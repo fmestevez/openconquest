@@ -114,6 +114,9 @@ pub struct Scene {
     pub trainings: Vec<Training>,
     /// Trained marines waiting at each settlement, by crew type.
     pub garrisons: std::collections::HashMap<u32, [u32; 9]>,
+    /// Sounds to play: name (in `sounds.dkx`) and world position. The
+    /// front end drains this every frame.
+    pub sounds: Vec<(&'static str, f32, f32)>,
     /// News for the player (e.g. an order that could not be carried out).
     pub messages: Vec<String>,
     pub minimap: Vec<u32>,
@@ -172,6 +175,7 @@ impl Scene {
             productions: Vec::new(),
             constructions: Vec::new(),
             messages: Vec::new(),
+            sounds: Vec::new(),
             trainings: Vec::new(),
             purses: players
                 .iter()
@@ -477,6 +481,7 @@ impl Scene {
         match spell {
             Spell::Lightning | Spell::SmallLightning => {
                 self.spawn_effect(data, caches, magic::FX_LIGHTNING, x, y);
+                self.sounds.push(("molniya2", x, y));
                 let damage = if spell == Spell::Lightning {
                     magic::LIGHTNING_DAMAGE
                 } else {
@@ -486,6 +491,7 @@ impl Scene {
             }
             Spell::Flame => {
                 self.objects[t].combat.as_mut().unwrap().burning = magic::FLAME_SECONDS;
+                self.sounds.push(("fireball", x, y));
                 self.spawn_aura(data, caches, magic::FX_FLAME, target, magic::FLAME_SECONDS);
             }
             Spell::ProtectWeapons | Spell::ProtectMagic => {
@@ -495,6 +501,7 @@ impl Scene {
                 } else {
                     c.protect_magic = magic::PROTECTION_SECONDS;
                 }
+                self.sounds.push(("prote1", x, y));
                 let name = magic::fx_protection(spell, large);
                 self.spawn_aura(data, caches, &name, target, magic::PROTECTION_SECONDS);
             }
@@ -507,6 +514,7 @@ impl Scene {
     pub fn cast_wind(&mut self, direction: u32) -> Result<(), String> {
         self.pay_spell(Spell::Wind)?;
         self.wind.force(direction, magic::WIND_SECONDS);
+        self.sounds.push(("wind8", f32::NAN, f32::NAN));
         Ok(())
     }
 
@@ -546,6 +554,15 @@ impl Scene {
             .map_err(|e| format!("The spell failed: {e:#}"))?
             .ok_or("The spell failed")?;
         self.pay_spell(spell)?;
+        self.sounds.push((
+            if spell == Spell::Whirlpool {
+                "whirl3"
+            } else {
+                "splash1"
+            },
+            obj.x,
+            obj.y,
+        ));
         self.objects.push(obj);
         self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
         Ok(())
@@ -887,6 +904,10 @@ impl Scene {
             .retain(|c| c.elapsed < c.total && self.objects.iter().any(|o| o.id == c.site));
         for id in done {
             self.refresh_building(id, data, caches);
+            if let Some(i) = self.object_index(id) {
+                self.sounds
+                    .push(("bild6", self.objects[i].x, self.objects[i].y));
+            }
         }
     }
 
@@ -1395,7 +1416,10 @@ impl Scene {
             let c = self.objects[i].combat.as_mut().unwrap();
             if c.reload <= 0.0 {
                 c.reload = combat::RELOAD_SECONDS;
+                let heaviest = c.weapons.iter().copied().max().unwrap_or(0);
                 volleys.push((target_id, c.weapons.clone()));
+                let (x, y) = (self.objects[i].x, self.objects[i].y);
+                self.sounds.push((combat::fire_sound(heaviest), x, y));
             }
         }
         for (target, weapons) in volleys {
@@ -1441,8 +1465,12 @@ impl Scene {
             combat::FX_SPLASH
         };
         self.spawn_effect(data, caches, name, fx, fy);
+        self.sounds
+            .push((if damage > 0.0 { "hitmed" } else { "splash1" }, fx, fy));
         let is_building = self.objects[ti].ship.is_none();
         if destroyed {
+            self.sounds
+                .push((if is_building { "razru2" } else { "wreck1" }, tx, ty));
             self.productions.retain(|p| p.site != target);
             self.constructions.retain(|c| c.site != target);
             self.spawn_effect(data, caches, combat::FX_SINK, tx, ty);
@@ -1839,6 +1867,10 @@ impl Scene {
             }
         }
         self.wind.update(dt);
+        // Sounds nobody played (no front end) are dropped.
+        if self.sounds.len() > 64 {
+            self.sounds.clear();
+        }
         self.run_training(dt);
         self.magic.update(dt);
         self.run_statuses(dt, data, caches);

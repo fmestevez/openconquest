@@ -334,6 +334,16 @@ pub const RELOAD_SECONDS: f32 = 3.0;
 /// Chance that a shot hits. Placeholder.
 pub const HIT_CHANCE: u32 = 70;
 
+/// The sound of a volley, by its heaviest item.
+pub fn fire_sound(item: u8) -> &'static str {
+    match item {
+        0..=2 => "strel1",
+        4 => "gastsn1",
+        6 => "thrbal1",
+        _ => "thrcat1",
+    }
+}
+
 /// Effect animations (BOMB sequences): a hit, a splash and a sinking.
 pub const FX_HIT: &str = "BOMBA20";
 pub const FX_SPLASH: &str = "BOMBA50";

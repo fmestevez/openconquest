@@ -249,3 +249,32 @@ fn briefings_read() {
         .iter()
         .any(|p| p.contains("son of King Eson would lead")));
 }
+
+#[test]
+fn sounds_decode() {
+    let Some(root) = data_dir() else { return };
+    let path = archives(&root)
+        .into_iter()
+        .find(|p| p.ends_with("sounds.dkx"))
+        .unwrap();
+    let archive = Archive::open(&path).unwrap();
+    let mut n = 0;
+    for e in archive
+        .entries()
+        .iter()
+        .filter(|e| e.kind == ResourceKind::Sound)
+    {
+        let sound = openac_formats::Sound::parse(&archive.read_entry(e).unwrap()).unwrap();
+        assert!(
+            sound.sample_rate >= 11025 && !sound.samples.is_empty(),
+            "{}",
+            e.name
+        );
+        n += 1;
+    }
+    assert!(n > 100);
+    assert_eq!(
+        openac_formats::sound_choices(&archive, 9).unwrap(),
+        ["bowla1", "strel1"]
+    );
+}

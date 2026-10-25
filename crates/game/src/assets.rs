@@ -73,6 +73,8 @@ pub struct GameData {
     pub objects: Archive,
     /// Interface graphics and fonts (`data/controlg.dkx`).
     pub controls: Archive,
+    /// Sound effects (`sound/sounds.dkx`), if installed.
+    pub sounds: Option<Archive>,
     pub palette: Palette,
     pub cycles: Vec<PaletteCycle>,
     pub tilesets: TileSetLibrary,
@@ -95,6 +97,10 @@ impl GameData {
         let controls_path = find_ci(&root.join("data"), "controlg.dkx")?
             .context("data/controlg.dkx missing from the game data")?;
         let controls = Archive::open(controls_path)?;
+        let sounds = match find_ci(&root.join("sound"), "sounds.dkx") {
+            Ok(Some(p)) => Some(Archive::open(p)?),
+            _ => None,
+        };
         let palette = Palette::from_bitmap(&maplib.read("PALETTE", ResourceKind::Bitmap)?)?;
         let anim = maplib
             .find("ANIM_PALETTE", ResourceKind::PaletteAnimation)
@@ -111,6 +117,7 @@ impl GameData {
             maplib,
             objects,
             controls,
+            sounds,
             palette,
             cycles,
             tilesets,

@@ -52,7 +52,9 @@ gorgons, sea creatures, amazons, minotaurs or cyclops; the objectives are
 shown in the message line) and lost when you have no ship or building left.
 A Temple of War learns protection from weapons and from magic, flame and
 lightning, with the original effect animations.
-The wind changes as in the original and speeds up or
+Sound effects from the original play for gunfire,
+hits, splashes, wrecks, construction and spells, louder the nearer they
+are to the centre of the view. The wind changes as in the original and speeds up or
 slows down ships by their heading; the wind rose shows it. Computer players (a simple stand-in for the original
 AI) keep their own amber and fish: their merchants gather, their shipyards
 build merchants and then the strongest warships they can afford, their
@@ -61,11 +63,12 @@ send waves of three or more warships against your towns and fleet. Hull and buil
 crew capacity, spell study time, durations and damage, hazard damage, fort weapons, range, reload time,
 build and construction times, building placement rules and gathering
 rate are placeholders until recovered from the
-executable. Not yet implemented: the rest of the game logic (wind,
-crew and weapon upgrades, the remaining spells: view map, tornado,
-sea monster, ghost), the original AI, the
-original interface panels, sound, music, video and multiplayer. See [docs/FORMATS.md](docs/FORMATS.md) for what
-is known about the file formats.
+executable. Not yet implemented: armour, ram and crew upgrades, the
+special-ship upgrades, the remaining spells (view map, tornado, sea
+monster, ghost), story objectives scripted in briefings, the original AI,
+the original interface panels (options, save and load), music, video and
+multiplayer. See [docs/FORMATS.md](docs/FORMATS.md) for what is known about
+the file formats.
 
 ### Modern improvements
 
@@ -82,7 +85,8 @@ is known about the file formats.
 
 ## Getting started
 
-Requires Rust 1.82 or newer.
+Requires Rust 1.82 or newer. On Linux, sound needs the ALSA development
+package (`libasound2-dev` or `alsa-lib-devel`).
 
 ```sh
 # 1. Install the game data from the CD or a mounted ISO
@@ -112,6 +116,7 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 | Esc | Deselect (quits when nothing is selected) |
 | Click/drag on the minimap | Jump |
 | Tab | Toggle the interface (full-window view) |
+| M | Sound on/off (`--mute` starts with it off) |
 | F1 | Show the mission briefing again (it is shown at the start; the game waits until it is closed) |
 | Page Up / Page Down | Previous / next mission |
 | F11, Alt+Enter | Fullscreen |

@@ -2,6 +2,7 @@
 
 mod app;
 mod assets;
+mod audio;
 mod combat;
 mod commands;
 mod economy;
@@ -54,6 +55,9 @@ struct Args {
     /// Scroll when the cursor touches the window edge (always on in fullscreen).
     #[arg(long)]
     edge_scroll: bool,
+    /// Start with sound off (M toggles it).
+    #[arg(long)]
+    mute: bool,
     /// Initial window size, e.g. 1600x900 (logical pixels).
     #[arg(long, default_value = "1280x720", value_parser = parse_size)]
     window: (u32, u32),
@@ -120,6 +124,7 @@ fn main() -> Result<()> {
         fullscreen: args.fullscreen,
         edge_scroll: args.edge_scroll,
         window_size: args.window,
+        mute: args.mute,
     };
     app::App::new(data, missions, mission_index, camera, options)?.run()
 }

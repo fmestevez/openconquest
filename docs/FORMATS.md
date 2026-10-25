@@ -515,6 +515,16 @@ crews add to them (0x43e5c0).
 Palette index 0xfe in object sprites is a shadow: the destination pixel is
 remapped through a darkening table (0x5c1358).
 
+## Sounds
+
+`sound/sounds.dkx` holds 163 sounds (kind 2): a `WAVEFORMATEX` (18 bytes;
+all PCM, mono, 16-bit, 22050 Hz), the sample data length (u32), four more
+bytes, then the samples. Text entries `SND_n` list the sounds that may play
+for game event `n`: a 24-byte header (u32s 0, flags, count, 10, 10, 0),
+then `count` NUL-terminated names, the first preceded by a byte with one
+high bit per name (0x80, 0xc0, 0xe0). `SOUNDLIST` lists the events. Music:
+`sound/ancientN.mid` (MIDI) and CD audio tracks (`TRACKS_CD` in missions).
+
 ## Missions (partially understood)
 
 `CONDITIONS` (record, 11 u32 flags, read at 0x4ed4c0 into the game object

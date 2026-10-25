@@ -11,6 +11,7 @@ pub mod installer;
 pub mod lz;
 pub mod map;
 pub mod mission;
+pub mod sound;
 
 mod bytes;
 
@@ -22,6 +23,7 @@ pub use map::{MapGrid, TileRef, TileSet, TileSetLibrary};
 pub use mission::{
     briefing, conditions, object_records, players, ObjectClass, ObjectRecord, PlayerInfo,
 };
+pub use sound::{load_sound, sound_choices, Sound};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

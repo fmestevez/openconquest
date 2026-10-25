@@ -14,6 +14,7 @@ use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
 use crate::assets::GameData;
+use crate::audio::Audio;
 use crate::commands::{menu, Command, Page};
 use crate::economy;
 use crate::magic::{self, Spell, Target, Temple};
@@ -40,6 +41,7 @@ pub struct Options {
     pub fullscreen: bool,
     pub edge_scroll: bool,
     pub window_size: (u32, u32),
+    pub mute: bool,
 }
 
 struct Gfx {
@@ -77,6 +79,8 @@ pub struct App {
     page: Page,
     /// The mission briefing is shown (and the game waits).
     briefing: bool,
+    /// Sound output, if a device is available.
+    audio: Option<Audio>,
     status: Option<(String, Instant)>,
     started: Instant,
     last_frame: Instant,
@@ -92,6 +96,7 @@ impl App {
         camera: Camera,
         options: Options,
     ) -> Result<Self> {
+        let mute = options.mute;
         let mut caches = Caches::default();
         let scene = Scene::load(&data, &mut caches, &missions[mission_index])?;
         let text = TextRenderer::load(&data.controls, "0SYSTEM_FONT", 0)?;
@@ -121,6 +126,10 @@ impl App {
             pending: None,
             page: Page::Main,
             briefing: true,
+            audio: Audio::open().map(|mut a| {
+                a.muted = mute;
+                a
+            }),
             status: None,
             started: now,
             last_frame: now,
@@ -215,6 +224,45 @@ impl App {
             .button_at(&layout, pos.x as f32, pos.y as f32)
     }
 
+    /// Plays an interface sound at full volume.
+    fn play_ui(&mut self, name: &str) {
+        if let (Some(audio), Some(sounds)) = (self.audio.as_mut(), self.data.sounds.as_ref()) {
+            audio.play(sounds, name, 1.0);
+        }
+    }
+
+    /// Plays the sounds the scene reported, by their distance from the
+    /// centre of the view.
+    fn play_scene_sounds(&mut self) {
+        let sounds = std::mem::take(&mut self.scene.sounds);
+        if sounds.is_empty() {
+            return;
+        }
+        let (screen, _) = self.placement();
+        let (Some(audio), Some(archive)) = (self.audio.as_mut(), self.data.sounds.as_ref()) else {
+            return;
+        };
+        let (vw, vh) = self.camera.view_size(&screen);
+        let (cx, cy) = (self.camera.x + vw / 2.0, self.camera.y + vh / 2.0);
+        let reach = (vw * vw + vh * vh).sqrt() / 2.0;
+        let mut played: Vec<&str> = Vec::new();
+        for (name, x, y) in sounds {
+            // One of each sound per frame, and not too many at once.
+            if played.contains(&name) || played.len() >= 8 {
+                continue;
+            }
+            let gain = if x.is_nan() {
+                1.0
+            } else {
+                crate::audio::falloff(((x - cx).powi(2) + (y - cy).powi(2)).sqrt(), reach)
+            };
+            if gain > 0.05 {
+                audio.play(archive, name, gain);
+                played.push(name);
+            }
+        }
+    }
+
     fn say(&mut self, msg: impl Into<String>) {
         self.status = Some((msg.into(), Instant::now()));
     }
@@ -257,6 +305,7 @@ impl App {
                 None => format!("{}: not available yet", entry.command.name()),
             };
             self.say(reason);
+            self.play_ui("deny");
             return;
         }
         if let Some(kind) = ship_kind {
@@ -684,6 +733,7 @@ impl App {
         if !self.briefing {
             self.scene.update(dt, &self.data, &mut self.caches);
         }
+        self.play_scene_sounds();
         let latest = std::mem::take(&mut self.scene.messages).pop();
         if let Some(msg) = latest {
             self.say(msg);
@@ -867,6 +917,13 @@ impl ApplicationHandler for App {
                     KeyCode::Escape if self.selected.is_some() => self.selected = None,
                     KeyCode::Escape => event_loop.exit(),
                     KeyCode::F11 => self.toggle_fullscreen(),
+                    KeyCode::KeyM => {
+                        if let Some(a) = self.audio.as_mut() {
+                            a.muted = !a.muted;
+                            let msg = if a.muted { "Sound off" } else { "Sound on" };
+                            self.say(msg);
+                        }
+                    }
                     KeyCode::Enter if self.modifiers.alt_key() => self.toggle_fullscreen(),
                     KeyCode::PageDown => self.switch_mission(1),
                     KeyCode::PageUp => self.switch_mission(-1),
