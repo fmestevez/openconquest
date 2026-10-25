@@ -1,0 +1,12 @@
+[package]
+name = "openac-extract"
+description = "Installs and inspects Ancient Conquest game data"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+openac-formats.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+png.workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "openac"
+description = "Open source reimplementation of Ancient Conquest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+openac-formats.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+winit.workspace = true
+softbuffer.workspace = true
+png.workspace = true
