@@ -350,20 +350,27 @@ compass: command 0x58 + direction in slots 6, 2, 1, 0, 4, 8, 9, 10 around
 
 Combat tables:
 
-- 0x5964d8: weapons each ship type carries when built, 40 bytes per type
-  (u32 count, then up to nine u32 weapon kinds): royal 0,2,4,8; bomber
-  0,1,4,6,7; boarder 1,2,2,3; rammer 1,4,5; ship killer 5,4; men killer 3,0;
-  quick lime ship 1; the others none. 0x5962fc holds a second list per type.
-- Ship records (class 0xc8, 154 fields) carry their own loadout (read in
-  0x4dfe00): field 12 hull condition in percent, field 14 crew type + 3,
-  field 15 crew level?, fields 18-26 the count of each weapon kind, fields
-  29-100 the condition of each weapon (eight per kind, usually 100).
-- 0x597d2c: 19 rows of nine u32: three values (A, B, C), each for three
-  upgrade levels. Rows 0-2 are crew types (A attack, C defence?); rows
-  3-18 weapons, where A is damage against hulls and B against crews
-  (0x4ac1b0 and 0x4ac1e0 scale values by them; 0x4ac140 caches A x 15).
-  Weapon kinds 0-8 use rows 3-11: hull damage 40, 60, 80, 200, 250, 220, 0,
-  200, 200.
+- Ships carry items in nine slots, numbered like the building commands
+  0x2d + item (button names): 0 bowmen (ONION), 1 javelin men (DART), 2
+  swordsmen (SWORD), 3 BLDTRANS, 4 gastraphetes (BLDGASTR), 5 small
+  catapult (BLDSMALKAT), 6 ballista (BLDBALIST), 7 big catapult
+  (BLDBIGKAT), 8 onager (BLDONAGR). Settlements train items 0-2 (30
+  amber each, u16 table at 0x597164, plus fish hundreds 2, 2, 3 at
+  0x597170); menu 0x4361c0 builds items 3-8 (50 amber for 3-5, 70 for 6-8).
+- 0x5964d8: items each ship type carries when built, 40 bytes per type
+  (u32 count, then up to nine u32 items): royal 0,2,4,8; bomber 0,1,4,6,7;
+  boarder 1,2,2,3; rammer 1,4,5; ship killer 5,4; men killer 3,0; quick
+  lime ship 1; the others none. 0x5962fc holds a second list per type.
+- Ship records (class 0xc8, 154 fields; read in 0x4dfe00): field 12 hull
+  condition in percent, field 14 the crew class + 3 (ramming uses it for
+  crew quality), field 15 its level?, fields 18-26 the count of each item,
+  fields 29-100 each item's condition (eight per slot, usually 100).
+- 0x597d2c: rows of nine u32, three values (A, B, C) for three upgrade
+  levels each, one row per item from 0: A is damage against hulls (5, 7,
+  3, 40, 60, 80, 200, 250, 220 at level 0), B against crews; for the marine
+  rows C (35, 68, 100) is used here as boarding strength (an
+  interpretation). Rows 9-18 belong to the special ships and upgrades.
+  0x4ac1b0 and 0x4ac1e0 scale values by them; 0x4ac140 caches A x 15.
 - Building records (66 fields): field 7 condition in percent; fields 22-33
   flag twelve emplacements on forts (wood fort 3, stone fort 8), contents
   unknown.
@@ -378,10 +385,6 @@ Combat tables:
   0x598084 for the rammed: 4 12 20; the angle class comes from 0x4c19b0)
   x a per-type value at 0x5c76b0 (runtime, not yet known). Rammers (type 5)
   get x1.5. The result is attacker x 100 / defender, capped at 200.
-- Ship records: field 14 is the crew type + 3 (bowmen, javelin men,
-  swordsmen; build buttons ONION, DART, SWORD), field 16 the crew count.
-  Crew rows 0-2 of 0x597d2c: A 5/7/3, B 45/25/5, C 35/68/100 at level 0;
-  C is used here as boarding strength (an interpretation).
 - Effects are BOMB sequences (`BOMB%C%1d%1d`): e.g. BOMBA20 hit, BOMBA50
   splash, BOMBG10 explosion; FIRE0-2 and SMOKE0-2 for burning.
 - The random generator is the usual LCG `x * 0x41c64e6d + 0x3039`, using

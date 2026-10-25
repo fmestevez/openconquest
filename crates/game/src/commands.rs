@@ -331,7 +331,7 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
     } else {
         // Warships (0x4e6980): weapons and behaviour.
         set(menu, 4, Command::FIRE, obj.is_armed());
-        set(menu, 5, Command::BOARD, ship.crew.count > 0);
+        set(menu, 5, Command::BOARD, ship.crew.count() > 0);
         set(menu, 6, Command::RAM, true);
         set(menu, 7, Command::BEHAVIOUR, false);
     }

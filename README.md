@@ -39,8 +39,10 @@ buildings explode (buildings leave ruins). Ships can ram (odds from the
 original's ramming power, crew and angle-of-approach tables; rammers hit
 half again as hard) and board enemy ships, whose marines fight it out;
 a ship whose crew falls is captured. Merchants found new settlements on
-any free shore. Settlements train marines (bowmen, javelin men and
-swordsmen, at the original costs) that ships alongside take on with Load.
+any free shore. Settlements train squads of marines (bowmen, javelin men and
+swordsmen, at the original costs) that ships alongside take on with Load;
+ships carry the marines and weapons (catapults, ballistae, onagers, ...)
+given in their mission records.
 A Temple of the Sea learns spells in the original order and at the
 original prices: so far calling the wind, raising reefs and summoning
 whirlpools work, and whirlpools and reefs damage ships that sail into them.
@@ -51,8 +53,11 @@ shown in the message line) and lost when you have no ship or building left.
 A Temple of War learns protection from weapons and from magic, flame and
 lightning, with the original effect animations.
 The wind changes as in the original and speeds up or
-slows down ships by their heading; the wind rose shows it. Computer warships hunt your ships
-when they come within ten cells (a simple stand-in for the original AI). Hull and building strength, ram damage, boarding pace, training time,
+slows down ships by their heading; the wind rose shows it. Computer players (a simple stand-in for the original
+AI) keep their own amber and fish: their merchants gather, their shipyards
+build merchants and then the strongest warships they can afford, their
+warships hunt your ships within ten cells, and after five minutes they
+send waves of three or more warships against your towns and fleet. Hull and building strength, ram damage, boarding pace, training time,
 crew capacity, spell study time, durations and damage, hazard damage, fort weapons, range, reload time,
 build and construction times, building placement rules and gathering
 rate are placeholders until recovered from the

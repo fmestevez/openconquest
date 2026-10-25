@@ -785,12 +785,16 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
         );
     }
     if let Some(ship) = &obj.ship {
-        if ship.crew.count > 0 {
-            text += &format!(
-                ". Crew: {} {}",
-                ship.crew.count,
-                crate::combat::CREW_NAMES[ship.crew.kind as usize % 3]
-            );
+        if ship.crew.count() > 0 {
+            text += &format!(". Marines: {}", ship.crew.describe());
+        }
+        if let Some(c) = obj.combat.as_ref().filter(|c| !c.weapons.is_empty()) {
+            let names: Vec<&str> = c
+                .weapons
+                .iter()
+                .map(|&w| crate::combat::ITEM_NAMES[w as usize % 9])
+                .collect();
+            text += &format!(". Weapons: {}", names.join(", "));
         }
         if let (Some(kind), true) = (ship.cargo_kind, ship.cargo >= 1.0) {
             text += &format!(". Carrying {} {}", ship.cargo as u32, goods(kind));

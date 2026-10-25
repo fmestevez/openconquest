@@ -64,56 +64,125 @@ impl Combatant {
     }
 }
 
-/// The marines of a ship: bowmen, javelin men or swordsmen.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Crew {
-    /// 0 bowmen, 1 javelin men, 2 swordsmen.
-    pub kind: u8,
-    pub count: u32,
-}
+/// What a ship carries in its nine item slots (ship records, fields
+/// 18-26; the building menus use the same numbering: commands 0x2d + item):
+/// marines (0 bowmen ONION, 1 javelin men DART, 2 swordsmen SWORD), then
+/// weapons (3 TRANS, 4 gastraphetes, 5 small catapult, 6 ballista, 7 big
+/// catapult, 8 onager).
+pub const ITEM_NAMES: [&str; 9] = [
+    "bowmen",
+    "javelin men",
+    "swordsmen",
+    "TRANS",
+    "gastraphetes",
+    "small catapult",
+    "ballista",
+    "big catapult",
+    "onager",
+];
 
 pub const CREW_NAMES: [&str; 3] = ["bowmen", "javelin men", "swordsmen"];
 
-/// Cost of training one marine of each type: amber and fish (0x597164,
-/// 0x597170 x 100).
-pub const CREW_COST: [(u32, u32); 3] = [(30, 200), (50, 200), (70, 300)];
+/// Cost of training a squad of marines: 30 amber each (u16 at 0x597164)
+/// and fish (0x597170 x 100).
+pub const CREW_COST: [(u32, u32); 3] = [(30, 200), (30, 200), (30, 300)];
 
-/// Seconds to train one marine. The settlement menu (0x43c740) shows
+/// Seconds to train one squad. The settlement menu (0x43c740) shows
 /// progress as elapsed x 100 / (70 x queued); reading the 70 as tenths of a
 /// second is a guess.
 pub const CREW_TRAIN_SECONDS: f32 = 7.0;
 
-/// Marines a ship type can carry. Assumed to be the per-type values at
-/// 0x596110 (boat 10, merchant 20, royal 25, ...); not confirmed.
-pub const CREW_CAPACITY: [u32; 12] = [10, 20, 25, 20, 10, 10, 10, 10, 10, 10, 10, 20];
+/// Squads of marines a ship can carry. Placeholder.
+pub const CREW_CAPACITY: u32 = 6;
 
 /// How close (in cells) a ship must lie to a settlement to take on marines.
 /// Placeholder.
 pub const LOAD_REACH: f32 = 3.0;
 
-/// Boarding strength of each crew type (0x597d2c rows 0-2, third value at
-/// level 0).
+/// Boarding strength of each marine kind (0x597d2c rows 0-2, third value
+/// at level 0).
 const CREW_MELEE: [u32; 3] = [35, 68, 100];
 
-/// Crew quality used in ramming (0x598054, by crew type and level; level 0).
+/// Crew quality used in ramming (0x598054, by crew class and level; level
+/// 0).
 const CREW_RAM: [u32; 3] = [100, 125, 160];
 
+/// The people on a ship: its crew class (record field 14 minus 3; ramming
+/// uses it for crew quality) and squads of marines by kind.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Crew {
+    pub class: u8,
+    pub squads: [u32; 3],
+}
+
 impl Crew {
-    /// Ship records hold the crew type plus 3 in field 14 and the number of
-    /// marines in field 16. Newly built ships get a placeholder crew.
-    pub fn from_record(fields: &[u32]) -> Self {
-        match (fields.get(14), fields.get(16)) {
-            (Some(&k), Some(&n)) if (3..=5).contains(&k) => Self {
-                kind: (k - 3) as u8,
-                count: n.min(50),
-            },
-            _ => Self { kind: 2, count: 4 },
+    /// From a ship record: the crew class in field 14, marine squads in
+    /// item slots 0-2 (fields 18-20). Records too short for that (ships
+    /// built in play) get their type's default load.
+    pub fn from_record(fields: &[u32], kind: u8) -> Self {
+        let class = fields
+            .get(14)
+            .filter(|&&k| (3..=5).contains(&k))
+            .map_or(0, |&k| (k - 3) as u8);
+        let mut squads = [0u32; 3];
+        match fields.get(18..21) {
+            Some(counts) => {
+                for (s, &n) in squads.iter_mut().zip(counts) {
+                    *s = n.min(CREW_CAPACITY);
+                }
+            }
+            None => {
+                for &item in DEFAULT_WEAPONS[kind as usize % 12] {
+                    if item < 3 {
+                        squads[item as usize] += 1;
+                    }
+                }
+            }
+        }
+        Self { class, squads }
+    }
+
+    pub fn count(&self) -> u32 {
+        self.squads.iter().sum()
+    }
+
+    /// Takes away the `n`-th squad (counting across kinds).
+    pub fn lose(&mut self, mut n: u32) {
+        for s in &mut self.squads {
+            if n < *s {
+                *s -= 1;
+                return;
+            }
+            n -= *s;
         }
     }
 
-    pub fn melee(&self) -> u32 {
-        CREW_MELEE[self.kind as usize % 3]
+    /// The kind of the `n`-th squad.
+    pub fn kind_of(&self, mut n: u32) -> usize {
+        for (k, &s) in self.squads.iter().enumerate() {
+            if n < s {
+                return k;
+            }
+            n -= s;
+        }
+        0
     }
+
+    pub fn describe(&self) -> String {
+        let parts: Vec<String> = self
+            .squads
+            .iter()
+            .zip(CREW_NAMES)
+            .filter(|(n, _)| **n > 0)
+            .map(|(n, name)| format!("{n} {name}"))
+            .collect();
+        parts.join(", ")
+    }
+}
+
+/// Boarding strength of a squad of marine kind `kind`.
+pub fn melee(kind: usize) -> u32 {
+    CREW_MELEE[kind % 3]
 }
 
 /// Ramming power of each ship type (0x598024).
@@ -128,7 +197,7 @@ const RAM_ANGLE_DEFENCE: [u32; 3] = [4, 12, 20];
 /// half again as hard.
 pub fn ram_odds(attacker: (u8, Crew), target: (u8, Crew), angle: usize) -> u32 {
     let power = |(kind, crew): (u8, Crew), angle_factor: u32| {
-        (CREW_RAM[crew.kind as usize % 3] * RAM_POWER[kind as usize % 12]) as u64
+        (CREW_RAM[crew.class as usize % 3] * RAM_POWER[kind as usize % 12]) as u64
             * angle_factor as u64
     };
     let mut a = power(attacker, RAM_ANGLE_ATTACK[angle.min(2)]);
@@ -171,7 +240,8 @@ pub fn building_strength(class: u32) -> f32 {
 
 /// Forts (classes 0x34-0x36) shoot from their emplacements. Fort records
 /// flag twelve emplacements in fields 22-33 (wood fort 3, stone fort 8);
-/// what each one holds is not known yet, so each fires a weapon of kind 0.
+/// what each one holds is not known yet, so each fires the lightest
+/// weapon (item 3).
 fn fort_weapons(class: u32, fields: &[u32]) -> Vec<u8> {
     if !(0x34..=0x36).contains(&class) {
         return Vec::new();
@@ -179,11 +249,11 @@ fn fort_weapons(class: u32, fields: &[u32]) -> Vec<u8> {
     let n = fields
         .get(22..34)
         .map_or(0, |f| f.iter().filter(|&&v| v == 1).count());
-    vec![0; n]
+    vec![3; n]
 }
 
-/// Weapons a ship type carries when built (0x5964d8: a count and up to nine
-/// weapon kinds per ship type).
+/// Items a ship type carries when built (0x5964d8: a count and up to nine
+/// items per ship type; see `ITEM_NAMES`).
 pub const DEFAULT_WEAPONS: [&[u8]; 12] = [
     &[],
     &[],
@@ -199,38 +269,43 @@ pub const DEFAULT_WEAPONS: [&[u8]; 12] = [
     &[],
 ];
 
-/// Weapons of a ship from its mission record: fields 18-26 hold how many of
-/// each of the nine weapon kinds it carries (fields 29.. hold their
-/// condition, eight per kind). Records too short for that get the ship
-/// type's default loadout.
+/// Weapons of a ship from its mission record: item slots 3-8 (fields
+/// 21-26) hold how many of each it carries (fields 29.. their condition,
+/// eight per item). Records too short for that get the ship type's default
+/// load.
 pub fn weapons_from_record(fields: &[u32], kind: u8) -> Vec<u8> {
     match fields.get(18..27) {
         Some(counts) => counts
             .iter()
             .enumerate()
+            .skip(3)
             .flat_map(|(w, &n)| std::iter::repeat_n(w as u8, n.min(8) as usize))
             .collect(),
-        None => DEFAULT_WEAPONS[kind as usize].to_vec(),
+        None => DEFAULT_WEAPONS[kind as usize]
+            .iter()
+            .copied()
+            .filter(|&w| w >= 3)
+            .collect(),
     }
 }
 
-/// Damage of a weapon kind against hulls and against crews, at upgrade
-/// level 0 (0x597d2c, rows 3-11; rows 0-2 are the three crew types, and
-/// each value has three upgrade levels).
-const WEAPON_DAMAGE: [(u32, u32); 9] = [
+/// Damage of each item against hulls and against crews, at upgrade level
+/// 0 (0x597d2c rows 0-8; each value has three upgrade levels; the third
+/// value of the marine rows is their boarding strength).
+const ITEM_DAMAGE: [(u32, u32); 9] = [
+    (5, 45),
+    (7, 25),
+    (3, 5),
     (40, 80),
     (60, 60),
     (80, 40),
     (200, 80),
     (250, 100),
     (220, 80),
-    (0, 0),
-    (200, 80),
-    (200, 80),
 ];
 
 pub fn hull_damage(weapon: u8) -> f32 {
-    WEAPON_DAMAGE.get(weapon as usize).map_or(0, |w| w.0) as f32
+    ITEM_DAMAGE.get(weapon as usize).map_or(0, |w| w.0) as f32
 }
 
 /// Hull points of a ship type. Placeholder: twice the hull's amber cost.
@@ -301,7 +376,10 @@ impl Rng {
 mod tests {
     use super::*;
 
-    const SWORDS: Crew = Crew { kind: 2, count: 8 };
+    const SWORDS: Crew = Crew {
+        class: 2,
+        squads: [0, 0, 1],
+    };
 
     #[test]
     fn ram_angles() {
@@ -318,5 +396,41 @@ mod tests {
         assert_eq!(ram_odds(royal, royal, 0), 200, "side on, capped");
         let rammer = (5, SWORDS);
         assert!(ram_odds(rammer, royal, 2) > ram_odds(royal, rammer, 2));
+    }
+
+    #[test]
+    fn crews_lose_squads_in_order() {
+        let mut crew = Crew {
+            class: 0,
+            squads: [1, 0, 2],
+        };
+        assert_eq!(
+            (
+                crew.count(),
+                crew.kind_of(0),
+                crew.kind_of(1),
+                crew.kind_of(2)
+            ),
+            (3, 0, 2, 2)
+        );
+        crew.lose(0);
+        assert_eq!(crew.squads, [0, 0, 2]);
+        crew.lose(1);
+        assert_eq!(crew.squads, [0, 0, 1]);
+        assert_eq!(crew.describe(), "1 swordsmen");
+    }
+
+    #[test]
+    fn items_read_from_records() {
+        // A royal ship: bowmen, swordsmen, small catapult, onager.
+        let mut fields = vec![0u32; 30];
+        fields[14] = 5;
+        fields[18..27].copy_from_slice(&[1, 0, 1, 0, 0, 1, 0, 0, 1]);
+        assert_eq!(weapons_from_record(&fields, 2), vec![5, 8]);
+        let crew = Crew::from_record(&fields, 2);
+        assert_eq!((crew.class, crew.squads), (2, [1, 0, 1]));
+        // Built in play: the type's default load (0, 2, 4, 8).
+        assert_eq!(weapons_from_record(&fields[..13], 2), vec![4, 8]);
+        assert_eq!(Crew::from_record(&fields[..13], 2).squads, [1, 0, 1]);
     }
 }

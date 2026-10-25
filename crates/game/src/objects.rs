@@ -449,7 +449,7 @@ pub fn resolve(
         cargo: 0.0,
         cargo_kind: None,
         task: None,
-        crew: crate::combat::Crew::from_record(&rec.fields),
+        crew: crate::combat::Crew::from_record(&rec.fields, f(7).min(11) as u8),
     });
     let combat = crate::combat::Combatant::from_record(rec, class);
     // Deposits: amber holds field 4 x 100 units, negative for unlimited

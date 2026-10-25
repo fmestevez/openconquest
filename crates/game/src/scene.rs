@@ -71,6 +71,13 @@ pub struct Construction {
     pub total: f32,
 }
 
+/// Seconds between the computer players' economic decisions.
+const AI_ECONOMY_PERIOD: u32 = 5;
+/// Seconds before computer players start attacking. Placeholder.
+const AI_GRACE_SECONDS: f32 = 300.0;
+/// Idle warships a computer player gathers before attacking. Placeholder.
+const AI_WAVE: usize = 3;
+
 /// How far from the settlement that orders it a building may go, in cells.
 /// Placeholder.
 pub const BUILD_RADIUS: i32 = 6;
@@ -101,6 +108,8 @@ pub struct Scene {
     pub productions: Vec<Production>,
     /// Buildings going up.
     pub constructions: Vec<Construction>,
+    /// Amber and fish of the computer players.
+    pub purses: std::collections::HashMap<(u32, u32), (u32, u32)>,
     /// Marines in training.
     pub trainings: Vec<Training>,
     /// Trained marines waiting at each settlement, by crew type.
@@ -114,6 +123,8 @@ pub struct Scene {
     rng: Rng,
     /// Seconds until the computer players next decide.
     ai_timer: f32,
+    /// Seconds since the mission started.
+    pub clock: f32,
     pub wind: Wind,
     /// The mission's victory conditions (see `OBJECTIVES`).
     pub conditions: [bool; 11],
@@ -162,6 +173,11 @@ impl Scene {
             constructions: Vec::new(),
             messages: Vec::new(),
             trainings: Vec::new(),
+            purses: players
+                .iter()
+                .filter(|p| p.computer)
+                .map(|p| ((p.nation, p.slot), (p.amber, p.fish)))
+                .collect(),
             garrisons: Default::default(),
             amber: human.map_or(0, |p| p.amber),
             fish: human.map_or(0, |p| p.fish),
@@ -171,6 +187,7 @@ impl Scene {
             effects: Vec::new(),
             rng: Rng(0x1234_5678),
             ai_timer: 0.0,
+            clock: 0.0,
             wind: Wind::new(0x5eed_0001),
             conditions,
             outcome: None,
@@ -191,11 +208,17 @@ impl Scene {
     /// classes (bit n = class 0x32 + n). A town also counts as a settlement,
     /// a dock as a shipyard.
     pub fn owned_buildings(&self) -> u32 {
+        self.human
+            .map_or(0, |h| self.buildings_of((h.nation, h.slot)))
+    }
+
+    /// Standing buildings of player `owner`, as for `owned_buildings`.
+    pub fn buildings_of(&self, owner: (u32, u32)) -> u32 {
         let mut mask = 0;
         for obj in &self.objects {
             if let ObjectClass::Building(cls) = obj.class {
                 let standing = self.construction_at(obj.id).is_none();
-                if self.is_own(obj) && standing && (SETTLEMENT..=0x3e).contains(&cls) {
+                if obj.owner == Some(owner) && standing && (SETTLEMENT..=0x3e).contains(&cls) {
                     mask |= 1 << (cls - SETTLEMENT);
                     if cls == TOWN {
                         mask |= 1;
@@ -211,20 +234,52 @@ impl Scene {
 
     /// Whether the human player can order a ship of type `kind` now.
     pub fn can_build_ship(&self, kind: u8) -> Result<(), String> {
+        let human = self.human.ok_or("No player")?;
+        self.can_build_ship_for((human.nation, human.slot), kind)
+    }
+
+    /// Whether player `owner` can order a ship of type `kind` now.
+    pub fn can_build_ship_for(&self, owner: (u32, u32), kind: u8) -> Result<(), String> {
         let need = economy::ship_requirements(kind) | 1;
-        if self.owned_buildings() & need != need {
+        if self.buildings_of(owner) & need != need {
             return Err(format!(
                 "{} needs more buildings",
                 SHIP_NAMES[kind as usize]
             ));
         }
         let (amber, fish) = economy::ship_cost(kind);
-        if self.amber < amber || self.fish < fish {
+        let (have_amber, have_fish) = self.funds(owner);
+        if have_amber < amber || have_fish < fish {
             return Err(format!(
                 "Not enough resources: {amber} amber and {fish} fish needed"
             ));
         }
         Ok(())
+    }
+
+    /// Amber and fish of player `owner`.
+    pub fn funds(&self, owner: (u32, u32)) -> (u32, u32) {
+        match self.human {
+            Some(h) if (h.nation, h.slot) == owner => (self.amber, self.fish),
+            _ => self.purses.get(&owner).copied().unwrap_or_default(),
+        }
+    }
+
+    /// Adds (or with negative amounts, takes) amber and fish to player
+    /// `owner`'s funds; the caller checks they suffice.
+    fn earn(&mut self, owner: (u32, u32), amber: i64, fish: i64) {
+        let add = |v: &mut u32, d: i64| *v = (*v as i64 + d).max(0) as u32;
+        match self.human {
+            Some(h) if (h.nation, h.slot) == owner => {
+                add(&mut self.amber, amber);
+                add(&mut self.fish, fish);
+            }
+            _ => {
+                let purse = self.purses.entry(owner).or_default();
+                add(&mut purse.0, amber);
+                add(&mut purse.1, fish);
+            }
+        }
     }
 
     pub fn production_at(&self, site: u32) -> Option<&Production> {
@@ -236,10 +291,13 @@ impl Scene {
         if self.production_at(site).is_some() {
             return Err("The shipyard is busy".into());
         }
-        self.can_build_ship(kind)?;
+        let owner = self
+            .object_index(site)
+            .and_then(|i| self.objects[i].owner)
+            .ok_or("No such shipyard")?;
+        self.can_build_ship_for(owner, kind)?;
         let (amber, fish) = economy::ship_cost(kind);
-        self.amber -= amber;
-        self.fish -= fish;
+        self.earn(owner, -(amber as i64), -(fish as i64));
         self.productions.push(Production {
             site,
             ship: kind,
@@ -283,7 +341,10 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) -> Result<()> {
-        let (Some(i), Some(human)) = (self.object_index(site), self.human) else {
+        let Some(i) = self.object_index(site) else {
+            return Ok(());
+        };
+        let Some((nation, slot)) = self.objects[i].owner else {
             return Ok(());
         };
         let t = TILE_SIZE as f32;
@@ -320,10 +381,10 @@ impl Scene {
         let mut fields = vec![0u32; 13];
         fields[0] = 0xc8;
         fields[1] = 1;
-        fields[2] = human.nation;
-        fields[3] = human.slot;
-        fields[5] = human.nation;
-        fields[6] = human.slot;
+        fields[2] = nation;
+        fields[3] = slot;
+        fields[5] = nation;
+        fields[6] = slot;
         fields[7] = kind as u32;
         fields[8] = u32::MAX;
         fields[9] = x as u32;
@@ -600,9 +661,9 @@ impl Scene {
         Ok(())
     }
 
-    /// Ship `ship` takes on marines from an own settlement or town nearby:
-    /// of its crew's type, or if it has none, of the most numerous type
-    /// waiting. Returns how many came aboard.
+    /// Ship `ship` takes on the marines waiting at an own settlement or
+    /// town nearby, as many as it has room for. Returns how many squads
+    /// came aboard.
     pub fn load_crew(&mut self, ship: u32) -> Result<u32, String> {
         let t = TILE_SIZE as f32;
         let i = self.object_index(ship).ok_or("No such ship")?;
@@ -620,24 +681,22 @@ impl Scene {
             .ok_or("The ship must lie next to your settlement")?;
         let mut garrison = self.garrison(site);
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
-        let kind = if s.crew.count > 0 {
-            s.crew.kind
-        } else {
-            (0..3u8).max_by_key(|&k| garrison[k as usize]).unwrap()
-        };
-        let room = combat::CREW_CAPACITY[s.kind as usize % 12].saturating_sub(s.crew.count);
-        let n = room.min(garrison[kind as usize]);
-        if n == 0 {
-            return Err(if room == 0 {
-                "The ship is full"
-            } else {
-                "No marines of that kind are waiting"
-            }
-            .into());
+        let mut room = combat::CREW_CAPACITY.saturating_sub(s.crew.count());
+        if room == 0 {
+            return Err("The ship is full".into());
         }
-        s.crew.kind = kind;
-        s.crew.count += n;
-        garrison[kind as usize] -= n;
+        let mut n = 0;
+        // Swordsmen first: they are the strongest boarders.
+        for kind in (0..3).rev() {
+            let take = room.min(garrison[kind]);
+            s.crew.squads[kind] += take;
+            garrison[kind] -= take;
+            room -= take;
+            n += take;
+        }
+        if n == 0 {
+            return Err("No marines are waiting".into());
+        }
         self.garrisons.insert(site, garrison);
         Ok(n)
     }
@@ -892,16 +951,17 @@ impl Scene {
         Ok(())
     }
 
-    /// The human player's building nearest to `(x, y)` where cargo can be
+    /// Player `owner`'s building nearest to `(x, y)` where cargo can be
     /// unloaded: a port, or failing that a settlement or town.
-    fn unloading_site(&self, x: f32, y: f32) -> Option<u32> {
+    fn unloading_site(&self, owner: Option<(u32, u32)>, x: f32, y: f32) -> Option<u32> {
         let dist = |o: &MapObject| (o.x - x).powi(2) + (o.y - y).powi(2);
         let nearest = |classes: &[u32]| {
             self.objects
                 .iter()
                 .filter(|o| {
                     matches!(o.class, ObjectClass::Building(c) if classes.contains(&c))
-                        && self.is_own(o)
+                        && owner.is_some()
+                        && o.owner == owner
                 })
                 .min_by(|a, b| dist(a).total_cmp(&dist(b)))
                 .map(|o| o.id)
@@ -1004,10 +1064,10 @@ impl Scene {
                 let ship = self.objects[i].ship.as_mut().unwrap();
                 let (cargo, kind) = (ship.cargo.floor(), ship.cargo_kind.take());
                 ship.cargo = 0.0;
-                if self.is_own(&self.objects[i]) {
+                if let Some(owner) = self.objects[i].owner {
                     match kind {
-                        Some(Resource::Amber) => self.amber += cargo as u32,
-                        Some(Resource::Fish) => self.fish += cargo as u32,
+                        Some(Resource::Amber) => self.earn(owner, cargo as i64, 0),
+                        Some(Resource::Fish) => self.earn(owner, 0, cargo as i64),
                         None => {}
                     }
                 }
@@ -1030,7 +1090,8 @@ impl Scene {
     /// Sends ship `i` (gathering from `deposit`) to unload.
     fn send_to_port(&mut self, i: usize, deposit: u32) {
         let (x, y) = (self.objects[i].x, self.objects[i].y);
-        let route = self.unloading_site(x, y).and_then(|port| {
+        let owner = self.objects[i].owner;
+        let route = self.unloading_site(owner, x, y).and_then(|port| {
             let p = self.object_index(port)?;
             Some((
                 port,
@@ -1105,6 +1166,124 @@ impl Scene {
         }
         for (ship, target) in orders {
             let _ = self.order_attack(ship, target);
+        }
+    }
+
+    /// Computer players: idle merchants gather, shipyards build merchants
+    /// until there are two and then the strongest warship they can afford,
+    /// and once the grace period is over, idle warships set out in waves
+    /// against the human player. A stand-in for the original AI.
+    fn run_computer_economy(&mut self) {
+        let Some(human) = self.human else { return };
+        let human = (human.nation, human.slot);
+        let owners: Vec<(u32, u32)> = self.purses.keys().copied().collect();
+        for owner in owners {
+            let mine = |o: &MapObject| o.owner == Some(owner);
+            // Merchants without work gather from the nearest deposit.
+            let idle_merchants: Vec<(u32, f32, f32)> = self
+                .objects
+                .iter()
+                .filter(|o| mine(o))
+                .filter_map(|o| {
+                    let s = o.ship.as_ref()?;
+                    (cargo_capacity(s.kind) > 0.0 && s.task.is_none() && s.path.is_empty())
+                        .then_some((o.id, o.x, o.y))
+                })
+                .collect();
+            for (id, x, y) in idle_merchants {
+                let dist = |o: &MapObject| (o.x - x).powi(2) + (o.y - y).powi(2);
+                let deposit = self
+                    .objects
+                    .iter()
+                    .filter(|o| {
+                        o.deposit
+                            .is_some_and(|d| d.remaining.is_none_or(|r| r > 0.0))
+                    })
+                    .min_by(|a, b| dist(a).total_cmp(&dist(b)))
+                    .map(|o| o.id);
+                if let Some(d) = deposit {
+                    let _ = self.order_gather(id, d);
+                }
+            }
+            // Shipyards build.
+            let merchants = self
+                .objects
+                .iter()
+                .filter(|o| {
+                    mine(o)
+                        && o.ship
+                            .as_ref()
+                            .is_some_and(|s| cargo_capacity(s.kind) > 0.0)
+                })
+                .count();
+            let yards: Vec<u32> = self
+                .objects
+                .iter()
+                .filter(|o| {
+                    mine(o)
+                        && matches!(o.class, ObjectClass::Building(SHIPYARD | DOCK))
+                        && self.construction_at(o.id).is_none()
+                        && self.production_at(o.id).is_none()
+                })
+                .map(|o| o.id)
+                .collect();
+            for (n, yard) in yards.into_iter().enumerate() {
+                let wanted: Vec<u8> = if merchants + n < 2 {
+                    vec![1, 0]
+                } else {
+                    let mut warships: Vec<u8> = economy::buildable_ships(owner.0)
+                        .filter(|&k| k >= 2)
+                        .collect();
+                    warships.sort_by_key(|&k| std::cmp::Reverse(economy::ship_cost(k).0));
+                    warships
+                };
+                if let Some(kind) = wanted
+                    .into_iter()
+                    .find(|&k| self.can_build_ship_for(owner, k).is_ok())
+                {
+                    let _ = self.start_ship(yard, kind);
+                }
+            }
+            // Attack waves.
+            if self.clock < AI_GRACE_SECONDS {
+                continue;
+            }
+            let fleet: Vec<u32> = self
+                .objects
+                .iter()
+                .filter(|o| {
+                    mine(o)
+                        && o.is_armed()
+                        && o.ship
+                            .as_ref()
+                            .is_some_and(|s| s.task.is_none() && s.path.is_empty())
+                })
+                .map(|o| o.id)
+                .collect();
+            if fleet.len() < AI_WAVE {
+                continue;
+            }
+            let Some(lead) = self.object_index(fleet[0]) else {
+                continue;
+            };
+            let (lx, ly) = (self.objects[lead].x, self.objects[lead].y);
+            let dist = |o: &MapObject| (o.x - lx).powi(2) + (o.y - ly).powi(2);
+            let target = self
+                .objects
+                .iter()
+                .filter(|o| o.owner == Some(human) && o.combat.is_some())
+                .min_by(|a, b| {
+                    // Buildings first, then ships.
+                    (a.ship.is_some(), dist(a))
+                        .partial_cmp(&(b.ship.is_some(), dist(b)))
+                        .unwrap()
+                })
+                .map(|o| o.id);
+            if let Some(target) = target {
+                for ship in fleet {
+                    let _ = self.order_attack(ship, target);
+                }
+            }
         }
     }
 
@@ -1299,7 +1478,7 @@ impl Scene {
             return Err("Choose an enemy ship".into());
         }
         let ship = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
-        if board && ship.crew.count == 0 {
+        if board && ship.crew.count() == 0 {
             return Err("There is no crew to board with".into());
         }
         ship.path.clear();
@@ -1401,41 +1580,63 @@ impl Scene {
         let (Some(i), Some(ti)) = (self.object_index(a), self.object_index(t)) else {
             return;
         };
-        let ca = self.objects[i].ship.as_ref().unwrap().crew;
-        let ct = self.objects[ti].ship.as_ref().unwrap().crew;
-        let pa = 100 * ca.melee() / (ca.melee() + ct.melee()).max(1);
-        // Each fighter strikes once a round, killing with his side's odds.
-        let kills_a = (0..ca.count).filter(|_| self.rng.chance(pa / 2)).count() as u32;
-        let kills_t = (0..ct.count)
-            .filter(|_| self.rng.chance((100 - pa) / 2))
-            .count() as u32;
-        let crew_a = ca.count.saturating_sub(kills_t);
-        let crew_t = ct.count.saturating_sub(kills_a);
-        self.objects[i].ship.as_mut().unwrap().crew.count = crew_a;
-        self.objects[ti].ship.as_mut().unwrap().crew.count = crew_t;
-        if crew_a == 0 {
+        let mut ca = self.objects[i].ship.as_ref().unwrap().crew;
+        let mut ct = self.objects[ti].ship.as_ref().unwrap().crew;
+        // Each squad strikes once a round at a random enemy squad, winning
+        // by the odds of their boarding strengths.
+        let mut strikes = Vec::new();
+        for (side, (from, to)) in [(&ca, &ct), (&ct, &ca)].into_iter().enumerate() {
+            for n in 0..from.count() {
+                if to.count() == 0 {
+                    break;
+                }
+                let target = self.rng.next() % to.count();
+                let (mine, theirs) = (
+                    combat::melee(from.kind_of(n)),
+                    combat::melee(to.kind_of(target)),
+                );
+                if self.rng.chance(50 * mine / (mine + theirs)) {
+                    strikes.push((side, target));
+                }
+            }
+        }
+        // Losses fall after the exchange, highest squad numbers first.
+        strikes.sort_by_key(|&(side, n)| std::cmp::Reverse((side, n)));
+        strikes.dedup();
+        for (side, n) in strikes {
+            if side == 0 {
+                ct.lose(n)
+            } else {
+                ca.lose(n)
+            }
+        }
+        self.objects[i].ship.as_mut().unwrap().crew = ca;
+        self.objects[ti].ship.as_mut().unwrap().crew = ct;
+        if ca.count() == 0 {
             self.objects[i].ship.as_mut().unwrap().task = None;
             return;
         }
-        if crew_t > 0 {
+        if ct.count() > 0 {
             return;
         }
-        // Captured: half the boarders (at least one) stay on the prize.
-        let prize = crew_a.div_ceil(2);
+        // Captured: half the boarding squads (at least one) stay on the
+        // prize, strongest first.
+        let mut prize = combat::Crew {
+            class: ct.class,
+            squads: [0; 3],
+        };
+        let mut stay = ca.count().div_ceil(2);
+        for kind in (0..3).rev() {
+            let take = stay.min(ca.squads[kind]);
+            prize.squads[kind] += take;
+            ca.squads[kind] -= take;
+            stay -= take;
+        }
         let owner = self.objects[i].owner;
         let ship = self.objects[i].ship.as_mut().unwrap();
-        ship.crew.count -= prize;
+        ship.crew = ca;
         ship.task = None;
-        self.capture(
-            t,
-            owner,
-            combat::Crew {
-                kind: ca.kind,
-                count: prize,
-            },
-            data,
-            caches,
-        );
+        self.capture(t, owner, prize, data, caches);
     }
 
     /// Gives ship `id` to `owner`, redrawing it in the new owner's colours.
@@ -1591,10 +1792,15 @@ impl Scene {
                 self.run_task(i, dt, data, caches);
             }
         }
+        self.clock += dt;
         self.ai_timer -= dt;
         if self.ai_timer <= 0.0 {
             self.ai_timer = 1.0;
             self.run_ai();
+            // Every few seconds the computer players manage their economy.
+            if (self.clock as u32) % AI_ECONOMY_PERIOD == 0 {
+                self.run_computer_economy();
+            }
             if self.outcome.is_none() {
                 self.outcome = self.judge();
             }
@@ -1805,7 +2011,7 @@ mod tests {
             scene.objects[scene.object_index(mine_id).unwrap()].x,
             scene.objects[scene.object_index(mine_id).unwrap()].y,
         );
-        for (id, dx, kind, crew) in [(mine_id, 0.0, 5u8, 20u32), (other_id, 40.0, 1, 3)] {
+        for (id, dx, kind, crew) in [(mine_id, 0.0, 5u8, 6u32), (other_id, 40.0, 1, 1)] {
             let i = scene.object_index(id).unwrap();
             let o = &mut scene.objects[i];
             o.x = x + dx;
@@ -1814,8 +2020,8 @@ mod tests {
             let s = o.ship.as_mut().unwrap();
             s.kind = kind;
             s.crew = combat::Crew {
-                kind: 2,
-                count: crew,
+                class: 2,
+                squads: [0, 0, crew],
             };
         }
         let i = scene.object_index(other_id).unwrap();
@@ -1841,7 +2047,7 @@ mod tests {
         }
         let prize = &scene.objects[scene.object_index(other_id).unwrap()];
         assert!(scene.is_own(prize), "the ship was captured");
-        assert!(prize.ship.as_ref().unwrap().crew.count > 0);
+        assert!(prize.ship.as_ref().unwrap().crew.count() > 0);
     }
 
     /// A boat founds a settlement on a distant shore (needs `OPENAC_DATA`).
@@ -1924,14 +2130,17 @@ mod tests {
         scene.train(home, 2).unwrap();
         scene.train(home, 2).unwrap();
         assert!(scene.train(home, 0).is_err(), "one crew type at a time");
-        assert_eq!((scene.amber, scene.fish), (amber - 140, fish - 600));
+        assert_eq!((scene.amber, scene.fish), (amber - 60, fish - 600));
         for _ in 0..50 * (2 * combat::CREW_TRAIN_SECONDS as usize + 1) {
             scene.update(0.02, &data, &mut caches);
         }
         assert_eq!(scene.garrison(home), [0, 0, 2]);
         assert!(scene.training_at(home).is_none());
         let i = scene.object_index(ship).unwrap();
-        scene.objects[i].ship.as_mut().unwrap().crew = combat::Crew { kind: 2, count: 0 };
+        scene.objects[i].ship.as_mut().unwrap().crew = combat::Crew {
+            class: 0,
+            squads: [0; 3],
+        };
         let i = scene.object_index(ship).unwrap();
         scene.objects[i].x = hx + 64.0;
         scene.objects[i].y = hy;
@@ -2202,6 +2411,48 @@ mod tests {
         scene.objects.retain(|o| !own.contains(&o.id));
         scene.update(1.0, &data, &mut caches);
         assert_eq!(scene.outcome, Some(Outcome::Defeat));
+    }
+
+    /// Computer players gather and build ships, then attack after the grace
+    /// period (needs `OPENAC_DATA`).
+    #[test]
+    fn computer_players_build_and_attack() {
+        let Some(root) = std::env::var_os("OPENAC_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+        let persians = (3, 3);
+        let ships = |s: &Scene| {
+            s.objects
+                .iter()
+                .filter(|o| o.owner == Some(persians) && o.ship.is_some())
+                .count()
+        };
+        let funds = scene.funds(persians);
+        for _ in 0..50 * 60 {
+            scene.update(0.02, &data, &mut caches);
+        }
+        assert!(ships(&scene) > 0, "the Persians launched ships");
+        assert!(scene.funds(persians).0 < funds.0, "and paid for them");
+        let attacking = |s: &Scene| {
+            s.objects.iter().any(|o| {
+                o.owner == Some(persians)
+                    && matches!(
+                        o.ship.as_ref().and_then(|s| s.task),
+                        Some(Task::Attack { .. })
+                    )
+            })
+        };
+        assert!(!attacking(&scene), "no attack during the grace period");
+        for _ in 0..50 * (AI_GRACE_SECONDS as usize) {
+            scene.update(0.02, &data, &mut caches);
+            if attacking(&scene) {
+                break;
+            }
+        }
+        assert!(attacking(&scene), "a wave set out");
     }
 
     /// A settlement puts up a smithy next to it (needs `OPENAC_DATA`).
