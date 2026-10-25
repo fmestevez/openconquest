@@ -6,7 +6,7 @@ use openac_formats::{players, MapGrid, ObjectClass, ObjectRecord, PlayerInfo};
 
 use crate::assets::GameData;
 use crate::combat::{self, Effect, Rng};
-use crate::economy::{self, DOCK, PORT, SETTLEMENT, SHIPYARD, TOWN};
+use crate::economy::{self, DOCK, PORT, SETTLEMENT, SHIPYARD, TOWN, WORKSHOP};
 use crate::magic::{self, Magic, Spell, Temple};
 use crate::nav::NavGrid;
 use crate::objects::{
@@ -25,7 +25,7 @@ use crate::terrain::Terrain;
 #[derive(Debug, Clone)]
 pub struct Training {
     pub site: u32,
-    /// Crew type (see `combat::CREW_NAMES`).
+    /// The item being made (see `combat::ITEM_NAMES`).
     pub kind: u8,
     /// Marines ordered and not yet trained.
     pub queued: u32,
@@ -113,7 +113,7 @@ pub struct Scene {
     /// Marines in training.
     pub trainings: Vec<Training>,
     /// Trained marines waiting at each settlement, by crew type.
-    pub garrisons: std::collections::HashMap<u32, [u32; 3]>,
+    pub garrisons: std::collections::HashMap<u32, [u32; 9]>,
     /// News for the player (e.g. an order that could not be carried out).
     pub messages: Vec<String>,
     pub minimap: Vec<u32>,
@@ -632,26 +632,34 @@ impl Scene {
         self.trainings.iter().find(|t| t.site == site)
     }
 
-    /// Marines waiting at `site`, by crew type.
-    pub fn garrison(&self, site: u32) -> [u32; 3] {
+    /// Items (marines or weapons) waiting at `site`, by item.
+    pub fn garrison(&self, site: u32) -> [u32; 9] {
         self.garrisons.get(&site).copied().unwrap_or_default()
     }
 
-    /// Orders one more marine of type `kind` at settlement `site`, paying
-    /// for it. A settlement trains one crew type at a time.
-    pub fn train(&mut self, site: u32, kind: u8) -> Result<(), String> {
-        let (amber, fish) = combat::CREW_COST[kind as usize];
+    /// Orders one more `item` (see `combat::ITEM_NAMES`) at `site`,
+    /// paying for it: marines at a settlement or town, weapons at a
+    /// workshop. A site makes one kind of item at a time.
+    pub fn train(&mut self, site: u32, item: u8) -> Result<(), String> {
+        let i = self.object_index(site).ok_or("No such building")?;
+        let fits = match self.objects[i].class {
+            ObjectClass::Building(SETTLEMENT | TOWN) => item < 3,
+            ObjectClass::Building(WORKSHOP) => (3..9).contains(&item),
+            _ => false,
+        };
+        if !fits {
+            return Err("This building cannot make that".into());
+        }
+        let (amber, fish) = combat::item_cost(item);
         if self.amber < amber || self.fish < fish {
             return Err("Not enough amber or fish".into());
         }
         match self.trainings.iter_mut().find(|t| t.site == site) {
-            Some(t) if t.kind != kind => {
-                return Err("The settlement is training other marines".into())
-            }
+            Some(t) if t.kind != item => return Err("The building is busy with other work".into()),
             Some(t) => t.queued += 1,
             None => self.trainings.push(Training {
                 site,
-                kind,
+                kind: item,
                 queued: 1,
                 elapsed: 0.0,
             }),
@@ -661,47 +669,72 @@ impl Scene {
         Ok(())
     }
 
-    /// Ship `ship` takes on the marines waiting at an own settlement or
-    /// town nearby, as many as it has room for. Returns how many squads
-    /// came aboard.
+    /// Ship `ship` takes on the marines and weapons waiting at own
+    /// settlements, towns and workshops nearby, as many as it has room for.
+    /// Returns how many items came aboard.
     pub fn load_crew(&mut self, ship: u32) -> Result<u32, String> {
         let t = TILE_SIZE as f32;
         let i = self.object_index(ship).ok_or("No such ship")?;
         let (sx, sy) = (self.objects[i].x, self.objects[i].y);
-        let site = self
+        let sites: Vec<u32> = self
             .objects
             .iter()
             .filter(|o| {
                 self.is_own(o)
-                    && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
+                    && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN | WORKSHOP))
                     && ((o.x - sx).powi(2) + (o.y - sy).powi(2)).sqrt() <= combat::LOAD_REACH * t
             })
             .map(|o| o.id)
-            .max_by_key(|&id| self.garrison(id).iter().sum::<u32>())
-            .ok_or("The ship must lie next to your settlement")?;
-        let mut garrison = self.garrison(site);
-        let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
-        let mut room = combat::CREW_CAPACITY.saturating_sub(s.crew.count());
-        if room == 0 {
-            return Err("The ship is full".into());
+            .collect();
+        if sites.is_empty() {
+            return Err("The ship must lie next to your settlement or workshop".into());
+        }
+        if self.objects[i].ship.is_none() || self.objects[i].combat.is_none() {
+            return Err("Not a ship".into());
         }
         let mut n = 0;
-        // Swordsmen first: they are the strongest boarders.
-        for kind in (0..3).rev() {
-            let take = room.min(garrison[kind]);
-            s.crew.squads[kind] += take;
-            garrison[kind] -= take;
-            room -= take;
-            n += take;
+        for site in sites {
+            let mut stock = self.garrison(site);
+            let obj = &mut self.objects[i];
+            let crew = &mut obj.ship.as_mut().unwrap().crew;
+            // Swordsmen first: they are the strongest boarders.
+            for kind in (0..3).rev() {
+                let take = combat::CREW_CAPACITY
+                    .saturating_sub(crew.count())
+                    .min(stock[kind]);
+                crew.squads[kind] += take;
+                stock[kind] -= take;
+                n += take;
+            }
+            // The heaviest weapons first.
+            let weapons = &mut obj.combat.as_mut().unwrap().weapons;
+            for item in (3..9).rev() {
+                let take = (combat::WEAPON_CAPACITY as usize)
+                    .saturating_sub(weapons.len())
+                    .min(stock[item] as usize);
+                weapons.extend(std::iter::repeat_n(item as u8, take));
+                stock[item] -= take as u32;
+                n += take as u32;
+            }
+            self.garrisons.insert(site, stock);
         }
         if n == 0 {
-            return Err("No marines are waiting".into());
+            let full = {
+                let o = &self.objects[i];
+                o.ship.as_ref().unwrap().crew.count() >= combat::CREW_CAPACITY
+                    && o.combat.as_ref().unwrap().weapons.len() >= combat::WEAPON_CAPACITY as usize
+            };
+            return Err(if full {
+                "The ship is full"
+            } else {
+                "Nothing is waiting to be loaded"
+            }
+            .into());
         }
-        self.garrisons.insert(site, garrison);
         Ok(n)
     }
 
-    /// Advances marine training.
+    /// Advances marine training and weapon building.
     fn run_training(&mut self, dt: f32) {
         for t in &mut self.trainings {
             t.elapsed += dt;
@@ -2134,7 +2167,7 @@ mod tests {
         for _ in 0..50 * (2 * combat::CREW_TRAIN_SECONDS as usize + 1) {
             scene.update(0.02, &data, &mut caches);
         }
-        assert_eq!(scene.garrison(home), [0, 0, 2]);
+        assert_eq!(scene.garrison(home)[..3], [0, 0, 2]);
         assert!(scene.training_at(home).is_none());
         let i = scene.object_index(ship).unwrap();
         scene.objects[i].ship.as_mut().unwrap().crew = combat::Crew {
@@ -2145,7 +2178,7 @@ mod tests {
         scene.objects[i].x = hx + 64.0;
         scene.objects[i].y = hy;
         assert_eq!(scene.load_crew(ship), Ok(2));
-        assert_eq!(scene.garrison(home), [0, 0, 0]);
+        assert_eq!(scene.garrison(home)[..3], [0, 0, 0]);
     }
 
     /// A Temple of the Sea learns spells; the wind obeys and a whirlpool
@@ -2453,6 +2486,71 @@ mod tests {
             }
         }
         assert!(attacking(&scene), "a wave set out");
+    }
+
+    /// A workshop builds a ballista and a ship alongside takes it on
+    /// (needs `OPENAC_DATA`).
+    #[test]
+    fn workshop_builds_weapons() {
+        let Some(root) = std::env::var_os("OPENAC_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.amber = 10_000;
+        let home = scene
+            .objects
+            .iter()
+            .find(|o| {
+                scene.is_own(o) && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
+            })
+            .unwrap();
+        let (hx, hy, home) = ((home.x / 64.0) as i32, (home.y / 64.0) as i32, home.id);
+        let site = (-BUILD_RADIUS..=BUILD_RADIUS)
+            .flat_map(|dy| (-BUILD_RADIUS..=BUILD_RADIUS).map(move |dx| (hx + dx, hy + dy)))
+            .find(|&(x, y)| scene.check_site(home, WORKSHOP, x, y).is_ok())
+            .unwrap();
+        scene
+            .place_building(home, WORKSHOP, site.0, site.1, &data, &mut caches)
+            .unwrap();
+        let workshop = scene
+            .objects
+            .iter()
+            .find(|o| o.class == ObjectClass::Building(WORKSHOP))
+            .unwrap()
+            .id;
+        assert!(
+            scene.train(workshop, 0).is_err(),
+            "workshops make weapons, not marines"
+        );
+        assert!(
+            scene.train(home, 6).is_err(),
+            "settlements train marines, not weapons"
+        );
+        let amber = scene.amber;
+        scene.train(workshop, 6).unwrap();
+        assert_eq!(scene.amber, amber - 70);
+        for _ in 0..50 * (combat::CREW_TRAIN_SECONDS as usize + 1) {
+            scene.update(0.02, &data, &mut caches);
+        }
+        assert_eq!(scene.garrison(workshop)[6], 1);
+        let ship = scene
+            .objects
+            .iter()
+            .find(|o| scene.is_own(o) && o.ship.is_some())
+            .unwrap()
+            .id;
+        let w = scene.object_index(workshop).unwrap();
+        let (wx, wy) = (scene.objects[w].x, scene.objects[w].y);
+        let i = scene.object_index(ship).unwrap();
+        scene.objects[i].x = wx + 64.0;
+        scene.objects[i].y = wy;
+        scene.objects[i].combat.as_mut().unwrap().weapons.clear();
+        assert_eq!(scene.load_crew(ship), Ok(1));
+        let i = scene.object_index(ship).unwrap();
+        assert_eq!(scene.objects[i].combat.as_ref().unwrap().weapons, vec![6]);
+        assert!(scene.objects[i].is_armed());
     }
 
     /// A settlement puts up a smithy next to it (needs `OPENAC_DATA`).

@@ -20,6 +20,7 @@ pub const BUILDING_SECONDS: f32 = 30.0;
 
 pub const SETTLEMENT: u32 = 0x32;
 pub const TOWN: u32 = 0x33;
+pub const WORKSHOP: u32 = 0x37;
 pub const PORT: u32 = 0x39;
 pub const TEMPLE_OF_THE_SEA: u32 = 0x3d;
 pub const TEMPLE_OF_WAR: u32 = 0x3e;

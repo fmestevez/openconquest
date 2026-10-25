@@ -41,8 +41,8 @@ half again as hard) and board enemy ships, whose marines fight it out;
 a ship whose crew falls is captured. Merchants found new settlements on
 any free shore. Settlements train squads of marines (bowmen, javelin men and
 swordsmen, at the original costs) that ships alongside take on with Load;
-ships carry the marines and weapons (catapults, ballistae, onagers, ...)
-given in their mission records.
+workshops build weapons (gastraphetes, catapults, ballistae, onagers) that
+ships take on the same way.
 A Temple of the Sea learns spells in the original order and at the
 original prices: so far calling the wind, raising reefs and summoning
 whirlpools work, and whirlpools and reefs damage ships that sail into them.

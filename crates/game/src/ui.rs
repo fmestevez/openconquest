@@ -823,7 +823,7 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
     if garrison.iter().any(|&n| n > 0) {
         let parts: Vec<String> = garrison
             .iter()
-            .zip(crate::combat::CREW_NAMES)
+            .zip(crate::combat::ITEM_NAMES)
             .filter(|(n, _)| **n > 0)
             .map(|(n, name)| format!("{n} {name}"))
             .collect();
@@ -833,7 +833,7 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
         text += &format!(
             ". Training {} {}",
             t.queued,
-            crate::combat::CREW_NAMES[t.kind as usize]
+            crate::combat::ITEM_NAMES[t.kind as usize % 9]
         );
     }
     if let Some(c) = scene.construction_at(obj.id) {

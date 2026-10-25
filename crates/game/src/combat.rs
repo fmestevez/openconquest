@@ -94,6 +94,18 @@ pub const CREW_TRAIN_SECONDS: f32 = 7.0;
 
 /// Squads of marines a ship can carry. Placeholder.
 pub const CREW_CAPACITY: u32 = 6;
+/// Weapons a ship can carry. Placeholder.
+pub const WEAPON_CAPACITY: u32 = 4;
+
+/// Cost of an item in amber and fish: marines as above; weapons 50 amber
+/// (items 3-5) or 70 (6-8) (0x597164 by item / 3, workshop menu 0x4361c0).
+pub fn item_cost(item: u8) -> (u32, u32) {
+    match item {
+        0..=2 => CREW_COST[item as usize],
+        3..=5 => (50, 0),
+        _ => (70, 0),
+    }
+}
 
 /// How close (in cells) a ship must lie to a settlement to take on marines.
 /// Placeholder.

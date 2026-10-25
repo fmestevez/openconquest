@@ -238,7 +238,7 @@ impl App {
                     "The shipyard is busy".to_string()
                 }
                 Some(kind) => self.scene.can_build_ship(kind).err().unwrap_or_default(),
-                None if (Command::TRAIN_BOWMEN.0..=Command::TRAIN_SWORDSMEN.0)
+                None if (Command::TRAIN_BOWMEN.0..=Command::TRAIN_BOWMEN.0 + 8)
                     .contains(&entry.command.0) =>
                 {
                     "Not enough amber or fish".to_string()
@@ -290,7 +290,7 @@ impl App {
                 self.pending = None;
                 self.scene.stop(id);
             }
-            c if (Command::TRAIN_BOWMEN.0..=Command::TRAIN_SWORDSMEN.0).contains(&c.0) => {
+            c if (Command::TRAIN_BOWMEN.0..=Command::TRAIN_BOWMEN.0 + 8).contains(&c.0) => {
                 let kind = entry.command.0 - Command::TRAIN_BOWMEN.0;
                 match self.scene.train(id, kind) {
                     Ok(()) => self.say(entry.command.name()),
@@ -298,7 +298,7 @@ impl App {
                 }
             }
             Command::LOAD => match self.scene.load_crew(id) {
-                Ok(n) => self.say(format!("{n} marines came aboard")),
+                Ok(n) => self.say(format!("{n} marines and weapons came aboard")),
                 Err(e) => self.say(e),
             },
             magic::GET_MAGIC => {

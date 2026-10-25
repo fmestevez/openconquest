@@ -356,7 +356,13 @@ Combat tables:
   catapult (BLDSMALKAT), 6 ballista (BLDBALIST), 7 big catapult
   (BLDBIGKAT), 8 onager (BLDONAGR). Settlements train items 0-2 (30
   amber each, u16 table at 0x597164, plus fish hundreds 2, 2, 3 at
-  0x597170); menu 0x4361c0 builds items 3-8 (50 amber for 3-5, 70 for 6-8).
+  0x597170); the workshop (StudioClassTy, menu 0x4361c0) builds items 3-8
+  (50 amber for 3-5, 70 for 6-8) in slots 0-2 and 4-6, and has a research
+  page (cost tables 0x5971c4, 0x59720c, 0x597254). Menus by class (vtable
+  slot 0x68, 0x68 after GetMessage): smithy 0x433e60 (armour levels 0x36,
+  0x37 for 30/60 amber, ram levels 0x38, 0x39 for 25/50, research time
+  150/200; refits 0x49-0x4e), sage school 0x430f90 (0x3c, 0x47, 0x48, 0x4f
+  and the special ship upgrades 0x50-0x53).
 - 0x5964d8: items each ship type carries when built, 40 bytes per type
   (u32 count, then up to nine u32 items): royal 0,2,4,8; bomber 0,1,4,6,7;
   boarder 1,2,2,3; rammer 1,4,5; ship killer 5,4; men killer 3,0; quick

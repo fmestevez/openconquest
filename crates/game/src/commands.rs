@@ -9,7 +9,9 @@
 
 use openac_formats::ObjectClass;
 
-use crate::economy::{self, DOCK, SETTLEMENT, SHIPYARD, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR, TOWN};
+use crate::economy::{
+    self, DOCK, SETTLEMENT, SHIPYARD, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR, TOWN, WORKSHOP,
+};
 use crate::magic::{self, Spell, Temple};
 use crate::objects::{MapObject, SHIP_NAMES};
 use crate::scene::Scene;
@@ -38,7 +40,6 @@ impl Command {
     pub const BUILD_STRUCTURES: Command = Command(0x10);
     pub const REPAIR_BUILDING: Command = Command(0x11);
     pub const TRAIN_BOWMEN: Command = Command(0x2d);
-    pub const TRAIN_SWORDSMEN: Command = Command(0x2f);
     pub const UPGRADE_TOWN: Command = Command(0x3a);
     pub const UPGRADE_DOCK: Command = Command(0x3b);
     pub const BEHAVIOUR: Command = Command(0x6c);
@@ -104,6 +105,12 @@ impl Command {
                     0x2d => "ONION",
                     0x2e => "DART",
                     0x2f => "SWORD",
+                    0x30 => return Some("CBUT_BLDTRANS".into()),
+                    0x31 => return Some("CBUT_BLDGASTR".into()),
+                    0x32 => return Some("CBUT_BLDSMALKAT".into()),
+                    0x33 => return Some("CBUT_BLDBALIST".into()),
+                    0x34 => return Some("CBUT_BLDBIGKAT".into()),
+                    0x35 => return Some("CBUT_BLDONAGR".into()),
                     0x3a => "UPGTOWN",
                     0x3b => "UPGDOCK",
                     _ => return None,
@@ -144,6 +151,12 @@ impl Command {
                 return format!(
                     "Train {}",
                     crate::combat::CREW_NAMES[(self.0 - 0x2d) as usize]
+                )
+            }
+            0x30..=0x35 => {
+                return format!(
+                    "Build a {}",
+                    crate::combat::ITEM_NAMES[(self.0 - 0x2d) as usize]
                 )
             }
             0x54 => "Learn a spell",
@@ -297,6 +310,7 @@ pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
         ObjectClass::Ship => ship_menu(obj, &mut menu),
         ObjectClass::Building(SHIPYARD | DOCK) => shipyard_menu(scene, obj, &mut menu),
         ObjectClass::Building(SETTLEMENT | TOWN) => settlement_menu(scene, obj, &mut menu),
+        ObjectClass::Building(WORKSHOP) => workshop_menu(scene, obj, &mut menu),
         ObjectClass::Building(c @ (TEMPLE_OF_THE_SEA | TEMPLE_OF_WAR)) => {
             temple_menu(scene, Temple::of_class(c).unwrap(), &mut menu)
         }
@@ -373,6 +387,21 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     if obj.class == ObjectClass::Building(SHIPYARD) {
         let enabled = building.is_none() && scene.amber >= economy::building_cost(DOCK);
         set(menu, 11, Command::UPGRADE_DOCK, enabled);
+    }
+}
+
+/// The workshop (StudioClassTy, menu 0x4361c0) builds weapons, items 3-8
+/// (commands 0x30-0x35), in slots 0-2 and 4-6.
+fn workshop_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
+    let making = scene.training_at(obj.id);
+    for item in 3u8..9 {
+        let slot = (item % 3) as usize + (item as usize / 3) * 4 - 4;
+        let (amber, fish) = crate::combat::item_cost(item);
+        menu[slot] = Some(Slot {
+            command: Command(0x2d + item),
+            enabled: scene.amber >= amber && scene.fish >= fish,
+            progress: making.filter(|t| t.kind == item).map(|t| t.progress()),
+        });
     }
 }
 
