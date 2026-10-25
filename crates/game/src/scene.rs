@@ -40,6 +40,29 @@ impl Training {
     }
 }
 
+/// How a mission ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Victory,
+    Defeat,
+}
+
+/// The mission objectives (string resources 3000-3010), in `CONDITIONS`
+/// order, with the record classes each one counts.
+pub const OBJECTIVES: [(&str, &[u32]); 11] = [
+    ("Kill all enemies", &[]),
+    ("Kill all dragons", &[0x44]),
+    ("Kill all wizards of fire", &[0x43]),
+    ("Kill all wizards of wind", &[0x42]),
+    ("Kill all sirens", &[0x1fd]),
+    ("Kill all gorgons", &[0x1fa]),
+    ("Kill all harpies", &[0x45]),
+    ("Kill all sea creatures", &[0x1fb]),
+    ("Kill all amazons", &[0x48]),
+    ("Kill all minotaurs", &[0x47]),
+    ("Kill all cyclops", &[0x46]),
+];
+
 /// A building going up.
 #[derive(Debug, Clone)]
 pub struct Construction {
@@ -92,6 +115,12 @@ pub struct Scene {
     /// Seconds until the computer players next decide.
     ai_timer: f32,
     pub wind: Wind,
+    /// The mission's victory conditions (see `OBJECTIVES`).
+    pub conditions: [bool; 11],
+    /// Set once the mission is won or lost.
+    pub outcome: Option<Outcome>,
+    /// The mission briefing, as paragraphs.
+    pub briefing: Vec<String>,
     /// The human player's temple magic.
     pub magic: Magic,
 }
@@ -122,6 +151,7 @@ impl Scene {
         let nav = NavGrid::from_map(&grid);
         let players = players(&archive).unwrap_or_default();
         let human = players.iter().copied().find(|p| !p.computer);
+        let conditions = openac_formats::conditions(&archive)?;
         Ok(Self {
             mission: mission.to_string(),
             grid,
@@ -142,6 +172,9 @@ impl Scene {
             rng: Rng(0x1234_5678),
             ai_timer: 0.0,
             wind: Wind::new(0x5eed_0001),
+            conditions,
+            outcome: None,
+            briefing: openac_formats::briefing(&archive).unwrap_or_default(),
             magic: Magic::default(),
         })
     }
@@ -490,6 +523,47 @@ impl Scene {
         for id in wrecked {
             self.hit(id, 0.0, data, caches);
         }
+    }
+
+    /// Whether objective `i` (see `OBJECTIVES`) is achieved.
+    pub fn objective_met(&self, i: usize) -> bool {
+        let standing = |o: &&MapObject| o.combat.is_some();
+        if i == 0 {
+            // No other player has a ship or building left.
+            return !self.objects.iter().filter(standing).any(|o| {
+                matches!(
+                    o.class,
+                    ObjectClass::Ship | ObjectClass::Building(_) | ObjectClass::Barbarian(_)
+                ) && o.owner.is_some_and(|w| w != combat::MONSTERS)
+                    && !self.is_own(o)
+            });
+        }
+        let classes = OBJECTIVES[i].1;
+        !self
+            .objects
+            .iter()
+            .filter(standing)
+            .any(|o| classes.contains(&o.record.class_id))
+    }
+
+    /// The mission's outcome as things stand (0x448610): defeat when the
+    /// player has no ship or building left, victory when every condition
+    /// of the mission is met.
+    fn judge(&self) -> Option<Outcome> {
+        self.human?;
+        let alive = self.objects.iter().any(|o| {
+            self.is_own(o)
+                && o.combat.is_some()
+                && matches!(o.class, ObjectClass::Ship | ObjectClass::Building(_))
+        });
+        if !alive {
+            return Some(Outcome::Defeat);
+        }
+        let wanted: Vec<usize> = (0..OBJECTIVES.len())
+            .filter(|&i| self.conditions[i])
+            .collect();
+        (!wanted.is_empty() && wanted.iter().all(|&i| self.objective_met(i)))
+            .then_some(Outcome::Victory)
     }
 
     /// The training going on at `site`, if any.
@@ -1521,6 +1595,9 @@ impl Scene {
         if self.ai_timer <= 0.0 {
             self.ai_timer = 1.0;
             self.run_ai();
+            if self.outcome.is_none() {
+                self.outcome = self.judge();
+            }
         }
         self.wind.update(dt);
         self.run_training(dt);
@@ -2078,6 +2155,53 @@ mod tests {
             scene.update(0.02, &data, &mut caches);
         }
         assert_eq!(hull(&scene, mine), 10_000.0);
+    }
+
+    /// Missions are won when every condition is met and lost when the
+    /// player has nothing left (needs `OPENAC_DATA`).
+    #[test]
+    fn victory_and_defeat() {
+        let Some(root) = std::env::var_os("OPENAC_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        // single04: kill all enemies and the dragons.
+        let mut scene = Scene::load(&data, &mut caches, "single04").unwrap();
+        assert_eq!(&scene.conditions[..2], &[true, true]);
+        let enemy = |s: &Scene, o: &MapObject| {
+            o.owner.is_some_and(|w| w != combat::MONSTERS) && !s.is_own(o)
+        };
+        let keep: Vec<u32> = scene
+            .objects
+            .iter()
+            .filter(|o| !enemy(&scene, o))
+            .map(|o| o.id)
+            .collect();
+        scene.objects.retain(|o| keep.contains(&o.id));
+        scene.update(1.0, &data, &mut caches);
+        assert!(scene.objective_met(0) && !scene.objective_met(1));
+        assert_eq!(scene.outcome, None, "the dragons still live");
+        let nest = scene
+            .objects
+            .iter()
+            .find(|o| o.record.class_id == 0x44)
+            .unwrap()
+            .id;
+        scene.hit(nest, 1.0e6, &data, &mut caches);
+        scene.update(1.0, &data, &mut caches);
+        assert_eq!(scene.outcome, Some(Outcome::Victory));
+
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        let own: Vec<u32> = scene
+            .objects
+            .iter()
+            .filter(|o| scene.is_own(o))
+            .map(|o| o.id)
+            .collect();
+        scene.objects.retain(|o| !own.contains(&o.id));
+        scene.update(1.0, &data, &mut caches);
+        assert_eq!(scene.outcome, Some(Outcome::Defeat));
     }
 
     /// A settlement puts up a smithy next to it (needs `OPENAC_DATA`).

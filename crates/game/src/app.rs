@@ -75,6 +75,8 @@ pub struct App {
     pending: Option<Command>,
     /// Which menu of the selected object is shown.
     page: Page,
+    /// The mission briefing is shown (and the game waits).
+    briefing: bool,
     status: Option<(String, Instant)>,
     started: Instant,
     last_frame: Instant,
@@ -118,6 +120,7 @@ impl App {
             selected: None,
             pending: None,
             page: Page::Main,
+            briefing: true,
             status: None,
             started: now,
             last_frame: now,
@@ -163,6 +166,7 @@ impl App {
             hover_button: self.cursor.and_then(|c| self.button_at(c)),
             page: self.page,
             site: None,
+            briefing: self.briefing,
         }
     }
 
@@ -387,6 +391,7 @@ impl App {
                 self.pending = None;
                 self.mission_index = next;
                 self.center_pending = true;
+                self.briefing = true;
                 self.update_title();
             }
             Err(e) => eprintln!("failed to load {}: {e:#}", self.missions[next]),
@@ -675,7 +680,10 @@ impl App {
     }
 
     fn update(&mut self, dt: f32) {
-        self.scene.update(dt, &self.data, &mut self.caches);
+        // The game waits while the briefing is read.
+        if !self.briefing {
+            self.scene.update(dt, &self.data, &mut self.caches);
+        }
         let latest = std::mem::take(&mut self.scene.messages).pop();
         if let Some(msg) = latest {
             self.say(msg);
@@ -831,6 +839,19 @@ impl ApplicationHandler for App {
                 if event.repeat {
                     return;
                 }
+                if code == KeyCode::F1 {
+                    self.briefing = !self.briefing;
+                    return;
+                }
+                if self.briefing
+                    && matches!(
+                        code,
+                        KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space | KeyCode::Escape
+                    )
+                {
+                    self.briefing = false;
+                    return;
+                }
                 let (screen, _) = self.placement();
                 let map = self.scene.map_size();
                 let center = (
@@ -903,6 +924,9 @@ impl ApplicationHandler for App {
                             self.right_click(c);
                         }
                     }
+                }
+                (MouseButton::Left, ElementState::Pressed) if self.briefing => {
+                    self.briefing = false;
                 }
                 (MouseButton::Left, ElementState::Pressed) => {
                     if let Some(c) = self.cursor {

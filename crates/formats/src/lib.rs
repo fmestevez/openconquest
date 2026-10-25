@@ -19,7 +19,9 @@ pub use archive::{Archive, Entry, ResourceKind};
 pub use font::{Font, Glyph};
 pub use image::{parse_palette_animation, Bitmap, Mask, Palette, PaletteCycle, Rgb, Sprite};
 pub use map::{MapGrid, TileRef, TileSet, TileSetLibrary};
-pub use mission::{object_records, players, ObjectClass, ObjectRecord, PlayerInfo};
+pub use mission::{
+    briefing, conditions, object_records, players, ObjectClass, ObjectRecord, PlayerInfo,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

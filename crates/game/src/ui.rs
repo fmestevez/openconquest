@@ -526,9 +526,96 @@ pub struct GameView<'a> {
     pub page: Page,
     /// A building site being chosen: the cell and whether it is allowed.
     pub site: Option<((i32, i32), bool)>,
+    /// Show the mission briefing over the view.
+    pub briefing: bool,
 }
 
 impl GameView<'_> {
+    /// The mission name and its objectives, ticked off as they are met.
+    fn headline(&self) -> String {
+        let goals: Vec<String> = (0..crate::scene::OBJECTIVES.len())
+            .filter(|&i| self.scene.conditions[i])
+            .map(|i| {
+                let name = crate::scene::OBJECTIVES[i].0;
+                if self.scene.objective_met(i) {
+                    format!("{name} (done)")
+                } else {
+                    name.to_string()
+                }
+            })
+            .collect();
+        let name = self.scene.mission.to_uppercase();
+        if goals.is_empty() {
+            name
+        } else {
+            format!("{name}: {}", goals.join(", "))
+        }
+    }
+
+    /// The mission briefing in a box over the view; the first paragraph
+    /// is the title.
+    fn draw_briefing(&self, frame: &mut Frame, screen: &Screen, scale: u32) {
+        let line = self.text.line_height() * scale;
+        let pad = 12 * scale;
+        let width = (screen.w * 3 / 5).max(200 * scale);
+        let mut lines: Vec<String> = Vec::new();
+        for (i, p) in self.scene.briefing.iter().enumerate() {
+            if i > 0 {
+                lines.push(String::new());
+            }
+            lines.extend(wrap(self.text, p, width / scale));
+        }
+        lines.push(String::new());
+        lines.push("Click or press Enter to begin (F1 shows this again)".to_string());
+        let height = (lines.len() as u32 * line).min(screen.h.saturating_sub(2 * pad));
+        let x = screen.x + screen.w.saturating_sub(width) / 2;
+        let y = screen.y + screen.h.saturating_sub(height) / 2;
+        shade_rect(
+            frame,
+            x.saturating_sub(pad),
+            y.saturating_sub(pad),
+            width + 2 * pad,
+            height + 2 * pad,
+        );
+        for (i, l) in lines.iter().enumerate() {
+            let ly = y + i as u32 * line;
+            if ly + line > y + height {
+                break;
+            }
+            self.text.draw(frame, x as i32, ly as i32, scale, l);
+        }
+    }
+
+    /// A banner across the view announcing the end of the mission.
+    fn draw_outcome(
+        &self,
+        frame: &mut Frame,
+        screen: &Screen,
+        outcome: crate::scene::Outcome,
+        scale: u32,
+    ) {
+        let text = match outcome {
+            crate::scene::Outcome::Victory => "Victory! The mission is accomplished.",
+            crate::scene::Outcome::Defeat => "Defeat. Your fleet and towns are lost.",
+        };
+        let scale = scale * 2;
+        let (w, h) = (
+            self.text.measure(text) * scale,
+            self.text.line_height() * scale,
+        );
+        let pad = 8 * scale;
+        let x = screen.x + screen.w.saturating_sub(w) / 2;
+        let y = screen.y + screen.h.saturating_sub(h) / 3;
+        shade_rect(
+            frame,
+            x.saturating_sub(pad),
+            y.saturating_sub(pad),
+            w + 2 * pad,
+            h + 2 * pad,
+        );
+        self.text.draw(frame, x as i32, y as i32, scale, text);
+    }
+
     /// The world viewport and minimap placement for a window size.
     pub fn placement(&self, window: (u32, u32)) -> (Screen, MinimapRect, Option<Layout>) {
         match self.interface {
@@ -602,6 +689,12 @@ impl GameView<'_> {
             }
         }
         draw_minimap(frame, &minimap, self.scene, self.camera, &screen);
+        if let Some(outcome) = self.scene.outcome {
+            self.draw_outcome(frame, &screen, outcome, text_scale);
+        }
+        if self.briefing && !self.scene.briefing.is_empty() {
+            self.draw_briefing(frame, &screen, text_scale);
+        }
         if let (Some(ui), Some(layout)) = (self.interface, &layout) {
             ui.draw_resources(
                 frame,
@@ -611,15 +704,13 @@ impl GameView<'_> {
                 self.time_ms,
             );
             ui.draw_wind(frame, layout, &self.scene.wind);
-            let msg = self
-                .status
-                .map_or_else(|| self.scene.mission.to_uppercase(), str::to_string);
+            let msg = self.status.map_or_else(|| self.headline(), str::to_string);
             ui.draw_message(frame, layout, self.text, &msg);
             return;
         }
         // Without the interface: mission name, selection and status messages
         // in the top-left corner of the view.
-        let mut lines = vec![self.scene.mission.to_uppercase()];
+        let mut lines = vec![self.headline()];
         if let Some(obj) = selected {
             lines.push(obj.label.clone());
         }

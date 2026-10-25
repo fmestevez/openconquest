@@ -508,6 +508,24 @@ remapped through a darkening table (0x5c1358).
 
 ## Missions (partially understood)
 
+`CONDITIONS` (record, 11 u32 flags, read at 0x4ed4c0 into the game object
+at +0x32a5; missing: only flag 0) lists the mission's victory conditions,
+named by string resources 3000-3010: kill all enemies, dragons, wizards of
+fire, wizards of wind, sirens, gorgons, harpies, sea creatures, amazons,
+minotaurs, cyclops. 0x448610 counts each player's remaining objects using
+a 5x4 side table (+0x1a1d; 1 = the human's side): defeat when the human's
+side has none, victory when every enabled condition's "remaining" flag
+(+0x32d1..) is clear. Which classes count for each creature condition is
+inferred (dragon/harpy nests 0x44/0x45, war/sea castles 0x43/0x42, sirens
+0x1fd, gorgons 0x1fa, sea creatures 0x1fb, lairs 0x48/0x47/0x46): every
+mission that enables a condition contains such objects. `WEATHE` (record):
+field 5 looks like the weather's random seed; the demo stores an explicit
+wind. `DISCRIPTION` (text) is the mission briefing: a 24-byte header (u32s 0,
+0, 23, 40, 20, 0), marker bytes 0xff 0xff 0xfe, then NUL-separated lines
+already wrapped for the original box; a line starting with `@` begins a
+paragraph (`@ ` alone is a blank line).
+
+
 A mission archive (`missNNN`, `singleNN`, `battleNN`) contains:
 
 | Name | Kind | Notes |

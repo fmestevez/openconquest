@@ -39,6 +39,13 @@ impl Combatant {
                 )
             }
             ObjectClass::Building(c) => (building_strength(c), f(7), fort_weapons(c, &rec.fields)),
+            // Barbarian strongholds, creatures and their lairs can be
+            // destroyed too (victory conditions count them).
+            ObjectClass::Barbarian(_)
+            | ObjectClass::Castle(_)
+            | ObjectClass::HarpyNest
+            | ObjectClass::CreatureSpawn
+            | ObjectClass::Monster(0x1fa | 0x1fb | 0x1fd) => (MONSTER_STRENGTH, 100, Vec::new()),
             _ => return None,
         };
         Some(Self {
@@ -150,6 +157,12 @@ pub const BOARD_ROUND: f32 = 1.0;
 
 /// Distance at which ships touch, for ramming and boarding. Placeholder.
 pub const CONTACT: f32 = 48.0;
+
+/// Hull points of barbarian strongholds, creatures and lairs. Placeholder.
+pub const MONSTER_STRENGTH: f32 = 2000.0;
+
+/// The owner given to creatures and their lairs: hostile to every player.
+pub const MONSTERS: (u32, u32) = (99, 0);
 
 /// Hull points of a building. Placeholder: three times its amber cost.
 pub fn building_strength(class: u32) -> f32 {

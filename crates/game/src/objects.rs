@@ -478,6 +478,10 @@ pub fn resolve(
             ObjectClass::Building(_) | ObjectClass::Barbarian(_) => {
                 Some((f(field::NATION), f(field::PLAYER)))
             }
+            ObjectClass::Castle(_)
+            | ObjectClass::HarpyNest
+            | ObjectClass::CreatureSpawn
+            | ObjectClass::Monster(0x1fa | 0x1fb | 0x1fd) => Some(crate::combat::MONSTERS),
             _ => None,
         },
         label: label(rec),

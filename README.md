@@ -44,6 +44,10 @@ swordsmen, at the original costs) that ships alongside take on with Load.
 A Temple of the Sea learns spells in the original order and at the
 original prices: so far calling the wind, raising reefs and summoning
 whirlpools work, and whirlpools and reefs damage ships that sail into them.
+Missions are won by meeting their original victory conditions (kill all
+enemies, and in some single missions the dragons, harpies, wizards, sirens,
+gorgons, sea creatures, amazons, minotaurs or cyclops; the objectives are
+shown in the message line) and lost when you have no ship or building left.
 A Temple of War learns protection from weapons and from magic, flame and
 lightning, with the original effect animations.
 The wind changes as in the original and speeds up or
@@ -103,6 +107,7 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 | Esc | Deselect (quits when nothing is selected) |
 | Click/drag on the minimap | Jump |
 | Tab | Toggle the interface (full-window view) |
+| F1 | Show the mission briefing again (it is shown at the start; the game waits until it is closed) |
 | Page Up / Page Down | Previous / next mission |
 | F11, Alt+Enter | Fullscreen |
 

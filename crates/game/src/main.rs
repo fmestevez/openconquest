@@ -195,6 +195,7 @@ fn screenshot(
         hover_button: None,
         page: Default::default(),
         site: None,
+        briefing: false,
     };
     let (screen, _, _) = view.placement(size);
     let map = scene.map_size();

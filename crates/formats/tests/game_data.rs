@@ -228,3 +228,24 @@ fn every_mission_has_one_human_player() {
         }
     }
 }
+
+#[test]
+fn briefings_read() {
+    let Some(root) = data_dir() else { return };
+    let path = archives(&root)
+        .into_iter()
+        .find(|p| p.ends_with("miss001.dkx"))
+        .unwrap();
+    let archive = Archive::open(&path).unwrap();
+    let text = openac_formats::briefing(&archive).unwrap();
+    assert_eq!(text[0], "\"The Magic Oar\"");
+    assert!(text
+        .iter()
+        .any(|p| p.starts_with("The glorious town of Iolcus")));
+    assert!(text
+        .iter()
+        .all(|p| !p.is_empty() && !p.contains('@') && !p.contains('\0')));
+    assert!(text
+        .iter()
+        .any(|p| p.contains("son of King Eson would lead")));
+}

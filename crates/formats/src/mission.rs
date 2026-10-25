@@ -109,6 +109,66 @@ impl ObjectRecord {
 }
 
 /// Reads all object records of a mission archive, ordered by id.
+/// The mission briefing (text `DISCRIPTION`) as paragraphs: after a
+/// 24-byte header and a few marker bytes, NUL-separated lines (wrapped for
+/// the original's box), where a line starting with `@` starts a paragraph.
+pub fn briefing(archive: &Archive) -> Result<Vec<String>> {
+    let Some(e) = archive.find("DISCRIPTION", ResourceKind::Text) else {
+        return Ok(Vec::new());
+    };
+    let data = archive.read_entry(e)?;
+    let body = data.get(24..).unwrap_or_default();
+    let start = body.iter().position(|&b| b < 0xf0).unwrap_or(body.len());
+    let mut paragraphs: Vec<String> = Vec::new();
+    for line in body[start..].split(|&b| b == 0) {
+        // Windows-1252 text; the characters used are all Latin-1.
+        let mut text: String = line.iter().map(|&b| b as char).collect();
+        if let Some(rest) = text.strip_prefix('@') {
+            text = rest.to_string();
+            paragraphs.push(String::new());
+        }
+        match paragraphs.last_mut() {
+            // Each line was shown on its own, so the break may stand for a
+            // space.
+            Some(p) => {
+                if !p.is_empty() && !p.ends_with(' ') && !text.starts_with(' ') && !text.is_empty()
+                {
+                    p.push(' ');
+                }
+                p.push_str(&text);
+            }
+            None => paragraphs.push(text),
+        }
+    }
+    Ok(paragraphs
+        .into_iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect())
+}
+
+/// Number of victory conditions in a mission's `CONDITIONS` record.
+pub const CONDITIONS: usize = 11;
+
+/// The mission's victory conditions (record `CONDITIONS`, eleven u32 flags,
+/// read at 0x4ed4c0): 0 kill all enemies, then kill all dragons, wizards of
+/// fire, wizards of wind, sirens, gorgons, harpies, sea creatures, amazons,
+/// minotaurs and cyclops (string resources 3000-3010). Missions without the
+/// record only require killing all enemies.
+pub fn conditions(archive: &Archive) -> Result<[bool; CONDITIONS]> {
+    let mut out = [false; CONDITIONS];
+    match archive.find("CONDITIONS", ResourceKind::Record) {
+        Some(e) => {
+            let data = archive.read_entry(e)?;
+            for (flag, chunk) in out.iter_mut().zip(data.chunks_exact(4)) {
+                *flag = u32::from_le_bytes(chunk.try_into().unwrap()) != 0;
+            }
+        }
+        None => out[0] = true,
+    }
+    Ok(out)
+}
+
 pub fn object_records(archive: &Archive) -> Result<Vec<ObjectRecord>> {
     let mut out = Vec::new();
     for e in archive.entries() {
