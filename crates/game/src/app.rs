@@ -69,6 +69,12 @@ fn group_offset(k: usize) -> (f32, f32) {
     (r * a.cos(), r * a.sin())
 }
 
+/// The first of the ten flag frames of each player (nation x 4 + slot;
+/// table 0x5c2560), in `M_FLAGS`.
+const FLAG_STARTS: [u32; 16] = [
+    10, 50, 90, 130, 20, 60, 100, 140, 30, 70, 110, 150, 0, 40, 80, 120,
+];
+
 /// The title screen's buttons, in the original's order.
 const TITLE_BUTTONS: [&str; 6] = [
     "Best Conquerors",
@@ -152,21 +158,63 @@ struct Preview {
     map: Option<Rc<crate::assets::Image>>,
     briefing: Vec<String>,
     players: Vec<String>,
+    /// Each player's nation, slot and whether the computer plays it.
+    seats: Vec<(u32, u32, bool)>,
+    /// The cell at the top left of the human player's starting view.
+    start: (u32, u32),
+    /// The briefing as the original lays it out.
+    text: Vec<String>,
 }
 
 impl Preview {
     fn load(data: &GameData, caches: &mut Caches, mission: &str, index: usize) -> Result<Self> {
         let archive = data.open_mission(mission)?;
         let grid = data.load_map(&archive, mission)?;
-        let terrain = crate::terrain::Terrain::compose(data, &grid, &mut caches.tiles)?;
-        let (w, h, pixels) = terrain.minimap(&crate::render::palette_lut(data, 0));
+        // The menu screens' palette has none of the game's colours: each
+        // is shown as the nearest of the backdrop's.
+        let mut screen = crate::render::palette_lut(data, 0);
+        if let Some(menus) = &data.menus {
+            if let Ok(raw) = menus.read("0M_BKGND_01", openac_formats::ResourceKind::Bitmap) {
+                if let Ok(b) = openac_formats::Bitmap::parse(&raw) {
+                    let near = |c: u32| {
+                        let (r, g, bl) = (
+                            (c >> 16 & 255) as i32,
+                            (c >> 8 & 255) as i32,
+                            (c & 255) as i32,
+                        );
+                        b.palette
+                            .0
+                            .iter()
+                            .min_by_key(|p| {
+                                let d = |a: i32, b: u8| (a - b as i32) * (a - b as i32);
+                                d(r, p.r) + d(g, p.g) + d(bl, p.b)
+                            })
+                            .map_or(c, |p| crate::assets::rgb(*p))
+                    };
+                    for slot in screen.iter_mut() {
+                        *slot = near(*slot);
+                    }
+                }
+            }
+        }
+        let (w, h, pixels) =
+            crate::terrain::Terrain::small(data, &grid, &mut caches.tiles, &screen)?;
         let nation = |n: u32| match n {
             1 => "Greeks",
             3 => "Persians",
             _ => "Barbarians",
         };
-        let players = openac_formats::players(&archive)
-            .unwrap_or_default()
+        let infos = openac_formats::players(&archive).unwrap_or_default();
+        let seats = infos
+            .iter()
+            .map(|p| (p.nation, p.slot, p.computer))
+            .collect();
+        let start = infos
+            .iter()
+            .find(|p| !p.computer)
+            .and_then(|p| openac_formats::mission::start_view(&archive, p.nation, p.slot))
+            .unwrap_or((0, 0));
+        let players = infos
             .iter()
             .enumerate()
             .map(|(i, p)| {
@@ -184,6 +232,9 @@ impl Preview {
             ))),
             briefing: openac_formats::briefing(&archive).unwrap_or_default(),
             players,
+            seats,
+            start,
+            text: openac_formats::briefing_text(&archive).unwrap_or_default(),
         })
     }
 }
@@ -200,6 +251,8 @@ struct MenuPage {
     first: usize,
     credits: bool,
     story: Option<(crate::menus::Rect, Vec<String>)>,
+    story_style: Option<(crate::menus::Style, f32)>,
+    story_arrow: Option<(f32, f32)>,
     labels: Vec<(String, f32, f32)>,
     checks: Vec<crate::menus::Check>,
     panels: Vec<crate::menus::Panel>,
@@ -207,6 +260,11 @@ struct MenuPage {
     picture: Option<(Rc<crate::assets::Image>, crate::menus::Rect)>,
     boxes: Vec<(crate::menus::Rect, Vec<String>)>,
     tabs: Vec<crate::menus::MenuTab>,
+    sprites: Vec<crate::menus::Placed>,
+    texts: Vec<crate::menus::Text>,
+    map: Option<(Rc<crate::assets::Image>, crate::menus::Rect, (u32, u32))>,
+    row_height: Option<f32>,
+    spots: Vec<(crate::menus::Rect, MenuHit)>,
 }
 
 impl MenuPage {
@@ -222,6 +280,8 @@ impl MenuPage {
             hover,
             credits: self.credits,
             story: self.story.as_ref().map(|(r, p)| (*r, p.as_slice())),
+            story_style: self.story_style,
+            story_arrow: self.story_arrow,
             labels: &self.labels,
             checks: &self.checks,
             panels: &self.panels,
@@ -229,6 +289,11 @@ impl MenuPage {
             picture: self.picture.as_ref().map(|(i, r)| (&**i, *r)),
             boxes: &self.boxes,
             tabs: &self.tabs,
+            sprites: &self.sprites,
+            texts: &self.texts,
+            map: self.map.as_ref().map(|(i, r, o)| (&**i, *r, *o)),
+            row_height: self.row_height,
+            spots: &self.spots,
         }
     }
 }
@@ -364,6 +429,9 @@ pub struct App {
     /// and how many players each takes, and a game being hosted or joined.
     lobby_players: usize,
     join_address: String,
+    /// The computer players' level on the custom missions screen (0 weak,
+    /// as the original starts it).
+    custom_ai: usize,
     /// The name typed on the multiplayer screen.
     player_name: String,
     /// A chat line being typed in a multiplayer game.
@@ -500,6 +568,7 @@ impl App {
             lobby_players: 2,
             join_address: String::new(),
             player_name: String::new(),
+            custom_ai: 0,
             chat_line: None,
             list_first: 0,
             wheel_rest: 0.0,
@@ -710,6 +779,8 @@ impl App {
             first: self.list_first,
             credits: false,
             story: None,
+            story_style: None,
+            story_arrow: None,
             labels: Vec::new(),
             checks: Vec::new(),
             panels: Vec::new(),
@@ -717,6 +788,11 @@ impl App {
             picture: None,
             boxes: Vec::new(),
             tabs: Vec::new(),
+            sprites: Vec::new(),
+            texts: Vec::new(),
+            map: None,
+            row_height: None,
+            spots: Vec::new(),
         };
         match state {
             MenuState::Main if self.in_game => MenuPage {
@@ -752,12 +828,22 @@ impl App {
                 credits: true,
                 ..empty
             },
+            // "Select custom mission" as the original's (Startcst.cpp),
+            // every widget placed where the original draws it (fitted to
+            // its screen): the map panel with its scroll bars and the tick,
+            // the description, the missions and the players.
+            MenuState::Missions(Category::Single, selected) => {
+                let list = self.screen_missions(Category::Single);
+                let chosen = selected.and_then(|i| list.get(i)).copied();
+                let preview = self.preview.as_ref().filter(|p| Some(p.index) == chosen);
+                self.custom_page(&list, selected, preview, empty)
+            }
             // "Select custom mission" as the original lays it out (panel
             // frames measured on its screen): the map of the chosen
             // mission, its description, the missions and its players;
             // Start and Cancel below.
             MenuState::Missions(category, selected) => {
-                let list = self.category_missions(category);
+                let list = self.screen_missions(category);
                 let chosen = selected.and_then(|i| list.get(i)).copied();
                 let preview = self.preview.as_ref().filter(|p| Some(p.index) == chosen);
                 let panel = |rect, title: String, arrows| crate::menus::Panel {
@@ -1099,6 +1185,202 @@ impl App {
     }
 
     /// Missions of `category`, as indices into `missions`.
+    /// The missions a mission screen lists: for Custom missions, as the
+    /// original, the battles and single missions by file name.
+    fn screen_missions(&self, category: Category) -> Vec<usize> {
+        if category != Category::Single {
+            return self.category_missions(category);
+        }
+        let mut list: Vec<usize> = (0..self.missions.len())
+            .filter(|&i| {
+                matches!(
+                    Category::of(&self.missions[i]),
+                    Some(Category::Single | Category::Battle)
+                )
+            })
+            .collect();
+        list.sort_by(|&a, &b| self.missions[a].cmp(&self.missions[b]));
+        list
+    }
+
+    /// The original's "Select custom mission" screen.
+    fn custom_page(
+        &self,
+        list: &[usize],
+        selected: Option<usize>,
+        preview: Option<&Preview>,
+        empty: MenuPage,
+    ) -> MenuPage {
+        use crate::menus::{Placed, Style, Text};
+        let at = |name: &str, x: f32, y: f32| Placed {
+            name: name.into(),
+            x,
+            y,
+        };
+        let style = |font, variant| Style {
+            font,
+            variant,
+            spacing: 1,
+        };
+        let title = style("BH", 2);
+        let text = |style, x, y, t: &str| Text {
+            style,
+            x,
+            y,
+            text: t.into(),
+        };
+        // Arrows: picture 0 when they can scroll, 2 when they cannot.
+        let arrow = |dir: &str, can: bool| format!("M_LBUT_{dir}{}", if can { 0 } else { 2 });
+        // A thumb's offset along a track of travel `travel`.
+        let thumb = |at: u32, most: u32, travel: f32| {
+            if most == 0 {
+                0.0
+            } else {
+                (at.min(most) as f32 / most as f32 * travel).round()
+            }
+        };
+        let mut sprites = vec![
+            at("MP_MAP", 3.0, 3.0),
+            at("MP_DESC", 196.0, 27.0),
+            at("MP_LFILE1", 3.0, 216.0),
+            at("SP_LPLAY1", 196.0, 216.0),
+        ];
+        let size = preview.map_or((0, 0), |p| p.size);
+        let mut texts = vec![
+            text(title, 398.0, 2.0, "Select custom mission"),
+            text(title, 16.0, 4.0, &format!("Map ({}x{})", size.0, size.1)),
+            text(title, 209.0, 28.0, "Mission description"),
+            text(title, 13.0, 217.0, "Missions"),
+            text(title, 209.0, 217.0, "Players"),
+        ];
+        // The map, 8 pixels a cell in a 153-pixel window, scrolled to the
+        // player's starting view.
+        const VIEW: u32 = 153;
+        let mut map = None;
+        let (mut mx, mut my, mut most_x, mut most_y) = (0, 0, 0, 0);
+        if let Some(p) = preview {
+            if let Some(m) = &p.map {
+                most_x = m.width.saturating_sub(VIEW);
+                most_y = m.height.saturating_sub(VIEW);
+                mx = (p.start.0 * 8).min(most_x);
+                my = (p.start.1 * 8).min(most_y);
+                map = Some((m.clone(), (9.0, 29.0, VIEW as f32, VIEW as f32), (mx, my)));
+            }
+        }
+        sprites.extend([
+            at(&arrow("UP", my > 0), 165.0, 28.0),
+            at(&arrow("DN", my < most_y), 165.0, 160.0),
+            at("MAP_TR_V0", 165.0, 52.0),
+            at("MAP_TR_V1", 169.0, 56.0 + thumb(my, most_y, 84.0)),
+            at(&arrow("LF", mx > 0), 8.0, 185.0),
+            at(&arrow("RT", mx < most_x), 140.0, 185.0),
+            at("MAP_TR_H0", 32.0, 185.0),
+            at("MAP_TR_H1", 36.0 + thumb(mx, most_x, 84.0), 189.0),
+            at("M_CHECK1", 165.0, 185.0),
+            at(&arrow("UP", false), 766.0, 52.0),
+            at("DESC_TR0", 766.0, 76.0),
+            at("DESC_TR1", 770.0, 80.0),
+        ]);
+        // The description, from its first line.
+        let story = preview.map(|p| p.text.clone()).unwrap_or_default();
+        // The missions, 27 apart; the chosen one framed and pale.
+        const ROWS: usize = 11;
+        let first = self.list_first.min(list.len().saturating_sub(ROWS));
+        for (k, &i) in list.iter().enumerate().skip(first).take(ROWS) {
+            let y = 249.0 + 27.0 * (k - first) as f32;
+            if selected == Some(k) {
+                sprites.push(at("MP_LFILE0", 11.0, y - 4.0));
+            }
+            // The chosen one pale and a pixel higher (fitted).
+            let (variant, dy) = if selected == Some(k) {
+                (2, -1.0)
+            } else {
+                (1, 0.0)
+            };
+            texts.push(text(style("MH", variant), 13.0, y + dy, &self.missions[i]));
+        }
+        let most = list.len().saturating_sub(ROWS) as u32;
+        sprites.extend([
+            at(&arrow("UP", first > 0), 165.0, 241.0),
+            at(&arrow("DN", (first as u32) < most), 165.0, 525.0),
+            at("LFILE_TR0", 165.0, 265.0),
+            at("LFILE_TR1", 169.0, 269.0 + thumb(first as u32, most, 236.0)),
+        ]);
+        // The players: flag, who plays, the choice arrow, the name.
+        if let Some(p) = preview {
+            let frame = (self.time_ms / 100 % 10) as u32;
+            for (k, &(nation, slot, computer)) in p.seats.iter().enumerate().take(10) {
+                let y = 249.0 + 27.0 * k as f32;
+                let start = FLAG_STARTS[((nation * 4 + slot) as usize).min(15)];
+                sprites.extend([
+                    at("LPLAY_FL", 206.0, y),
+                    at(&format!("M_FLAGS{:03}", start + frame), 209.0, y),
+                    at("LPLAY_TP", 230.0, y),
+                    at("M_CBUT0", 342.0, y),
+                    at("LPLAY_NP", 375.0, y),
+                ]);
+                let (who, variant) = if computer {
+                    (
+                        ["AI Weak", "AI Medium", "AI Strong"][self.custom_ai.min(2)],
+                        1,
+                    )
+                } else {
+                    ("Human", 2)
+                };
+                texts.push(text(style("MH", variant), 234.0, y + 1.0, who));
+            }
+        }
+        sprites.extend([
+            at(&arrow("UP", false), 766.0, 241.0),
+            at(&arrow("DN", false), 766.0, 525.0),
+            at("SLPLAY_TR0", 766.0, 265.0),
+            at("SLPLAY_TR1", 770.0, 269.0),
+        ]);
+        MenuPage {
+            backdrop: Backdrop::TitleDim,
+            items: list.iter().map(|&i| self.missions[i].clone()).collect(),
+            selected,
+            list_rect: Some((8.0, 245.0, 155.0, 27.0 * ROWS as f32)),
+            row_height: Some(27.0),
+            story: Some(((204.0, 58.0, 559.0, 145.0), story)),
+            story_style: Some((style("MH", 1), 18.0)),
+            story_arrow: Some((766.0, 184.0)),
+            sprites,
+            texts,
+            map,
+            spots: {
+                let mut spots = vec![
+                    ((165.0, 241.0, 23.0, 23.0), MenuHit::Scroll(-1)),
+                    ((165.0, 525.0, 23.0, 23.0), MenuHit::Scroll(1)),
+                ];
+                if let Some(p) = preview {
+                    for (k, s) in p.seats.iter().enumerate().take(10) {
+                        if s.2 {
+                            let y = 249.0 + 27.0 * k as f32;
+                            spots.push(((342.0, y, 29.0, 21.0), MenuHit::Check(k)));
+                        }
+                    }
+                }
+                spots
+            },
+            buttons: vec![
+                Button {
+                    caption: "Start".into(),
+                    x: 224.0,
+                    y: 558.0,
+                    shape: 2,
+                },
+                Button {
+                    caption: "Cancel".into(),
+                    x: 460.0,
+                    y: 558.0,
+                    shape: 3,
+                },
+            ],
+            ..empty
+        }
+    }
+
     fn category_missions(&self, category: Category) -> Vec<usize> {
         (0..self.missions.len())
             .filter(|&i| Category::of(&self.missions[i]) == Some(category))
@@ -1265,6 +1547,13 @@ impl App {
             }
             // A difficulty: the mission is set up again for it.
             MenuHit::Check(i) => {
+                // A player's choice arrow on Custom missions: the computer
+                // players' level goes round Weak, Medium, Strong.
+                if let MenuState::Missions(Category::Single, _) = state {
+                    let _ = i;
+                    self.custom_ai = (self.custom_ai + 1) % 3;
+                    return;
+                }
                 if state == MenuState::Briefing && self.difficulty != i {
                     self.difficulty = i;
                     self.open_mission(self.mission_index);
@@ -1274,7 +1563,7 @@ impl App {
             MenuHit::Item(i) => {
                 self.menu = Some(match state {
                     MenuState::Missions(c, _) => {
-                        if let Some(&index) = self.category_missions(c).get(i) {
+                        if let Some(&index) = self.screen_missions(c).get(i) {
                             match Preview::load(
                                 &self.data,
                                 &mut self.caches,
@@ -1378,8 +1667,11 @@ impl App {
                 if c == Category::Campaign && i == 0 {
                     self.queue_video(crate::video::OPENING);
                 }
-                if let Some(&index) = self.category_missions(c).get(i) {
+                if let Some(&index) = self.screen_missions(c).get(i) {
                     self.carry = None;
+                    if c == Category::Single {
+                        self.difficulty = self.custom_ai;
+                    }
                     self.open_mission(index);
                 }
             }
@@ -1449,7 +1741,7 @@ impl App {
         let state = match which {
             "main" => MenuState::Main,
             "missions" => MenuState::Missions(Category::Campaign, Some(1)),
-            "custom" => MenuState::Missions(Category::Single, Some(2)),
+            "custom" => MenuState::Missions(Category::Single, Some(0)),
             "load" => {
                 self.refresh_panels();
                 MenuState::Load(LoadTab::Scenario, Some(0))
@@ -1474,7 +1766,7 @@ impl App {
             other => anyhow::bail!("unknown menu screen {other}"),
         };
         if let MenuState::Missions(c, Some(i)) = state {
-            if let Some(&index) = self.category_missions(c).get(i) {
+            if let Some(&index) = self.screen_missions(c).get(i) {
                 self.preview = Some(Preview::load(
                     &self.data,
                     &mut self.caches,

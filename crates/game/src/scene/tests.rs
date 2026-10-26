@@ -3094,8 +3094,12 @@ fn fit_font() {
             }
             for spacing in 0..4 {
                 let f = f_clone(arc, name, variant, &palette).with_spacing(spacing);
-                for dy in -3..=3 {
-                    for dx in -3..=3 {
+                let reach: i32 = std::env::var("OPENAC_FIT_REACH")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(3);
+                for dy in -reach..=reach {
+                    for dx in -reach..=reach {
                         let mut px = bg.clone();
                         let mut frame = crate::render::Frame {
                             pixels: &mut px,
@@ -3103,10 +3107,17 @@ fn fit_font() {
                             height: 600,
                         };
                         f.draw(&mut frame, x0 + dx, y0 + dy, 1, &text);
-                        let mut n = 0;
+                        // Only where the candidate draws (the background may
+                        // hold more than the backdrop): mismatches per
+                        // thousand drawn pixels.
+                        let (mut n, mut drawn) = (0, 0);
                         for y in y0..y0 + h {
                             for x in x0..x0 + w {
                                 let k = (y * 800 + x) as usize;
+                                if px[k] == bg[k] {
+                                    continue;
+                                }
+                                drawn += 1;
                                 let (a, b) = (px[k], shot[k]);
                                 let d =
                                     |s: u32| ((a >> s & 255) as i32 - (b >> s & 255) as i32).abs();
@@ -3115,7 +3126,9 @@ fn fit_font() {
                                 }
                             }
                         }
-                        results.push((n, name, variant, spacing, dx, dy));
+                        if drawn > 40 {
+                            results.push((n * 1000 / drawn, name, variant, spacing, dx, dy));
+                        }
                     }
                 }
             }
@@ -3134,4 +3147,87 @@ fn f_clone(
     palette: &openac_formats::Palette,
 ) -> crate::text::TextRenderer {
     crate::text::TextRenderer::load_in(arc, &format!("0{name}"), variant, Some(palette)).unwrap()
+}
+
+/// Finds where the menu sprites `OPENAC_FIT_SPRITES` (comma separated) sit
+/// in the 800x600 raw RGB screenshot `OPENAC_FIT_RGB`, searching the area
+/// `OPENAC_FIT_AREA` (x0,y0,x1,y1 for the sprites' top-left corner); a
+/// development aid that does nothing without them.
+#[test]
+fn fit_sprite() {
+    let (Some(root), Ok(raw), Ok(names), Ok(area)) = (
+        std::env::var_os("OPENAC_DATA"),
+        std::env::var("OPENAC_FIT_RGB"),
+        std::env::var("OPENAC_FIT_SPRITES"),
+        std::env::var("OPENAC_FIT_AREA"),
+    ) else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let arc = data.menus.as_ref().unwrap();
+    let shot: Vec<[u8; 3]> = std::fs::read(raw)
+        .unwrap()
+        .chunks(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
+    let palette = openac_formats::Bitmap::parse(
+        &arc.read("0M_BKGND_00", openac_formats::ResourceKind::Bitmap)
+            .unwrap(),
+    )
+    .unwrap()
+    .palette;
+    let a: Vec<i32> = area.split(',').map(|v| v.parse().unwrap()).collect();
+    for name in names.split(',') {
+        let e = arc
+            .find(&format!("0{name}"), openac_formats::ResourceKind::Sprite)
+            .or_else(|| arc.find(name, openac_formats::ResourceKind::Sprite))
+            .unwrap();
+        let s = openac_formats::Sprite::parse(&arc.read_entry(e).unwrap()).unwrap();
+        let mut ink = Vec::new();
+        for y in 0..s.box_height {
+            for x in 0..s.box_width {
+                let i = (y * s.box_width + x) as usize;
+                if s.opaque[i] != 0 {
+                    let c = palette.0[s.pixels[i] as usize];
+                    ink.push(((s.x + x) as i32, (s.y + y) as i32, [c.r, c.g, c.b]));
+                }
+            }
+        }
+        let mut best = (usize::MAX, 0, 0);
+        for oy in a[1]..=a[3] {
+            for ox in a[0]..=a[2] {
+                let mut bad = 0;
+                for &(x, y, c) in &ink {
+                    let (px, py) = (ox + x, oy + y);
+                    if !(0..800).contains(&px) || !(0..600).contains(&py) {
+                        bad += 1;
+                        continue;
+                    }
+                    let p = shot[(py * 800 + px) as usize];
+                    if (0..3)
+                        .map(|k| (p[k] as i32 - c[k] as i32).abs())
+                        .sum::<i32>()
+                        > 24
+                    {
+                        bad += 1;
+                    }
+                    if bad >= best.0 {
+                        break;
+                    }
+                }
+                if bad < best.0 {
+                    best = (bad, ox, oy);
+                }
+            }
+        }
+        eprintln!(
+            "== {name} {}x{} at ({}, {}): {} of {} differ",
+            s.width,
+            s.height,
+            best.1,
+            best.2,
+            best.0,
+            ink.len()
+        );
+    }
 }

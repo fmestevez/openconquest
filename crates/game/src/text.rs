@@ -12,6 +12,7 @@ use crate::render::Frame;
 /// (the original passes it with each text, mfcfnt.cpp 0x5470f0).
 const SPACING: u32 = 1;
 
+#[derive(Clone)]
 pub struct TextRenderer {
     glyphs: HashMap<u8, Glyph>,
     line_height: u32,

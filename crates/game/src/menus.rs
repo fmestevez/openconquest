@@ -60,6 +60,11 @@ pub struct MenuView<'a> {
     /// in this box, wrapped to its width, each first line indented, empty
     /// paragraphs blank lines.
     pub story: Option<(Rect, &'a [String])>,
+    /// The story's font and line pitch, if not the briefing's.
+    pub story_style: Option<(Style, f32)>,
+    /// Where the story's down arrow goes: live if the story runs past its
+    /// box.
+    pub story_arrow: Option<(f32, f32)>,
     /// Labels in the big font, at their top left.
     pub labels: &'a [(String, f32, f32)],
     /// Checkboxes (`M_CHECK0`/`1`) with their captions.
@@ -72,9 +77,46 @@ pub struct MenuView<'a> {
     pub picture: Option<(&'a Image, Rect)>,
     /// Text lines in a box, in the small font (a panel's contents).
     pub boxes: &'a [(Rect, Vec<String>)],
+    /// The original's own widget pictures (panels, scroll tracks, list
+    /// rows), by name, at their top left; drawn over the backdrop first.
+    pub sprites: &'a [Placed],
+    /// Text in a given font, variant and spacing, at its top left.
+    pub texts: &'a [Text],
+    /// A picture shown 1:1 in a box, from the given offset into it (the
+    /// map of the chosen mission).
+    pub map: Option<(&'a Image, Rect, (u32, u32))>,
+    /// Row height of the list, when not the plain box's.
+    pub row_height: Option<f32>,
+    /// Clickable spots beyond buttons and the list (scroll arrows).
+    pub spots: &'a [(Rect, MenuHit)],
     /// Tabs (`M_LOADZ`, wide ones `M_LOADZ_BIG`; the second picture is
     /// the open tab).
     pub tabs: &'a [MenuTab],
+}
+
+/// One of the original's widget pictures placed on a screen.
+#[derive(Debug, Clone)]
+pub struct Placed {
+    pub name: String,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// The fonts of the front end, by name (`S_FNT_*` without the prefix).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Style {
+    pub font: &'static str,
+    pub variant: usize,
+    pub spacing: u32,
+}
+
+/// Text placed on a screen.
+#[derive(Debug, Clone)]
+pub struct Text {
+    pub style: Style,
+    pub x: f32,
+    pub y: f32,
+    pub text: String,
 }
 
 /// A tab on a menu screen, at its top left.
@@ -158,7 +200,75 @@ pub struct Menus {
     arrows: Vec<[Option<Image>; 2]>,
     /// Tabs, narrow and wide, closed and open, by backdrop.
     tabs: Vec<[[Option<Image>; 2]; 2]>,
+    /// Widget pictures by name, in the front end's palette.
+    pictures: std::collections::HashMap<String, Image>,
+    /// Fonts by style.
+    styles: std::collections::HashMap<Style, TextRenderer>,
 }
+
+/// The widget pictures the screens use (theme-prefixed in controlm.dkx).
+const PICTURES: &[&str] = &[
+    "RAM_BEST",
+    "MP_MAP",
+    "MP_DESC",
+    "MP_LFILE0",
+    "MP_LFILE1",
+    "SP_LPLAY0",
+    "SP_LPLAY1",
+    "MP_LPLAY0",
+    "MP_LPLAY1",
+    "MAP_TR_V0",
+    "MAP_TR_V1",
+    "MAP_TR_H0",
+    "MAP_TR_H1",
+    "DESC_TR0",
+    "DESC_TR1",
+    "LFILE_TR0",
+    "LFILE_TR1",
+    "SLPLAY_TR0",
+    "SLPLAY_TR1",
+    "LPLAY_TR0",
+    "LPLAY_TR1",
+    "LPLAY_FL",
+    "LPLAY_TP",
+    "LPLAY_NP",
+    "LPLAY_NPM",
+    "M_CBUT0",
+    "M_CBUT1",
+    "M_CBUT2",
+    "M_CHECK0",
+    "M_CHECK1",
+    "M_LBUT_UP0",
+    "M_LBUT_UP1",
+    "M_LBUT_UP2",
+    "M_LBUT_DN0",
+    "M_LBUT_DN1",
+    "M_LBUT_DN2",
+    "M_LBUT_LF0",
+    "M_LBUT_LF1",
+    "M_LBUT_LF2",
+    "M_LBUT_RT0",
+    "M_LBUT_RT1",
+    "M_LBUT_RT2",
+    "LOAD_RM0",
+    "LOAD_RM1",
+    "LOAD_TR0",
+    "LOAD_TR1",
+    "PROV_NAME",
+    "PROV_RAM0",
+    "PROV_RAM1",
+    "PROV_TR0",
+    "PROV_TR1",
+    "NEW_BUT0",
+    "NEW_BUT1",
+    "MESS_MS",
+    "MP_MESS",
+    "MESS_TR0",
+    "MESS_TR1",
+];
+
+/// The fonts the screens use.
+const FONTS: [&str; 7] = ["LH", "BH", "BS", "MH", "MS", "SH", "SS"];
 
 impl Menus {
     pub fn load(data: &GameData, theme: char) -> Result<Self> {
@@ -220,7 +330,53 @@ impl Menus {
                 main_palette.as_ref(),
             )
         };
+        let mut pictures = std::collections::HashMap::new();
+        for name in PICTURES {
+            if let Some(img) = sprite(name, &None) {
+                pictures.insert(name.to_string(), img);
+            }
+        }
+        // The players' flags have no theme prefix.
+        for i in 0..160 {
+            let name = format!("M_FLAGS{i:03}");
+            if let Some(palette) = main_palette.as_ref() {
+                if let Some(e) = archive.find(&name, ResourceKind::Sprite) {
+                    if let Ok(s) = Sprite::parse(&archive.read_entry(e)?) {
+                        let mut pixels = vec![None; (s.width * s.height) as usize];
+                        for y in 0..s.box_height {
+                            for x in 0..s.box_width {
+                                let i = (y * s.box_width + x) as usize;
+                                if s.opaque[i] != 0 {
+                                    pixels[((s.y + y) * s.width + s.x + x) as usize] =
+                                        Some(rgb(palette.0[s.pixels[i] as usize]));
+                                }
+                            }
+                        }
+                        pictures.insert(name, Image::new(s.width, s.height, pixels));
+                    }
+                }
+            }
+        }
+        let mut styles = std::collections::HashMap::new();
+        for f in FONTS {
+            for variant in 0..4 {
+                if let Ok(r) = font(&format!("S_FNT_{f}"), variant) {
+                    for spacing in 0..4 {
+                        styles.insert(
+                            Style {
+                                font: f,
+                                variant,
+                                spacing,
+                            },
+                            r.clone().with_spacing(spacing),
+                        );
+                    }
+                }
+            }
+        }
         Ok(Self {
+            pictures,
+            styles,
             shapes,
             checks: backdrops
                 .iter()
@@ -301,6 +457,18 @@ impl Menus {
             blit_scaled(frame, bg, (0, 0, bg.width, bg.height), x, y, s);
         }
         let ts = s.round().max(1.0) as u32;
+        for p in view.sprites {
+            if let Some(img) = self.pictures.get(&p.name) {
+                let (x, y) = at(p.x, p.y);
+                blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
+            }
+        }
+        if let Some((img, (bx, by, bw, bh), (sx, sy))) = view.map {
+            let w = (bw as u32).min(img.width.saturating_sub(sx));
+            let h = (bh as u32).min(img.height.saturating_sub(sy));
+            let (x, y) = at(bx, by);
+            blit_scaled(frame, img, (sx, sy, w, h), x, y, s);
+        }
         let write = |frame: &mut Frame, font: &TextRenderer, x: f32, y: f32, text: &str| {
             let (px, py) = at(x, y);
             font.draw(frame, px as i32, py as i32, ts, text);
@@ -395,6 +563,10 @@ impl Menus {
                 if y + ROW > list.1 + list.3 {
                     break;
                 }
+                // Rows the screen draws itself (the original's widgets).
+                if view.row_height.is_some() {
+                    continue;
+                }
                 // In a panel, as in the original: the chosen row framed.
                 if view.list_rect.is_some() {
                     if selected == Some(i) {
@@ -411,10 +583,9 @@ impl Menus {
                 // The chosen entry is marked; the one under the cursor too.
                 let mark = if selected == Some(i) {
                     "> "
-                } else if view
-                    .hover
-                    .is_some_and(|p| row_at(list, p).map(|r| r + view.first) == Some(i))
-                {
+                } else if view.hover.is_some_and(|p| {
+                    row_at(list, view.row_height, p).map(|r| r + view.first) == Some(i)
+                }) {
                     "- "
                 } else {
                     "  "
@@ -428,7 +599,7 @@ impl Menus {
                 );
             }
             // More above or below: the wheel scrolls.
-            if view.first > 0 {
+            if view.first > 0 && view.row_height.is_none() {
                 write(
                     frame,
                     &self.text,
@@ -437,7 +608,7 @@ impl Menus {
                     "^ more",
                 );
             }
-            if items.len() > view.first + VISIBLE_ROWS {
+            if items.len() > view.first + VISIBLE_ROWS && view.row_height.is_none() {
                 let y = list.1 + list.3 - ROW;
                 write(frame, &self.text, list.0 + list.2 - 70.0, y, "v more");
             }
@@ -474,8 +645,16 @@ impl Menus {
         if let Some(((bx, by, bw, _bh), paragraphs)) = view.story {
             // Wrapped at spaces to the box (empty words keep double
             // spaces), 19 a line from 19 down (fitted to the original).
-            let font = &self.story_font;
+            let (font, pitch) = match view
+                .story_style
+                .and_then(|(st, l)| Some((self.styles.get(&st)?, l)))
+            {
+                Some(f) => f,
+                None => (&self.story_font, STORY_LINE),
+            };
             let width = bw as u32;
+            let bottom = by + _bh;
+            let mut overflow = false;
             let mut y = by + 19.0;
             for p in paragraphs {
                 let mut line: Option<String> = None;
@@ -491,16 +670,36 @@ impl Menus {
                             if !l.trim().is_empty()
                                 && font.measure(&format!("{candidate} ")) > width =>
                         {
-                            write(frame, font, bx, y, &l);
-                            y += STORY_LINE;
+                            if y + pitch <= bottom {
+                                write(frame, font, bx, y, &l);
+                            } else {
+                                overflow = true;
+                            }
+                            y += pitch;
                             line = Some(word.to_string());
                         }
                         _ => line = Some(candidate),
                     }
                 }
                 let line = line.unwrap_or_default();
-                write(frame, font, bx, y, &line);
-                y += STORY_LINE;
+                if y + pitch <= bottom {
+                    write(frame, font, bx, y, &line);
+                } else if !line.trim().is_empty() {
+                    overflow = true;
+                }
+                y += pitch;
+            }
+            if let Some((ax, ay)) = view.story_arrow {
+                let name = if overflow { "M_LBUT_DN0" } else { "M_LBUT_DN2" };
+                if let Some(img) = self.pictures.get(name) {
+                    let (x, y) = at(ax, ay);
+                    blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
+                }
+            }
+        }
+        for t in view.texts {
+            if let Some(f) = self.styles.get(&t.style) {
+                write(frame, f, t.x, t.y, &t.text);
             }
         }
         for (label, x, y) in view.labels {
@@ -626,6 +825,11 @@ impl Menus {
 
     /// What lies at 800x600 point `p`.
     pub fn hit(&self, view: &MenuView, p: (f32, f32)) -> Option<MenuHit> {
+        for &(r, hit) in view.spots {
+            if inside(p, r) {
+                return Some(hit);
+            }
+        }
         for (i, c) in view.checks.iter().enumerate() {
             let w = 30.0 + self.big.measure(&c.caption) as f32;
             if inside(p, (c.x, c.y, w, 24.0)) {
@@ -652,7 +856,7 @@ impl Menus {
             }
         }
         let (items, _) = view.list?;
-        row_at(view.list_rect.unwrap_or(LIST), p)
+        row_at(view.list_rect.unwrap_or(LIST), view.row_height, p)
             .map(|r| r + view.first)
             .filter(|&i| i < items.len())
             .map(MenuHit::Item)
@@ -660,12 +864,17 @@ impl Menus {
 }
 
 /// The row of list `list` at point `p`, if any.
-fn row_at(list: Rect, p: (f32, f32)) -> Option<usize> {
+fn row_at(list: Rect, row: Option<f32>, p: (f32, f32)) -> Option<usize> {
     if !inside(p, list) {
         return None;
     }
-    let i = ((p.1 - list.1 - 8.0) / ROW).floor();
-    (i >= 0.0 && list.1 + 8.0 + (i + 1.0) * ROW <= list.1 + list.3).then_some(i as usize)
+    // Rows of the given height from the box's top, or the plain box's.
+    let (top, row) = match row {
+        Some(r) => (list.1, r),
+        None => (list.1 + 8.0, ROW),
+    };
+    let i = ((p.1 - top) / row).floor();
+    (i >= 0.0 && top + (i + 1.0) * row <= list.1 + list.3).then_some(i as usize)
 }
 
 /// The original's framed boxes, measured on its screens: a raised outer
