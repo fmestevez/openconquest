@@ -326,11 +326,22 @@ pub fn draw_selection(
         return;
     };
     let (w, h) = (first.image.width as f32, first.image.height as f32);
-    let (left, top) = (
-        obj.x + first.dx as f32 - w / 2.0,
-        obj.y + first.dy as f32 - h / 2.0,
-    );
-    let (bw, bh) = (w as i64 + 4, h as i64 + 4);
+    // A building's box is its footprint from its cell, 4 pixels more
+    // (measured on the original's settlement).
+    let t = TILE_SIZE as f32;
+    let (left, top, bw, bh) = match (obj.cell, obj.class) {
+        (Some((cx, cy)), ObjectClass::Building(class)) => {
+            let cells = if matches!(class, 0x32 | 0x33) { 2 } else { 1 };
+            let size = cells * TILE_SIZE as i64 + 4;
+            (cx as f32 * t + 2.0, cy as f32 * t + 2.0, size, size)
+        }
+        _ => (
+            obj.x + first.dx as f32 - w / 2.0,
+            obj.y + first.dy as f32 - h / 2.0,
+            w as i64 + 4,
+            h as i64 + 4,
+        ),
+    };
     let origin = to_screen(left.round() - 2.0, top.round() - 2.0);
     let s = scale;
     // A pixel of the box in box pixels, mirrored into each corner.
@@ -348,14 +359,15 @@ pub fn draw_selection(
             );
         }
     };
-    // Palette 203 yellow, 109 inside it, 117 the highlight's brightest.
+    // Palette 248 (a shimmering yellow), 247 inside it, 117 the
+    // highlight's brightest.
     for k in 0..13 {
-        corner_px(k, 0, lut[203]);
-        corner_px(0, k, lut[203]);
+        corner_px(k, 0, lut[248]);
+        corner_px(0, k, lut[248]);
     }
     for k in 1..12 {
-        corner_px(k, 1, lut[109]);
-        corner_px(1, k, lut[109]);
+        corner_px(k, 1, lut[247]);
+        corner_px(1, k, lut[247]);
     }
     for &(x, y, c) in &[
         (3, 3, 0x00_f3_f3_9e),

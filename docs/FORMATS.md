@@ -743,11 +743,25 @@ cargo a slot (0x2a amber, 0x2b fish, 0x2c leviathan; empty 0x29) up to 4 or
 The strip above the buttons is `CCTRL_CLRDEF1` (a relief) on a main page,
 `CCTRL_CLRDEF2` on others, at y 366.
 
+A settlement's or town's slots (0x43bfe0, page 0) are its stock: the nine
+items at places 0-2, 4-6 and 8-10 (marines, medium and strong weapons),
+each with its count in the corner (`NUMBER_FONT`, at (3, 3)), dimmed
+(pictures +15 for marines, item + 13 for weapons) with no stock, and an
+arrow (`COBJ_SSPEC_00`, `01` without stock) to open its units; place 3 its
+armour and rams (0x20, dim 0x1f), place 7 its goods (0x2e, dim 0x2d).
+Clicking a cell with stock lists its units; clicking one again picks it up
+to load onto a ship. Its starting stock is record fields 14-22. Its menu
+(0x43c740): building (0), reload object (1, onto a ship alongside), repair
+(2), upgrade to town (4), sell item (5), sell town (6), and from slot 8 the
+marines it can train: only with a workshop of the settlement, and for
+swordsmen a smithy (0x43da20, +0x1fc, +0x200).
+
 ## Selection box
 
-Around the object's picture, 2 pixels out: 13-pixel corner angles in
-palette 203 with palette 109 inside them and a small highlight; the hull
-bar on the top edge from 14 in, (width - 28) long, 4 high, as the slot bars.
+A ship's: around its picture, 2 pixels out; a building's: its footprint
+from its cell, 4 pixels more. 13-pixel corner angles in palette 248 (it
+shimmers) with 247 inside them and a small highlight; the hull bar on the
+top edge from 14 in, (width - 28) long, 4 high, as the slot bars.
 
 ## Minimap
 

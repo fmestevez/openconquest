@@ -393,6 +393,21 @@ impl Scene {
                     .map(move |t| (o.id, t))
             })
             .collect();
+        // Settlements and towns start with the marines and weapons their
+        // records hold (fields 14-22, one count per item).
+        for o in &scene.objects {
+            if matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN)) {
+                if let Some(counts) = o.record.fields.get(14..23) {
+                    let mut stock = [0u32; 9];
+                    for (s, &n) in stock.iter_mut().zip(counts) {
+                        *s = n.min(99);
+                    }
+                    if stock.iter().any(|&n| n > 0) {
+                        scene.garrisons.insert(o.id, stock);
+                    }
+                }
+            }
+        }
         // The campaign's missions are judged by their story.
         if is_campaign(mission) {
             scene.permits = crate::permits::Permits::campaign(mission[4..].parse().unwrap_or(0));
@@ -759,10 +774,8 @@ impl Scene {
             o.clamp(0, (map - shown).max(0))
         };
         let (ox, oy) = self.minimap_origin.get();
-        self.minimap_origin.set((
-            follow(ox, cell.0, size.0, w),
-            follow(oy, cell.1, size.1, h),
-        ));
+        self.minimap_origin
+            .set((follow(ox, cell.0, size.0, w), follow(oy, cell.1, size.1, h)));
     }
 
     pub fn update(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {

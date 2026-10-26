@@ -2421,7 +2421,10 @@ impl App {
                     Err(e) => self.say(e),
                 }
             }
-            Command::LOAD => match self.issue(Order::LoadCrew { ship: id }) {
+            // From a settlement: onto the ship alongside it.
+            Command::LOAD => match self.issue(Order::LoadCrew {
+                ship: self.scene.ship_alongside(id).unwrap_or(id),
+            }) {
                 Ok(n) if self.net.is_none() => {
                     self.say(format!("{n} marines and weapons came aboard"))
                 }

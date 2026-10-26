@@ -79,6 +79,8 @@ pub struct Interface {
     strips: [Option<Image>; 2],
     /// A slot cell's background (`COBJ_BKSMSLOT`, 47x50).
     small_slot: Option<Image>,
+    /// Counts on slot cells (`NUMBER_FONT`, letters 2 apart).
+    number_font: TextRenderer,
     /// The health bar colours (palette 200 and 199, 203 and 157, 65 and
     /// 68: green, yellow, red).
     bar_colours: [[u32; 2]; 3],
@@ -177,6 +179,13 @@ impl Interface {
             object_panel,
             strips: [1, 2].map(|i| load(&format!("CCTRL_CLRDEF{i}"), false).ok()),
             small_slot: load("COBJ_BKSMSLOT", false).ok(),
+            number_font: TextRenderer::load_in(
+                &data.controls,
+                "NUMBER_FONT",
+                0,
+                Some(&data.palette),
+            )?
+            .with_spacing(2),
             bar_colours: [[200, 199], [203, 157], [65, 68]]
                 .map(|pair| pair.map(|i| rgb(data.palette.0[i]))),
             field_view,
@@ -603,6 +612,22 @@ impl Interface {
             if let Some(img) = self.picture(data, &format!("COBJ_SSLOT_{:02}", cell.frame)) {
                 blit_scaled(frame, &img, (0, 0, img.width, img.height), x + s, y + s, s);
             }
+            if let Some(mark) = cell.mark {
+                if let Ok(Some(img)) =
+                    data.load_image(&data.controls, &format!("COBJ_SSPEC_{mark:02}"), false)
+                {
+                    blit_scaled(frame, &img, (0, 0, img.width, img.height), x + s, y + s, s);
+                }
+            }
+            if cell.count > 0 {
+                self.number_font.draw(
+                    frame,
+                    (x + 3.0 * s) as i32,
+                    (y + 3.0 * s) as i32,
+                    s.round().max(1.0) as u32,
+                    &cell.count.to_string(),
+                );
+            }
             if let Some(pct) = cell.bar {
                 // A black bar 4 high, then two lines of colour (0x4f9520).
                 let len = (w - 2) * pct as u32 / 100;
@@ -912,7 +937,10 @@ impl GameView<'_> {
                     self.hover_button,
                     self.time_ms,
                 );
-                let slots = ship_slots(obj);
+                let mut slots = ship_slots(obj);
+                if slots.is_empty() && self.scene.is_own(obj) {
+                    slots = settlement_slots(self.scene, obj);
+                }
                 if !slots.is_empty() {
                     ui.draw_slots(frame, self.data, layout, &slots);
                 }
@@ -1185,6 +1213,10 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
 pub struct SlotCell {
     pub frame: u8,
     pub bar: Option<u8>,
+    /// A `COBJ_SSPEC` mark (0 green arrow, 1 dark arrow: units to open).
+    pub mark: Option<u8>,
+    /// A count shown in the corner (`NUMBER_FONT`), if not 0.
+    pub count: u32,
 }
 
 /// Slot counts by ship type (0x597ae4 weapon and crew places, 0x597af0
@@ -1228,9 +1260,18 @@ pub fn ship_slots(obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
         Some(SlotCell {
             frame,
             bar: Some(100),
+            mark: None,
+            count: 0,
         })
     };
-    let bare = |frame: u8| Some(SlotCell { frame, bar: None });
+    let bare = |frame: u8| {
+        Some(SlotCell {
+            frame,
+            bar: None,
+            mark: None,
+            count: 0,
+        })
+    };
     if kind <= 1 {
         let capacity = SLOT_CARGO[kind];
         if let Some(goods) = ship.cargo_kind.filter(|_| ship.cargo > 0.0) {
@@ -1245,6 +1286,8 @@ pub fn ship_slots(obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
                 cells.push(Some(SlotCell {
                     frame,
                     bar: Some(left.clamp(0.0, 100.0).round() as u8),
+                    mark: None,
+                    count: 0,
                 }));
             }
         }
@@ -1312,5 +1355,43 @@ pub fn ship_slots(obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
             cells.push(bare(0x2f));
         }
     }
+    cells
+}
+
+/// A settlement's or town's slot cells (0x43bfe0, page 0): its stock of each
+/// item, marines in the first row, medium and strong weapons in the next
+/// two, dimmed where there is none, each with an arrow to open its units;
+/// at the start of the second row its armour and rams, of the third its
+/// goods.
+pub fn settlement_slots(scene: &Scene, obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
+    if !matches!(
+        obj.class,
+        openac_formats::ObjectClass::Building(crate::economy::SETTLEMENT | crate::economy::TOWN)
+    ) {
+        return Vec::new();
+    }
+    let stock = scene.garrison(obj.id);
+    let nation3 = obj.owner.is_some_and(|o| o.0 == 3);
+    let mut cells = vec![None; 11];
+    let cell = |frame: u8, dim: u8, count: u32| {
+        Some(SlotCell {
+            frame: if count > 0 { frame } else { dim },
+            bar: None,
+            mark: Some(u8::from(count == 0)),
+            count,
+        })
+    };
+    for item in 0..9u8 {
+        let (frame, dim) = match item {
+            0..=2 => {
+                let f = item + if nation3 { 13 } else { 10 };
+                (f, f + 15)
+            }
+            _ => (item - 2, item + 13),
+        };
+        cells[item as usize * 4 / 3] = cell(frame, dim, stock[item as usize]);
+    }
+    cells[3] = cell(0x20, 0x1f, 0);
+    cells[7] = cell(0x2e, 0x2d, 0);
     cells
 }

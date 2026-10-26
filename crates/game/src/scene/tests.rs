@@ -268,6 +268,9 @@ fn marines_train_and_embark() {
         .unwrap()
         .id;
     scene.objects.retain(|o| o.ship.is_none() || o.id == ship);
+    // Start from an empty stock (miss000's settlement holds two marines).
+    assert_eq!(scene.garrison(home)[..3], [0, 1, 1]);
+    scene.garrisons.remove(&home);
     let (amber, fish) = (scene.amber, scene.fish);
     scene.train(home, 2).unwrap();
     scene.train(home, 2).unwrap();

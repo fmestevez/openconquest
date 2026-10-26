@@ -863,10 +863,29 @@ fn research_menu(scene: &Scene, obj: &MapObject) -> Menu {
 /// upgrade of a settlement to a town.
 fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     set(menu, 0, Command::BUILD_STRUCTURES, true);
+    // Its stock onto a ship alongside (0x43c740 slot 1).
+    let stocked = scene.garrison(obj.id).iter().any(|&n| n > 0);
+    set(
+        menu,
+        1,
+        Command::LOAD,
+        stocked && scene.ship_alongside(obj.id).is_some(),
+    );
     // Marines: one button per crew type in slots 8-10, showing the training
     // in progress.
     let training = scene.training_at(obj.id);
-    for kind in 0..3u8 {
+    // Only those the player may train, and only with a workshop (and for
+    // swordsmen a smithy) to equip them (0x43c740: 0x43da20 needs the
+    // settlement's workshops and smithies, +0x1fc and +0x200).
+    let owns = |class: u32| {
+        scene.objects.iter().any(|o| {
+            scene.is_own(o)
+                && o.class == ObjectClass::Building(class)
+                && scene.construction_at(o.id).is_none()
+        })
+    };
+    let trainable = |k: u8| scene.permits.item(k) && owns(WORKSHOP) && (k != 2 || owns(SMITHY));
+    for kind in (0..3u8).filter(|&k| trainable(k)) {
         let command = Command(Command::TRAIN_BOWMEN.0 + kind);
         let (amber, fish) = crate::combat::CREW_COST[kind as usize];
         menu[8 + kind as usize] = Some(Slot {

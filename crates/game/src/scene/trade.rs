@@ -584,6 +584,18 @@ impl Scene {
     /// Ship `ship` takes on the marines and weapons waiting at own
     /// settlements, towns and workshops nearby, as many as it has room for.
     /// Returns how many items came aboard.
+    /// The player's ship nearest to `site` within loading reach.
+    pub fn ship_alongside(&self, site: u32) -> Option<u32> {
+        let t = TILE_SIZE as f32;
+        let s = self.objects.iter().find(|o| o.id == site)?;
+        let dist = |o: &MapObject| ((o.x - s.x).powi(2) + (o.y - s.y).powi(2)).sqrt();
+        self.objects
+            .iter()
+            .filter(|o| self.is_own(o) && o.ship.is_some() && dist(o) <= combat::LOAD_REACH * t)
+            .min_by(|a, b| dist(a).total_cmp(&dist(b)))
+            .map(|o| o.id)
+    }
+
     pub fn load_crew(&mut self, ship: u32) -> Result<u32, String> {
         let t = TILE_SIZE as f32;
         let i = self.object_index(ship).ok_or("No such ship")?;
