@@ -294,8 +294,16 @@ Building composites (0x4288c0) are named prefix, nation, [class], state,
 towards the water using the ship heading convention: 0 east, 2 north, 4
 west, 6 south (checked against every port and dock in the missions).
 
-Amber deposits hold record field 4 x 100 units (negative: unlimited)
-(0x48a800).
+Amber deposits (AmberClassTy, Grig/amber.cpp; record handler 0x48a800):
+field 4 x 100 units (+0x78), measured against 1000 (+0x7c) whatever the
+start; a negative field 4 starts empty and grows to |field 4| x 100
+(+0x80); field 9 is how often it grows back (+0x84), field 10 is kept at
++0x8c; fields 6 and 7 are the cell. The picture size (0x48d2f0) is 3 above
+70 percent of 1000, 2 above 35, 1 above 0. Exhausted (state 1), it grows
+back while it may: state 2 waits, state 3 counts 100 ticks, then the amount
+returns (0x48a430). Ships take amber through its second virtual method
+(0x489f50, vtable 0x597460). The sparkle comes at random intervals per
+size from the pairs at 0x5b97a8 (10-60, 5-30, 1-10).
 
 Wind (WeatherClassTy, Weather.cpp; global object at 0x5c6a40):
 
@@ -407,8 +415,9 @@ Combat tables:
   each with three upgrade kinds whose current levels are player bytes and
   whose maximum levels are at 0x59715c, 0x597158, 0x597160 (W M S: 0 1 2,
   2 2 2, 2 2 2). Costs by kind at 0x5971c4, 0x59720c, 0x597254: nine amber
-  values (group x 3 + level) then nine fish values, e.g. 1500/1700/1900
-  amber and 200/250/290 fish for the first kind. The rows are the item
+  values (group x 3 + level) then nine study times in ticks (0x436ee0;
+  see Timings), e.g. 1500/1700/1900 amber and 200/250/290 ticks for the
+  first kind. The rows are the item
   groups (W = marines 0-2, M = light weapons 3-5, S = heavy weapons 6-8);
   the levels are player bytes +0x8e+group (first kind), +0x95+group
   (second) and +0x9c+group (third). The third is the damage level: the
@@ -416,7 +425,7 @@ Combat tables:
   +0x9c + i/3, which picks the A, B and C columns of the item's row. Its
   buttons are 0x3f, 0x42, 0x45 (`CBUT_UPGARMINGW1`, `M1`, `S1`), costing
   1500/1700, 1700/1800, 1800/2600 amber (0x597254; the following values
-  100-170 are probably study times). The first kind (`<group>3`, 0x3e,
+  100-170 are its study times). The first kind (`<group>3`, 0x3e,
   0x41, 0x44; slots 0, 4, 8) is the rate of fire: the item info routine
   0x4a9870 reads it from u32 0x597a3c[item x 3 + level] (120/150/150 for
   marines, scorpion 100/130/130, gastraphetes 120, small catapult
@@ -429,8 +438,17 @@ Combat tables:
   ballistae). The manual's comparison chart gives the same figures (its
   minimum ranges are one more, counting the ship's own cell). The main
   workshop page opens this one with 0x3d.
+- Starting levels (the navy's set-up, Navy.cpp 0x4a78a0, copies them from
+  each `DESCRIPTOR` player block, u32s from block +0x14): armour (+0x5f),
+  three unknown (+0x60..+0x62), ram (+0x5e), crew quality per crew type
+  (+0x67..+0x69), arming (+0xa3, 0 read as 1), an unknown u32, then rate of
+  fire, range and damage per item group (+0x8e, +0x95, +0x9c). Nothing else
+  writes the crew levels: crews are not upgraded in play. All zero except
+  some computer players of miss007-009 and the human of single06 (armour,
+  ram and workshop levels 1-2, arming 2).
 - The sage school (SchoolClassTy, menu 0x430f90) studies per-player levels
-  0-2: weapons (0x3c, player byte +0xa3, 1200/1300 amber at 0x5971ac),
+  0-2: weapons or arming (0x3c, player byte +0xa3, offered once, while it is
+  below 2, for 0x5971ac[+0xa3] = 1300 amber),
   rams (0x48, +0x5e, 1000/1500 at 0x42d9a0), armour (0x47, +0x5f, same
   costs) and rigging or movement (0x4f with the move button, +0x51,
   2000/3000 at 0x42d980); Greek schools add the special-ship upgrades
@@ -574,6 +592,12 @@ object kind (1 = player-owned), dword 2 the nation (1 Greek, 3 Persian,
   `WHIRLSPR_<state>`, `BREEF<kind>SPR_<state>`, `MREEF<kind>SPR_<state>`,
   `FISH_<kind><state+1>`, `CSTLSEASPR_<state><damage>`; sea monsters are
   `UMON<type><state><heading>`; hero houses `HHOUSE<n>SPR_013`.
+* Merchant work (Run_Ship.cpp, 0x4e1bb0): unloading walkway `MOST0_`, a
+  composite of 18 frames whose eight layers are the eight facings (one is
+  drawn); amber walkway `AMOST_<facing>` (sequences for facings 0, 2, 4, 6)
+  with porters `ANOSIL_<facing>`; fishing net `SETKA_<facing>` (0-3);
+  porters ashore `NOSIL_<loaded><0><heading>`. The sprites carry no
+  offsets: the game places them in code.
 
 ### Placement and timing
 
@@ -641,6 +665,38 @@ loading screen `<theme>LOADING`, button shapes `M_BUT0`-`3` (174x40 and
 fonts `S_FNT_<size><style>` (sizes B, L, M, S; style S plain dark, H gold).
 `data/datamap.dkx` is the scenario editor's (title `ZAST`).
 
+## Timings
+
+Times count the game clock (+0xde of the game object, one tick per
++0x34 ms: the second u32 of the speed's 24-byte row at 0x5bed7c, 13 17 20
+33 40 50 for speeds 1-6; 20 at the default speed 3).
+
+- Construction: a building's construction picture plays once over the
+  first entry of its class's cycle table (+0xc0, set by each constructor:
+  200 ticks for every player building; 300 at 0x5949e8 and 50 at
+  0x595e80 for two other classes); progress is elapsed x 100 / cycle.
+- The sage school (0x432210): arming 0x5971b8[+0xa3] = 450 ticks; ram,
+  armour and rigging 600 ticks for the first level, 700 for the second;
+  a unique ship 400 (0x432210 compares the elapsed ticks with 399).
+- The workshop's studies (0x436ee0): the second half of each 18-entry
+  cost table is the study time, by group x 3 + level (0x5971e8 rate of
+  fire 200, 250/290; 0x597230 range 150/285, 270/360, 240/420; 0x597278
+  damage 100/125, 100/170, 170/150). There are no fish costs.
+- Marines (settlement) and weapons (workshop): 0x5971a0[item / 3] ticks
+  each, 70, 80, 95.
+- Docks pass queued ships on to shipyards every 25 ticks (0x416f90); the
+  ship building time itself is not found yet.
+
+## Gathering
+
+Gathering (0x4ad0e0): each take moves amber 100 (boats and merchants; 20
+for other ships) or fish by ship type (0x59b2a8: boat 33, merchant 50,
+others 20) or 50 of a leviathan; the barbarians (player 0x10) take a
+third, and computer players double under a side and difficulty test.
+Amber is taken once per round of the porters (0x4b0590 state 0xf, then
+the `ANOSIL_` cycle in state 6), fish once per cast of the net (0x4ae760
+states 2 and 6); walkways, nets and porters advance a frame a tick.
+
 ## Sounds
 
 `sound/sounds.dkx` holds 163 sounds (kind 2): a `WAVEFORMATEX` (18 bytes;
@@ -649,6 +705,10 @@ bytes, then the samples. Text entries `SND_n` list the sounds that may play
 for game event `n`: a 24-byte header (u32s 0, flags, count, 10, 10, 0),
 then `count` NUL-terminated names, the first preceded by a byte with one
 high bit per name (0x80, 0xc0, 0xe0). `SOUNDLIST` lists the events.
+Interface sounds are played by event through 0x525370; positional ones
+through 0x50e570. A ship sinking (0x4dec40) plays event 3 (`deadsh`) if
+it was the viewing player's and event 319 (`deny`, despite its name a
+fanfare) if not. No sound was found for clicking an unavailable command.
 
 Music: missions' `TRACKS_MID` (Other(20)) is a playlist: a 28-byte header
 (u32s 0, 0, 260, 4, 10, 10, 0; entry size and count) then four 260-byte
@@ -657,8 +717,9 @@ files written for the sound card's General MIDI synthesizer).
 `TRACKS_CD` lists CD audio tracks 1-8 (not on the ISO; taken here as the
 audio tracks 2-9 after the data track). Per-mission technology masks
 (player bytes +0x45, +0x4e, +0x8bce) are not in `DESCRIPTOR` (its 104-byte
-player blocks hold only the human/computer flag, amber, nation, slot and
-fish, and the rest of the entry is the same in every mission), `HEAD_CUST`,
+player blocks hold the human/computer flag, amber, nation, slot, fish and
+the starting levels below; the rest of the entry is the same in every
+mission), `HEAD_CUST`,
 `ORIGINAL`, `HERO_ARR` (nine u32s, one per hero), `FLOT` or `LIST_OBJ`
 (a list of map positions in 1/64-cell units); they may be set in code.
 

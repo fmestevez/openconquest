@@ -271,7 +271,7 @@ fn marines_train_and_embark() {
     scene.train(home, 2).unwrap();
     assert!(scene.train(home, 0).is_err(), "one crew type at a time");
     assert_eq!((scene.amber, scene.fish), (amber - 60, fish - 600));
-    for _ in 0..50 * (2 * combat::CREW_TRAIN_SECONDS as usize + 1) {
+    for _ in 0..50 * (2 * combat::train_seconds(0).ceil() as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     assert_eq!(scene.garrison(home)[..3], [0, 0, 2]);
@@ -662,7 +662,7 @@ fn workshop_builds_weapons() {
     let amber = scene.amber;
     scene.train(workshop, 6).unwrap();
     assert_eq!(scene.amber, amber - 70);
-    for _ in 0..50 * (combat::CREW_TRAIN_SECONDS as usize + 1) {
+    for _ in 0..50 * (combat::train_seconds(8).ceil() as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     assert_eq!(scene.garrison(workshop)[6], 1);
@@ -859,7 +859,7 @@ fn school_research() {
     }
     let amber = scene.amber;
     scene.start_research(id, combat::Upgrade::Weapons).unwrap();
-    assert_eq!(scene.amber, amber - 1200);
+    assert_eq!(scene.amber, amber - 1300);
     assert!(
         scene.start_research(id, combat::Upgrade::Ram).is_err(),
         "one at a time"
@@ -869,19 +869,13 @@ fn school_research() {
     }
     let human = scene.human.map(|h| (h.nation, h.slot));
     assert_eq!(scene.levels_of(human).weapons, 1);
-    assert_eq!(scene.next_level(combat::Upgrade::Weapons), Some(1));
-    // A ballista strikes harder at level 1 (240 against 200).
-    assert_eq!(combat::hull_damage_at(6, 1), 240.0);
-    scene.start_research(id, combat::Upgrade::Weapons).unwrap();
-    assert_eq!(scene.amber, amber - 1200 - 1300);
-    for _ in 0..50 * 31 {
-        scene.update(0.02, &data, &mut caches);
-    }
     assert_eq!(
         scene.next_level(combat::Upgrade::Weapons),
         None,
-        "level 2 is the top"
+        "arming is studied once"
     );
+    // A ballista strikes harder at damage level 1 (240 against 200).
+    assert_eq!(combat::hull_damage_at(6, 1), 240.0);
 }
 
 /// A smithy fits armour to a ship alongside, once the school has
@@ -1129,13 +1123,28 @@ fn merchant_gathers_amber() {
     let (deposit, before) = (deposit.id, deposit.deposit.unwrap().remaining.unwrap());
     scene.order_gather(boat, deposit).unwrap();
     let amber = scene.amber;
+    let (mut partly, mut walkway, mut porters) = (false, false, false);
+    let mut amber_walkway = false;
     for _ in 0..60 * 600 {
         scene.update(1.0 / 60.0, &data, &mut caches);
-        if scene.amber > amber {
+        // Unloading takes a while: porters carry the goods in.
+        partly |= scene.amber > amber && scene.amber < amber + 400;
+        walkway |= scene
+            .planks
+            .iter()
+            .any(|p| p.activity == super::unload::Activity::Unloading);
+        amber_walkway |= scene
+            .planks
+            .iter()
+            .any(|p| p.activity == super::unload::Activity::Amber);
+        porters |= !scene.porters.is_empty();
+        if scene.amber >= amber + 400 {
             break;
         }
     }
     assert_eq!(scene.amber, amber + 400, "one full boat load delivered");
+    assert!(partly && walkway && porters, "{partly} {walkway} {porters}");
+    assert!(amber_walkway, "a walkway to the amber while gathering");
     let left = scene.objects[scene.object_index(deposit).unwrap()]
         .deposit
         .unwrap()
@@ -1308,7 +1317,7 @@ fn workshop_research() {
     let amber = scene.amber;
     scene.start_research(id, heavy).unwrap();
     assert_eq!(scene.amber, amber - 1800);
-    for _ in 0..50 * (heavy.seconds() as usize + 1) {
+    for _ in 0..50 * (heavy.seconds(0) as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     let levels = scene.levels_of(scene.human.map(|h| (h.nation, h.slot)));
@@ -1320,7 +1329,7 @@ fn workshop_research() {
     assert!(scene.next_level(combat::Upgrade::Rate(0)).is_none());
     let reach = combat::Upgrade::Reach(2);
     scene.start_research(id, reach).unwrap();
-    for _ in 0..50 * (reach.seconds() as usize + 1) {
+    for _ in 0..50 * (reach.seconds(0) as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     let levels = scene.levels_of(scene.human.map(|h| (h.nation, h.slot)));
@@ -1526,6 +1535,8 @@ fn leviathan_hunt() {
     scene.objects[z].deposit = Some(crate::objects::Deposit {
         resource: Resource::Leviathan,
         remaining: Some(1.0),
+        regrows: 0,
+        refill: 0.0,
     });
     scene.order_gather(boat, zone).unwrap();
     let (amber, fish) = (scene.amber, scene.fish);
@@ -2226,13 +2237,26 @@ fn campaign_heroes_carry_over() {
         .find(|o| o.ship.is_some() && o.owner == human)
         .unwrap();
     assert_eq!(boat.ship.as_ref().unwrap().heroes, vec![0, 5, 1, 8]);
-    // Missions with a settlement keep them there for a ship to take.
-    let found = (1..14).find_map(|m| {
-        let scene = Scene::load(&data, &mut caches, &format!("miss{m:03}")).unwrap();
-        (!scene.carried.is_empty() && !scene.start_sites.is_empty()).then_some(scene)
-    });
-    let Some(mut scene) = found else { return };
+    // miss003 starts without a ship: the Argo comes, with Jason and Argus,
+    // where the view starts.
+    let scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    let argo = scene
+        .objects
+        .iter()
+        .find(|o| o.ship.as_ref().is_some_and(|s| s.argo))
+        .unwrap();
+    assert_eq!(argo.ship.as_ref().unwrap().heroes, vec![0, 5]);
+    let (vx, vy) = scene.start_view();
+    assert!((argo.x - vx).abs() < 600.0 && (argo.y - vy).abs() < 600.0);
+    // Heroes waiting at a settlement go aboard a ship that comes for them.
+    let mut scene = Scene::load(&data, &mut caches, "miss004").unwrap();
     let site = scene.start_sites[0];
+    for o in scene.objects.iter_mut() {
+        if let Some(s) = o.ship.as_mut() {
+            s.heroes.clear();
+        }
+    }
+    scene.site_heroes.insert(site, scene.carried.clone());
     let waiting = scene.site_heroes[&site].clone();
     assert_eq!(waiting, scene.carried);
     let s = scene.object_index(site).unwrap();
@@ -2846,4 +2870,179 @@ fn missions_start_where_the_view_is_set() {
     assert_eq!((x, y), (27.0 * 64.0 + 296.0, 28.0 * 64.0 + 263.0));
     let ship = scene.objects.iter().find(|o| scene.is_own(o)).unwrap();
     assert!((ship.x - x).abs() < 300.0 && (ship.y - y).abs() < 270.0);
+}
+
+/// A fishing ground is picked anywhere in it, not only on the fish drawn
+/// in its middle (needs `OPENAC_DATA`).
+#[test]
+fn deposits_are_picked_by_area() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.fog = false;
+    let t = TILE_SIZE as f32;
+    let zone = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::FishZone && o.record.field(8).unwrap_or(0) >= 2)
+        .unwrap();
+    let (x, y) = (
+        zone.record.field(6).unwrap() as f32,
+        zone.record.field(7).unwrap() as f32,
+    );
+    // Its top-left cell, away from the fish in the middle.
+    let picked = crate::render::hit_test(&scene, x * t + t / 2.0, y * t + t / 2.0, 0);
+    assert_eq!(picked, Some(zone.id));
+}
+
+/// Every mouse pointer, normal and greyed, loads from the game data (needs
+/// `OPENAC_DATA`).
+#[test]
+fn pointers_load() {
+    use crate::cursor::{Pointer as P, Pointers};
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let pointers = Pointers::default();
+    assert!(pointers.available(&data));
+    for p in [
+        P::Standard,
+        P::Fish,
+        P::Whale,
+        P::Amber,
+        P::Own,
+        P::Select,
+        P::Sea,
+        P::Attack,
+        P::Board,
+        P::Ram,
+        P::Build,
+        P::Repair,
+        P::Magic,
+        P::Treasure,
+        P::Behaviour,
+        P::Ban,
+    ] {
+        for greyed in [false, true] {
+            assert!(pointers.count(&data, p, greyed) > 0, "{p:?} {greyed}");
+        }
+    }
+}
+
+/// A boat fishing casts its net (needs `OPENAC_DATA`).
+#[test]
+fn fishing_casts_the_net() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let (boat, bx, by) = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+        .map(|o| (o.id, o.x, o.y))
+        .unwrap();
+    let ground = scene
+        .objects
+        .iter()
+        .filter(|o| o.deposit.is_some_and(|d| d.resource == Resource::Fish))
+        .min_by(|a, b| {
+            let d = |o: &&MapObject| (o.x - bx).powi(2) + (o.y - by).powi(2);
+            d(a).total_cmp(&d(b))
+        })
+        .unwrap()
+        .id;
+    scene.order_gather(boat, ground).unwrap();
+    let net = (0..60 * 120).any(|_| {
+        scene.update(1.0 / 60.0, &data, &mut caches);
+        scene
+            .planks
+            .iter()
+            .any(|p| p.activity == super::unload::Activity::Fishing && !p.frame().is_empty())
+    });
+    assert!(net);
+}
+
+/// Exhausted amber lies empty for a while and grows back to what it held
+/// (needs `OPENAC_DATA`).
+#[test]
+fn amber_grows_back() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss004").unwrap();
+    scene.brain = None;
+    let (boat, bx, by) = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+        .map(|o| (o.id, o.x, o.y))
+        .unwrap();
+    let amber = scene
+        .objects
+        .iter()
+        .filter(|o| {
+            o.deposit
+                .is_some_and(|d| d.resource == Resource::Amber && d.regrows > 0)
+        })
+        .min_by(|a, b| {
+            let d = |o: &&MapObject| (o.x - bx).powi(2) + (o.y - by).powi(2);
+            d(a).total_cmp(&d(b))
+        })
+        .unwrap()
+        .id;
+    let a = scene.object_index(amber).unwrap();
+    let full = scene.objects[a].deposit.unwrap().refill;
+    let regrows = scene.objects[a].deposit.unwrap().regrows;
+    scene.objects[a].deposit.as_mut().unwrap().remaining = Some(5.0);
+    scene.order_gather(boat, amber).unwrap();
+    let emptied = (0..60 * 120).any(|_| {
+        scene.update(1.0 / 60.0, &data, &mut caches);
+        let a = scene.object_index(amber).unwrap();
+        scene.objects[a].dormant.is_some()
+    });
+    assert!(emptied, "the amber runs out");
+    let a = scene.object_index(amber).unwrap();
+    assert!(scene.objects[a].deposit.is_none() && scene.objects[a].frames.is_empty());
+    for _ in 0..(60.0 * (crate::objects::REGROW_SECONDS + 0.5)) as usize {
+        scene.update(1.0 / 60.0, &data, &mut caches);
+    }
+    let a = scene.object_index(amber).unwrap();
+    let dep = scene.objects[a].deposit.expect("grown back");
+    assert_eq!(dep.remaining, Some(full));
+    assert_eq!(dep.regrows, regrows - 1);
+    assert!(!scene.objects[a].frames.is_empty());
+}
+
+/// Missions give some players research levels from the start: in miss008
+/// the computer players have armour, ram and the workshop's levels at 2
+/// (needs `OPENAC_DATA`).
+#[test]
+fn missions_give_starting_levels() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let scene = Scene::load(&data, &mut caches, "miss008").unwrap();
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    assert_eq!(scene.levels_of(human), combat::Levels::default());
+    let strong: Vec<_> = scene
+        .levels
+        .iter()
+        .filter(|(owner, _)| Some(**owner) != human)
+        .collect();
+    assert_eq!(strong.len(), 2);
+    for (_, l) in strong {
+        assert_eq!((l.armour, l.ram, l.weapons), (2, 2, 1));
+        assert_eq!((l.arms, l.rate, l.reach), ([2; 3], [2; 3], [2; 3]));
+    }
 }

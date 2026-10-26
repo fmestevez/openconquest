@@ -802,6 +802,9 @@ impl Scene {
         if let Ok(Some(obj)) = crate::objects::resolve(data, caches, &rec) {
             self.objects.push(obj);
             self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
+            if let Some(i) = self.object_index(id) {
+                self.refresh_amber(i, data, caches);
+            }
         }
     }
 }

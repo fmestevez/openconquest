@@ -106,11 +106,30 @@ pub fn draw_objects(
     };
     let visible = scene.objects.iter().filter(|o| scene.is_visible(o));
     let (above, below): (Vec<_>, Vec<_>) = visible.partition(flying);
-    for obj in below.into_iter().chain(above) {
-        for layer in obj.frame_at(time_ms) {
-            let (left, top) = layer_origin(obj, layer);
-            draw_image(frame, screen, camera, lut, &layer.image, left, top);
+    let draw = |frame: &mut Frame, layers: &[crate::objects::Layer], x: f32, y: f32| {
+        for layer in layers {
+            let img = &layer.image;
+            let left = (x + layer.dx as f32 - img.width as f32 / 2.0).round() as i32;
+            let top = (y + layer.dy as f32 - img.height as f32 / 2.0).round() as i32;
+            draw_image(frame, screen, camera, lut, img, left, top);
         }
+    };
+    for obj in below {
+        draw(frame, obj.frame_at(time_ms), obj.x, obj.y);
+    }
+    // Walkways of unloading ships, and their porters.
+    for p in &scene.planks {
+        for layers in p.frame() {
+            draw(frame, layers, p.x, p.y);
+        }
+    }
+    for p in &scene.porters {
+        if let Some(layers) = p.frame(time_ms) {
+            draw(frame, layers, p.x, p.y);
+        }
+    }
+    for obj in above {
+        draw(frame, obj.frame_at(time_ms), obj.x, obj.y);
     }
     let t = TILE_SIZE as f32;
     for fx in scene.effects.iter().filter(|fx| {
@@ -205,20 +224,40 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
     if let Some(t) = treasure {
         return Some(t.id);
     }
-    scene
-        .objects
-        .iter()
-        .rev()
-        .filter(|o| scene.is_visible(o))
-        .find_map(|obj| {
-            obj.frame_at(time_ms)
-                .iter()
-                .any(|layer| {
-                    let (left, top) = layer_origin(obj, layer);
-                    layer.image.is_solid(px - left, py - top)
-                })
-                .then_some(obj.id)
+    let solid = |obj: &&crate::objects::MapObject| {
+        obj.frame_at(time_ms).iter().any(|layer| {
+            let (left, top) = layer_origin(obj, layer);
+            layer.image.is_solid(px - left, py - top)
         })
+    };
+    let visible = || scene.objects.iter().rev().filter(|o| scene.is_visible(o));
+    // Ships, buildings and creatures first: what can be selected or fought.
+    if let Some(o) = visible().find(|o| o.combat.is_some() && solid(o)) {
+        return Some(o.id);
+    }
+    // Deposits are areas: anywhere in a fishing or leviathan ground (its
+    // cells, record fields 6-9), near an amber deposit.
+    let t = openac_formats::map::TILE_SIZE as f32;
+    let (cx, cy) = ((wx / t).floor() as i32, (wy / t).floor() as i32);
+    if let Some(o) = visible().find(|o| {
+        o.deposit.is_some() && {
+            let f = |i| o.record.field(i).unwrap_or(0) as i32;
+            match o.class {
+                openac_formats::ObjectClass::FishZone | openac_formats::ObjectClass::WhaleZone => {
+                    let (x, y, w, h) = if o.class == openac_formats::ObjectClass::FishZone {
+                        (f(6), f(7), f(8), f(9))
+                    } else {
+                        (f(7), f(8), f(9), f(10))
+                    };
+                    cx >= x && cy >= y && cx < x + w.max(1) && cy < y + h.max(1)
+                }
+                _ => (o.x - wx).powi(2) + (o.y - wy).powi(2) <= (t * 0.6).powi(2) || solid(o),
+            }
+        }
+    }) {
+        return Some(o.id);
+    }
+    visible().find(|o| solid(o)).map(|o| o.id)
 }
 
 /// World-space bounding box `(x0, y0, x1, y1)` of an object's current frame.

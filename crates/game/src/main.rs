@@ -5,6 +5,7 @@ mod assets;
 mod audio;
 mod combat;
 mod commands;
+mod cursor;
 mod economy;
 mod launch;
 mod magic;
@@ -132,10 +133,18 @@ struct Args {
     /// Run the simulation for this many seconds before taking the screenshot.
     #[arg(long, default_value_t = 0.0, value_name = "SECONDS")]
     simulate: f32,
+    /// Command slot shown hovered in the screenshot (with the player's
+    /// first ship selected).
+    #[arg(long, hide = true)]
+    hover_button: Option<usize>,
     /// Debugging: before simulating, order the focused ship to attack the
     /// nearest ship of another player.
     #[arg(long)]
     skirmish: bool,
+    /// Debugging: before simulating, order the player's merchant nearest
+    /// the focus to gather the nearest amber (or fish).
+    #[arg(long, hide = true, value_name = "amber|fish")]
+    gather: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -320,6 +329,39 @@ fn skirmish(scene: &mut Scene, focus: Option<(u32, u32)>) -> Option<u32> {
     None
 }
 
+fn gather(scene: &mut Scene, focus: Option<(u32, u32)>, what: &str) -> Option<u32> {
+    use crate::objects::{cargo_capacity, Resource};
+    let (fx, fy) = focus.map_or((0.0, 0.0), |(x, y)| {
+        ((x * 64 + 32) as f32, (y * 64 + 32) as f32)
+    });
+    let d = |o: &crate::objects::MapObject, x: f32, y: f32| (o.x - x).powi(2) + (o.y - y).powi(2);
+    let resource = if what == "fish" {
+        Resource::Fish
+    } else {
+        Resource::Amber
+    };
+    let boat = scene
+        .objects
+        .iter()
+        .filter(|o| {
+            scene.is_own(o)
+                && o.ship
+                    .as_ref()
+                    .is_some_and(|s| cargo_capacity(s.kind) > 0.0)
+        })
+        .min_by(|a, b| d(a, fx, fy).total_cmp(&d(b, fx, fy)))?;
+    let deposit = scene
+        .objects
+        .iter()
+        .filter(|o| o.deposit.is_some_and(|dep| dep.resource == resource))
+        .min_by(|a, b| d(a, boat.x, boat.y).total_cmp(&d(b, boat.x, boat.y)))?;
+    let (b, t) = (boat.id, deposit.id);
+    if let Err(e) = scene.order_gather(b, t) {
+        eprintln!("gather: {e}");
+    }
+    Some(b)
+}
+
 fn screenshot(
     data: &GameData,
     args: &Args,
@@ -333,6 +375,8 @@ fn screenshot(
     scene.fog = !args.no_fog;
     let attacker = if args.skirmish {
         skirmish(&mut scene, args.focus)
+    } else if let Some(what) = &args.gather {
+        gather(&mut scene, args.focus, what)
     } else {
         None
     };
@@ -359,7 +403,7 @@ fn screenshot(
         select_box: None,
         status: None,
         time_ms,
-        hover_button: None,
+        hover_button: args.hover_button,
         page: match args.page.as_deref() {
             Some("behaviour") => commands::Page::Behaviour,
             Some("research") => commands::Page::Research,

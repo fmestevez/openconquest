@@ -220,6 +220,10 @@ pub struct App {
     box_from: Option<PhysicalPosition<f64>>,
     /// A command waiting for a target on the map (e.g. Move).
     pending: Option<Command>,
+    /// The window size the frame being drawn has (see `window_size`).
+    drawn_size: (u32, u32),
+    /// The original's mouse pointers, drawn by the game.
+    pointers: crate::cursor::Pointers,
     /// Which menu of the selected object is shown.
     page: Page,
     /// The mission briefing is shown (and the game waits).
@@ -356,6 +360,8 @@ impl App {
             group: Vec::new(),
             box_from: None,
             pending: None,
+            drawn_size: (1, 1),
+            pointers: Default::default(),
             page: Page::Main,
             briefing: !restored,
             music: None,
@@ -422,6 +428,9 @@ impl App {
         }
     }
 
+    /// The window's size in pixels. While a frame is drawn (the window
+    /// taken out of `gfx`), the size it had when the frame began: anything
+    /// laid out then (the hovered button, the pointer) needs the real size.
     fn window_size(&self) -> (u32, u32) {
         self.gfx
             .as_ref()
@@ -429,7 +438,7 @@ impl App {
                 let s = g.window.inner_size();
                 (s.width.max(1), s.height.max(1))
             })
-            .unwrap_or((1, 1))
+            .unwrap_or(self.drawn_size)
     }
 
     fn view(&self) -> GameView<'_> {
@@ -1256,12 +1265,6 @@ impl App {
     }
 
     /// Plays an interface sound at full volume.
-    fn play_ui(&mut self, name: &str) {
-        if let (Some(audio), Some(sounds)) = (self.audio.as_mut(), self.data.sounds.as_ref()) {
-            audio.play(sounds, name, 1.0);
-        }
-    }
-
     /// Plays the sounds the scene reported, by their distance from the
     /// centre of the view.
     fn play_scene_sounds(&mut self) {
@@ -1343,8 +1346,9 @@ impl App {
                 }
                 None => format!("{}: not available yet", entry.command.name()),
             };
+            // The original only greys the button: no sound (its "deny"
+            // sound, event 319, is the sting for an enemy ship sunk).
             self.say(reason);
-            self.play_ui("deny");
             return;
         }
         if let Some(kind) = ship_kind {
@@ -1907,6 +1911,97 @@ impl App {
         self.pending = None;
     }
 
+    /// The pointer for the mouse at `pos` and whether it is greyed (the
+    /// action cannot be done there): as the original (0x5175b0), by what
+    /// the selected units would do to what is under it.
+    fn pointer(&self, pos: PhysicalPosition<f64>) -> (crate::cursor::Pointer, bool) {
+        use crate::cursor::Pointer as P;
+        if self.video.is_some() || self.menu.is_some() || self.button_at(pos).is_some() {
+            return (P::Standard, false);
+        }
+        let (screen, _) = self.placement();
+        if !screen.contains(pos.x as f32, pos.y as f32) {
+            return (P::Standard, false);
+        }
+        let target = self
+            .object_at(pos)
+            .and_then(|id| self.scene.object_index(id).map(|i| &self.scene.objects[i]));
+        let selected = self
+            .selected
+            .and_then(|id| self.scene.object_index(id))
+            .map(|i| &self.scene.objects[i]);
+        let own = |o: &crate::objects::MapObject| self.scene.is_own(o);
+        let enemy = |o: &crate::objects::MapObject| {
+            o.combat.is_some() && selected.is_some_and(|s| Scene::are_enemies(s, o)) && !own(o)
+        };
+        let resource = |o: &crate::objects::MapObject| o.deposit.map(|d| d.resource);
+        let water = self
+            .cell_at(pos)
+            .is_some_and(|(x, y)| self.scene.nav.is_water(x, y));
+        // A command waiting for its target.
+        if let Some(cmd) = self.pending {
+            let deposit = |r: Resource| target.and_then(resource) == Some(r);
+            return match cmd {
+                Command::MOVE => (P::Sea, !water),
+                Command::FIRE => (P::Attack, !target.is_some_and(enemy)),
+                Command::RAM => (
+                    P::Ram,
+                    !target.is_some_and(|o| enemy(o) && o.ship.is_some()),
+                ),
+                Command::BOARD => (
+                    P::Board,
+                    !target.is_some_and(|o| enemy(o) && o.ship.is_some()),
+                ),
+                Command::AMBER => (P::Amber, !deposit(Resource::Amber)),
+                Command::FISH => (P::Fish, !deposit(Resource::Fish)),
+                Command::WHALE => (P::Whale, !deposit(Resource::Leviathan)),
+                Command::TREASURE => (
+                    P::Treasure,
+                    !target.is_some_and(|o| {
+                        o.treasure.is_some() || o.class == openac_formats::ObjectClass::HeroHouse
+                    }),
+                ),
+                Command::REPAIR_SHIP | Command::REPAIR_BUILDING => {
+                    (P::Repair, !target.is_some_and(own))
+                }
+                Command::BUILD_GROUND => (P::Build, !self.site_at(pos).is_some_and(|s| s.1)),
+                c if economy::building_of_command(c).is_some() => {
+                    (P::Build, !self.site_at(pos).is_some_and(|s| s.1))
+                }
+                c if Spell::of_command(c).is_some() => (P::Magic, false),
+                _ => (P::Behaviour, false),
+            };
+        }
+        // What a right click would do with own ships selected.
+        let ship = selected.filter(|s| own(s) && s.ship.is_some());
+        if let Some(s) = ship {
+            let merchant = s
+                .ship
+                .as_ref()
+                .is_some_and(|sh| crate::objects::cargo_capacity(sh.kind) > 0.0);
+            return match target {
+                Some(o) if own(o) => (P::Own, false),
+                Some(o) if enemy(o) => (P::Attack, !s.is_armed()),
+                Some(o) if o.treasure.is_some() => (P::Treasure, false),
+                Some(o) if o.class == openac_formats::ObjectClass::HeroHouse => {
+                    (P::Treasure, false)
+                }
+                Some(o) if resource(o).is_some() && merchant => match resource(o).unwrap() {
+                    Resource::Amber => (P::Amber, false),
+                    Resource::Fish => (P::Fish, false),
+                    Resource::Leviathan => (P::Whale, false),
+                },
+                _ if water => (P::Sea, false),
+                _ => (P::Ban, false),
+            };
+        }
+        match target {
+            Some(o) if own(o) => (P::Own, false),
+            Some(o) if o.combat.is_some() || o.deposit.is_some() => (P::Select, false),
+            _ => (P::Standard, false),
+        }
+    }
+
     /// Gives `order` for the player: at once in a single-player game, in a
     /// coming turn in a multiplayer one (where refusals show then).
     fn issue(&mut self, order: Order) -> Result<u32, String> {
@@ -2373,6 +2468,7 @@ impl App {
         self.update(dt);
 
         let window = self.window_size();
+        self.drawn_size = window;
         let Some(mut gfx) = self.gfx.take() else {
             return Ok(());
         };
@@ -2409,6 +2505,20 @@ impl App {
                 }
                 .draw(&mut frame);
             }
+            if let Some(c) = self.cursor {
+                let (pointer, greyed) = self.pointer(c);
+                let scale = self.camera.policy.base_scale(window.1);
+                self.pointers.draw(
+                    &mut frame,
+                    &self.data,
+                    pointer,
+                    greyed,
+                    c.x as f32,
+                    c.y as f32,
+                    scale,
+                    self.time_ms,
+                );
+            }
             buffer.present().map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(())
         })();
@@ -2437,6 +2547,10 @@ impl ApplicationHandler for App {
         }
         let result = (|| -> Result<Gfx> {
             let window = Rc::new(event_loop.create_window(attrs)?);
+            // The game draws its own pointers over the window.
+            if self.pointers.available(&self.data) {
+                window.set_cursor_visible(false);
+            }
             let context =
                 softbuffer::Context::new(window.clone()).map_err(|e| anyhow::anyhow!("{e}"))?;
             let surface = softbuffer::Surface::new(&context, window.clone())

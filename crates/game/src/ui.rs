@@ -927,6 +927,10 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
                 ..
             }) => text += ". Returning to port",
             Some(Task::Gather {
+                phase: GatherPhase::Unloading(_),
+                ..
+            }) => text += ". Unloading",
+            Some(Task::Gather {
                 phase: GatherPhase::ToDeposit,
                 ..
             }) => text += ". Sailing to gather",

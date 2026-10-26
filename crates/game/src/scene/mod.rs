@@ -33,7 +33,7 @@ pub struct Training {
 impl Training {
     /// Progress 0..1 of the marine in training.
     pub fn progress(&self) -> f32 {
-        (self.elapsed / combat::CREW_TRAIN_SECONDS).min(1.0)
+        (self.elapsed / combat::train_seconds(self.kind)).min(1.0)
     }
 }
 
@@ -164,6 +164,9 @@ pub struct Scene {
     /// Each player's starting view (`WIN_VIEW`): the top-left cell of the
     /// original's view, by player id `nation * 4 + slot`.
     pub views: Vec<Option<(u32, u32)>>,
+    /// Walkways and porters of ships unloading (only shown).
+    pub planks: Vec<unload::Plank>,
+    pub porters: Vec<unload::Porter>,
     /// The human player's statistics for the outcome screen.
     pub stats: stats::Stats,
     /// What the human player may build, fit, research and learn.
@@ -211,6 +214,7 @@ mod seats;
 mod spells;
 mod stats;
 mod story;
+mod unload;
 mod walkers;
 pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use flyers::{Flyer, Nest};
@@ -273,7 +277,11 @@ impl Scene {
             sounds: Vec::new(),
             trainings: Vec::new(),
             summons: Vec::new(),
-            levels: Default::default(),
+            levels: players
+                .iter()
+                .filter(|p| p.levels != Default::default())
+                .map(|p| ((p.nation, p.slot), combat::Levels::starting(&p.levels)))
+                .collect(),
             research: Vec::new(),
             purses: players
                 .iter()
@@ -303,6 +311,8 @@ impl Scene {
             seats: Vec::new(),
             active: 0,
             stats: Default::default(),
+            planks: Vec::new(),
+            porters: Vec::new(),
             views: (0..20)
                 .map(|id| openac_formats::mission::start_view(&archive, id / 4, id % 4))
                 .collect(),
@@ -340,26 +350,31 @@ impl Scene {
             // The campaign's heroes so far wait at the starting settlement.
             scene.carried = story::carried_heroes(data, mission);
             scene.start_sites = scene.own_sites();
-            // With no settlement to start from, they ride on the first ship
-            // (in the original, the Argo the scripts create).
+            // After miss002 they sail in the Argo; before, or without a
+            // ship, they wait at the starting settlement.
+            let argo = if mission > "miss002" {
+                scene.ready_argo(data, caches)
+            } else {
+                None
+            };
             if !scene.carried.is_empty() {
-                match scene.start_sites.first() {
-                    Some(&site) => {
+                let human = scene.human.map(|h| (h.nation, h.slot));
+                let first_ship = || {
+                    scene
+                        .objects
+                        .iter()
+                        .position(|o| o.ship.is_some() && o.owner == human)
+                };
+                match (argo, scene.start_sites.first()) {
+                    (Some(i), _) => {
+                        scene.objects[i].ship.as_mut().unwrap().heroes = scene.carried.clone()
+                    }
+                    (None, Some(&site)) => {
                         scene.site_heroes.insert(site, scene.carried.clone());
                     }
-                    None => {
-                        let human = scene.human.map(|h| (h.nation, h.slot));
-                        if let Some(o) = scene
-                            .objects
-                            .iter_mut()
-                            .find(|o| o.ship.is_some() && o.owner == human)
-                        {
-                            o.ship.as_mut().unwrap().heroes = scene.carried.clone();
-                            // After miss002 they sail in the Argo.
-                            if mission > "miss002" {
-                                o.ship.as_mut().unwrap().argo = true;
-                                o.label = "Argo".into();
-                            }
+                    (None, None) => {
+                        if let Some(i) = first_ship() {
+                            scene.objects[i].ship.as_mut().unwrap().heroes = scene.carried.clone();
                         }
                     }
                 }
@@ -373,6 +388,9 @@ impl Scene {
             scene.start_sites = scene.own_sites();
         }
         scene.start_nests(data, caches);
+        for i in 0..scene.objects.len() {
+            scene.refresh_amber(i, data, caches);
+        }
         scene.update_sight();
         Ok(scene)
     }
@@ -397,6 +415,7 @@ impl Scene {
                     owner: o.owner,
                     ship: o.ship.clone(),
                     deposit: o.deposit,
+                    dormant: o.dormant,
                     combat: o.combat.clone(),
                 })
                 .collect(),
@@ -459,6 +478,7 @@ impl Scene {
             obj.owner = s.owner;
             obj.ship = s.ship.clone();
             obj.deposit = s.deposit;
+            obj.dormant = s.dormant;
             obj.combat = s.combat.clone();
             scene.objects.push(obj);
         }
@@ -494,6 +514,9 @@ impl Scene {
         scene.held = save.held.clone();
         scene.flyers = save.flyers.clone();
         scene.stats = save.stats.clone();
+        for i in 0..scene.objects.len() {
+            scene.refresh_amber(i, data, caches);
+        }
         scene.nests = save.nests.clone();
         scene.walkers = save.walkers.clone();
         scene.lair_clocks = save.lair_clocks.clone();
@@ -746,6 +769,8 @@ impl Scene {
         self.run_wizards(dt, data, caches);
         self.run_flyers(dt, data, caches);
         self.run_walkers(dt, data, caches);
+        self.run_porters(dt, data, caches);
+        self.run_regrowth(dt, data, caches);
         self.offer_argo();
         self.run_hazards(dt, data, caches);
         self.run_constructions(dt, data, caches);

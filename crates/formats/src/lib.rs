@@ -24,6 +24,7 @@ pub use image::{parse_palette_animation, Bitmap, Mask, Palette, PaletteCycle, Rg
 pub use map::{MapGrid, TileRef, TileSet, TileSetLibrary};
 pub use mission::{
     briefing, conditions, object_records, players, ObjectClass, ObjectRecord, PlayerInfo,
+    StartLevels,
 };
 pub use sound::{load_sound, sound_choices, Sound};
 

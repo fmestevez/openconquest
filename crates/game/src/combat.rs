@@ -111,10 +111,13 @@ pub const CREW_NAMES: [&str; 3] = ["bowmen", "javelin men", "swordsmen"];
 /// and fish (0x597170 x 100).
 pub const CREW_COST: [(u32, u32); 3] = [(30, 200), (30, 200), (30, 300)];
 
-/// Seconds to train one squad. The settlement menu (0x43c740) shows
-/// progress as elapsed x 100 / (70 x queued); reading the 70 as tenths of a
-/// second is a guess.
-pub const CREW_TRAIN_SECONDS: f32 = 7.0;
+/// Seconds to train a squad of marines or build a weapon `item`: game
+/// ticks of 20 ms by item group, 70 marines, 80 medium and 95 heavy
+/// weapons (0x5971a0; the settlement 0x43c740 and the workshop 0x4369c0
+/// show progress as elapsed x 100 / (ticks x queued)).
+pub fn train_seconds(item: u8) -> f32 {
+    [70.0, 80.0, 95.0][(item / 3).min(2) as usize] * 0.02
+}
 
 /// Room aboard a ship type for marines and weapons, from the manual's
 /// comparison chart ("displacement for weapons or for cargo"); it matches
@@ -574,7 +577,9 @@ impl Upgrade {
     pub fn max_level(self) -> u8 {
         match self {
             Upgrade::Rate(g) => g.min(2),
-            Upgrade::Special(_) => 1,
+            // Arming is studied once, from the original's 1 to 2 (the
+            // school offers it while +0xa3 < 2).
+            Upgrade::Weapons | Upgrade::Special(_) => 1,
             _ => 2,
         }
     }
@@ -585,7 +590,8 @@ impl Upgrade {
     pub fn cost(self, level: u8) -> u32 {
         let g = |g: u8| g.min(2) as usize;
         let costs = match self {
-            Upgrade::Weapons => [1200, 1300],
+            // Indexed by the original's arming, which starts at 1.
+            Upgrade::Weapons => [1300, 1300],
             Upgrade::Ram | Upgrade::Armour => [1000, 1500],
             Upgrade::Speed => [2000, 3000],
             Upgrade::Arms(n) => [[1500, 1700], [1700, 1800], [1800, 2600]][g(n)],
@@ -596,16 +602,24 @@ impl Upgrade {
         costs[level.min(1) as usize]
     }
 
-    /// Seconds of study. Placeholder (for the workshop, the values after
-    /// each cost table, 100-420, read as tenths of a second).
-    pub fn seconds(self) -> f32 {
-        match self {
-            Upgrade::Arms(g) => [11.0, 13.5, 16.0][g.min(2) as usize],
-            Upgrade::Rate(g) => [20.0, 20.0, 27.0][g.min(2) as usize],
-            Upgrade::Reach(g) => [22.0, 31.5, 33.0][g.min(2) as usize],
-            Upgrade::Special(_) => 40.0,
-            _ => 30.0,
-        }
+    /// Seconds to study the level after `from`: game ticks of 20 ms. The
+    /// sage school (0x432210): arming 0x5971b8[+0xa3] (450, the original's
+    /// arming starting at 1), ram, armour and rigging 600 then 700, a
+    /// unique ship 400. The workshop (0x436ee0): the second half of each
+    /// cost table, by group x 3 + level (0x5971e8 rate of fire, 0x597230
+    /// range, 0x597278 damage).
+    pub fn seconds(self, from: u8) -> f32 {
+        let l = from.min(1) as usize;
+        let g = |g: u8| g.min(2) as usize * 3 + l;
+        let ticks = match self {
+            Upgrade::Weapons => [400, 450][(from + 1).min(1) as usize],
+            Upgrade::Ram | Upgrade::Armour | Upgrade::Speed => [600, 700][l],
+            Upgrade::Special(_) => 400,
+            Upgrade::Rate(n) => [0, 0, 0, 200, 0, 0, 250, 290, 0][g(n)],
+            Upgrade::Reach(n) => [150, 285, 0, 270, 360, 0, 240, 420, 0][g(n)],
+            Upgrade::Arms(n) => [100, 125, 0, 100, 170, 0, 170, 150, 0][g(n)],
+        };
+        ticks as f32 * 0.02
     }
 
     pub fn name(self) -> &'static str {
@@ -652,6 +666,22 @@ pub struct Levels {
 }
 
 impl Levels {
+    /// The levels a mission gives a player at the start. The arming is
+    /// one less here: the original's starts at 1.
+    pub fn starting(s: &openac_formats::StartLevels) -> Self {
+        let cap = |v: u8| v.min(2);
+        Self {
+            weapons: s.arming.saturating_sub(1).min(1),
+            ram: cap(s.ram),
+            armour: cap(s.armour),
+            speed: 0,
+            arms: s.arms.map(cap),
+            rate: s.rate.map(cap),
+            reach: s.reach.map(cap),
+            special: [0; 4],
+        }
+    }
+
     pub fn get(&self, u: Upgrade) -> u8 {
         match u {
             Upgrade::Weapons => self.weapons,

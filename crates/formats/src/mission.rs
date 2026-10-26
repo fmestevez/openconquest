@@ -239,6 +239,29 @@ pub struct PlayerInfo {
     pub amber: u32,
     /// Starting fish.
     pub fish: u32,
+    /// Levels the player starts the mission with.
+    pub levels: StartLevels,
+}
+
+/// A player's starting levels (copied to the player state by the navy's
+/// set-up, 0x4a78a0). All zero except for a few computer players of the
+/// later campaign and `single06`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StartLevels {
+    /// Armour (+0x5f) and ram (+0x5e) studied.
+    pub armour: u8,
+    pub ram: u8,
+    /// Three more levels (+0x60..+0x62), not yet identified.
+    pub unknown: [u8; 3],
+    /// Crew quality level per crew type (+0x67..+0x69; 0x598054).
+    pub crew: [u8; 3],
+    /// The sage school's arming (+0xa3; 0 is read as 1).
+    pub arming: u8,
+    /// The workshop's rate of fire (+0x8e), range (+0x95) and damage
+    /// (+0x9c) levels per item group.
+    pub rate: [u8; 3],
+    pub reach: [u8; 3],
+    pub arms: [u8; 3],
 }
 
 /// Players of a mission.
@@ -255,6 +278,11 @@ pub struct PlayerInfo {
 ///        +0x08 u32 nation
 ///        +0x0c u32 colour slot
 ///        +0x10 u32 fish
+///        +0x14 u32 armour level      +0x18 3 x u32 unknown levels
+///        +0x24 u32 ram level         +0x28 3 x u32 crew levels
+///        +0x34 u32 arming            +0x38 u32 unknown
+///        +0x3c 3 x u32 rate of fire, +0x48 3 x u32 range,
+///        +0x54 3 x u32 damage levels (per item group)
 /// ```
 pub fn players(archive: &Archive) -> Result<Vec<PlayerInfo>> {
     const BLOCK: usize = 0x68;
@@ -274,6 +302,20 @@ pub fn players(archive: &Archive) -> Result<Vec<PlayerInfo>> {
                 nation: u32_at(b + 8)?,
                 slot: u32_at(b + 0xc)?,
                 fish: u32_at(b + 0x10)?,
+                levels: {
+                    let byte = |o: usize| u32_at(b + o).map_or(0, |v| v.min(255) as u8);
+                    let three = |o: usize| [byte(o), byte(o + 4), byte(o + 8)];
+                    StartLevels {
+                        armour: byte(0x14),
+                        ram: byte(0x24),
+                        unknown: three(0x18),
+                        crew: three(0x28),
+                        arming: byte(0x34),
+                        rate: three(0x3c),
+                        reach: three(0x48),
+                        arms: three(0x54),
+                    }
+                },
             })
         })
         .collect()

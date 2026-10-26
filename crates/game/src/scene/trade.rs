@@ -2,9 +2,23 @@
 
 use super::*;
 
-/// Units of goods a merchant gathers per second. Placeholder: the original
-/// rate has not been recovered yet.
-const GATHER_RATE: f32 = 50.0;
+/// Goods a ship takes aboard each time (0x4ad0e0): amber 100 for boats and
+/// merchants (20 for other ships), fish by ship type from 0x59b2a8 (boat
+/// 33, merchant 50, others 20); the barbarians take a third. Amber comes
+/// once per round of the porters, fish once per cast of the net.
+fn take_per_round(resource: Resource, kind: u8, barbarian: bool) -> f32 {
+    let n = match (resource, kind) {
+        (Resource::Amber, 0 | 1) => 100.0,
+        (Resource::Fish, 0) => 33.0,
+        (Resource::Fish, 1) => 50.0,
+        _ => 20.0,
+    };
+    if barbarian {
+        (n / 3.0_f32).floor()
+    } else {
+        n
+    }
+}
 
 impl Scene {
     /// Standing buildings the human player owns, as a bit mask over building
@@ -282,6 +296,41 @@ impl Scene {
         self.nav.nearest_water(cx, cy)
     }
 
+    /// Puts a new ship of type `kind` for `owner` at cell `(cx, cy)`.
+    pub(super) fn spawn_ship(
+        &mut self,
+        owner: (u32, u32),
+        kind: u8,
+        cx: i32,
+        cy: i32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Option<u32> {
+        let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
+        let mut fields = vec![0u32; 13];
+        fields[0] = 0xc8;
+        fields[1] = 1;
+        fields[2] = owner.0;
+        fields[3] = owner.1;
+        fields[5] = owner.0;
+        fields[6] = owner.1;
+        fields[7] = kind as u32;
+        fields[8] = u32::MAX;
+        fields[9] = cx as u32;
+        fields[10] = cy as u32;
+        fields[11] = 6; // facing south
+        fields[12] = 100;
+        let rec = ObjectRecord {
+            id,
+            class_id: 0xc8,
+            fields,
+        };
+        let obj = objects::resolve(data, caches, &rec).ok()??;
+        self.objects.push(obj);
+        self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
+        Some(id)
+    }
+
     pub(super) fn launch_ship(
         &mut self,
         site: u32,
@@ -374,8 +423,8 @@ impl Scene {
         })?;
         if let combat::Upgrade::Special(k) = upgrade {
             let levels = self.levels_of(self.human.map(|h| (h.nation, h.slot)));
-            if levels.weapons < 2 {
-                return Err("Study arming twice first".into());
+            if levels.weapons < 1 {
+                return Err("Study arming first".into());
             }
             let greek = self.human.is_some_and(|h| h.nation == 1);
             if greek != (k < 2) {
@@ -465,7 +514,7 @@ impl Scene {
         self.research
             .iter()
             .find(|r| r.0 == site)
-            .map(|r| (r.1, r.3 / r.1.seconds()))
+            .map(|r| (r.1, r.3 / r.1.seconds(r.2.saturating_sub(1))))
     }
 
     pub(super) fn run_research(&mut self, dt: f32) {
@@ -477,11 +526,12 @@ impl Scene {
         let mut done = Vec::new();
         for r in &mut self.research {
             r.3 += dt;
-            if r.3 >= r.1.seconds() {
+            if r.3 >= r.1.seconds(r.2.saturating_sub(1)) {
                 done.push((r.1, r.2));
             }
         }
-        self.research.retain(|r| r.3 < r.1.seconds());
+        self.research
+            .retain(|r| r.3 < r.1.seconds(r.2.saturating_sub(1)));
         for (upgrade, level) in done {
             self.levels.entry(human).or_default().set(upgrade, level);
             self.messages
@@ -616,7 +666,7 @@ impl Scene {
     pub(super) fn run_training(&mut self, dt: f32) {
         for t in &mut self.trainings {
             t.elapsed += dt;
-            if t.elapsed >= combat::CREW_TRAIN_SECONDS {
+            if t.elapsed >= combat::train_seconds(t.kind) {
                 t.elapsed = 0.0;
                 t.queued -= 1;
                 self.garrisons.entry(t.site).or_default()[t.kind as usize] += 1;
@@ -731,6 +781,8 @@ impl Scene {
         if !frames.is_empty() {
             obj.frames = frames;
         }
+        // The building goes up as the work does.
+        obj.progress = Some(0.0);
         if let Some(c) = obj.combat.as_mut() {
             c.hull = c.max_hull * 0.1;
         }
@@ -753,6 +805,7 @@ impl Scene {
             let Some(i) = self.objects.iter().position(|o| o.id == c.site) else {
                 continue;
             };
+            self.objects[i].progress = Some((c.elapsed / c.total).min(1.0));
             if let Some(h) = self.objects[i].combat.as_mut() {
                 // Hull grows with the work, from a tenth to whole.
                 h.hull = (h.hull + h.max_hull * 0.9 * dt / c.total).min(h.max_hull);
@@ -785,6 +838,7 @@ impl Scene {
             Ok(_) => {}
             Err(e) => eprintln!("could not load building frames: {e:#}"),
         }
+        self.objects[i].progress = None;
     }
 
     /// Orders merchant `ship` to gather from `deposit` and deliver to port.
@@ -833,6 +887,19 @@ impl Scene {
         nearest(&[PORT]).or_else(|| nearest(&[SETTLEMENT, TOWN]))
     }
 
+    /// How far from building `p` (in cells) a ship can come: from its
+    /// nearest water, and a cell more.
+    pub(super) fn landing_reach(&self, p: usize) -> f32 {
+        let t = TILE_SIZE as f32;
+        let (x, y) = (self.objects[p].x, self.objects[p].y);
+        self.nav
+            .nearest_water((x / t) as i32, (y / t) as i32)
+            .map_or(2.6, |(cx, cy)| {
+                let (wx, wy) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
+                (wx - x).hypot(wy - y) / t + 1.0
+            })
+    }
+
     /// Advances the standing order of ship `i`.
     pub(super) fn run_task(&mut self, i: usize, dt: f32, data: &GameData, caches: &mut Caches) {
         if let Some(Task::Found { cx, cy }) = self.objects[i].ship.as_ref().and_then(|s| s.task) {
@@ -869,7 +936,10 @@ impl Scene {
                 ship.path = p;
             }
         };
-        let deposit_at = self.object_index(deposit);
+        // An exhausted deposit growing back counts as gone.
+        let deposit_at = self
+            .object_index(deposit)
+            .filter(|&d| self.objects[d].deposit.is_some());
         match phase {
             GatherPhase::ToDeposit => {
                 let arrived = deposit_at.is_some_and(|d| near(&self.objects[d], 1.6));
@@ -884,12 +954,32 @@ impl Scene {
                     return self.send_to_port(i, deposit);
                 };
                 let dep = self.objects[d].deposit.unwrap();
+                // A walkway to the amber, or the net out.
+                let activity = match dep.resource {
+                    Resource::Amber => Some(super::unload::Activity::Amber),
+                    Resource::Fish => Some(super::unload::Activity::Fishing),
+                    Resource::Leviathan => None,
+                };
+                if let Some(a) = activity {
+                    self.show_activity(i, deposit, a, data, caches);
+                }
                 let ship = self.objects[i].ship.as_ref().unwrap();
                 // A leviathan is one catch, taken in a hunt.
                 let (rate, capacity) = if dep.resource == Resource::Leviathan {
                     (1.0 / crate::objects::HUNT_SECONDS, 1.0)
                 } else {
-                    (GATHER_RATE, capacity)
+                    // Once the walkway is down or the net out, a load a
+                    // round of its animation.
+                    // Player 0x10: nation 4 (the barbarians), slot 0.
+                    let barbarian = self.objects[i].owner == Some((4, 0));
+                    let take = take_per_round(dep.resource, ship.kind, barbarian);
+                    let rate = self
+                        .planks
+                        .iter()
+                        .find(|p| p.ship == self.objects[i].id)
+                        .and_then(|p| p.round_seconds())
+                        .map_or(0.0, |s| take / s);
+                    (rate, capacity)
                 };
                 let mut take = (rate * dt).min(capacity - ship.cargo);
                 if let Some(left) = dep.remaining {
@@ -900,18 +990,36 @@ impl Scene {
                 ship.cargo_kind = Some(dep.resource);
                 let (full, cargo) = (ship.cargo >= capacity, ship.cargo);
                 let mut exhausted = false;
+                let mut thirds = None;
                 if let Some(left) = self.objects[d]
                     .deposit
                     .as_mut()
                     .and_then(|d| d.remaining.as_mut())
                 {
+                    let third = |v: f32| (v / 100.0).ceil() as i64;
+                    thirds = Some(third(*left));
                     *left -= take;
                     exhausted = *left <= 1e-3;
+                    // The picture shrinks as the amber runs out.
+                    if thirds == Some(third(*left)) {
+                        thirds = None;
+                    }
+                }
+                if thirds.is_some() && !exhausted {
+                    self.refresh_amber(d, data, caches);
                 }
                 if exhausted {
-                    // Removing the deposit may shift the ship's index.
                     let ship_id = self.objects[i].id;
-                    self.objects.remove(d);
+                    let dep = self.objects[d].deposit.unwrap();
+                    if dep.regrows > 0 {
+                        // Amber grows back after a while.
+                        self.objects[d].deposit = None;
+                        self.objects[d].dormant = Some((dep, 0.0));
+                        self.refresh_amber(d, data, caches);
+                    } else {
+                        // Removing the deposit may shift the ship's index.
+                        self.objects.remove(d);
+                    }
                     let Some(i) = self.object_index(ship_id) else {
                         return;
                     };
@@ -928,30 +1036,56 @@ impl Scene {
                 let Some(p) = self.object_index(port) else {
                     return self.send_to_port(i, deposit);
                 };
-                if !near(&self.objects[p], 2.6) {
+                // As close as the water lets it come: a town may stand a
+                // few cells inland.
+                let reach = self.landing_reach(p).max(2.6);
+                if !near(&self.objects[p], reach) {
+                    return self.send_to_port(i, deposit);
+                }
+                // Arrived: the porters carry the goods in.
+                set(
+                    self,
+                    Some(Task::Gather {
+                        deposit,
+                        phase: GatherPhase::Unloading(port),
+                    }),
+                    None,
+                );
+                self.show_activity(i, port, super::unload::Activity::Unloading, data, caches);
+            }
+            GatherPhase::Unloading(port) => {
+                if self.object_index(port).is_none() {
                     return self.send_to_port(i, deposit);
                 }
                 let ship = self.objects[i].ship.as_mut().unwrap();
-                let kind = ship.cargo_kind.take();
-                // A leviathan comes in whole (its hunt may fall short by a
-                // rounding error).
-                let cargo = if kind == Some(Resource::Leviathan) {
-                    ship.cargo.round()
+                let kind = ship.cargo_kind;
+                // A leviathan comes in whole, in a second; goods at the
+                // porters' pace.
+                let (before, rate) = if kind == Some(Resource::Leviathan) {
+                    (ship.cargo.round(), 1.0)
                 } else {
-                    ship.cargo.floor()
+                    (ship.cargo, super::unload::UNLOAD_RATE)
                 };
-                ship.cargo = 0.0;
-                if let Some(owner) = self.objects[i].owner {
+                let after = (before - rate * dt).max(0.0);
+                ship.cargo = after;
+                let came = (before.floor() - after.floor()) as i64;
+                if let (Some(owner), true) = (self.objects[i].owner, came > 0) {
                     match kind {
-                        Some(Resource::Amber) => self.earn(owner, cargo as i64, 0),
-                        Some(Resource::Fish) => self.earn(owner, 0, cargo as i64),
+                        Some(Resource::Amber) => self.earn(owner, came, 0),
+                        Some(Resource::Fish) => self.earn(owner, 0, came),
                         Some(Resource::Leviathan) => {
                             let (amber, fish) = crate::objects::LEVIATHAN_WORTH;
-                            self.earn(owner, amber * cargo as i64, fish * cargo as i64)
+                            self.earn(owner, amber * came, fish * came)
                         }
                         None => {}
                     }
                 }
+                if after > 0.0 {
+                    return;
+                }
+                let ship = self.objects[i].ship.as_mut().unwrap();
+                ship.cargo = 0.0;
+                ship.cargo_kind = None;
                 match deposit_at {
                     Some(d) => {
                         let (x, y) = (self.objects[d].x, self.objects[d].y);

@@ -15,8 +15,11 @@ const SHIP_REQUIRES: [u32; 12] = [0, 2, 96, 32, 96, 2, 32, 32, 34, 34, 34, 98];
 /// not been recovered yet.
 pub const SHIP_BUILD_SECONDS: f32 = 20.0;
 
-/// Seconds to put up a building. Placeholder.
-pub const BUILDING_SECONDS: f32 = 30.0;
+/// Seconds to put up a building or upgrade one: its construction picture
+/// plays once, the first entry of the class's cycle table (+0xc0; 200
+/// ticks of 20 ms for every player building), and progress is elapsed x
+/// 100 / that cycle (0x416f90 for the dock).
+pub const BUILDING_SECONDS: f32 = 4.0;
 
 pub const SETTLEMENT: u32 = 0x32;
 pub const TOWN: u32 = 0x33;

@@ -99,6 +99,8 @@ pub struct SavedObject {
     pub owner: Option<(u32, u32)>,
     pub ship: Option<Ship>,
     pub deposit: Option<Deposit>,
+    #[serde(default)]
+    pub dormant: Option<(Deposit, f32)>,
     pub combat: Option<Combatant>,
 }
 

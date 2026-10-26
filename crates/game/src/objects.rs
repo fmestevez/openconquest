@@ -79,6 +79,7 @@ impl Caches {
 }
 
 /// One sprite of an animation frame, offset from the object's position.
+#[derive(Clone)]
 pub struct Layer {
     pub image: Rc<Image>,
     pub dx: i32,
@@ -104,6 +105,9 @@ pub struct MapObject {
     pub frame_ms: u64,
     pub ship: Option<Ship>,
     pub deposit: Option<Deposit>,
+    /// An exhausted amber deposit growing back: its deposit and the
+    /// seconds it has lain empty.
+    pub dormant: Option<(Deposit, f32)>,
     /// Hull and weapons, for objects that can fight or be attacked.
     pub combat: Option<crate::combat::Combatant>,
     /// Owning player as `(nation, colour slot)`, for player-owned objects.
@@ -113,6 +117,9 @@ pub struct MapObject {
     pub picture: Option<(String, (u32, u32))>,
     /// A treasure lying on the map.
     pub treasure: Option<Treasure>,
+    /// Shows the frame this far (0..1) through the animation instead of
+    /// playing it: a building going up.
+    pub progress: Option<f32>,
 }
 
 /// A treasure (`TreasClassTy` record: kind in field 4, parameters in
@@ -343,7 +350,17 @@ pub struct Deposit {
     pub resource: Resource,
     /// Units left, or `None` for an inexhaustible deposit.
     pub remaining: Option<f32>,
+    /// Times an exhausted amber deposit grows back (record field 9), and
+    /// to how much (0x48a430).
+    #[serde(default)]
+    pub regrows: u32,
+    #[serde(default)]
+    pub refill: f32,
 }
+
+/// Seconds an exhausted amber deposit lies empty before it grows back: 100
+/// ticks of its state machine (0x48a430, state 3) of 20 ms.
+pub const REGROW_SECONDS: f32 = 2.0;
 
 /// A ship's standing order.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -383,6 +400,8 @@ pub enum GatherPhase {
     ToDeposit,
     Collecting,
     ToPort(u32),
+    /// Porters carrying the goods into the building.
+    Unloading(u32),
 }
 
 /// Cargo capacity of a merchant ship type, in units of goods: the manual's
@@ -429,6 +448,10 @@ impl MapObject {
     }
 
     pub fn frame_at(&self, time_ms: u64) -> &[Layer] {
+        if let (Some(p), false) = (self.progress, self.frames.is_empty()) {
+            let n = self.frames.len();
+            return &self.frames[((p * n as f32) as usize).min(n - 1)];
+        }
         let step = (time_ms / self.frame_ms.max(1)) as usize;
         let i = match &self.ship {
             // A ship lying still has its sail furled.
@@ -463,6 +486,81 @@ pub fn flyer_sequence(class: u32, state: u8, heading: usize) -> String {
         heading
     };
     format!("{prefix}_{state}{}", heading.min(7))
+}
+
+/// Amber deposits (Grig/amber.cpp) match the shore they lie on: the
+/// base-layer tile codes of each of the 20 variants (0x5b97c8, 0x24 bytes
+/// each: four codes, then the rectangle in the cell where the sparkle
+/// shows, x, y, width, height).
+/// A variant's tile codes and sparkle rectangle.
+type AmberVariant = ([u8; 4], (i32, i32, i32, i32));
+const AMBER_VARIANTS: [AmberVariant; 20] = [
+    ([2, 3, 4, 5], (37, 28, 26, 30)),
+    ([6, 0, 0, 0], (12, 17, 16, 46)),
+    ([7, 8, 9, 10], (0, 27, 24, 29)),
+    ([11, 0, 0, 0], (0, 20, 38, 17)),
+    ([12, 13, 14, 15], (16, 0, 25, 23)),
+    ([16, 0, 0, 0], (11, 0, 17, 36)),
+    ([17, 18, 19, 20], (0, 16, 26, 23)),
+    ([21, 0, 0, 0], (0, 39, 42, 17)),
+    ([30, 0, 0, 0], (7, 3, 20, 60)),
+    ([31, 0, 0, 0], (12, 3, 20, 60)),
+    ([32, 0, 0, 0], (39, 3, 20, 60)),
+    ([33, 0, 0, 0], (31, 3, 24, 60)),
+    ([34, 0, 0, 0], (2, 30, 61, 22)),
+    ([35, 0, 0, 0], (0, 27, 61, 15)),
+    ([36, 0, 0, 0], (0, 37, 61, 23)),
+    ([37, 0, 0, 0], (1, 27, 61, 21)),
+    ([38, 0, 0, 0], (2, 36, 61, 17)),
+    ([39, 0, 0, 0], (1, 27, 61, 21)),
+    ([40, 0, 0, 0], (2, 35, 60, 16)),
+    ([41, 0, 0, 0], (1, 21, 61, 23)),
+];
+
+/// The amber variant for a cell whose base tile has code `tile` (0x489a10;
+/// variant 0 when none matches).
+pub fn amber_variant(tile: u8) -> usize {
+    AMBER_VARIANTS
+        .iter()
+        .position(|(codes, _)| tile != 0 && codes.contains(&tile))
+        .unwrap_or(0)
+}
+
+/// An amber deposit's frames (0x489cd0): its variant's picture for how
+/// much is left (`level` 3 full to 1, frame (variant + 1) x 3 - level of
+/// `AMBER_`), still, with the sparkle (`ASTAR_`) playing over it.
+pub fn amber_frames(
+    data: &GameData,
+    caches: &mut Caches,
+    variant: usize,
+    level: usize,
+) -> Result<Vec<Vec<Layer>>> {
+    let all = sequence_frames(data, caches, "AMBER_")?;
+    let v = variant.min(AMBER_VARIANTS.len() - 1);
+    let i = ((v + 1) * 3).saturating_sub(level.clamp(1, 3));
+    let Some(base) = all.get(i).or(all.first()).cloned() else {
+        return Ok(Vec::new());
+    };
+    let sparkle = sequence_frames(data, caches, "ASTAR_").unwrap_or_default();
+    if sparkle.is_empty() {
+        return Ok(vec![base]);
+    }
+    // The sparkle in the middle of its rectangle, relative to the 64-pixel
+    // picture's centre.
+    let (x, y, w, h) = AMBER_VARIANTS[v].1;
+    let (dx, dy) = (x + w / 2 - 32, y + h / 2 - 32);
+    Ok(sparkle
+        .into_iter()
+        .map(|layers| {
+            let mut frame = base.clone();
+            frame.extend(layers.into_iter().map(|l| Layer {
+                image: l.image,
+                dx: l.dx + dx,
+                dy: l.dy + dy,
+            }));
+            frame
+        })
+        .collect())
 }
 
 /// A flyer's frames: each its shadow on the water (sequence + `S`), then
@@ -784,18 +882,34 @@ pub fn resolve(
         argo: false,
     });
     let combat = crate::combat::Combatant::from_record(rec, class);
-    // Deposits: amber holds field 4 x 100 units, negative for unlimited
-    // (AmberClassTy init, 0x48a800); fishing zones are treated the same way.
+    // Deposits: amber holds field 4 x 100 units; a negative amount starts
+    // empty and grows to that much; it grows back field 9 times
+    // (AmberClassTy init, 0x48a800). Fishing zones: field 4 x 100,
+    // negative for unlimited.
+    let mut dormant = None;
     let deposit = match class {
-        ObjectClass::Amber | ObjectClass::FishZone => {
+        ObjectClass::Amber => {
+            let amount = f(4) as i32;
+            let dep = Deposit {
+                resource: Resource::Amber,
+                remaining: Some(amount.max(0) as f32 * 100.0),
+                regrows: f(9),
+                refill: amount.unsigned_abs() as f32 * 100.0,
+            };
+            if amount > 0 {
+                Some(dep)
+            } else {
+                dormant = Some((dep, 0.0));
+                None
+            }
+        }
+        ObjectClass::FishZone => {
             let amount = f(4) as i32;
             Some(Deposit {
-                resource: if class == ObjectClass::Amber {
-                    Resource::Amber
-                } else {
-                    Resource::Fish
-                },
+                resource: Resource::Fish,
                 remaining: (amount >= 0).then_some(amount as f32 * 100.0),
+                regrows: 0,
+                refill: 0.0,
             })
         }
         // One leviathan to a zone (a placeholder: whether zones refill is
@@ -803,6 +917,8 @@ pub fn resolve(
         ObjectClass::WhaleZone => Some(Deposit {
             resource: Resource::Leviathan,
             remaining: Some(1.0),
+            regrows: 0,
+            refill: 0.0,
         }),
         _ => None,
     };
@@ -831,12 +947,14 @@ pub fn resolve(
         frame_ms,
         ship,
         deposit,
+        dormant,
         combat,
         treasure: (class == ObjectClass::Treasure).then(|| Treasure {
             kind: f(4).min(27) as u8,
             param: f(7),
             amount: f(8),
         }),
+        progress: None,
     }))
 }
 
@@ -1109,6 +1227,36 @@ pub fn ship_mode_frames(
         &format!("SHIP_{letter}{nation}00{mode}"),
         0..usize::MAX,
     )
+}
+
+/// The frames of one layer of composite `name`, e.g. one facing of the
+/// unloading walkway `MOST0_`, whose eight layers are its eight facings.
+pub fn composite_layer_frames(
+    data: &GameData,
+    caches: &mut Caches,
+    name: &str,
+    layer: usize,
+) -> Result<Vec<Vec<Layer>>> {
+    let Some(comp) = caches.composite(data, name)? else {
+        return Ok(Vec::new());
+    };
+    let mut frames = Vec::new();
+    for i in 0..comp.frames {
+        let mut layers = Vec::new();
+        if let Some(cell) = comp.frame(i).get(layer) {
+            if cell.sprite != EMPTY_SPRITE {
+                if let Some(image) = caches.sprites.get(data, &cell.sprite)? {
+                    layers.push(Layer {
+                        image,
+                        dx: cell.dx,
+                        dy: cell.dy,
+                    });
+                }
+            }
+        }
+        frames.push(layers);
+    }
+    Ok(frames)
 }
 
 fn composite_frames(

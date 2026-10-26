@@ -576,7 +576,7 @@ fn school_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     } else {
         2
     };
-    let specials = (levels.weapons >= 2)
+    let specials = (levels.weapons >= 1)
         .then(|| {
             [
                 (4, Upgrade::Special(first)),

@@ -26,13 +26,16 @@ Object placement, naming and animation timing were recovered from the
 original executable with Ghidra; see [docs/FORMATS.md](docs/FORMATS.md).
 
 You play the mission's human player: you can select anything, and command
-and sail your own ships. Merchants gather amber and fish and bring them to
-your port, and hunt leviathans, worth 5000 amber and 2500 fish each as in
+and sail your own ships. Merchants gather amber (a walkway to the
+shore, porters bringing it aboard; exhausted amber grows back as often as
+the mission allows) and fish (the net out) and bring them
+to your port (a walkway goes ashore and porters carry the goods in, which
+takes a few seconds), and hunt leviathans, worth 5000 amber and 2500 fish each as in
 the manual (one to a zone, caught in 30 seconds: placeholders); shipyards build ships (hull costs and building requirements from
 the original); settlements upgrade to towns and shipyards to docks, and put
 up new buildings nearby (ports, shipyards, workshops, smithies, schools,
 temples and forts, with the original costs and construction, damage and
-ruin graphics). Your
+ruin graphics; a building goes up as its construction does). Your
 amber and fish are shown in the money panel. Warships fire at enemy ships
 and buildings with their original weapon loadouts and damage values; idle
 ships and forts fire at enemy ships in range, and sunk ships and destroyed
@@ -127,8 +130,11 @@ place the wind and fire wizards' castles (the wizards strike ships in
 their reach with lightning or fire) and the dragon's nest guarding the
 Golden Fleece, as the original's do. In miss002, once Argus is at your
 town your shipyards can build the Argo (a royal ship; there is only one),
-and the mission wants Jason and Argus aboard it; in later missions without
-a starting settlement the heroes start out aboard the Argo.
+and the mission wants Jason and Argus aboard it; from miss003 on the heroes
+start out aboard the Argo (your royal ship nearest the mission's starting
+view, or, in miss003, which starts without one, launched there as the
+original's script does). Missions open with the view where the original
+sets it.
 Buildings, lairs, nests and sea monsters hold the treasures their records
 list (most heroes' items and the scrolls among them) and drop them when
 destroyed; a hero's item found nowhere is held by the enemy building
@@ -173,10 +179,11 @@ slows down ships by their heading; the wind rose shows it. Computer players (a s
 AI) keep their own amber and fish: their merchants gather, their shipyards
 build merchants and then the strongest warships they can afford, their
 warships hunt your ships within ten cells, and after five minutes they
-send waves of three or more warships against your towns and fleet. Hull and building strength, ram damage, boarding pace, training time,
+send waves of three or more warships against your towns and fleet. Construction, research and training
+times, and how fast merchants gather, are the original's (in game ticks of
+20 ms at the default speed). Hull and building strength, ram damage, boarding pace,
 spell study time, durations and damage, hazard damage, fort weapons, the unit of the rate of fire,
-build and construction times, building placement rules and gathering
-rate are placeholders until recovered from the
+ship building time and building placement rules are placeholders until recovered from the
 executable. The original's videos play, decoded from the CD's Cinepak and
 Video 1 AVIs: the company logos and title sequence at start-up (skipped
 with any key or a click, all of them with Esc, or not shown with
@@ -184,7 +191,9 @@ with any key or a click, all of them with Esc, or not shown with
 its ending after the last. A mission's outcome shows the original's
 statistics: ships destroyed, boarded and lost, buildings, monsters and
 lairs destroyed, fish caught, amber earned and left, treasures found and
-the total score, computed as the original does. Not yet implemented: crew upgrades, the campaign scripts' story events (partly decoded),
+the total score, computed as the original does. Missions' starting research levels apply (some campaign opponents start
+with better armour, rams and weapons); crews are not upgraded in play, as in
+the original. Not yet implemented: the campaign scripts' story events (partly decoded),
 the original's multiplayer screens (OpenAC has its own lobby), and play against the original game over the network. See [docs/FORMATS.md](docs/FORMATS.md) for what is known about
 the file formats.
 

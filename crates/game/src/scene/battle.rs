@@ -312,6 +312,13 @@ impl Scene {
             self.drop_held(target, data, caches);
             self.sounds
                 .push((if is_building { "razru2" } else { "wreck1" }, tx, ty));
+            // A ship gone: a lament if it was the player's, a fanfare
+            // ("deny", event 319) if not (0x4dec40).
+            if !is_building {
+                let own = self.is_own(&self.objects[ti]);
+                self.sounds
+                    .push((if own { "deadsh" } else { "deny" }, tx, ty));
+            }
             self.productions.retain(|p| p.site != target);
             self.constructions.retain(|c| c.site != target);
             match self.objects[ti].ship.as_ref().map(|sh| sh.kind) {

@@ -220,6 +220,47 @@ pub fn goal_name(goal: Goal) -> String {
     }
 }
 
+impl Scene {
+    /// The Argo, from miss003 on: the player's royal ship nearest where
+    /// the mission's view starts, or, with no ship at all (miss003, where
+    /// the original's script brings it), a royal ship launched on the water
+    /// nearest that view. Its index.
+    pub(super) fn ready_argo(
+        &mut self,
+        data: &crate::assets::GameData,
+        caches: &mut crate::objects::Caches,
+    ) -> Option<usize> {
+        const ROYAL_SHIP: u8 = 2;
+        let human = self.human?;
+        let owner = Some((human.nation, human.slot));
+        let (vx, vy) = self.start_view();
+        let d = |o: &MapObject| (o.x - vx).powi(2) + (o.y - vy).powi(2);
+        let mine = |o: &&MapObject| o.owner == owner && o.ship.is_some();
+        let any_ship = self.objects.iter().any(|o| mine(&o));
+        let found = self
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| mine(o) && o.ship.as_ref().unwrap().kind == ROYAL_SHIP)
+            .min_by(|a, b| d(a.1).total_cmp(&d(b.1)))
+            .map(|(i, _)| i);
+        let i = match found {
+            Some(i) => i,
+            None if !any_ship => {
+                let t = TILE_SIZE as f32;
+                let (cx, cy) = self.nav.nearest_water((vx / t) as i32, (vy / t) as i32)?;
+                let id = self.spawn_ship(owner?, ROYAL_SHIP, cx, cy, data, caches)?;
+                self.object_index(id)?
+            }
+            None => return None,
+        };
+        let o = &mut self.objects[i];
+        o.ship.as_mut().unwrap().argo = true;
+        o.label = "Argo".into();
+        Some(i)
+    }
+}
+
 /// What the campaign carries from one mission to the next (the original's
 /// record at game + 0x3361, restored by 0x4a9740): the player's research,
 /// the spells learned and the technology revealed.
