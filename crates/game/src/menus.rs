@@ -89,6 +89,8 @@ pub struct MenuView<'a> {
     pub row_height: Option<f32>,
     /// Clickable spots beyond buttons and the list (scroll arrows).
     pub spots: &'a [(Rect, MenuHit)],
+    /// Filled rectangles (a text field's cursor), drawn last.
+    pub fills: &'a [(Rect, u32)],
     /// Tabs (`M_LOADZ`, wide ones `M_LOADZ_BIG`; the second picture is
     /// the open tab).
     pub tabs: &'a [MenuTab],
@@ -265,6 +267,14 @@ const PICTURES: &[&str] = &[
     "MP_MESS",
     "MESS_TR0",
     "MESS_TR1",
+    "M_LOADZ0",
+    "M_LOADZ1",
+    "M_LOADZ_BIG0",
+    "M_LOADZ_BIG1",
+    "M_SBUT_UP0",
+    "M_SBUT_UP2",
+    "M_SBUT_DN0",
+    "M_SBUT_DN2",
 ];
 
 /// The fonts the screens use.
@@ -702,6 +712,15 @@ impl Menus {
                 write(frame, f, t.x, t.y, &t.text);
             }
         }
+        for &((x, y, w, h), colour) in view.fills {
+            let (x0, y0) = at(x, y);
+            let (x1, y1) = at(x + w, y + h);
+            for py in (y0.round() as i64).max(0)..(y1.round() as i64).min(frame.height as i64) {
+                for px in (x0.round() as i64).max(0)..(x1.round() as i64).min(frame.width as i64) {
+                    frame.pixels[(py as u32 * frame.width + px as u32) as usize] = colour;
+                }
+            }
+        }
         for (label, x, y) in view.labels {
             write(frame, &self.label_font, *x, *y, label);
         }
@@ -821,6 +840,13 @@ impl Menus {
             PANEL_RED,
             PANEL_GOLD,
         );
+    }
+
+    /// Width of `text` in style `style`, in screen pixels.
+    pub fn measure(&self, style: Style, text: &str) -> f32 {
+        self.styles
+            .get(&style)
+            .map_or(0.0, |f| f.measure(text) as f32)
     }
 
     /// What lies at 800x600 point `p`.

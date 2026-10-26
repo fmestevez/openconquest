@@ -265,6 +265,7 @@ struct MenuPage {
     map: Option<(Rc<crate::assets::Image>, crate::menus::Rect, (u32, u32))>,
     row_height: Option<f32>,
     spots: Vec<(crate::menus::Rect, MenuHit)>,
+    fills: Vec<(crate::menus::Rect, u32)>,
 }
 
 impl MenuPage {
@@ -294,6 +295,7 @@ impl MenuPage {
             map: self.map.as_ref().map(|(i, r, o)| (&**i, *r, *o)),
             row_height: self.row_height,
             spots: &self.spots,
+            fills: &self.fills,
         }
     }
 }
@@ -793,6 +795,7 @@ impl App {
             map: None,
             row_height: None,
             spots: Vec::new(),
+            fills: Vec::new(),
         };
         match state {
             MenuState::Main if self.in_game => MenuPage {
@@ -909,10 +912,7 @@ impl App {
                     ..empty
                 }
             }
-            // "Select mission to load" as the original lays it out: the
-            // map and description of the chosen entry, the list, the tabs
-            // Scenario, Custom and Start from... at (321, 529), (451, 529)
-            // and (581, 529), Load and Cancel below.
+            // "Select mission to load" as the original's.
             MenuState::Load(tab, selected) => {
                 let entries = self.load_entries(tab);
                 let chosen = selected.and_then(|i| entries.get(i)).map(|e| e.0);
@@ -920,66 +920,7 @@ impl App {
                     .preview
                     .as_ref()
                     .filter(|p| chosen.and_then(|e| self.entry_mission(e)) == Some(p.index));
-                let panel = |rect, title: &str, arrows| crate::menus::Panel {
-                    rect,
-                    title: title.into(),
-                    arrows,
-                };
-                let size = preview.map_or((0, 0), |p| p.size);
-                let list = panel((2.0, 216.0, 792.0, 313.0), "Missions", true);
-                let about = panel((195.0, 27.0, 599.0, 186.0), "Mission description", true);
-                let mut boxes = Vec::new();
-                if let Some(p) = preview {
-                    boxes.push((about.inner(), p.briefing.clone()));
-                }
-                let heading = "Select mission to load";
-                let tab_at = |caption: &str, x, wide, t| crate::menus::MenuTab {
-                    caption: caption.into(),
-                    x,
-                    y: 529.0,
-                    wide,
-                    open: tab == t,
-                };
-                MenuPage {
-                    backdrop: Backdrop::TitleDim,
-                    labels: vec![(heading.into(), self.centred(heading, 494.0), 6.0)],
-                    items: entries.into_iter().map(|e| e.1).collect(),
-                    selected,
-                    list_rect: Some(list.inner()),
-                    picture: preview
-                        .and_then(|p| p.map.clone())
-                        .map(|m| (m, (8.0, 29.0, 153.0, 153.0))),
-                    boxes,
-                    panels: vec![
-                        panel(
-                            (2.0, 3.0, 190.0, 210.0),
-                            &format!("Map ({}x{})", size.0, size.1),
-                            false,
-                        ),
-                        about,
-                        list,
-                    ],
-                    tabs: vec![
-                        tab_at("Scenario", 321.0, false, LoadTab::Scenario),
-                        tab_at("Custom", 451.0, false, LoadTab::Custom),
-                        tab_at("Start from...", 581.0, true, LoadTab::StartFrom),
-                    ],
-                    buttons: vec![
-                        Button {
-                            caption: "Load".into(),
-                            x: 225.0,
-                            y: 557.0,
-                            shape: 2,
-                        },
-                        Button {
-                            caption: "Cancel".into(),
-                            x: 459.0,
-                            y: 557.0,
-                            shape: 3,
-                        },
-                    ],
-                    ..empty
-                }
+                self.load_page(tab, &entries, selected, preview, empty)
             }
             // "Your mission" (Starttsk.cpp, 0x53ed40 and 0x53f550): the
             // briefing in a box at (20, 80, 630, 440), "Difficulty level:"
@@ -1055,42 +996,65 @@ impl App {
                     ..empty
                 }
             }
-            // The original's multiplayer screen (frames measured on it):
-            // "Player's name" over a text field, "Select communication
-            // channel" over the ways to connect (OpenAC has its own, over
-            // the internet, instead of DirectPlay's), New, Join and Cancel.
+            // The original's multiplayer screen (Startmp, fitted to it):
+            // the player's name with its cursor, the ways to connect (OpenAC
+            // offers its own network game, over TCP/IP), New, Join, Cancel.
             MenuState::Connect => {
-                let name = crate::menus::Panel {
-                    rect: (29.0, 225.0, 478.0, 60.0),
-                    title: "Player's name".into(),
-                    arrows: false,
+                use crate::menus::{Placed, Style, Text};
+                let at = |name: &str, x: f32, y: f32| Placed {
+                    name: name.into(),
+                    x,
+                    y,
                 };
-                let channel = crate::menus::Panel {
-                    rect: (29.0, 290.0, 478.0, 193.0),
-                    title: "Select communication channel".into(),
-                    arrows: true,
+                let style = |font, variant| Style {
+                    font,
+                    variant,
+                    spacing: 1,
                 };
-                let (nx, ny, nw, nh) = name.inner();
-                let at = |caption: &str, x, shape| Button {
+                let text = |style, x, y, t: &str| Text {
+                    style,
+                    x,
+                    y,
+                    text: t.into(),
+                };
+                let name_style = style("MH", 2);
+                let typed = self
+                    .menus
+                    .as_ref()
+                    .map_or(0.0, |m| m.measure(name_style, &self.player_name));
+                let caret = if self.player_name.is_empty() {
+                    43.0
+                } else {
+                    44.0 + typed
+                };
+                let at_button = |caption: &str, x, shape| Button {
                     caption: caption.into(),
                     x,
                     y: 510.0,
                     shape,
                 };
                 MenuPage {
-                    backdrop: Backdrop::Title,
-                    list_rect: Some(channel.inner()),
-                    items: vec!["Internet TCP/IP connection (OpenAC)".into()],
-                    selected: Some(0),
-                    boxes: vec![(
-                        (nx, ny + 2.0, nw, nh),
-                        vec![format!("{}_", self.player_name)],
-                    )],
-                    panels: vec![name, channel],
+                    backdrop: Backdrop::TitleDim,
+                    sprites: vec![
+                        at("PROV_NAME", 30.0, 225.0),
+                        at("PROV_RAM1", 30.0, 290.0),
+                        at("PROV_RAM0", 38.0, 320.0),
+                        at("M_SBUT_UP2", 472.0, 317.0),
+                        at("M_SBUT_DN2", 472.0, 448.0),
+                        at("PROV_TR0", 472.0, 349.0),
+                        at("PROV_TR1", 476.0, 353.0),
+                    ],
+                    texts: vec![
+                        text(style("BH", 2), 43.0, 228.0, "Player's name"),
+                        text(style("BH", 2), 43.0, 293.0, "Select communication channel"),
+                        text(name_style, 43.0, 255.0, &self.player_name),
+                        text(style("MH", 2), 43.0, 321.0, "Internet TCP/IP Connection"),
+                    ],
+                    fills: vec![((caret, 256.0, 2.0, 18.0), 0xffff00)],
                     buttons: vec![
-                        at("New", 60.0, 2),
-                        at("Join", 215.0, 3),
-                        at("Cancel", 365.0, 2),
+                        at_button("New", 60.0, 2),
+                        at_button("Join", 215.0, 3),
+                        at_button("Cancel", 365.0, 2),
                     ],
                     ..empty
                 }
@@ -1203,6 +1167,238 @@ impl App {
         list
     }
 
+    /// The map and description panels of the mission screens (Custom
+    /// missions, Load game), as the original's: the map 8 pixels a cell in
+    /// a 153-pixel window scrolled to the player's starting view, with its
+    /// scroll bars and the tick; the titles bright once a mission is chosen.
+    #[allow(clippy::type_complexity)]
+    fn map_panels(
+        preview: Option<&Preview>,
+    ) -> (
+        Vec<crate::menus::Placed>,
+        Vec<crate::menus::Text>,
+        Option<(Rc<crate::assets::Image>, crate::menus::Rect, (u32, u32))>,
+    ) {
+        use crate::menus::{Placed, Style, Text};
+        let at = |name: &str, x: f32, y: f32| Placed {
+            name: name.into(),
+            x,
+            y,
+        };
+        let arrow = |dir: &str, can: bool| format!("M_LBUT_{dir}{}", if can { 0 } else { 2 });
+        let thumb = |at: u32, most: u32, travel: f32| {
+            if most == 0 {
+                0.0
+            } else {
+                (at.min(most) as f32 / most as f32 * travel).round()
+            }
+        };
+        let title = Style {
+            font: "BH",
+            variant: if preview.is_some() { 2 } else { 1 },
+            spacing: 1,
+        };
+        let size = preview.map_or((0, 0), |p| p.size);
+        let texts = vec![
+            Text {
+                style: title,
+                x: 16.0,
+                y: 4.0,
+                text: format!("Map ({}x{})", size.0, size.1),
+            },
+            // Bright whether or not a mission is chosen (the original's).
+            Text {
+                style: Style {
+                    variant: 2,
+                    ..title
+                },
+                x: 209.0,
+                y: 28.0,
+                text: "Mission description".into(),
+            },
+        ];
+        let mut sprites = vec![at("MP_MAP", 3.0, 3.0), at("MP_DESC", 196.0, 27.0)];
+        // The map, 8 pixels a cell in a 153-pixel window, scrolled to the
+        // player's starting view.
+        const VIEW: u32 = 153;
+        let mut map = None;
+        let (mut mx, mut my, mut most_x, mut most_y) = (0, 0, 0, 0);
+        if let Some(p) = preview {
+            if let Some(m) = &p.map {
+                most_x = m.width.saturating_sub(VIEW);
+                most_y = m.height.saturating_sub(VIEW);
+                mx = (p.start.0 * 8).min(most_x);
+                my = (p.start.1 * 8).min(most_y);
+                map = Some((m.clone(), (9.0, 29.0, VIEW as f32, VIEW as f32), (mx, my)));
+            }
+        }
+        sprites.extend([
+            at(&arrow("UP", my > 0), 165.0, 28.0),
+            at(&arrow("DN", my < most_y), 165.0, 160.0),
+            at("MAP_TR_V0", 165.0, 52.0),
+            at("MAP_TR_V1", 169.0, 56.0 + thumb(my, most_y, 84.0)),
+            at(&arrow("LF", mx > 0), 8.0, 185.0),
+            at(&arrow("RT", mx < most_x), 140.0, 185.0),
+            at("MAP_TR_H0", 32.0, 185.0),
+            at("MAP_TR_H1", 36.0 + thumb(mx, most_x, 84.0), 189.0),
+            at("M_CHECK1", 165.0, 185.0),
+            at(&arrow("UP", false), 766.0, 52.0),
+            at("DESC_TR0", 766.0, 76.0),
+            at("DESC_TR1", 770.0, 80.0),
+        ]);
+        (sprites, texts, map)
+    }
+
+    /// The original's "Select mission to load" screen: the map and
+    /// description panels, the list of saved games (or campaign missions)
+    /// across the screen, the tabs Scenario, Custom and Start from...,
+    /// Load and Cancel (positions fitted to the original).
+    fn load_page(
+        &self,
+        tab: LoadTab,
+        entries: &[(LoadEntry, String)],
+        selected: Option<usize>,
+        preview: Option<&Preview>,
+        empty: MenuPage,
+    ) -> MenuPage {
+        use crate::menus::{Placed, Style, Text};
+        let at = |name: &str, x: f32, y: f32| Placed {
+            name: name.into(),
+            x,
+            y,
+        };
+        let style = |variant| Style {
+            font: "BH",
+            variant,
+            spacing: 1,
+        };
+        let text = |style, x, y, t: &str| Text {
+            style,
+            x,
+            y,
+            text: t.into(),
+        };
+        let (mut sprites, mut texts, map) = Self::map_panels(preview);
+        sprites.push(at("LOAD_RM1", 3.0, 216.0));
+        texts.extend([
+            text(style(2), 396.0, 2.0, "Select mission to load"),
+            text(style(2), 13.0, 217.0, "Missions"),
+        ]);
+        const ROWS: usize = 9;
+        let first = self.list_first.min(entries.len().saturating_sub(ROWS));
+        for (k, (_, label)) in entries.iter().enumerate().skip(first).take(ROWS) {
+            let y = 249.0 + 27.0 * (k - first) as f32;
+            if selected == Some(k) {
+                sprites.push(at("LOAD_RM0", 11.0, y - 4.0));
+            }
+            let (variant, dy) = if selected == Some(k) {
+                (2, -1.0)
+            } else {
+                (1, 0.0)
+            };
+            texts.push(text(
+                Style {
+                    font: "MH",
+                    variant,
+                    spacing: 1,
+                },
+                13.0,
+                y + dy,
+                label,
+            ));
+        }
+        let most = entries.len().saturating_sub(ROWS);
+        let arrow = |dir: &str, can: bool| format!("M_LBUT_{dir}{}", if can { 0 } else { 2 });
+        sprites.extend([
+            at(&arrow("UP", first > 0), 767.0, 241.0),
+            at(&arrow("DN", first < most), 767.0, 500.0),
+            at("LOAD_TR0", 767.0, 265.0),
+            at(
+                "LOAD_TR1",
+                771.0,
+                269.0
+                    + if most == 0 {
+                        0.0
+                    } else {
+                        (first as f32 / most as f32 * 211.0).round()
+                    },
+            ),
+        ]);
+        // The tabs: the open one's picture and a bright caption a pixel
+        // higher.
+        let tabs = [
+            ("Scenario", 322.0, LoadTab::Scenario, false),
+            ("Custom", 452.0, LoadTab::Custom, false),
+            ("Start from...", 582.0, LoadTab::StartFrom, true),
+        ];
+        for (caption, x, t, wide) in tabs {
+            let open = t == tab;
+            let picture = match (wide, open) {
+                (false, false) => "M_LOADZ0",
+                (false, true) => "M_LOADZ1",
+                (true, false) => "M_LOADZ_BIG0",
+                (true, true) => "M_LOADZ_BIG1",
+            };
+            sprites.push(at(picture, x, 528.0));
+            let w = if wide { 214.0 } else { 130.0 };
+            let tw = self
+                .menus
+                .as_ref()
+                .map_or(0.0, |m| m.measure(style(if open { 2 } else { 1 }), caption));
+            texts.push(text(
+                style(if open { 2 } else { 1 }),
+                x + ((w - tw) / 2.0).ceil(),
+                if open { 530.0 } else { 531.0 },
+                caption,
+            ));
+        }
+        let story = preview.map(|p| p.text.clone()).unwrap_or_default();
+        let tab_spot = |x: f32, w: f32, k: usize| ((x, 528.0, w, 28.0), MenuHit::Tab(k));
+        MenuPage {
+            backdrop: Backdrop::TitleDim,
+            items: entries.iter().map(|e| e.1.clone()).collect(),
+            selected,
+            first: self.list_first,
+            list_rect: Some((8.0, 245.0, 755.0, 27.0 * ROWS as f32)),
+            row_height: Some(27.0),
+            story: Some(((204.0, 58.0, 559.0, 145.0), story)),
+            story_style: Some((
+                Style {
+                    font: "MH",
+                    variant: 1,
+                    spacing: 1,
+                },
+                18.0,
+            )),
+            story_arrow: Some((766.0, 184.0)),
+            sprites,
+            texts,
+            map,
+            spots: vec![
+                ((767.0, 241.0, 23.0, 23.0), MenuHit::Scroll(-1)),
+                ((767.0, 500.0, 23.0, 23.0), MenuHit::Scroll(1)),
+                tab_spot(322.0, 130.0, 0),
+                tab_spot(452.0, 130.0, 1),
+                tab_spot(582.0, 214.0, 2),
+            ],
+            buttons: vec![
+                Button {
+                    caption: "Load".into(),
+                    x: 224.0,
+                    y: 557.0,
+                    shape: 2,
+                },
+                Button {
+                    caption: "Cancel".into(),
+                    x: 460.0,
+                    y: 557.0,
+                    shape: 3,
+                },
+            ],
+            ..empty
+        }
+    }
+
     /// The original's "Select custom mission" screen.
     fn custom_page(
         &self,
@@ -1239,47 +1435,12 @@ impl App {
                 (at.min(most) as f32 / most as f32 * travel).round()
             }
         };
-        let mut sprites = vec![
-            at("MP_MAP", 3.0, 3.0),
-            at("MP_DESC", 196.0, 27.0),
-            at("MP_LFILE1", 3.0, 216.0),
-            at("SP_LPLAY1", 196.0, 216.0),
-        ];
-        let size = preview.map_or((0, 0), |p| p.size);
-        let mut texts = vec![
+        let (mut sprites, mut texts, map) = Self::map_panels(preview);
+        sprites.extend([at("MP_LFILE1", 3.0, 216.0), at("SP_LPLAY1", 196.0, 216.0)]);
+        texts.extend([
             text(title, 398.0, 2.0, "Select custom mission"),
-            text(title, 16.0, 4.0, &format!("Map ({}x{})", size.0, size.1)),
-            text(title, 209.0, 28.0, "Mission description"),
             text(title, 13.0, 217.0, "Missions"),
             text(title, 209.0, 217.0, "Players"),
-        ];
-        // The map, 8 pixels a cell in a 153-pixel window, scrolled to the
-        // player's starting view.
-        const VIEW: u32 = 153;
-        let mut map = None;
-        let (mut mx, mut my, mut most_x, mut most_y) = (0, 0, 0, 0);
-        if let Some(p) = preview {
-            if let Some(m) = &p.map {
-                most_x = m.width.saturating_sub(VIEW);
-                most_y = m.height.saturating_sub(VIEW);
-                mx = (p.start.0 * 8).min(most_x);
-                my = (p.start.1 * 8).min(most_y);
-                map = Some((m.clone(), (9.0, 29.0, VIEW as f32, VIEW as f32), (mx, my)));
-            }
-        }
-        sprites.extend([
-            at(&arrow("UP", my > 0), 165.0, 28.0),
-            at(&arrow("DN", my < most_y), 165.0, 160.0),
-            at("MAP_TR_V0", 165.0, 52.0),
-            at("MAP_TR_V1", 169.0, 56.0 + thumb(my, most_y, 84.0)),
-            at(&arrow("LF", mx > 0), 8.0, 185.0),
-            at(&arrow("RT", mx < most_x), 140.0, 185.0),
-            at("MAP_TR_H0", 32.0, 185.0),
-            at("MAP_TR_H1", 36.0 + thumb(mx, most_x, 84.0), 189.0),
-            at("M_CHECK1", 165.0, 185.0),
-            at(&arrow("UP", false), 766.0, 52.0),
-            at("DESC_TR0", 766.0, 76.0),
-            at("DESC_TR1", 770.0, 80.0),
         ]);
         // The description, from its first line.
         let story = preview.map(|p| p.text.clone()).unwrap_or_default();
@@ -1755,7 +1916,7 @@ impl App {
                 MenuState::Missions(Category::Battle, Some(12))
             }
             "connect" => {
-                self.player_name = "Jason".into();
+                self.player_name.clear();
                 MenuState::Connect
             }
             "multiplayer" => {

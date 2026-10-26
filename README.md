@@ -210,15 +210,17 @@ the file formats.
 - Borderless fullscreen (F11 or Alt+Enter), HiDPI aware.
 - Optional integer scaling (`--integer-scale`) or a fixed scale (`--scale 2`).
 - Zooming with the mouse wheel or a trackpad pinch; panning by right/middle drag or a two-finger swipe.
-- The original front end, laid out as the original's screens: the title
-  screen (with the menu music), Start scenario's "Your mission" briefing
-  with its difficulty boxes, Load game (saved games of the campaign and of
-  other missions, or a campaign mission to start from, with the map and
-  description of the one chosen), Custom missions (map, description,
-  missions and players), Best Conquerors, the multiplayer screen (OpenAC's
-  own network game behind it), and the mission accomplished and failed
-  screens with next mission and retry. Battles against the computer are on
-  the in-game menu's Battles.
+- The original front end, checked pixel for pixel against the original
+  running under Wine: the title screen (with the menu music), Best
+  Conquerors, Start scenario's "Your mission" briefing with its difficulty
+  boxes, Custom missions (the battles and single missions, the chosen one's
+  map from the small tiles, its description and players with their flags
+  and computer level), Load game (saved games of the campaign and of other
+  missions, or a campaign mission to start from) and the multiplayer
+  screen (OpenAC's own network game behind it, so its one way to connect is
+  TCP/IP). The screens are drawn from the original's own widget pictures
+  and fonts. The mission accomplished and failed screens are OpenAC's own
+  so far.
 - Quick save and load at any moment (F5 / F9), plus eight save slots.
 - Adjustable game speed (half to double) and scroll speed.
 - Minimap markers coloured by side: yours, enemies, creatures.
