@@ -508,7 +508,11 @@ ground `07`/`08`), layer 1 shoals (tile sets `02` `b_ban01_`, `03`
 `b_ban02_`; the manual says royal ships, bombers and rammers cannot pass
 over them), and higher layers shores, grass, desert,
 rocks, forests, hills and ruins. Drawing the sea tile `b_sea00_001` under
-every cell and then the layers in order, row-major, reproduces the map.
+every sea or shelf cell and the full shelf `b_shelf_017` under island cells
+(their ground tiles leave the shore water open), then the layers in order,
+row-major, reproduces the map. Shelf tiles exist as a bitmap, which shades
+in four steps from shallow water into the sea, and as a hard-edged sprite;
+the map shows the bitmaps.
 
 ## Treasures and heroes
 

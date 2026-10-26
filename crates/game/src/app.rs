@@ -2456,7 +2456,11 @@ impl App {
             }
             Command::BUILD_STRUCTURES => {
                 self.pending = None;
-                self.page = Page::Structures;
+                self.page = if self.page == Page::Structures {
+                    Page::Main
+                } else {
+                    Page::Structures
+                };
             }
             Command::MOVE => {
                 self.pending = Some(Command::MOVE);

@@ -409,6 +409,8 @@ pub struct Slot {
     pub progress: Option<f32>,
     /// A behaviour switched on (drawn highlighted).
     pub checked: bool,
+    /// Closes the page it is on (drawn with a red cross).
+    pub closes: bool,
 }
 
 pub type Menu = [Option<Slot>; SLOTS];
@@ -501,6 +503,7 @@ fn temple_menu(scene: &Scene, temple: Temple, menu: &mut Menu) {
         let learning = scene.magic.learning(temple);
         menu[0] = Some(Slot {
             checked: false,
+            closes: false,
             command: magic::GET_MAGIC,
             enabled: learning.is_some() || scene.amber >= magic::LEARN_COST,
             progress: learning.map(|t| t / magic::LEARN_SECONDS),
@@ -537,7 +540,8 @@ fn temple_menu(scene: &Scene, temple: Temple, menu: &mut Menu) {
 /// workshop, shipyard, smithy, school, the temples). Esc returns to the main
 /// menu.
 fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
-    const ORDER: [u8; 10] = [0x1a, 0x17, 0x18, 0x19, 0x1c, 0x1b, 0x1d, 0x1e, 0x1f, 0x20];
+    // Forts are put up by ships (the ground page), not listed here.
+    const ORDER: [u8; 7] = [0x1a, 0x1c, 0x1b, 0x1d, 0x1e, 0x1f, 0x20];
     let mut menu: Menu = [None; SLOTS];
     if !scene.is_own(obj) || !matches!(obj.class, ObjectClass::Building(SETTLEMENT | TOWN)) {
         return menu;
@@ -557,6 +561,14 @@ fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
         );
         slot += 1;
     }
+    // The page's own button, bottom right, closes it.
+    menu[SLOTS - 1] = Some(Slot {
+        command: Command::BUILD_STRUCTURES,
+        enabled: true,
+        progress: None,
+        checked: false,
+        closes: true,
+    });
     menu
 }
 
@@ -586,6 +598,7 @@ pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
 fn set(menu: &mut Menu, slot: usize, command: Command, enabled: bool) {
     menu[slot] = Some(Slot {
         checked: false,
+        closes: false,
         command,
         enabled,
         progress: None,
@@ -642,6 +655,7 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         let command = economy::ship_command(kind);
         let mut entry = Slot {
             checked: false,
+            closes: false,
             command,
             enabled: building.is_none() && scene.can_build_ship(kind).is_ok(),
             progress: None,
@@ -657,6 +671,7 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         let slot = menu.iter().position(|s| s.is_none()).unwrap_or(10);
         let mut entry = Slot {
             checked: false,
+            closes: false,
             command: Command::BUILD_ARGO,
             enabled: building.is_none() && scene.can_build_ship(2).is_ok(),
             progress: None,
@@ -720,12 +735,14 @@ fn school_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         let entry = match (busy, scene.next_level(upgrade)) {
             (Some((u, progress)), _) if u == upgrade => Slot {
                 checked: false,
+                closes: false,
                 command: Command(upgrade.command()),
                 enabled: true,
                 progress: Some(progress),
             },
             (_, Some(level)) => Slot {
                 checked: false,
+                closes: false,
                 command: Command(upgrade.command()),
                 enabled: busy.is_none() && scene.amber >= upgrade.cost(level),
                 progress: None,
@@ -745,6 +762,7 @@ fn workshop_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         let (amber, fish) = crate::combat::item_cost(item);
         menu[slot] = Some(Slot {
             checked: false,
+            closes: false,
             command: Command(0x2d + item),
             enabled: scene.permits.item(item) && scene.amber >= amber && scene.fish >= fish,
             progress: making.filter(|t| t.kind == item).map(|t| t.progress()),
@@ -783,6 +801,7 @@ fn behaviour_menu(scene: &Scene, obj: &MapObject) -> Menu {
             enabled,
             progress: None,
             checked,
+            closes: false,
         });
     };
     toggle(0, GUARD, true, b.guard);
@@ -819,6 +838,7 @@ fn zones_menu(scene: &Scene, obj: &MapObject) -> Menu {
             enabled: true,
             progress: None,
             checked: ship.zone.is_some_and(|z| z.1 == resource),
+            closes: false,
         });
     }
     menu
@@ -843,12 +863,14 @@ fn research_menu(scene: &Scene, obj: &MapObject) -> Menu {
         menu[slot] = match (busy, scene.next_level(upgrade)) {
             (Some((u, progress)), _) if u == upgrade => Some(Slot {
                 checked: false,
+                closes: false,
                 command: Command(upgrade.command()),
                 enabled: true,
                 progress: Some(progress),
             }),
             (_, Some(level)) => Some(Slot {
                 checked: false,
+                closes: false,
                 command: Command(upgrade.command()),
                 enabled: busy.is_none() && scene.amber >= upgrade.cost(level),
                 progress: None,
@@ -890,6 +912,7 @@ fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         let (amber, fish) = crate::combat::CREW_COST[kind as usize];
         menu[8 + kind as usize] = Some(Slot {
             checked: false,
+            closes: false,
             command,
             enabled: scene.amber >= amber && scene.fish >= fish,
             progress: training.filter(|t| t.kind == kind).map(|t| t.progress()),

@@ -542,7 +542,11 @@ impl Interface {
             blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
             // Marks: an arrow on buttons that open a page, a tick on those
             // switched on (grey on disabled buttons); then the caption.
-            let marks = [(slot.command.opens_page(), 2), (slot.checked, 4)];
+            let marks = [
+                (slot.closes, 0),
+                (slot.command.opens_page() && !slot.closes, 2),
+                (slot.checked, 4),
+            ];
             for (_, mark) in marks.iter().filter(|(on, _)| *on) {
                 let mark = mark + usize::from(!slot.enabled);
                 if let Some(Some(m)) = self.button_marks.get(mark) {

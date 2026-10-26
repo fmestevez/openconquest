@@ -9,6 +9,9 @@ use crate::assets::{GameData, Image, ImageCache, ANIMATED};
 /// Tile drawn under every cell before the map layers, so that tiles with
 /// transparent parts (shelf, shores) show open sea beneath.
 const SEA_TILE: &str = "b_sea00_001";
+/// Shallow water all over: under island cells, whose ground tiles leave the
+/// water around the shore open, so that it joins the shelf around them.
+const SHELF_TILE: &str = "b_shelf_017";
 
 /// Scale factor of the minimap relative to the full-size map.
 pub const MINIMAP_DIVISOR: u32 = 8;
@@ -33,8 +36,10 @@ impl Terrain {
 
         for cy in 0..grid.height {
             for cx in 0..grid.width {
-                if let Some(sea) = cache.get(data, SEA_TILE)? {
-                    t.blit(&sea, cx * TILE_SIZE, cy * TILE_SIZE);
+                // Layer 0 is sea (tile set 0), shelf (1) or island ground.
+                let island = grid.get(0, cx, cy).tileset > 1;
+                if let Some(water) = cache.get(data, if island { SHELF_TILE } else { SEA_TILE })? {
+                    t.blit(&water, cx * TILE_SIZE, cy * TILE_SIZE);
                 }
             }
         }

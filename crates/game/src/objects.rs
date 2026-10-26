@@ -457,6 +457,9 @@ impl MapObject {
     }
 
     pub fn frame_at(&self, time_ms: u64) -> &[Layer] {
+        if self.frames.is_empty() {
+            return &[];
+        }
         if let (Some(p), false) = (self.progress, self.frames.is_empty()) {
             let n = self.frames.len();
             return &self.frames[((p * n as f32) as usize).min(n - 1)];

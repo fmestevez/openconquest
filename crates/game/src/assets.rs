@@ -197,7 +197,13 @@ impl GameData {
     /// Loads an image by name. Sprites are preferred; bitmaps are cut out
     /// with their mask, if any.
     pub fn load_image(&self, lib: &Archive, name: &str, shadows: bool) -> Result<Option<Image>> {
-        if let Some(e) = lib.find(name, ResourceKind::Sprite) {
+        // Shelf tiles come twice: the bitmap shades into the open sea, the
+        // sprite is a hard-edged shape. The map shows the bitmap.
+        let bitmap_first = name.starts_with("b_shelf_");
+        if let Some(e) = lib
+            .find(name, ResourceKind::Sprite)
+            .filter(|_| !bitmap_first || lib.find(name, ResourceKind::Bitmap).is_none())
+        {
             let s = Sprite::parse(&lib.read_entry(e)?)?;
             let mut pixels = vec![None; (s.width * s.height) as usize];
             for y in 0..s.box_height {
