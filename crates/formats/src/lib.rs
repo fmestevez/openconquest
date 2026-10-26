@@ -23,8 +23,8 @@ pub use font::{Font, Glyph};
 pub use image::{parse_palette_animation, Bitmap, Mask, Palette, PaletteCycle, Rgb, Sprite};
 pub use map::{MapGrid, TileRef, TileSet, TileSetLibrary};
 pub use mission::{
-    briefing, conditions, object_records, players, ObjectClass, ObjectRecord, PlayerInfo,
-    StartLevels,
+    briefing, briefing_text, conditions, object_records, players, ObjectClass, ObjectRecord,
+    PlayerInfo, StartLevels,
 };
 pub use sound::{load_sound, sound_choices, Sound};
 

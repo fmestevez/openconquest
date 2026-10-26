@@ -152,6 +152,35 @@ pub fn briefing(archive: &Archive) -> Result<Vec<String>> {
     Ok(paragraphs)
 }
 
+/// The briefing as the original lays it out (Starttsk.cpp): each `@` line
+/// begins a paragraph with three spaces, the lines after it are joined on
+/// with a space, and nothing is trimmed (so a line's trailing space and the
+/// joining one make a double space, as on the original's screen).
+pub fn briefing_text(archive: &Archive) -> Result<Vec<String>> {
+    let Some(e) = archive.find("DISCRIPTION", ResourceKind::Text) else {
+        return Ok(Vec::new());
+    };
+    let data = archive.read_entry(e)?;
+    let body = data.get(24..).unwrap_or_default();
+    let start = body.iter().position(|&b| b < 0x80).unwrap_or(body.len());
+    let mut paragraphs: Vec<String> = Vec::new();
+    for line in body[start..].split(|&b| b == 0) {
+        let text: String = line.iter().map(|&b| b as char).collect();
+        match text.strip_prefix('@') {
+            Some(rest) => paragraphs.push(format!("   {rest}")),
+            None if text.is_empty() => {}
+            None => match paragraphs.last_mut() {
+                Some(p) => {
+                    p.push(' ');
+                    p.push_str(&text);
+                }
+                None => paragraphs.push(text),
+            },
+        }
+    }
+    Ok(paragraphs)
+}
+
 /// Number of victory conditions in a mission's `CONDITIONS` record.
 pub const CONDITIONS: usize = 11;
 

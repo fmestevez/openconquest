@@ -3047,3 +3047,91 @@ fn missions_give_starting_levels() {
         assert_eq!((l.arms, l.rate, l.reach), ([2; 3], [2; 3], [2; 3]));
     }
 }
+
+/// Finds the menu font, colour variant and spacing that draw `OPENAC_FIT_TEXT`
+/// at `OPENAC_FIT_AT` (x,y,w,h) as in the 800x600 raw RGB screenshot
+/// `OPENAC_FIT_RGB` (a development aid; does nothing without them).
+#[test]
+fn fit_font() {
+    let (Some(root), Ok(raw), Ok(bg), Ok(text), Ok(at)) = (
+        std::env::var_os("OPENAC_DATA"),
+        std::env::var("OPENAC_FIT_RGB"),
+        std::env::var("OPENAC_FIT_BG"),
+        std::env::var("OPENAC_FIT_TEXT"),
+        std::env::var("OPENAC_FIT_AT"),
+    ) else {
+        return;
+    };
+    let bg: Vec<u32> = std::fs::read(bg)
+        .unwrap()
+        .chunks(3)
+        .map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32)
+        .collect();
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let arc = data.menus.as_ref().unwrap();
+    let bytes = std::fs::read(raw).unwrap();
+    let shot: Vec<u32> = bytes
+        .chunks(3)
+        .map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32)
+        .collect();
+    let r: Vec<i32> = at.split(',').map(|v| v.parse().unwrap()).collect();
+    let (x0, y0, w, h) = (r[0], r[1], r[2], r[3]);
+    let palette = openac_formats::Bitmap::parse(
+        &arc.read("0M_BKGND_00", openac_formats::ResourceKind::Bitmap)
+            .unwrap(),
+    )
+    .unwrap()
+    .palette;
+    let mut results = Vec::new();
+    for name in [
+        "S_FNT_LH", "S_FNT_BH", "S_FNT_BS", "S_FNT_MH", "S_FNT_MS", "S_FNT_SH", "S_FNT_SS",
+    ] {
+        for variant in 0..4 {
+            if crate::text::TextRenderer::load_in(arc, &format!("0{name}"), variant, Some(&palette))
+                .is_err()
+            {
+                continue;
+            }
+            for spacing in 0..4 {
+                let f = f_clone(arc, name, variant, &palette).with_spacing(spacing);
+                for dy in -3..=3 {
+                    for dx in -3..=3 {
+                        let mut px = bg.clone();
+                        let mut frame = crate::render::Frame {
+                            pixels: &mut px,
+                            width: 800,
+                            height: 600,
+                        };
+                        f.draw(&mut frame, x0 + dx, y0 + dy, 1, &text);
+                        let mut n = 0;
+                        for y in y0..y0 + h {
+                            for x in x0..x0 + w {
+                                let k = (y * 800 + x) as usize;
+                                let (a, b) = (px[k], shot[k]);
+                                let d =
+                                    |s: u32| ((a >> s & 255) as i32 - (b >> s & 255) as i32).abs();
+                                if d(16) + d(8) + d(0) > 24 {
+                                    n += 1;
+                                }
+                            }
+                        }
+                        results.push((n, name, variant, spacing, dx, dy));
+                    }
+                }
+            }
+        }
+    }
+    results.sort();
+    for r in results.iter().take(6) {
+        eprintln!("== fit {r:?}");
+    }
+}
+
+fn f_clone(
+    arc: &openac_formats::Archive,
+    name: &str,
+    variant: usize,
+    palette: &openac_formats::Palette,
+) -> crate::text::TextRenderer {
+    crate::text::TextRenderer::load_in(arc, &format!("0{name}"), variant, Some(palette)).unwrap()
+}

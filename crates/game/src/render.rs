@@ -656,7 +656,7 @@ pub fn draw_minimap(
 
 /// Darkens a pixel to 3/4 brightness (see [`SHADOW`]).
 #[inline]
-fn darken(px: u32) -> u32 {
+pub fn darken(px: u32) -> u32 {
     let r = (px >> 16 & 0xff) * 3 / 4;
     let g = (px >> 8 & 0xff) * 3 / 4;
     let b = (px & 0xff) * 3 / 4;

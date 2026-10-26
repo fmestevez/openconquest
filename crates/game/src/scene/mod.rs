@@ -194,6 +194,9 @@ pub struct Scene {
     pub outcome: Option<Outcome>,
     /// The mission briefing, as paragraphs.
     pub briefing: Vec<String>,
+    /// The briefing as the original's "Your mission" screen lays it out
+    /// (`openac_formats::briefing_text`).
+    pub briefing_text: Vec<String>,
     /// The human player's temple magic.
     pub magic: Magic,
 }
@@ -332,6 +335,7 @@ impl Scene {
             conditions,
             outcome: None,
             briefing: openac_formats::briefing(&archive).unwrap_or_default(),
+            briefing_text: openac_formats::briefing_text(&archive).unwrap_or_default(),
             magic: Magic::default(),
         };
         // What buildings, lairs and monsters hold, dropped when they fall.

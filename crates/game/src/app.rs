@@ -108,16 +108,84 @@ impl Category {
 enum MenuState {
     Main,
     Missions(Category, Option<usize>),
-    Load(Option<usize>),
+    Load(LoadTab, Option<usize>),
     Briefing,
     Outcome(crate::scene::Outcome),
     /// The best results.
     Best,
+    /// The original's first multiplayer screen: the player's name and the
+    /// way to connect.
+    Connect,
     /// The multiplayer lobby: a battle map to host (with the number of
     /// players), or an address to join.
     Multiplayer(Option<usize>),
     /// Hosting or joining, until everyone is there.
     Waiting,
+}
+
+/// The load screen's tabs (as the original's: string resources 1034,
+/// 1035 and 1142).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadTab {
+    /// Games saved in the campaign.
+    Scenario,
+    /// Games saved in other missions.
+    Custom,
+    /// A campaign mission to start from.
+    StartFrom,
+}
+
+/// An entry of the load screen's list.
+#[derive(Debug, Clone, Copy)]
+enum LoadEntry {
+    /// Save slot (`panels::SLOTS` is the quick save).
+    Save(usize),
+    /// A mission to start.
+    Mission(usize),
+}
+
+/// What the mission screens show of the chosen mission: its map, size,
+/// briefing and players.
+struct Preview {
+    index: usize,
+    size: (u32, u32),
+    map: Option<Rc<crate::assets::Image>>,
+    briefing: Vec<String>,
+    players: Vec<String>,
+}
+
+impl Preview {
+    fn load(data: &GameData, caches: &mut Caches, mission: &str, index: usize) -> Result<Self> {
+        let archive = data.open_mission(mission)?;
+        let grid = data.load_map(&archive, mission)?;
+        let terrain = crate::terrain::Terrain::compose(data, &grid, &mut caches.tiles)?;
+        let (w, h, pixels) = terrain.minimap(&crate::render::palette_lut(data, 0));
+        let nation = |n: u32| match n {
+            1 => "Greeks",
+            3 => "Persians",
+            _ => "Barbarians",
+        };
+        let players = openac_formats::players(&archive)
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let who = if p.computer { "computer" } else { "you" };
+                format!("{}. {} ({who})", i + 1, nation(p.nation))
+            })
+            .collect();
+        Ok(Self {
+            index,
+            size: (grid.width, grid.height),
+            map: Some(Rc::new(crate::assets::Image::new(
+                w,
+                h,
+                pixels.into_iter().map(Some).collect(),
+            ))),
+            briefing: openac_formats::briefing(&archive).unwrap_or_default(),
+            players,
+        })
+    }
 }
 
 /// What a front-end screen shows, owned (see `MenuView`).
@@ -134,6 +202,11 @@ struct MenuPage {
     story: Option<(crate::menus::Rect, Vec<String>)>,
     labels: Vec<(String, f32, f32)>,
     checks: Vec<crate::menus::Check>,
+    panels: Vec<crate::menus::Panel>,
+    list_rect: Option<crate::menus::Rect>,
+    picture: Option<(Rc<crate::assets::Image>, crate::menus::Rect)>,
+    boxes: Vec<(crate::menus::Rect, Vec<String>)>,
+    tabs: Vec<crate::menus::MenuTab>,
 }
 
 impl MenuPage {
@@ -151,6 +224,11 @@ impl MenuPage {
             story: self.story.as_ref().map(|(r, p)| (*r, p.as_slice())),
             labels: &self.labels,
             checks: &self.checks,
+            panels: &self.panels,
+            list_rect: self.list_rect,
+            picture: self.picture.as_ref().map(|(i, r)| (&**i, *r)),
+            boxes: &self.boxes,
+            tabs: &self.tabs,
         }
     }
 }
@@ -266,6 +344,7 @@ pub struct App {
     tab: Tab,
     /// Labels of the save slots (`None`: empty).
     slot_labels: Vec<Option<String>>,
+    quick_label: Option<String>,
     selected_slot: Option<usize>,
     help_text: Vec<String>,
     settings: Settings,
@@ -285,6 +364,8 @@ pub struct App {
     /// and how many players each takes, and a game being hosted or joined.
     lobby_players: usize,
     join_address: String,
+    /// The name typed on the multiplayer screen.
+    player_name: String,
     /// A chat line being typed in a multiplayer game.
     chat_line: Option<String>,
     /// The first entry shown of a front-end list, and wheel movement not
@@ -301,6 +382,8 @@ pub struct App {
     /// The front end, if it is shown instead of the game.
     menu: Option<MenuState>,
     menus: Option<Menus>,
+    /// The mission chosen on a mission screen, shown.
+    preview: Option<Preview>,
     /// Mission titles from their briefings, by mission index.
     mission_titles: Vec<String>,
     /// A game is under way (the main menu offers to resume it).
@@ -404,6 +487,7 @@ impl App {
             },
             tab: Tab::Object,
             slot_labels: vec![None; panels::SLOTS],
+            quick_label: None,
             selected_slot: None,
             help_text: Vec::new(),
             settings: Settings::default(),
@@ -415,6 +499,7 @@ impl App {
             turn_time: 0.0,
             lobby_players: 2,
             join_address: String::new(),
+            player_name: String::new(),
             chat_line: None,
             list_first: 0,
             wheel_rest: 0.0,
@@ -425,6 +510,7 @@ impl App {
             paused: false,
             menu: start_menu.then_some(MenuState::Main),
             menus,
+            preview: None,
             mission_titles,
             in_game: !start_menu,
             outcome_at: None,
@@ -626,6 +712,11 @@ impl App {
             story: None,
             labels: Vec::new(),
             checks: Vec::new(),
+            panels: Vec::new(),
+            list_rect: None,
+            picture: None,
+            boxes: Vec::new(),
+            tabs: Vec::new(),
         };
         match state {
             MenuState::Main if self.in_game => MenuPage {
@@ -661,44 +752,156 @@ impl App {
                 credits: true,
                 ..empty
             },
-            MenuState::Missions(category, selected) => MenuPage {
-                title: Some(
-                    match category {
-                        Category::Campaign => "The Golden Fleece",
-                        Category::Single => "Single missions",
-                        Category::Battle => "Battles",
-                    }
-                    .into(),
-                ),
-                items: self
-                    .category_missions(category)
-                    .iter()
-                    .map(|&i| self.mission_titles[i].clone())
-                    .collect(),
-                selected,
-                buttons: column(&["Start", "Back"]),
-                ..empty
-            },
-            MenuState::Load(selected) => MenuPage {
-                title: Some("Load game".into()),
-                items: (0..panels::SLOTS)
-                    .map(|i| match &self.slot_labels[i] {
-                        Some(l) => format!("{}. {l}", i + 1),
-                        None => format!("{}. empty", i + 1),
-                    })
-                    .chain(std::iter::once("Quick save".to_string()))
-                    .collect(),
-                selected,
-                buttons: column(&["Load", "Back"]),
-                ..empty
-            },
+            // "Select custom mission" as the original lays it out (panel
+            // frames measured on its screen): the map of the chosen
+            // mission, its description, the missions and its players;
+            // Start and Cancel below.
+            MenuState::Missions(category, selected) => {
+                let list = self.category_missions(category);
+                let chosen = selected.and_then(|i| list.get(i)).copied();
+                let preview = self.preview.as_ref().filter(|p| Some(p.index) == chosen);
+                let panel = |rect, title: String, arrows| crate::menus::Panel {
+                    rect,
+                    title,
+                    arrows,
+                };
+                let size = preview.map_or((0, 0), |p| p.size);
+                let missions = panel((2.0, 216.0, 190.0, 338.0), "Missions".into(), true);
+                let players = panel((195.0, 216.0, 598.0, 338.0), "Players".into(), true);
+                let about = panel(
+                    (195.0, 27.0, 599.0, 186.0),
+                    "Mission description".into(),
+                    true,
+                );
+                let mut boxes = Vec::new();
+                if let Some(p) = preview {
+                    boxes.push((about.inner(), p.briefing.clone()));
+                    boxes.push((players.inner(), p.players.clone()));
+                }
+                let heading = match category {
+                    Category::Campaign => "Select scenario mission",
+                    Category::Single => "Select custom mission",
+                    Category::Battle => "Select battle",
+                };
+                MenuPage {
+                    backdrop: Backdrop::TitleDim,
+                    labels: vec![(heading.into(), self.centred(heading, 494.0), 6.0)],
+                    items: list
+                        .iter()
+                        .map(|&i| self.mission_titles[i].clone())
+                        .collect(),
+                    selected,
+                    list_rect: Some(missions.inner()),
+                    picture: preview
+                        .and_then(|p| p.map.clone())
+                        .map(|m| (m, (8.0, 29.0, 153.0, 153.0))),
+                    boxes,
+                    panels: vec![
+                        panel(
+                            (2.0, 3.0, 190.0, 210.0),
+                            format!("Map ({}x{})", size.0, size.1),
+                            false,
+                        ),
+                        about,
+                        missions,
+                        players,
+                    ],
+                    buttons: vec![
+                        Button {
+                            caption: "Start".into(),
+                            x: 225.0,
+                            y: 557.0,
+                            shape: 2,
+                        },
+                        Button {
+                            caption: "Cancel".into(),
+                            x: 459.0,
+                            y: 557.0,
+                            shape: 3,
+                        },
+                    ],
+                    ..empty
+                }
+            }
+            // "Select mission to load" as the original lays it out: the
+            // map and description of the chosen entry, the list, the tabs
+            // Scenario, Custom and Start from... at (321, 529), (451, 529)
+            // and (581, 529), Load and Cancel below.
+            MenuState::Load(tab, selected) => {
+                let entries = self.load_entries(tab);
+                let chosen = selected.and_then(|i| entries.get(i)).map(|e| e.0);
+                let preview = self
+                    .preview
+                    .as_ref()
+                    .filter(|p| chosen.and_then(|e| self.entry_mission(e)) == Some(p.index));
+                let panel = |rect, title: &str, arrows| crate::menus::Panel {
+                    rect,
+                    title: title.into(),
+                    arrows,
+                };
+                let size = preview.map_or((0, 0), |p| p.size);
+                let list = panel((2.0, 216.0, 792.0, 313.0), "Missions", true);
+                let about = panel((195.0, 27.0, 599.0, 186.0), "Mission description", true);
+                let mut boxes = Vec::new();
+                if let Some(p) = preview {
+                    boxes.push((about.inner(), p.briefing.clone()));
+                }
+                let heading = "Select mission to load";
+                let tab_at = |caption: &str, x, wide, t| crate::menus::MenuTab {
+                    caption: caption.into(),
+                    x,
+                    y: 529.0,
+                    wide,
+                    open: tab == t,
+                };
+                MenuPage {
+                    backdrop: Backdrop::TitleDim,
+                    labels: vec![(heading.into(), self.centred(heading, 494.0), 6.0)],
+                    items: entries.into_iter().map(|e| e.1).collect(),
+                    selected,
+                    list_rect: Some(list.inner()),
+                    picture: preview
+                        .and_then(|p| p.map.clone())
+                        .map(|m| (m, (8.0, 29.0, 153.0, 153.0))),
+                    boxes,
+                    panels: vec![
+                        panel(
+                            (2.0, 3.0, 190.0, 210.0),
+                            &format!("Map ({}x{})", size.0, size.1),
+                            false,
+                        ),
+                        about,
+                        list,
+                    ],
+                    tabs: vec![
+                        tab_at("Scenario", 321.0, false, LoadTab::Scenario),
+                        tab_at("Custom", 451.0, false, LoadTab::Custom),
+                        tab_at("Start from...", 581.0, true, LoadTab::StartFrom),
+                    ],
+                    buttons: vec![
+                        Button {
+                            caption: "Load".into(),
+                            x: 225.0,
+                            y: 557.0,
+                            shape: 2,
+                        },
+                        Button {
+                            caption: "Cancel".into(),
+                            x: 459.0,
+                            y: 557.0,
+                            shape: 3,
+                        },
+                    ],
+                    ..empty
+                }
+            }
             // "Your mission" (Starttsk.cpp, 0x53ed40 and 0x53f550): the
             // briefing in a box at (20, 80, 630, 440), "Difficulty level:"
             // (string 105) at (660, 405) over three boxes from (660, 440),
             // 30 apart (strings 106-108), Start (1010) at (244, 543) and
             // Cancel (164) at (440, 543).
             MenuState::Briefing => {
-                let mut story = self.scene.briefing.clone();
+                let mut story = self.scene.briefing_text.clone();
                 if story.is_empty() {
                     story.push(self.scene.mission.to_uppercase());
                 }
@@ -717,8 +920,18 @@ impl App {
                         })
                         .collect(),
                     buttons: vec![
-                        button("Start", 244.0, 543.0),
-                        button("Cancel", 440.0, 543.0),
+                        Button {
+                            caption: "Start".into(),
+                            x: 244.0,
+                            y: 543.0,
+                            shape: 2,
+                        },
+                        Button {
+                            caption: "Cancel".into(),
+                            x: 440.0,
+                            y: 543.0,
+                            shape: 3,
+                        },
                     ],
                     ..empty
                 }
@@ -734,15 +947,65 @@ impl App {
                         ))
                     })
                     .collect();
+                // The original's screen: its framed box at (15, 305, 378,
+                // 210), empty until someone has won, and OK (string 10) at
+                // (345, 540); both checked pixel for pixel against it.
+                let panel = crate::menus::Panel {
+                    rect: (15.0, 305.0, 378.0, 210.0),
+                    title: String::new(),
+                    arrows: false,
+                };
                 MenuPage {
                     backdrop: Backdrop::Best,
-                    text: if items.is_empty() {
-                        vec!["No mission won yet.".into()]
-                    } else {
-                        Vec::new()
-                    },
+                    list_rect: Some(panel.inner()),
+                    panels: vec![panel],
                     items,
-                    buttons: column(&["Back"]),
+                    buttons: vec![Button {
+                        caption: "OK".into(),
+                        x: 345.0,
+                        y: 540.0,
+                        shape: 2,
+                    }],
+                    ..empty
+                }
+            }
+            // The original's multiplayer screen (frames measured on it):
+            // "Player's name" over a text field, "Select communication
+            // channel" over the ways to connect (OpenAC has its own, over
+            // the internet, instead of DirectPlay's), New, Join and Cancel.
+            MenuState::Connect => {
+                let name = crate::menus::Panel {
+                    rect: (29.0, 225.0, 478.0, 60.0),
+                    title: "Player's name".into(),
+                    arrows: false,
+                };
+                let channel = crate::menus::Panel {
+                    rect: (29.0, 290.0, 478.0, 193.0),
+                    title: "Select communication channel".into(),
+                    arrows: true,
+                };
+                let (nx, ny, nw, nh) = name.inner();
+                let at = |caption: &str, x, shape| Button {
+                    caption: caption.into(),
+                    x,
+                    y: 510.0,
+                    shape,
+                };
+                MenuPage {
+                    backdrop: Backdrop::Title,
+                    list_rect: Some(channel.inner()),
+                    items: vec!["Internet TCP/IP connection (OpenAC)".into()],
+                    selected: Some(0),
+                    boxes: vec![(
+                        (nx, ny + 2.0, nw, nh),
+                        vec![format!("{}_", self.player_name)],
+                    )],
+                    panels: vec![name, channel],
+                    buttons: vec![
+                        at("New", 60.0, 2),
+                        at("Join", 215.0, 3),
+                        at("Cancel", 365.0, 2),
+                    ],
                     ..empty
                 }
             }
@@ -986,6 +1249,20 @@ impl App {
         };
         let caption = match hit {
             MenuHit::Button(i) => page.buttons[i].caption.clone(),
+            MenuHit::Tab(t) => {
+                if let MenuState::Load(..) = state {
+                    let tab = [LoadTab::Scenario, LoadTab::Custom, LoadTab::StartFrom][t.min(2)];
+                    self.menu = Some(MenuState::Load(tab, None));
+                    self.list_first = 0;
+                }
+                return;
+            }
+            MenuHit::Scroll(d) => {
+                let most = page.items.len().saturating_sub(1);
+                self.list_first =
+                    (self.list_first as i64 + d as i64).clamp(0, most as i64) as usize;
+                return;
+            }
             // A difficulty: the mission is set up again for it.
             MenuHit::Check(i) => {
                 if state == MenuState::Briefing && self.difficulty != i {
@@ -996,8 +1273,37 @@ impl App {
             }
             MenuHit::Item(i) => {
                 self.menu = Some(match state {
-                    MenuState::Missions(c, _) => MenuState::Missions(c, Some(i)),
-                    MenuState::Load(_) => MenuState::Load(Some(i)),
+                    MenuState::Missions(c, _) => {
+                        if let Some(&index) = self.category_missions(c).get(i) {
+                            match Preview::load(
+                                &self.data,
+                                &mut self.caches,
+                                &self.missions[index],
+                                index,
+                            ) {
+                                Ok(p) => self.preview = Some(p),
+                                Err(e) => self.say(format!("{e:#}")),
+                            }
+                        }
+                        MenuState::Missions(c, Some(i))
+                    }
+                    MenuState::Load(tab, _) => {
+                        let entry = self.load_entries(tab).get(i).map(|e| e.0);
+                        if let Some(index) = entry.and_then(|e| self.entry_mission(e)) {
+                            if self.preview.as_ref().is_none_or(|p| p.index != index) {
+                                match Preview::load(
+                                    &self.data,
+                                    &mut self.caches,
+                                    &self.missions[index],
+                                    index,
+                                ) {
+                                    Ok(p) => self.preview = Some(p),
+                                    Err(e) => self.say(format!("{e:#}")),
+                                }
+                            }
+                        }
+                        MenuState::Load(tab, Some(i))
+                    }
                     MenuState::Multiplayer(_) => {
                         // A map takes at most so many players.
                         if let Some(&(_, n)) = self.battle_maps.get(i) {
@@ -1025,22 +1331,27 @@ impl App {
             (_, "Battles") => self.menu = Some(MenuState::Missions(Category::Battle, None)),
             (_, "Load game") => {
                 self.refresh_panels();
-                self.menu = Some(MenuState::Load(None));
+                self.menu = Some(MenuState::Load(LoadTab::Scenario, None));
             }
             (_, "Quit") | (_, "Quit game") => self.quit = true,
             // The campaign from its first mission, on its briefing.
             (_, "Start scenario") => {
                 if let Some(&first) = self.category_missions(Category::Campaign).first() {
+                    // The story opens before the first mission.
+                    self.queue_video(crate::video::OPENING);
                     self.carry = None;
                     self.open_mission(first);
                 }
             }
             (_, "Custom missions") => self.menu = Some(MenuState::Missions(Category::Single, None)),
             (_, "Best Conquerors") => self.menu = Some(MenuState::Best),
-            (_, "MultiPlayer game") => {
+            (MenuState::Best, "OK") => self.menu = Some(MenuState::Main),
+            (_, "MultiPlayer game") => self.menu = Some(MenuState::Connect),
+            (MenuState::Connect, "New") | (MenuState::Connect, "Join") => {
                 self.find_battle_maps();
                 self.menu = Some(MenuState::Multiplayer(None));
             }
+            (MenuState::Connect, "Cancel") => self.menu = Some(MenuState::Main),
             (_, "Best results") => self.menu = Some(MenuState::Best),
             (_, "Multiplayer") => {
                 self.find_battle_maps();
@@ -1072,7 +1383,21 @@ impl App {
                     self.open_mission(index);
                 }
             }
-            (MenuState::Load(Some(i)), "Load") => {
+            (MenuState::Load(tab, Some(i)), "Load") => {
+                let Some((entry, _)) = self.load_entries(tab).get(i).cloned() else {
+                    return;
+                };
+                let i = match entry {
+                    LoadEntry::Save(slot) => slot,
+                    LoadEntry::Mission(index) => {
+                        if self.category_missions(Category::Campaign).first() == Some(&index) {
+                            self.queue_video(crate::video::OPENING);
+                        }
+                        self.carry = None;
+                        self.open_mission(index);
+                        return;
+                    }
+                };
                 let path = if i < panels::SLOTS {
                     self.slot_path(i)
                 } else {
@@ -1092,7 +1417,9 @@ impl App {
                 self.menu = None;
                 self.in_game = true;
             }
-            (MenuState::Briefing, "Cancel") => self.menu = Some(MenuState::Main),
+            (MenuState::Briefing, "Cancel")
+            | (MenuState::Missions(..), "Cancel")
+            | (MenuState::Load(..), "Cancel") => self.menu = Some(MenuState::Main),
             (MenuState::Outcome(_), "Next mission") => {
                 if let Some(next) = self.next_mission() {
                     // The campaign goes on with what was learned.
@@ -1122,9 +1449,10 @@ impl App {
         let state = match which {
             "main" => MenuState::Main,
             "missions" => MenuState::Missions(Category::Campaign, Some(1)),
+            "custom" => MenuState::Missions(Category::Single, Some(2)),
             "load" => {
                 self.refresh_panels();
-                MenuState::Load(None)
+                MenuState::Load(LoadTab::Scenario, Some(0))
             }
             "briefing" => MenuState::Briefing,
             "victory" => MenuState::Outcome(crate::scene::Outcome::Victory),
@@ -1134,6 +1462,10 @@ impl App {
                 self.list_first = 10;
                 MenuState::Missions(Category::Battle, Some(12))
             }
+            "connect" => {
+                self.player_name = "Jason".into();
+                MenuState::Connect
+            }
             "multiplayer" => {
                 self.find_battle_maps();
                 self.join_address = "192.168.1.20".into();
@@ -1141,6 +1473,16 @@ impl App {
             }
             other => anyhow::bail!("unknown menu screen {other}"),
         };
+        if let MenuState::Missions(c, Some(i)) = state {
+            if let Some(&index) = self.category_missions(c).get(i) {
+                self.preview = Some(Preview::load(
+                    &self.data,
+                    &mut self.caches,
+                    &self.missions[index],
+                    index,
+                )?);
+            }
+        }
         let menus = self.menus.as_ref().context("menus are not installed")?;
         menus.draw(frame, &self.menu_page(state).view(hover));
         Ok(())
@@ -1265,6 +1607,15 @@ impl App {
                 })
             })
             .collect();
+        self.quick_label = SaveGame::read(&self.quick_save_path()).ok().map(|s| {
+            let t = s.clock as u32;
+            format!(
+                "{} {}:{:02} (quick save)",
+                s.mission.to_uppercase(),
+                t / 60,
+                t % 60
+            )
+        });
         let mut help: Vec<String> = Vec::new();
         let goals: Vec<&str> = (0..crate::scene::OBJECTIVES.len())
             .filter(|&i| self.scene.conditions[i])
@@ -1419,6 +1770,60 @@ impl App {
                 played.push(name);
             }
         }
+    }
+
+    /// The load screen's entries on tab `tab`: saved games of the campaign
+    /// or of other missions, or the campaign's missions to start from.
+    fn load_entries(&self, tab: LoadTab) -> Vec<(LoadEntry, String)> {
+        if tab == LoadTab::StartFrom {
+            return self
+                .category_missions(Category::Campaign)
+                .into_iter()
+                .map(|i| (LoadEntry::Mission(i), self.mission_titles[i].clone()))
+                .collect();
+        }
+        let labels = self
+            .slot_labels
+            .iter()
+            .enumerate()
+            .filter_map(|(i, l)| Some((i, l.clone()?)))
+            .chain(self.quick_save_label().map(|l| (panels::SLOTS, l)));
+        labels
+            .filter(|(_, l)| {
+                let mission = l.split_whitespace().next().unwrap_or("").to_lowercase();
+                crate::scene::is_campaign(&mission) == (tab == LoadTab::Scenario)
+            })
+            .map(|(i, l)| (LoadEntry::Save(i), l))
+            .collect()
+    }
+
+    /// The mission of a load screen entry.
+    fn entry_mission(&self, entry: LoadEntry) -> Option<usize> {
+        match entry {
+            LoadEntry::Mission(i) => Some(i),
+            LoadEntry::Save(slot) => {
+                let label = if slot < panels::SLOTS {
+                    self.slot_labels.get(slot)?.clone()?
+                } else {
+                    self.quick_save_label()?
+                };
+                let name = label.split_whitespace().next()?.to_lowercase();
+                self.missions.iter().position(|m| *m == name)
+            }
+        }
+    }
+
+    /// The quick save, as the save slots are labelled (read by
+    /// `refresh_panels`).
+    fn quick_save_label(&self) -> Option<String> {
+        self.quick_label.clone()
+    }
+
+    /// Where text in the big menu font starts to be centred on `x`.
+    fn centred(&self, text: &str, x: f32) -> f32 {
+        self.menus
+            .as_ref()
+            .map_or(x, |m| x - m.big.measure(text) as f32 / 2.0)
     }
 
     fn say(&mut self, msg: impl Into<String>) {
@@ -2781,6 +3186,20 @@ impl ApplicationHandler for App {
                     {
                         self.chat_line = Some(String::new());
                         self.say("Say: _");
+                        return;
+                    }
+                }
+                if let (Some(MenuState::Connect), Some(_)) = (self.menu, &self.menus) {
+                    if code == KeyCode::Backspace {
+                        self.player_name.pop();
+                        return;
+                    }
+                    let typed = event.text.as_deref().unwrap_or("");
+                    if !typed.is_empty()
+                        && !typed.chars().any(char::is_control)
+                        && self.player_name.len() < 30
+                    {
+                        self.player_name.push_str(typed);
                         return;
                     }
                 }

@@ -249,7 +249,7 @@ fn run() -> Result<()> {
             cd_audio: None,
             intro: false,
             fog: true,
-            difficulty: Difficulty::Normal.level(),
+            difficulty: args.difficulty.level(),
         };
         let size = args.window;
         let mut app = app::App::new(data, missions, mission_index, camera, options, None, true)?;
