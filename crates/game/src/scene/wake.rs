@@ -132,6 +132,10 @@ const STERN: [[(i8, i8); 8]; 12] = [
 const FRAME: [f32; 12] = [
     56.0, 64.0, 80.0, 80.0, 72.0, 72.0, 72.0, 72.0, 64.0, 72.0, 72.0, 72.0,
 ];
+/// The speed above which a ship type throws a wake (0x5bb1f4).
+const WAKE_FROM: [u32; 12] = [
+    26000, 25000, 20000, 13000, 18000, 25000, 23000, 23000, 18000, 20000, 22000, 20000,
+];
 /// How far apart the two droplets start, by ship type (0x5bb840).
 const SPREAD: [i8; 12] = [7, 9, 11, 13, 11, 9, 9, 9, 7, 8, 12, 8];
 /// The droplets' sprites by ship type (0x5bb224): `TRAKS00` or `TRAKS14`.
@@ -210,7 +214,10 @@ impl Scene {
         let mut new = Vec::new();
         for o in &self.objects {
             let Some(s) = &o.ship else { continue };
-            if s.path.is_empty() || s.rotation.is_some() {
+            // Only going faster than its type's threshold (0x5bb1f4, in
+            // units of 1/6000 pixel a tick).
+            let from = WAKE_FROM[s.kind as usize % 12] as f32 / 6000.0 / crate::clock::TICK;
+            if s.path.is_empty() || s.rotation.is_some() || s.velocity <= from {
                 continue;
             }
             let k = s.kind as usize % 12;
@@ -218,7 +225,7 @@ impl Scene {
             let (sx, sy) = STERN[k][h];
             let (ax, ay) = AHEAD[h];
             let norm = (ax as f32).hypot(ay as f32).max(1.0);
-            let along = s.speed * KEEP_UP / norm;
+            let along = s.velocity * KEEP_UP / norm;
             let (px, py) = SIDE[h];
             let spread = SPREAD[k] as f32 + if h == 2 || h == 6 { 1.0 } else { 0.0 };
             let half = FRAME[k] / 2.0;

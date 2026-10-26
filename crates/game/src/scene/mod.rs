@@ -1200,9 +1200,50 @@ impl Scene {
             // A ship first turns to its next course, through the hull's
             // rotations, then sails it.
             if !turn_ship(ship, obj.x, obj.y, dt) {
+                ship.velocity = 0.0;
                 continue;
             }
-            let mut budget = ship.speed * wind * rigging * feather * dt;
+            // It gathers way up to its speed, and loses it in time to stop
+            // where it is bound or before a turn of more than 45 degrees
+            // (0x4a3f40, 0x4a2f60).
+            let top = ship.speed * wind * rigging * feather;
+            let accel = objects::ship_accel(ship.kind) * wind.max(0.1);
+            let ahead = {
+                let mut d = 0.0;
+                let mut from = (obj.x, obj.y);
+                let mut heading = None;
+                for &(px, py) in &ship.path {
+                    let (lx, ly) = (px - from.0, py - from.1);
+                    if lx.hypot(ly) > 0.5 {
+                        let h = heading_towards(lx, ly);
+                        if let Some(prev) = heading {
+                            let steps = (h as i32 - prev as i32).rem_euclid(8);
+                            if steps != 0 && steps != 1 && steps != 7 {
+                                break;
+                            }
+                        }
+                        heading = Some(h);
+                    }
+                    d += lx.hypot(ly);
+                    from = (px, py);
+                }
+                d
+            };
+            let stopping = (2.0 * accel * ahead).sqrt().max(MIN_WAY);
+            let target = top.min(stopping);
+            ship.velocity = if ship.velocity < target {
+                (ship.velocity + accel * dt).min(target)
+            } else {
+                target
+            };
+            // A diagonal step goes a third of the way on each axis for a
+            // half on one (0x4a3f40).
+            let diagonal = ship
+                .path
+                .front()
+                .is_some_and(|&(tx, ty)| (tx - obj.x).abs() > 0.5 && (ty - obj.y).abs() > 0.5);
+            let along = if diagonal { DIAGONAL_PACE } else { 1.0 };
+            let mut budget = ship.velocity * along * dt;
             // Closing in on a shore or pier, the last short way, it goes
             // slowly.
             if ship.path.len() == 1 {
@@ -1224,6 +1265,7 @@ impl Scene {
                     match taken.get(&next) {
                         Some(&other) if other != obj.id => {
                             ship.blocked += dt;
+                            ship.velocity = 0.0;
                             held.push((obj.id, next, lying.contains(&other)));
                             break;
                         }
@@ -1305,6 +1347,12 @@ impl Scene {
         (self.terrain.width, self.terrain.height)
     }
 }
+
+/// The least way a ship keeps while bound somewhere, in world pixels a
+/// second, so braking ends.
+const MIN_WAY: f32 = 10.0;
+/// A diagonal step's pace against a straight one's: 2 x sqrt(2) / 3.
+const DIAGONAL_PACE: f32 = 0.9428;
 
 /// How much slower a ship goes closing in on a shore or pier. An
 /// estimate.

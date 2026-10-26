@@ -833,8 +833,9 @@ pub fn armour_factor(level: u8) -> f32 {
     [1.0, 0.85, 0.7][level.min(2) as usize]
 }
 
+/// Rigging: 115 and 130 percent of the top speed (0x4ac210).
 pub fn speed_factor(level: u8) -> f32 {
-    [1.0, 1.1, 1.2][level.min(2) as usize]
+    [1.0, 1.15, 1.3][level.min(2) as usize]
 }
 
 /// Effect animations (BOMB sequences): a hit, a splash and a sinking.

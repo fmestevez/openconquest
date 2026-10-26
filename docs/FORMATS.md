@@ -873,6 +873,15 @@ speed is saved with a game (`SPEED_GAME`).
   tick); gulls 1.
 - A ship turns a rotation of 24 a frame (0x4a3320); under way it bears off
   45 degrees at once, more and it stops to turn (0x4a3560).
+- Ship speeds (0x4ac210, at start-up): top speed = 0x5bb4e0[type] x 400
+  (x 1.15 and x 1.3 with rigging 1 and 2), acceleration = 0x5bb510[type]
+  x 8, in units of 1/6000 pixel a tick: each tick (0x4a3f40) the velocity
+  grows by the acceleration up to the top speed, both scaled by the wind
+  table 0x597b2c, and the position by the velocity, a straight step half a
+  pixel per 3000 units and a diagonal a third on each axis. Before the end
+  of its way it brakes at v squared / (distance x 6000) (0x4a2f60).
+  Measured live: a boat 60000 / 1200, a merchant 56000 / 1120; a merchant
+  at 33600 made 4.8 pixels a tick.
 
 - Construction: a building's construction picture plays once over the
   first entry of its class's cycle table (+0xc0, set by each constructor:

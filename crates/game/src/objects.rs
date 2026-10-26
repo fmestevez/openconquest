@@ -247,6 +247,10 @@ pub struct Ship {
     /// Seconds it has waited for another ship to clear the cell ahead.
     #[serde(default)]
     pub blocked: f32,
+    /// How fast it is going now, in world pixels a second: it gathers way
+    /// up to its speed and loses it to stop where it is bound or to turn.
+    #[serde(default)]
+    pub velocity: f32,
     /// Goods on board.
     pub cargo: f32,
     pub cargo_kind: Option<Resource>,
@@ -948,6 +952,7 @@ pub fn resolve(
         rotation: None,
         turn_clock: 0.0,
         blocked: 0.0,
+        velocity: 0.0,
         cargo: 0.0,
         cargo_kind: None,
         task: None,
@@ -1083,18 +1088,29 @@ pub const SHIP_NAMES: [&str; 12] = [
     "Ship of the Dead",
 ];
 
-/// Maximum speeds from the manual's comparison chart, in type order.
+/// Top speeds by ship type (0x5bb4e0; the manual's chart, which swaps the
+/// sixth and seventh): x 400 in the original's units of 1/6000 pixel a
+/// tick (0x4ac210).
 /// Whether ships of type `kind` cannot pass over shoals: the royal ship,
 /// bomber and rammer (the manual's comparison chart).
 pub fn deep_draught(kind: u8) -> bool {
     matches!(kind, 2 | 3 | 5)
 }
 
-const SHIP_SPEED: [u32; 12] = [150, 140, 100, 60, 90, 150, 130, 120, 90, 100, 120, 100];
-/// World pixels per second per manual speed unit, before the wind factor
-/// (0.6 in calm, up to 1.2 downwind; see `weather`). Chosen for feel; the
-/// original's base speeds have not been recovered yet.
-const SPEED_SCALE: f32 = 0.75;
+const SHIP_SPEED: [u32; 12] = [150, 140, 100, 60, 90, 150, 120, 130, 90, 100, 120, 100];
+/// World pixels per second per chart unit, before the wind factor (0.6 in
+/// calm, up to 1.25 downwind; see `weather`): 400 units of 1/6000 pixel a
+/// tick (0x4a3f40 moves a straight step half a pixel per 3000 units).
+const SPEED_SCALE: f32 = 400.0 / 6000.0 / crate::clock::TICK;
+/// Acceleration by ship type (0x5bb510, x 8 units a tick, 0x4a3a70).
+const SHIP_ACCEL: [u32; 12] = [150, 140, 80, 40, 90, 120, 120, 130, 90, 100, 120, 100];
+
+/// How fast a ship of type `kind` gathers way, in world pixels a second
+/// per second (before the wind).
+pub fn ship_accel(kind: u8) -> f32 {
+    let tick = crate::clock::TICK;
+    SHIP_ACCEL[kind as usize % 12] as f32 * 8.0 / 6000.0 / (tick * tick)
+}
 
 /// The object panel picture (0x4f5800, 0x5004d0).
 fn picture(rec: &ObjectRecord) -> Option<(String, (u32, u32))> {
