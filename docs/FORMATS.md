@@ -684,8 +684,12 @@ Times count the game clock (+0xde of the game object, one tick per
   damage 100/125, 100/170, 170/150). There are no fish costs.
 - Marines (settlement) and weapons (workshop): 0x5971a0[item / 3] ticks
   each, 70, 80, 95.
-- Docks pass queued ships on to shipyards every 25 ticks (0x416f90); the
-  ship building time itself is not found yet.
+- Ships take no time to build: the yard (DockClassTy 0x416a40) pays and
+  creates the ship record at once (message 0x1488, record field 4 = 2,
+  which the ship loader 0x4dfe00 does not read) when a berth is free
+  (0x4e82f0), with the nation's "ship built" sound (events 0xe4-0xe7);
+  orders that find no free berth wait in a queue that is retried every 25
+  ticks (0x416f90).
 
 ## Gathering
 

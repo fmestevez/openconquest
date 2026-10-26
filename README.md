@@ -167,7 +167,9 @@ effect animations. As in the manual, spells reach 12 or 15 cells from one
 of your temples of their kind, except wind, view and flame.
 Fog of war hides what you have not explored and dims what is out of your
 ships' and buildings' sight, where other players' ships cannot be seen
-(`--no-fog` turns it off; sight ranges are placeholders). The game CD's own music, its audio tracks 2-9 (not part of a data image),
+(`--no-fog` turns it off; sight ranges are placeholders). The menus play
+the original's menu music (`mus_menu` from the game's sounds, needing no
+CD or SoundFont). In missions, the game CD's own music, its audio tracks 2-9 (not part of a data image),
 plays if you rip them into `<data>/cdaudio` (or `--cd-audio DIR`) as WAV,
 FLAC or Ogg files named by track number (`Track02.flac`, ...); otherwise
 the original MIDI music plays through a General MIDI SoundFont you
@@ -180,10 +182,10 @@ AI) keep their own amber and fish: their merchants gather, their shipyards
 build merchants and then the strongest warships they can afford, their
 warships hunt your ships within ten cells, and after five minutes they
 send waves of three or more warships against your towns and fleet. Construction, research and training
-times, and how fast merchants gather, are the original's (in game ticks of
+times (ships are launched at once, as soon as a berth is free), and how fast merchants gather, are the original's (in game ticks of
 20 ms at the default speed). Hull and building strength, ram damage, boarding pace,
 spell study time, durations and damage, hazard damage, fort weapons, the unit of the rate of fire,
-ship building time and building placement rules are placeholders until recovered from the
+and building placement rules are placeholders until recovered from the
 executable. The original's videos play, decoded from the CD's Cinepak and
 Video 1 AVIs: the company logos and title sequence at start-up (skipped
 with any key or a click, all of them with Esc, or not shown with
@@ -208,9 +210,13 @@ the file formats.
 - Borderless fullscreen (F11 or Alt+Enter), HiDPI aware.
 - Optional integer scaling (`--integer-scale`) or a fixed scale (`--scale 2`).
 - Zooming with the mouse wheel or a trackpad pinch; panning by right/middle drag or a two-finger swipe.
-- The original front end: title screen, mission lists (campaign, single
-  missions, battles) with the missions' own titles, briefing, mission
-  accomplished and failed screens with next mission and retry.
+- The original front end: the title screen as in the original (its
+  buttons, captions, layout and lit buttons, with the menu music), mission
+  lists (Start scenario: the campaign; Custom missions: the single
+  missions) with the missions' own titles, briefing, mission accomplished
+  and failed screens with next mission and retry. (The screens after the
+  title are still OpenAC's own; battles against the computer are on the
+  in-game menu's Battles.)
 - Quick save and load at any moment (F5 / F9), plus eight save slots.
 - Adjustable game speed (half to double) and scroll speed.
 - Minimap markers coloured by side: yours, enemies, creatures.
@@ -289,7 +295,7 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 
 Two to eight players can play a map together over the network (the
 `battle01`-`battle25` maps; each player needs the same build of OpenAC
-and their own copy of the game data). From the main menu, Multiplayer:
+and their own copy of the game data). From the title screen, MultiPlayer game:
 the host picks a map and the number of players and chooses Host; the
 others type the host's address (shown on the host's screen) and choose
 Join; the game starts once everyone is there. Or from the command line:

@@ -34,6 +34,25 @@ impl Audio {
         })
     }
 
+    /// A sink playing sound `name` over and over (the menus' music).
+    pub fn loop_sound(&mut self, sounds: &Archive, name: &str) -> Option<rodio::Sink> {
+        let sound = match load_sound(sounds, name) {
+            Ok(Some(s)) => s,
+            Ok(None) => return None,
+            Err(e) => {
+                eprintln!("could not load sound {name}: {e}");
+                return None;
+            }
+        };
+        let sink = rodio::Sink::try_new(&self.handle).ok()?;
+        sink.append(
+            SamplesBuffer::new(sound.channels, sound.sample_rate, sound.samples)
+                .repeat_infinite()
+                .convert_samples::<f32>(),
+        );
+        Some(sink)
+    }
+
     /// Plays sound `name` at `gain` (0..1, before the master volume).
     pub fn play(&mut self, sounds: &Archive, name: &str, gain: f32) {
         if self.muted || gain <= 0.0 {

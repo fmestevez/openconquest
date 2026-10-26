@@ -69,6 +69,16 @@ fn group_offset(k: usize) -> (f32, f32) {
     (r * a.cos(), r * a.sin())
 }
 
+/// The title screen's buttons, in the original's order.
+const TITLE_BUTTONS: [&str; 6] = [
+    "Best Conquerors",
+    "Start scenario",
+    "Load game",
+    "Custom missions",
+    "MultiPlayer game",
+    "Quit game",
+];
+
 /// Mission groups on the front end, by archive name prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Category {
@@ -120,6 +130,7 @@ struct MenuPage {
     notes: Vec<String>,
     buttons: Vec<Button>,
     first: usize,
+    credits: bool,
 }
 
 impl MenuPage {
@@ -133,6 +144,7 @@ impl MenuPage {
             notes: &self.notes,
             buttons: &self.buttons,
             hover,
+            credits: self.credits,
         }
     }
 }
@@ -232,6 +244,12 @@ pub struct App {
     audio: Option<Audio>,
     /// Music, if a SoundFont is available.
     music: Option<Music>,
+    /// The menus' own music (`mus_menu`, sound event 325, which the
+    /// original plays looped when no other is asked for: 0x525370), while
+    /// the front-end menus are up.
+    menu_music: Option<rodio::Sink>,
+    /// `mus_menu` could not be played: do not try again.
+    no_menu_music: bool,
     music_volume: f32,
     /// Where the ripped CD audio tracks are looked for.
     cd_audio: Option<std::path::PathBuf>,
@@ -365,6 +383,8 @@ impl App {
             page: Page::Main,
             briefing: !restored,
             music: None,
+            menu_music: None,
+            no_menu_music: false,
             music_volume: 0.5,
             cd_audio,
             video: None,
@@ -557,6 +577,9 @@ impl App {
                 if let Some(m) = &self.music {
                     m.set_volume(if muted { 0.0 } else { v });
                 }
+                if let Some(s) = &self.menu_music {
+                    s.set_volume(if muted { 0.0 } else { v });
+                }
             }
         }
     }
@@ -571,7 +594,7 @@ impl App {
             caption: caption.into(),
             x,
             y,
-            wide: true,
+            shape: 0,
         };
         let column = |captions: &[&str]| -> Vec<Button> {
             captions
@@ -593,14 +616,13 @@ impl App {
             notes: Vec::new(),
             buttons: Vec::new(),
             first: self.list_first,
+            credits: false,
         };
         match state {
-            MenuState::Main => {
-                let mut captions = Vec::new();
-                if self.in_game {
-                    captions.push("Resume");
-                }
-                captions.extend([
+            MenuState::Main if self.in_game => MenuPage {
+                backdrop: Backdrop::Title,
+                buttons: column(&[
+                    "Resume",
                     "Campaign",
                     "Single missions",
                     "Battles",
@@ -608,13 +630,28 @@ impl App {
                     "Load game",
                     "Best results",
                     "Quit",
-                ]);
-                MenuPage {
-                    backdrop: Backdrop::Title,
-                    buttons: column(&captions),
-                    ..empty
-                }
-            }
+                ]),
+                ..empty
+            },
+            // The original's title screen (Startmm.cpp, 0x530cb0): six
+            // buttons down a diagonal from (70, 232), 40 right and 52 down
+            // apart, the two wide shapes taking turns; captions are string
+            // resources 1042, 101, 1027, 1026, 1000 and 103.
+            MenuState::Main => MenuPage {
+                backdrop: Backdrop::Title,
+                buttons: TITLE_BUTTONS
+                    .iter()
+                    .enumerate()
+                    .map(|(n, c)| Button {
+                        caption: (*c).into(),
+                        x: 30.0 + 40.0 * (n + 1) as f32,
+                        y: 180.0 + 52.0 * (n + 1) as f32,
+                        shape: (n % 2) as u8,
+                    })
+                    .collect(),
+                credits: true,
+                ..empty
+            },
             MenuState::Missions(category, selected) => MenuPage {
                 title: Some(
                     match category {
@@ -954,7 +991,16 @@ impl App {
                 self.refresh_panels();
                 self.menu = Some(MenuState::Load(None));
             }
-            (_, "Quit") => self.quit = true,
+            (_, "Quit") | (_, "Quit game") => self.quit = true,
+            (_, "Start scenario") => {
+                self.menu = Some(MenuState::Missions(Category::Campaign, None))
+            }
+            (_, "Custom missions") => self.menu = Some(MenuState::Missions(Category::Single, None)),
+            (_, "Best Conquerors") => self.menu = Some(MenuState::Best),
+            (_, "MultiPlayer game") => {
+                self.find_battle_maps();
+                self.menu = Some(MenuState::Multiplayer(None));
+            }
             (_, "Best results") => self.menu = Some(MenuState::Best),
             (_, "Multiplayer") => {
                 self.find_battle_maps();
@@ -1028,6 +1074,15 @@ impl App {
     /// Renders a front-end screen (`main`, `missions`, `load`, `briefing`,
     /// `victory`, `defeat`) into `frame`, for screenshots.
     pub fn draw_menu_screen(&mut self, which: &str, frame: &mut Frame) -> Result<()> {
+        // `screen@x,y`: with the mouse at 800x600 point (x, y).
+        let (which, hover) = match which.split_once('@') {
+            Some((w, at)) => (
+                w,
+                at.split_once(',')
+                    .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?))),
+            ),
+            None => (which, None),
+        };
         let state = match which {
             "main" => MenuState::Main,
             "missions" => MenuState::Missions(Category::Campaign, Some(1)),
@@ -1051,7 +1106,7 @@ impl App {
             other => anyhow::bail!("unknown menu screen {other}"),
         };
         let menus = self.menus.as_ref().context("menus are not installed")?;
-        menus.draw(frame, &self.menu_page(state).view(None));
+        menus.draw(frame, &self.menu_page(state).view(hover));
         Ok(())
     }
 
@@ -1264,7 +1319,34 @@ impl App {
         }
     }
 
-    /// Plays an interface sound at full volume.
+    /// The menus' music in the front-end menus (not over a game, nor while
+    /// a video plays), the game's music otherwise.
+    fn choose_music(&mut self) {
+        let want =
+            self.menu.is_some() && !self.in_game && self.video.is_none() && !self.no_menu_music;
+        if want == self.menu_music.is_some() {
+            return;
+        }
+        if want {
+            if let (Some(audio), Some(sounds)) = (self.audio.as_mut(), self.data.sounds.as_ref()) {
+                self.menu_music = audio.loop_sound(sounds, "mus_menu");
+                let muted = audio.muted;
+                if let Some(s) = &self.menu_music {
+                    s.set_volume(if muted { 0.0 } else { self.music_volume });
+                }
+            }
+            if self.menu_music.is_none() {
+                self.no_menu_music = true;
+                return;
+            }
+        } else {
+            self.menu_music = None;
+        }
+        if let Some(m) = &self.music {
+            m.set_paused(want);
+        }
+    }
+
     /// Plays the sounds the scene reported, by their distance from the
     /// centre of the view.
     fn play_scene_sounds(&mut self) {
@@ -2406,6 +2488,7 @@ impl App {
                 .update(dt * self.settings.speed(), &self.data, &mut self.caches);
         }
         self.play_scene_sounds();
+        self.choose_music();
         if let Some(m) = self.music.as_mut() {
             m.keep_playing();
         }
@@ -2725,6 +2808,9 @@ impl ApplicationHandler for App {
                             let muted = a.muted;
                             if let Some(m) = &self.music {
                                 m.set_volume(if muted { 0.0 } else { self.music_volume });
+                            }
+                            if let Some(s) = &self.menu_music {
+                                s.set_volume(if muted { 0.0 } else { self.music_volume });
                             }
                             self.say(if muted { "Sound off" } else { "Sound on" });
                         }

@@ -105,7 +105,8 @@ impl Scene {
                 done.push(id);
                 continue;
             };
-            let heal = (REPAIR_RATE * dt).min(c.max_hull - c.hull);
+            // Never below what it has (a hull above full is left alone).
+            let heal = (REPAIR_RATE * dt).min(c.max_hull - c.hull).max(0.0);
             let owed = self.repair_owed.entry(owner).or_default();
             *owed += heal * REPAIR_AMBER_PER_POINT;
             let pay = owed.floor() as u32;
@@ -119,7 +120,6 @@ impl Scene {
             let c = self.objects[i].combat.as_mut().unwrap();
             c.hull += heal;
             if c.hull >= c.max_hull {
-                c.hull = c.max_hull;
                 done.push(id);
             }
         }

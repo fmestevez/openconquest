@@ -6,7 +6,7 @@
 //! the window's height and centred.
 
 use anyhow::{Context, Result};
-use openac_formats::{Bitmap, ResourceKind};
+use openac_formats::{Bitmap, ResourceKind, Sprite};
 
 use crate::assets::{rgb, GameData, Image};
 use crate::render::{blit_scaled, shade_rect, Frame};
@@ -32,7 +32,8 @@ pub struct Button {
     pub caption: String,
     pub x: f32,
     pub y: f32,
-    pub wide: bool,
+    /// Its picture, `M_BUT<shape>_`: 0 and 1 wide, 2 and 3 narrow.
+    pub shape: u8,
 }
 
 /// What a menu screen shows.
@@ -50,7 +51,18 @@ pub struct MenuView<'a> {
     pub buttons: &'a [Button],
     /// The cursor, in 800x600 coordinates.
     pub hover: Option<(f32, f32)>,
+    /// The title screen's version and publisher lines.
+    pub credits: bool,
 }
+
+/// The title screen's lines (string resources 1145 and 1143), drawn by
+/// Startmm.cpp (0x5310a0) in boxes at (10, 0, 200, 27) and (0, 561, 799,
+/// 38), the second centred.
+const VERSION: &str = "Version 2.00";
+const PUBLISHER: [&str; 2] = [
+    "Published under license by K.E.Media for Denmark, Sweden, Finland and Norway",
+    "(C) 1999, 1998 Megamedia Australia, Reaction Entertainment",
+];
 
 /// What a click hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,10 +80,14 @@ const TEXT_BOX: (f32, f32, f32, f32) = (40.0, 90.0, 520.0, 420.0);
 
 pub struct Menus {
     backdrops: Vec<Option<Image>>,
-    /// Wide and narrow button shapes, normal and lit.
-    wide: [Option<Image>; 2],
-    narrow: [Option<Image>; 2],
+    /// The button shapes `M_BUT0_` to `M_BUT3_`, normal and lit, coloured
+    /// with each backdrop's palette (the original's 256-colour screen takes
+    /// the backdrop's; the global palette turns the lit buttons purple).
+    shapes: Vec<[[Option<Image>; 2]; 4]>,
     pub big: TextRenderer,
+    /// The big font for a lit button's caption (`S_FNT_BS`; Startmm.cpp
+    /// loads both).
+    lit_font: TextRenderer,
     pub text: TextRenderer,
 }
 
@@ -81,29 +97,67 @@ impl Menus {
             .menus
             .as_ref()
             .context("controlm.dkx is not installed")?;
-        let bitmap = |name: &str| -> Option<Image> {
+        let backdrop = |i: usize| -> Option<Bitmap> {
             let data = archive
-                .read(&format!("{theme}{name}"), ResourceKind::Bitmap)
+                .read(&format!("{theme}M_BKGND_{i:02}"), ResourceKind::Bitmap)
                 .ok()?;
-            let b = Bitmap::parse(&data).ok()?;
-            let pixels = b
-                .pixels
-                .iter()
-                .map(|&i| Some(rgb(b.palette.0[i as usize])))
-                .collect();
-            Some(Image::new(b.width, b.height, pixels))
+            Bitmap::parse(&data).ok()
         };
-        let sprite = |name: &str| {
-            data.load_image(archive, &format!("{theme}{name}"), false)
-                .ok()
-                .flatten()
+        let backdrops: Vec<Option<Bitmap>> = (0..6).map(backdrop).collect();
+        let main_palette = backdrops.iter().flatten().next().map(|b| b.palette.clone());
+        // A sprite in the palette of backdrop `b` (the global palette if
+        // it has none).
+        let sprite = |name: &str, b: &Option<Bitmap>| -> Option<Image> {
+            let palette = b.as_ref().map(|b| &b.palette).or(main_palette.as_ref());
+            let Some(palette) = palette else {
+                return data
+                    .load_image(archive, &format!("{theme}{name}"), false)
+                    .ok()
+                    .flatten();
+            };
+            let e = archive.find(&format!("{theme}{name}"), ResourceKind::Sprite)?;
+            let s = Sprite::parse(&archive.read_entry(e).ok()?).ok()?;
+            let mut pixels = vec![None; (s.width * s.height) as usize];
+            for y in 0..s.box_height {
+                for x in 0..s.box_width {
+                    let i = (y * s.box_width + x) as usize;
+                    if s.opaque[i] != 0 {
+                        pixels[((s.y + y) * s.width + s.x + x) as usize] =
+                            Some(rgb(palette.0[s.pixels[i] as usize]));
+                    }
+                }
+            }
+            Some(Image::new(s.width, s.height, pixels))
         };
+        let shapes = backdrops
+            .iter()
+            .map(|bg| {
+                [0, 1, 2, 3].map(|k| {
+                    [
+                        sprite(&format!("M_BUT{k}_00"), bg),
+                        sprite(&format!("M_BUT{k}_01"), bg),
+                    ]
+                })
+            })
+            .collect();
         let font = |name: &str| TextRenderer::load(archive, &format!("{theme}{name}"), 0);
         Ok(Self {
-            backdrops: (0..6).map(|i| bitmap(&format!("M_BKGND_{i:02}"))).collect(),
-            wide: [sprite("M_BUT0_00"), sprite("M_BUT0_01")],
-            narrow: [sprite("M_BUT2_00"), sprite("M_BUT2_01")],
+            shapes,
+            backdrops: backdrops
+                .iter()
+                .map(|b| {
+                    b.as_ref().map(|b| {
+                        let pixels = b
+                            .pixels
+                            .iter()
+                            .map(|&i| Some(rgb(b.palette.0[i as usize])))
+                            .collect();
+                        Image::new(b.width, b.height, pixels)
+                    })
+                })
+                .collect(),
             big: font("S_FNT_BH")?,
+            lit_font: font("S_FNT_BS")?,
             text: font("S_FNT_MH")?,
         })
     }
@@ -125,12 +179,9 @@ impl Menus {
     }
 
     fn button_size(&self, b: &Button) -> (f32, f32) {
-        let img = if b.wide {
-            &self.wide[0]
-        } else {
-            &self.narrow[0]
-        };
-        img.as_ref()
+        self.shapes
+            .first()
+            .and_then(|s| s[usize::from(b.shape.min(3))][0].as_ref())
             .map_or((174.0, 40.0), |i| (i.width as f32, i.height as f32))
     }
 
@@ -153,6 +204,19 @@ impl Menus {
             shade_rect(frame, px as u32, py as u32, (w * s) as u32, (h * s) as u32);
         };
         let line = self.text.line_height() as f32 * ts as f32 / s;
+        if view.credits {
+            write(frame, &self.text, 10.0, 4.0, VERSION);
+            for (i, l) in PUBLISHER.iter().enumerate() {
+                let w = self.text.measure(l) as f32 * ts as f32 / s;
+                write(
+                    frame,
+                    &self.text,
+                    (800.0 - w) / 2.0,
+                    561.0 + i as f32 * line,
+                    l,
+                );
+            }
+        }
         if let Some(title) = view.title {
             write(frame, &self.big, LIST.0 + 12.0, LIST.1 - 30.0, title);
         }
@@ -229,12 +293,17 @@ impl Menus {
         for b in view.buttons {
             let (w, h) = self.button_size(b);
             let lit = view.hover.is_some_and(|p| inside(p, (b.x, b.y, w, h)));
-            let shapes = if b.wide { &self.wide } else { &self.narrow };
-            if let Some(img) = &shapes[usize::from(lit)] {
+            let shapes = self
+                .shapes
+                .get(view.backdrop as usize)
+                .or(self.shapes.first());
+            let img =
+                shapes.and_then(|s| s[usize::from(b.shape.min(3))][usize::from(lit)].as_ref());
+            if let Some(img) = img {
                 let (x, y) = at(b.x, b.y);
                 blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
             }
-            let font = &self.big;
+            let font = if lit { &self.lit_font } else { &self.big };
             let tw = font.measure(&b.caption) as f32 * ts as f32 / s;
             let th = font.line_height() as f32 * ts as f32 / s;
             write(

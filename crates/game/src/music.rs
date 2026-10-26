@@ -120,6 +120,15 @@ impl Music {
         self.sink.set_volume(v);
     }
 
+    /// Holds the music (while the menus play their own) or lets it go on.
+    pub fn set_paused(&self, paused: bool) {
+        if paused {
+            self.sink.pause();
+        } else {
+            self.sink.play();
+        }
+    }
+
     /// Queues the next tune when the current one ends.
     pub fn keep_playing(&mut self) {
         if !self.sink.empty() {

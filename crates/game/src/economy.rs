@@ -11,9 +11,12 @@ const HULL_FISH_HUNDREDS: [u32; 12] = [0, 2, 4, 4, 2, 3, 2, 2, 2, 2, 2, 10];
 /// a bit mask over building classes: bit n is class 0x32 + n (0x5961a8).
 const SHIP_REQUIRES: [u32; 12] = [0, 2, 96, 32, 96, 2, 32, 32, 34, 34, 34, 98];
 
-/// Seconds to build a ship. Placeholder: the original's production timing has
-/// not been recovered yet.
-pub const SHIP_BUILD_SECONDS: f32 = 20.0;
+/// Seconds to build a ship. The original makes it at once, paid and
+/// launched, when one of the yard's berths is free (DockClassTy 0x416a40;
+/// the ship record is created with message 0x1488); orders waiting for a
+/// berth go out every 25 ticks (0x416f90). Here a yard turns out one ship
+/// per 25 ticks.
+pub const SHIP_BUILD_SECONDS: f32 = 0.5;
 
 /// Seconds to put up a building or upgrade one: its construction picture
 /// plays once, the first entry of the class's cycle table (+0xc0; 200

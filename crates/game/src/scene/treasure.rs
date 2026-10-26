@@ -118,7 +118,9 @@ impl Scene {
             if s.heroes.contains(&5) {
                 rate += ARGUS_REPAIR;
             }
-            c.hull = (c.hull + rate * dt).min(c.max_hull);
+            if rate > 0.0 && c.hull < c.max_hull {
+                c.hull = (c.hull + rate * dt).min(c.max_hull);
+            }
         }
     }
 
