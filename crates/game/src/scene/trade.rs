@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Seconds a frame of a building collapsing into ruins. An estimate.
+const RUINS_FRAME_SECONDS: f32 = 0.1;
+
 /// Goods a ship takes aboard each time (0x4ad0e0): amber 100 for boats and
 /// merchants (20 for other ships), fish by ship type from 0x59b2a8 (boat
 /// 33, merchant 50, others 20); the barbarians take a third. Amber comes
@@ -919,13 +922,38 @@ impl Scene {
         };
         let obj = &self.objects[i];
         let Some(c) = &obj.combat else { return };
-        let state = BuildingState::for_condition(c.hull / c.max_hull * 100.0);
+        let percent = c.hull / c.max_hull * 100.0;
+        let state = BuildingState::for_condition(percent);
         match objects::building_frames(data, caches, &obj.record, state) {
             Ok(frames) if !frames.is_empty() => self.objects[i].frames = frames,
             Ok(_) => {}
             Err(e) => eprintln!("could not load building frames: {e:#}"),
         }
-        self.objects[i].progress = None;
+        // A damaged building's frames show it ever more broken: the frame
+        // follows its condition within the third (intact ones animate).
+        self.objects[i].progress = match state {
+            BuildingState::Standing(level @ (1 | 2)) => {
+                let top = level as f32 * 100.0 / 3.0;
+                Some(((top - percent) * 3.0 / 100.0).clamp(0.0, 1.0))
+            }
+            _ => None,
+        };
+    }
+
+    /// Ruins collapse once, then lie still on their last frame.
+    pub(super) fn run_ruins(&mut self, dt: f32) {
+        for obj in &mut self.objects {
+            if !matches!(obj.class, ObjectClass::Building(_))
+                || obj.owner.is_some()
+                || obj.combat.is_some()
+            {
+                continue;
+            }
+            if let Some(p) = obj.progress.as_mut().filter(|p| **p < 1.0) {
+                let n = obj.frames.len().max(1) as f32;
+                *p = (*p + dt / (n * RUINS_FRAME_SECONDS)).min(1.0);
+            }
+        }
     }
 
     /// Orders merchant `ship` to gather from `deposit` and deliver to port.
@@ -1167,7 +1195,18 @@ impl Scene {
                 let arrived = match self.front_cell(p) {
                     Some(_) => {
                         let (bx, by) = self.berth(p);
-                        (bx - sx).hypot(by - sy) <= 0.75 * t
+                        if (bx - sx).hypot(by - sy) > 0.75 * t {
+                            false
+                        } else {
+                            // In its cell, it closes in alongside.
+                            let (ax, ay) = self.alongside(p);
+                            if (ax - sx).hypot(ay - sy) > 1.0 {
+                                let ship = self.objects[i].ship.as_mut().unwrap();
+                                ship.path = [(ax, ay)].into();
+                                return;
+                            }
+                            true
+                        }
                     }
                     None => near(&self.objects[p], self.landing_reach(p).max(2.6)),
                 };
@@ -1263,6 +1302,17 @@ impl Scene {
             Some((cx, cy)) => (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0),
             None => (self.objects[p].x, self.objects[p].y),
         }
+    }
+
+    /// Where a ship lies unloading at moorage `p`: its berth, closer in
+    /// towards the building.
+    pub(super) fn alongside(&self, p: usize) -> (f32, f32) {
+        /// Pixels from the berth's centre towards the moorage. An estimate.
+        const CLOSE_IN: f32 = 20.0;
+        let (bx, by) = self.berth(p);
+        let (dx, dy) = (self.objects[p].x - bx, self.objects[p].y - by);
+        let len = dx.hypot(dy).max(1.0);
+        (bx + dx / len * CLOSE_IN, by + dy / len * CLOSE_IN)
     }
 
     pub(super) fn send_to_port(&mut self, i: usize, deposit: u32) {

@@ -16,7 +16,6 @@ const MINIMAP_VIEW: u32 = 0x00_e6_07_06;
 const SELECTION: u32 = 0x00_f0_e8_a0;
 /// The selection corners' highlight (measured; not palette colours).
 const SELECTION_GLINT: u32 = 0x00_d0_d0_5c;
-const SELECTION_ROUTE: u32 = 0x00_d0_f0_ff;
 const HULL_OK: u32 = 0x00_40_d0_40;
 const HULL_LOST: u32 = 0x00_c0_30_20;
 
@@ -352,6 +351,34 @@ pub fn draw_selection(
     let thick = (scale.round() as i64).max(1);
     let (clip_x0, clip_y0) = (screen.x as i64, screen.y as i64);
     let (clip_x1, clip_y1) = (clip_x0 + screen.w as i64, clip_y0 + screen.h as i64);
+    // Where the player sent it: the helm marker (`WPMOVE`, a 29x36 frame
+    // centred on the point), numbered when there are waypoints.
+    if let Some(ship) = obj.ship.as_ref().filter(|s| s.task.is_none()) {
+        let (marker, digits) = (&scene.waypoint_art.0, &scene.waypoint_art.1);
+        let many = ship.marks.len() > 1;
+        for (n, &(mx, my)) in ship.marks.iter().enumerate() {
+            let (left, top) = (mx as i32 - 14, my as i32 - 18);
+            if let Some(img) = marker {
+                draw_image(frame, screen, camera, lut, img, left, top);
+            }
+            if many {
+                let label = (n + 1).to_string();
+                for (k, d) in label.bytes().enumerate() {
+                    if let Some(Some(img)) = digits.get((d - b'0') as usize) {
+                        draw_image(
+                            frame,
+                            screen,
+                            camera,
+                            lut,
+                            img,
+                            left + 19 + 10 * k as i32,
+                            top + 18,
+                        );
+                    }
+                }
+            }
+        }
+    }
     let mut put = |x: i64, y: i64, c: u32| {
         for dy in 0..thick {
             for dx in 0..thick {
@@ -362,21 +389,6 @@ pub fn draw_selection(
             }
         }
     };
-    // Route: dotted line through the remaining waypoints.
-    if let Some(ship) = &obj.ship {
-        let mut from = (obj.x, obj.y);
-        for &to in &ship.path {
-            let (a, b) = (to_screen(from.0, from.1), to_screen(to.0, to.1));
-            let steps = ((b.0 - a.0).abs().max((b.1 - a.1).abs()) / (4 * thick)).max(1);
-            for i in 0..=steps {
-                let t = i as f32 / steps as f32;
-                let x = a.0 as f32 + (b.0 - a.0) as f32 * t;
-                let y = a.1 as f32 + (b.1 - a.1) as f32 * t;
-                put(x as i64, y as i64, SELECTION_ROUTE);
-            }
-            from = to;
-        }
-    }
     // The box: the picture's frame and 2 pixels around it (measured on the
     // original), its corners 13-pixel yellow angles lined inside in a darker
     // colour, with a small highlight curving between.

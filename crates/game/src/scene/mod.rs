@@ -16,7 +16,7 @@ use crate::render::palette_lut;
 use crate::save::{self, SaveGame, SavedObject};
 use crate::terrain::Terrain;
 use crate::weather::Wind;
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Marines being trained at a settlement, one at a time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -166,6 +166,11 @@ pub struct Scene {
     pub gulls: Vec<gulls::Gull>,
     gull_rng: Rng,
     pub gull_art: std::rc::Rc<(Frames, Frames)>,
+    /// The move marker (`_WPMOVE`) and waypoint digits (`_WPNUM0`-`9`).
+    pub waypoint_art: std::rc::Rc<(
+        Option<crate::assets::Image>,
+        Vec<Option<crate::assets::Image>>,
+    )>,
     /// Seconds until the computer players next decide.
     ai_timer: f32,
     /// Seconds since the mission started.
@@ -361,6 +366,17 @@ impl Scene {
             shoals_shown: Default::default(),
             gulls,
             gull_rng: Rng(0x6011_5eed),
+            waypoint_art: std::rc::Rc::new({
+                let load = |name: &str| {
+                    data.menus
+                        .as_ref()
+                        .and_then(|a| data.load_image(a, name, false).ok().flatten())
+                };
+                (
+                    load("_WPMOVE"),
+                    (0..10).map(|d| load(&format!("_WPNUM{d}"))).collect(),
+                )
+            }),
             gull_art: std::rc::Rc::new((
                 objects::sequence_frames(data, caches, "GULLSPR").unwrap_or_default(),
                 objects::sequence_frames(data, caches, "GULLSHD_SPR").unwrap_or_default(),
@@ -668,6 +684,8 @@ impl Scene {
                     }
                     if ruined {
                         scene.objects[i].picture = None;
+                        // Fallen before the mission: the last frame.
+                        scene.objects[i].progress = Some(1.0);
                     }
                 }
                 None => scene.refresh_building(id, data, caches),
@@ -704,6 +722,7 @@ impl Scene {
         ship.path = path;
         ship.task = None;
         ship.zone = None;
+        ship.marks = vec![(x, y)];
         true
     }
 
@@ -727,6 +746,7 @@ impl Scene {
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path.extend(leg);
         ship.task = None;
+        ship.marks.push((x, y));
         true
     }
 
@@ -745,6 +765,18 @@ impl Scene {
         x: f32,
         y: f32,
     ) -> Option<VecDeque<(f32, f32)>> {
+        self.plan_route_avoiding(i, start, x, y, &HashSet::new())
+    }
+
+    /// The same, keeping out of the cells in `avoid`.
+    fn plan_route_avoiding(
+        &self,
+        i: usize,
+        start: (f32, f32),
+        x: f32,
+        y: f32,
+        avoid: &HashSet<(i32, i32)>,
+    ) -> Option<VecDeque<(f32, f32)>> {
         let t = TILE_SIZE as f32;
         let obj = &self.objects[i];
         let start_point = start;
@@ -762,19 +794,91 @@ impl Scene {
             .ship
             .as_ref()
             .is_some_and(|s| crate::objects::deep_draught(s.kind));
-        let cells = self.nav.find_path(start, to, deep)?;
+        let cells = self
+            .nav
+            .find_path_avoiding(start, to, deep, |c| c != to && avoid.contains(&c))?;
         let mut points: Vec<(f32, f32)> = cells
             .into_iter()
             .map(|(cx, cy)| (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0))
             .collect();
-        // Finish on the exact point if it is in open water.
-        if to == target {
-            if let Some(last) = points.last_mut() {
-                *last = (x, y);
+        // Ships keep to the grid: cell centre to cell centre, straight or
+        // diagonal, the first leg to the centre of the cell they are in.
+        let here = (start.0 as f32 * t + t / 2.0, start.1 as f32 * t + t / 2.0);
+        if (here.0 - start_point.0).hypot(here.1 - start_point.1) > 0.5 {
+            points.insert(0, here);
+        }
+        Some(points.into())
+    }
+
+    /// Ships held up by others: one whose last cell is taken by a ship
+    /// lying there makes for the nearest free cell instead; one held up on
+    /// the way long enough goes round.
+    fn go_round(&mut self, held: Vec<(u32, (i32, i32), bool)>) {
+        const PATIENCE: f32 = 1.0;
+        let t = TILE_SIZE as f32;
+        let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
+        let centre = |(cx, cy): (i32, i32)| (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
+        for (id, cell, by_lying) in held {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            let (x, y) = (self.objects[i].x, self.objects[i].y);
+            let ship = self.objects[i].ship.as_ref().unwrap();
+            let Some(&(lx, ly)) = ship.path.back() else {
+                continue;
+            };
+            let last = cell_of(lx, ly);
+            let retarget = last == cell && by_lying;
+            if !retarget && ship.blocked <= PATIENCE {
+                continue;
+            }
+            // Cells other ships lie in or make for.
+            let others: HashSet<(i32, i32)> = self
+                .objects
+                .iter()
+                .filter(|o| o.id != id)
+                .filter_map(|o| {
+                    let s = o.ship.as_ref()?;
+                    Some([
+                        Some(cell_of(o.x, o.y)),
+                        s.path.back().map(|&(a, b)| cell_of(a, b)),
+                    ])
+                })
+                .flatten()
+                .flatten()
+                .collect();
+            let deep = objects::deep_draught(ship.kind);
+            let route = if retarget {
+                let free = (1..=8).find_map(|r: i32| {
+                    let mut ring: Vec<(i32, i32)> = (-r..=r)
+                        .flat_map(|dx| (-r..=r).map(move |dy| (cell.0 + dx, cell.1 + dy)))
+                        .filter(|&(cx, cy)| (cx - cell.0).abs().max((cy - cell.1).abs()) == r)
+                        .filter(|&c| self.nav.passable(c.0, c.1, deep) && !others.contains(&c))
+                        .collect();
+                    ring.sort_by(|a, b| {
+                        let d = |c: &(i32, i32)| {
+                            let (px, py) = centre(*c);
+                            (px - x).hypot(py - y)
+                        };
+                        d(a).total_cmp(&d(b))
+                    });
+                    ring.first().copied()
+                });
+                free.and_then(|c| {
+                    let (fx, fy) = centre(c);
+                    self.plan_route_avoiding(i, (x, y), fx, fy, &others)
+                })
+                .or(Some(VecDeque::new()))
+            } else {
+                self.plan_route_avoiding(i, (x, y), lx, ly, &others)
+            };
+            // Try again a while later either way.
+            let ship = self.objects[i].ship.as_mut().unwrap();
+            ship.blocked = 0.0;
+            if let Some(path) = route {
+                ship.path = path;
             }
         }
-        // Straight courses where the water allows, not the grid's steps.
-        Some(self.nav.smooth(start_point, &points, t, deep).into())
     }
 
     /// Cancels a ship's route.
@@ -968,9 +1072,36 @@ impl Scene {
         self.offer_argo();
         self.run_hazards(dt, data, caches);
         self.run_constructions(dt, data, caches);
+        self.run_ruins(dt);
         self.run_combat(dt, data, caches);
         self.run_contact(dt, data, caches);
         let mut moved = false;
+        // One ship to a cell: the cells ships lie in, and those they are
+        // already sailing into, are taken.
+        let t = TILE_SIZE as f32;
+        let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
+        let mut taken: HashMap<(i32, i32), u32> = HashMap::new();
+        for o in self.objects.iter().filter(|o| o.ship.is_some()) {
+            taken.entry(cell_of(o.x, o.y)).or_insert(o.id);
+        }
+        for o in &self.objects {
+            let Some(&(nx, ny)) = o.ship.as_ref().and_then(|s| s.path.front()) else {
+                continue;
+            };
+            let here = cell_of(o.x, o.y);
+            let centre = (here.0 as f32 * t + t / 2.0, here.1 as f32 * t + t / 2.0);
+            if (o.x - centre.0).hypot(o.y - centre.1) > 0.5 {
+                taken.entry(cell_of(nx, ny)).or_insert(o.id);
+            }
+        }
+        let lying: HashSet<u32> = self
+            .objects
+            .iter()
+            .filter(|o| o.ship.as_ref().is_some_and(|s| s.path.is_empty()))
+            .map(|o| o.id)
+            .collect();
+        // Ships held up: the cell ahead, and whether a ship lies in it.
+        let mut held = Vec::new();
         for obj in &mut self.objects {
             let Some(ship) = obj.ship.as_mut() else {
                 continue;
@@ -999,21 +1130,45 @@ impl Scene {
             } else {
                 1.0
             };
+            // A ship first turns to its next course, through the hull's
+            // rotations, then sails it.
+            if !turn_ship(ship, obj.x, obj.y, dt) {
+                continue;
+            }
             let mut budget = ship.speed * wind * rigging * feather * dt;
             while budget > 0.0 {
                 let Some(&(tx, ty)) = ship.path.front() else {
                     break;
                 };
+                let next = cell_of(tx, ty);
+                if next != cell_of(obj.x, obj.y) {
+                    match taken.get(&next) {
+                        Some(&other) if other != obj.id => {
+                            ship.blocked += dt;
+                            held.push((obj.id, next, lying.contains(&other)));
+                            break;
+                        }
+                        _ => {
+                            taken.insert(next, obj.id);
+                            ship.blocked = 0.0;
+                        }
+                    }
+                }
                 let (dx, dy) = (tx - obj.x, ty - obj.y);
                 let dist = (dx * dx + dy * dy).sqrt();
-                if dist > 0.5 {
-                    ship.heading = heading_towards(dx, dy);
-                }
                 if dist <= budget {
                     obj.x = tx;
                     obj.y = ty;
                     budget -= dist;
                     ship.path.pop_front();
+                    moved = true;
+                    // A new course: turn to it first.
+                    if let Some(&(nx, ny)) = ship.path.front() {
+                        let (ex, ey) = (nx - obj.x, ny - obj.y);
+                        if ex.hypot(ey) > 0.5 && heading_towards(ex, ey) != ship.heading {
+                            break;
+                        }
+                    }
                 } else {
                     obj.x += dx / dist * budget;
                     obj.y += dy / dist * budget;
@@ -1021,7 +1176,16 @@ impl Scene {
                 }
                 moved = true;
             }
+            // Marks the ship has reached go.
+            while let Some(&(mx, my)) = ship.marks.first() {
+                if ship.path.is_empty() || (obj.x - mx).hypot(obj.y - my) < 0.75 * t {
+                    ship.marks.remove(0);
+                } else {
+                    break;
+                }
+            }
         }
+        self.go_round(held);
         if moved {
             // Keep painter's order as ships move.
             self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
@@ -1061,6 +1225,54 @@ impl Scene {
 
     pub fn map_size(&self) -> (u32, u32) {
         (self.terrain.width, self.terrain.height)
+    }
+}
+
+/// Seconds a ship takes to turn its hull one of 24 rotations. An estimate.
+const TURN_STEP_SECONDS: f32 = 0.06;
+
+/// Turns a ship at `(x, y)` towards its next waypoint, a rotation at a
+/// time; true once it lies on that course.
+fn turn_ship(ship: &mut objects::Ship, x: f32, y: f32, dt: f32) -> bool {
+    let Some(&(tx, ty)) = ship.path.front() else {
+        ship.rotation = None;
+        return true;
+    };
+    let (dx, dy) = (tx - x, ty - y);
+    // Short shifts (closing in alongside, back to the cell's centre) it
+    // makes without turning.
+    if dx.hypot(dy) < 24.0 {
+        return true;
+    }
+    let want = heading_towards(dx, dy) as i32 * 3;
+    let mut at = ship.rotation.map_or(ship.heading as i32 * 3, i32::from);
+    if at == want {
+        ship.rotation = None;
+        ship.heading = (want / 3) as usize;
+        return true;
+    }
+    ship.turn_clock += dt;
+    while ship.turn_clock >= TURN_STEP_SECONDS && at != want {
+        ship.turn_clock -= TURN_STEP_SECONDS;
+        // The shorter way round.
+        at = (at
+            + if (want - at).rem_euclid(24) <= 12 {
+                1
+            } else {
+                -1
+            })
+        .rem_euclid(24);
+        if at % 3 == 0 {
+            ship.heading = (at / 3) as usize;
+        }
+    }
+    if at == want {
+        ship.rotation = None;
+        ship.turn_clock = 0.0;
+        true
+    } else {
+        ship.rotation = Some(at as u8);
+        false
     }
 }
 

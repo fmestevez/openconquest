@@ -215,8 +215,17 @@ of 44 bytes:
 Each sprite has the full frame size and is drawn centred on the object.
 
 Ships (`SHIP_xxxxx`, 9 layers x 152 frames): frames 0-31 are 8 headings x 4
-wake animation frames; the remaining frames are turning animations using
-24 hull rotations (`CORP_1A0000`-`0023`).
+frames under way (oars and wake `BLB`); 32-55 the 24 hull rotations
+(`CORP_1A0000`-`0023`, 3 a heading) a ship turns through; 56-87 8 headings
+x 4 frames lying still (at rest, rocking one way, at rest, rocking the
+other); 88-151 8 headings x 8 frames furling the sail. Ships keep to the
+grid: they turn on the spot to the next cell, then sail to its centre,
+straight or diagonal, one ship to a cell. Where the player sent a ship is
+marked with `WPMOVE` (controlm: `_WPMOVE`, and `_WPNUM` digits numbering
+waypoints) until it gets there. A damaged building's 12 frames
+(`<prefix>11x`/`12x` level 1 and 2) show it ever more broken, not an
+animation; its ruins (`<prefix>21`) collapse once. The fishing net
+`SETKA_<heading % 4>` lies along the hull.
 
 ### Font, kind 3 (verified)
 

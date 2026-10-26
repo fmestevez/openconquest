@@ -89,64 +89,26 @@ impl NavGrid {
         None
     }
 
-    /// Whether a ship can sail straight from world point `a` to `b` (cells
-    /// of `cell` pixels): every point along the way, and beside it by a
-    /// third of a cell on either side, is passable, so the ship keeps clear
-    /// of the coast.
-    pub fn clear_line(&self, a: (f32, f32), b: (f32, f32), cell: f32, deep: bool) -> bool {
-        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let len = (dx * dx + dy * dy).sqrt();
-        if len < 1.0 {
-            return true;
-        }
-        let (nx, ny) = (-dy / len * cell / 3.0, dx / len * cell / 3.0);
-        let steps = (len / (cell / 4.0)).ceil() as i32;
-        (0..=steps).all(|k| {
-            let f = k as f32 / steps as f32;
-            let (x, y) = (a.0 + dx * f, a.1 + dy * f);
-            [(0.0, 0.0), (nx, ny), (-nx, -ny)].iter().all(|&(ox, oy)| {
-                let (px, py) = (x + ox, y + oy);
-                self.passable((px / cell).floor() as i32, (py / cell).floor() as i32, deep)
-            })
-        })
-    }
-
-    /// Straightens a route of world points from `start`: from each point
-    /// it goes straight to the furthest later one in clear sight, so ships
-    /// sail direct courses instead of the grid's 45-degree steps.
-    pub fn smooth(
-        &self,
-        start: (f32, f32),
-        points: &[(f32, f32)],
-        cell: f32,
-        deep: bool,
-    ) -> Vec<(f32, f32)> {
-        let mut out = Vec::new();
-        let mut from = start;
-        let mut i = 0;
-        while i < points.len() {
-            let mut far = i;
-            for j in (i + 1..points.len()).rev() {
-                if self.clear_line(from, points[j], cell, deep) {
-                    far = j;
-                    break;
-                }
-            }
-            out.push(points[far]);
-            from = points[far];
-            i = far + 1;
-        }
-        out
-    }
-
     /// A* over 8-connected water cells. Diagonal moves may not cut past land
     /// corners. Returns the cells after `from` up to and including `to`:
     /// the shortest route from `from` to `to`, avoiding shoals if `deep`.
+    #[cfg(test)]
     pub fn find_path(
         &self,
         from: (i32, i32),
         to: (i32, i32),
         deep: bool,
+    ) -> Option<Vec<(i32, i32)>> {
+        self.find_path_avoiding(from, to, deep, |_| false)
+    }
+
+    /// The same, keeping out of the cells `avoid` names (other ships).
+    pub fn find_path_avoiding(
+        &self,
+        from: (i32, i32),
+        to: (i32, i32),
+        deep: bool,
+        avoid: impl Fn((i32, i32)) -> bool,
     ) -> Option<Vec<(i32, i32)>> {
         if !self.passable(to.0, to.1, deep) {
             return None;
@@ -190,7 +152,7 @@ impl NavGrid {
                 (-1, -1),
             ] {
                 let next = (cell.0 + dx, cell.1 + dy);
-                if !self.passable(next.0, next.1, deep) {
+                if !self.passable(next.0, next.1, deep) || avoid(next) {
                     continue;
                 }
                 let diagonal = dx != 0 && dy != 0;
@@ -237,45 +199,6 @@ mod tests {
         assert!(nav.find_path((0, 0), (2, 0), false).is_none());
         assert!(nav.find_path((0, 0), (1, 2), false).is_none());
         assert_eq!(nav.nearest_water(2, 0), Some((1, 0)));
-    }
-
-    #[test]
-    fn open_water_routes_are_straight() {
-        let nav = NavGrid::from_rows(&[
-            "..........", //
-            "..........", //
-            "..........", //
-            "..........", //
-        ]);
-        let cells = nav.find_path((0, 0), (9, 3), false).unwrap();
-        let points: Vec<(f32, f32)> = cells
-            .iter()
-            .map(|&(x, y)| (x as f32 * 64.0 + 32.0, y as f32 * 64.0 + 32.0))
-            .collect();
-        let route = nav.smooth((32.0, 32.0), &points, 64.0, false);
-        assert_eq!(route, vec![(9.0 * 64.0 + 32.0, 3.0 * 64.0 + 32.0)]);
-    }
-
-    #[test]
-    fn smoothed_routes_keep_off_land() {
-        let nav = NavGrid::from_rows(&[
-            ".....", //
-            ".###.", //
-            ".#...", //
-            ".#.#.", //
-        ]);
-        let cells = nav.find_path((0, 3), (2, 3), false).unwrap();
-        let points: Vec<(f32, f32)> = cells
-            .iter()
-            .map(|&(x, y)| (x as f32 * 64.0 + 32.0, y as f32 * 64.0 + 32.0))
-            .collect();
-        let route = nav.smooth((32.0, 3.0 * 64.0 + 32.0), &points, 64.0, false);
-        let mut from = (32.0, 3.0 * 64.0 + 32.0);
-        for &p in &route {
-            assert!(nav.clear_line(from, p, 64.0, false));
-            from = p;
-        }
-        assert!(route.len() < points.len());
     }
 
     #[test]

@@ -371,6 +371,8 @@ impl Scene {
                     obj.frames = frames;
                     obj.combat = None;
                     obj.owner = None;
+                    // The collapse plays once.
+                    obj.progress = Some(0.0);
                     obj.picture = None;
                     obj.label = format!("Ruins ({})", obj.label);
                 }

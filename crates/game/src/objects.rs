@@ -240,6 +240,19 @@ pub struct Ship {
     pub speed: f32,
     /// Remaining waypoints (cell centres), nearest first.
     pub path: std::collections::VecDeque<(f32, f32)>,
+    /// The hull's rotation (of 24, 3 a heading) while it turns; `None`
+    /// when it lies on `heading`.
+    #[serde(default)]
+    pub rotation: Option<u8>,
+    #[serde(default)]
+    pub turn_clock: f32,
+    /// Where the player sent it (a move and its waypoints), marked on the
+    /// map until it gets there.
+    #[serde(default)]
+    pub marks: Vec<(f32, f32)>,
+    /// Seconds it has waited for another ship to clear the cell ahead.
+    #[serde(default)]
+    pub blocked: f32,
     /// Goods on board.
     pub cargo: f32,
     pub cargo_kind: Option<Resource>,
@@ -427,6 +440,11 @@ pub fn cargo_capacity(kind: u8) -> f32 {
 
 pub const SHIP_HEADINGS: usize = 8;
 const SHIP_FRAMES_PER_HEADING: usize = 4;
+/// First of a ship's 24 turning frames and of its 32 lying-still frames.
+const SHIP_TURN_FRAMES: usize = 32;
+const SHIP_IDLE_FRAMES: usize = 56;
+/// Milliseconds a frame of a ship rocking at rest. An estimate.
+const SHIP_ROCK_MS: u64 = 300;
 
 impl MapObject {
     pub fn is_armed(&self) -> bool {
@@ -465,14 +483,25 @@ impl MapObject {
             return &self.frames[((p * n as f32) as usize).min(n - 1)];
         }
         let step = (time_ms / self.frame_ms.max(1)) as usize;
+        let n = self.frames.len();
         let i = match &self.ship {
-            // Lying still or sailing, the sail stays set (the original's
-            // first frame of miss000 shows its idle ships so).
+            // A ship's composite: 8 headings x 4 frames under way (oars and
+            // wake), the 24 hull rotations it turns through, then 8
+            // headings x 4 frames lying still: at rest, rocking one way, at
+            // rest, rocking the other.
+            Some(ship) if n >= SHIP_IDLE_FRAMES + 32 => match ship.rotation {
+                Some(r) => SHIP_TURN_FRAMES + r as usize % 24,
+                None if ship.path.is_empty() => {
+                    let rock = (time_ms / SHIP_ROCK_MS) as usize;
+                    SHIP_IDLE_FRAMES + ship.heading * 4 + rock % 4
+                }
+                None => ship.heading * SHIP_FRAMES_PER_HEADING + step % SHIP_FRAMES_PER_HEADING,
+            },
             Some(ship) => {
-                let per = SHIP_FRAMES_PER_HEADING.min(self.frames.len().max(1));
-                (ship.heading * per + step % per) % self.frames.len().max(1)
+                let per = SHIP_FRAMES_PER_HEADING.min(n.max(1));
+                (ship.heading * per + step % per) % n.max(1)
             }
-            None => step % self.frames.len().max(1),
+            None => step % n.max(1),
         };
         &self.frames[i]
     }
@@ -919,6 +948,10 @@ pub fn resolve(
         heading: (f(11) as usize) % SHIP_HEADINGS,
         speed: SHIP_SPEED.get(f(7) as usize).copied().unwrap_or(100) as f32 * SPEED_SCALE,
         path: Default::default(),
+        rotation: None,
+        turn_clock: 0.0,
+        marks: Vec::new(),
+        blocked: 0.0,
         cargo: 0.0,
         cargo_kind: None,
         task: None,

@@ -3338,3 +3338,58 @@ fn stock_loads_onto_a_ship_alongside() {
     assert_eq!(scene.garrison(home)[1], 0);
     assert!(scene.load_item(home, ship, 1).is_err(), "none left");
 }
+
+/// Ships turn on the spot before they set off, and sail cell to cell along
+/// the eight directions only (needs `OPENAC_DATA`).
+#[test]
+fn ships_turn_then_sail_the_grid() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    scene.objects.retain(|o| o.ship.is_none() || o.id == ship);
+    let i = scene.object_index(ship).unwrap();
+    let (x0, y0) = (scene.objects[i].x, scene.objects[i].y);
+    let heading = scene.objects[i].ship.as_ref().unwrap().heading;
+    // Somewhere behind it and off to one side, so it must turn.
+    let t = TILE_SIZE as f32;
+    let back = [
+        (1.0, 0.0),
+        (1.0, -1.0),
+        (0.0, -1.0),
+        (-1.0, -1.0),
+        (-1.0, 0.0),
+        (-1.0, 1.0),
+        (0.0, 1.0),
+        (1.0, 1.0),
+    ][(heading + 3) % 8];
+    let (tx, ty) = (x0 + back.0 * 3.0 * t, y0 + back.1 * 3.0 * t);
+    assert!(scene.order_move(ship, tx, ty), "no route");
+    let mut turned = false;
+    let mut last = (x0, y0);
+    for _ in 0..400 {
+        scene.update(0.02, &data, &mut caches);
+        let i = scene.object_index(ship).unwrap();
+        let o = &scene.objects[i];
+        let s = o.ship.as_ref().unwrap();
+        if s.rotation.is_some() {
+            turned = true;
+            assert_eq!((o.x, o.y), last, "moved while turning");
+        }
+        let (dx, dy) = (o.x - last.0, o.y - last.1);
+        if dx.abs() > 0.01 && dy.abs() > 0.01 {
+            assert!((dx.abs() - dy.abs()).abs() < 0.05, "odd angle ({dx}, {dy})");
+        }
+        last = (o.x, o.y);
+    }
+    assert!(turned, "never turned");
+    assert!(last != (x0, y0), "never moved");
+}

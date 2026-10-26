@@ -155,7 +155,9 @@ impl Scene {
             }
             Activity::Fishing => {
                 let ship_heading = self.objects[i].ship.as_ref().map_or(0, |s| s.heading);
-                (Vec::new(), seq(&format!("SETKA_{}", ship_heading / 2 % 4)))
+                // Its long side along the hull: 0 east-west, 1 north-east,
+                // 2 north-south, 3 north-west.
+                (Vec::new(), seq(&format!("SETKA_{}", ship_heading % 4)))
             }
         };
         // A walkway reaches from the ship towards the target: its far end
