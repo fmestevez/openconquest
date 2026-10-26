@@ -75,6 +75,8 @@ pub struct GameData {
     pub controls: Archive,
     /// Sound effects (`sound/sounds.dkx`), if installed.
     pub sounds: Option<Archive>,
+    /// Menu screens (`controlm.dkx`), if installed.
+    pub menus: Option<Archive>,
     pub palette: Palette,
     pub cycles: Vec<PaletteCycle>,
     pub tilesets: TileSetLibrary,
@@ -97,6 +99,10 @@ impl GameData {
         let controls_path = find_ci(&root.join("data"), "controlg.dkx")?
             .context("data/controlg.dkx missing from the game data")?;
         let controls = Archive::open(controls_path)?;
+        let menus = match find_ci(root, "controlm.dkx") {
+            Ok(Some(p)) => Some(Archive::open(p)?),
+            _ => None,
+        };
         let sounds = match find_ci(&root.join("sound"), "sounds.dkx") {
             Ok(Some(p)) => Some(Archive::open(p)?),
             _ => None,
@@ -118,11 +124,27 @@ impl GameData {
             objects,
             controls,
             sounds,
+            menus,
             palette,
             cycles,
             tilesets,
             animated,
         })
+    }
+
+    /// The installation's `sound` directory.
+    /// The game data directory.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn sound_dir(&self) -> PathBuf {
+        self.root.join("sound")
+    }
+
+    /// Where saved games go.
+    pub fn save_dir(&self) -> PathBuf {
+        self.root.join("saves")
     }
 
     /// Missions and scenarios with a terrain map, sorted by name.

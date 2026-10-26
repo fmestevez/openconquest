@@ -4,7 +4,7 @@ use openac_formats::ObjectClass;
 
 use crate::assets::{rgb, GameData, Image, SHADOW};
 use crate::objects::{Layer, MapObject};
-use crate::scene::Scene;
+use crate::scene::{Scene, Seen};
 use crate::terrain::{resolve, MINIMAP_DIVISOR};
 use crate::view::{Camera, Screen};
 use openac_formats::map::TILE_SIZE;
@@ -12,8 +12,9 @@ use openac_formats::map::TILE_SIZE;
 /// Color shown outside the map.
 const BACKGROUND: u32 = 0x00_0b_1a_26;
 const MINIMAP_VIEW: u32 = 0x00_ff_ff_ff;
-const MINIMAP_SHIP: u32 = 0x00_f0_f0_f0;
-const MINIMAP_BUILDING: u32 = 0x00_e8_c0_40;
+const MINIMAP_OWN: u32 = 0x00_60_f0_60;
+const MINIMAP_ENEMY: u32 = 0x00_f0_50_40;
+const MINIMAP_CREATURE: u32 = 0x00_c0_70_f0;
 const SELECTION: u32 = 0x00_f0_e8_a0;
 const SELECTION_ROUTE: u32 = 0x00_d0_f0_ff;
 const HULL_OK: u32 = 0x00_40_d0_40;
@@ -99,13 +100,22 @@ pub fn draw_objects(
     lut: &[u32; 256],
     time_ms: u64,
 ) {
-    for obj in &scene.objects {
+    // Harpies and dragons fly over everything else.
+    let flying = |o: &&crate::objects::MapObject| {
+        matches!(o.class, openac_formats::ObjectClass::Monster(0x1f8 | 0x1f9))
+    };
+    let visible = scene.objects.iter().filter(|o| scene.is_visible(o));
+    let (above, below): (Vec<_>, Vec<_>) = visible.partition(flying);
+    for obj in below.into_iter().chain(above) {
         for layer in obj.frame_at(time_ms) {
             let (left, top) = layer_origin(obj, layer);
             draw_image(frame, screen, camera, lut, &layer.image, left, top);
         }
     }
-    for fx in &scene.effects {
+    let t = TILE_SIZE as f32;
+    for fx in scene.effects.iter().filter(|fx| {
+        scene.seen((fx.x / t).floor() as i32, (fx.y / t).floor() as i32) == Seen::InSight
+    }) {
         if let Some(layers) = fx.frame() {
             for layer in layers {
                 let (left, top) = (
@@ -186,15 +196,29 @@ pub fn layer_origin(obj: &MapObject, layer: &Layer) -> (i32, i32) {
 /// The topmost object with a solid pixel at world position `(wx, wy)`.
 pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
     let (px, py) = (wx.floor() as i32, wy.floor() as i32);
-    scene.objects.iter().rev().find_map(|obj| {
-        obj.frame_at(time_ms)
-            .iter()
-            .any(|layer| {
-                let (left, top) = layer_origin(obj, layer);
-                layer.image.is_solid(px - left, py - top)
-            })
-            .then_some(obj.id)
-    })
+    // Treasures are small sparkles: near enough counts.
+    let treasure = scene.objects.iter().find(|o| {
+        o.treasure.is_some()
+            && scene.is_visible(o)
+            && (o.x - wx).powi(2) + (o.y - wy).powi(2) <= 24.0 * 24.0
+    });
+    if let Some(t) = treasure {
+        return Some(t.id);
+    }
+    scene
+        .objects
+        .iter()
+        .rev()
+        .filter(|o| scene.is_visible(o))
+        .find_map(|obj| {
+            obj.frame_at(time_ms)
+                .iter()
+                .any(|layer| {
+                    let (left, top) = layer_origin(obj, layer);
+                    layer.image.is_solid(px - left, py - top)
+                })
+                .then_some(obj.id)
+        })
 }
 
 /// World-space bounding box `(x0, y0, x1, y1)` of an object's current frame.
@@ -293,6 +317,27 @@ pub fn draw_selection(
 }
 
 /// Outlines map cell `cell` as a building site: green if allowed, red if not.
+/// Draws the rubber band of a selection being dragged, in window pixels.
+pub fn draw_box(frame: &mut Frame, screen: &Screen, (x0, y0, x1, y1): (f32, f32, f32, f32)) {
+    let (x0, x1) = (x0.min(x1) as i64, x0.max(x1) as i64);
+    let (y0, y1) = (y0.min(y1) as i64, y0.max(y1) as i64);
+    let (cx0, cy0) = (screen.x as i64, screen.y as i64);
+    let (cx1, cy1) = (cx0 + screen.w as i64, cy0 + screen.h as i64);
+    let mut put = |x: i64, y: i64| {
+        if x >= cx0 && x < cx1 && y >= cy0 && y < cy1 {
+            frame.put(x, y, SELECTION);
+        }
+    };
+    for x in x0..=x1 {
+        put(x, y0);
+        put(x, y1);
+    }
+    for y in y0..=y1 {
+        put(x0, y);
+        put(x1, y);
+    }
+}
+
 pub fn draw_site(frame: &mut Frame, screen: &Screen, camera: &Camera, cell: (i32, i32), ok: bool) {
     let scale = camera.scale(screen);
     let t = TILE_SIZE as f32;
@@ -322,6 +367,75 @@ pub fn draw_site(frame: &mut Frame, screen: &Screen, camera: &Camera, cell: (i32
                     frame.put(x, y, colour);
                 }
             }
+        }
+    }
+}
+
+/// How bright explored cells out of sight are drawn.
+const FOG_BRIGHTNESS: f32 = 0.55;
+
+fn scale_rgb(c: u32, k: f32) -> u32 {
+    let ch = |shift: u32| ((((c >> shift) & 0xff) as f32 * k) as u32).min(255) << shift;
+    ch(16) | ch(8) | ch(0)
+}
+
+/// Fog of war over the view: unexplored cells black, explored ones out of
+/// sight dimmed, blended between cell centres so the edges are soft.
+pub fn draw_fog(frame: &mut Frame, screen: &Screen, scene: &Scene, camera: &Camera) {
+    if !scene.fog {
+        return;
+    }
+    let scale = camera.scale(screen);
+    let t = TILE_SIZE as f32;
+    let w = screen.w.min(frame.width.saturating_sub(screen.x));
+    let h = screen.h.min(frame.height.saturating_sub(screen.y));
+    let level = |cx: i32, cy: i32| scene.seen(cx, cy) as u8 as f32;
+    // Brightness for blended levels 0..2 in 1/64 steps, in 8.8 fixed point.
+    let lut: Vec<u32> = (0..=128)
+        .map(|i| {
+            let v = i as f32 / 64.0;
+            let b = if v < 1.0 {
+                FOG_BRIGHTNESS * v
+            } else {
+                FOG_BRIGHTNESS + (1.0 - FOG_BRIGHTNESS) * (v - 1.0)
+            };
+            (b * 256.0) as u32
+        })
+        .collect();
+    // Per column: the cell to the left of the sample and the blend weight.
+    let cols: Vec<(i32, f32)> = (0..w)
+        .map(|sx| {
+            let fx = sample(camera.x, sx, scale) / t - 0.5;
+            (fx.floor() as i32, fx - fx.floor())
+        })
+        .collect();
+    for sy in 0..h {
+        let fy = sample(camera.y, sy, scale) / t - 0.5;
+        let (cy, ty) = (fy.floor() as i32, fy - fy.floor());
+        let row =
+            &mut frame.pixels[((screen.y + sy) * frame.width + screen.x) as usize..][..w as usize];
+        // The current cell: its left and right levels blended down the row.
+        let mut cell = (i32::MIN, 0.0f32, 0.0f32);
+        for (px, &(cx, tx)) in row.iter_mut().zip(&cols) {
+            if cell.0 != cx {
+                let (a, b) = (level(cx, cy), level(cx + 1, cy));
+                let (c, d) = (level(cx, cy + 1), level(cx + 1, cy + 1));
+                cell = (cx, a + (c - a) * ty, b + (d - b) * ty);
+            }
+            let (_, left, right) = cell;
+            if left == 2.0 && right == 2.0 {
+                continue;
+            }
+            if left == 0.0 && right == 0.0 {
+                *px = 0;
+                continue;
+            }
+            let v = left + (right - left) * tx;
+            let k = lut[(v * 64.0) as usize];
+            // Scale red and blue together, then green.
+            let p = *px;
+            *px =
+                ((((p & 0xff00ff) * k) >> 8) & 0xff00ff) | ((((p & 0x00ff00) * k) >> 8) & 0x00ff00);
         }
     }
 }
@@ -440,20 +554,38 @@ pub fn draw_minimap(
         let sy = ((y as f32 / zoom) as u32).min(mh - 1);
         for x in 0..w {
             let sx = ((x as f32 / zoom) as u32).min(mw - 1);
-            frame.put(
-                (x0 + x) as i64,
-                (y0 + y) as i64,
-                scene.minimap[(sy * mw + sx) as usize],
-            );
+            let mut c = scene.minimap[(sy * mw + sx) as usize];
+            if scene.fog {
+                // Minimap pixels are MINIMAP_DIVISOR world pixels.
+                let cell = |v: u32| (v * MINIMAP_DIVISOR / TILE_SIZE) as i32;
+                c = match scene.seen(cell(sx), cell(sy)) {
+                    Seen::Unexplored => 0,
+                    Seen::Explored => scale_rgb(c, FOG_BRIGHTNESS),
+                    Seen::InSight => c,
+                };
+            }
+            frame.put((x0 + x) as i64, (y0 + y) as i64, c);
         }
     }
     let k = zoom / MINIMAP_DIVISOR as f32;
     // Object markers.
     let dot = (zoom as i64).clamp(2, 4);
-    for obj in &scene.objects {
+    for obj in scene.objects.iter().filter(|o| scene.is_visible(o)) {
+        // Yours in green, other players in red, creatures in purple;
+        // buildings are drawn a shade darker than ships.
+        let side = if scene.is_own(obj) {
+            MINIMAP_OWN
+        } else if obj.owner == Some(crate::combat::MONSTERS) {
+            MINIMAP_CREATURE
+        } else if obj.owner.is_some() {
+            MINIMAP_ENEMY
+        } else {
+            continue;
+        };
         let color = match obj.class {
-            ObjectClass::Ship => MINIMAP_SHIP,
-            ObjectClass::Building(_) | ObjectClass::Barbarian(_) => MINIMAP_BUILDING,
+            ObjectClass::Ship => side,
+            ObjectClass::Building(_) | ObjectClass::Barbarian(_) => darken(side),
+            _ if obj.combat.is_some() => side,
             _ => continue,
         };
         let mx = x0 as i64 + (obj.x * k) as i64 - dot / 2;

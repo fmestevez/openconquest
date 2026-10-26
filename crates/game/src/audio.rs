@@ -13,7 +13,7 @@ use rodio::{OutputStream, OutputStreamHandle, Source};
 pub struct Audio {
     // Keeps the output device open.
     _stream: OutputStream,
-    handle: OutputStreamHandle,
+    pub handle: OutputStreamHandle,
     cache: HashMap<String, Option<Arc<Sound>>>,
     pub muted: bool,
     pub volume: f32,

@@ -111,9 +111,114 @@ pub struct MapObject {
     /// Picture for the object panel (`INF_SHIPnn` / `INF_OBJnn` in CONTROLG)
     /// and its offset in the panel.
     pub picture: Option<(String, (u32, u32))>,
+    /// A treasure lying on the map.
+    pub treasure: Option<Treasure>,
+}
+
+/// A treasure (`TreasClassTy` record: kind in field 4, parameters in
+/// fields 7 and 8; see `treasure_name`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Treasure {
+    pub kind: u8,
+    /// Field 7: a spell index, resource class or packed item and count.
+    pub param: u32,
+    /// Field 8: an amount.
+    pub amount: u32,
+}
+
+/// The nine heroes, by house number (`HeroHouseClassTy` field 22) and
+/// portrait (`COBJ_HEROYnn`).
+pub const HERO_NAMES: [&str; 9] = [
+    "Jason", "Theseus", "Orpheus", "Zetes", "Hercules", "Argus", "Atalanta", "Odysseus", "Perseus",
+];
+
+/// What a treasure is, from the original's descriptions (string resources)
+/// in the order the treasure routine 0x4b9740 groups the kinds: 0-2 amber
+/// and 3-5 fish (0x4a8de0, 0x4a8c30), 6-7 goods to deliver, 8 a spell
+/// cast where it is taken (0x4b9bf0), 9 a spell kept for later, 10-17
+/// lasting gifts, 18-26 the heroes' magic items, 27 a scroll.
+pub fn treasure_name(kind: u8) -> String {
+    match kind {
+        0..=2 => "Barrel of amber".into(),
+        3..=5 => "Barrel of fish".into(),
+        6 => "Goods for your settlement".into(),
+        7 => "Weapons for your settlement".into(),
+        8 => "Gift of Poseidon".into(),
+        9 => "Disposable magic".into(),
+        10 => "Torch of Ares (protection from fire)".into(),
+        11 => "Armour of Ares".into(),
+        12 => "Feather of Boreas (speed and ram)".into(),
+        13 => "Magic wood (no boarding)".into(),
+        14 => "Mirror shield of Athena (protection from Gorgon)".into(),
+        15 => "Cup of Asclepius (heals crews)".into(),
+        16 => "Golden Fleece".into(),
+        17 => "Gorgon's head".into(),
+        18..=26 => {
+            const ITEMS: [&str; 9] = [
+                "Magic oar",
+                "Ariadne's clew",
+                "Magic harp",
+                "Magic horn",
+                "Magic sword",
+                "Hammer",
+                "Magic bow",
+                "Golden statuette",
+                "Mirror shield",
+            ];
+            let h = (kind - 18) as usize;
+            format!("{} for {}", ITEMS[h], HERO_NAMES[h])
+        }
+        _ => "Scroll of knowledge".into(),
+    }
+}
+
+/// The treasures an object's record says it holds (its inventory: a count,
+/// then entries of five dwords like a treasure record's fields 4-8: kind,
+/// holder -1, 0, parameter, amount). Lairs, nests, barbarian structures,
+/// fortresses, towns and sea monsters keep theirs at different fields.
+pub fn inventory(rec: &ObjectRecord) -> Vec<Treasure> {
+    let count_at = match rec.class_id {
+        0x46..=0x48 => 10,
+        0x34..=0x36 | 0x3f..=0x41 => 11,
+        0x44 | 0x45 => 12,
+        0x1fb => 17,
+        0x32 | 0x33 => 60,
+        _ => return Vec::new(),
+    };
+    let f = |i: usize| rec.field(i);
+    let Some(n) = f(count_at).filter(|&n| n <= 8) else {
+        return Vec::new();
+    };
+    (0..n as usize)
+        .map_while(|k| {
+            let at = count_at + 1 + 5 * k;
+            let kind = f(at).filter(|&kind| kind <= 27)?;
+            (f(at + 1)? == u32::MAX).then_some(Treasure {
+                kind: kind as u8,
+                param: f(at + 3)?,
+                amount: f(at + 4)?,
+            })
+        })
+        .collect()
+}
+
+/// The hero a treasure kind calls, if it is a hero's item.
+pub fn treasure_hero(kind: u8) -> Option<u8> {
+    (18..=26).contains(&kind).then(|| kind - 18)
+}
+
+/// Treasures and heroes a ship type can carry (the manual's chart:
+/// "displacement for treasures" and "for heroes").
+pub fn treasure_room(kind: u8) -> usize {
+    [1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0][kind as usize % 12]
+}
+
+pub fn hero_room(kind: u8) -> usize {
+    [0, 0, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0][kind as usize % 12]
 }
 
 /// Movement state of a ship.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ship {
     /// Ship type 0-11 (see `SHIP_NAMES`).
     pub kind: u8,
@@ -130,17 +235,110 @@ pub struct Ship {
     pub task: Option<Task>,
     /// Marines on board.
     pub crew: crate::combat::Crew,
+    /// Armour and ram fitted at a smithy, levels 0-2.
+    #[serde(default)]
+    pub armour: u8,
+    #[serde(default)]
+    pub ram: u8,
+    /// What the ship does on its own (warships).
+    #[serde(default)]
+    pub behaviour: Behaviour,
+    /// A zone a merchant gathers in on its own: world rectangle (x0, y0,
+    /// x1, y1) and what it gathers.
+    #[serde(default)]
+    pub zone: Option<((f32, f32, f32, f32), Resource)>,
+    /// Treasures aboard.
+    #[serde(default)]
+    pub treasures: Vec<Treasure>,
+    /// Heroes aboard (see `HERO_NAMES`).
+    #[serde(default)]
+    pub heroes: Vec<u8>,
+    /// This is the Argo (a royal ship built with "Build Argo", 0x7d).
+    #[serde(default)]
+    pub argo: bool,
 }
 
+/// A warship's behaviour switches (ship byte +0x684 bits 0-2 and +0x633;
+/// the manual's "Ship AI options").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Behaviour {
+    /// Fire at enemies in range.
+    pub guard: bool,
+    /// Ram enemy ships when attacking them.
+    pub ram: bool,
+    /// Board enemy ships when attacking them.
+    pub board: bool,
+    /// Go after whoever fires at the ship (needs `guard`).
+    pub aggressor: bool,
+}
+
+impl Default for Behaviour {
+    fn default() -> Self {
+        Self {
+            guard: true,
+            ram: false,
+            board: false,
+            aggressor: false,
+        }
+    }
+}
+
+impl Ship {
+    /// Whether a treasure of `kind` is aboard.
+    pub fn has_treasure(&self, kind: u8) -> bool {
+        self.treasures.iter().any(|t| t.kind == kind)
+    }
+
+    /// Whether hero `hero` (see `HERO_NAMES`) is aboard.
+    pub fn has_hero(&self, hero: u8) -> bool {
+        self.heroes.contains(&hero)
+    }
+}
+
+/// Heroes by number.
+pub const JASON: u8 = 0;
+pub const THESEUS: u8 = 1;
+pub const ORPHEUS: u8 = 2;
+pub const ZETES: u8 = 3;
+pub const HERCULES: u8 = 4;
+pub const ARGUS: u8 = 5;
+pub const ATALANTA: u8 = 6;
+
+/// Treasure kinds with lasting effects aboard.
+pub const FIRE_TORCH: u8 = 10;
+pub const ARMOUR_OF_ARES: u8 = 11;
+pub const FEATHER: u8 = 12;
+pub const MAGIC_WOOD: u8 = 13;
+
+/// How much the gifts and heroes help. Placeholders: the original's
+/// figures have not been found.
+pub const FEATHER_SPEED: f32 = 1.25;
+pub const THESEUS_DAMAGE: f32 = 1.25;
+pub const THESEUS_RANGE: f32 = 64.0;
+pub const ATALANTA_RATE: f32 = 1.25;
+pub const ATALANTA_HIT: u32 = 15;
+pub const ARGUS_MONSTER_DAMAGE: f32 = 0.5;
+/// The Armour of Ares takes this share of hull damage when its record
+/// gives none (miss001's gives 40).
+pub const ARMOUR_OF_ARES_PERCENT: u32 = 40;
+
 /// Goods that can be gathered and carried.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Resource {
     Amber,
     Fish,
+    /// A leviathan, caught whole.
+    Leviathan,
 }
 
+/// What a leviathan brought home is worth: 5000 amber and 2500 fish (the
+/// manual).
+pub const LEVIATHAN_WORTH: (i64, i64) = (5000, 2500);
+/// Seconds to catch a leviathan. Placeholder.
+pub const HUNT_SECONDS: f32 = 30.0;
+
 /// A deposit of a resource on the map.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Deposit {
     pub resource: Resource,
     /// Units left, or `None` for an inexhaustible deposit.
@@ -148,7 +346,7 @@ pub struct Deposit {
 }
 
 /// A ship's standing order.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Task {
     /// Shuttle between a deposit and the nearest port.
     Gather { deposit: u32, phase: GatherPhase },
@@ -161,9 +359,26 @@ pub enum Task {
     /// Come alongside an enemy ship and fight for it; `round` counts down
     /// to the next exchange of blows.
     Board { target: u32, round: f32 },
+    /// Sail to an own dock and be repaired there.
+    Repair { dock: u32 },
+    /// Sail out to scout, then back to `home`.
+    Scout { home: (f32, f32) },
+    /// Sail to `to`, then back to `from`, and so on.
+    Patrol { from: (f32, f32), to: (f32, f32) },
+    /// Hold the world rectangle `rect` (x0, y0, x1, y1): fight enemy ships
+    /// that come into it (a guard zone), or with `attack`, every enemy
+    /// ship and building in it until none is left (an attack zone).
+    Zone {
+        rect: (f32, f32, f32, f32),
+        attack: bool,
+    },
+    /// Keep close to own ship `ward` and guard it.
+    Convoy { ward: u32 },
+    /// Sail to a treasure or a hero's house and take it.
+    Take { target: u32 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GatherPhase {
     ToDeposit,
     Collecting,
@@ -182,15 +397,46 @@ pub fn cargo_capacity(kind: u8) -> f32 {
 
 pub const SHIP_HEADINGS: usize = 8;
 const SHIP_FRAMES_PER_HEADING: usize = 4;
+/// First frame of the sail-furling animations (8 per heading).
+const SHIP_FURLED: usize = 88;
 
 impl MapObject {
     pub fn is_armed(&self) -> bool {
-        self.combat.as_ref().is_some_and(|c| c.is_armed())
+        !self.shooters().is_empty()
+    }
+
+    /// What fires from the object: its weapons, then (on ships) a shot for
+    /// each squad of bowmen and javelin men.
+    pub fn shooters(&self) -> Vec<u8> {
+        let Some(c) = self.combat.as_ref() else {
+            return Vec::new();
+        };
+        let mut items: Vec<u8> = c
+            .weapons
+            .iter()
+            .copied()
+            .filter(|&w| crate::combat::fires(w))
+            .collect();
+        if let Some(s) = &self.ship {
+            for kind in 0..2u8 {
+                items.extend(std::iter::repeat_n(
+                    kind,
+                    s.crew.squads[kind as usize] as usize,
+                ));
+            }
+        }
+        items
     }
 
     pub fn frame_at(&self, time_ms: u64) -> &[Layer] {
         let step = (time_ms / self.frame_ms.max(1)) as usize;
         let i = match &self.ship {
+            // A ship lying still has its sail furled.
+            Some(ship)
+                if ship.path.is_empty() && self.frames.len() >= SHIP_FURLED + 8 * SHIP_HEADINGS =>
+            {
+                SHIP_FURLED + ship.heading * 8 + 7
+            }
             Some(ship) => {
                 let per = SHIP_FRAMES_PER_HEADING.min(self.frames.len().max(1));
                 (ship.heading * per + step % per) % self.frames.len().max(1)
@@ -199,6 +445,51 @@ impl MapObject {
         };
         &self.frames[i]
     }
+}
+
+/// A harpy's (0x1f8) or dragon's sprite sequence for a state (0 resting,
+/// 1 waiting, 2 taking off, 3 flying, 4 turning, 5 striking, 6 landing, 7
+/// dying) and heading; resting, taking off and landing have only the odd
+/// headings. Dragons never rest: they circle (flying).
+pub fn flyer_sequence(class: u32, state: u8, heading: usize) -> String {
+    let (prefix, state) = if class == 0x1f9 {
+        ("DRGSPR", if state < 2 { 3 } else { state })
+    } else {
+        ("HRPSPR", state)
+    };
+    let heading = if matches!(state, 0 | 2 | 6) {
+        heading | 1
+    } else {
+        heading
+    };
+    format!("{prefix}_{state}{}", heading.min(7))
+}
+
+/// A flyer's frames: each its shadow on the water (sequence + `S`), then
+/// the creature in the air (drawn high in the frame).
+pub fn flyer_frames(data: &GameData, caches: &mut Caches, name: &str) -> Result<Vec<Vec<Layer>>> {
+    let mut frames = sequence_frames(data, caches, name)?;
+    if let Ok(shadows) = sequence_frames(data, caches, &format!("{name}S")) {
+        for (frame, shadow) in frames.iter_mut().zip(shadows) {
+            // The shadow sprites are drawn in one colour: darken instead.
+            let shadow = shadow.into_iter().map(|l| {
+                let img = &l.image;
+                let pixels = img
+                    .pixels
+                    .iter()
+                    .map(|p| p.map(|_| crate::assets::SHADOW))
+                    .collect();
+                Layer {
+                    image: Rc::new(Image::new(img.width, img.height, pixels)),
+                    dx: l.dx,
+                    dy: l.dy,
+                }
+            });
+            let body = std::mem::take(frame);
+            *frame = shadow.chain(body).collect();
+        }
+    }
+    Ok(frames)
 }
 
 /// Result of loading a mission's objects.
@@ -270,13 +561,9 @@ pub fn resolve(
             let letter = (b'A' + f(7).min(25) as u8) as char;
             let (nation, player) = (f(5), f(6));
             let name = format!("SHIP_{letter}{nation}{nation}{player}0");
-            // The first 32 frames are 8 headings x 4 wake animation frames.
-            let frames = composite_frames(
-                data,
-                caches,
-                &name,
-                0..SHIP_HEADINGS * SHIP_FRAMES_PER_HEADING,
-            )?;
+            // 8 headings x 4 frames under sail, then (frames 88-151) 8
+            // headings x 8 frames furling the sail.
+            let frames = composite_frames(data, caches, &name, 0..usize::MAX)?;
             (
                 CellCentre(f(9), f(10)),
                 Visual {
@@ -296,6 +583,18 @@ pub fn resolve(
             let frames = sequence_frames(data, caches, &format!("{prefix}SPR_{LIVE}3"))?;
             let frame_ms = cycle(CASTLE_CYCLE[LIVE as usize], frames.len());
             (CellCorner(f(5), f(6), dx, dy), Visual { frames, frame_ms })
+        }
+        // Treasures lying on the map (field 5 is -1; otherwise the id of
+        // the object holding them) sparkle at the cell in fields 9 and 10.
+        ObjectClass::Treasure if f(5) == u32::MAX => {
+            let frames = sequence_frames(data, caches, &format!("TREAS{:02}", f(4).min(27)))?;
+            (
+                CellCentre(f(9), f(10)),
+                Visual {
+                    frames,
+                    frame_ms: DEFAULT_FRAME_MS,
+                },
+            )
         }
         ObjectClass::HeroHouse => {
             let name = format!("HHOUSE{}SPR_013", f(22).min(8));
@@ -345,10 +644,36 @@ pub fn resolve(
             )
         }
         ObjectClass::Monster(0x1fb) => {
-            // Sea monster, `UMON<type><state><heading>` (0x490040); state 0 is idle.
-            let frames = sequence_frames(data, caches, &format!("UMON{}00", f(4).min(3)))?;
+            // Sea monster, `UMON<type><state><heading>` (0x490040): states 0
+            // surfacing, 1 swimming, 2 diving, 3 striking, 4 dying.
+            let frames = sequence_frames(data, caches, &format!("UMON{}10", f(4).min(3)))?;
             (
                 CellCentre(f(7), f(8)),
+                Visual {
+                    frames,
+                    frame_ms: DEFAULT_FRAME_MS,
+                },
+            )
+        }
+        ObjectClass::Monster(cls @ 0x1f4..=0x1f6) => {
+            // A cyclops, minotaur or amazon out of its lair (CyclopClassTy),
+            // appearing.
+            let name = crate::scene::walker_sequence(cls, 0, 0);
+            let frames = sequence_frames(data, caches, &name)?;
+            (
+                CellCentre(f(4), f(5)),
+                Visual {
+                    frames,
+                    frame_ms: DEFAULT_FRAME_MS,
+                },
+            )
+        }
+        ObjectClass::Monster(cls @ (0x1f8 | 0x1f9)) => {
+            // A harpy or dragon (HarpyClassTy, 0x4207b0) out of its nest:
+            // `HRPSPR_`/`DRGSPR_` + state + heading; resting at first.
+            let frames = flyer_frames(data, caches, &flyer_sequence(cls, 0, 1))?;
+            (
+                CellCentre(f(4), f(5)),
                 Visual {
                     frames,
                     frame_ms: DEFAULT_FRAME_MS,
@@ -450,6 +775,13 @@ pub fn resolve(
         cargo_kind: None,
         task: None,
         crew: crate::combat::Crew::from_record(&rec.fields, f(7).min(11) as u8),
+        armour: 0,
+        ram: 0,
+        behaviour: Behaviour::default(),
+        zone: None,
+        treasures: Vec::new(),
+        heroes: Vec::new(),
+        argo: false,
     });
     let combat = crate::combat::Combatant::from_record(rec, class);
     // Deposits: amber holds field 4 x 100 units, negative for unlimited
@@ -466,6 +798,12 @@ pub fn resolve(
                 remaining: (amount >= 0).then_some(amount as f32 * 100.0),
             })
         }
+        // One leviathan to a zone (a placeholder: whether zones refill is
+        // not known).
+        ObjectClass::WhaleZone => Some(Deposit {
+            resource: Resource::Leviathan,
+            remaining: Some(1.0),
+        }),
         _ => None,
     };
     Ok(Some(MapObject {
@@ -481,7 +819,9 @@ pub fn resolve(
             ObjectClass::Castle(_)
             | ObjectClass::HarpyNest
             | ObjectClass::CreatureSpawn
-            | ObjectClass::Monster(0x1fa | 0x1fb | 0x1fd) => Some(crate::combat::MONSTERS),
+            | ObjectClass::Monster(0x1f4..=0x1f6 | 0x1f8..=0x1fb | 0x1fd) => {
+                Some(crate::combat::MONSTERS)
+            }
             _ => None,
         },
         label: label(rec),
@@ -492,6 +832,11 @@ pub fn resolve(
         ship,
         deposit,
         combat,
+        treasure: (class == ObjectClass::Treasure).then(|| Treasure {
+            kind: f(4).min(27) as u8,
+            param: f(7),
+            amount: f(8),
+        }),
     }))
 }
 
@@ -516,6 +861,12 @@ pub const SHIP_NAMES: [&str; 12] = [
 ];
 
 /// Maximum speeds from the manual's comparison chart, in type order.
+/// Whether ships of type `kind` cannot pass over shoals: the royal ship,
+/// bomber and rammer (the manual's comparison chart).
+pub fn deep_draught(kind: u8) -> bool {
+    matches!(kind, 2 | 3 | 5)
+}
+
 const SHIP_SPEED: [u32; 12] = [150, 140, 100, 60, 90, 150, 130, 120, 90, 100, 120, 100];
 /// World pixels per second per manual speed unit, before the wind factor
 /// (0.6 in calm, up to 1.2 downwind; see `weather`). Chosen for feel; the
@@ -605,12 +956,18 @@ fn label(rec: &ObjectRecord) -> String {
             _ => "Amazon village",
         }
         .into(),
-        ObjectClass::HeroHouse => "Hero's house".into(),
+        ObjectClass::HeroHouse => format!("House of {}", HERO_NAMES[f(22).min(8) as usize]),
+        ObjectClass::Treasure => treasure_name(f(4).min(27) as u8),
         ObjectClass::Amber => "Amber".into(),
         ObjectClass::FishZone => "Fish".into(),
         ObjectClass::WhaleZone => "Leviathan".into(),
         ObjectClass::Monster(0x1fa) => "Medusa".into(),
         ObjectClass::Monster(0x1fb) => "Sea monster".into(),
+        ObjectClass::Monster(0x1f4) => "Cyclops".into(),
+        ObjectClass::Monster(0x1f5) => "Minotaur".into(),
+        ObjectClass::Monster(0x1f6) => "Amazon".into(),
+        ObjectClass::Monster(0x1f8) => "Harpy".into(),
+        ObjectClass::Monster(0x1f9) => "Dragon".into(),
         ObjectClass::Monster(0x1fd) => "Siren".into(),
         ObjectClass::Whirlpool => "Whirlpool".into(),
         ObjectClass::Reef(_) => "Reef".into(),
@@ -733,6 +1090,25 @@ fn sheep_frames(data: &GameData, caches: &mut Caches, count: u32) -> Result<Vec<
         }
     }
     Ok(frames)
+}
+
+/// A ship type's sinking (mode 1, 20 frames) or under-construction (mode
+/// 2, 80 frames: 40 lying east-west then 40 north-south) animation:
+/// `SHIP_<letter><hull nation>00<mode>`.
+pub fn ship_mode_frames(
+    data: &GameData,
+    caches: &mut Caches,
+    kind: u8,
+    nation: u32,
+    mode: u32,
+) -> Result<Vec<Vec<Layer>>> {
+    let letter = (b'A' + kind.min(25)) as char;
+    composite_frames(
+        data,
+        caches,
+        &format!("SHIP_{letter}{nation}00{mode}"),
+        0..usize::MAX,
+    )
 }
 
 fn composite_frames(

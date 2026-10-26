@@ -1,3 +1,5 @@
 /target
 /gamedata
 *.png
+/dist
+.DS_Store

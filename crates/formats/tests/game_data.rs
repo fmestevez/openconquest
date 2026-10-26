@@ -278,3 +278,30 @@ fn sounds_decode() {
         ["bowla1", "strel1"]
     );
 }
+
+/// The videos parse and decode (Cinepak and Microsoft Video 1), with their
+/// sound as long as their pictures.
+#[test]
+fn videos_decode() {
+    let Some(root) = data_dir() else {
+        return;
+    };
+    for (name, codec_frames) in [("logo3.avi", 135), ("title.avi", 639)] {
+        let path = root.join("video").join(name);
+        let avi = openac_formats::avi::Avi::parse(std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(avi.frame_count(), codec_frames, "{name}");
+        let mut dec = avi.decoder();
+        for n in 0..avi.frame_count() / 2 {
+            dec.decode(avi.frame(n));
+        }
+        let lit = dec.pixels.iter().filter(|&&p| p & 0xf0f0f0 != 0).count();
+        assert!(lit > 500, "{name}: a picture ({lit} lit pixels)");
+        let audio = avi.audio.as_ref().unwrap();
+        let sound_s = audio.samples.len() as f32 / audio.channels as f32 / audio.rate as f32;
+        let picture_s = avi.frame_count() as f32 * avi.frame_us as f32 / 1e6;
+        assert!(
+            (sound_s - picture_s).abs() < 1.0,
+            "{name}: {sound_s} s of sound, {picture_s} s of picture"
+        );
+    }
+}

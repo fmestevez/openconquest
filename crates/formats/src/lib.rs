@@ -5,8 +5,10 @@
 
 pub mod anim;
 pub mod archive;
+pub mod avi;
 pub mod font;
 pub mod image;
+pub mod install;
 pub mod installer;
 pub mod lz;
 pub mod map;

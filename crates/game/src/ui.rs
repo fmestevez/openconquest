@@ -20,9 +20,10 @@ use std::rc::Rc;
 
 use crate::assets::{rgb, GameData, Image};
 use crate::commands::{menu, Menu, Page, SLOTS};
+use crate::panels::{PanelView, Panels};
 use crate::render::{
-    blit_scaled, draw_minimap, draw_objects, draw_selection, draw_site, draw_world, palette_lut,
-    shade_rect, Frame, MinimapRect,
+    blit_scaled, draw_fog, draw_minimap, draw_objects, draw_selection, draw_site, draw_world,
+    palette_lut, shade_rect, Frame, MinimapRect,
 };
 use crate::scene::Scene;
 use crate::text::TextRenderer;
@@ -82,6 +83,9 @@ pub struct Interface {
     /// Button animations by base name.
     buttons: RefCell<HashMap<String, Rc<Vec<Rc<Image>>>>>,
     button_frame: Option<Rc<Image>>,
+    pub panels: Panels,
+    /// The animated "pause" sign (`WIN_PAUSE`).
+    pause_sign: Vec<Rc<Image>>,
 }
 
 /// Window-space placement of the interface for one window size.
@@ -90,7 +94,7 @@ pub struct Layout {
     pub view: Screen,
     pub minimap: MinimapRect,
     field_w: u32,
-    bar_x: f32,
+    pub bar_x: f32,
     /// Top-left of the object panel's text area, in window pixels.
     pub info_text: (f32, f32),
     pub info_width: f32,
@@ -172,6 +176,8 @@ impl Interface {
             fish_icon: sequence("GAME_FISH"),
             digits: TextRenderer::load(&data.controls, "MONEY_FONT", 0)?,
             buttons: RefCell::default(),
+            panels: Panels::load(data, theme)?,
+            pause_sign: sequence(&format!("{theme}WIN_PAUSE")),
             button_frame: data
                 .load_image(&data.controls, "CBUT_BK", false)
                 .ok()
@@ -413,11 +419,12 @@ impl Interface {
         })
     }
 
-    /// Draws a command menu. The hovered button plays its animation;
-    /// disabled buttons show their greyed last frame.
-    /// Draws a command menu. The hovered button plays its animation;
-    /// disabled buttons show their greyed last frame; a running order (such
-    /// as a ship being built) shows its progress through the frames.
+    /// Draws a command menu. The button under the cursor plays its
+    /// animation (the original loads every frame, 0x4f31b0 and 0x542f20,
+    /// unless a low-detail setting keeps only the first and the greyed
+    /// last) and is framed; disabled buttons show the greyed last frame; a
+    /// running order (such as a ship being built) shows its progress
+    /// through the frames.
     #[allow(clippy::too_many_arguments)]
     fn draw_menu(
         &self,
@@ -455,7 +462,7 @@ impl Interface {
                 y,
                 layout.scale,
             );
-            if hover == Some(i) && slot.enabled {
+            if (hover == Some(i) && slot.enabled) || slot.checked {
                 if let Some(bk) = &self.button_frame {
                     blit_scaled(frame, bk, (0, 0, bk.width, bk.height), x, y, layout.scale);
                 }
@@ -518,6 +525,10 @@ pub struct GameView<'a> {
     pub interface: Option<&'a Interface>,
     pub text: &'a TextRenderer,
     pub selected: Option<u32>,
+    /// Other ships selected with it.
+    pub group: &'a [u32],
+    /// A selection box being dragged (window pixels).
+    pub select_box: Option<(f32, f32, f32, f32)>,
     pub status: Option<&'a str>,
     pub time_ms: u64,
     /// Command slot under the cursor.
@@ -528,11 +539,31 @@ pub struct GameView<'a> {
     pub site: Option<((i32, i32), bool)>,
     /// Show the mission briefing over the view.
     pub briefing: bool,
+    /// The bar's tabs and open panel (with the interface shown).
+    pub panel: Option<PanelView<'a>>,
+    /// The bar-relative point under the cursor, in original pixels.
+    pub panel_hover: Option<(u32, u32)>,
+    /// The game is paused.
+    pub paused: bool,
 }
 
 impl GameView<'_> {
     /// The mission name and its objectives, ticked off as they are met.
     fn headline(&self) -> String {
+        let done = |name: String, met: bool| if met { format!("{name} (done)") } else { name };
+        if !self.scene.story.is_empty() {
+            let goals: Vec<String> = self
+                .scene
+                .story
+                .iter()
+                .map(|&g| done(crate::scene::goal_name(g), self.scene.goal_met(g)))
+                .collect();
+            return format!(
+                "{}: {}",
+                self.scene.mission.to_uppercase(),
+                goals.join(", ")
+            );
+        }
         let goals: Vec<String> = (0..crate::scene::OBJECTIVES.len())
             .filter(|&i| self.scene.conditions[i])
             .map(|i| {
@@ -583,6 +614,30 @@ impl GameView<'_> {
                 break;
             }
             self.text.draw(frame, x as i32, ly as i32, scale, l);
+        }
+    }
+
+    /// The pause sign in the middle of the view (text without the
+    /// interface's art).
+    fn draw_pause(&self, frame: &mut Frame, screen: &Screen, scale: f32) {
+        let sign = self
+            .interface
+            .map(|ui| &ui.pause_sign)
+            .filter(|s| !s.is_empty());
+        match sign {
+            Some(frames) => {
+                let img = &frames[(self.time_ms / 60) as usize % frames.len()];
+                let x = screen.x as f32 + (screen.w as f32 - img.width as f32 * scale) / 2.0;
+                let y = screen.y as f32 + (screen.h as f32 - img.height as f32 * scale) / 2.0;
+                blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, scale);
+            }
+            None => {
+                let ts = scale.round().max(1.0) as u32 * 2;
+                let w = self.text.measure("Paused") * ts;
+                let x = screen.x + screen.w.saturating_sub(w) / 2;
+                let y = screen.y + screen.h / 2;
+                self.text.draw(frame, x as i32, y as i32, ts, "Paused");
+            }
         }
     }
 
@@ -637,8 +692,12 @@ impl GameView<'_> {
         let lut = palette_lut(self.data, self.time_ms);
         draw_world(frame, &screen, self.scene, self.camera, &lut);
         draw_objects(frame, &screen, self.scene, self.camera, &lut, self.time_ms);
-        if let Some(id) = self.selected {
+        draw_fog(frame, &screen, self.scene, self.camera);
+        for &id in self.selected.iter().chain(self.group) {
             draw_selection(frame, &screen, self.scene, self.camera, id, self.time_ms);
+        }
+        if let Some(b) = self.select_box {
+            crate::render::draw_box(frame, &screen, b);
         }
         if let Some((cell, ok)) = self.site {
             draw_site(frame, &screen, self.camera, cell, ok);
@@ -649,9 +708,13 @@ impl GameView<'_> {
             .map(|i| &self.scene.objects[i]);
         let ui_scale = self.camera.policy.base_scale(window.1);
         let text_scale = ui_scale.round().max(1.0) as u32;
+        let panel_open = self
+            .panel
+            .as_ref()
+            .is_some_and(|p| Panels::covers_bar(p.tab));
         if let (Some(ui), Some(layout)) = (self.interface, &layout) {
             ui.draw(frame, layout);
-            if let Some(obj) = selected {
+            if let (Some(obj), false) = (selected, panel_open) {
                 if let Some((name, (px, py))) = &obj.picture {
                     if let Some(img) = ui.picture(self.data, name) {
                         let (sx, sy, _, _) = ui.picture_slot(layout);
@@ -679,7 +742,14 @@ impl GameView<'_> {
                 let (tx, ty) = layout.info_text;
                 let lines = wrap(
                     self.text,
-                    &details(self.scene, obj),
+                    &match self.group.len() {
+                        0 => details(self.scene, obj),
+                        n => format!(
+                            "{}. With {n} more ship{}",
+                            details(self.scene, obj),
+                            if n == 1 { "" } else { "s" }
+                        ),
+                    },
                     (layout.info_width / text_scale as f32) as u32,
                 );
                 for (i, line) in lines.iter().enumerate() {
@@ -688,12 +758,28 @@ impl GameView<'_> {
                 }
             }
         }
-        draw_minimap(frame, &minimap, self.scene, self.camera, &screen);
+        if self.interface.is_none() || !panel_open {
+            draw_minimap(frame, &minimap, self.scene, self.camera, &screen);
+        }
+        if let (Some(ui), Some(layout), Some(view)) = (self.interface, &layout, &self.panel) {
+            let origin = (layout.bar_x, 0.0);
+            ui.panels.draw(
+                frame,
+                origin,
+                layout.scale,
+                view,
+                self.text,
+                self.panel_hover,
+            );
+        }
         if let Some(outcome) = self.scene.outcome {
             self.draw_outcome(frame, &screen, outcome, text_scale);
         }
         if self.briefing && !self.scene.briefing.is_empty() {
             self.draw_briefing(frame, &screen, text_scale);
+        }
+        if self.paused {
+            self.draw_pause(frame, &screen, ui_scale);
         }
         if let (Some(ui), Some(layout)) = (self.interface, &layout) {
             ui.draw_resources(
@@ -704,7 +790,19 @@ impl GameView<'_> {
                 self.time_ms,
             );
             ui.draw_wind(frame, layout, &self.scene.wind);
-            let msg = self.status.map_or_else(|| self.headline(), str::to_string);
+            // The button under the cursor says what it does and costs.
+            let hovered = self.hover_button.and_then(|slot| {
+                let obj = self
+                    .selected
+                    .and_then(|id| self.scene.object_index(id))
+                    .map(|i| &self.scene.objects[i])?;
+                menu(self.scene, obj, self.page)[slot].map(|e| e.command.describe(Some(self.scene)))
+            });
+            let msg = match (self.status, hovered) {
+                (Some(s), _) => s.to_string(),
+                (None, Some(h)) => h,
+                (None, None) => self.headline(),
+            };
             ui.draw_message(frame, layout, self.text, &msg);
             return;
         }
@@ -746,7 +844,7 @@ impl GameView<'_> {
 }
 
 /// Splits `text` into lines no wider than `width` font pixels.
-fn wrap(font: &TextRenderer, text: &str, width: u32) -> Vec<String> {
+pub fn wrap(font: &TextRenderer, text: &str, width: u32) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for word in text.split_whitespace() {
         match lines.last_mut() {
@@ -764,12 +862,10 @@ fn wrap(font: &TextRenderer, text: &str, width: u32) -> Vec<String> {
 fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
     use crate::objects::{GatherPhase, Resource, Task};
     let mut text = obj.label.clone();
-    let goods = |r: Resource| {
-        if r == Resource::Amber {
-            "amber"
-        } else {
-            "fish"
-        }
+    let goods = |r: Resource| match r {
+        Resource::Amber => "amber",
+        Resource::Fish => "fish",
+        Resource::Leviathan => "leviathan",
     };
     if let Some(d) = obj.deposit {
         match d.remaining {
@@ -785,6 +881,9 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
         );
     }
     if let Some(ship) = &obj.ship {
+        if ship.armour > 0 || ship.ram > 0 {
+            text += &format!(". Armour {}, ram {}", ship.armour, ship.ram);
+        }
         if ship.crew.count() > 0 {
             text += &format!(". Marines: {}", ship.crew.describe());
         }
@@ -792,9 +891,28 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
             let names: Vec<&str> = c
                 .weapons
                 .iter()
-                .map(|&w| crate::combat::ITEM_NAMES[w as usize % 9])
+                .map(|&w| crate::combat::item_name(w))
                 .collect();
             text += &format!(". Weapons: {}", names.join(", "));
+        }
+        if obj.combat.as_ref().is_some_and(|c| c.stone > 0.0) {
+            text += ". Turned to stone";
+        }
+        if !ship.heroes.is_empty() {
+            let names: Vec<&str> = ship
+                .heroes
+                .iter()
+                .map(|&h| crate::objects::HERO_NAMES[h as usize % 9])
+                .collect();
+            text += &format!(". Heroes: {}", names.join(", "));
+        }
+        if !ship.treasures.is_empty() {
+            let names: Vec<String> = ship
+                .treasures
+                .iter()
+                .map(|t| crate::objects::treasure_name(t.kind))
+                .collect();
+            text += &format!(". Treasures: {}", names.join(", "));
         }
         if let (Some(kind), true) = (ship.cargo_kind, ship.cargo >= 1.0) {
             text += &format!(". Carrying {} {}", ship.cargo as u32, goods(kind));
@@ -816,8 +934,22 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
             Some(Task::Ram { .. }) => text += ". Ramming",
             Some(Task::Found { .. }) => text += ". Sailing to found a settlement",
             Some(Task::Board { .. }) => text += ". Boarding",
+            Some(Task::Repair { .. }) => text += ". Repairing",
+            Some(Task::Scout { .. }) => text += ". Scouting",
+            Some(Task::Patrol { .. }) => text += ". Patrolling",
+            Some(Task::Zone { attack: false, .. }) => text += ". Guarding a zone",
+            Some(Task::Zone { attack: true, .. }) => text += ". Attacking a zone",
+            Some(Task::Convoy { .. }) => text += ". Escorting",
+            Some(Task::Take { .. }) => text += ". Sailing to take a treasure",
             None => {}
         }
+    }
+    if let Some(heroes) = scene.site_heroes.get(&obj.id).filter(|h| !h.is_empty()) {
+        let names: Vec<&str> = heroes
+            .iter()
+            .map(|&h| crate::objects::HERO_NAMES[h as usize % 9])
+            .collect();
+        text += &format!(". Heroes waiting: {}", names.join(", "));
     }
     let garrison = scene.garrison(obj.id);
     if garrison.iter().any(|&n| n > 0) {

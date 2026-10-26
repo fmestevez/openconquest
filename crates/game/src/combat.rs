@@ -1,23 +1,36 @@
 //! Ship combat: weapons, hull damage and the effects drawn for them.
 //!
-//! The weapon tables come from ANCIENT.EXE; hull strength, range and reload
-//! times have not been recovered yet and are placeholders.
+//! The weapon tables (damage, rate of fire, range) come from ANCIENT.EXE;
+//! hull strength has not been recovered yet and is a placeholder.
 
 use openac_formats::{ObjectClass, ObjectRecord};
 
 use crate::objects::Layer;
 
 /// Hull and weapons of an object that can fight or be attacked.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Combatant {
     pub hull: f32,
     pub max_hull: f32,
     /// Weapon kinds carried.
     pub weapons: Vec<u8>,
-    /// Seconds until the next volley.
+    /// Seconds until the next volley (unused: kept for older saves).
     pub reload: f32,
-    /// Seconds left burning (Flame spell).
+    /// Seconds until each weapon fires again, by its index in `weapons`.
+    #[serde(default)]
+    pub reloads: Vec<f32>,
+    /// Seconds left burning (unused: kept for older saves).
+    #[serde(default)]
     pub burning: f32,
+    /// Wounds of the crew aboard: every `SQUAD_LIFE` costs a squad.
+    #[serde(default)]
+    pub wounds: f32,
+    /// Seconds left turned to stone by the Gorgon: no moving, no firing.
+    #[serde(default)]
+    pub stone: f32,
+    /// Seconds left invisible to other players (Phantom object).
+    #[serde(default)]
+    pub phantom: f32,
     /// Seconds left of protection from weapons and from magic.
     pub protect_weapons: f32,
     pub protect_magic: f32,
@@ -32,11 +45,10 @@ impl Combatant {
                 let kind = f(7).min(11) as u8;
                 // Synthetic records of newly built ships are short.
                 let condition = if rec.fields.len() > 12 { f(12) } else { 100 };
-                (
-                    hull_strength(kind),
-                    condition,
-                    weapons_from_record(&rec.fields, kind),
-                )
+                // The unique ships' own weapon comes with the ship.
+                let mut weapons = weapons_from_record(&rec.fields, kind);
+                weapons.extend(special_weapon(kind));
+                (hull_strength(kind), condition, weapons)
             }
             ObjectClass::Building(c) => (building_strength(c), f(7), fort_weapons(c, &rec.fields)),
             // Barbarian strongholds, creatures and their lairs can be
@@ -45,7 +57,9 @@ impl Combatant {
             | ObjectClass::Castle(_)
             | ObjectClass::HarpyNest
             | ObjectClass::CreatureSpawn
-            | ObjectClass::Monster(0x1fa | 0x1fb | 0x1fd) => (MONSTER_STRENGTH, 100, Vec::new()),
+            | ObjectClass::Monster(0x1f4..=0x1f6 | 0x1f8..=0x1fb | 0x1fd) => {
+                (MONSTER_STRENGTH, 100, creature_weapons(rec.class_id))
+            }
             _ => return None,
         };
         Some(Self {
@@ -53,14 +67,14 @@ impl Combatant {
             max_hull,
             weapons,
             reload: 0.0,
+            reloads: Vec::new(),
             burning: 0.0,
+            phantom: 0.0,
+            stone: 0.0,
+            wounds: 0.0,
             protect_weapons: 0.0,
             protect_magic: 0.0,
         })
-    }
-
-    pub fn is_armed(&self) -> bool {
-        self.weapons.iter().any(|&w| hull_damage(w) > 0.0)
     }
 }
 
@@ -81,6 +95,16 @@ pub const ITEM_NAMES: [&str; 9] = [
     "onager",
 ];
 
+/// The name of any item, the unique ships' weapons included.
+pub fn item_name(item: u8) -> &'static str {
+    match item {
+        GREEK_FIRE => "Greek fire",
+        QUICKLIME => "quicklime",
+        POWDER => "barrel of powder",
+        _ => ITEM_NAMES[item as usize % 9],
+    }
+}
+
 pub const CREW_NAMES: [&str; 3] = ["bowmen", "javelin men", "swordsmen"];
 
 /// Cost of training a squad of marines: 30 amber each (u16 at 0x597164)
@@ -92,10 +116,35 @@ pub const CREW_COST: [(u32, u32); 3] = [(30, 200), (30, 200), (30, 300)];
 /// second is a guess.
 pub const CREW_TRAIN_SECONDS: f32 = 7.0;
 
-/// Squads of marines a ship can carry. Placeholder.
-pub const CREW_CAPACITY: u32 = 6;
-/// Weapons a ship can carry. Placeholder.
-pub const WEAPON_CAPACITY: u32 = 4;
+/// Room aboard a ship type for marines and weapons, from the manual's
+/// comparison chart ("displacement for weapons or for cargo"); it matches
+/// the types' default armings. The special ships' own weapons fill their
+/// room, except one more weapon on the quick lime ship.
+const CAPACITY: [u32; 12] = [4, 10, 5, 7, 4, 3, 2, 2, 0, 1, 0, 3];
+
+pub fn capacity(kind: u8) -> u32 {
+    CAPACITY[kind as usize % 12]
+}
+
+/// Room an item takes: one for a squad of marines or a medium weapon, two
+/// for a strong one (the manual's chart).
+pub fn item_size(item: u8) -> u32 {
+    if (6..=8).contains(&item) {
+        2
+    } else {
+        1
+    }
+}
+
+/// Room taken aboard by `crew` and `weapons`.
+pub fn load(crew: &Crew, weapons: &[u8]) -> u32 {
+    crew.count() + weapons.iter().map(|&w| item_size(w)).sum::<u32>()
+}
+
+/// Whether ships of type `kind` can carry weapons: merchant ships cannot.
+pub fn carries_weapons(kind: u8) -> bool {
+    kind >= 2
+}
 
 /// Cost of an item in amber and fish: marines as above; weapons 50 amber
 /// (items 3-5) or 70 (6-8) (0x597164 by item / 3, workshop menu 0x4361c0).
@@ -121,7 +170,7 @@ const CREW_RAM: [u32; 3] = [100, 125, 160];
 
 /// The people on a ship: its crew class (record field 14 minus 3; ramming
 /// uses it for crew quality) and squads of marines by kind.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Crew {
     pub class: u8,
     pub squads: [u32; 3],
@@ -140,7 +189,7 @@ impl Crew {
         match fields.get(18..21) {
             Some(counts) => {
                 for (s, &n) in squads.iter_mut().zip(counts) {
-                    *s = n.min(CREW_CAPACITY);
+                    *s = n.min(capacity(kind));
                 }
             }
             None => {
@@ -301,23 +350,99 @@ pub fn weapons_from_record(fields: &[u32], kind: u8) -> Vec<u8> {
     }
 }
 
-/// Damage of each item against hulls and against crews, at upgrade level
-/// 0 (0x597d2c rows 0-8; each value has three upgrade levels; the third
-/// value of the marine rows is their boarding strength).
-const ITEM_DAMAGE: [(u32, u32); 9] = [
-    (5, 45),
-    (7, 25),
-    (3, 5),
-    (40, 80),
-    (60, 60),
-    (80, 40),
-    (200, 80),
-    (250, 100),
-    (220, 80),
-];
-
 pub fn hull_damage(weapon: u8) -> f32 {
-    ITEM_DAMAGE.get(weapon as usize).map_or(0, |w| w.0) as f32
+    hull_damage_at(weapon, 0)
+}
+
+/// The unique ships' weapons: Greek fire (the fire ship's ballista), the
+/// quick lime ship's catapult, and the fire rammer's barrel of powder.
+pub const GREEK_FIRE: u8 = 9;
+pub const QUICKLIME: u8 = 10;
+pub const POWDER: u8 = 11;
+
+/// Hull damage of an item at weapons level 0-2 (0x597d2c, A values; the
+/// unique ships' weapons from the manual's chart, which gives no upgraded
+/// values for them).
+pub fn hull_damage_at(weapon: u8, level: u8) -> f32 {
+    const A: [[u32; 3]; 12] = [
+        [5, 7, 10],
+        [7, 9, 12],
+        [3, 5, 7],
+        [40, 48, 56],
+        [60, 72, 84],
+        [80, 96, 112],
+        [200, 240, 280],
+        [250, 300, 350],
+        [220, 264, 330],
+        [350, 350, 350],
+        [0, 0, 0],
+        [400, 400, 400],
+    ];
+    A.get(weapon as usize)
+        .map_or(0, |a| a[level.min(2) as usize]) as f32
+}
+
+/// Damage to crews of an item at weapons level 0-2 (0x597d2c, B values;
+/// the unique ships' weapons from the manual).
+pub fn crew_damage_at(weapon: u8, level: u8) -> f32 {
+    const B: [[u32; 3]; 12] = [
+        [45, 56, 68],
+        [25, 31, 38],
+        [5, 8, 11],
+        [80, 96, 112],
+        [60, 72, 84],
+        [40, 48, 56],
+        [80, 96, 112],
+        [100, 120, 140],
+        [80, 96, 112],
+        [100, 100, 100],
+        [300, 300, 300],
+        [150, 150, 150],
+    ];
+    B.get(weapon as usize)
+        .map_or(0, |b| b[level.min(2) as usize]) as f32
+}
+
+/// Whether item `weapon` is fired (the barrel of powder is not: it goes off
+/// when its ship rams).
+pub fn fires(weapon: u8) -> bool {
+    weapon != POWDER
+        && (hull_damage(weapon) > 0.0 || crew_damage_at(weapon, 0) > 0.0)
+        && weapon != 2
+}
+
+/// Wound points that cost a crew one squad. Placeholder.
+pub const SQUAD_LIFE: f32 = 150.0;
+/// Crew wound points healed a second by the Cup of Asclepius and the Golden
+/// Fleece. Placeholder.
+pub const CREW_HEALING: f32 = 5.0;
+/// The ship of the dead's undead crews are this much stronger in boarding.
+/// Placeholder.
+pub const UNDEAD_MELEE: u32 = 2;
+
+/// The unique weapon built into a ship type, if any.
+pub fn special_weapon(kind: u8) -> Option<u8> {
+    match kind {
+        8 => Some(GREEK_FIRE),
+        9 => Some(QUICKLIME),
+        10 => Some(POWDER),
+        _ => None,
+    }
+}
+
+/// What the wild creatures strike with, as the nearest weapons (the
+/// manual: cyclops throw stones, minotaurs axes "similar to a Scorpion's",
+/// amazons arrows; sea monsters bite). Their lairs send them out
+/// (`scene::walkers`) and do not fight themselves. Placeholders. (Harpies and dragons
+/// strike as they fly: `scene::flyers`.)
+pub fn creature_weapons(class_id: u32) -> Vec<u8> {
+    match class_id {
+        0x1f4 => vec![5],
+        0x1f5 => vec![3],
+        0x1f6 => vec![0, 0],
+        0x1fb => vec![4; 4],
+        _ => Vec::new(),
+    }
 }
 
 /// Hull points of a ship type. Placeholder: twice the hull's amber cost.
@@ -325,12 +450,53 @@ pub fn hull_strength(kind: u8) -> f32 {
     crate::economy::HULL_AMBER[kind as usize] as f32 * 2.0
 }
 
-/// Firing range in world pixels. Placeholder, kept below four cells:
-/// miss007 starts with a barbarian fleet four cells from a Greek fortress,
-/// presumably out of its range.
-pub const RANGE: f32 = 3.5 * 64.0;
-/// Seconds between volleys. Placeholder.
-pub const RELOAD_SECONDS: f32 = 3.0;
+/// Rate of fire per item and level (0x597a3c, item x 3 + level; the
+/// manual's chart lists the same figures).
+const RATE: [[u32; 3]; 11] = [
+    [120, 150, 150],
+    [120, 150, 150],
+    [120, 150, 150],
+    [100, 130, 130],
+    [120, 120, 120],
+    [90, 110, 110],
+    [70, 90, 90],
+    [60, 80, 80],
+    [70, 90, 90],
+    [50, 70, 80],
+    [60, 80, 80],
+];
+
+/// Seconds between shots of item `item` at rate of fire level `level`. The
+/// unit of the rate is not known: a rate of 100 is taken as one shot every
+/// three seconds.
+pub fn reload_seconds(item: u8, level: u8) -> f32 {
+    let rate = RATE
+        .get(item as usize)
+        .map_or(100, |r| r[level.min(2) as usize]);
+    300.0 / rate.max(1) as f32
+}
+
+/// Longest and shortest range of item `item` in cells, at range level
+/// `level` (0x598154: maximum, 12 items per level; 0x598178: minimum).
+pub fn range_cells(item: u8, level: u8) -> (u8, u8) {
+    const MAX: [[u8; 12]; 3] = [
+        [3, 2, 2, 3, 3, 3, 5, 3, 4, 2, 3, 0],
+        [3, 2, 2, 4, 3, 3, 5, 4, 4, 2, 3, 0],
+        [4, 3, 3, 4, 4, 4, 6, 5, 5, 3, 4, 0],
+    ];
+    const MIN: [u8; 12] = [0, 0, 0, 0, 0, 1, 2, 1, 1, 0, 0, 0];
+    let i = (item as usize).min(11);
+    (MIN[i], MAX[level.min(2) as usize][i])
+}
+
+/// The world distances, in pixels, at which item `item` reaches: within
+/// its longest range in cells (counted to the far edge of the cell) and
+/// beyond its shortest.
+pub fn reach(item: u8, level: u8) -> (f32, f32) {
+    let (min, max) = range_cells(item, level);
+    (min as f32 * 64.0, (max as f32 + 0.5) * 64.0)
+}
+
 /// Chance that a shot hits. Placeholder.
 pub const HIT_CHANCE: u32 = 70;
 
@@ -342,6 +508,232 @@ pub fn fire_sound(item: u8) -> &'static str {
         6 => "thrbal1",
         _ => "thrcat1",
     }
+}
+
+/// Research at the sage school (SchoolClassTy, menu 0x430f90): each
+/// player's weapons, ram, armour and movement levels, 0 to 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Upgrade {
+    /// The school's "arming" (+0xa3); in the original it opens the Greek
+    /// special-ship upgrades.
+    Weapons,
+    Ram,
+    Armour,
+    Speed,
+    /// The workshop's damage level for item group 0 (marines), 1 (medium
+    /// weapons, items 3-5) or 2 (strong weapons, 6-8): player bytes
+    /// +0x9c + group, read by the damage routine 0x4bb670 as the column
+    /// level of every item in the group.
+    Arms(u8),
+    /// The workshop's rate of fire level per group (+0x8e, table 0x597a3c).
+    Rate(u8),
+    /// The workshop's range level per group (+0x95, tables 0x598154).
+    Reach(u8),
+    /// The sage school's study of a unique ship, which lets it be built:
+    /// 0 Greek fire ship, 1 quick lime ship, 2 fire rammer, 3 ship of the
+    /// dead (commands 0x50-0x53, 2000 amber each, offered once the arming
+    /// is at level 2; menu 0x430f90).
+    Special(u8),
+}
+
+impl Upgrade {
+    /// In menu order (slots 0-3).
+    pub const ALL: [Upgrade; 4] = [
+        Upgrade::Weapons,
+        Upgrade::Ram,
+        Upgrade::Armour,
+        Upgrade::Speed,
+    ];
+
+    /// Command ids: 0x3c UPARMING, 0x48 UPRAM, 0x47 UPARMOR, 0x4f (the move
+    /// button).
+    pub fn command(self) -> u8 {
+        match self {
+            Upgrade::Weapons => 0x3c,
+            Upgrade::Ram => 0x48,
+            Upgrade::Armour => 0x47,
+            Upgrade::Speed => 0x4f,
+            // `CBUT_UPGARMING<W|M|S><1|2|3>` (workshop menu page 3).
+            Upgrade::Arms(g) => 0x3f + 3 * g.min(2),
+            Upgrade::Rate(g) => 0x3e + 3 * g.min(2),
+            Upgrade::Reach(g) => 0x40 + 3 * g.min(2),
+            Upgrade::Special(k) => 0x50 + k.min(3),
+        }
+    }
+
+    pub fn of_command(c: u8) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .chain((0..3).flat_map(|g| [Upgrade::Arms(g), Upgrade::Rate(g), Upgrade::Reach(g)]))
+            .chain((0..4).map(Upgrade::Special))
+            .find(|u| u.command() == c)
+    }
+
+    /// The highest level: 2, except rate of fire, which marines cannot
+    /// improve and medium weapons only once (0x59715c).
+    pub fn max_level(self) -> u8 {
+        match self {
+            Upgrade::Rate(g) => g.min(2),
+            Upgrade::Special(_) => 1,
+            _ => 2,
+        }
+    }
+
+    /// Amber to raise the level from `level` (0x5971ac for weapons, 0x42d9a0
+    /// for ram and armour, 0x42d980 for movement; for the workshop, by group
+    /// x 3 + level at 0x5971c4 rate, 0x597254 damage, 0x59720c range).
+    pub fn cost(self, level: u8) -> u32 {
+        let g = |g: u8| g.min(2) as usize;
+        let costs = match self {
+            Upgrade::Weapons => [1200, 1300],
+            Upgrade::Ram | Upgrade::Armour => [1000, 1500],
+            Upgrade::Speed => [2000, 3000],
+            Upgrade::Arms(n) => [[1500, 1700], [1700, 1800], [1800, 2600]][g(n)],
+            Upgrade::Rate(n) => [[0, 0], [1500, 0], [1700, 1900]][g(n)],
+            Upgrade::Reach(n) => [[1000, 1900], [1800, 2400], [1900, 2800]][g(n)],
+            Upgrade::Special(_) => [2000, 2000],
+        };
+        costs[level.min(1) as usize]
+    }
+
+    /// Seconds of study. Placeholder (for the workshop, the values after
+    /// each cost table, 100-420, read as tenths of a second).
+    pub fn seconds(self) -> f32 {
+        match self {
+            Upgrade::Arms(g) => [11.0, 13.5, 16.0][g.min(2) as usize],
+            Upgrade::Rate(g) => [20.0, 20.0, 27.0][g.min(2) as usize],
+            Upgrade::Reach(g) => [22.0, 31.5, 33.0][g.min(2) as usize],
+            Upgrade::Special(_) => 40.0,
+            _ => 30.0,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Upgrade::Weapons => "weapons",
+            Upgrade::Ram => "rams",
+            Upgrade::Armour => "armour",
+            Upgrade::Speed => "rigging",
+            Upgrade::Arms(0) => "marines' strength",
+            Upgrade::Arms(1) => "medium weapons' strength",
+            Upgrade::Arms(_) => "strong weapons' strength",
+            Upgrade::Rate(0) => "marines' rate of fire",
+            Upgrade::Rate(1) => "medium weapons' rate of fire",
+            Upgrade::Rate(_) => "strong weapons' rate of fire",
+            Upgrade::Reach(0) => "marines' range",
+            Upgrade::Reach(1) => "medium weapons' range",
+            Upgrade::Reach(_) => "strong weapons' range",
+            Upgrade::Special(0) => "Greek fire ships",
+            Upgrade::Special(1) => "quick lime ships",
+            Upgrade::Special(2) => "fire rammers",
+            Upgrade::Special(_) => "ships of the dead",
+        }
+    }
+}
+
+/// A player's research levels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Levels {
+    pub weapons: u8,
+    pub ram: u8,
+    pub armour: u8,
+    pub speed: u8,
+    /// Damage level per item group (see `Upgrade::Arms`).
+    #[serde(default)]
+    pub arms: [u8; 3],
+    /// Rate of fire and range levels per item group.
+    #[serde(default)]
+    pub rate: [u8; 3],
+    #[serde(default)]
+    pub reach: [u8; 3],
+    /// Unique ships studied (see `Upgrade::Special`).
+    #[serde(default)]
+    pub special: [u8; 4],
+}
+
+impl Levels {
+    pub fn get(&self, u: Upgrade) -> u8 {
+        match u {
+            Upgrade::Weapons => self.weapons,
+            Upgrade::Ram => self.ram,
+            Upgrade::Armour => self.armour,
+            Upgrade::Speed => self.speed,
+            Upgrade::Arms(g) => self.arms[g.min(2) as usize],
+            Upgrade::Rate(g) => self.rate[g.min(2) as usize],
+            Upgrade::Reach(g) => self.reach[g.min(2) as usize],
+            Upgrade::Special(k) => self.special[k.min(3) as usize],
+        }
+    }
+
+    /// The damage level of item `item`.
+    pub fn arms_for(&self, item: u8) -> u8 {
+        self.arms[(item / 3).min(2) as usize]
+    }
+
+    /// The rate of fire and range levels of item `item`.
+    pub fn rate_for(&self, item: u8) -> u8 {
+        self.rate[(item / 3).min(2) as usize]
+    }
+
+    pub fn reach_for(&self, item: u8) -> u8 {
+        self.reach[(item / 3).min(2) as usize]
+    }
+
+    pub fn set(&mut self, u: Upgrade, v: u8) {
+        let slot = match u {
+            Upgrade::Weapons => &mut self.weapons,
+            Upgrade::Ram => &mut self.ram,
+            Upgrade::Armour => &mut self.armour,
+            Upgrade::Speed => &mut self.speed,
+            Upgrade::Arms(g) => &mut self.arms[g.min(2) as usize],
+            Upgrade::Rate(g) => &mut self.rate[g.min(2) as usize],
+            Upgrade::Reach(g) => &mut self.reach[g.min(2) as usize],
+            Upgrade::Special(k) => &mut self.special[k.min(3) as usize],
+        };
+        *slot = (*slot).max(v.min(u.max_level()));
+    }
+}
+
+/// A smithy refit: armour or ram for one ship, to level 1 or 2 (commands
+/// 0x36, 0x37 armour M/S and 0x38, 0x39 ram M/S, menu 0x433e60).
+pub fn refit_of_command(c: u8) -> Option<(Upgrade, u8)> {
+    match c {
+        0x36 | 0x37 => Some((Upgrade::Armour, c - 0x36 + 1)),
+        0x38 | 0x39 => Some((Upgrade::Ram, c - 0x38 + 1)),
+        _ => None,
+    }
+}
+
+/// What a refit to `level` costs for a ship of type `kind`: 30/60 amber
+/// (armour, 0x42d960) or 25/50 (ram, 0x42d940) times the ship's size. The
+/// size is taken from the per-type values at 0x596110 (boat 10, merchant
+/// 20, royal ship 25, ...), which is an assumption.
+pub fn refit_cost(upgrade: Upgrade, level: u8, kind: u8) -> u32 {
+    const SIZE: [u32; 12] = [10, 20, 25, 20, 10, 10, 10, 10, 10, 10, 10, 20];
+    let base = match (upgrade, level) {
+        (Upgrade::Armour, 1) => 30,
+        (Upgrade::Armour, _) => 60,
+        (_, 1) => 25,
+        _ => 50,
+    };
+    base * SIZE[kind as usize % 12]
+}
+
+/// How much hull damage a ship of armour level 0-2 takes, how much harder
+/// a ram of level 0-2 strikes, and how much faster rigging of level 0-2
+/// sails. Placeholders: where the original applies these levels has not
+/// been found yet (it also has ships refitted at the smithy; here a level
+/// covers all of a player's ships). Weapon levels use the damage table.
+pub fn armour_factor(level: u8) -> f32 {
+    [1.0, 0.85, 0.7][level.min(2) as usize]
+}
+
+pub fn ram_factor(level: u8) -> f32 {
+    [1.0, 1.25, 1.5][level.min(2) as usize]
+}
+
+pub fn speed_factor(level: u8) -> f32 {
+    [1.0, 1.1, 1.2][level.min(2) as usize]
 }
 
 /// Effect animations (BOMB sequences): a hit, a splash and a sinking.
@@ -361,9 +753,20 @@ pub struct Effect {
     pub follow: Option<u32>,
     /// Loop until this age; `None` plays the frames once.
     pub life_ms: Option<f32>,
+    /// A tornado: moves with the wind and wrecks ships.
+    pub drift: bool,
+    /// Shows the ship being built at this shipyard (its frame is set from
+    /// the production's progress).
+    pub site: Option<u32>,
 }
 
 impl Effect {
+    /// Holds frame `n` (for animations driven by something else).
+    pub fn show_frame(&mut self, n: usize) {
+        self.age_ms = n as f32 * FX_FRAME_MS + 1.0;
+        self.life_ms = Some(f32::MAX);
+    }
+
     /// The current frame, or `None` once the animation has finished.
     pub fn frame(&self) -> Option<&[Layer]> {
         let step = (self.age_ms / FX_FRAME_MS) as usize;
@@ -379,7 +782,7 @@ impl Effect {
 
 /// The original's random generator (0x4bb670): a 32-bit LCG whose high
 /// half is used.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Rng(pub u32);
 
 impl Rng {
@@ -396,6 +799,32 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn ranges_and_rates() {
+        // Ballistae outrange scorpions; catapults cannot fire point-blank.
+        assert!(reach(6, 0).1 > reach(3, 0).1);
+        assert_eq!(range_cells(7, 0), (1, 3));
+        assert_eq!(reach(3, 0).0, 0.0);
+        // Faster with upgrades; heavy engines slower than light ones.
+        assert!(reload_seconds(3, 1) < reload_seconds(3, 0));
+        assert!(reload_seconds(7, 0) > reload_seconds(3, 0));
+        assert_eq!(Upgrade::of_command(0x46), Some(Upgrade::Reach(2)));
+        assert_eq!(Upgrade::of_command(0x3e), Some(Upgrade::Rate(0)));
+    }
+
+    #[test]
+    fn default_armings_fill_the_room() {
+        // The manual's displacement matches the default armings exactly.
+        for kind in 2..8u8 {
+            let load: u32 = DEFAULT_WEAPONS[kind as usize]
+                .iter()
+                .map(|&w| item_size(w))
+                .sum();
+            assert_eq!(load, capacity(kind), "kind {kind}");
+        }
+    }
+
     use super::*;
 
     const SWORDS: Crew = Crew {

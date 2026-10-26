@@ -343,8 +343,16 @@ indices 10, 9, 8, 11, 7, 6); 6 lightning 0x69 (10000/25), 7 small
 lightning 0x6a (3000/7), 8 flame 0x67 (6000/15), 9 ghost 0x66 (1000/1),
 10 protection from weapons 0x65 (1000/1), 11 protection from magic 0x68
 (1000/1); index 12 (4000/10, command 0x6b CBUT_HGORG?) is not in either
-temple's list. Effects: SLIGHT1-4 lightning, FIRE0-2 fire, PROTWSPR_64/128
-and PROTMSPR_64/128 protection auras for smaller/larger ships. The wind page (menu page 4) is a
+temple's list. The manual names these spells waterspout (tornado), view
+(view map; clears the clouds over an area), fireball (small lightning),
+phantom object (ghost; makes an object invisible), weapon shield and magic
+shield, and gives each a reach from the temple: 12 cells for whirlpool,
+reef, monster, lightning and fireball, 15 for waterspout, phantom and the
+shields, unlimited for wind, view and flame. Effects: SLIGHT1-4 lightning, FIRE0-2 fire, PROTWSPR_64/128
+and PROTMSPR_64/128 protection auras for smaller/larger ships, TRNDSPR
+tornado; the sea monster is `UMON<type><state><heading>` (type = the
+caster's nation's monster, as on the CBUT_MONSTER<n> button; states 0
+surfacing, 1 swimming, 2 diving, 3 striking, 4 dying; 13-36 frames). The wind page (menu page 4) is a
 compass: command 0x58 + direction in slots 6, 2, 1, 0, 4, 8, 9, 10 around
 0x57 in slot 5.
 
@@ -359,10 +367,8 @@ Combat tables:
   0x597170); the workshop (StudioClassTy, menu 0x4361c0) builds items 3-8
   (50 amber for 3-5, 70 for 6-8) in slots 0-2 and 4-6, and has a research
   page (cost tables 0x5971c4, 0x59720c, 0x597254). Menus by class (vtable
-  slot 0x68, 0x68 after GetMessage): smithy 0x433e60 (armour levels 0x36,
-  0x37 for 30/60 amber, ram levels 0x38, 0x39 for 25/50, research time
-  150/200; refits 0x49-0x4e), sage school 0x430f90 (0x3c, 0x47, 0x48, 0x4f
-  and the special ship upgrades 0x50-0x53).
+  slot 0x68, 0x68 after GetMessage): smithy 0x433e60 (ship refits, see
+  below), sage school 0x430f90 (research, see below).
 - 0x5964d8: items each ship type carries when built, 40 bytes per type
   (u32 count, then up to nine u32 items): royal 0,2,4,8; bomber 0,1,4,6,7;
   boarder 1,2,2,3; rammer 1,4,5; ship killer 5,4; men killer 3,0; quick
@@ -377,6 +383,62 @@ Combat tables:
   rows C (35, 68, 100) is used here as boarding strength (an
   interpretation). Rows 9-18 belong to the special ships and upgrades.
   0x4ac1b0 and 0x4ac1e0 scale values by them; 0x4ac140 caches A x 15.
+- The warship menu (0x4e6980) opens the behaviour page (page 5) with
+  0x6c `CBUT_BEHMAIN`: slot 0 guard 0x6f, 1 ram attack 0x79, 2 board attack
+  0x78 (ship byte +0x684 bits 0-2; a set switch has button flag 0x20), 4
+  convoy 0x6d, 5 fire on aggressor 0x72 (enabled only while guarding;
+  ship byte +0x633), 6 scout 0x76, 8 patrol 0x6e, 9 guard zone 0x74, 10
+  attack zone 0x75. Commands 0x70, 0x71, 0x73, 0x77 and 0x7a-0x7c are
+  `BEHFGUARD`, `BEHRAID`, `BEHFAGR`, `BEHRCZONE` and the merchants' amber,
+  fish and whale zones.
+- Once the sage school's arming (+0xa3) is above 1, its menu (0x430f90)
+  offers the nation's unique ships in slots 4 and 5: Greeks 0x50
+  `CBUT_UPGFIRE` (fire ship) and 0x51 `CBUT_UPQLIME` (quick lime ship),
+  Persians 0x52 `CBUT_UPFRAM` (fire rammer) and 0x53 `CBUT_UPDEAD` (ship of
+  the dead), 2000 amber each, studied once (player dwords +0x6e/+0x72,
+  +0x76/+0x7a, +0x7e/+0x82, +0x86/+0x8a: done and in progress), each also
+  allowed by a mission technology bit (+0x4e bits 6, 2, 0; +0x8bce bit 1).
+  The unique ships' weapons are items 9-11 (Greek fire, quicklime, barrel
+  with powder): their ranges are the last three of the 12 per level at
+  0x598154 (2/2/3 and 3/3/4 cells, the barrel 0), and the Greek fire's rate
+  of fire the tenth row at 0x597a3c (50/70/80).
+- The workshop's research page (0x4361c0, menu page 3) has three groups
+  (button suffixes W, M, S; commands 0x3e-0x46 `CBUT_UPGARMING<group><n>`),
+  each with three upgrade kinds whose current levels are player bytes and
+  whose maximum levels are at 0x59715c, 0x597158, 0x597160 (W M S: 0 1 2,
+  2 2 2, 2 2 2). Costs by kind at 0x5971c4, 0x59720c, 0x597254: nine amber
+  values (group x 3 + level) then nine fish values, e.g. 1500/1700/1900
+  amber and 200/250/290 fish for the first kind. The rows are the item
+  groups (W = marines 0-2, M = light weapons 3-5, S = heavy weapons 6-8);
+  the levels are player bytes +0x8e+group (first kind), +0x95+group
+  (second) and +0x9c+group (third). The third is the damage level: the
+  damage routine 0x4bb670 calls 0x4bb490 for item i with level byte
+  +0x9c + i/3, which picks the A, B and C columns of the item's row. Its
+  buttons are 0x3f, 0x42, 0x45 (`CBUT_UPGARMINGW1`, `M1`, `S1`), costing
+  1500/1700, 1700/1800, 1800/2600 amber (0x597254; the following values
+  100-170 are probably study times). The first kind (`<group>3`, 0x3e,
+  0x41, 0x44; slots 0, 4, 8) is the rate of fire: the item info routine
+  0x4a9870 reads it from u32 0x597a3c[item x 3 + level] (120/150/150 for
+  marines, scorpion 100/130/130, gastraphetes 120, small catapult
+  90/110/110, ballista 70/90/90, big catapult 60/80/80, onager 70/90/90).
+  The second (`<group>2`, 0x40, 0x43, 0x46; slots 1, 5, 9) is the range in
+  cells: bytes 0x598154[level x 12 + item] are the longest range (level 0:
+  3 2 2 3 3 3 5 3 4 for items 0-8, then 2 3 0 for the special weapons;
+  levels 1 and 2 follow) and 0x598178[...] the shortest (0 for marines,
+  scorpions and gastraphetes, 1 for catapults and onagers, 2 for
+  ballistae). The manual's comparison chart gives the same figures (its
+  minimum ranges are one more, counting the ship's own cell). The main
+  workshop page opens this one with 0x3d.
+- The sage school (SchoolClassTy, menu 0x430f90) studies per-player levels
+  0-2: weapons (0x3c, player byte +0xa3, 1200/1300 amber at 0x5971ac),
+  rams (0x48, +0x5e, 1000/1500 at 0x42d9a0), armour (0x47, +0x5f, same
+  costs) and rigging or movement (0x4f with the move button, +0x51,
+  2000/3000 at 0x42d980); Greek schools add the special-ship upgrades
+  (0x50-0x53, 2000 amber, after arming level 2). The damage level is the
+  workshop's, not this "arming". The smithy (0x433e60) then
+  refits ships to armour M/S (0x36, 0x37) and ram M/S (0x38, 0x39) up to the
+  researched level, for 30/60 and 25/50 amber times a ship size factor;
+  its 0x49-0x4e are the W/M/S variants.
 - Building records (66 fields): field 7 condition in percent; fields 22-33
   flag twelve emplacements on forts (wood fort 3, stone fort 8), contents
   unknown.
@@ -424,9 +486,30 @@ whirlpools, monsters, treasures, houses) describe map objects, not tiles.
 Entry width/height give the grid size in 64-pixel cells (24x24 to 36x36). The
 payload is 8 layers of `width * height` cells, each `u8 variant, u8 tile set
 id`; `00 00` is empty. Layer 0 is the base (sea `00`, shelf `01`, island
-ground `07`/`08`), layer 1 shoals, and higher layers shores, grass, desert,
+ground `07`/`08`), layer 1 shoals (tile sets `02` `b_ban01_`, `03`
+`b_ban02_`; the manual says royal ships, bombers and rammers cannot pass
+over them), and higher layers shores, grass, desert,
 rocks, forests, hills and ruins. Drawing the sea tile `b_sea00_001` under
 every cell and then the layers in order, row-major, reproduces the map.
+
+## Treasures and heroes
+
+A treasure record's kind (field 4) is grouped by 0x4b9740: kinds 0-5 and 8
+act when taken (0-2 add field 8 to the player's amber, 0x4a8de0; 3-5 to
+the fish, 0x4a8c30; 8 casts spell field 7 where it lay, 0x4b9bf0: 1 reef,
+2 whirlpool, 3 waterspout, 4 monster, 9 phantom, 10 and 11 the shields on
+the ship); 6, 7 and 27 are carried to a settlement (6: field 7 the deposit
+class, 0x190 amber or 0x191 fish, field 8 the amount; 7: field 7 item << 16
+| count; 27 the scroll of knowledge); 9 (a spell, field 7) and 17-26 are
+kept aboard; 10-14 (torch of Ares, Armour of Ares, feather of Boreas,
+magic wood, mirror shield of Athena) and 15-16 (cup of Asclepius, Golden
+Fleece) are lasting gifts. Kinds 18-26 are the heroes' items (hero = kind -
+18: Jason, Theseus, Orpheus, Zetes, Hercules, Argus, Atalanta, Odysseus,
+Perseus, the order of the hero houses' field 22, the `COBJ_HEROYnn`
+portraits and the descriptions in the string resources); 17 is taken to be
+the Gorgon's head. Panel pictures `COBJ_TREAS00`-`20` show the barrel,
+weapons, magic, the gifts, the Fleece, the nine items, the scroll and the
+Gorgon's head.
 
 ## Mission objects
 
@@ -457,7 +540,7 @@ game's own, from its error strings.
 | 0x192 | `WhaleClassTy` | leviathan zone | 7, 8 | 9, 10: width, height |
 | 0x1f4-0x1f6 | `CyclopClassTy` | cyclops, minotaur, amazon | | |
 | 0x1f7 | `CyclopsJamClassTy` | | | |
-| 0x1f8, 0x1f9 | `HarpyClassTy` | harpy, dragon | | |
+| 0x1f8, 0x1f9 | `HarpyClassTy` | harpy, dragon (sent out by their nests) | 4, 5 | 6: player, 7: 1 (new), 8-10: the nest's fields 7, 8, 11 |
 | 0x1fa | `MedusaClassTy` | medusa (`GORG%1d`) | 5, 6 | 7, 8: area |
 | 0x1fb | `UMonsterClassTy` | sea monster | 7, 8 | 4: type |
 | 0x1fc | `LandingClassTy` | landing party | | |
@@ -466,7 +549,7 @@ game's own, from its error strings.
 | 0x259, 0x25a | `ReefObjClassTy` | big, medium reef | 5, 6 | 7: reef kind 1-3 |
 | 0x25b-0x25d | `LightningObjClassTy`, `TornadoClassTy`, `SlightClassTy` | weather | | |
 | 0x25e | `VolcanoClassTy` | lava flow | 6, 7 | 4: lava sequence 0-10 |
-| 0x2bc | `TreasClassTy` | treasure bookkeeping, not placed on the map (object kind 0) | | 4: treasure index |
+| 0x2bc | `TreasClassTy` | treasure (sprite sequence `TREAS<kind>`) | 9, 10 | 4: kind 0-27, 5: holder id or -1 for lying on the map, 7: parameter, 8: amount |
 | 0x2be | `SheepsObjClassTy` | sheep flock | 4, 5 | 7: count |
 | 0x2bf | `TraksClassTy` | music tracks (not drawn) | | |
 | 0x2c1 | `SkarbClassTy` | | | |
@@ -500,6 +583,14 @@ per-class offset (castles: sea 6, 12 and war 4, 13). Their frame period is
 30/60/30, whirlpool 60/60/60, castle 300/20/100/75). A game tick is 20 ms
 at speed 3; the speed table at 0x5bed7c has one 24-byte row per speed.
 
+Ship composites `SHIP_<letter><hull nation><owner nation><player><mode>`:
+mode 0 is the ship afloat (152 frames: 0-31 are 8 headings x 4 frames
+under sail; 88-151 are 8 headings x 8 frames furling the sail, from full
+sail to furled; 32-87 not identified), mode 1 its sinking (20 frames) and mode 2 the hull
+under construction at a shipyard (80 frames: 40 lying east-west from keel
+to finished ship, then 40 north-south); modes 1 and 2 exist only with
+owner and player `00`.
+
 Ship headings 0-7 run counter-clockwise from east (0 = east, 2 = north,
 4 = west, 6 = south). Ship types (record field 7, sprite letter `'A' + type`, cost table index):
 0 boat, 1 merchant, 2 royal ship, 3 bomber, 4 boarder, 5 rammer, 6 ship
@@ -515,6 +606,41 @@ crews add to them (0x43e5c0).
 Palette index 0xfe in object sprites is a shadow: the destination pixel is
 remapped through a darkening table (0x5c1358).
 
+## Control bar tabs and panels
+
+The bar ends in five 42-pixel tabs at y 558 (0x511c00, ids 1000-1004,
+left to right at x 0, 44, 85, 126, 167): object panel (wheel), files
+(disk), game settings (wrench), sound (clef), help and tasks (scroll). The
+tab images `BMARK_<name>_00/01/02` (normal, hover, active) do not follow
+that order by name: the disk is `BMARK_VTASK`, the clef `BMARK_CFG`, the
+scroll `BMARK_VHELP`. Panels: `CFILE_BKGND` (200x454; name field, list
+with scrollbar `CFILE_SLSL`, buttons `CFILE_BMRKSAVE/LOAD/DEL`, then
+`CFILE_RSTART`, `CFILE_MMENU`, `CFILE_QUIT`, captions drawn by the game;
+0x50a700), `CCFG_BKGND` (202x552) with slider tracks `CFGSCR_GSPD/KSPD/
+MSPD` and thumb `TRACKBAR_BB`, sound `CFGSND_*`, help `HVIEW_BKGND`. The
+pause sign is the `WIN_PAUSE` sequence (197x156, 31 frames).
+
+## Fog of war
+
+`maplib.dkx` holds two layers of 64x64 one-bit masks, `b_DARK00`-`15`
+(never explored) and `b_FOG00`-`15` (explored, out of sight), with 8x8
+minimap versions `s_DARK`/`s_FOG`; each set is 16 dithered edge shapes
+(00 full, 15 empty) chosen from the state of the cell's surroundings.
+DarkTy (`Grig\dark.cpp`, 0x48b3a0) keeps a byte per cell; 0x48b9e0
+registers a temporary viewer (cell, player, radius, duration in ms), e.g.
+the temples' 3000 ms reveals. Units' ordinary sight ranges have not been
+traced.
+
+## Menus
+
+`controlm.dkx` (in the installation root) holds the front end: 800x600
+backgrounds `<theme>M_BKGND_00`-`05` (title, dimmed title, best
+conquerors, mission accomplished, mission failed, your mission), the
+loading screen `<theme>LOADING`, button shapes `M_BUT0`-`3` (174x40 and
+116x40; captions are drawn by the game), list and scroll controls, and
+fonts `S_FNT_<size><style>` (sizes B, L, M, S; style S plain dark, H gold).
+`data/datamap.dkx` is the scenario editor's (title `ZAST`).
+
 ## Sounds
 
 `sound/sounds.dkx` holds 163 sounds (kind 2): a `WAVEFORMATEX` (18 bytes;
@@ -522,10 +648,245 @@ all PCM, mono, 16-bit, 22050 Hz), the sample data length (u32), four more
 bytes, then the samples. Text entries `SND_n` list the sounds that may play
 for game event `n`: a 24-byte header (u32s 0, flags, count, 10, 10, 0),
 then `count` NUL-terminated names, the first preceded by a byte with one
-high bit per name (0x80, 0xc0, 0xe0). `SOUNDLIST` lists the events. Music:
-`sound/ancientN.mid` (MIDI) and CD audio tracks (`TRACKS_CD` in missions).
+high bit per name (0x80, 0xc0, 0xe0). `SOUNDLIST` lists the events.
+
+Music: missions' `TRACKS_MID` (Other(20)) is a playlist: a 28-byte header
+(u32s 0, 0, 260, 4, 10, 10, 0; entry size and count) then four 260-byte
+entries naming `Ancient1`-`Ancient4` (`sound/ancientN.mid`, standard MIDI
+files written for the sound card's General MIDI synthesizer).
+`TRACKS_CD` lists CD audio tracks 1-8 (not on the ISO; taken here as the
+audio tracks 2-9 after the data track). Per-mission technology masks
+(player bytes +0x45, +0x4e, +0x8bce) are not in `DESCRIPTOR` (its 104-byte
+player blocks hold only the human/computer flag, amber, nation, slot and
+fish, and the rest of the entry is the same in every mission), `HEAD_CUST`,
+`ORIGINAL`, `HERO_ARR` (nine u32s, one per hero), `FLOT` or `LIST_OBJ`
+(a list of map positions in 1/64-cell units); they may be set in code.
+
+## Mission brains and technology permissions (partly decoded)
+
+Each campaign mission has a script compiled into the executable
+(`E:\MyProjects\ancient\brain\miss000.cpp`-`miss013.cpp`, plus
+`missCOM.cpp` and `missweb.cpp`; functions roughly 0x449000-0x46f000). A
+brain runs the computer players' groups of ships on a timetable (e.g.
+0x44d0e0 calls a group routine every 50 ticks per group and ship), reacts to
+events (message 0x5d94: a treasure delivered; kind 0x1b, the scroll,
+delivered to a settlement or town (0x32/0x33) enables technology bits and
+shows string 2104 "You can now upgrade to silver armor"), and shows the
+story's messages (string resources 2104-2121: "You can now produce strong
+weapons", "You can now build Bomber ships", "You can now research Greek
+Fire", "You can now open the way to Lacridas", "Defend the fortress with
+Hercules's sword!", "The parchment that describes the way to Colchis is
+delivered to the town Iolcus", ...). `HERO_ARR` (nine u32s, by hero) marks
+the heroes a mission asks to recruit: miss001 Jason, 002 Argus, 003
+Theseus, 004 Perseus, 005 Odysseus, 006 Orpheus and Zetes, 007 Hercules
+and Atalanta. The campaign missions' `CONDITIONS` only ever say "kill all
+enemies"; their real objectives (bring the parchment to Iolcus, recruit a
+hero, bring Jason and the heroes to a settlement, ...) live in the brains.
+
+In the executable each brain's per-fleet handlers come first and its main
+function (the message handler that creates the fleets, lays deposits and
+dispatches each member to its handler) last: miss011's handlers are
+0x46b8d0-0x46d830 and its main 0x46e8e0, miss012's 0x46f760-0x472370 and
+0x472900, miss013's 0x473f40-0x476dc0 and 0x477930. Mains: miss000
+0x449b10, miss001 0x44af70, miss002 0x44d0e0, miss003 0x44fd90, miss004
+0x453b00, miss005 0x457950, miss006 0x45b280, miss007 0x45f770, miss008
+0x463240, miss009 0x4663d0, miss010 0x46a0f0.
+
+The brains share a small runtime (`missCOM.cpp`, 0x478000-0x47c000). A brain
+has groups of members (`this + 0x2c + group * 0xc` points to the members,
+0xb4 bytes each); each member is a fleet created by 0x479200(group, member,
+fleet kind, flags, flags, list, n): 0x4a0480 op 1 makes the fleet for the
+brain's player (`this[0x39]`), op 8 adds ships to it from a list of (x,
+y, a, b) entries. Each member runs a state machine: +0xc the state, +8 the
+previous one, +0x10 "started", +0x18 the start tick and +0x14 a timeout.
+Primitives, each issuing an order on first call and then waiting for the
+fleet's report (0x4a0f60 query, 0x1f5 = done, result 0xb = arrived) or the
+timeout before switching state with 0x479750:
+0x47a3b0 wait(next, ms); 0x47a450 move(ok, failed, x, y, a, b, ms) (order
+100, 0x479870); 0x47a570 gather in a zone (order 0x78, 0x479970: rectangle,
+resource class e.g. 0x191 fish); 0x47a6a0 attack a zone (order 0x71,
+0x479a40: rectangle from a per-mission table, strength by difficulty); 0x47a900
+patrol a list of (x, y, pause) points (order 100 for each in turn); 0x4797e0
+set the fleet's behaviour (order 0x72). The brain's tick (message 0) runs
+member m of group g every 50 ticks at an offset of 5 * m; every 125 ticks
+it judges the mission (vtable + 8, e.g. 0x448e90 for miss000, which counts
+objects with 0x4c46c0) and ends it as won or lost. At the start (message
+0x8d1) miss000's brain creates its three barbarian fleets and gives their
+player 4000 amber and 2000 fish (2000 and 1000 on the second difficulty,
+`+0x32a1`). Its members: 0x4495a0 waits, then attacks a zone from table
+0x5ad940; 0x449680 fishes at a zone, sails, waits 1.5 s, fishes again,
+sails, waits 3 s; 0x449810 patrols, and once the player has more warships
+(types 4-7) than a difficulty-dependent number sails to one of two places
+and attacks.
+
+More `missCOM` pieces: event 0x47a060 fires when one of the fleet's ships is
+hit by the watched player (at least a given time into the step) and sets
+the attack area around the attacker; 0x47a2a0 compares the fleet's size
+(0x479d60) with a number once the step has lasted long enough (0 equal, 1
+at least, 2 more, -2 fewer, -1 at most) and 0x47a1e0 does so at once; a
+brain may rewrite these records' numbers at run time (miss001's raid:
+(8, 6 or 4 + random 0-3) x 1500 ticks, at least 2-4 ships, back home at
+1-3). A fleet created with kind 11 holds buildings and builds: other fleets
+count their ships by type (0x479dc0) and, when short, queue a request
+(brain + 0x114, codes 200 + ship type), which the builder serves with
+0x47b130 (an order to make the ship, then a wait from a difficulty table)
+and the new ship joins the fleet that asked. State 0xffffff0 means "back to
+the state before". 0x48b180 and 0x48ebc0 lay an amber deposit (class 0x190)
+or a fishing ground (0x191) at a cell.
+
+Campaign state carries over between missions: at the start (message
+0x8d1) a brain restores the human's technology bits (+0x45, 12 bytes),
+rigging, ram and armour levels, the workshop's levels (+0x8e, +0x95,
++0x9c), the arming (+0xa3), the spells known (+0xb4, +0xbc) and the unique
+ships studied (+0x6e...) from the campaign record at game + 0x3361
+(0x4a9740), and on message 2 puts the heroes it carries (nine 16-byte
+entries at game + 0x33be: present, object id or cell) into the player's
+buildings (0x424ed0). The computer builds ships for its empty fleets
+through a production order (0x48b180 and 0x48ebc0: message 0x167e with the
+ship type, a fleet and difficulty-dependent amounts from tables such as
+0x5adb38).
+
+Technology permissions are a bit array per player at +0x45 (bit n is bit
+`(n ^ 7) & 7` of byte `(n ^ 7) >> 3`), set and cleared by 0x4a9810 (player,
+bit, value) and tested with `xor dl, 7; bt`. What each bit allows (the
+checks: 0x43d430 buildings, 0x43da20 equipment and ship types, 0x430f90
+the sage school, 0x436030 and 0x4361c0 the workshop, 0x43c740 settlements,
+0x417ff0 fleets, 0x437de0 and 0x438b80 the temples, spell bits from
+0x42fd70):
+
+| Bits | Allows |
+|------|--------|
+| 0-7 | building a port, medium fortress, sage school, shipyard, smithy, school, sea temple, war temple (the last three in towns) |
+| 73, 74 | building a small, big fortress (the big one in towns); docks are free |
+| 8, 10, 11, 13 | settlement commands 0x05 (load), 0x3a (become a town), 0x11 (repair), 0x12 |
+| 37 | upgrading a shipyard to a dock (0x3b) |
+| 15-17 | items of group item / 3 (marines, medium, strong weapons; also the arming studied >= the group) |
+| 18-26 | workshop research of group g: range 18 + 3g, damage 19 + 3g, rate 20 + 3g |
+| 29, 30 | armour level 1, 2 (silver, golden): fitting it (also the armour research), and researching it from level - 1 |
+| 32, 33 | ram level 1, 2 (fitting); ram research level l to l + 1 needs 24 + l |
+| 38 + k | ship type k (bombers also need armour research, rammers ram research, the unique ships 8-11 their study) |
+| 50-53 | sage school: arming, ram research, armour research, rigging (speed) |
+| 76-79 | sage school specials: Greek fire, quicklime (Greeks), the Persians' two |
+| 54-67 | temple spells: spell 0-12 -> 59, 55, 54, 57, 58, 60, 61, 62, 63, 64, 66, 67, 56 |
+| 71, 72 | fleet commands 3 and the group behaviours 0x70, 0x73 |
+| 80 | building the Argo (command 0x7d) |
+
+The campaign starts (miss000, 0x449160) by clearing 4-7, 10, 17, 21-37,
+41, 46-59, 61-65, 67, 74, 76, 77 and setting 16 and 71. Each later
+mission's start function (the brain's vtable slot after its main) grants
+more: miss001 (0x44a440) 4, 21-23, 31, 34; miss002 (0x44bb60) 5, 10;
+miss003 (0x44e210) 6, 7, 37, 60, 66; miss004 (0x451520) 27, 29, 32, 35,
+51, 52, 59, 64, 74; miss005 (0x454f00) 17, 50, 57, 63; miss006 (0x45b020)
+25, 54; miss007 (0x45c980) 26, 28, 33, 51, 55; miss008 (0x461010) 53, 58;
+miss009 (0x4648a0) 24, 30, 36, 41, 52, 67; miss010 (0x467e30) 62;
+miss011 (0x46e110) 46, 47, 76, 77 (each also re-grants the scrolls of two
+missions before). A scroll of knowledge (treasure kind 27, field 7 its
+number) delivered to a settlement or town grants, by its number: 1 (miss002,
+held by an amazon lair) 29, 35, 52 ("You can now upgrade to silver
+armor"); 3 (miss003) 17, 50 (strong weapons); 4 (miss004) 25 (their
+power); 5 (miss005) 26 (their rate); 6 (miss006) 53 (speed of ships); 11
+(miss007) 41 (bombers); 12 (miss007) 30, 36, 52 (golden armour); 13
+(miss009) 46, 76 (Greek fire). Other scrolls only say "You have got a
+scroll of knowledge". Brains also grant computer players bits (78, 79: the
+Persians' specials).
+
+Nests (HarpyNestClassTy, message handler 0x41d4a0) send out their creature
+(HarpyClassTy 0x4207b0: a harpy from 0x45, a dragon from 0x44) at the start
+(message 0x8d1) and, while record field 9 (creatures left) is above zero,
+another once theirs has fallen and 0xd8cc - 6000 x field 10 milliseconds
+have passed. The creature's states (0x41f680) name its sprites
+`HRPSPR_`/`DRGSPR_` + state + heading (+ `S` the shadow, + `M`): 0 resting
+(odd headings; dragons have none), 1 waiting a random time shortened by
+its parameter, 2 taking off, 3 flying to a target cell, 4 turning, 5
+striking, 6 landing, 7 dying. The flying sprites are tall: the creature is
+drawn high in the frame, its shadow on the water below.
+
+Lairs (CreaturesFlatClassTy, handler 0x414f00; record field 8 the most
+creatures about, field 9 their speed) send a cyclops, minotaur or amazon
+(CyclopClassTy 0x1f4-0x1f6) onto a free land cell beside them every (10 -
+field 9) x 20-25 time units while fewer are out, to roam the island about
+the lair. Their sprites are `CLPSPR_`/`MNTSPR_`/`AMZSPR_` + state +
+heading: 0 appearing (out of smoke), 1 walking, 2 standing, 3 throwing (the
+amazons' in two parts, `AMZSPR_3<heading><part>`), 4 turning, 5 vanishing.
+
+Command buttons (`CBUT_<name>_00`-`_30`, 49x49; the last frame greyed for
+a disabled command) are animated sprites: the command panel (0x4f31b0)
+loads them through 0x542940 type 0xb (0x542f20) with every frame, or, when
+a display setting asks (panel byte +0x15c set, or game word +0xa81 =
+0xd0dd), with only frames 0 and 30.
+
+Command 0x7d builds the Argo (button `CBUT_BLD<nation>ARGO`): shipyards
+offer it after their ship types (0x4164e0) while permission bit 80 is set,
+at a royal ship's price; miss002's brain sets bit 80 when Argus enters one
+of the player's buildings (message 0x5d99), and building the Argo clears
+it (0x416a40).
+
+Commands 0x7e, 0x7f and 0x80 are "Sell 100 items of fish", "Buy 100 items
+of fish" and "Sell town" (buttons `CBUT_SELLFISH`, `CBUT_BUYFISH`,
+`CBUT_SELLTOWN`; button switch 0x4f08a0, jump table 0x4f1938 by command -
+1). Settlements offer Sell town in slot 7 (with command 0x12 in slot 6,
+both behind permission bit 13; command 0x12 is "Sell item", `CBUT_SELL`);
+where the fish trade is offered is not known (perhaps only between
+players in multiplayer). The town's order handler (0x43b290, internal ids
+0x138a-0x138e) trains items with 0x138d (paying 0x597164 amber by group
+and 0x597170 fish by item) and, for Greek towns, answers 0x138e with
+message 0x5d9c (the town's owner and cell), likely the handing over of a
+sold town; what selling pays is not decoded.
+
+At a mission's end the brains' shared slot 0x478e30 fills the statistics
+at game + 0x3309 (twelve dwords, shown by 0x539b20 with strings
+1047-1058): enemy ships destroyed (from the player's kill counts by ship
+type, player + 0x704), boarded (+0x894), enemy and monsters' buildings
+destroyed (by class index 0-23, 16-23 the monsters'), monsters killed (ten
+kinds, +0x7a0), ships and buildings lost (+0x3e4), fish caught, amber
+earned, amber left, treasures found and the score: ships and monsters by
+their points (0x59b358: the ships' amber costs; monsters 700, 400, 200,
+200, 600, 1100, 1300, 800, 200, 900 by kind), less the ships lost, plus
+the amber earned, a fifth of the fish and 600 per treasure, a tenth of
+it, added to the campaign's running score. Buildings score nothing: the
+price lookup 0x42d8b0 is given the index, not the class.
+
+Some objects are created by the scripts at the start: 0x411010 (world,
+class, x, y, level, a, b) makes a castle record (class, 2, 4, 1, 0, x, y,
+100, ..., fields 22-24 level, a, b): miss007 the wind wizard (0x42) at
+(46, 73) or (16, 74), level difficulty + 5, a = b = 2 x difficulty + 8;
+miss009 the fire wizard (0x43) at (30, 1), level 2 x difficulty + 5, a = b
+= 5 x difficulty + 10. 0x41dd30 makes a nest (class, 2, 4, 1, x, y, 0,
+...): miss010 the dragon's (0x44) at (59, 4). Message 0x158c1, sent to the
+object at a cell with a five-dword treasure entry, adds the treasure to
+its inventory: the fire wizard gets scroll 13 and a disposable magic, the
+dragon the Golden Fleece (kind 16). 0x520c70 lays a treasure on a cell
+(miss010: 2000-2500 amber).
+
+Buildings, lairs, nests and monsters hold treasures in their records: a
+count, then five dwords per treasure like a treasure record's fields 4-8
+(kind, holder -1, 0, parameter, amount), at field 10 for lairs (0x46-0x48),
+11 for fortresses and barbarian structures (0x34-0x36, 0x3f-0x41), 12 for
+nests (0x44, 0x45), 17 for sea monsters and 60 for settlements and towns.
+They fall when the holder is destroyed; this is where the campaign keeps
+its scrolls and most heroes' items.
+
+## Videos (`video/*.avi`; verified)
+
+RIFF AVI files with a video and a PCM sound stream (`00dc`/`01wb` chunks in
+`movi`, some inside `rec ` lists): `logo1` (K.E. Media, 512x384 Cinepak,
+44.1 kHz stereo), `logo2` (Re:Action, 640x480 Cinepak, 22 kHz mono),
+`logo3` (MegaMedia, 320x240 Microsoft Video 1 `CRAM`, 16-bit RGB555),
+`title` (the title sequence), `mis000` (the story's opening, 2751 frames)
+and `outro0` (its ending), the last three 400x184 Cinepak at 20 frames a
+second with 22 kHz stereo sound. Cinepak frames are strips of 4x4 blocks
+coded by V1 (one 2x2-upscaled entry) or V4 (four entries) codebooks of
+luma quads with shared chroma (r = y + 2v, g = y - u/2 - v, b = y + 2u);
+Video 1 is 4x4 blocks from the bottom up, each a skip, a fill, or two or
+eight colours picked by a bit mask. `tasks.dkx` in the same folder is not
+a video.
 
 ## Missions (partially understood)
+
+`WIN_VIEW` (record, 20 dwords, read by 0x4ed5a0 into game + 0x2ef5) holds
+each player's starting view by player id (`nation * 4 + slot`): the cell
+at the top left of the view, x in the low word and y in the high one; the
+game sends it with message 0xcba when the mission starts.
 
 `CONDITIONS` (record, 11 u32 flags, read at 0x4ed4c0 into the game object
 at +0x32a5; missing: only flag 0) lists the mission's victory conditions,

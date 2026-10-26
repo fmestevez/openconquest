@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -18,10 +18,14 @@ use crate::audio::Audio;
 use crate::commands::{menu, Command, Page};
 use crate::economy;
 use crate::magic::{self, Spell, Target, Temple};
+use crate::menus::{Backdrop, Button, MenuHit, MenuView, Menus};
+use crate::music::Music;
 use crate::objects::Caches;
 use crate::objects::{Resource, SHIP_NAMES};
+use crate::panels::{self, PanelHit, PanelView, Panels, Slider, Tab};
 use crate::render::{hit_test, Frame, MinimapRect};
-use crate::scene::Scene;
+use crate::save::SaveGame;
+use crate::scene::{Order, Scene};
 use crate::text::TextRenderer;
 use crate::ui::{GameView, Interface};
 use crate::view::{Camera, Screen};
@@ -34,14 +38,151 @@ const ZOOM_STEP: f32 = 1.15;
 /// Cursor travel (screen pixels) after which a right-button press is a pan
 /// rather than a click.
 const CLICK_SLOP: f64 = 5.0;
+/// -1, 0 or 1 by the sign of `v` (`f32::signum` gives 1 for 0, which
+/// would scroll the map with no key held).
+fn direction(v: f32) -> f32 {
+    if v > 0.0 {
+        1.0
+    } else if v < 0.0 {
+        -1.0
+    } else {
+        0.0
+    }
+}
+
 /// How long status messages stay on screen.
 const STATUS_TIME: Duration = Duration::from_secs(3);
+
+/// Window pixels the mouse must move before a click becomes a box.
+const BOX_THRESHOLD: f64 = 6.0;
+
+/// Where the `k`-th ship of a group goes relative to the point it is sent
+/// to: rings of places 48 pixels apart.
+fn group_offset(k: usize) -> (f32, f32) {
+    if k == 0 {
+        return (0.0, 0.0);
+    }
+    let ring = ((k as f32).sqrt().ceil()) as i32;
+    let around = (8 * ring) as usize;
+    let a = (k % around) as f32 / around as f32 * std::f32::consts::TAU;
+    let r = 48.0 * ring as f32;
+    (r * a.cos(), r * a.sin())
+}
+
+/// Mission groups on the front end, by archive name prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Category {
+    Campaign,
+    Single,
+    Battle,
+}
+
+impl Category {
+    fn prefix(self) -> &'static str {
+        match self {
+            Category::Campaign => "miss",
+            Category::Single => "single",
+            Category::Battle => "battle",
+        }
+    }
+
+    fn of(mission: &str) -> Option<Self> {
+        [Category::Campaign, Category::Single, Category::Battle]
+            .into_iter()
+            .find(|c| mission.starts_with(c.prefix()))
+    }
+}
+
+/// The front-end screen shown instead of the game.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum MenuState {
+    Main,
+    Missions(Category, Option<usize>),
+    Load(Option<usize>),
+    Briefing,
+    Outcome(crate::scene::Outcome),
+    /// The best results.
+    Best,
+    /// The multiplayer lobby: a battle map to host (with the number of
+    /// players), or an address to join.
+    Multiplayer(Option<usize>),
+    /// Hosting or joining, until everyone is there.
+    Waiting,
+}
+
+/// What a front-end screen shows, owned (see `MenuView`).
+struct MenuPage {
+    backdrop: Backdrop,
+    title: Option<String>,
+    items: Vec<String>,
+    selected: Option<usize>,
+    text: Vec<String>,
+    notes: Vec<String>,
+    buttons: Vec<Button>,
+    first: usize,
+}
+
+impl MenuPage {
+    fn view(&self, hover: Option<(f32, f32)>) -> MenuView<'_> {
+        MenuView {
+            backdrop: self.backdrop,
+            title: self.title.as_deref(),
+            list: (!self.items.is_empty()).then_some((self.items.as_slice(), self.selected)),
+            first: self.first,
+            text: &self.text,
+            notes: &self.notes,
+            buttons: &self.buttons,
+            hover,
+        }
+    }
+}
+
+/// Player settings from the wrench panel, as slider positions 0..1.
+#[derive(Debug, Clone, Copy)]
+struct Settings {
+    game_speed: f32,
+    scroll_speed: f32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            game_speed: 1.0 / 3.0,
+            scroll_speed: 0.5,
+        }
+    }
+}
+
+impl Settings {
+    /// Simulation speed: 0.5x to 2x, normal at a third of the way.
+    fn speed(&self) -> f32 {
+        if self.game_speed <= 1.0 / 3.0 {
+            0.5 + 1.5 * self.game_speed
+        } else {
+            1.0 + 1.5 * (self.game_speed - 1.0 / 3.0)
+        }
+    }
+
+    /// Scrolling speed factor: about 0.35x to 2.8x, normal in the middle.
+    fn scroll(&self) -> f32 {
+        2f32.powf((self.scroll_speed - 0.5) * 3.0)
+    }
+}
 
 pub struct Options {
     pub fullscreen: bool,
     pub edge_scroll: bool,
     pub window_size: (u32, u32),
     pub mute: bool,
+    pub soundfont: Option<std::path::PathBuf>,
+    /// The ripped CD audio tracks' folder.
+    pub cd_audio: Option<std::path::PathBuf>,
+    /// Show the company logos and title sequence at start-up.
+    pub intro: bool,
+    /// Fog of war.
+    pub fog: bool,
+    /// The computer players' difficulty (`scene::EASY`, `NORMAL`, `HARD`).
+    pub difficulty: usize,
 }
 
 struct Gfx {
@@ -73,6 +214,10 @@ pub struct App {
     right_press: Option<(PhysicalPosition<f64>, bool)>,
     minimap_drag: bool,
     selected: Option<u32>,
+    /// Other own ships selected with it.
+    group: Vec<u32>,
+    /// Where a left-button selection box started.
+    box_from: Option<PhysicalPosition<f64>>,
     /// A command waiting for a target on the map (e.g. Move).
     pending: Option<Command>,
     /// Which menu of the selected object is shown.
@@ -81,6 +226,63 @@ pub struct App {
     briefing: bool,
     /// Sound output, if a device is available.
     audio: Option<Audio>,
+    /// Music, if a SoundFont is available.
+    music: Option<Music>,
+    music_volume: f32,
+    /// Where the ripped CD audio tracks are looked for.
+    cd_audio: Option<std::path::PathBuf>,
+    /// The video playing, and those waiting their turn.
+    video: Option<crate::video::Player>,
+    videos: std::collections::VecDeque<std::path::PathBuf>,
+    /// The control bar's open tab.
+    tab: Tab,
+    /// Labels of the save slots (`None`: empty).
+    slot_labels: Vec<Option<String>>,
+    selected_slot: Option<usize>,
+    help_text: Vec<String>,
+    settings: Settings,
+    /// Quit at the next opportunity.
+    quit: bool,
+    /// Fog of war in the missions played.
+    fog: bool,
+    difficulty: usize,
+    /// The campaign record the current mission started from (none when it
+    /// was picked from the menu).
+    carry: Option<crate::scene::Carry>,
+    /// A multiplayer game's connection, and the game time not yet played
+    /// in turns.
+    net: Option<crate::net::Net>,
+    turn_time: f32,
+    /// The lobby: players wanted, the address being typed, the battle maps
+    /// and how many players each takes, and a game being hosted or joined.
+    lobby_players: usize,
+    join_address: String,
+    /// A chat line being typed in a multiplayer game.
+    chat_line: Option<String>,
+    /// The first entry shown of a front-end list, and wheel movement not
+    /// yet a whole row (trackpads scroll in small steps).
+    list_first: usize,
+    wheel_rest: f32,
+    battle_maps: Vec<(usize, usize)>,
+    hosting: Option<crate::net::Lobby>,
+    joining: Option<crate::net::Joining>,
+    /// A slider being dragged with the left button.
+    slider_drag: Option<Slider>,
+    /// The game is paused (P).
+    paused: bool,
+    /// The front end, if it is shown instead of the game.
+    menu: Option<MenuState>,
+    menus: Option<Menus>,
+    /// Mission titles from their briefings, by mission index.
+    mission_titles: Vec<String>,
+    /// A game is under way (the main menu offers to resume it).
+    in_game: bool,
+    /// The mission clock when it was won or lost.
+    outcome_at: Option<f32>,
+    /// Best winning times, and what the last win came to: its time and
+    /// whether it was a new best.
+    records: crate::records::Records,
+    last_win: Option<(f32, bool)>,
     status: Option<(String, Instant)>,
     started: Instant,
     last_frame: Instant,
@@ -95,14 +297,42 @@ impl App {
         mission_index: usize,
         camera: Camera,
         options: Options,
+        save: Option<SaveGame>,
+        start_menu: bool,
     ) -> Result<Self> {
         let mute = options.mute;
+        let fog = options.fog;
+        let difficulty = options.difficulty;
+        let soundfont = options.soundfont.clone();
+        let cd_audio = options.cd_audio.clone();
+        let intro = options.intro;
+        let data_root = data.root().to_path_buf();
+        let records = crate::records::Records::load(&data.save_dir().join("best.json"));
+        let menus = Menus::load(&data, '0')
+            .map_err(|e| eprintln!("no menus: {e:#}"))
+            .ok();
+        // Mission titles: the first line of each briefing.
+        let mission_titles = missions
+            .iter()
+            .map(|m| {
+                data.open_mission(m)
+                    .ok()
+                    .and_then(|a| openac_formats::briefing(&a).ok())
+                    .and_then(|b| b.first().map(|t| t.trim_matches('"').to_string()))
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| m.to_uppercase())
+            })
+            .collect();
         let mut caches = Caches::default();
-        let scene = Scene::load(&data, &mut caches, &missions[mission_index])?;
+        let restored = save.is_some();
+        let scene = match &save {
+            Some(save) => Scene::restore(&data, &mut caches, save)?,
+            None => Scene::load_at(&data, &mut caches, &missions[mission_index], difficulty)?,
+        };
         let text = TextRenderer::load(&data.controls, "0SYSTEM_FONT", 0)?;
         let interface = Interface::load(&data, '0')?;
         let now = Instant::now();
-        Ok(Self {
+        let mut app = Self {
             data,
             caches,
             missions,
@@ -123,9 +353,51 @@ impl App {
             right_press: None,
             minimap_drag: false,
             selected: None,
+            group: Vec::new(),
+            box_from: None,
             pending: None,
             page: Page::Main,
-            briefing: true,
+            briefing: !restored,
+            music: None,
+            music_volume: 0.5,
+            cd_audio,
+            video: None,
+            videos: if start_menu && intro {
+                crate::video::INTRO
+                    .iter()
+                    .filter_map(|n| crate::video::find(data_root.as_path(), n))
+                    .collect()
+            } else {
+                Default::default()
+            },
+            tab: Tab::Object,
+            slot_labels: vec![None; panels::SLOTS],
+            selected_slot: None,
+            help_text: Vec::new(),
+            settings: Settings::default(),
+            quit: false,
+            fog,
+            difficulty,
+            carry: None,
+            net: None,
+            turn_time: 0.0,
+            lobby_players: 2,
+            join_address: String::new(),
+            chat_line: None,
+            list_first: 0,
+            wheel_rest: 0.0,
+            battle_maps: Vec::new(),
+            hosting: None,
+            joining: None,
+            slider_drag: None,
+            paused: false,
+            menu: start_menu.then_some(MenuState::Main),
+            menus,
+            mission_titles,
+            in_game: !start_menu,
+            outcome_at: None,
+            records,
+            last_win: None,
             audio: Audio::open().map(|mut a| {
                 a.muted = mute;
                 a
@@ -135,7 +407,10 @@ impl App {
             last_frame: now,
             time_ms: 0,
             center_pending: true,
-        })
+        };
+        app.scene.fog = app.fog;
+        app.start_music(soundfont.as_deref());
+        Ok(app)
     }
 
     pub fn run(mut self) -> Result<()> {
@@ -170,13 +445,736 @@ impl App {
             interface: self.show_interface.then_some(&self.interface),
             text: &self.text,
             selected: self.selected,
+            group: &self.group,
+            select_box: self.box_from.zip(self.cursor).and_then(|(a, b)| {
+                ((a.x - b.x).abs() + (a.y - b.y).abs() > BOX_THRESHOLD)
+                    .then_some((a.x as f32, a.y as f32, b.x as f32, b.y as f32))
+            }),
             status,
             time_ms: self.time_ms,
             hover_button: self.cursor.and_then(|c| self.button_at(c)),
             page: self.page,
             site: None,
             briefing: self.briefing,
+            panel: Some(PanelView {
+                tab: self.tab,
+                slots: &self.slot_labels,
+                selected_slot: self.selected_slot,
+                game_speed: self.settings.game_speed,
+                scroll_speed: self.settings.scroll_speed,
+                volume: self.audio.as_ref().map_or(0.0, |a| a.volume),
+                music: self.music.as_ref().map(|_| self.music_volume),
+                help: &self.help_text,
+            }),
+            panel_hover: self.cursor.and_then(|c| self.bar_point(c)),
+            paused: self.paused,
         }
+    }
+
+    /// A window position as a point on the control bar, in original pixels.
+    fn bar_point(&self, pos: PhysicalPosition<f64>) -> Option<(u32, u32)> {
+        if !self.show_interface {
+            return None;
+        }
+        let layout = self
+            .interface
+            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let x = (pos.x as f32 - layout.bar_x) / layout.scale;
+        let y = pos.y as f32 / layout.scale;
+        (x >= 0.0 && y >= 0.0).then_some((x as u32, y as u32))
+    }
+
+    /// Handles a click on the bar's tabs and panels; true if it hit one.
+    fn panel_click(&mut self, pos: PhysicalPosition<f64>) -> bool {
+        let Some(p) = self.bar_point(pos) else {
+            return false;
+        };
+        let Some(hit) = self.interface.panels.hit(self.tab, p) else {
+            // Clicks elsewhere on an open panel do nothing.
+            return Panels::covers_bar(self.tab) && p.1 < 558;
+        };
+        match hit {
+            PanelHit::Tab(tab) => {
+                self.tab = tab;
+                self.refresh_panels();
+            }
+            PanelHit::Slot(i) => self.selected_slot = Some(i),
+            PanelHit::Save => match self.selected_slot {
+                Some(i) => match self.scene.save().write(&self.slot_path(i)) {
+                    Ok(()) => {
+                        self.say(format!("Saved in slot {}", i + 1));
+                        self.refresh_panels();
+                    }
+                    Err(e) => self.say(format!("Could not save: {e:#}")),
+                },
+                None => self.say("Choose a slot"),
+            },
+            PanelHit::Load => match self.selected_slot {
+                Some(i) if self.slot_labels[i].is_some() => self.load_game(&self.slot_path(i)),
+                _ => self.say("Choose a saved game"),
+            },
+            PanelHit::Delete => {
+                if let Some(i) = self
+                    .selected_slot
+                    .filter(|&i| self.slot_labels[i].is_some())
+                {
+                    let _ = std::fs::remove_file(self.slot_path(i));
+                    self.say(format!("Slot {} cleared", i + 1));
+                    self.refresh_panels();
+                }
+            }
+            PanelHit::Restart => self.switch_mission(0),
+            PanelHit::Quit => self.quit = true,
+            PanelHit::Slider(slider, v) => {
+                self.slider_drag = Some(slider);
+                self.set_slider(slider, v);
+            }
+        }
+        true
+    }
+
+    fn set_slider(&mut self, slider: Slider, v: f32) {
+        match slider {
+            Slider::GameSpeed => self.settings.game_speed = v,
+            Slider::ScrollSpeed => self.settings.scroll_speed = v,
+            Slider::Volume => {
+                if let Some(a) = self.audio.as_mut() {
+                    a.volume = v;
+                }
+            }
+            Slider::Music => {
+                self.music_volume = v;
+                let muted = self.audio.as_ref().is_some_and(|a| a.muted);
+                if let Some(m) = &self.music {
+                    m.set_volume(if muted { 0.0 } else { v });
+                }
+            }
+        }
+    }
+
+    fn slot_path(&self, i: usize) -> std::path::PathBuf {
+        self.data.save_dir().join(format!("slot{}.json", i + 1))
+    }
+
+    /// What front-end screen `state` shows.
+    fn menu_page(&self, state: MenuState) -> MenuPage {
+        let button = |caption: &str, x: f32, y: f32| Button {
+            caption: caption.into(),
+            x,
+            y,
+            wide: true,
+        };
+        let column = |captions: &[&str]| -> Vec<Button> {
+            captions
+                .iter()
+                .enumerate()
+                // Closer together when there are many, above the frieze.
+                .map(|(i, c)| {
+                    let step = (300.0 / (captions.len().max(2) - 1) as f32).min(52.0);
+                    button(c, 590.0, 220.0 + i as f32 * step)
+                })
+                .collect()
+        };
+        let empty = MenuPage {
+            backdrop: Backdrop::TitleDim,
+            title: None,
+            items: Vec::new(),
+            selected: None,
+            text: Vec::new(),
+            notes: Vec::new(),
+            buttons: Vec::new(),
+            first: self.list_first,
+        };
+        match state {
+            MenuState::Main => {
+                let mut captions = Vec::new();
+                if self.in_game {
+                    captions.push("Resume");
+                }
+                captions.extend([
+                    "Campaign",
+                    "Single missions",
+                    "Battles",
+                    "Multiplayer",
+                    "Load game",
+                    "Best results",
+                    "Quit",
+                ]);
+                MenuPage {
+                    backdrop: Backdrop::Title,
+                    buttons: column(&captions),
+                    ..empty
+                }
+            }
+            MenuState::Missions(category, selected) => MenuPage {
+                title: Some(
+                    match category {
+                        Category::Campaign => "The Golden Fleece",
+                        Category::Single => "Single missions",
+                        Category::Battle => "Battles",
+                    }
+                    .into(),
+                ),
+                items: self
+                    .category_missions(category)
+                    .iter()
+                    .map(|&i| self.mission_titles[i].clone())
+                    .collect(),
+                selected,
+                buttons: column(&["Start", "Back"]),
+                ..empty
+            },
+            MenuState::Load(selected) => MenuPage {
+                title: Some("Load game".into()),
+                items: (0..panels::SLOTS)
+                    .map(|i| match &self.slot_labels[i] {
+                        Some(l) => format!("{}. {l}", i + 1),
+                        None => format!("{}. empty", i + 1),
+                    })
+                    .chain(std::iter::once("Quick save".to_string()))
+                    .collect(),
+                selected,
+                buttons: column(&["Load", "Back"]),
+                ..empty
+            },
+            MenuState::Briefing => {
+                let mut text = self.scene.briefing.clone();
+                if text.is_empty() {
+                    text.push(self.scene.mission.to_uppercase());
+                }
+                MenuPage {
+                    backdrop: Backdrop::Mission,
+                    text,
+                    buttons: vec![button("Begin", 590.0, 470.0), button("Back", 590.0, 522.0)],
+                    ..empty
+                }
+            }
+            MenuState::Best => {
+                let items: Vec<String> = (0..self.missions.len())
+                    .filter_map(|i| {
+                        let best = self.records.best(&self.missions[i])?;
+                        Some(format!(
+                            "{}  {}",
+                            crate::records::clock(best),
+                            self.mission_titles[i]
+                        ))
+                    })
+                    .collect();
+                MenuPage {
+                    backdrop: Backdrop::Best,
+                    text: if items.is_empty() {
+                        vec!["No mission won yet.".into()]
+                    } else {
+                        Vec::new()
+                    },
+                    items,
+                    buttons: column(&["Back"]),
+                    ..empty
+                }
+            }
+            MenuState::Multiplayer(selected) => {
+                let here =
+                    crate::net::local_address().map_or("unknown".to_string(), |a| a.to_string());
+                MenuPage {
+                    title: Some("Multiplayer".into()),
+                    items: self
+                        .battle_maps
+                        .iter()
+                        .map(|&(i, n)| format!("{}  (up to {n})", self.mission_titles[i]))
+                        .collect(),
+                    selected,
+                    notes: vec![
+                        format!(
+                            "Players: {}   (host a game of the map chosen)",
+                            self.lobby_players
+                        ),
+                        format!("Join address: {}_   (type it)", self.join_address),
+                        format!("Your address: {here}"),
+                    ],
+                    buttons: column(&["Host", "Join", "More players", "Fewer players", "Back"]),
+                    ..empty
+                }
+            }
+            MenuState::Waiting => {
+                let mut text = Vec::new();
+                if let Some(l) = &self.hosting {
+                    text.push(format!("Hosting {}", l.setup.mission.to_uppercase()));
+                    text.push(format!(
+                        "Waiting for {} more player(s). Others join with the address {}:{}.",
+                        l.missing(),
+                        crate::net::local_address().map_or("?".into(), |a| a.to_string()),
+                        l.port
+                    ));
+                }
+                if let Some(j) = &self.joining {
+                    text.push(format!("Joined {}", j.address));
+                    text.push(match j.seat() {
+                        Some(k) => format!(
+                            "You are player {}. Waiting for the others and the host.",
+                            k + 1
+                        ),
+                        None => "Waiting for the host to answer.".into(),
+                    });
+                }
+                MenuPage {
+                    title: Some("Multiplayer".into()),
+                    text,
+                    buttons: column(&["Cancel"]),
+                    ..empty
+                }
+            }
+            MenuState::Outcome(outcome) => {
+                let won = outcome == crate::scene::Outcome::Victory;
+                let mut buttons = Vec::new();
+                if won && self.next_mission().is_some() {
+                    buttons.push(button("Next mission", 313.0, 470.0));
+                }
+                if !won {
+                    buttons.push(button("Try again", 313.0, 470.0));
+                }
+                buttons.push(button("Main menu", 313.0, 522.0));
+                let mut text = match (won, self.last_win) {
+                    (true, Some((time, new))) => vec![format!(
+                        "Won in {}{}",
+                        crate::records::clock(time),
+                        if new { ", a new best" } else { "" }
+                    )],
+                    _ => vec![if won {
+                        "Mission accomplished"
+                    } else {
+                        "Mission failed"
+                    }
+                    .into()],
+                };
+                text.extend(self.scene.stats.lines(self.scene.amber));
+                MenuPage {
+                    backdrop: if won {
+                        Backdrop::Accomplished
+                    } else {
+                        Backdrop::Failed
+                    },
+                    text,
+                    buttons,
+                    ..empty
+                }
+            }
+        }
+    }
+
+    /// Missions of `category`, as indices into `missions`.
+    fn category_missions(&self, category: Category) -> Vec<usize> {
+        (0..self.missions.len())
+            .filter(|&i| Category::of(&self.missions[i]) == Some(category))
+            .collect()
+    }
+
+    /// The mission after the current one in its group.
+    fn next_mission(&self) -> Option<usize> {
+        let list = self.category_missions(Category::of(&self.missions[self.mission_index])?);
+        let at = list.iter().position(|&i| i == self.mission_index)?;
+        list.get(at + 1).copied()
+    }
+
+    /// Opens mission `index` on its briefing screen.
+    /// Starts the multiplayer game `net` was set up for: its mission with
+    /// its human players seated, this machine's player active.
+    pub fn start_multiplayer(&mut self, net: crate::net::Net) -> Result<()> {
+        let setup = &net.setup;
+        let mut scene = Scene::load_at(
+            &self.data,
+            &mut self.caches,
+            &setup.mission,
+            setup.difficulty,
+        )?;
+        scene.fog = setup.fog;
+        let archive = self.data.open_mission(&setup.mission)?;
+        let players = openac_formats::players(&archive)?;
+        let seated: Vec<_> = setup
+            .seats
+            .iter()
+            .filter_map(|&(n, s)| {
+                players
+                    .iter()
+                    .find(|p| (p.nation, p.slot) == (n, s))
+                    .copied()
+            })
+            .collect();
+        if seated.len() != setup.seats.len() {
+            anyhow::bail!("{} has no such players", setup.mission);
+        }
+        scene.seat(&seated);
+        scene.sit(net.seat);
+        scene.refresh_sight();
+        if let Some(i) = self.missions.iter().position(|m| *m == setup.mission) {
+            self.mission_index = i;
+        }
+        self.scene = scene;
+        self.fog = setup.fog;
+        self.selected = None;
+        self.group.clear();
+        self.pending = None;
+        self.page = Page::Main;
+        self.center_pending = true;
+        self.briefing = false;
+        self.menu = None;
+        self.in_game = true;
+        self.videos.clear();
+        self.say(format!(
+            "Multiplayer: you are player {} of {}",
+            net.seat + 1,
+            setup.seats.len()
+        ));
+        self.net = Some(net);
+        self.turn_time = 0.0;
+        self.refresh_panels();
+        self.update_title();
+        Ok(())
+    }
+
+    /// Plays the multiplayer turns due: each turn every player's orders,
+    /// then `net::TURN` seconds of game in fixed steps, the host's player
+    /// active so every machine computes the same.
+    fn run_turns(&mut self, dt: f32) {
+        let Some(net) = self.net.as_mut() else { return };
+        net.poll();
+        let chat = std::mem::take(&mut net.chat);
+        for notice in std::mem::take(&mut net.notices) {
+            self.say(notice);
+        }
+        for (seat, text) in chat {
+            self.say(format!("Player {}: {text}", seat + 1));
+        }
+        // Behind by more than a second: catch up, but not all at once.
+        self.turn_time = (self.turn_time + dt).min(1.0);
+        while self.turn_time >= crate::net::TURN {
+            let net = self.net.as_mut().unwrap();
+            let (turn, local) = (net.turn, net.seat);
+            let Some(orders) = net.next_turn() else { break };
+            self.turn_time -= crate::net::TURN;
+            let steps = (crate::net::TURN / crate::net::STEP).round() as usize;
+            let (check, refused) = self.scene.play_turn(
+                &orders,
+                local,
+                steps,
+                crate::net::STEP,
+                &self.data,
+                &mut self.caches,
+            );
+            self.net.as_mut().unwrap().played(turn, check);
+            for e in refused {
+                self.say(e);
+            }
+        }
+    }
+
+    fn open_mission(&mut self, index: usize) {
+        if self.net.is_some() {
+            self.say("Not in a multiplayer game");
+            return;
+        }
+        match Scene::load_at(
+            &self.data,
+            &mut self.caches,
+            &self.missions[index],
+            self.difficulty,
+        ) {
+            Ok(scene) => {
+                self.scene = scene;
+                self.scene.fog = self.fog;
+                if let Some(carry) = &self.carry {
+                    self.scene.resume(carry);
+                }
+                self.mission_index = index;
+                self.selected = None;
+                self.group.clear();
+                self.pending = None;
+                self.page = Page::Main;
+                self.tab = Tab::Object;
+                self.center_pending = true;
+                self.briefing = false;
+                self.outcome_at = None;
+                self.refresh_panels();
+                self.update_title();
+                self.menu = Some(MenuState::Briefing);
+            }
+            Err(e) => self.say(format!("Could not open the mission: {e:#}")),
+        }
+    }
+
+    fn menu_click(&mut self, pos: PhysicalPosition<f64>) {
+        let (Some(state), Some(menus)) = (self.menu, &self.menus) else {
+            return;
+        };
+        let page = self.menu_page(state);
+        let p = Menus::to_menu(self.window_size(), pos.x as f32, pos.y as f32);
+        let Some(hit) = menus.hit(&page.view(None), p) else {
+            return;
+        };
+        let caption = match hit {
+            MenuHit::Button(i) => page.buttons[i].caption.clone(),
+            MenuHit::Item(i) => {
+                self.menu = Some(match state {
+                    MenuState::Missions(c, _) => MenuState::Missions(c, Some(i)),
+                    MenuState::Load(_) => MenuState::Load(Some(i)),
+                    MenuState::Multiplayer(_) => {
+                        // A map takes at most so many players.
+                        if let Some(&(_, n)) = self.battle_maps.get(i) {
+                            self.lobby_players = self.lobby_players.min(n);
+                        }
+                        MenuState::Multiplayer(Some(i))
+                    }
+                    other => other,
+                });
+                return;
+            }
+        };
+        let was = self.menu;
+        self.menu_action(state, &caption);
+        if self.menu != was {
+            self.list_first = 0;
+        }
+    }
+
+    fn menu_action(&mut self, state: MenuState, caption: &str) {
+        match (state, caption) {
+            (_, "Resume") => self.menu = None,
+            (_, "Campaign") => self.menu = Some(MenuState::Missions(Category::Campaign, None)),
+            (_, "Single missions") => self.menu = Some(MenuState::Missions(Category::Single, None)),
+            (_, "Battles") => self.menu = Some(MenuState::Missions(Category::Battle, None)),
+            (_, "Load game") => {
+                self.refresh_panels();
+                self.menu = Some(MenuState::Load(None));
+            }
+            (_, "Quit") => self.quit = true,
+            (_, "Best results") => self.menu = Some(MenuState::Best),
+            (_, "Multiplayer") => {
+                self.find_battle_maps();
+                self.menu = Some(MenuState::Multiplayer(None));
+            }
+            (MenuState::Multiplayer(sel), "More players") => {
+                let most = sel
+                    .and_then(|i| self.battle_maps.get(i))
+                    .map_or(8, |&(_, n)| n);
+                self.lobby_players = (self.lobby_players + 1).min(most);
+            }
+            (MenuState::Multiplayer(_), "Fewer players") => {
+                self.lobby_players = (self.lobby_players - 1).max(2);
+            }
+            (MenuState::Multiplayer(sel), "Host") => self.host_game(sel),
+            (MenuState::Multiplayer(_), "Join") => self.join_game(),
+            (MenuState::Waiting, "Cancel") => {
+                self.hosting = None;
+                self.joining = None;
+                self.menu = Some(MenuState::Multiplayer(None));
+            }
+            (MenuState::Missions(c, Some(i)), "Start") => {
+                // The story opens before the first campaign mission.
+                if c == Category::Campaign && i == 0 {
+                    self.queue_video(crate::video::OPENING);
+                }
+                if let Some(&index) = self.category_missions(c).get(i) {
+                    self.carry = None;
+                    self.open_mission(index);
+                }
+            }
+            (MenuState::Load(Some(i)), "Load") => {
+                let path = if i < panels::SLOTS {
+                    self.slot_path(i)
+                } else {
+                    self.quick_save_path()
+                };
+                self.load_game(&path);
+                if self
+                    .status
+                    .as_ref()
+                    .is_some_and(|(m, _)| m == "Game loaded")
+                {
+                    self.menu = None;
+                    self.in_game = true;
+                }
+            }
+            (MenuState::Briefing, "Begin") => {
+                self.menu = None;
+                self.in_game = true;
+            }
+            (MenuState::Briefing, "Back") => {
+                let c =
+                    Category::of(&self.missions[self.mission_index]).unwrap_or(Category::Campaign);
+                self.menu = Some(MenuState::Missions(c, None));
+            }
+            (MenuState::Outcome(_), "Next mission") => {
+                if let Some(next) = self.next_mission() {
+                    // The campaign goes on with what was learned.
+                    self.carry =
+                        crate::scene::is_campaign(&self.missions[next]).then(|| self.scene.carry());
+                    self.open_mission(next);
+                }
+            }
+            (MenuState::Outcome(_), "Try again") => self.open_mission(self.mission_index),
+            (_, "Main menu") | (_, "Back") => self.menu = Some(MenuState::Main),
+            _ => {}
+        }
+    }
+
+    /// Renders a front-end screen (`main`, `missions`, `load`, `briefing`,
+    /// `victory`, `defeat`) into `frame`, for screenshots.
+    pub fn draw_menu_screen(&mut self, which: &str, frame: &mut Frame) -> Result<()> {
+        let state = match which {
+            "main" => MenuState::Main,
+            "missions" => MenuState::Missions(Category::Campaign, Some(1)),
+            "load" => {
+                self.refresh_panels();
+                MenuState::Load(None)
+            }
+            "briefing" => MenuState::Briefing,
+            "victory" => MenuState::Outcome(crate::scene::Outcome::Victory),
+            "defeat" => MenuState::Outcome(crate::scene::Outcome::Defeat),
+            "best" => MenuState::Best,
+            "battles" => {
+                self.list_first = 10;
+                MenuState::Missions(Category::Battle, Some(12))
+            }
+            "multiplayer" => {
+                self.find_battle_maps();
+                self.join_address = "192.168.1.20".into();
+                MenuState::Multiplayer(Some(4))
+            }
+            other => anyhow::bail!("unknown menu screen {other}"),
+        };
+        let menus = self.menus.as_ref().context("menus are not installed")?;
+        menus.draw(frame, &self.menu_page(state).view(None));
+        Ok(())
+    }
+
+    /// The battle maps and how many players each takes.
+    fn find_battle_maps(&mut self) {
+        if !self.battle_maps.is_empty() {
+            return;
+        }
+        self.battle_maps = self
+            .category_missions(Category::Battle)
+            .into_iter()
+            .filter_map(|i| {
+                let archive = self.data.open_mission(&self.missions[i]).ok()?;
+                let players = openac_formats::players(&archive).ok()?;
+                let n = players
+                    .iter()
+                    .filter(|p| !p.computer || p.nation != 4)
+                    .count();
+                (n >= 2).then_some((i, n))
+            })
+            .collect();
+    }
+
+    /// Hosts a game of the chosen battle map.
+    fn host_game(&mut self, selected: Option<usize>) {
+        let Some(&(i, _)) = selected.and_then(|k| self.battle_maps.get(k)) else {
+            self.say("Choose a map to host");
+            return;
+        };
+        let mission = self.missions[i].clone();
+        let seats = self
+            .data
+            .open_mission(&mission)
+            .ok()
+            .and_then(|a| openac_formats::players(&a).ok())
+            .and_then(|p| crate::net::seats_for(&p, self.lobby_players));
+        let Some(seats) = seats else {
+            self.say("The map has no room for so many players");
+            return;
+        };
+        let setup = crate::net::Setup {
+            mission,
+            seats,
+            difficulty: self.difficulty,
+            fog: self.fog,
+        };
+        match crate::net::Lobby::open(crate::net::PORT, setup) {
+            Ok(lobby) => {
+                self.hosting = Some(lobby);
+                self.menu = Some(MenuState::Waiting);
+            }
+            Err(e) => self.say(format!("{e:#}")),
+        }
+    }
+
+    /// Joins the game at the address typed.
+    fn join_game(&mut self) {
+        let address = self.join_address.trim().to_string();
+        if address.is_empty() {
+            self.say("Type the host's address first");
+            return;
+        }
+        match crate::net::Joining::connect(&address) {
+            Ok(j) => {
+                self.joining = Some(j);
+                self.menu = Some(MenuState::Waiting);
+            }
+            Err(e) => self.say(format!("{e:#}")),
+        }
+    }
+
+    /// While waiting in the lobby: starts the game once everyone is there.
+    fn run_lobby(&mut self) {
+        let polled = if let Some(l) = self.hosting.as_mut() {
+            l.poll()
+        } else if let Some(j) = self.joining.as_mut() {
+            j.poll()
+        } else {
+            return;
+        };
+        match polled {
+            Ok(None) => {}
+            Ok(Some(net)) => {
+                self.hosting = None;
+                self.joining = None;
+                if let Err(e) = self.start_multiplayer(net) {
+                    self.say(format!("Could not start the game: {e:#}"));
+                    self.menu = Some(MenuState::Multiplayer(None));
+                }
+            }
+            Err(e) => {
+                self.hosting = None;
+                self.joining = None;
+                self.say(format!("{e:#}"));
+                self.menu = Some(MenuState::Multiplayer(None));
+            }
+        }
+    }
+
+    /// Esc on the front end: back a screen, or out of the main menu.
+    fn menu_back(&mut self, event_loop: &ActiveEventLoop) {
+        self.list_first = 0;
+        self.menu = match self.menu {
+            Some(MenuState::Main) if self.in_game => None,
+            Some(MenuState::Main) => {
+                event_loop.exit();
+                return;
+            }
+            _ => Some(MenuState::Main),
+        };
+    }
+
+    /// Re-reads the save slots and the help text shown in the panels.
+    fn refresh_panels(&mut self) {
+        self.slot_labels = (0..panels::SLOTS)
+            .map(|i| {
+                SaveGame::read(&self.slot_path(i)).ok().map(|s| {
+                    let t = s.clock as u32;
+                    format!("{} {}:{:02}", s.mission.to_uppercase(), t / 60, t % 60)
+                })
+            })
+            .collect();
+        let mut help: Vec<String> = Vec::new();
+        let goals: Vec<&str> = (0..crate::scene::OBJECTIVES.len())
+            .filter(|&i| self.scene.conditions[i])
+            .map(|i| crate::scene::OBJECTIVES[i].0)
+            .collect();
+        if !goals.is_empty() {
+            help.push(format!("Objectives: {}.", goals.join(", ")));
+        }
+        help.extend(self.scene.briefing.iter().cloned());
+        self.help_text = help;
     }
 
     /// The building site under a window position while a building is being
@@ -214,7 +1212,7 @@ impl App {
 
     /// The command slot under a window position, if the interface is shown.
     fn button_at(&self, pos: PhysicalPosition<f64>) -> Option<usize> {
-        if !self.show_interface {
+        if !self.show_interface || Panels::covers_bar(self.tab) {
             return None;
         }
         let layout = self
@@ -222,6 +1220,39 @@ impl App {
             .layout(self.window_size(), &self.camera.policy, &self.scene);
         self.interface
             .button_at(&layout, pos.x as f32, pos.y as f32)
+    }
+
+    /// Starts the music if there is sound and a SoundFont.
+    fn start_music(&mut self, soundfont: Option<&std::path::Path>) {
+        let Some(audio) = &self.audio else { return };
+        // The CD's own music, if it has been ripped.
+        let cd_dir = self
+            .cd_audio
+            .clone()
+            .unwrap_or_else(|| self.data.root().join("cdaudio"));
+        let tracks = crate::music::cd_tracks(&cd_dir);
+        if !tracks.is_empty() {
+            match Music::from_files(&audio.handle, tracks) {
+                Ok(music) => {
+                    music.set_volume(if audio.muted { 0.0 } else { self.music_volume });
+                    self.music = Some(music);
+                    return;
+                }
+                Err(e) => eprintln!("no CD music: {e:#}"),
+            }
+        }
+        let Some(font) = crate::music::find_soundfont(soundfont) else {
+            eprintln!("no music: give a General MIDI SoundFont with --soundfont");
+            return;
+        };
+        let tunes = crate::music::playlist(&self.data.sound_dir());
+        match Music::new(&audio.handle, &font, &tunes) {
+            Ok(music) => {
+                music.set_volume(if audio.muted { 0.0 } else { self.music_volume });
+                self.music = Some(music);
+            }
+            Err(e) => eprintln!("no music: {e:#}"),
+        }
     }
 
     /// Plays an interface sound at full volume.
@@ -296,7 +1327,15 @@ impl App {
                 {
                     "Not enough amber".to_string()
                 }
-                None if entry.command == magic::GET_MAGIC => "Not enough amber".to_string(),
+                None if crate::combat::refit_of_command(entry.command.0).is_some() => {
+                    "No ship of yours lies next to the smithy needing it, or not enough amber"
+                        .to_string()
+                }
+                None if entry.command == magic::GET_MAGIC
+                    || crate::combat::Upgrade::of_command(entry.command.0).is_some() =>
+                {
+                    "Not enough amber, or the building is busy".to_string()
+                }
                 None if Spell::of_command(entry.command).is_some_and(|s| s.implemented())
                     || (magic::WIND_EAST.0..magic::WIND_EAST.0 + 8).contains(&entry.command.0) =>
                 {
@@ -312,8 +1351,8 @@ impl App {
             if entry.progress.is_some() {
                 return;
             }
-            match self.scene.start_ship(id, kind) {
-                Ok(()) => self.say(format!("Building a {}", SHIP_NAMES[kind as usize])),
+            match self.issue(Order::BuildShip { site: id, kind }) {
+                Ok(_) => self.say(format!("Building a {}", SHIP_NAMES[kind as usize])),
                 Err(e) => self.say(e),
             }
             return;
@@ -327,6 +1366,40 @@ impl App {
             return;
         }
         match entry.command {
+            crate::commands::RESEARCH => self.page = Page::Research,
+            Command::BEHAVIOUR => self.page = Page::Behaviour,
+            Command::ZONES => self.page = Page::Zones,
+            c if crate::commands::GATHER_ZONES.contains(&c) => {
+                self.pending = Some(c);
+                self.say("Drag a rectangle around the zone");
+            }
+            c @ (crate::commands::GUARD_ZONE | crate::commands::ATTACK_ZONE) => {
+                self.pending = Some(c);
+                self.say("Drag a rectangle around the zone");
+            }
+            crate::commands::CONVOY => {
+                self.pending = Some(crate::commands::CONVOY);
+                self.say("Drag a rectangle around the ship to escort");
+            }
+            c @ (crate::commands::SCOUT | crate::commands::PATROL) => {
+                self.pending = Some(c);
+                self.say(if c == crate::commands::SCOUT {
+                    "Choose where to scout"
+                } else {
+                    "Choose the far end of the patrol"
+                });
+            }
+            c @ (crate::commands::GUARD
+            | crate::commands::RAM_ATTACK
+            | crate::commands::BOARD_ATTACK
+            | crate::commands::FIRE_ON_AGGRESSOR) => {
+                if let Err(e) = self.issue(Order::Behaviour {
+                    ship: id,
+                    command: c,
+                }) {
+                    self.say(e);
+                }
+            }
             Command::BUILD_STRUCTURES => {
                 self.pending = None;
                 self.page = Page::Structures;
@@ -337,19 +1410,47 @@ impl App {
             }
             Command::STOP => {
                 self.pending = None;
-                self.scene.stop(id);
+                for id in self.selection() {
+                    let _ = self.issue(Order::Stop { id });
+                }
             }
             c if (Command::TRAIN_BOWMEN.0..=Command::TRAIN_BOWMEN.0 + 8).contains(&c.0) => {
                 let kind = entry.command.0 - Command::TRAIN_BOWMEN.0;
-                match self.scene.train(id, kind) {
-                    Ok(()) => self.say(entry.command.name()),
+                match self.issue(Order::Train {
+                    site: id,
+                    item: kind,
+                }) {
+                    Ok(_) => self.say(entry.command.name()),
                     Err(e) => self.say(e),
                 }
             }
-            Command::LOAD => match self.scene.load_crew(id) {
-                Ok(n) => self.say(format!("{n} marines and weapons came aboard")),
+            Command::LOAD => match self.issue(Order::LoadCrew { ship: id }) {
+                Ok(n) if self.net.is_none() => {
+                    self.say(format!("{n} marines and weapons came aboard"))
+                }
+                Ok(_) => {}
                 Err(e) => self.say(e),
             },
+            c if crate::combat::refit_of_command(c.0).is_some() => {
+                let (upgrade, level) = crate::combat::refit_of_command(c.0).unwrap();
+                match self.issue(Order::Refit {
+                    smithy: id,
+                    upgrade,
+                    level,
+                }) {
+                    Ok(_) => self.say(entry.command.name()),
+                    Err(e) => self.say(e),
+                }
+            }
+            c if crate::combat::Upgrade::of_command(c.0).is_some() => {
+                if entry.progress.is_none() {
+                    let upgrade = crate::combat::Upgrade::of_command(c.0).unwrap();
+                    match self.issue(Order::Research { site: id, upgrade }) {
+                        Ok(_) => self.say(entry.command.name()),
+                        Err(e) => self.say(e),
+                    }
+                }
+            }
             magic::GET_MAGIC => {
                 if entry.progress.is_none() {
                     let temple = self
@@ -360,17 +1461,23 @@ impl App {
                             _ => None,
                         })
                         .unwrap_or(Temple::Sea);
-                    match self.scene.learn_spell(temple) {
-                        Ok(()) => self.say("The priests study a new spell"),
+                    match self.issue(Order::LearnSpell { temple }) {
+                        Ok(_) => self.say("The priests study a new spell"),
                         Err(e) => self.say(e),
                     }
                 }
             }
             c if Spell::of_command(c) == Some(Spell::Wind) => self.page = Page::Wind,
+            c if Spell::of_command(c) == Some(Spell::Flame) => match self.issue(Order::CastFlame) {
+                Ok(_) => self.say("Your weapons burn hotter"),
+                Err(e) => self.say(e),
+            },
             Command(0x57) => self.page = Page::Main,
             c if (magic::WIND_EAST.0..magic::WIND_EAST.0 + 8).contains(&c.0) => {
-                match self.scene.cast_wind((c.0 - magic::WIND_EAST.0) as u32) {
-                    Ok(()) => {
+                match self.issue(Order::CastWind {
+                    direction: (c.0 - magic::WIND_EAST.0) as u32,
+                }) {
+                    Ok(_) => {
                         self.page = Page::Main;
                         self.say("The wind rises");
                     }
@@ -378,7 +1485,7 @@ impl App {
                 }
             }
             c if Spell::of_command(c).is_some_and(|s| {
-                matches!(s.target(), Target::Water | Target::Enemy | Target::OwnShip)
+                matches!(s.target(), Target::Water | Target::Area | Target::OwnShip)
             }) =>
             {
                 self.pending = Some(c);
@@ -392,6 +1499,18 @@ impl App {
                 self.pending = Some(entry.command);
                 self.say("Choose an enemy ship");
             }
+            Command::TREASURE => {
+                self.pending = Some(Command::TREASURE);
+                self.say("Choose a treasure or a hero's house");
+            }
+            Command::REPAIR_SHIP => {
+                self.pending = Some(Command::REPAIR_SHIP);
+                self.say("Choose one of your docks");
+            }
+            Command::REPAIR_BUILDING => {
+                self.pending = Some(Command::REPAIR_BUILDING);
+                self.say("Choose a damaged building of yours");
+            }
             Command::FIRE => {
                 self.pending = Some(Command::FIRE);
                 self.say("Choose an enemy ship or building");
@@ -404,9 +1523,21 @@ impl App {
                 self.pending = Some(Command::FISH);
                 self.say("Choose a fishing ground");
             }
+            Command::WHALE => {
+                self.pending = Some(Command::WHALE);
+                self.say("Choose a leviathan");
+            }
+            Command::BUILD_ARGO => {
+                if entry.progress.is_none() {
+                    match self.issue(Order::BuildArgo { site: id }) {
+                        Ok(_) => self.say("Building the Argo"),
+                        Err(e) => self.say(e),
+                    }
+                }
+            }
             Command::UPGRADE_TOWN | Command::UPGRADE_DOCK => {
-                match self.scene.upgrade(id, &self.data, &mut self.caches) {
-                    Ok(()) => self.say("Upgrade complete"),
+                match self.issue(Order::Upgrade { id }) {
+                    Ok(_) => self.say("Upgrade complete"),
                     Err(e) => self.say(e),
                 }
             }
@@ -431,19 +1562,84 @@ impl App {
     }
 
     fn switch_mission(&mut self, delta: isize) {
+        if self.net.is_some() {
+            self.say("Not in a multiplayer game");
+            return;
+        }
         let n = self.missions.len() as isize;
         let next = (self.mission_index as isize + delta).rem_euclid(n) as usize;
-        match Scene::load(&self.data, &mut self.caches, &self.missions[next]) {
+        match Scene::load_at(
+            &self.data,
+            &mut self.caches,
+            &self.missions[next],
+            self.difficulty,
+        ) {
             Ok(scene) => {
                 self.scene = scene;
+                self.scene.fog = self.fog;
                 self.selected = None;
+                self.group.clear();
                 self.pending = None;
                 self.mission_index = next;
                 self.center_pending = true;
                 self.briefing = true;
+                self.refresh_panels();
                 self.update_title();
             }
             Err(e) => eprintln!("failed to load {}: {e:#}", self.missions[next]),
+        }
+    }
+
+    fn quick_save_path(&self) -> std::path::PathBuf {
+        self.data.save_dir().join("quick.json")
+    }
+
+    /// Saves the game in progress (F5).
+    fn quick_save(&mut self) {
+        if self.net.is_some() {
+            self.say("Multiplayer games cannot be saved");
+            return;
+        }
+        let path = self.quick_save_path();
+        match self.scene.save().write(&path) {
+            Ok(()) => self.say("Game saved"),
+            Err(e) => self.say(format!("Could not save: {e:#}")),
+        }
+    }
+
+    /// Loads the quick save (F9).
+    fn quick_load(&mut self) {
+        let path = self.quick_save_path();
+        self.load_game(&path);
+    }
+
+    fn load_game(&mut self, path: &std::path::Path) {
+        if self.net.is_some() {
+            self.say("Not in a multiplayer game");
+            return;
+        }
+        let path = path.to_path_buf();
+        let loaded = SaveGame::read(&path).and_then(|save| {
+            let scene = Scene::restore(&self.data, &mut self.caches, &save)?;
+            Ok((save.mission, scene))
+        });
+        match loaded {
+            Ok((mission, scene)) => {
+                self.scene = scene;
+                self.scene.fog = self.fog;
+                if let Some(i) = self.missions.iter().position(|m| *m == mission) {
+                    self.mission_index = i;
+                }
+                self.selected = None;
+                self.group.clear();
+                self.pending = None;
+                self.page = Page::Main;
+                self.briefing = false;
+                self.refresh_panels();
+                self.update_title();
+                self.say("Game loaded");
+            }
+            Err(e) => self.say(format!("Could not load: {e:#}")),
         }
     }
 
@@ -464,6 +1660,9 @@ impl App {
     /// Moves the camera to the world point under a minimap position.
     /// Returns false if the position is outside the minimap.
     fn minimap_jump(&mut self, pos: PhysicalPosition<f64>) -> bool {
+        if self.show_interface && Panels::covers_bar(self.tab) {
+            return false;
+        }
         let (screen, minimap) = self.placement();
         let (sx, sy) = (pos.x as f32, pos.y as f32);
         if !minimap.contains(sx, sy) {
@@ -476,6 +1675,9 @@ impl App {
     }
 
     fn left_click(&mut self, pos: PhysicalPosition<f64>) {
+        if self.panel_click(pos) {
+            return;
+        }
         if let Some(slot) = self.button_at(pos) {
             self.press_button(slot);
             return;
@@ -490,15 +1692,13 @@ impl App {
             let (Some(settlement), Some(cell)) = (self.selected, self.cell_at(pos)) else {
                 return;
             };
-            match self.scene.place_building(
-                settlement,
+            match self.issue(Order::PlaceBuilding {
+                site: settlement,
                 class,
-                cell.0,
-                cell.1,
-                &self.data,
-                &mut self.caches,
-            ) {
-                Ok(()) => {
+                cx: cell.0,
+                cy: cell.1,
+            }) {
+                Ok(_) => {
                     self.pending = None;
                     self.page = Page::Main;
                     self.say(format!(
@@ -513,16 +1713,15 @@ impl App {
         if let Some(spell) = self
             .pending
             .and_then(Spell::of_command)
-            .filter(|s| matches!(s.target(), Target::Enemy | Target::OwnShip))
+            .filter(|s| matches!(s.target(), Target::Area | Target::OwnShip))
         {
-            let order = match self.object_at(pos) {
-                Some(target) => self
-                    .scene
-                    .cast_on(spell, target, &self.data, &mut self.caches),
-                None => Err(spell.prompt().to_string()),
+            let order = match (spell.target(), self.object_at(pos), self.cell_at(pos)) {
+                (Target::OwnShip, Some(target), _) => self.issue(Order::CastOn { spell, target }),
+                (Target::Area, _, Some((cx, cy))) => self.issue(Order::CastArea { spell, cx, cy }),
+                _ => Err(spell.prompt().to_string()),
             };
             match order {
-                Ok(()) => {
+                Ok(_) => {
                     self.pending = None;
                     self.status = None;
                 }
@@ -538,11 +1737,12 @@ impl App {
             let Some(cell) = self.cell_at(pos) else {
                 return;
             };
-            match self
-                .scene
-                .cast_hazard(spell, cell.0, cell.1, &self.data, &mut self.caches)
-            {
-                Ok(()) => {
+            match self.issue(Order::CastHazard {
+                spell,
+                cx: cell.0,
+                cy: cell.1,
+            }) {
+                Ok(_) => {
                     self.pending = None;
                     self.status = None;
                 }
@@ -554,8 +1754,12 @@ impl App {
             let (Some(ship), Some(cell)) = (self.selected, self.cell_at(pos)) else {
                 return;
             };
-            match self.scene.order_found(ship, cell.0, cell.1) {
-                Ok(()) => {
+            match self.issue(Order::Found {
+                ship,
+                cx: cell.0,
+                cy: cell.1,
+            }) {
+                Ok(_) => {
                     self.pending = None;
                     self.status = None;
                 }
@@ -564,11 +1768,76 @@ impl App {
             return;
         }
         if let Some(cmd @ (Command::RAM | Command::BOARD)) = self.pending {
-            let order = match (self.object_at(pos), self.selected) {
-                (Some(target), Some(ship)) => {
-                    self.scene.order_close(ship, target, cmd == Command::BOARD)
+            let order = match self.object_at(pos) {
+                Some(target) => self.order_each(|ship| Order::Close {
+                    ship,
+                    target,
+                    board: cmd == Command::BOARD,
+                }),
+                None => Err("Choose an enemy ship".into()),
+            };
+            match order {
+                Ok(()) => {
+                    self.pending = None;
+                    self.status = None;
                 }
-                _ => Err("Choose an enemy ship".into()),
+                Err(e) => self.say(e),
+            }
+            return;
+        }
+        if let Some(cmd @ (Command::REPAIR_SHIP | Command::REPAIR_BUILDING)) = self.pending {
+            let order = match self.object_at(pos) {
+                Some(target) if cmd == Command::REPAIR_SHIP => {
+                    self.order_each(|ship| Order::Repair { ship, dock: target })
+                }
+                Some(target) => self.order_each(|site| Order::Mend { site, target }),
+                None => Err("Choose a building".into()),
+            };
+            match order {
+                Ok(()) => {
+                    self.pending = None;
+                    self.status = None;
+                }
+                Err(e) => self.say(e),
+            }
+            return;
+        }
+        let zone = matches!(
+            self.pending,
+            Some(
+                crate::commands::GUARD_ZONE
+                    | crate::commands::ATTACK_ZONE
+                    | crate::commands::CONVOY
+            )
+        ) || self
+            .pending
+            .is_some_and(|c| crate::commands::GATHER_ZONES.contains(&c));
+        if zone && self.world_at(pos).is_some() {
+            // The zone is the box dragged from here (see `finish_select`).
+            self.box_from = Some(pos);
+            return;
+        }
+        if let Some(cmd @ (crate::commands::SCOUT | crate::commands::PATROL)) = self.pending {
+            let order = match self.world_at(pos) {
+                Some((x, y)) if cmd == crate::commands::SCOUT => {
+                    self.order_each(|ship| Order::Scout { ship, x, y })
+                }
+                Some((x, y)) => self.order_each(|ship| Order::Patrol { ship, x, y }),
+                None => Err("Choose a place at sea".into()),
+            };
+            match order {
+                Ok(()) => {
+                    self.pending = None;
+                    self.status = None;
+                }
+                Err(e) => self.say(e),
+            }
+            return;
+        }
+        if self.pending == Some(Command::TREASURE) {
+            let order = match self.object_at(pos) {
+                Some(target) => self.order_each(|ship| Order::Take { ship, target }),
+                None => Err("Choose a treasure or a hero's house".into()),
             };
             match order {
                 Ok(()) => {
@@ -580,9 +1849,9 @@ impl App {
             return;
         }
         if self.pending == Some(Command::FIRE) {
-            let order = match (self.object_at(pos), self.selected) {
-                (Some(target), Some(ship)) => self.scene.order_attack(ship, target),
-                _ => Err("Choose an enemy ship or building".into()),
+            let order = match self.object_at(pos) {
+                Some(target) => self.order_each(|ship| Order::Attack { ship, target }),
+                None => Err("Choose an enemy ship or building".into()),
             };
             match order {
                 Ok(()) => {
@@ -593,11 +1862,11 @@ impl App {
             }
             return;
         }
-        if let Some(cmd @ (Command::AMBER | Command::FISH)) = self.pending {
-            let wanted = if cmd == Command::AMBER {
-                Resource::Amber
-            } else {
-                Resource::Fish
+        if let Some(cmd @ (Command::AMBER | Command::FISH | Command::WHALE)) = self.pending {
+            let wanted = match cmd {
+                Command::AMBER => Resource::Amber,
+                Command::FISH => Resource::Fish,
+                _ => Resource::Leviathan,
             };
             let target = self.object_at(pos).filter(|&id| {
                 self.scene
@@ -606,17 +1875,17 @@ impl App {
                     .is_some_and(|d| d.resource == wanted)
             });
             match (target, self.selected) {
-                (Some(deposit), Some(ship)) => {
+                (Some(deposit), Some(_)) => {
                     self.pending = None;
                     self.status = None;
-                    if let Err(e) = self.scene.order_gather(ship, deposit) {
+                    if let Err(e) = self.order_each(|ship| Order::Gather { ship, deposit }) {
                         self.say(e);
                     }
                 }
-                _ => self.say(if cmd == Command::AMBER {
-                    "Choose an amber deposit"
-                } else {
-                    "Choose a fishing ground"
+                _ => self.say(match cmd {
+                    Command::AMBER => "Choose an amber deposit",
+                    Command::FISH => "Choose a fishing ground",
+                    _ => "Choose a leviathan",
                 }),
             }
             return;
@@ -633,12 +1902,181 @@ impl App {
         let (wx, wy) = self
             .camera
             .screen_to_world(&screen, pos.x as f32, pos.y as f32);
-        let hit = hit_test(&self.scene, wx, wy, self.time_ms);
-        if hit != self.selected {
+        let _ = (wx, wy);
+        self.box_from = Some(pos);
+        self.pending = None;
+    }
+
+    /// Gives `order` for the player: at once in a single-player game, in a
+    /// coming turn in a multiplayer one (where refusals show then).
+    fn issue(&mut self, order: Order) -> Result<u32, String> {
+        if let Some(net) = self.net.as_mut() {
+            net.send(order);
+            return Ok(0);
+        }
+        self.scene.apply(&order, &self.data, &mut self.caches)
+    }
+
+    /// Gives an order to each selected object: done if any of them took
+    /// it, else the first refusal.
+    fn order_each(&mut self, order: impl Fn(u32) -> Order) -> Result<(), String> {
+        let mut result = Err("Nothing is selected".to_string());
+        for (k, id) in self.selection().into_iter().enumerate() {
+            match self.issue(order(id)) {
+                Ok(_) => result = Ok(()),
+                Err(e) if k == 0 => result = Err(e),
+                Err(_) => {}
+            }
+        }
+        result
+    }
+
+    /// The selected object and the ships selected with it.
+    fn selection(&self) -> Vec<u32> {
+        self.selected
+            .iter()
+            .chain(&self.group)
+            .copied()
+            .filter(|&id| self.scene.object_index(id).is_some())
+            .collect()
+    }
+
+    /// Whether `id` is one of the player's ships.
+    fn own_ship(&self, id: u32) -> bool {
+        self.scene.object_index(id).is_some_and(|i| {
+            let o = &self.scene.objects[i];
+            o.ship.is_some() && self.scene.is_own(o)
+        })
+    }
+
+    /// Ends a left click or drag in the world view: a click selects what
+    /// is under it (with Shift, adds or removes an own ship), a drag every
+    /// own ship inside the box (with Shift, added to the selection).
+    fn finish_select(&mut self, from: PhysicalPosition<f64>, to: PhysicalPosition<f64>) {
+        if self.pending == Some(crate::commands::CONVOY) {
+            let order = match (self.world_at(from), self.world_at(to)) {
+                (Some(a), Some(b)) => self.order_each(|ship| Order::Convoy { ship, a, b }),
+                _ => Err("Drag a rectangle around the ship to escort".into()),
+            };
+            match order {
+                Ok(()) => {
+                    self.pending = None;
+                    self.status = None;
+                }
+                Err(e) => self.say(e),
+            }
+            return;
+        }
+        if let Some(k) = self
+            .pending
+            .and_then(|c| crate::commands::GATHER_ZONES.iter().position(|&z| z == c))
+        {
+            let resource = [Resource::Amber, Resource::Fish, Resource::Leviathan][k];
+            let order = match (self.world_at(from), self.world_at(to)) {
+                (Some(a), Some(b)) => self.order_each(|ship| Order::GatherZone {
+                    ship,
+                    a,
+                    b,
+                    resource,
+                }),
+                _ => Err("Drag a rectangle around the zone".into()),
+            };
+            match order {
+                Ok(()) => {
+                    self.pending = None;
+                    self.status = None;
+                }
+                Err(e) => self.say(e),
+            }
+            return;
+        }
+        if let Some(cmd @ (crate::commands::GUARD_ZONE | crate::commands::ATTACK_ZONE)) =
+            self.pending
+        {
+            let attack = cmd == crate::commands::ATTACK_ZONE;
+            let order = match (self.world_at(from), self.world_at(to)) {
+                (Some(a), Some(b)) => self.order_each(|ship| Order::Zone { ship, a, b, attack }),
+                _ => Err("Drag a rectangle around the zone".into()),
+            };
+            match order {
+                Ok(()) => {
+                    self.pending = None;
+                    self.status = None;
+                }
+                Err(e) => self.say(e),
+            }
+            return;
+        }
+        let shift = self.modifiers.shift_key();
+        let dragged = (from.x - to.x).abs() + (from.y - to.y).abs() > BOX_THRESHOLD;
+        let mut chosen: Vec<u32> = if dragged {
+            let (screen, _) = self.placement();
+            let (x0, x1) = (from.x.min(to.x) as f32, from.x.max(to.x) as f32);
+            let (y0, y1) = (from.y.min(to.y) as f32, from.y.max(to.y) as f32);
+            let scale = self.camera.scale(&screen);
+            self.scene
+                .objects
+                .iter()
+                .filter(|o| o.ship.is_some() && self.scene.is_own(o))
+                .filter(|o| {
+                    let sx = screen.x as f32 + (o.x - self.camera.x) * scale;
+                    let sy = screen.y as f32 + (o.y - self.camera.y) * scale;
+                    (x0..=x1).contains(&sx) && (y0..=y1).contains(&sy)
+                })
+                .map(|o| o.id)
+                .collect()
+        } else {
+            self.object_at(to).into_iter().collect()
+        };
+        if shift && !dragged {
+            // Shift-click adds or removes one own ship.
+            if let Some(&id) = chosen.first().filter(|&&id| self.own_ship(id)) {
+                let mut all = self.selection();
+                if let Some(k) = all.iter().position(|&s| s == id) {
+                    all.remove(k);
+                } else {
+                    all.retain(|&s| self.own_ship(s));
+                    all.push(id);
+                }
+                chosen = all;
+            } else {
+                return;
+            }
+        } else if shift {
+            let mut all: Vec<u32> = self
+                .selection()
+                .into_iter()
+                .filter(|&s| self.own_ship(s))
+                .collect();
+            for id in chosen {
+                if !all.contains(&id) {
+                    all.push(id);
+                }
+            }
+            chosen = all;
+        } else if dragged && chosen.is_empty() {
+            return;
+        }
+        let first = chosen.first().copied();
+        if first != self.selected {
             self.page = Page::Main;
         }
-        self.selected = hit;
-        self.pending = None;
+        self.selected = first;
+        self.group = chosen.into_iter().skip(1).collect();
+    }
+
+    /// The world point under a window position, in the view or on the
+    /// minimap.
+    fn world_at(&self, pos: PhysicalPosition<f64>) -> Option<(f32, f32)> {
+        let (screen, minimap) = self.placement();
+        let (sx, sy) = (pos.x as f32, pos.y as f32);
+        if screen.contains(sx, sy) {
+            Some(self.camera.screen_to_world(&screen, sx, sy))
+        } else if minimap.contains(sx, sy) {
+            Some(minimap.to_world(sx, sy))
+        } else {
+            None
+        }
     }
 
     /// The object under a window position in the world view.
@@ -654,9 +2092,30 @@ impl App {
     }
 
     fn right_click(&mut self, pos: PhysicalPosition<f64>) {
-        let Some(id) = self.selected else { return };
+        // Ships of a group spread out around the point they are sent to.
+        for (k, id) in self.selection().into_iter().enumerate() {
+            self.right_click_for(id, k, pos);
+        }
+    }
+
+    /// Carries out a right click for selected object `id`, the `k`-th of
+    /// the selection.
+    fn right_click_for(&mut self, id: u32, k: usize, pos: PhysicalPosition<f64>) {
         // Right-clicking a deposit with a merchant selected starts gathering.
         if let Some(target) = self.object_at(pos) {
+            // Treasures and heroes' houses: go and take them.
+            let takeable = self.scene.object_index(target).is_some_and(|t| {
+                matches!(
+                    self.scene.objects[t].class,
+                    openac_formats::ObjectClass::Treasure | openac_formats::ObjectClass::HeroHouse
+                )
+            });
+            if takeable && self.own_ship(id) {
+                if let Err(e) = self.issue(Order::Take { ship: id, target }) {
+                    self.say(e);
+                }
+                return;
+            }
             let is_deposit = self
                 .scene
                 .object_index(target)
@@ -669,7 +2128,10 @@ impl App {
                         .is_some_and(|s| crate::objects::cargo_capacity(s.kind) > 0.0)
             });
             if is_deposit && own_merchant {
-                if let Err(e) = self.scene.order_gather(id, target) {
+                if let Err(e) = self.issue(Order::Gather {
+                    ship: id,
+                    deposit: target,
+                }) {
                     self.say(e);
                 }
                 return;
@@ -687,7 +2149,7 @@ impl App {
                 _ => false,
             };
             if own_warship && enemy_ship {
-                if let Err(e) = self.scene.order_attack(id, target) {
+                if let Err(e) = self.issue(Order::Attack { ship: id, target }) {
                     self.say(e);
                 }
                 return;
@@ -704,7 +2166,11 @@ impl App {
                 .object_index(target)
                 .is_some_and(|t| self.scene.objects[t].ship.is_some());
             if own_rammer && enemy_ship && target_ship {
-                if let Err(e) = self.scene.order_close(id, target, false) {
+                if let Err(e) = self.issue(Order::Close {
+                    ship: id,
+                    target,
+                    board: false,
+                }) {
                     self.say(e);
                 }
                 return;
@@ -723,17 +2189,131 @@ impl App {
         } else {
             return;
         };
-        if is_ship && !self.scene.order_move(id, target.0, target.1) {
+        let (dx, dy) = group_offset(k);
+        let target = (target.0 + dx, target.1 + dy);
+        if !is_ship {
+            return;
+        }
+        let (x, y) = target;
+        let order = if self.modifiers.shift_key() {
+            Order::Waypoint { ship: id, x, y }
+        } else {
+            Order::Move { ship: id, x, y }
+        };
+        if self.issue(order).is_err() {
             self.say("The ship cannot sail there.");
         }
     }
 
+    /// Puts video `name` in line to play, if it is installed.
+    fn queue_video(&mut self, name: &str) {
+        if let Some(path) = crate::video::find(self.data.root(), name) {
+            self.videos.push_back(path);
+        }
+    }
+
+    /// Plays the videos in line; true while one is showing.
+    fn run_videos(&mut self, dt: f32) -> bool {
+        if let Some(v) = self.video.as_mut() {
+            if v.advance(dt) {
+                return true;
+            }
+            self.video = None;
+        }
+        while let Some(path) = self.videos.pop_front() {
+            let volume = self
+                .audio
+                .as_ref()
+                .map_or(0.0, |a| if a.muted { 0.0 } else { a.volume });
+            match crate::video::Player::open(&path, self.audio.as_ref().map(|a| &a.handle), volume)
+            {
+                Ok(v) => {
+                    self.video = Some(v);
+                    // The music waits.
+                    if let Some(m) = &self.music {
+                        m.set_volume(0.0);
+                    }
+                    return true;
+                }
+                Err(e) => eprintln!("video: {e:#}"),
+            }
+        }
+        false
+    }
+
+    /// Skips the video playing, or with `all` every one in line.
+    fn skip_video(&mut self, all: bool) {
+        self.video = None;
+        if all {
+            self.videos.clear();
+        }
+        if self.videos.is_empty() {
+            self.restore_music();
+        }
+    }
+
+    /// The music's volume as set (after a video).
+    fn restore_music(&self) {
+        if let (Some(m), Some(a)) = (&self.music, &self.audio) {
+            m.set_volume(if a.muted { 0.0 } else { self.music_volume });
+        }
+    }
+
     fn update(&mut self, dt: f32) {
+        // The world waits while a video plays.
+        let was_playing = self.video.is_some();
+        if self.run_videos(dt) {
+            return;
+        }
+        if was_playing {
+            self.restore_music();
+        }
         // The game waits while the briefing is read.
-        if !self.briefing {
-            self.scene.update(dt, &self.data, &mut self.caches);
+        if let (Some(outcome), None) = (self.scene.outcome, self.outcome_at) {
+            self.outcome_at = Some(self.scene.clock);
+            // A win goes on the best results.
+            self.last_win = (outcome == crate::scene::Outcome::Victory).then(|| {
+                let mission = self.missions[self.mission_index].clone();
+                let new = self.records.record(&mission, self.scene.clock);
+                if new {
+                    if let Err(e) = self.records.save(&self.data.save_dir().join("best.json")) {
+                        eprintln!("could not save the best results: {e}");
+                    }
+                }
+                (self.scene.clock, new)
+            });
+        }
+        // The end screen follows a few seconds after the mission is decided.
+        if let (Some(outcome), Some(at), None) = (self.scene.outcome, self.outcome_at, self.menu) {
+            if self.scene.clock > at + 3.0 && self.menus.is_some() {
+                self.menu = Some(MenuState::Outcome(outcome));
+                self.in_game = false;
+                // The story's end after the last campaign mission is won.
+                let campaign =
+                    Category::of(&self.missions[self.mission_index]) == Some(Category::Campaign);
+                if outcome == crate::scene::Outcome::Victory
+                    && campaign
+                    && self.next_mission().is_none()
+                {
+                    self.queue_video(crate::video::ENDING);
+                }
+            }
+        }
+        if self.menu == Some(MenuState::Waiting) {
+            self.run_lobby();
+        }
+        if self.net.is_some() {
+            // Multiplayer games run at one speed and do not pause, menus
+            // open or not.
+            self.run_turns(dt);
+        } else if !self.briefing && !self.paused && self.menu.is_none() {
+            self.scene
+                .update(dt * self.settings.speed(), &self.data, &mut self.caches);
         }
         self.play_scene_sounds();
+        if let Some(m) = self.music.as_mut() {
+            m.keep_playing();
+        }
         let latest = std::mem::take(&mut self.scene.messages).pop();
         if let Some(msg) = latest {
             self.say(msg);
@@ -743,8 +2323,8 @@ impl App {
         let map = self.scene.map_size();
         if self.center_pending {
             self.center_pending = false;
-            self.camera
-                .center_on(map.0 as f32 / 2.0, map.1 as f32 / 2.0, &screen, map);
+            let (x, y) = self.scene.start_view();
+            self.camera.center_on(x, y, &screen, map);
         }
         let (mut dx, mut dy) = (0.0f32, 0.0f32);
         let held = |k: &[KeyCode]| k.iter().any(|k| self.keys.contains(k));
@@ -776,9 +2356,12 @@ impl App {
         }
         // Speed is defined in original pixels so scrolling feels the same at
         // any resolution.
-        let speed = SCROLL_SPEED * self.camera.policy.base_scale(window.1) * dt;
-        self.camera
-            .scroll(dx.signum() * speed, dy.signum() * speed, &screen, map);
+        let speed =
+            SCROLL_SPEED * self.settings.scroll() * self.camera.policy.base_scale(window.1) * dt;
+        if dx != 0.0 || dy != 0.0 {
+            self.camera
+                .scroll(direction(dx) * speed, direction(dy) * speed, &screen, map);
+        }
         self.camera.clamp(&screen, map);
     }
 
@@ -810,12 +2393,22 @@ impl App {
                 width: window.0,
                 height: window.1,
             };
-            let site = self.cursor.and_then(|c| self.site_at(c));
-            GameView {
-                site,
-                ..self.view()
+            if let Some(v) = &self.video {
+                v.draw(&mut frame);
+            } else if let (Some(state), Some(menus)) = (self.menu, &self.menus) {
+                let page = self.menu_page(state);
+                let hover = self
+                    .cursor
+                    .map(|c| Menus::to_menu(window, c.x as f32, c.y as f32));
+                menus.draw(&mut frame, &page.view(hover));
+            } else {
+                let site = self.cursor.and_then(|c| self.site_at(c));
+                GameView {
+                    site,
+                    ..self.view()
+                }
+                .draw(&mut frame);
             }
-            .draw(&mut frame);
             buffer.present().map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(())
         })();
@@ -876,7 +2469,14 @@ impl ApplicationHandler for App {
                 let (screen, _) = self.placement();
                 self.camera.clamp(&screen, self.scene.map_size());
             }
-            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+            WindowEvent::ModifiersChanged(m) => {
+                self.modifiers = m.state();
+                // macOS sends no key release for keys let go while Command
+                // is held: forget held keys rather than scroll for ever.
+                if self.modifiers.super_key() {
+                    self.keys.clear();
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
@@ -885,8 +2485,88 @@ impl ApplicationHandler for App {
                     self.keys.remove(&code);
                     return;
                 }
-                self.keys.insert(code);
+                // (See ModifiersChanged: with Command held, key releases
+                // never come.)
+                if !self.modifiers.super_key() {
+                    self.keys.insert(code);
+                }
                 if event.repeat {
+                    return;
+                }
+                // Any key skips a video; Esc skips them all.
+                if self.video.is_some() {
+                    self.skip_video(code == KeyCode::Escape);
+                    return;
+                }
+                // Chat in a multiplayer game: Enter opens a line, Enter
+                // again sends it, Esc drops it.
+                if self.net.is_some() && self.menu.is_none() {
+                    if let Some(line) = self.chat_line.as_mut() {
+                        match code {
+                            KeyCode::Enter | KeyCode::NumpadEnter => {
+                                let text = self.chat_line.take().unwrap_or_default();
+                                if !text.trim().is_empty() {
+                                    if let Some(net) = self.net.as_mut() {
+                                        net.chat(text.trim());
+                                    }
+                                    self.say(format!("You: {}", text.trim()));
+                                } else {
+                                    self.status = None;
+                                }
+                            }
+                            KeyCode::Escape => {
+                                self.chat_line = None;
+                                self.status = None;
+                            }
+                            KeyCode::Backspace => {
+                                line.pop();
+                                let shown = format!("Say: {line}_");
+                                self.say(shown);
+                            }
+                            _ => {
+                                if let Some(t) = event.text.as_deref() {
+                                    if line.len() < 200 {
+                                        line.extend(t.chars().filter(|c| !c.is_control()));
+                                    }
+                                }
+                                let shown = format!("Say: {line}_");
+                                self.say(shown);
+                            }
+                        }
+                        // Typing is not a command.
+                        self.keys.remove(&code);
+                        return;
+                    }
+                    if matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
+                        && !self.modifiers.alt_key()
+                    {
+                        self.chat_line = Some(String::new());
+                        self.say("Say: _");
+                        return;
+                    }
+                }
+                if let (Some(MenuState::Multiplayer(_)), Some(_)) = (self.menu, &self.menus) {
+                    if code == KeyCode::Backspace {
+                        self.join_address.pop();
+                        return;
+                    }
+                    let typed = event.text.as_deref().unwrap_or("");
+                    if !typed.is_empty()
+                        && typed
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-'))
+                        && self.join_address.len() < 60
+                    {
+                        self.join_address.push_str(typed);
+                        return;
+                    }
+                }
+                if self.menu.is_some() && self.menus.is_some() {
+                    if code == KeyCode::Escape {
+                        self.menu_back(event_loop);
+                    } else if code == KeyCode::F11 {
+                        self.toggle_fullscreen();
+                    }
                     return;
                 }
                 if code == KeyCode::F1 {
@@ -914,14 +2594,25 @@ impl ApplicationHandler for App {
                         self.status = None;
                     }
                     KeyCode::Escape if self.page != Page::Main => self.page = Page::Main,
-                    KeyCode::Escape if self.selected.is_some() => self.selected = None,
+                    KeyCode::Escape if self.tab != Tab::Object => self.tab = Tab::Object,
+                    KeyCode::Escape if self.selected.is_some() => {
+                        self.selected = None;
+                        self.group.clear();
+                    }
+                    KeyCode::Escape if self.menus.is_some() => self.menu = Some(MenuState::Main),
                     KeyCode::Escape => event_loop.exit(),
                     KeyCode::F11 => self.toggle_fullscreen(),
+                    KeyCode::F5 => self.quick_save(),
+                    KeyCode::KeyP | KeyCode::Pause => self.paused = !self.paused,
+                    KeyCode::F9 => self.quick_load(),
                     KeyCode::KeyM => {
                         if let Some(a) = self.audio.as_mut() {
                             a.muted = !a.muted;
-                            let msg = if a.muted { "Sound off" } else { "Sound on" };
-                            self.say(msg);
+                            let muted = a.muted;
+                            if let Some(m) = &self.music {
+                                m.set_volume(if muted { 0.0 } else { self.music_volume });
+                            }
+                            self.say(if muted { "Sound off" } else { "Sound on" });
                         }
                     }
                     KeyCode::Enter if self.modifiers.alt_key() => self.toggle_fullscreen(),
@@ -947,6 +2638,16 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                if let Some(slider) = self.slider_drag {
+                    if let Some(layout) = self.show_interface.then(|| {
+                        self.interface
+                            .layout(self.window_size(), &self.camera.policy, &self.scene)
+                    }) {
+                        let x = (position.x as f32 - layout.bar_x) / layout.scale;
+                        let v = self.interface.panels.slider_value(slider, x);
+                        self.set_slider(slider, v);
+                    }
+                }
                 if let Some((start, moved)) = self.right_press.as_mut() {
                     let (dx, dy) = (position.x - start.x, position.y - start.y);
                     *moved |= dx * dx + dy * dy > CLICK_SLOP * CLICK_SLOP;
@@ -982,6 +2683,16 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
+                (MouseButton::Left, ElementState::Pressed) if self.video.is_some() => {
+                    self.skip_video(false);
+                }
+                (MouseButton::Left, ElementState::Pressed)
+                    if self.menu.is_some() && self.menus.is_some() =>
+                {
+                    if let Some(c) = self.cursor {
+                        self.menu_click(c);
+                    }
+                }
                 (MouseButton::Left, ElementState::Pressed) if self.briefing => {
                     self.briefing = false;
                 }
@@ -990,7 +2701,13 @@ impl ApplicationHandler for App {
                         self.left_click(c);
                     }
                 }
-                (MouseButton::Left, ElementState::Released) => self.minimap_drag = false,
+                (MouseButton::Left, ElementState::Released) => {
+                    self.minimap_drag = false;
+                    self.slider_drag = None;
+                    if let (Some(from), Some(to)) = (self.box_from.take(), self.cursor) {
+                        self.finish_select(from, to);
+                    }
+                }
                 _ => {}
             },
             WindowEvent::MouseWheel { delta, .. } => {
@@ -998,14 +2715,52 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
                 };
+                // On the front end the wheel scrolls lists.
+                if let (Some(state), Some(_)) = (self.menu, &self.menus) {
+                    let rows = self.menu_page(state).items.len();
+                    let last = rows.saturating_sub(crate::menus::VISIBLE_ROWS);
+                    self.wheel_rest += steps;
+                    let whole = self.wheel_rest.trunc();
+                    self.wheel_rest -= whole;
+                    let step = -whole as isize;
+                    self.list_first =
+                        (self.list_first as isize + step).clamp(0, last as isize) as usize;
+                    return;
+                }
                 let (screen, _) = self.placement();
                 let c = self.cursor.unwrap_or(PhysicalPosition::new(
                     (screen.x + screen.w / 2) as f64,
                     (screen.y + screen.h / 2) as f64,
                 ));
-                if screen.contains(c.x as f32, c.y as f32) {
-                    self.camera.zoom_at(
+                if !screen.contains(c.x as f32, c.y as f32) {
+                    return;
+                }
+                match delta {
+                    // A mouse wheel zooms.
+                    MouseScrollDelta::LineDelta(..) => self.camera.zoom_at(
                         ZOOM_STEP.powf(steps),
+                        c.x as f32,
+                        c.y as f32,
+                        &screen,
+                        self.scene.map_size(),
+                    ),
+                    // A trackpad's two-finger swipe moves the map (pinch
+                    // zooms, below).
+                    MouseScrollDelta::PixelDelta(p) => {
+                        self.camera
+                            .scroll(-p.x as f32, -p.y as f32, &screen, self.scene.map_size())
+                    }
+                }
+            }
+            WindowEvent::PinchGesture { delta, .. } => {
+                let (screen, _) = self.placement();
+                let c = self.cursor.unwrap_or(PhysicalPosition::new(
+                    (screen.x + screen.w / 2) as f64,
+                    (screen.y + screen.h / 2) as f64,
+                ));
+                if self.menu.is_none() && screen.contains(c.x as f32, c.y as f32) {
+                    self.camera.zoom_at(
+                        (1.0 + delta as f32).max(0.1),
                         c.x as f32,
                         c.y as f32,
                         &screen,
@@ -1023,6 +2778,10 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.quit {
+            event_loop.exit();
+            return;
+        }
         // Redraw at ~60 Hz; palette cycling needs a steady clock even when idle.
         if let Some(g) = &self.gfx {
             g.window.request_redraw();
@@ -1030,5 +2789,34 @@ impl ApplicationHandler for App {
         event_loop.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(16),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::group_offset;
+
+    #[test]
+    fn group_places_are_apart() {
+        let places: Vec<(f32, f32)> = (0..12).map(group_offset).collect();
+        assert_eq!(places[0], (0.0, 0.0));
+        for (i, a) in places.iter().enumerate() {
+            for b in &places[i + 1..] {
+                let d = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+                assert!(d > 16.0, "{a:?} {b:?}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    /// No key held, no scrolling: the map once drifted right and down
+    /// because `f32::signum(0.0)` is 1.
+    #[test]
+    fn no_input_no_scroll() {
+        assert_eq!(super::direction(0.0), 0.0);
+        assert_eq!(super::direction(2.0), 1.0);
+        assert_eq!(super::direction(-1.0), -1.0);
     }
 }

@@ -10,7 +10,8 @@
 use openac_formats::ObjectClass;
 
 use crate::economy::{
-    self, DOCK, SETTLEMENT, SHIPYARD, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR, TOWN, WORKSHOP,
+    self, DOCK, SCHOOL, SETTLEMENT, SHIPYARD, SMITHY, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR, TOWN,
+    WORKSHOP,
 };
 use crate::magic::{self, Spell, Temple};
 use crate::objects::{MapObject, SHIP_NAMES};
@@ -19,7 +20,7 @@ use crate::scene::Scene;
 pub const SLOTS: usize = 12;
 
 /// A command id as used by the original game.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Command(pub u8);
 
 impl Command {
@@ -42,6 +43,8 @@ impl Command {
     pub const TRAIN_BOWMEN: Command = Command(0x2d);
     pub const UPGRADE_TOWN: Command = Command(0x3a);
     pub const UPGRADE_DOCK: Command = Command(0x3b);
+    /// Build the Argo (shipyards, once Argus has come).
+    pub const BUILD_ARGO: Command = Command(0x7d);
     pub const BEHAVIOUR: Command = Command(0x6c);
 
     /// Name of the button image (`<name>_00`, `<name>_01`, ...). Build and
@@ -65,6 +68,42 @@ impl Command {
             0x10 => "CBUT_BUILDGRG",
             0x11 | 0x14 => "CBUT_REPGRND",
             0x6c => "CBUT_BEHMAIN",
+            0x6d => "CBUT_BEHCONVEY",
+            0x6e => "CBUT_BEHPATROL",
+            0x6f => "CBUT_BEHSGUARD",
+            0x70 => "CBUT_BEHFGUARD",
+            0x71 => "CBUT_BEHRAID",
+            0x72 => "CBUT_BEHSAGR",
+            0x73 => "CBUT_BEHFAGR",
+            0x74 => "CBUT_BEHGZONE",
+            0x75 => "CBUT_BEHAZONE",
+            0x76 => "CBUT_BEHSCOUT",
+            0x78 => "CBUT_BEHGUARDBRD",
+            0x79 => "CBUT_BEHGUARDRAM",
+            0x7a => "CBUT_BEHAMBERZONE",
+            0x7b => "CBUT_BEHFISHZONE",
+            0x7c => "CBUT_BEHWHALEZONE",
+            0x36 => "CBUT_UPARMORM",
+            0x37 => "CBUT_UPARMORS",
+            0x38 => "CBUT_UPRAMM",
+            0x39 => "CBUT_UPRAMS",
+            0x3c | 0x3d => "CBUT_UPARMING",
+            0x50 => "CBUT_UPGFIRE",
+            0x51 => "CBUT_UPQLIME",
+            0x52 => "CBUT_UPFRAM",
+            0x53 => "CBUT_UPDEAD",
+            0x3e => "CBUT_UPGARMINGW3",
+            0x3f => "CBUT_UPGARMINGW1",
+            0x40 => "CBUT_UPGARMINGW2",
+            0x41 => "CBUT_UPGARMINGM3",
+            0x42 => "CBUT_UPGARMINGM1",
+            0x43 => "CBUT_UPGARMINGM2",
+            0x44 => "CBUT_UPGARMINGS3",
+            0x45 => "CBUT_UPGARMINGS1",
+            0x46 => "CBUT_UPGARMINGS2",
+            0x47 => "CBUT_UPARMOR",
+            0x48 => "CBUT_UPRAM",
+            0x4f => "CBUT_MOVE",
             0x65 => "CBUT_PROTWEAPON",
             0x66 => "CBUT_GHOST",
             0x67 => "CBUT_FLAME",
@@ -113,6 +152,7 @@ impl Command {
                     0x35 => return Some("CBUT_BLDONAGR".into()),
                     0x3a => "UPGTOWN",
                     0x3b => "UPGDOCK",
+                    0x7d => "ARGO",
                     _ => return None,
                 };
                 let digit = if nation == 3 { 3 } else { 1 };
@@ -120,6 +160,35 @@ impl Command {
             }
         };
         Some(fixed.to_string())
+    }
+
+    /// The name and, for things that cost amber or fish, the price (for
+    /// research, at the human player's level in `scene`).
+    pub fn describe(self, scene: Option<&Scene>) -> String {
+        let cost = if let Some(kind) = economy::ship_of_command(self) {
+            Some(economy::ship_cost(kind))
+        } else if let Some(class) = economy::building_of_command(self) {
+            Some((economy::building_cost(class), 0))
+        } else if (0x2d..=0x35).contains(&self.0) {
+            Some(crate::combat::item_cost(self.0 - 0x2d))
+        } else if let Some(spell) = Spell::of_command(self) {
+            Some(spell.cost())
+        } else if let Some(upgrade) = crate::combat::Upgrade::of_command(self.0) {
+            let level = scene.and_then(|s| s.next_level(upgrade)).unwrap_or(0);
+            Some((upgrade.cost(level), 0))
+        } else {
+            match self {
+                Command::UPGRADE_TOWN => Some((economy::building_cost(TOWN), 0)),
+                Command::UPGRADE_DOCK => Some((economy::building_cost(DOCK), 0)),
+                magic::GET_MAGIC => Some((magic::LEARN_COST, 0)),
+                _ => None,
+            }
+        };
+        match cost {
+            Some((amber, 0)) => format!("{}: {amber} amber", self.name()),
+            Some((amber, fish)) => format!("{}: {amber} amber, {fish} fish", self.name()),
+            None => self.name(),
+        }
     }
 
     pub fn name(self) -> String {
@@ -159,6 +228,21 @@ impl Command {
                     crate::combat::ITEM_NAMES[(self.0 - 0x2d) as usize]
                 )
             }
+            0x36 | 0x37 => return format!("Fit armour, level {}", self.0 - 0x35),
+            0x38 | 0x39 => return format!("Fit a ram, level {}", self.0 - 0x37),
+            0x3c => "Study arming",
+            0x3d => "Weapon research",
+            0x3e..=0x46 => {
+                return crate::combat::Upgrade::of_command(self.0)
+                    .map_or("Research".into(), |u| format!("Improve the {}", u.name()))
+            }
+            0x47 => "Study better armour",
+            0x48 => "Study better rams",
+            0x4f => "Study better rigging",
+            0x50..=0x53 => {
+                return crate::combat::Upgrade::of_command(self.0)
+                    .map_or("Research".into(), |u| format!("Study {}", u.name()))
+            }
             0x54 => "Learn a spell",
             0x57 => "Back",
             0x58..=0x5f => {
@@ -182,6 +266,20 @@ impl Command {
             0x3a => "Upgrade to town",
             0x3b => "Upgrade to dock",
             0x6c => "Behaviour",
+            0x6d => "Convoy",
+            0x6e => "Patrol",
+            0x6f | 0x70 => "Guard",
+            0x71 => "Raid",
+            0x72 | 0x73 => "Fire on aggressor",
+            0x74 => "Guard zone",
+            0x75 => "Attack zone",
+            0x76 => "Scout",
+            0x78 => "Board attack",
+            0x79 => "Ram attack",
+            0x7a => "Amber zone",
+            0x7b => "Fish zone",
+            0x7c => "Leviathan zone",
+            0x7d => "Build the Argo",
             _ => "Command",
         }
         .to_string()
@@ -196,6 +294,8 @@ pub struct Slot {
     /// Progress 0..1 of an order running on this button (e.g. a ship being
     /// built); shown by the button's animation frames.
     pub progress: Option<f32>,
+    /// A behaviour switched on (drawn highlighted).
+    pub checked: bool,
 }
 
 pub type Menu = [Option<Slot>; SLOTS];
@@ -209,6 +309,12 @@ pub enum Page {
     Structures,
     /// A temple's wind directions.
     Wind,
+    /// A workshop's research.
+    Research,
+    /// A warship's behaviour (0x4e6980, page 5).
+    Behaviour,
+    /// A merchant's gathering zones (0x4e6e90, page 1).
+    Zones,
 }
 
 /// The command menu of an object on `page`.
@@ -217,6 +323,9 @@ pub fn menu(scene: &Scene, obj: &MapObject, page: Page) -> Menu {
         Page::Main => main_menu(scene, obj),
         Page::Structures => structures_menu(scene, obj),
         Page::Wind => wind_menu(scene, obj),
+        Page::Research => research_menu(scene, obj),
+        Page::Behaviour => behaviour_menu(scene, obj),
+        Page::Zones => zones_menu(scene, obj),
     }
 }
 
@@ -245,19 +354,39 @@ fn wind_menu(scene: &Scene, obj: &MapObject) -> Menu {
 /// button per known spell.
 fn temple_menu(scene: &Scene, temple: Temple, menu: &mut Menu) {
     let mut slot = 0;
-    if !scene.magic.all_known(temple) {
+    // The next spell, if the campaign has revealed it yet.
+    let next = temple.order().get(scene.magic.known(temple).len()).copied();
+    if next.is_some_and(|s| scene.permits.spell(s)) {
         let learning = scene.magic.learning(temple);
         menu[0] = Some(Slot {
+            checked: false,
             command: magic::GET_MAGIC,
             enabled: learning.is_some() || scene.amber >= magic::LEARN_COST,
             progress: learning.map(|t| t / magic::LEARN_SECONDS),
         });
         slot = 1;
     }
-    for &spell in scene.magic.known(temple) {
+    // Known spells, then any the player may cast once from a treasure.
+    let free = |s: Spell| scene.free_casts.get(&s).is_some_and(|&n| n > 0);
+    let gifts = scene
+        .free_casts
+        .keys()
+        .copied()
+        .filter(|&s| s.temple() == temple && free(s) && !scene.magic.knows(s));
+    let spells: Vec<Spell> = scene
+        .magic
+        .known(temple)
+        .iter()
+        .copied()
+        .chain(gifts)
+        .collect();
+    for spell in spells {
         let (amber, fish) = spell.cost();
-        let enabled = spell.implemented() && scene.amber >= amber && scene.fish >= fish;
-        set(menu, slot, spell.command(), enabled);
+        let enabled =
+            spell.implemented() && (free(spell) || scene.amber >= amber && scene.fish >= fish);
+        if slot < SLOTS {
+            set(menu, slot, spell.command(), enabled);
+        }
         slot += 1;
     }
 }
@@ -287,6 +416,9 @@ fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
         if let Some(id) = id {
             let command = Command(*id);
             let class = economy::building_of_command(command).unwrap();
+            if !scene.permits.building(class) {
+                continue;
+            }
             set(
                 &mut menu,
                 slot,
@@ -311,6 +443,8 @@ pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
         ObjectClass::Building(SHIPYARD | DOCK) => shipyard_menu(scene, obj, &mut menu),
         ObjectClass::Building(SETTLEMENT | TOWN) => settlement_menu(scene, obj, &mut menu),
         ObjectClass::Building(WORKSHOP) => workshop_menu(scene, obj, &mut menu),
+        ObjectClass::Building(SCHOOL) => school_menu(scene, obj, &mut menu),
+        ObjectClass::Building(SMITHY) => smithy_menu(scene, obj, &mut menu),
         ObjectClass::Building(c @ (TEMPLE_OF_THE_SEA | TEMPLE_OF_WAR)) => {
             temple_menu(scene, Temple::of_class(c).unwrap(), &mut menu)
         }
@@ -321,6 +455,7 @@ pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
 
 fn set(menu: &mut Menu, slot: usize, command: Command, enabled: bool) {
     menu[slot] = Some(Slot {
+        checked: false,
         command,
         enabled,
         progress: None,
@@ -340,19 +475,20 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
         set(menu, 2, Command::UNLOAD, false);
         set(menu, 4, Command::AMBER, true);
         set(menu, 5, Command::FISH, true);
-        set(menu, 6, Command::WHALE, false);
-        set(menu, 7, Command::ZONES, false);
+        set(menu, 6, Command::WHALE, true);
+        set(menu, 7, Command::ZONES, true);
     } else {
         // Warships (0x4e6980): weapons and behaviour.
         set(menu, 4, Command::FIRE, obj.is_armed());
         set(menu, 5, Command::BOARD, ship.crew.count() > 0);
         set(menu, 6, Command::RAM, true);
-        set(menu, 7, Command::BEHAVIOUR, false);
+        set(menu, 7, Command::BEHAVIOUR, true);
     }
     set(menu, 8, Command::LOAD, true);
-    set(menu, 9, Command::REPAIR_SHIP, false);
+    let damaged = obj.combat.as_ref().is_some_and(|c| c.hull < c.max_hull);
+    set(menu, 9, Command::REPAIR_SHIP, damaged);
     set(menu, 10, Command::BUILD_GROUND, kind <= 1);
-    set(menu, 11, Command::TREASURE, false);
+    set(menu, 11, Command::TREASURE, true);
     // Unique ships lose some commands (0x4e42e0).
     let removed: &[usize] = match kind {
         8 => &[5, 6, 11],
@@ -374,6 +510,7 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     for (slot, kind) in economy::buildable_ships(human.nation).enumerate() {
         let command = economy::ship_command(kind);
         let mut entry = Slot {
+            checked: false,
             command,
             enabled: building.is_none() && scene.can_build_ship(kind).is_ok(),
             progress: None,
@@ -384,9 +521,87 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         }
         menu[slot] = Some(entry);
     }
-    if obj.class == ObjectClass::Building(SHIPYARD) {
+    // The Argo, after the ship types (0x4164e0), once Argus has come.
+    if scene.permits.argo() && crate::scene::is_campaign(&scene.mission) {
+        let slot = menu.iter().position(|s| s.is_none()).unwrap_or(10);
+        let mut entry = Slot {
+            checked: false,
+            command: Command::BUILD_ARGO,
+            enabled: building.is_none() && scene.can_build_ship(2).is_ok(),
+            progress: None,
+        };
+        if let Some(p) = building.filter(|p| p.argo) {
+            entry.progress = Some(p.elapsed / p.total);
+            entry.enabled = true;
+        }
+        menu[slot] = Some(entry);
+    }
+    if obj.class == ObjectClass::Building(SHIPYARD) && scene.permits.dock() {
         let enabled = building.is_none() && scene.amber >= economy::building_cost(DOCK);
         set(menu, 11, Command::UPGRADE_DOCK, enabled);
+    }
+}
+
+/// The smithy (0x433e60): refits a ship lying next to it with armour M/S
+/// or ram M/S (slots 0, 1 and 4, 5), up to the studied level.
+fn smithy_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
+    let studied = scene.levels_of(scene.human.map(|h| (h.nation, h.slot)));
+    for (slot, command) in [(0, 0x36u8), (1, 0x37), (4, 0x38), (5, 0x39)] {
+        let (upgrade, level) = crate::combat::refit_of_command(command).unwrap();
+        if studied.get(upgrade) < level || !scene.permits.fit(upgrade, level) {
+            continue;
+        }
+        let affordable = scene
+            .refit_candidate(obj.id, upgrade, level)
+            .is_some_and(|i| {
+                let kind = scene.objects[i].ship.as_ref().unwrap().kind;
+                scene.amber >= crate::combat::refit_cost(upgrade, level, kind)
+            });
+        set(menu, slot, Command(command), affordable);
+    }
+}
+
+/// The sage school (0x430f90): weapons (slot 0), rams (1), armour (2) and
+/// rigging (3), each studied up to level 2; the one in progress shows its
+/// progress. (Greek schools also offer the special-ship upgrades, not
+/// implemented.)
+fn school_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
+    use crate::combat::Upgrade;
+    let busy = scene.research_at(obj.id);
+    // Slots 0-3: arming, ram, armour, rigging; once the arming is at level
+    // 2, the nation's two unique ships in slots 4 and 5.
+    let levels = scene.levels_of(scene.human.map(|h| (h.nation, h.slot)));
+    let first = if scene.human.is_some_and(|h| h.nation == 1) {
+        0
+    } else {
+        2
+    };
+    let specials = (levels.weapons >= 2)
+        .then(|| {
+            [
+                (4, Upgrade::Special(first)),
+                (5, Upgrade::Special(first + 1)),
+            ]
+        })
+        .into_iter()
+        .flatten();
+    for (slot, upgrade) in Upgrade::ALL.into_iter().enumerate().chain(specials) {
+        let entry = match (busy, scene.next_level(upgrade)) {
+            (Some((u, progress)), _) if u == upgrade => Slot {
+                checked: false,
+                command: Command(upgrade.command()),
+                enabled: true,
+                progress: Some(progress),
+            },
+            (_, Some(level)) => Slot {
+                checked: false,
+                command: Command(upgrade.command()),
+                enabled: busy.is_none() && scene.amber >= upgrade.cost(level),
+                progress: None,
+            },
+            _ => continue,
+        };
+        menu[slot] = Some(entry);
     }
 }
 
@@ -398,11 +613,119 @@ fn workshop_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         let slot = (item % 3) as usize + (item as usize / 3) * 4 - 4;
         let (amber, fish) = crate::combat::item_cost(item);
         menu[slot] = Some(Slot {
+            checked: false,
             command: Command(0x2d + item),
-            enabled: scene.amber >= amber && scene.fish >= fish,
+            enabled: scene.permits.item(item) && scene.amber >= amber && scene.fish >= fish,
             progress: making.filter(|t| t.kind == item).map(|t| t.progress()),
         });
     }
+    // Slot 8 opens the research page (command 0x3d, menu page 3).
+    set(menu, 8, RESEARCH, true);
+}
+
+/// The behaviour switches on a warship's behaviour page.
+pub const GUARD: Command = Command(0x6f);
+pub const FIRE_ON_AGGRESSOR: Command = Command(0x72);
+pub const BOARD_ATTACK: Command = Command(0x78);
+pub const RAM_ATTACK: Command = Command(0x79);
+pub const SCOUT: Command = Command(0x76);
+pub const PATROL: Command = Command(0x6e);
+pub const GUARD_ZONE: Command = Command(0x74);
+pub const CONVOY: Command = Command(0x6d);
+/// A merchant's gathering zones: amber, fish, leviathans.
+pub const GATHER_ZONES: [Command; 3] = [Command(0x7a), Command(0x7b), Command(0x7c)];
+pub const ATTACK_ZONE: Command = Command(0x75);
+
+/// A warship's behaviour page (0x4e6980, page 5): guard, ram attack and
+/// board attack in slots 0-2, fire on aggressor in slot 5 (only while
+/// guarding), convoy in 4, scout in 6, patrol in 8, guard and attack zones
+/// in 9 and 10.
+fn behaviour_menu(scene: &Scene, obj: &MapObject) -> Menu {
+    let mut menu: Menu = [None; SLOTS];
+    let Some(ship) = obj.ship.as_ref().filter(|_| scene.is_own(obj)) else {
+        return menu;
+    };
+    let b = ship.behaviour;
+    let mut toggle = |slot: usize, command: Command, enabled: bool, checked: bool| {
+        menu[slot] = Some(Slot {
+            command,
+            enabled,
+            progress: None,
+            checked,
+        });
+    };
+    toggle(0, GUARD, true, b.guard);
+    toggle(1, RAM_ATTACK, true, b.ram);
+    toggle(2, BOARD_ATTACK, true, b.board);
+    toggle(5, FIRE_ON_AGGRESSOR, b.guard, b.guard && b.aggressor);
+    let scouting = matches!(ship.task, Some(crate::objects::Task::Scout { .. }));
+    let patrolling = matches!(ship.task, Some(crate::objects::Task::Patrol { .. }));
+    toggle(6, SCOUT, true, scouting);
+    toggle(8, PATROL, true, patrolling);
+    let zone = |attack| matches!(ship.task, Some(crate::objects::Task::Zone { attack: a, .. }) if a == attack);
+    toggle(9, GUARD_ZONE, obj.is_armed(), zone(false));
+    toggle(10, ATTACK_ZONE, obj.is_armed(), zone(true));
+    let escorting = matches!(ship.task, Some(crate::objects::Task::Convoy { .. }));
+    toggle(4, CONVOY, true, escorting);
+    menu
+}
+
+/// A merchant's gathering zone page: amber, fish and leviathan zones in
+/// slots 0-2, the one in use shown set.
+fn zones_menu(scene: &Scene, obj: &MapObject) -> Menu {
+    use crate::objects::Resource;
+    let mut menu: Menu = [None; SLOTS];
+    let Some(ship) = obj.ship.as_ref().filter(|_| scene.is_own(obj)) else {
+        return menu;
+    };
+    for (slot, (command, resource)) in GATHER_ZONES
+        .into_iter()
+        .zip([Resource::Amber, Resource::Fish, Resource::Leviathan])
+        .enumerate()
+    {
+        menu[slot] = Some(Slot {
+            command,
+            enabled: true,
+            progress: None,
+            checked: ship.zone.is_some_and(|z| z.1 == resource),
+        });
+    }
+    menu
+}
+
+/// Opens a workshop's research page.
+pub const RESEARCH: Command = Command(0x3d);
+
+/// The workshop's research page (0x4361c0, page 3): one row per item group
+/// (marines, medium, strong weapons), with rate of fire, damage and range
+/// in slots 0-2 of the row.
+fn research_menu(scene: &Scene, obj: &MapObject) -> Menu {
+    use crate::combat::Upgrade;
+    let mut menu: Menu = [None; SLOTS];
+    if !scene.is_own(obj) || obj.class != ObjectClass::Building(WORKSHOP) {
+        return menu;
+    }
+    let busy = scene.research_at(obj.id);
+    for (g, column) in (0..3u8).flat_map(|g| (0..3).map(move |c| (g, c))) {
+        let upgrade = [Upgrade::Rate(g), Upgrade::Arms(g), Upgrade::Reach(g)][column];
+        let slot = g as usize * 4 + column;
+        menu[slot] = match (busy, scene.next_level(upgrade)) {
+            (Some((u, progress)), _) if u == upgrade => Some(Slot {
+                checked: false,
+                command: Command(upgrade.command()),
+                enabled: true,
+                progress: Some(progress),
+            }),
+            (_, Some(level)) => Some(Slot {
+                checked: false,
+                command: Command(upgrade.command()),
+                enabled: busy.is_none() && scene.amber >= upgrade.cost(level),
+                progress: None,
+            }),
+            _ => None,
+        };
+    }
+    menu
 }
 
 /// Settlement and town (0x43c740): build structures, repair, and the
@@ -416,18 +739,46 @@ fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         let command = Command(Command::TRAIN_BOWMEN.0 + kind);
         let (amber, fish) = crate::combat::CREW_COST[kind as usize];
         menu[8 + kind as usize] = Some(Slot {
+            checked: false,
             command,
             enabled: scene.amber >= amber && scene.fish >= fish,
             progress: training.filter(|t| t.kind == kind).map(|t| t.progress()),
         });
     }
-    set(menu, 2, Command::REPAIR_BUILDING, false);
-    if obj.class == ObjectClass::Building(SETTLEMENT) {
+    set(menu, 2, Command::REPAIR_BUILDING, true);
+    if obj.class == ObjectClass::Building(SETTLEMENT) && scene.permits.town() {
         set(
             menu,
             4,
             Command::UPGRADE_TOWN,
             scene.amber >= economy::building_cost(TOWN),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn descriptions_name_prices() {
+        assert_eq!(
+            economy::ship_command(0).describe(None),
+            "Build Boat: 200 amber"
+        );
+        assert_eq!(
+            economy::ship_command(2).describe(None),
+            "Build Royal Ship: 1100 amber, 400 fish"
+        );
+        assert_eq!(
+            Command(0x2f).describe(None),
+            "Train swordsmen: 30 amber, 300 fish"
+        );
+        assert_eq!(Command(0x33).describe(None), "Build a ballista: 70 amber");
+        assert_eq!(
+            Command::UPGRADE_TOWN.describe(None),
+            "Upgrade to town: 500 amber"
+        );
+        assert_eq!(Command::STOP.describe(None), "Stop");
     }
 }

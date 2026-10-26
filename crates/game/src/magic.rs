@@ -5,7 +5,7 @@
 use crate::commands::Command;
 use crate::economy::{TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Temple {
     Sea,
     War,
@@ -37,17 +37,17 @@ impl Temple {
             Temple::Sea => &[
                 Spell::Wind,
                 Spell::ViewMap,
-                Spell::Tornado,
+                Spell::Waterspout,
                 Spell::Whirlpool,
                 Spell::Reef,
                 Spell::Monster,
             ],
             Temple::War => &[
                 Spell::ProtectWeapons,
-                Spell::Ghost,
+                Spell::Phantom,
                 Spell::Flame,
                 Spell::ProtectMagic,
-                Spell::SmallLightning,
+                Spell::Fireball,
                 Spell::Lightning,
             ],
         }
@@ -56,18 +56,20 @@ impl Temple {
 
 /// Spells, in the original's spell index order (0x42fd70 gives each its
 /// command).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum Spell {
     Wind,
     Reef,
     Whirlpool,
-    Tornado,
+    Waterspout,
     Monster,
     ViewMap,
     Lightning,
-    SmallLightning,
+    Fireball,
     Flame,
-    Ghost,
+    Phantom,
     ProtectWeapons,
     ProtectMagic,
 }
@@ -77,13 +79,13 @@ impl Spell {
         Spell::Wind,
         Spell::Reef,
         Spell::Whirlpool,
-        Spell::Tornado,
+        Spell::Waterspout,
         Spell::Monster,
         Spell::ViewMap,
         Spell::Lightning,
-        Spell::SmallLightning,
+        Spell::Fireball,
         Spell::Flame,
-        Spell::Ghost,
+        Spell::Phantom,
         Spell::ProtectWeapons,
         Spell::ProtectMagic,
     ];
@@ -121,21 +123,40 @@ impl Spell {
     }
 
     /// Whether this port casts it yet.
+    /// The spell with index `i` (the original's numbering, as in the order
+    /// of this enum).
+    pub fn of_index(i: u32) -> Option<Spell> {
+        Self::ALL.get(i as usize).copied()
+    }
+
     pub fn implemented(self) -> bool {
-        !matches!(
-            self,
-            Spell::Tornado | Spell::Monster | Spell::ViewMap | Spell::Ghost
-        )
+        true
+    }
+
+    /// How far from one of the player's temples of its kind the spell
+    /// reaches, in cells (the manual); `None` for anywhere.
+    pub fn range(self) -> Option<i32> {
+        match self {
+            Spell::Wind | Spell::ViewMap | Spell::Flame => None,
+            Spell::Reef
+            | Spell::Whirlpool
+            | Spell::Monster
+            | Spell::Lightning
+            | Spell::Fireball => Some(12),
+            Spell::Waterspout | Spell::Phantom | Spell::ProtectWeapons | Spell::ProtectMagic => {
+                Some(15)
+            }
+        }
     }
 
     /// How the spell is aimed.
     pub fn target(self) -> Target {
         match self {
             Spell::Wind => Target::Direction,
-            Spell::Reef | Spell::Whirlpool | Spell::Tornado | Spell::Monster => Target::Water,
-            Spell::Lightning | Spell::SmallLightning | Spell::Flame => Target::Enemy,
-            Spell::ProtectWeapons | Spell::ProtectMagic | Spell::Ghost => Target::OwnShip,
-            Spell::ViewMap => Target::None,
+            Spell::Reef | Spell::Whirlpool | Spell::Waterspout | Spell::Monster => Target::Water,
+            Spell::Lightning | Spell::Fireball | Spell::ViewMap => Target::Area,
+            Spell::ProtectWeapons | Spell::ProtectMagic | Spell::Phantom => Target::OwnShip,
+            Spell::Flame => Target::None,
         }
     }
 
@@ -144,15 +165,15 @@ impl Spell {
             Spell::Wind => "Call the wind",
             Spell::Reef => "Raise a reef",
             Spell::Whirlpool => "Summon a whirlpool",
-            Spell::Tornado => "Tornado",
+            Spell::Waterspout => "Waterspout",
             Spell::Monster => "Sea monster",
-            Spell::ViewMap => "View the map",
+            Spell::ViewMap => "View",
             Spell::Lightning => "Lightning",
-            Spell::SmallLightning => "Small lightning",
+            Spell::Fireball => "Fireball",
             Spell::Flame => "Flame",
-            Spell::Ghost => "Ghost",
-            Spell::ProtectWeapons => "Protection from weapons",
-            Spell::ProtectMagic => "Protection from magic",
+            Spell::Phantom => "Phantom object",
+            Spell::ProtectWeapons => "Weapon shield",
+            Spell::ProtectMagic => "Magic shield",
         }
     }
 
@@ -160,8 +181,8 @@ impl Spell {
     pub fn prompt(self) -> &'static str {
         match self.target() {
             Target::Water => "Choose a place at sea",
-            Target::Enemy => "Choose an enemy ship or building",
-            Target::OwnShip => "Choose one of your ships",
+            Target::Area => "Choose where to cast it",
+            Target::OwnShip => "Choose one of your ships or buildings",
             Target::Direction | Target::None => "",
         }
     }
@@ -172,7 +193,9 @@ pub enum Target {
     None,
     Direction,
     Water,
-    Enemy,
+    /// Any map cell.
+    Area,
+    /// One of the player's ships or buildings.
     OwnShip,
 }
 
@@ -182,15 +205,39 @@ pub const LEARN_COST: u32 = 1000;
 pub const LEARN_SECONDS: f32 = 20.0;
 /// Seconds a called wind blows. Placeholder.
 pub const WIND_SECONDS: f32 = 60.0;
-/// Hull damage of a lightning strike and a small one. Placeholders.
-pub const LIGHTNING_DAMAGE: f32 = 2000.0;
-pub const SMALL_LIGHTNING_DAMAGE: f32 = 700.0;
-/// A flame burns for this long at this many hull points a second.
+/// Lightning destroys every enemy object unprotected from magic within
+/// this radius (world pixels) of the strike. Placeholder.
+pub const LIGHTNING_RADIUS: f32 = 96.0;
+/// A fireball burns enemy objects within this radius for this long at this
+/// many hull points a second. Placeholders.
+pub const FIREBALL_RADIUS: f32 = 96.0;
+pub const FIREBALL_SECONDS: f32 = 15.0;
+pub const FIREBALL_DPS: f32 = 120.0;
+/// Flame makes the player's weapons this much stronger for this long.
 /// Placeholders.
-pub const FLAME_SECONDS: f32 = 15.0;
-pub const FLAME_DPS: f32 = 60.0;
+pub const FLAME_FACTOR: f32 = 1.5;
+pub const FLAME_SECONDS: f32 = 60.0;
+/// View clears the clouds within this many cells. Placeholder.
+pub const VIEW_RADIUS: i32 = 8;
+/// The shields' protection (the manual): weapon shield 80% against weapons;
+/// magic shield neutralises lightning and 80% against fireballs,
+/// waterspouts and sea monsters.
+pub const SHIELD_FACTOR: f32 = 0.2;
 /// Seconds a protection lasts. Placeholder.
 pub const PROTECTION_SECONDS: f32 = 60.0;
+
+/// A tornado: how long it lasts, how fast it drifts (world pixels per
+/// second at wind strength 6) and the damage per second to ships it passes
+/// over. Placeholders.
+pub const WATERSPOUT_SECONDS: f32 = 30.0;
+pub const WATERSPOUT_SPEED: f32 = 40.0;
+pub const WATERSPOUT_DPS: f32 = 200.0;
+pub const FX_TORNADO: &str = "TRNDSPR";
+/// A summoned sea monster: how long it stays and what it strikes with
+/// (as four gastraphetes, which strike at close quarters). Placeholders.
+pub const MONSTER_SECONDS: f32 = 90.0;
+pub const MONSTER_WEAPON: u8 = 4;
+pub const MONSTER_WEAPONS: usize = 4;
 
 /// Effect animations.
 pub const FX_LIGHTNING: &str = "SLIGHT1";
@@ -213,7 +260,7 @@ pub const WIND_EAST: Command = Command(0x58);
 pub const WIND_SLOTS: [usize; 8] = [6, 2, 1, 0, 4, 8, 9, 10];
 
 /// What the human player's temples know.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Magic {
     /// How many spells of each temple's order are known.
     known: [usize; 2],
@@ -236,6 +283,11 @@ impl Magic {
 
     pub fn learning(&self, temple: Temple) -> Option<f32> {
         self.learning[temple.slot()]
+    }
+
+    /// Drops any learning in progress.
+    pub fn stop_learning(&mut self) {
+        self.learning = [None; 2];
     }
 
     pub fn start_learning(&mut self, temple: Temple) {

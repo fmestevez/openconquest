@@ -25,7 +25,7 @@ const SPEED: [[u32; 5]; 11] = [
     [125, 67, 28, 46, 62],
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Wind {
     pub strength: u32,
     pub direction: u32,

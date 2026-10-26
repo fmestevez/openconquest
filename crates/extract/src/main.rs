@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use openac_formats::installer::Installer;
 use openac_formats::{Archive, Bitmap, Mask, Palette, ResourceKind, Sprite};
 
 #[derive(Parser)]
@@ -42,6 +41,14 @@ enum Command {
         #[arg(long)]
         filter: Option<String>,
     },
+    /// Decode a video (`video/*.avi`) and write every n-th frame as PNG.
+    Video {
+        avi: PathBuf,
+        out: PathBuf,
+        /// Write one frame in this many.
+        #[arg(long, default_value_t = 50)]
+        every: usize,
+    },
 }
 
 fn main() -> Result<()> {
@@ -54,7 +61,47 @@ fn main() -> Result<()> {
             palette,
             filter,
         } => dump(&archive, &out, palette.as_deref(), filter.as_deref()),
+        Command::Video { avi, out, every } => video(&avi, &out, every.max(1)),
     }
+}
+
+fn video(path: &Path, out: &Path, every: usize) -> Result<()> {
+    let avi = openac_formats::avi::Avi::parse(fs::read(path)?)?;
+    fs::create_dir_all(out)?;
+    let mut dec = avi.decoder();
+    let stem = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    for n in 0..avi.frame_count() {
+        dec.decode(avi.frame(n));
+        if n % every == 0 {
+            let rgba: Vec<u8> = dec
+                .pixels
+                .iter()
+                .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8, 255])
+                .collect();
+            write_png(
+                &out.join(format!("{stem}_{n:05}.png")),
+                avi.width,
+                avi.height,
+                &rgba,
+            )?;
+        }
+    }
+    let audio = avi.audio.as_ref().map_or("no sound".to_string(), |a| {
+        format!("{} Hz x{}, {} samples", a.rate, a.channels, a.samples.len())
+    });
+    println!(
+        "{}: {}x{}, {} frames at {} us, {audio}",
+        path.display(),
+        avi.width,
+        avi.height,
+        avi.frame_count(),
+        avi.frame_us
+    );
+    Ok(())
 }
 
 /// Finds a file in `dir` by case-insensitive name.
@@ -76,53 +123,7 @@ fn find_ci(dir: &Path, name: &str) -> Result<Option<PathBuf>> {
 }
 
 fn install(cd: &Path, dest: &Path, no_video: bool) -> Result<()> {
-    let setup = find_ci(cd, "setup.dat")?.with_context(|| {
-        format!(
-            "{} does not look like the Ancient Conquest CD (no SETUP.DAT)",
-            cd.display()
-        )
-    })?;
-    fs::create_dir_all(dest)?;
-
-    // Plain files from the CD subdirectories.
-    let mut dirs = vec!["data", "sound"];
-    if !no_video {
-        dirs.push("video");
-    }
-    for dir in dirs {
-        let Some(src_dir) = find_ci(cd, dir)? else {
-            bail!("missing directory {dir} on the CD");
-        };
-        let dst_dir = dest.join(dir);
-        fs::create_dir_all(&dst_dir)?;
-        for item in fs::read_dir(&src_dir)? {
-            let item = item?;
-            if !item.file_type()?.is_file() {
-                continue;
-            }
-            let name = item.file_name().to_string_lossy().to_ascii_lowercase();
-            let dst = dst_dir.join(&name);
-            println!("copy    {dir}/{name}");
-            fs::copy(item.path(), &dst)
-                .with_context(|| format!("copying {}", item.path().display()))?;
-        }
-    }
-
-    // Files packed in the installer: maps, missions, interface art, executables.
-    let data = fs::read(&setup)?;
-    let installer = Installer::parse(&data)?;
-    for file in installer.files() {
-        // Placeholder entries such as "*EMPTY" carry no data.
-        if file.name.starts_with('*') || file.name.contains(['/', '\\']) {
-            continue;
-        }
-        let bytes = installer
-            .extract(file)
-            .with_context(|| format!("unpacking {}", file.name))?;
-        let name = file.name.to_ascii_lowercase();
-        println!("unpack  {name} ({} bytes)", bytes.len());
-        fs::write(dest.join(&name), bytes)?;
-    }
+    openac_formats::install::install(cd, dest, !no_video, |line| println!("{line}"))?;
     println!("Game data installed to {}", dest.display());
     Ok(())
 }

@@ -6,14 +6,23 @@ mod audio;
 mod combat;
 mod commands;
 mod economy;
+mod launch;
 mod magic;
+mod menus;
+mod music;
 mod nav;
+mod net;
 mod objects;
+mod panels;
+mod permits;
+mod records;
 mod render;
+mod save;
 mod scene;
 mod terrain;
 mod text;
 mod ui;
+mod video;
 mod view;
 mod weather;
 
@@ -33,12 +42,29 @@ use crate::view::{Camera, ScalePolicy};
 #[derive(Parser)]
 #[command(version, about)]
 struct Args {
-    /// Game data directory created by `openac-extract install`.
-    #[arg(long, env = "OPENAC_DATA", default_value = "gamedata")]
-    data: PathBuf,
+    /// Game data directory (an installed Ancient Conquest, or one made by
+    /// `openac-extract install`). Without it OpenAC uses the one chosen
+    /// last time, or asks for the CD or install folder.
+    #[arg(long, env = "OPENAC_DATA")]
+    data: Option<PathBuf>,
     /// Mission to open (e.g. miss000, single03, battle12).
     #[arg(long)]
     mission: Option<String>,
+    /// Host a multiplayer game of `--mission` (battle01 by default) for
+    /// `--players` players, waiting for them to join on `--port`.
+    #[arg(long)]
+    host: bool,
+    /// Join the multiplayer game hosted at this address (host or
+    /// host:port).
+    #[arg(long, value_name = "ADDRESS")]
+    join: Option<String>,
+    #[arg(long, default_value_t = net::PORT)]
+    port: u16,
+    #[arg(long, default_value_t = 2)]
+    players: usize,
+    /// Continue a saved game (F5 saves to <data>/saves/quick.json).
+    #[arg(long, value_name = "FILE")]
+    load: Option<PathBuf>,
     /// List the available missions and exit.
     #[arg(long)]
     list_missions: bool,
@@ -55,6 +81,25 @@ struct Args {
     /// Scroll when the cursor touches the window edge (always on in fullscreen).
     #[arg(long)]
     edge_scroll: bool,
+    /// General MIDI SoundFont (.sf2) for the music; common install places
+    /// are tried when it is not given.
+    #[arg(long, env = "OPENAC_SOUNDFONT", value_name = "SF2")]
+    soundfont: Option<PathBuf>,
+    /// Folder of the game CD's audio tracks ripped by you (Track02 to
+    /// Track09 as WAV, FLAC or Ogg); played instead of the MIDI music.
+    /// Defaults to `<data>/cdaudio`.
+    #[arg(long, env = "OPENAC_CD_AUDIO", value_name = "DIR")]
+    cd_audio: Option<PathBuf>,
+    /// Skip the company logos and title sequence at start-up.
+    #[arg(long)]
+    no_intro: bool,
+    /// Play without fog of war (the whole map visible from the start).
+    #[arg(long)]
+    no_fog: bool,
+    /// How hard the computer players of the campaign play: how many ships
+    /// they gather before raiding, and how soon.
+    #[arg(long, value_enum, default_value_t = Difficulty::Normal)]
+    difficulty: Difficulty,
     /// Start with sound off (M toggles it).
     #[arg(long)]
     mute: bool,
@@ -70,6 +115,20 @@ struct Args {
     /// Map cell to centre the screenshot on, e.g. 12,30 (default: map centre).
     #[arg(long, value_parser = parse_size, value_name = "X,Y")]
     focus: Option<(u32, u32)>,
+    /// Render a front-end screen instead of the game (main, missions, load,
+    /// briefing, victory, defeat).
+    #[arg(long, hide = true)]
+    menu_shot: Option<String>,
+    /// Menu page of the selected object to show (behaviour, research,
+    /// structures, wind).
+    #[arg(long, hide = true)]
+    page: Option<String>,
+    /// Show the pause sign in the screenshot.
+    #[arg(long, hide = true)]
+    paused: bool,
+    /// Bar panel to show in the screenshot.
+    #[arg(long, value_enum, default_value = "object")]
+    panel: panels::Tab,
     /// Run the simulation for this many seconds before taking the screenshot.
     #[arg(long, default_value_t = 0.0, value_name = "SECONDS")]
     simulate: f32,
@@ -77,6 +136,23 @@ struct Args {
     /// nearest ship of another player.
     #[arg(long)]
     skirmish: bool,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum Difficulty {
+    Easy,
+    Normal,
+    Hard,
+}
+
+impl Difficulty {
+    fn level(self) -> usize {
+        match self {
+            Difficulty::Easy => scene::EASY,
+            Difficulty::Normal => scene::NORMAL,
+            Difficulty::Hard => scene::HARD,
+        }
+    }
 }
 
 fn parse_size(s: &str) -> Result<(u32, u32), String> {
@@ -89,14 +165,28 @@ fn parse_size(s: &str) -> Result<(u32, u32), String> {
 }
 
 fn main() -> Result<()> {
+    let result = run();
+    // Started from a file browser there is no terminal to show errors in.
+    if let Err(e) = &result {
+        if !std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+            launch::show_error(e);
+        }
+    }
+    result
+}
+
+fn run() -> Result<()> {
     let args = Args::parse();
     if args.window.0 == 0 || args.window.1 == 0 {
         bail!("window size must be non-zero");
     }
-    let data = GameData::open(&args.data)?;
+    let Some(root) = launch::data_dir(args.data.clone())? else {
+        return Ok(());
+    };
+    let data = GameData::open(&root)?;
     let missions = data.missions()?;
     if missions.is_empty() {
-        bail!("no missions found in {}", args.data.display());
+        bail!("no missions found in {}", root.display());
     }
     if args.list_missions {
         for m in &missions {
@@ -104,7 +194,31 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    let mission_index = match &args.mission {
+    // A multiplayer game is set up before the window opens.
+    let net = if let Some(addr) = &args.join {
+        Some(net::Net::join(addr)?)
+    } else if args.host {
+        let mission = args.mission.clone().unwrap_or_else(|| "battle01".into());
+        let archive = data.open_mission(&mission)?;
+        let players = openac_formats::players(&archive)?;
+        let Some(seats) = net::seats_for(&players, args.players) else {
+            bail!("{mission} has no room for {} players", args.players);
+        };
+        Some(net::Net::host(
+            args.port,
+            net::Setup {
+                mission,
+                seats,
+                difficulty: args.difficulty.level(),
+                fog: !args.no_fog,
+            },
+        )?)
+    } else {
+        None
+    };
+    let save = args.load.as_deref().map(save::SaveGame::read).transpose()?;
+    let wanted = save.as_ref().map(|s| &s.mission).or(args.mission.as_ref());
+    let mission_index = match wanted {
         Some(m) => missions
             .iter()
             .position(|x| x.eq_ignore_ascii_case(m))
@@ -116,6 +230,29 @@ fn main() -> Result<()> {
         integer: args.integer_scale,
     });
 
+    if let (Some(path), Some(which)) = (&args.screenshot, &args.menu_shot) {
+        let options = app::Options {
+            fullscreen: false,
+            edge_scroll: false,
+            window_size: args.window,
+            mute: true,
+            soundfont: None,
+            cd_audio: None,
+            intro: false,
+            fog: true,
+            difficulty: Difficulty::Normal.level(),
+        };
+        let size = args.window;
+        let mut app = app::App::new(data, missions, mission_index, camera, options, None, true)?;
+        let mut pixels = vec![0u32; (size.0 * size.1) as usize];
+        let mut frame = Frame {
+            pixels: &mut pixels,
+            width: size.0,
+            height: size.1,
+        };
+        app.draw_menu_screen(which, &mut frame)?;
+        return write_png(path, size, &pixels);
+    }
     if let Some(path) = &args.screenshot {
         return screenshot(&data, &args, &missions[mission_index], camera, path);
     }
@@ -125,8 +262,26 @@ fn main() -> Result<()> {
         edge_scroll: args.edge_scroll,
         window_size: args.window,
         mute: args.mute,
+        soundfont: args.soundfont.clone(),
+        cd_audio: args.cd_audio.clone(),
+        intro: !args.no_intro,
+        fog: !args.no_fog,
+        difficulty: args.difficulty.level(),
     };
-    app::App::new(data, missions, mission_index, camera, options)?.run()
+    let start_menu = args.mission.is_none() && save.is_none() && net.is_none();
+    let mut app = app::App::new(
+        data,
+        missions,
+        mission_index,
+        camera,
+        options,
+        save,
+        start_menu,
+    )?;
+    if let Some(net) = net {
+        app.start_multiplayer(net)?;
+    }
+    app.run()
 }
 
 /// Orders the armed ship nearest to `focus` to attack the nearest ship of
@@ -170,11 +325,12 @@ fn screenshot(
     args: &Args,
     mission: &str,
     mut camera: Camera,
-    path: &PathBuf,
+    path: &std::path::Path,
 ) -> Result<()> {
     let size = args.window;
     let mut caches = Caches::default();
-    let mut scene = Scene::load(data, &mut caches, mission)?;
+    let mut scene = Scene::load_at(data, &mut caches, mission, args.difficulty.level())?;
+    scene.fog = !args.no_fog;
     let attacker = if args.skirmish {
         skirmish(&mut scene, args.focus)
     } else {
@@ -188,6 +344,10 @@ fn screenshot(
     let text = TextRenderer::load(&data.controls, "0SYSTEM_FONT", 0)?;
     let interface = Interface::load(data, '0')?;
     let initial = camera;
+    let slots: Vec<Option<String>> = (0..panels::SLOTS)
+        .map(|i| (i == 0).then(|| format!("{} 12:34", mission.to_uppercase())))
+        .collect();
+    let help = scene.briefing.clone();
     let mut view = GameView {
         data,
         scene: &scene,
@@ -195,12 +355,32 @@ fn screenshot(
         interface: (!args.no_interface).then_some(&interface),
         text: &text,
         selected: None,
+        group: &[],
+        select_box: None,
         status: None,
         time_ms,
         hover_button: None,
-        page: Default::default(),
+        page: match args.page.as_deref() {
+            Some("behaviour") => commands::Page::Behaviour,
+            Some("research") => commands::Page::Research,
+            Some("structures") => commands::Page::Structures,
+            Some("wind") => commands::Page::Wind,
+            _ => Default::default(),
+        },
         site: None,
         briefing: false,
+        panel: Some(panels::PanelView {
+            tab: args.panel,
+            slots: &slots,
+            selected_slot: Some(0),
+            game_speed: 1.0 / 3.0,
+            scroll_speed: 0.5,
+            volume: 0.6,
+            music: Some(0.5),
+            help: &help,
+        }),
+        panel_hover: None,
+        paused: args.paused,
     };
     let (screen, _, _) = view.placement(size);
     let map = scene.map_size();
@@ -233,6 +413,10 @@ fn screenshot(
         height: size.1,
     };
     view.draw(&mut frame);
+    write_png(path, size, &pixels)
+}
+
+fn write_png(path: &std::path::Path, size: (u32, u32), pixels: &[u32]) -> Result<()> {
     let rgb: Vec<u8> = pixels
         .iter()
         .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8])

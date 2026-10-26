@@ -110,7 +110,7 @@ impl ObjectRecord {
 
 /// Reads all object records of a mission archive, ordered by id.
 /// The mission briefing (text `DISCRIPTION`) as paragraphs: after a
-/// 24-byte header and a few marker bytes, NUL-separated lines (wrapped for
+/// 24-byte header and a few marker bytes (high bit set), NUL-separated lines (wrapped for
 /// the original's box), where a line starting with `@` starts a paragraph.
 pub fn briefing(archive: &Archive) -> Result<Vec<String>> {
     let Some(e) = archive.find("DISCRIPTION", ResourceKind::Text) else {
@@ -118,7 +118,7 @@ pub fn briefing(archive: &Archive) -> Result<Vec<String>> {
     };
     let data = archive.read_entry(e)?;
     let body = data.get(24..).unwrap_or_default();
-    let start = body.iter().position(|&b| b < 0xf0).unwrap_or(body.len());
+    let start = body.iter().position(|&b| b < 0x80).unwrap_or(body.len());
     let mut paragraphs: Vec<String> = Vec::new();
     for line in body[start..].split(|&b| b == 0) {
         // Windows-1252 text; the characters used are all Latin-1.
@@ -167,6 +167,32 @@ pub fn conditions(archive: &Archive) -> Result<[bool; CONDITIONS]> {
         None => out[0] = true,
     }
     Ok(out)
+}
+
+/// The heroes a mission asks the player to win over (`HERO_ARR`, kind 0:
+/// nine u32 flags in the order Jason, Theseus, Orpheus, Zetes, Hercules,
+/// Argus, Atalanta, Odysseus, Perseus).
+pub fn heroes(archive: &Archive) -> Result<[bool; 9]> {
+    let mut out = [false; 9];
+    if let Some(e) = archive.find("HERO_ARR", ResourceKind::Raw) {
+        let data = archive.read_entry(e)?;
+        for (flag, chunk) in out.iter_mut().zip(data.chunks_exact(4)) {
+            *flag = u32::from_le_bytes(chunk.try_into().unwrap()) != 0;
+        }
+    }
+    Ok(out)
+}
+
+/// Where each player's view starts (`WIN_VIEW`, a record of 20 dwords, one
+/// per player id `nation * 4 + slot`: the cell at the view's top left, x in
+/// the low word, y in the high one; read by 0x4ed5a0 into game + 0x2ef5,
+/// sent with message 0xcba when the mission starts). `None` without one.
+pub fn start_view(archive: &Archive, nation: u32, slot: u32) -> Option<(u32, u32)> {
+    let e = archive.find("WIN_VIEW", ResourceKind::Record)?;
+    let data = archive.read_entry(e).ok()?;
+    let at = ((nation * 4 + slot) * 4) as usize;
+    let v = u32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?);
+    Some((v & 0xffff, v >> 16))
 }
 
 pub fn object_records(archive: &Archive) -> Result<Vec<ObjectRecord>> {
