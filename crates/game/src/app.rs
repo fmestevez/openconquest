@@ -131,6 +131,9 @@ struct MenuPage {
     buttons: Vec<Button>,
     first: usize,
     credits: bool,
+    story: Option<(crate::menus::Rect, Vec<String>)>,
+    labels: Vec<(String, f32, f32)>,
+    checks: Vec<crate::menus::Check>,
 }
 
 impl MenuPage {
@@ -145,6 +148,9 @@ impl MenuPage {
             buttons: &self.buttons,
             hover,
             credits: self.credits,
+            story: self.story.as_ref().map(|(r, p)| (*r, p.as_slice())),
+            labels: &self.labels,
+            checks: &self.checks,
         }
     }
 }
@@ -617,6 +623,9 @@ impl App {
             buttons: Vec::new(),
             first: self.list_first,
             credits: false,
+            story: None,
+            labels: Vec::new(),
+            checks: Vec::new(),
         };
         match state {
             MenuState::Main if self.in_game => MenuPage {
@@ -683,15 +692,34 @@ impl App {
                 buttons: column(&["Load", "Back"]),
                 ..empty
             },
+            // "Your mission" (Starttsk.cpp, 0x53ed40 and 0x53f550): the
+            // briefing in a box at (20, 80, 630, 440), "Difficulty level:"
+            // (string 105) at (660, 405) over three boxes from (660, 440),
+            // 30 apart (strings 106-108), Start (1010) at (244, 543) and
+            // Cancel (164) at (440, 543).
             MenuState::Briefing => {
-                let mut text = self.scene.briefing.clone();
-                if text.is_empty() {
-                    text.push(self.scene.mission.to_uppercase());
+                let mut story = self.scene.briefing.clone();
+                if story.is_empty() {
+                    story.push(self.scene.mission.to_uppercase());
                 }
                 MenuPage {
                     backdrop: Backdrop::Mission,
-                    text,
-                    buttons: vec![button("Begin", 590.0, 470.0), button("Back", 590.0, 522.0)],
+                    story: Some(((20.0, 80.0, 630.0, 440.0), story)),
+                    labels: vec![("Difficulty level:".into(), 660.0, 405.0)],
+                    checks: ["Easy", "Normal", "Hard"]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| crate::menus::Check {
+                            caption: (*c).into(),
+                            x: 660.0,
+                            y: 440.0 + 30.0 * i as f32,
+                            checked: self.difficulty == i,
+                        })
+                        .collect(),
+                    buttons: vec![
+                        button("Start", 244.0, 543.0),
+                        button("Cancel", 440.0, 543.0),
+                    ],
                     ..empty
                 }
             }
@@ -958,6 +986,14 @@ impl App {
         };
         let caption = match hit {
             MenuHit::Button(i) => page.buttons[i].caption.clone(),
+            // A difficulty: the mission is set up again for it.
+            MenuHit::Check(i) => {
+                if state == MenuState::Briefing && self.difficulty != i {
+                    self.difficulty = i;
+                    self.open_mission(self.mission_index);
+                }
+                return;
+            }
             MenuHit::Item(i) => {
                 self.menu = Some(match state {
                     MenuState::Missions(c, _) => MenuState::Missions(c, Some(i)),
@@ -992,8 +1028,12 @@ impl App {
                 self.menu = Some(MenuState::Load(None));
             }
             (_, "Quit") | (_, "Quit game") => self.quit = true,
+            // The campaign from its first mission, on its briefing.
             (_, "Start scenario") => {
-                self.menu = Some(MenuState::Missions(Category::Campaign, None))
+                if let Some(&first) = self.category_missions(Category::Campaign).first() {
+                    self.carry = None;
+                    self.open_mission(first);
+                }
             }
             (_, "Custom missions") => self.menu = Some(MenuState::Missions(Category::Single, None)),
             (_, "Best Conquerors") => self.menu = Some(MenuState::Best),
@@ -1048,15 +1088,11 @@ impl App {
                     self.in_game = true;
                 }
             }
-            (MenuState::Briefing, "Begin") => {
+            (MenuState::Briefing, "Start") => {
                 self.menu = None;
                 self.in_game = true;
             }
-            (MenuState::Briefing, "Back") => {
-                let c =
-                    Category::of(&self.missions[self.mission_index]).unwrap_or(Category::Campaign);
-                self.menu = Some(MenuState::Missions(c, None));
-            }
+            (MenuState::Briefing, "Cancel") => self.menu = Some(MenuState::Main),
             (MenuState::Outcome(_), "Next mission") => {
                 if let Some(next) = self.next_mission() {
                     // The campaign goes on with what was learned.
@@ -1237,7 +1273,13 @@ impl App {
         if !goals.is_empty() {
             help.push(format!("Objectives: {}.", goals.join(", ")));
         }
-        help.extend(self.scene.briefing.iter().cloned());
+        help.extend(
+            self.scene
+                .briefing
+                .iter()
+                .filter(|p| !p.is_empty())
+                .cloned(),
+        );
         self.help_text = help;
     }
 

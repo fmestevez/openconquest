@@ -111,7 +111,8 @@ impl ObjectRecord {
 /// Reads all object records of a mission archive, ordered by id.
 /// The mission briefing (text `DISCRIPTION`) as paragraphs: after a
 /// 24-byte header and a few marker bytes (high bit set), NUL-separated lines (wrapped for
-/// the original's box), where a line starting with `@` starts a paragraph.
+/// the original's box), where a line starting with `@` starts a paragraph;
+/// a paragraph of only spaces (`@ `) is a blank line, kept as an empty one.
 pub fn briefing(archive: &Archive) -> Result<Vec<String>> {
     let Some(e) = archive.find("DISCRIPTION", ResourceKind::Text) else {
         return Ok(Vec::new());
@@ -140,11 +141,15 @@ pub fn briefing(archive: &Archive) -> Result<Vec<String>> {
             None => paragraphs.push(text),
         }
     }
-    Ok(paragraphs
+    // Empty paragraphs are the blank lines between.
+    let mut paragraphs: Vec<String> = paragraphs
         .into_iter()
         .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty())
-        .collect())
+        .collect();
+    while paragraphs.last().is_some_and(|p| p.is_empty()) {
+        paragraphs.pop();
+    }
+    Ok(paragraphs)
 }
 
 /// Number of victory conditions in a mission's `CONDITIONS` record.
@@ -274,10 +279,10 @@ pub struct StartLevels {
 /// +0x10  u32  player count n
 /// +0x14  n x 104-byte player blocks:
 ///        +0x00 u8  0 = human, 1 = computer (upper bytes unknown)
-///        +0x04 u32 amber
+///        +0x04 u32 fish
 ///        +0x08 u32 nation
 ///        +0x0c u32 colour slot
-///        +0x10 u32 fish
+///        +0x10 u32 amber
 ///        +0x14 u32 armour level      +0x18 3 x u32 unknown levels
 ///        +0x24 u32 ram level         +0x28 3 x u32 crew levels
 ///        +0x34 u32 arming            +0x38 u32 unknown
@@ -298,10 +303,12 @@ pub fn players(archive: &Archive) -> Result<Vec<PlayerInfo>> {
             let b = 0x14 + i * BLOCK;
             Ok(PlayerInfo {
                 computer: data.get(b).copied().unwrap_or(1) != 0,
-                amber: u32_at(b + 4)?,
+                // The navy's set-up (0x4a78a0) puts +0x10 in the player's
+                // amber (+0x20) and +0x04 in its fish (+0x2c).
+                amber: u32_at(b + 0x10)?,
                 nation: u32_at(b + 8)?,
                 slot: u32_at(b + 0xc)?,
-                fish: u32_at(b + 0x10)?,
+                fish: u32_at(b + 4)?,
                 levels: {
                     let byte = |o: usize| u32_at(b + o).map_or(0, |v| v.min(255) as u8);
                     let three = |o: usize| [byte(o), byte(o + 4), byte(o + 8)];

@@ -590,7 +590,8 @@ impl GameView<'_> {
         let pad = 12 * scale;
         let width = (screen.w * 3 / 5).max(200 * scale);
         let mut lines: Vec<String> = Vec::new();
-        for (i, p) in self.scene.briefing.iter().enumerate() {
+        let paragraphs = self.scene.briefing.iter().filter(|p| !p.is_empty());
+        for (i, p) in paragraphs.enumerate() {
             if i > 0 {
                 lines.push(String::new());
             }

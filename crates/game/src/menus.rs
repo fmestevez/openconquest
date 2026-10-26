@@ -12,6 +12,9 @@ use crate::assets::{rgb, GameData, Image};
 use crate::render::{blit_scaled, shade_rect, Frame};
 use crate::text::TextRenderer;
 
+/// A rectangle on a menu screen: x, y, width, height.
+pub type Rect = (f32, f32, f32, f32);
+
 pub const W: f32 = 800.0;
 pub const H: f32 = 600.0;
 
@@ -53,6 +56,24 @@ pub struct MenuView<'a> {
     pub hover: Option<(f32, f32)>,
     /// The title screen's version and publisher lines.
     pub credits: bool,
+    /// The briefing as the original shows it (Starttsk.cpp): paragraphs
+    /// in this box, wrapped to its width, each first line indented, empty
+    /// paragraphs blank lines.
+    pub story: Option<(Rect, &'a [String])>,
+    /// Labels in the big font, at their top left.
+    pub labels: &'a [(String, f32, f32)],
+    /// Checkboxes (`M_CHECK0`/`1`) with their captions.
+    pub checks: &'a [Check],
+}
+
+/// A checkbox on a menu screen; its caption stands 30 to the right
+/// (Starttsk.cpp's difficulty boxes).
+#[derive(Debug, Clone)]
+pub struct Check {
+    pub caption: String,
+    pub x: f32,
+    pub y: f32,
+    pub checked: bool,
 }
 
 /// The title screen's lines (string resources 1145 and 1143), drawn by
@@ -69,6 +90,7 @@ const PUBLISHER: [&str; 2] = [
 pub enum MenuHit {
     Button(usize),
     Item(usize),
+    Check(usize),
 }
 
 // The list and text boxes.
@@ -77,6 +99,8 @@ const ROW: f32 = 26.0;
 /// List rows that fit.
 pub const VISIBLE_ROWS: usize = ((LIST.3 - 8.0) / ROW) as usize;
 const TEXT_BOX: (f32, f32, f32, f32) = (40.0, 90.0, 520.0, 420.0);
+/// Line spacing of the briefing text.
+const STORY_LINE: f32 = 19.0;
 
 pub struct Menus {
     backdrops: Vec<Option<Image>>,
@@ -89,6 +113,8 @@ pub struct Menus {
     /// loads both).
     lit_font: TextRenderer,
     pub text: TextRenderer,
+    /// Checkbox pictures, clear and ticked, by backdrop.
+    checks: Vec<[Option<Image>; 2]>,
 }
 
 impl Menus {
@@ -143,6 +169,10 @@ impl Menus {
         let font = |name: &str| TextRenderer::load(archive, &format!("{theme}{name}"), 0);
         Ok(Self {
             shapes,
+            checks: backdrops
+                .iter()
+                .map(|bg| [sprite("M_CHECK0", bg), sprite("M_CHECK1", bg)])
+                .collect(),
             backdrops: backdrops
                 .iter()
                 .map(|b| {
@@ -290,6 +320,47 @@ impl Menus {
                 );
             }
         }
+        if let Some(((bx, by, bw, _bh), paragraphs)) = view.story {
+            // Measured on the original: 19 a line, the first 22 down, first
+            // lines indented 27.
+            let (line, indent) = (STORY_LINE, 27.0);
+            let width = (bw * s / ts as f32) as u32;
+            let mut y = by + 22.0;
+            for p in paragraphs {
+                if p.trim().is_empty() {
+                    y += line;
+                    continue;
+                }
+                let first = width.saturating_sub((indent * s / ts as f32) as u32);
+                let mut lines = crate::ui::wrap(&self.text, p, first).into_iter();
+                if let Some(l) = lines.next() {
+                    write(frame, &self.text, bx + indent, y, &l);
+                    y += line;
+                }
+                let rest: String = lines.collect::<Vec<_>>().join(" ");
+                for l in crate::ui::wrap(&self.text, &rest, width) {
+                    if l.is_empty() {
+                        continue;
+                    }
+                    write(frame, &self.text, bx, y, &l);
+                    y += line;
+                }
+            }
+        }
+        for (label, x, y) in view.labels {
+            write(frame, &self.big, *x, *y, label);
+        }
+        let checks = self
+            .checks
+            .get(view.backdrop as usize)
+            .or(self.checks.first());
+        for c in view.checks {
+            if let Some(img) = checks.and_then(|k| k[usize::from(c.checked)].as_ref()) {
+                let (x, y) = at(c.x, c.y);
+                blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
+            }
+            write(frame, &self.big, c.x + 30.0, c.y - 2.0, &c.caption);
+        }
         for b in view.buttons {
             let (w, h) = self.button_size(b);
             let lit = view.hover.is_some_and(|p| inside(p, (b.x, b.y, w, h)));
@@ -318,6 +389,12 @@ impl Menus {
 
     /// What lies at 800x600 point `p`.
     pub fn hit(&self, view: &MenuView, p: (f32, f32)) -> Option<MenuHit> {
+        for (i, c) in view.checks.iter().enumerate() {
+            let w = 30.0 + self.big.measure(&c.caption) as f32;
+            if inside(p, (c.x, c.y, w, 24.0)) {
+                return Some(MenuHit::Check(i));
+            }
+        }
         for (i, b) in view.buttons.iter().enumerate() {
             let (w, h) = self.button_size(b);
             if inside(p, (b.x, b.y, w, h)) {

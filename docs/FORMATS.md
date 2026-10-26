@@ -989,8 +989,10 @@ A mission archive (`missNNN`, `singleNN`, `battleNN`) contains:
 
 `DESCRIPTOR` (kind 0) holds the map size (+0x08, +0x0c), the player count
 (+0x10) and, from +0x14, one 104-byte block per player: +0x00 u8 0 = human,
-1 = computer; +0x04 u32 starting amber; +0x08 u32 nation; +0x0c u32 colour
-slot; +0x10 u32 starting fish. Every mission has exactly one human player;
+1 = computer; +0x04 u32 starting fish; +0x08 u32 nation; +0x0c u32 colour
+slot; +0x10 u32 starting amber (the navy's set-up 0x4a78a0 puts +0x10 in the
+player's amber, +0x20, and +0x04 in its fish, +0x2c; the original's miss000
+starts at 8000 amber and 2300 fish on Easy: 4000 + 4000 and 300 + 2000). Every mission has exactly one human player;
 (nation, slot) matches the owner fields of the object records.
 
 Saved games (`demo.dkd`) add `DARK_MAP` (fog of war), `ALIANCES`,

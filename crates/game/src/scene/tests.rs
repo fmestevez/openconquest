@@ -27,9 +27,9 @@ fn shipyard_builds_and_settlement_upgrades() {
         .iter()
         .filter(|o| o.ship.is_some() && scene.is_own(o))
         .count();
-    // 300 amber, and miss000's brain adds 2000 at the middle difficulty;
+    // 4000 amber, and miss000's brain adds 2000 at the middle difficulty;
     // spend down to 300.
-    assert_eq!(scene.amber, 2300);
+    assert_eq!(scene.amber, 6000);
     scene.amber = 300;
     // A merchant needs a town; a boat only a shipyard and a settlement.
     assert!(scene.can_build_ship(1).is_err());
@@ -2446,7 +2446,8 @@ fn difficulty_sets_bonus() {
             scene.amber
         })
         .collect();
-    assert_eq!(amber, [4300, 2300, 300]);
+    // The original shows 8000 amber on Easy (4000 + 4000).
+    assert_eq!(amber, [8000, 6000, 4000]);
 }
 
 /// The campaign reveals technology as it goes: miss002's player cannot
