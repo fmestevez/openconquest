@@ -47,11 +47,20 @@ pub enum Outcome {
 /// The mission objectives (string resources 3000-3010), in `CONDITIONS`
 /// order, with the record classes each one counts.
 /// Whether `mission` is one of the campaign's (`miss000`-`miss013`).
+/// Whether `mission` is a custom one (`battle..` or `single..`), which the
+/// original starts in its own mode (game +0xd80 = 2).
+pub fn is_custom(mission: &str) -> bool {
+    mission.starts_with("battle") || mission.starts_with("single")
+}
+
 pub fn is_campaign(mission: &str) -> bool {
     mission.len() == 7
         && mission.starts_with("miss")
         && mission[4..].bytes().all(|b| b.is_ascii_digit())
 }
+
+/// Seconds between steps of the resource counters (a game tick).
+const COUNTER_TICK: f32 = 0.02;
 
 pub const OBJECTIVES: [(&str, &[u32]); 11] = [
     ("Kill all enemies", &[]),
@@ -104,6 +113,10 @@ pub struct Scene {
     /// The human player's current amber and fish.
     pub amber: u32,
     pub fish: u32,
+    /// The amber and fish the counters show: they roll towards the real
+    /// amounts by 1, 10 or 100 a tick, from 1 at the start (0x505530).
+    pub shown: [u32; 2],
+    shown_clock: f32,
     /// Ships being built.
     pub productions: Vec<Production>,
     /// Buildings going up.
@@ -187,6 +200,11 @@ pub struct Scene {
     pub fog: bool,
     sight: Vec<Seen>,
     sight_timer: f32,
+    /// The fog's edge codes per cell (see `sight::edge_codes`).
+    dark_codes: Vec<u8>,
+    fog_codes: Vec<u8>,
+    /// The fog's art, if the data has it.
+    pub fog_art: Option<std::rc::Rc<FogArt>>,
     pub wind: Wind,
     /// The mission's victory conditions (see `OBJECTIVES`).
     pub conditions: [bool; 11],
@@ -197,6 +215,8 @@ pub struct Scene {
     /// The briefing as the original's "Your mission" screen lays it out
     /// (`openac_formats::briefing_text`).
     pub briefing_text: Vec<String>,
+    /// The briefing's lines as stored (the help panel builds on them).
+    pub briefing_lines: Vec<String>,
     /// The human player's temple magic.
     pub magic: Magic,
 }
@@ -209,7 +229,7 @@ mod orders;
 mod repair;
 mod sight;
 mod treasure;
-pub use sight::Seen;
+pub use sight::{FogArt, Seen};
 mod flyers;
 mod order;
 mod script;
@@ -329,13 +349,19 @@ impl Scene {
             brain_clock: 0.0,
             repair_owed: Default::default(),
             flame: 0.0,
+            shown: [1, 1],
+            shown_clock: 0.0,
             sight: vec![Seen::Unexplored; cells],
             sight_timer: 0.0,
+            dark_codes: Vec::new(),
+            fog_codes: Vec::new(),
+            fog_art: FogArt::load(data, &archive).ok().map(std::rc::Rc::new),
             wind: Wind::new(0x5eed_0001),
             conditions,
             outcome: None,
             briefing: openac_formats::briefing(&archive).unwrap_or_default(),
             briefing_text: openac_formats::briefing_text(&archive).unwrap_or_default(),
+            briefing_lines: openac_formats::briefing_lines(&archive).unwrap_or_default(),
             magic: Magic::default(),
         };
         // What buildings, lairs and monsters hold, dropped when they fall.
@@ -699,6 +725,23 @@ impl Scene {
 
     /// Advances the simulation by `dt` seconds.
     pub fn update(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+        self.shown_clock += dt;
+        while self.shown_clock >= COUNTER_TICK {
+            self.shown_clock -= COUNTER_TICK;
+            for (shown, real) in self.shown.iter_mut().zip([self.amber, self.fish]) {
+                let step = match shown.abs_diff(real) {
+                    0 => 0,
+                    1..=10 => 1,
+                    11..=100 => 10,
+                    _ => 100,
+                };
+                *shown = if *shown < real {
+                    *shown + step
+                } else {
+                    *shown - step
+                };
+            }
+        }
         for p in &mut self.productions {
             p.elapsed += dt;
         }
@@ -836,6 +879,18 @@ impl Scene {
             // Keep painter's order as ships move.
             self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
         }
+    }
+
+    /// The top-left world corner of the view when the mission starts, as
+    /// the original sets it (`WIN_VIEW`): the cell's corner (checked against
+    /// the original's first frame of miss000).
+    pub fn start_corner(&self) -> Option<(f32, f32)> {
+        let t = TILE_SIZE as f32;
+        self.human
+            .and_then(|h| self.views.get((h.nation * 4 + h.slot) as usize))
+            .copied()
+            .flatten()
+            .map(|(x, y)| (x as f32 * t, y as f32 * t))
     }
 
     /// The world point to centre the view on when the mission starts: the

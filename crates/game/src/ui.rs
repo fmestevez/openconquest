@@ -47,6 +47,9 @@ const MONEY_PANEL: (u32, u32) = (106, 527);
 /// Coin and fish icons in the money panel (0x505330).
 const MONEY_ICON: (u32, u32) = (10, 5);
 const FISH_ICON: (u32, u32) = (10, 35);
+/// The amber and fish numbers' boxes in the money panel (0x505530).
+const MONEY_TEXT: [(u32, u32); 2] = [(45, 10), (45, 41)];
+const MONEY_BOX: (u32, u32) = (50, 20);
 /// Frame delay of the money and fish icons (0x505330: 40).
 const ICON_FRAME_MS: u64 = 40;
 /// Wind rose `GAME_ROSEWIND` with the `GAME_WIND_nn` arrow over it
@@ -73,16 +76,22 @@ pub struct Interface {
     money_panel: Image,
     message_line: Image,
     /// Number slots of the money panel (amber, fish).
-    money_slots: [Rect; 2],
     message_area: Rect,
     money_icon: Vec<Rc<Image>>,
     wind_rose: Image,
     wind_arrows: Vec<Option<Image>>,
     fish_icon: Vec<Rc<Image>>,
-    digits: TextRenderer,
+    /// The amber and fish counters' fonts.
+    digits: [TextRenderer; 2],
     /// Button animations by base name.
     buttons: RefCell<HashMap<String, Rc<Vec<Rc<Image>>>>>,
     button_frame: Option<Rc<Image>>,
+    /// Button captions (`BUT_FONT`): atlas 0 on enabled buttons, 1 (grey)
+    /// on disabled ones.
+    button_font: [TextRenderer; 2],
+    /// Button marks (`CBUT_SPEC_00`-`05`): red and grey crosses, green and
+    /// grey arrows, green and grey ticks.
+    button_marks: Vec<Option<Image>>,
     pub panels: Panels,
     /// The animated "pause" sign (`WIN_PAUSE`).
     pause_sign: Vec<Rc<Image>>,
@@ -124,10 +133,6 @@ impl Interface {
         );
         let picture_slot = black_rect(&object_panel, 20, 20);
         let money_panel = load("GAME_BKMONEY", false)?;
-        let money_slots = [
-            black_rect(&money_panel, 75, 18),
-            black_rect(&money_panel, 75, 48),
-        ];
         let message_line = load("GAME_MEDIT", false)?;
         let message_area = black_rect(
             &message_line,
@@ -162,7 +167,6 @@ impl Interface {
             pictures: RefCell::default(),
             money_panel,
             message_line,
-            money_slots,
             message_area,
             money_icon: sequence("GAME_MONEY"),
             wind_rose: load("GAME_ROSEWIND", false)?,
@@ -174,7 +178,12 @@ impl Interface {
                 })
                 .collect(),
             fish_icon: sequence("GAME_FISH"),
-            digits: TextRenderer::load(&data.controls, "MONEY_FONT", 0)?,
+            digits: [
+                TextRenderer::load_in(&data.controls, "MONEY_FONT", 0, Some(&data.palette))?
+                    .with_spacing(0),
+                TextRenderer::load_in(&data.controls, "FISH_FONT", 0, Some(&data.palette))?
+                    .with_spacing(0),
+            ],
             buttons: RefCell::default(),
             panels: Panels::load(data, theme)?,
             pause_sign: sequence(&format!("{theme}WIN_PAUSE")),
@@ -183,6 +192,19 @@ impl Interface {
                 .ok()
                 .flatten()
                 .map(Rc::new),
+            button_font: [
+                TextRenderer::load_in(&data.controls, "BUT_FONT", 0, Some(&data.palette))?
+                    .with_spacing(0),
+                TextRenderer::load_in(&data.controls, "BUT_FONT", 1, Some(&data.palette))?
+                    .with_spacing(0),
+            ],
+            button_marks: (0..6)
+                .map(|i| {
+                    data.load_image(&data.controls, &format!("CBUT_SPEC_{i:02}"), false)
+                        .ok()
+                        .flatten()
+                })
+                .collect(),
         })
     }
 
@@ -339,17 +361,26 @@ impl Interface {
                 );
             }
         }
+        // Each number, `%7d`, centred in a 50x20 box (0x505530).
         let text_scale = s.round().max(1.0) as u32;
-        for (value, (x, y, w, h)) in [(amber, self.money_slots[0]), (fish, self.money_slots[1])] {
-            let text = value.to_string();
-            let tw = self.digits.measure(&text) * text_scale;
-            let th = self.digits.line_height() * text_scale;
-            let right = px + (x + w) as f32 * s - 3.0 * s;
-            let top = py + y as f32 * s + ((h as f32 * s) - th as f32) / 2.0;
-            self.digits.draw(
+        for (k, value) in [amber, fish].into_iter().enumerate() {
+            let font = &self.digits[k];
+            let text = format!("{value:>7}");
+            let (bx, by) = MONEY_TEXT[k];
+            // The number's bitmap is black throughout, over the box's rim.
+            let (x0, y0) = (px + bx as f32 * s, py + by as f32 * s);
+            let (x1, y1) = (x0 + MONEY_BOX.0 as f32 * s, y0 + MONEY_BOX.1 as f32 * s);
+            for y in (y0.round() as u32)..(y1.round() as u32).min(frame.height) {
+                for x in (x0.round() as u32)..(x1.round() as u32).min(frame.width) {
+                    frame.put(x as i64, y as i64, 0);
+                }
+            }
+            let left = (MONEY_BOX.0.saturating_sub(font.measure(&text))) / 2;
+            let top = (MONEY_BOX.1.saturating_sub(font.line_height())) / 2;
+            font.draw(
                 frame,
-                (right - tw as f32) as i32,
-                top as i32,
+                (px + (bx + left) as f32 * s) as i32,
+                (py + (by + top) as f32 * s) as i32,
                 text_scale,
                 &text,
             );
@@ -453,20 +484,60 @@ impl Interface {
             } else {
                 &frames[0]
             };
+            // The rim `CBUT_BK` two pixels down, then the picture a pixel
+            // right of the slot (0x4f2a90; pressed, a pixel down instead).
             let (x, y, _) = self.button_rect(layout, i);
-            blit_scaled(
-                frame,
-                img,
-                (0, 0, img.width, img.height),
-                x,
-                y,
-                layout.scale,
-            );
-            if (hover == Some(i) && slot.enabled) || slot.checked {
-                if let Some(bk) = &self.button_frame {
-                    blit_scaled(frame, bk, (0, 0, bk.width, bk.height), x, y, layout.scale);
+            let s = layout.scale;
+            if let Some(bk) = &self.button_frame {
+                blit_scaled(frame, bk, (0, 0, bk.width, bk.height), x, y + 2.0 * s, s);
+            }
+            let x = x + s;
+            blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
+            // Marks: an arrow on buttons that open a page, a tick on those
+            // switched on (grey on disabled buttons); then the caption.
+            let marks = [(slot.command.opens_page(), 2), (slot.checked, 4)];
+            for (_, mark) in marks.iter().filter(|(on, _)| *on) {
+                let mark = mark + usize::from(!slot.enabled);
+                if let Some(Some(m)) = self.button_marks.get(mark) {
+                    blit_scaled(frame, m, (0, 0, m.width, m.height), x, y, s);
                 }
             }
+            if let Some(caption) = data.strings.get(&slot.command.caption_id()) {
+                self.draw_caption(frame, layout, caption, slot.enabled, (x, y));
+            }
+        }
+    }
+
+    /// A button's caption (0x4f2a90): its lines centred one above the
+    /// other, `BUT_FONT` lines 2 pixels closer than the font's height, the
+    /// block at the bottom of the button.
+    fn draw_caption(
+        &self,
+        frame: &mut Frame,
+        layout: &Layout,
+        caption: &str,
+        enabled: bool,
+        (x, y): (f32, f32),
+    ) {
+        let font = &self.button_font[usize::from(!enabled)];
+        let s = layout.scale;
+        let ts = s.round().max(1.0) as u32;
+        let lines: Vec<&str> = caption.split('\n').collect();
+        // The original sets the lines 11 pixels high (2 less than the
+        // font's height) and 2 closer still: 9 apart (measured).
+        let cell = font.line_height() as i32 - 2;
+        let pitch = cell - 2;
+        let height = lines.len() as i32 * cell - 2 * (lines.len() as i32 - 1);
+        for (k, line) in lines.iter().enumerate() {
+            let left = (BUTTON_SIZE as i32 - font.measure(line) as i32) / 2;
+            let top = BUTTON_SIZE as i32 - height + k as i32 * pitch;
+            font.draw(
+                frame,
+                (x + left as f32 * s) as i32,
+                (y + top as f32 * s) as i32,
+                ts,
+                line,
+            );
         }
     }
 
@@ -693,7 +764,7 @@ impl GameView<'_> {
         let lut = palette_lut(self.data, self.time_ms);
         draw_world(frame, &screen, self.scene, self.camera, &lut);
         draw_objects(frame, &screen, self.scene, self.camera, &lut, self.time_ms);
-        draw_fog(frame, &screen, self.scene, self.camera);
+        draw_fog(frame, &screen, self.scene, self.camera, &lut);
         for &id in self.selected.iter().chain(self.group) {
             draw_selection(frame, &screen, self.scene, self.camera, id, self.time_ms);
         }
@@ -786,8 +857,8 @@ impl GameView<'_> {
             ui.draw_resources(
                 frame,
                 layout,
-                self.scene.amber,
-                self.scene.fish,
+                self.scene.shown[0],
+                self.scene.shown[1],
                 self.time_ms,
             );
             ui.draw_wind(frame, layout, &self.scene.wind);
@@ -799,10 +870,12 @@ impl GameView<'_> {
                     .map(|i| &self.scene.objects[i])?;
                 menu(self.scene, obj, self.page)[slot].map(|e| e.command.describe(Some(self.scene)))
             });
+            // Blank with nothing to say, as on the original (the objectives
+            // are in the help panel).
             let msg = match (self.status, hovered) {
                 (Some(s), _) => s.to_string(),
                 (None, Some(h)) => h,
-                (None, None) => self.headline(),
+                (None, None) => String::new(),
             };
             ui.draw_message(frame, layout, self.text, &msg);
             return;
@@ -937,7 +1010,12 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
             }) => text += ". Sailing to gather",
             Some(Task::Attack { .. }) => text += ". Attacking",
             Some(Task::Ram { .. }) => text += ". Ramming",
-            Some(Task::Found { .. }) => text += ". Sailing to found a settlement",
+            Some(Task::Found { class, .. }) => {
+                text += &format!(
+                    ". Sailing to build a {}",
+                    crate::objects::building_label(class).to_lowercase()
+                )
+            }
             Some(Task::Board { .. }) => text += ". Boarding",
             Some(Task::Repair { .. }) => text += ". Repairing",
             Some(Task::Scout { .. }) => text += ". Scouting",

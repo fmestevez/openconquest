@@ -50,6 +50,9 @@ pub enum PanelHit {
     Restart,
     Quit,
     Slider(Slider, f32),
+    /// The help panel's up and down buttons.
+    HelpUp,
+    HelpDown,
 }
 
 /// Number of save slots.
@@ -66,8 +69,10 @@ pub struct PanelView<'a> {
     pub volume: f32,
     /// Music volume, if music is playing.
     pub music: Option<f32>,
-    /// Help panel text, as paragraphs.
+    /// Help panel text, as paragraphs (see `help_paragraphs`).
     pub help: &'a [String],
+    /// The first help line shown.
+    pub help_first: usize,
 }
 
 // Placement in original bar pixels.
@@ -80,6 +85,14 @@ const SAVE_BUTTONS: [(u32, u32); 3] = [(4, 336), (70, 336), (136, 336)];
 const RESTART_BUTTON: (u32, u32) = (3, 460);
 const QUIT_BUTTON: (u32, u32) = (54, 508);
 const TRACK_X: u32 = 33;
+// The help panel (Viewsys 0x526930), measured on the original: its
+// background, text (`HELP_FONT`, 2 pixels between letters and lines,
+// 188 wide, 445 high), up and down buttons and its two page tabs.
+const HELP_BG: (u32, u32) = (4, 5);
+const HELP_TEXT: (u32, u32, u32, u32) = (12, 11, 188, 445);
+const HELP_LINE_GAP: u32 = 2;
+const HELP_BUTTONS: [(u32, u32); 2] = [(10, 460), (108, 460)];
+const HELP_TABS: [(u32, u32); 2] = [(3, 513), (103, 513)];
 const SLIDER_ROWS: [(u32, Slider); 4] = [
     (40, Slider::GameSpeed),
     (110, Slider::ScrollSpeed),
@@ -93,6 +106,11 @@ pub struct Panels {
     file_bg: Option<Image>,
     settings_bg: Option<Image>,
     help_bg: Option<Image>,
+    help_font: Option<TextRenderer>,
+    /// Up and down: normal, pressed, disabled.
+    help_buttons: [[Option<Image>; 3]; 2],
+    /// The objectives and quick help page tabs: normal, selected.
+    help_tabs: [[Option<Image>; 2]; 2],
     /// Save, load, delete; restart; quit. Each normal and pressed.
     file_buttons: Vec<[Option<Image>; 2]>,
     tracks: [Option<Image>; 4],
@@ -131,6 +149,13 @@ impl Panels {
             file_bg: bitmap("CFILE_BKGND"),
             settings_bg: bitmap("CCFG_BKGND"),
             help_bg: bitmap("HVIEW_BKGND"),
+            help_font: TextRenderer::load(&data.controls, &format!("{theme}HELP_FONT"), 0)
+                .ok()
+                .map(|f| f.with_spacing(2)),
+            help_buttons: ["VIEW_BUTUP_", "VIEW_BUTDN_"]
+                .map(|b| [0, 1, 2].map(|s| bitmap(&format!("{b}{s:02}")))),
+            help_tabs: ["HVIEW_TASK", "HVIEW_HELP"]
+                .map(|t| [0, 1].map(|s| bitmap(&format!("{t}{s:02}")))),
             file_buttons,
             tracks: [
                 bitmap("CFGSCR_GSPD"),
@@ -172,11 +197,11 @@ impl Panels {
             blit_scaled(frame, img, (0, 0, img.width, img.height), px, py, scale);
         };
         let hovered = |r: (u32, u32, u32, u32)| hover.is_some_and(|p| inside(p, r));
+        // The open tab and the one under the cursor are lit (state 1, as
+        // on the original); state 2 is a darkened one.
         for (i, tab) in Tab::ALL.iter().enumerate() {
             let w = tab_width(i);
-            let state = if *tab == view.tab {
-                2
-            } else if hovered((TAB_X[i], TABS_Y, w, 42)) {
+            let state = if *tab == view.tab || hovered((TAB_X[i], TABS_Y, w, 42)) {
                 1
             } else {
                 0
@@ -271,23 +296,53 @@ impl Panels {
             }
             Tab::Help => {
                 if let Some(bg) = &self.help_bg {
-                    blit(frame, bg, PANEL.0, PANEL.1);
+                    blit(frame, bg, HELP_BG.0, HELP_BG.1);
                 }
-                let width = ((self.help_bg.as_ref().map_or(199, |b| b.width) - 20) as f32 * scale
-                    / ts as f32) as u32;
-                let mut y = PANEL.1 + 12;
-                'paragraphs: for p in view.help {
-                    for l in crate::ui::wrap(text, p, width) {
-                        if y as f32 + line > (TABS_Y - 12) as f32 {
-                            break 'paragraphs;
-                        }
-                        write(frame, PANEL.0 + 10, y, &l);
-                        y += line.ceil() as u32;
+                let font = self.help_font.as_ref().unwrap_or(text);
+                let lines = help_lines(font, view.help);
+                let rows = self.help_rows();
+                let pitch = font.line_height() + HELP_LINE_GAP;
+                for (i, l) in lines.iter().skip(view.help_first).take(rows).enumerate() {
+                    let (px, py) = at(HELP_TEXT.0, HELP_TEXT.1 + i as u32 * pitch);
+                    font.draw(frame, px as i32, py as i32, ts, l);
+                }
+                let can = [view.help_first > 0, view.help_first + rows < lines.len()];
+                for (k, &(x, y)) in HELP_BUTTONS.iter().enumerate() {
+                    let imgs = &self.help_buttons[k];
+                    let size = imgs[0].as_ref().map_or((90, 46), |b| (b.width, b.height));
+                    let state = if !can[k] {
+                        2
+                    } else if hovered((x, y, size.0, size.1)) {
+                        1
+                    } else {
+                        0
+                    };
+                    if let Some(img) = &imgs[state] {
+                        blit(frame, img, x, y);
                     }
-                    y += (line / 2.0).ceil() as u32;
+                }
+                // The objectives page is the one shown.
+                for (k, &(x, y)) in HELP_TABS.iter().enumerate() {
+                    if let Some(img) = &self.help_tabs[k][usize::from(k == 0)] {
+                        blit(frame, img, x, y);
+                    }
                 }
             }
         }
+    }
+
+    /// How many help lines the panel shows at once.
+    pub fn help_rows(&self) -> usize {
+        let pitch = self
+            .help_font
+            .as_ref()
+            .map_or(20, |f| f.line_height() + HELP_LINE_GAP);
+        ((HELP_TEXT.3 + HELP_LINE_GAP) / pitch.max(1)) as usize
+    }
+
+    /// The help text's lines, wrapped as the panel shows them.
+    pub fn help_line_count(&self, help: &[String], text: &TextRenderer) -> usize {
+        help_lines(self.help_font.as_ref().unwrap_or(text), help).len()
     }
 
     fn button_size(&self, i: usize) -> (u32, u32) {
@@ -304,7 +359,15 @@ impl Panels {
             }
         }
         match tab {
-            Tab::Object | Tab::Help => None,
+            Tab::Object => None,
+            Tab::Help => {
+                let hits = [PanelHit::HelpUp, PanelHit::HelpDown];
+                HELP_BUTTONS
+                    .iter()
+                    .zip(hits)
+                    .find(|(&(x, y), _)| inside(p, (x, y, 90, 46)))
+                    .map(|(_, h)| h)
+            }
             Tab::File => {
                 let actions = [
                     PanelHit::Save,
@@ -403,8 +466,111 @@ fn inside(p: (u32, u32), (x, y, w, h): (u32, u32, u32, u32)) -> bool {
     p.0 >= x && p.1 >= y && p.0 < x + w && p.1 < y + h
 }
 
+/// The help panel's text, as the original builds it (Viewsys 0x526930) from
+/// the briefing's stored `lines`: for a scenario, what follows the blank
+/// line `@   ` (the objectives); for a custom mission, the whole briefing
+/// with its closing `@-` lines replaced by the mission's objectives
+/// (0x5265e0). Each `@` line begins a paragraph; the lines after it are
+/// joined on with a space.
+pub fn help_paragraphs(lines: &[String], custom: bool, conditions: &[bool]) -> Vec<String> {
+    let mut lines = lines.to_vec();
+    if custom {
+        while lines.last().is_some_and(|l| l.starts_with("@-")) {
+            lines.pop();
+        }
+        for (i, _) in conditions.iter().enumerate().filter(|(_, &on)| on) {
+            if let Some((goal, _)) = crate::scene::OBJECTIVES.get(i) {
+                lines.push(format!("@-{goal}"));
+            }
+        }
+    } else {
+        // Up to and including the blank line (none: nothing is left).
+        let start = lines
+            .iter()
+            .position(|l| l == "@   ")
+            .map_or(lines.len(), |i| i + 1);
+        lines.drain(..start);
+    }
+    let mut paragraphs: Vec<String> = Vec::new();
+    for l in lines {
+        match l.strip_prefix('@') {
+            Some(rest) => paragraphs.push(rest.to_string()),
+            None => match paragraphs.last_mut() {
+                Some(p) => {
+                    p.push(' ');
+                    p.push_str(&l);
+                }
+                None => paragraphs.push(l),
+            },
+        }
+    }
+    paragraphs
+}
+
+/// Wraps help paragraphs to the panel's width: word by word, a word going
+/// down when it and a space would not fit; a blank paragraph (`@ `) gives
+/// an empty line.
+fn help_lines(font: &TextRenderer, paragraphs: &[String]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for p in paragraphs {
+        let mut line = String::new();
+        for word in p.split_whitespace() {
+            let candidate = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            // As the briefing screen does, with room kept for a space.
+            if !line.is_empty() && font.measure(&format!("{candidate} ")) > HELP_TEXT.2 {
+                lines.push(std::mem::replace(&mut line, word.to_string()));
+            } else {
+                line = candidate;
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn help_shows_what_follows_the_blank_line() {
+        let lines: Vec<String> = [
+            "@Title",
+            "@Story that goes on ",
+            "and on.",
+            "@   ",
+            "@Your objectives:",
+            "@ ",
+            "@- Kill all Barbarians.",
+            "@- Find the parchment ",
+            "on board.",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            help_paragraphs(&lines, false, &[true]),
+            [
+                "Your objectives:",
+                " ",
+                "- Kill all Barbarians.",
+                "- Find the parchment  on board."
+            ]
+        );
+        // Custom missions: the whole text, the objectives from the
+        // conditions.
+        let mut conditions = [false; 11];
+        conditions[0] = true;
+        conditions[1] = true;
+        let custom = help_paragraphs(&lines[..6], true, &conditions);
+        assert_eq!(custom[0], "Title");
+        assert_eq!(
+            &custom[custom.len() - 2..],
+            ["-Kill all enemies", "-Kill all dragons"]
+        );
+    }
+
     use super::*;
 
     /// Needs `OPENAC_DATA`.

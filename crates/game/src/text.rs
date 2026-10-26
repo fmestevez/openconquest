@@ -15,6 +15,8 @@ const SPACING: u32 = 1;
 #[derive(Clone)]
 pub struct TextRenderer {
     glyphs: HashMap<u8, Glyph>,
+    /// How wide a character the font lacks is (drawn blank).
+    missing_width: u32,
     line_height: u32,
     atlas_width: u32,
     /// Atlas pixels as `0x00RRGGBB`, `None` where transparent.
@@ -49,6 +51,7 @@ impl TextRenderer {
             .collect();
         Ok(Self {
             glyphs: font.glyphs,
+            missing_width: font.missing_width as u32,
             line_height: font.line_height as u32,
             atlas_width: bitmap.width,
             atlas: pixels,
@@ -74,7 +77,7 @@ impl TextRenderer {
             .map(|c| {
                 self.glyphs
                     .get(&c)
-                    .map_or(self.line_height / 3, |g| g.width as u32)
+                    .map_or(self.missing_width, |g| g.width as u32)
             })
             .sum();
         glyphs + self.spacing * (text.len() as u32).saturating_sub(1)
@@ -86,7 +89,7 @@ impl TextRenderer {
         let mut pen = x;
         for c in text.bytes() {
             let Some(g) = self.glyphs.get(&c) else {
-                pen += (self.line_height / 3 + self.spacing) as i32 * s;
+                pen += (self.missing_width + self.spacing) as i32 * s;
                 continue;
             };
             for gy in 0..g.height as i32 {

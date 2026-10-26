@@ -13,6 +13,7 @@ pub mod installer;
 pub mod lz;
 pub mod map;
 pub mod mission;
+pub mod pe;
 pub mod sound;
 
 mod bytes;
@@ -23,9 +24,10 @@ pub use font::{Font, Glyph};
 pub use image::{parse_palette_animation, Bitmap, Mask, Palette, PaletteCycle, Rgb, Sprite};
 pub use map::{MapGrid, TileRef, TileSet, TileSetLibrary};
 pub use mission::{
-    briefing, briefing_text, conditions, object_records, players, ObjectClass, ObjectRecord,
-    PlayerInfo, StartLevels,
+    briefing, briefing_lines, briefing_text, conditions, object_records, players, ObjectClass,
+    ObjectRecord, PlayerInfo, StartLevels,
 };
+pub use pe::string_table;
 pub use sound::{load_sound, sound_choices, Sound};
 
 #[derive(Debug, thiserror::Error)]

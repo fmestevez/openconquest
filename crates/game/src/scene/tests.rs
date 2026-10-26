@@ -228,7 +228,9 @@ fn boat_founds_settlement() {
                     .any(|(dx, dy)| scene.nav.is_water(x + dx, y + dy))
         })
         .unwrap();
-    scene.order_found(boat, shore.0, shore.1).unwrap();
+    scene
+        .order_found(boat, shore.0, shore.1, SETTLEMENT)
+        .unwrap();
     for _ in 0..50 * 600 {
         scene.update(0.02, &data, &mut caches);
         if !scene.constructions.is_empty() {
@@ -3230,4 +3232,63 @@ fn fit_sprite() {
             ink.len()
         );
     }
+}
+
+#[test]
+fn start_fog_matches_the_original() {
+    // The explored layer (DarkTy layer 0, edge codes) of the original's
+    // human player at the start of miss000, read from its memory; rows 10
+    // and below are all 0.
+    const ORIGINAL: [&str; 10] = [
+        "0000000000007fffffffffff",
+        "0000000000007fffffffffff",
+        "0000000000007fffffffffff",
+        "0000000000007fffffffffff",
+        "000000000000c4ffffffffff",
+        "0000000000000c4fffffffff",
+        "00000000000000c84fffffff",
+        "0000000000000000c4ffffff",
+        "00000000000000000c84ffff",
+        "0000000000000000000c8888",
+    ];
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    for y in 0..24 {
+        let ours: String = (0..24)
+            .map(|x| format!("{:x}", scene.fog_codes(x, y).0))
+            .collect();
+        let expected = ORIGINAL
+            .get(y as usize)
+            .copied()
+            .unwrap_or("000000000000000000000000");
+        assert_eq!(ours, expected, "row {y}");
+    }
+}
+
+#[test]
+fn warships_open_the_building_page() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let killer = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 7))
+        .unwrap();
+    let main = crate::commands::menu(&scene, killer, crate::commands::Page::Main);
+    let build = main
+        .iter()
+        .flatten()
+        .find(|s| s.command == crate::commands::Command::BUILD_GROUND)
+        .unwrap();
+    assert!(build.enabled);
+    let ground = crate::commands::menu(&scene, killer, crate::commands::Page::Ground);
+    assert_eq!(ground[0].unwrap().command, crate::commands::Command(0x16));
 }

@@ -336,8 +336,14 @@ pub const DEFAULT_WEAPONS: [&[u8]; 12] = [
 /// Weapons of a ship from its mission record: item slots 3-8 (fields
 /// 21-26) hold how many of each it carries (fields 29.. their condition,
 /// eight per item). Records too short for that get the ship type's default
-/// load.
+/// load. Boats always carry one item 3 and merchants one item 4, whatever
+/// the record holds (the ship loaders 0x4dfa90, 0x4dfe00).
 pub fn weapons_from_record(fields: &[u32], kind: u8) -> Vec<u8> {
+    match kind {
+        0 => return vec![3],
+        1 => return vec![4],
+        _ => {}
+    }
     match fields.get(18..27) {
         Some(counts) => counts
             .iter()

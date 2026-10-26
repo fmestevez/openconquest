@@ -414,6 +414,7 @@ pub struct App {
     quick_label: Option<String>,
     selected_slot: Option<usize>,
     help_text: Vec<String>,
+    help_first: usize,
     settings: Settings,
     /// Quit at the next opportunity.
     quit: bool,
@@ -560,6 +561,7 @@ impl App {
             quick_label: None,
             selected_slot: None,
             help_text: Vec::new(),
+            help_first: 0,
             settings: Settings::default(),
             quit: false,
             fog,
@@ -657,6 +659,7 @@ impl App {
                 volume: self.audio.as_ref().map_or(0.0, |a| a.volume),
                 music: self.music.as_ref().map(|_| self.music_volume),
                 help: &self.help_text,
+                help_first: self.help_first,
             }),
             panel_hover: self.cursor.and_then(|c| self.bar_point(c)),
             paused: self.paused,
@@ -689,6 +692,14 @@ impl App {
             PanelHit::Tab(tab) => {
                 self.tab = tab;
                 self.refresh_panels();
+            }
+            PanelHit::HelpUp => self.help_first = self.help_first.saturating_sub(1),
+            PanelHit::HelpDown => {
+                let panels = &self.interface.panels;
+                let last = panels
+                    .help_line_count(&self.help_text, &self.text)
+                    .saturating_sub(panels.help_rows());
+                self.help_first = (self.help_first + 1).min(last);
             }
             PanelHit::Slot(i) => self.selected_slot = Some(i),
             PanelHit::Save => match self.selected_slot {
@@ -2069,36 +2080,36 @@ impl App {
                 t % 60
             )
         });
-        let mut help: Vec<String> = Vec::new();
-        let goals: Vec<&str> = (0..crate::scene::OBJECTIVES.len())
-            .filter(|&i| self.scene.conditions[i])
-            .map(|i| crate::scene::OBJECTIVES[i].0)
-            .collect();
-        if !goals.is_empty() {
-            help.push(format!("Objectives: {}.", goals.join(", ")));
-        }
-        help.extend(
-            self.scene
-                .briefing
-                .iter()
-                .filter(|p| !p.is_empty())
-                .cloned(),
+        let help = panels::help_paragraphs(
+            &self.scene.briefing_lines,
+            crate::scene::is_custom(&self.scene.mission),
+            &self.scene.conditions,
         );
+        if help != self.help_text {
+            self.help_first = 0;
+        }
         self.help_text = help;
+    }
+
+    /// The selected object, if it is a ship.
+    fn selected_ship(&self) -> Option<&crate::objects::MapObject> {
+        let id = self.selected?;
+        self.scene
+            .objects
+            .iter()
+            .find(|o| o.id == id)
+            .filter(|o| o.ship.is_some())
     }
 
     /// The building site under a window position while a building is being
     /// placed, and whether it is allowed.
     fn site_at(&self, pos: PhysicalPosition<f64>) -> Option<((i32, i32), bool)> {
         let cell = self.cell_at(pos)?;
-        if self.pending == Some(Command::BUILD_GROUND) {
-            let ok = self
-                .scene
-                .check_ground(economy::SETTLEMENT, cell.0, cell.1)
-                .is_ok();
+        let class = self.pending.and_then(economy::building_of_command)?;
+        if self.selected_ship().is_some() {
+            let ok = self.scene.check_ground(class, cell.0, cell.1).is_ok();
             return Some((cell, ok));
         }
-        let class = self.pending.and_then(economy::building_of_command)?;
         let settlement = self.selected?;
         let ok = self
             .scene
@@ -2477,10 +2488,7 @@ impl App {
                 self.pending = Some(c);
                 self.say(Spell::of_command(c).unwrap().prompt());
             }
-            Command::BUILD_GROUND => {
-                self.pending = Some(Command::BUILD_GROUND);
-                self.say("Choose a shore to found a settlement on");
-            }
+            Command::BUILD_GROUND => self.page = Page::Ground,
             Command::RAM | Command::BOARD => {
                 self.pending = Some(entry.command);
                 self.say("Choose an enemy ship");
@@ -2678,6 +2686,23 @@ impl App {
             let (Some(settlement), Some(cell)) = (self.selected, self.cell_at(pos)) else {
                 return;
             };
+            // A ship sails there to put it up.
+            if self.selected_ship().is_some() {
+                match self.issue(Order::Found {
+                    ship: settlement,
+                    cx: cell.0,
+                    cy: cell.1,
+                    class,
+                }) {
+                    Ok(_) => {
+                        self.pending = None;
+                        self.page = Page::Main;
+                        self.status = None;
+                    }
+                    Err(e) => self.say(e),
+                }
+                return;
+            }
             match self.issue(Order::PlaceBuilding {
                 site: settlement,
                 class,
@@ -2725,23 +2750,6 @@ impl App {
             };
             match self.issue(Order::CastHazard {
                 spell,
-                cx: cell.0,
-                cy: cell.1,
-            }) {
-                Ok(_) => {
-                    self.pending = None;
-                    self.status = None;
-                }
-                Err(e) => self.say(e),
-            }
-            return;
-        }
-        if self.pending == Some(Command::BUILD_GROUND) {
-            let (Some(ship), Some(cell)) = (self.selected, self.cell_at(pos)) else {
-                return;
-            };
-            match self.issue(Order::Found {
-                ship,
                 cx: cell.0,
                 cy: cell.1,
             }) {
@@ -2946,7 +2954,6 @@ impl App {
                 Command::REPAIR_SHIP | Command::REPAIR_BUILDING => {
                     (P::Repair, !target.is_some_and(own))
                 }
-                Command::BUILD_GROUND => (P::Build, !self.site_at(pos).is_some_and(|s| s.1)),
                 c if economy::building_of_command(c).is_some() => {
                     (P::Build, !self.site_at(pos).is_some_and(|s| s.1))
                 }
@@ -3401,8 +3408,17 @@ impl App {
         let map = self.scene.map_size();
         if self.center_pending {
             self.center_pending = false;
-            let (x, y) = self.scene.start_view();
-            self.camera.center_on(x, y, &screen, map);
+            match self.scene.start_corner() {
+                Some((x, y)) => {
+                    self.camera.x = x;
+                    self.camera.y = y;
+                    self.camera.clamp(&screen, map);
+                }
+                None => {
+                    let (x, y) = self.scene.start_view();
+                    self.camera.center_on(x, y, &screen, map);
+                }
+            }
         }
         let (mut dx, mut dy) = (0.0f32, 0.0f32);
         let held = |k: &[KeyCode]| k.iter().any(|k| self.keys.contains(k));

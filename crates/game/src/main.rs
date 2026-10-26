@@ -145,6 +145,9 @@ struct Args {
     /// the focus to gather the nearest amber (or fish).
     #[arg(long, hide = true, value_name = "amber|fish")]
     gather: Option<String>,
+    /// Centre the screenshot where the mission's view starts.
+    #[arg(long, hide = true)]
+    at_start: bool,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -373,6 +376,8 @@ fn screenshot(
     let mut caches = Caches::default();
     let mut scene = Scene::load_at(data, &mut caches, mission, args.difficulty.level())?;
     scene.fog = !args.no_fog;
+    // The counters as they settle once the game has run a moment.
+    scene.shown = [scene.amber, scene.fish];
     let attacker = if args.skirmish {
         skirmish(&mut scene, args.focus)
     } else if let Some(what) = &args.gather {
@@ -391,7 +396,11 @@ fn screenshot(
     let slots: Vec<Option<String>> = (0..panels::SLOTS)
         .map(|i| (i == 0).then(|| format!("{} 12:34", mission.to_uppercase())))
         .collect();
-    let help = scene.briefing.clone();
+    let help = panels::help_paragraphs(
+        &scene.briefing_lines,
+        scene::is_custom(&scene.mission),
+        &scene.conditions,
+    );
     let mut view = GameView {
         data,
         scene: &scene,
@@ -422,6 +431,7 @@ fn screenshot(
             volume: 0.6,
             music: Some(0.5),
             help: &help,
+            help_first: 0,
         }),
         panel_hover: None,
         paused: args.paused,
@@ -430,6 +440,7 @@ fn screenshot(
     let map = scene.map_size();
     let followed = attacker.and_then(|a| scene.objects.iter().find(|o| o.id == a));
     let (fx, fy) = match (followed, args.focus) {
+        _ if args.at_start => scene.start_view(),
         (Some(o), _) => (o.x, o.y),
         (None, focus) => match focus {
             Some((cx, cy)) => ((cx * 64 + 32) as f32, (cy * 64 + 32) as f32),
@@ -437,9 +448,17 @@ fn screenshot(
         },
     };
     camera.center_on(fx, fy, &screen, map);
+    if args.at_start {
+        if let Some((x, y)) = scene.start_corner() {
+            camera.x = x;
+            camera.y = y;
+            camera.clamp(&screen, map);
+        }
+    }
     view.camera = &camera;
     // Select the object nearest to the focus point, to show the object panel.
-    view.selected = args.focus.and_then(|_| {
+    view.selected = args.focus.and_then(|(cx, cy)| {
+        let (fx, fy) = ((cx * 64 + 32) as f32, (cy * 64 + 32) as f32);
         scene
             .objects
             .iter()

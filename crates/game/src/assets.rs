@@ -78,6 +78,8 @@ pub struct GameData {
     /// Menu screens (`controlm.dkx`), if installed.
     pub menus: Option<Archive>,
     pub palette: Palette,
+    /// The game's strings (`ancient.exe`'s string table), if it is there.
+    pub strings: std::collections::HashMap<u32, String>,
     pub cycles: Vec<PaletteCycle>,
     pub tilesets: TileSetLibrary,
     animated: [bool; 256],
@@ -108,6 +110,12 @@ impl GameData {
             _ => None,
         };
         let palette = Palette::from_bitmap(&maplib.read("PALETTE", ResourceKind::Bitmap)?)?;
+        let strings = find_ci(root, "ancient.exe")
+            .ok()
+            .flatten()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|exe| openac_formats::string_table(&exe).ok())
+            .unwrap_or_default();
         let anim = maplib
             .find("ANIM_PALETTE", ResourceKind::PaletteAnimation)
             .context("ANIM_PALETTE missing from maplib")?;
@@ -126,6 +134,7 @@ impl GameData {
             sounds,
             menus,
             palette,
+            strings,
             cycles,
             tilesets,
             animated,

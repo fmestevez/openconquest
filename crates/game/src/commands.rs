@@ -191,6 +191,119 @@ impl Command {
         }
     }
 
+    /// The id of the caption on this command's button in the game's string
+    /// table (0x4f21b0), e.g. " \nMOVE": two lines, centred, the first
+    /// often blank.
+    pub fn caption_id(self) -> u32 {
+        match self.0 {
+            0x01 | 0x02 => 0x1a1,
+            0x03 => 0x1a3,
+            0x04 => 0x1a2,
+            0x05 => 0x1ad,
+            0x06 => 0x1b0,
+            0x07 | 0x10 => 0x1ae,
+            0x08 => 0x1ea,
+            0x09 => 0x1a7,
+            0x0a => 0x1a8,
+            0x0b => 0x1b1,
+            0x0c => 0x1a9,
+            0x0d | 0x7b => 0x1aa,
+            0x0e | 0x7a => 0x1ab,
+            0x0f | 0x7c => 0x1ac,
+            0x11 => 0x208,
+            0x12 => 0x1ed,
+            0x13 => 0x1af,
+            0x14 => 0x209,
+            0x15 => 0x1ee,
+            0x16 => 0x1b2,
+            0x17..=0x19 => 0x1b3,
+            0x1a => 0x1b4,
+            0x1b => 0x1b5,
+            0x1c => 0x1b6,
+            0x1d => 0x1b7,
+            0x1e => 0x1b8,
+            0x1f => 0x1b9,
+            0x20 => 0x1ba,
+            0x21 => 0x1bb,
+            0x22 => 0x1bc,
+            0x23 => 0x1be,
+            0x24 => 0x1bd,
+            0x25 => 0x1f8,
+            0x26 => 0x1f9,
+            0x27 => 0x1fc,
+            0x28 => 0x1bf,
+            0x29 => 0x1f6,
+            0x2a => 0x1fa,
+            0x2b => 0x1f7,
+            0x2c => 0x1fb,
+            0x2d => 0x1c3,
+            0x2e => 0x1c5,
+            0x2f => 0x1c4,
+            0x30 => 0x1c6,
+            0x31 => 0x1c7,
+            0x32 => 0x1c8,
+            0x33 => 0x1c9,
+            0x34 => 0x1ca,
+            0x35 => 0x1cb,
+            0x36 => 0x1cc,
+            0x37 => 0x1cd,
+            0x38 => 0x1ce,
+            0x39 => 0x1cf,
+            0x3a => 0x1d0,
+            0x3b => 0x1d2,
+            0x3c | 0x3d => 0x1d3,
+            0x3e | 0x41 | 0x44 => 0x1d4,
+            0x3f | 0x42 | 0x45 => 0x1d6,
+            0x40 | 0x43 | 0x46 => 0x1d5,
+            0x47 | 0x49 | 0x4a | 0x4b => 0x1d7,
+            0x48 | 0x4c | 0x4d | 0x4e => 0x1d8,
+            0x4f => 0x1eb,
+            0x50 => 0x1fd,
+            0x51 => 0x1ff,
+            0x52 => 0x1fe,
+            0x53 => 0x200,
+            0x54 => 0x201,
+            0x55 => 0x1f4,
+            0x56 | 0x58 | 0x59 | 0x5a | 0x5b | 0x5c | 0x5d | 0x5e | 0x5f => 0x1e5,
+            0x57 => 0x1e6,
+            0x60 => 0x1dc,
+            0x61 => 0x1db,
+            0x62 => 0x1dd,
+            0x63 => 0x1e7,
+            0x64 => 0x1e4,
+            0x65 => 0x1e8,
+            0x66 => 0x1e3,
+            0x67 => 0x1de,
+            0x68 => 0x1e9,
+            0x69 => 0x1e1,
+            0x6a => 0x1e2,
+            0x6b => 0x202,
+            0x6c => 0x1ec,
+            0x6d => 0x1ef,
+            0x6e => 0x1f1,
+            0x6f | 0x70 => 0x1f2,
+            0x71 => 0x1f3,
+            0x72 | 0x73 => 0x205,
+            0x74 => 0x204,
+            0x75 => 0x203,
+            0x76 => 0x206,
+            0x77 => 0x207,
+            0x78 => 0x20a,
+            0x79 => 0x20b,
+            0x7d => 0x1c0,
+            0x7e => 0x20c,
+            0x7f => 0x20d,
+            0x80 => 0x20e,
+            _ => 0x28,
+        }
+    }
+
+    /// Whether the button opens a page of further commands (drawn with an
+    /// arrow, `CBUT_SPEC`).
+    pub fn opens_page(self) -> bool {
+        matches!(self.0, 0x07 | 0x0c | 0x10 | 0x3d | 0x56 | 0x6c)
+    }
+
     pub fn name(self) -> String {
         if let Some(kind) = economy::ship_of_command(self) {
             return format!("Build {}", SHIP_NAMES[kind as usize]);
@@ -315,6 +428,8 @@ pub enum Page {
     Behaviour,
     /// A merchant's gathering zones (0x4e6e90, page 1).
     Zones,
+    /// A ship's buildings: a settlement and forts (0x4e6980, page 2).
+    Ground,
 }
 
 /// The command menu of an object on `page`.
@@ -326,7 +441,33 @@ pub fn menu(scene: &Scene, obj: &MapObject, page: Page) -> Menu {
         Page::Research => research_menu(scene, obj),
         Page::Behaviour => behaviour_menu(scene, obj),
         Page::Zones => zones_menu(scene, obj),
+        Page::Ground => ground_menu(scene, obj),
     }
+}
+
+/// A ship's building page (0x4e6980, page 2): a settlement, then the forts
+/// the player may build, packed in that order.
+fn ground_menu(scene: &Scene, obj: &MapObject) -> Menu {
+    let mut menu: Menu = [None; SLOTS];
+    if !scene.is_own(obj) || obj.ship.is_none() {
+        return menu;
+    }
+    let mut slot = 0;
+    for id in [0x16, 0x17, 0x18, 0x19] {
+        let command = Command(id);
+        let class = economy::building_of_command(command).unwrap();
+        if id != 0x16 && !scene.permits.building(class) {
+            continue;
+        }
+        set(
+            &mut menu,
+            slot,
+            command,
+            scene.amber >= economy::building_cost(class),
+        );
+        slot += 1;
+    }
+    menu
 }
 
 /// The Temple of the Sea's compass (0x437de0, page 4): a direction button
@@ -391,41 +532,30 @@ fn temple_menu(scene: &Scene, temple: Temple, menu: &mut Menu) {
     }
 }
 
-/// Buildings a settlement or town can put up (own layout: the original's
-/// submenu has not been decoded). Esc returns to the main menu.
+/// Buildings a settlement or town can put up (0x43c740, page 2): those the
+/// player may build, packed in the original's order (port, the forts,
+/// workshop, shipyard, smithy, school, the temples). Esc returns to the main
+/// menu.
 fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
-    const LAYOUT: [Option<u8>; SLOTS] = [
-        Some(0x1a),
-        Some(0x1b),
-        Some(0x1c),
-        Some(0x1d),
-        Some(0x1e),
-        Some(0x1f),
-        Some(0x20),
-        None,
-        Some(0x17),
-        Some(0x18),
-        Some(0x19),
-        None,
-    ];
+    const ORDER: [u8; 10] = [0x1a, 0x17, 0x18, 0x19, 0x1c, 0x1b, 0x1d, 0x1e, 0x1f, 0x20];
     let mut menu: Menu = [None; SLOTS];
     if !scene.is_own(obj) || !matches!(obj.class, ObjectClass::Building(SETTLEMENT | TOWN)) {
         return menu;
     }
-    for (slot, id) in LAYOUT.iter().enumerate() {
-        if let Some(id) = id {
-            let command = Command(*id);
-            let class = economy::building_of_command(command).unwrap();
-            if !scene.permits.building(class) {
-                continue;
-            }
-            set(
-                &mut menu,
-                slot,
-                command,
-                scene.amber >= economy::building_cost(class),
-            );
+    let mut slot = 0;
+    for id in ORDER {
+        let command = Command(id);
+        let class = economy::building_of_command(command).unwrap();
+        if !scene.permits.building(class) {
+            continue;
         }
+        set(
+            &mut menu,
+            slot,
+            command,
+            scene.amber >= economy::building_cost(class),
+        );
+        slot += 1;
     }
     menu
 }
@@ -487,7 +617,8 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
     set(menu, 8, Command::LOAD, true);
     let damaged = obj.combat.as_ref().is_some_and(|c| c.hull < c.max_hull);
     set(menu, 9, Command::REPAIR_SHIP, damaged);
-    set(menu, 10, Command::BUILD_GROUND, kind <= 1);
+    // Every ship's capabilities allow building (0x4e6930 clears other bits).
+    set(menu, 10, Command::BUILD_GROUND, true);
     set(menu, 11, Command::TREASURE, true);
     // Unique ships lose some commands (0x4e42e0).
     let removed: &[usize] = match kind {

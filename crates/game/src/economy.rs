@@ -83,10 +83,11 @@ pub fn building_cost(class: u32) -> u32 {
     }
 }
 
-/// The building class a settlement's build command puts up (command ids
-/// 0x17-0x20, button suffixes FORTW .. WAR).
+/// The building class a build command puts up (command ids 0x16-0x20,
+/// button suffixes TOWN, FORTW .. WAR; 0x16 is a ship's settlement).
 pub fn building_of_command(c: Command) -> Option<u32> {
     Some(match c.0 {
+        0x16 => SETTLEMENT,
         0x17 => 0x34,
         0x18 => 0x35,
         0x19 => 0x36,

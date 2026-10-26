@@ -120,6 +120,11 @@ pub struct MapObject {
     /// Shows the frame this far (0..1) through the animation instead of
     /// playing it: a building going up.
     pub progress: Option<f32>,
+    /// A building's banner (`FLAGSPR_<nation><slot>`, its first frame) and
+    /// where its top left lies from the building's.
+    pub banner: Option<(Rc<Image>, i32, i32)>,
+    /// The map cell a building stands on (its record's).
+    pub cell: Option<(i32, i32)>,
 }
 
 /// A treasure (`TreasClassTy` record: kind in field 4, parameters in
@@ -369,8 +374,14 @@ pub enum Task {
     Gather { deposit: u32, phase: GatherPhase },
     /// Chase and fire at an enemy ship or building.
     Attack { target: u32 },
-    /// Sail to a land cell and found a settlement there.
-    Found { cx: i32, cy: i32 },
+    /// Sail to a land cell and put up a building there: a settlement or a
+    /// fort (the ships' building page, 0x4e6980 page 2).
+    Found {
+        cx: i32,
+        cy: i32,
+        #[serde(default = "settlement_class")]
+        class: u32,
+    },
     /// Run into an enemy ship.
     Ram { target: u32 },
     /// Come alongside an enemy ship and fight for it; `round` counts down
@@ -416,8 +427,6 @@ pub fn cargo_capacity(kind: u8) -> f32 {
 
 pub const SHIP_HEADINGS: usize = 8;
 const SHIP_FRAMES_PER_HEADING: usize = 4;
-/// First frame of the sail-furling animations (8 per heading).
-const SHIP_FURLED: usize = 88;
 
 impl MapObject {
     pub fn is_armed(&self) -> bool {
@@ -454,12 +463,8 @@ impl MapObject {
         }
         let step = (time_ms / self.frame_ms.max(1)) as usize;
         let i = match &self.ship {
-            // A ship lying still has its sail furled.
-            Some(ship)
-                if ship.path.is_empty() && self.frames.len() >= SHIP_FURLED + 8 * SHIP_HEADINGS =>
-            {
-                SHIP_FURLED + ship.heading * 8 + 7
-            }
+            // Lying still or sailing, the sail stays set (the original's
+            // first frame of miss000 shows its idle ships so).
             Some(ship) => {
                 let per = SHIP_FRAMES_PER_HEADING.min(self.frames.len().max(1));
                 (ship.heading * per + step % per) % self.frames.len().max(1)
@@ -647,8 +652,19 @@ pub fn resolve(
                 return Ok(None);
             };
             let frames = composite_frames(data, caches, &name, 0..usize::MAX)?;
+            // The picture's top left is the cell's corner less a per-class
+            // offset (LandObjClassTy 0x422e30; the constructors' +0xc4,
+            // +0xc8): ports and docks (0, 7), forts (4, 12), settlements and
+            // towns none (measured on the original), the rest (4, 4).
+            let anchor = match cls {
+                0x39..=0x3b => CellCorner(f(5), f(6), 0, 7),
+                0x34..=0x36 => CellCorner(f(5), f(6), 4, 12),
+                0x32 | 0x33 => CellCorner(f(5), f(6), 0, 0),
+                0x37 | 0x38 | 0x3c | 0x3d | 0x3e => CellCorner(f(5), f(6), 4, 4),
+                _ => CellCentre(f(5), f(6)),
+            };
             (
-                CellCentre(f(5), f(6)),
+                anchor,
                 Visual {
                     frames,
                     frame_ms: DEFAULT_FRAME_MS,
@@ -660,8 +676,14 @@ pub fn resolve(
             let (nation, player) = (f(5), f(6));
             let name = format!("SHIP_{letter}{nation}{nation}{player}0");
             // 8 headings x 4 frames under sail, then (frames 88-151) 8
-            // headings x 8 frames furling the sail.
-            let frames = composite_frames(data, caches, &name, 0..usize::MAX)?;
+            // headings x 8 frames furling the sail. The layers are the wake
+            // and pairs (hull, ram, armour, sail); the original shows the
+            // first of each pair, and the ram only on rammers (5) and fire
+            // rammers (10) (fitted to the original's first frame of miss000).
+            let rammer = matches!(f(7), 5 | 10);
+            let frames = composite_frames_with(data, caches, &name, 0..usize::MAX, |k, s| {
+                (k == 0 || k % 2 == 1) && (rammer || !s.starts_with("TARAN_"))
+            })?;
             (
                 CellCentre(f(9), f(10)),
                 Visual {
@@ -852,11 +874,36 @@ pub fn resolve(
         }
         _ => return Ok(None),
     };
+    let banner = match class {
+        ObjectClass::Building(cls) if f(field::NATION) < 4 => {
+            let (nation, slot) = (f(field::NATION), f(field::PLAYER));
+            let at = banner_offset(cls, nation);
+            match (
+                at,
+                caches.composite(data, &format!("FLAGSPR_{nation}{slot}"))?,
+            ) {
+                (Some((dx, dy)), Some(comp)) => comp
+                    .frame(0)
+                    .first()
+                    .map(|c| c.sprite.clone())
+                    .and_then(|s| caches.sprites.get(data, &s).ok().flatten())
+                    .map(|img| (img, dx, dy)),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
     let Visual { frames, frame_ms } = visual;
     let Some(first) = frames.iter().flatten().next() else {
         return Ok(None);
     };
     let t = TILE_SIZE as f32;
+    let cell = match (class, &anchor) {
+        (ObjectClass::Building(_), CellCorner(cx, cy, ..) | CellCentre(cx, cy)) => {
+            Some((*cx as i32, *cy as i32))
+        }
+        _ => None,
+    };
     let (x, y) = match anchor {
         CellCentre(cx, cy) => (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0),
         CellCorner(cx, cy, dx, dy) => (
@@ -955,7 +1002,31 @@ pub fn resolve(
             amount: f(8),
         }),
         progress: None,
+        banner,
+        cell,
     }))
+}
+
+/// Where a building's banner stands from the building's top left, by class
+/// and nation (0-3): the tables each class's constructor sets (+0xdc, read
+/// by 0x4247b0); settlements, towns, ports and yards fitted to the
+/// original's first frame of miss000 (Greek).
+fn banner_offset(class: u32, nation: u32) -> Option<(i32, i32)> {
+    let table: [(i32, i32); 4] = match class {
+        0x32 | 0x33 => [(37, 33); 4],
+        0x39 => [(20, -15); 4],
+        0x3a | 0x3b => [(36, -19); 4],
+        0x34 => [(36, -16), (35, -9), (37, -22), (35, 1)],
+        0x35 => [(36, -16), (32, -23), (37, -22), (34, 2)],
+        0x36 => [(36, -16), (41, -23), (37, -22), (35, -22)],
+        0x37 => [(37, -15), (44, 3), (52, -20), (49, -20)],
+        0x38 => [(35, -17), (48, -16), (52, -3), (49, -20)],
+        0x3c => [(38, -21), (37, -11), (38, -22), (34, -12)],
+        0x3d => [(42, -13), (41, -13), (45, -26), (41, -14)],
+        0x3e => [(56, -16), (48, -21), (37, -23), (42, -14)],
+        _ => return None,
+    };
+    table.get(nation as usize).copied()
 }
 
 /// Ship type names, indexed by the type in mission records (field 7),
@@ -1265,14 +1336,36 @@ fn composite_frames(
     name: &str,
     range: std::ops::Range<usize>,
 ) -> Result<Vec<Vec<Layer>>> {
+    composite_frames_with(data, caches, name, range, |_, _| true)
+}
+
+/// A composite's frames, its layers drawn in their order (the wake, order
+/// -21000, first; then from the highest order to the lowest, so a ship's
+/// sails, 4, lie over its hull, 10 and 11), keeping the sprites `keep`
+/// accepts.
+fn composite_frames_with(
+    data: &GameData,
+    caches: &mut Caches,
+    name: &str,
+    range: std::ops::Range<usize>,
+    keep: impl Fn(usize, &str) -> bool,
+) -> Result<Vec<Vec<Layer>>> {
     let Some(comp) = caches.composite(data, name)? else {
         return Ok(Vec::new());
     };
     let mut frames = Vec::new();
     for i in range.start..range.end.min(comp.frames) {
         let mut layers = Vec::new();
-        for cell in comp.frame(i) {
-            if cell.sprite == EMPTY_SPRITE {
+        let mut cells: Vec<_> = comp.frame(i).iter().enumerate().collect();
+        cells.sort_by_key(|(_, c)| {
+            if c.order < 0 {
+                (0, c.order)
+            } else {
+                (1, -c.order)
+            }
+        });
+        for (k, cell) in cells {
+            if cell.sprite == EMPTY_SPRITE || !keep(k, &cell.sprite) {
                 continue;
             }
             if let Some(image) = caches.sprites.get(data, &cell.sprite)? {
@@ -1305,4 +1398,8 @@ pub fn sequence_frames(
         }
     }
     Ok(frames)
+}
+
+fn settlement_class() -> u32 {
+    crate::economy::SETTLEMENT
 }

@@ -902,15 +902,19 @@ impl Scene {
 
     /// Advances the standing order of ship `i`.
     pub(super) fn run_task(&mut self, i: usize, dt: f32, data: &GameData, caches: &mut Caches) {
-        if let Some(Task::Found { cx, cy }) = self.objects[i].ship.as_ref().and_then(|s| s.task) {
+        if let Some(Task::Found { cx, cy, class }) =
+            self.objects[i].ship.as_ref().and_then(|s| s.task)
+        {
             if !self.objects[i].ship.as_ref().unwrap().path.is_empty() {
                 return;
             }
             self.objects[i].ship.as_mut().unwrap().task = None;
             let id = self.objects[i].id;
-            if let Err(e) = self.place_building(id, SETTLEMENT, cx, cy, data, caches) {
-                self.messages
-                    .push(format!("Cannot found the settlement: {e}"));
+            if let Err(e) = self.place_building(id, class, cx, cy, data, caches) {
+                self.messages.push(format!(
+                    "Cannot build the {}: {e}",
+                    crate::objects::building_label(class)
+                ));
             }
             return;
         }
@@ -1128,26 +1132,27 @@ impl Scene {
 
     /// Orders merchant `ship` to sail to the land cell `(cx, cy)` and found a
     /// settlement there.
-    pub fn order_found(&mut self, ship: u32, cx: i32, cy: i32) -> Result<(), String> {
+    /// Sends `ship` to put up a settlement or fort (`class`) at a land
+    /// cell: any ship may (the ships' building page, 0x4e6980 page 2).
+    pub fn order_found(&mut self, ship: u32, cx: i32, cy: i32, class: u32) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
-        if self.objects[i]
-            .ship
-            .as_ref()
-            .is_none_or(|s| cargo_capacity(s.kind) <= 0.0)
-        {
-            return Err("Only merchant ships can found settlements".into());
+        if self.objects[i].ship.is_none() {
+            return Err("Only ships can found settlements".into());
         }
-        if self.amber < economy::building_cost(SETTLEMENT) {
+        if !(class == SETTLEMENT || (0x34..=0x36).contains(&class)) {
+            return Err("Ships found settlements and forts".into());
+        }
+        if self.amber < economy::building_cost(class) {
             return Err("Not enough amber".into());
         }
-        self.check_ground(SETTLEMENT, cx, cy)?;
+        self.check_ground(class, cx, cy)?;
         let t = TILE_SIZE as f32;
         let path = self
             .plan_route(i, cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0)
             .ok_or("The ship cannot sail there")?;
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path = path;
-        ship.task = Some(Task::Found { cx, cy });
+        ship.task = Some(Task::Found { cx, cy, class });
         Ok(())
     }
 }

@@ -116,6 +116,16 @@ pub fn draw_objects(
     };
     for obj in below {
         draw(frame, obj.frame_at(time_ms), obj.x, obj.y);
+        // Its banner, from the picture's top left.
+        if let (Some((flag, dx, dy)), Some(first), true) = (
+            &obj.banner,
+            obj.frame_at(time_ms).first(),
+            obj.owner.is_some(),
+        ) {
+            let left = (obj.x - first.image.width as f32 / 2.0).round() as i32 + dx;
+            let top = (obj.y - first.image.height as f32 / 2.0).round() as i32 + dy;
+            draw_image(frame, screen, camera, lut, flag, left, top);
+        }
     }
     // Walkways of unloading ships, and their porters.
     for p in &scene.planks {
@@ -410,7 +420,7 @@ pub fn draw_site(frame: &mut Frame, screen: &Screen, camera: &Camera, cell: (i32
     }
 }
 
-/// How bright explored cells out of sight are drawn.
+/// How bright explored cells out of sight are drawn on the minimap.
 const FOG_BRIGHTNESS: f32 = 0.55;
 
 fn scale_rgb(c: u32, k: f32) -> u32 {
@@ -418,63 +428,64 @@ fn scale_rgb(c: u32, k: f32) -> u32 {
     ch(16) | ch(8) | ch(0)
 }
 
-/// Fog of war over the view: unexplored cells black, explored ones out of
-/// sight dimmed, blended between cell centres so the edges are soft.
-pub fn draw_fog(frame: &mut Frame, screen: &Screen, scene: &Scene, camera: &Camera) {
+/// Fog of war over the view, as the original draws it (0x5762d0): over a
+/// covered cell (explored code 0) the cloud picture, tiled 9 x 8 cells
+/// across the map; over the others, black stippled through the in-sight
+/// edge mask, then the clouds through the explored edge mask.
+pub fn draw_fog(
+    frame: &mut Frame,
+    screen: &Screen,
+    scene: &Scene,
+    camera: &Camera,
+    lut: &[u32; 256],
+) {
     if !scene.fog {
         return;
     }
+    let Some(art) = scene.fog_art.as_deref() else {
+        return;
+    };
     let scale = camera.scale(screen);
-    let t = TILE_SIZE as f32;
+    let t = TILE_SIZE as i32;
     let w = screen.w.min(frame.width.saturating_sub(screen.x));
     let h = screen.h.min(frame.height.saturating_sub(screen.y));
-    let level = |cx: i32, cy: i32| scene.seen(cx, cy) as u8 as f32;
-    // Brightness for blended levels 0..2 in 1/64 steps, in 8.8 fixed point.
-    let lut: Vec<u32> = (0..=128)
-        .map(|i| {
-            let v = i as f32 / 64.0;
-            let b = if v < 1.0 {
-                FOG_BRIGHTNESS * v
-            } else {
-                FOG_BRIGHTNESS + (1.0 - FOG_BRIGHTNESS) * (v - 1.0)
-            };
-            (b * 256.0) as u32
-        })
-        .collect();
-    // Per column: the cell to the left of the sample and the blend weight.
-    let cols: Vec<(i32, f32)> = (0..w)
-        .map(|sx| {
-            let fx = sample(camera.x, sx, scale) / t - 0.5;
-            (fx.floor() as i32, fx - fx.floor())
-        })
+    let cloud = &art.cloud;
+    let (tiles_x, tiles_y) = (
+        (cloud.width as i32 / t).max(1),
+        (cloud.height as i32 / t).max(1),
+    );
+    let cols: Vec<i32> = (0..w)
+        .map(|sx| sample(camera.x, sx, scale).floor() as i32)
         .collect();
     for sy in 0..h {
-        let fy = sample(camera.y, sy, scale) / t - 0.5;
-        let (cy, ty) = (fy.floor() as i32, fy - fy.floor());
+        let wy = sample(camera.y, sy, scale).floor() as i32;
+        let (cy, iy) = (wy.div_euclid(t), wy.rem_euclid(t));
+        let ty = cy.rem_euclid(tiles_y) * t + iy;
         let row =
             &mut frame.pixels[((screen.y + sy) * frame.width + screen.x) as usize..][..w as usize];
-        // The current cell: its left and right levels blended down the row.
-        let mut cell = (i32::MIN, 0.0f32, 0.0f32);
-        for (px, &(cx, tx)) in row.iter_mut().zip(&cols) {
-            if cell.0 != cx {
-                let (a, b) = (level(cx, cy), level(cx + 1, cy));
-                let (c, d) = (level(cx, cy + 1), level(cx + 1, cy + 1));
-                cell = (cx, a + (c - a) * ty, b + (d - b) * ty);
-            }
-            let (_, left, right) = cell;
-            if left == 2.0 && right == 2.0 {
+        for (px, &wx) in row.iter_mut().zip(&cols) {
+            let (cx, ix) = (wx.div_euclid(t), wx.rem_euclid(t));
+            let (dark, fog) = scene.fog_codes(cx, cy);
+            let cloud_px = || {
+                let tx = cx.rem_euclid(tiles_x) * t + ix;
+                cloud.pixels[(ty as u32 * cloud.width + tx as u32) as usize]
+                    .map_or(0, |p| crate::terrain::resolve(p, lut))
+            };
+            if dark == 0 {
+                *px = cloud_px();
                 continue;
             }
-            if left == 0.0 && right == 0.0 {
-                *px = 0;
-                continue;
+            let (ix, iy) = (ix as u32, iy as u32);
+            if let Some(m) = art.fog.get(fog as usize) {
+                if m.get(ix, iy) {
+                    *px = 0;
+                }
             }
-            let v = left + (right - left) * tx;
-            let k = lut[(v * 64.0) as usize];
-            // Scale red and blue together, then green.
-            let p = *px;
-            *px =
-                ((((p & 0xff00ff) * k) >> 8) & 0xff00ff) | ((((p & 0x00ff00) * k) >> 8) & 0x00ff00);
+            if let Some(m) = art.dark.get(dark as usize) {
+                if m.get(ix, iy) {
+                    *px = cloud_px();
+                }
+            }
         }
     }
 }

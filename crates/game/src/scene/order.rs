@@ -78,6 +78,7 @@ pub enum Order {
         ship: u32,
         cx: i32,
         cy: i32,
+        class: u32,
     },
     Repair {
         ship: u32,
@@ -191,7 +192,12 @@ impl Scene {
             Convoy { ship, a, b } => done(self.order_convoy(ship, a, b)),
             Gather { ship, deposit } => done(self.order_gather(ship, deposit)),
             Take { ship, target } => done(self.order_take(ship, target)),
-            Found { ship, cx, cy } => done(self.order_found(ship, cx, cy)),
+            Found {
+                ship,
+                cx,
+                cy,
+                class,
+            } => done(self.order_found(ship, cx, cy, class)),
             Repair { ship, dock } => done(self.order_repair(ship, dock)),
             Mend { site, target } => done(self.order_mend(site, target)),
             LoadCrew { ship } => self.load_crew(ship),

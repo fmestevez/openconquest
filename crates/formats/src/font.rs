@@ -35,6 +35,9 @@ pub struct Font {
     pub line_height: u16,
     pub transparent: u8,
     pub glyphs: HashMap<u8, Glyph>,
+    /// The width of a character the font lacks: the original looks it up
+    /// as the table's first glyph (mfcfnt.cpp 0x547170).
+    pub missing_width: u16,
     pub atlas_offsets: Vec<u32>,
 }
 
@@ -55,8 +58,10 @@ impl Font {
         let line_height = r.u16()?;
         let _last_char = r.u16()?;
         let mut glyphs = HashMap::with_capacity(count as usize);
+        let mut missing_width = None;
         for _ in 0..count {
             let (x, y, width, height, ch) = (r.u16()?, r.u16()?, r.u16()?, r.u16()?, r.u16()?);
+            missing_width.get_or_insert(width);
             if let Ok(ch) = u8::try_from(ch) {
                 glyphs.insert(
                     ch,
@@ -73,6 +78,7 @@ impl Font {
             line_height,
             transparent,
             glyphs,
+            missing_width: missing_width.unwrap_or(0),
             atlas_offsets,
         })
     }

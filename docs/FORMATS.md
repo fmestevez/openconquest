@@ -650,10 +650,86 @@ pause sign is the `WIN_PAUSE` sequence (197x156, 31 frames).
 (never explored) and `b_FOG00`-`15` (explored, out of sight), with 8x8
 minimap versions `s_DARK`/`s_FOG`; each set is 16 dithered edge shapes
 (00 full, 15 empty) chosen from the state of the cell's surroundings.
-DarkTy (`Grig\dark.cpp`, 0x48b3a0) keeps a byte per cell; 0x48b9e0
-registers a temporary viewer (cell, player, radius, duration in ms), e.g.
-the temples' 3000 ms reveals. Units' ordinary sight ranges have not been
-traced.
+DarkTy (`Grig\dark.cpp`, 0x48b3a0; the object at `[0x5c74a0]`) keeps, per
+player (nation * 4 + slot), four `w * h` byte layers at +0x24 + 16 * p:
+0 the explored edge codes, 1 the in-sight edge codes, 2 how many eyes see
+each cell, 3 countdowns for cells fading in or out. 0x48b9e0 registers a
+temporary viewer (cell, player, radius, duration in ms), e.g. the temples'
+3000 ms reveals.
+
+**Sight.** Ships and buildings see through one of six masks, radius 0-5
+(0x48b200; radius 2 is a 5x5 square less its corners, and so on). A ship's
+radius (byte +0x533) is the larger of a type base (0x4e5910: boats,
+merchants, fire ships and fire rammers 1; royal ships and bombers 3; the
+rest 2) and its crew's longest weapon range (+0x47d, 0x4bc360, the item
+range table 0x598154); fire and quick lime ships see 3. Boats always carry
+one item 3 and merchants one item 4 (the loaders 0x4dfa90, 0x4dfe00), so
+both see 3 and 2. Buildings (constructors' +0x1b0) see from each cell of
+their footprint (+0x56 cells, two to a row): settlements 2 and towns 3
+over 2x2, forts 4, schools and temples 3, the rest 2. Checked against the
+sight counts read from the original's memory at the start of miss000.
+
+**Edge codes.** A cell that comes into view sets itself and its eight
+neighbours to 15 (clear), then gives each neighbour the code its own
+neighbours imply (0x48c520): neighbours with codes below 15 add bits from
+a 15 x 8 table (0x5bdef8; bits 8-11 corners, 0-7 half sides), and the bits
+map back to a code through a 15-entry table (0x5bdeb8; none = 15, else an
+exact match, else the first with the same corners). On the map's border a
+side with only one of its corners covered loses its half sides. The
+explored layer passes over cells already clear (0x48c5d0); the in-sight one
+is rebuilt from the counts (0x48c750). Raster order reproduces the
+original's layer exactly.
+
+**Drawing** (0x5762d0): a cell with explored code 0 shows the cloud
+picture `<n>OBL_BIG` (576x512, tiled every 9 x 8 cells over the map; `n`
+from the mission's optional `N_CLOUD` record); otherwise black (index 0) is
+stippled where `b_FOG<in-sight code>` is set, then the clouds drawn where
+`b_DARK<explored code>` is set.
+
+## Help panel
+
+Viewsys (0x526930): `HVIEW_BKGND` at bar (4, 5); the text in `HELP_FONT`
+(atlas 0, 2 pixels between letters and between lines) from (12, 11), 188
+wide and 445 high, wrapped word by word (a word goes down when it and a
+space would not fit); `VIEW_BUTUP_nn`/`VIEW_BUTDN_nn` at (10, 460) and
+(108, 460), state 02 when there is nothing to scroll; `HVIEW_TASK01` and
+`HVIEW_HELP00` at (3, 513) and (103, 513). The text is the briefing's
+stored lines: for a scenario (game +0xd80 = 1) what follows the blank line
+`@   `; for a custom mission (2) the whole briefing with its closing `@-`
+lines replaced by `@-<objective>` per condition (0x5265e0, strings
+3000-3010). The bar's open tab is drawn in state 01.
+
+## Command buttons
+
+A menu slot is a 16-bit value: the command in its low byte, flags in the
+high one (0x01 enabled, 0x04 an arrow for a page of further commands, 0x20
+a tick for a behaviour switched on, 0x02 a cross). The button (0x4f2a90) is
+drawn as: the rim `CBUT_BK` two pixels below the slot, then the picture a
+pixel right of it (frame 30 when disabled, 0 otherwise, the animation on
+hover; pressed, a pixel down instead of right), the mark (`CBUT_SPEC_00`-
+`05`: red/grey cross, green/grey arrow, green/grey tick), and the caption:
+the command's string (0x4f21b0, e.g. 0x1a2 ` \nMOVE`) in `BUT_FONT` (atlas
+0, atlas 1 grey when disabled), each line centred, lines 9 apart, the block
+(11 per line less 2 between) at the button's bottom. The strings come from
+`ancient.exe`'s string table.
+
+Ships' main page (0x4e6980): move, stop, two spell slots, fire, board,
+ram, behaviour, reload, repair, building, hero/treasure; enabled by a
+capability mask (+0x261, all set but bit 11 for boats and merchants, bit 8
+for the rest; 0x4e6930). Building opens page 2: a settlement (0x16) and
+the forts (0x17-0x19) the player's technology allows; any ship may build
+them. A settlement's building page (0x43c740, page 2) packs what may be
+built in this order: port, the three forts, workshop, shipyard, smithy,
+school, Temple of the Sea, Temple of War.
+
+## Resource counters
+
+The money panel (0x505530) draws each amount as `%7d` centred in a black
+50x20 bitmap at panel (45, 10) for amber (`MONEY_FONT`) and (45, 41) for
+fish (`FISH_FONT`), letters 0 apart, in the game palette. A character a
+font lacks measures as its first glyph (0x547170), so the padding spaces
+are a digit wide. The shown amounts start at 1 and roll towards the real
+ones by 1, 10 or 100 a tick.
 
 ## Menus
 

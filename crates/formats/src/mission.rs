@@ -112,7 +112,7 @@ impl ObjectRecord {
 /// The mission briefing (text `DISCRIPTION`) as paragraphs: after a
 /// 24-byte header and a few marker bytes (high bit set), NUL-separated lines (wrapped for
 /// the original's box), where a line starting with `@` starts a paragraph;
-/// a paragraph of only spaces (`@ `) is a blank line, kept as an empty one.
+/// blank paragraphs (`@ `) are left out.
 pub fn briefing(archive: &Archive) -> Result<Vec<String>> {
     let Some(e) = archive.find("DISCRIPTION", ResourceKind::Text) else {
         return Ok(Vec::new());
@@ -141,15 +141,28 @@ pub fn briefing(archive: &Archive) -> Result<Vec<String>> {
             None => paragraphs.push(text),
         }
     }
-    // Empty paragraphs are the blank lines between.
-    let mut paragraphs: Vec<String> = paragraphs
+    // Blank lines dropped (`briefing_text` keeps the original's layout).
+    Ok(paragraphs
         .into_iter()
         .map(|p| p.trim().to_string())
-        .collect();
-    while paragraphs.last().is_some_and(|p| p.is_empty()) {
-        paragraphs.pop();
-    }
-    Ok(paragraphs)
+        .filter(|p| !p.is_empty())
+        .collect())
+}
+
+/// The briefing's lines as stored: one starting with `@` begins a
+/// paragraph, the others continue the one before.
+pub fn briefing_lines(archive: &Archive) -> Result<Vec<String>> {
+    let Some(e) = archive.find("DISCRIPTION", ResourceKind::Text) else {
+        return Ok(Vec::new());
+    };
+    let data = archive.read_entry(e)?;
+    let body = data.get(24..).unwrap_or_default();
+    let start = body.iter().position(|&b| b < 0x80).unwrap_or(body.len());
+    Ok(body[start..]
+        .split(|&b| b == 0)
+        .map(|l| l.iter().map(|&b| b as char).collect::<String>())
+        .filter(|l| !l.is_empty())
+        .collect())
 }
 
 /// The briefing as the original lays it out (Starttsk.cpp): each `@` line
