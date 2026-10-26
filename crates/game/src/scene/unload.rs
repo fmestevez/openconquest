@@ -20,13 +20,10 @@ const PORTER_EVERY: f32 = 1.2;
 const PORTER_SPEED: f32 = 40.0;
 /// How far below a fishing ship's middle its net hangs.
 const NET_DROP: f32 = 16.0;
-/// Milliseconds per frame of a walkway to amber, a net and the porters
-/// bringing amber aboard: one a game tick (0x4b0590, 0x4ae760); a load
-/// comes aboard each round.
-const PLANK_FRAME_MS: f32 = 20.0;
-/// Milliseconds per frame of the walkway laid down to unload: slower (an
-/// estimate; only shown).
-const WALKWAY_FRAME_MS: f32 = 60.0;
+/// Milliseconds per frame of a walkway, a net and the porters bringing
+/// amber aboard: one a game tick (0x4b0590, 0x4ae760); a load comes aboard
+/// each round.
+const PLANK_FRAME_MS: f32 = crate::clock::TICK_MS as f32;
 const PORTER_FRAME_MS: u64 = 100;
 
 /// What a merchant is shown doing (the ship's activity in Run_Ship.cpp,
@@ -63,6 +60,8 @@ pub struct Plank {
 
 /// A porter walking between a walkway and the building.
 pub struct Porter {
+    /// The ship whose goods it carries.
+    pub ship: u32,
     pub x: f32,
     pub y: f32,
     pub frames: Vec<Vec<Layer>>,
@@ -74,11 +73,7 @@ pub struct Porter {
 impl Plank {
     /// Milliseconds per frame of its animation.
     fn frame_ms(&self) -> f32 {
-        if self.activity == Activity::Unloading {
-            WALKWAY_FRAME_MS
-        } else {
-            PLANK_FRAME_MS
-        }
+        PLANK_FRAME_MS
     }
 
     /// Seconds a round of the work takes (the porters' or the net's
@@ -86,7 +81,7 @@ impl Plank {
     pub fn round_seconds(&self) -> Option<f32> {
         let down = self.age_ms >= self.frames.len() as f32 * self.frame_ms();
         (down && !self.looping.is_empty())
-            .then(|| self.looping.len() as f32 * self.frame_ms() / 1000.0)
+            .then(|| self.looping.len() as f32 * PLANK_FRAME_MS / 1000.0)
     }
 
     /// The walkway's frame, and the looped work over it once it is down.
@@ -224,22 +219,32 @@ impl Scene {
         };
         let planks = std::mem::take(&mut self.planks);
         self.planks = planks.into_iter().filter(|p| working(self, p)).collect();
+        // Ships with goods still aboard.
+        let laden: std::collections::HashSet<u32> = self
+            .objects
+            .iter()
+            .filter(|o| o.ship.as_ref().is_some_and(|s| s.cargo >= 1.0))
+            .map(|o| o.id)
+            .collect();
         let mut new = Vec::new();
         for p in &mut self.planks {
             p.age_ms += dt * 1000.0;
             p.clock += dt;
-            // Porters start once the walkway is down.
+            // Porters start once the walkway is down, while there are
+            // goods to carry.
             if p.activity == Activity::Unloading
                 && p.age_ms >= p.frames.len() as f32 * p.frame_ms()
                 && p.clock >= PORTER_EVERY
+                && laden.contains(&p.ship)
             {
                 p.clock = 0.0;
-                new.push((p.from, p.to));
+                new.push((p.ship, p.from, p.to));
             }
         }
-        for (from, to) in new {
+        for (ship, from, to) in new {
             let frames = porter_frames(data, caches, true, from, to);
             self.porters.push(Porter {
+                ship,
                 x: from.0,
                 y: from.1,
                 frames,
@@ -328,7 +333,7 @@ impl Scene {
 
 /// The picture size of an amber deposit with `left` of `full` (0x48d2f0):
 /// 3 above 70 percent, 2 above 35, else 1 (0, gone, is not shown).
-fn amber_level(left: f32, full: f32) -> usize {
+pub(super) fn amber_level(left: f32, full: f32) -> usize {
     match (left * 100.0 / full) as i32 {
         71.. => 3,
         36.. => 2,

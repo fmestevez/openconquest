@@ -108,9 +108,15 @@ pub struct Interface {
     /// Button marks (`CBUT_SPEC_00`-`05`): red and grey crosses, green and
     /// grey arrows, green and grey ticks.
     button_marks: Vec<Option<Image>>,
+    /// The "default arming" checkbox: its box (`TRIGGER_BKGND`), tick
+    /// (`MARKER`) and caption (string 501).
+    arming_box: Option<Image>,
+    arming_tick: Option<Image>,
     pub panels: Panels,
     /// The animated "pause" sign (`WIN_PAUSE`).
     pause_sign: Vec<Rc<Image>>,
+    /// The green tick where a ship was sent (`TAKE_CMD`, controlm).
+    take_cmd: Vec<Image>,
 }
 
 /// Window-space placement of the interface for one window size.
@@ -214,6 +220,14 @@ impl Interface {
             buttons: RefCell::default(),
             panels: Panels::load(data, theme)?,
             pause_sign: sequence(&format!("{theme}WIN_PAUSE")),
+            take_cmd: (0..4)
+                .filter_map(|i| {
+                    let menus = data.menus.as_ref()?;
+                    data.load_image(menus, &format!("TAKE_CMD{i:02}"), false)
+                        .ok()
+                        .flatten()
+                })
+                .collect(),
             button_frame: data
                 .load_image(&data.controls, "CBUT_BK", false)
                 .ok()
@@ -225,6 +239,11 @@ impl Interface {
                 TextRenderer::load_in(&data.controls, "BUT_FONT", 1, Some(&data.palette))?
                     .with_spacing(0),
             ],
+            arming_box: load("TRIGGER_BKGND", false).ok(),
+            arming_tick: data
+                .load_image(&data.controls, &format!("{theme}MARKER"), false)
+                .ok()
+                .flatten(),
             button_marks: (0..6)
                 .map(|i| {
                     data.load_image(&data.controls, &format!("CBUT_SPEC_{i:02}"), false)
@@ -490,6 +509,48 @@ impl Interface {
         (row * 4 + col).checked_sub(1).map(|i| i as usize)
     }
 
+    /// Where the "default arming" checkbox and its caption are clicked:
+    /// the box at (7, 371) of the bar, 20 pixels, and the caption after it
+    /// (measured on the original).
+    pub fn arming_rect(&self, layout: &Layout) -> (f32, f32, f32, f32) {
+        let s = layout.scale;
+        (layout.bar_x + 7.0 * s, 371.0 * s, 140.0 * s, 20.0 * s)
+    }
+
+    /// Draws the "default arming" checkbox.
+    pub fn draw_arming(
+        &self,
+        frame: &mut Frame,
+        layout: &Layout,
+        text: &TextRenderer,
+        caption: &str,
+        on: bool,
+    ) {
+        let (x, y, _, _) = self.arming_rect(layout);
+        let s = layout.scale;
+        if let Some(b) = &self.arming_box {
+            blit_scaled(frame, b, (0, 0, b.width, b.height), x, y, s);
+        }
+        if let (true, Some(m)) = (on, &self.arming_tick) {
+            blit_scaled(
+                frame,
+                m,
+                (0, 0, m.width, m.height),
+                x + 3.0 * s,
+                y + 3.0 * s,
+                s,
+            );
+        }
+        let ts = (s.round() as u32).max(1);
+        text.draw(
+            frame,
+            (x + 30.0 * s) as i32,
+            (y + 2.0 * s) as i32,
+            ts,
+            caption,
+        );
+    }
+
     pub fn button_at(&self, layout: &Layout, x: f32, y: f32) -> Option<usize> {
         (0..SLOTS).find(|&i| {
             let (bx, by, size) = self.button_rect(layout, i);
@@ -751,6 +812,9 @@ pub struct GameView<'a> {
     pub hover_button: Option<usize>,
     /// The panel's slot cell chosen (its index), shown framed.
     pub chosen_cell: Option<usize>,
+    /// Where the player last sent ships (world point) and how many
+    /// milliseconds ago.
+    pub sent: Option<(f32, f32, u64)>,
     /// Which menu of the selected object is shown.
     pub page: Page,
     /// A building site being chosen: the cell and whether it is allowed.
@@ -923,6 +987,16 @@ impl GameView<'_> {
                 &lut,
             );
         }
+        // The green tick where ships were sent, its four frames played
+        // twice. The timing is an estimate.
+        if let (Some((x, y, age)), Some(ui)) = (self.sent, self.interface) {
+            const TICK_MS: u64 = 120;
+            let n = ui.take_cmd.len() as u64;
+            if n > 0 && age < 2 * n * TICK_MS {
+                let img = &ui.take_cmd[((age / TICK_MS) % n) as usize];
+                crate::render::draw_centred(frame, &screen, self.camera, &lut, img, x, y);
+            }
+        }
         if let Some(b) = self.select_box {
             crate::render::draw_box(frame, &screen, b);
         }
@@ -958,6 +1032,14 @@ impl GameView<'_> {
                 }
                 if self.page != Page::Main {
                     ui.draw_strip(frame, layout, false);
+                }
+                if matches!(self.page, Page::Structures | Page::Ground) && self.scene.is_own(obj) {
+                    let caption = self
+                        .data
+                        .strings
+                        .get(&501)
+                        .map_or("default arming", |s| s.as_str());
+                    ui.draw_arming(frame, layout, self.text, caption, self.scene.default_arming);
                 }
                 let nation = self.scene.human.map_or(1, |h| h.nation);
                 ui.draw_menu(

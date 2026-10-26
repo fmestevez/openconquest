@@ -461,12 +461,18 @@ fn ground_menu(scene: &Scene, obj: &MapObject) -> Menu {
         if id != 0x16 && !scene.permits.building(class) {
             continue;
         }
-        set(
-            &mut menu,
-            slot,
-            command,
-            scene.amber >= economy::building_cost(class),
-        );
+        let cost = if id == 0x16 {
+            economy::building_cost(class)
+        } else {
+            let home = scene
+                .object_index(obj.id)
+                .and_then(|i| scene.home_settlement(i));
+            match scene.fort_price(home, class) {
+                Some(p) => p.amber,
+                None => continue,
+            }
+        };
+        set(&mut menu, slot, command, scene.amber >= cost);
         slot += 1;
     }
     menu
@@ -540,8 +546,7 @@ fn temple_menu(scene: &Scene, temple: Temple, menu: &mut Menu) {
 /// workshop, shipyard, smithy, school, the temples). Esc returns to the main
 /// menu.
 fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
-    // Forts are put up by ships (the ground page), not listed here.
-    const ORDER: [u8; 7] = [0x1a, 0x1c, 0x1b, 0x1d, 0x1e, 0x1f, 0x20];
+    const ORDER: [u8; 10] = [0x1a, 0x17, 0x18, 0x19, 0x1c, 0x1b, 0x1d, 0x1e, 0x1f, 0x20];
     let mut menu: Menu = [None; SLOTS];
     if !scene.is_own(obj) || !matches!(obj.class, ObjectClass::Building(SETTLEMENT | TOWN)) {
         return menu;
@@ -553,11 +558,24 @@ fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
         if !scene.permits.building(class) {
             continue;
         }
+        // Forts only when their weapons can be had (with default arming;
+        // 0x43d430), the stone fort only at a town.
+        let cost = if (0x34..=0x36).contains(&class) {
+            if class == 0x36 && obj.class != ObjectClass::Building(TOWN) {
+                continue;
+            }
+            match scene.fort_price(Some(obj.id), class) {
+                Some(p) => (p.amber, p.fish),
+                None => continue,
+            }
+        } else {
+            (economy::building_cost(class), 0)
+        };
         set(
             &mut menu,
             slot,
             command,
-            scene.amber >= economy::building_cost(class),
+            scene.amber >= cost.0 && scene.fish >= cost.1,
         );
         slot += 1;
     }
@@ -657,7 +675,10 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             checked: false,
             closes: false,
             command,
-            enabled: building.is_none() && scene.can_build_ship(kind).is_ok(),
+            enabled: building.is_none() && scene.can_build_ship(kind).is_ok() && {
+                let p = scene.ship_price(obj.id, kind);
+                scene.amber >= p.amber && scene.fish >= p.fish
+            },
             progress: None,
         };
         if let Some(p) = building.filter(|p| p.ship == kind) {

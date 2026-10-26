@@ -473,6 +473,8 @@ pub struct App {
     started: Instant,
     last_frame: Instant,
     time_ms: u64,
+    /// Where ships were last sent and when (`time_ms`): the green tick.
+    sent: Option<(f32, f32, u64)>,
     center_pending: bool,
 }
 
@@ -603,6 +605,7 @@ impl App {
             started: now,
             last_frame: now,
             time_ms: 0,
+            sent: None,
             center_pending: true,
         };
         app.scene.fog = app.fog;
@@ -652,6 +655,9 @@ impl App {
             }),
             status,
             time_ms: self.time_ms,
+            sent: self
+                .sent
+                .map(|(x, y, at)| (x, y, self.time_ms.saturating_sub(at))),
             hover_button: self.cursor.and_then(|c| self.button_at(c)),
             chosen_cell: self
                 .chosen_cell
@@ -2188,6 +2194,24 @@ impl App {
         true
     }
 
+    /// Whether a window position is on the Building page's "default
+    /// arming" checkbox.
+    fn on_arming_box(&self, pos: PhysicalPosition<f64>) -> bool {
+        if !self.show_interface
+            || Panels::covers_bar(self.tab)
+            || !matches!(self.page, Page::Structures | Page::Ground)
+            || self.selection().is_empty()
+        {
+            return false;
+        }
+        let layout = self
+            .interface
+            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let (x, y, w, h) = self.interface.arming_rect(&layout);
+        let (px, py) = (pos.x as f32, pos.y as f32);
+        px >= x && py >= y && px < x + w && py < y + h
+    }
+
     /// The command slot under a window position, if the interface is shown.
     fn button_at(&self, pos: PhysicalPosition<f64>) -> Option<usize> {
         if !self.show_interface || Panels::covers_bar(self.tab) {
@@ -2755,6 +2779,13 @@ impl App {
         }
         if let Some(slot) = self.button_at(pos) {
             self.press_button(slot);
+            return;
+        }
+        if self.on_arming_box(pos) {
+            let on = !self.scene.default_arming;
+            if let Err(e) = self.issue(Order::DefaultArming { on }) {
+                self.say(e);
+            }
             return;
         }
         if self.pending == Some(Command::MOVE) {
@@ -3372,6 +3403,8 @@ impl App {
         };
         if self.issue(order).is_err() {
             self.say("The ship cannot sail there.");
+        } else if k == 0 {
+            self.sent = Some((x - dx, y - dy, self.time_ms));
         }
     }
 

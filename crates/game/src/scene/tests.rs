@@ -2636,8 +2636,19 @@ fn creatures_leave_their_lairs() {
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss006").unwrap();
     scene.brain = None;
-    for _ in 0..50 * 40 {
+    let cyclops_out = |scene: &Scene| {
+        scene.walkers.iter().any(|w| {
+            scene
+                .object_index(w.id)
+                .is_some_and(|i| scene.objects[i].record.class_id == 0x1f4)
+        })
+    };
+    // Which come out first is down to chance: wait for a cyclops.
+    for _ in 0..50 * 180 {
         scene.update(0.02, &data, &mut caches);
+        if scene.walkers.len() >= 3 && cyclops_out(&scene) {
+            break;
+        }
     }
     assert!(scene.walkers.len() >= 3, "{} out", scene.walkers.len());
     let t = TILE_SIZE as f32;
@@ -2646,18 +2657,19 @@ fn creatures_leave_their_lairs() {
         assert!(!scene.nav.is_water((o.x / t) as i32, (o.y / t) as i32));
     }
     // A ship beside a cyclops is stoned.
-    let cyclops = scene
+    // A cyclops with water within three cells.
+    let (wx, wy) = scene
         .walkers
         .iter()
         .map(|w| &scene.objects[scene.object_index(w.id).unwrap()])
-        .find(|o| o.record.class_id == 0x1f4)
-        .map(|o| (o.x, o.y))
-        .unwrap();
-    let (cx, cy) = ((cyclops.0 / t) as i32, (cyclops.1 / t) as i32);
-    let (wx, wy) = (-3..=3)
-        .flat_map(|dy| (-3..=3).map(move |dx| (cx + dx, cy + dy)))
-        .find(|&(x, y)| scene.nav.is_water(x, y))
-        .unwrap();
+        .filter(|o| o.record.class_id == 0x1f4)
+        .find_map(|o| {
+            let (cx, cy) = ((o.x / t) as i32, (o.y / t) as i32);
+            (-3..=3)
+                .flat_map(|dy| (-3..=3).map(move |dx| (cx + dx, cy + dy)))
+                .find(|&(x, y)| scene.nav.is_water(x, y))
+        })
+        .expect("no cyclops near the sea");
     let ship = scene
         .objects
         .iter()
@@ -3384,12 +3396,61 @@ fn ships_turn_then_sail_the_grid() {
             turned = true;
             assert_eq!((o.x, o.y), last, "moved while turning");
         }
-        let (dx, dy) = (o.x - last.0, o.y - last.1);
-        if dx.abs() > 0.01 && dy.abs() > 0.01 {
-            assert!((dx.abs() - dy.abs()).abs() < 0.05, "odd angle ({dx}, {dy})");
-        }
+        // On a straight or diagonal line through its nearest cell centre.
+        let c = |v: f32| (v / t).floor() * t + t / 2.0;
+        let (dx, dy) = ((o.x - c(o.x)).abs(), (o.y - c(o.y)).abs());
+        assert!(
+            dx < 0.05 || dy < 0.05 || (dx - dy).abs() < 0.05,
+            "off the grid at ({}, {})",
+            o.x,
+            o.y
+        );
         last = (o.x, o.y);
     }
     assert!(turned, "never turned");
     assert!(last != (x0, y0), "never moved");
+}
+
+/// Shoals keep moving while fished, and the fishing ship follows its shoal
+/// and goes on fishing (needs `OPENAC_DATA`).
+#[test]
+fn fishing_ships_follow_their_shoal() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| {
+            scene.is_own(o)
+                && o.ship
+                    .as_ref()
+                    .is_some_and(|s| crate::objects::cargo_capacity(s.kind) > 0.0)
+        })
+        .unwrap()
+        .id;
+    let shoal = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::FishZone)
+        .unwrap()
+        .id;
+    scene.order_gather(ship, shoal).unwrap();
+    let mut spots = std::collections::HashSet::new();
+    let mut caught = 0.0f32;
+    for _ in 0..50 * 90 {
+        scene.update(0.02, &data, &mut caches);
+        let o = &scene.objects[scene.object_index(shoal).unwrap()];
+        spots.insert((o.x as i32, o.y as i32));
+        let s = scene.objects[scene.object_index(ship).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap();
+        caught = caught.max(s.cargo);
+    }
+    assert!(spots.len() > 1, "the shoal never moved");
+    assert!(caught > 0.0, "nothing caught");
 }

@@ -112,11 +112,11 @@ pub const CREW_NAMES: [&str; 3] = ["bowmen", "javelin men", "swordsmen"];
 pub const CREW_COST: [(u32, u32); 3] = [(30, 200), (30, 200), (30, 300)];
 
 /// Seconds to train a squad of marines or build a weapon `item`: game
-/// ticks of 20 ms by item group, 70 marines, 80 medium and 95 heavy
+/// ticks by item group, 70 marines, 80 medium and 95 heavy
 /// weapons (0x5971a0; the settlement 0x43c740 and the workshop 0x4369c0
 /// show progress as elapsed x 100 / (ticks x queued)).
 pub fn train_seconds(item: u8) -> f32 {
-    [70.0, 80.0, 95.0][(item / 3).min(2) as usize] * 0.02
+    crate::clock::ticks([70, 80, 95][(item / 3).min(2) as usize])
 }
 
 /// Room aboard a ship type for marines and weapons, from the manual's
@@ -332,6 +332,76 @@ pub const DEFAULT_WEAPONS: [&[u8]; 12] = [
     &[],
     &[],
 ];
+
+/// What a ship type takes instead of each of its `DEFAULT_WEAPONS` when
+/// that one is not to be had (0x5962f8), and more of these, from the
+/// last, until it is as strong as `MIN_POWER` (0x597ae4).
+pub const FALLBACK_WEAPONS: [&[u8]; 12] = [
+    &[],
+    &[],
+    &[0, 2, 4, 5],
+    &[0, 1, 4, 6, 7],
+    &[1, 1, 2, 2],
+    &[1, 4, 4],
+    &[4, 4],
+    &[3, 0],
+    &[],
+    &[1],
+    &[],
+    &[],
+];
+pub const MIN_POWER: [u32; 12] = [0, 0, 5, 7, 4, 3, 2, 2, 0, 1, 1, 3];
+
+/// The strength an item adds (0x59729c, by group): marines and light
+/// weapons 1, heavy weapons 2.
+pub fn item_power(item: u8) -> u32 {
+    [1, 1, 2][(item / 3).min(2) as usize]
+}
+
+/// Armour level (0-2) a ship type is built with, and the one it falls
+/// back to (0x596268, 0x596238).
+pub const DEFAULT_ARMOUR: [(u8, u8); 12] = [
+    (0, 0),
+    (0, 0),
+    (2, 0),
+    (2, 1),
+    (1, 0),
+    (1, 0),
+    (0, 0),
+    (1, 0),
+    (0, 0),
+    (1, 0),
+    (0, 0),
+    (0, 0),
+];
+/// Ram level (0-2) a ship type is built with, and its fallback (0x5962c8,
+/// 0x596298, which count from 3).
+pub const DEFAULT_RAM: [(u8, u8); 12] = [
+    (0, 0),
+    (0, 0),
+    (2, 0),
+    (0, 0),
+    (0, 0),
+    (2, 1),
+    (1, 0),
+    (0, 0),
+    (0, 0),
+    (0, 0),
+    (0, 0),
+    (0, 0),
+];
+
+/// Weapons a fort (class 0x34-0x36) is built with and their fallbacks
+/// (0x5966b8, 0x596730: 40 bytes a fort). A fort can only be put up when
+/// each fallback is in stock or may be made.
+pub fn fort_arming(class: u32) -> (&'static [u8], &'static [u8]) {
+    match class {
+        0x34 => (&[4, 5, 6], &[4, 4, 4, 4]),
+        0x35 => (&[0, 4, 4, 6, 7], &[0, 0, 4, 4, 4, 4, 4]),
+        0x36 => (&[0, 1, 4, 5, 6, 7, 8], &[0, 0, 4, 4, 4, 4, 4, 6, 6]),
+        _ => (&[], &[]),
+    }
+}
 
 /// Weapons of a ship from its mission record: item slots 3-8 (fields
 /// 21-26) hold how many of each it carries (fields 29.. their condition,
@@ -608,7 +678,7 @@ impl Upgrade {
         costs[level.min(1) as usize]
     }
 
-    /// Seconds to study the level after `from`: game ticks of 20 ms. The
+    /// Seconds to study the level after `from`: game ticks. The
     /// sage school (0x432210): arming 0x5971b8[+0xa3] (450, the original's
     /// arming starting at 1), ram, armour and rigging 600 then 700, a
     /// unique ship 400. The workshop (0x436ee0): the second half of each
@@ -625,7 +695,7 @@ impl Upgrade {
             Upgrade::Reach(n) => [150, 285, 0, 270, 360, 0, 240, 420, 0][g(n)],
             Upgrade::Arms(n) => [100, 125, 0, 100, 170, 0, 170, 150, 0][g(n)],
         };
-        ticks as f32 * 0.02
+        crate::clock::ticks(ticks)
     }
 
     pub fn name(self) -> &'static str {

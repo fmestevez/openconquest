@@ -4,7 +4,7 @@
 //! its builder fleet makes when a fleet wants more), each fleet running a
 //! small program of states: wait, sail somewhere, gather in a zone, patrol
 //! a round of points, attack a zone, build a ship, or a step of the
-//! mission's own. Timings are game ticks (20 ms) as in the original's
+//! mission's own. Timings are game ticks (`clock::TICK`) as in the original's
 //! `missCOM` primitives (0x47a3b0 and the others; see docs/FORMATS.md).
 
 use openac_formats::map::TILE_SIZE;
@@ -654,6 +654,7 @@ impl Scene {
             ship: kind,
             elapsed: 0.0,
             total: crate::economy::SHIP_BUILD_SECONDS,
+            arming: None,
         });
         let brain = self.brain.as_mut().unwrap();
         brain.requests.remove(r);

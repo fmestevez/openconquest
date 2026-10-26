@@ -59,10 +59,15 @@ pub fn is_campaign(mission: &str) -> bool {
         && mission[4..].bytes().all(|b| b.is_ascii_digit())
 }
 
-/// Seconds a shoal takes to surface and spread before it may move on (its
-/// states 1-3; measured on the original: a shoal stays two to four
-/// seconds).
-const SHOAL_SURFACING: f32 = 1.5;
+/// A shoal's clock (Fish.cpp 0x48dd80): a frame of its animation each
+/// game tick (timed on the original: shoals up 4-8 seconds, gone a few).
+const SHOAL_UNIT: f32 = crate::clock::TICK;
+/// It rises (`FISH_<size>1`, 33 frames), lives 0-3 passes of `FISH_<size>2`
+/// (60 frames), dives (`FISH_<size>3`, 33 frames) and stays below 25-75
+/// units before it comes up elsewhere in its zone.
+const SHOAL_SURFACING: f32 = 33.0 * SHOAL_UNIT;
+const SHOAL_LIVING: f32 = 60.0 * SHOAL_UNIT;
+const SHOAL_DIVING: f32 = 33.0 * SHOAL_UNIT;
 
 /// An animation's frames, each a stack of layers.
 pub type Frames = Vec<Vec<objects::Layer>>;
@@ -71,7 +76,7 @@ pub type Frames = Vec<Vec<objects::Layer>>;
 pub const MINIMAP_CELLS: i32 = 24;
 
 /// Seconds between steps of the resource counters (a game tick).
-const COUNTER_TICK: f32 = 0.02;
+const COUNTER_TICK: f32 = crate::clock::TICK;
 
 pub const OBJECTIVES: [(&str, &[u32]); 11] = [
     ("Kill all enemies", &[]),
@@ -111,9 +116,16 @@ pub struct Production {
     pub argo: bool,
     pub elapsed: f32,
     pub total: f32,
+    /// What it is armed with when launched; `None` for the mission's
+    /// standard load (computer players).
+    #[serde(default)]
+    pub arming: Option<Arming>,
 }
 
 pub struct Scene {
+    /// "Default arming" (the Building page's checkbox, 0x1fdb): new ships
+    /// and forts come armed, the weapons paid for or taken from stock.
+    pub default_arming: bool,
     pub mission: String,
     pub grid: MapGrid,
     pub terrain: Terrain,
@@ -162,15 +174,19 @@ pub struct Scene {
     /// (FishClassTy, Fish.cpp 0x48dd80).
     pub shoals_gone: std::collections::BTreeMap<u32, f32>,
     shoals_shown: std::collections::BTreeMap<u32, f32>,
+    /// Seconds since a shoal surfaced (it rises with `FISH_11`).
+    shoals_up: std::collections::BTreeMap<u32, f32>,
+    /// Shoals of each size (1-3) surfacing, living and diving:
+    /// `FISH_<size><1-3>`.
+    pub fish_art: std::rc::Rc<[[Frames; 3]; 3]>,
     /// Seagulls (only shown) and their pictures: `GULLSPR`, `GULLSHD_SPR`.
     pub gulls: Vec<gulls::Gull>,
     gull_rng: Rng,
     pub gull_art: std::rc::Rc<(Frames, Frames)>,
-    /// The move marker (`_WPMOVE`) and waypoint digits (`_WPNUM0`-`9`).
-    pub waypoint_art: std::rc::Rc<(
-        Option<crate::assets::Image>,
-        Vec<Option<crate::assets::Image>>,
-    )>,
+    /// Ships' wakes (only shown) and their sprites: `TRAKS00`, `TRAKS14`.
+    pub droplets: Vec<wake::Droplet>,
+    wake_clock: f32,
+    pub wake_art: std::rc::Rc<(Frames, Frames)>,
     /// Seconds until the computer players next decide.
     ai_timer: f32,
     /// Seconds since the mission started.
@@ -258,6 +274,7 @@ mod orders;
 mod repair;
 mod sight;
 mod treasure;
+mod wake;
 pub use sight::{FogArt, Seen};
 mod flyers;
 mod order;
@@ -277,6 +294,7 @@ pub use walkers::{walker_sequence, Walker};
 #[cfg(test)]
 mod tests;
 mod trade;
+pub use trade::Arming;
 
 impl Scene {
     pub fn load(data: &GameData, caches: &mut Caches, mission: &str) -> Result<Self> {
@@ -364,19 +382,22 @@ impl Scene {
             rng: Rng(0x1234_5678),
             shoals_gone: Default::default(),
             shoals_shown: Default::default(),
+            shoals_up: Default::default(),
+            fish_art: std::rc::Rc::new([1, 2, 3].map(|size| {
+                [1, 2, 3].map(|state| {
+                    objects::sequence_frames(data, caches, &format!("FISH_{size}{state}"))
+                        .unwrap_or_default()
+                })
+            })),
+            default_arming: true,
             gulls,
             gull_rng: Rng(0x6011_5eed),
-            waypoint_art: std::rc::Rc::new({
-                let load = |name: &str| {
-                    data.menus
-                        .as_ref()
-                        .and_then(|a| data.load_image(a, name, false).ok().flatten())
-                };
-                (
-                    load("_WPMOVE"),
-                    (0..10).map(|d| load(&format!("_WPNUM{d}"))).collect(),
-                )
-            }),
+            droplets: Vec::new(),
+            wake_clock: 0.0,
+            wake_art: std::rc::Rc::new((
+                objects::sequence_frames(data, caches, "TRAKS00").unwrap_or_default(),
+                objects::sequence_frames(data, caches, "TRAKS14").unwrap_or_default(),
+            )),
             gull_art: std::rc::Rc::new((
                 objects::sequence_frames(data, caches, "GULLSPR").unwrap_or_default(),
                 objects::sequence_frames(data, caches, "GULLSHD_SPR").unwrap_or_default(),
@@ -540,6 +561,8 @@ impl Scene {
             rng: self.rng.clone(),
             shoals_gone: self.shoals_gone.clone(),
             shoals_shown: self.shoals_shown.clone(),
+            shoals_up: self.shoals_up.clone(),
+            default_arming: self.default_arming,
             research_levels: self.levels.iter().map(|(k, v)| (*k, *v)).collect(),
             sight: self.sight.iter().map(|&s| s as u8).collect(),
             research: self.research.clone(),
@@ -608,6 +631,8 @@ impl Scene {
         scene.rng = save.rng.clone();
         scene.shoals_gone = save.shoals_gone.clone();
         scene.shoals_shown = save.shoals_shown.clone();
+        scene.shoals_up = save.shoals_up.clone();
+        scene.default_arming = save.default_arming;
         scene.levels = save.research_levels.iter().copied().collect();
         if save.sight.len() == scene.sight.len() {
             for (cell, &v) in scene.sight.iter_mut().zip(&save.sight) {
@@ -722,7 +747,6 @@ impl Scene {
         ship.path = path;
         ship.task = None;
         ship.zone = None;
-        ship.marks = vec![(x, y)];
         true
     }
 
@@ -746,7 +770,6 @@ impl Scene {
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path.extend(leg);
         ship.task = None;
-        ship.marks.push((x, y));
         true
     }
 
@@ -897,23 +920,15 @@ impl Scene {
     /// and come up a moment later on another free water cell of their zone
     /// (Fish.cpp 0x48dd80, states 0, 4 and 5). One being fished stays.
     fn move_shoals(&mut self, dt: f32) {
-        const TICK: f32 = 0.02;
         let t = TILE_SIZE as f32;
-        let fished: Vec<u32> = self
-            .objects
-            .iter()
-            .filter_map(|o| match o.ship.as_ref()?.task {
-                Some(Task::Gather { deposit, .. }) => Some(deposit),
-                _ => None,
-            })
-            .collect();
+        // Shoals move on whether fished or not; their ships follow.
         let zones: Vec<usize> = (0..self.objects.len())
             .filter(|&i| self.objects[i].class == ObjectClass::FishZone)
             .collect();
         for i in zones {
             let id = self.objects[i].id;
-            if fished.contains(&id) {
-                continue;
+            if let Some(up) = self.shoals_up.get_mut(&id) {
+                *up += dt;
             }
             if let Some(left) = self.shoals_gone.get_mut(&id) {
                 *left -= dt;
@@ -934,18 +949,69 @@ impl Scene {
                         break;
                     }
                 }
-                let stay = (self.rng.next() % 51 + 25) as f32 * TICK;
-                self.shoals_shown.insert(id, stay + SHOAL_SURFACING);
+                let stay = (self.rng.next() & 3) as f32 * SHOAL_LIVING;
+                self.shoals_shown
+                    .insert(id, SHOAL_SURFACING + stay + SHOAL_DIVING);
+                self.shoals_up.insert(id, 0.0);
                 continue;
             }
-            let left = self.shoals_shown.entry(id).or_insert(0.0);
+            // Up when the mission starts: it stays a while, then dives.
+            if !self.shoals_shown.contains_key(&id) {
+                let stay = (self.rng.next() & 3) as f32 * SHOAL_LIVING;
+                self.shoals_shown.insert(id, stay + SHOAL_DIVING);
+            }
+            let left = self.shoals_shown.get_mut(&id).unwrap();
             *left -= dt;
             if *left <= 0.0 {
                 self.shoals_shown.remove(&id);
-                let away = (self.rng.next() % 51 + 25) as f32 * TICK;
+                self.shoals_up.remove(&id);
+                let away = (self.rng.next() % 51 + 25) as f32 * SHOAL_UNIT;
                 self.shoals_gone.insert(id, away);
             }
         }
+    }
+
+    /// What object `obj` shows at `time_ms`: a fish shoal rising, living
+    /// or diving as it is; anything else its own animation.
+    pub fn frame_of<'a>(
+        &'a self,
+        obj: &'a objects::MapObject,
+        time_ms: u64,
+    ) -> &'a [objects::Layer] {
+        if obj.class == ObjectClass::FishZone {
+            // Its size by how much fish is left (0x48d2f0, as amber).
+            let size = obj
+                .deposit
+                .and_then(|d| d.remaining)
+                .map_or(3, |left| unload::amber_level(left, 1000.0))
+                .clamp(1, 3);
+            let [rise, live, dive] = &self.fish_art[size - 1];
+            let pick = |frames: &'a Frames, done: f32| {
+                let n = frames.len();
+                (n > 0).then(|| {
+                    frames[((done.clamp(0.0, 1.0) * n as f32) as usize).min(n - 1)].as_slice()
+                })
+            };
+            let up = self.shoals_up.get(&obj.id).copied();
+            let left = self.shoals_shown.get(&obj.id).copied();
+            if let Some(f) = up
+                .filter(|&u| u < SHOAL_SURFACING)
+                .and_then(|u| pick(rise, u / SHOAL_SURFACING))
+            {
+                return f;
+            }
+            if let Some(f) = left
+                .filter(|&l| l < SHOAL_DIVING)
+                .and_then(|l| pick(dive, 1.0 - l / SHOAL_DIVING))
+            {
+                return f;
+            }
+            if !live.is_empty() {
+                let unit = (SHOAL_UNIT * 1000.0) as u64;
+                return &live[(time_ms / unit) as usize % live.len()];
+            }
+        }
+        obj.frame_at(time_ms)
     }
 
     /// Whether object `id` is a fish shoal gone below.
@@ -976,6 +1042,7 @@ impl Scene {
     pub fn update(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         self.move_shoals(dt);
         self.move_gulls(dt);
+        self.run_wakes(dt);
         self.shown_clock += dt;
         while self.shown_clock >= COUNTER_TICK {
             self.shown_clock -= COUNTER_TICK;
@@ -1003,7 +1070,7 @@ impl Scene {
             .partition(|p| p.elapsed >= p.total);
         self.productions = running;
         for p in done {
-            match self.launch_ship(p.site, p.ship, data, caches) {
+            match self.launch_ship(p.site, p.ship, p.arming.as_ref(), data, caches) {
                 Ok(Some(id)) => {
                     if p.argo {
                         self.christen_argo(id);
@@ -1033,8 +1100,8 @@ impl Scene {
         }
         // The brain runs every game tick (scaled to this update's length).
         self.brain_clock += dt;
-        while self.brain_clock >= 0.02 {
-            self.brain_clock -= 0.02;
+        while self.brain_clock >= crate::clock::TICK {
+            self.brain_clock -= crate::clock::TICK;
             self.run_brain();
         }
         self.ai_timer -= dt;
@@ -1136,6 +1203,18 @@ impl Scene {
                 continue;
             }
             let mut budget = ship.speed * wind * rigging * feather * dt;
+            // Closing in on a shore or pier, the last short way, it goes
+            // slowly.
+            if ship.path.len() == 1 {
+                if let Some(&(tx, ty)) = ship.path.front() {
+                    // Routes run between cell centres; a point off them is
+                    // a shore or pier closed in on.
+                    let centre = |v: f32| (v.rem_euclid(t) - t / 2.0).abs() < 0.5;
+                    if (tx - obj.x).hypot(ty - obj.y) < 24.0 && !(centre(tx) && centre(ty)) {
+                        budget *= CLOSING_IN;
+                    }
+                }
+            }
             while budget > 0.0 {
                 let Some(&(tx, ty)) = ship.path.front() else {
                     break;
@@ -1162,11 +1241,18 @@ impl Scene {
                     budget -= dist;
                     ship.path.pop_front();
                     moved = true;
-                    // A new course: turn to it first.
+                    // A new course: under way, a ship bears off 45 degrees at
+                    // once; more, it stops and turns to it first (0x4a3560).
                     if let Some(&(nx, ny)) = ship.path.front() {
                         let (ex, ey) = (nx - obj.x, ny - obj.y);
-                        if ex.hypot(ey) > 0.5 && heading_towards(ex, ey) != ship.heading {
-                            break;
+                        let next = heading_towards(ex, ey);
+                        if ex.hypot(ey) > 0.5 && next != ship.heading {
+                            let steps = (next as i32 - ship.heading as i32).rem_euclid(8);
+                            if steps == 1 || steps == 7 {
+                                ship.heading = next;
+                            } else {
+                                break;
+                            }
                         }
                     }
                 } else {
@@ -1175,14 +1261,6 @@ impl Scene {
                     budget = 0.0;
                 }
                 moved = true;
-            }
-            // Marks the ship has reached go.
-            while let Some(&(mx, my)) = ship.marks.first() {
-                if ship.path.is_empty() || (obj.x - mx).hypot(obj.y - my) < 0.75 * t {
-                    ship.marks.remove(0);
-                } else {
-                    break;
-                }
             }
         }
         self.go_round(held);
@@ -1228,8 +1306,13 @@ impl Scene {
     }
 }
 
-/// Seconds a ship takes to turn its hull one of 24 rotations. An estimate.
-const TURN_STEP_SECONDS: f32 = 0.06;
+/// How much slower a ship goes closing in on a shore or pier. An
+/// estimate.
+const CLOSING_IN: f32 = 0.2;
+
+/// Seconds a ship takes to turn its hull one of 24 rotations: a frame of
+/// its picture (0x4a3320).
+const TURN_STEP_SECONDS: f32 = objects::SHIP_FRAME_MS as f32 / 1000.0;
 
 /// Turns a ship at `(x, y)` towards its next waypoint, a rotation at a
 /// time; true once it lies on that course.

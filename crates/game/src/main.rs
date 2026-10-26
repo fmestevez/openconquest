@@ -3,6 +3,7 @@
 mod app;
 mod assets;
 mod audio;
+mod clock;
 mod combat;
 mod commands;
 mod cursor;
@@ -145,6 +146,10 @@ struct Args {
     /// the focus to gather the nearest amber (or fish).
     #[arg(long, hide = true, value_name = "amber|fish")]
     gather: Option<String>,
+    /// Debugging: before simulating, send the player's ship nearest the
+    /// focus to this cell.
+    #[arg(long, hide = true, value_parser = parse_size, value_name = "X,Y")]
+    sail: Option<(u32, u32)>,
     /// Centre the screenshot where the mission's view starts.
     #[arg(long, hide = true)]
     at_start: bool,
@@ -382,6 +387,25 @@ fn screenshot(
         skirmish(&mut scene, args.focus)
     } else if let Some(what) = &args.gather {
         gather(&mut scene, args.focus, what)
+    } else if let Some((x, y)) = args.sail {
+        let (fx, fy) = args.focus.map_or((0.0, 0.0), |(x, y)| {
+            ((x * 64 + 32) as f32, (y * 64 + 32) as f32)
+        });
+        let ship = scene
+            .objects
+            .iter()
+            .filter(|o| o.ship.is_some() && scene.is_own(o))
+            .min_by(|a, b| {
+                (a.x - fx)
+                    .hypot(a.y - fy)
+                    .total_cmp(&(b.x - fx).hypot(b.y - fy))
+            })
+            .map(|o| o.id);
+        if let Some(id) = ship {
+            let ok = scene.order_move(id, (x * 64 + 32) as f32, (y * 64 + 32) as f32);
+            eprintln!("sail: ship {id} to ({x},{y}): {ok}");
+        }
+        ship
     } else {
         None
     };
@@ -414,6 +438,7 @@ fn screenshot(
         time_ms,
         hover_button: args.hover_button,
         chosen_cell: None,
+        sent: None,
         page: match args.page.as_deref() {
             Some("behaviour") => commands::Page::Behaviour,
             Some("research") => commands::Page::Research,

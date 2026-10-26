@@ -16,13 +16,13 @@ const SHIP_REQUIRES: [u32; 12] = [0, 2, 96, 32, 96, 2, 32, 32, 34, 34, 34, 98];
 /// the ship record is created with message 0x1488); orders waiting for a
 /// berth go out every 25 ticks (0x416f90). Here a yard turns out one ship
 /// per 25 ticks.
-pub const SHIP_BUILD_SECONDS: f32 = 0.5;
+pub const SHIP_BUILD_SECONDS: f32 = 25.0 * crate::clock::TICK;
 
 /// Seconds to put up a building or upgrade one: its construction picture
 /// plays once, the first entry of the class's cycle table (+0xc0; 200
-/// ticks of 20 ms for every player building), and progress is elapsed x
-/// 100 / that cycle (0x416f90 for the dock).
-pub const BUILDING_SECONDS: f32 = 4.0;
+/// ticks for every player building), and progress is elapsed x 100 / that
+/// cycle (0x416f90 for the dock).
+pub const BUILDING_SECONDS: f32 = 200.0 * crate::clock::TICK;
 
 pub const SETTLEMENT: u32 = 0x32;
 pub const TOWN: u32 = 0x33;

@@ -807,11 +807,38 @@ ships berth.
 A fishing zone (record: x, y, w, h) keeps a shoal on one of its cells
 (Fish.cpp 0x48dd80): it stays 25-75 ticks after surfacing, dives, waits as
 long, and comes up on a random free water cell of the zone (a hundred
-tries); one being fished spreads instead. Seagulls (Gull.cpp 0x41c700): one
+tries), fished or not, its ship following. Its states run on the game
+time `[game+0xde]` (about 100 ms a unit, timed on the original), a frame a
+unit: it rises (`FISH_<size>1`, 33 frames), lives 0-3 passes of
+`FISH_<size>2` (60), dives (`FISH_<size>3`, 33) and stays below 25-75
+units; size 1-3 as amber's (0x48d2f0). Seagulls (Gull.cpp 0x41c700): one
 for every 225 cells and one more, at most 25; each waits 375-750 ticks,
 then flies a diagonal (1, 3, 5, 7) from the opposite edge, 2 pixels a step
 every other tick, `GULLSPR` frames heading x 10 + step, its shadow
 `GULLSHD_SPR` 120 pixels below drawn through the shadow table.
+
+## Default arming
+
+The Building page's checkbox (string 501, `TRIGGER_BKGND` with `MARKER`,
+message 0x1fdb toggling `[game+0x3295]`). While on, a new ship (0x43e5c0)
+or fort (0x43e990) comes armed: each item of its list (ships 0x5964d8,
+forts 0x5966b8) is taken from the nearest settlement's stock if it holds
+one, else bought (amber 30/50/70 by group, fish 200/200/300 for marines) if
+it may be made (permitted, with a workshop; swordsmen a smithy), else its
+fallback (0x5962f8, 0x596730) taken or bought; ships then add fallbacks from
+the last until their strength (1, 1, 2 by group, 0x59729c) reaches the
+type's minimum (0x597ae4). Armour (0x596268, fallback 0x596238) costs 30/60
+and a ram (0x5962c8, 0x596298, counted from 3) 25/50. A fort is offered only
+if every fallback item can be had (0x43d430), the stone fort only at a town.
+
+## Wakes and the move tick
+
+A ship under way faster than its type's threshold (0x5bb1f4) throws off two
+droplets a tick (0x4a3f40) from its stern (0x5bb540, per type and heading,
+from the top-left of its `SHIP_` composite frame, 56-80 pixels), spread apart by 0x5bb840 plus or minus a little,
+drifting outwards (`TRAKS00` for boats and merchants, `TRAKS14` else,
+0x5bb224). Where the player sends ships a green tick (`TAKE_CMD`, controlm)
+plays.
 
 ## Resource counters
 
@@ -836,7 +863,16 @@ fonts `S_FNT_<size><style>` (sizes B, L, M, S; style S plain dark, H gold).
 
 Times count the game clock (+0xde of the game object, one tick per
 +0x34 ms: the second u32 of the speed's 24-byte row at 0x5bed7c, 13 17 20
-33 40 50 for speeds 1-6; 20 at the default speed 3).
+33 40 40 40 for speeds 1-7). A new game starts at speed 5 (0x501710), 40
+ms a tick; measured on the original under Wine, 470 ticks in 20.3 s. The
+speed is saved with a game (`SPEED_GAME`).
+
+- A picture advances a frame once more than its frame delay (+0x7d) of
+  ticks has passed since the last (+0x81): ships 2 (a frame each 3 ticks,
+  under way, turning and rocking); walkways, nets and porters 0 (a frame a
+  tick); gulls 1.
+- A ship turns a rotation of 24 a frame (0x4a3320); under way it bears off
+  45 degrees at once, more and it stops to turn (0x4a3560).
 
 - Construction: a building's construction picture plays once over the
   first entry of its class's cycle table (+0xc0, set by each constructor:

@@ -3,8 +3,8 @@
 
 use super::*;
 
-/// Game ticks a step: a gull moves every other tick.
-const STEP_SECONDS: f32 = 0.04;
+/// Seconds a step: a gull moves every other tick.
+const STEP_SECONDS: f32 = 2.0 * crate::clock::TICK;
 /// How far below a gull its shadow falls.
 const SHADOW_DROP: f32 = 120.0;
 
@@ -103,7 +103,7 @@ impl Scene {
     }
 }
 
-/// 50 to 100 times 7.5 ticks of 20 ms.
+/// 50 to 100 times 7.5 ticks.
 fn gull_wait(rng: &mut Rng) -> f32 {
-    ((rng.next() % 51 + 50) * 750 / 100) as f32 * 0.02
+    crate::clock::ticks((rng.next() % 51 + 50) * 750 / 100)
 }

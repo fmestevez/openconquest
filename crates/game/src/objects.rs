@@ -26,9 +26,7 @@ use openac_formats::{
 
 use crate::assets::{GameData, Image, ImageCache, Source};
 
-/// Length of a game tick at the default game speed (speed table at
-/// 0x5bed7c, row 3).
-const TICK_MS: u64 = 20;
+use crate::clock::TICK_MS;
 /// Frame period for objects whose timing has not been recovered yet.
 const DEFAULT_FRAME_MS: u64 = 100;
 
@@ -246,10 +244,6 @@ pub struct Ship {
     pub rotation: Option<u8>,
     #[serde(default)]
     pub turn_clock: f32,
-    /// Where the player sent it (a move and its waypoints), marked on the
-    /// map until it gets there.
-    #[serde(default)]
-    pub marks: Vec<(f32, f32)>,
     /// Seconds it has waited for another ship to clear the cell ahead.
     #[serde(default)]
     pub blocked: f32,
@@ -377,8 +371,8 @@ pub struct Deposit {
 }
 
 /// Seconds an exhausted amber deposit lies empty before it grows back: 100
-/// ticks of its state machine (0x48a430, state 3) of 20 ms.
-pub const REGROW_SECONDS: f32 = 2.0;
+/// ticks of its state machine (0x48a430, state 3).
+pub const REGROW_SECONDS: f32 = 100.0 * crate::clock::TICK;
 
 /// A ship's standing order.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -443,8 +437,11 @@ const SHIP_FRAMES_PER_HEADING: usize = 4;
 /// First of a ship's 24 turning frames and of its 32 lying-still frames.
 const SHIP_TURN_FRAMES: usize = 32;
 const SHIP_IDLE_FRAMES: usize = 56;
-/// Milliseconds a frame of a ship rocking at rest. An estimate.
-const SHIP_ROCK_MS: u64 = 300;
+/// Milliseconds a frame of a ship's animation, under way, turning or
+/// rocking at rest: its picture's frame delay is 2 (0x4e0160 and the ship
+/// loader), a frame once more than 2 ticks have passed (0x4a3320).
+pub const SHIP_FRAME_MS: u64 = 3 * TICK_MS;
+const SHIP_ROCK_MS: u64 = SHIP_FRAME_MS;
 
 impl MapObject {
     pub fn is_armed(&self) -> bool {
@@ -720,7 +717,7 @@ pub fn resolve(
                 CellCentre(f(9), f(10)),
                 Visual {
                     frames,
-                    frame_ms: DEFAULT_FRAME_MS,
+                    frame_ms: SHIP_FRAME_MS,
                 },
             )
         }
@@ -950,7 +947,6 @@ pub fn resolve(
         path: Default::default(),
         rotation: None,
         turn_clock: 0.0,
-        marks: Vec::new(),
         blocked: 0.0,
         cargo: 0.0,
         cargo_kind: None,

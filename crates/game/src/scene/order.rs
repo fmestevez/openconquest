@@ -26,6 +26,10 @@ pub enum Order {
     Stop {
         id: u32,
     },
+    /// The Building page's "default arming" checkbox.
+    DefaultArming {
+        on: bool,
+    },
     Attack {
         ship: u32,
         target: u32,
@@ -177,6 +181,10 @@ impl Scene {
             }
             Stop { id } => {
                 self.stop(id);
+                Ok(0)
+            }
+            DefaultArming { on } => {
+                self.default_arming = on;
                 Ok(0)
             }
             Attack { ship, target } => done(self.order_attack(ship, target)),

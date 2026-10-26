@@ -44,6 +44,10 @@ pub struct SaveGame {
     pub shoals_gone: std::collections::BTreeMap<u32, f32>,
     #[serde(default)]
     pub shoals_shown: std::collections::BTreeMap<u32, f32>,
+    #[serde(default)]
+    pub shoals_up: std::collections::BTreeMap<u32, f32>,
+    #[serde(default = "default_true")]
+    pub default_arming: bool,
     /// Research levels (saves from before the sage school's research had
     /// a different `levels`, which is ignored).
     #[serde(default)]
@@ -126,4 +130,8 @@ impl SaveGame {
         }
         Ok(save)
     }
+}
+
+fn default_true() -> bool {
+    true
 }

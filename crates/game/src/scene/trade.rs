@@ -2,6 +2,26 @@
 
 use super::*;
 
+/// What a new ship or fort is armed with: items (see
+/// `combat::ITEM_NAMES`), armour and ram levels.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Arming {
+    pub items: Vec<u8>,
+    pub armour: u8,
+    pub ram: u8,
+}
+
+/// The price of a ship or fort with its arming, and the stock of its
+/// settlement (`home`) once the arms it holds are taken.
+#[derive(Debug, Clone, Default)]
+pub struct Price {
+    pub amber: u32,
+    pub fish: u32,
+    pub arming: Arming,
+    pub home: Option<u32>,
+    pub stock_left: [u32; 9],
+}
+
 /// Seconds a frame of a building collapsing into ruins. An estimate.
 const RUINS_FRAME_SECONDS: f32 = 0.1;
 
@@ -133,7 +153,26 @@ impl Scene {
             .and_then(|i| self.objects[i].owner)
             .ok_or("No such shipyard")?;
         self.can_build_ship_for(owner, kind)?;
-        let (amber, fish) = economy::ship_cost(kind);
+        // The player's ships come armed as the Building page says; the
+        // computer players' with their standard load.
+        let human = Some(owner) == self.human.map(|h| (h.nation, h.slot));
+        let (amber, fish, arming) = if human {
+            let price = self.ship_price(site, kind);
+            let (amber, fish) = (price.amber, price.fish);
+            let (have_amber, have_fish) = self.funds(owner);
+            if have_amber < amber || have_fish < fish {
+                return Err(format!(
+                    "Not enough resources: {amber} amber and {fish} fish needed"
+                ));
+            }
+            if let Some(home) = price.home {
+                self.garrisons.insert(home, price.stock_left);
+            }
+            (amber, fish, Some(price.arming))
+        } else {
+            let (amber, fish) = economy::ship_cost(kind);
+            (amber, fish, None)
+        };
         self.earn(owner, -(amber as i64), -(fish as i64));
         self.productions.push(Production {
             site,
@@ -141,8 +180,155 @@ impl Scene {
             argo: false,
             elapsed: 0.0,
             total: economy::SHIP_BUILD_SECONDS,
+            arming,
         });
         Ok(())
+    }
+
+    /// What a ship of type `kind` built at shipyard `site` costs the
+    /// player, with its arming if "default arming" is on (0x43e5c0).
+    pub fn ship_price(&self, site: u32, kind: u8) -> Price {
+        let (hull_amber, hull_fish) = economy::ship_cost(kind);
+        let home = self
+            .object_index(site)
+            .and_then(|i| self.home_settlement(i));
+        let stock = home.map(|h| self.garrison(h)).unwrap_or_default();
+        let k = kind as usize % 12;
+        let mut price = if self.default_arming {
+            self.plan_arming(
+                stock,
+                combat::DEFAULT_WEAPONS[k],
+                combat::FALLBACK_WEAPONS[k],
+                combat::MIN_POWER[k],
+                combat::DEFAULT_ARMOUR[k],
+                combat::DEFAULT_RAM[k],
+            )
+        } else {
+            Price {
+                stock_left: stock,
+                ..Price::default()
+            }
+        };
+        price.amber += hull_amber;
+        price.fish += hull_fish;
+        price.home = home;
+        price
+    }
+
+    /// What a fort of `class` costs put up near `settlement`, armed if
+    /// "default arming" is on (0x43e990); `None` if its weapons cannot be
+    /// had (0x43d430).
+    pub fn fort_price(&self, settlement: Option<u32>, class: u32) -> Option<Price> {
+        let stock = settlement.map(|h| self.garrison(h)).unwrap_or_default();
+        let (items, fallbacks) = combat::fort_arming(class);
+        let mut price = Price {
+            stock_left: stock,
+            ..Price::default()
+        };
+        if self.default_arming {
+            if fallbacks
+                .iter()
+                .any(|&w| stock[w as usize] == 0 && !self.can_make(w))
+            {
+                return None;
+            }
+            price = self.plan_arming(stock, items, fallbacks, 0, (0, 0), (0, 0));
+        }
+        price.amber += economy::building_cost(class);
+        price.home = settlement;
+        Some(price)
+    }
+
+    /// Whether the player may have `item` made: it is permitted and they
+    /// have a workshop (and a smithy for swordsmen), as the settlement's
+    /// training asks.
+    pub fn can_make(&self, item: u8) -> bool {
+        let Some(h) = self.human else { return false };
+        let have = self.buildings_of((h.nation, h.slot));
+        let owns = |class: u32| have & (1 << (class - SETTLEMENT)) != 0;
+        self.permits.item(item) && owns(WORKSHOP) && (item != 2 || owns(economy::SMITHY))
+    }
+
+    /// The player's settlement or town nearest building `i`: whose stock
+    /// arms what it builds.
+    pub fn home_settlement(&self, i: usize) -> Option<u32> {
+        let (x, y, owner) = (self.objects[i].x, self.objects[i].y, self.objects[i].owner?);
+        self.objects
+            .iter()
+            .filter(|o| {
+                o.owner == Some(owner)
+                    && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
+                    && self.construction_at(o.id).is_none()
+            })
+            .min_by(|a, b| {
+                let d = |o: &&MapObject| (o.x - x).hypot(o.y - y);
+                d(a).total_cmp(&d(b))
+            })
+            .map(|o| o.id)
+    }
+
+    /// Default arming (0x43e5c0): each of `items` taken from `stock` if it
+    /// holds one, else bought if it may be made, else its fallback (from
+    /// stock or bought); then more fallbacks, from the last, until the
+    /// arms are as strong as `min_power`; and armour and a ram of their
+    /// levels, or of the fallback levels, if they may be fitted.
+    fn plan_arming(
+        &self,
+        mut stock: [u32; 9],
+        items: &[u8],
+        fallbacks: &[u8],
+        min_power: u32,
+        armour: (u8, u8),
+        ram: (u8, u8),
+    ) -> Price {
+        let mut price = Price::default();
+        let mut power = 0;
+        let take = |item: u8, price: &mut Price, stock: &mut [u32; 9]| {
+            if stock[item as usize] > 0 {
+                stock[item as usize] -= 1;
+            } else {
+                let (amber, fish) = combat::item_cost(item);
+                price.amber += amber;
+                price.fish += fish;
+            }
+            price.arming.items.push(item);
+        };
+        for (j, &w) in items.iter().enumerate() {
+            let item = if stock[w as usize] > 0 || self.can_make(w) {
+                w
+            } else {
+                fallbacks.get(j).copied().unwrap_or(w)
+            };
+            take(item, &mut price, &mut stock);
+            power += combat::item_power(item);
+        }
+        let mut k = fallbacks.len();
+        while k > 1 && power < min_power {
+            k -= 1;
+            take(fallbacks[k], &mut price, &mut stock);
+            power += combat::item_power(fallbacks[k]);
+        }
+        let levels = self.levels_of(self.human.map(|h| (h.nation, h.slot)));
+        let fitted = |upgrade: combat::Upgrade, (level, fallback): (u8, u8)| {
+            let can = |l: u8| l > 0 && levels.get(upgrade) >= l && self.permits.fit(upgrade, l);
+            // A level-2 fit without a fallback falls back to level 1.
+            let fallback = if level == 2 && fallback == 0 {
+                1
+            } else {
+                fallback
+            };
+            [level, fallback].into_iter().find(|&l| can(l))
+        };
+        if let Some(l) = fitted(combat::Upgrade::Armour, armour) {
+            price.arming.armour = l;
+            price.amber += [0, 30, 60][l as usize];
+        }
+        if let Some(l) = fitted(combat::Upgrade::Ram, ram) {
+            price.arming.ram = l;
+            price.amber += [0, 25, 50][l as usize];
+        }
+        price.stock_left = stock;
+        price
     }
 
     /// Ship type of the Argo.
@@ -338,6 +524,7 @@ impl Scene {
         &mut self,
         site: u32,
         kind: u8,
+        arming: Option<&Arming>,
         data: &GameData,
         caches: &mut Caches,
     ) -> Result<Option<u32>> {
@@ -369,7 +556,22 @@ impl Scene {
             class_id: 0xc8,
             fields,
         };
-        if let Some(obj) = objects::resolve(data, caches, &rec)? {
+        if let Some(mut obj) = objects::resolve(data, caches, &rec)? {
+            // Armed as ordered; boats and merchants keep their one item.
+            if let (Some(a), Some(ship), Some(fight)) =
+                (arming, obj.ship.as_mut(), obj.combat.as_mut())
+            {
+                let mut squads = [0; 3];
+                for &w in a.items.iter().filter(|&&w| w < 3) {
+                    squads[w as usize] += 1;
+                }
+                ship.crew.squads = squads;
+                if combat::carries_weapons(kind) && kind > 1 {
+                    fight.weapons = a.items.iter().copied().filter(|&w| w >= 3).collect();
+                }
+                ship.armour = a.armour;
+                ship.ram = a.ram;
+            }
             self.objects.push(obj);
             self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
             return Ok(Some(id));
@@ -842,9 +1044,24 @@ impl Scene {
         caches: &mut Caches,
     ) -> Result<(), String> {
         let human = self.human.ok_or("No player")?;
-        let cost = economy::building_cost(class);
-        if self.amber < cost {
-            return Err("Not enough amber".into());
+        // A fort comes armed (default arming), its weapons paid for or
+        // taken from the nearest settlement's stock.
+        let fort = if (0x34..=0x36).contains(&class) {
+            let home = self
+                .object_index(settlement)
+                .and_then(|i| self.home_settlement(i));
+            Some(
+                self.fort_price(home, class)
+                    .ok_or("Its weapons cannot be had yet")?,
+            )
+        } else {
+            None
+        };
+        let (cost, fish) = fort
+            .as_ref()
+            .map_or((economy::building_cost(class), 0), |p| (p.amber, p.fish));
+        if self.amber < cost || self.fish < fish {
+            return Err("Not enough resources".into());
         }
         let facing = self.check_site(settlement, class, cx, cy)?;
         let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
@@ -877,6 +1094,21 @@ impl Scene {
             c.hull = c.max_hull * 0.1;
         }
         self.amber -= cost;
+        self.fish -= fish;
+        if let Some(price) = fort {
+            if let Some(home) = price.home {
+                self.garrisons.insert(home, price.stock_left);
+            }
+            if let Some(c) = obj.combat.as_mut() {
+                c.weapons = price
+                    .arming
+                    .items
+                    .iter()
+                    .copied()
+                    .filter(|&w| w >= 3)
+                    .collect();
+            }
+        }
         self.objects.push(obj);
         self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
         self.constructions.push(Construction {
@@ -1062,6 +1294,23 @@ impl Scene {
         match phase {
             GatherPhase::ToDeposit => {
                 let arrived = deposit_at.is_some_and(|d| near(&self.objects[d], 1.6));
+                // A shoal: wait while it is below; sail on to where it
+                // comes up.
+                if let Some(d) =
+                    deposit_at.filter(|&d| self.objects[d].class == ObjectClass::FishZone)
+                {
+                    if self.shoal_gone(self.objects[d].id) {
+                        return;
+                    }
+                    if !arrived {
+                        let (x, y) = (self.objects[d].x, self.objects[d].y);
+                        if let Some(path) = self.plan_route(i, x, y) {
+                            let ship = self.objects[i].ship.as_mut().unwrap();
+                            ship.path = path;
+                        }
+                        return;
+                    }
+                }
                 // At amber the ship first closes in on the shore, until its
                 // bow is about to touch land (the original moves it there
                 // along a path, Run_Ship.cpp 0x4b0590).
@@ -1077,9 +1326,16 @@ impl Scene {
                             self.nav
                                 .is_water((x / t).floor() as i32, (y / t).floor() as i32)
                         };
+                        // How far the hull reaches that way: its bow along
+                        // the keel, less across it.
+                        let heading = self.objects[i].ship.as_ref().map_or(0, |s| s.heading);
+                        let reach = hull_reach(heading, ux, uy);
                         let mut step = 0.0;
                         while step < len
-                            && water(sx + ux * (step + 2.0 + BOW), sy + uy * (step + 2.0 + BOW))
+                            && water(
+                                sx + ux * (step + 2.0 + reach),
+                                sy + uy * (step + 2.0 + reach),
+                            )
                         {
                             step += 2.0;
                         }
@@ -1107,6 +1363,17 @@ impl Scene {
                 let Some(d) = deposit_at else {
                     return self.send_to_port(i, deposit);
                 };
+                // A shoal that has gone below or moved on: follow it.
+                if self.objects[d].class == ObjectClass::FishZone
+                    && (self.shoal_gone(self.objects[d].id) || !near(&self.objects[d], 1.6))
+                {
+                    let ship = self.objects[i].ship.as_mut().unwrap();
+                    ship.task = Some(Task::Gather {
+                        deposit,
+                        phase: GatherPhase::ToDeposit,
+                    });
+                    return;
+                }
                 let dep = self.objects[d].deposit.unwrap();
                 // A walkway to the amber, or the net out.
                 let activity = match dep.resource {
@@ -1199,7 +1466,8 @@ impl Scene {
                             false
                         } else {
                             // In its cell, it closes in alongside.
-                            let (ax, ay) = self.alongside(p);
+                            let heading = self.objects[i].ship.as_ref().map_or(0, |s| s.heading);
+                            let (ax, ay) = self.alongside(p, heading);
                             if (ax - sx).hypot(ay - sy) > 1.0 {
                                 let ship = self.objects[i].ship.as_mut().unwrap();
                                 ship.path = [(ax, ay)].into();
@@ -1254,6 +1522,11 @@ impl Scene {
                 if after > 0.0 {
                     return;
                 }
+                // It casts off once its porters are back aboard.
+                let id = self.objects[i].id;
+                if self.porters.iter().any(|p| p.ship == id) {
+                    return;
+                }
                 let ship = self.objects[i].ship.as_mut().unwrap();
                 ship.cargo = 0.0;
                 ship.cargo_kind = None;
@@ -1306,13 +1579,14 @@ impl Scene {
 
     /// Where a ship lies unloading at moorage `p`: its berth, closer in
     /// towards the building.
-    pub(super) fn alongside(&self, p: usize) -> (f32, f32) {
-        /// Pixels from the berth's centre towards the moorage. An estimate.
-        const CLOSE_IN: f32 = 20.0;
+    pub(super) fn alongside(&self, p: usize, heading: usize) -> (f32, f32) {
         let (bx, by) = self.berth(p);
         let (dx, dy) = (self.objects[p].x - bx, self.objects[p].y - by);
         let len = dx.hypot(dy).max(1.0);
-        (bx + dx / len * CLOSE_IN, by + dy / len * CLOSE_IN)
+        let (ux, uy) = (dx / len, dy / len);
+        // Until the hull is about to touch the pier at the cell's edge.
+        let close_in = (TILE_SIZE as f32 / 2.0 - hull_reach(heading, ux, uy) - 2.0).max(0.0);
+        (bx + ux * close_in, by + uy * close_in)
     }
 
     pub(super) fn send_to_port(&mut self, i: usize, deposit: u32) {
@@ -1348,7 +1622,14 @@ impl Scene {
         if !(class == SETTLEMENT || (0x34..=0x36).contains(&class)) {
             return Err("Ships found settlements and forts".into());
         }
-        if self.amber < economy::building_cost(class) {
+        let cost = if (0x34..=0x36).contains(&class) {
+            self.fort_price(self.home_settlement(i), class)
+                .ok_or("Its weapons cannot be had yet")?
+                .amber
+        } else {
+            economy::building_cost(class)
+        };
+        if self.amber < cost {
             return Err("Not enough amber".into());
         }
         self.check_ground(class, cx, cy)?;
@@ -1371,5 +1652,15 @@ fn building_cells(o: &MapObject) -> i32 {
     }
 }
 
-/// How far a ship's bow reaches ahead of its middle, in world pixels.
+/// How far a ship's bow reaches ahead of its middle, and its side out
+/// from it, in world pixels. Estimates.
 const BOW: f32 = 36.0;
+const BEAM: f32 = 14.0;
+
+/// How far a ship on `heading` reaches from its middle in the direction
+/// `(ux, uy)`: its bow along the keel, less across it.
+fn hull_reach(heading: usize, ux: f32, uy: f32) -> f32 {
+    let a = heading as f32 * std::f32::consts::FRAC_PI_4;
+    let along = (ux * a.cos() - uy * a.sin()).abs();
+    BEAM + (BOW - BEAM) * along
+}

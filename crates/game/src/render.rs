@@ -149,8 +149,19 @@ pub fn draw_objects(
             );
         }
     }
+    // Ships' wakes, under the hulls.
+    for d in &scene.droplets {
+        let frames = if d.small {
+            &scene.wake_art.0
+        } else {
+            &scene.wake_art.1
+        };
+        if let Some(layers) = d.frame(frames.len()).and_then(|f| frames.get(f)) {
+            draw(frame, layers, d.x, d.y);
+        }
+    }
     for obj in below {
-        draw(frame, obj.frame_at(time_ms), obj.x, obj.y);
+        draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y);
         // Its banner, from the picture's top left.
         if let (Some((flag, dx, dy)), Some(first), true) = (
             &obj.banner,
@@ -174,7 +185,7 @@ pub fn draw_objects(
         }
     }
     for obj in above {
-        draw(frame, obj.frame_at(time_ms), obj.x, obj.y);
+        draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y);
     }
     // Gulls over everything.
     for g in &scene.gulls {
@@ -199,6 +210,21 @@ pub fn draw_objects(
 }
 
 /// Draws a sprite whose top-left corner is at world position `(left, top)`.
+/// Draws `img` centred on the world point `(x, y)`.
+pub fn draw_centred(
+    frame: &mut Frame,
+    screen: &Screen,
+    camera: &Camera,
+    lut: &[u32; 256],
+    img: &Image,
+    x: f32,
+    y: f32,
+) {
+    let left = (x - img.width as f32 / 2.0).round() as i32;
+    let top = (y - img.height as f32 / 2.0).round() as i32;
+    draw_image(frame, screen, camera, lut, img, left, top);
+}
+
 fn draw_image(
     frame: &mut Frame,
     screen: &Screen,
@@ -327,8 +353,7 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
     visible().find(|o| solid(o)).map(|o| o.id)
 }
 
-/// Draws the selection box around object `id` (with its hull bar), and its
-/// route if it is a ship.
+/// Draws the selection box around object `id` (with its hull bar).
 pub fn draw_selection(
     frame: &mut Frame,
     screen: &Screen,
@@ -351,34 +376,6 @@ pub fn draw_selection(
     let thick = (scale.round() as i64).max(1);
     let (clip_x0, clip_y0) = (screen.x as i64, screen.y as i64);
     let (clip_x1, clip_y1) = (clip_x0 + screen.w as i64, clip_y0 + screen.h as i64);
-    // Where the player sent it: the helm marker (`WPMOVE`, a 29x36 frame
-    // centred on the point), numbered when there are waypoints.
-    if let Some(ship) = obj.ship.as_ref().filter(|s| s.task.is_none()) {
-        let (marker, digits) = (&scene.waypoint_art.0, &scene.waypoint_art.1);
-        let many = ship.marks.len() > 1;
-        for (n, &(mx, my)) in ship.marks.iter().enumerate() {
-            let (left, top) = (mx as i32 - 14, my as i32 - 18);
-            if let Some(img) = marker {
-                draw_image(frame, screen, camera, lut, img, left, top);
-            }
-            if many {
-                let label = (n + 1).to_string();
-                for (k, d) in label.bytes().enumerate() {
-                    if let Some(Some(img)) = digits.get((d - b'0') as usize) {
-                        draw_image(
-                            frame,
-                            screen,
-                            camera,
-                            lut,
-                            img,
-                            left + 19 + 10 * k as i32,
-                            top + 18,
-                        );
-                    }
-                }
-            }
-        }
-    }
     let mut put = |x: i64, y: i64, c: u32| {
         for dy in 0..thick {
             for dx in 0..thick {
