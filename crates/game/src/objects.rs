@@ -920,8 +920,10 @@ pub fn resolve(
         cargo_kind: None,
         task: None,
         crew: crate::combat::Crew::from_record(&rec.fields, f(7).min(11) as u8),
-        armour: 0,
-        ram: 0,
+        // Armour level in field 15, ram level in field 14 less 3 (the
+        // loader 0x4dfa90: ship +0x27a, +0x27b).
+        armour: rec.fields.get(15).map_or(0, |&v| v.min(2) as u8),
+        ram: crate::combat::Crew::from_record(&rec.fields, 0).class,
         behaviour: Behaviour::default(),
         zone: None,
         treasures: Vec::new(),

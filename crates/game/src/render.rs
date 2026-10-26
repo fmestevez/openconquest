@@ -11,11 +11,11 @@ use openac_formats::map::TILE_SIZE;
 
 /// Color shown outside the map.
 const BACKGROUND: u32 = 0x00_0b_1a_26;
-const MINIMAP_VIEW: u32 = 0x00_ff_ff_ff;
-const MINIMAP_OWN: u32 = 0x00_60_f0_60;
-const MINIMAP_ENEMY: u32 = 0x00_f0_50_40;
-const MINIMAP_CREATURE: u32 = 0x00_c0_70_f0;
+/// The minimap's view frame (measured on the original).
+const MINIMAP_VIEW: u32 = 0x00_e6_07_06;
 const SELECTION: u32 = 0x00_f0_e8_a0;
+/// The selection corners' highlight (measured; not palette colours).
+const SELECTION_GLINT: u32 = 0x00_d0_d0_5c;
 const SELECTION_ROUTE: u32 = 0x00_d0_f0_ff;
 const HULL_OK: u32 = 0x00_40_d0_40;
 const HULL_LOST: u32 = 0x00_c0_30_20;
@@ -270,25 +270,8 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
     visible().find(|o| solid(o)).map(|o| o.id)
 }
 
-/// World-space bounding box `(x0, y0, x1, y1)` of an object's current frame.
-pub fn object_bounds(obj: &MapObject, time_ms: u64) -> Option<(i32, i32, i32, i32)> {
-    obj.frame_at(time_ms).iter().fold(None, |acc, layer| {
-        let (left, top) = layer_origin(obj, layer);
-        let (x0, y0, x1, y1) = layer.image.solid_bounds?;
-        let b = (
-            left + x0 as i32,
-            top + y0 as i32,
-            left + x1 as i32,
-            top + y1 as i32,
-        );
-        Some(match acc {
-            None => b,
-            Some(a) => (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)),
-        })
-    })
-}
-
-/// Draws selection brackets around object `id`, and its route if it is a ship.
+/// Draws the selection box around object `id` (with its hull bar), and its
+/// route if it is a ship.
 pub fn draw_selection(
     frame: &mut Frame,
     screen: &Screen,
@@ -296,6 +279,7 @@ pub fn draw_selection(
     camera: &Camera,
     id: u32,
     time_ms: u64,
+    lut: &[u32; 256],
 ) {
     let Some(obj) = scene.objects.iter().find(|o| o.id == id) else {
         return;
@@ -335,32 +319,76 @@ pub fn draw_selection(
             from = to;
         }
     }
-    let Some((x0, y0, x1, y1)) = object_bounds(obj, time_ms) else {
+    // The box: the picture's frame and 2 pixels around it (measured on the
+    // original), its corners 13-pixel yellow angles lined inside in a darker
+    // colour, with a small highlight curving between.
+    let Some(first) = obj.frame_at(time_ms).first() else {
         return;
     };
-    let (sx0, sy0) = to_screen(x0 as f32 - 2.0, y0 as f32 - 2.0);
-    let (sx1, sy1) = to_screen(x1 as f32 + 2.0, y1 as f32 + 2.0);
-    let arm = ((sx1 - sx0).min(sy1 - sy0) / 4).max(3);
-    for i in 0..arm {
-        for (x, y) in [
-            (sx0 + i, sy0),
-            (sx0, sy0 + i),
-            (sx1 - i, sy0),
-            (sx1, sy0 + i),
-            (sx0 + i, sy1),
-            (sx0, sy1 - i),
-            (sx1 - i, sy1),
-            (sx1, sy1 - i),
+    let (w, h) = (first.image.width as f32, first.image.height as f32);
+    let (left, top) = (
+        obj.x + first.dx as f32 - w / 2.0,
+        obj.y + first.dy as f32 - h / 2.0,
+    );
+    let (bw, bh) = (w as i64 + 4, h as i64 + 4);
+    let origin = to_screen(left.round() - 2.0, top.round() - 2.0);
+    let s = scale;
+    // A pixel of the box in box pixels, mirrored into each corner.
+    let mut corner_px = |x: i64, y: i64, c: u32| {
+        for (mx, my) in [
+            (x, y),
+            (bw - 1 - x, y),
+            (x, bh - 1 - y),
+            (bw - 1 - x, bh - 1 - y),
         ] {
-            put(x, y, SELECTION);
+            put(
+                origin.0 + (mx as f32 * s) as i64,
+                origin.1 + (my as f32 * s) as i64,
+                c,
+            );
         }
+    };
+    // Palette 203 yellow, 109 inside it, 117 the highlight's brightest.
+    for k in 0..13 {
+        corner_px(k, 0, lut[203]);
+        corner_px(0, k, lut[203]);
     }
-    // Hull bar above the box.
+    for k in 1..12 {
+        corner_px(k, 1, lut[109]);
+        corner_px(1, k, lut[109]);
+    }
+    for &(x, y, c) in &[
+        (3, 3, 0x00_f3_f3_9e),
+        (4, 3, 0x00_e4_e4_7b),
+        (3, 4, 0x00_e4_e4_7b),
+        (5, 3, SELECTION_GLINT),
+        (6, 3, SELECTION_GLINT),
+        (4, 4, lut[117]),
+        (3, 5, SELECTION_GLINT),
+        (3, 6, SELECTION_GLINT),
+    ] {
+        corner_px(x, y, c);
+    }
+    // The hull bar on the box's top edge: a black frame 4 high, two rows of
+    // colour inside (as the panel's slot bars).
     if let Some(c) = &obj.combat {
-        let filled = sx0 + ((sx1 - sx0) as f32 * (c.hull / c.max_hull).clamp(0.0, 1.0)) as i64;
-        let y = sy0 - 3 * thick;
-        for x in (sx0..=sx1).step_by(thick as usize) {
-            put(x, y, if x <= filled { HULL_OK } else { HULL_LOST });
+        let len = bw - 28;
+        let fill = ((len - 2) as f32 * (c.hull / c.max_hull).clamp(0.0, 1.0)) as i64;
+        let colours = match c.hull / c.max_hull {
+            f if f >= 0.5 => [lut[200], lut[199]],
+            f if f >= 0.25 => [lut[203], lut[157]],
+            _ => [lut[65], lut[68]],
+        };
+        for y in 0..4 {
+            for x in 0..len {
+                let inside = (1..3).contains(&y) && (1..=fill).contains(&x);
+                let c = if inside { colours[y as usize - 1] } else { 0 };
+                put(
+                    origin.0 + ((14 + x) as f32 * s) as i64,
+                    origin.1 + (y as f32 * s) as i64,
+                    c,
+                );
+            }
         }
     }
 }
@@ -418,14 +446,6 @@ pub fn draw_site(frame: &mut Frame, screen: &Screen, camera: &Camera, cell: (i32
             }
         }
     }
-}
-
-/// How bright explored cells out of sight are drawn on the minimap.
-const FOG_BRIGHTNESS: f32 = 0.55;
-
-fn scale_rgb(c: u32, k: f32) -> u32 {
-    let ch = |shift: u32| ((((c >> shift) & 0xff) as f32 * k) as u32).min(255) << shift;
-    ch(16) | ch(8) | ch(0)
 }
 
 /// Fog of war over the view, as the original draws it (0x5762d0): over a
@@ -541,6 +561,8 @@ pub struct MinimapRect {
     pub w: u32,
     pub h: u32,
     pub zoom: f32,
+    /// The first minimap pixel shown.
+    pub origin: (u32, u32),
 }
 
 impl MinimapRect {
@@ -555,6 +577,28 @@ impl MinimapRect {
             w: mw,
             h: mh,
             zoom,
+            origin: (0, 0),
+        }
+    }
+
+    /// The bar's minimap, as the original's: 24 x 24 cells at 8 pixels a
+    /// cell in the box `(x, y, w, h)` (192 x 192 at 800x600), from the top
+    /// left, a smaller map not stretched, from the scene's minimap origin.
+    pub fn window(scene: &Scene, x: u32, y: u32, w: u32, h: u32) -> Self {
+        let cell = TILE_SIZE / MINIMAP_DIVISOR;
+        let zoom = w as f32 / (crate::scene::MINIMAP_CELLS as u32 * cell) as f32;
+        let (mw, mh) = scene.minimap_size;
+        let shown = |map: u32, box_px: u32| ((map as f32 * zoom) as u32).min(box_px);
+        Self {
+            x,
+            y,
+            w: shown(mw, w),
+            h: shown(mh, h),
+            zoom,
+            origin: (
+                scene.minimap_origin.get().0.max(0) as u32 * cell,
+                scene.minimap_origin.get().1.max(0) as u32 * cell,
+            ),
         }
     }
 
@@ -580,8 +624,11 @@ impl MinimapRect {
 
     /// World position under window position `(sx, sy)`.
     pub fn to_world(self, sx: f32, sy: f32) -> (f32, f32) {
-        let k = MINIMAP_DIVISOR as f32 / self.zoom;
-        ((sx - self.x as f32) * k, (sy - self.y as f32) * k)
+        let d = MINIMAP_DIVISOR as f32;
+        (
+            ((sx - self.x as f32) / self.zoom + self.origin.0 as f32) * d,
+            ((sy - self.y as f32) / self.zoom + self.origin.1 as f32) * d,
+        )
     }
 }
 
@@ -591,6 +638,7 @@ pub fn draw_minimap(
     scene: &Scene,
     camera: &Camera,
     screen: &Screen,
+    lut: &[u32; 256],
 ) {
     let (mw, mh) = scene.minimap_size;
     let MinimapRect {
@@ -599,70 +647,177 @@ pub fn draw_minimap(
         w,
         h,
         zoom,
+        origin,
     } = *rect;
+    let art = scene.fog_art.as_deref();
+    // Minimap pixels per cell.
+    let cell = (TILE_SIZE / MINIMAP_DIVISOR) as i32;
     for y in 0..h {
-        let sy = ((y as f32 / zoom) as u32).min(mh - 1);
+        let my = ((y as f32 / zoom) as u32 + origin.1).min(mh - 1);
         for x in 0..w {
-            let sx = ((x as f32 / zoom) as u32).min(mw - 1);
-            let mut c = scene.minimap[(sy * mw + sx) as usize];
-            if scene.fog {
-                // Minimap pixels are MINIMAP_DIVISOR world pixels.
-                let cell = |v: u32| (v * MINIMAP_DIVISOR / TILE_SIZE) as i32;
-                c = match scene.seen(cell(sx), cell(sy)) {
-                    Seen::Unexplored => 0,
-                    Seen::Explored => scale_rgb(c, FOG_BRIGHTNESS),
-                    Seen::InSight => c,
-                };
-            }
+            let mx = ((x as f32 / zoom) as u32 + origin.0).min(mw - 1);
+            let c = resolve(scene.minimap[(my * mw + mx) as usize], lut);
             frame.put((x0 + x) as i64, (y0 + y) as i64, c);
         }
     }
     let k = zoom / MINIMAP_DIVISOR as f32;
-    // Object markers.
-    let dot = (zoom as i64).clamp(2, 4);
-    for obj in scene.objects.iter().filter(|o| scene.is_visible(o)) {
-        // Yours in green, other players in red, creatures in purple;
-        // buildings are drawn a shade darker than ships.
-        let side = if scene.is_own(obj) {
-            MINIMAP_OWN
-        } else if obj.owner == Some(crate::combat::MONSTERS) {
-            MINIMAP_CREATURE
-        } else if obj.owner.is_some() {
-            MINIMAP_ENEMY
-        } else {
-            continue;
-        };
-        let color = match obj.class {
-            ObjectClass::Ship => side,
-            ObjectClass::Building(_) | ObjectClass::Barbarian(_) => darken(side),
-            _ if obj.combat.is_some() => side,
-            _ => continue,
-        };
-        let mx = x0 as i64 + (obj.x * k) as i64 - dot / 2;
-        let my = y0 as i64 + (obj.y * k) as i64 - dot / 2;
-        for dy in 0..dot {
-            for dx in 0..dot {
-                frame.put(mx + dx, my + dy, color);
+    let (ox, oy) = (origin.0 as f32 * zoom, origin.1 as f32 * zoom);
+    let inside = |px: i64, py: i64| {
+        px >= x0 as i64 && py >= y0 as i64 && px < (x0 + w) as i64 && py < (y0 + h) as i64
+    };
+    // Object icons at their cells (Mapa.cpp 0x51cdd0, message 0xd20): a
+    // player's by nation (the shape) and player (the colour), 16x16 for
+    // settlements and towns; the rest by class.
+    if let Some((small, big)) = art.and_then(|a| a.icons.as_ref()) {
+        // Things that stay put are drawn under the clouds, which hide them
+        // until explored; ships and creatures only in sight.
+        let moves = |o: &MapObject| o.ship.is_some() || matches!(o.class, ObjectClass::Monster(_));
+        for obj in scene
+            .objects
+            .iter()
+            .filter(|o| !moves(o) || scene.is_visible(o))
+        {
+            let Some((icon, large)) = minimap_icon(obj) else {
+                continue;
+            };
+            let atlas = if large { big } else { small };
+            let size = atlas.width;
+            if (icon + 1) * size > atlas.height {
+                continue;
+            }
+            // At its cell: a building's or deposit's top-left one.
+            let t = TILE_SIZE as f32;
+            let fields = &obj.record.fields;
+            let (cx, cy) = match (obj.cell, obj.record.class_id) {
+                (Some(c), _) => c,
+                (None, 0x190) if fields.len() > 7 => (fields[6] as i32, fields[7] as i32),
+                _ => ((obj.x / t).floor() as i32, (obj.y / t).floor() as i32),
+            };
+            let left = x0 as f32 + (cx * cell) as f32 * zoom - ox;
+            let top = y0 as f32 + (cy * cell) as f32 * zoom - oy;
+            for iy in 0..(size as f32 * zoom) as i64 {
+                for ix in 0..(size as f32 * zoom) as i64 {
+                    let (px, py) = (left as i64 + ix, top as i64 + iy);
+                    if !inside(px, py) {
+                        continue;
+                    }
+                    let (sx, sy) = ((ix as f32 / zoom) as u32, (iy as f32 / zoom) as u32);
+                    // Black is see-through.
+                    match atlas.pixels[((icon * size + sy) * size + sx) as usize] {
+                        Some(p) if p & 0xff_ffff != 0 => frame.put(px, py, resolve(p, lut)),
+                        _ => {}
+                    }
+                }
             }
         }
     }
-    // Visible area, clipped to the minimap.
-    let (vw, vh) = camera.view_size(screen);
-    let vx0 = (camera.x * k).max(0.0) as i64;
-    let vy0 = (camera.y * k).max(0.0) as i64;
-    let vx1 = ((camera.x + vw) * k).min(w as f32) as i64 - 1;
-    let vy1 = ((camera.y + vh) * k).min(h as f32) as i64 - 1;
-    if vx1 > vx0 && vy1 > vy0 {
-        let (ox, oy) = (x0 as i64, y0 as i64);
-        for x in vx0..=vx1 {
-            frame.put(ox + x, oy + vy0, MINIMAP_VIEW);
-            frame.put(ox + x, oy + vy1, MINIMAP_VIEW);
-        }
-        for y in vy0..=vy1 {
-            frame.put(ox + vx0, oy + y, MINIMAP_VIEW);
-            frame.put(ox + vx1, oy + y, MINIMAP_VIEW);
+    // Fog as in the view, over the icons, in the small masks and clouds
+    // (Mapa.cpp: s_DARK, s_FOG, OBL_SM).
+    for y in 0..h {
+        let my = ((y as f32 / zoom) as u32 + origin.1).min(mh - 1);
+        for x in 0..w {
+            let mx = ((x as f32 / zoom) as u32 + origin.0).min(mw - 1);
+            let (px, py) = ((x0 + x) as i64, (y0 + y) as i64);
+            let mut c = frame.pixels[(py as u32 * frame.width + px as u32) as usize];
+            let before = c;
+            if let (true, Some(art)) = (scene.fog, art) {
+                let (cx, cy) = (mx as i32 / cell, my as i32 / cell);
+                let (ix, iy) = ((mx as i32 % cell) as u32, (my as i32 % cell) as u32);
+                let (dark, fog) = scene.fog_codes(cx, cy);
+                let cloud = || {
+                    art.small_cloud.as_ref().map_or(0, |img| {
+                        let px = mx % img.width;
+                        let py = my % img.height;
+                        img.pixels[(py * img.width + px) as usize].map_or(0, |p| resolve(p, lut))
+                    })
+                };
+                if dark == 0 {
+                    c = cloud();
+                } else {
+                    if art
+                        .small_fog
+                        .get(fog as usize)
+                        .is_some_and(|m| m.get(ix, iy))
+                    {
+                        c = 0;
+                    }
+                    if art
+                        .small_dark
+                        .get(dark as usize)
+                        .is_some_and(|m| m.get(ix, iy))
+                    {
+                        c = cloud();
+                    }
+                }
+            }
+            if c != before {
+                frame.put(px, py, c);
+            }
         }
     }
+    // The view: a dashed red frame, two on and one off from its corner
+    // (the right side a step later; measured on the original).
+    let (vw, vh) = camera.view_size(screen);
+    let vx0 = x0 as i64 + (camera.x * k - ox).round() as i64;
+    let vy0 = y0 as i64 + (camera.y * k - oy).round() as i64;
+    let vx1 = vx0 + (vw * k).round() as i64 - 1;
+    let vy1 = vy0 + (vh * k).round() as i64 - 1;
+    let mut put = |px: i64, py: i64| {
+        if inside(px, py) {
+            frame.put(px, py, MINIMAP_VIEW);
+        }
+    };
+    for x in vx0..=vx1 {
+        if (x - vx0) % 3 != 0 {
+            put(x, vy0);
+            put(x, vy1);
+        }
+    }
+    for y in vy0..=vy1 {
+        if (y - vy0) % 3 != 0 {
+            put(vx0, y);
+        }
+        if (y - vy0) % 3 != 2 {
+            put(vx1, y);
+        }
+    }
+}
+
+/// An object's minimap icon (an index into `LMAP8X8`, or `LMAP16X16` when
+/// large) as the original picks it (0x50da60, 0x51cdd0).
+fn minimap_icon(obj: &MapObject) -> Option<(u32, bool)> {
+    if let Some((nation, slot)) = obj
+        .owner
+        .filter(|_| matches!(obj.class, ObjectClass::Ship | ObjectClass::Building(_)))
+    {
+        let icon = if nation == 4 { 0x10 } else { nation * 4 + slot };
+        let large = matches!(obj.class, ObjectClass::Building(0x32 | 0x33));
+        return Some((icon, large));
+    }
+    let icon = match obj.record.class_id {
+        0x190 => 0x11,
+        0x191 => 0x12,
+        0x192 => 0x13,
+        0x258 => 0x14,
+        0x1f4 => 0x15,
+        0x25d => 0x16,
+        0x25c => 0x17,
+        0x259 | 0x25a => 0x18,
+        0x46..=0x48 => 0x19,
+        0x1fa => 0x1a,
+        0x1f8 => 0x1b,
+        0x1fb => 0x1c,
+        0x45 => 0x1d,
+        0x49 => 0x1e,
+        0x42..=0x44 => 0x1f,
+        0x1f5 => 0x20,
+        0x1f6 => 0x21,
+        0x1fd => 0x22,
+        0x1f9 => 0x23,
+        0x25e => return Some((0x11, true)),
+        _ => return None,
+    };
+    Some((icon, false))
 }
 
 /// Darkens a pixel to 3/4 brightness (see [`SHADOW`]).

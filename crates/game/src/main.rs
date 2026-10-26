@@ -455,6 +455,12 @@ fn screenshot(
             camera.clamp(&screen, map);
         }
     }
+    let t = openac_formats::map::TILE_SIZE as f32;
+    let (vw, vh) = camera.view_size(&screen);
+    scene.follow_view(
+        ((camera.x / t).floor() as i32, (camera.y / t).floor() as i32),
+        ((vw / t).ceil() as i32, (vh / t).ceil() as i32),
+    );
     view.camera = &camera;
     // Select the object nearest to the focus point, to show the object panel.
     view.selected = args.focus.and_then(|(cx, cy)| {

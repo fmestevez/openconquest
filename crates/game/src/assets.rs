@@ -27,31 +27,14 @@ pub struct Image {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<Option<u32>>,
-    /// Bounding box of the solid (non-shadow) pixels: `x0, y0, x1, y1`
-    /// (exclusive), or `None` if there are none.
-    pub solid_bounds: Option<(u32, u32, u32, u32)>,
 }
 
 impl Image {
     pub fn new(width: u32, height: u32, pixels: Vec<Option<u32>>) -> Self {
-        let mut b: Option<(u32, u32, u32, u32)> = None;
-        for y in 0..height {
-            for x in 0..width {
-                if matches!(pixels[(y * width + x) as usize], Some(p) if p != SHADOW) {
-                    b = Some(match b {
-                        None => (x, y, x + 1, y + 1),
-                        Some((x0, y0, x1, y1)) => {
-                            (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1))
-                        }
-                    });
-                }
-            }
-        }
         Self {
             width,
             height,
             pixels,
-            solid_bounds: b,
         }
     }
 
@@ -82,7 +65,7 @@ pub struct GameData {
     pub strings: std::collections::HashMap<u32, String>,
     pub cycles: Vec<PaletteCycle>,
     pub tilesets: TileSetLibrary,
-    animated: [bool; 256],
+    pub animated: [bool; 256],
 }
 
 impl GameData {

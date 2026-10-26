@@ -59,6 +59,9 @@ pub fn is_campaign(mission: &str) -> bool {
         && mission[4..].bytes().all(|b| b.is_ascii_digit())
 }
 
+/// Cells the minimap shows across and down (Mapa.cpp, mode 3).
+pub const MINIMAP_CELLS: i32 = 24;
+
 /// Seconds between steps of the resource counters (a game tick).
 const COUNTER_TICK: f32 = 0.02;
 
@@ -140,6 +143,9 @@ pub struct Scene {
     pub messages: Vec<String>,
     pub minimap: Vec<u32>,
     pub minimap_size: (u32, u32),
+    /// The minimap's first cell shown: it shows 24 x 24 cells and follows
+    /// the view (Mapa.cpp 0x51b8c0).
+    pub minimap_origin: std::cell::Cell<(i32, i32)>,
     /// Running one-shot animations (explosions, splashes).
     pub effects: Vec<Effect>,
     rng: Rng,
@@ -282,7 +288,19 @@ impl Scene {
                 list.join(" ")
             );
         }
-        let (mw, mh, minimap) = terrain.minimap(&palette_lut(data, 0));
+        // The minimap: the map in its small (`s_`) tiles, 8 pixels a cell
+        // (Mapa.cpp), animated colours kept as such.
+        let indices: [u32; 256] = std::array::from_fn(|i| {
+            if data.animated[i] {
+                crate::assets::ANIMATED | i as u32
+            } else {
+                crate::assets::rgb(data.palette.0[i])
+            }
+        });
+        let (mw, mh, minimap) = match Terrain::small(data, &grid, &mut caches.tiles, &indices) {
+            Ok(small) => small,
+            Err(_) => terrain.minimap(&palette_lut(data, 0)),
+        };
         let nav = NavGrid::from_map(&grid);
         let cells = (nav.width * nav.height) as usize;
         let players = players(&archive).unwrap_or_default();
@@ -317,6 +335,7 @@ impl Scene {
             human,
             minimap,
             minimap_size: (mw, mh),
+            minimap_origin: Default::default(),
             effects: Vec::new(),
             rng: Rng(0x1234_5678),
             ai_timer: 0.0,
@@ -724,6 +743,28 @@ impl Scene {
     }
 
     /// Advances the simulation by `dt` seconds.
+    /// Scrolls the minimap only as far as keeps the view, whose top-left
+    /// cell is `cell` and size `size` cells, inside it (0x51b8c0).
+    pub fn follow_view(&self, cell: (i32, i32), size: (i32, i32)) {
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        let follow = |origin: i32, at: i32, view: i32, map: i32| {
+            let shown = MINIMAP_CELLS.min(map);
+            let mut o = origin;
+            if at < o {
+                o = at;
+            }
+            if o + shown - view < at {
+                o = at - shown + view;
+            }
+            o.clamp(0, (map - shown).max(0))
+        };
+        let (ox, oy) = self.minimap_origin.get();
+        self.minimap_origin.set((
+            follow(ox, cell.0, size.0, w),
+            follow(oy, cell.1, size.1, h),
+        ));
+    }
+
     pub fn update(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         self.shown_clock += dt;
         while self.shown_clock >= COUNTER_TICK {

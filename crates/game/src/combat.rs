@@ -755,17 +755,12 @@ pub fn refit_cost(upgrade: Upgrade, level: u8, kind: u8) -> u32 {
     base * SIZE[kind as usize % 12]
 }
 
-/// How much hull damage a ship of armour level 0-2 takes, how much harder
-/// a ram of level 0-2 strikes, and how much faster rigging of level 0-2
-/// sails. Placeholders: where the original applies these levels has not
-/// been found yet (it also has ships refitted at the smithy; here a level
-/// covers all of a player's ships). Weapon levels use the damage table.
+/// How much hull damage a ship of armour level 0-2 takes, and how much
+/// faster rigging of level 0-2 sails. Placeholders: where the original
+/// applies these levels has not been found yet. Weapon levels use the
+/// damage table; ram levels, the ram quality table (`ram_odds`).
 pub fn armour_factor(level: u8) -> f32 {
     [1.0, 0.85, 0.7][level.min(2) as usize]
-}
-
-pub fn ram_factor(level: u8) -> f32 {
-    [1.0, 1.25, 1.5][level.min(2) as usize]
 }
 
 pub fn speed_factor(level: u8) -> f32 {

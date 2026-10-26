@@ -105,6 +105,13 @@ pub struct FogArt {
     pub cloud: Image,
     pub dark: Vec<openac_formats::Mask>,
     pub fog: Vec<openac_formats::Mask>,
+    /// The minimap's: `<n>OBL_SM` and the 8x8 `s_DARK`/`s_FOG` masks.
+    pub small_cloud: Option<Image>,
+    pub small_dark: Vec<openac_formats::Mask>,
+    pub small_fog: Vec<openac_formats::Mask>,
+    /// The minimap's object icons (`LMAP8X8`, `LMAP16X16`: columns of
+    /// 8x8 and 16x16 icons), if the menus archive is there.
+    pub icons: Option<(Image, Image)>,
 }
 
 impl FogArt {
@@ -143,6 +150,16 @@ impl FogArt {
             cloud,
             dark: masks("b_DARK")?,
             fog: masks("b_FOG")?,
+            small_cloud: data
+                .load_image(lib, &format!("{theme}OBL_SM"), false)?
+                .or(data.load_image(lib, "0OBL_SM", false)?),
+            small_dark: masks("s_DARK").unwrap_or_default(),
+            small_fog: masks("s_FOG").unwrap_or_default(),
+            icons: data.menus.as_ref().and_then(|m| {
+                let small = data.load_image(m, "LMAP8X8", false).ok().flatten()?;
+                let big = data.load_image(m, "LMAP16X16", false).ok().flatten()?;
+                Some((small, big))
+            }),
         })
     }
 }
@@ -303,12 +320,12 @@ impl Scene {
             return true;
         }
         let t = TILE_SIZE as f32;
-        let seen = self.seen((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let (cx, cy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
         let moves = o.ship.is_some() || matches!(o.class, ObjectClass::Monster(_));
         if moves {
-            seen == Seen::InSight
+            self.seen(cx, cy) == Seen::InSight
         } else {
-            seen >= Seen::Explored
+            self.seen(cx, cy) >= Seen::Explored
         }
     }
 

@@ -503,8 +503,13 @@ impl Scene {
         let angle = combat::ram_angle(sa.heading, st.heading);
         // The feather of Boreas strengthens the ram.
         let ram = (sa.ram + sa.has_treasure(objects::FEATHER) as u8).min(2);
-        let odds = combat::ram_odds((sa.kind, sa.crew), (st.kind, st.crew), angle) as f32
-            * combat::ram_factor(ram)
+        // The ram quality table (0x598054) is read by the ships' ram levels.
+        let with_ram = |crew: combat::Crew, class: u8| combat::Crew { class, ..crew };
+        let odds = combat::ram_odds(
+            (sa.kind, with_ram(sa.crew, ram)),
+            (st.kind, with_ram(st.crew, st.ram)),
+            angle,
+        ) as f32
             * combat::armour_factor(st.armour);
         let max = |o: &MapObject| o.combat.as_ref().map_or(0.0, |c| c.max_hull);
         // Placeholder scale: a ram at the best odds takes half the target's hull.

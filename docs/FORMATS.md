@@ -722,6 +722,46 @@ them. A settlement's building page (0x43c740, page 2) packs what may be
 built in this order: port, the three forts, workshop, shipyard, smithy,
 school, Temple of the Sea, Temple of War.
 
+## Object panel (ships)
+
+`c_load.cpp` (0x4f9520) lays a ship's slots in a grid of four columns 48
+apart from bar (9, 210), rows 51 apart, the first cell the portrait's. Each
+cell is `COBJ_BKSMSLOT` (47x50) with a `COBJ_SSLOT` picture at (1, 1) and,
+for crew, weapons and cargo, a bar: black, 4 high, from (1, 45), its
+length (w - 2) * health, two lines of colour inside (palette 200/199 green,
+203/157 yellow below half, 65/68 red below a quarter). The list (0x4e5e40):
+for warships each crew and weapon unit (pictures 10-12 the marines, 13-15
+for nation 3, item - 2 for weapons), the unique ships' own weapon, empty
+places (picture 0) up to a per-type count (0x597ae4, big weapons taking
+two), the armour (0x22 + level) and ram (0x26 + level) where the type has
+them (0x597b14, 0x597b20); for boats and merchants a hundred units of
+cargo a slot (0x2a amber, 0x2b fish, 0x2c leviathan; empty 0x29) up to 4 or
+10; then from the eighth place treasures (0x3a + kind, 0x5005a0; empty
+0x39) and heroes (0x30 + hero; empty 0x2f) by per-type counts (0x597afc,
+0x597b08). A ship's armour level is record field 15 and its ram level field
+14 less 3 (0x4dfa90); the ram quality table 0x598054 is read by ram level.
+The strip above the buttons is `CCTRL_CLRDEF1` (a relief) on a main page,
+`CCTRL_CLRDEF2` on others, at y 366.
+
+## Selection box
+
+Around the object's picture, 2 pixels out: 13-pixel corner angles in
+palette 203 with palette 109 inside them and a small highlight; the hull
+bar on the top edge from 14 in, (width - 28) long, 4 high, as the slot bars.
+
+## Minimap
+
+Mapa.cpp (0x51b8c0): in the bar a 24 x 24-cell window at bar (8, 8), 8
+pixels a cell, a smaller map from the top left; it scrolls only as far as
+keeps the view inside it. The terrain in the `s_` tiles; object icons
+(`LMAP8X8`, `LMAP16X16` for settlements and towns, from `controlm.dkx`): a
+player's by nation (shape: disc, flag, diamond, cross) and player (colour),
+barbarians 16, the rest by class (0x50da60: amber 0x11, fish 0x12, ...) at
+their top-left cell, black see-through; then the fog as in the view in the
+small masks and `<n>OBL_SM`, over the icons of things that stay put (ships
+and creatures only shown in sight); then the view as `LMAPVIEW_n`, a dashed
+red frame.
+
 ## Resource counters
 
 The money panel (0x505530) draws each amount as `%7d` centred in a black

@@ -3465,6 +3465,16 @@ impl App {
         self.last_frame = now;
         self.time_ms = (now - self.started).as_millis() as u64;
         self.update(dt);
+        let (screen, _) = self.placement();
+        let (vw, vh) = self.camera.view_size(&screen);
+        let t = openac_formats::map::TILE_SIZE as f32;
+        self.scene.follow_view(
+            (
+                (self.camera.x / t).floor() as i32,
+                (self.camera.y / t).floor() as i32,
+            ),
+            ((vw / t).ceil() as i32, (vh / t).ceil() as i32),
+        );
 
         let window = self.window_size();
         self.drawn_size = window;

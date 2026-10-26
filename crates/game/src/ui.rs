@@ -34,6 +34,11 @@ const BAR_W: u32 = 208;
 const UI_H: u32 = 600;
 const MINIMAP_POS: (u32, u32) = (4, 4);
 const OBJECT_PANEL_POS: (u32, u32) = (3, 206);
+/// The strip above the command buttons (0x4f06f0: y 0x16e).
+const STRIP_Y: u32 = 366;
+/// The object panel's slot grid (measured on the original).
+const SLOTS_ORIGIN: (u32, u32) = (9, 210);
+const SLOT_STEP: (u32, u32) = (48, 51);
 /// Command buttons (0x4f31b0): 4 columns x 3 rows of 49x49 buttons.
 const BUTTON_ORIGIN: (u32, u32) = (2, 403);
 const BUTTON_STEP: (u32, u32) = (51, 52);
@@ -68,6 +73,15 @@ pub struct Interface {
     bar: Image,
     minimap_frame: Image,
     object_panel: Image,
+    /// The strip above the command buttons (0x4f06f0): `CCTRL_CLRDEF1`, a
+    /// relief, on an object's main page; `CCTRL_CLRDEF2`, plain, on the
+    /// others.
+    strips: [Option<Image>; 2],
+    /// A slot cell's background (`COBJ_BKSMSLOT`, 47x50).
+    small_slot: Option<Image>,
+    /// The health bar colours (palette 200 and 199, 203 and 157, 65 and
+    /// 68: green, yellow, red).
+    bar_colours: [[u32; 2]; 3],
     /// The see-through part of `field` where the world is shown.
     field_view: Rect,
     minimap_area: Rect,
@@ -161,6 +175,10 @@ impl Interface {
             bar: load("GAME_CTRLBAR", false)?,
             minimap_frame,
             object_panel,
+            strips: [1, 2].map(|i| load(&format!("CCTRL_CLRDEF{i}"), false).ok()),
+            small_slot: load("COBJ_BKSMSLOT", false).ok(),
+            bar_colours: [[200, 199], [203, 157], [65, 68]]
+                .map(|pair| pair.map(|i| rgb(data.palette.0[i]))),
             field_view,
             minimap_area,
             picture_slot,
@@ -223,7 +241,7 @@ impl Interface {
             window_h: window.1,
         };
         let (mx, my, mw, mh) = self.minimap_area;
-        let minimap = MinimapRect::fit(
+        let minimap = MinimapRect::window(
             scene,
             (bar_x + ((MINIMAP_POS.0 + mx) as f32 * scale)) as u32,
             to_px(MINIMAP_POS.1 + my),
@@ -289,6 +307,7 @@ impl Interface {
             oy,
             s,
         );
+        self.draw_strip(frame, layout, true);
         let (mx, my) = self.money_panel_origin(layout);
         blit_scaled(frame, &self.money_panel, full(&self.money_panel), mx, my, s);
         blit_scaled(
@@ -541,6 +560,77 @@ impl Interface {
         }
     }
 
+    /// The strip above the command buttons: the relief on a main page.
+    fn draw_strip(&self, frame: &mut Frame, layout: &Layout, main: bool) {
+        if let Some(img) = &self.strips[usize::from(!main)] {
+            let (w, h) = (img.width, img.height);
+            let s = layout.scale;
+            blit_scaled(
+                frame,
+                img,
+                (0, 0, w, h),
+                layout.bar_x,
+                STRIP_Y as f32 * s,
+                s,
+            );
+        }
+    }
+
+    /// A ship's slot grid (c_load.cpp): four cells to a row, 48 apart from
+    /// bar (9, 210), rows 51 apart; the first cell is the portrait's.
+    fn draw_slots(
+        &self,
+        frame: &mut Frame,
+        data: &GameData,
+        layout: &Layout,
+        cells: &[Option<SlotCell>],
+    ) {
+        let s = layout.scale;
+        for (i, cell) in cells.iter().enumerate() {
+            let Some(cell) = cell else { continue };
+            let n = i as u32 + 1;
+            let (x, y) = (
+                layout.bar_x + (SLOTS_ORIGIN.0 + n % 4 * SLOT_STEP.0) as f32 * s,
+                (SLOTS_ORIGIN.1 + n / 4 * SLOT_STEP.1) as f32 * s,
+            );
+            let (w, h) = self
+                .small_slot
+                .as_ref()
+                .map_or((47, 50), |b| (b.width, b.height));
+            if let Some(bk) = &self.small_slot {
+                blit_scaled(frame, bk, (0, 0, w, h), x, y, s);
+            }
+            if let Some(img) = self.picture(data, &format!("COBJ_SSLOT_{:02}", cell.frame)) {
+                blit_scaled(frame, &img, (0, 0, img.width, img.height), x + s, y + s, s);
+            }
+            if let Some(pct) = cell.bar {
+                // A black bar 4 high, then two lines of colour (0x4f9520).
+                let len = (w - 2) * pct as u32 / 100;
+                let colours = if pct >= 50 {
+                    self.bar_colours[0]
+                } else if pct >= 25 {
+                    self.bar_colours[1]
+                } else {
+                    self.bar_colours[2]
+                };
+                let mut fill = |x0: u32, y0: u32, x1: u32, y1: u32, c: u32| {
+                    let (px0, py0) = ((x + x0 as f32 * s) as i64, (y + y0 as f32 * s) as i64);
+                    let (px1, py1) = ((x + x1 as f32 * s) as i64, (y + y1 as f32 * s) as i64);
+                    for py in py0..py1 {
+                        for px in px0..px1 {
+                            frame.put(px, py, c);
+                        }
+                    }
+                };
+                fill(1, h - 5, 1 + len, h - 1, 0);
+                if len > 2 {
+                    fill(2, h - 4, len, h - 3, colours[0]);
+                    fill(2, h - 3, len, h - 2, colours[1]);
+                }
+            }
+        }
+    }
+
     /// Offset of the picture slot within the object panel.
     pub fn picture_slot_offset(&self) -> (u32, u32) {
         (self.picture_slot.0, self.picture_slot.1)
@@ -766,7 +856,15 @@ impl GameView<'_> {
         draw_objects(frame, &screen, self.scene, self.camera, &lut, self.time_ms);
         draw_fog(frame, &screen, self.scene, self.camera, &lut);
         for &id in self.selected.iter().chain(self.group) {
-            draw_selection(frame, &screen, self.scene, self.camera, id, self.time_ms);
+            draw_selection(
+                frame,
+                &screen,
+                self.scene,
+                self.camera,
+                id,
+                self.time_ms,
+                &lut,
+            );
         }
         if let Some(b) = self.select_box {
             crate::render::draw_box(frame, &screen, b);
@@ -801,6 +899,9 @@ impl GameView<'_> {
                         );
                     }
                 }
+                if self.page != Page::Main {
+                    ui.draw_strip(frame, layout, false);
+                }
                 let nation = self.scene.human.map_or(1, |h| h.nation);
                 ui.draw_menu(
                     frame,
@@ -811,19 +912,29 @@ impl GameView<'_> {
                     self.hover_button,
                     self.time_ms,
                 );
+                let slots = ship_slots(obj);
+                if !slots.is_empty() {
+                    ui.draw_slots(frame, self.data, layout, &slots);
+                }
+                // Ships show their slots instead (no text, as on the
+                // original).
                 let (tx, ty) = layout.info_text;
-                let lines = wrap(
-                    self.text,
-                    &match self.group.len() {
-                        0 => details(self.scene, obj),
-                        n => format!(
-                            "{}. With {n} more ship{}",
-                            details(self.scene, obj),
-                            if n == 1 { "" } else { "s" }
-                        ),
-                    },
-                    (layout.info_width / text_scale as f32) as u32,
-                );
+                let lines = if !slots.is_empty() {
+                    Vec::new()
+                } else {
+                    wrap(
+                        self.text,
+                        &match self.group.len() {
+                            0 => details(self.scene, obj),
+                            n => format!(
+                                "{}. With {n} more ship{}",
+                                details(self.scene, obj),
+                                if n == 1 { "" } else { "s" }
+                            ),
+                        },
+                        (layout.info_width / text_scale as f32) as u32,
+                    )
+                };
                 for (i, line) in lines.iter().enumerate() {
                     let y = ty + (i as u32 * (self.text.line_height() + 1) * text_scale) as f32;
                     self.text.draw(frame, tx as i32, y as i32, text_scale, line);
@@ -831,7 +942,7 @@ impl GameView<'_> {
             }
         }
         if self.interface.is_none() || !panel_open {
-            draw_minimap(frame, &minimap, self.scene, self.camera, &screen);
+            draw_minimap(frame, &minimap, self.scene, self.camera, &screen, &lut);
         }
         if let (Some(ui), Some(layout), Some(view)) = (self.interface, &layout, &self.panel) {
             let origin = (layout.bar_x, 0.0);
@@ -1065,4 +1176,141 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
         );
     }
     text
+}
+
+/// A cell of the object panel's slot grid (c_load.cpp 0x4f9520): a
+/// `COBJ_SSLOT` picture and, for crew, weapons and cargo, a health or fill
+/// bar in percent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SlotCell {
+    pub frame: u8,
+    pub bar: Option<u8>,
+}
+
+/// Slot counts by ship type (0x597ae4 weapon and crew places, 0x597af0
+/// cargo, 0x597afc treasures, 0x597b08 heroes; 0x597b14 and 0x597b20
+/// whether it shows its armour and ram).
+const SLOT_ITEMS: [usize; 12] = [0, 0, 5, 7, 4, 3, 2, 2, 0, 1, 1, 3];
+const SLOT_CARGO: [usize; 12] = [4, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const SLOT_TREASURES: [usize; 12] = [1, 1, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0];
+const SLOT_HEROES: [usize; 12] = [0, 0, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0];
+const SLOT_ARMOUR: [bool; 12] = [
+    false, false, true, true, true, true, false, true, false, true, false, false,
+];
+const SLOT_RAM: [bool; 12] = [
+    false, false, true, false, false, true, true, false, false, false, false, false,
+];
+
+/// A treasure's picture among the slots (0x5005a0): kinds 6-27 in order,
+/// but for kind 17 last.
+fn treasure_frame(kind: u8) -> u8 {
+    let n = match kind {
+        6 | 7 => kind - 6,
+        9..=16 => kind - 7,
+        17 => 20,
+        18..=27 => kind - 8,
+        _ => return 0x3a,
+    };
+    0x3a + n
+}
+
+/// A ship's slot cells by grid position (0x4e5e40): its crew and weapons
+/// (merchants: their cargo, a hundred units a slot), empty places, armour
+/// and ram; then, from the eighth place on, treasures and heroes, with their
+/// empty places dimmed.
+pub fn ship_slots(obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
+    let Some(ship) = &obj.ship else {
+        return Vec::new();
+    };
+    let kind = ship.kind as usize % 12;
+    let mut cells: Vec<Option<SlotCell>> = Vec::new();
+    let full = |frame: u8| {
+        Some(SlotCell {
+            frame,
+            bar: Some(100),
+        })
+    };
+    let bare = |frame: u8| Some(SlotCell { frame, bar: None });
+    if kind <= 1 {
+        let capacity = SLOT_CARGO[kind];
+        if let Some(goods) = ship.cargo_kind.filter(|_| ship.cargo > 0.0) {
+            let frame = match goods {
+                crate::objects::Resource::Fish => 0x2b,
+                crate::objects::Resource::Leviathan => 0x2c,
+                crate::objects::Resource::Amber => 0x2a,
+            };
+            let units = (ship.cargo / 100.0).ceil() as usize;
+            for k in 0..units.min(capacity) {
+                let left = ship.cargo - k as f32 * 100.0;
+                cells.push(Some(SlotCell {
+                    frame,
+                    bar: Some(left.clamp(0.0, 100.0).round() as u8),
+                }));
+            }
+        }
+        while cells.len() < capacity {
+            cells.push(bare(0x29));
+        }
+    } else {
+        let weapons = obj
+            .combat
+            .as_ref()
+            .map(|c| c.weapons.as_slice())
+            .unwrap_or(&[]);
+        // Soldiers look different for nation 3.
+        let nation3 = obj.owner.is_some_and(|o| o.0 == 3);
+        let mut big = 0;
+        for item in 0..9u8 {
+            let count = if item < 3 {
+                ship.crew.squads[item as usize] as usize
+            } else {
+                weapons.iter().filter(|&&w| w == item).count()
+            };
+            for _ in 0..count {
+                let frame = match item {
+                    0..=2 if kind == 11 => item + 12 + 0x43,
+                    0..=2 => item + if nation3 { 13 } else { 10 },
+                    _ => item - 2,
+                };
+                cells.push(full(frame));
+                if (6..9).contains(&item) {
+                    big += 1;
+                }
+            }
+        }
+        // The unique ships' own weapon.
+        match kind {
+            8 => cells.push(full(7)),
+            9 => cells.push(full(8)),
+            10 => cells.push(full(9)),
+            _ => {}
+        }
+        while cells.len() + big < SLOT_ITEMS[kind] {
+            cells.push(bare(0));
+        }
+        if SLOT_ARMOUR[kind] {
+            cells.push(bare(0x22 + ship.armour.min(2)));
+        }
+        if SLOT_RAM[kind] {
+            cells.push(bare(0x26 + ship.ram.min(2)));
+        }
+    }
+    if SLOT_TREASURES[kind] + SLOT_HEROES[kind] > 0 {
+        while cells.len() < 7 {
+            cells.push(None);
+        }
+        for t in ship.treasures.iter().take(SLOT_TREASURES[kind]) {
+            cells.push(full(treasure_frame(t.kind)));
+        }
+        for _ in ship.treasures.len()..SLOT_TREASURES[kind] {
+            cells.push(bare(0x39));
+        }
+        for &h in ship.heroes.iter().take(SLOT_HEROES[kind]) {
+            cells.push(bare(0x30 + h));
+        }
+        for _ in ship.heroes.len()..SLOT_HEROES[kind] {
+            cells.push(bare(0x2f));
+        }
+    }
+    cells
 }
