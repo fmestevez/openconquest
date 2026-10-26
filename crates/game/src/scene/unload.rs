@@ -11,16 +11,23 @@ use super::{heading_towards, Scene};
 use crate::assets::GameData;
 use crate::objects::{self, Caches, Layer};
 
-/// Units of cargo unloaded a second. Placeholder.
-pub const UNLOAD_RATE: f32 = 100.0;
+/// Units of cargo unloaded a second. An estimate (the original's looked
+/// slower than our first 100).
+pub const UNLOAD_RATE: f32 = 40.0;
 /// Seconds between porters setting out, and how fast they walk (world
 /// pixels a second). Placeholders.
 const PORTER_EVERY: f32 = 1.2;
 const PORTER_SPEED: f32 = 40.0;
-/// Milliseconds per frame of a walkway going down, a net and the porters
-/// bringing amber aboard: one a game tick (0x4b0590, 0x4ae760).
+/// How far below a fishing ship's middle its net hangs.
+const NET_DROP: f32 = 16.0;
+/// Milliseconds per frame of a walkway to amber, a net and the porters
+/// bringing amber aboard: one a game tick (0x4b0590, 0x4ae760); a load
+/// comes aboard each round.
 const PLANK_FRAME_MS: f32 = 20.0;
-const PORTER_FRAME_MS: u64 = 60;
+/// Milliseconds per frame of the walkway laid down to unload: slower (an
+/// estimate; only shown).
+const WALKWAY_FRAME_MS: f32 = 60.0;
+const PORTER_FRAME_MS: u64 = 100;
 
 /// What a merchant is shown doing (the ship's activity in Run_Ship.cpp,
 /// 0x4e1bb0).
@@ -65,17 +72,26 @@ pub struct Porter {
 }
 
 impl Plank {
+    /// Milliseconds per frame of its animation.
+    fn frame_ms(&self) -> f32 {
+        if self.activity == Activity::Unloading {
+            WALKWAY_FRAME_MS
+        } else {
+            PLANK_FRAME_MS
+        }
+    }
+
     /// Seconds a round of the work takes (the porters' or the net's
     /// cycle), once the walkway is down; `None` before.
     pub fn round_seconds(&self) -> Option<f32> {
-        let down = self.age_ms >= self.frames.len() as f32 * PLANK_FRAME_MS;
+        let down = self.age_ms >= self.frames.len() as f32 * self.frame_ms();
         (down && !self.looping.is_empty())
-            .then(|| self.looping.len() as f32 * PLANK_FRAME_MS / 1000.0)
+            .then(|| self.looping.len() as f32 * self.frame_ms() / 1000.0)
     }
 
     /// The walkway's frame, and the looped work over it once it is down.
     pub fn frame(&self) -> Vec<&[Layer]> {
-        let step = (self.age_ms / PLANK_FRAME_MS) as usize;
+        let step = (self.age_ms / self.frame_ms()) as usize;
         let n = self.frames.len();
         let mut out = Vec::new();
         if n > 0 {
@@ -156,6 +172,13 @@ impl Scene {
             }
         };
         let (x, y) = (sx + ux * reach / 2.0, sy + uy * reach / 2.0);
+        // The net hangs in the water below the hull (measured on the
+        // original: its middle about 16 pixels under the ship's).
+        let y = if activity == Activity::Fishing {
+            y + NET_DROP
+        } else {
+            y
+        };
         let shore = (sx + ux * reach, sy + uy * reach);
         self.planks.push(Plank {
             ship,
@@ -205,7 +228,7 @@ impl Scene {
             p.clock += dt;
             // Porters start once the walkway is down.
             if p.activity == Activity::Unloading
-                && p.age_ms >= p.frames.len() as f32 * PLANK_FRAME_MS
+                && p.age_ms >= p.frames.len() as f32 * p.frame_ms()
                 && p.clock >= PORTER_EVERY
             {
                 p.clock = 0.0;

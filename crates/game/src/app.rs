@@ -415,6 +415,10 @@ pub struct App {
     selected_slot: Option<usize>,
     help_text: Vec<String>,
     help_first: usize,
+    /// The object panel's slot cell chosen: the object and the cell.
+    chosen_cell: Option<(u32, usize)>,
+    /// A unit picked up from a settlement's stock: the settlement and item.
+    carrying: Option<(u32, u8)>,
     settings: Settings,
     /// Quit at the next opportunity.
     quit: bool,
@@ -562,6 +566,8 @@ impl App {
             selected_slot: None,
             help_text: Vec::new(),
             help_first: 0,
+            chosen_cell: None,
+            carrying: None,
             settings: Settings::default(),
             quit: false,
             fog,
@@ -647,6 +653,10 @@ impl App {
             status,
             time_ms: self.time_ms,
             hover_button: self.cursor.and_then(|c| self.button_at(c)),
+            chosen_cell: self
+                .chosen_cell
+                .filter(|&(site, _)| Some(site) == self.selected)
+                .map(|(_, i)| i),
             page: self.page,
             site: None,
             briefing: self.briefing,
@@ -2131,6 +2141,53 @@ impl App {
         Some(((wx / t).floor() as i32, (wy / t).floor() as i32))
     }
 
+    /// A click on the object panel's slot cells: a settlement's stocked
+    /// item is chosen, and chosen again picked up to load onto a ship
+    /// (c_load.cpp 0x4f9da0).
+    fn slot_click(&mut self, pos: PhysicalPosition<f64>) -> bool {
+        if !self.show_interface || Panels::covers_bar(self.tab) {
+            return false;
+        }
+        let layout = self
+            .interface
+            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let Some(i) = self
+            .interface
+            .slot_cell_at(&layout, pos.x as f32, pos.y as f32)
+        else {
+            return false;
+        };
+        let Some(site) = self.selected else {
+            return false;
+        };
+        let Some(obj) = self.scene.objects.iter().find(|o| o.id == site) else {
+            return false;
+        };
+        let cells = crate::ui::settlement_slots(&self.scene, obj);
+        let Some(Some(cell)) = cells.get(i) else {
+            return true;
+        };
+        // Places 3 and 7 are the armour and goods stores.
+        let item = [0, 1, 2, 99, 3, 4, 5, 99, 6, 7, 8]
+            .get(i)
+            .copied()
+            .unwrap_or(99);
+        if cell.count == 0 || item == 99 || !self.scene.is_own(obj) {
+            self.chosen_cell = None;
+            return true;
+        }
+        if self.chosen_cell == Some((site, i)) {
+            self.carrying = Some((site, item));
+            self.say(format!(
+                "Choose a ship alongside to take the {}",
+                crate::combat::ITEM_NAMES[item as usize]
+            ));
+        } else {
+            self.chosen_cell = Some((site, i));
+        }
+        true
+    }
+
     /// The command slot under a window position, if the interface is shown.
     fn button_at(&self, pos: PhysicalPosition<f64>) -> Option<usize> {
         if !self.show_interface || Panels::covers_bar(self.tab) {
@@ -2675,6 +2732,23 @@ impl App {
         if self.panel_click(pos) {
             return;
         }
+        if self.slot_click(pos) {
+            return;
+        }
+        // A unit picked up from a settlement's stock goes aboard the ship
+        // clicked.
+        if let Some((site, item)) = self.carrying.take() {
+            self.status = None;
+            match self.object_at(pos) {
+                Some(ship) => {
+                    if let Err(e) = self.issue(Order::LoadItem { site, ship, item }) {
+                        self.say(e);
+                    }
+                }
+                None => self.say("Choose a ship alongside the settlement"),
+            }
+            return;
+        }
         if let Some(slot) = self.button_at(pos) {
             self.press_button(slot);
             return;
@@ -3179,6 +3253,11 @@ impl App {
     }
 
     fn right_click(&mut self, pos: PhysicalPosition<f64>) {
+        // A unit picked up is put back.
+        if self.carrying.take().is_some() {
+            self.status = None;
+            return;
+        }
         // Ships of a group spread out around the point they are sent to.
         for (k, id) in self.selection().into_iter().enumerate() {
             self.right_click_for(id, k, pos);
@@ -3729,6 +3808,10 @@ impl ApplicationHandler for App {
                     screen.y as f32 + screen.h as f32 / 2.0,
                 );
                 match code {
+                    KeyCode::Escape if self.carrying.is_some() => {
+                        self.carrying = None;
+                        self.status = None;
+                    }
                     KeyCode::Escape if self.pending.is_some() => {
                         self.pending = None;
                         self.status = None;

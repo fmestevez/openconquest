@@ -216,15 +216,15 @@ fn boat_founds_settlement() {
             .count()
     };
     let before = settlements(&scene);
-    // A shore cell well away from the boat's home.
+    // An inland cell near the sea, well away from the boat's home.
     let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
     let shore = (0..h)
         .rev()
         .flat_map(|y| (0..w).rev().map(move |x| (x, y)))
         .find(|&(x, y)| {
             scene.check_ground(SETTLEMENT, x, y).is_ok()
-                && [(1, 0), (-1, 0), (0, 1), (0, -1)]
-                    .iter()
+                && (-2..=2)
+                    .flat_map(|dy| (-2..=2).map(move |dx| (dx, dy)))
                     .any(|(dx, dy)| scene.nav.is_water(x + dx, y + dy))
         })
         .unwrap();
@@ -677,6 +677,8 @@ fn workshop_builds_weapons() {
         .find(|o| scene.is_own(o) && o.ship.is_some())
         .unwrap()
         .id;
+    // Only the workshop's stock, not the settlement's.
+    scene.garrisons.remove(&home);
     let w = scene.object_index(workshop).unwrap();
     let (wx, wy) = (scene.objects[w].x, scene.objects[w].y);
     let i = scene.object_index(ship).unwrap();
@@ -3294,4 +3296,45 @@ fn warships_open_the_building_page() {
     assert!(build.enabled);
     let ground = crate::commands::menu(&scene, killer, crate::commands::Page::Ground);
     assert_eq!(ground[0].unwrap().command, crate::commands::Command(0x16));
+}
+
+/// A settlement's stocked marine goes aboard a ship alongside, one at a time
+/// (needs `OPENAC_DATA`).
+#[test]
+fn stock_loads_onto_a_ship_alongside() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let home = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.class == ObjectClass::Building(SETTLEMENT))
+        .unwrap();
+    let (hx, hy, home) = (home.x, home.y, home.id);
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 7))
+        .unwrap()
+        .id;
+    assert!(scene.load_item(home, ship, 1).is_err(), "too far away");
+    let i = scene.object_index(ship).unwrap();
+    scene.objects[i].x = hx + 64.0;
+    scene.objects[i].y = hy;
+    // Its two places are taken (a bowman and a scorpion): make room.
+    let full = scene.load_item(home, ship, 1);
+    assert_eq!(full, Err("No room aboard".to_string()));
+    scene.objects[i].ship.as_mut().unwrap().crew.squads = [0; 3];
+    let before = scene.objects[i].ship.as_ref().unwrap().crew.squads[1];
+    scene.load_item(home, ship, 1).unwrap();
+    let i = scene.object_index(ship).unwrap();
+    assert_eq!(
+        scene.objects[i].ship.as_ref().unwrap().crew.squads[1],
+        before + 1
+    );
+    assert_eq!(scene.garrison(home)[1], 0);
+    assert!(scene.load_item(home, ship, 1).is_err(), "none left");
 }

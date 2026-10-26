@@ -59,6 +59,14 @@ pub fn is_campaign(mission: &str) -> bool {
         && mission[4..].bytes().all(|b| b.is_ascii_digit())
 }
 
+/// Seconds a shoal takes to surface and spread before it may move on (its
+/// states 1-3; measured on the original: a shoal stays two to four
+/// seconds).
+const SHOAL_SURFACING: f32 = 1.5;
+
+/// An animation's frames, each a stack of layers.
+pub type Frames = Vec<Vec<objects::Layer>>;
+
 /// Cells the minimap shows across and down (Mapa.cpp, mode 3).
 pub const MINIMAP_CELLS: i32 = 24;
 
@@ -87,9 +95,9 @@ pub struct Construction {
     pub total: f32,
 }
 
-/// How far from the settlement that orders it a building may go, in cells.
-/// Placeholder.
-pub const BUILD_RADIUS: i32 = 6;
+/// How far from the settlement's own cells a moorage or shipyard may go, in
+/// cells; other buildings one less (probed on the original in miss000).
+pub const BUILD_RADIUS: i32 = 2;
 /// How close a ship must lie to the site of the settlement it founds.
 pub const FOUND_REACH: i32 = 2;
 
@@ -149,6 +157,15 @@ pub struct Scene {
     /// Running one-shot animations (explosions, splashes).
     pub effects: Vec<Effect>,
     rng: Rng,
+    /// Fish shoals out of sight between moves: the zone and seconds until
+    /// they surface again; and those in sight: seconds until they leave
+    /// (FishClassTy, Fish.cpp 0x48dd80).
+    pub shoals_gone: std::collections::BTreeMap<u32, f32>,
+    shoals_shown: std::collections::BTreeMap<u32, f32>,
+    /// Seagulls (only shown) and their pictures: `GULLSPR`, `GULLSHD_SPR`.
+    pub gulls: Vec<gulls::Gull>,
+    gull_rng: Rng,
+    pub gull_art: std::rc::Rc<(Frames, Frames)>,
     /// Seconds until the computer players next decide.
     ai_timer: f32,
     /// Seconds since the mission started.
@@ -231,6 +248,7 @@ mod ai;
 mod battle;
 mod brain;
 mod creatures;
+mod gulls;
 mod orders;
 mod repair;
 mod sight;
@@ -302,6 +320,7 @@ impl Scene {
             Err(_) => terrain.minimap(&palette_lut(data, 0)),
         };
         let nav = NavGrid::from_map(&grid);
+        let gulls = Scene::new_gulls(nav.width, nav.height, &mut Rng(0x6011));
         let cells = (nav.width * nav.height) as usize;
         let players = players(&archive).unwrap_or_default();
         let human = players.iter().copied().find(|p| !p.computer);
@@ -338,6 +357,14 @@ impl Scene {
             minimap_origin: Default::default(),
             effects: Vec::new(),
             rng: Rng(0x1234_5678),
+            shoals_gone: Default::default(),
+            shoals_shown: Default::default(),
+            gulls,
+            gull_rng: Rng(0x6011_5eed),
+            gull_art: std::rc::Rc::new((
+                objects::sequence_frames(data, caches, "GULLSPR").unwrap_or_default(),
+                objects::sequence_frames(data, caches, "GULLSHD_SPR").unwrap_or_default(),
+            )),
             ai_timer: 0.0,
             clock: 0.0,
             fog: true,
@@ -495,6 +522,8 @@ impl Scene {
             clock: self.clock,
             ai_timer: self.ai_timer,
             rng: self.rng.clone(),
+            shoals_gone: self.shoals_gone.clone(),
+            shoals_shown: self.shoals_shown.clone(),
             research_levels: self.levels.iter().map(|(k, v)| (*k, *v)).collect(),
             sight: self.sight.iter().map(|&s| s as u8).collect(),
             research: self.research.clone(),
@@ -561,6 +590,8 @@ impl Scene {
         scene.clock = save.clock;
         scene.ai_timer = save.ai_timer;
         scene.rng = save.rng.clone();
+        scene.shoals_gone = save.shoals_gone.clone();
+        scene.shoals_shown = save.shoals_shown.clone();
         scene.levels = save.research_levels.iter().copied().collect();
         if save.sight.len() == scene.sight.len() {
             for (cell, &v) in scene.sight.iter_mut().zip(&save.sight) {
@@ -758,6 +789,66 @@ impl Scene {
     }
 
     /// Advances the simulation by `dt` seconds.
+    /// Fish shoals stay a while (25-75 ticks, and their surfacing), dive,
+    /// and come up a moment later on another free water cell of their zone
+    /// (Fish.cpp 0x48dd80, states 0, 4 and 5). One being fished stays.
+    fn move_shoals(&mut self, dt: f32) {
+        const TICK: f32 = 0.02;
+        let t = TILE_SIZE as f32;
+        let fished: Vec<u32> = self
+            .objects
+            .iter()
+            .filter_map(|o| match o.ship.as_ref()?.task {
+                Some(Task::Gather { deposit, .. }) => Some(deposit),
+                _ => None,
+            })
+            .collect();
+        let zones: Vec<usize> = (0..self.objects.len())
+            .filter(|&i| self.objects[i].class == ObjectClass::FishZone)
+            .collect();
+        for i in zones {
+            let id = self.objects[i].id;
+            if fished.contains(&id) {
+                continue;
+            }
+            if let Some(left) = self.shoals_gone.get_mut(&id) {
+                *left -= dt;
+                if *left > 0.0 {
+                    continue;
+                }
+                self.shoals_gone.remove(&id);
+                // Up to a hundred tries for a free water cell in the zone.
+                let f =
+                    |k: usize| self.objects[i].record.fields.get(k).copied().unwrap_or(0) as i32;
+                let (zx, zy, zw, zh) = (f(6), f(7), f(8).max(1), f(9).max(1));
+                for _ in 0..100 {
+                    let cx = zx + (self.rng.next() % zw as u32) as i32;
+                    let cy = zy + (self.rng.next() % zh as u32) as i32;
+                    if self.nav.is_water(cx, cy) {
+                        self.objects[i].x = cx as f32 * t + t / 2.0;
+                        self.objects[i].y = cy as f32 * t + t / 2.0;
+                        break;
+                    }
+                }
+                let stay = (self.rng.next() % 51 + 25) as f32 * TICK;
+                self.shoals_shown.insert(id, stay + SHOAL_SURFACING);
+                continue;
+            }
+            let left = self.shoals_shown.entry(id).or_insert(0.0);
+            *left -= dt;
+            if *left <= 0.0 {
+                self.shoals_shown.remove(&id);
+                let away = (self.rng.next() % 51 + 25) as f32 * TICK;
+                self.shoals_gone.insert(id, away);
+            }
+        }
+    }
+
+    /// Whether object `id` is a fish shoal gone below.
+    pub fn shoal_gone(&self, id: u32) -> bool {
+        self.shoals_gone.contains_key(&id)
+    }
+
     /// Scrolls the minimap only as far as keeps the view, whose top-left
     /// cell is `cell` and size `size` cells, inside it (0x51b8c0).
     pub fn follow_view(&self, cell: (i32, i32), size: (i32, i32)) {
@@ -779,6 +870,8 @@ impl Scene {
     }
 
     pub fn update(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+        self.move_shoals(dt);
+        self.move_gulls(dt);
         self.shown_clock += dt;
         while self.shown_clock >= COUNTER_TICK {
             self.shown_clock -= COUNTER_TICK;

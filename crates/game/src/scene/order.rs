@@ -91,6 +91,12 @@ pub enum Order {
     LoadCrew {
         ship: u32,
     },
+    /// One unit of `item` from a settlement's stock onto a ship alongside.
+    LoadItem {
+        site: u32,
+        ship: u32,
+        item: u8,
+    },
     BuildShip {
         site: u32,
         kind: u8,
@@ -201,6 +207,7 @@ impl Scene {
             Repair { ship, dock } => done(self.order_repair(ship, dock)),
             Mend { site, target } => done(self.order_mend(site, target)),
             LoadCrew { ship } => self.load_crew(ship),
+            LoadItem { site, ship, item } => done(self.load_item(site, ship, item)),
             BuildShip { site, kind } => done(self.start_ship(site, kind)),
             BuildArgo { site } => done(self.start_argo(site)),
             Train { site, item } => done(self.train(site, item)),

@@ -471,6 +471,25 @@ impl Interface {
     }
 
     /// The command slot under window position `(x, y)`.
+    /// The slot cell (its index in the panel's list) under window position
+    /// `(x, y)`.
+    pub fn slot_cell_at(&self, layout: &Layout, x: f32, y: f32) -> Option<usize> {
+        let s = layout.scale;
+        let (fx, fy) = ((x - layout.bar_x) / s, y / s);
+        let (ox, oy) = (fx - SLOTS_ORIGIN.0 as f32, fy - SLOTS_ORIGIN.1 as f32);
+        if ox < 0.0 || oy < 0.0 {
+            return None;
+        }
+        let (col, row) = (
+            (ox / SLOT_STEP.0 as f32) as u32,
+            (oy / SLOT_STEP.1 as f32) as u32,
+        );
+        if col >= 4 || row >= 3 || ox % SLOT_STEP.0 as f32 >= 47.0 {
+            return None;
+        }
+        (row * 4 + col).checked_sub(1).map(|i| i as usize)
+    }
+
     pub fn button_at(&self, layout: &Layout, x: f32, y: f32) -> Option<usize> {
         (0..SLOTS).find(|&i| {
             let (bx, by, size) = self.button_rect(layout, i);
@@ -593,6 +612,7 @@ impl Interface {
         data: &GameData,
         layout: &Layout,
         cells: &[Option<SlotCell>],
+        chosen: Option<usize>,
     ) {
         let s = layout.scale;
         for (i, cell) in cells.iter().enumerate() {
@@ -611,6 +631,12 @@ impl Interface {
             }
             if let Some(img) = self.picture(data, &format!("COBJ_SSLOT_{:02}", cell.frame)) {
                 blit_scaled(frame, &img, (0, 0, img.width, img.height), x + s, y + s, s);
+            }
+            // The chosen cell's frame (`COBJ_SACT`).
+            if chosen == Some(i) {
+                if let Ok(Some(img)) = data.load_image(&data.controls, "COBJ_SACT", false) {
+                    blit_scaled(frame, &img, (0, 0, img.width, img.height), x + s, y + s, s);
+                }
             }
             if let Some(mark) = cell.mark {
                 if let Ok(Some(img)) =
@@ -719,6 +745,8 @@ pub struct GameView<'a> {
     pub time_ms: u64,
     /// Command slot under the cursor.
     pub hover_button: Option<usize>,
+    /// The panel's slot cell chosen (its index), shown framed.
+    pub chosen_cell: Option<usize>,
     /// Which menu of the selected object is shown.
     pub page: Page,
     /// A building site being chosen: the cell and whether it is allowed.
@@ -942,7 +970,7 @@ impl GameView<'_> {
                     slots = settlement_slots(self.scene, obj);
                 }
                 if !slots.is_empty() {
-                    ui.draw_slots(frame, self.data, layout, &slots);
+                    ui.draw_slots(frame, self.data, layout, &slots, self.chosen_cell);
                 }
                 // Ships show their slots instead (no text, as on the
                 // original).

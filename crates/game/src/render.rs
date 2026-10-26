@@ -105,7 +105,29 @@ pub fn draw_objects(
         matches!(o.class, openac_formats::ObjectClass::Monster(0x1f8 | 0x1f9))
     };
     let visible = scene.objects.iter().filter(|o| scene.is_visible(o));
-    let (above, below): (Vec<_>, Vec<_>) = visible.partition(flying);
+    let (above, mut below): (Vec<_>, Vec<_>) = visible.partition(flying);
+    // Things on the water's surface (fish shoals, leviathans, whirlpools,
+    // reefs) under everything; the rest by how far down the map they reach,
+    // nearer ones over farther.
+    let surface = |o: &crate::objects::MapObject| {
+        matches!(
+            o.class,
+            openac_formats::ObjectClass::FishZone
+                | openac_formats::ObjectClass::WhaleZone
+                | openac_formats::ObjectClass::Whirlpool
+                | openac_formats::ObjectClass::Reef(_)
+        )
+    };
+    let bottom = |o: &crate::objects::MapObject| {
+        o.frame_at(time_ms)
+            .first()
+            .map_or(o.y, |l| o.y + l.dy as f32 + l.image.height as f32 / 2.0)
+    };
+    below.sort_by(|a, b| {
+        (!surface(a), bottom(a))
+            .partial_cmp(&(!surface(b), bottom(b)))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let draw = |frame: &mut Frame, layers: &[crate::objects::Layer], x: f32, y: f32| {
         for layer in layers {
             let img = &layer.image;
@@ -114,6 +136,20 @@ pub fn draw_objects(
             draw_image(frame, screen, camera, lut, img, left, top);
         }
     };
+    // Gulls' shadows on the water.
+    let (gulls, shadows) = (&scene.gull_art.0, &scene.gull_art.1);
+    for g in &scene.gulls {
+        if let Some(l) = g
+            .frame()
+            .and_then(|f| shadows.get(f))
+            .and_then(|f| f.first())
+        {
+            let (x, y) = Scene::gull_shadow(g);
+            draw_image_as(
+                frame, screen, camera, lut, &l.image, x as i32, y as i32, true,
+            );
+        }
+    }
     for obj in below {
         draw(frame, obj.frame_at(time_ms), obj.x, obj.y);
         // Its banner, from the picture's top left.
@@ -141,6 +177,12 @@ pub fn draw_objects(
     for obj in above {
         draw(frame, obj.frame_at(time_ms), obj.x, obj.y);
     }
+    // Gulls over everything.
+    for g in &scene.gulls {
+        if let Some(l) = g.frame().and_then(|f| gulls.get(f)).and_then(|f| f.first()) {
+            draw_image(frame, screen, camera, lut, &l.image, g.x as i32, g.y as i32);
+        }
+    }
     let t = TILE_SIZE as f32;
     for fx in scene.effects.iter().filter(|fx| {
         scene.seen((fx.x / t).floor() as i32, (fx.y / t).floor() as i32) == Seen::InSight
@@ -166,6 +208,22 @@ fn draw_image(
     img: &Image,
     left: i32,
     top: i32,
+) {
+    draw_image_as(frame, screen, camera, lut, img, left, top, false);
+}
+
+/// Draws `img` at world `(left, top)`; `as_shadow` darkens what lies under
+/// its pixels instead (the original's shadow table, 0x5c1358).
+#[allow(clippy::too_many_arguments)]
+fn draw_image_as(
+    frame: &mut Frame,
+    screen: &Screen,
+    camera: &Camera,
+    lut: &[u32; 256],
+    img: &Image,
+    left: i32,
+    top: i32,
+    as_shadow: bool,
 ) {
     let scale = camera.scale(screen);
     let (vw, vh) = camera.view_size(screen);
@@ -203,7 +261,7 @@ fn draw_image(
         let dst = &mut frame.pixels[start..][..cols.len()];
         for (d, &ix) in dst.iter_mut().zip(&cols) {
             if let Some(px) = src[ix as usize] {
-                *d = if px == SHADOW {
+                *d = if px == SHADOW || as_shadow {
                     darken(*d)
                 } else {
                     resolve(px, lut)

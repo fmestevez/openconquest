@@ -776,6 +776,30 @@ small masks and `<n>OBL_SM`, over the icons of things that stay put (ships
 and creatures only shown in sight); then the view as `LMAPVIEW_n`, a dashed
 red frame.
 
+## Building sites
+
+The landscape grid (`[0x5c74fc]`: width, height, cell width and height as
+shorts, then 24 bytes a cell) holds each cell's tile types, a nibble a map
+layer from the tileset records' type byte (+4: sea 7, shelf 1, land 8, ...;
+0x5456c0), and the object standing there (+12). Probed on the original in
+miss000: a building goes on a free land cell, trees and rocks no matter; a
+moorage or shipyard on the shore, water beside it, up to two cells from its
+settlement's own cells; other buildings inland (land on all four sides, the
+map's edge counting as land), up to one cell away. A moorage's front is the
+cell its record field 10 faces (0 east, 2 north, 4 west, 6 south), where
+ships berth.
+
+## Fish shoals and gulls
+
+A fishing zone (record: x, y, w, h) keeps a shoal on one of its cells
+(Fish.cpp 0x48dd80): it stays 25-75 ticks after surfacing, dives, waits as
+long, and comes up on a random free water cell of the zone (a hundred
+tries); one being fished spreads instead. Seagulls (Gull.cpp 0x41c700): one
+for every 225 cells and one more, at most 25; each waits 375-750 ticks,
+then flies a diagonal (1, 3, 5, 7) from the opposite edge, 2 pixels a step
+every other tick, `GULLSPR` frames heading x 10 + step, its shadow
+`GULLSHD_SPR` 120 pixels below drawn through the shadow table.
+
 ## Resource counters
 
 The money panel (0x505530) draws each amount as `%7d` centred in a black

@@ -413,6 +413,7 @@ fn screenshot(
         status: None,
         time_ms,
         hover_button: args.hover_button,
+        chosen_cell: None,
         page: match args.page.as_deref() {
             Some("behaviour") => commands::Page::Behaviour,
             Some("research") => commands::Page::Research,

@@ -39,6 +39,11 @@ pub struct SaveGame {
     pub clock: f32,
     pub ai_timer: f32,
     pub rng: Rng,
+    /// Fish shoals below and in sight: zone and seconds left.
+    #[serde(default)]
+    pub shoals_gone: std::collections::BTreeMap<u32, f32>,
+    #[serde(default)]
+    pub shoals_shown: std::collections::BTreeMap<u32, f32>,
     /// Research levels (saves from before the sage school's research had
     /// a different `levels`, which is ignored).
     #[serde(default)]

@@ -596,6 +596,45 @@ impl Scene {
             .map(|o| o.id)
     }
 
+    /// Puts one unit of `item` from `site`'s stock aboard `ship`, which must
+    /// lie alongside and have room (the original's load cursor, c_load.cpp).
+    pub fn load_item(&mut self, site: u32, ship: u32, item: u8) -> Result<(), String> {
+        let t = TILE_SIZE as f32;
+        let s = self.object_index(site).ok_or("No such settlement")?;
+        let i = self.object_index(ship).ok_or("No such ship")?;
+        if !self.is_own(&self.objects[i]) || self.objects[i].ship.is_none() {
+            return Err("Choose one of your ships".into());
+        }
+        let (a, b) = (&self.objects[s], &self.objects[i]);
+        if ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt() > combat::LOAD_REACH * t {
+            return Err("The ship must lie next to the settlement".into());
+        }
+        let mut stock = self.garrison(site);
+        if stock.get(item as usize).is_none_or(|&n| n == 0) {
+            return Err("None left".into());
+        }
+        let kind = self.objects[i].ship.as_ref().unwrap().kind;
+        if item >= 3 && !combat::carries_weapons(kind) {
+            return Err("This ship carries no weapons".into());
+        }
+        let obj = &mut self.objects[i];
+        let (Some(ship), Some(fight)) = (obj.ship.as_mut(), obj.combat.as_mut()) else {
+            return Err("Not a ship".into());
+        };
+        let free = combat::capacity(kind).saturating_sub(combat::load(&ship.crew, &fight.weapons));
+        if free < combat::item_size(item) {
+            return Err("No room aboard".into());
+        }
+        if item < 3 {
+            ship.crew.squads[item as usize] += 1;
+        } else {
+            fight.weapons.push(item);
+        }
+        stock[item as usize] -= 1;
+        self.garrisons.insert(site, stock);
+        Ok(())
+    }
+
     pub fn load_crew(&mut self, ship: u32) -> Result<u32, String> {
         let t = TILE_SIZE as f32;
         let i = self.object_index(ship).ok_or("No such ship")?;
@@ -701,55 +740,91 @@ impl Scene {
         let t = TILE_SIZE as f32;
         let i = self.object_index(origin).ok_or("No settlement")?;
         let home = &self.objects[i];
-        let (hx, hy) = ((home.x / t).floor() as i32, (home.y / t).floor() as i32);
-        // Settlements build around them; ships found settlements on the shore
-        // they lie at.
-        let (reach, too_far) = if home.ship.is_some() {
-            (FOUND_REACH, "The ship must lie next to the site")
-        } else {
-            (BUILD_RADIUS, "Too far from the settlement")
+        // Settlements build around their own cells; ships found settlements
+        // on the shore they lie at.
+        let (x0, y0, x1, y1, reach, too_far) = match (&home.ship, home.cell) {
+            (None, Some((hx, hy))) => {
+                let size = building_cells(home);
+                // Moorages and shipyards a cell further than the rest.
+                let reach = if matches!(class, PORT | SHIPYARD | DOCK) {
+                    BUILD_RADIUS
+                } else {
+                    BUILD_RADIUS - 1
+                };
+                (
+                    hx,
+                    hy,
+                    hx + size - 1,
+                    hy + size - 1,
+                    reach,
+                    "Too far from the settlement",
+                )
+            }
+            _ => {
+                let (hx, hy) = ((home.x / t).floor() as i32, (home.y / t).floor() as i32);
+                (
+                    hx,
+                    hy,
+                    hx,
+                    hy,
+                    FOUND_REACH,
+                    "The ship must lie next to the site",
+                )
+            }
         };
-        if (cx - hx).abs().max((cy - hy).abs()) > reach {
+        let dx = (x0 - cx).max(cx - x1).max(0);
+        let dy = (y0 - cy).max(cy - y1).max(0);
+        if dx.max(dy) > reach {
             return Err(too_far.into());
         }
         self.check_ground(class, cx, cy)
     }
 
     /// Whether building class `class` can stand on cell `(cx, cy)`, wherever
-    /// it is ordered from; on success, the facing (see `check_site`).
+    /// it is ordered from; on success, the facing (see `check_site`). As
+    /// probed on the original: a free land cell (trees and rocks do not
+    /// matter); moorages and shipyards on the shore, water beside them;
+    /// other buildings inland, land on all four sides.
     pub fn check_ground(&self, class: u32, cx: i32, cy: i32) -> Result<u32, String> {
-        let t = TILE_SIZE as f32;
-        // Sprites are taller than a cell: keep off the map's border.
-        if cx < 1 || cy < 1 || cx >= self.nav.width as i32 - 1 || cy >= self.nav.height as i32 - 1 {
-            return Err("Too close to the edge of the map".into());
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        if cx < 0 || cy < 0 || cx >= w || cy >= h {
+            return Err("Off the map".into());
         }
         if self.nav.is_water(cx, cy) {
             return Err("Buildings go on land".into());
         }
-        let crowded = self.objects.iter().any(|o| {
-            let structure = !matches!(
-                o.class,
-                ObjectClass::Ship
-                    | ObjectClass::Amber
-                    | ObjectClass::FishZone
-                    | ObjectClass::WhaleZone
-                    | ObjectClass::Other(_)
-            );
-            let (ox, oy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
-            structure && (ox - cx).abs() <= 1 && (oy - cy).abs() <= 1
+        let taken = self.objects.iter().any(|o| {
+            let Some((ox, oy)) = o
+                .cell
+                .filter(|_| matches!(o.class, ObjectClass::Building(_)))
+            else {
+                return false;
+            };
+            let size = building_cells(o);
+            (ox..ox + size).contains(&cx) && (oy..oy + size).contains(&cy)
         });
-        if crowded {
+        if taken {
             return Err("There is no room there".into());
         }
-        if !matches!(class, PORT | SHIPYARD) {
-            return Ok(0);
+        let sides = [(0, (1, 0)), (2, (0, -1)), (4, (-1, 0)), (6, (0, 1))];
+        let inside = |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y);
+        if !matches!(class, PORT | SHIPYARD | DOCK) {
+            // Beyond the map's edge counts as land.
+            let inland = sides.iter().all(|&(_, (dx, dy))| {
+                !inside(cx + dx, cy + dy) || !self.nav.is_water(cx + dx, cy + dy)
+            });
+            return if inland {
+                Ok(0)
+            } else {
+                Err("This must be built inland, away from the shore".into())
+            };
         }
         // Facing 0 = water to the east, 2 north, 4 west, 6 south.
-        [(0, (1, 0)), (2, (0, -1)), (4, (-1, 0)), (6, (0, 1))]
+        sides
             .into_iter()
             .find(|&(_, (dx, dy))| self.nav.is_water(cx + dx, cy + dy))
             .map(|(facing, _)| facing)
-            .ok_or_else(|| "Ports and shipyards must be built on the shore".into())
+            .ok_or_else(|| "Moorages and shipyards must be built on the shore".into())
     }
 
     /// Starts putting up building `class` on cell `(cx, cy)` near settlement
@@ -959,6 +1034,41 @@ impl Scene {
         match phase {
             GatherPhase::ToDeposit => {
                 let arrived = deposit_at.is_some_and(|d| near(&self.objects[d], 1.6));
+                // At amber the ship first closes in on the shore, until its
+                // bow is about to touch land (the original moves it there
+                // along a path, Run_Ship.cpp 0x4b0590).
+                if let (true, Some(d)) = (arrived, deposit_at) {
+                    let amber = self.objects[d]
+                        .deposit
+                        .is_some_and(|dep| dep.resource == Resource::Amber);
+                    if amber {
+                        let (dx, dy) = (self.objects[d].x - sx, self.objects[d].y - sy);
+                        let len = dx.hypot(dy).max(1.0);
+                        let (ux, uy) = (dx / len, dy / len);
+                        let water = |x: f32, y: f32| {
+                            self.nav
+                                .is_water((x / t).floor() as i32, (y / t).floor() as i32)
+                        };
+                        let mut step = 0.0;
+                        while step < len
+                            && water(sx + ux * (step + 2.0 + BOW), sy + uy * (step + 2.0 + BOW))
+                        {
+                            step += 2.0;
+                        }
+                        if step >= 4.0 {
+                            let to = (sx + ux * step, sy + uy * step);
+                            set(
+                                self,
+                                Some(Task::Gather {
+                                    deposit,
+                                    phase: GatherPhase::ToDeposit,
+                                }),
+                                Some([to].into()),
+                            );
+                            return;
+                        }
+                    }
+                }
                 let next = arrived.then_some(Task::Gather {
                     deposit,
                     phase: GatherPhase::Collecting,
@@ -1052,10 +1162,16 @@ impl Scene {
                 let Some(p) = self.object_index(port) else {
                     return self.send_to_port(i, deposit);
                 };
-                // As close as the water lets it come: a town may stand a
-                // few cells inland.
-                let reach = self.landing_reach(p).max(2.6);
-                if !near(&self.objects[p], reach) {
+                // At a moorage's front; at a town as close as the water
+                // lets it come (it may stand a few cells inland).
+                let arrived = match self.front_cell(p) {
+                    Some(_) => {
+                        let (bx, by) = self.berth(p);
+                        (bx - sx).hypot(by - sy) <= 0.75 * t
+                    }
+                    None => near(&self.objects[p], self.landing_reach(p).max(2.6)),
+                };
+                if !arrived {
                     return self.send_to_port(i, deposit);
                 }
                 // Arrived: the porters carry the goods in.
@@ -1119,15 +1235,43 @@ impl Scene {
     }
 
     /// Sends ship `i` (gathering from `deposit`) to unload.
+    /// The water cell in front of moorage or shipyard `p` (record field
+    /// 10: 0 east, 2 north, 4 west, 6 south), where ships berth.
+    pub(super) fn front_cell(&self, p: usize) -> Option<(i32, i32)> {
+        let o = &self.objects[p];
+        if !matches!(o.class, ObjectClass::Building(PORT | SHIPYARD | DOCK)) {
+            return None;
+        }
+        let (cx, cy) = o.cell?;
+        let (dx, dy) = match o.record.fields.get(10)? {
+            0 => (1, 0),
+            2 => (0, -1),
+            4 => (-1, 0),
+            6 => (0, 1),
+            _ => return None,
+        };
+        self.nav
+            .is_water(cx + dx, cy + dy)
+            .then_some((cx + dx, cy + dy))
+    }
+
+    /// Where a ship lies to unload at `p`: before a moorage's front, else at
+    /// the building.
+    pub(super) fn berth(&self, p: usize) -> (f32, f32) {
+        let t = TILE_SIZE as f32;
+        match self.front_cell(p) {
+            Some((cx, cy)) => (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0),
+            None => (self.objects[p].x, self.objects[p].y),
+        }
+    }
+
     pub(super) fn send_to_port(&mut self, i: usize, deposit: u32) {
         let (x, y) = (self.objects[i].x, self.objects[i].y);
         let owner = self.objects[i].owner;
         let route = self.unloading_site(owner, x, y).and_then(|port| {
             let p = self.object_index(port)?;
-            Some((
-                port,
-                self.plan_route(i, self.objects[p].x, self.objects[p].y)?,
-            ))
+            let (bx, by) = self.berth(p);
+            Some((port, self.plan_route(i, bx, by)?))
         });
         let ship = self.objects[i].ship.as_mut().unwrap();
         match route {
@@ -1168,3 +1312,14 @@ impl Scene {
         Ok(())
     }
 }
+
+/// How many cells across a building stands on: settlements and towns two.
+fn building_cells(o: &MapObject) -> i32 {
+    match o.class {
+        ObjectClass::Building(SETTLEMENT | TOWN) => 2,
+        _ => 1,
+    }
+}
+
+/// How far a ship's bow reaches ahead of its middle, in world pixels.
+const BOW: f32 = 36.0;
