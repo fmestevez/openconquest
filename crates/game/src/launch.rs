@@ -20,6 +20,9 @@ struct Config {
     /// the pointers).
     #[serde(default)]
     modern_mouse: bool,
+    /// The configuration and sound panels' settings.
+    #[serde(default)]
+    panels: crate::panels::Config,
 }
 
 fn read_config() -> Config {
@@ -47,6 +50,18 @@ pub fn modern_mouse() -> bool {
 pub fn set_modern_mouse(on: bool) {
     let mut config = read_config();
     config.modern_mouse = on;
+    write_config(&config);
+}
+
+/// The configuration and sound panels' settings as last set.
+pub fn panel_config() -> crate::panels::Config {
+    read_config().panels
+}
+
+/// Remembers the configuration and sound panels' settings.
+pub fn set_panel_config(panels: &crate::panels::Config) {
+    let mut config = read_config();
+    config.panels = *panels;
     write_config(&config);
 }
 

@@ -40,6 +40,8 @@ pub enum Pointer {
     Unload,
     /// The leviathan hunt waiting for its target (mode 3).
     GetWhale,
+    /// Over a quick help hyperlink (`CUR_HTEXT_`, never greyed).
+    Hypertext,
 }
 
 impl Pointer {
@@ -65,6 +67,7 @@ impl Pointer {
             Load => ("CUR_LOAD_", (-32, -37)),
             Unload => ("CUR_UNLOAD_", (-18, -29)),
             GetWhale => ("CUR_GETW_", (-15, -15)),
+            Hypertext => ("CUR_HTEXT_", (-10, -3)),
         }
     }
 }
@@ -88,7 +91,11 @@ impl Pointers {
                     return Rc::new(Vec::new());
                 };
                 let (name, _) = pointer.sprite();
-                let state = if greyed { 'G' } else { 'N' };
+                let state = match (pointer, greyed) {
+                    (Pointer::Hypertext, _) => String::new(),
+                    (_, true) => "G".into(),
+                    _ => "N".into(),
+                };
                 // Two-digit frames, or (the plainer ones) a single digit.
                 let mut frames: Vec<Image> = (0..)
                     .map_while(|i| {

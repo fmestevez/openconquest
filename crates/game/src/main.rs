@@ -132,6 +132,10 @@ struct Args {
     /// Bar panel to show in the screenshot.
     #[arg(long, value_enum, default_value = "object")]
     panel: panels::Tab,
+    /// Quick help page to show on the help panel (instead of the mission
+    /// objectives).
+    #[arg(long, hide = true)]
+    help_page: Option<usize>,
     /// Run the simulation for this many seconds before taking the screenshot.
     #[arg(long, default_value_t = 0.0, value_name = "SECONDS")]
     simulate: f32,
@@ -448,9 +452,7 @@ fn screenshot(
     let text = TextRenderer::load(&data.controls, "0SYSTEM_FONT", 0)?;
     let interface = Interface::load(data, '0')?;
     let initial = camera;
-    let slots: Vec<Option<String>> = (0..panels::SLOTS)
-        .map(|i| (i == 0).then(|| format!("{} 12:34", mission.to_uppercase())))
-        .collect();
+    let config = panels::Config::default();
     let help = panels::help_paragraphs(
         &scene.briefing_lines,
         scene::is_custom(&scene.mission),
@@ -481,15 +483,19 @@ fn screenshot(
         briefing: false,
         panel: Some(panels::PanelView {
             tab: args.panel,
-            slots: &slots,
-            selected_slot: Some(0),
-            game_speed: 1.0 / 3.0,
-            scroll_speed: 0.5,
+            saves: &[],
+            save_first: 0,
+            selected_save: None,
+            file_mode: panels::FileMode::Save,
+            name: "",
+            config: &config,
             modern_mouse: false,
-            volume: 0.6,
-            music: Some(0.5),
+            tracks: &[],
             help: &help,
             help_first: 0,
+            help_page: args.help_page,
+            pressed: None,
+            time_ms,
         }),
         panel_hover: None,
         paused: args.paused,

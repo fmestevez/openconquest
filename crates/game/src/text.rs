@@ -83,6 +83,16 @@ impl TextRenderer {
         glyphs + self.spacing * (text.len() as u32).saturating_sub(1)
     }
 
+    /// Height of `text` in font pixels: its tallest glyph's (as mfcfnt.cpp's
+    /// 0x547350 measures it for centring).
+    pub fn height(&self, text: &str) -> u32 {
+        text.bytes()
+            .filter_map(|c| self.glyphs.get(&c))
+            .map(|g| g.height as u32)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Draws `text` with its top-left corner at `(x, y)`, magnified by `scale`.
     pub fn draw(&self, frame: &mut Frame, x: i32, y: i32, scale: u32, text: &str) {
         let s = scale.max(1) as i32;
