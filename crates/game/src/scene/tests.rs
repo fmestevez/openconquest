@@ -35,11 +35,15 @@ fn shipyard_builds_and_settlement_upgrades() {
     assert!(scene.can_build_ship(1).is_err());
     scene.start_ship(yard, 0).unwrap();
     assert_eq!(scene.amber, 100);
-    assert!(
-        scene.start_ship(yard, 0).is_err(),
-        "shipyard should be busy"
-    );
-    for _ in 0..(60.0 * (economy::SHIP_BUILD_SECONDS + 1.0)) as usize {
+    // More wait their turn; the last can be taken back, paid back.
+    scene.amber = 500;
+    scene.start_ship(yard, 0).unwrap();
+    scene.start_ship(yard, 0).unwrap();
+    assert_eq!(scene.ships_queued(yard, 0, false), 3);
+    scene.cancel_ship(yard, 0).unwrap();
+    assert_eq!((scene.ships_queued(yard, 0, false), scene.amber), (2, 300));
+    scene.amber = 100;
+    for _ in 0..(60.0 * (2.0 * economy::SHIP_BUILD_SECONDS + 1.0)) as usize {
         scene.update(1.0 / 60.0, &data, &mut caches);
     }
     let own_ships: Vec<_> = scene
@@ -47,7 +51,7 @@ fn shipyard_builds_and_settlement_upgrades() {
         .iter()
         .filter(|o| o.ship.is_some() && scene.is_own(o))
         .collect();
-    assert_eq!(own_ships.len(), ships_before + 1);
+    assert_eq!(own_ships.len(), ships_before + 2);
     assert!(scene.productions.is_empty());
 
     let settlement = own(&scene, SETTLEMENT);

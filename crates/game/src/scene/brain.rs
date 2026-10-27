@@ -698,6 +698,7 @@ impl Scene {
             elapsed: 0.0,
             total: crate::economy::SHIP_BUILD_SECONDS,
             arming: None,
+            paid: (0, 0),
         });
         let brain = self.brain.as_mut().unwrap();
         brain.requests.remove(r);
@@ -738,6 +739,7 @@ impl Scene {
             elapsed: 0.0,
             total: crate::economy::SHIP_BUILD_SECONDS,
             arming: None,
+            paid: (0, 0),
         });
         self.brain
             .as_mut()

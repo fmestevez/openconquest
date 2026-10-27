@@ -150,9 +150,6 @@ impl Scene {
 
     /// Starts building a ship of type `kind` at shipyard `site`.
     pub fn start_ship(&mut self, site: u32, kind: u8) -> Result<(), String> {
-        if self.production_at(site).is_some() {
-            return Err("The shipyard is busy".into());
-        }
         let owner = self
             .object_index(site)
             .and_then(|i| self.objects[i].owner)
@@ -186,7 +183,34 @@ impl Scene {
             elapsed: 0.0,
             total: economy::SHIP_BUILD_SECONDS,
             arming,
+            paid: (amber, fish),
         });
+        Ok(())
+    }
+
+    /// Ships of type `kind` ordered at yard `site` and not yet afloat.
+    pub fn ships_queued(&self, site: u32, kind: u8, argo: bool) -> u32 {
+        self.productions
+            .iter()
+            .filter(|p| p.site == site && p.ship == kind && p.argo == argo)
+            .count() as u32
+    }
+
+    /// Takes the last ship of type `kind` ordered at yard `site` off its
+    /// queue and pays its price back (a right click on its button, message
+    /// 0x3c; the stock its arming took stays spent).
+    pub fn cancel_ship(&mut self, site: u32, kind: u8) -> Result<(), String> {
+        let k = self
+            .productions
+            .iter()
+            .rposition(|p| p.site == site && p.ship == kind && !p.argo)
+            .ok_or("None of those are being built")?;
+        let p = self.productions.remove(k);
+        let owner = self
+            .object_index(site)
+            .and_then(|i| self.objects[i].owner)
+            .ok_or("No such shipyard")?;
+        self.earn(owner, p.paid.0 as i64, p.paid.1 as i64);
         Ok(())
     }
 
@@ -363,7 +387,7 @@ impl Scene {
     }
 
     /// Ship type of the Argo.
-    const ROYAL_SHIP: u8 = 2;
+    pub const ROYAL_SHIP: u8 = 2;
 
     /// Starts building the Argo at shipyard `site` (0x7d): a royal ship,
     /// once Argus has come to the player's town (permission bit 80, which
@@ -373,7 +397,7 @@ impl Scene {
             return Err("Argus must come to your town first".into());
         }
         self.start_ship(site, Self::ROYAL_SHIP)?;
-        if let Some(p) = self.productions.iter_mut().find(|p| p.site == site) {
+        if let Some(p) = self.productions.iter_mut().rev().find(|p| p.site == site) {
             p.argo = true;
         }
         self.permits.set(crate::permits::ARGO, false);
@@ -449,7 +473,14 @@ impl Scene {
         self.effects
             .retain(|fx| fx.site.is_none_or(|s| building.contains(&s)));
         let t = TILE_SIZE as f32;
-        for p in self.productions.clone() {
+        // The ship at the head of each yard's queue.
+        let mut heads: Vec<super::Production> = Vec::new();
+        for p in &self.productions {
+            if !heads.iter().any(|h| h.site == p.site) {
+                heads.push(p.clone());
+            }
+        }
+        for p in heads {
             let Some(i) = self.object_index(p.site) else {
                 continue;
             };

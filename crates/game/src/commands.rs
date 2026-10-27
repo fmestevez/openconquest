@@ -715,16 +715,17 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             checked: false,
             closes: false,
             command,
-            enabled: building.is_none() && scene.can_build_ship(kind).is_ok() && {
+            // More may be ordered while one is built: they wait their turn
+            // (0x4164e0 counts them on the button, 0x416f90).
+            enabled: scene.can_build_ship(kind).is_ok() && {
                 let p = scene.ship_price(obj.id, kind);
                 scene.amber >= p.amber && scene.fish >= p.fish
             },
             progress: None,
-            count: 0,
+            count: scene.ships_queued(obj.id, kind, false),
         };
-        if let Some(p) = building.filter(|p| p.ship == kind) {
+        if let Some(p) = building.filter(|p| p.ship == kind && !p.argo) {
             entry.progress = Some(p.elapsed / p.total);
-            entry.enabled = true;
         }
         menu[slot] = Some(entry);
     }
@@ -735,7 +736,8 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             checked: false,
             closes: false,
             command: Command::BUILD_ARGO,
-            enabled: building.is_none() && scene.can_build_ship(2).is_ok(),
+            enabled: scene.ships_queued(obj.id, Scene::ROYAL_SHIP, true) == 0
+                && scene.can_build_ship(2).is_ok(),
             progress: None,
             count: 0,
         };

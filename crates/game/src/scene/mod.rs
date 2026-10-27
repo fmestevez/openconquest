@@ -188,6 +188,9 @@ pub struct Production {
     /// standard load (computer players).
     #[serde(default)]
     pub arming: Option<Arming>,
+    /// What it cost (amber, fish), paid back if cancelled.
+    #[serde(default)]
+    pub paid: (u32, u32),
 }
 
 pub struct Scene {
@@ -1284,8 +1287,14 @@ impl Scene {
                 };
             }
         }
+        // Each yard works on the first ship of its queue (orders waiting
+        // for a berth, 0x416f90).
+        let mut working: Vec<u32> = Vec::new();
         for p in &mut self.productions {
-            p.elapsed += dt;
+            if !working.contains(&p.site) {
+                working.push(p.site);
+                p.elapsed += dt;
+            }
         }
         self.show_productions(data, caches);
         let (done, running): (Vec<_>, Vec<_>) = self

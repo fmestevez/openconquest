@@ -148,6 +148,10 @@ pub enum Order {
     BuildArgo {
         site: u32,
     },
+    CancelShip {
+        site: u32,
+        kind: u8,
+    },
     Train {
         site: u32,
         item: u8,
@@ -276,6 +280,7 @@ impl Scene {
             RepairStock { workshop } => done(self.order_repair_stock(workshop)),
             BuildShip { site, kind } => done(self.start_ship(site, kind)),
             BuildArgo { site } => done(self.start_argo(site)),
+            CancelShip { site, kind } => done(self.cancel_ship(site, kind)),
             Train { site, item } => done(self.train(site, item)),
             CancelTrain { site, item } => done(self.cancel_training(site, item)),
             Refit {

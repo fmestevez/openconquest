@@ -2736,6 +2736,15 @@ impl App {
         let Some(entry) = menu(&self.scene, obj, self.page)[slot] else {
             return;
         };
+        if let Some(kind) = economy::ship_of_command(entry.command) {
+            if entry.count > 0 {
+                let order = Order::CancelShip { site: obj.id, kind };
+                if let Err(e) = self.issue(order) {
+                    self.say(e);
+                }
+            }
+            return;
+        }
         let train = Command::TRAIN_BOWMEN.0;
         if (train..train + 9).contains(&entry.command.0) && entry.count > 0 {
             let order = Order::CancelTrain {
@@ -2800,9 +2809,6 @@ impl App {
             return;
         }
         if let Some(kind) = ship_kind {
-            if entry.progress.is_some() {
-                return;
-            }
             match self.issue(Order::BuildShip { site: id, kind }) {
                 Ok(_) => self.say(format!("Building a {}", SHIP_NAMES[kind as usize])),
                 Err(e) => self.say(e),
