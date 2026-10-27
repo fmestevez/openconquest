@@ -515,6 +515,9 @@ fn war_magic() {
     scene
         .cast_area(Spell::Lightning, ex, ey, &data, &mut caches)
         .unwrap();
+    for _ in 0..50 * 2 {
+        scene.update(0.02, &data, &mut caches);
+    }
     assert!(
         scene.object_index(enemy).is_some(),
         "shielded from lightning"
@@ -543,6 +546,11 @@ fn war_magic() {
     scene
         .cast_area(Spell::Lightning, ex, ey, &data, &mut caches)
         .unwrap();
+    // It strikes partway through its picture.
+    assert!(scene.object_index(enemy).is_some(), "not yet");
+    for _ in 0..50 * 2 {
+        scene.update(0.02, &data, &mut caches);
+    }
     assert!(scene.object_index(enemy).is_none(), "struck down");
     // Flame makes our weapons stronger for a while.
     scene.cast_flame().unwrap();

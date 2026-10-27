@@ -137,52 +137,10 @@ impl Scene {
                     .is_water((x / t).floor() as i32, (y / t).floor() as i32);
                 self.spawn_effect(data, caches, magic::fx_lightning(water), x, y);
                 self.sounds.push(("molniya2", x, y));
-                // It strikes the 3 x 3 cells about its cell, whoever's
-                // (LightningObjClassTy 0x42cfa0, message 0xda93): ships go
-                // down unless shielded from magic; a settlement or town
-                // (unshielded), lair, nest or castle, or a harpy or dragon,
-                // only when struck on its own cell; sea monsters lose half
-                // their strength, land creatures and the gorgon a quarter.
-                let t = TILE_SIZE as f32;
-                let (cx, cy) = ((x / t).floor() as i32, (y / t).floor() as i32);
-                let mut blows: Vec<(u32, f32)> = Vec::new();
-                for o in &self.objects {
-                    let Some(c) = o.combat.as_ref() else { continue };
-                    let (ox, oy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
-                    let f = |i| o.record.field(i).unwrap_or(0) as i32;
-                    let home = match o.class {
-                        ObjectClass::Building(_)
-                        | ObjectClass::Barbarian(_)
-                        | ObjectClass::Castle(_) => (f(5), f(6)),
-                        ObjectClass::HarpyNest | ObjectClass::CreatureSpawn => (f(4), f(5)),
-                        _ => (ox, oy),
-                    };
-                    let near = (home.0 - cx).abs() <= 1 && (home.1 - cy).abs() <= 1;
-                    let centre = home == (cx, cy);
-                    let shielded = c.protect_magic > 0.0;
-                    let blow = match o.class {
-                        ObjectClass::Ship if near && !shielded => c.hull,
-                        ObjectClass::Building(SETTLEMENT | TOWN) if centre && !shielded => c.hull,
-                        ObjectClass::Barbarian(_)
-                        | ObjectClass::Castle(_)
-                        | ObjectClass::HarpyNest
-                        | ObjectClass::CreatureSpawn
-                        | ObjectClass::Monster(0x1f8 | 0x1f9)
-                            if centre =>
-                        {
-                            c.hull
-                        }
-                        ObjectClass::Monster(0x1fb) if near => c.max_hull / 2.0,
-                        ObjectClass::Monster(0x1f4..=0x1f6 | 0x1fa) if near => c.max_hull / 4.0,
-                        _ => 0.0,
-                    };
-                    if blow > 0.0 {
-                        blows.push((o.id, blow));
-                    }
-                }
-                for (id, blow) in blows {
-                    self.hit(id, blow, data, caches);
-                }
+                // It strikes at frame 11 of its picture over water, 40 over
+                // land, a frame a tick (0x42cfa0).
+                let at = if water { 11 } else { 40 };
+                self.lightning.push((x, y, crate::clock::ticks(at)));
             }
             Spell::Fireball => {
                 self.pay_spell(spell)?;
@@ -207,6 +165,72 @@ impl Scene {
         self.flame = magic::FLAME_SECONDS;
         self.sounds.push(("fireball", f32::NAN, f32::NAN));
         Ok(())
+    }
+
+    /// Lightning cast and waiting for its picture to strike.
+    pub(super) fn run_lightning(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+        for l in &mut self.lightning {
+            l.2 -= dt;
+        }
+        let due: Vec<(f32, f32)> = self
+            .lightning
+            .iter()
+            .filter(|l| l.2 <= 0.0)
+            .map(|l| (l.0, l.1))
+            .collect();
+        self.lightning.retain(|l| l.2 > 0.0);
+        for (x, y) in due {
+            self.lightning_strike(x, y, data, caches);
+        }
+    }
+
+    fn lightning_strike(&mut self, x: f32, y: f32, data: &GameData, caches: &mut Caches) {
+        // It strikes the 3 x 3 cells about its cell, whoever's
+        // (LightningObjClassTy 0x42cfa0, message 0xda93): ships go
+        // down unless shielded from magic; a settlement or town
+        // (unshielded), lair, nest or castle, or a harpy or dragon,
+        // only when struck on its own cell; sea monsters lose half
+        // their strength, land creatures and the gorgon a quarter.
+        let t = TILE_SIZE as f32;
+        let (cx, cy) = ((x / t).floor() as i32, (y / t).floor() as i32);
+        let mut blows: Vec<(u32, f32)> = Vec::new();
+        for o in &self.objects {
+            let Some(c) = o.combat.as_ref() else { continue };
+            let (ox, oy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+            let f = |i| o.record.field(i).unwrap_or(0) as i32;
+            let home = match o.class {
+                ObjectClass::Building(_) | ObjectClass::Barbarian(_) | ObjectClass::Castle(_) => {
+                    (f(5), f(6))
+                }
+                ObjectClass::HarpyNest | ObjectClass::CreatureSpawn => (f(4), f(5)),
+                _ => (ox, oy),
+            };
+            let near = (home.0 - cx).abs() <= 1 && (home.1 - cy).abs() <= 1;
+            let centre = home == (cx, cy);
+            let shielded = c.protect_magic > 0.0;
+            let blow = match o.class {
+                ObjectClass::Ship if near && !shielded => c.hull,
+                ObjectClass::Building(SETTLEMENT | TOWN) if centre && !shielded => c.hull,
+                ObjectClass::Barbarian(_)
+                | ObjectClass::Castle(_)
+                | ObjectClass::HarpyNest
+                | ObjectClass::CreatureSpawn
+                | ObjectClass::Monster(0x1f8 | 0x1f9)
+                    if centre =>
+                {
+                    c.hull
+                }
+                ObjectClass::Monster(0x1fb) if near => c.max_hull / 2.0,
+                ObjectClass::Monster(0x1f4..=0x1f6 | 0x1fa) if near => c.max_hull / 4.0,
+                _ => 0.0,
+            };
+            if blow > 0.0 {
+                blows.push((o.id, blow));
+            }
+        }
+        for (id, blow) in blows {
+            self.hit(id, blow, data, caches);
+        }
     }
 
     /// The Flame wears off.
