@@ -61,6 +61,9 @@ pub struct SaveGame {
     /// Buildings being repaired.
     #[serde(default)]
     pub mending: Vec<u32>,
+    /// Forts mending their units with their structure.
+    #[serde(default)]
+    pub unit_mends: Vec<crate::scene::UnitMend>,
     /// Settlements' stock units' conditions, and their repairs.
     #[serde(default)]
     pub stock_conditions: BTreeMap<u32, [Vec<u8>; 9]>,

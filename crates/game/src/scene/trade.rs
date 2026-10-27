@@ -916,22 +916,6 @@ impl Scene {
         Ok(())
     }
 
-    /// Ship `ship` takes on the marines and weapons waiting at own
-    /// settlements, towns and workshops nearby, as many as it has room for.
-    /// Returns how many items came aboard.
-    /// The player's ship nearest to `site` within loading reach.
-    pub fn ship_alongside(&self, site: u32) -> Option<u32> {
-        let k = self.object_index(site)?;
-        let s = &self.objects[k];
-        let dist = |o: &MapObject| ((o.x - s.x).powi(2) + (o.y - s.y).powi(2)).sqrt();
-        self.objects
-            .iter()
-            .enumerate()
-            .filter(|(i, o)| self.is_own(o) && o.ship.is_some() && self.alongside(*i, k))
-            .min_by(|a, b| dist(a.1).total_cmp(&dist(b.1)))
-            .map(|(_, o)| o.id)
-    }
-
     /// Ships sent to load at a settlement take their unit aboard once
     /// alongside it, or give up if they cannot get there.
     pub(super) fn run_fetches(&mut self) {
@@ -1076,6 +1060,9 @@ impl Scene {
         Ok(())
     }
 
+    /// Ship `ship` takes on the marines and weapons waiting at own
+    /// settlements, towns and workshops nearby, as many as it has room for.
+    /// Returns how many items came aboard.
     pub fn load_crew(&mut self, ship: u32) -> Result<u32, String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let sites: Vec<u32> = self

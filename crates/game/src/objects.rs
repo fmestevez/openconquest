@@ -695,6 +695,46 @@ impl MapObject {
         out
     }
 
+    /// Whether it holds units in places as a fort does (forts 0x34-0x36,
+    /// barbarian structures 0x3f-0x41): its `combat` weapons, with their
+    /// conditions in `combat.conditions`.
+    pub fn holds_units(&self) -> bool {
+        self.ship.is_none()
+            && self.combat.is_some()
+            && crate::combat::holds_units(self.record.class_id)
+    }
+
+    /// A fort's units' conditions by item (its places `+0x4d0 + 0x23 +
+    /// item x 4`), each place's in order; missing conditions are whole.
+    pub fn fort_places(&self) -> [Vec<u8>; 9] {
+        let mut places: [Vec<u8>; 9] = Default::default();
+        if let Some(c) = self.combat.as_ref().filter(|_| self.holds_units()) {
+            for (k, &w) in c.weapons.iter().enumerate() {
+                if let Some(p) = places.get_mut(w as usize) {
+                    p.push(c.conditions.get(k).copied().unwrap_or(100));
+                }
+            }
+        }
+        places
+    }
+
+    /// Sets a fort's units to `places` (conditions by item), its weapons
+    /// in item order.
+    pub fn set_fort_places(&mut self, places: [Vec<u8>; 9]) {
+        if !self.holds_units() {
+            return;
+        }
+        let c = self.combat.as_mut().unwrap();
+        c.weapons.clear();
+        c.conditions.clear();
+        for (k, p) in places.iter().enumerate() {
+            for &cond in p {
+                c.weapons.push(k as u8);
+                c.conditions.push(cond);
+            }
+        }
+    }
+
     /// Removes a ship's units at condition 0 (0x4bc6c0).
     pub fn drop_broken_units(&mut self) {
         let Some(units) = self.units() else {
@@ -758,10 +798,17 @@ impl MapObject {
     /// The mean condition of a ship's units of item `item` (0x4bc360,
     /// `+0x419`), 100 for others.
     pub fn mean_condition(&self, item: u8) -> u32 {
-        if self.ship.is_none() || item >= 9 {
+        if item >= 9 {
             return 100;
         }
-        let u = &self.unit_conditions()[item as usize];
+        let u = if self.ship.is_some() {
+            self.unit_conditions()[item as usize].clone()
+        } else if self.holds_units() {
+            // A fort's place fires with its units' points (0x446710).
+            self.fort_places()[item as usize].clone()
+        } else {
+            return 100;
+        };
         if u.is_empty() {
             return 100;
         }

@@ -227,16 +227,20 @@ fn ship(scene: &Scene, obj: &MapObject, info: &mut ObjectInfo) {
 /// its room taken (0x59729c: 1, 1, 2 by group) of 4, 7 or 10 (0x5967a8).
 fn garrison(scene: &Scene, obj: &MapObject, class: u32, info: &mut ObjectInfo) {
     let levels = scene.levels_of(obj.owner);
-    let weapons = obj.combat.as_ref().map_or(&[][..], |c| &c.weapons);
+    let places = obj.fort_places();
     let (mut hulls, mut crews, mut room) = (0u16, 0u16, 0u32);
     for item in 0..9u8 {
-        let n = weapons.iter().filter(|&&w| w == item).count() as u32;
+        let units = &places[item as usize];
+        let n = units.len() as u32;
         if n == 0 {
             continue;
         }
         let level = levels.arms_for(item);
-        // Units whole: forts keep no conditions here.
-        hulls = hulls.wrapping_add((n * 100 * cache(item, level) / 100) as u16);
+        let fire: u32 = units
+            .iter()
+            .map(|&c| c as u32 * cache(item, level) / 100)
+            .sum();
+        hulls = hulls.wrapping_add(fire as u16);
         crews = crews.wrapping_add(against_crews(item, level, hulls as u32) as u16);
         room += [1, 1, 2][(item / 3) as usize] * n;
     }

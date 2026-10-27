@@ -2945,17 +2945,14 @@ impl App {
             }
             Command::LOAD if obj_is_ship => {
                 self.pending = Some(Command::LOAD);
-                self.say("Choose your port, shipyard, dock or ship to reload at");
+                self.say("Choose your port, shipyard, dock, fort or ship to reload at");
             }
-            Command::LOAD => match self.issue(Order::LoadCrew {
-                ship: self.scene.ship_alongside(id).unwrap_or(id),
-            }) {
-                Ok(n) if self.net.is_none() => {
-                    self.say(format!("{n} marines and weapons came aboard"))
-                }
-                Ok(_) => {}
-                Err(e) => self.say(e),
-            },
+            // A settlement's Reload Object picks one of its forts (0x441ba0
+            // case 0x1f).
+            Command::LOAD => {
+                self.pending = Some(Command::LOAD);
+                self.say("Choose one of the settlement's forts");
+            }
             c if crate::combat::refit_of_command(c.0).is_some() => {
                 let (upgrade, level) = crate::combat::refit_of_command(c.0).unwrap();
                 match self.issue(Order::Refit {
@@ -3411,7 +3408,7 @@ impl App {
         if self.pending == Some(Command::LOAD) {
             let order = match self.object_at(pos) {
                 Some(target) => self.order_each(|ship| Order::LoadObject { ship, target }),
-                None => Err("Choose your port, shipyard, dock or ship".into()),
+                None => Err("Choose your port, shipyard, dock, fort or ship".into()),
             };
             match order {
                 Ok(()) => {
@@ -3621,7 +3618,7 @@ impl App {
                 ),
                 Command::LOAD => (
                     P::Load,
-                    !target.is_some_and(|o| own(o) && is_load_target(o, selected)),
+                    !target.is_some_and(|o| own(o) && is_load_target(&self.scene, o, selected)),
                 ),
                 // Over a site it may not go, the ban pointer (gcursor
                 // 0x516ea0 mode 100, answered by 0x441ba0 to 0xc451).
@@ -3729,7 +3726,7 @@ impl App {
         if own_dock {
             more.push((P::Repair, false));
         }
-        if self.scene.is_own(t) && is_load_target(t, Some(s)) && sh.kind < 10 {
+        if self.scene.is_own(t) && is_load_target(&self.scene, t, Some(s)) && sh.kind < 10 {
             more.push((P::Load, false));
         }
         let laden = sh.cargo >= 1.0;
@@ -4983,13 +4980,33 @@ mod scroll_tests {
     }
 }
 
-/// Whether a ship's Reload Object may take up `o` (0x4dc630, command 0x1f
-/// with a target): an own port, shipyard or dock, or another ship.
-fn is_load_target(o: &crate::objects::MapObject, ship: Option<&crate::objects::MapObject>) -> bool {
+/// Whether the Reload Object of `selected` may take up `o` (command 0x1f
+/// with a target): for a ship (0x4dc630) an own port, shipyard, dock or
+/// fort, or another ship; for a settlement (0x441ba0, 0xc452) one of its
+/// forts.
+fn is_load_target(
+    scene: &Scene,
+    o: &crate::objects::MapObject,
+    selected: Option<&crate::objects::MapObject>,
+) -> bool {
     use openconquest_formats::ObjectClass;
+    let fort = matches!(o.class, ObjectClass::Building(0x34..=0x36));
+    if let Some(site) = selected.filter(|s| {
+        matches!(
+            s.class,
+            ObjectClass::Building(economy::SETTLEMENT | economy::TOWN)
+        )
+    }) {
+        return fort
+            && scene
+                .object_index(o.id)
+                .is_some_and(|i| scene.home_settlement(i) == Some(site.id));
+    }
     match o.class {
-        ObjectClass::Ship => ship.is_some_and(|s| s.id != o.id),
-        ObjectClass::Building(c) => matches!(c, economy::PORT | economy::SHIPYARD | economy::DOCK),
+        ObjectClass::Ship => selected.is_some_and(|s| s.id != o.id),
+        ObjectClass::Building(c) => {
+            fort || matches!(c, economy::PORT | economy::SHIPYARD | economy::DOCK)
+        }
         _ => false,
     }
 }

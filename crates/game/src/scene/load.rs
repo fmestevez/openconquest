@@ -9,6 +9,11 @@
 //! port, shipyard or dock (`ShipServiceObjClassTy`, 0x4e7640) lists and
 //! moves its settlement's stock (`+0x1c8`); here that is the nearest own
 //! settlement or town (`home_settlement`).
+//!
+//! A fort (`FortressClassTy`, 0x419f80) lists and moves its own units and
+//! treasure, with a ship alongside or with its settlement, which takes it up
+//! with its own Reload Object (0x441ba0 case 0x1f; no sailing: the two
+//! stay linked until Finish reload).
 
 use openconquest_formats::ObjectClass;
 
@@ -16,6 +21,11 @@ use super::Scene;
 use crate::assets::GameData;
 use crate::combat;
 use crate::economy::{DOCK, PORT, SETTLEMENT, SHIPYARD, TOWN};
+
+/// Forts' classes (small, medium, big).
+const FORTS: std::ops::RangeInclusive<u32> = 0x34..=0x36;
+/// Treasures a fort can store (0x5c1094 by class, through 0x424af0).
+const FORT_STORE: usize = 1;
 use crate::objects::{self, Caches, Resource, Task, Treasure};
 
 /// Entry flags (the list entries' word at +6, 0x43bfe0, 0x4e5e40,
@@ -66,7 +76,9 @@ pub enum Cargo {
     Goods,
 }
 
-/// A ship lying alongside an own port, shipyard, dock or ship to reload.
+/// A ship lying alongside an own port, shipyard, dock, fort or ship to
+/// reload, or a settlement reloading with one of its forts (`ship` is then
+/// the settlement).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LoadLink {
     pub ship: u32,
@@ -188,10 +200,18 @@ enum Payload {
 
 impl Scene {
     /// Sends own ship `ship` (Reload Object, command 0x1f with a target) to
-    /// lie alongside own port, shipyard, dock or ship `target`; once there
-    /// the two can reload (0x4dc630: the targets 0x4dd7af accepts).
+    /// lie alongside own port, shipyard, dock, fort or ship `target`; once
+    /// there the two can reload (0x4dc630: the targets 0x4dd7af accepts).
+    /// A settlement's Reload Object takes up one of its forts at once
+    /// (`load_fort`).
     pub fn order_load(&mut self, ship: u32, target: u32) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
+        if matches!(
+            self.objects[i].class,
+            ObjectClass::Building(SETTLEMENT | TOWN)
+        ) {
+            return self.load_fort(ship, target);
+        }
         let t = self
             .object_index(target)
             .ok_or("Choose your port, dock or ship")?;
@@ -204,11 +224,12 @@ impl Scene {
         }
         let other = &self.objects[t];
         let fits = other.ship.is_some()
-            || matches!(other.class, ObjectClass::Building(PORT | SHIPYARD | DOCK));
+            || matches!(other.class, ObjectClass::Building(PORT | SHIPYARD | DOCK))
+            || matches!(other.class, ObjectClass::Building(c) if FORTS.contains(&c));
         if ship == target || !fits || other.owner != self.objects[i].owner {
-            return Err("Choose your port, shipyard, dock or another ship of yours".into());
+            return Err("Choose your port, shipyard, dock, fort or another ship of yours".into());
         }
-        if other.ship.is_none() && self.home_settlement(t).is_none() {
+        if self.load_holder(target).is_none() {
             return Err("The port belongs to no settlement".into());
         }
         if self.construction_at(target).is_some() {
@@ -228,6 +249,43 @@ impl Scene {
         let s = self.objects[i].ship.as_mut().unwrap();
         s.path = path;
         s.task = Some(Task::LoadAt { target });
+        Ok(())
+    }
+
+    /// Settlement or town `site`'s Reload Object (menu slot 1, command 5;
+    /// 0x441ba0 case 0x1f) on its fort `fort`: 0xc452 takes one of its own
+    /// buildings (`+0x1d0`) of classes 0x34-0x36 while the settlement stands
+    /// idle (`+0xa4` 1, `+0x10c` 0); the two are linked at once (`+0x104`,
+    /// `+0x108`, message 0x2875 to the fort) and the panel opens.
+    pub fn load_fort(&mut self, site: u32, fort: u32) -> Result<(), String> {
+        let s = self.object_index(site).ok_or("No such settlement")?;
+        let f = self.object_index(fort).ok_or("Choose one of its forts")?;
+        if !self.is_own(&self.objects[s]) {
+            return Err("Not your settlement".into());
+        }
+        if !matches!(
+            self.objects[s].class,
+            ObjectClass::Building(SETTLEMENT | TOWN)
+        ) {
+            return Err("Only settlements reload forts".into());
+        }
+        if self.construction_at(site).is_some()
+            || self.training_at(site).is_some()
+            || self.stock_repair_at(site).is_some()
+            || self.mending.contains(&site)
+        {
+            return Err("The settlement is busy".into());
+        }
+        if !self.is_fort(fort)
+            || self.objects[f].owner != self.objects[s].owner
+            || self.home_settlement(f) != Some(site)
+        {
+            return Err("Choose one of this settlement's forts".into());
+        }
+        if self.construction_at(fort).is_some() {
+            return Err("It is still being built".into());
+        }
+        self.link(site, fort);
         Ok(())
     }
 
@@ -283,8 +341,16 @@ impl Scene {
                         .as_ref()
                         .is_none_or(|s| s.path.is_empty() && s.task.is_none())
                 };
-                let standing = self.objects[t].combat.as_ref().is_none_or(|c| c.hull > 0.0);
-                still(i) && still(t) && standing && self.alongside(i, t)
+                let standing = |k: usize| {
+                    self.objects[k].owner.is_some()
+                        && self.objects[k].combat.as_ref().is_none_or(|c| c.hull > 0.0)
+                };
+                // A settlement and its fort have no contact to lose: they
+                // part only at Finish reload (or when one falls).
+                if self.objects[i].ship.is_none() {
+                    return standing(i) && standing(t);
+                }
+                still(i) && still(t) && standing(t) && self.alongside(i, t)
             })
             .collect();
         let mut k = 0;
@@ -303,16 +369,80 @@ impl Scene {
             .copied()
     }
 
-    /// Who holds what object `id` lists and moves: a ship itself; a port,
-    /// shipyard or dock its settlement (0x4e7640, `+0x1c8`).
+    /// Who holds what object `id` lists and moves: a ship, settlement or
+    /// fort itself; a port, shipyard or dock its settlement (0x4e7640,
+    /// `+0x1c8`).
     pub fn load_holder(&self, id: u32) -> Option<u32> {
         let i = self.object_index(id)?;
         match self.objects[i].class {
             ObjectClass::Ship => Some(id),
             ObjectClass::Building(PORT | SHIPYARD | DOCK) => self.home_settlement(i),
             ObjectClass::Building(SETTLEMENT | TOWN) => Some(id),
+            ObjectClass::Building(c) if FORTS.contains(&c) => Some(id),
             _ => None,
         }
+    }
+
+    /// Settlement `site`'s forts: own forts whose settlement it is.
+    pub fn forts_of(&self, site: u32) -> Vec<u32> {
+        let Some(s) = self.object_index(site) else {
+            return Vec::new();
+        };
+        self.objects
+            .iter()
+            .enumerate()
+            .filter(|(i, o)| {
+                o.owner.is_some()
+                    && o.owner == self.objects[s].owner
+                    && self.is_fort(o.id)
+                    && self.construction_at(o.id).is_none()
+                    && self.home_settlement(*i) == Some(site)
+            })
+            .map(|(_, o)| o.id)
+            .collect()
+    }
+
+    /// Whether `id` is a fort.
+    fn is_fort(&self, id: u32) -> bool {
+        self.object_index(id).is_some_and(
+            |i| matches!(self.objects[i].class, ObjectClass::Building(c) if FORTS.contains(&c)),
+        )
+    }
+
+    /// A fort's list (0x4179b0): each unit with its condition as its bar
+    /// (all dimmed while the fort is being mended, `+0x10c` with `+0x110`
+    /// 0xff), an empty place for each room left (0x5966d8 less the load),
+    /// then its treasures (0x4237b0), or one empty treasure place.
+    fn fort_list(&self, i: usize) -> Vec<Entry> {
+        let o = &self.objects[i];
+        let mending = self.mending.contains(&o.id);
+        let mut list = Vec::new();
+        for (k, place) in o.fort_places().iter().enumerate() {
+            for (j, &c) in place.iter().enumerate() {
+                let mut e = Entry::new(UNIT, k as u8, if mending { EMPTY } else { PRESENT });
+                e.bar = Some(c);
+                e.cargo = Some(Cargo::Unit(k as u8, j as u8));
+                list.push(e);
+            }
+        }
+        let weapons = o.combat.as_ref().map_or(&[][..], |c| c.weapons.as_slice());
+        let room = combat::fort_room(o.record.class_id).saturating_sub(combat::fort_load(weapons));
+        for _ in 0..room {
+            list.push(Entry::new(UNIT, 0xff, EMPTY));
+        }
+        let held = self.held_by(o.id);
+        if held.is_empty() {
+            list.push(Entry::new(TREASURE, 0, EMPTY));
+        }
+        for (k, tr) in held.iter().enumerate() {
+            let mut e = Entry::new(TREASURE, tr.kind, PRESENT);
+            e.cargo = Some(Cargo::Treasure {
+                index: k as u8,
+                kind: tr.kind,
+            });
+            list.push(e);
+        }
+        list
     }
 
     /// The two holders the load panel shows with `selected` chosen: its
@@ -343,6 +473,9 @@ impl Scene {
         };
         if self.objects[i].ship.is_some() {
             return self.ship_list(i);
+        }
+        if self.is_fort(id) {
+            return self.fort_list(i);
         }
         let held: Vec<&Treasure> = self.held_by(id);
         let heroes = self.site_heroes.get(&id).cloned().unwrap_or_default();
@@ -510,7 +643,7 @@ impl Scene {
     }
 
     /// The treasures building `id` stores, in order.
-    fn held_by(&self, id: u32) -> Vec<&Treasure> {
+    pub(super) fn held_by(&self, id: u32) -> Vec<&Treasure> {
         self.held
             .iter()
             .filter(|h| h.0 == id)
@@ -617,6 +750,24 @@ impl Scene {
             };
             return if ok { Ok(()) } else { missing };
         }
+        if self.is_fort(id) {
+            // Its units are dimmed while it is being mended (0x4179b0).
+            let ok = match cargo {
+                Cargo::Unit(..) if self.mending.contains(&id) => {
+                    return Err("The fort is being repaired".into())
+                }
+                Cargo::Unit(k, index) => o
+                    .fort_places()
+                    .get(k as usize)
+                    .is_some_and(|p| (index as usize) < p.len()),
+                Cargo::Treasure { index, kind } => self
+                    .held_by(id)
+                    .get(index as usize)
+                    .is_some_and(|t| t.kind == kind),
+                _ => false,
+            };
+            return if ok { Ok(()) } else { missing };
+        }
         let (armour, rams) = self.fittings.get(&id).cloned().unwrap_or_default();
         let ok = match cargo {
             Cargo::Unit(k, _) => self.garrison(id).get(k as usize).is_some_and(|&n| n > 0),
@@ -642,6 +793,36 @@ impl Scene {
         let i = self.object_index(to).ok_or("No such object")?;
         let o = &self.objects[i];
         let full = Err("No room aboard".to_string());
+        if self.is_fort(to) {
+            // A unit if the fort has room for it and is not being mended
+            // (0x419390, 0x417ef0); a treasure into its store of one
+            // (0x424b30, 0x424af0: not while it is mended), barrels and
+            // goods being credited; no heroes (its vtable +0x80 says no),
+            // armour, rams or goods.
+            let mending = self.mending.contains(&to);
+            return match cargo {
+                Cargo::Unit(item, _) => {
+                    if mending {
+                        return Err("The fort is being repaired".into());
+                    }
+                    let weapons = o.combat.as_ref().map_or(&[][..], |c| c.weapons.as_slice());
+                    let load = combat::fort_load(weapons) + combat::item_power(item);
+                    if item >= 9 || load > combat::fort_room(o.record.class_id) {
+                        return Err("There is no room in the fort".into());
+                    }
+                    Ok(())
+                }
+                Cargo::Treasure { kind, .. } if kind >= 7 => {
+                    if mending || self.held_by(to).len() >= FORT_STORE {
+                        return Err("There is no room for the treasure".into());
+                    }
+                    Ok(())
+                }
+                Cargo::Treasure { .. } => Ok(()),
+                Cargo::Hero(_) => Err("Heroes do not stay in forts".into()),
+                _ => Err("A fort takes only units and treasures".into()),
+            };
+        }
         let Some(s) = &o.ship else {
             return match cargo {
                 Cargo::Goods => Err("Goods are unloaded with Unload".into()),
@@ -800,6 +981,34 @@ impl Scene {
             }
             return Ok(payload);
         }
+        if self.is_fort(id) {
+            // The chosen unit itself goes, either way (0x419340 by its
+            // place in the list).
+            return Ok(match cargo {
+                Cargo::Unit(k, index) => {
+                    let mut places = self.objects[i].fort_places();
+                    let place = places.get_mut(k as usize).ok_or("It is not there")?;
+                    if index as usize >= place.len() {
+                        return Err("It is not there".into());
+                    }
+                    let c = place.remove(index as usize);
+                    self.objects[i].set_fort_places(places);
+                    Payload::Unit(k, c)
+                }
+                Cargo::Treasure { index, .. } => {
+                    let p = self
+                        .held
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, h)| h.0 == id)
+                        .nth(index as usize)
+                        .map(|(p, _)| p)
+                        .ok_or("It is not there")?;
+                    Payload::Treasure(self.held.remove(p).1)
+                }
+                _ => return Err("It is not there".into()),
+            });
+        }
         Ok(match cargo {
             Cargo::Unit(k, _) => {
                 let mut stock = self.stock_units(id);
@@ -895,6 +1104,21 @@ impl Scene {
             }
             return;
         }
+        if self.is_fort(to) {
+            match payload {
+                // Last of its place (0x446500).
+                Payload::Unit(k, c) => {
+                    let mut places = self.objects[i].fort_places();
+                    if let Some(p) = places.get_mut(k as usize) {
+                        p.push(c);
+                    }
+                    self.objects[i].set_fort_places(places);
+                }
+                Payload::Treasure(tr) => self.store_at(to, tr),
+                _ => {}
+            }
+            return;
+        }
         match payload {
             Payload::Unit(k, c) => {
                 let mut stock = self.stock_units(to);
@@ -906,6 +1130,28 @@ impl Scene {
             Payload::Hero(h) => self.site_heroes.entry(to).or_default().push(h),
             Payload::Treasure(tr) => self.store_treasure(to, tr),
             Payload::Goods(..) => {}
+        }
+    }
+
+    /// A building other than a settlement takes treasure `tr` (0x424b30):
+    /// barrels of amber or fish and goods are credited, the rest stored
+    /// (`can_take` checked the room) and announced (message 0x5d94 with 1).
+    fn store_at(&mut self, site: u32, tr: Treasure) {
+        let Some(owner) = self.object_index(site).and_then(|i| self.objects[i].owner) else {
+            return;
+        };
+        match tr.kind {
+            0..=2 => self.earn(owner, tr.amount as i64, 0),
+            3..=5 => self.earn(owner, 0, tr.amount as i64),
+            6 => self.hand_over(owner, site, tr),
+            _ => {
+                self.held.push((site, tr));
+                if Some(owner) == self.human.map(|h| (h.nation, h.slot)) {
+                    self.delivered.push(tr.kind);
+                    self.messages
+                        .push(format!("Handed over: {}", objects::treasure_name(tr.kind)));
+                }
+            }
         }
     }
 

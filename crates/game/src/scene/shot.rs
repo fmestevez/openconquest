@@ -410,7 +410,14 @@ impl Scene {
         // (0x4bf170).
         if let Some(i) = target {
             // Fire first, judged on the hull before the blow (0x4bf1a0).
+            let holder = self.objects[i].holds_units();
             self.ignite(i, s.item, s.flaming, s.damage, data, caches);
+            if holder {
+                self.fort_blow(
+                    s.target, s.damage, s.wounds, s.item, s.flaming, data, caches,
+                );
+                return;
+            }
             self.strike(s.target, s.damage, false, data, caches);
             self.wound(s.target, s.wounds);
             self.wear(s.target, s.wear);
