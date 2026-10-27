@@ -73,6 +73,12 @@ pub struct SaveGame {
     /// Treasures held by objects (holder id, treasure).
     #[serde(default)]
     pub held: Vec<(u32, crate::objects::Treasure)>,
+    /// Armour and rams stored at settlements (site id, (armour, rams)).
+    #[serde(default)]
+    pub fittings: Vec<(u32, crate::scene::load::Fittings)>,
+    /// Ships reloading alongside a port, dock or ship.
+    #[serde(default)]
+    pub loads: Vec<crate::scene::LoadLink>,
     /// Heroes waiting at settlements (site id, heroes).
     #[serde(default)]
     pub site_heroes: Vec<(u32, Vec<u8>)>,

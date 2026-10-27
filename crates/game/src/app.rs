@@ -434,6 +434,9 @@ pub struct App {
     chosen_cell: Option<(u32, usize)>,
     /// A unit picked up from a settlement's stock: the settlement and item.
     carrying: Option<(u32, u8)>,
+    /// The load panel's state (`load_panel`), and its button held down.
+    load_view: crate::load_panel::LoadView,
+    load_pressed: Option<crate::load_panel::Hit>,
     settings: Settings,
     /// Quit at the next opportunity.
     quit: bool,
@@ -586,6 +589,8 @@ impl App {
             help_first: 0,
             chosen_cell: None,
             carrying: None,
+            load_view: Default::default(),
+            load_pressed: None,
             settings: Settings::default(),
             quit: false,
             fog,
@@ -656,7 +661,17 @@ impl App {
             .status
             .as_ref()
             .filter(|(_, at)| at.elapsed() < STATUS_TIME)
-            .map(|(m, _)| m.as_str());
+            .map(|(m, _)| m.as_str())
+            .or_else(|| {
+                // The load panel's buttons say what they do (strings 400,
+                // 401).
+                let id = match self.cursor.and_then(|c| self.load_hit(c))? {
+                    crate::load_panel::Hit::End => 400,
+                    crate::load_panel::Hit::Kill => 401,
+                    _ => return None,
+                };
+                self.data.strings.get(&id).map(|s| s.as_str())
+            });
         GameView {
             data: &self.data,
             scene: &self.scene,
@@ -696,7 +711,105 @@ impl App {
             }),
             panel_hover: self.cursor.and_then(|c| self.bar_point(c)),
             paused: self.paused,
+            load: Some((self.load_state(), self.load_pressed)),
         }
+    }
+
+    /// The load panel's state for the selected object (fresh when the
+    /// selection changed).
+    fn load_state(&self) -> crate::load_panel::LoadView {
+        match self.selected {
+            Some(id) if self.load_view.owner == id => self.load_view,
+            Some(id) => crate::load_panel::LoadView {
+                owner: id,
+                ..Default::default()
+            },
+            None => Default::default(),
+        }
+    }
+
+    /// The load panel's lists while the selected object reloads and the
+    /// object panel shows.
+    fn reloading(&self) -> Option<crate::load_panel::Lists> {
+        if !self.show_interface || Panels::covers_bar(self.tab) {
+            return None;
+        }
+        crate::load_panel::lists(&self.scene, self.selected?, &self.load_state())
+    }
+
+    /// What of the load panel lies under window position `pos`.
+    fn load_hit(&self, pos: PhysicalPosition<f64>) -> Option<crate::load_panel::Hit> {
+        let panel = self.reloading()?;
+        let layout = self
+            .interface
+            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let x = (pos.x as f32 - layout.bar_x) / layout.scale;
+        let y = pos.y as f32 / layout.scale;
+        crate::load_panel::hit(&panel, &self.load_state(), x, y)
+    }
+
+    /// A click on the load panel (0x4f9da0, 0x4fa140): an entry is chosen,
+    /// and chosen again it goes to the other side; a group opens or closes;
+    /// Kill item throws the chosen entry away; Finish reload ends.
+    fn load_click(&mut self, pos: PhysicalPosition<f64>) -> bool {
+        use crate::load_panel::Hit;
+        let (Some(hit), Some(panel), Some(selected)) =
+            (self.load_hit(pos), self.reloading(), self.selected)
+        else {
+            return false;
+        };
+        let mut view = self.load_state();
+        self.load_pressed = Some(hit);
+        match hit {
+            Hit::Cell(side, i) => {
+                let e = panel.entries[side][i];
+                if !e.is_choosable() {
+                    return true;
+                }
+                if e.is_group() {
+                    view.open[side] = if e.flags & crate::scene::load::HEADER != 0 {
+                        None
+                    } else {
+                        Some((e.cat, e.sub))
+                    };
+                    view.scroll[side] = 0;
+                    view.chosen = (side, 0);
+                } else if view.chosen == (side, i) {
+                    if let Some(cargo) = e.cargo {
+                        let order = Order::Transfer {
+                            from: panel.holders[side],
+                            to: panel.holders[1 - side],
+                            cargo,
+                        };
+                        if let Err(e) = self.issue(order) {
+                            self.say(e);
+                        }
+                    }
+                } else {
+                    view.chosen = (side, i);
+                }
+            }
+            Hit::Kill => {
+                if let Some((holder, cargo)) = crate::load_panel::chosen_cargo(&panel, &view) {
+                    if let Err(e) = self.issue(Order::Discard { holder, cargo }) {
+                        self.say(e);
+                    }
+                }
+            }
+            Hit::End => {
+                if let Err(e) = self.issue(Order::EndLoad { id: selected }) {
+                    self.say(e);
+                }
+            }
+            Hit::Up(side) => view.scroll[side] = view.scroll[side].saturating_sub(2),
+            Hit::Down(side) => {
+                let n = panel.entries[side].len().saturating_sub(1);
+                view.scroll[side] = (view.scroll[side] + 2).min(crate::load_panel::max_scroll(n));
+            }
+            Hit::Panel => {}
+        }
+        self.load_view = view;
+        true
     }
 
     /// A window position as a point on the control bar, in original pixels.
@@ -2178,7 +2291,7 @@ impl App {
     /// item is chosen, and chosen again picked up to load onto a ship
     /// (c_load.cpp 0x4f9da0).
     fn slot_click(&mut self, pos: PhysicalPosition<f64>) -> bool {
-        if !self.show_interface || Panels::covers_bar(self.tab) {
+        if !self.show_interface || Panels::covers_bar(self.tab) || self.reloading().is_some() {
             return false;
         }
         let layout = self
@@ -2241,7 +2354,7 @@ impl App {
 
     /// The command slot under a window position, if the interface is shown.
     fn button_at(&self, pos: PhysicalPosition<f64>) -> Option<usize> {
-        if !self.show_interface || Panels::covers_bar(self.tab) {
+        if !self.show_interface || Panels::covers_bar(self.tab) || self.reloading().is_some() {
             return None;
         }
         let layout = self
@@ -2414,6 +2527,7 @@ impl App {
             return;
         };
         let id = obj.id;
+        let obj_is_ship = obj.ship.is_some();
         let ship_kind = economy::ship_of_command(entry.command);
         if !entry.enabled {
             let reason = match ship_kind {
@@ -2556,6 +2670,12 @@ impl App {
                 if let Err(e) = self.issue(Order::SellTown { site: id }) {
                     self.say(e);
                 }
+            }
+            // A ship's Reload Object picks the port, dock or ship to reload
+            // at (pointer mode 12, command 0x1f).
+            Command::LOAD if obj_is_ship => {
+                self.pending = Some(Command::LOAD);
+                self.say("Choose your port, shipyard, dock or ship to reload at");
             }
             Command::LOAD => match self.issue(Order::LoadCrew {
                 ship: self.scene.ship_alongside(id).unwrap_or(id),
@@ -2810,6 +2930,9 @@ impl App {
         if self.panel_click(pos) {
             return;
         }
+        if self.load_click(pos) {
+            return;
+        }
         if self.slot_click(pos) {
             return;
         }
@@ -2990,6 +3113,21 @@ impl App {
             }
             return;
         }
+        if self.pending == Some(Command::LOAD) {
+            let order = match self.object_at(pos) {
+                Some(target) => self.order_each(|ship| Order::LoadObject { ship, target }),
+                None => Err("Choose your port, shipyard, dock or ship".into()),
+            };
+            match order {
+                Ok(()) => {
+                    self.pending = None;
+                    self.status = None;
+                    self.confirm(pos);
+                }
+                Err(e) => self.say(e),
+            }
+            return;
+        }
         if self.pending == Some(Command::TREASURE) {
             let order = match self.object_at(pos) {
                 Some(target) => self.order_each(|ship| Order::Take { ship, target }),
@@ -3062,6 +3200,7 @@ impl App {
                     | P::Ram
                     | P::Repair
                     | P::Unload
+                    | P::Load
                     | P::Treasure
                     | P::Amber
                     | P::Fish
@@ -3149,6 +3288,10 @@ impl App {
                 Command::REPAIR_SHIP | Command::REPAIR_BUILDING => {
                     (P::Repair, !target.is_some_and(own))
                 }
+                Command::LOAD => (
+                    P::Load,
+                    !target.is_some_and(|o| own(o) && is_load_target(o, selected)),
+                ),
                 c if economy::building_of_command(c).is_some() => {
                     (P::Build, !self.site_at(pos).is_some_and(|s| s.1))
                 }
@@ -3249,6 +3392,9 @@ impl App {
         if own_dock {
             more.push((P::Repair, false));
         }
+        if self.scene.is_own(t) && is_load_target(t, Some(s)) && sh.kind < 10 {
+            more.push((P::Load, false));
+        }
         let laden = sh.cargo >= 1.0;
         let landing = self.scene.is_own(t)
             && matches!(
@@ -3309,6 +3455,7 @@ impl App {
             }),
             (P::Repair, Some(dock)) => self.order_each(|ship| Order::Repair { ship, dock }),
             (P::Unload, Some(port)) => self.order_each(|ship| Order::Unload { ship, port }),
+            (P::Load, Some(target)) => self.order_each(|ship| Order::LoadObject { ship, target }),
             _ => {
                 self.right_click(pos);
                 Ok(())
@@ -4082,6 +4229,14 @@ impl ApplicationHandler for App {
                         self.pending = None;
                         self.status = None;
                     }
+                    // Finish reloading objects - Esc (string 400).
+                    KeyCode::Escape if self.reloading().is_some() => {
+                        if let Some(id) = self.selected {
+                            if let Err(e) = self.issue(Order::EndLoad { id }) {
+                                self.say(e);
+                            }
+                        }
+                    }
                     KeyCode::Escape if self.page != Page::Main => self.page = Page::Main,
                     KeyCode::Escape if self.tab != Tab::Object => self.tab = Tab::Object,
                     KeyCode::Escape if self.selected.is_some() => {
@@ -4198,6 +4353,7 @@ impl ApplicationHandler for App {
                     }
                 }
                 (MouseButton::Left, ElementState::Released) => {
+                    self.load_pressed = None;
                     self.minimap_drag = false;
                     self.slider_drag = None;
                     if let (Some(from), Some(to)) = (self.box_from.take(), self.cursor) {
@@ -4314,5 +4470,16 @@ mod scroll_tests {
         assert_eq!(super::direction(0.0), 0.0);
         assert_eq!(super::direction(2.0), 1.0);
         assert_eq!(super::direction(-1.0), -1.0);
+    }
+}
+
+/// Whether a ship's Reload Object may take up `o` (0x4dc630, command 0x1f
+/// with a target): an own port, shipyard or dock, or another ship.
+fn is_load_target(o: &crate::objects::MapObject, ship: Option<&crate::objects::MapObject>) -> bool {
+    use openconquest_formats::ObjectClass;
+    match o.class {
+        ObjectClass::Ship => ship.is_some_and(|s| s.id != o.id),
+        ObjectClass::Building(c) => matches!(c, economy::PORT | economy::SHIPYARD | economy::DOCK),
+        _ => false,
     }
 }

@@ -9,6 +9,7 @@ mod commands;
 mod cursor;
 mod economy;
 mod launch;
+mod load_panel;
 mod magic;
 mod menus;
 mod music;
@@ -153,6 +154,12 @@ struct Args {
     /// Centre the screenshot where the mission's view starts.
     #[arg(long, hide = true)]
     at_start: bool,
+    /// Debugging: before simulating, send the player's ship nearest the
+    /// focus to reload at the own port, shipyard or dock nearest it, and
+    /// show the building's load panel (with --simulate long enough for the
+    /// ship to get there).
+    #[arg(long, hide = true)]
+    reload: bool,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -383,6 +390,11 @@ fn screenshot(
     scene.fog = !args.no_fog;
     // The counters as they settle once the game has run a moment.
     scene.shown = [scene.amber, scene.fish];
+    let reloading = if args.reload {
+        reload(&mut scene, args.focus)
+    } else {
+        None
+    };
     let attacker = if args.skirmish {
         skirmish(&mut scene, args.focus)
     } else if let Some(what) = &args.gather {
@@ -462,6 +474,7 @@ fn screenshot(
         }),
         panel_hover: None,
         paused: args.paused,
+        load: Some((load_panel::LoadView::default(), None)),
     };
     let (screen, _, _) = view.placement(size);
     let map = scene.map_size();
@@ -502,6 +515,19 @@ fn screenshot(
             })
             .map(|o| o.id)
     });
+    if let Some(target) = reloading {
+        view.selected = Some(target);
+        view.load = Some((
+            load_panel::LoadView {
+                owner: target,
+                ..Default::default()
+            },
+            None,
+        ));
+        if scene.load_link(target).is_none() {
+            eprintln!("reload: the ship has not got alongside yet");
+        }
+    }
     let mut pixels = vec![0u32; (size.0 * size.1) as usize];
     let mut frame = Frame {
         pixels: &mut pixels,
@@ -510,6 +536,43 @@ fn screenshot(
     };
     view.draw(&mut frame);
     write_png(path, size, &pixels)
+}
+
+/// Sends the player's ship nearest `focus` to reload at the own port,
+/// shipyard or dock nearest it (see `--reload`); returns the building.
+fn reload(scene: &mut Scene, focus: Option<(u32, u32)>) -> Option<u32> {
+    use openconquest_formats::ObjectClass;
+    let (fx, fy) = focus.map_or((0.0, 0.0), |(x, y)| {
+        ((x * 64 + 32) as f32, (y * 64 + 32) as f32)
+    });
+    let near = |o: &&crate::objects::MapObject| (o.x - fx).hypot(o.y - fy);
+    let ship = scene
+        .objects
+        .iter()
+        .filter(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind < 10))
+        .min_by(|a, b| near(a).total_cmp(&near(b)))?;
+    let (sx, sy, ship) = (ship.x, ship.y, ship.id);
+    let target = scene
+        .objects
+        .iter()
+        .filter(|o| {
+            scene.is_own(o)
+                && matches!(
+                    o.class,
+                    ObjectClass::Building(economy::PORT | economy::SHIPYARD | economy::DOCK)
+                )
+        })
+        .min_by(|a, b| {
+            (a.x - sx)
+                .hypot(a.y - sy)
+                .total_cmp(&(b.x - sx).hypot(b.y - sy))
+        })?
+        .id;
+    match scene.order_load(ship, target) {
+        Ok(()) => eprintln!("reload: ship {ship} at ({sx}, {sy}) to {target}"),
+        Err(e) => eprintln!("reload: {e}"),
+    }
+    Some(target)
 }
 
 fn write_png(path: &std::path::Path, size: (u32, u32), pixels: &[u32]) -> Result<()> {

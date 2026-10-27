@@ -770,10 +770,121 @@ arrow (`COBJ_SSPEC_00`, `01` without stock) to open its units; place 3 its
 armour and rams (0x20, dim 0x1f), place 7 its goods (0x2e, dim 0x2d).
 Clicking a cell with stock lists its units; clicking one again picks it up
 to load onto a ship. Its starting stock is record fields 14-22. Its menu
-(0x43c740): building (0), reload object (1, onto a ship alongside), repair
+(0x43c740): building (0), reload object (1, command 0x1f: with one of its
+own forts 0x34-0x36, see Load panel), repair
 (2), upgrade to town (4), sell item (5), sell town (6), and from slot 8 the
 marines it can train: only with a workshop of the settlement, and for
 swordsmen a smithy (0x43da20, +0x1fc, +0x200).
+
+## Load panel (c_load.cpp)
+
+**Opening.** A ship's Reload Object (button 0x05, string 429; pointer mode
+12) sends command 0x1f with a target (0x4e2ba0), which 0x4dc630 accepts
+when it is the player's own and not the ship itself: a port (0x39),
+shipyard (0x3a), dock (0x3b), fort (0x34-0x36) or ship (classes 200-211);
+not a settlement. The ship sails alongside through its contact machine
+(`+0x8e6`, type 0x32 for a building, 200 for a ship); in contact state 3
+it sends 0x2875 to the target (0x4b3930), which takes it up (LandObj
+0x425990: `+0x104` = 1, `+0x108` = the ship's id). A settlement's own
+Reload Object (menu slot 1) does the same with one of its forts (0x441ba0
+case 0x1f, checked in 0xc452: target classes 0x34-0x36). When the
+object panel is rebuilt (0xc453, 0x4fffe0) it asks the selected object
+0xc45a: a building answers `+0x104`, a ship 1 in contact state 6
+(`+0x58c`); if set, panel 0x22e (c_load, ctor 0x4f7e40, handler
+0x4fa140) replaces the slots (0x22c) and the command buttons (0x22d).
+The link ends with Finish reload (0x1d1f: message 0xc45b through the
+cursor, 0x518db0 mode 0x32 → 0x280f with byte 0x32; the building clears
+`+0x104` and sends 0x2876 to its partner) or when the contact ends
+(0x4b4401: 0x2876). Esc also ends it (string 400 "Finish reloading
+objects - Esc").
+
+**Lists.** Two side structs at panel +0x20 (0x24 bytes: owner nation +1,
+slot +2, class +0xf, count +0x1a, an opened group's key +0x1c, entries
++0x20), filled by message 0x10a1 to the selection: a ship fills side 0
+with its own places (0x4e4120 → 0x4e5e40) and side 1 with its partner's
+(another ship's places, or 0x4bda00 for a building); a port, shipyard or
+dock (`ShipServiceObjClassTy`, 0x4e7640) fills side 0 with its
+settlement's stock (`+0x1c8`, the settlement's vtable +0x64 = 0x43c570) and
+side 1 with the ship; a settlement side 0 with its stock and side 1 with
+the fort (0x441ba0, partner class 0x1494 `FortressClassTy`); a fort
+(0x419f80) its own weapons and its settlement's or ship's. Entries are
+0x14 bytes: category (+0), its byte (+1: item, level, hero, treasure
+kind), index within the category (+2), flags (+6: 1 nothing there,
+dimmed; 2 something there; 4 a group to open, arrow `COBJ_SSPEC_00`/`01`;
+8 locked, `_04`/`05`; 0x10 an open group's header, `_02`/`03`), count (+8,
+`NUMBER_FONT` at (3, 3)), bar (+0xa: value, maximum). Categories and
+pictures (0x4f9520): 1 a unit (marines 10 + item, 13 + item for nation 3,
++15 dimmed; weapons item - 2, item + 13 dimmed; 0xff an empty place, 0),
+2 armour (0x22 + level, empty 0x21), 4 a ram (0x23 + level + 3, empty
+0x25), 8 a settlement's armour-and-rams place (0x20, dim 0x1f), 0x10 a
+hundred of goods (0x2a + kind, empty 0x29), 0x20 a hero (0x30 + hero,
+empty 0x2f), 0x40 a treasure (0x3a + 0x5005a0(kind), empty 0x39), 0x80 a
+settlement's treasures-and-heroes place (0x2e, dim 0x2d). A ship lists
+as on its object panel (0x4e5e40; merchants: their units in cargo
+places, then goods, then empty places); the unique ships' own weapon
+(types 8, 9: item 9, 10) and type 10's first entry are locked, and every
+entry of type 11 (0x4e4120). A settlement lists its eleven places
+(0x43bfe0 page 0) but 0x43c570 drops the units' group flag: its nine
+item places are entries with the count and the first unit's condition
+as their bar, and only places 3 (armour and rams) and 7 (stored
+treasures `+0x19c`, then heroes `+0x1a0`) open.
+
+**Clicks** (0x4f9da0, cells 0x1e4b + side x 100 + index; drawn by
+0x4f9520 as 0x1f13 + ...): nothing for flags 1 or 8; a group (2 and 4)
+opens: the side's list becomes its header (key = the entry's first word,
+flags 0x12) and the owner appends the group's entries (armour, then rams;
+treasures, then heroes); the header (0x10) closes it. Otherwise the first
+click chooses the entry (panel +0x68 side, +0x69 index; `COBJ_SACT`
+framed) and a second click on the same entry moves it to the other side:
+message 0x10ac through the cursor with direction = side (+4), the
+entry's first word (+6), bytes 2-5 (+8, the index within its category),
+its bar (+0xc, the condition) and its index in the list, less the header
+(+0xe). Kill item (0x1d20) sends the same with direction side + 2. Kill
+is enabled while some entry of the chosen side has flag 2 (0x4fa0b0).
+
+**Moves** (0x4e7640 at a port, 0x441ba0 at a settlement, 0x419f80 at a
+fort, 0x4e3b70 between ships; each first checks that the entry is still
+there, 0x4236b0/0x4e39e0 and 0x423720/0x4e3a50). Into a ship 0x4bc8c0:
+units into a warship if the free room (0x4be800 mode 5: 0x597ae4 less the
+load) is at least the item's size (0x597cf0: 1, strong weapons 2), into
+a boat or merchant as cargo if a cargo place is free (0x597af0 less the
+places used); armour up to the type's level (0x597b14) and not the one
+fitted, a fitted one going back (0x4bde80); rams likewise (0x597b20,
+levels counted from 3); between ships the two swap (0x4bcff0) if each
+fits the other; goods (0x10) into a free cargo place (0x4bd650); a hero
+if a hero place is free (0x597b08, 0x4bd350); a treasure if a treasure
+place is free (0x597afc, 0x4bd0c0). Ships 10 and 11 take nothing. Out of
+a settlement a unit is always the first of its place (0x446620 index 0).
+Into a settlement: a unit with its condition (0x440d40, refused while it
+is repairing: `+0x10c` and state 2), armour or a ram into its lists
+(`+0x248`, `+0x24c`; level 0 is none and is refused), a hero
+(0x424ed0, `+0x1a0`, announced 0x5d99), a treasure through 0x441480
+(kind 7 a pack of units, armour or rams; else 0x424b30: kinds 0-2
+amber, 3-5 fish, 6 goods credited; the rest stored if the building has
+room, 0x424af0: table 0x5c1094 by class, settlements and towns 50, forts
+1, others 2, and announced with 0x5d94, 1). Goods do not go ashore here.
+
+**Kill** (direction 2 or 3): a settlement's unit is its place's last
+(0x446620), armour or rams their entry, a treasure is dropped from its
+store (0x424cf0, announced 0x5d94 with 0), a hero is removed; a ship's
+entry through 0x4bcd10, a treasure thrown overboard lying in the sea
+where the ship is (0x4bd500 with 1 → 0x520c70).
+
+**Layout** (bar pixels): side 0 on `COBJ_BKMAIN` at (3, 206), side 1 on
+`CLOAD_BKMAIN` (199x157) at (3, 400); each with its owner's portrait as
+on the object panel (0x4f8ad0: `INF_OBJ` at +(8, 6), `INF_SHIP` at
++(10, 9)). Kill item `CLOAD_KILL` at (4, 365) and Finish reload
+`CLOAD_END` at (105, 365), 100x34, frame 01 pressed, captions 474 "Kill
+item" and 473 "Finish reload" in `INT_FONT` (0x4e9ca0), hints 401 and
+400. Cells (`COBJ_BKSMSLOT`, 47x50) from y 210 (side 0) and 404 (side 1):
+a closed list in the slot grid (entry i at place i + 1, four to a row 48
+apart from x 9, rows 51 apart); an opened one with its header at (9,
+y + 102) and the rest three to a row from x 57, or with ten and more a
+window of six, two to a row 53 apart from x 62, with `COBJ_BKGSCROLL`/
+`CLOAD_BKGSCROLL` at panel (165, 6)/(165, 4) and a slider (0x4f9af0):
+`SLIDER_UP_`/`SLIDER_DN_` (22x22) at (172, y + 6) and (172, y + 124),
+the track `COBJ_BKSCROLL`/`CLOAD_BKSCROLL` (30x96) at (168, y + 28),
+`SLIDER_BB` the thumb, a step a row of two (messages 0x537/0x538).
 
 ## Selection box
 
@@ -1405,8 +1516,9 @@ for a computer player its 0x10 ones too, go to the building (0x4bdc10 ->
 and announces message 0x5d94 with 1. Message 0x5d94 with 0 is a ship
 taking a treasure (0x4b6e80). So the human never hands the Golden Fleece
 over by unloading. miss010's brain waits for it (0x5d94, 1, kind 16).
-Docks (0x4e7861) and towns (0x441480) can also take items from a ship
-alongside, perhaps through the ship's slots; this is not traced.
+Docks (0x4e7861) and towns (0x441480) also take items from a ship in the
+load panel (below); a treasure handed over there is announced with 0x5d94
+and 1 too.
 
 Barbarian structures (`BarbarianClassTy`, 0x40e000-0x410000) build their
 ships for nothing. The class pays only to mend its units (0x40eba0), while

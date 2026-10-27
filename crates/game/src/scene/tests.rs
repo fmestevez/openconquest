@@ -4478,3 +4478,314 @@ fn miss007_guard_hunts_the_sword() {
     }
     assert_eq!(scene.brain.as_ref().unwrap().fleets[11].state, 25);
 }
+
+/// Puts own ship `ship` beside object `target` and takes the two up for
+/// reloading (Reload Object, already alongside).
+fn reload_beside(scene: &mut Scene, ship: u32, target: u32) {
+    let (i, t) = (
+        scene.object_index(ship).unwrap(),
+        scene.object_index(target).unwrap(),
+    );
+    let from = (scene.objects[i].x, scene.objects[i].y);
+    let (x, y) = scene
+        .beside_cells(t, from)
+        .into_iter()
+        .find(|&(x, y)| {
+            !scene
+                .objects
+                .iter()
+                .any(|o| o.id != ship && o.ship.is_some() && (o.x - x).hypot(o.y - y) < 32.0)
+        })
+        .unwrap();
+    scene.objects[i].x = x;
+    scene.objects[i].y = y;
+    scene.objects[i].ship.as_mut().unwrap().path.clear();
+    scene.objects[i].ship.as_mut().unwrap().task = None;
+    assert!(scene.alongside(i, t));
+    scene.order_load(ship, target).unwrap();
+}
+
+/// The load panel at a shipyard (c_load.cpp, 0x4e7640): the settlement's
+/// stock and the ship trade marines and weapons both ways within the
+/// room aboard; a treasure handed to the settlement is stored and counts
+/// as delivered (message 0x5d94), and goes back aboard; Kill item throws
+/// a treasure into the sea; Finish reload ends it (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn load_panel_moves_items_both_ways() {
+    use crate::scene::load::{Cargo, GROUP, PRESENT, STORE, TREASURE};
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let own = |scene: &Scene, cls| {
+        scene
+            .objects
+            .iter()
+            .find(|o| o.class == ObjectClass::Building(cls) && scene.is_own(o))
+            .map(|o| o.id)
+            .unwrap()
+    };
+    let yard = own(&scene, SHIPYARD);
+    let site = own(&scene, SETTLEMENT);
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 7))
+        .unwrap()
+        .id;
+    // Not a reload target: a settlement (only ports, yards, docks, ships).
+    assert!(scene.order_load(ship, site).is_err());
+    reload_beside(&mut scene, ship, yard);
+    assert_eq!(scene.load_sides(yard), Some([site, ship]));
+    assert_eq!(scene.load_sides(ship), Some([ship, site]));
+    let k = scene.object_index(ship).unwrap();
+    scene.objects[k].ship.as_mut().unwrap().crew.squads = [0; 3];
+    scene.objects[k].combat.as_mut().unwrap().weapons.clear();
+    scene.garrisons.insert(site, [3, 0, 0, 2, 0, 0, 1, 0, 0]);
+    let crew = |scene: &Scene| {
+        scene.objects[scene.object_index(ship).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap()
+            .crew
+            .squads
+    };
+    // The settlement's list: its nine places with counts, its armour and
+    // rams, its treasures and heroes (groups).
+    let list = scene.load_list(site, None);
+    assert_eq!(list.len(), 11);
+    assert_eq!((list[0].count, list[0].cargo), (3, Some(Cargo::Unit(0))));
+    assert_eq!(list[4].cargo, Some(Cargo::Unit(3)));
+    assert_eq!(list[7].cat, STORE);
+    assert_ne!(list[7].flags & GROUP, 0);
+    // A bowman aboard, then back ashore; through the orders.
+    let order = |from, to, cargo| Order::Transfer { from, to, cargo };
+    scene
+        .apply(&order(site, ship, Cargo::Unit(0)), &data, &mut caches)
+        .unwrap();
+    assert_eq!(crew(&scene)[0], 1);
+    assert_eq!(scene.garrison(site)[0], 2);
+    scene
+        .apply(&order(ship, site, Cargo::Unit(0)), &data, &mut caches)
+        .unwrap();
+    assert_eq!(crew(&scene)[0], 0);
+    assert_eq!(scene.garrison(site)[0], 3);
+    // A ballista (two places) and a scorpion fill the bireme's two places.
+    scene
+        .transfer(site, ship, Cargo::Unit(6), &data, &mut caches)
+        .unwrap();
+    assert_eq!(
+        scene.transfer(site, ship, Cargo::Unit(3), &data, &mut caches),
+        Err("No room aboard".to_string())
+    );
+    assert_eq!(scene.garrison(site)[3], 2, "the refused one stays");
+    scene
+        .transfer(ship, site, Cargo::Unit(6), &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.garrison(site)[6], 1);
+    // Nothing that is not there moves.
+    assert!(scene
+        .transfer(ship, site, Cargo::Unit(6), &data, &mut caches)
+        .is_err());
+    // The Golden Fleece handed to the settlement: stored, delivered.
+    let fleece = crate::objects::Treasure {
+        kind: 16,
+        param: 0,
+        amount: 10,
+    };
+    let k = scene.object_index(ship).unwrap();
+    scene.objects[k].ship.as_mut().unwrap().treasures = vec![fleece];
+    let tr = Cargo::Treasure { index: 0, kind: 16 };
+    scene.transfer(ship, site, tr, &data, &mut caches).unwrap();
+    assert!(scene.held.contains(&(site, fleece)));
+    assert!(scene.delivered.contains(&16), "the brains hear of it");
+    let store = scene.load_list(site, Some((STORE, 0)));
+    assert_eq!(store.len(), 2, "the header and the Fleece");
+    assert_eq!((store[1].cat, store[1].sub), (TREASURE, 16));
+    assert_eq!(store[1].flags, PRESENT);
+    // And back aboard.
+    scene.transfer(site, ship, tr, &data, &mut caches).unwrap();
+    assert!(!scene.held.iter().any(|h| h.0 == site));
+    let k = scene.object_index(ship).unwrap();
+    assert!(scene.objects[k].ship.as_ref().unwrap().has_treasure(16));
+    // A second treasure finds no room aboard (a bireme holds one).
+    scene
+        .held
+        .push((site, crate::objects::Treasure { kind: 13, ..fleece }));
+    assert!(scene
+        .transfer(
+            site,
+            ship,
+            Cargo::Treasure { index: 0, kind: 13 },
+            &data,
+            &mut caches
+        )
+        .is_err());
+    // Kill item: thrown overboard, it lies in the sea.
+    let lying = |scene: &Scene| {
+        scene
+            .objects
+            .iter()
+            .filter(|o| o.treasure.is_some_and(|t| t.kind == 16))
+            .count()
+    };
+    let before = lying(&scene);
+    scene
+        .apply(
+            &Order::Discard {
+                holder: ship,
+                cargo: tr,
+            },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    assert_eq!(lying(&scene), before + 1);
+    // Kill a unit of the stock.
+    scene
+        .discard(site, Cargo::Unit(0), &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.garrison(site)[0], 2);
+    // Finish reload; then nothing moves.
+    scene
+        .apply(&Order::EndLoad { id: yard }, &data, &mut caches)
+        .unwrap();
+    assert!(scene.load_link(ship).is_none());
+    assert!(scene
+        .transfer(site, ship, Cargo::Unit(0), &data, &mut caches)
+        .is_err());
+}
+
+/// Two ships reload alongside each other: marines, a treasure and a
+/// hero move from one to the other, as there is room; the link ends as
+/// one sails off (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ships_reload_from_each_other() {
+    use crate::scene::load::Cargo;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let ships: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| scene.is_own(o) && o.ship.is_some() && o.combat.is_some())
+        .map(|o| o.id)
+        .collect();
+    assert!(ships.len() >= 2, "two ships");
+    let (a, b) = (ships[0], ships[1]);
+    for id in [a, b] {
+        let k = scene.object_index(id).unwrap();
+        let o = &mut scene.objects[k];
+        o.ship.as_mut().unwrap().kind = 2; // royal ships: room for heroes
+        o.ship.as_mut().unwrap().crew.squads = [0; 3];
+        o.combat.as_mut().unwrap().weapons.clear();
+    }
+    reload_beside(&mut scene, a, b);
+    assert_eq!(scene.load_sides(b), Some([b, a]));
+    let ka = scene.object_index(a).unwrap();
+    {
+        let s = scene.objects[ka].ship.as_mut().unwrap();
+        s.crew.squads = [2, 0, 0];
+        s.heroes = vec![crate::objects::THESEUS];
+        s.treasures = vec![crate::objects::Treasure {
+            kind: 19,
+            param: 0,
+            amount: 0,
+        }];
+    }
+    scene
+        .transfer(a, b, Cargo::Unit(0), &data, &mut caches)
+        .unwrap();
+    scene
+        .transfer(
+            a,
+            b,
+            Cargo::Hero(crate::objects::THESEUS),
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    scene
+        .transfer(
+            a,
+            b,
+            Cargo::Treasure { index: 0, kind: 19 },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    let ship = |scene: &Scene, id| {
+        scene.objects[scene.object_index(id).unwrap()]
+            .ship
+            .clone()
+            .unwrap()
+    };
+    assert_eq!(ship(&scene, a).crew.squads[0], 1);
+    assert_eq!(ship(&scene, b).crew.squads[0], 1);
+    assert_eq!(ship(&scene, b).heroes, vec![crate::objects::THESEUS]);
+    assert!(ship(&scene, b).has_treasure(19) && !ship(&scene, a).has_treasure(19));
+    // A royal ship holds five units: the sixth finds no room.
+    let kb = scene.object_index(b).unwrap();
+    scene.objects[kb].ship.as_mut().unwrap().crew.squads = [5, 0, 0];
+    assert_eq!(
+        scene.transfer(a, b, Cargo::Unit(0), &data, &mut caches),
+        Err("No room aboard".to_string())
+    );
+    // Sailing off ends the reloading.
+    let (x, y) = (scene.objects[ka].x + 64.0 * 6.0, scene.objects[ka].y);
+    scene.order_move(a, x, y);
+    scene.update(0.02, &data, &mut caches);
+    assert!(scene.load_link(b).is_none());
+}
+
+/// A ship sent to reload sails alongside its port first and is taken up
+/// on arriving (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ships_sail_to_reload() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let yard = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .unwrap()
+        .id;
+    let t = scene.object_index(yard).unwrap();
+    let ship = scene
+        .objects
+        .iter()
+        .enumerate()
+        .filter(|(i, o)| scene.is_own(o) && o.ship.is_some() && !scene.alongside(*i, t))
+        .map(|(_, o)| o.id)
+        .next()
+        .unwrap();
+    scene
+        .apply(
+            &Order::LoadObject { ship, target: yard },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    assert!(scene.load_link(ship).is_none());
+    for _ in 0..50 * 120 {
+        scene.update(0.02, &data, &mut caches);
+        if scene.load_link(yard).is_some() {
+            assert_eq!(scene.load_link(yard).unwrap().ship, ship);
+            return;
+        }
+    }
+    panic!("the ship never got alongside");
+}

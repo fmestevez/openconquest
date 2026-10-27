@@ -20,6 +20,7 @@ use std::rc::Rc;
 
 use crate::assets::{rgb, GameData, Image};
 use crate::commands::{menu, Menu, Page, SLOTS};
+use crate::load_panel;
 use crate::panels::{PanelView, Panels};
 use crate::render::{
     blit_scaled, draw_fog, draw_minimap, draw_objects, draw_selection, draw_site, draw_world,
@@ -115,6 +116,8 @@ pub struct Interface {
     pub panels: Panels,
     /// The animated "pause" sign (`WIN_PAUSE`).
     pause_sign: Vec<Rc<Image>>,
+    /// The load panel's pictures.
+    pub load_art: load_panel::LoadArt,
     /// The green tick where a ship was sent (`TAKE_CMD`, controlm).
     take_cmd: Vec<Image>,
 }
@@ -220,6 +223,7 @@ impl Interface {
             buttons: RefCell::default(),
             panels: Panels::load(data, theme)?,
             pause_sign: sequence(&format!("{theme}WIN_PAUSE")),
+            load_art: load_panel::LoadArt::load(data, theme),
             take_cmd: (0..4)
                 .filter_map(|i| {
                     let menus = data.menus.as_ref()?;
@@ -687,62 +691,207 @@ impl Interface {
                 layout.bar_x + (SLOTS_ORIGIN.0 + n % 4 * SLOT_STEP.0) as f32 * s,
                 (SLOTS_ORIGIN.1 + n / 4 * SLOT_STEP.1) as f32 * s,
             );
-            let (w, h) = self
-                .small_slot
-                .as_ref()
-                .map_or((47, 50), |b| (b.width, b.height));
-            if let Some(bk) = &self.small_slot {
-                blit_scaled(frame, bk, (0, 0, w, h), x, y, s);
+            self.draw_cell(frame, data, layout, (x, y), cell, &[], chosen == Some(i));
+        }
+    }
+
+    /// One cell (0x4f9520): `COBJ_BKSMSLOT`, the `COBJ_SSLOT` picture at
+    /// (1, 1), the health bar, the chosen frame (`COBJ_SACT`), the marks
+    /// (`COBJ_SSPEC`) and the count in `NUMBER_FONT` at (3, 3).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_cell(
+        &self,
+        frame: &mut Frame,
+        data: &GameData,
+        layout: &Layout,
+        (x, y): (f32, f32),
+        cell: &SlotCell,
+        more_marks: &[u8],
+        chosen: bool,
+    ) {
+        let s = layout.scale;
+        let (w, h) = self
+            .small_slot
+            .as_ref()
+            .map_or((47, 50), |b| (b.width, b.height));
+        if let Some(bk) = &self.small_slot {
+            blit_scaled(frame, bk, (0, 0, w, h), x, y, s);
+        }
+        if let Some(img) = self.picture(data, &format!("COBJ_SSLOT_{:02}", cell.frame)) {
+            blit_scaled(frame, &img, (0, 0, img.width, img.height), x + s, y + s, s);
+        }
+        if let Some(pct) = cell.bar {
+            // A black bar 4 high, then two lines of colour (0x4f9520).
+            let len = (w - 2) * pct as u32 / 100;
+            let colours = if pct >= 50 {
+                self.bar_colours[0]
+            } else if pct >= 25 {
+                self.bar_colours[1]
+            } else {
+                self.bar_colours[2]
+            };
+            let mut fill = |x0: u32, y0: u32, x1: u32, y1: u32, c: u32| {
+                let (px0, py0) = ((x + x0 as f32 * s) as i64, (y + y0 as f32 * s) as i64);
+                let (px1, py1) = ((x + x1 as f32 * s) as i64, (y + y1 as f32 * s) as i64);
+                for py in py0..py1 {
+                    for px in px0..px1 {
+                        frame.put(px, py, c);
+                    }
+                }
+            };
+            fill(1, h - 5, 1 + len, h - 1, 0);
+            if len > 2 {
+                fill(2, h - 4, len, h - 3, colours[0]);
+                fill(2, h - 3, len, h - 2, colours[1]);
             }
-            if let Some(img) = self.picture(data, &format!("COBJ_SSLOT_{:02}", cell.frame)) {
+        }
+        // The chosen cell's frame (`COBJ_SACT`).
+        if chosen {
+            if let Some(img) = &self.load_art.active {
+                blit_scaled(frame, img, (0, 0, img.width, img.height), x + s, y + s, s);
+            }
+        }
+        for mark in cell.mark.iter().chain(more_marks) {
+            if let Ok(Some(img)) =
+                data.load_image(&data.controls, &format!("COBJ_SSPEC_{mark:02}"), false)
+            {
                 blit_scaled(frame, &img, (0, 0, img.width, img.height), x + s, y + s, s);
             }
-            // The chosen cell's frame (`COBJ_SACT`).
-            if chosen == Some(i) {
-                if let Ok(Some(img)) = data.load_image(&data.controls, "COBJ_SACT", false) {
-                    blit_scaled(frame, &img, (0, 0, img.width, img.height), x + s, y + s, s);
+        }
+        if cell.count > 0 {
+            self.number_font.draw(
+                frame,
+                (x + 3.0 * s) as i32,
+                (y + 3.0 * s) as i32,
+                s.round().max(1.0) as u32,
+                &cell.count.to_string(),
+            );
+        }
+    }
+
+    /// The load panel (c_load.cpp; see `load_panel`): the selected
+    /// object's holder above with its portrait, its partner's below, the
+    /// two lists, Kill item and Finish reload, and a slider on a list that
+    /// scrolls.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_load_panel(
+        &self,
+        frame: &mut Frame,
+        data: &GameData,
+        layout: &Layout,
+        scene: &Scene,
+        panel: &load_panel::Lists,
+        view: &load_panel::LoadView,
+        pressed: Option<load_panel::Hit>,
+    ) {
+        use load_panel::{
+            can_kill, cells, max_scroll, scrolls, Hit, ARROW_X, ARROW_Y, BUTTON, END, KILL,
+            PANEL_X, PANEL_Y, SCROLL_BACK, SIDE_Y, TRACK, TRACK_SIZE,
+        };
+        let s = layout.scale;
+        let bx = layout.bar_x;
+        let at = |x: u32, y: u32| (bx + x as f32 * s, y as f32 * s);
+        let art = &self.load_art;
+        let backs = [Some(&self.object_panel), art.bottom.as_ref()];
+        for side in 0..2 {
+            let holder = panel.holders[side];
+            let obj = scene.object_index(holder).map(|i| &scene.objects[i]);
+            if let Some(bk) = backs[side] {
+                let (x, y) = at(PANEL_X, PANEL_Y[side]);
+                blit_scaled(frame, bk, (0, 0, bk.width, bk.height), x, y, s);
+            }
+            let list = &panel.entries[side];
+            if scrolls(list) {
+                if let Some(img) = &art.scroll_back[side] {
+                    let (x, y) = at(PANEL_X + SCROLL_BACK.0, PANEL_Y[side] + SCROLL_BACK.1[side]);
+                    blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
                 }
             }
-            if let Some(mark) = cell.mark {
-                if let Ok(Some(img)) =
-                    data.load_image(&data.controls, &format!("COBJ_SSPEC_{mark:02}"), false)
-                {
-                    blit_scaled(frame, &img, (0, 0, img.width, img.height), x + s, y + s, s);
+            // The holder's portrait as on the object panel (0x4f8ad0).
+            if let Some((name, (px, py))) = obj.and_then(|o| o.picture.as_ref()) {
+                if let Some(img) = self.picture(data, name) {
+                    let (x, y) = at(PANEL_X + *px, PANEL_Y[side] + *py);
+                    blit_scaled(frame, &img, (0, 0, img.width, img.height), x, y, s);
                 }
             }
-            if cell.count > 0 {
-                self.number_font.draw(
+            let nation3 = obj.and_then(|o| o.owner).is_some_and(|o| o.0 == 3);
+            for (i, cx, cy) in cells(list, side, view.scroll[side]) {
+                let e = &list[i];
+                let marks = e.marks();
+                let cell = SlotCell {
+                    frame: e.frame(nation3),
+                    bar: e.bar,
+                    mark: None,
+                    count: e.count,
+                };
+                self.draw_cell(
                     frame,
-                    (x + 3.0 * s) as i32,
-                    (y + 3.0 * s) as i32,
-                    s.round().max(1.0) as u32,
-                    &cell.count.to_string(),
+                    data,
+                    layout,
+                    at(cx, cy),
+                    &cell,
+                    &marks,
+                    view.chosen == (side, i),
                 );
             }
-            if let Some(pct) = cell.bar {
-                // A black bar 4 high, then two lines of colour (0x4f9520).
-                let len = (w - 2) * pct as u32 / 100;
-                let colours = if pct >= 50 {
-                    self.bar_colours[0]
-                } else if pct >= 25 {
-                    self.bar_colours[1]
-                } else {
-                    self.bar_colours[2]
-                };
-                let mut fill = |x0: u32, y0: u32, x1: u32, y1: u32, c: u32| {
-                    let (px0, py0) = ((x + x0 as f32 * s) as i64, (y + y0 as f32 * s) as i64);
-                    let (px1, py1) = ((x + x1 as f32 * s) as i64, (y + y1 as f32 * s) as i64);
-                    for py in py0..py1 {
-                        for px in px0..px1 {
-                            frame.put(px, py, c);
-                        }
-                    }
-                };
-                fill(1, h - 5, 1 + len, h - 1, 0);
-                if len > 2 {
-                    fill(2, h - 4, len, h - 3, colours[0]);
-                    fill(2, h - 3, len, h - 2, colours[1]);
+            if scrolls(list) {
+                let y0 = SIDE_Y[side];
+                if let Some(img) = &art.track[side] {
+                    let (x, y) = at(TRACK.0, y0 + TRACK.1);
+                    blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
                 }
+                let max = max_scroll(list.len() - 1).max(1);
+                if let Some(img) = &art.thumb {
+                    let room = TRACK_SIZE.1 - img.height;
+                    let k = view.scroll[side].min(max) as u32 * room / max as u32;
+                    let (x, y) = at(TRACK.0 + 4, y0 + TRACK.1 + k);
+                    blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
+                }
+                for (arrows, dy, hit) in [
+                    (&art.up, ARROW_Y[0], Hit::Up(side)),
+                    (&art.down, ARROW_Y[1], Hit::Down(side)),
+                ] {
+                    let f = usize::from(pressed == Some(hit)) * 2;
+                    if let Some(img) = arrows.get(f).or(arrows.first()) {
+                        let (x, y) = at(ARROW_X, y0 + dy);
+                        blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
+                    }
+                }
+            }
+        }
+        // Kill item and Finish reload (0x4e9ca0): frame 1 pressed, the
+        // caption (strings 474 and 473) in `INT_FONT`, centred.
+        let kill = can_kill(panel, view);
+        for (pos, frames, id, hit, enabled) in [
+            (KILL, &art.kill, 474, Hit::Kill, kill),
+            (END, &art.end, 473, Hit::End, true),
+        ] {
+            let down = pressed == Some(hit) && enabled;
+            let (x, y) = at(pos.0, pos.1);
+            if let Some(img) = frames.get(usize::from(down)).or(frames.first()) {
+                blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
+            }
+            let caption = data.strings.get(&id).map_or(
+                if id == 474 {
+                    "Kill item"
+                } else {
+                    "Finish reload"
+                },
+                |c| c.as_str(),
+            );
+            let font = if enabled {
+                art.font.as_ref()
+            } else {
+                Some(&self.button_font[1])
+            };
+            if let Some(font) = font {
+                let ts = s.round().max(1.0) as u32;
+                let w = font.measure(caption) as f32;
+                let h = font.line_height() as f32;
+                let shift = if down { 2.0 } else { 0.0 };
+                let tx = x + ((BUTTON.0 as f32 - w) / 2.0 - shift) * s;
+                let ty = y + ((BUTTON.1 as f32 - h) / 2.0 + shift) * s;
+                font.draw(frame, tx as i32, ty as i32, ts, caption);
             }
         }
     }
@@ -827,6 +976,8 @@ pub struct GameView<'a> {
     pub panel_hover: Option<(u32, u32)>,
     /// The game is paused.
     pub paused: bool,
+    /// The load panel's state, and the panel button held down.
+    pub load: Option<(load_panel::LoadView, Option<load_panel::Hit>)>,
 }
 
 impl GameView<'_> {
@@ -1035,56 +1186,79 @@ impl GameView<'_> {
                         );
                     }
                 }
-                if self.page != Page::Main {
-                    ui.draw_strip(frame, layout, false);
+                // Reloading: the load panel takes the slots' and the
+                // buttons' place (0x4fffe0).
+                let reloading = self.load.and_then(|(view, pressed)| {
+                    let panel = load_panel::lists(self.scene, obj.id, &view)?;
+                    Some((panel, view, pressed))
+                });
+                if let Some((panel, view, pressed)) = reloading {
+                    ui.draw_load_panel(
+                        frame, self.data, layout, self.scene, &panel, &view, pressed,
+                    );
                 }
-                if matches!(self.page, Page::Structures | Page::Ground) && self.scene.is_own(obj) {
-                    let caption = self
-                        .data
-                        .strings
-                        .get(&501)
-                        .map_or("default arming", |s| s.as_str());
-                    ui.draw_arming(frame, layout, self.text, caption, self.scene.default_arming);
-                }
-                let nation = self.scene.human.map_or(1, |h| h.nation);
-                ui.draw_menu(
-                    frame,
-                    self.data,
-                    layout,
-                    &menu(self.scene, obj, self.page),
-                    nation,
-                    self.hover_button,
-                    self.time_ms,
-                );
-                let mut slots = ship_slots(obj);
-                if slots.is_empty() && self.scene.is_own(obj) {
-                    slots = settlement_slots(self.scene, obj);
-                }
-                if !slots.is_empty() {
-                    ui.draw_slots(frame, self.data, layout, &slots, self.chosen_cell);
-                }
-                // Ships show their slots instead (no text, as on the
-                // original).
-                let (tx, ty) = layout.info_text;
-                let lines = if !slots.is_empty() {
-                    Vec::new()
+                if reloading_shown(self.load, self.scene, obj.id) {
+                    // Nothing else of the object panel.
                 } else {
-                    wrap(
-                        self.text,
-                        &match self.group.len() {
-                            0 => details(self.scene, obj),
-                            n => format!(
-                                "{}. With {n} more ship{}",
-                                details(self.scene, obj),
-                                if n == 1 { "" } else { "s" }
-                            ),
-                        },
-                        (layout.info_width / text_scale as f32) as u32,
-                    )
-                };
-                for (i, line) in lines.iter().enumerate() {
-                    let y = ty + (i as u32 * (self.text.line_height() + 1) * text_scale) as f32;
-                    self.text.draw(frame, tx as i32, y as i32, text_scale, line);
+                    if self.page != Page::Main {
+                        ui.draw_strip(frame, layout, false);
+                    }
+                    if matches!(self.page, Page::Structures | Page::Ground)
+                        && self.scene.is_own(obj)
+                    {
+                        let caption = self
+                            .data
+                            .strings
+                            .get(&501)
+                            .map_or("default arming", |s| s.as_str());
+                        ui.draw_arming(
+                            frame,
+                            layout,
+                            self.text,
+                            caption,
+                            self.scene.default_arming,
+                        );
+                    }
+                    let nation = self.scene.human.map_or(1, |h| h.nation);
+                    ui.draw_menu(
+                        frame,
+                        self.data,
+                        layout,
+                        &menu(self.scene, obj, self.page),
+                        nation,
+                        self.hover_button,
+                        self.time_ms,
+                    );
+                    let mut slots = ship_slots(obj);
+                    if slots.is_empty() && self.scene.is_own(obj) {
+                        slots = settlement_slots(self.scene, obj);
+                    }
+                    if !slots.is_empty() {
+                        ui.draw_slots(frame, self.data, layout, &slots, self.chosen_cell);
+                    }
+                    // Ships show their slots instead (no text, as on the
+                    // original).
+                    let (tx, ty) = layout.info_text;
+                    let lines = if !slots.is_empty() {
+                        Vec::new()
+                    } else {
+                        wrap(
+                            self.text,
+                            &match self.group.len() {
+                                0 => details(self.scene, obj),
+                                n => format!(
+                                    "{}. With {n} more ship{}",
+                                    details(self.scene, obj),
+                                    if n == 1 { "" } else { "s" }
+                                ),
+                            },
+                            (layout.info_width / text_scale as f32) as u32,
+                        )
+                    };
+                    for (i, line) in lines.iter().enumerate() {
+                        let y = ty + (i as u32 * (self.text.line_height() + 1) * text_scale) as f32;
+                        self.text.draw(frame, tx as i32, y as i32, text_scale, line);
+                    }
                 }
             }
         }
@@ -1173,6 +1347,15 @@ impl GameView<'_> {
             );
         }
     }
+}
+
+/// Whether the load panel shows for `selected` (see `load_panel`).
+fn reloading_shown(
+    load: Option<(load_panel::LoadView, Option<load_panel::Hit>)>,
+    scene: &Scene,
+    selected: u32,
+) -> bool {
+    load.is_some_and(|(view, _)| load_panel::lists(scene, selected, &view).is_some())
 }
 
 /// Splits `text` into lines no wider than `width` font pixels.
@@ -1276,7 +1459,7 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
             }
             Some(Task::Board { .. }) => text += ". Boarding",
             Some(Task::Repair { .. }) => text += ". Repairing",
-            Some(Task::Fetch { .. }) => text += ". Sailing to load",
+            Some(Task::Fetch { .. } | Task::LoadAt { .. }) => text += ". Sailing to load",
             Some(Task::Scout { .. }) => text += ". Scouting",
             Some(Task::Patrol { .. }) => text += ". Patrolling",
             Some(Task::Zone { attack: false, .. }) => text += ". Guarding a zone",

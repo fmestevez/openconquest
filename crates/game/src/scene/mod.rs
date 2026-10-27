@@ -225,6 +225,11 @@ pub struct Scene {
     pub site_heroes: std::collections::BTreeMap<u32, Vec<u8>>,
     /// Treasures held by objects, dropped when they are destroyed.
     pub held: Vec<(u32, crate::objects::Treasure)>,
+    /// Armour and rams stored at settlements (levels: armour, rams), put
+    /// ashore from ships in the load panel.
+    pub fittings: BTreeMap<u32, load::Fittings>,
+    /// Ships lying alongside an own port, dock or ship to reload.
+    pub loads: Vec<load::LoadLink>,
     /// Harpies and dragons out of their nests, and the nests' counts.
     pub flyers: Vec<flyers::Flyer>,
     pub nests: Vec<flyers::Nest>,
@@ -314,6 +319,7 @@ mod battle;
 mod brain;
 mod creatures;
 mod gulls;
+pub mod load;
 mod orders;
 mod repair;
 mod sheep;
@@ -335,6 +341,7 @@ mod unload;
 mod walkers;
 pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use flyers::{Flyer, Nest};
+pub use load::{Cargo, Entry, LoadLink};
 pub use order::Order;
 pub use stats::Stats;
 pub use story::{goal_name, Carry, Goal};
@@ -487,6 +494,8 @@ impl Scene {
             start_sites: Vec::new(),
             delivered: Vec::new(),
             held: Vec::new(),
+            fittings: Default::default(),
+            loads: Vec::new(),
             permits: crate::permits::Permits::ALL,
             seats: Vec::new(),
             active: 0,
@@ -649,6 +658,8 @@ impl Scene {
             start_sites: self.start_sites.clone(),
             delivered: self.delivered.clone(),
             held: self.held.clone(),
+            fittings: self.fittings.iter().map(|(k, v)| (*k, v.clone())).collect(),
+            loads: self.loads.clone(),
             permits: Some(self.permits),
             stats: self.stats.clone(),
             flyers: self.flyers.clone(),
@@ -734,6 +745,8 @@ impl Scene {
         scene.mending = save.mending.clone();
         scene.delivered = save.delivered.clone();
         scene.held = save.held.clone();
+        scene.fittings = save.fittings.iter().cloned().collect();
+        scene.loads = save.loads.clone();
         scene.flyers = save.flyers.clone();
         scene.stats = save.stats.clone();
         for i in 0..scene.objects.len() {
@@ -1279,6 +1292,7 @@ impl Scene {
         self.run_creatures(dt, data, caches);
         self.run_wizards(dt, data, caches);
         self.run_fetches();
+        self.run_loads();
         self.run_flyers(dt, data, caches);
         self.run_walkers(dt, data, caches);
         self.run_porters(dt, data, caches);

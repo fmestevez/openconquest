@@ -106,6 +106,28 @@ pub enum Order {
         ship: u32,
         item: u8,
     },
+    /// Reload Object: own `ship` sails alongside own port, shipyard, dock
+    /// or ship `target` and the two reload (the load panel).
+    LoadObject {
+        ship: u32,
+        target: u32,
+    },
+    /// The load panel: `cargo` from holder `from` to holder `to`, two
+    /// sides of one reloading (message 0x10ac).
+    Transfer {
+        from: u32,
+        to: u32,
+        cargo: super::Cargo,
+    },
+    /// The load panel's Kill item: holder `holder` throws `cargo` away.
+    Discard {
+        holder: u32,
+        cargo: super::Cargo,
+    },
+    /// The load panel's Finish reload, for the ship or building `id`.
+    EndLoad {
+        id: u32,
+    },
     /// Sell one `item` of settlement `site`'s stock.
     SellItem {
         site: u32,
@@ -237,6 +259,10 @@ impl Scene {
             Mend { site, target } => done(self.order_mend(site, target)),
             LoadCrew { ship } => self.load_crew(ship),
             LoadItem { site, ship, item } => done(self.load_item(site, ship, item)),
+            LoadObject { ship, target } => done(self.order_load(ship, target)),
+            Transfer { from, to, cargo } => done(self.transfer(from, to, cargo, data, caches)),
+            Discard { holder, cargo } => done(self.discard(holder, cargo, data, caches)),
+            EndLoad { id } => done(self.end_load(id)),
             SellItem { site, item } => done(self.sell_item(site, item)),
             SellTown { site } => done(self.sell_town(site, data, caches)),
             BuildShip { site, kind } => done(self.start_ship(site, kind)),

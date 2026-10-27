@@ -443,6 +443,9 @@ pub enum Task {
     Convoy { ward: u32 },
     /// Sail to a treasure or a hero's house and take it.
     Take { target: u32 },
+    /// Sail alongside own port, shipyard, dock or ship `target` and reload
+    /// there (Reload Object; see `scene::load`).
+    LoadAt { target: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
