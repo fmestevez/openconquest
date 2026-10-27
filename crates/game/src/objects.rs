@@ -741,13 +741,10 @@ pub fn resolve(
         ObjectClass::HeroHouse => {
             let name = format!("HHOUSE{}SPR_013", f(22).min(8));
             let frames = composite_frames(data, caches, &name, 0..usize::MAX)?;
-            (
-                CellCentre(f(5), f(6)),
-                Visual {
-                    frames,
-                    frame_ms: DEFAULT_FRAME_MS,
-                },
-            )
+            // A land building (0x422e30): its cycle 50, 75, 75, 57 ticks
+            // (0x595e80, constructor 0x420fd0), standing 75.
+            let frame_ms = building_frame_ms(frames.len());
+            (CellCentre(f(5), f(6)), Visual { frames, frame_ms })
         }
         ObjectClass::HarpyNest => {
             // 0x41d010: dragon (0x44) or harpy (0x45) nest; the frame shows
@@ -777,13 +774,9 @@ pub fn resolve(
             };
             let frames =
                 composite_frames(data, caches, &format!("{prefix}SPR_413"), 0..usize::MAX)?;
-            (
-                CellCentre(f(4), f(5)),
-                Visual {
-                    frames,
-                    frame_ms: DEFAULT_FRAME_MS,
-                },
-            )
+            // Land buildings too (0x422e30): standing, 75 ticks a round.
+            let frame_ms = building_frame_ms(frames.len());
+            (CellCentre(f(4), f(5)), Visual { frames, frame_ms })
         }
         ObjectClass::Monster(0x1fb) => {
             // Sea monster, `UMON<type><state><heading>` (0x490040): states 0
@@ -876,11 +869,12 @@ pub fn resolve(
         }
         ObjectClass::Lava => {
             let frames = sequence_frames(data, caches, &format!("VOLCANOLAVA{:02}", f(4)))?;
+            // A frame every 3 ticks (the volcano, 0x445630).
             (
                 CellCorner(f(6), f(7), 0, 0),
                 Visual {
                     frames,
-                    frame_ms: DEFAULT_FRAME_MS,
+                    frame_ms: 3 * TICK_MS,
                 },
             )
         }
