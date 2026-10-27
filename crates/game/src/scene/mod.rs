@@ -1270,6 +1270,7 @@ impl Scene {
                 }
                 d
             };
+            let resting = ship.velocity == 0.0;
             let stopping = (2.0 * accel * ahead).sqrt().max(MIN_WAY);
             let target = top.min(stopping);
             ship.velocity = if ship.velocity < target {
@@ -1285,17 +1286,19 @@ impl Scene {
                 .is_some_and(|&(tx, ty)| (tx - obj.x).abs() > 0.5 && (ty - obj.y).abs() > 0.5);
             let along = if diagonal { DIAGONAL_PACE } else { 1.0 };
             let mut budget = ship.velocity * along * dt;
-            // Closing in on a shore or pier, the last short way, it goes
-            // slowly.
-            if ship.path.len() == 1 {
-                if let Some(&(tx, ty)) = ship.path.front() {
-                    // Routes run between cell centres; a point off them is
-                    // a shore or pier closed in on.
-                    let centre = |v: f32| (v.rem_euclid(t) - t / 2.0).abs() < 0.5;
-                    if (tx - obj.x).hypot(ty - obj.y) < 24.0 && !(centre(tx) && centre(ty)) {
-                        budget *= CLOSING_IN;
-                    }
-                }
+            // Closing in on a shore or pier, and backing out from it to its
+            // cell's middle, it slides along a line of points at a steady
+            // pace (0x4b02a0, state 0x13). Routes run between cell centres;
+            // a point off them is a shore or pier closed in on.
+            let centre = |v: f32| (v.rem_euclid(t) - t / 2.0).abs() < 0.5;
+            let sliding = ship.path.front().is_some_and(|&(tx, ty)| {
+                let (to_mid, at_mid) = (centre(tx) && centre(ty), centre(obj.x) && centre(obj.y));
+                cell_of(tx, ty) == cell_of(obj.x, obj.y)
+                    && ((ship.path.len() == 1 && !to_mid) || (to_mid && !at_mid && resting))
+            });
+            if sliding {
+                ship.velocity = 0.0;
+                budget = CLOSING_PACE * dt;
             }
             while budget > 0.0 {
                 let Some(&(tx, ty)) = ship.path.front() else {
@@ -1395,9 +1398,10 @@ const MIN_WAY: f32 = 10.0;
 /// A diagonal step's pace against a straight one's: 2 x sqrt(2) / 3.
 const DIAGONAL_PACE: f32 = 0.9428;
 
-/// How much slower a ship goes closing in on a shore or pier. An
-/// estimate.
-const CLOSING_IN: f32 = 0.2;
+/// World pixels a second a ship slides closing in on a shore or pier, or
+/// backing out: two points of its line a frame of its picture, every 3
+/// ticks (0x4b02a0).
+const CLOSING_PACE: f32 = 2.0 / (3.0 * crate::clock::TICK);
 
 /// Seconds a ship takes to turn its hull one of 24 rotations: a frame of
 /// its picture (0x4a3320).

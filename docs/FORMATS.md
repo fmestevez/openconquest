@@ -1002,7 +1002,10 @@ it, at amber by direction (east 0x599c44, north 0x59a1c8, west 0x599ee8,
 south 0x59a4c8), ship type and the shore tile's group (0x5bb870, 0x4b3770;
 0 means not at all), at a port 10 pixels across or 13 up and down
 (0x59a7c8, 0x59a82c), turning as it goes to lie side-on, whichever of the
-two ways is nearer its heading. It records the way and backs out along it.
+two ways is nearer its heading. It records the way (a pixel line,
+0x4b5220) and backs out along it; either way it moves two points of the
+line, and a hull rotation while it turns, a frame of its picture (every 3
+ticks; 0x4b02a0, state 0x13).
 
 ## Nets, walkways and porters
 
