@@ -797,7 +797,7 @@ impl Scene {
     /// 0x4bee60): each marine's condition x C x 15 / 1000 (0x4ac1e0 with
     /// the A x 15 cache; C from 0x597d2c, `melee`), ten times that on the
     /// ship of the dead.
-    fn boarding_strength(&self, i: usize) -> u32 {
+    pub(crate) fn boarding_strength(&self, i: usize) -> u32 {
         let o = &self.objects[i];
         let Some(ship) = o.ship.as_ref() else {
             return 0;

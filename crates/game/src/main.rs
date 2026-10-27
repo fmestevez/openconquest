@@ -15,6 +15,7 @@ mod menus;
 mod music;
 mod nav;
 mod net;
+mod object_info;
 mod objects;
 mod panels;
 mod permits;
@@ -169,6 +170,10 @@ struct Args {
     /// (to see the damaged pictures).
     #[arg(long, hide = true, value_name = "PCT")]
     hull: Option<f32>,
+    /// Debugging: show the object info of the object under this map cell's
+    /// centre (or the nearest one) in the strip below the view.
+    #[arg(long, hide = true, value_parser = parse_size, value_name = "X,Y")]
+    hover: Option<(u32, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -496,6 +501,7 @@ fn screenshot(
         panel_hover: None,
         paused: args.paused,
         load: Some((load_panel::LoadView::default(), None)),
+        object_info: None,
     };
     let (screen, _, _) = view.placement(size);
     let map = scene.map_size();
@@ -551,6 +557,22 @@ fn screenshot(
         if scene.load_link(target).is_none() {
             eprintln!("reload: the ship has not got alongside yet");
         }
+    }
+    let hovered = args.hover.and_then(|(cx, cy)| {
+        let (fx, fy) = ((cx * 64 + 32) as f32, (cy * 64 + 32) as f32);
+        let near = |o: &&crate::objects::MapObject| (o.x - fx).powi(2) + (o.y - fy).powi(2);
+        render::hit_test(&scene, fx, fy, time_ms)
+            .and_then(|id| scene.objects.iter().find(|o| o.id == id))
+            .or_else(|| {
+                scene
+                    .objects
+                    .iter()
+                    .min_by(|a, b| near(a).total_cmp(&near(b)))
+            })
+    });
+    if let Some(o) = hovered {
+        view.object_info = object_info::of(&scene, o);
+        eprintln!("hover: {} {:?}: {:?}", o.id, o.class, view.object_info);
     }
     let mut pixels = vec![0u32; (size.0 * size.1) as usize];
     let mut frame = Frame {

@@ -123,6 +123,8 @@ pub struct Interface {
     pub load_art: load_panel::LoadArt,
     /// The green tick where a ship was sent (`TAKE_CMD`, controlm).
     take_cmd: Vec<Image>,
+    /// The object info in the strip below the view.
+    info_art: crate::object_info::InfoArt,
 }
 
 /// Window-space placement of the interface for one window size.
@@ -254,6 +256,7 @@ impl Interface {
                 TextRenderer::load_in(&data.controls, "BUT_FONT", 1, Some(&data.palette))?
                     .with_spacing(0),
             ],
+            info_art: crate::object_info::InfoArt::load(data, theme),
             arming_box: load("TRIGGER_BKGND", false).ok(),
             arming_tick: data
                 .load_image(&data.controls, &format!("{theme}MARKER"), false)
@@ -1036,6 +1039,9 @@ pub struct GameView<'a> {
     pub paused: bool,
     /// The load panel's state, and the panel button held down.
     pub load: Option<(load_panel::LoadView, Option<load_panel::Hit>)>,
+    /// What the strip below the view tells of the object under the
+    /// pointer (see `object_info`).
+    pub object_info: Option<crate::object_info::ObjectInfo>,
 }
 
 impl GameView<'_> {
@@ -1359,6 +1365,11 @@ impl GameView<'_> {
                 self.time_ms,
             );
             ui.draw_wind(frame, layout, &self.scene.wind);
+            if let Some(info) = &self.object_info {
+                let (x, y) = crate::object_info::ORIGIN;
+                let s = layout.scale;
+                ui.info_art.draw(frame, x as f32 * s, y as f32 * s, s, info);
+            }
             // The button under the cursor says what it does and costs.
             let hovered = self.hover_button.and_then(|slot| {
                 let obj = self

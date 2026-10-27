@@ -390,6 +390,9 @@ pub struct App {
     /// The original mouse's right button stepping through the pointers:
     /// what the pointer was over, and how many steps on.
     cycle: Cell<(Option<HoverKey>, usize)>,
+    /// The object info last shown in the strip below the view (kept over
+    /// what shows none, as 0x516c10 does).
+    shown_info: Cell<Option<crate::object_info::ObjectInfo>>,
     minimap_drag: bool,
     selected: Option<u32>,
     /// Other own ships selected with it.
@@ -566,6 +569,7 @@ impl App {
             drag_from: None,
             right_press: None,
             cycle: Cell::new((None, 0)),
+            shown_info: Cell::new(None),
             minimap_drag: false,
             selected: None,
             group: Vec::new(),
@@ -724,7 +728,25 @@ impl App {
             panel_hover: self.cursor.and_then(|c| self.bar_point(c)),
             paused: self.paused,
             load: Some((self.load_state(), self.load_pressed)),
+            object_info: self.hovered_info(),
         }
+    }
+
+    /// The object info for the strip below the view (gcursor.cpp
+    /// 0x516c10): the object under the pointer fills it; off objects it is
+    /// blank; one that shows none (type 0x1f7) leaves the last.
+    fn hovered_info(&self) -> Option<crate::object_info::ObjectInfo> {
+        let obj = self
+            .cursor
+            .and_then(|c| self.object_at(c))
+            .and_then(|id| self.scene.object_index(id))
+            .map(|i| &self.scene.objects[i]);
+        let info = match obj {
+            None => None,
+            Some(o) => crate::object_info::of(&self.scene, o).or(self.shown_info.get()),
+        };
+        self.shown_info.set(info);
+        info
     }
 
     /// The load panel's state for the selected object (fresh when the
