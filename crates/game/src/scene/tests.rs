@@ -5264,3 +5264,44 @@ fn unloading_ends_at_any_speed() {
         }
     }
 }
+
+/// Three ships sent to a real dock are all mended: one mended and idle at
+/// the dock makes way for the next (needs `OPENCONQUEST_DATA`).
+#[test]
+fn idle_ships_make_way_at_the_dock() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.amber = 10_000;
+    let yard = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.class == ObjectClass::Building(SHIPYARD))
+        .unwrap()
+        .id;
+    scene.upgrade(yard, &data, &mut caches).unwrap();
+    let ids: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| scene.is_own(o) && o.ship.is_some())
+        .map(|o| o.id)
+        .collect();
+    for &id in &ids {
+        let i = scene.object_index(id).unwrap();
+        let c = scene.objects[i].combat.as_mut().unwrap();
+        c.hull = c.max_hull / 2.0;
+        scene.order_repair(id, yard).unwrap();
+    }
+    for _ in 0..3000 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    for id in ids {
+        let i = scene.object_index(id).unwrap();
+        let c = scene.objects[i].combat.as_ref().unwrap();
+        assert_eq!(c.hull, c.max_hull, "ship {id} mended");
+    }
+}

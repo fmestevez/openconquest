@@ -3349,6 +3349,7 @@ impl App {
                 Ok(()) => {
                     self.pending = None;
                     self.status = None;
+                    self.confirm(pos);
                 }
                 Err(e) => self.say(e),
             }

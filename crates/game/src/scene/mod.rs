@@ -1047,15 +1047,87 @@ impl Scene {
         Some(points.into())
     }
 
+    /// Idle ship `idle` (no orders, lying still) moves out of ship
+    /// `mover`'s way, if both are the same player's: to the nearest free
+    /// cell not on `mover`'s route. True if it set off.
+    fn make_way(&mut self, idle: u32, mover: u32) -> bool {
+        let t = TILE_SIZE as f32;
+        let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
+        let (Some(k), Some(m)) = (self.object_index(idle), self.object_index(mover)) else {
+            return false;
+        };
+        let (o, mo) = (&self.objects[k], &self.objects[m]);
+        let Some(ship) = o.ship.as_ref() else {
+            return false;
+        };
+        if o.owner != mo.owner || o.owner.is_none() || ship.task.is_some() || !ship.path.is_empty()
+        {
+            return false;
+        }
+        let here = cell_of(o.x, o.y);
+        let mut avoid: HashSet<(i32, i32)> = mo
+            .ship
+            .as_ref()
+            .map(|s| s.path.iter().map(|&(x, y)| cell_of(x, y)).collect())
+            .unwrap_or_default();
+        avoid.insert(cell_of(mo.x, mo.y));
+        for p in &self.objects {
+            if p.id != idle {
+                if let Some(s) = p.ship.as_ref() {
+                    avoid.insert(cell_of(p.x, p.y));
+                    if let Some(&(x, y)) = s.path.back() {
+                        avoid.insert(cell_of(x, y));
+                    }
+                }
+            }
+        }
+        let deep = objects::deep_draught(ship.kind);
+        let (x, y) = (o.x, o.y);
+        let free = (1..=4).find_map(|r: i32| {
+            let mut ring: Vec<(i32, i32)> = (-r..=r)
+                .flat_map(|dx| (-r..=r).map(move |dy| (here.0 + dx, here.1 + dy)))
+                .filter(|&(cx, cy)| (cx - here.0).abs().max((cy - here.1).abs()) == r)
+                .filter(|&c| self.nav.passable(c.0, c.1, deep) && !avoid.contains(&c))
+                .collect();
+            ring.sort_by(|a, b| {
+                let d = |c: &(i32, i32)| {
+                    let (px, py) = (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+                    (px - x).hypot(py - y)
+                };
+                d(a).total_cmp(&d(b))
+            });
+            ring.first().copied()
+        });
+        let Some(c) = free else {
+            return false;
+        };
+        let (fx, fy) = (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+        let Some(path) = self.plan_route_avoiding(k, (x, y), fx, fy, &avoid) else {
+            return false;
+        };
+        if path.is_empty() {
+            return false;
+        }
+        let s = self.objects[k].ship.as_mut().unwrap();
+        s.path = path;
+        s.face = None;
+        true
+    }
+
     /// Ships held up by others: one whose last cell is taken by a ship
     /// lying there makes for the nearest free cell instead; one held up on
     /// the way long enough goes round.
-    fn go_round(&mut self, held: Vec<(u32, (i32, i32), bool)>) {
+    fn go_round(&mut self, held: Vec<(u32, (i32, i32), bool, u32)>) {
         const PATIENCE: f32 = 1.0;
         let t = TILE_SIZE as f32;
         let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
         let centre = |(cx, cy): (i32, i32)| (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
-        for (id, cell, by_lying) in held {
+        for (id, cell, by_lying, other) in held {
+            // An idle ship of the same player in the way makes room: it
+            // moves to the nearest free cell off the other's way.
+            if by_lying && self.make_way(other, id) {
+                continue;
+            }
             let Some(i) = self.object_index(id) else {
                 continue;
             };
@@ -1530,7 +1602,7 @@ impl Scene {
                         Some(&other) if other != obj.id => {
                             ship.blocked += dt;
                             ship.velocity = 0.0;
-                            held.push((obj.id, next, lying.contains(&other)));
+                            held.push((obj.id, next, lying.contains(&other), other));
                             break;
                         }
                         _ => {
