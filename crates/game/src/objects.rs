@@ -718,12 +718,23 @@ pub fn resolve(
         // Treasures lying on the map (field 5 is -1; otherwise the id of
         // the object holding them) sparkle at the cell in fields 9 and 10.
         ObjectClass::Treasure if f(5) == u32::MAX => {
-            let frames = sequence_frames(data, caches, &format!("TREAS{:02}", f(4).min(27)))?;
+            // Afloat it bobs (state 2, 0x406a10): frames 8-22 (30-59 for
+            // the big 16 and 27), a frame every 3 ticks (2 for those;
+            // 0x4068e0). Frames before rise into view, after sink.
+            let kind = f(4).min(27);
+            let all = sequence_frames(data, caches, &format!("TREAS{kind:02}"))?;
+            let big = kind == 16 || kind == 27;
+            let (from, to, ticks) = if big { (30, 59, 2) } else { (8, 22, 3) };
+            let frames = if all.len() > from {
+                all[from..=to.min(all.len() - 1)].to_vec()
+            } else {
+                all
+            };
             (
                 CellCentre(f(9), f(10)),
                 Visual {
                     frames,
-                    frame_ms: DEFAULT_FRAME_MS,
+                    frame_ms: ticks * TICK_MS,
                 },
             )
         }
