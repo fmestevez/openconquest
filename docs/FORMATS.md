@@ -897,6 +897,17 @@ the track `COBJ_BKSCROLL`/`CLOAD_BKSCROLL` (30x96) at (168, y + 28),
 
 ## Selection box
 
+The frame is a sprite sequence of 10 pictures in objects.dkx, smallest
+first: `RAM_0<w>X0<h>` from a ship's picture size (0x4e0c80),
+`RAM_128X128` for settlements and towns (0x43b000), `RAM_064X078` for
+ports, shipyards, docks and the barbarians' yard (0x4e7f50), `RAM_072X072`
+for other land buildings (LandObj 0x427750); each picture is 4 pixels
+larger than its name says. Selecting an object (0x427590) adds it at the
+object's picture (+0xec/+0xf0, 0 by default) at its first frame, and each
+tick (0x427268, delay +0x7d = 0) steps it a frame larger up to the last;
+deselecting (0x427648) steps it back down from the last but one and
+removes it at 0.
+
 A ship's: around its picture, 2 pixels out; a building's: its footprint
 from its cell, 4 pixels more. 13-pixel corner angles in palette 248 (it
 shimmers) with 247 inside them and a small highlight; the hull bar on the

@@ -1008,6 +1008,9 @@ pub struct GameView<'a> {
     pub selected: Option<u32>,
     /// Other ships selected with it.
     pub group: &'a [u32],
+    /// When each selected object was selected (`time_ms`), for the frame's
+    /// zoom.
+    pub selected_since: &'a HashMap<u32, u64>,
     /// A selection box being dragged (window pixels).
     pub select_box: Option<(f32, f32, f32, f32)>,
     pub status: Option<&'a str>,
@@ -1183,13 +1186,20 @@ impl GameView<'_> {
         draw_objects(frame, &screen, self.scene, self.camera, &lut, self.time_ms);
         draw_fog(frame, &screen, self.scene, self.camera, &lut);
         for &id in self.selected.iter().chain(self.group) {
+            // Ticks since it was selected pick the frame's zoom; unknown
+            // (a screenshot) shows it whole.
+            let zoom = self.selected_since.get(&id).map_or(usize::MAX, |&t| {
+                (self.time_ms.saturating_sub(t) / crate::clock::TICK_MS) as usize
+            });
             draw_selection(
                 frame,
                 &screen,
+                self.data,
                 self.scene,
                 self.camera,
                 id,
                 self.time_ms,
+                zoom,
                 &lut,
             );
         }

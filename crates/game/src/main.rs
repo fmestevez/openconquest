@@ -456,7 +456,9 @@ fn screenshot(
         scene::is_custom(&scene.mission),
         &scene.conditions,
     );
+    let since = std::collections::HashMap::new();
     let mut view = GameView {
+        selected_since: &since,
         data,
         scene: &scene,
         camera: &initial,

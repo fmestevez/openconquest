@@ -420,18 +420,24 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
 }
 
 /// Draws the selection box around object `id` (with its hull bar).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_selection(
     frame: &mut Frame,
     screen: &Screen,
+    data: &GameData,
     scene: &Scene,
     camera: &Camera,
     id: u32,
     time_ms: u64,
+    zoom: usize,
     lut: &[u32; 256],
 ) {
     let Some(obj) = scene.objects.iter().find(|o| o.id == id) else {
         return;
     };
+    if draw_frame_sprite(frame, screen, data, obj, camera, time_ms, zoom, lut) {
+        return;
+    }
     let scale = camera.scale(screen);
     let to_screen = |wx: f32, wy: f32| {
         (
@@ -536,6 +542,117 @@ pub fn draw_selection(
             }
         }
     }
+}
+
+thread_local! {
+    /// The selection frames (`RAM_`, objects.dkx).
+    static FRAMES: std::cell::RefCell<crate::assets::ImageCache> =
+        std::cell::RefCell::new(crate::assets::ImageCache::new(crate::assets::Source::Objects));
+}
+
+/// Frames of the selection frame's zoom: picked one a tick from the
+/// smallest as an object is selected (LandObj 0x427268; the frame's delay
+/// +0x7d is 0), held at the last.
+pub const SELECTION_FRAMES: usize = 10;
+
+/// The selection frame's picture for `obj` (its name in the constructors:
+/// `RAM_0<w>X0<h>` from a ship's picture, 0x4e0c80; `RAM_128X128` for
+/// settlements and towns, 0x43b000; `RAM_064X078` for ports, shipyards,
+/// docks and the barbarians' yard, 0x4e7f50; `RAM_072X072` for other land
+/// buildings, 0x427750), frame `zoom`.
+fn selection_frame(
+    data: &GameData,
+    obj: &MapObject,
+    w: u32,
+    h: u32,
+    zoom: usize,
+) -> Option<std::rc::Rc<Image>> {
+    let base = match obj.class {
+        ObjectClass::Ship => format!("RAM_0{w}X0{h}"),
+        ObjectClass::Building(0x32 | 0x33) => "RAM_128X128".into(),
+        ObjectClass::Building(0x39..=0x3b) | ObjectClass::Barbarian(0x40) => "RAM_064X078".into(),
+        _ if obj.cell.is_some() => "RAM_072X072".into(),
+        _ => return None,
+    };
+    let name = format!("{base}{:02}", zoom.min(SELECTION_FRAMES - 1));
+    FRAMES.with(|c| c.borrow_mut().get(data, &name).ok().flatten())
+}
+
+/// Draws the selection frame sprite and the hull bar on its top edge;
+/// false if the object has none (the drawn corners serve instead). A
+/// ship's frame is centred on its picture (the frame is 4 pixels larger),
+/// a building's laid at its picture's corner (measured on a settlement).
+#[allow(clippy::too_many_arguments)]
+fn draw_frame_sprite(
+    frame: &mut Frame,
+    screen: &Screen,
+    data: &GameData,
+    obj: &MapObject,
+    camera: &Camera,
+    time_ms: u64,
+    zoom: usize,
+    lut: &[u32; 256],
+) -> bool {
+    let Some(first) = obj.frame_at(time_ms).first() else {
+        return false;
+    };
+    let (w, h) = (first.image.width, first.image.height);
+    let Some(img) = selection_frame(data, obj, w, h, zoom) else {
+        return false;
+    };
+    let (pl, pt) = (
+        obj.x + first.dx as f32 - w as f32 / 2.0,
+        obj.y + first.dy as f32 - h as f32 / 2.0,
+    );
+    let (fw, fh) = (img.width as f32, img.height as f32);
+    let (left, top) = match obj.class {
+        ObjectClass::Ship => (pl + (w as f32 - fw) / 2.0, pt + (h as f32 - fh) / 2.0),
+        _ => (pl, pt),
+    };
+    draw_image(
+        frame,
+        screen,
+        camera,
+        lut,
+        &img,
+        left.round() as i32,
+        top.round() as i32,
+    );
+    // The hull bar on the top edge: a black frame 4 high, two rows of
+    // colour inside (as the panel's slot bars), from 14 in, width - 28.
+    let Some(c) = &obj.combat else { return true };
+    let scale = camera.scale(screen);
+    let thick = (scale.round() as i64).max(1);
+    let ox = screen.x as i64 + ((left.round() - camera.x) * scale) as i64;
+    let oy = screen.y as i64 + ((top.round() - camera.y) * scale) as i64;
+    let (cx0, cy0) = (screen.x as i64, screen.y as i64);
+    let (cx1, cy1) = (cx0 + screen.w as i64, cy0 + screen.h as i64);
+    let len = img.width as i64 - 28;
+    let fill = ((len - 2) as f32 * (c.hull / c.max_hull).clamp(0.0, 1.0)) as i64;
+    let colours = match c.hull / c.max_hull {
+        f if f >= 0.5 => [lut[200], lut[199]],
+        f if f >= 0.25 => [lut[203], lut[157]],
+        _ => [lut[65], lut[68]],
+    };
+    for y in 0..4 {
+        for x in 0..len {
+            let inside = (1..3).contains(&y) && (1..=fill).contains(&x);
+            let col = if inside { colours[y as usize - 1] } else { 0 };
+            let (px, py) = (
+                ox + ((14 + x) as f32 * scale) as i64,
+                oy + (y as f32 * scale) as i64,
+            );
+            for dy in 0..thick {
+                for dx in 0..thick {
+                    let (qx, qy) = (px + dx, py + dy);
+                    if qx >= cx0 && qy >= cy0 && qx < cx1 && qy < cy1 {
+                        frame.put(qx, qy, col);
+                    }
+                }
+            }
+        }
+    }
+    true
 }
 
 /// Outlines map cell `cell` as a building site: green if allowed, red if not.

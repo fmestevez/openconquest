@@ -1,7 +1,7 @@
 //! Window, input handling and the frame loop.
 
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -397,6 +397,8 @@ pub struct App {
     /// The groups assigned with Ctrl+1 ... Ctrl+0 (Cmd on macOS), recalled
     /// with 1 ... 0 (the manual's "Game Hot Keys").
     groups: [Vec<u32>; 10],
+    /// When each selected object was selected, for its frame's zoom.
+    selected_since: HashMap<u32, u64>,
     /// The map places assigned with Shift+F1 ... Shift+F10, centred on with
     /// F1 ... F10.
     places: [Option<(f32, f32)>; 10],
@@ -568,6 +570,7 @@ impl App {
             selected: None,
             group: Vec::new(),
             groups: Default::default(),
+            selected_since: HashMap::new(),
             places: [None; 10],
             box_from: None,
             pending: None,
@@ -681,6 +684,7 @@ impl App {
                 self.data.strings.get(&id).map(|s| s.as_str())
             });
         GameView {
+            selected_since: &self.selected_since,
             data: &self.data,
             scene: &self.scene,
             camera: &self.camera,
@@ -4062,6 +4066,13 @@ impl App {
                 menus.draw(&mut frame, &page.view(hover));
             } else {
                 let site = self.cursor.and_then(|c| self.site_at(c));
+                // Newly selected objects start their frame's zoom.
+                let now = self.time_ms;
+                let chosen: Vec<u32> = self.selected.iter().chain(&self.group).copied().collect();
+                self.selected_since.retain(|id, _| chosen.contains(id));
+                for id in chosen {
+                    self.selected_since.entry(id).or_insert(now);
+                }
                 GameView {
                     site,
                     ..self.view()
