@@ -3221,11 +3221,26 @@ impl App {
         let enemy = t.combat.is_some() && Scene::are_enemies(s, t) && !self.scene.is_own(t);
         let mut more = Vec::new();
         if enemy {
-            more.push((P::Attack, !s.is_armed()));
-            if t.ship.is_some() {
-                more.push((P::Board, sh.crew.count() == 0));
-                more.push((P::Ram, sh.kind < 2));
+            // Only what the ship can do to it (0x4e45c0): fire if armed;
+            // board with marines aboard and ram, a warship at a ship
+            // (0x4e3580, 0x4e3800). The first of them is the default.
+            let warship = sh.kind >= 2;
+            let options = [
+                (P::Attack, s.is_armed()),
+                (P::Board, warship && t.ship.is_some() && sh.crew.count() > 0),
+                (P::Ram, warship && t.ship.is_some()),
+            ];
+            let open: Vec<_> = options
+                .iter()
+                .filter(|o| o.1)
+                .map(|o| (o.0, false))
+                .collect();
+            if let Some(&first) = open.first() {
+                if modes[0].0 == P::Attack {
+                    modes[0] = first;
+                }
             }
+            more.extend(open);
         }
         let own_dock = self.scene.is_own(t)
             && t.class == openconquest_formats::ObjectClass::Building(economy::DOCK);
