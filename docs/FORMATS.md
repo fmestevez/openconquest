@@ -947,6 +947,23 @@ its end (0x441ba0). State 1 is training, a queued unit taking
 `ticks[kind / 3]`. Docks (`Shipserv.cpp`, 0x4e7640) serve ships alongside
 (reloading); a dock's own queue (0x416f90, every 25 ticks) builds ships.
 
+## Magic
+
+A temple learns a spell in 200 ticks, 100 for computer players (side
+value 3 or 4; 0x439260). Casts (`Magic.cpp` 0x42f580) are checked by
+0x42ef90: reef, whirlpool, monster, lightning, fireball within 12 cells,
+waterspout, phantom and the protections within 15. Protections and the
+phantom add 3000 ticks to what is left (messages 0xda9a, 0xda97 to the
+ship, 0x4dc630). Cast whirlpools and reefs go after 7500 + rand(7501)
+ticks (Whirl.cpp 0x447ee0, Reef.cpp 0x4306d0); every tick they post
+0xda95/0xda94 to the ships on their cell, which then wreck (flag 0x200,
+state 4: 0x4ab720, 0x4aa280). A tornado (`TRNDSPR`, Tornado.cpp 0x43a380)
+steps a frame every 2 ticks: rising 0-41, moving 42-83 looped, sinking
+84-124; moving, it slides to its next cell over 16 frames, then strikes
+the objects on it (0xda96, 30000, a fifth on a ship shielded from magic)
+and picks a neighbour (0x43a6c0: weight 3 within one heading of the wind,
+else 2), sinking at the first hop after 250 ticks of moving.
+
 ## Land creatures
 
 Lairs (`CreaturesFlatClassTy`, 0x414f00) send out another creature once
