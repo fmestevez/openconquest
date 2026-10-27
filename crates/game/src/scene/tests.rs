@@ -2684,6 +2684,10 @@ fn dragon_flies_and_returns() {
         scene.update(0.02, &data, &mut caches);
     }
     assert!(hull(&scene) < before, "the dragon struck");
+    // A nest waits 55500 ticks less 6000 per field 10: shortened here.
+    for n in scene.nests.iter_mut().filter(|n| n.id == dragon.nest) {
+        n.delay = 5.0;
+    }
     scene.hit(dragon.id, f32::MAX, &data, &mut caches);
     for _ in 0..50 * 60 {
         scene.update(0.02, &data, &mut caches);

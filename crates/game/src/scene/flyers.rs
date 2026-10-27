@@ -1,7 +1,7 @@
 //! Harpies and dragons (HarpyClassTy, 0x4207b0): each nest (0x41d4a0)
 //! sends out its creature when the mission starts and, while it has
 //! creatures left (record field 9), a new one some time after the last
-//! fell (55.5 s less 6 s per field 10). The creature rests by its nest,
+//! fell (55500 ticks less 6000 per field 10). The creature rests by its nest,
 //! flies at a ship in reach, strikes (harpies at the crew, dragons drop
 //! their teeth on the hull) and flies home.
 
@@ -20,9 +20,8 @@ const SPEED: f32 = 110.0;
 const REST: f32 = 8.0;
 const STRIKE: f32 = 1.0;
 const TEETH: f32 = 250.0;
-/// The nest's delay before a new creature, in seconds (0x41d4a0: 0xd8cc
-/// less 6000 per field 10, in milliseconds), at least this.
-const RESPAWN_MIN: f32 = 5.0;
+/// The nest's delay before a new creature (0x41d4a0): 55500 game ticks
+/// less 6000 per field 10, from 37 minutes down to one at field 9.
 /// Harpies and Odysseus: his crews resist them.
 const ODYSSEUS: u8 = 7;
 
@@ -69,7 +68,7 @@ impl Scene {
             })
             .collect();
         for (id, left, speed) in nests {
-            let delay = (55.5 - 6.0 * speed as f32).max(RESPAWN_MIN);
+            let delay = crate::clock::ticks(55_500u32.saturating_sub(6000 * speed));
             self.nests.push(Nest {
                 id,
                 left,
