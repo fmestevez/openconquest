@@ -73,6 +73,13 @@ pub enum Op {
     Wait { next: u32, ticks: u32 },
     /// Wait as many ticks as the fleet's variable `var` holds.
     WaitVar { next: u32, var: usize },
+    /// Wait (0x47a3b0 given events): `next` after `ticks`, unless an
+    /// event fires first.
+    Watch {
+        next: u32,
+        ticks: u32,
+        events: &'static [Event],
+    },
     /// Sail to a cell (0x47a450): `ok` on arriving, `failed` if stopped
     /// short, `ok` after `ticks`.
     Move {
@@ -253,7 +260,7 @@ fn mission(name: &str) -> Option<Mission> {
         "miss011" => Some(Mission {
             fleets: miss011::FLEETS,
             start: miss011::start,
-            turn: None,
+            turn: Some(miss011::turn),
         }),
         "miss012" => Some(Mission {
             fleets: miss012::FLEETS,
@@ -490,6 +497,19 @@ impl Scene {
                 let ticks = self.brain.as_ref().unwrap().fleets[k].vars[var];
                 if started && elapsed >= ticks {
                     self.set_state(k, next);
+                }
+            }
+            Op::Watch {
+                next,
+                ticks,
+                events,
+            } => {
+                if started {
+                    if let Some(s) = self.event_fired(k, events, elapsed) {
+                        self.set_state(k, s);
+                    } else if elapsed >= ticks {
+                        self.set_state(k, next);
+                    }
                 }
             }
             Op::Move {
@@ -1054,26 +1074,63 @@ impl Scene {
     }
 
     /// Casts `spell` on cell `(cx, cy)` for nothing, as the brains do
-    /// through `Magic.cpp` (0x42f580, a free cast): only lightning is
-    /// cast so far (its picture, then its strike, as the player's).
+    /// through `Magic.cpp` (0x42f580, a free cast; 0x47ae10 sends it as
+    /// message 0x3ee): lightning (its picture, then its strike, as the
+    /// player's); a fireball sparing `owner`'s; a waterspout, whirlpool,
+    /// reef or sea monster (fighting for `owner`) on open water only, as
+    /// the player may cast them. Other spells are not cast on a cell.
     pub(super) fn brain_cast(
         &mut self,
         spell: crate::magic::Spell,
         cx: i32,
         cy: i32,
+        owner: Option<(u32, u32)>,
         data: &GameData,
         caches: &mut Caches,
     ) {
-        if spell != crate::magic::Spell::Lightning {
-            return;
-        }
+        use crate::magic::Spell;
         let t = TILE_SIZE as f32;
         let (x, y) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
         let water = self.nav.is_water(cx, cy);
-        self.spawn_effect(data, caches, crate::magic::fx_lightning(water), x, y);
-        self.sounds.push(("molniya2", x, y));
-        let at = if water { 11 } else { 40 };
-        self.lightning.push((x, y, crate::clock::ticks(at)));
+        match spell {
+            Spell::Lightning => {
+                self.spawn_effect(data, caches, crate::magic::fx_lightning(water), x, y);
+                self.sounds.push(("molniya2", x, y));
+                let at = if water { 11 } else { 40 };
+                self.lightning.push((x, y, crate::clock::ticks(at)));
+            }
+            Spell::Fireball => self.spawn_fireball(cx, cy, owner, data, caches),
+            Spell::Waterspout | Spell::Whirlpool | Spell::Reef | Spell::Monster if water => {
+                if let Err(e) = self.spawn_hazard(spell, cx, cy, owner, data, caches) {
+                    eprintln!("a brain's spell failed: {e}");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Casts a shield or the phantom on ship `id` for nothing (0x47acf0,
+    /// each ship of a fleet through 0x479c20), as the player's `cast_on`
+    /// does. The Flame is the player's in the port, not a ship's: not
+    /// cast.
+    pub(super) fn brain_cast_on(
+        &mut self,
+        spell: crate::magic::Spell,
+        id: u32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        use crate::magic::Spell;
+        if matches!(
+            spell,
+            Spell::Phantom | Spell::ProtectWeapons | Spell::ProtectMagic
+        ) {
+            if let Some(i) = self.object_index(id) {
+                if self.objects[i].combat.is_some() {
+                    self.protect(spell, i, data, caches);
+                }
+            }
+        }
     }
 
     /// Puts an object made from a record of `class` with `fields` on the
@@ -6136,7 +6193,7 @@ mod miss009 {
     fn tick(scene: &mut Scene) {
         if var(scene, 0, WOKEN) == 0 && scene.human_in((0, 9, 18, 5)) {
             let x = if scene.rng.next() & 1 != 0 { 10 } else { 12 };
-            scene.pending_casts.push((Spell::Lightning, x, 9));
+            scene.pending_casts.push((Spell::Lightning, x, 9, None));
             set_var(scene, 0, WOKEN, 1);
         }
         if difficulty() != EASY && var(scene, GUARD, GONE) == 0 {
@@ -6152,7 +6209,7 @@ mod miss009 {
                 .filter(|&(x, y)| (10..50).contains(&x) && (0..20).contains(&y))
                 .collect();
             for (x, y) in temples {
-                scene.pending_casts.push((Spell::Lightning, x, y));
+                scene.pending_casts.push((Spell::Lightning, x, y, None));
             }
         }
     }
@@ -7072,7 +7129,7 @@ mod miss010 {
         let cast = var(scene, 0, CAST);
         if cast < 2 && scene.delivered.contains(&16) {
             let (x, y) = if cast == 0 { (58, 5) } else { (59, 4) };
-            scene.pending_casts.push((Spell::Lightning, x, y));
+            scene.pending_casts.push((Spell::Lightning, x, y, None));
             set_var(scene, 0, CAST, cast + 1);
         }
     }
@@ -7571,19 +7628,109 @@ mod miss010 {
     }
 }
 
-/// miss011's brain (0x46e8e0; its fleets' handlers precede it,
-/// 0x46b8d0-0x46d830), ported coarsely: the first computer player holds the
-/// north-east and the west coast, with sentries in the north-west; the
-/// second holds the middle sea.
+/// miss011's brain (0x46e8e0; its members' handlers precede it,
+/// 0x46b8d0-0x46e110). The barbarians (group 0) have two yards
+/// (0x46b8d0 at (54, 11), 0x46c0b0 at (8, 31)), each serving its
+/// members' request slots (brain `+0x118`, `+0x144`, by member) in order
+/// and building for free: yard 1 for the patrol of the north-east (member
+/// 1, 0x46bb30) and the raiders there (member 3, 0x46be60, the ships in
+/// (55, 15, 3, 3)), yard 2 for the patrol of the west coast (member 5,
+/// 0x46c310) and the raiders there (member 6, 0x46c4c0). Member 2
+/// (0x46bce0, the ships in (6, 29, 2, 2)) fishes and gathers amber off the
+/// west coast; members 7-10 (0x46c880-0x46cdc0, the ships in (0, 4),
+/// (0, 10), (1, 18) and (1, 23)) keep the north-west, all striking where
+/// one is fired on. The Persians (player 14, group 1) have a yard (member
+/// 0, 0x46cf80, at (32, 17)) serving members 1-7 (`+0x170`) and resting
+/// 500 ticks; members 1 and 2 (0x46d320, 0x46d470) gather amber and fish
+/// in the middle sea, 3 and 4 (0x46d5c0, 0x46d830; the ships in (32, 21,
+/// 2, 2) and (36, 17, 3, 2)) guard it, 5 (0x46da00, the ships in (38, 20,
+/// 3, 3)) patrols it and, grown, strikes at the player's settlements once
+/// the barbarians' yard at (54, 11) is gone (the brain's tick, `+0x19c`),
+/// casting a spell on its ships first; 6 (0x46e090) mends prizes; 7
+/// (0x46e110), with no ships, casts a spell now and then at the player's
+/// things within 15 cells of the Persians' temple. Member 3 casts
+/// lightning at (38, 14) and (30, 23) when the player comes into the
+/// middle sea's western zones.
+/// (Not ported: the Persian yard's one-off order of class 1 and its code
+/// 0x34 (class 0x30, never asked for) (0x47b130, as in miss008-miss010);
+/// the Persians' technology and workshop levels set at the start; a launch
+/// the brain did not order joining member 2 (boats, merchants) or 5
+/// (warships) (message 0x5d98): every launch here is ordered; the Flame
+/// (kind 9) cast on member 5's ships, the port's Flame being a player's,
+/// not a ship's; member 5's states 30 and 40 (0x1e, 0x28), which no event
+/// reaches. Member 7 looks through the player's things in the scene's
+/// order, not the player's list's; a building is "in" an area by its
+/// cell. A waterspout or sea monster asked for on land is not cast. An
+/// attack's "failed" exit is taken as its "ok" one, as in miss008; a
+/// fleet's move that becomes needless (members 3 and 6 growing to
+/// strength) is called off on its next turn. The brain's tick runs every
+/// 5 ticks in the original, here on member 0's turn.)
 mod miss011 {
     use super::*;
+    use crate::magic::Spell;
+    use crate::objects::MapObject;
+    use openconquest_formats::ObjectClass;
 
     const MERCHANT: u8 = 1;
     const ROYAL: u8 = 2;
     const BOMBER: u8 = 3;
     const RAMMER: u8 = 5;
+    const KILLER: u8 = 6;
+    /// The Persians' own ships (codes 0xd2, 0xd3).
+    const PERSIAN_A: u8 = 10;
+    const PERSIAN_B: u8 = 11;
+
+    /// Fleet indices: the barbarians' members 0-10 are fleets 0-10, the
+    /// Persians' members 0-7 fleets 11-18.
+    const YARD1: usize = 0;
+    const EAST: usize = 1;
+    const EAST_RAIDERS: usize = 3;
+    const YARD2: usize = 4;
+    const WEST: usize = 5;
+    const WEST_RAIDERS: usize = 6;
+    const SENTRIES: [usize; 4] = [7, 8, 9, 10];
+    const PERSIANS: usize = 11;
+    const P_AMBER: usize = PERSIANS + 1;
+    const P_FISH: usize = PERSIANS + 2;
+    const GUARD1: usize = PERSIANS + 3;
+    const GUARD2: usize = PERSIANS + 4;
+    const STRIKERS: usize = PERSIANS + 5;
+    const CASTER: usize = PERSIANS + 7;
+
+    /// The members each yard serves, in the order of its slots.
+    const YARD1_SERVES: [usize; 2] = [EAST, EAST_RAIDERS];
+    const YARD2_SERVES: [usize; 2] = [WEST, WEST_RAIDERS];
+    const PERSIAN_SERVES: [usize; 5] = [P_AMBER, P_FISH, GUARD1, GUARD2, STRIKERS];
+
+    /// No member served, no spell chosen (the original's -1).
+    const NONE: u32 = u32::MAX;
+
+    /// Fleet variables: 2 the ship asked for (type + 1, 0 none; a member's
+    /// slot in its yard's requests). A yard: 0 its rest (barbarians), 3
+    /// the member it serves. Yard 1: 1 the barbarians' yard at (54, 11)
+    /// still stands (`+0x19c`). The Persian yard: 0 and 1 the Persians'
+    /// player (nation, slot + 1; 0 unknown). The western raiders: 0 their
+    /// patrol's length (`+0x190`). Member 5 (strikers): 0 the size at which
+    /// it may strike (5), 1 the ticks before it looks (rolled, event data
+    /// 0x5b3ec8), 3 the size below which it gives up (2, as "fewer than
+    /// 3"). Member 7 (caster): 0 the tick its wait ends, 1 the spells it
+    /// has cast (`+0x1e8`), 2 the spell member 5 casts on its ships when it
+    /// strikes (`+0x194`: 0 at first, none after).
+    const ASKED: usize = 2;
+    const WAIT: usize = 0;
+    const SERVING: usize = 3;
+    const STANDS: usize = 1;
+    const NATION: usize = 0;
+    const SLOT: usize = 1;
+    const N: usize = 0;
+    const AFTER: usize = 1;
+    const FEW: usize = 3;
+    const UNTIL: usize = 0;
+    const CASTS: usize = 1;
+    const SPELL: usize = 2;
 
     pub const FLEETS: &[FleetDef] = &[
+        // The barbarians.
         FleetDef {
             group: 0,
             cells: &[(54, 11, 1, 1)],
@@ -7594,19 +7741,19 @@ mod miss011 {
             group: 0,
             cells: &[],
             program: east_patrol,
-            wants: &[(ROYAL, [1, 2, 2]), (BOMBER, [1; 3])],
+            wants: &[],
         },
         FleetDef {
             group: 0,
             cells: &[(6, 29, 2, 2)],
-            program: west_patrol,
-            wants: &[(ROYAL, [1, 2, 2]), (BOMBER, [1; 3])],
+            program: coast_gatherers,
+            wants: &[],
         },
         FleetDef {
             group: 0,
             cells: &[(55, 15, 3, 3)],
             program: east_raiders,
-            wants: &[(ROYAL, [1, 2, 2]), (RAMMER, [1; 3])],
+            wants: &[],
         },
         FleetDef {
             group: 0,
@@ -7617,83 +7764,611 @@ mod miss011 {
         FleetDef {
             group: 0,
             cells: &[],
-            program: west_gatherers,
-            wants: &[(MERCHANT, [1; 3])],
+            program: west_patrol,
+            wants: &[],
         },
         FleetDef {
             group: 0,
             cells: &[],
             program: west_raiders,
-            wants: &[(ROYAL, [2, 2, 3]), (RAMMER, [1, 2, 2])],
+            wants: &[],
         },
         FleetDef {
             group: 0,
-            cells: &[(0, 4, 2, 2), (0, 10, 2, 2), (1, 18, 2, 2), (1, 23, 2, 2)],
-            program: sentries,
+            cells: &[(0, 4, 2, 2)],
+            program: sentry1,
             wants: &[],
         },
+        FleetDef {
+            group: 0,
+            cells: &[(0, 10, 2, 2)],
+            program: sentry2,
+            wants: &[],
+        },
+        FleetDef {
+            group: 0,
+            cells: &[(1, 18, 2, 2)],
+            program: sentry3,
+            wants: &[],
+        },
+        FleetDef {
+            group: 0,
+            cells: &[(1, 23, 2, 2)],
+            program: sentry4,
+            wants: &[],
+        },
+        // The Persians.
         FleetDef {
             group: 1,
             cells: &[(32, 17, 2, 2)],
-            program: yard,
+            program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
             cells: &[],
-            program: middle_amber,
-            wants: &[(MERCHANT, [1; 3])],
+            program: persian_amber,
+            wants: &[],
         },
         FleetDef {
             group: 1,
             cells: &[],
-            program: middle_fish,
-            wants: &[(MERCHANT, [1; 3])],
+            program: persian_fish,
+            wants: &[],
         },
         FleetDef {
             group: 1,
-            cells: &[(32, 21, 2, 2), (36, 17, 3, 2)],
-            program: middle_guard,
-            wants: &[(ROYAL, [1, 2, 2])],
+            cells: &[(32, 21, 2, 2)],
+            program: guard1,
+            wants: &[],
+        },
+        FleetDef {
+            group: 1,
+            cells: &[(36, 17, 3, 2)],
+            program: guard2,
+            wants: &[],
         },
         FleetDef {
             group: 1,
             cells: &[(38, 20, 3, 3)],
-            program: middle_guard_2,
-            wants: &[(ROYAL, [1, 2, 2]), (BOMBER, [1; 3])],
+            program: strikers,
+            wants: &[],
+        },
+        // Mends the Persians' prizes (0x46e090; see `brain_prize`).
+        FleetDef {
+            group: 1,
+            cells: &[],
+            program: repair,
+            wants: &[],
+        },
+        // Casts at the player near the Persians' temple (0x46e110; see
+        // `turn`: it has no ships).
+        FleetDef {
+            group: 1,
+            cells: &[],
+            program: idle,
+            wants: &[],
         },
     ];
 
+    /// The start (message 0x8d1): amber at (57, 26), (57, 35) and (51, 34)
+    /// and fish at (53, 31) (0x48b180, 0x48ebc0, on every difficulty); the
+    /// Persians get 12000, 17000 or 25000 amber and 8000, 10000 or 15000
+    /// fish by difficulty (0x4a8de0 and 0x4a8c30 add).
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        let level = difficulty();
         for (x, y) in [(57, 26), (57, 35), (51, 34)] {
             scene.add_deposit(0x190, (x, y, 1, 1), data, caches);
         }
         scene.add_deposit(0x191, (53, 31, 2, 2), data, caches);
+        let persian = scene.brain.as_ref().unwrap().fleets[PERSIANS..=STRIKERS]
+            .iter()
+            .flat_map(|f| f.ships.clone())
+            .find_map(|id| scene.object_index(id).and_then(|i| scene.objects[i].owner));
+        if let Some(owner) = persian {
+            let amber = [12_000, 17_000, 25_000][level];
+            let fish = [8000, 10_000, 15_000][level];
+            scene.earn(owner, amber, fish);
+            set_var(scene, PERSIANS, NATION, owner.0);
+            set_var(scene, PERSIANS, SLOT, owner.1 + 1);
+        }
+        for k in [YARD1, YARD2, PERSIANS] {
+            set_var(scene, k, SERVING, NONE);
+        }
+        set_var(scene, YARD1, STANDS, 1);
+        set_var(scene, STRIKERS, N, 5);
+        set_var(scene, STRIKERS, FEW, 2);
     }
 
+    /// Asks for ship `kind` in `holder`'s request slot if it is free.
+    fn ask(scene: &mut Scene, holder: usize, kind: u8) {
+        let f = &mut scene.brain.as_mut().unwrap().fleets[holder];
+        if f.vars[ASKED] == 0 {
+            f.vars[ASKED] = kind as u32 + 1;
+        }
+    }
+
+    fn var(scene: &Scene, k: usize, v: usize) -> u32 {
+        scene.brain.as_ref().unwrap().fleets[k].vars[v]
+    }
+
+    fn set_var(scene: &mut Scene, k: usize, v: usize, value: u32) {
+        scene.brain.as_mut().unwrap().fleets[k].vars[v] = value;
+    }
+
+    fn state(scene: &Scene, k: usize) -> u32 {
+        scene.brain.as_ref().unwrap().fleets[k].state
+    }
+
+    /// The Persians' player, as the start found it.
+    fn persians(scene: &Scene) -> Option<(u32, u32)> {
+        let slot = var(scene, PERSIANS, SLOT);
+        (slot != 0).then(|| (var(scene, PERSIANS, NATION), slot - 1))
+    }
+
+    /// An object's cell: a building's own, else where it lies.
+    fn cell_of(o: &MapObject) -> (i32, i32) {
+        let t = TILE_SIZE as f32;
+        o.cell.unwrap_or(((o.x / t) as i32, (o.y / t) as i32))
+    }
+
+    /// Something other than a ship stands on map cell `cell` (the map
+    /// cell's object).
+    fn stands_at(scene: &Scene, cell: (i32, i32)) -> bool {
+        scene.objects.iter().any(|o| {
+            o.cell == Some(cell) || (o.ship.is_none() && o.combat.is_some() && cell_of(o) == cell)
+        })
+    }
+
+    /// `n` cells about cell `(x, y)`, within the map's top and left
+    /// (0x4796c0).
+    fn about((x, y): (i32, i32), n: i32) -> Cells {
+        let (x0, y0) = ((x - n).max(0), (y - n).max(0));
+        (x0, y0, x + n + 1 - x0, y + n + 1 - y0)
+    }
+
+    fn inside((x, y): (i32, i32), (ax, ay, w, h): Cells) -> bool {
+        x >= ax && x < ax + w && y >= ay && y < ay + h
+    }
+
+    /// Each member's bookkeeping on its turn (the start of each member's
+    /// handler): what to ask its yard for, and the moves a member makes
+    /// whatever its state; on member 0's turn the brain's own tick.
+    pub fn turn(scene: &mut Scene, k: usize) {
+        let d = difficulty();
+        let n = scene.fleet_types(k);
+        let have = |kind: u8| n[kind as usize];
+        match k {
+            YARD1 => tick(scene),
+            EAST => {
+                if have(ROYAL) < [1, 1, 2][d] {
+                    ask(scene, k, ROYAL);
+                }
+                if have(BOMBER) < 1 {
+                    ask(scene, k, BOMBER);
+                }
+            }
+            EAST_RAIDERS | WEST_RAIDERS => {
+                let (royal, rammer) = ([2, 2, 3][d], [2, 3, 2][d]);
+                if have(ROYAL) < royal {
+                    ask(scene, k, ROYAL);
+                }
+                if have(RAMMER) < rammer {
+                    ask(scene, k, RAMMER);
+                }
+                // Grown while sailing to its post: patrol instead.
+                if state(scene, k) == MARCH && strong(scene, k) {
+                    scene.set_state(k, if k == EAST_RAIDERS { 10 } else { 6 });
+                }
+            }
+            WEST => {
+                if have(ROYAL) < [2, 2, 3][d] {
+                    ask(scene, k, ROYAL);
+                }
+                if have(BOMBER) < [2, 3, 2][d] {
+                    ask(scene, k, BOMBER);
+                }
+            }
+            // A sentry fired on fights back, and the others join it at the
+            // attacker (brain `+0x1c8`, states 0x1e and 0x28).
+            7..=10 if state(scene, k) == 30 => {
+                let area = scene.brain.as_ref().unwrap().fleets[k].area;
+                for other in SENTRIES.into_iter().filter(|&o| o != k) {
+                    if let Some(a) = area {
+                        scene.set_fleet_area(other, a);
+                    }
+                    scene.set_state(other, 40);
+                }
+            }
+            P_AMBER | P_FISH if have(MERCHANT) < 1 => ask(scene, k, MERCHANT),
+            GUARD1 | GUARD2 => {
+                if have(ROYAL) < 2 {
+                    ask(scene, k, ROYAL);
+                }
+                let own = if k == GUARD1 { PERSIAN_A } else { PERSIAN_B };
+                if have(own) < [1, 1, 2][d] {
+                    ask(scene, k, own);
+                }
+            }
+            STRIKERS => {
+                if have(BOMBER) < 2 {
+                    ask(scene, k, BOMBER);
+                }
+                if have(ROYAL) < [1, 2, 2][d] {
+                    ask(scene, k, ROYAL);
+                }
+                if have(PERSIAN_B) < [1, 1, 2][d] {
+                    ask(scene, k, PERSIAN_B);
+                }
+                if have(PERSIAN_A) < [1, 1, 2][d] {
+                    ask(scene, k, PERSIAN_A);
+                }
+                // The strike at a settlement begins with the spell.
+                if state(scene, k) == 85 {
+                    cast_on_strikers(scene);
+                }
+            }
+            CASTER => caster(scene),
+            _ => {}
+        }
+    }
+
+    /// The brain's tick (message 0, every 5 ticks): once the barbarians'
+    /// yard at (54, 11) is gone, member 5 starts over (and, grown, strikes
+    /// at the player instead of patrolling on).
+    fn tick(scene: &mut Scene) {
+        if var(scene, YARD1, STANDS) != 0 && !stands_at(scene, (54, 11)) {
+            set_var(scene, YARD1, STANDS, 0);
+            scene.set_state(STRIKERS, 0);
+        }
+    }
+
+    fn idle(_: u32) -> Op {
+        Op::Custom(|scene, k| state(scene, k))
+    }
+
+    /// A barbarian yard (0x46b8d0, 0x46c0b0): rolls its rest `((50, 30,
+    /// 10) by difficulty + rand(31)) x 25` ticks if it has none, takes the
+    /// first request of the members it serves (0), builds it for that
+    /// member for free (10), rests once it is launched (11), then clears
+    /// the request (12). Codes other than merchants, royal ships, bombers,
+    /// rammers and ship killers are dropped. (State 20, waiting for the
+    /// launch, is the port's.)
     fn yard(state: u32) -> Op {
         match state {
-            0 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            0 => Op::Custom(|scene, k| {
+                if var(scene, k, WAIT) == 0 {
+                    let rest = ([50, 30, 10][difficulty()] + scene.rng.next() % 31) * 25;
+                    set_var(scene, k, WAIT, rest);
+                }
+                let serves: &[usize] = if k == YARD1 {
+                    &YARD1_SERVES
+                } else {
+                    &YARD2_SERVES
+                };
+                match serves.iter().find(|&&f| var(scene, f, ASKED) != 0) {
+                    Some(&f) => {
+                        set_var(scene, k, SERVING, f as u32);
+                        10
+                    }
+                    None => 0,
+                }
+            }),
+            10 => Op::Custom(|scene, k| {
+                let holder = var(scene, k, SERVING);
+                if holder == NONE {
+                    return 0;
+                }
+                let kind = var(scene, holder as usize, ASKED) as u8 - 1;
+                if !matches!(kind, MERCHANT | ROYAL | BOMBER | RAMMER | KILLER) {
+                    set_var(scene, holder as usize, ASKED, 0);
+                    set_var(scene, k, SERVING, NONE);
+                    set_var(scene, k, WAIT, 0);
+                    return 10;
+                }
+                if scene.fleet_build_for(k, holder as usize, kind) {
+                    20
+                } else {
+                    10
+                }
+            }),
+            20 => Op::Custom(|scene, k| if scene.fleet_building(k) { 20 } else { 11 }),
+            11 => Op::WaitVar {
+                next: 12,
+                var: WAIT,
+            },
+            _ => Op::Custom(|scene, k| {
+                let holder = var(scene, k, SERVING);
+                if holder != NONE {
+                    set_var(scene, holder as usize, ASKED, 0);
+                    set_var(scene, k, SERVING, NONE);
+                    set_var(scene, k, WAIT, 0);
+                }
+                0
+            }),
+        }
+    }
+
+    /// The Persian yard (0x46cf80): (its one-off order of class 1 at 0
+    /// not ported) takes the first request of members 1-5 (5), builds it
+    /// for that member (10), rests 500 ticks once it is launched (11),
+    /// then clears it (12). (State 20, waiting for the launch, is the
+    /// port's.)
+    fn persian_yard(state: u32) -> Op {
+        match state {
+            0 => Op::Custom(|_, _| 5),
+            5 => Op::Custom(|scene, k| {
+                match PERSIAN_SERVES.iter().find(|&&f| var(scene, f, ASKED) != 0) {
+                    Some(&f) => {
+                        set_var(scene, k, SERVING, f as u32);
+                        10
+                    }
+                    None => 5,
+                }
+            }),
+            10 => Op::Custom(|scene, k| {
+                let holder = var(scene, k, SERVING);
+                if holder == NONE {
+                    return 0;
+                }
+                let kind = var(scene, holder as usize, ASKED) as u8 - 1;
+                if !matches!(kind, 0..=6 | PERSIAN_A | PERSIAN_B) {
+                    set_var(scene, holder as usize, ASKED, 0);
+                    set_var(scene, k, SERVING, NONE);
+                    return 10;
+                }
+                if scene.fleet_build_for(k, holder as usize, kind) {
+                    20
+                } else {
+                    10
+                }
+            }),
+            20 => Op::Custom(|scene, k| if scene.fleet_building(k) { 20 } else { 11 }),
+            11 => Op::Wait {
+                next: 12,
                 ticks: 500,
+            },
+            _ => Op::Custom(|scene, k| {
+                let holder = var(scene, k, SERVING);
+                if holder != NONE {
+                    set_var(scene, holder as usize, ASKED, 0);
+                    set_var(scene, k, SERVING, NONE);
+                }
+                0
+            }),
+        }
+    }
+
+    /// A fleet's fights: the zone seen 1500 ticks (20), whoever fired on
+    /// it `answer` ticks (30).
+    fn fight(state: u32, answer: u32) -> Op {
+        match state {
+            20 => Op::Attack {
+                next: 0,
+                target: Target::Seen,
+                ticks: 1500,
+                events: &[],
+            },
+            _ => Op::Attack {
+                next: 0,
+                target: Target::Attacker,
+                ticks: answer,
+                events: &[],
             },
         }
     }
 
-    fn patrol(state: u32, round: &'static [(i32, i32, u32)], watch: &'static [Event]) -> Op {
+    const fn attacked(after: u32) -> Event {
+        Event::Attacked { state: 30, after }
+    }
+
+    const fn zone(area: Cells) -> Event {
+        Event::Zone { state: 20, area }
+    }
+
+    /// The patrol of the north-east (member 1, 0x46bb30; round 0x5b3438,
+    /// events 0x5b3498): watches (49, 12, 15, 6). It asks yard 1 for
+    /// royal ships (1, 1, 2 by difficulty) and a bomber.
+    fn east_patrol(state: u32) -> Op {
+        const W: &[Event] = &[zone((49, 12, 15, 6)), attacked(250)];
+        const ROUND: &[(i32, i32, u32)] = &[(50, 14, 750), (54, 14, 750), (59, 14, 750)];
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
-                timeout: 0,
-                points: round,
-                ticks: 4500,
-                events: watch,
+                timeout: 5,
+                points: ROUND,
+                ticks: 0,
+                events: W,
             },
-            30 => Op::Attack {
+            _ => fight(state, 375),
+        }
+    }
+
+    /// The barbarians' gatherers (member 2, 0x46bce0): fish (0, 21, 17,
+    /// 15) 4500 ticks, home to (2, 33) (750 at most), rest 3000; then amber
+    /// the same.
+    fn coast_gatherers(state: u32) -> Op {
+        const AREA: Cells = (0, 21, 17, 15);
+        let home = |next| Op::Move {
+            ok: next,
+            failed: next,
+            to: (2, 33),
+            ticks: 750,
+            events: &[],
+        };
+        match state {
+            0 => Op::Behave { next: 5 },
+            5 | 11 => Op::Gather {
+                next: state + 2,
+                area: AREA,
+                resource: if state == 5 {
+                    Resource::Fish
+                } else {
+                    Resource::Amber
+                },
+                ticks: 4500,
+                events: &[],
+            },
+            7 | 13 => home(state + 2),
+            9 => Op::Wait {
+                next: 11,
+                ticks: 3000,
+            },
+            _ => Op::Wait {
                 next: 0,
-                target: Target::Attacker,
-                ticks: 375,
+                ticks: 3000,
+            },
+        }
+    }
+
+    /// The port's state for a raiding party's sail to its post (members 3
+    /// and 6 call the move at state 5 while short of strength).
+    const MARCH: u32 = 105;
+
+    /// Members 3 and 6 count their royal ships, rammers (and member 3 its
+    /// bombers) against the royal ships and rammers they ask for.
+    fn strong(scene: &Scene, k: usize) -> bool {
+        let d = difficulty();
+        let n = scene.fleet_types(k);
+        let mut have = n[ROYAL as usize] + n[RAMMER as usize];
+        if k == EAST_RAIDERS {
+            have += n[BOMBER as usize];
+        }
+        have >= [2, 2, 3][d] + [2, 3, 2][d]
+    }
+
+    /// The raiders of the north-east (member 3, 0x46be60; the ships in
+    /// (55, 15, 3, 3)): short of strength they sail to (50, 15) (45000
+    /// ticks at most) and wait there 1000, watching (49, 12, 15, 5) (events
+    /// 0x5b35d0); at strength they patrol (0x5b35a0) watching (49, 12, 15,
+    /// 5) and (46, 16, 17, 8) (0x5b35e8). They ask yard 1 for royal ships
+    /// and rammers.
+    fn east_raiders(state: u32) -> Op {
+        const MARCHING: &[Event] = &[zone((49, 12, 15, 5)), attacked(250)];
+        const W: &[Event] = &[zone((49, 12, 15, 5)), zone((46, 16, 17, 8)), attacked(250)];
+        const ROUND: &[(i32, i32, u32)] =
+            &[(49, 17, 500), (56, 18, 750), (62, 16, 500), (56, 18, 875)];
+        match state {
+            0 => Op::Behave { next: 5 },
+            5 => Op::Custom(|scene, k| if strong(scene, k) { 10 } else { MARCH }),
+            MARCH => Op::Move {
+                ok: 7,
+                failed: 7,
+                to: (50, 15),
+                ticks: 45_000,
+                events: MARCHING,
+            },
+            7 => Op::Watch {
+                next: 0,
+                ticks: 1000,
+                events: MARCHING,
+            },
+            10 => Op::Patrol {
+                timeout: 5,
+                points: ROUND,
+                ticks: 0,
+                events: W,
+            },
+            _ => fight(state, 375),
+        }
+    }
+
+    const WEST_COAST: [Event; 2] = [zone((1, 27, 6, 8)), zone((7, 25, 8, 11))];
+
+    /// The patrol of the west coast (member 5, 0x46c310; round 0x5b36a8,
+    /// events 0x5b36c0): watches (1, 27, 6, 8) and (7, 25, 8, 11). It asks
+    /// yard 2 for royal ships and bombers.
+    fn west_patrol(state: u32) -> Op {
+        const W: &[Event] = &[WEST_COAST[0], WEST_COAST[1], attacked(250)];
+        const ROUND: &[(i32, i32, u32)] = &[(6, 28, 750), (11, 29, 750)];
+        match state {
+            0 => Op::Behave { next: 5 },
+            5 => Op::Patrol {
+                timeout: 5,
+                points: ROUND,
+                ticks: 0,
+                events: W,
+            },
+            _ => fight(state, 375),
+        }
+    }
+
+    /// The raiders of the west (member 6, 0x46c4c0): roll their patrol's
+    /// length `(rand(4) + (10, 8, 6) by difficulty) x 1500` (0); short of
+    /// strength they sail to (3, 32) watching the coast (events 0x5b3840),
+    /// at strength patrol (0x5b3810) watching (11, 19, 9, 17) too
+    /// (0x5b3858), then attack about one of the player's settlements or
+    /// towns in (0, 0, 35, 36) 6000 ticks (10, 15). They answer fire 250
+    /// ticks and ask yard 2 for royal ships and rammers.
+    fn west_raiders(state: u32) -> Op {
+        const MARCHING: &[Event] = &[WEST_COAST[0], WEST_COAST[1], attacked(375)];
+        const W: &[Event] = &[
+            WEST_COAST[0],
+            WEST_COAST[1],
+            zone((11, 19, 9, 17)),
+            attacked(375),
+        ];
+        const ROUND: &[(i32, i32, u32)] =
+            &[(14, 21, 500), (15, 26, 750), (17, 31, 500), (15, 26, 875)];
+        match state {
+            0 => Op::Custom(|scene, k| {
+                let ticks = (scene.rng.next() % 4 + [10, 8, 6][difficulty()]) * 1500;
+                set_var(scene, k, 0, ticks);
+                5
+            }),
+            5 => Op::Custom(|scene, k| if strong(scene, k) { 6 } else { MARCH }),
+            MARCH => Op::Move {
+                ok: 0,
+                failed: 0,
+                to: (3, 32),
+                ticks: 0,
+                events: MARCHING,
+            },
+            6 => Op::Patrol {
+                timeout: 10,
+                points: ROUND,
+                ticks: VAR0,
+                events: W,
+            },
+            10 => Op::Custom(
+                |scene, k| match scene.human_site_area(Some((0, 0, 35, 36))) {
+                    Some(a) => {
+                        scene.set_fleet_area(k, a);
+                        15
+                    }
+                    None => 0,
+                },
+            ),
+            15 => Op::Attack {
+                next: 0,
+                target: Target::Seen,
+                ticks: 6000,
+                events: &[],
+            },
+            _ => fight(state, 250),
+        }
+    }
+
+    /// A sentry of the north-west (members 7-10, 0x46c880-0x46cdc0): holds
+    /// its post (sailing there again every 750 ticks), watching (5, 7, 9,
+    /// 7) (events 0x5b38f0 and on): the player there is attacked in (0, 0,
+    /// 17, 20) 1500 ticks (20); fired on, it fights the attacker 1500
+    /// ticks (30) and the other sentries join it (40; see `turn`).
+    fn sentry(state: u32, post: (i32, i32)) -> Op {
+        const W: &[Event] = &[zone((5, 7, 9, 7)), attacked(0)];
+        match state {
+            0 => Op::Behave { next: 5 },
+            5 => Op::Move {
+                ok: 0,
+                failed: 0,
+                to: post,
+                ticks: 750,
+                events: W,
+            },
+            20 => Op::Attack {
+                next: 0,
+                target: Target::Area((0, 0, 17, 20)),
+                ticks: 1500,
                 events: &[],
             },
             _ => Op::Attack {
@@ -7705,7 +8380,26 @@ mod miss011 {
         }
     }
 
-    fn gather(state: u32, area: Cells, resource: Resource, home: (i32, i32)) -> Op {
+    fn sentry1(state: u32) -> Op {
+        sentry(state, (0, 4))
+    }
+
+    fn sentry2(state: u32) -> Op {
+        sentry(state, (0, 10))
+    }
+
+    fn sentry3(state: u32) -> Op {
+        sentry(state, (1, 18))
+    }
+
+    fn sentry4(state: u32) -> Op {
+        sentry(state, (1, 23))
+    }
+
+    /// A Persian gatherer (members 1 and 2, 0x46d320, 0x46d470): asks for
+    /// a merchant while it has none, gathers 4500 ticks, sails home to
+    /// (37, 24) (750 at most) and rests 1500.
+    fn gatherer(state: u32, area: Cells, resource: Resource) -> Op {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Gather {
@@ -7716,9 +8410,9 @@ mod miss011 {
                 events: &[],
             },
             15 => Op::Move {
-                ok: 20,
-                failed: 20,
-                to: home,
+                ok: 17,
+                failed: 17,
+                to: (37, 24),
                 ticks: 750,
                 events: &[],
             },
@@ -7729,174 +8423,320 @@ mod miss011 {
         }
     }
 
-    fn east_patrol(state: u32) -> Op {
-        const ROUND: &[(i32, i32, u32)] = &[(50, 14, 750), (54, 14, 750), (59, 14, 750)];
-        const W: &[Event] = &[
-            Event::Zone {
-                state: 20,
-                area: (49, 12, 15, 6),
-            },
-            Event::Attacked {
-                state: 30,
-                after: 250,
-            },
-        ];
-        patrol(state, ROUND, W)
+    /// Member 1: amber in (31, 23, 11, 7).
+    fn persian_amber(state: u32) -> Op {
+        gatherer(state, (31, 23, 11, 7), Resource::Amber)
     }
 
-    fn east_raiders(state: u32) -> Op {
-        const ROUND: &[(i32, i32, u32)] =
-            &[(49, 17, 500), (56, 18, 750), (62, 16, 500), (56, 18, 875)];
-        const W: &[Event] = &[
-            Event::Zone {
-                state: 20,
-                area: (49, 12, 15, 5),
-            },
-            Event::Zone {
-                state: 20,
-                area: (46, 16, 17, 8),
-            },
-            Event::Attacked {
-                state: 30,
-                after: 250,
-            },
-        ];
-        patrol(state, ROUND, W)
+    /// Member 2: fish in (32, 18, 11, 12).
+    fn persian_fish(state: u32) -> Op {
+        gatherer(state, (32, 18, 11, 12), Resource::Fish)
     }
 
-    const WEST: &[Event] = &[
-        Event::Zone {
-            state: 20,
-            area: (1, 27, 6, 8),
-        },
-        Event::Zone {
-            state: 20,
-            area: (7, 25, 8, 11),
-        },
-        Event::Attacked {
-            state: 30,
-            after: 250,
-        },
+    /// The zones of the middle sea the guards watch (0x5b3ad0, 0x5b3bd8).
+    const MIDDLE: [Cells; 4] = [
+        (30, 19, 8, 5),
+        (34, 15, 6, 5),
+        (28, 10, 8, 6),
+        (22, 13, 8, 15),
+    ];
+    const GUARDING: &[Event] = &[
+        zone(MIDDLE[0]),
+        zone(MIDDLE[1]),
+        zone(MIDDLE[2]),
+        zone(MIDDLE[3]),
+        attacked(375),
     ];
 
-    fn west_patrol(state: u32) -> Op {
-        const ROUND: &[(i32, i32, u32)] = &[(6, 28, 750), (11, 29, 750)];
-        patrol(state, ROUND, WEST)
-    }
-
-    fn west_raiders(state: u32) -> Op {
-        const ROUND: &[(i32, i32, u32)] =
-            &[(14, 21, 500), (15, 26, 750), (17, 31, 500), (15, 26, 875)];
-        patrol(state, ROUND, WEST)
-    }
-
-    /// Fish, then amber, off the west coast (0x46bce0).
-    fn west_gatherers(state: u32) -> Op {
-        match state {
-            0 => Op::Behave { next: 7 },
-            7 => Op::Gather {
-                next: 9,
-                area: (0, 21, 17, 15),
-                resource: Resource::Fish,
-                ticks: 4500,
-                events: &[],
-            },
-            9 => Op::Move {
-                ok: 11,
-                failed: 11,
-                to: (2, 33),
-                ticks: 750,
-                events: &[],
-            },
-            11 => Op::Wait {
-                next: 13,
-                ticks: 3000,
-            },
-            13 => Op::Gather {
-                next: 15,
-                area: (0, 21, 17, 15),
-                resource: Resource::Amber,
-                ticks: 4500,
-                events: &[],
-            },
-            15 => Op::Move {
-                ok: 17,
-                failed: 17,
-                to: (2, 33),
-                ticks: 750,
-                events: &[],
-            },
-            _ => Op::Wait {
-                next: 7,
-                ticks: 3000,
-            },
-        }
-    }
-
-    /// The north-west sentries attack the player in their waters
-    /// (0x46c880-0x46cdc0).
-    fn sentries(state: u32) -> Op {
+    /// A guard of the middle sea (members 3 and 4): sails to its post and
+    /// waits there 1000 ticks, watching the middle sea's zones (events
+    /// 0x5b3bc0, 0x5b3cc8); the player there is fought 1500 ticks, whoever
+    /// fires on it 375. Each asks for two royal ships and its own Persian
+    /// ships (1, 1, 2).
+    fn guard(state: u32, post: (i32, i32)) -> Op {
         match state {
             0 => Op::Behave { next: 5 },
-            5 => Op::Wait {
-                next: 6,
-                ticks: 250,
+            5 => Op::Move {
+                ok: 7,
+                failed: 7,
+                to: post,
+                ticks: 0,
+                events: GUARDING,
             },
-            6 => Op::Custom(|scene, _| {
-                if scene.human_in((0, 0, 17, 20)) {
-                    20
-                } else {
-                    5
-                }
-            }),
-            _ => Op::Attack {
+            7 => Op::Watch {
                 next: 0,
-                target: Target::Area((0, 0, 17, 20)),
-                ticks: 1500,
-                events: &[],
+                ticks: 1000,
+                events: GUARDING,
             },
+            _ => fight(state, 375),
         }
     }
 
-    fn middle_amber(state: u32) -> Op {
-        gather(state, (31, 23, 11, 7), Resource::Amber, (37, 24))
+    /// Member 3 (0x46d5c0; post (38, 18)): the player in the western zones
+    /// (28, 10, 8, 6) or (22, 13, 8, 15) brings lightning (0x47ae10 kind
+    /// 10, cast by member 0 for nothing) at (38, 14) and at (30, 23), each
+    /// if something stands there (20); two turns later it attacks (22,
+    /// 25).
+    fn guard1(state: u32) -> Op {
+        match state {
+            20 => Op::Custom(|scene, k| {
+                let seen = scene.brain.as_ref().unwrap().fleets[k].area;
+                if seen == Some(MIDDLE[2]) || seen == Some(MIDDLE[3]) {
+                    let owner = persians(scene);
+                    for cell in [(38, 14), (30, 23)] {
+                        if stands_at(scene, cell) {
+                            scene
+                                .pending_casts
+                                .push((Spell::Lightning, cell.0, cell.1, owner));
+                        }
+                    }
+                }
+                22
+            }),
+            22 => Op::Custom(|_, _| 25),
+            25 => fight(20, 375),
+            _ => guard(state, (38, 18)),
+        }
     }
 
-    fn middle_fish(state: u32) -> Op {
-        gather(state, (32, 18, 11, 12), Resource::Fish, (37, 24))
+    /// Member 4 (0x46d830; post (34, 23)).
+    fn guard2(state: u32) -> Op {
+        guard(state, (34, 23))
     }
 
-    const MIDDLE: &[Event] = &[
-        Event::Zone {
-            state: 20,
-            area: (30, 19, 8, 5),
-        },
-        Event::Zone {
-            state: 20,
-            area: (34, 15, 6, 5),
-        },
-        Event::Zone {
-            state: 20,
-            area: (28, 10, 8, 6),
-        },
-        Event::Zone {
-            state: 20,
-            area: (22, 13, 8, 15),
-        },
-        Event::Attacked {
-            state: 30,
-            after: 375,
+    /// Member 5's strikes end on the player in the middle sea (20) or with
+    /// fewer than three ships (0x5b3f58).
+    const STRIKING: &[Event] = &[
+        zone(MIDDLE[0]),
+        zone(MIDDLE[1]),
+        zone((38, 16, 7, 13)),
+        Event::Size {
+            state: 0,
+            after: None,
+            cmp: Cmp::AtMost,
+            n: FEW,
         },
     ];
 
-    fn middle_guard(state: u32) -> Op {
-        const ROUND: &[(i32, i32, u32)] = &[(38, 18, 1000)];
-        patrol(state, ROUND, MIDDLE)
+    /// Member 5 casts the spell it chose on its ships (0x47acf0, by
+    /// member 0, for nothing), once.
+    fn cast_on_strikers(scene: &mut Scene) {
+        let kind = var(scene, CASTER, SPELL);
+        if kind == NONE {
+            return;
+        }
+        let spell = match kind {
+            9 => Some(Spell::Flame),
+            12 => Some(Spell::Phantom),
+            15 => Some(Spell::ProtectWeapons),
+            16 => Some(Spell::ProtectMagic),
+            _ => None,
+        };
+        if let Some(spell) = spell {
+            for id in scene.fleet_ships(STRIKERS) {
+                scene.pending_ship_casts.push((spell, id));
+            }
+        }
+        set_var(scene, CASTER, SPELL, NONE);
     }
 
-    fn middle_guard_2(state: u32) -> Op {
-        const ROUND: &[(i32, i32, u32)] = &[(34, 23, 1000)];
-        patrol(state, ROUND, MIDDLE)
+    /// Member 5 (0x46da00; the ships in (38, 20, 3, 3)): rolls when it
+    /// looks, `((8, 6, 4) by difficulty + rand(4)) x 1500` ticks, and, if
+    /// it has none, a spell: flame, the phantom or the weapon shield, or
+    /// none, from `rand((10, 6, 3) by difficulty + 1)` (0). It patrols
+    /// (0x5b3ce0) watching the middle sea (events 0x5b3ef0) (the player
+    /// there fought 1500 ticks, 20); five strong when it looks (25), it
+    /// starts over while the barbarians' yard at (54, 11) stands, else
+    /// strikes about one of the player's settlements or towns (60, 85), or
+    /// if there are none about the first of the player's things (90, 100),
+    /// 6000 ticks. It asks for bombers, royal ships and both Persian ships.
+    fn strikers(state: u32) -> Op {
+        const W: &[Event] = &[
+            zone(MIDDLE[0]),
+            zone(MIDDLE[1]),
+            zone((38, 16, 7, 13)),
+            Event::Size {
+                state: 25,
+                after: Some(AFTER),
+                cmp: Cmp::AtLeast,
+                n: N,
+            },
+        ];
+        const ROUND: &[(i32, i32, u32)] = &[(38, 24, 500), (40, 19, 750)];
+        let strike = Op::Attack {
+            next: 0,
+            target: Target::Seen,
+            ticks: 6000,
+            events: STRIKING,
+        };
+        match state {
+            0 => Op::Custom(|scene, k| {
+                let d = difficulty();
+                let after = ([8, 6, 4][d] + (scene.rng.next() & 3)) * 1500;
+                set_var(scene, k, AFTER, after);
+                let roll = scene.rng.next() % ([10, 6, 3][d] + 1);
+                if var(scene, CASTER, SPELL) == NONE {
+                    let kind = match roll {
+                        0 | 1 => 9,
+                        2 => 12,
+                        3 => 15,
+                        _ => NONE,
+                    };
+                    set_var(scene, CASTER, SPELL, kind);
+                }
+                // `+0x198`, rolled and never read.
+                scene.rng.next();
+                5
+            }),
+            5 => Op::Patrol {
+                timeout: 0,
+                points: ROUND,
+                ticks: 0,
+                events: W,
+            },
+            20 => fight(20, 375),
+            25 => Op::Custom(|scene, _| {
+                if var(scene, YARD1, STANDS) != 0 {
+                    0
+                } else {
+                    60
+                }
+            }),
+            60 => Op::Custom(
+                |scene, k| match scene.human_site_area(Some((0, 0, 64, 36))) {
+                    Some(a) => {
+                        scene.set_fleet_area(k, a);
+                        85
+                    }
+                    None => 90,
+                },
+            ),
+            90 => Op::Custom(|scene, k| {
+                let first = scene
+                    .objects
+                    .iter()
+                    .find(|o| scene.is_own(o) && o.combat.is_some())
+                    .map(cell_of);
+                match first {
+                    Some(cell) => {
+                        cast_on_strikers(scene);
+                        scene.set_fleet_area(k, about(cell, 2));
+                        100
+                    }
+                    None => 90,
+                }
+            }),
+            _ => strike,
+        }
+    }
+
+    /// Member 6 (0x46e090): sends what it is handed to the docks.
+    fn repair(_: u32) -> Op {
+        Op::Custom(|scene, k| {
+            scene.fleet_to_docks(k);
+            0
+        })
+    }
+
+    /// The things of the player in `area`, ships and buildings (0x479ed0
+    /// with masks 0xfff and 0xffffff).
+    fn human_count(scene: &Scene, area: Cells) -> usize {
+        scene
+            .objects
+            .iter()
+            .filter(|o| scene.is_own(o) && o.combat.is_some() && inside(cell_of(o), area))
+            .count()
+    }
+
+    /// Member 7 (0x46e110), run from `turn` as it has no ships: waits
+    /// `(3, 2, 1) by difficulty x 1500` ticks (10), then, if it has cast
+    /// fewer than (1, 2, 3) spells, looks through the player's things
+    /// within 15 cells of the Persians' first temple (class 0x3e) (15) and
+    /// casts one spell (0x47ae10 by member 0, for nothing) at the first it
+    /// picks: a fireball at a settlement one time in two; lightning at a
+    /// town or temple (0x3e); a waterspout or fireball, one time in four
+    /// each, at a temple (0x3d), fort (0x36) or building of class 0x34,
+    /// 0x35; at anything else with at least four of the player's things
+    /// within 3 cells, a waterspout, fireball or sea monster one time in
+    /// (20, 15, 10) + 1 each. A roll that picks nothing ends the look.
+    fn caster(scene: &mut Scene) {
+        let k = CASTER;
+        let d = difficulty();
+        match state(scene, k) {
+            0 => scene.set_state(k, 10),
+            10 => {
+                let now = scene.brain.as_ref().unwrap().tick;
+                let until = var(scene, k, UNTIL);
+                if until == 0 {
+                    set_var(scene, k, UNTIL, now + [3, 2, 1][d] * 1500);
+                } else if now >= until {
+                    set_var(scene, k, UNTIL, 0);
+                    scene.set_state(k, 15);
+                }
+            }
+            15 if var(scene, k, CASTS) < [1, 2, 3][d] as u32 => {
+                look_and_cast(scene);
+                scene.set_state(k, 0);
+            }
+            _ => {}
+        }
+    }
+
+    fn look_and_cast(scene: &mut Scene) {
+        let d = difficulty();
+        let Some(persian) = persians(scene) else {
+            return;
+        };
+        let Some(temple) = scene
+            .objects
+            .iter()
+            .find(|o| o.owner == Some(persian) && o.class == ObjectClass::Building(0x3e))
+            .map(cell_of)
+        else {
+            return;
+        };
+        let area = about(temple, 15);
+        let things: Vec<(ObjectClass, (i32, i32))> = scene
+            .objects
+            .iter()
+            .filter(|o| scene.is_own(o) && o.combat.is_some())
+            .map(|o| (o.class, cell_of(o)))
+            .collect();
+        for (class, cell) in things {
+            if !inside(cell, area) {
+                continue;
+            }
+            let (spell, at) = match class {
+                ObjectClass::Building(0x32) => match scene.rng.next() & 3 {
+                    0 | 2 => (Spell::Fireball, cell),
+                    _ => break,
+                },
+                ObjectClass::Building(0x33 | 0x3e) => (Spell::Lightning, cell),
+                ObjectClass::Building(0x34 | 0x35 | 0x36 | 0x3d) => match scene.rng.next() & 3 {
+                    0 => (Spell::Waterspout, cell),
+                    2 => (Spell::Fireball, cell),
+                    _ => break,
+                },
+                _ => {
+                    let roll = scene.rng.next() % ([20, 15, 10][d] + 1);
+                    let near = about(cell, 3);
+                    let at = (near.0 + near.2 / 2, near.1 + near.3 / 2);
+                    if human_count(scene, near) < 4 {
+                        break;
+                    }
+                    match roll {
+                        0 => (Spell::Waterspout, at),
+                        4 => (Spell::Fireball, at),
+                        8 => (Spell::Monster, at),
+                        _ => break,
+                    }
+                }
+            };
+            scene.pending_casts.push((spell, at.0, at.1, Some(persian)));
+            let casts = var(scene, CASTER, CASTS);
+            set_var(scene, CASTER, CASTS, casts + 1);
+            break;
+        }
     }
 }
 

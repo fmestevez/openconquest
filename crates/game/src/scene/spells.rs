@@ -88,11 +88,19 @@ impl Scene {
             return Err("Choose one of your ships or buildings".into());
         }
         self.in_reach(spell, obj.x, obj.y)?;
-        let large = obj
+        self.pay_spell(spell)?;
+        self.protect(spell, t, data, caches);
+        Ok(())
+    }
+
+    /// Puts a shield or the phantom `spell` on the ship or building at
+    /// index `t` (which has combat), however it was cast.
+    pub(super) fn protect(&mut self, spell: Spell, t: usize, data: &GameData, caches: &mut Caches) {
+        let target = self.objects[t].id;
+        let large = self.objects[t]
             .ship
             .as_ref()
             .is_none_or(|s| matches!(s.kind, 2..=5 | 9 | 11));
-        self.pay_spell(spell)?;
         let (x, y) = (self.objects[t].x, self.objects[t].y);
         let c = self.objects[t].combat.as_mut().unwrap();
         // Casting again adds to the time left.
@@ -108,7 +116,6 @@ impl Scene {
             let name = magic::fx_protection(spell, large);
             self.spawn_aura(data, caches, &name, target, left);
         }
-        Ok(())
     }
 
     /// Casts lightning, a fireball or the view on the map cell `(cx, cy)`.

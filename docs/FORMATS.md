@@ -1342,7 +1342,7 @@ hero, bring Jason and the heroes to a settlement, ...) live in the brains.
 In the executable each brain's per-fleet handlers come first and its main
 function (the message handler that creates the fleets, lays deposits and
 dispatches each member to its handler) last: miss011's handlers are
-0x46b8d0-0x46d830 and its main 0x46e8e0, miss012's 0x46f760-0x472370 and
+0x46b8d0-0x46e110 and its main 0x46e8e0, miss012's 0x46f760-0x472370 and
 0x472900, miss013's 0x473f40-0x476dc0 and 0x477930. Mains: miss000
 0x449b10, miss001 0x44af70, miss002 0x44d0e0, miss003 0x44fd90, miss004
 0x453b00, miss005 0x457950, miss006 0x45b280, miss007 0x45f770, miss008
@@ -1580,6 +1580,75 @@ miss010 (0x46a0f0; constructor 0x469d90):
   amber at (29, 12) and (39, 22), fish at (56, 23) and a barrel of 2000 at
   (27, 19). The Persians get 10000 amber and 8000 fish on normal, twice
   that on hard, technology bits 78, 79 and workshop levels (not ported).
+
+miss011 (0x46e8e0; members 0x46b8d0-0x46e110):
+
+- **Members.** Group 0 is the barbarians (11 members), group 1 the
+  Persians (player 14, 8 members). Requests are per-member slots in each
+  yard's array (codes 200 + type, -1 none): barbarian yard 1's `+0x118`,
+  yard 2's `+0x144`, the Persian yard's `+0x170`, each yard's member
+  served at `+0x104`, `+0x114`, `+0x10c`.
+- **The barbarians.** Yards 1 and 2 (0x46b8d0 at (54, 11), 0x46c0b0 at
+  (8, 31)) roll a rest of `((50, 30, 10) + rand(31)) x 25` ticks, serve
+  their slots in order (merchants, royal ships, bombers, rammers, ship
+  killers) and clear the slot after the rest. Member 1 (0x46bb30) asks
+  yard 1 for royal ships (1, 1, 2) and a bomber and patrols (0x5b3438)
+  watching (49, 12, 15, 6). Member 2 (0x46bce0, the ships in (6, 29, 2,
+  2)) fishes, then gathers amber, in (0, 21, 17, 15) 4500 ticks, sailing
+  home to (2, 33) and resting 3000 after each. Member 3 (0x46be60, the
+  ships in (55, 15, 3, 3)) asks yard 1 for royal ships (2, 2, 3) and
+  rammers (2, 3, 2); short of them (bombers counting) it sails to (50, 15)
+  and waits there 1000 ticks watching (49, 12, 15, 5), else patrols
+  (0x5b35a0) watching (46, 16, 17, 8) too. Member 5 (0x46c310) asks yard
+  2 for royal ships (2, 2, 3) and bombers (2, 3, 2) and patrols (0x5b36a8)
+  watching (1, 27, 6, 8) and (7, 25, 8, 11). Member 6 (0x46c4c0) asks yard
+  2 for royal ships and rammers; short of them it sails to (3, 32), else
+  patrols (0x5b3810) watching (11, 19, 9, 17) too for `(rand(4) + (10, 8,
+  6)) x 1500` ticks (`+0x190`), then attacks about one of the player's
+  settlements or towns in (0, 0, 35, 36) 6000 ticks. Members 7-10
+  (0x46c880-0x46cdc0, the ships at (0, 4), (0, 10), (1, 18), (1, 23)) hold
+  their posts watching (5, 7, 9, 7) (then attack (0, 0, 17, 20) 1500
+  ticks); one fired on fights the attacker 1500 ticks and sets the other
+  three on the same area (`+0x1c8`, state 0x28). Zone fights last 1500
+  ticks, answering fire 375 (member 6: 250).
+- **The Persians.** The yard (0x46cf80, at (32, 17)) gives a one-off order
+  of class 1, then serves its slots (boats to ship killers, 0xd2, 0xd3;
+  0x34 builds class 0x30), resting 500 ticks. Members 1 and 2 (0x46d320,
+  0x46d470) ask for a merchant while they have none and gather amber in
+  (31, 23, 11, 7) and fish in (32, 18, 11, 12) 4500 ticks, sail home to
+  (37, 24) and rest 1500. Members 3 and 4 (0x46d5c0, 0x46d830; the ships
+  in (32, 21, 2, 2) and (36, 17, 3, 2)) ask for two royal ships and
+  (1, 1, 2) of the Persians' ship 0xd2 or 0xd3, sail to (38, 18) or (34,
+  23) and wait 1000 ticks, watching (30, 19, 8, 5), (34, 15, 6, 5), (28,
+  10, 8, 6) and (22, 13, 8, 15); when member 3 sees the player in either
+  of the last two it casts lightning (0x47ae10 kind 10 by member 0, free)
+  at (38, 14) and at (30, 23), each if the map cell has an object. Member
+  5 (0x46da00, the ships in (38, 20, 3, 3)) asks for bombers, royal ships
+  and both Persian ships, rolls the time before it looks (`((8, 6, 4) +
+  rand(4)) x 1500`, written into its event data 0x5b3ec8) and, if it has
+  none, a spell (`+0x194`, 0 at first: `rand((10, 6, 3) + 1)` 0-1 flame,
+  2 phantom, 3 weapon shield), patrols (0x5b3ce0) watching (30, 19, 8, 5),
+  (34, 15, 6, 5) and (38, 16, 7, 13), and once five strong after that
+  time either starts over, while the barbarians' yard at (54, 11) stands
+  (`+0x19c`, cleared with a reset to state 0 by the brain's tick when the
+  cell empties), or casts its spell on its ships (0x47acf0) and strikes
+  6000 ticks about one of the player's settlements or towns, else about
+  the first of the player's things, until fewer than three are left.
+  Member 6 (0x46e090) mends prizes (0x5d97). Member 7 (0x46e110, no ships)
+  waits `(3, 2, 1) x 1500` ticks and, until it has cast (1, 2, 3) spells
+  (`+0x1e8`), looks through the player's things within 15 cells of the
+  Persians' first temple (class 0x3e) and casts at the first it picks
+  (0x47ae10, free): a fireball at a settlement (half the time), lightning
+  at a town or temple 0x3e, a waterspout or fireball (a quarter of the
+  time each) at a temple 0x3d, fort or class 0x34, 0x35, and at anything
+  else with four of the player's things within 3 cells a waterspout,
+  fireball or sea monster (one time in (20, 15, 10) + 1 each); a roll
+  that picks nothing ends the look. Unordered launches (0x5d98) join
+  member 2 (boats, merchants) or 5 (warships).
+- **The start.** Amber at (57, 26), (57, 35) and (51, 34) and fish at
+  (53, 31) on every difficulty; the Persians get 12000, 17000 or 25000
+  amber and 8000, 10000 or 15000 fish (added) and technology and workshop
+  levels (not ported).
 
 Primitives not yet ported (the later brains use them):
 

@@ -72,6 +72,10 @@ const SHOAL_DIVING: f32 = 33.0 * SHOAL_UNIT;
 /// An animation's frames, each a stack of layers.
 pub type Frames = Vec<Vec<objects::Layer>>;
 
+/// A spell a brain casts on a cell for nothing: the spell, the cell and
+/// the casting player (nation, slot), if it matters.
+type BrainCast = (Spell, i32, i32, Option<(u32, u32)>);
+
 /// Cells the minimap shows across and down (Mapa.cpp, mode 3).
 pub const MINIMAP_CELLS: i32 = 24;
 
@@ -249,9 +253,12 @@ pub struct Scene {
     /// Big reefs a brain raises this tick: cell and kind (not saved: raised
     /// at once).
     pending_reefs: Vec<(i32, i32, u32)>,
-    /// Spells a brain casts this tick for nothing (0x42f580): the spell
-    /// and its cell (not saved: cast at once).
-    pending_casts: Vec<(Spell, i32, i32)>,
+    /// Spells a brain casts this tick for nothing (0x42f580): the spell,
+    /// its cell and the caster (not saved: cast at once).
+    pending_casts: Vec<BrainCast>,
+    /// Spells a brain casts this tick on a ship for nothing (0x47acf0):
+    /// the spell and the ship (not saved: cast at once).
+    pending_ship_casts: Vec<(Spell, u32)>,
     /// Spells the player may cast once for nothing (disposable magic).
     pub free_casts: std::collections::BTreeMap<Spell, u32>,
     /// Buildings being repaired by a settlement or town.
@@ -475,6 +482,7 @@ impl Scene {
             wizards: BTreeMap::new(),
             pending_reefs: Vec::new(),
             pending_casts: Vec::new(),
+            pending_ship_casts: Vec::new(),
             story: Vec::new(),
             start_sites: Vec::new(),
             delivered: Vec::new(),
@@ -1235,8 +1243,11 @@ impl Scene {
             for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {
                 self.big_reef(x, y, kind, data, caches);
             }
-            for (spell, x, y) in std::mem::take(&mut self.pending_casts) {
-                self.brain_cast(spell, x, y, data, caches);
+            for (spell, x, y, owner) in std::mem::take(&mut self.pending_casts) {
+                self.brain_cast(spell, x, y, owner, data, caches);
+            }
+            for (spell, id) in std::mem::take(&mut self.pending_ship_casts) {
+                self.brain_cast_on(spell, id, data, caches);
             }
         }
         // The mission is judged every 250 ticks (0x448d40), a campaign
