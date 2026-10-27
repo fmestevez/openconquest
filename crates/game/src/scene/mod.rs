@@ -1120,6 +1120,16 @@ impl Scene {
         self.shoals_gone.contains_key(&id)
     }
 
+    /// Whether object `id` is a fish shoal diving or gone below: there is
+    /// nothing to fish there.
+    pub fn shoal_down(&self, id: u32) -> bool {
+        self.shoal_gone(id)
+            || self
+                .shoals_shown
+                .get(&id)
+                .is_some_and(|&l| l < SHOAL_DIVING)
+    }
+
     /// Scrolls the minimap only as far as keeps the view, whose top-left
     /// cell is `cell` and size `size` cells, inside it (0x51b8c0).
     pub fn follow_view(&self, cell: (i32, i32), size: (i32, i32)) {

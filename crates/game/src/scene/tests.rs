@@ -3874,3 +3874,68 @@ fn damage_and_armour_slow_ships() {
     let (speed, accel) = combat::sailing_factors(100.0, 100.0, 2);
     assert!((speed - 0.9).abs() < 1e-6 && (accel - 0.65).abs() < 1e-6);
 }
+
+/// Merchants never fish a shoal that is diving, gone below or out of
+/// reach: the net comes in as it dives (needs `OPENCONQUEST_DATA`).
+#[test]
+fn no_fishing_over_a_dived_shoal() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let merchants: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| {
+            scene.is_own(o)
+                && o.ship
+                    .as_ref()
+                    .is_some_and(|s| objects::cargo_capacity(s.kind) > 0.0)
+        })
+        .map(|o| o.id)
+        .collect();
+    let shoals: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| o.class == ObjectClass::FishZone)
+        .map(|o| o.id)
+        .collect();
+    for (k, &m) in merchants.iter().enumerate() {
+        let _ = scene.order_gather(m, shoals[k % shoals.len()]);
+    }
+    let mut bad = 0;
+    for step in 0..50 * 600 {
+        scene.update(0.02, &data, &mut caches);
+        for &m in &merchants {
+            let Some(i) = scene.object_index(m) else {
+                continue;
+            };
+            let o = &scene.objects[i];
+            if let Some(Task::Gather {
+                deposit,
+                phase: objects::GatherPhase::Collecting,
+            }) = o.ship.as_ref().unwrap().task
+            {
+                let Some(d) = scene.object_index(deposit) else {
+                    continue;
+                };
+                let dd = &scene.objects[d];
+                if dd.class != ObjectClass::FishZone {
+                    continue;
+                }
+                let dist = (dd.x - o.x).hypot(dd.y - o.y) / 64.0;
+                let gone = scene.shoal_gone(deposit);
+                let left = scene.shoals_shown.get(&deposit).copied();
+                let netted = scene.planks.iter().any(|p| p.ship == m);
+                if gone || dist > 1.6 || left.is_some_and(|l| l < SHOAL_DIVING) {
+                    bad += 1;
+                    eprintln!("t={:.1} ship {m} shoal {deposit} gone {gone} dist {dist:.2} left {left:?} net {netted}", step as f32 * 0.02);
+                }
+            }
+        }
+    }
+    assert_eq!(bad, 0, "fished where the shoal was not");
+}

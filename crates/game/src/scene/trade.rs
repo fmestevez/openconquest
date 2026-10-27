@@ -1369,7 +1369,7 @@ impl Scene {
                 if let Some(d) =
                     deposit_at.filter(|&d| self.objects[d].class == ObjectClass::FishZone)
                 {
-                    if self.shoal_gone(self.objects[d].id) {
+                    if self.shoal_down(self.objects[d].id) {
                         return;
                     }
                     if !arrived {
@@ -1416,7 +1416,7 @@ impl Scene {
                 };
                 // A shoal that has gone below or moved on: follow it.
                 if self.objects[d].class == ObjectClass::FishZone
-                    && (self.shoal_gone(self.objects[d].id) || !near(&self.objects[d], 1.6))
+                    && (self.shoal_down(self.objects[d].id) || !near(&self.objects[d], 1.6))
                 {
                     let ship = self.objects[i].ship.as_mut().unwrap();
                     ship.task = Some(Task::Gather {
