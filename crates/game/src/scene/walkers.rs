@@ -118,7 +118,7 @@ impl Scene {
         }
     }
 
-    fn spawn_walker(
+    pub(super) fn spawn_walker(
         &mut self,
         lair: u32,
         lair_class: u32,

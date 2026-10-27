@@ -2685,16 +2685,19 @@ fn dragon_flies_and_returns() {
         .unwrap();
     scene.objects[ship].x = nx - 4.0 * t;
     scene.objects[ship].y = ny + 2.0 * t;
-    let ship = scene.objects[ship].id;
-    let hull = |s: &Scene| {
-        s.object_index(ship)
-            .map_or(0.0, |i| s.objects[i].combat.as_ref().unwrap().hull)
+    // (The ship draws the dragon out.)
+    // Its teeth rise as a sea monster or a land creature.
+    let sown = |s: &Scene| {
+        s.objects
+            .iter()
+            .filter(|o| matches!(o.class, ObjectClass::Monster(0x1f4..=0x1f6 | 0x1fb)))
+            .count()
     };
-    let before = hull(&scene);
+    let before = sown(&scene);
     for _ in 0..50 * 30 {
         scene.update(0.02, &data, &mut caches);
     }
-    assert!(hull(&scene) < before, "the dragon struck");
+    assert!(sown(&scene) > before, "the dragon sowed its teeth");
     // A nest waits 55500 ticks less 6000 per field 10: shortened here.
     for n in scene.nests.iter_mut().filter(|n| n.id == dragon.nest) {
         n.delay = 5.0;

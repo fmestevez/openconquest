@@ -1128,7 +1128,9 @@ game ticks after the last fell. A harpy (0x41fbd0, state 5) strikes at
 frame 7 of its picture with a sure shot drawn as L (letter 11) carrying
 20 x item 4's level-1 blow (0x5c73dc); a dragon at frame 16 drops a shot
 drawn as P (15) on the cell ahead of it, carrying no blow of its own
-(0x41f1c0 finds it a target).
+(0x41f1c0 picks a free cell beside it, land next to buildings first): its
+teeth, which rise there as a cyclops, a minotaur or an amazon at random on
+land (message 0x1497) or as a wild sea monster on water (0x493780).
 
 ## Land creatures
 

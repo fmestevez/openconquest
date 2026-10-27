@@ -3,8 +3,10 @@
 //! creatures left (record field 9), a new one some time after the last
 //! fell (55500 ticks less 6000 per field 10). The creature rests by its nest,
 //! flies at a ship in reach, strikes (a harpy with a sure shot shared
-//! out on the ship as any blow; a dragon drops its teeth, a placeholder)
-//! and flies home.
+//! out on the ship as any blow; a dragon sows its teeth, which rise as
+//! land creatures or a sea monster) and flies home. (The original's
+//! dragon picks a free cell beside it, land near buildings first; here it
+//! goes for ships as harpies do.)
 
 use openac_formats::map::TILE_SIZE;
 use openac_formats::{ObjectClass, ObjectRecord};
@@ -15,12 +17,11 @@ use crate::objects::{self, Caches};
 
 /// How far from its nest a creature looks for ships, in cells; how fast it
 /// flies (world pixels a second); how long it rests between flights and
-/// strikes; and what a dragon's teeth do. Placeholders.
+/// strikes. Placeholders.
 const REACH: f32 = 8.0;
 const SPEED: f32 = 110.0;
 const REST: f32 = 8.0;
 const STRIKE: f32 = 1.0;
-const TEETH: f32 = 250.0;
 /// The nest's delay before a new creature (0x41d4a0): 55500 game ticks
 /// less 6000 per field 10, from 37 minutes down to one at field 9.
 /// Harpies and Odysseus: his crews resist them.
@@ -191,7 +192,7 @@ impl Scene {
                 Flight::Chase(prey) => match self.prey_at(class, prey) {
                     Some((px, py)) if (px - x).hypot(py - y) <= t / 2.0 => {
                         flight = Flight::Strike(prey, STRIKE);
-                        self.flyer_strikes(class, prey, (x, y), data, caches);
+                        self.flyer_strikes(class, prey, (x, y), f.nest, data, caches);
                     }
                     Some(p) => target_at = Some(p),
                     None => flight = Flight::Home,
@@ -265,6 +266,7 @@ impl Scene {
         class: u32,
         prey: u32,
         from: (f32, f32),
+        nest: u32,
         data: &GameData,
         caches: &mut Caches,
     ) {
@@ -273,8 +275,36 @@ impl Scene {
         };
         let (x, y) = (self.objects[i].x, self.objects[i].y);
         if class == 0x1f9 {
-            self.sounds.push(("hitmed", x, y));
-            self.hit(prey, TEETH, data, caches);
+            // A dragon sows its teeth on the cell ahead of it (0x41fbd0,
+            // state 5 at frame 16): on land they rise as a cyclops, a
+            // minotaur or an amazon (message 0x1497), on water as a sea
+            // monster (0x493780), both wild.
+            let t = TILE_SIZE as f32;
+            let ahead = (
+                from.0 + (x - from.0).clamp(-t, t),
+                from.1 + (y - from.1).clamp(-t, t),
+            );
+            let cell = ((ahead.0 / t).floor() as i32, (ahead.1 / t).floor() as i32);
+            if self.nav.is_water(cell.0, cell.1) {
+                let free = (-1..=1)
+                    .flat_map(|dy| (-1..=1).map(move |dx| (cell.0 + dx, cell.1 + dy)))
+                    .find(|&(cx, cy)| {
+                        self.nav.is_water(cx, cy)
+                            && !self.objects.iter().any(|o| {
+                                o.ship.is_some()
+                                    && ((o.x / t).floor() as i32, (o.y / t).floor() as i32)
+                                        == (cx, cy)
+                            })
+                    });
+                if let Some((cx, cy)) = free {
+                    let wild = Some(crate::combat::MONSTERS);
+                    let _ =
+                        self.spawn_hazard(crate::magic::Spell::Monster, cx, cy, wild, data, caches);
+                }
+            } else {
+                let lair = 0x46 + self.rng.next() % 3;
+                self.spawn_walker(nest, lair, ahead.0, ahead.1, data, caches);
+            }
             return;
         }
         // A harpy's strike (0x41fbd0, state 5 at frame 7): a sure shot,
