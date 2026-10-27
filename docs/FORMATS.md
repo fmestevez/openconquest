@@ -469,9 +469,12 @@ Combat tables:
   refits ships to armour M/S (0x36, 0x37) and ram M/S (0x38, 0x39) up to the
   researched level, for 30/60 and 25/50 amber times a ship size factor;
   its 0x49-0x4e are the W/M/S variants.
-- Building records (66 fields): field 7 condition in percent; fields 22-33
-  flag twelve emplacements on forts (wood fort 3, stone fort 8), contents
-  unknown.
+- Building records (66 fields): field 7 condition in percent; on forts
+  fields 22-33 count each item 0-11 they hold and fields from 34 give the
+  units' conditions (FortressClassTy 0x419f80 builds a unit for each into
+  its store, as a settlement's); the missions' forts hold their default
+  arming (0x5966b8): wood 4, 5, 6; middle 0, 4, 4, 6, 7; stone 0, 1,
+  4-8.
 - 0x597cfc: nine u32, the full condition of each weapon kind (2860 ...
   9100); weapon conditions are stored as a percentage of it (0x4be110).
 - Ramming odds (0x4ba950): for each ship, crew quality (0x598054, nine

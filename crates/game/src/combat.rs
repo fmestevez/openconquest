@@ -379,18 +379,21 @@ pub fn building_strength(class: u32) -> f32 {
     points as f32 / 15.0
 }
 
-/// Forts (classes 0x34-0x36) shoot from their emplacements. Fort records
-/// flag twelve emplacements in fields 22-33 (wood fort 3, stone fort 8);
-/// what each one holds is not known yet, so each fires the lightest
-/// weapon (item 3).
+/// Forts (classes 0x34-0x36) shoot with what they hold. Fort records give
+/// the count of each item 0-11 in fields 22-33 and the units' conditions
+/// from field 34 on, as a settlement's stock (FortressClassTy 0x419f80
+/// builds a unit per count into its store).
 fn fort_weapons(class: u32, fields: &[u32]) -> Vec<u8> {
     if !(0x34..=0x36).contains(&class) {
         return Vec::new();
     }
-    let n = fields
-        .get(22..34)
-        .map_or(0, |f| f.iter().filter(|&&v| v == 1).count());
-    vec![3; n]
+    fields.get(22..34).map_or(Vec::new(), |counts| {
+        counts
+            .iter()
+            .enumerate()
+            .flat_map(|(item, &n)| std::iter::repeat_n(item as u8, n.min(16) as usize))
+            .collect()
+    })
 }
 
 /// Items a ship type carries when built (0x5964d8: a count and up to nine
