@@ -1389,14 +1389,19 @@ and attacks.
 
 Primitives not yet ported (the later brains use them):
 
-- **0x47a7e0, repair** (`(group, member, ok, failed, builder, b, timeout,
+- **0x47a7e0, repair** (ported as prizes sailing to a dock; `(group,
+  member, ok, failed, builder, b, timeout,
   events)`). It gives the fleet order 0x82 (0x479900, 0x4cdf80; `builder` =
   the brain member that holds the docks, kind 11). The fleet's ships go to
   one of that member's docks, picked at random (0x4cdea0, 0x42cc40), and are
   mended there. Every brain has one member running only this, set up as
   behave, then repair (miss001 0x44cf20 with builder 7, miss003 0x452580
-  with 5, ...). How damaged ships join that member (fleet transfers, order
-  0xe through 0x479370, or `Navy.cpp` 0x4a78a0) is not traced yet.
+  with 5, ...). Ships join it when the brain's player captures them: the
+  capture (0x4b6f20) sends event 0x5d97 and the brain adds the prize to that
+  member (0x479300, op 2; miss002 group 1, member 8). Message 300 (a ship
+  joined, 0x4a1340) sends it to a dock (0x4cdc00, 0x4cdb00). Once mended
+  (message 0x134) it goes to the fleet named by the order's second
+  argument, which is 0 in every brain, so it stays.
 - **0x47ae10, cast** (`(group, member, kind, x, y, pay)`). The fleet casts
   spell `kind` (5-16, one per command; costs from 0x596844 by 0x47abb0,
   paid when `pay`) at cell (x, y) through message 0x3ee (0x47ab40). It is

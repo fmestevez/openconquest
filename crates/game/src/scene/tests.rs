@@ -4019,3 +4019,48 @@ fn merchants_unload_where_sent() {
     }
     panic!("never unloaded ({} fish)", scene.fish - fish);
 }
+
+/// A ship a campaign brain's player captures goes to be mended at one of
+/// that player's docks (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brains_mend_their_prizes() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+    assert!(scene.brain.is_some());
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    // One of the computer's buildings stands in for a dock.
+    let b = scene
+        .objects
+        .iter()
+        .position(|o| {
+            matches!(o.class, ObjectClass::Building(_))
+                && o.owner
+                    .is_some_and(|w| Some(w) != human && w != combat::MONSTERS)
+        })
+        .expect("a computer building");
+    let owner = scene.objects[b].owner.unwrap();
+    scene.objects[b].class = ObjectClass::Building(economy::DOCK);
+    let ship = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let c = scene.objects[ship].combat.as_mut().unwrap();
+    c.hull = c.max_hull / 2.0;
+    let id = scene.objects[ship].id;
+    let crew = scene.objects[ship].ship.as_ref().unwrap().crew;
+    scene.capture(id, Some(owner), crew, &data, &mut caches);
+    let i = scene.object_index(id).unwrap();
+    assert!(
+        matches!(
+            scene.objects[i].ship.as_ref().unwrap().task,
+            Some(Task::Repair { .. })
+        ),
+        "{:?}",
+        scene.objects[i].ship.as_ref().unwrap().task
+    );
+}

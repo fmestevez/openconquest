@@ -22,8 +22,9 @@ impl Scene {
     pub fn order_repair(&mut self, ship: u32, dock: u32) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let d = self.object_index(dock).ok_or("Choose one of your docks")?;
+        // A dock of the ship's own player.
         if self.objects[d].class != ObjectClass::Building(DOCK)
-            || !self.is_own(&self.objects[d])
+            || self.objects[d].owner != self.objects[i].owner
             || self.construction_at(dock).is_some()
         {
             return Err("Choose one of your docks".into());

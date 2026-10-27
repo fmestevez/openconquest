@@ -856,6 +856,29 @@ impl Scene {
             Err(e) => eprintln!("could not redraw captured ship: {e:#}"),
         }
         obj.record = rec;
+        self.brain_prize(id, (nation, player));
+    }
+
+    /// A prize taken by a campaign brain's player (event 0x5d97, sent by
+    /// the capture 0x4b6f20) joins the brain's repair fleet: it sails to
+    /// one of the player's docks, picked at random, and is mended there
+    /// (0x47a7e0, order 0x82, 0x4cdea0), then stays (every brain's repair
+    /// fleet hands its ships to no other).
+    fn brain_prize(&mut self, id: u32, owner: (u32, u32)) {
+        if self.brain.is_none() || self.human.map(|h| (h.nation, h.slot)) == Some(owner) {
+            return;
+        }
+        let docks: Vec<u32> = self
+            .objects
+            .iter()
+            .filter(|o| o.owner == Some(owner) && o.class == ObjectClass::Building(economy::DOCK))
+            .map(|o| o.id)
+            .collect();
+        if docks.is_empty() {
+            return;
+        }
+        let dock = docks[self.rng.next() as usize % docks.len()];
+        let _ = self.order_repair(id, dock);
     }
 
     pub(super) fn spawn_effect(
