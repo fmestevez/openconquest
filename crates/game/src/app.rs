@@ -3136,7 +3136,9 @@ impl App {
                 ),
                 Command::AMBER => (P::Amber, !deposit(Resource::Amber)),
                 Command::FISH => (P::Fish, !deposit(Resource::Fish)),
-                Command::WHALE => (P::Whale, !deposit(Resource::Leviathan)),
+                // The hunt command's own pointer (0x4dc630 case 0x1b: mode
+                // 3, `CUR_GETW`); `CUR_WW` is for pointing at a leviathan.
+                Command::WHALE => (P::GetWhale, !deposit(Resource::Leviathan)),
                 Command::TREASURE => (
                     P::Treasure,
                     !target.is_some_and(|o| {

@@ -38,6 +38,8 @@ pub enum Pointer {
     Ban,
     Load,
     Unload,
+    /// The leviathan hunt waiting for its target (mode 3).
+    GetWhale,
 }
 
 impl Pointer {
@@ -62,6 +64,7 @@ impl Pointer {
             Ban => ("CUR_BAN_", (-19, -10)),
             Load => ("CUR_LOAD_", (-32, -37)),
             Unload => ("CUR_UNLOAD_", (-18, -29)),
+            GetWhale => ("CUR_GETW_", (-15, -15)),
         }
     }
 }
