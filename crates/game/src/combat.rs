@@ -53,8 +53,14 @@ impl Combatant {
             ObjectClass::Building(c) => (building_strength(c), f(7), fort_weapons(c, &rec.fields)),
             // Barbarian strongholds, creatures and their lairs can be
             // destroyed too (victory conditions count them).
-            ObjectClass::Barbarian(_)
-            | ObjectClass::Castle(_)
+            // Barbarian structures hold units as forts do, and fire with
+            // them (BarbarianClassTy mends them, 0x40eba0).
+            ObjectClass::Barbarian(c) => (
+                building_strength(rec.class_id),
+                100,
+                fort_weapons(c, &rec.fields),
+            ),
+            ObjectClass::Castle(_)
             | ObjectClass::HarpyNest
             | ObjectClass::CreatureSpawn => (
                 building_strength(rec.class_id),
@@ -381,7 +387,9 @@ pub fn building_strength(class: u32) -> f32 {
 /// from field 34 on, as a settlement's stock (FortressClassTy 0x419f80
 /// builds a unit per count into its store).
 fn fort_weapons(class: u32, fields: &[u32]) -> Vec<u8> {
-    if !(0x34..=0x36).contains(&class) {
+    // Forts and barbarian structures (whose records have the same layout:
+    // the counts in fields 22-33, the units' conditions from field 34).
+    if !(0x34..=0x36).contains(&class) && !(0x3f..=0x41).contains(&class) {
         return Vec::new();
     }
     fields.get(22..34).map_or(Vec::new(), |counts| {
