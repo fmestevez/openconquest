@@ -1387,6 +1387,24 @@ sails, waits 3 s; 0x449810 patrols, and once the player has more warships
 (types 4-7) than a difficulty-dependent number sails to one of two places
 and attacks.
 
+Primitives not yet ported (the later brains use them):
+
+- **0x47a7e0, repair** (`(group, member, ok, failed, builder, b, timeout,
+  events)`). It gives the fleet order 0x82 (0x479900, 0x4cdf80; `builder` =
+  the brain member that holds the docks, kind 11). The fleet's ships go to
+  one of that member's docks, picked at random (0x4cdea0, 0x42cc40), and are
+  mended there. Every brain has one member running only this, set up as
+  behave, then repair (miss001 0x44cf20 with builder 7, miss003 0x452580
+  with 5, ...). How damaged ships join that member (fleet transfers, order
+  0xe through 0x479370, or `Navy.cpp` 0x4a78a0) is not traced yet.
+- **0x47ae10, cast** (`(group, member, kind, x, y, pay)`). The fleet casts
+  spell `kind` (5-16, one per command; costs from 0x596844 by 0x47abb0,
+  paid when `pay`) at cell (x, y) through message 0x3ee (0x47ab40). It is
+  used by miss011-miss013 and the wizard of miss007.
+- **0x479ed0** makes a fleet (0x4a0480 op 0xb) with a type mask;
+  **0x479f40** and **0x479fb0** test the brain's event list against
+  objects (0x49c3f0).
+
 More `missCOM` pieces: event 0x47a060 fires when one of the fleet's ships is
 hit by the watched player (at least a given time into the step) and sets
 the attack area around the attacker; 0x47a2a0 compares the fleet's size
