@@ -41,6 +41,8 @@ impl Command {
     pub const BUILD_STRUCTURES: Command = Command(0x10);
     pub const REPAIR_BUILDING: Command = Command(0x11);
     pub const SELL_ITEM: Command = Command(0x12);
+    /// A workshop's settlement mends its stock's worn units.
+    pub const REPAIR_STOCK: Command = Command(0x15);
     pub const SELL_TOWN: Command = Command(0x80);
     pub const TRAIN_BOWMEN: Command = Command(0x2d);
     pub const UPGRADE_TOWN: Command = Command(0x3a);
@@ -70,6 +72,7 @@ impl Command {
             0x10 => "CBUT_BUILDGRG",
             0x11 | 0x14 => "CBUT_REPGRND",
             0x12 => "CBUT_SELL",
+            0x15 => "CBUT_REPARMING",
             0x7e => "CBUT_SELLFISH",
             0x80 => "CBUT_SELLTOWN",
             0x6c => "CBUT_BEHMAIN",
@@ -334,6 +337,7 @@ impl Command {
             0x0f => "Hunt leviathan",
             0x10 => "Build structures",
             0x11 => "Repair",
+            0x15 => "Repair arming",
             0x2d..=0x2f => {
                 return format!(
                     "Train {}",
@@ -816,6 +820,30 @@ fn workshop_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     }
     // Slot 8 opens the research page (command 0x3d, menu page 3).
     set(menu, 8, RESEARCH, true);
+    // Slot 10 has the settlement mend its stock's worn units, with permit
+    // bit 11 (0x4361c0): enabled while it is idle, something is worn and
+    // the amber suffices, or while it mends (shown as progress).
+    let Some(home) = scene
+        .object_index(obj.id)
+        .and_then(|i| scene.home_settlement(i))
+    else {
+        return;
+    };
+    if scene.permits.allows(11) {
+        let units = scene.stock_units(home);
+        let (amber, _) = crate::scene::repair::stock_repair_cost(&units);
+        let repair = scene.stock_repair_at(home);
+        let idle = repair.is_none() && scene.training_at(home).is_none();
+        menu[10] = Some(Slot {
+            checked: false,
+            closes: false,
+            command: Command::REPAIR_STOCK,
+            enabled: repair.is_some()
+                || idle && units.iter().flatten().any(|&c| c < 100) && scene.amber >= amber,
+            progress: repair.map(|r| r.done() as f32 / 100.0),
+            count: 0,
+        });
+    }
 }
 
 /// The behaviour switches on a warship's behaviour page.

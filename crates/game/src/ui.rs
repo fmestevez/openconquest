@@ -1653,27 +1653,24 @@ pub fn ship_slots(obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
             cells.push(bare(0x29));
         }
     } else {
-        let weapons = obj
-            .combat
-            .as_ref()
-            .map(|c| c.weapons.as_slice())
-            .unwrap_or(&[]);
         // Soldiers look different for nation 3.
         let nation3 = obj.owner.is_some_and(|o| o.0 == 3);
         let mut big = 0;
+        // Each unit with its condition as its bar.
+        let units = obj.unit_conditions();
         for item in 0..9u8 {
-            let count = if item < 3 {
-                ship.crew.squads[item as usize] as usize
-            } else {
-                weapons.iter().filter(|&&w| w == item).count()
-            };
-            for _ in 0..count {
+            for &c in &units[item as usize] {
                 let frame = match item {
                     0..=2 if kind == 11 => item + 12 + 0x43,
                     0..=2 => item + if nation3 { 13 } else { 10 },
                     _ => item - 2,
                 };
-                cells.push(full(frame));
+                cells.push(Some(SlotCell {
+                    frame,
+                    bar: Some(c),
+                    mark: None,
+                    count: 0,
+                }));
                 if (6..9).contains(&item) {
                     big += 1;
                 }

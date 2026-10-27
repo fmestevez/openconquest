@@ -137,6 +137,10 @@ pub enum Order {
     SellTown {
         site: u32,
     },
+    /// Workshop `workshop`'s settlement mends its stock (command 0x15).
+    RepairStock {
+        workshop: u32,
+    },
     BuildShip {
         site: u32,
         kind: u8,
@@ -269,6 +273,7 @@ impl Scene {
             EndLoad { id } => done(self.end_load(id)),
             SellItem { site, item } => done(self.sell_item(site, item)),
             SellTown { site } => done(self.sell_town(site, data, caches)),
+            RepairStock { workshop } => done(self.order_repair_stock(workshop)),
             BuildShip { site, kind } => done(self.start_ship(site, kind)),
             BuildArgo { site } => done(self.start_argo(site)),
             Train { site, item } => done(self.train(site, item)),

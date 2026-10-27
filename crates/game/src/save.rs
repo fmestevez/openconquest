@@ -61,6 +61,11 @@ pub struct SaveGame {
     /// Buildings being repaired.
     #[serde(default)]
     pub mending: Vec<u32>,
+    /// Settlements' stock units' conditions, and their repairs.
+    #[serde(default)]
+    pub stock_conditions: BTreeMap<u32, [Vec<u8>; 9]>,
+    #[serde(default)]
+    pub stock_repairs: Vec<crate::scene::StockRepair>,
     /// Free casts from treasures, by spell index.
     #[serde(default)]
     pub free_casts: Vec<(u32, u32)>,

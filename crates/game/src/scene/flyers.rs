@@ -656,20 +656,11 @@ impl Scene {
         } else {
             crate::combat::hull_damage_at(4, 1) * 20.0
         };
-        let armour = crate::combat::armour_factor(s.armour);
-        let loads = (s.cargo / 100.0).ceil().max(0.0) as u32;
-        let damage = blow * armour * super::battle::ship_hull_share(s, c);
-        let wounds = blow
-            * 15.0
-            * armour
-            * crate::combat::crew_share(
-                s.kind,
-                s.armour,
-                s.ram,
-                c.weapons.len(),
-                loads,
-                s.crew.count(),
-            );
+        let blow = blow * crate::combat::armour_factor(s.armour);
+        let sh = crate::combat::Shares::of(s, &c.weapons);
+        let damage = sh.hull_part(blow);
+        let wounds = sh.crew_part(blow) * 15.0;
+        let wear = sh.weapons_part(blow) * 15.0;
         self.fire_shot(
             super::shot::Firing {
                 item: 4,
@@ -680,6 +671,7 @@ impl Scene {
                 strikes: true,
                 damage,
                 wounds,
+                wear,
             },
             data,
             caches,

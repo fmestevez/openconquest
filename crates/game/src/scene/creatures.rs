@@ -166,12 +166,8 @@ impl Scene {
                     .ship
                     .as_ref()
                     .is_some_and(|s| s.has_hero(crate::objects::ARGUS));
-                let share = match (&o.ship, &o.combat) {
-                    (Some(s), Some(cb)) => super::battle::ship_hull_share(s, cb),
-                    _ => 1.0,
-                };
-                let blow = 300.0 / 15.0 * if argus { 0.25 } else { 1.0 } * share;
-                self.hit(id, blow * blows as f32, data, caches);
+                let blow = 300.0 / 15.0 * if argus { 0.25 } else { 1.0 };
+                self.share_blow(id, blow * blows as f32, data, caches);
             }
             if c.left > 0.0 && self.object_index(id).is_some() {
                 self.charmed.insert(id, c);
@@ -239,15 +235,11 @@ impl Scene {
                     .iter()
                     .find(|t| t.kind == MIRROR_SHIELD)
                     .map_or(0, |t| if t.amount > 0 { t.amount.min(100) } else { 100 });
-                let share = match (&o.ship, &o.combat) {
-                    (Some(s), Some(c)) => super::battle::ship_hull_share(s, c),
-                    _ => 1.0,
-                };
                 if let Some(c) = self.objects[i].combat.as_mut() {
                     c.stone += ticks(150);
                 }
-                let hurt = blow * share * (100 - mirror) as f32 / 100.0;
-                self.hit(*ship, hurt, data, caches);
+                let hurt = blow * (100 - mirror) as f32 / 100.0;
+                self.share_blow(*ship, hurt, data, caches);
             }
             if !caught.is_empty() {
                 self.messages
@@ -328,7 +320,7 @@ impl Scene {
                 let (Some(s), Some(cb)) = (&o.ship, &o.combat) else {
                     continue;
                 };
-                let mut blow = 37_500.0 * strength / 15.0 * super::battle::ship_hull_share(s, cb);
+                let mut blow = 37_500.0 * strength / 15.0;
                 if s.has_hero(crate::objects::ARGUS) {
                     blow *= 0.25;
                 }
@@ -337,7 +329,7 @@ impl Scene {
                 }
                 let (mx, my) = (self.objects[i].x, self.objects[i].y);
                 self.sounds.push(("htk1", mx, my));
-                self.hit(target, blow, data, caches);
+                self.share_blow(target, blow, data, caches);
                 if self.objects[i]
                     .combat
                     .as_ref()

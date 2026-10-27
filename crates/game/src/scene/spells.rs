@@ -425,6 +425,7 @@ impl Scene {
         }
         let t = TILE_SIZE as f32;
         let mut wrecked = Vec::new();
+        let mut spouts = Vec::new();
         for o in self.objects.iter_mut().filter(|o| o.ship.is_some()) {
             let cell = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
             let s = o.ship.as_ref().unwrap();
@@ -437,25 +438,21 @@ impl Scene {
                 continue;
             }
             let blows = struck.iter().filter(|&&c| c == cell).count();
-            let share = o
-                .combat
-                .as_ref()
-                .map_or(1.0, |c| super::battle::ship_hull_share(s, c));
-            if let (true, false, Some(c)) = (blows > 0, zetes, o.combat.as_mut()) {
-                let blow = share
-                    * if c.protect_magic > 0.0 {
-                        magic::WATERSPOUT_STRIKE * magic::SHIELD_FACTOR
-                    } else {
-                        magic::WATERSPOUT_STRIKE
-                    };
-                c.hull -= blow * blows as f32;
-                if c.hull <= 0.0 {
-                    wrecked.push(o.id);
-                }
+            if let (true, false, Some(c)) = (blows > 0, zetes, o.combat.as_ref()) {
+                let blow = if c.protect_magic > 0.0 {
+                    magic::WATERSPOUT_STRIKE * magic::SHIELD_FACTOR
+                } else {
+                    magic::WATERSPOUT_STRIKE
+                };
+                spouts.push((o.id, blow * blows as f32));
             }
         }
         for id in wrecked {
             self.hit(id, 0.0, data, caches);
+        }
+        // Shared out as any blow (hull, crew, weapons).
+        for (id, blow) in spouts {
+            self.share_blow(id, blow, data, caches);
         }
     }
 

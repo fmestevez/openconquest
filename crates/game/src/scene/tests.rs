@@ -1101,6 +1101,10 @@ fn buildings_fight() {
     let c = scene.objects[i].combat.as_mut().unwrap();
     c.weapons = vec![4; 8];
     c.hull = 1.0e6;
+    // The fort's blows would wear the ship's weapons away: it is
+    // disarmed.
+    let f = scene.object_index(fort_id).unwrap();
+    scene.objects[f].combat.as_mut().unwrap().weapons.clear();
     scene.order_attack(ship_id, fort_id).unwrap();
     for _ in 0..50 * 120 {
         scene.update(0.02, &data, &mut caches);
@@ -4088,7 +4092,9 @@ fn brains_mend_their_prizes() {
     c.hull = c.max_hull / 2.0;
     let id = scene.objects[ship].id;
     let crew = scene.objects[ship].ship.as_ref().unwrap().crew;
-    scene.capture(id, Some(owner), crew, &data, &mut caches);
+    let units = scene.objects[ship].unit_conditions();
+    let marines = [units[0].clone(), units[1].clone(), units[2].clone()];
+    scene.capture(id, Some(owner), crew.class, marines, &data, &mut caches);
     let i = scene.object_index(id).unwrap();
     assert!(
         matches!(
@@ -4593,38 +4599,38 @@ fn load_panel_moves_items_both_ways() {
     // rams, its treasures and heroes (groups).
     let list = scene.load_list(site, None);
     assert_eq!(list.len(), 11);
-    assert_eq!((list[0].count, list[0].cargo), (3, Some(Cargo::Unit(0))));
-    assert_eq!(list[4].cargo, Some(Cargo::Unit(3)));
+    assert_eq!((list[0].count, list[0].cargo), (3, Some(Cargo::Unit(0, 0))));
+    assert_eq!(list[4].cargo, Some(Cargo::Unit(3, 0)));
     assert_eq!(list[7].cat, STORE);
     assert_ne!(list[7].flags & GROUP, 0);
     // A bowman aboard, then back ashore; through the orders.
     let order = |from, to, cargo| Order::Transfer { from, to, cargo };
     scene
-        .apply(&order(site, ship, Cargo::Unit(0)), &data, &mut caches)
+        .apply(&order(site, ship, Cargo::Unit(0, 0)), &data, &mut caches)
         .unwrap();
     assert_eq!(crew(&scene)[0], 1);
     assert_eq!(scene.garrison(site)[0], 2);
     scene
-        .apply(&order(ship, site, Cargo::Unit(0)), &data, &mut caches)
+        .apply(&order(ship, site, Cargo::Unit(0, 0)), &data, &mut caches)
         .unwrap();
     assert_eq!(crew(&scene)[0], 0);
     assert_eq!(scene.garrison(site)[0], 3);
     // A ballista (two places) and a scorpion fill the bireme's two places.
     scene
-        .transfer(site, ship, Cargo::Unit(6), &data, &mut caches)
+        .transfer(site, ship, Cargo::Unit(6, 0), &data, &mut caches)
         .unwrap();
     assert_eq!(
-        scene.transfer(site, ship, Cargo::Unit(3), &data, &mut caches),
+        scene.transfer(site, ship, Cargo::Unit(3, 0), &data, &mut caches),
         Err("No room aboard".to_string())
     );
     assert_eq!(scene.garrison(site)[3], 2, "the refused one stays");
     scene
-        .transfer(ship, site, Cargo::Unit(6), &data, &mut caches)
+        .transfer(ship, site, Cargo::Unit(6, 0), &data, &mut caches)
         .unwrap();
     assert_eq!(scene.garrison(site)[6], 1);
     // Nothing that is not there moves.
     assert!(scene
-        .transfer(ship, site, Cargo::Unit(6), &data, &mut caches)
+        .transfer(ship, site, Cargo::Unit(6, 0), &data, &mut caches)
         .is_err());
     // The Golden Fleece handed to the settlement: stored, delivered.
     let fleece = crate::objects::Treasure {
@@ -4682,7 +4688,7 @@ fn load_panel_moves_items_both_ways() {
     assert_eq!(lying(&scene), before + 1);
     // Kill a unit of the stock.
     scene
-        .discard(site, Cargo::Unit(0), &data, &mut caches)
+        .discard(site, Cargo::Unit(0, 0), &data, &mut caches)
         .unwrap();
     assert_eq!(scene.garrison(site)[0], 2);
     // Finish reload; then nothing moves.
@@ -4691,7 +4697,7 @@ fn load_panel_moves_items_both_ways() {
         .unwrap();
     assert!(scene.load_link(ship).is_none());
     assert!(scene
-        .transfer(site, ship, Cargo::Unit(0), &data, &mut caches)
+        .transfer(site, ship, Cargo::Unit(0, 0), &data, &mut caches)
         .is_err());
 }
 
@@ -4737,7 +4743,7 @@ fn ships_reload_from_each_other() {
         }];
     }
     scene
-        .transfer(a, b, Cargo::Unit(0), &data, &mut caches)
+        .transfer(a, b, Cargo::Unit(0, 0), &data, &mut caches)
         .unwrap();
     scene
         .transfer(
@@ -4771,7 +4777,7 @@ fn ships_reload_from_each_other() {
     let kb = scene.object_index(b).unwrap();
     scene.objects[kb].ship.as_mut().unwrap().crew.squads = [5, 0, 0];
     assert_eq!(
-        scene.transfer(a, b, Cargo::Unit(0), &data, &mut caches),
+        scene.transfer(a, b, Cargo::Unit(0, 0), &data, &mut caches),
         Err("No room aboard".to_string())
     );
     // Sailing off ends the reloading.
@@ -4897,4 +4903,265 @@ fn ship_looks_follow_damage() {
     assert_eq!(mask, 0x105 | 0x10 | 0x20);
     scene.update(0.02, &data, &mut caches);
     assert_eq!(scene.objects[i].ship.as_ref().unwrap().look, Some(low));
+}
+
+/// A blow shared out on a ship (0x4befc0) wears its marines and weapons
+/// down, one at a time, and breaks them, but for the last of each; worn
+/// weapons fire weaker; the units' conditions show as bars and go with
+/// them through the load panel into a settlement's stock, whose first
+/// unit's shows on its place (needs `OPENCONQUEST_DATA`).
+#[test]
+fn units_wear_and_move_with_their_condition() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let own = |scene: &Scene, cls| {
+        scene
+            .objects
+            .iter()
+            .find(|o| o.class == ObjectClass::Building(cls) && scene.is_own(o))
+            .map(|o| o.id)
+            .unwrap()
+    };
+    let (yard, site) = (own(&scene, SHIPYARD), own(&scene, SETTLEMENT));
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let k = scene.object_index(ship).unwrap();
+    {
+        let o = &mut scene.objects[k];
+        let s = o.ship.as_mut().unwrap();
+        s.kind = 3;
+        (s.armour, s.ram) = (0, 0);
+        s.crew.squads = [0, 0, 2];
+        s.conditions = Default::default();
+        let c = o.combat.as_mut().unwrap();
+        c.weapons = vec![4, 6];
+        (c.max_hull, c.hull) = (1e6, 1e6);
+    }
+    // Shares: hull 18, weapons 1 + 2, crew 2 (not in the sum): a blow of
+    // 210 (ours) takes 180 off the hull, and 300 and 450 points off the
+    // crew and the weapons.
+    let sh = combat::Shares::of(
+        scene.objects[k].ship.as_ref().unwrap(),
+        &scene.objects[k].combat.as_ref().unwrap().weapons,
+    );
+    assert_eq!((sh.hull, sh.crew, sh.weapons, sh.sum), (18, 2, 3, 21));
+    scene.share_blow(ship, 210.0, &data, &mut caches);
+    let o = &scene.objects[scene.object_index(ship).unwrap()];
+    assert_eq!(o.combat.as_ref().unwrap().hull, 1e6 - 180.0);
+    let units = o.unit_conditions();
+    let worn = |u: &Vec<u8>| u.iter().filter(|&&c| c < 100).count();
+    assert_eq!(worn(&units[2]), 1, "{units:?}");
+    assert_eq!(worn(&units[4]) + worn(&units[6]), 1, "{units:?}");
+    // The worn unit's bar, on the panel and in the load list.
+    let cells = crate::ui::ship_slots(o);
+    assert!(cells
+        .iter()
+        .flatten()
+        .any(|c| c.bar.is_some_and(|b| b < 100)));
+    // Crushing blows break units but leave the last of the crew and of
+    // the weapons standing.
+    for _ in 0..20 {
+        scene.share_blow(ship, 20_000.0, &data, &mut caches);
+    }
+    let k = scene.object_index(ship).unwrap();
+    let o = &scene.objects[k];
+    assert_eq!(o.ship.as_ref().unwrap().crew.count(), 1);
+    assert_eq!(o.combat.as_ref().unwrap().weapons.len(), 1);
+    assert!(o.unit_conditions().iter().flatten().all(|&c| c > 0));
+
+    // Worn weapons fire by their mean condition.
+    let o = &mut scene.objects[k];
+    o.combat.as_mut().unwrap().weapons = vec![4, 4, 6];
+    o.ship.as_mut().unwrap().crew.squads = [0, 0, 1];
+    o.ship.as_mut().unwrap().conditions = Default::default();
+    o.units().unwrap()[4] = vec![40, 81];
+    o.units().unwrap()[2] = vec![30];
+    assert_eq!(o.mean_condition(4), 60);
+    assert_eq!(o.mean_condition(6), 100);
+
+    // Through the load panel: the worn scorpion ashore keeps its 40%, the
+    // settlement's place shows its first unit's.
+    reload_beside(&mut scene, ship, yard);
+    scene.set_stock_units(site, Default::default());
+    let list = scene.load_list(ship, None);
+    let first = list
+        .iter()
+        .position(|e| e.cargo == Some(Cargo::Unit(4, 0)))
+        .unwrap();
+    assert_eq!(list[first].bar, Some(40));
+    assert_eq!(list[first + 1].bar, Some(81));
+    scene
+        .transfer(ship, site, Cargo::Unit(4, 0), &data, &mut caches)
+        .unwrap();
+    scene
+        .transfer(ship, site, Cargo::Unit(2, 0), &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.stock_units(site)[4], [40]);
+    assert_eq!(scene.stock_units(site)[2], [30]);
+    let k = scene.object_index(ship).unwrap();
+    assert_eq!(scene.objects[k].unit_conditions()[4], [81]);
+    let list = scene.load_list(site, None);
+    assert_eq!((list[5].count, list[5].bar), (1, Some(40)));
+    // Back aboard with it.
+    scene
+        .transfer(site, ship, Cargo::Unit(4, 0), &data, &mut caches)
+        .unwrap();
+    let k = scene.object_index(ship).unwrap();
+    assert_eq!(scene.objects[k].unit_conditions()[4], [81, 40]);
+    // Kill item throws away a settlement place's last unit.
+    scene.set_stock_units(site, {
+        let mut u: [Vec<u8>; 9] = Default::default();
+        u[0] = vec![20, 70];
+        u
+    });
+    scene
+        .discard(site, Cargo::Unit(0, 0), &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.stock_units(site)[0], [20]);
+    // Selling it brings back 75% of its price by its condition.
+    let amber = scene.amber;
+    scene.sell_item(site, 0).unwrap();
+    assert_eq!(scene.amber, amber + 30 * 75 / 100 * 20 / 100);
+}
+
+/// Worn units are mended: at a dock for a share of their price (0x4b1fc0),
+/// by a settlement for amber and time (0x440fd0, 0x441ba0 state 2), and by
+/// the Golden Fleece aboard (0x4b98b0) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn worn_units_are_mended() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.amber = 10_000;
+    let own = |scene: &Scene, cls| {
+        scene
+            .objects
+            .iter()
+            .find(|o| o.class == ObjectClass::Building(cls) && scene.is_own(o))
+            .map(|o| o.id)
+            .unwrap()
+    };
+    let site = own(&scene, SETTLEMENT);
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let k = scene.object_index(ship).unwrap();
+    {
+        let o = &mut scene.objects[k];
+        o.ship.as_mut().unwrap().kind = 3;
+        o.ship.as_mut().unwrap().crew.squads = [1, 0, 0];
+        o.combat.as_mut().unwrap().weapons = vec![6];
+        o.ship.as_mut().unwrap().conditions = Default::default();
+        o.units().unwrap()[6] = vec![50];
+        o.units().unwrap()[0] = vec![90];
+        let c = o.combat.as_mut().unwrap();
+        c.hull = c.max_hull;
+    }
+    // A full hull: the ship is still taken in for its worn units. (The
+    // shipyard stands in for a dock.)
+    let dock = own(&scene, SHIPYARD);
+    let d = scene.object_index(dock).unwrap();
+    scene.objects[d].class = ObjectClass::Building(economy::DOCK);
+    scene.order_repair(ship, dock).unwrap();
+    let amber = scene.amber;
+    for _ in 0..50 * 120 {
+        scene.update(0.02, &data, &mut caches);
+        let k = scene.object_index(ship).unwrap();
+        if scene.objects[k].ship.as_ref().unwrap().task.is_none() {
+            break;
+        }
+    }
+    let k = scene.object_index(ship).unwrap();
+    let units = scene.objects[k].unit_conditions();
+    assert_eq!((units[0].clone(), units[6].clone()), (vec![100], vec![100]));
+    // 70 x 50 x 9 / 1000 and 30 x 10 x 9 / 1000.
+    assert_eq!(amber - scene.amber, 31 + 2);
+
+    // The settlement mends its stock for 50 x 70 / 100 amber and
+    // 50 x 95 / 100 ticks, from its workshop's command.
+    let workshop = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.class == ObjectClass::Building(economy::WORKSHOP))
+        .map(|o| o.id);
+    let workshop = workshop.unwrap_or_else(|| {
+        let w = scene
+            .objects
+            .iter()
+            .position(|o| {
+                scene.is_own(o)
+                    && matches!(o.class, ObjectClass::Building(_))
+                    && o.id != site
+                    && o.id != dock
+            })
+            .unwrap();
+        scene.objects[w].class = ObjectClass::Building(economy::WORKSHOP);
+        scene.objects[w].id
+    });
+    assert_eq!(
+        scene.home_settlement(scene.object_index(workshop).unwrap()),
+        Some(site)
+    );
+    scene.set_stock_units(site, {
+        let mut u: [Vec<u8>; 9] = Default::default();
+        u[6] = vec![50, 100];
+        u
+    });
+    let amber = scene.amber;
+    scene
+        .apply(&Order::RepairStock { workshop }, &data, &mut caches)
+        .unwrap();
+    assert_eq!(amber - scene.amber, 35);
+    assert!(scene.order_repair_stock(workshop).is_err(), "busy");
+    // No unit goes ashore meanwhile.
+    reload_beside(&mut scene, ship, dock);
+    assert!(scene
+        .transfer(ship, site, Cargo::Unit(0, 0), &data, &mut caches)
+        .is_err());
+    for _ in 0..46 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert_eq!(scene.stock_units(site)[6], [50, 100]);
+    for _ in 0..2 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert_eq!(scene.stock_units(site)[6], [100, 100]);
+    assert!(scene.stock_repair_at(site).is_none());
+
+    // The Golden Fleece (10 a tick) heals every unit a point every 100
+    // ticks, the Cup (40) the marines every 25.
+    let k = scene.object_index(ship).unwrap();
+    {
+        let o = &mut scene.objects[k];
+        o.units().unwrap()[6] = vec![50];
+        o.units().unwrap()[0] = vec![50];
+        o.ship.as_mut().unwrap().treasures = vec![crate::objects::Treasure {
+            kind: 16,
+            param: 0,
+            amount: 10,
+        }];
+    }
+    scene.end_load(ship).unwrap();
+    for _ in 0..200 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let k = scene.object_index(ship).unwrap();
+    let units = scene.objects[k].unit_conditions();
+    assert_eq!((units[0][0], units[6][0]), (52, 52));
 }

@@ -214,18 +214,16 @@ impl Scene {
                 .and_then(|t| self.objects[t].combat.as_ref())
                 .is_some_and(|c| c.protect_weapons > 0.0);
             // What the target's state takes off every blow: the weapon
-            // shield 80%, the Flame adds, Theseus, the Armour of Ares, the
-            // armour and the hull's share.
+            // shield 80%, the Flame and Theseus add; on a ship the Armour of
+            // Ares and the armour cut it, and it is shared out on arrival
+            // (0x4bf170, `combat::Shares`).
             let mut factor = 1.0;
-            let mut wound_factor = 1.0;
             let mut lime_factor = 1.0;
             if warded {
                 factor *= magic::SHIELD_FACTOR;
-                wound_factor *= magic::SHIELD_FACTOR;
                 lime_factor *= magic::SHIELD_FACTOR;
             }
             if theseus {
-                wound_factor *= objects::THESEUS_DAMAGE;
                 lime_factor *= objects::THESEUS_DAMAGE;
                 factor *= objects::THESEUS_DAMAGE;
             }
@@ -233,6 +231,7 @@ impl Scene {
             if flaming {
                 factor *= magic::FLAME_FACTOR;
             }
+            let mut shares = None;
             if let Some(t) = self.object_index(target) {
                 if let Some(ship) = self.objects[t].ship.as_ref() {
                     if let Some(a) = ship
@@ -249,22 +248,8 @@ impl Scene {
                     }
                 }
                 if let (Some(ship), Some(c)) = (&self.objects[t].ship, &self.objects[t].combat) {
-                    factor *= combat::armour_factor(ship.armour) * ship_hull_share(ship, c);
-                    // The crew's share of the blow, in the original's units
-                    // (units of 100 condition points).
-                    let loads = (ship.cargo / 100.0).ceil().max(0.0) as u32;
-                    wound_factor *= combat::armour_factor(ship.armour)
-                        * combat::crew_share(
-                            ship.kind,
-                            ship.armour,
-                            ship.ram,
-                            c.weapons.len(),
-                            loads,
-                            ship.crew.count(),
-                        )
-                        * 15.0;
-                } else {
-                    wound_factor = 0.0;
+                    factor *= combat::armour_factor(ship.armour);
+                    shares = Some(combat::Shares::of(ship, &c.weapons));
                 }
             }
             // Each weapon sends a shot off, carrying its blow (bomb.cpp).
@@ -332,7 +317,28 @@ impl Scene {
                         )
                     }
                 };
-                let (factor, wound_factor) = (factor * weaken, wound_factor * weaken);
+                // A ship's weapons of a kind fire by their mean condition
+                // (0x4bc360, 0x4bfc20).
+                let worn = self.objects[s].mean_condition(w) as f32 / 100.0;
+                let blow = combat::hull_damage_at(w, level) * factor * weaken * worn;
+                // The hull's share, the crew's (by the item's B over its
+                // A, 0x4ac1b0) and the weapons', these in the units'
+                // points (blows here are a fifteenth of the original's).
+                let (damage, wounds, wear) = match shares {
+                    Some(sh) => (
+                        sh.hull_part(blow) * combat::hull_percent(w) as f32 / 100.0,
+                        sh.crew_part(blow) * 15.0 * combat::crew_scale(w),
+                        sh.weapons_part(blow) * 15.0,
+                    ),
+                    None => (blow, 0.0, 0.0),
+                };
+                // Quick lime, which spares hulls, burns crews by its own
+                // figure.
+                let wounds = if combat::hull_damage_at(w, level) > 0.0 {
+                    wounds
+                } else {
+                    combat::crew_damage_at(w, level) * 15.0 * lime_factor
+                };
                 self.fire_shot(
                     super::shot::Firing {
                         item: w,
@@ -341,14 +347,9 @@ impl Scene {
                         from,
                         target,
                         strikes,
-                        damage: combat::hull_damage_at(w, level) * factor,
-                        // A blow's crew share; quick lime, which spares
-                        // hulls, burns crews by its own figure.
-                        wounds: if combat::hull_damage_at(w, level) > 0.0 {
-                            combat::hull_damage_at(w, level) * wound_factor
-                        } else {
-                            combat::crew_damage_at(w, level) * lime_factor
-                        },
+                        damage,
+                        wounds,
+                        wear,
                     },
                     data,
                     caches,
@@ -361,26 +362,69 @@ impl Scene {
         self.effects.retain(|fx| fx.frame().is_some());
     }
 
-    /// Wounds the crew of ship `target`: every `SQUAD_LIFE` of wounds costs
-    /// it a squad, taken at random.
-    pub(super) fn wound(&mut self, target: u32, wounds: f32) {
+    /// Takes `points` off the marines of ship `target` (0x4be410, see
+    /// `combat::unit_blow`); those broken are gone. Boats and merchants
+    /// carry their marines as cargo, out of reach, and the ship of the
+    /// dead's crew takes nothing.
+    pub(super) fn wound(&mut self, target: u32, points: f32) {
         let Some(t) = self.object_index(target) else {
             return;
         };
         let o = &mut self.objects[t];
-        let (Some(ship), Some(c)) = (o.ship.as_mut(), o.combat.as_mut()) else {
+        if o.combat.is_none() || o.ship.as_ref().is_none_or(|s| s.kind <= 1 || s.kind == 11) {
+            return;
+        }
+        let units = o.units().unwrap();
+        if combat::unit_blow(units, 0..3, points.max(0.0) as u32, false, &mut self.rng) {
+            o.drop_broken_units();
+        }
+    }
+
+    /// Takes `points` off the weapons of ship `target` (0x4be110); those
+    /// broken are gone, but a boat's or merchant's own is kept at 10%.
+    pub(super) fn wear(&mut self, target: u32, points: f32) {
+        let Some(t) = self.object_index(target) else {
             return;
         };
-        if ship.crew.count() == 0 {
-            c.wounds = 0.0;
+        let o = &mut self.objects[t];
+        let Some(small) = o.ship.as_ref().map(|s| s.kind <= 1) else {
+            return;
+        };
+        if o.combat.is_none() {
             return;
         }
-        c.wounds += wounds;
-        while c.wounds >= combat::SQUAD_LIFE && ship.crew.count() > 0 {
-            c.wounds -= combat::SQUAD_LIFE;
-            let n = self.rng.next() % ship.crew.count();
-            ship.crew.lose(n);
+        let units = o.units().unwrap();
+        if combat::unit_blow(units, 3..9, points.max(0.0) as u32, small, &mut self.rng) {
+            o.drop_broken_units();
         }
+    }
+
+    /// A blow `blow` to ship `target` that is shared out (0x4befc0): the
+    /// hull, then the crew and the weapons each take their share (crew's and
+    /// weapons' in the units' points, the original's blows being fifteen
+    /// times ours). Other objects take it whole.
+    pub(super) fn share_blow(
+        &mut self,
+        target: u32,
+        blow: f32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        let shares = self.object_index(target).and_then(|t| {
+            let o = &self.objects[t];
+            Some(combat::Shares::of(
+                o.ship.as_ref()?,
+                &o.combat.as_ref()?.weapons,
+            ))
+        });
+        let Some(sh) = shares else {
+            self.hit(target, blow, data, caches);
+            return;
+        };
+        // The hull first; a wreck takes no more (0x4be0c0).
+        self.hit(target, sh.hull_part(blow), data, caches);
+        self.wound(target, sh.crew_part(blow) * 15.0);
+        self.wear(target, sh.weapons_part(blow) * 15.0);
     }
 
     /// Deals `damage` to the hull of `target`, with a hit (or splash) effect;
@@ -700,10 +744,6 @@ impl Scene {
             },
             angle,
         );
-        let share = |o: &MapObject| match (&o.ship, &o.combat) {
-            (Some(s), Some(c)) => ship_hull_share(s, c),
-            _ => 1.0,
-        };
         // Argus takes three quarters off a ram's blow.
         let argus = |o: &MapObject| {
             if o.ship.as_ref().is_some_and(|s| s.has_hero(objects::ARGUS)) {
@@ -712,13 +752,8 @@ impl Scene {
                 1.0
             }
         };
-        let to_target = to_target
-            * feather
-            * combat::armour_factor(st.armour)
-            * share(t)
-            * combat::RAM_HULL_FACTOR
-            * argus(t);
-        let to_self = to_self * share(a) * combat::RAM_HULL_FACTOR * argus(a);
+        let to_target = to_target * feather * combat::armour_factor(st.armour) * argus(t);
+        let to_self = to_self * argus(a);
         let (ida, idt) = (a.id, t.id);
         self.objects[i].ship.as_mut().unwrap().task = None;
         // A fire rammer's barrel of powder goes off in the ram.
@@ -729,27 +764,57 @@ impl Scene {
                 c.weapons.remove(k);
                 (
                     combat::hull_damage(combat::POWDER),
-                    combat::crew_damage_at(combat::POWDER, 0),
+                    combat::crew_damage_at(combat::POWDER, 0) * 15.0,
                 )
             }
             None => (0.0, 0.0),
         };
         self.wound(idt, burn);
-        self.hit(idt, to_target + blast, data, caches);
-        self.hit(ida, to_self, data, caches);
+        self.ram_blow(idt, to_target, blast, data, caches);
+        self.ram_blow(ida, to_self, 0.0, data, caches);
+    }
+
+    /// A ram's blow `blow` to ship `id` (0x4c1ad0): the hull takes its
+    /// share x 1.5 (and `blast` whole), then the crew its share x 0.4 and
+    /// the weapons theirs, in the units' points.
+    fn ram_blow(&mut self, id: u32, blow: f32, blast: f32, data: &GameData, caches: &mut Caches) {
+        let Some(sh) = self.object_index(id).and_then(|k| {
+            let o = &self.objects[k];
+            Some(combat::Shares::of(
+                o.ship.as_ref()?,
+                &o.combat.as_ref()?.weapons,
+            ))
+        }) else {
+            return;
+        };
+        let hull = sh.hull_part(blow) * combat::RAM_HULL_FACTOR + blast;
+        self.hit(id, hull, data, caches);
+        self.wound(id, sh.crew_part(blow) * 15.0 * combat::RAM_CREW_FACTOR);
+        self.wear(id, sh.weapons_part(blow) * 15.0);
     }
 
     /// A side's boarding strength in the original's units (0x4b4e80,
-    /// 0x4bee60): each squad's C x 15 (0x597d2c, `melee`). (The ship of
-    /// the dead's crews are no stronger: it wins every boarding instead.)
+    /// 0x4bee60): each marine's condition x C x 15 / 1000 (0x4ac1e0 with
+    /// the A x 15 cache; C from 0x597d2c, `melee`), ten times that on the
+    /// ship of the dead.
     fn boarding_strength(&self, i: usize) -> u32 {
         let o = &self.objects[i];
         let Some(ship) = o.ship.as_ref() else {
             return 0;
         };
-        (0..ship.crew.count())
-            .map(|n| combat::melee(ship.crew.kind_of(n)) * 15)
-            .sum()
+        let units = o.unit_conditions();
+        let sum: u32 = (0..3)
+            .flat_map(|k| {
+                units[k]
+                    .iter()
+                    .map(move |&c| c as u32 * combat::melee(k) * 15 / 1000)
+            })
+            .sum();
+        if ship.kind == 11 {
+            sum * 10
+        } else {
+            sum
+        }
     }
 
     /// Decides the fight for ship `ti` boarded from `i` (0x4b5b00): with
@@ -781,51 +846,102 @@ impl Scene {
     }
 
     /// The end of the fight for ship `t` boarded from `a` (0x4b5df0 state
-    /// 3): won, the boarders lose as much as the defenders' strength and a
-    /// hundredth of the prize's hull, and half of them man the prize; lost,
-    /// they all fall and their ship takes seven tenths of that.
+    /// 3 for the boarders, 0x4c3410 for the defenders), with the blows of
+    /// 0x4b5b00: the boarders' is one more than the defenders' strength
+    /// and a hundredth of the prize's hull, the defenders' one more than
+    /// the boarders' strength. Won, the boarders take a tenth of theirs ten times on their
+    /// crew and weapons and a tenth on the hull, the defenders lose their
+    /// marines, take theirs nine times on the weapons and seven times on
+    /// the hull, and half the boarders man the prize. Lost, the boarders
+    /// lose their marines, take theirs nine times on the weapons and seven
+    /// tenths of it on the hull, and the defenders a tenth ten times on
+    /// crew and weapons and all of it on the hull. Hercules or the ship of
+    /// the dead only take theirs on the hull.
     fn board_end(&mut self, a: u32, t: u32, won: bool, data: &GameData, caches: &mut Caches) {
         let (Some(i), Some(ti)) = (self.object_index(a), self.object_index(t)) else {
             return;
         };
         let hull_t = self.objects[ti].combat.as_ref().map_or(0.0, |c| c.hull);
         // In the original's units: hulls here are a fifteenth.
-        let blow = self.boarding_strength(ti) as f32 + 1.0 + hull_t * 15.0 / 100.0;
+        let blow = self.boarding_strength(ti) + 1 + (hull_t * 15.0 / 100.0) as u32;
+        let foe = self.boarding_strength(i) + 1;
+        let sure = |o: &MapObject| {
+            o.ship
+                .as_ref()
+                .is_some_and(|s| s.has_hero(objects::HERCULES) || s.kind == 11)
+        };
+        let (sure_a, sure_t) = (sure(&self.objects[i]), sure(&self.objects[ti]));
         self.objects[i].ship.as_mut().unwrap().task = None;
         if !won {
-            self.objects[i].ship.as_mut().unwrap().crew.squads = [0; 3];
-            self.hit(a, blow * 0.7 / 15.0, data, caches);
+            if sure_a {
+                self.hit(a, blow as f32 / 15.0, data, caches);
+            } else {
+                self.rout(a, blow, blow / 10 * 7, data, caches);
+            }
+            for _ in 0..10 {
+                self.wound(t, (foe / 10) as f32);
+                self.wear(t, (foe / 10) as f32);
+            }
+            self.hit(t, foe as f32 / 15.0, data, caches);
             return;
         }
-        // The losses fall on squads at random, up to the blow's worth.
-        let mut ca = self.objects[i].ship.as_ref().unwrap().crew;
-        let mut lost = 0.0;
-        while ca.count() > 1 {
-            let n = self.rng.next() % ca.count();
-            let worth = (combat::melee(ca.kind_of(n)) * 15) as f32;
-            if lost + worth > blow {
-                break;
-            }
-            lost += worth;
-            ca.lose(n);
+        for _ in 0..10 {
+            self.wound(a, (blow / 10) as f32);
+            self.wear(a, (blow / 10) as f32);
         }
-        let ct = self.objects[ti].ship.as_ref().unwrap().crew;
-        // Half the boarding squads (at least one) stay on the prize,
-        // strongest first.
-        let mut prize = combat::Crew {
-            class: ct.class,
-            squads: [0; 3],
+        self.hit(a, (blow / 10) as f32 / 15.0, data, caches);
+        if sure_t {
+            self.hit(t, foe as f32 / 15.0, data, caches);
+        } else {
+            self.rout(t, foe, foe * 7, data, caches);
+        }
+        let (Some(i), Some(ti)) = (self.object_index(a), self.object_index(t)) else {
+            return;
         };
-        let mut stay = ca.count().div_ceil(2);
-        for kind in (0..3).rev() {
-            let take = stay.min(ca.squads[kind]);
-            prize.squads[kind] += take;
-            ca.squads[kind] -= take;
-            stay -= take;
+        // Half the boarding squads (at least one) stay on the prize,
+        // strongest first, the last of each kind going.
+        let class = self.objects[ti].ship.as_ref().unwrap().crew.class;
+        let mut stay = self.objects[i]
+            .ship
+            .as_ref()
+            .unwrap()
+            .crew
+            .count()
+            .div_ceil(2);
+        let mut prize: [Vec<u8>; 3] = Default::default();
+        for kind in (0..3u8).rev() {
+            while stay > 0 {
+                let n = self.objects[i].unit_conditions()[kind as usize].len();
+                let Some(c) = n
+                    .checked_sub(1)
+                    .and_then(|last| self.objects[i].take_unit(kind, last))
+                else {
+                    break;
+                };
+                prize[kind as usize].insert(0, c);
+                stay -= 1;
+            }
         }
         let owner = self.objects[i].owner;
-        self.objects[i].ship.as_mut().unwrap().crew = ca;
-        self.capture(t, owner, prize, data, caches);
+        self.capture(t, owner, class, prize, data, caches);
+    }
+
+    /// A side routed in a boarding: its marines fall (but a boat's or
+    /// merchant's, carried as cargo), its weapons take `blow` nine times
+    /// and its hull `hull` (original units).
+    fn rout(&mut self, id: u32, blow: u32, hull: u32, data: &GameData, caches: &mut Caches) {
+        if let Some(k) = self.object_index(id) {
+            let s = self.objects[k].ship.as_mut().unwrap();
+            if s.kind > 1 {
+                s.crew.squads = [0; 3];
+                s.conditions[..3].iter_mut().for_each(Vec::clear);
+            }
+        }
+        for _ in 0..9 {
+            self.wear(id, blow as f32);
+            self.wound(id, blow as f32);
+        }
+        self.hit(id, hull as f32 / 15.0, data, caches);
     }
 
     /// Plays the boarding picture between ships `i` and `ti`; its length.
@@ -864,11 +980,14 @@ impl Scene {
     }
 
     /// Gives ship `id` to `owner`, redrawing it in the new owner's colours.
+    /// Its crew becomes `marines`: the conditions of the units of each
+    /// marine kind, of crew class `class`.
     pub(super) fn capture(
         &mut self,
         id: u32,
         owner: Option<(u32, u32)>,
-        crew: combat::Crew,
+        class: u8,
+        marines: [Vec<u8>; 3],
         data: &GameData,
         caches: &mut Caches,
     ) {
@@ -892,7 +1011,13 @@ impl Scene {
         let obj = &mut self.objects[i];
         obj.owner = owner;
         if let Some(ship) = obj.ship.as_mut() {
-            ship.crew = crew;
+            ship.crew = combat::Crew {
+                class,
+                squads: std::array::from_fn(|k| marines[k].len() as u32),
+            };
+            for (k, m) in marines.into_iter().enumerate() {
+                ship.conditions[k] = m;
+            }
             ship.task = None;
             ship.path.clear();
             // Its new colours drawn with its damage.
@@ -1026,9 +1151,3 @@ impl Scene {
 
 /// Ticks a building's collapse lasts (cycle table entry 2).
 const COLLAPSE_TICKS: u32 = 75;
-
-/// The share of a blow ship `ship` takes on its hull.
-pub(super) fn ship_hull_share(ship: &objects::Ship, c: &combat::Combatant) -> f32 {
-    let loads = (ship.cargo / 100.0).ceil().max(0.0) as u32;
-    combat::hull_share(ship.kind, ship.armour, ship.ram, c.weapons.len(), loads)
-}

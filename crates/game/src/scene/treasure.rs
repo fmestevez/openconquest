@@ -19,8 +19,8 @@ const HERO_REACH: f32 = 2.6;
 /// What heals aboard (0x4b98b0, a tick at a time): each Cup of Asclepius
 /// and Golden Fleece adds its treasure amount (field 8: 40 and 10 in the
 /// campaign) and Argus 20 (0x4bd36a) to a count; every 1000 heals each
-/// wounded unit a point of its 100 (the Cup and the Fleece) and mends 1%
-/// of the hull (the Fleece and Argus).
+/// worn unit a point of its 100 (the Cup the marines, the Fleece every
+/// unit) and mends 1% of the hull (the Fleece and Argus).
 const HEAL_STEP: f32 = 1000.0;
 pub const ARGUS_RATE: f32 = 20.0;
 
@@ -107,7 +107,7 @@ impl Scene {
         self.deliver_treasures();
         // Lasting gifts that mend the ship.
         for o in &mut self.objects {
-            let (Some(s), Some(c)) = (o.ship.as_ref(), o.combat.as_mut()) else {
+            let (Some(s), Some(c)) = (o.ship.as_ref(), o.combat.as_ref()) else {
                 continue;
             };
             let rate = |kind: u8| -> f32 {
@@ -118,13 +118,33 @@ impl Scene {
                     .sum()
             };
             let ticks = dt / crate::clock::TICK;
-            let crew = (rate(15) + rate(16)) * ticks / HEAL_STEP;
-            c.wounds = (c.wounds - crew).max(0.0);
-            let mut mend = rate(16);
+            let (cup, fleece) = (rate(15), rate(16));
+            let mut mend = fleece;
             if s.heroes.contains(&5) {
                 mend += ARGUS_RATE;
             }
             let rate = c.max_hull / 100.0 * mend * ticks / HEAL_STEP;
+            // The Cup heals the marines, the Fleece every unit (items 0-2
+            // and 0-8), a point each every 1000 of their count.
+            let mut heal = [0u32; 2];
+            if cup + fleece > 0.0 {
+                let s = o.ship.as_mut().unwrap();
+                for (k, r) in [cup, fleece].into_iter().enumerate() {
+                    s.healing[k] += r * ticks;
+                    heal[k] = (s.healing[k] / HEAL_STEP) as u32;
+                    s.healing[k] -= (heal[k] as f32) * HEAL_STEP;
+                }
+            }
+            if heal != [0, 0] {
+                let units = o.units().unwrap();
+                for (k, u) in units.iter_mut().enumerate() {
+                    let points = heal[1] + if k < 3 { heal[0] } else { 0 };
+                    for c in u.iter_mut().filter(|c| **c < 100) {
+                        *c = (*c as u32 + points).min(100) as u8;
+                    }
+                }
+            }
+            let c = o.combat.as_mut().unwrap();
             if rate > 0.0 && c.hull < c.max_hull {
                 c.hull = (c.hull + rate).min(c.max_hull);
             }

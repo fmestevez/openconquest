@@ -2705,6 +2705,11 @@ impl App {
                     self.say(e);
                 }
             }
+            Command::REPAIR_STOCK => {
+                if let Err(e) = self.issue(Order::RepairStock { workshop: id }) {
+                    self.say(e);
+                }
+            }
             // A ship's Reload Object picks the port, dock or ship to reload
             // at (pointer mode 12, command 0x1f).
             Command::LOAD if obj_is_ship => {

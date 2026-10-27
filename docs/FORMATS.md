@@ -1094,14 +1094,101 @@ the player's level of the fitted kind `+0x27a`), then shared out
 (0x4beb50) among the hull (type share 0x597ad8: 7, 10, 21, 18, 10, 12, 6,
 6, 3, 4, 2, 4), the armour kind, the ram, the weapons aboard and the cargo
 loads; the crew's share (its unit count) is reckoned against the same sum
-without counting itself, and comes off the units' conditions (100 each),
-the unit picked at random weighted by kind (0x597cfc: 2860, 2990, 3120;
-0x4be410), spilling over to the next. The hull at 0 wrecks the ship (state 4). At a
+without counting itself; the hull, crew and weapons shares come off them
+(see Units' conditions). The hull at 0 wrecks the ship (state 4). At a
 dock (0x4b1fc0) every 9 ticks a ship gets back up to a tenth of its hull
 for its type's price (0x59b388: 140, 280, 800, 910, 650, 560, 490, 420,
 420, 630, 420, 630) times the share mended, and worn units are made whole
 for `cost[kind / 3] x (100 - condition) x 9 / 1000`; short of amber, the
 human's ship gets what the amber buys, a computer player's stops.
+
+## Units' conditions
+
+Each marine and weapon aboard has its own condition in percent: counts
+by item at ship `+0x289` (nine bytes, items 0-8; `+0x292..` the unique
+ships' own), conditions at `+0x299 + item x 32 + index x 4` (eight u32 per
+item; ship records fields 29-100, always 100 in the shipped missions).
+Merchants and boats carry marines as cargo instead (`+0x4e5`, six-byte
+entries: flag 1, kind, condition u32; count `+0x484`), out of reach of
+blows. A unit's points are its condition x its item's full strength / 100
+(0x597cfc: 2860, 2990, 3120, 5450, 5590, 5720, 8840, 9360, 9100).
+
+**Shares** (0x4beb50): `+0x269` hull (0x597ad8 by type), `+0x26a` crew
+(marines x room, 0x4be780 mode 1 with 0x597cf0: 1 each), `+0x26b` armour
+kind, `+0x26c` ram kind, `+0x26d` weapons (items 3-8 x room: 1, heavy 2),
+`+0x26e` cargo (`+0x47f` fish, `+0x480` leviathan, `+0x481` amber loads,
+`+0x484` cargo units), `+0x26f` treasures (`+0x482`), `+0x270` heroes
+(`+0x483`). The sum is of all but the crew's; the armour, ram and cargo
+shares only soak up their part.
+
+**A blow.** A shot (0x4bf170, per bomb aboard `+0x7de`) is cut by the
+armour plus any Armour of Ares (capped at 85%), then: hull `share x blow /
+sum x 0x597fd8[bomb kind] / 100` (0 for marines' shots and quick lime,
+100 for weapons and Greek fire, kind 0xc), wrecked at 0 and then nothing
+else; crew `0x4ac1b0(bomb kind, 0, share x blow / sum)` = that x B / A of
+the bomb's row of 0x597d2c (rows 0-8 the items, 12 Greek fire 650/300, 13
+quick lime with no A: as is); weapons `share x blow / sum`. Other blows
+(message 4, 0x4befc0) the same without the bomb's factors. A ram
+(0x4c1ad0): Argus takes 75% off, the rammed ship's armour its cut, then
+hull share x 150 / 100 (0x598094), crew share x 40 / 100 (0x598090),
+weapons share. Boarding (0x4b5df0 state 3, 0x4c3410 for the defender,
+blows from 0x4b5b00: the boarders' `+0x6a4` = defenders' strength + 1 +
+prize hull / 100, the defenders' `+0x721` = boarders' strength + 1):
+won, the boarders take blow / 10 ten times on crew and weapons and blow /
+10 on the hull, the defenders lose all marines (0x4be410 with -1), take
+theirs nine times on weapons and x 7 on the hull; lost, the reverse
+(boarders: marines gone, nine times on weapons, blow / 10 x 7 on the hull;
+defenders: a tenth ten times on crew and weapons, all on the hull).
+Hercules or the ship of the dead take theirs on the hull only.
+
+**Spreading it** (0x4be410 marines 0-2, nothing for the ship of the dead;
+0x4be110 weapons 3-8; the unique ships' own are never worn): each unit is
+put in a random place of a table as long as the units (the next free
+place if taken; the LCG at ship `+0x18`), one is drawn weighted by its
+points (`rand % total`, the first whose running sum reaches it), and the
+blow comes off it. If it does not hold, the unit is left with its points
+plus (points - blow), so twice its points less the blow, broken at 0, and
+`blow - points` goes on to the next place, round the table, likewise,
+until a unit holds it or every unit has had a turn. A unit broken when
+every unit is broken is not written back: the last unit standing keeps
+its condition. Conditions written back are `points x 100 / full`; a
+weapon at 0 on a boat or merchant is set to 10, and in 0x4be410 a boat's
+first item 3 (`+0x2f9`) and a merchant's first item 4 (`+0x319`) are
+raised to 20. Units at 0 are then removed (0x4bc6c0) and the ship's
+firepower redone (0x4bc360).
+
+**Effects.** 0x4bc360 keeps each item's mean condition (`+0x419 + item x
+4`) and its firepower `+0x449 + item x 4` = A x 15 (by the player's damage
+level) x count x mean / 100; the ship fires each item as one shot of that
+times its accuracy (0x4bfc20), so worn weapons (and bowmen and javelin men)
+hit weaker. Boarding strength (0x4b4e80) sums each marine's condition x
+0x4ac1e0 (C x the A x 15 cache / A) / 1000, ten times on the ship of the
+dead.
+
+**Mending.** At a dock (0x4b1fc0, after the hull, items 9 down to 0): a
+unit below 100 is made whole for `0x597164[item / 3] x (100 - condition)
+x 9 / 1000` amber (30, 50, 70) if the owner has it. A Cup of Asclepius
+heals the marines and the Golden Fleece every unit, a point every 1000 of
+their count (0x4b98b0; see Healing aboard). A settlement's stock keeps
+its units' conditions (two-byte places, kind and condition); a unit
+moved through the load panel carries its condition (the entry's bar,
+message 0x10ac `+0xc`) both ways; a settlement's place shows its first
+unit's (0x43c570), gives out its first and throws away its last
+(0x446620). The workshop's command 0x15 (`CBUT_REPARMING`, "REPAIR
+ARMING", slot 10 of 0x4361c0, permit bit 11 = player `+0x46` bit 3;
+enabled while the settlement is idle, some unit is worn (0x440f80) and
+the amber suffices, or while it repairs, showing its progress `+0x120`)
+has the settlement repair: message 0x1e sub-order 2 (0x441ba0) takes
+`(100 - condition) x 0x597164[kind / 3] / 100` amber per worn unit
+(0x440fd0) at once and enters state 2 for `(100 - condition) x
+0x5971a0[kind / 3] / 100` ticks summed, at whose end every unit is
+whole; units are refused (0x440d40) meanwhile. Cancelled, it refunds the
+part not done (`(100 - progress) x amber / 100`) and seems to mend units
+as far as the time spent goes (not decoded in full; not done here).
+Selling a stock unit brings 75% of its price times its condition.
+Forts hold units with conditions too (record fields from 34; 0x4184f0
+appears to take blows on them and remove units, 0x446620): not decoded
+further.
 
 Buildings, strongholds, castles, nests and lairs hold points out of a
 maximum by class (0x424910: settlement 160000, town 220000, forts and

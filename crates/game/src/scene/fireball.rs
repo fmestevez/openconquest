@@ -205,6 +205,7 @@ impl Scene {
                     strikes: true,
                     damage: blow * shield,
                     wounds: 0.0,
+                    wear: 0.0,
                 },
                 data,
                 caches,
