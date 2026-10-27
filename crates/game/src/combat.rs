@@ -330,9 +330,6 @@ pub fn ram_angle(attacker_heading: usize, target_heading: usize) -> usize {
 /// Seconds between exchanges of blows when boarding. Placeholder.
 pub const BOARD_ROUND: f32 = 1.0;
 
-/// Distance at which ships touch, for ramming and boarding. Placeholder.
-pub const CONTACT: f32 = 48.0;
-
 /// Strength of a creature, over 15 as hulls are: cyclopes 30000,
 /// minotaurs 16000, amazons 12000 (CyclopClassTy 0x413d70), the gorgon
 /// 150000 (MedusaClassTy 0x401000), sirens 100000 (SirenaClassTy 0x403050,

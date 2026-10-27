@@ -3552,3 +3552,69 @@ fn settlement_sells_stock() {
         .as_ref()
         .is_none_or(|c| c.hull <= 0.0)));
 }
+
+/// A ram ordered from afar goes in and strikes from the neighbouring cell
+/// (one ship to a cell; needs `OPENAC_DATA`).
+#[test]
+fn ram_from_afar_connects() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let human = scene.human.unwrap();
+    let mine = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let other = scene
+        .objects
+        .iter()
+        .find(|o| o.ship.is_some() && o.id != mine)
+        .unwrap()
+        .id;
+    scene
+        .objects
+        .retain(|o| o.ship.is_none() || o.id == mine || o.id == other);
+    scene
+        .objects
+        .retain(|o| o.ship.is_some() || o.combat.as_ref().is_none_or(|c| c.weapons.is_empty()));
+    let t = TILE_SIZE as f32;
+    // A stretch of open water, five cells along and three deep.
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let (cx, cy) = (1..h - 1)
+        .flat_map(|y| (1..w - 5).map(move |x| (x, y)))
+        .find(|&(x, y)| (-1..=1).all(|dy| (-1..=4).all(|dx| scene.nav.is_water(x + dx, y + dy))))
+        .expect("open water");
+    let target_cell = (cx + 3, cy);
+    let m = scene.object_index(mine).unwrap();
+    scene.objects[m].x = cx as f32 * t + t / 2.0;
+    scene.objects[m].y = cy as f32 * t + t / 2.0;
+    scene.objects[m].ship.as_mut().unwrap().path.clear();
+    let e = scene.object_index(other).unwrap();
+    let enemy = &mut scene.objects[e];
+    enemy.owner = Some((1, (human.slot + 1) % 4));
+    enemy.x = target_cell.0 as f32 * t + t / 2.0;
+    enemy.y = target_cell.1 as f32 * t + t / 2.0;
+    enemy.ship.as_mut().unwrap().path.clear();
+    enemy.combat.as_mut().unwrap().weapons.clear();
+    let target = other;
+    let i = scene.object_index(mine).unwrap();
+    scene.objects[i].combat.as_mut().unwrap().weapons.clear();
+    scene.order_close(mine, target, false).unwrap();
+    let hull = |s: &Scene| {
+        s.object_index(target)
+            .map_or(0.0, |k| s.objects[k].combat.as_ref().unwrap().hull)
+    };
+    let before = hull(&scene);
+    for _ in 0..50 * 30 {
+        scene.update(0.02, &data, &mut caches);
+        if hull(&scene) < before {
+            break;
+        }
+    }
+    assert!(hull(&scene) < before, "the ram struck");
+}

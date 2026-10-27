@@ -528,12 +528,16 @@ impl Scene {
                 continue;
             };
             let (tx, ty) = (self.objects[ti].x, self.objects[ti].y);
-            let d = ((self.objects[i].x - tx).powi(2) + (self.objects[i].y - ty).powi(2)).sqrt();
-            if d > combat::CONTACT {
+            // Ships touch from neighbouring cells: one ship to a cell.
+            let t = TILE_SIZE as f32;
+            let cell = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
+            let (a, b) = (cell(self.objects[i].x, self.objects[i].y), cell(tx, ty));
+            if (a.0 - b.0).abs() > 1 || (a.1 - b.1).abs() > 1 {
                 let ship = self.objects[i].ship.as_ref().unwrap();
-                let stale = ship.path.back().is_none_or(|&(px, py)| {
-                    ((px - tx).powi(2) + (py - ty).powi(2)).sqrt() > combat::CONTACT
-                });
+                let stale = ship
+                    .path
+                    .back()
+                    .is_none_or(|&(px, py)| ((px - tx).powi(2) + (py - ty).powi(2)).sqrt() > t);
                 if stale {
                     if let Some(path) = self.plan_route(i, tx, ty) {
                         self.objects[i].ship.as_mut().unwrap().path = path;
