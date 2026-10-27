@@ -133,6 +133,7 @@ length (stored size plus a few bytes); it is not needed for reading.
 | 18 | 1-bit mask | verified |
 | 20 | Mission lists (`LIST_OBJ`, `TRACKS_*`) | not decoded |
 | 23 | Text/script (`DISCRIPTION`, `SOUNDLIST`, `SND_*`) | not decoded |
+| 24 | Quick help page (`SPHELP_nnn`) | verified |
 
 ## Images
 
@@ -665,12 +666,127 @@ left to right at x 0, 44, 85, 126, 167): object panel (wheel), files
 (disk), game settings (wrench), sound (clef), help and tasks (scroll). The
 tab images `BMARK_<name>_00/01/02` (normal, hover, active) do not follow
 that order by name: the disk is `BMARK_VTASK`, the clef `BMARK_CFG`, the
-scroll `BMARK_VHELP`. Panels: `CFILE_BKGND` (200x454; name field, list
-with scrollbar `CFILE_SLSL`, buttons `CFILE_BMRKSAVE/LOAD/DEL`, then
-`CFILE_RSTART`, `CFILE_MMENU`, `CFILE_QUIT`, captions drawn by the game;
-0x50a700), `CCFG_BKGND` (202x552) with slider tracks `CFGSCR_GSPD/KSPD/
-MSPD` and thumb `TRACKBAR_BB`, sound `CFGSND_*`, help `HVIEW_BKGND`. The
-pause sign is the `WIN_PAUSE` sequence (197x156, 31 frames).
+scroll `BMARK_VHELP`. The pause sign is the `WIN_PAUSE` sequence (197x156,
+31 frames).
+
+All positions below are bar pixels (0x512ab0 adds the bar's x: 592, or 0
+with the bar on the left). Checked pixel for pixel against the original
+under Wine.
+
+**Widgets.** Text goes through mfcfnt.cpp: 0x5470f0 sets a font's letter
+and line gaps, 0x546d80 its target rectangle, 0x547860 draws a line at an
+offset or, given -1, centred (horizontally by its width, 0x5472b0;
+vertically by its tallest glyph, 0x547350) in colour variant (atlas) n;
+0x5479f0 draws `\n`-separated lines, each centred, the block centred, a
+line advancing by its tallest glyph plus the line gap. A check box
+(0x4e9960 type 3, drawn by 0x4e9e30) is `TRIGGER_BKGND` (20x20) with the
+`TRIGGER_BB` sprite over it when set (states 2, 3). A push button (0x4e9b60)
+shows picture `<name>02` disabled, `00` normal, `01` pressed. A wide button
+(0x4e9ca0) shows `00`, or `01` pressed, its caption (a string) in
+`INT_FONT` gaps 0/-2, colour 1 disabled, 0 otherwise, the text rectangle
+w - 2, h + 2 when pressed. A slider (0x4e9f70; strack.cpp, the trackbar)
+is a track bitmap with the `TRACKBAR_BB` thumb (20x14) at offset 0 for
+position 0, `travel` (track - thumb width) for the last of `count`, else
+`travel / count * (pos + 0.5)` truncated (0x552400); a click within half a
+thumb of an end takes that end (0x5524a0).
+
+**Game file operations** (`Filesys.cpp`; created by 0x5099f0, messages
+0x50a700): `CFILE_BKGND` (200x454) at (3, 5). Fonts: `SYSTEM_FONT` gaps 2/1
+(+0x45) and `INT_FONT` gaps 0/-2 (+0x49). The name field (edit, 0x104
+characters) at (11, 14) 179x17, its text at x 15 in `SYSTEM_FONT` colour 0.
+The saved games' list at (14, 44) 140x280, rows 17 high (bitmap 140x17),
+the text 2 pixels in, vertically centred, colour 1, the chosen row colour
+0; choosing a row puts its name in the field (0x534). Arrows `SLIDER_UP_`
+at (172, 44) and `SLIDER_DN_` at (172, 310) (22x22), the scroll bar
+`CFILE_SLSL` at (168, 66) 30x244 with the `SLIDER_BB` thumb 4 pixels in.
+Bookmarks `CFILE_BMRKSAVE/LOAD/DEL` (66x70, `01` chosen) at (5 + 66i, 388),
+captioned with strings 0x25-0x27 (SAVE, LOAD, DELETE) in `INT_FONT` colour
+0, centred, 10 pixels down (message 0x54e). The wide buttons:
+`CFILE_SLDGAME` (190x46) at (9, 340), captioned by the bookmark: 0x23 Save
+game, 0x24 Load game, 0x22 Delete game (0x4fb); `CFILE_RSTART` (200x46) at
+(4, 461), 0x20 Restart mission; `CFILE_MMENU` and `CFILE_QUIT` (98x46) at
+(4, 510) and (106, 510), 0x1f `Main\nmenu`, 0x21 `Quit\nprogram`.
+
+**Configuration** (`Cfgssys.cpp`; controls 0x4faec0, captions 0x4fa6f0,
+messages 0x4fb540): `CCFG_BKGND` (202x552) at (3, 5); offsets below are
+from there. Captions in `INT_FONT` gaps 1/1 colour 0: centred in
+(0, y, 202, 22) for Game speed (0x70, y 43), Mouse scroll speed (0x71, 86),
+Key scroll speed (0x72, 129), and in (0, y, 152, 22) for Scroll speed
+(0x7b, 235) and Message lines (0x7c, 278); `MIN`/`MAX` (0x76, 0x77) in
+`LITTLE_FONT` gaps 2/1 colour 1 centred in 25x15 boxes at x 0 and x 177 (x
+130 beside the number boxes), y 58, 101, 144, 250, 293. Sliders at x 30:
+`CFGSCR_GSPD` y 63 (9 positions, 9 - `SPEED_GAME` [0x5ca556]),
+`CFGSCR_MSPD` 106 (10; [0x5ca54e] = 200 - 19 pos, ms per mouse scroll
+step), `CFGSCR_KSPD` 149 (10; [0x5ca552] = 95 - 9 pos), `CFGSCR_CHATSPD`
+255 (13; message scroll speed [0x5ca784] = 15 - pos), `CFGSCR_CHATSTR` 298
+(23; message lines [0x5ca783] = pos + 3). The two numbers in
+`CFGSCR_CHATIND` (40x24) at (157, 247) and (157, 290), in the game's
+`SYSTEM_FONT` ([game+0xd64]) centred in (5, 0, w - 10, h), 4 pixels down.
+Check boxes at x 14, captions 10 pixels into (34, y, 168, 20): message
+pop-up (0x7a, y 200, [0x5ca77f]); control bar left / right (0x74, 0x75, y
+335, 360, a radio pair, ids 0x3f1/0x3f2, [0x5ca54a]); button animation
+(0x73, 385, [0x5ca55a]; disabled when [game+0xa81] is 0xd0dd); help string
+(0x78, 410, [0x5ca542]); graphic trails (0x7e, 435, [0x5ca78f]); lighting
+effects (0x7f, 460, [0x5ca790]); pack save file (0x80, 485, [0x5ca791]);
+in network games guaranteed sending (0x7d, 510, [0x5ca78e]). Defaults read
+from the original's memory: speed 5, mouse 59 ms, keys 14 ms, scroll speed
+5, lines 10, bar right, all boxes set.
+
+Game speeds: the table at 0x5bed7c has a 24-byte row per speed 1-9; its
+first column (13, 17, 20, 33, 40, 50, 60, 70, 80) is used by the main loop
+(0x51fe20) as milliseconds per game update, the fifth (13-33, then 40) is
+`[game+0x34]` (0x4fb540 message 0x508).
+
+**Sound configuration** (`Cfgsys.cpp`; controls 0x4fc750, captions
+0x4fc170, messages 0x4fe130): `CCFG_BKGND` at (3, 5); offsets from there.
+Music choice (radio ids 0x3f3-0x3f6, [0x5ca55e] 1, 2, 4, 8): None (0x8a), CD
+music (0x8d), MIDI music (0x8c), FX music (0x8b), boxes at (7, 20 + 23i),
+captions 10 pixels into (27, y, 175, 20). `CFGSND_BKLIST` at (7, 127),
+`CFGSND_BKSLLIST` at (165, 128); the play list (bar (13, 134) 150x136,
+entries 17 pixels in, "Track n" (0x8e) for the CD), its arrows at bar
+(172, 137) and (172, 246), scroll bar `CFGSND_SLLIST` at bar (168, 159).
+Buttons `CFGSND_MARK_`, `_UP_`, `_DN_`, `_PLAY_` (`_STOP_` while playing;
+47x25) at (6, 54, 102, 150; 268). Check boxes at (7, 313 / 336 / 359): unit
+report (0x83), battle sound effects (0x85), ambient sound effects (0x84)
+([0x5ca55f] bits 1, 2, 4). Volume captions centred in (0, y, 202, 22): Music
+(0x87, 385; not with no music), Effects (0x89, 420), FX (0x86, 455), Main
+(0x88, 490); `MIN`/`MAX` at y 400 + 35i. Sliders at x 30: `CFGSND_MUSVOL`
+405 (the CD or MIDI mixer control, or for FX music 4001 positions of
+DirectSound attenuation, [0x5ca568] + 4000; only if the mixer has one),
+`CFGSND_EFFVOL` 440 (4001 positions, [0x5ca56c] = pos - 4000 hundredths of
+a dB), `CFGSND_WAVOL` 475 and `CFGSND_MAINVOL` 510 (the wave and master
+mixer controls).
+
+## Quick help pages (kind 24)
+
+`SPHELP_000`-`SPHELP_008` in `controlg.dkx` (the entry width is the item
+count), loaded by Viewsys.cpp (0x527600: `SPHELP_` plus the page number,
+0x525f80). Each item is 100 bytes:
+
+| Offset | Type | Field |
+|--------|------|-------|
+| 0x00 | u8 | archive: 0 `controlg.dkx`, 1 `controlm.dkx` |
+| 0x01 | u8 | kind: 1 bitmap, 6 sprite, 7 sequence, 25 hyperlink |
+| 0x02 | char[32] | resource name |
+| 0x22 | i16 | x |
+| 0x24 | i16 | y |
+| 0x28 | u16 | frame count |
+| 0x2a | u16 | milliseconds per frame |
+| 0x36 | i32 x 4 | hyperlink: x, y, width, height |
+| 0x46 | u32 | hyperlink: target page |
+
+The first item of every page is the sprite `HELP_nn` (201x445) at (0, 0):
+the page's words, titles and underlines are drawn in it. The others are
+icons (command buttons, slots, the money and fish animations, the cursors
+from `controlm.dkx`, animated by their frame delay). Items are placed at
+bar (6 + x, y) (0x526930: the page's x is the bar's + 6). A click inside a
+link's rectangle, edges included, opens its page if it exists (message
+0x61); over one the pointer is `CUR_HTEXT_` (offset -10, -3; 0x51728a).
+Pages: 0 contents (links to 1 Interface Parts, 2 Types of Cursor, 5 Object
+Control Tab, 8 Development Team), 1 interface parts, 2-4 types of cursor,
+5-6 object control, 7 slots, 8 development team; the others link back to 0
+(Quick help contents). The up and down buttons step a page (0x4f1, 0x4f2),
+disabled (`02`) on the first and last.
 
 ## Fog of war
 
@@ -721,7 +837,9 @@ Viewsys (0x526930): `HVIEW_BKGND` at bar (4, 5); the text in `HELP_FONT`
 wide and 445 high, wrapped word by word (a word goes down when it and a
 space would not fit); `VIEW_BUTUP_nn`/`VIEW_BUTDN_nn` at (10, 460) and
 (108, 460), state 02 when there is nothing to scroll; `HVIEW_TASK01` and
-`HVIEW_HELP00` at (3, 513) and (103, 513). The text is the briefing's
+`HVIEW_HELP00` at (3, 513) and (103, 513) (ids 0x406, 0x407; with the quick
+help open, `HVIEW_TASK00` and `HVIEW_HELP01`, see Quick help pages; the
+panel stays on the page last chosen). The text is the briefing's
 stored lines: for a scenario (game +0xd80 = 1) what follows the blank line
 `@   `; for a custom mission (2) the whole briefing with its closing `@-`
 lines replaced by `@-<objective>` per condition (0x5265e0, strings

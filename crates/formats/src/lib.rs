@@ -7,6 +7,7 @@ pub mod anim;
 pub mod archive;
 pub mod avi;
 pub mod font;
+pub mod help;
 pub mod image;
 pub mod install;
 pub mod installer;
@@ -21,6 +22,7 @@ mod bytes;
 pub use anim::{Composite, CompositeCell, Sequence};
 pub use archive::{Archive, Entry, ResourceKind};
 pub use font::{Font, Glyph};
+pub use help::{parse_help_page, HelpItem};
 pub use image::{parse_palette_animation, Bitmap, Mask, Palette, PaletteCycle, Rgb, Sprite};
 pub use map::{MapGrid, TileRef, TileSet, TileSetLibrary};
 pub use mission::{

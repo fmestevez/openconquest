@@ -23,7 +23,7 @@ use crate::menus::{Backdrop, Button, MenuHit, MenuView, Menus};
 use crate::music::Music;
 use crate::objects::Caches;
 use crate::objects::{Resource, SHIP_NAMES};
-use crate::panels::{self, PanelHit, PanelView, Panels, Slider, Tab};
+use crate::panels::{self, Check, FileMode, PanelHit, PanelView, Panels, Slider, Tab};
 use crate::render::{hit_test, Frame, MinimapRect};
 use crate::save::SaveGame;
 use crate::scene::{Order, Scene};
@@ -33,6 +33,8 @@ use crate::view::{Camera, Screen};
 
 /// Keyboard scroll speed in original pixels per second.
 const SCROLL_SPEED: f32 = 1400.0;
+/// Longest name the file panel's field takes.
+const SAVE_NAME_MAX: usize = 40;
 /// Width of the screen border that triggers edge scrolling, in screen pixels.
 const EDGE_MARGIN: f64 = 8.0;
 const ZOOM_STEP: f32 = 1.15;
@@ -145,7 +147,7 @@ enum LoadTab {
 /// An entry of the load screen's list.
 #[derive(Debug, Clone, Copy)]
 enum LoadEntry {
-    /// Save slot (`panels::SLOTS` is the quick save).
+    /// A saved game (its index in `App::saves`).
     Save(usize),
     /// A mission to start.
     Mission(usize),
@@ -308,40 +310,32 @@ enum HoverKey {
     Cell((i32, i32)),
 }
 
-/// Player settings from the wrench panel, as slider positions 0..1.
+/// Player settings from the configuration and sound panels (saved with
+/// this port's settings).
 #[derive(Debug, Clone, Copy)]
 struct Settings {
-    game_speed: f32,
-    scroll_speed: f32,
+    config: panels::Config,
     /// Right click gives orders, instead of the original's stepping through
-    /// the pointers (saved with the game's settings).
+    /// the pointers.
     modern_mouse: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            game_speed: 1.0 / 3.0,
-            scroll_speed: 0.5,
+            config: crate::launch::panel_config(),
             modern_mouse: crate::launch::modern_mouse(),
         }
     }
 }
 
-impl Settings {
-    /// Simulation speed: 0.5x to 2x, normal at a third of the way.
-    fn speed(&self) -> f32 {
-        if self.game_speed <= 1.0 / 3.0 {
-            0.5 + 1.5 * self.game_speed
-        } else {
-            1.0 + 1.5 * (self.game_speed - 1.0 / 3.0)
-        }
-    }
-
-    /// Scrolling speed factor: about 0.35x to 2.8x, normal in the middle.
-    fn scroll(&self) -> f32 {
-        2f32.powf((self.scroll_speed - 0.5) * 3.0)
-    }
+/// A saved game in the save folder.
+#[derive(Debug, Clone)]
+struct SaveEntry {
+    path: std::path::PathBuf,
+    /// Its mission, and how the front end's load screen labels it.
+    mission: String,
+    label: String,
 }
 
 pub struct Options {
@@ -432,12 +426,25 @@ pub struct App {
     videos: std::collections::VecDeque<std::path::PathBuf>,
     /// The control bar's open tab.
     tab: Tab,
-    /// Labels of the save slots (`None`: empty).
-    slot_labels: Vec<Option<String>>,
-    quick_label: Option<String>,
-    selected_slot: Option<usize>,
+    /// The saved games, and their names as the file panel lists them.
+    saves: Vec<SaveEntry>,
+    save_names: Vec<String>,
+    /// The file panel: the first row shown, the row chosen, the bookmark
+    /// and the name field.
+    save_first: usize,
+    selected_save: Option<usize>,
+    file_mode: FileMode,
+    save_name: String,
     help_text: Vec<String>,
     help_first: usize,
+    /// The quick help page shown (none: the mission objectives).
+    help_page: Option<usize>,
+    /// A panel button held down.
+    panel_pressed: Option<PanelHit>,
+    /// The SoundFont given for MIDI music.
+    soundfont: Option<std::path::PathBuf>,
+    /// The music's tracks as the sound panel lists them.
+    track_names: Vec<String>,
     /// The object panel's slot cell chosen: the object and the cell.
     chosen_cell: Option<(u32, usize)>,
     /// A unit picked up from a settlement's stock: the settlement and item.
@@ -593,11 +600,18 @@ impl App {
                 Default::default()
             },
             tab: Tab::Object,
-            slot_labels: vec![None; panels::SLOTS],
-            quick_label: None,
-            selected_slot: None,
+            saves: Vec::new(),
+            save_names: Vec::new(),
+            save_first: 0,
+            selected_save: None,
+            file_mode: FileMode::Save,
+            save_name: String::new(),
             help_text: Vec::new(),
             help_first: 0,
+            help_page: None,
+            panel_pressed: None,
+            soundfont: soundfont.clone(),
+            track_names: Vec::new(),
             chosen_cell: None,
             carrying: None,
             load_view: Default::default(),
@@ -641,7 +655,8 @@ impl App {
             center_pending: true,
         };
         app.scene.fog = app.fog;
-        app.start_music(soundfont.as_deref());
+        app.apply_volumes();
+        app.start_music();
         Ok(app)
     }
 
@@ -709,18 +724,7 @@ impl App {
             page: self.page,
             site: None,
             briefing: self.briefing,
-            panel: Some(PanelView {
-                tab: self.tab,
-                slots: &self.slot_labels,
-                selected_slot: self.selected_slot,
-                game_speed: self.settings.game_speed,
-                scroll_speed: self.settings.scroll_speed,
-                modern_mouse: self.settings.modern_mouse,
-                volume: self.audio.as_ref().map_or(0.0, |a| a.volume),
-                music: self.music.as_ref().map(|_| self.music_volume),
-                help: &self.help_text,
-                help_first: self.help_first,
-            }),
+            panel: Some(self.panel_view()),
             panel_hover: self.cursor.and_then(|c| self.bar_point(c)),
             paused: self.paused,
             load: Some((self.load_state(), self.load_pressed)),
@@ -837,60 +841,90 @@ impl App {
         (x >= 0.0 && y >= 0.0).then_some((x as u32, y as u32))
     }
 
+    /// The panels' state, for hit testing.
+    fn panel_view(&self) -> PanelView<'_> {
+        PanelView {
+            tab: self.tab,
+            saves: &self.save_names,
+            save_first: self.save_first,
+            selected_save: self.selected_save,
+            file_mode: self.file_mode,
+            name: &self.save_name,
+            config: &self.settings.config,
+            modern_mouse: self.settings.modern_mouse,
+            tracks: &self.track_names,
+            help: &self.help_text,
+            help_first: self.help_first,
+            help_page: self.help_page,
+            pressed: self.panel_pressed,
+            time_ms: self.time_ms,
+        }
+    }
+
     /// Handles a click on the bar's tabs and panels; true if it hit one.
     fn panel_click(&mut self, pos: PhysicalPosition<f64>) -> bool {
         let Some(p) = self.bar_point(pos) else {
             return false;
         };
-        let Some(hit) = self.interface.panels.hit(self.tab, p) else {
+        let Some(hit) = self.interface.panels.hit(&self.panel_view(), p) else {
             // Clicks elsewhere on an open panel do nothing.
             return Panels::covers_bar(self.tab) && p.1 < 558;
         };
+        self.panel_pressed = Some(hit);
         match hit {
             PanelHit::Tab(tab) => {
                 self.tab = tab;
                 self.refresh_panels();
             }
-            PanelHit::HelpUp => self.help_first = self.help_first.saturating_sub(1),
-            PanelHit::HelpDown => {
-                let panels = &self.interface.panels;
-                let last = panels
-                    .help_line_count(&self.help_text, &self.text)
-                    .saturating_sub(panels.help_rows());
-                self.help_first = (self.help_first + 1).min(last);
-            }
-            PanelHit::Slot(i) => self.selected_slot = Some(i),
-            PanelHit::Save => match self.selected_slot {
-                Some(i) => match self.scene.save().write(&self.slot_path(i)) {
-                    Ok(()) => {
-                        self.say(format!("Saved in slot {}", i + 1));
-                        self.refresh_panels();
-                    }
-                    Err(e) => self.say(format!("Could not save: {e:#}")),
-                },
-                None => self.say("Choose a slot"),
+            PanelHit::HelpUp => match self.help_page {
+                Some(page) => self.help_page = Some(page.saturating_sub(1)),
+                None => self.help_first = self.help_first.saturating_sub(1),
             },
-            PanelHit::Load => match self.selected_slot {
-                Some(i) if self.slot_labels[i].is_some() => self.load_game(&self.slot_path(i)),
-                _ => self.say("Choose a saved game"),
+            PanelHit::HelpDown => match self.help_page {
+                Some(page) => {
+                    let last = self.interface.panels.help_pages().saturating_sub(1);
+                    self.help_page = Some((page + 1).min(last));
+                }
+                None => {
+                    let panels = &self.interface.panels;
+                    let last = panels
+                        .help_line_count(&self.help_text, &self.text)
+                        .saturating_sub(panels.help_rows());
+                    self.help_first = (self.help_first + 1).min(last);
+                }
             },
-            PanelHit::Delete => {
-                if let Some(i) = self
-                    .selected_slot
-                    .filter(|&i| self.slot_labels[i].is_some())
-                {
-                    let _ = std::fs::remove_file(self.slot_path(i));
-                    self.say(format!("Slot {} cleared", i + 1));
-                    self.refresh_panels();
+            // The objectives and quick help tabs (0x406, 0x407); quick help
+            // opens on its contents.
+            PanelHit::QuickHelp(quick) => {
+                if quick != self.help_page.is_some() {
+                    self.help_page = quick.then_some(0);
                 }
             }
+            PanelHit::HelpLink(page) => self.help_page = Some(page),
+            PanelHit::FileMode(mode) => self.file_mode = mode,
+            // Choosing a saved game puts its name in the field (0x534).
+            PanelHit::SaveRow(i) => {
+                self.selected_save = Some(i);
+                self.save_name = self.save_names[i].clone();
+            }
+            PanelHit::ListScroll(d) => {
+                let max = self.saves.len().saturating_sub(Panels::save_rows());
+                self.save_first = (self.save_first as i64 + d as i64).clamp(0, max as i64) as usize;
+            }
+            PanelHit::ListThumb(first) => self.save_first = first,
+            PanelHit::FileAction => self.file_action(),
             PanelHit::Restart => self.switch_mission(0),
+            PanelHit::MainMenu => {
+                if self.menus.is_some() {
+                    self.menu = Some(MenuState::Main);
+                }
+            }
             PanelHit::Quit => self.quit = true,
             PanelHit::Slider(slider, v) => {
                 self.slider_drag = Some(slider);
                 self.set_slider(slider, v);
             }
-            PanelHit::MouseControls => {
+            PanelHit::Check(Check::ModernMouse) => {
                 let on = !self.settings.modern_mouse;
                 self.settings.modern_mouse = on;
                 crate::launch::set_modern_mouse(on);
@@ -900,34 +934,99 @@ impl App {
                     "Original mouse: right click changes the pointer"
                 });
             }
+            PanelHit::Check(c) => {
+                self.settings.config.toggle(c);
+                self.config_changed();
+            }
+            PanelHit::BarLeft(left) => {
+                self.settings.config.bar_left = left;
+                self.config_changed();
+            }
+            PanelHit::Music(m) => {
+                if self.settings.config.music != m {
+                    self.settings.config.music = m;
+                    self.config_changed();
+                    self.music = None;
+                    self.start_music();
+                }
+            }
         }
         true
     }
 
-    fn set_slider(&mut self, slider: Slider, v: f32) {
-        match slider {
-            Slider::GameSpeed => self.settings.game_speed = v,
-            Slider::ScrollSpeed => self.settings.scroll_speed = v,
-            Slider::Volume => {
-                if let Some(a) = self.audio.as_mut() {
-                    a.volume = v;
+    /// The file panel's wide button (0x50a700 message 0x4fa): saves under
+    /// the name typed, or loads or deletes the chosen game.
+    fn file_action(&mut self) {
+        match self.file_mode {
+            FileMode::Save => {
+                if self.net.is_some() {
+                    self.say("Multiplayer games cannot be saved");
+                    return;
+                }
+                let name: String = self
+                    .save_name
+                    .trim()
+                    .chars()
+                    .filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+                    .collect();
+                if name.is_empty() {
+                    self.say("Type a name for the saved game");
+                    return;
+                }
+                let path = self.data.save_dir().join(format!("{name}.json"));
+                match self.scene.save().write(&path) {
+                    Ok(()) => {
+                        self.say("Game saved");
+                        self.refresh_panels();
+                        self.selected_save = self.save_names.iter().position(|n| *n == name);
+                    }
+                    Err(e) => self.say(format!("Could not save: {e:#}")),
                 }
             }
-            Slider::Music => {
-                self.music_volume = v;
-                let muted = self.audio.as_ref().is_some_and(|a| a.muted);
-                if let Some(m) = &self.music {
-                    m.set_volume(if muted { 0.0 } else { v });
+            FileMode::Load => {
+                if let Some(e) = self.selected_save.and_then(|i| self.saves.get(i)) {
+                    let path = e.path.clone();
+                    self.load_game(&path);
                 }
-                if let Some(s) = &self.menu_music {
-                    s.set_volume(if muted { 0.0 } else { v });
+            }
+            FileMode::Delete => {
+                if let Some(e) = self.selected_save.and_then(|i| self.saves.get(i)) {
+                    let _ = std::fs::remove_file(&e.path);
+                    self.selected_save = None;
+                    self.save_name.clear();
+                    self.refresh_panels();
                 }
             }
         }
     }
 
-    fn slot_path(&self, i: usize) -> std::path::PathBuf {
-        self.data.save_dir().join(format!("slot{}.json", i + 1))
+    fn set_slider(&mut self, slider: Slider, v: u32) {
+        self.settings.config.set_slider(slider, v);
+        self.config_changed();
+    }
+
+    /// Keeps the settings and applies the volumes.
+    fn config_changed(&mut self) {
+        crate::launch::set_panel_config(&self.settings.config);
+        self.apply_volumes();
+    }
+
+    /// Sets the effects' and the music's volumes from the sound panel's.
+    fn apply_volumes(&mut self) {
+        let c = &self.settings.config;
+        let effects = panels::Config::gain(c.effects_volume);
+        self.music_volume = panels::Config::gain(c.music_volume);
+        let music = self.music_volume;
+        let muted = self.audio.as_ref().is_some_and(|a| a.muted);
+        if let Some(a) = self.audio.as_mut() {
+            a.volume = effects;
+        }
+        if let Some(m) = &self.music {
+            m.set_volume(if muted { 0.0 } else { music });
+        }
+        if let Some(s) = &self.menu_music {
+            s.set_volume(if muted { 0.0 } else { music });
+        }
     }
 
     /// What front-end screen `state` shows.
@@ -2020,7 +2119,7 @@ impl App {
                     return;
                 };
                 let i = match entry {
-                    LoadEntry::Save(slot) => slot,
+                    LoadEntry::Save(i) => i,
                     LoadEntry::Mission(index) => {
                         if self.category_missions(Category::Campaign).first() == Some(&index) {
                             self.queue_video(crate::video::OPENING);
@@ -2030,10 +2129,8 @@ impl App {
                         return;
                     }
                 };
-                let path = if i < panels::SLOTS {
-                    self.slot_path(i)
-                } else {
-                    self.quick_save_path()
+                let Some(path) = self.saves.get(i).map(|e| e.path.clone()) else {
+                    return;
                 };
                 self.load_game(&path);
                 if self
@@ -2231,23 +2328,35 @@ impl App {
 
     /// Re-reads the save slots and the help text shown in the panels.
     fn refresh_panels(&mut self) {
-        self.slot_labels = (0..panels::SLOTS)
-            .map(|i| {
-                SaveGame::read(&self.slot_path(i)).ok().map(|s| {
-                    let t = s.clock as u32;
-                    format!("{} {}:{:02}", s.mission.to_uppercase(), t / 60, t % 60)
-                })
+        // The saved games, by name (as the original lists its SAVEGAME
+        // folder).
+        let mut saves: Vec<SaveEntry> = std::fs::read_dir(self.data.save_dir())
+            .map(|dir| {
+                dir.filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "json"))
+                    .filter_map(|path| {
+                        let save = SaveGame::read(&path).ok()?;
+                        let label = path.file_stem()?.to_string_lossy().into_owned();
+                        Some(SaveEntry {
+                            path,
+                            mission: save.mission,
+                            label,
+                        })
+                    })
+                    .collect()
             })
-            .collect();
-        self.quick_label = SaveGame::read(&self.quick_save_path()).ok().map(|s| {
-            let t = s.clock as u32;
-            format!(
-                "{} {}:{:02} (quick save)",
-                s.mission.to_uppercase(),
-                t / 60,
-                t % 60
-            )
-        });
+            .unwrap_or_default();
+        saves.sort_by_key(|e| e.label.to_lowercase());
+        let chosen = self
+            .selected_save
+            .and_then(|i| self.saves.get(i))
+            .map(|e| e.path.clone());
+        self.selected_save = chosen.and_then(|p| saves.iter().position(|e| e.path == p));
+        self.save_names = saves.iter().map(|e| e.label.clone()).collect();
+        self.saves = saves;
+        self.save_first = self
+            .save_first
+            .min(self.saves.len().saturating_sub(Panels::save_rows()));
         let help = panels::help_paragraphs(
             &self.scene.briefing_lines,
             crate::scene::is_custom(&self.scene.mission),
@@ -2395,34 +2504,58 @@ impl App {
             .button_at(&layout, pos.x as f32, pos.y as f32)
     }
 
-    /// Starts the music if there is sound and a SoundFont.
-    fn start_music(&mut self, soundfont: Option<&std::path::Path>) {
+    /// Starts the music the sound panel chooses, if there is sound: none;
+    /// the CD's tracks, if they have been ripped (else the MIDI tunes); or
+    /// the MIDI tunes through a SoundFont. This port has no FX music; it
+    /// plays as CD music.
+    fn start_music(&mut self) {
+        self.track_names.clear();
         let Some(audio) = &self.audio else { return };
-        // The CD's own music, if it has been ripped.
-        let cd_dir = self
-            .cd_audio
-            .clone()
-            .unwrap_or_else(|| self.data.root().join("cdaudio"));
-        let tracks = crate::music::cd_tracks(&cd_dir);
-        if !tracks.is_empty() {
-            match Music::from_files(&audio.handle, tracks) {
-                Ok(music) => {
-                    music.set_volume(if audio.muted { 0.0 } else { self.music_volume });
-                    self.music = Some(music);
-                    return;
+        let mode = self.settings.config.music;
+        if mode == panels::Music::None {
+            return;
+        }
+        if mode != panels::Music::Midi {
+            let cd_dir = self
+                .cd_audio
+                .clone()
+                .unwrap_or_else(|| self.data.root().join("cdaudio"));
+            let tracks = crate::music::cd_tracks(&cd_dir);
+            if !tracks.is_empty() {
+                // As the sound panel lists them (string 0x8e, "Track ").
+                let word = self
+                    .data
+                    .strings
+                    .get(&0x8e)
+                    .map_or("Track ", |s| s.as_str());
+                let names = (2..2 + tracks.len())
+                    .map(|n| format!("{word}{n}"))
+                    .collect();
+                match Music::from_files(&audio.handle, tracks) {
+                    Ok(music) => {
+                        music.set_volume(if audio.muted { 0.0 } else { self.music_volume });
+                        self.music = Some(music);
+                        self.track_names = names;
+                        return;
+                    }
+                    Err(e) => eprintln!("no CD music: {e:#}"),
                 }
-                Err(e) => eprintln!("no CD music: {e:#}"),
             }
         }
-        let Some(font) = crate::music::find_soundfont(soundfont) else {
+        let Some(font) = crate::music::find_soundfont(self.soundfont.as_deref()) else {
             eprintln!("no music: give a General MIDI SoundFont with --soundfont");
             return;
         };
         let tunes = crate::music::playlist(&self.data.sound_dir());
+        let names = tunes
+            .iter()
+            .filter_map(|t| Some(t.file_name()?.to_string_lossy().into_owned()))
+            .collect();
         match Music::new(&audio.handle, &font, &tunes) {
             Ok(music) => {
                 music.set_volume(if audio.muted { 0.0 } else { self.music_volume });
                 self.music = Some(music);
+                self.track_names = names;
             }
             Err(e) => eprintln!("no music: {e:#}"),
         }
@@ -2498,18 +2631,11 @@ impl App {
                 .map(|i| (LoadEntry::Mission(i), self.mission_titles[i].clone()))
                 .collect();
         }
-        let labels = self
-            .slot_labels
+        self.saves
             .iter()
             .enumerate()
-            .filter_map(|(i, l)| Some((i, l.clone()?)))
-            .chain(self.quick_save_label().map(|l| (panels::SLOTS, l)));
-        labels
-            .filter(|(_, l)| {
-                let mission = l.split_whitespace().next().unwrap_or("").to_lowercase();
-                crate::scene::is_campaign(&mission) == (tab == LoadTab::Scenario)
-            })
-            .map(|(i, l)| (LoadEntry::Save(i), l))
+            .filter(|(_, e)| crate::scene::is_campaign(&e.mission) == (tab == LoadTab::Scenario))
+            .map(|(i, e)| (LoadEntry::Save(i), e.label.clone()))
             .collect()
     }
 
@@ -2517,22 +2643,11 @@ impl App {
     fn entry_mission(&self, entry: LoadEntry) -> Option<usize> {
         match entry {
             LoadEntry::Mission(i) => Some(i),
-            LoadEntry::Save(slot) => {
-                let label = if slot < panels::SLOTS {
-                    self.slot_labels.get(slot)?.clone()?
-                } else {
-                    self.quick_save_label()?
-                };
-                let name = label.split_whitespace().next()?.to_lowercase();
+            LoadEntry::Save(i) => {
+                let name = self.saves.get(i)?.mission.to_lowercase();
                 self.missions.iter().position(|m| *m == name)
             }
         }
-    }
-
-    /// The quick save, as the save slots are labelled (read by
-    /// `refresh_panels`).
-    fn quick_save_label(&self) -> Option<String> {
-        self.quick_label.clone()
     }
 
     /// Where text in the big menu font starts to be centred on `x`.
@@ -3298,6 +3413,15 @@ impl App {
         if self.video.is_some() || self.menu.is_some() || self.button_at(pos).is_some() {
             return (P::Standard, false);
         }
+        // Over a quick help link, the hypertext pointer (0x51728a).
+        if self.tab == Tab::Help {
+            let link = self
+                .bar_point(pos)
+                .and_then(|p| self.interface.panels.hit(&self.panel_view(), p));
+            if let Some(PanelHit::HelpLink(_)) = link {
+                return (P::Hypertext, false);
+            }
+        }
         let (screen, _) = self.placement();
         if !screen.contains(pos.x as f32, pos.y as f32) {
             return (P::Standard, false);
@@ -3968,8 +4092,11 @@ impl App {
             // open or not.
             self.run_turns(dt);
         } else if !self.briefing && !self.paused && self.menu.is_none() {
-            self.scene
-                .update(dt * self.settings.speed(), &self.data, &mut self.caches);
+            self.scene.update(
+                dt * self.settings.config.speed(),
+                &self.data,
+                &mut self.caches,
+            );
         }
         self.play_scene_sounds();
         self.choose_music();
@@ -3999,6 +4126,7 @@ impl App {
         }
         let (mut dx, mut dy) = (0.0f32, 0.0f32);
         let held = |k: &[KeyCode]| k.iter().any(|k| self.keys.contains(k));
+        let mut keyed = false;
         if held(&[KeyCode::ArrowLeft, KeyCode::KeyA]) {
             dx -= 1.0;
         }
@@ -4011,6 +4139,7 @@ impl App {
         if held(&[KeyCode::ArrowDown, KeyCode::KeyS]) {
             dy += 1.0;
         }
+        keyed |= dx != 0.0 || dy != 0.0;
         let edge = self.options.edge_scroll || self.is_fullscreen();
         if let (true, true, Some(c), None) = (edge, self.focused, self.cursor, self.drag_from) {
             let (w, h) = (window.0 as f64, window.1 as f64);
@@ -4027,8 +4156,10 @@ impl App {
         }
         // Speed is defined in original pixels so scrolling feels the same at
         // any resolution.
-        let speed =
-            SCROLL_SPEED * self.settings.scroll() * self.camera.policy.base_scale(window.1) * dt;
+        let speed = SCROLL_SPEED
+            * self.settings.config.scroll(keyed)
+            * self.camera.policy.base_scale(window.1)
+            * dt;
         if dx != 0.0 || dy != 0.0 {
             self.camera
                 .scroll(direction(dx) * speed, direction(dy) * speed, &screen, map);
@@ -4252,6 +4383,42 @@ impl ApplicationHandler for App {
                         return;
                     }
                 }
+                // The file panel's name field takes the typing while its
+                // SAVE bookmark is open; Enter saves.
+                let command = self.modifiers.control_key() || self.modifiers.super_key();
+                if self.menu.is_none()
+                    && self.show_interface
+                    && self.tab == Tab::File
+                    && self.file_mode == FileMode::Save
+                    && !command
+                {
+                    let typed: String = event
+                        .text
+                        .as_deref()
+                        .unwrap_or("")
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .collect();
+                    match code {
+                        KeyCode::Backspace => {
+                            self.save_name.pop();
+                        }
+                        KeyCode::Enter | KeyCode::NumpadEnter => self.file_action(),
+                        _ if self.save_name.chars().count() < SAVE_NAME_MAX => {
+                            self.save_name.push_str(&typed);
+                        }
+                        _ => {}
+                    }
+                    if !typed.is_empty()
+                        || matches!(
+                            code,
+                            KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter
+                        )
+                    {
+                        self.keys.remove(&code);
+                        return;
+                    }
+                }
                 if let (Some(MenuState::Connect), Some(_)) = (self.menu, &self.menus) {
                     if code == KeyCode::Backspace {
                         self.player_name.pop();
@@ -4401,7 +4568,10 @@ impl ApplicationHandler for App {
                             .layout(self.window_size(), &self.camera.policy, &self.scene)
                     }) {
                         let x = (position.x as f32 - layout.bar_x) / layout.scale;
-                        let v = self.interface.panels.slider_value(slider, x);
+                        let v =
+                            self.interface
+                                .panels
+                                .slider_value(slider, &self.settings.config, x);
                         self.set_slider(slider, v);
                     }
                 }
@@ -4466,6 +4636,7 @@ impl ApplicationHandler for App {
                 }
                 (MouseButton::Left, ElementState::Released) => {
                     self.load_pressed = None;
+                    self.panel_pressed = None;
                     self.minimap_drag = false;
                     self.slider_drag = None;
                     if let (Some(from), Some(to)) = (self.box_from.take(), self.cursor) {
