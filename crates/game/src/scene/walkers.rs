@@ -12,11 +12,12 @@ use crate::assets::GameData;
 use crate::objects::{self, Caches};
 
 /// Seconds between a lair's creatures per step of field 9 below 10; how
-/// far from the lair they roam (cells); how fast they walk (world pixels a
-/// second); how long they take to appear. Placeholders.
+/// far from the lair they roam (cells). Placeholders.
 const SPAWN_STEP: f32 = 2.0;
 const ROAM: i32 = 5;
-const SPEED: f32 = 24.0;
+/// Walking speed, world pixels a second: a cell (64 pixels) a pass of the
+/// 16-frame walking picture at 5 ticks a frame (0x411520, 0x59538c).
+const SPEED: f32 = 64.0 / (16.0 * 5.0 * crate::clock::TICK);
 
 /// What a creature is doing.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
