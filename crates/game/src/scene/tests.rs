@@ -4789,3 +4789,37 @@ fn ships_sail_to_reload() {
     }
     panic!("the ship never got alongside");
 }
+
+/// Ships attacking a building stop once it falls to ruins (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn attacks_end_at_ruins() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let target = scene
+        .objects
+        .iter()
+        .find(|o| matches!(o.class, ObjectClass::Barbarian(_)))
+        .unwrap()
+        .id;
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some() && o.is_armed())
+        .unwrap()
+        .id;
+    scene.order_attack(ship, target).unwrap();
+    scene.hit(target, f32::MAX, &data, &mut caches);
+    let t = scene.object_index(target).unwrap();
+    assert!(scene.objects[t].combat.is_none(), "ruins");
+    for _ in 0..50 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    let i = scene.object_index(ship).unwrap();
+    assert_eq!(scene.objects[i].ship.as_ref().unwrap().task, None);
+}

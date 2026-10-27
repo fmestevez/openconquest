@@ -95,10 +95,19 @@ impl Scene {
             };
             let me = &self.objects[i];
             let target = match ordered {
-                Some(t) => match self.object_index(t) {
+                // A target gone, or no longer to be fought (a building
+                // fallen to ruins, a ship captured), ends the attack.
+                Some(t) => match self.object_index(t).filter(|&ti| {
+                    self.objects[ti].combat.is_some()
+                        && Self::are_enemies(&self.objects[i], &self.objects[ti])
+                }) {
                     Some(ti) => Some(ti),
                     None => {
-                        self.objects[i].ship.as_mut().unwrap().task = None;
+                        let ship = self.objects[i].ship.as_mut().unwrap();
+                        if matches!(ship.task, Some(Task::Attack { .. })) {
+                            ship.task = None;
+                            ship.path.clear();
+                        }
                         continue;
                     }
                 },

@@ -60,9 +60,7 @@ impl Combatant {
                 100,
                 fort_weapons(c, &rec.fields),
             ),
-            ObjectClass::Castle(_)
-            | ObjectClass::HarpyNest
-            | ObjectClass::CreatureSpawn => (
+            ObjectClass::Castle(_) | ObjectClass::HarpyNest | ObjectClass::CreatureSpawn => (
                 building_strength(rec.class_id),
                 100,
                 creature_weapons(rec.class_id),
