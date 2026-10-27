@@ -1793,7 +1793,7 @@ fn building_cells(o: &MapObject) -> i32 {
 }
 
 /// The group (`SHORE_GROUPS`) of the shore tile on cell `(x, y)` (0x4b3770).
-pub(super) fn shore_group(grid: &openac_formats::MapGrid, x: i32, y: i32) -> Option<usize> {
+pub(super) fn shore_group(grid: &openconquest_formats::MapGrid, x: i32, y: i32) -> Option<usize> {
     if x < 0 || y < 0 || x as u32 >= grid.width || y as u32 >= grid.height {
         return None;
     }

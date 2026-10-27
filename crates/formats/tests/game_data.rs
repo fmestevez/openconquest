@@ -1,15 +1,15 @@
 //! Decodes every resource of an installed copy of the game.
 //!
 //! Game data is copyrighted and not part of the repository, so this test only
-//! runs when `OPENAC_DATA` points at a directory created by
-//! `openac-extract install`; otherwise it passes trivially.
+//! runs when `OPENCONQUEST_DATA` points at a directory created by
+//! `openconquest-extract install`; otherwise it passes trivially.
 
 use std::path::{Path, PathBuf};
 
-use openac_formats::{Archive, Bitmap, MapGrid, Mask, ResourceKind, Sprite, TileSetLibrary};
+use openconquest_formats::{Archive, Bitmap, MapGrid, Mask, ResourceKind, Sprite, TileSetLibrary};
 
 fn data_dir() -> Option<PathBuf> {
-    std::env::var_os("OPENAC_DATA").map(PathBuf::from)
+    std::env::var_os("OPENCONQUEST_DATA").map(PathBuf::from)
 }
 
 fn archives(root: &Path) -> Vec<PathBuf> {
@@ -37,7 +37,7 @@ fn archives(root: &Path) -> Vec<PathBuf> {
 #[test]
 fn every_resource_decodes() {
     let Some(root) = data_dir() else {
-        eprintln!("OPENAC_DATA not set; skipping");
+        eprintln!("OPENCONQUEST_DATA not set; skipping");
         return;
     };
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
@@ -130,7 +130,7 @@ fn every_map_tile_exists() {
 
 #[test]
 fn composites_and_sequences_resolve() {
-    use openac_formats::{anim::EMPTY_SPRITE, Composite, Sequence};
+    use openconquest_formats::{anim::EMPTY_SPRITE, Composite, Sequence};
     let Some(root) = data_dir() else { return };
     let objects = Archive::open(root.join("data").join("objects.dkx")).unwrap();
     let (mut composites, mut sequences, mut missing) = (0, 0, Vec::new());
@@ -175,7 +175,7 @@ fn composites_and_sequences_resolve() {
 
 #[test]
 fn fonts_and_atlases_load() {
-    use openac_formats::Font;
+    use openconquest_formats::Font;
     let Some(root) = data_dir() else { return };
     let mut fonts = 0;
     for path in archives(&root) {
@@ -216,7 +216,7 @@ fn every_mission_has_one_human_player() {
         {
             continue;
         }
-        let players = openac_formats::players(&archive).unwrap();
+        let players = openconquest_formats::players(&archive).unwrap();
         if players.is_empty() {
             // Saved games (demo.dkx) store players elsewhere.
             continue;
@@ -237,7 +237,7 @@ fn briefings_read() {
         .find(|p| p.ends_with("miss001.dkx"))
         .unwrap();
     let archive = Archive::open(&path).unwrap();
-    let text = openac_formats::briefing(&archive).unwrap();
+    let text = openconquest_formats::briefing(&archive).unwrap();
     assert_eq!(text[0], "\"The Magic Oar\"");
     assert!(text
         .iter()
@@ -264,7 +264,7 @@ fn sounds_decode() {
         .iter()
         .filter(|e| e.kind == ResourceKind::Sound)
     {
-        let sound = openac_formats::Sound::parse(&archive.read_entry(e).unwrap()).unwrap();
+        let sound = openconquest_formats::Sound::parse(&archive.read_entry(e).unwrap()).unwrap();
         assert!(
             sound.sample_rate >= 11025 && !sound.samples.is_empty(),
             "{}",
@@ -274,7 +274,7 @@ fn sounds_decode() {
     }
     assert!(n > 100);
     assert_eq!(
-        openac_formats::sound_choices(&archive, 9).unwrap(),
+        openconquest_formats::sound_choices(&archive, 9).unwrap(),
         ["bowla1", "strel1"]
     );
 }
@@ -288,7 +288,7 @@ fn videos_decode() {
     };
     for (name, codec_frames) in [("logo3.avi", 135), ("title.avi", 639)] {
         let path = root.join("video").join(name);
-        let avi = openac_formats::avi::Avi::parse(std::fs::read(&path).unwrap()).unwrap();
+        let avi = openconquest_formats::avi::Avi::parse(std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(avi.frame_count(), codec_frames, "{name}");
         let mut dec = avi.decoder();
         for n in 0..avi.frame_count() / 2 {

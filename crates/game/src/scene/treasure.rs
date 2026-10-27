@@ -2,8 +2,8 @@
 //! heroes joining ships that bring their magic items (the manual's
 //! "Treasures" and "Heroes"; kinds as in `objects::treasure_name`).
 
-use openac_formats::map::TILE_SIZE;
-use openac_formats::ObjectClass;
+use openconquest_formats::map::TILE_SIZE;
+use openconquest_formats::ObjectClass;
 
 use super::Scene;
 use crate::assets::GameData;
@@ -223,7 +223,7 @@ impl Scene {
         fields[8] = tr.amount;
         fields[9] = cx as u32;
         fields[10] = cy as u32;
-        let rec = openac_formats::ObjectRecord {
+        let rec = openconquest_formats::ObjectRecord {
             id,
             class_id: 0x2bc,
             fields,

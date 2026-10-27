@@ -1,13 +1,13 @@
 //! Software rendering into a `0x00RRGGBB` framebuffer.
 
-use openac_formats::ObjectClass;
+use openconquest_formats::ObjectClass;
 
 use crate::assets::{rgb, GameData, Image, SHADOW};
 use crate::objects::{Layer, MapObject};
 use crate::scene::{Scene, Seen};
 use crate::terrain::{resolve, MINIMAP_DIVISOR};
 use crate::view::{Camera, Screen};
-use openac_formats::map::TILE_SIZE;
+use openconquest_formats::map::TILE_SIZE;
 
 /// Color shown outside the map.
 const BACKGROUND: u32 = 0x00_0b_1a_26;
@@ -101,7 +101,10 @@ pub fn draw_objects(
 ) {
     // Harpies and dragons fly over everything else.
     let flying = |o: &&crate::objects::MapObject| {
-        matches!(o.class, openac_formats::ObjectClass::Monster(0x1f8 | 0x1f9))
+        matches!(
+            o.class,
+            openconquest_formats::ObjectClass::Monster(0x1f8 | 0x1f9)
+        )
     };
     let visible = scene.objects.iter().filter(|o| scene.is_visible(o));
     let (above, mut below): (Vec<_>, Vec<_>) = visible.partition(flying);
@@ -111,10 +114,10 @@ pub fn draw_objects(
     let surface = |o: &crate::objects::MapObject| {
         matches!(
             o.class,
-            openac_formats::ObjectClass::FishZone
-                | openac_formats::ObjectClass::WhaleZone
-                | openac_formats::ObjectClass::Whirlpool
-                | openac_formats::ObjectClass::Reef(_)
+            openconquest_formats::ObjectClass::FishZone
+                | openconquest_formats::ObjectClass::WhaleZone
+                | openconquest_formats::ObjectClass::Whirlpool
+                | openconquest_formats::ObjectClass::Reef(_)
         )
     };
     let bottom = |o: &crate::objects::MapObject| {
@@ -385,14 +388,15 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
     }
     // Deposits are areas: anywhere in a fishing or leviathan ground (its
     // cells, record fields 6-9), near an amber deposit.
-    let t = openac_formats::map::TILE_SIZE as f32;
+    let t = openconquest_formats::map::TILE_SIZE as f32;
     let (cx, cy) = ((wx / t).floor() as i32, (wy / t).floor() as i32);
     if let Some(o) = visible().find(|o| {
         o.deposit.is_some() && {
             let f = |i| o.record.field(i).unwrap_or(0) as i32;
             match o.class {
-                openac_formats::ObjectClass::FishZone | openac_formats::ObjectClass::WhaleZone => {
-                    let (x, y, w, h) = if o.class == openac_formats::ObjectClass::FishZone {
+                openconquest_formats::ObjectClass::FishZone
+                | openconquest_formats::ObjectClass::WhaleZone => {
+                    let (x, y, w, h) = if o.class == openconquest_formats::ObjectClass::FishZone {
                         (f(6), f(7), f(8), f(9))
                     } else {
                         (f(7), f(8), f(9), f(10))

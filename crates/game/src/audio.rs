@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use openac_formats::{load_sound, Archive, Sound};
+use openconquest_formats::{load_sound, Archive, Sound};
 use rodio::buffer::SamplesBuffer;
 use rodio::{OutputStream, OutputStreamHandle, Source};
 

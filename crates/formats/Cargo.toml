@@ -1,5 +1,5 @@
 [package]
-name = "openac-formats"
+name = "openconquest-formats"
 description = "Readers for Ancient Conquest data files (DKX/DKD archives, installer, images, maps)"
 version.workspace = true
 edition.workspace = true

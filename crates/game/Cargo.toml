@@ -1,12 +1,12 @@
 [package]
-name = "openac"
+name = "openconquest"
 description = "Open source reimplementation of Ancient Conquest"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-openac-formats.workspace = true
+openconquest-formats.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 winit.workspace = true

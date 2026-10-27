@@ -7,7 +7,7 @@
 //! 0x4e6980 (warships), with per-type removals in 0x4e42e0; the shipyard
 //! menu from 0x4164e0 and the settlement menu from 0x43c740.
 
-use openac_formats::ObjectClass;
+use openconquest_formats::ObjectClass;
 
 use crate::economy::{
     self, DOCK, SCHOOL, SETTLEMENT, SHIPYARD, SMITHY, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR, TOWN,

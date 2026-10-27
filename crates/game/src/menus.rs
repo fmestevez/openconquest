@@ -6,7 +6,7 @@
 //! the window's height and centred.
 
 use anyhow::{Context, Result};
-use openac_formats::{Bitmap, ResourceKind, Sprite};
+use openconquest_formats::{Bitmap, ResourceKind, Sprite};
 
 use crate::assets::{rgb, GameData, Image};
 use crate::render::{blit_scaled, shade_rect, Frame};

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use openac_formats::{Archive, Font, Glyph, ResourceKind};
+use openconquest_formats::{Archive, Font, Glyph, ResourceKind};
 
 use crate::assets::rgb;
 use crate::render::Frame;
@@ -37,7 +37,7 @@ impl TextRenderer {
         archive: &Archive,
         name: &str,
         atlas: usize,
-        palette: Option<&openac_formats::Palette>,
+        palette: Option<&openconquest_formats::Palette>,
     ) -> Result<Self> {
         let font = Font::parse(&archive.read(name, ResourceKind::Font)?)?;
         let bitmap = font

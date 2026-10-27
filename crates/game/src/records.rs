@@ -62,7 +62,8 @@ mod tests {
         assert!(!r.record("miss000", 700.0));
         assert!(r.record("miss000", 500.0));
         assert_eq!(r.best("miss000"), Some(500.0));
-        let path = std::env::temp_dir().join(format!("openac-best-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("openconquest-best-{}.json", std::process::id()));
         r.save(&path).unwrap();
         assert_eq!(Records::load(&path), r);
         std::fs::remove_file(&path).unwrap();

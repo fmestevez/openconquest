@@ -3,7 +3,7 @@
 //! The weapon tables (damage, rate of fire, range) and ships' hull
 //! strength come from ANCIENT.EXE.
 
-use openac_formats::{ObjectClass, ObjectRecord};
+use openconquest_formats::{ObjectClass, ObjectRecord};
 
 use crate::objects::Layer;
 
@@ -891,7 +891,7 @@ pub struct Levels {
 impl Levels {
     /// The levels a mission gives a player at the start. The arming is
     /// one less here: the original's starts at 1.
-    pub fn starting(s: &openac_formats::StartLevels) -> Self {
+    pub fn starting(s: &openconquest_formats::StartLevels) -> Self {
         let cap = |v: u8| v.min(2);
         Self {
             weapons: s.arming.saturating_sub(1).min(1),

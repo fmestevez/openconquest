@@ -1,8 +1,8 @@
 //! The currently loaded mission.
 
 use anyhow::Result;
-use openac_formats::map::TILE_SIZE;
-use openac_formats::{players, MapGrid, ObjectClass, ObjectRecord, PlayerInfo};
+use openconquest_formats::map::TILE_SIZE;
+use openconquest_formats::{players, MapGrid, ObjectClass, ObjectRecord, PlayerInfo};
 
 use crate::assets::GameData;
 use crate::combat::{self, Effect, Rng};
@@ -286,7 +286,7 @@ pub struct Scene {
     /// The mission briefing, as paragraphs.
     pub briefing: Vec<String>,
     /// The briefing as the original's "Your mission" screen lays it out
-    /// (`openac_formats::briefing_text`).
+    /// (`openconquest_formats::briefing_text`).
     pub briefing_text: Vec<String>,
     /// The briefing's lines as stored (the help panel builds on them).
     pub briefing_lines: Vec<String>,
@@ -380,7 +380,7 @@ impl Scene {
         let cells = (nav.width * nav.height) as usize;
         let players = players(&archive).unwrap_or_default();
         let human = players.iter().copied().find(|p| !p.computer);
-        let conditions = openac_formats::conditions(&archive)?;
+        let conditions = openconquest_formats::conditions(&archive)?;
         let mut scene = Self {
             mission: mission.to_string(),
             grid,
@@ -475,7 +475,7 @@ impl Scene {
             planks: Vec::new(),
             porters: Vec::new(),
             views: (0..20)
-                .map(|id| openac_formats::mission::start_view(&archive, id / 4, id % 4))
+                .map(|id| openconquest_formats::mission::start_view(&archive, id / 4, id % 4))
                 .collect(),
             flyers: Vec::new(),
             nests: Vec::new(),
@@ -497,9 +497,9 @@ impl Scene {
             wind: Wind::new(0x5eed_0001),
             conditions,
             outcome: None,
-            briefing: openac_formats::briefing(&archive).unwrap_or_default(),
-            briefing_text: openac_formats::briefing_text(&archive).unwrap_or_default(),
-            briefing_lines: openac_formats::briefing_lines(&archive).unwrap_or_default(),
+            briefing: openconquest_formats::briefing(&archive).unwrap_or_default(),
+            briefing_text: openconquest_formats::briefing_text(&archive).unwrap_or_default(),
+            briefing_lines: openconquest_formats::briefing_lines(&archive).unwrap_or_default(),
             magic: Magic::default(),
         };
         // What buildings, lairs and monsters hold, dropped when they fall.
@@ -563,7 +563,7 @@ impl Scene {
                 }
             }
             scene.place_scripted(difficulty, data, caches);
-            let heroes = openac_formats::mission::heroes(&archive).unwrap_or_default();
+            let heroes = openconquest_formats::mission::heroes(&archive).unwrap_or_default();
             scene.story = scene.story_goals(heroes);
             let wanted: Vec<u8> = (0..9u8).filter(|&h| heroes[h as usize]).collect();
             scene.hide_hero_items(&wanted, data, caches);

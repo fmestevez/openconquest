@@ -2,7 +2,7 @@
 //! original does (0x478e30 counts them at the end into game + 0x3309; the
 //! screen 0x539b20 lists them with string resources 1047-1058).
 
-use openac_formats::ObjectClass;
+use openconquest_formats::ObjectClass;
 
 use super::Scene;
 use crate::combat;

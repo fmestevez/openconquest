@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use anyhow::Result;
-use openac_formats::{Bitmap, ResourceKind};
+use openconquest_formats::{Bitmap, ResourceKind};
 
 use crate::assets::{rgb, GameData, Image};
 use crate::render::{blit_scaled, Frame};
@@ -573,10 +573,10 @@ mod tests {
 
     use super::*;
 
-    /// Needs `OPENAC_DATA`.
+    /// Needs `OPENCONQUEST_DATA`.
     #[test]
     fn clicks_find_tabs_and_controls() {
-        let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
             return;
         };
         let data = GameData::open(std::path::Path::new(&root)).unwrap();

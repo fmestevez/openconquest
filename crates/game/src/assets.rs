@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{bail, Context, Result};
-use openac_formats::{
+use openconquest_formats::{
     parse_palette_animation, Archive, Bitmap, MapGrid, Mask, Palette, PaletteCycle, ResourceKind,
     Sprite, TileSetLibrary,
 };
@@ -48,7 +48,7 @@ impl Image {
     }
 }
 
-/// The installed game data directory (see `openac-extract install`).
+/// The installed game data directory (see `openconquest-extract install`).
 pub struct GameData {
     root: PathBuf,
     pub maplib: Archive,
@@ -72,7 +72,7 @@ impl GameData {
     pub fn open(root: &Path) -> Result<Self> {
         let maplib_path = find_ci(root, "maplib.dkx")?.with_context(|| {
             format!(
-                "no game data in {} (expected maplib.dkx); run `openac-extract install <cd> {}` first",
+                "no game data in {} (expected maplib.dkx); run `openconquest-extract install <cd> {}` first",
                 root.display(),
                 root.display()
             )
@@ -97,7 +97,7 @@ impl GameData {
             .ok()
             .flatten()
             .and_then(|p| std::fs::read(p).ok())
-            .and_then(|exe| openac_formats::string_table(&exe).ok())
+            .and_then(|exe| openconquest_formats::string_table(&exe).ok())
             .unwrap_or_default();
         let anim = maplib
             .find("ANIM_PALETTE", ResourceKind::PaletteAnimation)
@@ -256,7 +256,7 @@ impl GameData {
     }
 }
 
-pub fn rgb(c: openac_formats::Rgb) -> u32 {
+pub fn rgb(c: openconquest_formats::Rgb) -> u32 {
     (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32
 }
 

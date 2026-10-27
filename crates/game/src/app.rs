@@ -174,8 +174,8 @@ impl Preview {
         // is shown as the nearest of the backdrop's.
         let mut screen = crate::render::palette_lut(data, 0);
         if let Some(menus) = &data.menus {
-            if let Ok(raw) = menus.read("0M_BKGND_01", openac_formats::ResourceKind::Bitmap) {
-                if let Ok(b) = openac_formats::Bitmap::parse(&raw) {
+            if let Ok(raw) = menus.read("0M_BKGND_01", openconquest_formats::ResourceKind::Bitmap) {
+                if let Ok(b) = openconquest_formats::Bitmap::parse(&raw) {
                     let near = |c: u32| {
                         let (r, g, bl) = (
                             (c >> 16 & 255) as i32,
@@ -204,7 +204,7 @@ impl Preview {
             3 => "Persians",
             _ => "Barbarians",
         };
-        let infos = openac_formats::players(&archive).unwrap_or_default();
+        let infos = openconquest_formats::players(&archive).unwrap_or_default();
         let seats = infos
             .iter()
             .map(|p| (p.nation, p.slot, p.computer))
@@ -212,7 +212,7 @@ impl Preview {
         let start = infos
             .iter()
             .find(|p| !p.computer)
-            .and_then(|p| openac_formats::mission::start_view(&archive, p.nation, p.slot))
+            .and_then(|p| openconquest_formats::mission::start_view(&archive, p.nation, p.slot))
             .unwrap_or((0, 0));
         let players = infos
             .iter()
@@ -230,11 +230,11 @@ impl Preview {
                 h,
                 pixels.into_iter().map(Some).collect(),
             ))),
-            briefing: openac_formats::briefing(&archive).unwrap_or_default(),
+            briefing: openconquest_formats::briefing(&archive).unwrap_or_default(),
             players,
             seats,
             start,
-            text: openac_formats::briefing_text(&archive).unwrap_or_default(),
+            text: openconquest_formats::briefing_text(&archive).unwrap_or_default(),
         })
     }
 }
@@ -505,7 +505,7 @@ impl App {
             .map(|m| {
                 data.open_mission(m)
                     .ok()
-                    .and_then(|a| openac_formats::briefing(&a).ok())
+                    .and_then(|a| openconquest_formats::briefing(&a).ok())
                     .and_then(|b| b.first().map(|t| t.trim_matches('"').to_string()))
                     .filter(|t| !t.is_empty())
                     .unwrap_or_else(|| m.to_uppercase())
@@ -1024,7 +1024,7 @@ impl App {
                 }
             }
             // The original's multiplayer screen (Startmp, fitted to it):
-            // the player's name with its cursor, the ways to connect (OpenAC
+            // the player's name with its cursor, the ways to connect (OpenConquest
             // offers its own network game, over TCP/IP), New, Join, Cancel.
             MenuState::Connect => {
                 use crate::menus::{Placed, Style, Text};
@@ -1595,7 +1595,7 @@ impl App {
         )?;
         scene.fog = setup.fog;
         let archive = self.data.open_mission(&setup.mission)?;
-        let players = openac_formats::players(&archive)?;
+        let players = openconquest_formats::players(&archive)?;
         let seated: Vec<_> = setup
             .seats
             .iter()
@@ -1978,7 +1978,7 @@ impl App {
             .into_iter()
             .filter_map(|i| {
                 let archive = self.data.open_mission(&self.missions[i]).ok()?;
-                let players = openac_formats::players(&archive).ok()?;
+                let players = openconquest_formats::players(&archive).ok()?;
                 let n = players
                     .iter()
                     .filter(|p| !p.computer || p.nation != 4)
@@ -1999,7 +1999,7 @@ impl App {
             .data
             .open_mission(&mission)
             .ok()
-            .and_then(|a| openac_formats::players(&a).ok())
+            .and_then(|a| openconquest_formats::players(&a).ok())
             .and_then(|p| crate::net::seats_for(&p, self.lobby_players));
         let Some(seats) = seats else {
             self.say("The map has no room for so many players");
@@ -2143,7 +2143,7 @@ impl App {
         let (wx, wy) = self
             .camera
             .screen_to_world(&screen, pos.x as f32, pos.y as f32);
-        let t = openac_formats::map::TILE_SIZE as f32;
+        let t = openconquest_formats::map::TILE_SIZE as f32;
         Some(((wx / t).floor() as i32, (wy / t).floor() as i32))
     }
 
@@ -2565,7 +2565,7 @@ impl App {
                         .scene
                         .object_index(id)
                         .and_then(|i| match self.scene.objects[i].class {
-                            openac_formats::ObjectClass::Building(c) => Temple::of_class(c),
+                            openconquest_formats::ObjectClass::Building(c) => Temple::of_class(c),
                             _ => None,
                         })
                         .unwrap_or(Temple::Sea);
@@ -2660,7 +2660,7 @@ impl App {
         if let Some(g) = &self.gfx {
             let s = &self.scene;
             g.window.set_title(&format!(
-                "OpenAC — {} ({}x{}) — PgUp/PgDn: mission · Tab: interface · F11: fullscreen",
+                "OpenConquest — {} ({}x{}) — PgUp/PgDn: mission · Tab: interface · F11: fullscreen",
                 s.mission, s.grid.width, s.grid.height
             ));
         }
@@ -3083,7 +3083,8 @@ impl App {
                 Command::TREASURE => (
                     P::Treasure,
                     !target.is_some_and(|o| {
-                        o.treasure.is_some() || o.class == openac_formats::ObjectClass::HeroHouse
+                        o.treasure.is_some()
+                            || o.class == openconquest_formats::ObjectClass::HeroHouse
                     }),
                 ),
                 Command::REPAIR_SHIP | Command::REPAIR_BUILDING => {
@@ -3107,7 +3108,7 @@ impl App {
                 Some(o) if own(o) => (P::Own, false),
                 Some(o) if enemy(o) => (P::Attack, !s.is_armed()),
                 Some(o) if o.treasure.is_some() => (P::Treasure, false),
-                Some(o) if o.class == openac_formats::ObjectClass::HeroHouse => {
+                Some(o) if o.class == openconquest_formats::ObjectClass::HeroHouse => {
                     (P::Treasure, false)
                 }
                 Some(o) if resource(o).is_some() && merchant => match resource(o).unwrap() {
@@ -3331,7 +3332,8 @@ impl App {
             let takeable = self.scene.object_index(target).is_some_and(|t| {
                 matches!(
                     self.scene.objects[t].class,
-                    openac_formats::ObjectClass::Treasure | openac_formats::ObjectClass::HeroHouse
+                    openconquest_formats::ObjectClass::Treasure
+                        | openconquest_formats::ObjectClass::HeroHouse
                 )
             });
             if takeable && self.own_ship(id) {
@@ -3609,7 +3611,7 @@ impl App {
         self.update(dt);
         let (screen, _) = self.placement();
         let (vw, vh) = self.camera.view_size(&screen);
-        let t = openac_formats::map::TILE_SIZE as f32;
+        let t = openconquest_formats::map::TILE_SIZE as f32;
         self.scene.follow_view(
             (
                 (self.camera.x / t).floor() as i32,
@@ -3690,7 +3692,7 @@ impl ApplicationHandler for App {
         }
         let (w, h) = self.options.window_size;
         let mut attrs = Window::default_attributes()
-            .with_title("OpenAC")
+            .with_title("OpenConquest")
             .with_inner_size(LogicalSize::new(w, h))
             .with_min_inner_size(LogicalSize::new(400, 300));
         if self.options.fullscreen {

@@ -1,13 +1,13 @@
-//! Scene tests; most need the game data (`OPENAC_DATA`).
+//! Scene tests; most need the game data (`OPENCONQUEST_DATA`).
 
 use super::*;
 use crate::objects::Caches;
 
 /// Builds a boat and upgrades the settlement in the first campaign
-/// mission (needs `OPENAC_DATA`).
+/// mission (needs `OPENCONQUEST_DATA`).
 #[test]
 fn shipyard_builds_and_settlement_upgrades() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -64,10 +64,10 @@ fn shipyard_builds_and_settlement_upgrades() {
     assert_eq!(scene.can_build_ship(1), Ok(()));
 }
 
-/// A warship attacks and sinks an enemy ship (needs `OPENAC_DATA`).
+/// A warship attacks and sinks an enemy ship (needs `OPENCONQUEST_DATA`).
 #[test]
 fn warship_sinks_enemy() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -132,10 +132,10 @@ fn warship_sinks_enemy() {
 }
 
 /// A rammer damages its target, and boarders capture a ship (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn ramming_and_boarding() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -211,10 +211,10 @@ fn ramming_and_boarding() {
     assert!(prize.ship.as_ref().unwrap().crew.count() > 0);
 }
 
-/// A boat founds a settlement on a distant shore (needs `OPENAC_DATA`).
+/// A boat founds a settlement on a distant shore (needs `OPENCONQUEST_DATA`).
 #[test]
 fn boat_founds_settlement() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -265,10 +265,10 @@ fn boat_founds_settlement() {
 }
 
 /// A settlement trains swordsmen and a ship alongside takes them on
-/// (needs `OPENAC_DATA`).
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn marines_train_and_embark() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -313,10 +313,10 @@ fn marines_train_and_embark() {
 }
 
 /// A Temple of the Sea learns spells; the wind obeys and a whirlpool
-/// sinks a ship (needs `OPENAC_DATA`).
+/// sinks a ship (needs `OPENCONQUEST_DATA`).
 #[test]
 fn temple_magic() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -411,10 +411,10 @@ fn temple_magic() {
 }
 
 /// A Temple of War learns all its spells; protection wards off weapons
-/// and magic, lightning and flame hurt (needs `OPENAC_DATA`).
+/// and magic, lightning and flame hurt (needs `OPENCONQUEST_DATA`).
 #[test]
 fn war_magic() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -576,10 +576,10 @@ fn war_magic() {
 }
 
 /// Missions are won when every condition is met and lost when the
-/// player has nothing left (needs `OPENAC_DATA`).
+/// player has nothing left (needs `OPENCONQUEST_DATA`).
 #[test]
 fn victory_and_defeat() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -622,10 +622,10 @@ fn victory_and_defeat() {
 }
 
 /// Computer players gather and build ships, then attack after the grace
-/// period (needs `OPENAC_DATA`).
+/// period (needs `OPENCONQUEST_DATA`).
 #[test]
 fn computer_players_build_and_attack() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -664,10 +664,10 @@ fn computer_players_build_and_attack() {
 }
 
 /// A workshop builds a ballista and a ship alongside takes it on
-/// (needs `OPENAC_DATA`).
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn workshop_builds_weapons() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -732,10 +732,10 @@ fn workshop_builds_weapons() {
 }
 
 /// A tornado hops about and goes; a summoned sea monster fights for
-/// its master, then leaves (needs `OPENAC_DATA`).
+/// its master, then leaves (needs `OPENCONQUEST_DATA`).
 #[test]
 fn tornado_and_sea_monster() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -820,10 +820,10 @@ fn tornado_and_sea_monster() {
 }
 
 /// A saved game, restored, carries on exactly as the original would
-/// (needs `OPENAC_DATA`).
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn save_and_restore() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -834,7 +834,10 @@ fn save_and_restore() {
     }
     // Knowledge gained since the start is kept.
     scene.permits.read_scroll(1);
-    let path = std::env::temp_dir().join(format!("openac-save-test-{}.json", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "openconquest-save-test-{}.json",
+        std::process::id()
+    ));
     scene.save().write(&path).unwrap();
     let save = SaveGame::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
@@ -874,10 +877,10 @@ fn save_and_restore() {
 }
 
 /// A sage school studies weapons, and better weapons hit harder
-/// (needs `OPENAC_DATA`).
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn school_research() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -935,10 +938,10 @@ fn school_research() {
 }
 
 /// A smithy fits armour to a ship alongside, once the school has
-/// studied it (needs `OPENAC_DATA`).
+/// studied it (needs `OPENCONQUEST_DATA`).
 #[test]
 fn smithy_refits() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1001,10 +1004,10 @@ fn smithy_refits() {
     assert!(scene.refit(id, armour, 2).is_err(), "level 2 not studied");
 }
 
-/// A settlement puts up a smithy next to it (needs `OPENAC_DATA`).
+/// A settlement puts up a smithy next to it (needs `OPENCONQUEST_DATA`).
 #[test]
 fn settlement_builds_structures() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1052,7 +1055,7 @@ fn settlement_builds_structures() {
 /// A warship destroys an enemy building, and forts fire at enemy ships.
 #[test]
 fn buildings_fight() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1118,7 +1121,7 @@ fn buildings_fight() {
 /// Computer warships attack a human ship that sails close.
 #[test]
 fn computer_ships_attack_intruders() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1152,10 +1155,10 @@ fn computer_ships_attack_intruders() {
     );
 }
 
-/// A boat gathers amber and delivers it (needs `OPENAC_DATA`).
+/// A boat gathers amber and delivers it (needs `OPENCONQUEST_DATA`).
 #[test]
 fn merchant_gathers_amber() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1209,10 +1212,10 @@ fn merchant_gathers_amber() {
     assert!((before - left - 400.0).abs() < 1.0 || left < before - 400.0);
 }
 
-/// Sails a ship across a real mission map (needs `OPENAC_DATA`).
+/// Sails a ship across a real mission map (needs `OPENCONQUEST_DATA`).
 #[test]
 fn ship_sails_around_islands() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1264,10 +1267,10 @@ fn headings() {
 
 /// Fog of war: the player starts seeing around their own things, what
 /// they leave behind stays explored, and other players' ships hide out of
-/// sight (needs `OPENAC_DATA`).
+/// sight (needs `OPENCONQUEST_DATA`).
 #[test]
 fn fog_of_war() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1331,10 +1334,10 @@ fn fog_of_war() {
 }
 
 /// A workshop improves heavy weapons, and they strike harder (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn workshop_research() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1394,10 +1397,10 @@ fn workshop_research() {
 }
 
 /// Ships are repaired at a dock and buildings by a settlement, for amber
-/// (needs `OPENAC_DATA`).
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn repairs() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1454,10 +1457,10 @@ fn repairs() {
 
 /// Behaviour switches: a ship off guard holds its fire, one set to ram
 /// goes in, and one firing on aggressors turns on its attacker (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn behaviours() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1561,10 +1564,10 @@ fn behaviours() {
 }
 
 /// A boat hunts a leviathan and brings it home for 5000 amber and 2500
-/// fish; the zone is then empty (needs `OPENAC_DATA`).
+/// fish; the zone is then empty (needs `OPENCONQUEST_DATA`).
 #[test]
 fn leviathan_hunt() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1606,10 +1609,10 @@ fn leviathan_hunt() {
     assert!(scene.object_index(zone).is_none(), "the leviathan is gone");
 }
 
-/// Waypoints add legs to a ship's route (needs `OPENAC_DATA`).
+/// Waypoints add legs to a ship's route (needs `OPENCONQUEST_DATA`).
 #[test]
 fn waypoints() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1642,10 +1645,10 @@ fn waypoints() {
 }
 
 /// A scout sails out and back; a patrol turns at each end (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn scout_and_patrol() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1692,10 +1695,10 @@ fn scout_and_patrol() {
 }
 
 /// A ship guarding a zone fights an enemy that comes into it; an attack
-/// zone order ends once the zone is clear (needs `OPENAC_DATA`).
+/// zone order ends once the zone is clear (needs `OPENCONQUEST_DATA`).
 #[test]
 fn zones() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1783,10 +1786,10 @@ fn zones() {
 }
 
 /// A boat given an amber zone goes to gather from the deposit in it on
-/// its own; moving it by hand ends the zone (needs `OPENAC_DATA`).
+/// its own; moving it by hand ends the zone (needs `OPENCONQUEST_DATA`).
 #[test]
 fn gathering_zone() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1828,10 +1831,10 @@ fn gathering_zone() {
     assert!(ship(&scene).zone.is_none());
 }
 
-/// An escort follows the ship it convoys (needs `OPENAC_DATA`).
+/// An escort follows the ship it convoys (needs `OPENCONQUEST_DATA`).
 #[test]
 fn convoy() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1875,10 +1878,10 @@ fn convoy() {
 }
 
 /// Treasures: a barrel pays at once, a lasting gift goes aboard, and a
-/// hero's item brings the hero from his house (needs `OPENAC_DATA`).
+/// hero's item brings the hero from his house (needs `OPENCONQUEST_DATA`).
 #[test]
 fn treasures_and_heroes() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -1956,10 +1959,10 @@ fn treasures_and_heroes() {
 }
 
 /// The Gorgon turns ships in her area to stone (not Perseus's), and a siren
-/// draws ships towards her (needs `OPENAC_DATA`).
+/// draws ships towards her (needs `OPENCONQUEST_DATA`).
 #[test]
 fn gorgon_and_siren() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2080,10 +2083,10 @@ fn gorgon_and_siren() {
 }
 
 /// Quicklime kills crews without touching the hull; a fire rammer's barrel
-/// of powder goes off in the ram (needs `OPENAC_DATA`).
+/// of powder goes off in the ram (needs `OPENCONQUEST_DATA`).
 #[test]
 fn crews_under_fire() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2153,10 +2156,10 @@ fn crews_under_fire() {
 }
 
 /// Unique ships need their study at the sage school, which needs the
-/// arming at level 2 (needs `OPENAC_DATA`).
+/// arming at level 2 (needs `OPENCONQUEST_DATA`).
 #[test]
 fn unique_ships_need_study() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2188,10 +2191,10 @@ fn unique_ships_need_study() {
 }
 
 /// Campaign missions are judged by their story: miss000 is won with the
-/// barbarians gone and the parchment aboard (needs `OPENAC_DATA`).
+/// barbarians gone and the parchment aboard (needs `OPENCONQUEST_DATA`).
 #[test]
 fn campaign_story() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2256,10 +2259,10 @@ fn campaign_story() {
 
 /// miss000's brain: its fleets are the barbarian ships, the merchant goes
 /// fishing, and the guards attack when the player comes into a bay (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn miss000_brain() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2309,10 +2312,10 @@ fn miss000_brain() {
 
 /// Later campaign missions bring the heroes won so far, waiting at the
 /// starting settlement for a ship to take them aboard (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn campaign_heroes_carry_over() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2385,10 +2388,10 @@ fn campaign_heroes_carry_over() {
 }
 
 /// miss001's brain: the barbarians' yard builds the ships its fleets ask
-/// for, paid from their purse (needs `OPENAC_DATA`).
+/// for, paid from their purse (needs `OPENCONQUEST_DATA`).
 #[test]
 fn miss001_brain_builds() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2415,10 +2418,10 @@ fn miss001_brain_builds() {
 }
 
 /// miss002's brain: two computer players, each building for its own fleets
-/// (needs `OPENAC_DATA`).
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn miss002_brain() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2452,10 +2455,10 @@ fn miss002_brain() {
 }
 
 /// miss003's brain finds its fleets and both yards build (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn miss003_brain() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2485,10 +2488,10 @@ fn miss003_brain() {
 }
 
 /// Every ported brain finds some of its fleets and runs a few minutes
-/// (needs `OPENAC_DATA`).
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn ported_brains_run() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2520,10 +2523,10 @@ fn ported_brains_run() {
 }
 
 /// The difficulty reaches the brain: miss000's bonus is 4000 amber on easy,
-/// 2000 on normal and none on hard (needs `OPENAC_DATA`).
+/// 2000 on normal and none on hard (needs `OPENCONQUEST_DATA`).
 #[test]
 fn difficulty_sets_bonus() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2542,10 +2545,10 @@ fn difficulty_sets_bonus() {
 
 /// The campaign reveals technology as it goes: miss002's player cannot
 /// build bombers or study armour until the amazons' scroll of knowledge
-/// reaches a settlement (needs `OPENAC_DATA`).
+/// reaches a settlement (needs `OPENCONQUEST_DATA`).
 #[test]
 fn scroll_reveals_armour() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2577,10 +2580,10 @@ fn scroll_reveals_armour() {
 }
 
 /// Research, spells and revealed technology carry into the next campaign
-/// mission (needs `OPENAC_DATA`).
+/// mission (needs `OPENCONQUEST_DATA`).
 #[test]
 fn campaign_carries_research() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2607,10 +2610,10 @@ fn campaign_carries_research() {
 
 /// miss009's script puts the fire wizard's castle at (30, 1): it strikes
 /// the player's ships in reach and, destroyed, gives up the scroll of Greek
-/// fire (needs `OPENAC_DATA`).
+/// fire (needs `OPENCONQUEST_DATA`).
 #[test]
 fn fire_wizard() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2654,10 +2657,10 @@ fn fire_wizard() {
 }
 
 /// miss010's dragon leaves its nest, strikes a ship nearby and, killed, is
-/// followed by another while the nest has some left (needs `OPENAC_DATA`).
+/// followed by another while the nest has some left (needs `OPENCONQUEST_DATA`).
 #[test]
 fn dragon_flies_and_returns() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2716,10 +2719,10 @@ fn dragon_flies_and_returns() {
 }
 
 /// Lairs send out their cyclops, minotaurs and amazons, who keep to the
-/// land and throw at ships in reach (needs `OPENAC_DATA`).
+/// land and throw at ships in reach (needs `OPENCONQUEST_DATA`).
 #[test]
 fn creatures_leave_their_lairs() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2782,10 +2785,10 @@ fn creatures_leave_their_lairs() {
 
 /// miss002: Argus at the player's town lets them build the Argo, and the
 /// mission wants it afloat with Jason and Argus aboard (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn argus_builds_the_argo() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2814,11 +2817,11 @@ fn argus_builds_the_argo() {
 
 /// Two machines, a host and a client over a local connection, play
 /// battle01 together: each gives its ship an order, both play the same
-/// turns and their games stay the same (needs `OPENAC_DATA`).
+/// turns and their games stay the same (needs `OPENCONQUEST_DATA`).
 #[test]
 fn multiplayer_lockstep() {
     use crate::net::{Net, Setup, STEP, TURN};
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2840,7 +2843,7 @@ fn multiplayer_lockstep() {
     let mut host = hosting.join().unwrap();
     assert_eq!(client.seat, 1);
     let archive = data.open_mission("battle01").unwrap();
-    let players = openac_formats::players(&archive).unwrap();
+    let players = openconquest_formats::players(&archive).unwrap();
     let seated: Vec<_> = [(1, 1), (3, 3)]
         .iter()
         .map(|&(n, s)| {
@@ -2925,10 +2928,10 @@ fn multiplayer_lockstep() {
 
 /// The outcome screen's statistics: an enemy ship destroyed and one of the
 /// player's lost count, and score by the ships' points (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn statistics_and_score() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2967,10 +2970,10 @@ fn statistics_and_score() {
 
 /// Missions start with the view where the original puts it (`WIN_VIEW`):
 /// miss005's at cell (27, 28), the player's ship in sight (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn missions_start_where_the_view_is_set() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -2983,10 +2986,10 @@ fn missions_start_where_the_view_is_set() {
 }
 
 /// A fishing ground is picked anywhere in it, not only on the fish drawn
-/// in its middle (needs `OPENAC_DATA`).
+/// in its middle (needs `OPENCONQUEST_DATA`).
 #[test]
 fn deposits_are_picked_by_area() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3009,11 +3012,11 @@ fn deposits_are_picked_by_area() {
 }
 
 /// Every mouse pointer, normal and greyed, loads from the game data (needs
-/// `OPENAC_DATA`).
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn pointers_load() {
     use crate::cursor::{Pointer as P, Pointers};
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3043,10 +3046,10 @@ fn pointers_load() {
     }
 }
 
-/// A boat fishing casts its net (needs `OPENAC_DATA`).
+/// A boat fishing casts its net (needs `OPENCONQUEST_DATA`).
 #[test]
 fn fishing_casts_the_net() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3080,10 +3083,10 @@ fn fishing_casts_the_net() {
 }
 
 /// Exhausted amber lies empty for a while and grows back to what it held
-/// (needs `OPENAC_DATA`).
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn amber_grows_back() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3134,10 +3137,10 @@ fn amber_grows_back() {
 
 /// Missions give some players research levels from the start: in miss008
 /// the computer players have armour, ram and the workshop's levels at 2
-/// (needs `OPENAC_DATA`).
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn missions_give_starting_levels() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3157,17 +3160,17 @@ fn missions_give_starting_levels() {
     }
 }
 
-/// Finds the menu font, colour variant and spacing that draw `OPENAC_FIT_TEXT`
-/// at `OPENAC_FIT_AT` (x,y,w,h) as in the 800x600 raw RGB screenshot
-/// `OPENAC_FIT_RGB` (a development aid; does nothing without them).
+/// Finds the menu font, colour variant and spacing that draw `OPENCONQUEST_FIT_TEXT`
+/// at `OPENCONQUEST_FIT_AT` (x,y,w,h) as in the 800x600 raw RGB screenshot
+/// `OPENCONQUEST_FIT_RGB` (a development aid; does nothing without them).
 #[test]
 fn fit_font() {
     let (Some(root), Ok(raw), Ok(bg), Ok(text), Ok(at)) = (
-        std::env::var_os("OPENAC_DATA"),
-        std::env::var("OPENAC_FIT_RGB"),
-        std::env::var("OPENAC_FIT_BG"),
-        std::env::var("OPENAC_FIT_TEXT"),
-        std::env::var("OPENAC_FIT_AT"),
+        std::env::var_os("OPENCONQUEST_DATA"),
+        std::env::var("OPENCONQUEST_FIT_RGB"),
+        std::env::var("OPENCONQUEST_FIT_BG"),
+        std::env::var("OPENCONQUEST_FIT_TEXT"),
+        std::env::var("OPENCONQUEST_FIT_AT"),
     ) else {
         return;
     };
@@ -3185,8 +3188,8 @@ fn fit_font() {
         .collect();
     let r: Vec<i32> = at.split(',').map(|v| v.parse().unwrap()).collect();
     let (x0, y0, w, h) = (r[0], r[1], r[2], r[3]);
-    let palette = openac_formats::Bitmap::parse(
-        &arc.read("0M_BKGND_00", openac_formats::ResourceKind::Bitmap)
+    let palette = openconquest_formats::Bitmap::parse(
+        &arc.read("0M_BKGND_00", openconquest_formats::ResourceKind::Bitmap)
             .unwrap(),
     )
     .unwrap()
@@ -3203,7 +3206,7 @@ fn fit_font() {
             }
             for spacing in 0..4 {
                 let f = f_clone(arc, name, variant, &palette).with_spacing(spacing);
-                let reach: i32 = std::env::var("OPENAC_FIT_REACH")
+                let reach: i32 = std::env::var("OPENCONQUEST_FIT_REACH")
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(3);
@@ -3250,25 +3253,25 @@ fn fit_font() {
 }
 
 fn f_clone(
-    arc: &openac_formats::Archive,
+    arc: &openconquest_formats::Archive,
     name: &str,
     variant: usize,
-    palette: &openac_formats::Palette,
+    palette: &openconquest_formats::Palette,
 ) -> crate::text::TextRenderer {
     crate::text::TextRenderer::load_in(arc, &format!("0{name}"), variant, Some(palette)).unwrap()
 }
 
-/// Finds where the menu sprites `OPENAC_FIT_SPRITES` (comma separated) sit
-/// in the 800x600 raw RGB screenshot `OPENAC_FIT_RGB`, searching the area
-/// `OPENAC_FIT_AREA` (x0,y0,x1,y1 for the sprites' top-left corner); a
+/// Finds where the menu sprites `OPENCONQUEST_FIT_SPRITES` (comma separated) sit
+/// in the 800x600 raw RGB screenshot `OPENCONQUEST_FIT_RGB`, searching the area
+/// `OPENCONQUEST_FIT_AREA` (x0,y0,x1,y1 for the sprites' top-left corner); a
 /// development aid that does nothing without them.
 #[test]
 fn fit_sprite() {
     let (Some(root), Ok(raw), Ok(names), Ok(area)) = (
-        std::env::var_os("OPENAC_DATA"),
-        std::env::var("OPENAC_FIT_RGB"),
-        std::env::var("OPENAC_FIT_SPRITES"),
-        std::env::var("OPENAC_FIT_AREA"),
+        std::env::var_os("OPENCONQUEST_DATA"),
+        std::env::var("OPENCONQUEST_FIT_RGB"),
+        std::env::var("OPENCONQUEST_FIT_SPRITES"),
+        std::env::var("OPENCONQUEST_FIT_AREA"),
     ) else {
         return;
     };
@@ -3279,8 +3282,8 @@ fn fit_sprite() {
         .chunks(3)
         .map(|c| [c[0], c[1], c[2]])
         .collect();
-    let palette = openac_formats::Bitmap::parse(
-        &arc.read("0M_BKGND_00", openac_formats::ResourceKind::Bitmap)
+    let palette = openconquest_formats::Bitmap::parse(
+        &arc.read("0M_BKGND_00", openconquest_formats::ResourceKind::Bitmap)
             .unwrap(),
     )
     .unwrap()
@@ -3288,10 +3291,13 @@ fn fit_sprite() {
     let a: Vec<i32> = area.split(',').map(|v| v.parse().unwrap()).collect();
     for name in names.split(',') {
         let e = arc
-            .find(&format!("0{name}"), openac_formats::ResourceKind::Sprite)
-            .or_else(|| arc.find(name, openac_formats::ResourceKind::Sprite))
+            .find(
+                &format!("0{name}"),
+                openconquest_formats::ResourceKind::Sprite,
+            )
+            .or_else(|| arc.find(name, openconquest_formats::ResourceKind::Sprite))
             .unwrap();
-        let s = openac_formats::Sprite::parse(&arc.read_entry(e).unwrap()).unwrap();
+        let s = openconquest_formats::Sprite::parse(&arc.read_entry(e).unwrap()).unwrap();
         let mut ink = Vec::new();
         for y in 0..s.box_height {
             for x in 0..s.box_width {
@@ -3358,7 +3364,7 @@ fn start_fog_matches_the_original() {
         "00000000000000000c84ffff",
         "0000000000000000000c8888",
     ];
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3378,7 +3384,7 @@ fn start_fog_matches_the_original() {
 
 #[test]
 fn warships_open_the_building_page() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3401,10 +3407,10 @@ fn warships_open_the_building_page() {
 }
 
 /// A settlement's stocked marine goes aboard a ship alongside, one at a time
-/// (needs `OPENAC_DATA`).
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn stock_loads_onto_a_ship_alongside() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3442,10 +3448,10 @@ fn stock_loads_onto_a_ship_alongside() {
 }
 
 /// Ships turn on the spot before they set off, and sail cell to cell along
-/// the eight directions only (needs `OPENAC_DATA`).
+/// the eight directions only (needs `OPENCONQUEST_DATA`).
 #[test]
 fn ships_turn_then_sail_the_grid() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3502,10 +3508,10 @@ fn ships_turn_then_sail_the_grid() {
 }
 
 /// Shoals keep moving while fished, and the fishing ship follows its shoal
-/// and goes on fishing (needs `OPENAC_DATA`).
+/// and goes on fishing (needs `OPENCONQUEST_DATA`).
 #[test]
 fn fishing_ships_follow_their_shoal() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3557,10 +3563,10 @@ fn fishing_ships_follow_their_shoal() {
 }
 
 /// Selling an item from a settlement's stock brings back three quarters of
-/// its amber price (needs `OPENAC_DATA`).
+/// its amber price (needs `OPENCONQUEST_DATA`).
 #[test]
 fn settlement_sells_stock() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3601,10 +3607,10 @@ fn settlement_sells_stock() {
 }
 
 /// A ram ordered from afar goes in and strikes from the neighbouring cell
-/// (one ship to a cell; needs `OPENAC_DATA`).
+/// (one ship to a cell; needs `OPENCONQUEST_DATA`).
 #[test]
 fn ram_from_afar_connects() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3667,10 +3673,10 @@ fn ram_from_afar_connects() {
 }
 
 /// A game saved mid-battle keeps the shots in flight and the spells
-/// under way (needs `OPENAC_DATA`).
+/// under way (needs `OPENCONQUEST_DATA`).
 #[test]
 fn battles_survive_a_save() {
-    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
@@ -3704,7 +3710,8 @@ fn battles_survive_a_save() {
     }
     assert!(!scene.shots.is_empty(), "a volley flies");
     scene.lightning.push((x, y, 1.0));
-    let path = std::env::temp_dir().join(format!("openac-battle-{}.json", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("openconquest-battle-{}.json", std::process::id()));
     scene.save().write(&path).unwrap();
     let save = SaveGame::read(&path).unwrap();
     let _ = std::fs::remove_file(&path);

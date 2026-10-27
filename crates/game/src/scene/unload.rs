@@ -352,7 +352,7 @@ impl Scene {
     /// ship `i` lays to amber deposit `d`, when the deposit's cell lies
     /// straight beside the ship's.
     fn amber_walkway(&self, i: usize, d: usize) -> Option<(usize, (i8, i8))> {
-        let t = openac_formats::map::TILE_SIZE as f32;
+        let t = openconquest_formats::map::TILE_SIZE as f32;
         let o = &self.objects[i];
         let k = o.ship.as_ref()?.kind as usize % 12;
         let f = self.objects[d].record.fields.get(6..8)?;
@@ -617,7 +617,7 @@ impl Scene {
     /// while it lies empty.
     pub(super) fn refresh_amber(&mut self, i: usize, data: &GameData, caches: &mut Caches) {
         let o = &self.objects[i];
-        if o.class != openac_formats::ObjectClass::Amber {
+        if o.class != openconquest_formats::ObjectClass::Amber {
             return;
         }
         let f = |k| o.record.field(k).unwrap_or(0);

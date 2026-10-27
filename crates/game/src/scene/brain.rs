@@ -7,7 +7,7 @@
 //! mission's own. Timings are game ticks (`clock::TICK`) as in the original's
 //! `missCOM` primitives (0x47a3b0 and the others; see docs/FORMATS.md).
 
-use openac_formats::map::TILE_SIZE;
+use openconquest_formats::map::TILE_SIZE;
 
 use super::Scene;
 use crate::assets::GameData;
@@ -795,7 +795,7 @@ impl Scene {
         fields[7] = y as u32;
         fields[8] = w as u32;
         fields[9] = h as u32;
-        let rec = openac_formats::ObjectRecord {
+        let rec = openconquest_formats::ObjectRecord {
             id,
             class_id: class,
             fields,

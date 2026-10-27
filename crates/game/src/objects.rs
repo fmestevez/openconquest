@@ -17,10 +17,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::Result;
-use openac_formats::anim::EMPTY_SPRITE;
-use openac_formats::map::TILE_SIZE;
-use openac_formats::mission::field;
-use openac_formats::{
+use openconquest_formats::anim::EMPTY_SPRITE;
+use openconquest_formats::map::TILE_SIZE;
+use openconquest_formats::mission::field;
+use openconquest_formats::{
     object_records, Archive, Composite, ObjectClass, ObjectRecord, ResourceKind, Sequence,
 };
 

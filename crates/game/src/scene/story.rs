@@ -6,8 +6,8 @@
 //! objectives". Goals that need something the map lacks (the scripts create
 //! the Argo, Jason and the Golden Fleece as the story goes) are left out.
 
-use openac_formats::map::TILE_SIZE;
-use openac_formats::ObjectClass;
+use openconquest_formats::map::TILE_SIZE;
+use openconquest_formats::ObjectClass;
 
 use super::{Scene, OBJECTIVES};
 use crate::economy::{SETTLEMENT, TOWN};
@@ -79,7 +79,7 @@ pub fn carried_heroes(data: &crate::assets::GameData, mission: &str) -> Vec<u8> 
         let Ok(archive) = data.open_mission(&format!("miss{m:03}")) else {
             continue;
         };
-        let flags = openac_formats::mission::heroes(&archive).unwrap_or_default();
+        let flags = openconquest_formats::mission::heroes(&archive).unwrap_or_default();
         for h in 0..9u8 {
             if flags[h as usize] && !heroes.contains(&h) {
                 heroes.push(h);

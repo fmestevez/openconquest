@@ -3,8 +3,8 @@
 //! wound crews (`flyers`). Lairs, nests and sea monsters fight with the weapons given
 //! them in `combat::creature_weapons`.
 
-use openac_formats::map::TILE_SIZE;
-use openac_formats::ObjectClass;
+use openconquest_formats::map::TILE_SIZE;
+use openconquest_formats::ObjectClass;
 
 use super::{Caches, GameData, Scene};
 

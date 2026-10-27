@@ -17,7 +17,7 @@ implementation in `crates/formats` (see `crates/formats/tests/game_data.rs`).
 | `VIDEO/*.AVI` | Logos, intro (`TITLE`), mission intro (`MIS000`), outro |
 | `VIDEO/TASKS.DK?` | One entry, `FON000` |
 
-`openac-extract install` copies these (lower-cased) and unpacks `SETUP.DAT`
+`openconquest-extract install` copies these (lower-cased) and unpacks `SETUP.DAT`
 into the data directory root.
 
 ## LZ compression (verified)

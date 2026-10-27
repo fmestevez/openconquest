@@ -1,8 +1,8 @@
 //! Repairs: ships at a dock, buildings by a settlement or town (the
 //! manual's "Repairing a Ship" and "Repairing a Terrain Object").
 
-use openac_formats::map::TILE_SIZE;
-use openac_formats::ObjectClass;
+use openconquest_formats::map::TILE_SIZE;
+use openconquest_formats::ObjectClass;
 
 use super::Scene;
 use crate::economy::{DOCK, SETTLEMENT, TOWN};

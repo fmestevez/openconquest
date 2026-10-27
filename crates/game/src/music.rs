@@ -248,7 +248,7 @@ mod tests {
     /// Ripped CD tracks are found by their number, in order, and decode.
     #[test]
     fn cd_tracks_found_and_decoded() {
-        let dir = std::env::temp_dir().join(format!("openac-cd-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("openconquest-cd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // A tenth of a second of silence as 16-bit mono PCM.
         let samples = 4410u32;
@@ -281,10 +281,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The game's tunes parse (needs `OPENAC_DATA`).
+    /// The game's tunes parse (needs `OPENCONQUEST_DATA`).
     #[test]
     fn tunes_parse() {
-        let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
             return;
         };
         let tunes = playlist(&Path::new(&root).join("sound"));
@@ -379,10 +379,10 @@ mod tests {
         chunk(b"RIFF", &body)
     }
 
-    /// A tune renders to sound (needs `OPENAC_DATA`).
+    /// A tune renders to sound (needs `OPENCONQUEST_DATA`).
     #[test]
     fn tunes_play() {
-        let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
             return;
         };
         let font = Arc::new(SoundFont::new(&mut std::io::Cursor::new(sine_soundfont())).unwrap());

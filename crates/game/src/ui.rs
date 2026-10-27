@@ -12,7 +12,7 @@
 //! stays on the right and the frame is widened by tiling its middle part.
 
 use anyhow::{Context, Result};
-use openac_formats::{Bitmap, ResourceKind, Sequence};
+use openconquest_formats::{Bitmap, ResourceKind, Sequence};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1485,7 +1485,9 @@ pub fn ship_slots(obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
 pub fn settlement_slots(scene: &Scene, obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
     if !matches!(
         obj.class,
-        openac_formats::ObjectClass::Building(crate::economy::SETTLEMENT | crate::economy::TOWN)
+        openconquest_formats::ObjectClass::Building(
+            crate::economy::SETTLEMENT | crate::economy::TOWN
+        )
     ) {
         return Vec::new();
     }

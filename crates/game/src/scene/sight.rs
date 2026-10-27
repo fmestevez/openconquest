@@ -103,21 +103,21 @@ pub const SIGHT_PERIOD: f32 = 0.25;
 /// `b_FOG<code>` where black is stippled over explored cells out of sight.
 pub struct FogArt {
     pub cloud: Image,
-    pub dark: Vec<openac_formats::Mask>,
-    pub fog: Vec<openac_formats::Mask>,
+    pub dark: Vec<openconquest_formats::Mask>,
+    pub fog: Vec<openconquest_formats::Mask>,
     /// The minimap's: `<n>OBL_SM` and the 8x8 `s_DARK`/`s_FOG` masks.
     pub small_cloud: Option<Image>,
-    pub small_dark: Vec<openac_formats::Mask>,
-    pub small_fog: Vec<openac_formats::Mask>,
+    pub small_dark: Vec<openconquest_formats::Mask>,
+    pub small_fog: Vec<openconquest_formats::Mask>,
     /// The minimap's object icons (`LMAP8X8`, `LMAP16X16`: columns of
     /// 8x8 and 16x16 icons), if the menus archive is there.
     pub icons: Option<(Image, Image)>,
 }
 
 impl FogArt {
-    pub fn load(data: &GameData, archive: &openac_formats::Archive) -> Result<Self> {
+    pub fn load(data: &GameData, archive: &openconquest_formats::Archive) -> Result<Self> {
         let theme = archive
-            .find("N_CLOUD", openac_formats::ResourceKind::Record)
+            .find("N_CLOUD", openconquest_formats::ResourceKind::Record)
             .and_then(|e| archive.read_entry(e).ok())
             .and_then(|b| {
                 b.get(..4)
@@ -129,16 +129,16 @@ impl FogArt {
             .load_image(lib, &format!("{theme}OBL_BIG"), false)?
             .or(data.load_image(lib, "0OBL_BIG", false)?)
             .context("no OBL_BIG in maplib")?;
-        let masks = |prefix: &str| -> Result<Vec<openac_formats::Mask>> {
+        let masks = |prefix: &str| -> Result<Vec<openconquest_formats::Mask>> {
             (0..16)
                 .map(|i| {
                     let e = lib
                         .find(
                             &format!("{prefix}{i:02}"),
-                            openac_formats::ResourceKind::Mask,
+                            openconquest_formats::ResourceKind::Mask,
                         )
                         .with_context(|| format!("no {prefix}{i:02} in maplib"))?;
-                    Ok(openac_formats::Mask::parse(
+                    Ok(openconquest_formats::Mask::parse(
                         &lib.read_entry(e)?,
                         e.width.into(),
                         e.height.into(),

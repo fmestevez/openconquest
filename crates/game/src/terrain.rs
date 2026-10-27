@@ -1,8 +1,8 @@
 //! Composition of a mission's layered terrain into a single image.
 
 use anyhow::Result;
-use openac_formats::map::TILE_SIZE;
-use openac_formats::MapGrid;
+use openconquest_formats::map::TILE_SIZE;
+use openconquest_formats::MapGrid;
 
 use crate::assets::{GameData, Image, ImageCache, ANIMATED};
 

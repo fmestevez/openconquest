@@ -1,4 +1,4 @@
-//! `openac-extract`: installs the game data from an Ancient Conquest CD and
+//! `openconquest-extract`: installs the game data from an Ancient Conquest CD and
 //! inspects archives.
 
 use std::fs;
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use openac_formats::{Archive, Bitmap, Mask, Palette, ResourceKind, Sprite};
+use openconquest_formats::{Archive, Bitmap, Mask, Palette, ResourceKind, Sprite};
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -66,7 +66,7 @@ fn main() -> Result<()> {
 }
 
 fn video(path: &Path, out: &Path, every: usize) -> Result<()> {
-    let avi = openac_formats::avi::Avi::parse(fs::read(path)?)?;
+    let avi = openconquest_formats::avi::Avi::parse(fs::read(path)?)?;
     fs::create_dir_all(out)?;
     let mut dec = avi.decoder();
     let stem = path
@@ -123,7 +123,7 @@ fn find_ci(dir: &Path, name: &str) -> Result<Option<PathBuf>> {
 }
 
 fn install(cd: &Path, dest: &Path, no_video: bool) -> Result<()> {
-    openac_formats::install::install(cd, dest, !no_video, |line| println!("{line}"))?;
+    openconquest_formats::install::install(cd, dest, !no_video, |line| println!("{line}"))?;
     println!("Game data installed to {}", dest.display());
     Ok(())
 }

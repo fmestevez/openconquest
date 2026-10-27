@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use openac_formats::avi::{Avi, Decoder};
+use openconquest_formats::avi::{Avi, Decoder};
 use rodio::buffer::SamplesBuffer;
 use rodio::{OutputStreamHandle, Sink};
 
@@ -112,10 +112,10 @@ mod tests {
     use super::*;
 
     /// A video fills the window's height or width, centred on black, and
-    /// ends after its frames (needs `OPENAC_DATA`).
+    /// ends after its frames (needs `OPENCONQUEST_DATA`).
     #[test]
     fn plays_letterboxed() {
-        let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
             return;
         };
         let path = find(Path::new(&root), "title.avi").unwrap();

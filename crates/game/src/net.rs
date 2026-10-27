@@ -3,7 +3,7 @@
 //! the turn each is carried out at, a few turns ahead; a machine plays a
 //! turn once it knows that turn's orders, so all play the same game. Each
 //! client reports a checksum of every turn to the host, which warns when
-//! the games drift apart (they need the same build of OpenAC).
+//! the games drift apart (they need the same build of OpenConquest).
 //!
 //! Messages are JSON lines.
 
@@ -210,7 +210,7 @@ impl Lobby {
                     });
                 }
                 Some(Msg::Hello { version }) if version != VERSION => link.send(&Msg::Refused {
-                    reason: format!("the host runs OpenAC {VERSION}, you {version}"),
+                    reason: format!("the host runs OpenConquest {VERSION}, you {version}"),
                 }),
                 Some(_) => link.send(&Msg::Refused {
                     reason: "the game is full".into(),
@@ -329,7 +329,10 @@ pub fn local_address() -> Option<std::net::IpAddr> {
 
 /// The seats of a game of `players` on a map with `map` players: the
 /// map's own player first, then its Greeks and Persians.
-pub fn seats_for(map: &[openac_formats::PlayerInfo], players: usize) -> Option<Vec<(u32, u32)>> {
+pub fn seats_for(
+    map: &[openconquest_formats::PlayerInfo],
+    players: usize,
+) -> Option<Vec<(u32, u32)>> {
     let seats: Vec<(u32, u32)> = map
         .iter()
         .filter(|p| !p.computer)

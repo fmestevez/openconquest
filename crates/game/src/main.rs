@@ -1,4 +1,4 @@
-//! OpenAC: an open source reimplementation of *Ancient Conquest*.
+//! OpenConquest: an open source reimplementation of *Ancient Conquest*.
 
 mod app;
 mod assets;
@@ -45,9 +45,9 @@ use crate::view::{Camera, ScalePolicy};
 #[command(version, about)]
 struct Args {
     /// Game data directory (an installed Ancient Conquest, or one made by
-    /// `openac-extract install`). Without it OpenAC uses the one chosen
+    /// `openconquest-extract install`). Without it OpenConquest uses the one chosen
     /// last time, or asks for the CD or install folder.
-    #[arg(long, env = "OPENAC_DATA")]
+    #[arg(long, env = "OPENCONQUEST_DATA")]
     data: Option<PathBuf>,
     /// Mission to open (e.g. miss000, single03, battle12).
     #[arg(long)]
@@ -85,12 +85,12 @@ struct Args {
     edge_scroll: bool,
     /// General MIDI SoundFont (.sf2) for the music; common install places
     /// are tried when it is not given.
-    #[arg(long, env = "OPENAC_SOUNDFONT", value_name = "SF2")]
+    #[arg(long, env = "OPENCONQUEST_SOUNDFONT", value_name = "SF2")]
     soundfont: Option<PathBuf>,
     /// Folder of the game CD's audio tracks ripped by you (Track02 to
     /// Track09 as WAV, FLAC or Ogg); played instead of the MIDI music.
     /// Defaults to `<data>/cdaudio`.
-    #[arg(long, env = "OPENAC_CD_AUDIO", value_name = "DIR")]
+    #[arg(long, env = "OPENCONQUEST_CD_AUDIO", value_name = "DIR")]
     cd_audio: Option<PathBuf>,
     /// Skip the company logos and title sequence at start-up.
     #[arg(long)]
@@ -217,7 +217,7 @@ fn run() -> Result<()> {
     } else if args.host {
         let mission = args.mission.clone().unwrap_or_else(|| "battle01".into());
         let archive = data.open_mission(&mission)?;
-        let players = openac_formats::players(&archive)?;
+        let players = openconquest_formats::players(&archive)?;
         let Some(seats) = net::seats_for(&players, args.players) else {
             bail!("{mission} has no room for {} players", args.players);
         };
@@ -481,7 +481,7 @@ fn screenshot(
             camera.clamp(&screen, map);
         }
     }
-    let t = openac_formats::map::TILE_SIZE as f32;
+    let t = openconquest_formats::map::TILE_SIZE as f32;
     let (vw, vh) = camera.view_size(&screen);
     scene.follow_view(
         ((camera.x / t).floor() as i32, (camera.y / t).floor() as i32),

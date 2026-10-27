@@ -2,8 +2,8 @@
 //! (message 0x8d1): the wizards' castles and the dragon's nest, with the
 //! treasures they guard; and what the wizards do.
 
-use openac_formats::map::TILE_SIZE;
-use openac_formats::{ObjectClass, ObjectRecord};
+use openconquest_formats::map::TILE_SIZE;
+use openconquest_formats::{ObjectClass, ObjectRecord};
 
 use super::Scene;
 use crate::assets::GameData;

@@ -1,5 +1,5 @@
 //! Finding the game data without command-line options: the folder given
-//! (`--data`, `OPENAC_DATA`), the one remembered from last time, a
+//! (`--data`, `OPENCONQUEST_DATA`), the one remembered from last time, a
 //! `gamedata` folder here or next to the program; failing those, the
 //! player is asked for the Ancient Conquest CD (or a mounted image of it)
 //! or the game's install folder. Data from a CD is installed into the
@@ -8,10 +8,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use openac_formats::install::{install, is_cd, is_installed};
+use openconquest_formats::install::{install, is_cd, is_installed};
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 
-const TITLE: &str = "OpenAC";
+const TITLE: &str = "OpenConquest";
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct Config {
@@ -19,11 +19,18 @@ struct Config {
 }
 
 fn config_path() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("OpenConquest").join("config.json"))
+}
+
+/// Where the settings were kept when the project was called OpenAC.
+fn old_config_path() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("OpenAC").join("config.json"))
 }
 
 fn remembered() -> Option<PathBuf> {
-    let text = std::fs::read_to_string(config_path()?).ok()?;
+    let text = std::fs::read_to_string(config_path()?)
+        .ok()
+        .or_else(|| std::fs::read_to_string(old_config_path()?).ok())?;
     serde_json::from_str::<Config>(&text).ok()?.data
 }
 
@@ -40,10 +47,13 @@ fn remember(data: &Path) {
 
 /// Where data installed from a CD goes.
 fn install_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("OpenAC")
-        .join("gamedata")
+    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+    // Data installed when the project was called OpenAC stays where it is.
+    let old = base.join("OpenAC").join("gamedata");
+    if old.is_dir() {
+        return old;
+    }
+    base.join("OpenConquest").join("gamedata")
 }
 
 /// Places a `gamedata` folder may be in: here, next to the program, and in
@@ -76,7 +86,7 @@ pub fn data_dir(given: Option<PathBuf>) -> Result<Option<PathBuf>> {
         .set_title(TITLE)
         .set_level(MessageLevel::Info)
         .set_description(
-            "Welcome to OpenAC.\n\nIt plays Ancient Conquest with the original game's data. \
+            "Welcome to OpenConquest.\n\nIt plays Ancient Conquest with the original game's data. \
              Choose the Ancient Conquest CD (or a mounted image of it), or the folder the \
              game is installed in.",
         )
@@ -104,7 +114,7 @@ pub fn data_dir(given: Option<PathBuf>) -> Result<Option<PathBuf>> {
                 .set_title(TITLE)
                 .set_level(MessageLevel::Info)
                 .set_description(format!(
-                    "OpenAC will copy the game's data (about 250 MB) from the CD to\n{}\n\n\
+                    "OpenConquest will copy the game's data (about 250 MB) from the CD to\n{}\n\n\
                      This takes a minute or two; the game starts when it is done.",
                     dest.display()
                 ))
@@ -120,7 +130,7 @@ pub fn data_dir(given: Option<PathBuf>) -> Result<Option<PathBuf>> {
         }
         // An install of the original that left its data on the CD.
         let hint = if matches!(
-            openac_formats::install::find_ci(&folder, "maplib.dkx"),
+            openconquest_formats::install::find_ci(&folder, "maplib.dkx"),
             Ok(Some(_))
         ) {
             "This installation keeps the game's data on the CD. Please choose the CD instead."

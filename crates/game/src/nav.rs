@@ -8,7 +8,7 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use openac_formats::MapGrid;
+use openconquest_formats::MapGrid;
 
 const SEA: u8 = 0x00;
 const SHELF: u8 = 0x01;

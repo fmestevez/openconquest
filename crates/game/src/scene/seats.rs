@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use openac_formats::PlayerInfo;
+use openconquest_formats::PlayerInfo;
 
 use super::{Order, Scene, Seen};
 use crate::assets::GameData;

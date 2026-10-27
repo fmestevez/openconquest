@@ -1,10 +1,10 @@
-# OpenAC
+# OpenConquest
 
 An open source reimplementation of **Ancient Conquest: Quest for the Golden
 Fleece** (Re:Action Entertainment / DreamCatcher, 1999) in Rust, using the
 original game's data.
 
-OpenAC does not include any game assets. You need an original copy of the
+OpenConquest does not include any game assets. You need an original copy of the
 game CD.
 
 ## Status
@@ -15,8 +15,8 @@ Early work. What exists today:
   package, DKX/DKD archives, LZ compression, bitmaps, sprites, masks, palette
   animation, tile sets and terrain maps. Every archive entry on the CD
   decompresses, and every image and map decodes.
-- `openac-extract`: installs the data from the CD and dumps archives to PNG.
-- `openac`: renders any campaign, single or battle mission: terrain with
+- `openconquest-extract`: installs the data from the CD and dumps archives to PNG.
+- `openconquest`: renders any campaign, single or battle mission: terrain with
   animated water, plus every object the mission places (ships in their
   owners' colours, towns and buildings, castles, monster lairs and nests,
   sea monsters, fish and leviathan grounds, amber, reefs, whirlpools, lava
@@ -173,7 +173,7 @@ CD or SoundFont). In missions, the game CD's own music, its audio tracks 2-9 (no
 plays if you rip them into `<data>/cdaudio` (or `--cd-audio DIR`) as WAV,
 FLAC or Ogg files named by track number (`Track02.flac`, ...); otherwise
 the original MIDI music plays through a General MIDI SoundFont you
-provide (`--soundfont FILE.sf2` or `OPENAC_SOUNDFONT`; common Linux
+provide (`--soundfont FILE.sf2` or `OPENCONQUEST_SOUNDFONT`; common Linux
 locations are found by themselves). Sound effects from the original play for gunfire,
 hits, splashes, wrecks, construction and spells, louder the nearer they
 are to the centre of the view. The wind changes as in the original and speeds up or
@@ -196,7 +196,7 @@ lairs destroyed, fish caught, amber earned and left, treasures found and
 the total score, computed as the original does. Missions' starting research levels apply (some campaign opponents start
 with better armour, rams and weapons); crews are not upgraded in play, as in
 the original. Not yet implemented: the campaign scripts' story events (partly decoded),
-the original's multiplayer screens (OpenAC has its own lobby), and play against the original game over the network. See [docs/FORMATS.md](docs/FORMATS.md) for what is known about
+the original's multiplayer screens (OpenConquest has its own lobby), and play against the original game over the network. See [docs/FORMATS.md](docs/FORMATS.md) for what is known about
 the file formats.
 
 ### Modern improvements
@@ -217,9 +217,9 @@ the file formats.
   map from the small tiles, its description and players with their flags
   and computer level), Load game (saved games of the campaign and of other
   missions, or a campaign mission to start from) and the multiplayer
-  screen (OpenAC's own network game behind it, so its one way to connect is
+  screen (OpenConquest's own network game behind it, so its one way to connect is
   TCP/IP). The screens are drawn from the original's own widget pictures
-  and fonts. The mission accomplished and failed screens are OpenAC's own
+  and fonts. The mission accomplished and failed screens are OpenConquest's own
   so far.
 - Quick save and load at any moment (F5 / F9), plus eight save slots.
 - Adjustable game speed (half to double) and scroll speed.
@@ -240,24 +240,24 @@ is installed in, copies the data it needs from a CD (about 250 MB, into
 your user data folder), and remembers the choice:
 
 ```sh
-cargo run --release -p openac
+cargo run --release -p openconquest
 ```
 
-On macOS, `scripts/bundle-macos.sh` builds `dist/OpenAC.app`, which you can
+On macOS, `scripts/bundle-macos.sh` builds `dist/OpenConquest.app`, which you can
 double-click (or copy to Applications); its icon is cut from the original's
 title art in your game data, when the script finds it. The game data then lives in
-`~/Library/Application Support/OpenAC/gamedata` and the choice in
-`~/Library/Application Support/OpenAC/config.json` (delete it to choose
+`~/Library/Application Support/OpenConquest/gamedata` and the choice in
+`~/Library/Application Support/OpenConquest/config.json` (delete it to choose
 again).
 
 Or by hand:
 
 ```sh
 # 1. Install the game data from the CD or a mounted ISO
-cargo run --release -p openac-extract -- install /Volumes/ANCIENT_CONQUEST gamedata
+cargo run --release -p openconquest-extract -- install /Volumes/ANCIENT_CONQUEST gamedata
 
 # 2. Run
-cargo run --release -p openac -- --data gamedata --mission miss000
+cargo run --release -p openconquest -- --data gamedata --mission miss000
 ```
 
 On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
@@ -298,15 +298,15 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 ### Multiplayer
 
 Two to eight players can play a map together over the network (the
-`battle01`-`battle25` maps; each player needs the same build of OpenAC
+`battle01`-`battle25` maps; each player needs the same build of OpenConquest
 and their own copy of the game data). From the title screen, MultiPlayer game:
 the host picks a map and the number of players and chooses Host; the
 others type the host's address (shown on the host's screen) and choose
 Join; the game starts once everyone is there. Or from the command line:
 
 ```sh
-openac --host --mission battle05 --players 3   # waits on port 17999
-openac --join 192.168.1.20                      # or host:port
+openconquest --host --mission battle05 --players 3   # waits on port 17999
+openconquest --join 192.168.1.20                      # or host:port
 ```
 
 The host's map players are taken in order: the map's own player for the
@@ -321,11 +321,11 @@ paused, sped up or saved, and a player who leaves cannot come back.
 ### Other tools
 
 ```sh
-openac --list-missions
-openac --mission battle07 --screenshot shot.png --window 2560x1080 --focus 20,12
-openac-extract list gamedata/maplib.dkx
-openac-extract dump gamedata/data/objects.dkx out/ --filter TARAN
-openac-extract video gamedata/video/title.avi frames/ --every 25
+openconquest --list-missions
+openconquest --mission battle07 --screenshot shot.png --window 2560x1080 --focus 20,12
+openconquest-extract list gamedata/maplib.dkx
+openconquest-extract dump gamedata/data/objects.dkx out/ --filter TARAN
+openconquest-extract video gamedata/video/title.avi frames/ --every 25
 ```
 
 ## Development
@@ -333,17 +333,17 @@ openac-extract video gamedata/video/title.avi frames/ --every 25
 ```sh
 cargo test
 # Also decode every resource of an installed copy:
-OPENAC_DATA=$PWD/gamedata cargo test --release
+OPENCONQUEST_DATA=$PWD/gamedata cargo test --release
 ```
 
 The workspace has three crates:
 
 - `crates/formats`: the data format library, with no platform dependencies.
-- `crates/extract`: the `openac-extract` tool.
-- `crates/game`: the `openac` game (winit + softbuffer software renderer).
+- `crates/extract`: the `openconquest-extract` tool.
+- `crates/game`: the `openconquest` game (winit + softbuffer software renderer).
 
 ## Legal
 
-OpenAC is an independent project, not affiliated with the original developers
+OpenConquest is an independent project, not affiliated with the original developers
 or publishers. Ancient Conquest and its assets are the property of their
 respective owners. Do not commit game data to this repository.

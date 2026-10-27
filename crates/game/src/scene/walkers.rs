@@ -4,8 +4,8 @@
 //! quicker the higher field 9). They roam the land near the lair and throw
 //! stones, axes or arrows at ships in reach (`combat::creature_weapons`).
 
-use openac_formats::map::TILE_SIZE;
-use openac_formats::{ObjectClass, ObjectRecord};
+use openconquest_formats::map::TILE_SIZE;
+use openconquest_formats::{ObjectClass, ObjectRecord};
 
 use super::{heading_towards, Scene};
 use crate::assets::GameData;
