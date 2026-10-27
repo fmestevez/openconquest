@@ -1883,7 +1883,7 @@ miss003 (0x44e210) 6, 7, 37, 60, 66; miss004 (0x451520) 27, 29, 32, 35,
 51, 52, 59, 64, 74; miss005 (0x454f00) 17, 50, 57, 63; miss006 (0x45b020)
 25, 54; miss007 (0x45c980) 26, 28, 33, 51, 55; miss008 (0x461010) 53, 58;
 miss009 (0x4648a0) 24, 30, 36, 41, 52, 67; miss010 (0x467e30) 62;
-miss011 (0x46e110) 46, 47, 76, 77 (each also re-grants the scrolls of two
+miss011 (0x46e590) 46, 47, 76, 77 (each also re-grants the scrolls of two
 missions before). A scroll of knowledge (treasure kind 27, field 7 its
 number) delivered to a settlement or town grants, by its number: 1 (miss002,
 held by an amazon lair) 29, 35, 52 ("You can now upgrade to silver
