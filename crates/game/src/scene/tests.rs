@@ -2018,8 +2018,11 @@ fn gorgon_and_siren() {
     let (mut scene, ships, _) = setup("battle17", 0x1fa, &mut caches);
     let i = scene.object_index(ships[1]).unwrap();
     scene.objects[i].ship.as_mut().unwrap().heroes.push(8); // Perseus
-    for _ in 0..50 * (GORGON_TEST_SECONDS) {
-        scene.update(0.02, &data, &mut caches);
+                                                            // Her blow would sink them; she rests up to 500 ticks before rising.
+    for &id in &ships {
+        let i = scene.object_index(id).unwrap();
+        let c = scene.objects[i].combat.as_mut().unwrap();
+        (c.max_hull, c.hull) = (1e7, 1e7);
     }
     let stone = |s: &Scene, id| {
         s.objects[s.object_index(id).unwrap()]
@@ -2028,8 +2031,17 @@ fn gorgon_and_siren() {
             .unwrap()
             .stone
     };
-    assert!(stone(&scene, ships[0]) > 0.0, "turned to stone");
-    assert_eq!(stone(&scene, ships[1]), 0.0, "Perseus is safe");
+    let (mut stoned, mut perseus) = (false, false);
+    for _ in 0..50 * 60 {
+        scene.update(0.02, &data, &mut caches);
+        stoned |= stone(&scene, ships[0]) > 0.0;
+        perseus |= stone(&scene, ships[1]) > 0.0;
+        if stoned {
+            break;
+        }
+    }
+    assert!(stoned, "turned to stone");
+    assert!(!perseus, "Perseus is safe");
 
     let (mut scene, ships, (sx, sy)) = setup("battle08", 0x1fd, &mut caches);
     let dist = |s: &Scene| {
@@ -2055,8 +2067,6 @@ fn gorgon_and_siren() {
         dist(&scene)
     );
 }
-
-const GORGON_TEST_SECONDS: usize = 9;
 
 /// Quicklime kills crews without touching the hull; a fire rammer's barrel
 /// of powder goes off in the ram (needs `OPENAC_DATA`).

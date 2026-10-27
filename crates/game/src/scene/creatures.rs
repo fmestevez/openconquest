@@ -7,12 +7,25 @@ use openac_formats::map::TILE_SIZE;
 use openac_formats::ObjectClass;
 
 use super::{Caches, GameData, Scene};
-use crate::objects::MapObject;
 
-/// Seconds between the Gorgon's stares, and ship-seconds of stone she has
-/// to share among the ships in her area each time. Placeholders.
-pub const GORGON_PERIOD: f32 = 8.0;
-pub const GORGON_POWER: f32 = 12.0;
+/// The Gorgon (MedusaClassTy, gorgona.cpp): she rests 200-500 ticks, rises
+/// (`GORG1`, 30 frames a tick), stares 1-3 times (`GORG2`, 28 frames, at
+/// frame 13) over the 3, 5 then 7 cells square about her, and sinks
+/// (`GORG3`, 30; `GORG4`, 21; 0x401f70, 0x4019d0). Each stare turns every
+/// ship there to stone for 150 ticks more and strikes it with 88000 shared
+/// out (22000 from five ships; message 0x158bf, 0x4dc630); Perseus and a
+/// magic shield keep it off, the mirror shield cuts the blow by its
+/// share.
+const GORGON_STARE: [u32; 3] = [1, 2, 3];
+
+/// A Gorgon's cycle: seconds until her next stare, and the stares left in
+/// this rising (0 resting), and how many she has made.
+#[derive(Debug, Clone, Copy)]
+pub struct GorgonCycle {
+    next: f32,
+    left: u32,
+    made: u32,
+}
 /// A siren (SirenaClassTy, sirena.cpp) hides 250-1000 ticks (0x403650),
 /// surfaces and sings once (her `SIRENA`, 163 frames a tick, at frame 45;
 /// 0x403ba0), then dives. Her song charms every ship within 7 cells (but
@@ -35,11 +48,6 @@ pub struct Charm {
     replan: f32,
     clock: f32,
 }
-/// The Gorgon's area when the record gives none, in cells.
-const DEFAULT_AREA: u32 = 5;
-
-/// A world rectangle: x0, y0, x1, y1.
-type Rect = (f32, f32, f32, f32);
 
 /// Treasure kind of the mirror shield of Athena, and the heroes who resist
 /// the Gorgon and sirens.
@@ -48,64 +56,13 @@ const ODYSSEUS: u8 = 7;
 const PERSEUS: u8 = 8;
 
 impl Scene {
-    /// The world rectangle of a Gorgon's area: fields 7 and 8 are
-    /// its size in cells, centred on the creature.
-    fn creature_area(o: &MapObject) -> Rect {
-        let t = TILE_SIZE as f32;
-        let size = |i| match o.record.field(i).unwrap_or(0) {
-            0 => DEFAULT_AREA,
-            n => n,
-        } as f32
-            * t;
-        let (w, h) = (size(7), size(8));
-        (o.x - w / 2.0, o.y - h / 2.0, o.x + w / 2.0, o.y + h / 2.0)
-    }
-
     pub(super) fn run_creatures(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         self.creature_clock += dt;
         // Stone wears off.
         for c in self.objects.iter_mut().filter_map(|o| o.combat.as_mut()) {
             c.stone = (c.stone - dt).max(0.0);
         }
-        let inside = |o: &MapObject, r: Rect| {
-            o.ship.is_some() && (r.0..=r.2).contains(&o.x) && (r.1..=r.3).contains(&o.y)
-        };
-        let warded = |o: &MapObject| o.combat.as_ref().is_some_and(|c| c.protect_magic > 0.0);
-        let gorgons: Vec<Rect> = self
-            .objects
-            .iter()
-            .filter(|o| o.class == ObjectClass::Monster(0x1fa))
-            .map(Self::creature_area)
-            .collect();
-        // The Gorgon's stare: her power is shared among the ships in her
-        // area, so a group suffers less each.
-        let stare = self.creature_clock % GORGON_PERIOD < dt;
-        if stare {
-            for r in gorgons {
-                let caught: Vec<usize> = self
-                    .objects
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, o)| inside(o, r) && !warded(o))
-                    .filter(|(_, o)| {
-                        let s = o.ship.as_ref().unwrap();
-                        !s.has_hero(PERSEUS) && !s.has_treasure(MIRROR_SHIELD)
-                    })
-                    .map(|(i, _)| i)
-                    .collect();
-                if caught.is_empty() {
-                    continue;
-                }
-                let each = GORGON_POWER / caught.len() as f32;
-                for i in caught {
-                    if let Some(c) = self.objects[i].combat.as_mut() {
-                        c.stone = c.stone.max(each);
-                    }
-                }
-                self.messages
-                    .push("The Gorgon's stare turns ships to stone".into());
-            }
-        }
+        self.run_gorgons(dt, data, caches);
         self.run_sirens(dt, data, caches);
     }
 
@@ -208,6 +165,90 @@ impl Scene {
             if c.left > 0.0 && self.object_index(id).is_some() {
                 self.charmed.insert(id, c);
             }
+        }
+    }
+
+    /// The Gorgons rest, rise, stare and sink.
+    fn run_gorgons(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+        let t = TILE_SIZE as f32;
+        let ticks = crate::clock::ticks;
+        let gorgons: Vec<(u32, (i32, i32))> = self
+            .objects
+            .iter()
+            .filter(|o| o.class == ObjectClass::Monster(0x1fa))
+            .map(|o| (o.id, ((o.x / t).floor() as i32, (o.y / t).floor() as i32)))
+            .collect();
+        for (id, cell) in gorgons {
+            let rest = |rng: &mut crate::combat::Rng| ticks(200 + rng.next() % 301 + 30 + 13);
+            let first = rest(&mut self.rng);
+            let mut g = *self.gorgons.entry(id).or_insert(GorgonCycle {
+                next: first,
+                left: 0,
+                made: 0,
+            });
+            g.next -= dt;
+            if g.next > 0.0 {
+                self.gorgons.insert(id, g);
+                continue;
+            }
+            if g.left == 0 {
+                g.left = 1 + self.rng.next() % 3;
+                g.made = 0;
+            }
+            // A stare.
+            let half = GORGON_STARE[(g.made as usize).min(2)] as i32;
+            let caught: Vec<u32> = self
+                .objects
+                .iter()
+                .filter(|o| {
+                    let (ox, oy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+                    (ox - cell.0).abs() <= half && (oy - cell.1).abs() <= half && o.ship.is_some()
+                })
+                .map(|o| o.id)
+                .collect();
+            let blow = if caught.len() < 5 {
+                88_000.0 / caught.len().max(1) as f32
+            } else {
+                22_000.0
+            } / 15.0;
+            for ship in &caught {
+                let Some(i) = self.object_index(*ship) else {
+                    continue;
+                };
+                let o = &self.objects[i];
+                let s = o.ship.as_ref().unwrap();
+                let warded = o.combat.as_ref().is_some_and(|c| c.protect_magic > 0.0);
+                if s.has_hero(PERSEUS) || warded {
+                    continue;
+                }
+                let mirror = s
+                    .treasures
+                    .iter()
+                    .find(|t| t.kind == MIRROR_SHIELD)
+                    .map_or(0, |t| if t.amount > 0 { t.amount.min(100) } else { 100 });
+                let share = match (&o.ship, &o.combat) {
+                    (Some(s), Some(c)) => super::battle::ship_hull_share(s, c),
+                    _ => 1.0,
+                };
+                if let Some(c) = self.objects[i].combat.as_mut() {
+                    c.stone += ticks(150);
+                }
+                let hurt = blow * share * (100 - mirror) as f32 / 100.0;
+                self.hit(*ship, hurt, data, caches);
+            }
+            if !caught.is_empty() {
+                self.messages
+                    .push("The Gorgon's stare turns ships to stone".into());
+            }
+            g.made += 1;
+            g.left -= 1;
+            g.next = if g.left > 0 {
+                ticks(28)
+            } else {
+                // Sinking, resting, rising, and into the first stare.
+                ticks(28 - 13 + 30 + 21) + rest(&mut self.rng)
+            };
+            self.gorgons.insert(id, g);
         }
     }
 }

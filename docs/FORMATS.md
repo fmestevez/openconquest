@@ -1096,6 +1096,15 @@ at +0x14 and +0x18; a summoned one 100 %, 0x493780). Idle, it waits
 each round's end (0x491fa0); at none it goes. Lightning takes half its
 maximum, blows what they carry.
 
+The Gorgon (MedusaClassTy, `gorgona.cpp`) rests 200-500 ticks (0x4019d0),
+rises (`GORG1`, 30 frames), stares 1-3 times (`GORG2`, 28 frames, at
+frame 13; 0x401f70) over the 3, 5 and 7 cells square about her, and sinks
+(`GORG3`, 30; `GORG4`, 21). Each stare sends every ship there message
+0x158bf with 88000 / the ships (22000 from five) and 150: unless it has
+hero 8 (Perseus) or a magic shield, the ship turns to stone for 150 ticks
+more (`+599`, `+0xa1`, `+0xa5`; freed at 0x4df260) and takes the blow (type
+0x1fa), cut by a mirror shield's share (cargo item 0xe).
+
 A siren (SirenaClassTy, `sirena.cpp`) hides 250-1000 ticks (0x403650),
 surfaces and sings as her `SIRENA` passes frame 45 (0x403ba0), then dives.
 Her song (message 0x15ca7, 750 and a share: 88 / the ships, 22 from five)
