@@ -1343,7 +1343,9 @@ In the executable each brain's per-fleet handlers come first and its main
 function (the message handler that creates the fleets, lays deposits and
 dispatches each member to its handler) last: miss011's handlers are
 0x46b8d0-0x46e110 and its main 0x46e8e0, miss012's 0x46fb80-0x472890 and
-0x472fa0 (0x46f760 is its judge), miss013's 0x473f40-0x476dc0 and 0x477930. Mains: miss000
+0x472fa0 (0x46f760 is its judge), miss013's 0x4741b0-0x477210 and 0x477930
+(0x473f40 is its judge; the repair handlers 0x475a70 and 0x477190 serve
+miss012 and miss013 alike). Mains: miss000
 0x449b10, miss001 0x44af70, miss002 0x44d0e0, miss003 0x44fd90, miss004
 0x453b00, miss005 0x457950, miss006 0x45b280, miss007 0x45f770, miss008
 0x463240, miss009 0x4663d0, miss010 0x46a0f0.
@@ -1719,6 +1721,84 @@ miss012 (0x472fa0; members 0x46fb80-0x472890, repair 0x475a70, 0x477190):
   and 8000, 10000 or 15000 fish, player 14 15000, 15000 or 25000 and
   10000, 10000 or 15000 (added), and both technology and workshop levels
   (not ported).
+
+miss013 (0x477930; members 0x4741b0-0x477210, judge 0x473f40):
+
+- **Members.** Group 0 is the barbarians (player 16, 4 members) in the
+  north-west corner, group 1 player 15 in the middle channel (7 members),
+  group 2 player 14 in the south (8 members). Requests are per-member
+  slots at `+0x10c`, `+0x134`, `+0x154`, each yard's member served at
+  `+0x104`, `+0x130`, `+0x150`. Members are dispatched at tick 5 x (group
+  + member) mod 50.
+- **The barbarians.** The yard (0x4741b0 at (2, 4)) is miss012's (rest
+  `((50, 30, 10) + rand(31)) x 25`, free). Member 1 (0x474410, no ships)
+  asks for royal ships (1, 1, 2) and a bomber and sails to (8, 5) every
+  750 ticks watching (1, 1, 9, 7). Member 2 (0x4745c0, (6, 11)) fishes
+  (2, 1, 8, 7), then gathers amber in (9, 11, 9, 8), 4500 ticks, sailing
+  to (5, 1) and resting 3000 after each. Member 3 (0x474740, (8, 7, 3, 3))
+  asks for royal ships (2) and a rammer, rolls `(rand(4) + (9, 7, 5)) x
+  1500` (`+0x12c`); short of three royal ships, bombers and rammers it
+  sails to (6, 1), else patrols (0x5b4f58) watching (3, 5, 19, 10) too,
+  then strikes 6000 ticks (until fewer than two) at (35, 0, 15, 9) if the
+  player is there, else about one of the player's settlements or towns in
+  (0, 0, 50, 72), else not. Zone fights last 1500 ticks, answering fire
+  250.
+- **Player 15.** The yard (0x474be0 at (14, 28)) is miss012's. Members 1
+  and 2 (0x474f80, 0x4750d0) gather amber and fish in (16, 19, 14, 17)
+  4500 ticks, home (13, 23), rest 1500. Member 3 (0x475220, (20, 26, 5,
+  3)) asks for royal ships (1, 2, 2), 0xd2 (1, 1, 2), bombers (2, 1, 2)
+  and 0xd3 (2, 1, 2) and sails to (22, 25) every 750 ticks watching four
+  channel zones (0x5b4fb8); state 0x19 sails to (42, 21) and on to 0x23, a
+  strike of 4500 ticks at `+0x180` while player 15 holds 5000 amber and
+  4000 fish. Member 4 (0x4754c0, (17, 20, 3, 4)) asks for boarders (0, 1,
+  2), 0xd3 (2), 0xd2 (3) and royal ships from 0x5c7474 (in .bss, never
+  written: none), patrols (0x5b5108) `(rand(4) + (11, 8, 7)) x 1500`
+  ticks (`+0x17c`) watching the channel, (0, 18, 8, 8) and (4, 17, 22, 7)
+  (events 0x5b5368; its fights read their zone from 0x5b5138, which has
+  only the first four: the fifth reads the terminator (an empty area),
+  the sixth a misaligned record, (20, 7, 18, 6)); answering fire 375
+  ticks, then back to the state before; then it takes `+0x180` about the
+  last of the player's royal ships carrying heroes or a lasting gift and,
+  one time in two, strikes there 4500 ticks (0x23, until fewer than
+  three); else `+0x180` = (35, 0, 15, 9) and, the player being there,
+  member 3 goes to 0x19, or, about one of the player's settlements or
+  towns in (0, 0, 50, 72), member 3 goes to 0x23. Member 5 (0x475a70)
+  mends, member 6 (0x475af0) is miss012's caster about player 15's first
+  temple 0x3e (waits (3, 2, 1) x 1500, spells `+0x174` (1, 2, 3), odds
+  (20, 15, 10)).
+- **Player 14.** The yard (0x475f70 at (44, 59)) is miss012's. Members 1
+  and 2 (0x476310, 0x476460) gather amber in (45, 56, 5, 8) and fish in
+  (28, 52, 22, 20) 6000 ticks, home (48, 66), rest 3000. Member 3
+  (0x4765b0, (39, 56, 4, 3)) asks for royal ships (2), bombers (3), 0xd2
+  (0, 1, 1) and 0xd3 (0, 0, 1), patrols (0x5b5428) `(rand(4) + (12, 10,
+  10)) x 1500` ticks (`+0x190`) watching the home waters (35, 52, 15, 5),
+  (35, 57, 8, 7) and (35, 64, 15, 6); on each turn, the player's first
+  ship lying in rows 38-54 sends members 4 and 5 to state 0x37, a strike
+  3 cells about it (`+0x1bc`) of 1500 ticks, once until member 3 or 4
+  starts over (`+0x1cc`). Member 4 (0x4768e0, (38, 61, 2, 3)) asks as
+  member (1, 4) (royal ships from 0x5c7480: none), rolls `(rand(4) + (10,
+  8, 6)) x 1500` (`+0x194`); short of strength it sails to (46, 53), else
+  patrols (0x5b54f0), watching the home waters and (14, 49, 24, 14) and
+  (37, 41, 9, 8) (state 0x1e); then about the first of the player's royal
+  ships carrying heroes, below row 44, one time in two, else in (0, 35,
+  50, 18) if the player is there, it strikes 4500 ticks (0x19, until
+  fewer than three). Member 5 (0x476dc0, (38, 65, 3, 2)) is miss012's
+  member (2, 5) (spell `+0x1b0`, `((20, 15, 10) + r) x 1500` ticks,
+  `+0x198`) asking for royal ships (3), 0xd3 (1, 1, 2) and 0xd2 (1): short
+  of them it sails to (47, 67) and waits 750 ticks, else patrols
+  (0x5b5720) watching the home waters and (24, 58, 13, 14), then casts
+  its spell on its ships (by member (2, 0)) and strikes (0, 55, 8, 8) 4500
+  ticks (until fewer than three). Member 6 (0x477190) mends, member 7
+  (0x477210) casts about player 14's first temple 0x3e (spells `+0x19c`),
+  through member (1, 0). Zone fights last 1500 ticks, answering fire 375.
+  Prizes of player 15 join member (1, 5), of player 14 member (1, 6)
+  (0x5d97); unordered launches join member 2 (boats, merchants) or 4 of
+  their player's group (0x5d98).
+- **The start.** Amber at (47, 0), (49, 1) and (38, 0) and fish at
+  (36, 1) on every difficulty; the purses are miss012's (player 15:
+  10000, 15000 or 25000 amber and 8000, 10000 or 15000 fish; player 14:
+  15000, 15000 or 25000 and 10000, 10000 or 15000; added), with
+  technology and workshop levels (not ported).
 
 Primitives not yet ported (the later brains use them):
 

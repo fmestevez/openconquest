@@ -4376,3 +4376,74 @@ fn miss012_brain_builds_its_fleets() {
         "the Persian yards built for their fleets"
     );
 }
+
+/// miss013's brain takes its fleets, lays the deposits and fills the two
+/// Persian players' purses at the start; twenty minutes on, the yards have
+/// built for the barbarians' guard and the Persians' gatherers.
+#[test]
+fn miss013_brain_builds_its_fleets() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss013").unwrap();
+    let brain = scene.brain.as_ref().unwrap();
+    let sites = |k: usize| brain.fleets[k].ships.len();
+    eprintln!(
+        "start: {:?}",
+        (0..brain.fleets.len()).map(sites).collect::<Vec<_>>()
+    );
+    // The three yards hold their buildings; the barbarians' gatherers and
+    // raiders and the Persians' guards, strikers and patrols start with
+    // ships.
+    assert_eq!(brain.fleets.len(), 19);
+    assert!([0, 4, 11].iter().all(|&k| sites(k) > 0));
+    assert!([2, 3, 7, 8, 14, 15, 16].iter().all(|&k| sites(k) > 0));
+    // Amber at (47, 0), (49, 1) and (38, 0), on every difficulty.
+    let deposits = scene
+        .objects
+        .iter()
+        .filter(|o| o.class == ObjectClass::Amber)
+        .count();
+    assert!(deposits >= 3);
+    // Two Persian players, each with a war temple (class 0x3e) for its
+    // caster to look about; their purses: 15000 amber each on normal,
+    // added.
+    let owner = |k: usize| {
+        scene.objects[scene.object_index(brain.fleets[k].ships[0]).unwrap()]
+            .owner
+            .unwrap()
+    };
+    let (middle, south) = (owner(4), owner(11));
+    assert_ne!(middle, south);
+    for p in [middle, south] {
+        assert!(scene.funds(p).0 >= 15_000);
+        assert!(scene
+            .objects
+            .iter()
+            .any(|o| o.owner == Some(p) && o.class == ObjectClass::Building(0x3e)));
+    }
+    // Twenty minutes, in ticks: note the most each fleet held.
+    let mut most = [0usize; 19];
+    for _ in 0..30_000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let brain = scene.brain.as_ref().unwrap();
+        for (m, f) in most.iter_mut().zip(&brain.fleets) {
+            *m = (*m).max(f.ships.len());
+        }
+    }
+    eprintln!(
+        "most: barbarian fleets {:?}, middle {:?}, south {:?}",
+        &most[1..=3],
+        &most[5..=10],
+        &most[12..=18]
+    );
+    // The barbarians' guard and the Persians' gatherers start with
+    // nothing.
+    assert!(most[1] > 0, "the barbarian yard built for its guard");
+    assert!(
+        [5, 6, 12, 13].iter().all(|&k| most[k] > 0),
+        "the Persian yards built for their gatherers"
+    );
+}
