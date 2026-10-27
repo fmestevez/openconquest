@@ -167,7 +167,9 @@ impl Scene {
     /// twice as often for 3000 ticks after he is attacked.
     pub(super) fn run_wizards(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         let t = TILE_SIZE as f32;
-        let castles: Vec<(u32, (i32, i32), u32, i32, i32, u32)> = self
+        // Each castle: id, cell, level, reach either way, class.
+        type Castle = (u32, (i32, i32), u32, i32, i32, u32);
+        let castles: Vec<Castle> = self
             .objects
             .iter()
             .filter_map(|o| match o.class {
