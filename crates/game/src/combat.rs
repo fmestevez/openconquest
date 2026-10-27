@@ -880,9 +880,11 @@ pub fn speed_factor(level: u8) -> f32 {
     [1.0, 1.15, 1.3][level.min(2) as usize]
 }
 
-/// Effect animations (BOMB sequences): a hit, a splash and a sinking.
-pub const FX_HIT: &str = "BOMBA20";
-pub const FX_SPLASH: &str = "BOMBA50";
+/// Effect animations: a heavy shot striking a ship and falling in the
+/// water (`BOMB<letter><state>0`, see `scene::shot`), used for blows
+/// without a shot (rams, hazards).
+pub const FX_HIT: &str = "BOMBG10";
+pub const FX_SPLASH: &str = "BOMBG20";
 pub const FX_SINK: &str = "BOMBG10";
 pub const FX_FRAME_MS: f32 = 70.0;
 

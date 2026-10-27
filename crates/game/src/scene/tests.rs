@@ -189,13 +189,20 @@ fn ramming_and_boarding() {
     scene.update(0.02, &data, &mut caches);
     assert!(hull(&scene, other_id) < before, "the ram did damage");
     scene.order_close(mine_id, other_id, true).unwrap();
+    // The fight aboard shows (ABORD_ pictures run 40-67 frames).
+    let mut fought = false;
     for _ in 0..50 * 60 {
         scene.update(0.02, &data, &mut caches);
+        fought |= scene
+            .effects
+            .iter()
+            .any(|fx| (40..=67).contains(&fx.frames.len()));
         let i = scene.object_index(other_id).unwrap();
         if scene.is_own(&scene.objects[i]) {
             break;
         }
     }
+    assert!(fought, "the boarding was shown");
     let prize = &scene.objects[scene.object_index(other_id).unwrap()];
     assert!(scene.is_own(prize), "the ship was captured");
     assert!(prize.ship.as_ref().unwrap().crew.count() > 0);

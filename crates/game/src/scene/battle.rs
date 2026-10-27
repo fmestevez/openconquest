@@ -508,11 +508,12 @@ impl Scene {
                         self.objects[i].ship.as_mut().unwrap().task =
                             Some(Task::Board { target, round });
                     } else {
-                        self.objects[i].ship.as_mut().unwrap().task = Some(Task::Board {
-                            target,
-                            round: combat::BOARD_ROUND,
-                        });
-                        self.board_round(id, target, data, caches);
+                        let round = self.board_round(id, target, data, caches);
+                        if let Some(ship) = self.objects.get_mut(i).and_then(|o| o.ship.as_mut()) {
+                            if matches!(ship.task, Some(Task::Board { .. })) {
+                                ship.task = Some(Task::Board { target, round });
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -562,9 +563,16 @@ impl Scene {
 
     /// One exchange of blows between the boarders of ship `a` and the crew
     /// of ship `t`; when the defenders fall, the ship changes hands.
-    pub(super) fn board_round(&mut self, a: u32, t: u32, data: &GameData, caches: &mut Caches) {
+    /// Returns the seconds until the next: the boarding picture's length.
+    pub(super) fn board_round(
+        &mut self,
+        a: u32,
+        t: u32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> f32 {
         let (Some(i), Some(ti)) = (self.object_index(a), self.object_index(t)) else {
-            return;
+            return combat::BOARD_ROUND;
         };
         let mut ca = self.objects[i].ship.as_ref().unwrap().crew;
         let mut ct = self.objects[ti].ship.as_ref().unwrap().crew;
@@ -623,14 +631,19 @@ impl Scene {
                 ca.lose(n)
             }
         }
+        let gained = ct.count() < self.objects[ti].ship.as_ref().unwrap().crew.count();
         self.objects[i].ship.as_mut().unwrap().crew = ca;
         self.objects[ti].ship.as_mut().unwrap().crew = ct;
+        // The fight aboard (0x4b5df0, 0x4e1bb0): the boarders gaining,
+        // `ABORD_0<heading>`, or thrown back, `ABORD_1<heading>`, a frame
+        // a tick between the ships; the next exchange waits for it.
+        let round = self.show_boarding(i, ti, gained, data, caches);
         if ca.count() == 0 {
             self.objects[i].ship.as_mut().unwrap().task = None;
-            return;
+            return round;
         }
         if ct.count() > 0 {
-            return;
+            return round;
         }
         // Captured: half the boarding squads (at least one) stay on the
         // prize, strongest first.
@@ -650,6 +663,40 @@ impl Scene {
         ship.crew = ca;
         ship.task = None;
         self.capture(t, owner, prize, data, caches);
+        round
+    }
+
+    /// Plays the boarding picture between ships `i` and `ti`; its length.
+    fn show_boarding(
+        &mut self,
+        i: usize,
+        ti: usize,
+        gained: bool,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> f32 {
+        let (a, t) = (&self.objects[i], &self.objects[ti]);
+        let heading = heading_towards(t.x - a.x, t.y - a.y);
+        let (x, y) = ((a.x + t.x) / 2.0, (a.y + t.y) / 2.0);
+        let name = format!("ABORD_{}{heading}", u8::from(!gained));
+        match objects::sequence_frames(data, caches, &name) {
+            Ok(frames) if !frames.is_empty() => {
+                let round = frames.len() as f32 * crate::clock::TICK;
+                self.effects.push(Effect {
+                    x,
+                    y,
+                    frames,
+                    age_ms: 0.0,
+                    follow: None,
+                    life_ms: None,
+                    frame_ms: crate::clock::TICK_MS as f32,
+                    tornado: None,
+                    site: None,
+                });
+                round
+            }
+            _ => combat::BOARD_ROUND,
+        }
     }
 
     /// Gives ship `id` to `owner`, redrawing it in the new owner's colours.
@@ -713,7 +760,12 @@ impl Scene {
                 age_ms: 0.0,
                 follow: None,
                 life_ms: None,
-                frame_ms: crate::combat::FX_FRAME_MS,
+                // Shots' pictures step a frame a tick (bomb.cpp).
+                frame_ms: if name.starts_with("BOMB") {
+                    crate::clock::TICK_MS as f32
+                } else {
+                    crate::combat::FX_FRAME_MS
+                },
                 tornado: None,
                 site: None,
             }),
