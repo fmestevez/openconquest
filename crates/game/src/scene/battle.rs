@@ -243,9 +243,22 @@ impl Scene {
                 continue;
             };
             let from = (self.objects[s].x, self.objects[s].y);
+            let Some(t) = self.object_index(target) else {
+                continue;
+            };
+            let dist = (self.objects[t].x - from.0).hypot(self.objects[t].y - from.1);
             for w in weapons {
-                let aim = combat::HIT_CHANCE + if atalanta { objects::ATALANTA_HIT } else { 0 };
-                let strikes = self.rng.chance(aim);
+                let aim = match (&self.objects[t].ship, &self.objects[t].combat) {
+                    (Some(ship), c) => combat::Aim::Ship {
+                        kind: ship.kind,
+                        zetes: ship.has_hero(objects::ZETES),
+                        phantom: c.as_ref().is_some_and(|c| c.phantom > 0.0),
+                    },
+                    _ => combat::Aim::Other,
+                };
+                let chance = combat::hit_chance(w, dist, aim)
+                    + if atalanta { objects::ATALANTA_HIT } else { 0 };
+                let strikes = self.rng.chance(chance);
                 let level = levels.arms_for(w);
                 self.fire_shot(
                     super::shot::Firing {

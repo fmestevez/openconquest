@@ -989,7 +989,12 @@ ground, 5 on a sea creature or whale, 6 on a land creature (7, a flyer,
 drawn as 6), a frame a tick, following what it hit; sounds: launch event
 `0x5bbca4[l]`, landing `0x5bbcec[state + l x 6]` for states 1-4. A ship's
 next shot with an item waits `0x5c76e0[item x 3 + level]` + rand(30)
-ticks.
+ticks. A shot hits (0x4bf7f0) with `43 + ease - 33 x distance / (aim x
+64)` percent, distance in pixels and aim in cells (0x598130: 9, 7, 7, 9,
+9, 9, 13, 11, 11, 7, 9 by item, alike at every level); the ease is 25,
+for a ship its type's (0x597acc: 5, 8, 20, 25, 15, 15, 10, 10, 10, 15,
+10, 15), 1 with hero 3 aboard, and a phantom is hit at 20 % whatever the
+range; Greek fire always hits.
 
 ## Training and repair at a settlement
 

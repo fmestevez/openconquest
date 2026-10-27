@@ -633,8 +633,39 @@ pub fn reach(item: u8, level: u8) -> (f32, f32) {
     (min as f32 * 64.0, (max as f32 + 0.5) * 64.0)
 }
 
-/// Chance that a shot hits. Placeholder.
-pub const HIT_CHANCE: u32 = 70;
+/// What a shot is aimed at, for its chances (0x4bf7f0).
+pub enum Aim {
+    /// A ship of this type; borne by Zetes; a phantom.
+    Ship {
+        kind: u8,
+        zetes: bool,
+        phantom: bool,
+    },
+    /// Anything else.
+    Other,
+}
+
+/// The percent chance that a shot with `item` from `dist` world pixels
+/// away hits (0x4bf7f0): 43 + the target's ease - 33 x the distance in
+/// cells / the item's aiming distance (0x598130: 9, 7, 7, 9, 9, 9, 13,
+/// 11, 11, 7, 9 cells, alike at every level). The ease is 25 but for
+/// ships, by type (0x597acc), 1 with Zetes aboard; a phantom is hit at
+/// 43 - 23 percent at any range. Greek fire always hits.
+pub fn hit_chance(item: u8, dist: f32, aim: Aim) -> u32 {
+    const AIMING: [u32; 11] = [9, 7, 7, 9, 9, 9, 13, 11, 11, 7, 9];
+    const EASE: [i32; 12] = [5, 8, 20, 25, 15, 15, 10, 10, 10, 15, 10, 15];
+    if item == GREEK_FIRE {
+        return 100;
+    }
+    let far = (dist * 33.0 / (AIMING[(item as usize).min(10)] as f32 * 64.0)) as i32;
+    let (ease, far) = match aim {
+        Aim::Ship { phantom: true, .. } => (0, 23),
+        Aim::Ship { zetes: true, .. } => (1, far),
+        Aim::Ship { kind, .. } => (EASE[kind as usize % 12], far),
+        Aim::Other => (25, far),
+    };
+    (ease - far + 43).clamp(0, 100) as u32
+}
 
 /// Research at the sage school (SchoolClassTy, menu 0x430f90): each
 /// player's weapons, ram, armour and movement levels, 0 to 2.
@@ -974,6 +1005,30 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn hit_chances() {
+        use super::*;
+        // A catapult (item 6, aiming 13 cells) at a skill ship (ease 25)
+        // two cells off: 43 + 25 - 33 x 2 / 13.
+        let ship = |kind| Aim::Ship {
+            kind,
+            zetes: false,
+            phantom: false,
+        };
+        assert_eq!(hit_chance(6, 128.0, ship(3)), 68 - 5);
+        // Farther, harder; a boat (ease 5) is harder than a skill ship.
+        assert!(hit_chance(6, 640.0, ship(3)) < hit_chance(6, 128.0, ship(3)));
+        assert!(hit_chance(6, 128.0, ship(0)) < hit_chance(6, 128.0, ship(3)));
+        // A phantom: 20 at any range; Greek fire never misses.
+        let phantom = Aim::Ship {
+            kind: 3,
+            zetes: false,
+            phantom: true,
+        };
+        assert_eq!(hit_chance(6, 64.0, phantom), 20);
+        assert_eq!(hit_chance(GREEK_FIRE, 640.0, Aim::Other), 100);
+    }
 
     #[test]
     fn ranges_and_rates() {
