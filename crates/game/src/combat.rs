@@ -632,16 +632,6 @@ pub fn reach(item: u8, level: u8) -> (f32, f32) {
 /// Chance that a shot hits. Placeholder.
 pub const HIT_CHANCE: u32 = 70;
 
-/// The sound of a volley, by its heaviest item.
-pub fn fire_sound(item: u8) -> &'static str {
-    match item {
-        0..=2 => "strel1",
-        4 => "gastsn1",
-        6 => "thrbal1",
-        _ => "thrcat1",
-    }
-}
-
 /// Research at the sage school (SchoolClassTy, menu 0x430f90): each
 /// player's weapons, ram, armour and movement levels, 0 to 2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -894,7 +884,7 @@ pub fn speed_factor(level: u8) -> f32 {
 pub const FX_HIT: &str = "BOMBA20";
 pub const FX_SPLASH: &str = "BOMBA50";
 pub const FX_SINK: &str = "BOMBG10";
-const FX_FRAME_MS: f32 = 70.0;
+pub const FX_FRAME_MS: f32 = 70.0;
 
 /// An animation at a world position: played once, or looped for a while
 /// over an object it follows.
@@ -909,6 +899,8 @@ pub struct Effect {
     pub life_ms: Option<f32>,
     /// A tornado: its course, which also picks its frame.
     pub tornado: Option<Tornado>,
+    /// Milliseconds a frame.
+    pub frame_ms: f32,
     /// Shows the ship being built at this shipyard (its frame is set from
     /// the production's progress).
     pub site: Option<u32>,
@@ -936,7 +928,7 @@ pub struct Tornado {
 impl Effect {
     /// Holds frame `n` (for animations driven by something else).
     pub fn show_frame(&mut self, n: usize) {
-        self.age_ms = n as f32 * FX_FRAME_MS + 1.0;
+        self.age_ms = n as f32 * self.frame_ms + 1.0;
         self.life_ms = Some(f32::MAX);
     }
 
@@ -946,7 +938,7 @@ impl Effect {
             let last = self.frames.len().checked_sub(1)?;
             return (t.phase != 0).then(|| self.frames[t.frame.min(last)].as_slice());
         }
-        let step = (self.age_ms / FX_FRAME_MS) as usize;
+        let step = (self.age_ms / self.frame_ms) as usize;
         match self.life_ms {
             Some(life) if self.age_ms < life && !self.frames.is_empty() => {
                 Some(&self.frames[step % self.frames.len()])

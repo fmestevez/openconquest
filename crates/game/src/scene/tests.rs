@@ -108,12 +108,21 @@ fn warship_sinks_enemy() {
     let target = scene.objects[enemy].id;
     let mine = scene.objects[mine].id;
     scene.order_attack(mine, target).unwrap();
+    let (mut flew, mut landed) = (false, false);
     for _ in 0..60 * 120 {
         scene.update(1.0 / 60.0, &data, &mut caches);
+        // Shots fly with their pictures and land with an impact a frame a
+        // tick.
+        flew |= scene.shots.iter().any(|s| s.layer().is_some());
+        landed |= scene
+            .effects
+            .iter()
+            .any(|fx| fx.frame_ms == crate::clock::TICK_MS as f32);
         if scene.object_index(target).is_none() {
             break;
         }
     }
+    assert!(flew && landed, "shots flew ({flew}) and landed ({landed})");
     assert!(scene.object_index(target).is_none(), "the enemy was sunk");
     assert!(
         scene.effects.iter().any(|fx| fx.frames.len() == 20),

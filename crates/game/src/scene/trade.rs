@@ -450,6 +450,7 @@ impl Scene {
                 age_ms: 0.0,
                 follow: None,
                 life_ms: None,
+                frame_ms: crate::combat::FX_FRAME_MS,
                 tornado: None,
                 site: Some(p.site),
             };

@@ -163,7 +163,7 @@ impl Scene {
                     fired.push(w);
                 }
             }
-            if let Some(&heaviest) = fired.iter().max() {
+            if !fired.is_empty() {
                 volleys.push((
                     target_id,
                     fired,
@@ -172,8 +172,6 @@ impl Scene {
                     theseus,
                     atalanta,
                 ));
-                let (x, y) = (self.objects[i].x, self.objects[i].y);
-                self.sounds.push((combat::fire_sound(heaviest), x, y));
             }
         }
         for (target, weapons, owner, shooter, theseus, atalanta) in volleys {
@@ -201,59 +199,68 @@ impl Scene {
                 .object_index(target)
                 .and_then(|t| self.objects[t].combat.as_ref())
                 .is_some_and(|c| c.protect_weapons > 0.0);
-            let mut damage = 0.0;
-            let mut wounds = 0.0;
+            // What the target's state takes off every blow: the weapon
+            // shield 80%, the Flame adds, Theseus, the Armour of Ares and
+            // Argus, the armour and the hull's share.
+            let mut factor = 1.0;
+            let mut wound_factor = 1.0;
+            if warded {
+                factor *= magic::SHIELD_FACTOR;
+                wound_factor *= magic::SHIELD_FACTOR;
+            }
+            if theseus {
+                wound_factor *= objects::THESEUS_DAMAGE;
+                factor *= objects::THESEUS_DAMAGE;
+            }
+            let flaming = self.flame_of(owner) > 0.0;
+            if flaming {
+                factor *= magic::FLAME_FACTOR;
+            }
+            if let Some(t) = self.object_index(target) {
+                if let Some(ship) = self.objects[t].ship.as_ref() {
+                    if let Some(a) = ship
+                        .treasures
+                        .iter()
+                        .find(|t| t.kind == objects::ARMOUR_OF_ARES)
+                    {
+                        let share = if a.amount > 0 {
+                            a.amount
+                        } else {
+                            objects::ARMOUR_OF_ARES_PERCENT
+                        };
+                        factor *= 1.0 - share.min(100) as f32 / 100.0;
+                    }
+                    if ship.has_hero(objects::ARGUS) && owner == Some(combat::MONSTERS) {
+                        factor *= objects::ARGUS_MONSTER_DAMAGE;
+                    }
+                }
+                if let (Some(ship), Some(c)) = (&self.objects[t].ship, &self.objects[t].combat) {
+                    factor *= combat::armour_factor(ship.armour) * ship_hull_share(ship, c);
+                }
+            }
+            // Each weapon sends a shot off, carrying its blow (bomb.cpp).
+            let Some(s) = self.object_index(shooter) else {
+                continue;
+            };
+            let from = (self.objects[s].x, self.objects[s].y);
             for w in weapons {
                 let aim = combat::HIT_CHANCE + if atalanta { objects::ATALANTA_HIT } else { 0 };
-                if self.rng.chance(aim) {
-                    damage += combat::hull_damage_at(w, levels.arms_for(w));
-                    wounds += combat::crew_damage_at(w, levels.arms_for(w));
-                }
+                let strikes = self.rng.chance(aim);
+                let level = levels.arms_for(w);
+                self.fire_shot(
+                    super::shot::Firing {
+                        item: w,
+                        flaming,
+                        from,
+                        target,
+                        strikes,
+                        damage: combat::hull_damage_at(w, level) * factor,
+                        wounds: combat::crew_damage_at(w, level) * wound_factor,
+                    },
+                    data,
+                    caches,
+                );
             }
-            // The weapon shield takes 80% of it; the player's Flame adds.
-            if warded {
-                damage *= magic::SHIELD_FACTOR;
-                wounds *= magic::SHIELD_FACTOR;
-            }
-            if theseus {
-                wounds *= objects::THESEUS_DAMAGE;
-            }
-            self.wound(target, wounds);
-            if self.flame_of(owner) > 0.0 {
-                damage *= magic::FLAME_FACTOR;
-            }
-            if theseus {
-                damage *= objects::THESEUS_DAMAGE;
-            }
-            // The Armour of Ares takes its share; Argus stands up to
-            // monsters.
-            if let Some(ship) = self
-                .object_index(target)
-                .and_then(|t| self.objects[t].ship.as_ref())
-            {
-                if let Some(a) = ship
-                    .treasures
-                    .iter()
-                    .find(|t| t.kind == objects::ARMOUR_OF_ARES)
-                {
-                    let share = if a.amount > 0 {
-                        a.amount
-                    } else {
-                        objects::ARMOUR_OF_ARES_PERCENT
-                    };
-                    damage *= 1.0 - share.min(100) as f32 / 100.0;
-                }
-                if ship.has_hero(objects::ARGUS) && owner == Some(combat::MONSTERS) {
-                    damage *= objects::ARGUS_MONSTER_DAMAGE;
-                }
-            }
-            // Armour softens blows on ships, and the hull takes its share.
-            if let Some(t) = self.object_index(target) {
-                if let (Some(ship), Some(c)) = (&self.objects[t].ship, &self.objects[t].combat) {
-                    damage *= combat::armour_factor(ship.armour) * ship_hull_share(ship, c);
-                }
-            }
-            self.hit(target, damage, data, caches);
         }
         for fx in &mut self.effects {
             fx.age_ms += dt * 1000.0;
@@ -286,6 +293,19 @@ impl Scene {
     /// Deals `damage` to the hull of `target`, with a hit (or splash) effect;
     /// a sunk ship is removed and a destroyed building left in ruins.
     pub(super) fn hit(&mut self, target: u32, damage: f32, data: &GameData, caches: &mut Caches) {
+        self.strike(target, damage, true, data, caches);
+    }
+
+    /// The same, showing the hit or splash only if `show` (a shot shows
+    /// its own).
+    pub(super) fn strike(
+        &mut self,
+        target: u32,
+        damage: f32,
+        show: bool,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         let Some(ti) = self.object_index(target) else {
             return;
         };
@@ -297,14 +317,16 @@ impl Scene {
         };
         c.hull -= damage;
         let destroyed = c.hull <= 0.0;
-        let name = if damage > 0.0 {
-            combat::FX_HIT
-        } else {
-            combat::FX_SPLASH
-        };
-        self.spawn_effect(data, caches, name, fx, fy);
-        self.sounds
-            .push((if damage > 0.0 { "hitmed" } else { "splash1" }, fx, fy));
+        if show {
+            let name = if damage > 0.0 {
+                combat::FX_HIT
+            } else {
+                combat::FX_SPLASH
+            };
+            self.spawn_effect(data, caches, name, fx, fy);
+            self.sounds
+                .push((if damage > 0.0 { "hitmed" } else { "splash1" }, fx, fy));
+        }
         let is_building = self.objects[ti].ship.is_none();
         if destroyed {
             self.note_destroyed(ti);
@@ -332,6 +354,7 @@ impl Scene {
                             age_ms: 0.0,
                             follow: None,
                             life_ms: None,
+                            frame_ms: crate::combat::FX_FRAME_MS,
                             tornado: None,
                             site: None,
                         }),
@@ -690,6 +713,7 @@ impl Scene {
                 age_ms: 0.0,
                 follow: None,
                 life_ms: None,
+                frame_ms: crate::combat::FX_FRAME_MS,
                 tornado: None,
                 site: None,
             }),
@@ -722,6 +746,7 @@ impl Scene {
                 age_ms: 0.0,
                 follow: Some(id),
                 life_ms: Some(seconds * 1000.0),
+                frame_ms: crate::combat::FX_FRAME_MS,
                 tornado: None,
                 site: None,
             }),

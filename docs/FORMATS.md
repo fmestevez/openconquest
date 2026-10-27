@@ -968,6 +968,26 @@ their percentage at `+0xa8`. They take a blow whole (message 0xda96 and
 the like), a fifth of it under a magic shield (`+0x15c`), and fall at 1
 (0x425990).
 
+## Projectiles
+
+Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships
+0x4c0230): `BOMB<letter><state><variant>` (0x498e10), the letter the
+item's (A for item 0; Greek fire flies as M, flaming, quick lime as N),
+variant 1 a flaming shot. In flight (state 0) the composite has 16 cells
+a frame, one per direction (0 east, counter-clockwise; 0x497e50), drawn
+with the mask `1 << direction`; the frames step a tick. Letters 0, 1, 3,
+4, 10, 11, 14 and 15 fly straight at `0x59757c[l] x 0x599b08[l] / 10`
+pixels a tick; the others arc (0x497be0, 0x497250) over a flight length by
+distance in tens of pixels from 30 (0x598dd8, seven shorts a row, the
+last the length) at `0x599b1c[l]` a tick, rising by `0x5baf74[l]` (about
+0.41 of the distance at 9000). Where it lands (0x4967b0, 0x4983d0) it
+plays state 1 on a ship, 2 in the water, 3 on a building, 4 on the
+ground, 5 on a sea creature or whale, 6 on a land creature (7, a flyer,
+drawn as 6), a frame a tick, following what it hit; sounds: launch event
+`0x5bbca4[l]`, landing `0x5bbcec[state + l x 6]` for states 1-4. A ship's
+next shot with an item waits `0x5c76e0[item x 3 + level]` + rand(30)
+ticks.
+
 ## Training and repair at a settlement
 
 A settlement's stock places (`[+0x244] + 0x23`, twelve) list units of two

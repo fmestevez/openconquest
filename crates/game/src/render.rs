@@ -232,6 +232,16 @@ pub fn draw_objects(
             }
         }
     }
+    // Shots in flight, over everything below them.
+    for s in scene
+        .shots
+        .iter()
+        .filter(|s| scene.seen((s.x / t).floor() as i32, (s.y / t).floor() as i32) == Seen::InSight)
+    {
+        if let Some(layer) = s.layer() {
+            draw_centred(frame, screen, camera, lut, &layer.image, s.x, s.y);
+        }
+    }
 }
 
 /// Draws a sprite whose top-left corner is at world position `(left, top)`.

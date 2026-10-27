@@ -169,6 +169,8 @@ pub struct Scene {
     pub minimap_origin: std::cell::Cell<(i32, i32)>,
     /// Running one-shot animations (explosions, splashes).
     pub effects: Vec<Effect>,
+    /// Projectiles in flight (not saved: a save lets them land at once).
+    pub shots: Vec<shot::Shot>,
     rng: Rng,
     /// Fish shoals out of sight between moves: the zone and seconds until
     /// they surface again; and those in sight: seconds until they leave
@@ -285,6 +287,7 @@ mod gulls;
 mod orders;
 mod repair;
 mod sheep;
+mod shot;
 mod sight;
 mod sparkle;
 mod treasure;
@@ -393,6 +396,7 @@ impl Scene {
             minimap_size: (mw, mh),
             minimap_origin: Default::default(),
             effects: Vec::new(),
+            shots: Vec::new(),
             rng: Rng(0x1234_5678),
             shoals_gone: Default::default(),
             shoals_shown: Default::default(),
@@ -1182,6 +1186,7 @@ impl Scene {
         self.run_constructions(dt, data, caches);
         self.run_ruins(dt);
         self.run_combat(dt, data, caches);
+        self.run_shots(dt, data, caches);
         self.run_contact(dt, data, caches);
         let mut moved = false;
         // One ship to a cell: the cells ships lie in, and those they are

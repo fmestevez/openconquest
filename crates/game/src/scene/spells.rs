@@ -193,6 +193,7 @@ impl Scene {
                             age_ms: 0.0,
                             follow: None,
                             life_ms: Some(magic::FIREBALL_SECONDS * 1000.0),
+                            frame_ms: crate::combat::FX_FRAME_MS,
                             tornado: None,
                             site: None,
                         });
@@ -326,6 +327,7 @@ impl Scene {
                 age_ms: 0.0,
                 follow: None,
                 life_ms: None,
+                frame_ms: crate::combat::FX_FRAME_MS,
                 tornado: Some(crate::combat::Tornado {
                     clock: 0.0,
                     frame: 0,
