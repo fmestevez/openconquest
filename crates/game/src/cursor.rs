@@ -36,6 +36,8 @@ pub enum Pointer {
     Treasure,
     Behaviour,
     Ban,
+    Load,
+    Unload,
 }
 
 impl Pointer {
@@ -58,6 +60,8 @@ impl Pointer {
             Treasure => ("CUR_TREASURE_", (-19, -21)),
             Behaviour => ("CUR_BEH_", (-17, -17)),
             Ban => ("CUR_BAN_", (-19, -10)),
+            Load => ("CUR_LOAD_", (-32, -37)),
+            Unload => ("CUR_UNLOAD_", (-18, -29)),
         }
     }
 }

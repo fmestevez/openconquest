@@ -70,6 +70,11 @@ pub enum Order {
         a: (f32, f32),
         b: (f32, f32),
     },
+    /// Merchant `ship` unloads its goods at own port or settlement `port`.
+    Unload {
+        ship: u32,
+        port: u32,
+    },
     Gather {
         ship: u32,
         deposit: u32,
@@ -221,6 +226,7 @@ impl Scene {
                 done(r)
             }
             Take { ship, target } => done(self.order_take(ship, target)),
+            Unload { ship, port } => done(self.order_unload(ship, port)),
             Found {
                 ship,
                 cx,

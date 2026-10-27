@@ -3061,6 +3061,7 @@ impl App {
                     | P::Board
                     | P::Ram
                     | P::Repair
+                    | P::Unload
                     | P::Treasure
                     | P::Amber
                     | P::Fish
@@ -3115,6 +3116,10 @@ impl App {
         let water = self
             .cell_at(pos)
             .is_some_and(|(x, y)| self.scene.nav.is_water(x, y));
+        // A unit picked up from a settlement's stock: onto one of own ships.
+        if self.carrying.is_some() {
+            return (P::Load, !target.is_some_and(|o| own(o) && o.ship.is_some()));
+        }
         // A command waiting for its target.
         if let Some(cmd) = self.pending {
             let deposit = |r: Resource| target.and_then(resource) == Some(r);
@@ -3227,6 +3232,17 @@ impl App {
         if own_dock {
             more.push((P::Repair, false));
         }
+        let laden = sh.cargo >= 1.0;
+        let landing = self.scene.is_own(t)
+            && matches!(
+                t.class,
+                openconquest_formats::ObjectClass::Building(
+                    economy::PORT | economy::SETTLEMENT | economy::TOWN
+                )
+            );
+        if laden && landing {
+            more.push((P::Unload, false));
+        }
         for m in more {
             if !modes.iter().any(|x| x.0 == m.0) {
                 modes.push(m);
@@ -3275,6 +3291,7 @@ impl App {
                 board: pointer == P::Board,
             }),
             (P::Repair, Some(dock)) => self.order_each(|ship| Order::Repair { ship, dock }),
+            (P::Unload, Some(port)) => self.order_each(|ship| Order::Unload { ship, port }),
             _ => {
                 self.right_click(pos);
                 Ok(())

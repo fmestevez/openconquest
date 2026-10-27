@@ -1830,6 +1830,39 @@ impl Scene {
         Some(((mx + ux * dist as f32, my + uy * dist as f32), face))
     }
 
+    /// Sends merchant `ship` to unload its goods at own port, settlement
+    /// or town `port` (the original's unload pointer, mode 13), then back
+    /// to what it was gathering.
+    pub fn order_unload(&mut self, ship: u32, port: u32) -> Result<(), String> {
+        let i = self.object_index(ship).ok_or("No such ship")?;
+        let p = self
+            .object_index(port)
+            .ok_or("Choose one of your ports or settlements")?;
+        let o = &self.objects[i];
+        if !self.is_own(o) || o.ship.as_ref().is_none_or(|s| s.cargo < 1.0) {
+            return Err("The ship has nothing to unload".into());
+        }
+        let b = &self.objects[p];
+        if !self.is_own(b) || !matches!(b.class, ObjectClass::Building(PORT | SETTLEMENT | TOWN)) {
+            return Err("Choose one of your ports or settlements".into());
+        }
+        let deposit = match o.ship.as_ref().and_then(|s| s.task) {
+            Some(Task::Gather { deposit, .. }) => deposit,
+            _ => 0,
+        };
+        let (bx, by) = self.berth(p);
+        let path = self
+            .plan_route(i, bx, by)
+            .ok_or("The ship cannot reach it")?;
+        let ship = self.objects[i].ship.as_mut().unwrap();
+        ship.path = path;
+        ship.task = Some(Task::Gather {
+            deposit,
+            phase: GatherPhase::ToPort(port),
+        });
+        Ok(())
+    }
+
     pub(super) fn send_to_port(&mut self, i: usize, deposit: u32) {
         let (x, y) = (self.objects[i].x, self.objects[i].y);
         let owner = self.objects[i].owner;

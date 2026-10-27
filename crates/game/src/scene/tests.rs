@@ -4044,3 +4044,49 @@ fn ships_sail_to_load() {
     }
     panic!("the ship never loaded");
 }
+
+/// A laden merchant sent to unload at a settlement delivers its goods
+/// there (needs `OPENCONQUEST_DATA`).
+#[test]
+fn merchants_unload_where_sent() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| {
+            scene.is_own(o)
+                && o.ship
+                    .as_ref()
+                    .is_some_and(|s| objects::cargo_capacity(s.kind) > 0.0)
+        })
+        .unwrap()
+        .id;
+    let port = scene
+        .unloading_site(
+            scene.objects[scene.object_index(ship).unwrap()].owner,
+            0.0,
+            0.0,
+        )
+        .unwrap();
+    let k = scene.object_index(ship).unwrap();
+    let s = scene.objects[k].ship.as_mut().unwrap();
+    s.cargo = 100.0;
+    s.cargo_kind = Some(Resource::Fish);
+    let fish = scene.fish;
+    scene
+        .apply(&order::Order::Unload { ship, port }, &data, &mut caches)
+        .unwrap();
+    for _ in 0..50 * 180 {
+        scene.update(0.02, &data, &mut caches);
+        if scene.fish >= fish + 100 {
+            return;
+        }
+    }
+    panic!("never unloaded ({} fish)", scene.fish - fish);
+}
