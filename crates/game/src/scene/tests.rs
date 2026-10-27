@@ -5197,3 +5197,4 @@ fn ships_burn_and_go_out() {
     scene.ignite(i, 9, false, 100.0, &data, &mut caches);
     assert!(scene.fires.is_empty(), "the Torch of Ares");
 }
+

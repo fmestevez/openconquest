@@ -691,12 +691,13 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
 fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     let Some(human) = scene.human else { return };
     let building = scene.production_at(obj.id);
-    // The ship types by slot (0x42d750): boat, merchant, royal ship,
-    // bomber, boarder, rammer, ship killer, men killer in fixed places,
-    // the unique ships packed after; locked ones are left out (0x43da20).
-    const BY_SLOT: [u8; 12] = [0, 1, 7, 6, 4, 5, 3, 2, 8, 9, 10, 11];
+    // A ship type's slot is its number (0x42d750 gives slot n the command
+    // of type n: boat, merchant, royal ship, bomber, boarder, rammer, ship
+    // killer, men killer), the unique ships packed after; locked ones are
+    // left out (0x43da20).
     let mut next = 8;
-    for (place, kind) in BY_SLOT.into_iter().enumerate() {
+    for kind in 0u8..12 {
+        let place = kind as usize;
         if !economy::buildable_ships(human.nation).any(|k| k == kind) || !scene.ship_unlocked(kind)
         {
             continue;
