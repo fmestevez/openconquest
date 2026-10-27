@@ -1265,10 +1265,19 @@ impl GameView<'_> {
                 if reloading_shown(self.load, self.scene, obj.id) {
                     // Nothing else of the object panel.
                 } else {
-                    if self.page != Page::Main {
+                    // Also over a shipyard's or dock's ships (c_ctrl 0x4f4cc0:
+                    // panel kind 0x13), in place of the strip's relief.
+                    let yard = self.page == Page::Main
+                        && matches!(
+                            obj.class,
+                            openconquest_formats::ObjectClass::Building(
+                                crate::economy::SHIPYARD | crate::economy::DOCK
+                            )
+                        );
+                    if self.page != Page::Main || yard && self.scene.is_own(obj) {
                         ui.draw_strip(frame, layout, false);
                     }
-                    if matches!(self.page, Page::Structures | Page::Ground)
+                    if (matches!(self.page, Page::Structures | Page::Ground) || yard)
                         && self.scene.is_own(obj)
                     {
                         let caption = self

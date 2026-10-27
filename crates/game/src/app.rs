@@ -2348,10 +2348,29 @@ impl App {
 
     /// Whether a window position is on the Building page's "default
     /// arming" checkbox.
+    /// The main page of one of the player's shipyards or docks (which shows
+    /// the "default arming" checkbox too).
+    fn yard_selected(&self) -> bool {
+        self.page == Page::Main
+            && self
+                .selected
+                .and_then(|id| self.scene.object_index(id))
+                .is_some_and(|i| {
+                    let o = &self.scene.objects[i];
+                    self.scene.is_own(o)
+                        && matches!(
+                            o.class,
+                            openconquest_formats::ObjectClass::Building(
+                                economy::SHIPYARD | economy::DOCK
+                            )
+                        )
+                })
+    }
+
     fn on_arming_box(&self, pos: PhysicalPosition<f64>) -> bool {
         if !self.show_interface
             || Panels::covers_bar(self.tab)
-            || !matches!(self.page, Page::Structures | Page::Ground)
+            || !(matches!(self.page, Page::Structures | Page::Ground) || self.yard_selected())
             || self.selection().is_empty()
         {
             return false;
