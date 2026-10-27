@@ -201,8 +201,9 @@ pub enum Target {
 
 /// Amber to learn the next spell (0x437de0, 0x438b80).
 pub const LEARN_COST: u32 = 1000;
-/// Seconds to learn a spell. Placeholder.
-pub const LEARN_SECONDS: f32 = 20.0;
+/// Seconds to learn a spell: 200 ticks for the human, 100 for computer
+/// players (the school, 0x439260).
+pub const LEARN_SECONDS: f32 = 200.0 * crate::clock::TICK;
 /// Seconds a called wind blows. Placeholder.
 pub const WIND_SECONDS: f32 = 60.0;
 /// Lightning destroys every enemy object unprotected from magic within
