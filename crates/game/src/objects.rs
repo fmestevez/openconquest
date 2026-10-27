@@ -321,6 +321,17 @@ impl Ship {
     }
 
     /// Whether hero `hero` (see `HERO_NAMES`) is aboard.
+    /// What the feathers of Boreas aboard add, in percent: each its
+    /// treasure amount, to the top speed (0x4bece0) and the ram's blow
+    /// (0x4c1c60).
+    pub fn feather_percent(&self) -> u32 {
+        self.treasures
+            .iter()
+            .filter(|t| t.kind == FEATHER)
+            .map(|t| t.amount)
+            .sum()
+    }
+
     pub fn has_hero(&self, hero: u8) -> bool {
         self.heroes.contains(&hero)
     }
@@ -341,14 +352,12 @@ pub const ARMOUR_OF_ARES: u8 = 11;
 pub const FEATHER: u8 = 12;
 pub const MAGIC_WOOD: u8 = 13;
 
-/// How much the gifts and heroes help. Placeholders: the original's
-/// figures have not been found.
-pub const FEATHER_SPEED: f32 = 1.25;
-pub const THESEUS_DAMAGE: f32 = 1.25;
-pub const THESEUS_RANGE: f32 = 64.0;
-pub const ATALANTA_RATE: f32 = 1.25;
-pub const ATALANTA_HIT: u32 = 15;
-pub const ARGUS_MONSTER_DAMAGE: f32 = 0.5;
+/// Theseus aboard: each shot's blow x 1.5 (0x4c0230, as the Flame), and
+/// the weapons' range at its best research level (0x4bfc60, 0x4c07c0).
+pub const THESEUS_DAMAGE: f32 = 1.5;
+/// The best research level, which Theseus gives the range and Atalanta the
+/// rate of fire of every weapon aboard (0x4c0230).
+pub const HERO_LEVEL: u8 = 2;
 /// The Armour of Ares takes this share of hull damage when its record
 /// gives none (miss001's gives 40).
 pub const ARMOUR_OF_ARES_PERCENT: u32 = 40;

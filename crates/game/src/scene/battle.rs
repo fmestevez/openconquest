@@ -57,13 +57,25 @@ impl Scene {
             let ship = self.objects[i].ship.as_ref();
             let theseus = ship.is_some_and(|s| s.has_hero(objects::THESEUS));
             let atalanta = ship.is_some_and(|s| s.has_hero(objects::ATALANTA));
-            let reach_bonus = if theseus { objects::THESEUS_RANGE } else { 0.0 };
+            let reach_level = |w: u8| {
+                if theseus {
+                    objects::HERO_LEVEL
+                } else {
+                    levels.reach_for(w)
+                }
+            };
+            let rate_level = |w: u8| {
+                if atalanta {
+                    objects::HERO_LEVEL
+                } else {
+                    levels.rate_for(w)
+                }
+            };
             // The longest of its weapons' ranges.
-            let range = reach_bonus
-                + shooters
-                    .iter()
-                    .map(|&w| combat::reach(w, levels.reach_for(w)).1)
-                    .fold(0.0, f32::max);
+            let range = shooters
+                .iter()
+                .map(|&w| combat::reach(w, reach_level(w)).1)
+                .fold(0.0, f32::max);
             let (ordered, idle) = match &self.objects[i].ship {
                 Some(ship) => (
                     match ship.task {
@@ -155,31 +167,18 @@ impl Scene {
             let c = self.objects[i].combat.as_mut().unwrap();
             let mut fired = Vec::new();
             for (k, &w) in shooters.iter().enumerate() {
-                let (near, far) = combat::reach(w, levels.reach_for(w));
-                let far = far + reach_bonus;
+                let (near, far) = combat::reach(w, reach_level(w));
                 if c.reloads[k] <= 0.0 && d >= near && d <= far {
-                    let rate = if atalanta {
-                        objects::ATALANTA_RATE
-                    } else {
-                        1.0
-                    };
                     let jitter = crate::clock::ticks(self.rng.next() % combat::RELOAD_JITTER);
-                    c.reloads[k] = (combat::reload_seconds(w, levels.rate_for(w)) + jitter) / rate;
+                    c.reloads[k] = combat::reload_seconds(w, rate_level(w)) + jitter;
                     fired.push(w);
                 }
             }
             if !fired.is_empty() {
-                volleys.push((
-                    target_id,
-                    fired,
-                    self.objects[i].owner,
-                    id,
-                    theseus,
-                    atalanta,
-                ));
+                volleys.push((target_id, fired, self.objects[i].owner, id, theseus));
             }
         }
-        for (target, weapons, owner, shooter, theseus, atalanta) in volleys {
+        for (target, weapons, owner, shooter, theseus) in volleys {
             self.scout_attacked(target);
             // A brain's fleet notes who fired on it.
             if owner == self.human.map(|h| (h.nation, h.slot)) {
@@ -205,8 +204,8 @@ impl Scene {
                 .and_then(|t| self.objects[t].combat.as_ref())
                 .is_some_and(|c| c.protect_weapons > 0.0);
             // What the target's state takes off every blow: the weapon
-            // shield 80%, the Flame adds, Theseus, the Armour of Ares and
-            // Argus, the armour and the hull's share.
+            // shield 80%, the Flame adds, Theseus, the Armour of Ares, the
+            // armour and the hull's share.
             let mut factor = 1.0;
             let mut wound_factor = 1.0;
             let mut lime_factor = 1.0;
@@ -237,9 +236,6 @@ impl Scene {
                             objects::ARMOUR_OF_ARES_PERCENT
                         };
                         factor *= 1.0 - share.min(100) as f32 / 100.0;
-                    }
-                    if ship.has_hero(objects::ARGUS) && owner == Some(combat::MONSTERS) {
-                        factor *= objects::ARGUS_MONSTER_DAMAGE;
                     }
                 }
                 if let (Some(ship), Some(c)) = (&self.objects[t].ship, &self.objects[t].combat) {
@@ -310,8 +306,7 @@ impl Scene {
                         // anyway for its chance in percent of the blow,
                         // unless it is the ship's only one of the item, when
                         // it flies wide (0x4c0230, 0x4bf7f0, 0x4bfc20).
-                        let chance = combat::hit_chance(w, dist, aim)
-                            + if atalanta { objects::ATALANTA_HIT } else { 0 };
+                        let chance = combat::hit_chance(w, dist, aim);
                         let accuracy = if self.rng.chance(chance) {
                             100
                         } else if same(w) > 1 || !target_is_ship {
@@ -634,14 +629,15 @@ impl Scene {
         let (a, t) = (&self.objects[i], &self.objects[ti]);
         let (sa, st) = (a.ship.as_ref().unwrap(), t.ship.as_ref().unwrap());
         let angle = combat::ram_angle(sa.heading, st.heading);
-        // The feather of Boreas strengthens the ram.
-        let ram = (sa.ram + sa.has_treasure(objects::FEATHER) as u8).min(2);
+        // The feathers of Boreas add their amount in percent to the
+        // rammer's blow (0x4c1c60).
+        let feather = 1.0 + sa.feather_percent() as f32 / 100.0;
         // The rammer charges at no less than its cruising speed here (ours
         // may slow as it closes).
         let (to_target, to_self) = combat::ram_blows(
             combat::Rammer {
                 kind: sa.kind,
-                ram,
+                ram: sa.ram,
                 heading: sa.heading,
                 speed: sa.velocity.max(sa.speed),
             },
@@ -666,6 +662,7 @@ impl Scene {
             }
         };
         let to_target = to_target
+            * feather
             * combat::armour_factor(st.armour)
             * share(t)
             * combat::RAM_HULL_FACTOR

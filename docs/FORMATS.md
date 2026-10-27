@@ -1554,3 +1554,29 @@ aboard. Every 1000 of a count:
 
 So the Fleece mends 1% every 100 ticks (4 s) and Argus 1% every 50 ticks
 (2 s).
+
+## Heroes and gifts in battle and under sail
+
+Heroes are checked by `0x4ba790(ship, hero)`, hero numbers in house order
+(0 Jason, 1 Theseus, 2 Orpheus, 3 Zetes, 4 Hercules, 5 Argus, 6 Atalanta,
+7 Odysseus, 8 Perseus).
+
+- **Theseus (1).** Every weapon aboard has range research level 2 (0x4bfc60,
+  0x4c07c0, 0x4c0eb0), and each shot's blow is x 1.5 (0x4c0230, like the
+  Flame's).
+- **Atalanta (6).** Every weapon below item 9 reloads at rate-of-fire level
+  2 (0x4c0230: `0x5c76e0[level + item x 3] + rand(30)`). The hit chance
+  (0x4bf7f0) checks for her but ignores the result.
+- **Orpheus (2).** Harpies (0x41efb0, 0x41f1c0) and land creatures
+  (0x412290) leave his ship alone.
+- **Odysseus (7).** A shot of letter 11, the harpy's, does his ship no harm
+  (0x4bf170).
+- **Argus (5).** He cuts rams (0x4c1ad0) and the siren's blow (0x4a74c0),
+  and mends the hull (0x4b98b0). Nothing else.
+
+The top speed (0x4bece0) is the type's speed at the rigging level, less half
+the share of the hull lost. Armour fitted (`+0x27a`) takes 5% (medium) or
+10% (strong) off it, and 15% or 35% off the acceleration, which the damage
+also slows. Each active feather of Boreas (item kind 12, flag 0x10) adds its
+amount in percent to the top speed and, in a ram (0x4c1c60), to the
+rammer's blow.

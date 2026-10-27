@@ -1297,11 +1297,10 @@ impl Scene {
             } else {
                 self.wind.speed_factor(merchant, ship.heading)
             };
-            let feather = if ship.has_treasure(objects::FEATHER) {
-                objects::FEATHER_SPEED
-            } else {
-                1.0
-            };
+            let feather = 1.0 + ship.feather_percent() as f32 / 100.0;
+            let (worn, worn_accel) = obj.combat.as_ref().map_or((1.0, 1.0), |c| {
+                combat::sailing_factors(c.hull, c.max_hull, ship.armour)
+            });
             // A ship first turns to its next course, through the hull's
             // rotations, then sails it.
             if !turn_ship(ship, obj.x, obj.y, dt) {
@@ -1311,11 +1310,11 @@ impl Scene {
             // It gathers way up to its speed, and loses it in time to stop
             // where it is bound or before a turn of more than 45 degrees
             // (0x4a3f40, 0x4a2f60).
-            let mut top = ship.speed * wind * rigging * feather;
+            let mut top = ship.speed * wind * rigging * worn * feather;
             if charmed.contains(&obj.id) {
                 top = top.min(creatures::CHARMED_SPEED);
             }
-            let accel = objects::ship_accel(ship.kind) * wind.max(0.1);
+            let accel = objects::ship_accel(ship.kind) * worn_accel * wind.max(0.1);
             let ahead = {
                 let mut d = 0.0;
                 let mut from = (obj.x, obj.y);

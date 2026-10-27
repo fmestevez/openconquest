@@ -96,8 +96,8 @@ marked as a placeholder in the code.
 - The campaign scripts' story events (partly decoded).
 - The original's multiplayer screens and network play with the original game
   (OpenConquest has its own lobby).
-- Some values are still estimates, among them how strongly some gifts and
-  heroes help.
+- A few values are still estimates (marked in the code), such as the
+  wizards' strikes and the leviathan hunt.
 
 ### Modern improvements
 

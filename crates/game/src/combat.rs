@@ -976,6 +976,20 @@ pub fn armour_factor(level: u8) -> f32 {
     [1.0, 0.8, 0.63][level.min(2) as usize]
 }
 
+/// What a ship's state takes off its top speed and acceleration
+/// (0x4bece0): its damage half of the hull lost, and its armour (fitted
+/// kind 1: 95% and 85%, kind 2: 90% and 65%).
+pub fn sailing_factors(hull: f32, max_hull: f32, armour: u8) -> (f32, f32) {
+    let lost = 1.0 - (hull / max_hull.max(1.0)).clamp(0.0, 1.0);
+    let damage = 1.0 - lost / 2.0;
+    let (speed, accel) = match armour {
+        1 => (0.95, 0.85),
+        2 => (0.90, 0.65),
+        _ => (1.0, 1.0),
+    };
+    (damage * speed, damage * accel)
+}
+
 /// Rigging: 115 and 130 percent of the top speed (0x4ac210).
 pub fn speed_factor(level: u8) -> f32 {
     [1.0, 1.15, 1.3][level.min(2) as usize]

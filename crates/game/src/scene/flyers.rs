@@ -48,7 +48,9 @@ const LEG_MASK: [u16; 13] = [
     0b0011111111100,
     0b0001111111000,
 ];
-/// Harpies and Odysseus: his crews resist them.
+/// Harpies leave ships with Orpheus aboard alone (0x41efb0, 0x41f1c0), and
+/// their shots do Odysseus's ship no harm (0x4bf170).
+const ORPHEUS: u8 = 2;
 const ODYSSEUS: u8 = 7;
 
 /// What a creature is doing.
@@ -608,7 +610,7 @@ impl Scene {
             && o.owner != Some(crate::combat::MONSTERS)
             && o.ship
                 .as_ref()
-                .is_some_and(|s| class == 0x1f9 || (s.crew.count() > 0 && !s.has_hero(ODYSSEUS)))
+                .is_some_and(|s| class == 0x1f9 || (s.crew.count() > 0 && !s.has_hero(ORPHEUS)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -645,10 +647,14 @@ impl Scene {
         // A harpy's strike (0x41fbd0, state 5 at frame 7): a sure shot,
         // drawn as L, carrying 20 x item 4's level-1 blow (the A x 15
         // cache's copy, 0x5c73dc), shared out on the ship as any blow.
-        let blow = crate::combat::hull_damage_at(4, 1) * 20.0;
         let o = &self.objects[i];
         let (Some(s), Some(c)) = (&o.ship, &o.combat) else {
             return;
+        };
+        let blow = if s.has_hero(ODYSSEUS) {
+            0.0
+        } else {
+            crate::combat::hull_damage_at(4, 1) * 20.0
         };
         let armour = crate::combat::armour_factor(s.armour);
         let loads = (s.cargo / 100.0).ceil().max(0.0) as u32;

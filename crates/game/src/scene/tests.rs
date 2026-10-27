@@ -3864,3 +3864,13 @@ fn harpy_strikes_and_goes_home() {
     assert!(struck, "the harpy struck");
     assert!(home_again, "and went home to rest");
 }
+
+/// A wrecked hull sails at half speed, and armour slows a ship (0x4bece0).
+#[test]
+fn damage_and_armour_slow_ships() {
+    assert_eq!(combat::sailing_factors(100.0, 100.0, 0), (1.0, 1.0));
+    let (speed, accel) = combat::sailing_factors(0.0, 100.0, 0);
+    assert!((speed - 0.5).abs() < 1e-6 && (accel - 0.5).abs() < 1e-6);
+    let (speed, accel) = combat::sailing_factors(100.0, 100.0, 2);
+    assert!((speed - 0.9).abs() < 1e-6 && (accel - 0.65).abs() < 1e-6);
+}
