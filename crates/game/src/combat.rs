@@ -61,9 +61,11 @@ impl Combatant {
                 100,
                 creature_weapons(rec.class_id),
             ),
-            ObjectClass::Monster(0x1f4..=0x1f6 | 0x1f8..=0x1fb | 0x1fd) => {
-                (MONSTER_STRENGTH, 100, creature_weapons(rec.class_id))
-            }
+            ObjectClass::Monster(0x1f4..=0x1f6 | 0x1f8..=0x1fb | 0x1fd) => (
+                creature_strength(rec.class_id),
+                100,
+                creature_weapons(rec.class_id),
+            ),
             _ => return None,
         };
         Some(Self {
@@ -295,8 +297,21 @@ pub const BOARD_ROUND: f32 = 1.0;
 /// Distance at which ships touch, for ramming and boarding. Placeholder.
 pub const CONTACT: f32 = 48.0;
 
-/// Hull points of creatures. Placeholder.
-pub const MONSTER_STRENGTH: f32 = 2000.0;
+/// Strength of a creature, over 15 as hulls are: cyclopes 30000,
+/// minotaurs 16000, amazons 12000 (CyclopClassTy 0x413d70), the gorgon
+/// 150000 (MedusaClassTy 0x401000), sirens 100000 (SirenaClassTy 0x403050,
+/// 0x404a20); harpies, dragons and sea monsters not yet found (2000, a
+/// placeholder).
+pub fn creature_strength(class: u32) -> f32 {
+    match class {
+        0x1f4 => 30_000.0 / 15.0,
+        0x1f5 => 16_000.0 / 15.0,
+        0x1f6 => 12_000.0 / 15.0,
+        0x1fa => 150_000.0 / 15.0,
+        0x1fd => 100_000.0 / 15.0,
+        _ => 2000.0,
+    }
+}
 
 /// The owner given to creatures and their lairs: hostile to every player.
 pub const MONSTERS: (u32, u32) = (99, 0);
