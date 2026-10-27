@@ -255,6 +255,10 @@ pub struct Ship {
     /// side-on (0x4afe50).
     #[serde(default)]
     pub face: Option<usize>,
+    /// How far its sail is furled, in frames of the furling (0-7): it
+    /// furls while it lies loading or unloading and unfurls as it leaves.
+    #[serde(default)]
+    pub furl: f32,
     /// Goods on board.
     pub cargo: f32,
     pub cargo_kind: Option<Resource>,
@@ -451,11 +455,16 @@ const SHIP_FRAMES_PER_HEADING: usize = 4;
 /// First of a ship's 24 turning frames and of its 32 lying-still frames.
 const SHIP_TURN_FRAMES: usize = 32;
 const SHIP_IDLE_FRAMES: usize = 56;
-/// Milliseconds a frame of a ship's animation, under way, turning or
-/// rocking at rest: its picture's frame delay is 2 (0x4e0160 and the ship
-/// loader), a frame once more than 2 ticks have passed (0x4a3320).
+/// Milliseconds a frame of a ship's animation, under way or turning: its
+/// picture's frame delay is 2 (0x4e0160 and the ship loader), a frame once
+/// more than 2 ticks have passed (0x4a3320).
 pub const SHIP_FRAME_MS: u64 = 3 * TICK_MS;
-const SHIP_ROCK_MS: u64 = SHIP_FRAME_MS;
+/// Rocking at rest and furling the sail go slower: the delay of 4 a ship
+/// gets lying against something (0x4b5df0), a frame every 5 ticks (for the
+/// rocking an estimate).
+const SHIP_ROCK_MS: u64 = 5 * TICK_MS;
+pub const SHIP_FURL_SECONDS: f32 = 5.0 * crate::clock::TICK;
+const SHIP_FURL_FRAMES: usize = 88;
 
 impl MapObject {
     pub fn is_armed(&self) -> bool {
@@ -502,6 +511,11 @@ impl MapObject {
             // rest, rocking the other.
             Some(ship) if n >= SHIP_IDLE_FRAMES + 32 => match ship.rotation {
                 Some(r) => SHIP_TURN_FRAMES + r as usize % 24,
+                // Lying loading or unloading, the sail furls (0x4b5df0, the
+                // frames from 88, 8 a heading).
+                None if ship.furl > 0.0 && n >= SHIP_FURL_FRAMES + 64 => {
+                    SHIP_FURL_FRAMES + ship.heading * 8 + (ship.furl as usize).min(7)
+                }
                 None if ship.path.is_empty() => {
                     let rock = (time_ms / SHIP_ROCK_MS) as usize;
                     SHIP_IDLE_FRAMES + ship.heading * 4 + rock % 4
@@ -943,6 +957,7 @@ pub fn resolve(
         blocked: 0.0,
         velocity: 0.0,
         face: None,
+        furl: 0.0,
         cargo: 0.0,
         cargo_kind: None,
         task: None,

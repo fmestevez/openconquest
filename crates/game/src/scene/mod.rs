@@ -1203,6 +1203,7 @@ impl Scene {
         self.run_flyers(dt, data, caches);
         self.run_walkers(dt, data, caches);
         self.run_porters(dt, data, caches);
+        self.run_furling(dt);
         self.run_regrowth(dt, data, caches);
         self.offer_argo();
         self.run_hazards(dt, data, caches);
@@ -1422,6 +1423,33 @@ impl Scene {
 
     pub fn map_size(&self) -> (u32, u32) {
         (self.terrain.width, self.terrain.height)
+    }
+
+    /// Ships lying loading or unloading furl their sails a frame every 5
+    /// ticks, and unfurl as they leave.
+    fn run_furling(&mut self, dt: f32) {
+        let lying: HashSet<u32> = self
+            .planks
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.activity,
+                    unload::Activity::Unloading | unload::Activity::Amber
+                )
+            })
+            .map(|p| p.ship)
+            .collect();
+        let step = dt / objects::SHIP_FURL_SECONDS;
+        for o in &mut self.objects {
+            let (id, Some(s)) = (o.id, o.ship.as_mut()) else {
+                continue;
+            };
+            s.furl = if lying.contains(&id) {
+                (s.furl.max(1.0) + step).min(7.0)
+            } else {
+                (s.furl - step).max(0.0)
+            };
+        }
     }
 }
 
