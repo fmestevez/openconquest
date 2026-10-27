@@ -332,6 +332,11 @@ impl Scene {
                 c.weapons = vec![magic::MONSTER_WEAPON; magic::MONSTER_WEAPONS];
             }
             self.summons.push((id, magic::MONSTER_SECONDS));
+        } else {
+            // Cast whirlpools and reefs go after 7500-15000 ticks (Whirl.cpp
+            // 0x447ee0, Reef.cpp 0x4306d0); the map's own stay.
+            let ticks = 7500 + self.rng.next() % 7501;
+            self.summons.push((id, crate::clock::ticks(ticks)));
         }
         self.sounds.push((
             if spell == Spell::Whirlpool {
@@ -358,7 +363,8 @@ impl Scene {
             fx.x += angle.cos() * speed * dt;
             fx.y -= angle.sin() * speed * dt;
         }
-        // Summoned monsters go back to the deep.
+        // Summoned monsters go back to the deep, cast whirlpools and reefs
+        // fade.
         for s in &mut self.summons {
             s.1 -= dt;
         }

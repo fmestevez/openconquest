@@ -150,7 +150,8 @@ pub struct Scene {
     pub levels: std::collections::BTreeMap<(u32, u32), combat::Levels>,
     /// Research at a sage school: site, upgrade, level, seconds spent.
     pub research: Vec<(u32, combat::Upgrade, u8, f32)>,
-    /// Summoned creatures and the seconds they have left.
+    /// Summoned creatures and cast whirlpools and reefs, and the seconds
+    /// they have left.
     pub summons: Vec<(u32, f32)>,
     /// Marines in training.
     pub trainings: Vec<Training>,
