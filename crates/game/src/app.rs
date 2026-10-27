@@ -397,7 +397,7 @@ pub struct App {
     /// When each selected object was selected, for its frame's zoom.
     selected_since: HashMap<u32, u64>,
     /// The building shown standing where it would go: its site, and it.
-    site_shown: Option<(((i32, i32), u32, u32), crate::objects::MapObject)>,
+    site_shown: Option<(SiteKey, crate::objects::MapObject)>,
     /// When objects were deselected, for their frames' zoom out.
     deselected: HashMap<u32, u64>,
     /// The map places assigned with Shift+F1 ... Shift+F10, centred on with
@@ -4942,3 +4942,6 @@ fn function_index(code: KeyCode) -> Option<usize> {
         .iter()
         .position(|&k| k == code)
 }
+
+/// A building site shown: its cell, the class and its facing.
+type SiteKey = ((i32, i32), u32, u32);
