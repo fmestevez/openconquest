@@ -925,6 +925,17 @@ An amber deposit glints in bursts (0x48a430 state 0, 0x489bd0): it waits
 a frame every 1-4 ticks (random), at a random point of one of its
 variant's two rectangles (0x5b97cc, picked at random).
 
+## Sheep
+
+A flock (0x4331c0; record: cell x, y at fields 4-5, count at 7) keeps its
+sheep on a 4 x 4 grid of 16-pixel spots in the cell, one to a spot, each
+on a random spot facing a random way at the start. A sheep grazes
+(`SHEEP_<dir>1`) a pass at a time, a frame every 2-4 ticks, resting
+(50-100 % of 25) ticks between passes; every (50-100 % of 250) ticks it
+walks (`SHEEP_<dir>2`, a frame every 3 ticks, 16 / (frames + 1) pixels a
+frame) to a free spot beside it, if there is one. A sheep's picture has its
+top-left 7 and 14 pixels up-left of its place.
+
 ## Closing in on shore
 
 A ship loading amber or unloading (0x4afe50) closes in only when the

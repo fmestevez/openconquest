@@ -185,6 +185,12 @@ pub struct Scene {
     pub gull_art: std::rc::Rc<(Frames, Frames)>,
     /// Ships' wakes (only shown) and their sprites: `TRAKS00`, `TRAKS14`.
     pub droplets: Vec<wake::Droplet>,
+    /// Flocks of sheep (only shown), their clock, and their pictures by
+    /// direction, grazing and walking (`SHEEP_<dir><1|2>`).
+    pub flocks: sheep::Flocks,
+    sheep_clock: f32,
+    sheep_ticks: u32,
+    pub sheep_art: std::rc::Rc<[[Frames; 2]; 8]>,
     /// Amber deposits' glints and the sparkle's frames (`ASTAR_`).
     pub sparkles: sparkle::Sparkles,
     pub sparkle_art: std::rc::Rc<Frames>,
@@ -277,6 +283,7 @@ mod creatures;
 mod gulls;
 mod orders;
 mod repair;
+mod sheep;
 mod sight;
 mod sparkle;
 mod treasure;
@@ -401,6 +408,15 @@ impl Scene {
             droplets: Vec::new(),
             unloaded: Vec::new(),
             sparkles: Default::default(),
+            flocks: Default::default(),
+            sheep_clock: 0.0,
+            sheep_ticks: 0,
+            sheep_art: std::rc::Rc::new(std::array::from_fn(|dir| {
+                [1, 2].map(|state| {
+                    objects::sequence_frames(data, caches, &format!("SHEEP_{dir}{state}"))
+                        .unwrap_or_default()
+                })
+            })),
             sparkle_art: std::rc::Rc::new(
                 objects::sequence_frames(data, caches, "ASTAR_").unwrap_or_default(),
             ),
@@ -1055,6 +1071,7 @@ impl Scene {
         self.move_gulls(dt);
         self.run_wakes(dt);
         self.run_sparkles(dt);
+        self.run_sheep(dt);
         self.shown_clock += dt;
         while self.shown_clock >= COUNTER_TICK {
             self.shown_clock -= COUNTER_TICK;

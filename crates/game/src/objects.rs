@@ -1299,8 +1299,9 @@ fn building_name(cls: u32, nation: u32, facing: u32, state: BuildingState) -> Op
     Some(name)
 }
 
-/// A small flock: `count` sheep scattered around the cell centre. The
-/// original spreads and moves them at random; this placement is fixed.
+/// A small flock's still picture: `count` sheep around the cell centre
+/// (what is picked and its bounds; the flock itself is drawn and moved by
+/// `scene::sheep`).
 fn sheep_frames(data: &GameData, caches: &mut Caches, count: u32) -> Result<Vec<Vec<Layer>>> {
     const SPOTS: [(i32, i32); 8] = [
         (-14, -6),

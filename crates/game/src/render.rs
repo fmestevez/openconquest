@@ -162,6 +162,20 @@ pub fn draw_objects(
         }
     }
     for obj in below {
+        // A flock: its sheep, each with its top-left 7 and 14 pixels up-left
+        // of its place (0x4331c0).
+        if let Some(flock) = scene.flocks.get(&obj.id) {
+            for s in &flock.sheep {
+                let frames = &scene.sheep_art[s.dir % 8][usize::from(s.walking)];
+                if let Some(layers) = frames.get(s.frame).or(frames.first()) {
+                    if let Some(l) = layers.first() {
+                        let (w, h) = (l.image.width as f32, l.image.height as f32);
+                        draw(frame, layers, s.x - 7.0 + w / 2.0, s.y - 14.0 + h / 2.0);
+                    }
+                }
+            }
+            continue;
+        }
         draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y);
         // An amber deposit's glint, part of it.
         if let Some((f, x, y)) = scene
