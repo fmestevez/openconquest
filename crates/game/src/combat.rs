@@ -1,7 +1,7 @@
 //! Ship combat: weapons, hull damage and the effects drawn for them.
 //!
-//! The weapon tables (damage, rate of fire, range) come from ANCIENT.EXE;
-//! hull strength has not been recovered yet and is a placeholder.
+//! The weapon tables (damage, rate of fire, range) and ships' hull
+//! strength come from ANCIENT.EXE.
 
 use openac_formats::{ObjectClass, ObjectRecord};
 
@@ -524,9 +524,22 @@ pub fn creature_weapons(class_id: u32) -> Vec<u8> {
     }
 }
 
-/// Hull points of a ship type. Placeholder: twice the hull's amber cost.
+/// Hull points of a ship type: its chart value (0x5bb4b0) x 650 (0x4ac210),
+/// over 15, as the original's shots deal A x 15 (0x4ac140) where ours deal
+/// A.
 pub fn hull_strength(kind: u8) -> f32 {
-    crate::economy::HULL_AMBER[kind as usize] as f32 * 2.0
+    const CHART: [u32; 12] = [28, 90, 100, 120, 65, 70, 36, 36, 65, 75, 110, 120];
+    CHART[kind as usize % 12] as f32 * 650.0 / 15.0
+}
+
+/// The share of a blow a ship's hull takes (0x4befc0, shares 0x4beb50):
+/// the type's hull share (0x597ad8) against it with the armour, the ram,
+/// the weapons aboard and the loads of cargo; the rest falls on what is
+/// aboard.
+pub fn hull_share(kind: u8, armour: u8, ram: u8, weapons: usize, loads: u32) -> f32 {
+    const SHARE: [u32; 12] = [7, 10, 21, 18, 10, 12, 6, 6, 3, 4, 2, 4];
+    let hull = SHARE[kind as usize % 12];
+    hull as f32 / (hull + armour as u32 + ram as u32 + weapons as u32 + loads) as f32
 }
 
 /// Rate of fire per item and level (0x597a3c, item x 3 + level; the

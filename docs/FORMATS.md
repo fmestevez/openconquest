@@ -940,6 +940,24 @@ Town show only with permit bit 10 (player +0x46 bit 2) and are enabled
 while the settlement is built and idle; Sell Town also hides while a ship
 is taken up for loading (+0x1c8). No menu offers Sell Fish (0x7e).
 
+## Hulls, blows and dock repairs
+
+A ship's hull points (`+0x271`) top out at its chart value (0x5bb4b0: 28,
+90, 100, 120, 65, 70, 36, 36, 65, 75, 110, 120) x 650 (0x4ac210, through
+0x4ac110 as the speeds). A shot carries its item's A x 15 (0x4ac140 caches
+it at 0x5c75cc; 0x499410). A blow (message 4, flag 4, 0x4befc0) is first
+cut by the armour (0x597a00: 0, 7, 14; 20, 27, 33; 37, 44, 50 percent, by
+the player's level of the fitted kind `+0x27a`), then shared out
+(0x4beb50) among the hull (type share 0x597ad8: 7, 10, 21, 18, 10, 12, 6,
+6, 3, 4, 2, 4), the armour kind, the ram, the weapons aboard and the cargo
+loads; the crew's share (its unit count) is reckoned against the same sum
+without counting itself. The hull at 0 wrecks the ship (state 4). At a
+dock (0x4b1fc0) every 9 ticks a ship gets back up to a tenth of its hull
+for its type's price (0x59b388: 140, 280, 800, 910, 650, 560, 490, 420,
+420, 630, 420, 630) times the share mended, and worn units are made whole
+for `cost[kind / 3] x (100 - condition) x 9 / 1000`; short of amber, the
+human's ship gets what the amber buys, a computer player's stops.
+
 ## Training and repair at a settlement
 
 A settlement's stock places (`[+0x244] + 0x23`, twelve) list units of two

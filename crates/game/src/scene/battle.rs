@@ -247,12 +247,11 @@ impl Scene {
                     damage *= objects::ARGUS_MONSTER_DAMAGE;
                 }
             }
-            // Armour softens blows on ships.
-            if let Some(ship) = self
-                .object_index(target)
-                .and_then(|t| self.objects[t].ship.as_ref())
-            {
-                damage *= combat::armour_factor(ship.armour);
+            // Armour softens blows on ships, and the hull takes its share.
+            if let Some(t) = self.object_index(target) {
+                if let (Some(ship), Some(c)) = (&self.objects[t].ship, &self.objects[t].combat) {
+                    damage *= combat::armour_factor(ship.armour) * ship_hull_share(ship, c);
+                }
             }
             self.hit(target, damage, data, caches);
         }
@@ -756,4 +755,10 @@ impl Scene {
             None => true,
         });
     }
+}
+
+/// The share of a blow ship `ship` takes on its hull.
+pub(super) fn ship_hull_share(ship: &objects::Ship, c: &combat::Combatant) -> f32 {
+    let loads = (ship.cargo / 100.0).ceil().max(0.0) as u32;
+    combat::hull_share(ship.kind, ship.armour, ship.ram, c.weapons.len(), loads)
 }

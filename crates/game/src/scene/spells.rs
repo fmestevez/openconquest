@@ -91,7 +91,7 @@ impl Scene {
         let large = obj
             .ship
             .as_ref()
-            .is_none_or(|s| combat::hull_strength(s.kind) >= 1600.0);
+            .is_none_or(|s| matches!(s.kind, 2..=5 | 9 | 11));
         self.pay_spell(spell)?;
         let (x, y) = (self.objects[t].x, self.objects[t].y);
         let c = self.objects[t].combat.as_mut().unwrap();
@@ -406,12 +406,17 @@ impl Scene {
                 continue;
             }
             let blows = struck.iter().filter(|&&c| c == cell).count();
+            let share = o
+                .combat
+                .as_ref()
+                .map_or(1.0, |c| super::battle::ship_hull_share(s, c));
             if let (true, false, Some(c)) = (blows > 0, zetes, o.combat.as_mut()) {
-                let blow = if c.protect_magic > 0.0 {
-                    magic::WATERSPOUT_STRIKE * magic::SHIELD_FACTOR
-                } else {
-                    magic::WATERSPOUT_STRIKE
-                };
+                let blow = share
+                    * if c.protect_magic > 0.0 {
+                        magic::WATERSPOUT_STRIKE * magic::SHIELD_FACTOR
+                    } else {
+                        magic::WATERSPOUT_STRIKE
+                    };
                 c.hull -= blow * blows as f32;
                 if c.hull <= 0.0 {
                     wrecked.push(o.id);

@@ -8,9 +8,14 @@ use super::Scene;
 use crate::economy::{DOCK, SETTLEMENT, TOWN};
 use crate::objects::Task;
 
-/// Hull points mended a second, and amber paid per point. Placeholders.
+/// Hull points a settlement mends on a building a second, and amber paid
+/// per point. Placeholders.
 pub const REPAIR_RATE: f32 = 40.0;
 pub const REPAIR_AMBER_PER_POINT: f32 = 0.2;
+/// At a dock a ship gets up to a tenth of its hull back every 9 ticks, for
+/// its type's repair price (0x59b388) times the share mended (0x4b1fc0).
+const DOCK_TICKS: u32 = 9;
+const DOCK_REPAIR_PRICE: [u32; 12] = [140, 280, 800, 910, 650, 560, 490, 420, 420, 630, 420, 630];
 /// How near (cells) a ship must lie to the dock, and a building to the
 /// settlement or town mending it. Placeholders.
 pub const DOCK_REACH: f32 = 2.6;
@@ -106,9 +111,16 @@ impl Scene {
                 continue;
             };
             // Never below what it has (a hull above full is left alone).
-            let heal = (REPAIR_RATE * dt).min(c.max_hull - c.hull).max(0.0);
+            let (rate, price) = match self.objects[i].ship.as_ref().filter(|_| is_ship) {
+                Some(ship) => (
+                    c.max_hull * 0.1 / crate::clock::ticks(DOCK_TICKS),
+                    DOCK_REPAIR_PRICE[ship.kind as usize % 12] as f32 / c.max_hull.max(1.0),
+                ),
+                None => (REPAIR_RATE, REPAIR_AMBER_PER_POINT),
+            };
+            let heal = (rate * dt).min(c.max_hull - c.hull).max(0.0);
             let owed = self.repair_owed.entry(owner).or_default();
-            *owed += heal * REPAIR_AMBER_PER_POINT;
+            *owed += heal * price;
             let pay = owed.floor() as u32;
             let (amber, _) = self.funds(owner);
             if gone || pay > amber {

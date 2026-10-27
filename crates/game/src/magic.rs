@@ -229,10 +229,11 @@ pub const SHIELD_FACTOR: f32 = 0.2;
 /// 0xda9a, 0x4dc630).
 pub const PROTECTION_SECONDS: f32 = 3000.0 * crate::clock::TICK;
 
-/// What a tornado's strike takes from a ship on each cell it comes to
-/// (the original's blow is 30000, a fifth of it on a ship shielded from
-/// magic; 0x43a6c0, 0x4dc630). Placeholder scale.
-pub const WATERSPOUT_STRIKE: f32 = 270.0;
+/// A tornado's blow to a ship on each cell it comes to: 30000 in the
+/// original's units, a fifth of it on a ship shielded from magic (0x43a6c0,
+/// 0x4dc630); over 15 in ours (see `combat::hull_strength`). The hull
+/// takes its share.
+pub const WATERSPOUT_STRIKE: f32 = 30000.0 / 15.0;
 pub const FX_TORNADO: &str = "TRNDSPR";
 /// A summoned sea monster: how long it stays and what it strikes with
 /// (as four gastraphetes, which strike at close quarters). Placeholders.
