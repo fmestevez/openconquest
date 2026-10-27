@@ -271,6 +271,76 @@ the frame's right edge at y = 527, with the animated `GAME_MONEY` and
 `GAME_FISH` icons at panel + (10, 5) and (10, 35) (0x505330) and the
 amounts in `MONEY_FONT`.
 
+### Object info (the strip's middle)
+
+While "Help string on/off" (string 0x5b; `[0x5ca542]`, on by default,
+the settings tab's checkbox 0x522/0x523) is on, the pointer (gcursor.cpp
+0x5175b0) calls 0x516c10 with the object under it, or null when the
+pointer is off the view or a modal panel is up. 0x516c10 zeroes a
+13-dword struct, puts the pointer's cell at +6/+8 and has the object fill
+it through its vtable +0x18 (the counter `[0x5ca8c8]` that would skip
+fills never leaves 0); if the struct or object changed (copy at 0x5ca890,
+object 0x5ca8cc) and its type (+0) is not 0x1f7, it sends message 0x627
+with the struct, or null off objects, to Fieldsys (0x504620 → 0x503d60).
+Nothing is drawn until the first object is shown; null then leaves the
+empty background, which `GAME_FIELD` already shows there.
+
+The struct (base filler 0x50e7b0: +0 type, +4 `+0x57`, +5 owner nation,
++0xe vtable +0x10, +0x30 vtable +0x20, +0x2f 0xff), each cell a dword flag
+then its values: +0xa life (+0xe percent), +0xf fire power (u16 +0x13
+against hulls, +0x15 against crews), +0x17 board power (u16 +0x1b), +0x1d
+experience (bytes +0x21 have, +0x22 most), +0x23 cargo (+0x27, +0x28),
++0x29 volume (+0x2d, +0x2e); +0x2f a hero icon, +0x30 a treasure icon.
+Fillers:
+
+- Ships (ship.cpp 0x4e51c0): life hull x 100 / the type's (0x4e53e0).
+  Boats and merchants: cargo, the places taken of 4 or 10 (0x597af0 less
+  0x4be800 mode 3). Warships: fire power, summing items 0-8 with the
+  owner's damage level of the item's group: `power` = `+0x449` (0x4bc360:
+  A x 15 x count x mean condition / 100), against hulls `power x
+  0x597fd8[item] / 100 x count` (0x4bc610), against crews `count x power x
+  B / A` (0x4bc660, 0x4ac1b0), both x 100 / 1500; board power `+0x53c` x
+  1000 / 1500 (/ 3000 and no fire power while blinded by quick lime,
+  `+600`, set by 0x4c4120); unless blinded, experience `+0x544` / 100 of
+  100 (0 in a dock, state 2). Icons: treasures aboard (`+0x482`), the hero
+  `+0x4b5` or 9 with several (`+0x483`).
+- Buildings, castles, nests, lairs, heroes' houses (0x423990, also
+  town.cpp 0x43c730): life `+0xa8`; the hero icon from `+0x1a0` (0x40df20,
+  9 with several), the treasure icon if `+0x19c` holds any (0x40ded0).
+  Forts 0x34-0x36 (Fortress.cpp 0x417dc0, units at `+0x4d0`) and barbarian
+  strongholds (Barb.cpp 0x40e7f0, `+0x20c`) add fire power over their 12
+  unit groups: against hulls each unit's condition x the A x 15 cache /
+  100 (0x446710; x 1.5 with player `+0xa8` set), against crews 0x4ac1b0 of
+  the running sum (not the group's), both x 100 / 1500; and volume, the
+  room taken (0x59729c: 1, 1, 2 by group) of 4, 7, 10 (0x5967a8 by class).
+- Cyclopes, minotaurs, amazons (0x413cf0): life `+0x78`, fire power
+  against hulls their throw (0x4126f0: the cache's ballista, small
+  catapult, item 3 at level 1) x 100 / 1500. Harpies and dragons
+  (0x420760: `+0x89` of 200000/250000), the gorgon (0x402ec0, of 150000),
+  sea monsters and sirens (0x4049f0, of `+0x7c` and 100000): life.
+- Amber and fishing grounds (0x48b100): volume `+0x78` / 50 of 100 (above
+  100 as a u16 shown full). A leviathan (0x495f40): life `+0x80` of
+  `+0x7c` (0x4935d0) while it has any, else volume `+0x78` of 100.
+- Everything else keeps the base: nothing shown. CyclopsJam (0x415ea0)
+  passes the fill to the creature on the pointer's cell, else leaves type
+  0x1f7: the last info stays.
+
+Drawing (0x503d60): a copy of `CHT_BKINFO` (380x20, `+0x10e`;
+`CHT_BKFINFO`, 585 wide, without the bar) at (107, 527) (0x504ef0 adds 208
+with the bar on the left). The shown cells in the order above, 78 apart
+from x 0: `GAME_INDOBJ` (71x20, `+0x116`), the label (strings 0x3ca-0x3cf
+LIFE LEVEL, FIRE POWER, BOARD POWER, EXPERIENCE, CARGO, VOLUME) in
+`IND_FONT` (no letter gap) centred in (2, 2, 67, 9) (0x546d80, 0x547860
+-1, -1: by width and tallest glyph). A bar of length `n` (most 67): once
+`n` > 1 a palette-0 frame `n` x 4 at (2, y) (0x563140), once `n` > 2 rows
+y + 1 and y + 2 from x 3 to `n` in colours 200 and 199 (0x562d40); life
+uses 203/157 below 50% and 65/68 below 25%. Rows: life `n` = percent x 67
+/ 100 at y 14; fire power two bars, at y 11 `sqrt(min(v, 1550) x 4489 /
+1550)` and at y 14 `sqrt(min(v, 1000) x 4489 / 1000)`; board power at y 14
+`sqrt(min(v, 1100) x 4489 / 1100)`; the others `have x 67 / most`. Then
+`CIND_HTR_<hero + 1>` (20x20, `+0x11e`) at width - 67 and `CIND_HTR_00`
+(the treasure) at width - 40.
+
 The object panel picture is `INF_OBJ<n>` for buildings, with
 `n = class + nation * 13 - 0x32`, drawn at panel + (8, 6); and
 `<theme>INF_SHIP<n>` for ships (0x5004d0), with `n` = 0, 8, 16, 32, 40, 48,
