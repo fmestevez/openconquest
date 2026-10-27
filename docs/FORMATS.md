@@ -854,6 +854,23 @@ Where the player sends ships a green tick (`TAKE_CMD`, controlm) plays
 a frame each 250 ms, removed on reaching its last (0x5166f8). The pointers
 themselves step a frame each 100 ms; both run on the clock, not on ticks.
 
+Clicks (gcursor.cpp 0x5180e0, `CursorClassTy`; message 0x62 the left button,
+100 the right):
+
+- **Left button.** It carries out what the current pointer mode stands for
+  (0x516ea0 modes: 0 standard, 1 fish, 2 leviathan, 3 `GETW`, 4 amber,
+  5 own, 6 select, 7 sea, 8 attack, 9 `WALL`, 10 board, 11 ram, 12 load,
+  13 unload, 14 build, 15 repair, 16 magic, 20 treasure, 30 info, 40 sell,
+  50 behaviour, 100 ban, 101 `HTEXT`, 102 clock). So with ships selected it
+  gives orders, and elsewhere it selects.
+- **Right button.** With something selected it cycles the pointer through
+  the modes possible there (`+0xe4` stepping through the mask `+0xe2`).
+  With nothing selected it returns to the standard pointer.
+- **Confirmation.** The tick (`CreateConfirmSprite`, `TAKE_CMD`) follows
+  modes 7, 12, 13, 20, 30 and 50 only. It does not follow gathering or
+  attacking. The cursor class's only other sprite is `VETOBUILD`, for
+  building sites.
+
 Buildings (LandObjClassTy 0x422e30, TownObjClassTy 0x43bd60): the
 picture's damage digit is ceil(health x 2 / 67) (0x594ab0) for a standing
 building, 3 otherwise; its frames step every cycle[state] / frames ticks

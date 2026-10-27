@@ -2791,11 +2791,10 @@ impl App {
         if let Some((site, item)) = self.carrying.take() {
             self.status = None;
             match self.object_at(pos) {
-                Some(ship) => {
-                    if let Err(e) = self.issue(Order::LoadItem { site, ship, item }) {
-                        self.say(e);
-                    }
-                }
+                Some(ship) => match self.issue(Order::LoadItem { site, ship, item }) {
+                    Ok(_) => self.confirm(pos),
+                    Err(e) => self.say(e),
+                },
                 None => self.say("Choose a ship alongside the settlement"),
             }
             return;
@@ -2958,6 +2957,7 @@ impl App {
                 Ok(()) => {
                     self.pending = None;
                     self.status = None;
+                    self.confirm(pos);
                 }
                 Err(e) => self.say(e),
             }
@@ -2972,6 +2972,7 @@ impl App {
                 Ok(()) => {
                     self.pending = None;
                     self.status = None;
+                    self.confirm(pos);
                 }
                 Err(e) => self.say(e),
             }
@@ -3018,6 +3019,22 @@ impl App {
                 }),
             }
             return;
+        }
+        // As in the original, the left button gives orders too: with own
+        // ships selected, a click where the pointer shows an order (the sea,
+        // an enemy, a treasure, a deposit) carries it out; anywhere else it
+        // selects.
+        if self.pending.is_none() {
+            use crate::cursor::Pointer as P;
+            let (pointer, greyed) = self.pointer(pos);
+            let order = matches!(
+                pointer,
+                P::Sea | P::Attack | P::Treasure | P::Amber | P::Fish | P::Whale
+            );
+            if order && !greyed {
+                self.right_click(pos);
+                return;
+            }
         }
         if self.minimap_jump(pos) {
             self.minimap_drag = true;
@@ -3337,8 +3354,10 @@ impl App {
                 )
             });
             if takeable && self.own_ship(id) {
-                if let Err(e) = self.issue(Order::Take { ship: id, target }) {
-                    self.say(e);
+                match self.issue(Order::Take { ship: id, target }) {
+                    Ok(_) if k == 0 => self.confirm(pos),
+                    Ok(_) => {}
+                    Err(e) => self.say(e),
                 }
                 return;
             }
@@ -3430,6 +3449,15 @@ impl App {
             self.say("The ship cannot sail there.");
         } else if k == 0 {
             self.sent = Some((x - dx, y - dy, self.time_ms));
+        }
+    }
+
+    /// The green tick confirming an order at the clicked point (gcursor.cpp
+    /// 0x5180e0: after a move, taking a treasure, a behaviour's point, and
+    /// loading or unloading; never after gathering or attacking).
+    fn confirm(&mut self, pos: PhysicalPosition<f64>) {
+        if let Some((x, y)) = self.world_at(pos) {
+            self.sent = Some((x, y, self.time_ms));
         }
     }
 
