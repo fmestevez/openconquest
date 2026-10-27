@@ -239,6 +239,8 @@ pub struct Scene {
     pub effects: Vec<Effect>,
     /// Projectiles in flight (not saved: a save lets them land at once).
     pub shots: Vec<shot::Shot>,
+    /// Ships burning (not saved: flames are short-lived).
+    pub fires: Vec<fire::Fire>,
     rng: Rng,
     /// Fish shoals out of sight between moves: the zone and seconds until
     /// they surface again; and those in sight: seconds until they leave
@@ -387,6 +389,7 @@ mod ai;
 mod battle;
 mod brain;
 mod creatures;
+mod fire;
 mod gulls;
 pub mod load;
 mod orders;
@@ -505,6 +508,7 @@ impl Scene {
             minimap_origin: Default::default(),
             effects: Vec::new(),
             shots: Vec::new(),
+            fires: Vec::new(),
             rng: Rng(0x1234_5678),
             shoals_gone: Default::default(),
             shoals_shown: Default::default(),
@@ -1384,6 +1388,7 @@ impl Scene {
         self.run_ruins(dt);
         self.run_combat(dt, data, caches);
         self.run_shots(dt, data, caches);
+        self.run_burning(dt);
         self.run_contact(dt, data, caches);
         let mut moved = false;
         // One ship to a cell: the cells ships lie in, and those they are

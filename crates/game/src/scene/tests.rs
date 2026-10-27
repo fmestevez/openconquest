@@ -5165,3 +5165,35 @@ fn worn_units_are_mended() {
     let units = scene.objects[k].unit_conditions();
     assert_eq!((units[0][0], units[6][0]), (52, 52));
 }
+
+/// Greek fire sets a ship ablaze from the flames' middle; they burn out on
+/// their own; the Torch of Ares keeps them off (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ships_burn_and_go_out() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let i = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+    let id = scene.objects[i].id;
+    scene.ignite(i, 9, false, 100.0, &data, &mut caches);
+    let f = scene.fires.iter().find(|f| f.ship == id).unwrap();
+    assert_eq!((f.size, f.frame), (2, f.frames.len() / 2));
+    let left = f.frames.len() - f.frame;
+    assert!(scene.fire_on(&scene.objects[i], 0).is_some());
+    for _ in 0..left * 2 + 2 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert!(scene.fires.is_empty(), "burnt out");
+    let ship = scene.objects[i].ship.as_mut().unwrap();
+    ship.treasures.push(crate::objects::Treasure {
+        kind: 10,
+        param: 0,
+        amount: 0,
+    });
+    scene.ignite(i, 9, false, 100.0, &data, &mut caches);
+    assert!(scene.fires.is_empty(), "the Torch of Ares");
+}

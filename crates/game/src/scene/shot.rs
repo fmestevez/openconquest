@@ -95,6 +95,9 @@ const LAND: [[&[&str]; 4]; 14] = [
 /// A projectile in flight.
 pub struct Shot {
     pub letter: u8,
+    /// What was fired, and with the Flame (it may set ships on fire).
+    item: u8,
+    flaming: bool,
     pub variant: u8,
     from: (f32, f32),
     to: (f32, f32),
@@ -183,6 +186,10 @@ pub struct SavedShot {
     wounds: f32,
     #[serde(default)]
     wear: f32,
+    #[serde(default)]
+    item: u8,
+    #[serde(default)]
+    flaming: bool,
     age: f32,
     flight: f32,
     apex: f32,
@@ -200,6 +207,8 @@ impl Shot {
             damage: self.damage,
             wounds: self.wounds,
             wear: self.wear,
+            item: self.item,
+            flaming: self.flaming,
             age: self.age,
             flight: self.flight,
             apex: self.apex,
@@ -210,6 +219,8 @@ impl Shot {
         let dir = direction(s.to.0 - s.from.0, s.to.1 - s.from.1);
         Shot {
             letter: s.letter,
+            item: s.item,
+            flaming: s.flaming,
             variant: s.variant,
             from: s.from,
             to: s.to,
@@ -296,6 +307,8 @@ impl Scene {
         }
         self.shots.push(Shot {
             letter,
+            item: f.item,
+            flaming: f.flaming,
             variant,
             from: f.from,
             to: (tx, ty),
@@ -374,7 +387,9 @@ impl Scene {
         }
         // The hull's share first, then the crew's and the weapons'
         // (0x4bf170).
-        if target.is_some() {
+        if let Some(i) = target {
+            // Fire first, judged on the hull before the blow (0x4bf1a0).
+            self.ignite(i, s.item, s.flaming, s.damage, data, caches);
             self.strike(s.target, s.damage, false, data, caches);
             self.wound(s.target, s.wounds);
             self.wear(s.target, s.wear);

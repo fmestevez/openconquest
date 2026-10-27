@@ -174,6 +174,9 @@ struct Args {
     /// (to see the damaged pictures).
     #[arg(long, hide = true, value_name = "PCT")]
     hull: Option<f32>,
+    /// Debugging: set every ship on fire (Greek fire) before simulating.
+    #[arg(long, hide = true)]
+    burn: bool,
     /// Debugging: show the object info of the object under this map cell's
     /// centre (or the nearest one) in the strip below the view.
     #[arg(long, hide = true, value_parser = parse_size, value_name = "X,Y")]
@@ -419,6 +422,9 @@ fn screenshot(
                 c.hull = c.max_hull * pct / 100.0;
             }
         }
+    }
+    if args.burn {
+        scene.burn_all(data, &mut caches);
     }
     let training = (!args.train.is_empty())
         .then(|| train(&mut scene, data, &mut caches, args.focus, &args.train))

@@ -3010,7 +3010,9 @@ impl App {
     fn placement(&self) -> (Screen, MinimapRect) {
         let window = self.window_size();
         if self.show_interface {
-            let layout = self.interface.layout(window, &self.camera.policy, &self.scene);
+            let layout = self
+                .interface
+                .layout(window, &self.camera.policy, &self.scene);
             (layout.view, layout.minimap)
         } else {
             (

@@ -186,6 +186,20 @@ pub fn draw_objects(
             continue;
         }
         draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y);
+        // Flames on a burning ship.
+        if let Some((layers, left, top)) = scene.fire_on(obj, time_ms) {
+            if let Some(l) = layers.first() {
+                draw_image(
+                    frame,
+                    screen,
+                    camera,
+                    lut,
+                    &l.image,
+                    left.round() as i32,
+                    top.round() as i32,
+                );
+            }
+        }
         // An amber deposit's glint, part of it.
         if let Some((f, x, y)) = scene
             .sparkles

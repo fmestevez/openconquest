@@ -1083,6 +1083,22 @@ window of six, two to a row 53 apart from x 62, with `COBJ_BKGSCROLL`/
 the track `COBJ_BKSCROLL`/`CLOAD_BKSCROLL` (30x96) at (168, y + 28),
 `SLIDER_BB` the thumb, a step a row of two (messages 0x537/0x538).
 
+## Ships on fire
+
+A shot's blow (0x4bf1a0) can set a ship on fire (0x4e4fb0, layer 5,
+`FIRE<size>` played once, a frame every other tick, then removed by
+0x4e04d0/0x4e0260): Greek fire (bomb kind 10) at once with size 3 (shown as
+2, from the sequence's middle); a flaming shot (+0xe3, the Flame) with a
+chance `rand % 100 <= blow / 27 + (100 - hull%) / 2` (0x4e5120, the hull
+before the blow), size 0, or one more (at most 2) on a burning ship, which
+only goes back to the middle of its flames. A Torch of Ares aboard
+(treasure kind 10) keeps both off; +0x255 also keeps them off (not
+identified). The flames' bottom middle stands at the ship type's and
+heading's spot (0x598ad8, 8 a type) from its picture's top left, 23 pixels
+lower. The layer is drawn through the shadow table (0x50e050 with
+0x5c1358) and 0x50e130(1, 0x26), not decoded: we draw it plainly. `SMOKE`
+(layer 6) is only restored from saves; nothing starts it in play.
+
 ## Selection box
 
 The frame is a sprite sequence of 10 pictures in objects.dkx, smallest
