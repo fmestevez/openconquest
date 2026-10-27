@@ -23,7 +23,7 @@ const MONSTER_STEP_SECONDS: f32 = 0.75;
 
 /// A Gorgon's cycle: seconds until her next stare, and the stares left in
 /// this rising (0 resting), and how many she has made.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct GorgonCycle {
     next: f32,
     left: u32,
@@ -43,7 +43,7 @@ pub const SONG_CYCLE_FRAMES: u32 = 163;
 pub const CHARMED_SPEED: f32 = 7000.0 / 6000.0 / crate::clock::TICK;
 
 /// A ship under a siren's song.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Charm {
     pub cell: (i32, i32),
     share: u32,

@@ -3665,3 +3665,54 @@ fn ram_from_afar_connects() {
     }
     assert!(hull(&scene) < before, "the ram struck");
 }
+
+/// A game saved mid-battle keeps the shots in flight and the spells
+/// under way (needs `OPENAC_DATA`).
+#[test]
+fn battles_survive_a_save() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let human = scene.human.unwrap();
+    let mine = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let (x, y) = (scene.objects[mine].x, scene.objects[mine].y);
+    scene.objects[mine].ship.as_mut().unwrap().kind = 2;
+    scene.objects[mine].combat.as_mut().unwrap().weapons = combat::DEFAULT_WEAPONS[2].to_vec();
+    let mine = scene.objects[mine].id;
+    let e = scene
+        .objects
+        .iter()
+        .position(|o| o.ship.is_some() && o.id != mine)
+        .unwrap();
+    scene.objects[e].owner = Some((human.nation, human.slot + 1));
+    scene.objects[e].x = x + 192.0;
+    scene.objects[e].y = y;
+    let target = scene.objects[e].id;
+    scene.order_attack(mine, target).unwrap();
+    for _ in 0..50 * 10 {
+        scene.update(0.02, &data, &mut caches);
+        if !scene.shots.is_empty() {
+            break;
+        }
+    }
+    assert!(!scene.shots.is_empty(), "a volley flies");
+    scene.lightning.push((x, y, 1.0));
+    let path = std::env::temp_dir().join(format!("openac-battle-{}.json", std::process::id()));
+    scene.save().write(&path).unwrap();
+    let save = SaveGame::read(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let restored = Scene::restore(&data, &mut caches, &save).unwrap();
+    assert_eq!(restored.shots.len(), scene.shots.len());
+    assert!(
+        restored.shots.iter().all(|s| s.layer().is_some()),
+        "pictures found again"
+    );
+    assert_eq!(restored.lightning.len(), 1);
+}

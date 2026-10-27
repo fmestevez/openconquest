@@ -95,6 +95,11 @@ pub struct SaveGame {
     pub walkers: Vec<crate::scene::Walker>,
     #[serde(default)]
     pub lair_clocks: std::collections::BTreeMap<u32, f32>,
+    /// What was under way in battle: shots in flight, fireballs, lightning
+    /// to strike, spells' sight, sirens' songs and charms, the Gorgons' and
+    /// sea monsters' timing.
+    #[serde(default)]
+    pub battle: crate::scene::Battle,
 }
 
 #[derive(Serialize, Deserialize)]

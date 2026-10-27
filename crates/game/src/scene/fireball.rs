@@ -26,7 +26,49 @@ pub struct Fireball {
     frames: [Vec<Vec<Layer>>; 4],
 }
 
+/// A fireball as a save keeps it (its pictures are found again).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SavedFireball {
+    cell: (i32, i32),
+    owner: Option<(u32, u32)>,
+    state: u8,
+    frame: usize,
+    clock: f32,
+    strikes: u32,
+    struck: u32,
+}
+
+fn fireball_frames(data: &GameData, caches: &mut Caches) -> [Vec<Vec<Layer>>; 4] {
+    [1, 2, 3, 4]
+        .map(|n| objects::sequence_frames(data, caches, &format!("SLIGHT{n}")).unwrap_or_default())
+}
+
 impl Fireball {
+    pub fn saved(&self) -> SavedFireball {
+        SavedFireball {
+            cell: self.cell,
+            owner: self.owner,
+            state: self.state,
+            frame: self.frame,
+            clock: self.clock,
+            strikes: self.strikes,
+            struck: self.struck,
+        }
+    }
+
+    pub fn restored(s: &SavedFireball, data: &GameData, caches: &mut Caches) -> Self {
+        Fireball {
+            cell: s.cell,
+            owner: s.owner,
+            state: s.state,
+            frame: s.frame,
+            clock: s.clock,
+            strikes: s.strikes,
+            struck: s.struck,
+            frames: fireball_frames(data, caches),
+        }
+    }
+
     /// Its picture now, and its top-left corner in world pixels.
     pub fn picture(&self) -> Option<(&[Layer], f32, f32)> {
         let frames = self.frames.get(self.state.checked_sub(1)? as usize)?;
@@ -52,9 +94,7 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) {
-        let frames = [1, 2, 3, 4].map(|n| {
-            objects::sequence_frames(data, caches, &format!("SLIGHT{n}")).unwrap_or_default()
-        });
+        let frames = fireball_frames(data, caches);
         let t = TILE_SIZE as f32;
         let (x, y) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
         self.sounds.push(("bf1", x, y));

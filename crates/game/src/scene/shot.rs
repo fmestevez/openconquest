@@ -145,6 +145,83 @@ fn picture(letter: u8, state: u8, variant: u8) -> String {
     format!("BOMB{}{}{}", (b'A' + letter) as char, state.min(6), variant)
 }
 
+/// A shot's picture in flight: its direction's cell of each frame.
+fn flight_frames(
+    letter: u8,
+    variant: u8,
+    dir: usize,
+    data: &GameData,
+    caches: &mut Caches,
+) -> Vec<Layer> {
+    let cells = |name: &str, caches: &mut Caches| -> Vec<Layer> {
+        objects::composite_layer_frames(data, caches, name, dir)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|f| f.into_iter().next())
+            .collect()
+    };
+    let frames = cells(&picture(letter, 0, variant), caches);
+    if frames.is_empty() {
+        cells(&picture(letter, 0, 1 - variant), caches)
+    } else {
+        frames
+    }
+}
+
+/// A shot in flight as a save keeps it (its picture is found again).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SavedShot {
+    letter: u8,
+    variant: u8,
+    from: (f32, f32),
+    to: (f32, f32),
+    target: u32,
+    strikes: bool,
+    damage: f32,
+    wounds: f32,
+    age: f32,
+    flight: f32,
+    apex: f32,
+}
+
+impl Shot {
+    pub fn saved(&self) -> SavedShot {
+        SavedShot {
+            letter: self.letter,
+            variant: self.variant,
+            from: self.from,
+            to: self.to,
+            target: self.target,
+            strikes: self.strikes,
+            damage: self.damage,
+            wounds: self.wounds,
+            age: self.age,
+            flight: self.flight,
+            apex: self.apex,
+        }
+    }
+
+    pub fn restored(s: &SavedShot, data: &GameData, caches: &mut Caches) -> Self {
+        let dir = direction(s.to.0 - s.from.0, s.to.1 - s.from.1);
+        Shot {
+            letter: s.letter,
+            variant: s.variant,
+            from: s.from,
+            to: s.to,
+            target: s.target,
+            strikes: s.strikes,
+            damage: s.damage,
+            wounds: s.wounds,
+            age: s.age,
+            flight: s.flight,
+            apex: s.apex,
+            frames: flight_frames(s.letter, s.variant, dir, data, caches),
+            x: s.from.0,
+            y: s.from.1,
+        }
+    }
+}
+
 /// The 16 directions (0x497e50): 0 east, counter-clockwise.
 fn direction(dx: f32, dy: f32) -> usize {
     let a = (-dy).atan2(dx).rem_euclid(std::f32::consts::TAU);
@@ -206,18 +283,7 @@ impl Scene {
                 0.41 * dist.min(500.0) * HEIGHT[l] as f32 / 9000.0,
             )
         };
-        let name = picture(letter, 0, variant);
-        let cells = |name: &str, caches: &mut Caches| -> Vec<Layer> {
-            objects::composite_layer_frames(data, caches, name, dir)
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|f| f.into_iter().next())
-                .collect()
-        };
-        let mut frames = cells(&name, caches);
-        if frames.is_empty() {
-            frames = cells(&picture(letter, 0, 1 - variant), caches);
-        }
+        let frames = flight_frames(letter, variant, dir, data, caches);
         if !LAUNCH[l.min(13)].is_empty() {
             self.sounds.push((LAUNCH[l.min(13)], f.from.0, f.from.1));
         }

@@ -642,6 +642,17 @@ impl Scene {
                 .map(|(k, v)| (*k, v.clone()))
                 .collect(),
             brain: self.brain.clone(),
+            battle: Battle {
+                shots: self.shots.iter().map(|s| s.saved()).collect(),
+                fireballs: self.fireballs.iter().map(|f| f.saved()).collect(),
+                lightning: self.lightning.clone(),
+                sight_points: self.sight_points.clone(),
+                charmed: self.charmed.iter().map(|(k, v)| (*k, v.clone())).collect(),
+                siren_songs: self.siren_songs.iter().map(|(k, v)| (*k, *v)).collect(),
+                siren_shown: self.siren_shown.iter().map(|(k, v)| (*k, *v)).collect(),
+                gorgons: self.gorgons.iter().map(|(k, v)| (*k, *v)).collect(),
+                sea_monsters: self.sea_monsters.iter().map(|(k, v)| (*k, *v)).collect(),
+            },
         }
     }
 
@@ -718,6 +729,25 @@ impl Scene {
         if save.brain.is_some() {
             scene.brain = save.brain.clone();
         }
+        let b = &save.battle;
+        scene.shots = b
+            .shots
+            .iter()
+            .map(|s| shot::Shot::restored(s, data, caches))
+            .collect();
+        scene.fireballs = b
+            .fireballs
+            .iter()
+            .map(|f| fireball::Fireball::restored(f, data, caches))
+            .collect();
+        scene.lightning = b.lightning.clone();
+        scene.sight_points = b.sight_points.clone();
+        scene.charmed = b.charmed.iter().cloned().collect();
+        scene.siren_songs = b.siren_songs.iter().copied().collect();
+        scene.siren_shown = b.siren_shown.iter().copied().collect();
+        scene.gorgons = b.gorgons.iter().copied().collect();
+        scene.sea_monsters = b.sea_monsters.iter().copied().collect();
+        scene.refresh_sight();
         if !save.start_sites.is_empty() {
             scene.start_sites = save.start_sites.clone();
         }
@@ -1454,6 +1484,30 @@ impl Scene {
             };
         }
     }
+}
+
+/// What was under way in battle when the game was saved (see
+/// `SaveGame::battle`).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Battle {
+    #[serde(default)]
+    pub shots: Vec<shot::SavedShot>,
+    #[serde(default)]
+    pub fireballs: Vec<fireball::SavedFireball>,
+    #[serde(default)]
+    pub lightning: Vec<(f32, f32, f32)>,
+    #[serde(default)]
+    pub sight_points: Vec<(i32, i32, i32, f32)>,
+    #[serde(default)]
+    pub charmed: Vec<(u32, creatures::Charm)>,
+    #[serde(default)]
+    pub siren_songs: Vec<(u32, f32)>,
+    #[serde(default)]
+    pub siren_shown: Vec<(u32, f32)>,
+    #[serde(default)]
+    pub gorgons: Vec<(u32, creatures::GorgonCycle)>,
+    #[serde(default)]
+    pub sea_monsters: Vec<(u32, (f32, f32))>,
 }
 
 /// The least way a ship keeps while bound somewhere, in world pixels a
