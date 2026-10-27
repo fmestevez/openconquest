@@ -229,12 +229,10 @@ pub const SHIELD_FACTOR: f32 = 0.2;
 /// 0xda9a, 0x4dc630).
 pub const PROTECTION_SECONDS: f32 = 3000.0 * crate::clock::TICK;
 
-/// A tornado: how long it lasts, how fast it drifts (world pixels per
-/// second at wind strength 6) and the damage per second to ships it passes
-/// over. Placeholders.
-pub const WATERSPOUT_SECONDS: f32 = 30.0;
-pub const WATERSPOUT_SPEED: f32 = 40.0;
-pub const WATERSPOUT_DPS: f32 = 200.0;
+/// What a tornado's strike takes from a ship on each cell it comes to
+/// (the original's blow is 30000, a fifth of it on a ship shielded from
+/// magic; 0x43a6c0, 0x4dc630). Placeholder scale.
+pub const WATERSPOUT_STRIKE: f32 = 270.0;
 pub const FX_TORNADO: &str = "TRNDSPR";
 /// A summoned sea monster: how long it stays and what it strikes with
 /// (as four gastraphetes, which strike at close quarters). Placeholders.
@@ -309,10 +307,3 @@ impl Magic {
         }
     }
 }
-
-/// Damage per second a ship takes inside a whirlpool or on a reef.
-/// Placeholder.
-pub const WHIRLPOOL_DPS: f32 = 150.0;
-pub const REEF_DPS: f32 = 60.0;
-/// How close to a hazard's centre a ship is caught. Placeholder.
-pub const HAZARD_RADIUS: f32 = 32.0;

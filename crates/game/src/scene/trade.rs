@@ -450,7 +450,7 @@ impl Scene {
                 age_ms: 0.0,
                 follow: None,
                 life_ms: None,
-                drift: false,
+                tornado: None,
                 site: Some(p.site),
             };
             fx.show_frame(frame);

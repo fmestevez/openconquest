@@ -333,7 +333,7 @@ impl Scene {
                             age_ms: 0.0,
                             follow: None,
                             life_ms: None,
-                            drift: false,
+                            tornado: None,
                             site: None,
                         }),
                         _ => self.spawn_effect(data, caches, combat::FX_SINK, tx, ty),
@@ -691,7 +691,7 @@ impl Scene {
                 age_ms: 0.0,
                 follow: None,
                 life_ms: None,
-                drift: false,
+                tornado: None,
                 site: None,
             }),
             Ok(_) => {}
@@ -723,7 +723,7 @@ impl Scene {
                 age_ms: 0.0,
                 follow: Some(id),
                 life_ms: Some(seconds * 1000.0),
-                drift: false,
+                tornado: None,
                 site: None,
             }),
             Ok(_) => {}

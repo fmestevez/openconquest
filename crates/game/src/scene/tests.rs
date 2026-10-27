@@ -360,20 +360,15 @@ fn temple_magic() {
     scene
         .cast_hazard(Spell::Whirlpool, cx, cy, &data, &mut caches)
         .unwrap();
-    // Put the ship in the whirlpool's eye.
-    let pool = scene
-        .objects
-        .iter()
-        .find(|o| {
-            o.class == ObjectClass::Whirlpool
-                && o.record.fields[5] == cx as u32
-                && o.record.fields[6] == cy as u32
-        })
-        .unwrap();
-    let (px, py) = (pool.x, pool.y);
+    // The ship on the whirlpool's cell goes down.
+    assert!(scene.objects.iter().any(|o| {
+        o.class == ObjectClass::Whirlpool
+            && o.record.fields[5] == cx as u32
+            && o.record.fields[6] == cy as u32
+    }));
     let i = scene.object_index(ship).unwrap();
-    scene.objects[i].x = px;
-    scene.objects[i].y = py;
+    scene.objects[i].x = cx as f32 * 64.0 + 32.0;
+    scene.objects[i].y = cy as f32 * 64.0 + 32.0;
     for _ in 0..50 * 30 {
         scene.update(0.02, &data, &mut caches);
         if scene.object_index(ship).is_none() {
@@ -694,7 +689,7 @@ fn workshop_builds_weapons() {
     assert!(scene.objects[i].is_armed());
 }
 
-/// A tornado drifts and wrecks ships; a summoned sea monster fights for
+/// A tornado hops about and goes; a summoned sea monster fights for
 /// its master, then leaves (needs `OPENAC_DATA`).
 #[test]
 fn tornado_and_sea_monster() {
@@ -759,15 +754,22 @@ fn tornado_and_sea_monster() {
         scene.update(0.02, &data, &mut caches);
     }
     assert!(scene.object_index(monster).is_none(), "the monster left");
-    // A tornado drifts with the wind.
+    // A tornado rises, hops from cell to cell and sinks.
     scene
         .cast_hazard(Spell::Waterspout, cell.0, cell.1, &data, &mut caches)
         .unwrap();
-    let fx = scene.effects.iter().position(|fx| fx.drift).unwrap();
+    let tornado = |s: &Scene| s.effects.iter().position(|fx| fx.tornado.is_some());
+    let fx = tornado(&scene).unwrap();
     let start = (scene.effects[fx].x, scene.effects[fx].y);
-    scene.update(1.0, &data, &mut caches);
-    let fx = scene.effects.iter().position(|fx| fx.drift).unwrap();
+    for _ in 0..50 * 5 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    let fx = tornado(&scene).unwrap();
     assert_ne!((scene.effects[fx].x, scene.effects[fx].y), start);
+    for _ in 0..50 * 20 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert!(tornado(&scene).is_none(), "the tornado is gone");
 }
 
 /// A saved game, restored, carries on exactly as the original would

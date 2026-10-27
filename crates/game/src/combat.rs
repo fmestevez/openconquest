@@ -855,11 +855,30 @@ pub struct Effect {
     pub follow: Option<u32>,
     /// Loop until this age; `None` plays the frames once.
     pub life_ms: Option<f32>,
-    /// A tornado: moves with the wind and wrecks ships.
-    pub drift: bool,
+    /// A tornado: its course, which also picks its frame.
+    pub tornado: Option<Tornado>,
     /// Shows the ship being built at this shipyard (its frame is set from
     /// the production's progress).
     pub site: Option<u32>,
+}
+
+/// A tornado (Tornado.cpp 0x43a380), a frame every 2 ticks: it rises
+/// (frames 0-41), then hops from cell to cell, 16 frames a hop, looping
+/// frames 42-83, until 250 ticks have passed at the end of a hop, and sinks
+/// (84-124).
+#[derive(Debug, Clone)]
+pub struct Tornado {
+    /// Seconds owed to its next frame.
+    pub clock: f32,
+    pub frame: usize,
+    /// 1 rising, 2 moving, 3 sinking, 0 gone.
+    pub phase: u8,
+    /// Seconds since it began to move.
+    pub moving: f32,
+    /// Frames into the hop, and its ends (world pixels).
+    pub hop: u32,
+    pub from: (f32, f32),
+    pub to: (f32, f32),
 }
 
 impl Effect {
@@ -871,6 +890,10 @@ impl Effect {
 
     /// The current frame, or `None` once the animation has finished.
     pub fn frame(&self) -> Option<&[Layer]> {
+        if let Some(t) = &self.tornado {
+            let last = self.frames.len().checked_sub(1)?;
+            return (t.phase != 0).then(|| self.frames[t.frame.min(last)].as_slice());
+        }
         let step = (self.age_ms / FX_FRAME_MS) as usize;
         match self.life_ms {
             Some(life) if self.age_ms < life && !self.frames.is_empty() => {

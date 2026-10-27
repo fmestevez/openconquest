@@ -845,9 +845,20 @@ impl Scene {
             .ship
             .as_ref()
             .is_some_and(|s| crate::objects::deep_draught(s.kind));
-        let cells = self
-            .nav
-            .find_path_avoiding(start, to, deep, |c| c != to && avoid.contains(&c))?;
+        // Whirlpools and reefs hold their cells (the landscape grid marks
+        // them, Reef.cpp 0x4306d0): routes keep off them.
+        let traps: HashSet<(i32, i32)> = self
+            .objects
+            .iter()
+            .filter(|o| matches!(o.class, ObjectClass::Whirlpool | ObjectClass::Reef(_)))
+            .map(|o| {
+                let f = |i| o.record.field(i).unwrap_or(0) as i32;
+                (f(5), f(6))
+            })
+            .collect();
+        let cells = self.nav.find_path_avoiding(start, to, deep, |c| {
+            (c != to && avoid.contains(&c)) || traps.contains(&c)
+        })?;
         let mut points: Vec<(f32, f32)> = cells
             .into_iter()
             .map(|(cx, cy)| (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0))
