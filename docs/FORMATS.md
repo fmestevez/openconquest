@@ -1342,8 +1342,8 @@ hero, bring Jason and the heroes to a settlement, ...) live in the brains.
 In the executable each brain's per-fleet handlers come first and its main
 function (the message handler that creates the fleets, lays deposits and
 dispatches each member to its handler) last: miss011's handlers are
-0x46b8d0-0x46e110 and its main 0x46e8e0, miss012's 0x46f760-0x472370 and
-0x472900, miss013's 0x473f40-0x476dc0 and 0x477930. Mains: miss000
+0x46b8d0-0x46e110 and its main 0x46e8e0, miss012's 0x46fb80-0x472890 and
+0x472fa0 (0x46f760 is its judge), miss013's 0x473f40-0x476dc0 and 0x477930. Mains: miss000
 0x449b10, miss001 0x44af70, miss002 0x44d0e0, miss003 0x44fd90, miss004
 0x453b00, miss005 0x457950, miss006 0x45b280, miss007 0x45f770, miss008
 0x463240, miss009 0x4663d0, miss010 0x46a0f0.
@@ -1649,6 +1649,76 @@ miss011 (0x46e8e0; members 0x46b8d0-0x46e110):
   (53, 31) on every difficulty; the Persians get 12000, 17000 or 25000
   amber and 8000, 10000 or 15000 fish (added) and technology and workshop
   levels (not ported).
+
+miss012 (0x472fa0; members 0x46fb80-0x472890, repair 0x475a70, 0x477190):
+
+- **Members.** Group 0 is the barbarians (player 16, 4 members), group 1
+  player 15 in the north-west, group 2 player 14 in the south-west (8
+  members each). Requests are per-member slots (codes 200 + type, -1
+  none) at `+0x110`, `+0x138`, `+0x15c`, each yard's member served at
+  `+0x108`, `+0x134`, `+0x158`. Members are dispatched at tick 5 x (group
+  + member) mod 50.
+- **The barbarians.** The yard (0x46fb80 at (50, 32)) rolls a rest of
+  `((50, 30, 10) + rand(31)) x 25` ticks and builds merchants, royal ships,
+  bombers, rammers and ship killers for free. Member 1 (0x46fde0, the
+  ships in (50, 27, 2, 2)) asks for royal ships (2) and bombers (1, 1, 2)
+  and sails to (50, 28) every 750 ticks watching (43, 21, 13, 19).
+  Member 2 (0x46ff90, (48, 31)) fishes, then gathers amber, in (45, 18,
+  11, 19) 4500 ticks, sailing to (47, 33) and resting 3000 after each.
+  Member 3 (0x470110, (53, 26, 3, 3)) asks for royal ships (2) and
+  rammers (1, 2, 2), rolls `(rand(4) + (10, 8, 6)) x 1500` (`+0x130`);
+  short of them (bombers counting) it sails to (54, 26), else patrols
+  (0x5b43e0) watching (45, 11, 11, 10) too, then strikes 3000 ticks (until
+  fewer than three) at (37, 0, 19, 10) if the player is there, else about
+  one of the player's settlements or towns in (0, 0, 56, 52), else about
+  the player's first thing. Zone fights last 1500 ticks, answering fire
+  250.
+- **The Persians.** The yards (0x470620 at (15, 12), 0x471b50 at (4, 50))
+  give an order of class 1 each round, serve their slots (boats to ship
+  killers, 0xd2, 0xd3; 0x34 class 0x30) and rest 500 ticks. Members 1
+  and 2 of each group (0x4709c0, 0x470b10, 0x471ef0, 0x472040) ask for
+  merchants while they have fewer than two and gather amber and fish: in
+  (8, 5, 16, 15) 4500 ticks, home (10, 16), rest 1500; in (0, 41, 15, 11)
+  6000 ticks, home (0, 50), rest 3000. Member (1, 3) (0x470c60, (10, 10,
+  3, 3)) patrols (0x5b44b0) watching (8, 5, 16, 15) and (10, 0, 14, 6).
+  Member (1, 4) (0x470eb0, (22, 12, 2, 2)) patrols the middle sea
+  (0x5b4560) `(rand(4) + (10, 8, 6)) x 1500` ticks (`+0x184`) watching
+  (8, 5, 16, 15), (24, 8, 9, 4), (24, 12, 14, 15) and (38, 15, 6, 10)
+  (answering fire 375 ticks, then back to the state before), then strikes
+  4500 ticks about the last of the player's royal ships carrying heroes
+  (`+0x259`) or a lasting gift (treasure kinds 10-14, 0x4b9740 group
+  0x10); else it sends member 3 to state 0x19 (a strike at (35, 0, 15, 9),
+  4500 ticks, while player 15 holds 5000 amber and 4000 fish) if the
+  player is there, or to state 0x23 about one of the player's settlements
+  or towns in (0, 0, 50, 72) (`+0x188`), which member 3's handler has no
+  case for: it stays so for good. Member (1, 7) (0x4718c0, (19, 15, 2,
+  2)) patrols (0x5b47d0) watching (8, 5, 16, 15); members (2, 3) and
+  (2, 4) (0x472190, 0x472370; (1, 46, 2, 2), (10, 49, 3, 2)) patrol
+  (0x5b4830, 0x5b4898) watching (0, 40, 19, 12). Member (2, 5) (0x472550)
+  rolls `r = rand(4)`, a spell (`+0x1b0`: 0-1 kind 9 paid, 2 kind 12, 3
+  kind 15) and `((20, 15, 10) + r) x 1500` ticks (`+0x198`; `+0x1b8`, set
+  to 1 at the start, picks that table over (8, 6, 4)); short of three
+  royal ships and (1, 2, 2) and (1, 1, 2) Persian ships it sails to (8,
+  46), else patrols (0x5b4958); the player in (0, 40, 19, 12) brings the
+  spell on its ships (0x47acf0 by member (2, 0)) and a fight of 1500
+  ticks; (1, 34, 21, 7) and (19, 39, 6, 13) send it to state 0x1e (the
+  area at `+0x40`). The other patrols ask for royal ships or bombers and
+  both Persian ships ((1, 3): 2 royal, (1, 1, 2) 0xd2, (1, 2, 2) 0xd3;
+  (1, 4): (0, 1, 2) royal, 2 and 2; (1, 7): 2 bombers, (1, 2, 2), (1, 1,
+  2); (2, 3): (2, 3, 3) royal, (1, 2, 2), (1, 2, 3); (2, 4): 2 bombers,
+  2 0xd2, (0, 1, 2) 0xd3). Zone fights last 1500 ticks, answering fire
+  375. Members (1, 6) and (2, 7) (0x471440, 0x472890; no ships) are
+  miss011's member 7 about player 15's and player 14's first temple 0x3e,
+  both casting through member (1, 0) (waits 0x5b40b0, 0x5b4170:
+  (3, 2, 1) x 1500; spells `+0x17c`, `+0x19c`, (1, 2, 3); odds (20, 15,
+  10)). Prizes of both players join member (1, 5) (0x5d97); unordered
+  launches join member 2 (boats, merchants) or 4 of their player's group
+  (0x5d98).
+- **The start.** Amber at (40, 0), (45, 0) and (53, 0) and fish at
+  (52, 5) on every difficulty; player 15 gets 10000, 15000 or 25000 amber
+  and 8000, 10000 or 15000 fish, player 14 15000, 15000 or 25000 and
+  10000, 10000 or 15000 (added), and both technology and workshop levels
+  (not ported).
 
 Primitives not yet ported (the later brains use them):
 
