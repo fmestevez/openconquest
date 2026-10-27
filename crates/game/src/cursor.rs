@@ -12,8 +12,9 @@ use std::rc::Rc;
 use crate::assets::{GameData, Image};
 use crate::render::{blit_scaled, Frame};
 
-/// Milliseconds per frame of a pointer's animation.
-const FRAME_MS: u64 = 120;
+/// Milliseconds per frame of a pointer's animation (its frame delay, 100,
+/// gcursor.cpp; pointers run on the clock, not the game's ticks).
+const FRAME_MS: u64 = 100;
 
 /// The pointers, with their names and draw offsets from the mouse
 /// position (0x516ea0, fields +0xd1, +0xd5).

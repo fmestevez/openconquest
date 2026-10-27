@@ -159,22 +159,19 @@ const SIDE: [(i8, i8); 8] = [
     (-1, 1),
 ];
 
-/// Seconds between pairs of droplets, a droplet's frame, and how fast
-/// droplets drift outwards and along. Estimates.
-const EVERY: f32 = 0.04;
-const FRAME_SECONDS: f32 = 0.06;
-const OUTWARDS: f32 = 30.0;
-/// Droplets start along with the ship at this share of its speed (the
-/// original gives them its speed ahead, 0x4a3f40), so they leave the stern
-/// and fall behind as they slow.
-const KEEP_UP: f32 = 0.8;
+/// A droplet steps a frame each tick and goes after its last
+/// (TraksClassTy 0x48f440, frame delay 1); pairs come every tick.
+const EVERY: f32 = crate::clock::TICK;
 
+/// A droplet of a ship's wake (TraksClassTy): it stays where it was thrown
+/// and drifts by v t / 10 + a t squared / 20 pixels after t ticks (0x48f440).
 #[derive(Debug, Clone)]
 pub struct Droplet {
-    pub x: f32,
-    pub y: f32,
-    vx: f32,
-    vy: f32,
+    x0: f32,
+    y0: f32,
+    /// Pixels a tick and a tick squared (v / 10, a / 20 of the original).
+    v: (f32, f32),
+    a: (f32, f32),
     pub age: f32,
     /// `TRAKS00` (true) or `TRAKS14`.
     pub small: bool,
@@ -183,22 +180,27 @@ pub struct Droplet {
 impl Droplet {
     /// Its frame of `frames` frames, while it lasts.
     pub fn frame(&self, frames: usize) -> Option<usize> {
-        let f = (self.age / FRAME_SECONDS) as usize;
+        let f = (self.age / crate::clock::TICK) as usize;
         (f < frames).then_some(f)
+    }
+
+    /// Where it is now.
+    pub fn at(&self) -> (f32, f32) {
+        let t = self.age / crate::clock::TICK;
+        (
+            self.x0 + self.v.0 * t + self.a.0 * t * t,
+            self.y0 + self.v.1 * t + self.a.1 * t * t,
+        )
     }
 }
 
 impl Scene {
-    /// Ships under way throw off droplets; droplets drift and fade.
+    /// Ships under way throw off droplets (0x4a3f40); droplets drift and
+    /// fade.
     pub(super) fn run_wakes(&mut self, dt: f32) {
         let (small, big) = (self.wake_art.0.len(), self.wake_art.1.len());
         self.droplets.retain_mut(|d| {
             d.age += dt;
-            d.x += d.vx * dt;
-            d.y += d.vy * dt;
-            // Slowing as they spread.
-            d.vx *= 1.0 - 2.0 * dt;
-            d.vy *= 1.0 - 2.0 * dt;
             d.frame(if d.small { small } else { big }).is_some()
         });
         self.wake_clock += dt;
@@ -207,31 +209,39 @@ impl Scene {
         }
         self.wake_clock -= EVERY;
         let mut new = Vec::new();
+        let rng = &mut self.gull_rng;
         for o in &self.objects {
             let Some(s) = &o.ship else { continue };
-            // Only going faster than its type's threshold (0x5bb1f4, in
-            // units of 1/6000 pixel a tick).
-            let from = WAKE_FROM[s.kind as usize % 12] as f32 / 6000.0 / crate::clock::TICK;
-            if s.path.is_empty() || s.rotation.is_some() || s.velocity <= from {
+            // In the original's units: 1/6000 pixel a tick.
+            let speed = (s.velocity * crate::clock::TICK * 6000.0) as i32;
+            // Only going faster than its type's threshold (0x5bb1f4).
+            if s.path.is_empty()
+                || s.rotation.is_some()
+                || speed <= WAKE_FROM[s.kind as usize % 12] as i32
+            {
                 continue;
             }
             let k = s.kind as usize % 12;
             let h = s.heading % 8;
             let (sx, sy) = STERN[k][h];
-            let (ax, ay) = AHEAD[h];
-            let norm = (ax as f32).hypot(ay as f32).max(1.0);
-            let along = s.velocity * KEEP_UP / norm;
-            let (px, py) = SIDE[h];
-            let spread = SPREAD[k] as f32 + if h == 2 || h == 6 { 1.0 } else { 0.0 };
+            let (ax, ay) = (AHEAD[h].0 as i32, AHEAD[h].1 as i32);
+            let (px, py) = (SIDE[h].0 as i32, SIDE[h].1 as i32);
+            // A little apart, by chance (0x4a3f40: rand & 3, less 2).
+            let spread =
+                (rng.next() & 3) as i32 - 2 + SPREAD[k] as i32 + i32::from(h == 2 || h == 6);
+            let (ahead, out, accel) = (speed / 9000, speed / 3500, speed / 9500);
             let half = objects::SHIP_FRAME[k] / 2.0;
             let (x, y) = (o.x - half + sx as f32, o.y - half + sy as f32);
-            for side in [1.0, -1.0] {
-                let (px, py) = (px as f32 * side, py as f32 * side);
+            for side in [1, -1] {
+                let (px, py) = (px * side, py * side);
                 new.push(Droplet {
-                    x: x + px * spread,
-                    y: y + py * spread,
-                    vx: px * OUTWARDS + ax as f32 * along,
-                    vy: py * OUTWARDS + ay as f32 * along,
+                    x0: x + (px * spread) as f32,
+                    y0: y + (py * spread) as f32,
+                    v: (
+                        ((ax * ahead + px * out) / 2) as f32 / 10.0,
+                        ((ay * ahead + py * out) / 2) as f32 / 10.0,
+                    ),
+                    a: ((px * accel) as f32 / 20.0, (py * accel) as f32 / 20.0),
                     age: 0.0,
                     small: SMALL[k],
                 });

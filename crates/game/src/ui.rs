@@ -987,14 +987,19 @@ impl GameView<'_> {
                 &lut,
             );
         }
-        // The green tick where ships were sent, its four frames played
-        // twice. The timing is an estimate.
+        // The green tick where ships were sent (gcursor.cpp 0x515e60): its
+        // top-left 11 and 24 pixels up-left of the click, a frame each 250
+        // ms, gone as it reaches its last (0x5166f8).
         if let (Some((x, y, age)), Some(ui)) = (self.sent, self.interface) {
-            const TICK_MS: u64 = 120;
+            const TICK_MS: u64 = 250;
             let n = ui.take_cmd.len() as u64;
-            if n > 0 && age < 2 * n * TICK_MS {
-                let img = &ui.take_cmd[((age / TICK_MS) % n) as usize];
-                crate::render::draw_centred(frame, &screen, self.camera, &lut, img, x, y);
+            if n > 1 && age < (n - 1) * TICK_MS {
+                let img = &ui.take_cmd[(age / TICK_MS) as usize];
+                let (cx, cy) = (
+                    x - 11.0 + img.width as f32 / 2.0,
+                    y - 24.0 + img.height as f32 / 2.0,
+                );
+                crate::render::draw_centred(frame, &screen, self.camera, &lut, img, cx, cy);
             }
         }
         if let Some(b) = self.select_box {

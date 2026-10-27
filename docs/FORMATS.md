@@ -837,8 +837,21 @@ A ship under way faster than its type's threshold (0x5bb1f4) throws off two
 droplets a tick (0x4a3f40) from its stern (0x5bb540, per type and heading,
 from the top-left of its `SHIP_` composite frame, 56-80 pixels), spread apart by 0x5bb840 plus or minus a little,
 drifting outwards (`TRAKS00` for boats and merchants, `TRAKS14` else,
-0x5bb224). Where the player sends ships a green tick (`TAKE_CMD`, controlm)
-plays.
+0x5bb224). With s the ship's speed (1/6000 pixel a tick), a droplet starts
+at the stern plus the side times (spread + rand & 3 - 2) and moves
+(ahead x s / 9000 + side x s / 3500) / 2 tenths of a pixel a tick, with an
+acceleration of side x s / 9500 (position v t / 10 + a t^2 / 20 after t
+ticks, TraksClassTy 0x48f440), a frame a tick until its last.
+
+Where the player sends ships a green tick (`TAKE_CMD`, controlm) plays
+(gcursor.cpp 0x515e60): its top-left 11 and 24 pixels up-left of the click,
+a frame each 250 ms, removed on reaching its last (0x5166f8). The pointers
+themselves step a frame each 100 ms; both run on the clock, not on ticks.
+
+Buildings (LandObjClassTy 0x422e30, TownObjClassTy 0x43bd60): the
+picture's damage digit is ceil(health x 2 / 67) (0x594ab0) for a standing
+building, 3 otherwise; its frames step every cycle[state] / frames ticks
+(the class's cycle table at +0xc0).
 
 ## Resource counters
 

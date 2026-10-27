@@ -157,7 +157,8 @@ pub fn draw_objects(
             &scene.wake_art.1
         };
         if let Some(layers) = d.frame(frames.len()).and_then(|f| frames.get(f)) {
-            draw(frame, layers, d.x, d.y);
+            let (x, y) = d.at();
+            draw(frame, layers, x, y);
         }
     }
     for obj in below {
