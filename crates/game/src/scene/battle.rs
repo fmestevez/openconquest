@@ -294,7 +294,7 @@ impl Scene {
                 let (strikes, level, letter, weaken) = match thrower {
                     Some(class) => {
                         let cells = (dist / TILE_SIZE as f32) as u32;
-                        let missed = cells >= 2 && cells < 8 && self.rng.next() % (8 - cells) == 0;
+                        let missed = (2..8).contains(&cells) && self.rng.next() % (8 - cells) == 0;
                         (
                             !missed,
                             1,
