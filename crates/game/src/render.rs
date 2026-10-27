@@ -163,6 +163,16 @@ pub fn draw_objects(
     }
     for obj in below {
         draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y);
+        // An amber deposit's glint, part of it.
+        if let Some((f, x, y)) = scene
+            .sparkles
+            .get(&obj.id)
+            .and_then(|s| s.frame(scene.sparkle_art.len()))
+        {
+            if let Some(layers) = scene.sparkle_art.get(f) {
+                draw(frame, layers, x, y);
+            }
+        }
         // Its banner, from the picture's top left.
         if let (Some((flag, dx, dy)), Some(first), true) = (
             &obj.banner,

@@ -918,6 +918,13 @@ speed is saved with a game (`SPEED_GAME`).
   orders that find no free berth wait in a queue that is retried every 25
   ticks (0x416f90).
 
+## Amber glints
+
+An amber deposit glints in bursts (0x48a430 state 0, 0x489bd0): it waits
+10-60, 5-30 or 1-10 ticks by size 1-3 (0x5b97a8), then plays `ASTAR_` once,
+a frame every 1-4 ticks (random), at a random point of one of its
+variant's two rectangles (0x5b97cc, picked at random).
+
 ## Closing in on shore
 
 A ship loading amber or unloading (0x4afe50) closes in only when the

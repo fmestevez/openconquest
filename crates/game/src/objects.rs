@@ -532,31 +532,31 @@ pub fn flyer_sequence(class: u32, state: u8, heading: usize) -> String {
 
 /// Amber deposits (Grig/amber.cpp) match the shore they lie on: the
 /// base-layer tile codes of each of the 20 variants (0x5b97c8, 0x24 bytes
-/// each: four codes, then the rectangle in the cell where the sparkle
-/// shows, x, y, width, height).
-/// A variant's tile codes and sparkle rectangle.
-type AmberVariant = ([u8; 4], (i32, i32, i32, i32));
-const AMBER_VARIANTS: [AmberVariant; 20] = [
-    ([2, 3, 4, 5], (37, 28, 26, 30)),
-    ([6, 0, 0, 0], (12, 17, 16, 46)),
-    ([7, 8, 9, 10], (0, 27, 24, 29)),
-    ([11, 0, 0, 0], (0, 20, 38, 17)),
-    ([12, 13, 14, 15], (16, 0, 25, 23)),
-    ([16, 0, 0, 0], (11, 0, 17, 36)),
-    ([17, 18, 19, 20], (0, 16, 26, 23)),
-    ([21, 0, 0, 0], (0, 39, 42, 17)),
-    ([30, 0, 0, 0], (7, 3, 20, 60)),
-    ([31, 0, 0, 0], (12, 3, 20, 60)),
-    ([32, 0, 0, 0], (39, 3, 20, 60)),
-    ([33, 0, 0, 0], (31, 3, 24, 60)),
-    ([34, 0, 0, 0], (2, 30, 61, 22)),
-    ([35, 0, 0, 0], (0, 27, 61, 15)),
-    ([36, 0, 0, 0], (0, 37, 61, 23)),
-    ([37, 0, 0, 0], (1, 27, 61, 21)),
-    ([38, 0, 0, 0], (2, 36, 61, 17)),
-    ([39, 0, 0, 0], (1, 27, 61, 21)),
-    ([40, 0, 0, 0], (2, 35, 60, 16)),
-    ([41, 0, 0, 0], (1, 21, 61, 23)),
+/// each: four codes, then two rectangles in the cell where the sparkle may
+/// show, x, y, width, height).
+/// A variant's tile codes and sparkle rectangles.
+pub type AmberVariant = ([u8; 4], [(i32, i32, i32, i32); 2]);
+pub const AMBER_VARIANTS: [AmberVariant; 20] = [
+    ([2, 3, 4, 5], [(37, 28, 26, 30), (14, 41, 23, 22)]),
+    ([6, 0, 0, 0], [(12, 17, 16, 46), (28, 17, 36, 20)]),
+    ([7, 8, 9, 10], [(0, 27, 24, 29), (25, 40, 24, 23)]),
+    ([11, 0, 0, 0], [(0, 20, 38, 17), (37, 20, 18, 43)]),
+    ([12, 13, 14, 15], [(16, 0, 25, 23), (40, 11, 20, 27)]),
+    ([16, 0, 0, 0], [(11, 0, 17, 36), (13, 36, 50, 19)]),
+    ([17, 18, 19, 20], [(0, 16, 26, 23), (18, 2, 31, 22)]),
+    ([21, 0, 0, 0], [(0, 39, 42, 17), (35, 3, 19, 45)]),
+    ([30, 0, 0, 0], [(7, 3, 20, 60), (7, 3, 20, 60)]),
+    ([31, 0, 0, 0], [(12, 3, 20, 60), (12, 3, 20, 60)]),
+    ([32, 0, 0, 0], [(39, 3, 20, 60), (39, 3, 20, 60)]),
+    ([33, 0, 0, 0], [(31, 3, 24, 60), (31, 3, 24, 60)]),
+    ([34, 0, 0, 0], [(2, 30, 61, 22), (2, 30, 61, 22)]),
+    ([35, 0, 0, 0], [(0, 27, 61, 15), (0, 27, 61, 15)]),
+    ([36, 0, 0, 0], [(0, 37, 61, 23), (0, 37, 61, 23)]),
+    ([37, 0, 0, 0], [(1, 27, 61, 21), (1, 27, 61, 21)]),
+    ([38, 0, 0, 0], [(2, 36, 61, 17), (2, 36, 61, 17)]),
+    ([39, 0, 0, 0], [(1, 27, 61, 21), (1, 27, 61, 21)]),
+    ([40, 0, 0, 0], [(2, 35, 60, 16), (2, 35, 60, 16)]),
+    ([41, 0, 0, 0], [(1, 21, 61, 23), (1, 21, 61, 23)]),
 ];
 
 /// The amber variant for a cell whose base tile has code `tile` (0x489a10;
@@ -570,7 +570,7 @@ pub fn amber_variant(tile: u8) -> usize {
 
 /// An amber deposit's frames (0x489cd0): its variant's picture for how
 /// much is left (`level` 3 full to 1, frame (variant + 1) x 3 - level of
-/// `AMBER_`), still, with the sparkle (`ASTAR_`) playing over it.
+/// `AMBER_`), still.
 pub fn amber_frames(
     data: &GameData,
     caches: &mut Caches,
@@ -580,29 +580,8 @@ pub fn amber_frames(
     let all = sequence_frames(data, caches, "AMBER_")?;
     let v = variant.min(AMBER_VARIANTS.len() - 1);
     let i = ((v + 1) * 3).saturating_sub(level.clamp(1, 3));
-    let Some(base) = all.get(i).or(all.first()).cloned() else {
-        return Ok(Vec::new());
-    };
-    let sparkle = sequence_frames(data, caches, "ASTAR_").unwrap_or_default();
-    if sparkle.is_empty() {
-        return Ok(vec![base]);
-    }
-    // The sparkle in the middle of its rectangle, relative to the 64-pixel
-    // picture's centre.
-    let (x, y, w, h) = AMBER_VARIANTS[v].1;
-    let (dx, dy) = (x + w / 2 - 32, y + h / 2 - 32);
-    Ok(sparkle
-        .into_iter()
-        .map(|layers| {
-            let mut frame = base.clone();
-            frame.extend(layers.into_iter().map(|l| Layer {
-                image: l.image,
-                dx: l.dx + dx,
-                dy: l.dy + dy,
-            }));
-            frame
-        })
-        .collect())
+    // The sparkle comes in bursts of its own (`scene::sparkle`).
+    Ok(all.get(i).or(all.first()).cloned().into_iter().collect())
 }
 
 /// A flyer's frames: each its shadow on the water (sequence + `S`), then

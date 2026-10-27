@@ -185,6 +185,9 @@ pub struct Scene {
     pub gull_art: std::rc::Rc<(Frames, Frames)>,
     /// Ships' wakes (only shown) and their sprites: `TRAKS00`, `TRAKS14`.
     pub droplets: Vec<wake::Droplet>,
+    /// Amber deposits' glints and the sparkle's frames (`ASTAR_`).
+    pub sparkles: sparkle::Sparkles,
+    pub sparkle_art: std::rc::Rc<Frames>,
     /// Ships whose laden porter trips have just put a slot ashore.
     unloaded: Vec<u32>,
     wake_clock: f32,
@@ -275,6 +278,7 @@ mod gulls;
 mod orders;
 mod repair;
 mod sight;
+mod sparkle;
 mod treasure;
 mod wake;
 pub use sight::{FogArt, Seen};
@@ -396,6 +400,10 @@ impl Scene {
             gull_rng: Rng(0x6011_5eed),
             droplets: Vec::new(),
             unloaded: Vec::new(),
+            sparkles: Default::default(),
+            sparkle_art: std::rc::Rc::new(
+                objects::sequence_frames(data, caches, "ASTAR_").unwrap_or_default(),
+            ),
             wake_clock: 0.0,
             wake_art: std::rc::Rc::new((
                 objects::sequence_frames(data, caches, "TRAKS00").unwrap_or_default(),
@@ -1046,6 +1054,7 @@ impl Scene {
         self.move_shoals(dt);
         self.move_gulls(dt);
         self.run_wakes(dt);
+        self.run_sparkles(dt);
         self.shown_clock += dt;
         while self.shown_clock >= COUNTER_TICK {
             self.shown_clock -= COUNTER_TICK;
