@@ -5659,3 +5659,50 @@ fn ships_slipping_away_cannot_be_hooked() {
     set(&mut scene, 60.0, 0, 0.0);
     assert!(!scene.slipping(i), "lying still");
 }
+
+/// A boarder ordered elsewhere with its walkway going down rolls it back
+/// up and both ships leave, no fight (needs `OPENCONQUEST_DATA`).
+#[test]
+fn boarding_called_off_before_the_fight() {
+    use crate::objects::GrappleStage;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let (mine, other, _) = boarding_pair(&mut scene, 1, 0);
+    scene.order_close(mine, other, true).unwrap();
+    let grapple = |s: &Scene, id| {
+        s.objects[s.object_index(id).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap()
+            .grapple
+    };
+    let mut called = false;
+    let mut fought = false;
+    for _ in 0..3000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        match grapple(&scene, mine) {
+            Some(g) if g.stage == GrappleStage::Plank && g.ticks == 5 && !called => {
+                let i = scene.object_index(mine).unwrap();
+                scene.objects[i].ship.as_mut().unwrap().task = None;
+                called = true;
+            }
+            Some(g) => fought |= g.stage == GrappleStage::Fight,
+            None if called => break,
+            None => {}
+        }
+    }
+    assert!(called, "the walkway went down");
+    assert!(!fought, "no fight");
+    assert!(grapple(&scene, mine).is_none());
+    for _ in 0..200 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert!(
+        grapple(&scene, other).is_none(),
+        "the boarded ship let go too"
+    );
+}

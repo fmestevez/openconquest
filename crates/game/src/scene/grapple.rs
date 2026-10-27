@@ -559,6 +559,32 @@ impl Scene {
         if partner.is_none() && g.stage != Leave {
             g = self.leave(k, g);
         }
+        // A boarder given another order before the fight calls the boarding
+        // off: the walkway, if going down, comes back up from where it is,
+        // and both ships leave (0x4b5df0 before state 3).
+        let ordered_off = g.boarder
+            && !matches!(
+                self.objects[k].ship.as_ref().unwrap().task,
+                Some(Task::Board { target, .. }) if target == g.with
+            );
+        if ordered_off {
+            match g.stage {
+                Pull | Furl => g = self.leave(k, g),
+                Plank => {
+                    let down = g.ticks.min(PLANK_FRAMES);
+                    g.stage = Retract;
+                    g.ticks = PLANK_FRAMES.saturating_sub(down);
+                }
+                _ => {}
+            }
+        }
+        // The boarded ship leaves when its boarder does.
+        if !g.boarder
+            && matches!(g.stage, Pull | Furl)
+            && partner.is_some_and(|(_, pg)| matches!(pg.stage, Leave | Retract))
+        {
+            g = self.leave(k, g);
+        }
         match g.stage {
             Pull => {
                 let (pos, slid) = slide(g.from, g.at, g.ticks);
