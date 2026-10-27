@@ -174,6 +174,10 @@ struct Args {
     /// (to see the damaged pictures).
     #[arg(long, hide = true, value_name = "PCT")]
     hull: Option<f32>,
+    /// Debugging: show the site of a workshop at this cell, as when
+    /// placing one from the settlement nearest it.
+    #[arg(long, hide = true, value_parser = parse_size, value_name = "X,Y")]
+    build_site: Option<(u32, u32)>,
     /// Debugging: set every ship on fire (Greek fire) before simulating.
     #[arg(long, hide = true)]
     burn: bool,
@@ -469,9 +473,35 @@ fn screenshot(
         scene::is_custom(&scene.mission),
         &scene.conditions,
     );
+    let site_shown = args.build_site.and_then(|(x, y)| {
+        let (x, y) = (x as i32, y as i32);
+        let home = scene
+            .objects
+            .iter()
+            .filter(|o| {
+                scene.is_own(o)
+                    && matches!(
+                        o.class,
+                        openconquest_formats::ObjectClass::Building(
+                            crate::economy::SETTLEMENT | crate::economy::TOWN
+                        )
+                    )
+            })
+            .min_by_key(|o| {
+                let (cx, cy) = o.cell.unwrap_or((0, 0));
+                (cx - x).pow(2) + (cy - y).pow(2)
+            })?
+            .id;
+        let class = crate::economy::WORKSHOP;
+        let facing = scene.check_site(home, class, x, y).ok();
+        let preview = facing.and_then(|f| scene.site_preview(class, x, y, f, data, &mut caches));
+        Some(((x, y), facing.is_some(), preview))
+    });
     let since = std::collections::HashMap::new();
     let mut view = GameView {
         selected_since: &since,
+        site_preview: site_shown.as_ref().and_then(|s| s.2.as_ref()),
+        site_cells: 1,
         deselected: &since,
         data,
         scene: &scene,
@@ -493,7 +523,7 @@ fn screenshot(
             Some("wind") => commands::Page::Wind,
             _ => Default::default(),
         },
-        site: None,
+        site: site_shown.as_ref().map(|s| (s.0, s.1)),
         briefing: false,
         panel: Some(panels::PanelView {
             tab: args.panel,

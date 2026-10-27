@@ -1031,6 +1031,11 @@ pub struct GameView<'a> {
     pub page: Page,
     /// A building site being chosen: the cell and whether it is allowed.
     pub site: Option<((i32, i32), bool)>,
+    /// The building standing where it would go, shown in place of the
+    /// site's frame when it may go there.
+    pub site_preview: Option<&'a crate::objects::MapObject>,
+    /// How many cells across the building to put up is.
+    pub site_cells: i32,
     /// Show the mission briefing over the view.
     pub briefing: bool,
     /// The bar's tabs and open panel (with the interface shown).
@@ -1245,8 +1250,16 @@ impl GameView<'_> {
         if let Some(b) = self.select_box {
             crate::render::draw_box(frame, &screen, b);
         }
-        if let Some((cell, ok)) = self.site {
-            draw_site(frame, &screen, self.camera, cell, ok);
+        // Where it may go, the building as it will stand; where not, a red
+        // frame hatched across its ground.
+        match (self.site, self.site_preview) {
+            (Some((_, true)), Some(b)) => {
+                crate::render::draw_object(frame, &screen, self.camera, &lut, b, self.time_ms)
+            }
+            (Some((cell, ok)), _) => {
+                draw_site(frame, &screen, self.camera, cell, self.site_cells, ok)
+            }
+            _ => {}
         }
         let selected = self
             .selected

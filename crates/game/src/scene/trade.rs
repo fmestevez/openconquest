@@ -1280,6 +1280,35 @@ impl Scene {
 
     /// Starts putting up building `class` on cell `(cx, cy)` near settlement
     /// `settlement`, paying for it.
+    /// What building class `class` would look like standing at cell
+    /// `(cx, cy)` facing `facing`: the preview shown where it may go.
+    pub fn site_preview(
+        &self,
+        class: u32,
+        cx: i32,
+        cy: i32,
+        facing: u32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Option<MapObject> {
+        let human = self.human?;
+        let mut fields = vec![0u32; 66];
+        fields[0] = class;
+        fields[1] = 1;
+        fields[2] = human.nation;
+        fields[3] = human.slot;
+        fields[5] = cx as u32;
+        fields[6] = cy as u32;
+        fields[7] = 100;
+        fields[10] = facing;
+        let rec = ObjectRecord {
+            id: 0,
+            class_id: class,
+            fields,
+        };
+        objects::resolve(data, caches, &rec).ok().flatten()
+    }
+
     pub fn place_building(
         &mut self,
         settlement: u32,

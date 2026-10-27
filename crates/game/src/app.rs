@@ -396,6 +396,8 @@ pub struct App {
     groups: [Vec<u32>; 10],
     /// When each selected object was selected, for its frame's zoom.
     selected_since: HashMap<u32, u64>,
+    /// The building shown standing where it would go: its site, and it.
+    site_shown: Option<(((i32, i32), u32, u32), crate::objects::MapObject)>,
     /// When objects were deselected, for their frames' zoom out.
     deselected: HashMap<u32, u64>,
     /// The map places assigned with Shift+F1 ... Shift+F10, centred on with
@@ -588,6 +590,7 @@ impl App {
             group: Vec::new(),
             groups: Default::default(),
             selected_since: HashMap::new(),
+            site_shown: None,
             deselected: HashMap::new(),
             places: [None; 10],
             box_from: None,
@@ -712,6 +715,11 @@ impl App {
                 self.data.strings.get(&id).map(|s| s.as_str())
             });
         GameView {
+            site_preview: None,
+            site_cells: match self.pending.and_then(economy::building_of_command) {
+                Some(economy::SETTLEMENT | economy::TOWN) => 2,
+                _ => 1,
+            },
             selected_since: &self.selected_since,
             deselected: &self.deselected,
             data: &self.data,
@@ -2417,18 +2425,24 @@ impl App {
     /// The building site under a window position while a building is being
     /// placed, and whether it is allowed.
     fn site_at(&self, pos: PhysicalPosition<f64>) -> Option<((i32, i32), bool)> {
+        self.site_facing(pos)
+            .map(|(cell, _, f)| (cell, f.is_some()))
+    }
+
+    /// The building site under `pos`: its cell, the class to put up, and
+    /// its facing if it may go there.
+    fn site_facing(&self, pos: PhysicalPosition<f64>) -> Option<((i32, i32), u32, Option<u32>)> {
         let cell = self.cell_at(pos)?;
         let class = self.pending.and_then(economy::building_of_command)?;
-        if self.selected_ship().is_some() {
-            let ok = self.scene.check_ground(class, cell.0, cell.1).is_ok();
-            return Some((cell, ok));
-        }
-        let settlement = self.selected?;
-        let ok = self
-            .scene
-            .check_site(settlement, class, cell.0, cell.1)
-            .is_ok();
-        Some((cell, ok))
+        let facing = if self.selected_ship().is_some() {
+            self.scene.check_ground(class, cell.0, cell.1).ok()
+        } else {
+            let settlement = self.selected?;
+            self.scene
+                .check_site(settlement, class, cell.0, cell.1)
+                .ok()
+        };
+        Some((cell, class, facing))
     }
 
     /// The map cell under a window position in the world view.
@@ -3588,8 +3602,14 @@ impl App {
                     P::Load,
                     !target.is_some_and(|o| own(o) && is_load_target(o, selected)),
                 ),
+                // Over a site it may not go, the ban pointer (gcursor
+                // 0x516ea0 mode 100, answered by 0x441ba0 to 0xc451).
                 c if economy::building_of_command(c).is_some() => {
-                    (P::Build, !self.site_at(pos).is_some_and(|s| s.1))
+                    if self.site_at(pos).is_some_and(|s| s.1) {
+                        (P::Build, false)
+                    } else {
+                        (P::Ban, false)
+                    }
                 }
                 c if Spell::of_command(c).is_some() => (P::Magic, false),
                 _ => (P::Behaviour, false),
@@ -4329,6 +4349,18 @@ impl App {
                 menus.draw(&mut frame, &page.view(hover));
             } else {
                 let site = self.cursor.and_then(|c| self.site_at(c));
+                // The building as it would stand there.
+                let at = self
+                    .cursor
+                    .and_then(|c| self.site_facing(c))
+                    .and_then(|(cell, class, facing)| facing.map(|f| (cell, class, f)));
+                if self.site_shown.as_ref().map(|p| p.0) != at {
+                    self.site_shown = at.and_then(|key @ (cell, class, f)| {
+                        self.scene
+                            .site_preview(class, cell.0, cell.1, f, &self.data, &mut self.caches)
+                            .map(|o| (key, o))
+                    });
+                }
                 // Newly selected objects start their frame's zoom.
                 let now = self.time_ms;
                 let chosen: Vec<u32> = self.selected.iter().chain(&self.group).copied().collect();
@@ -4350,6 +4382,7 @@ impl App {
                 }
                 GameView {
                     site,
+                    site_preview: self.site_shown.as_ref().map(|p| &p.1),
                     ..self.view()
                 }
                 .draw(&mut frame);

@@ -714,7 +714,14 @@ pub fn draw_box(frame: &mut Frame, screen: &Screen, (x0, y0, x1, y1): (f32, f32,
     }
 }
 
-pub fn draw_site(frame: &mut Frame, screen: &Screen, camera: &Camera, cell: (i32, i32), ok: bool) {
+pub fn draw_site(
+    frame: &mut Frame,
+    screen: &Screen,
+    camera: &Camera,
+    cell: (i32, i32),
+    cells: i32,
+    ok: bool,
+) {
     let scale = camera.scale(screen);
     let t = TILE_SIZE as f32;
     let to_screen = |wx: f32, wy: f32| {
@@ -724,26 +731,56 @@ pub fn draw_site(frame: &mut Frame, screen: &Screen, camera: &Camera, cell: (i32
         )
     };
     let (x0, y0) = to_screen(cell.0 as f32 * t, cell.1 as f32 * t);
-    let (x1, y1) = to_screen((cell.0 + 1) as f32 * t, (cell.1 + 1) as f32 * t);
+    let (x1, y1) = to_screen(
+        (cell.0 + cells.max(1)) as f32 * t,
+        (cell.1 + cells.max(1)) as f32 * t,
+    );
     let colour = if ok { HULL_OK } else { HULL_LOST };
     let thick = (scale.round() as i64).max(1);
     let (cx0, cy0) = (screen.x as i64, screen.y as i64);
     let (cx1, cy1) = (cx0 + screen.w as i64, cy0 + screen.h as i64);
+    let mut put = |x: i64, y: i64| {
+        if x >= cx0 && x < cx1 && y >= cy0 && y < cy1 {
+            frame.put(x, y, colour);
+        }
+    };
     for k in 0..thick {
         for x in x0..=x1 {
-            for y in [y0 + k, y1 - k] {
-                if x >= cx0 && x < cx1 && y >= cy0 && y < cy1 {
-                    frame.put(x, y, colour);
-                }
-            }
+            put(x, y0 + k);
+            put(x, y1 - k);
         }
         for y in y0..=y1 {
-            for x in [x0 + k, x1 - k] {
-                if x >= cx0 && x < cx1 && y >= cy0 && y < cy1 {
-                    frame.put(x, y, colour);
+            put(x0 + k, y);
+            put(x1 - k, y);
+        }
+    }
+    // Where it may not go, stripes across: one diagonal every 8 pixels.
+    if !ok {
+        let step = (8.0 * scale).round().max(2.0) as i64;
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if (x - x0 + y - y0).rem_euclid(step) < thick {
+                    put(x, y);
                 }
             }
         }
+    }
+}
+
+/// Draws object `obj` alone (a building's preview).
+pub fn draw_object(
+    frame: &mut Frame,
+    screen: &Screen,
+    camera: &Camera,
+    lut: &[u32; 256],
+    obj: &MapObject,
+    time_ms: u64,
+) {
+    for layer in obj.frame_at(time_ms) {
+        let img = &layer.image;
+        let left = (obj.x + layer.dx as f32 - img.width as f32 / 2.0).round() as i32;
+        let top = (obj.y + layer.dy as f32 - img.height as f32 / 2.0).round() as i32;
+        draw_image(frame, screen, camera, lut, img, left, top);
     }
 }
 
