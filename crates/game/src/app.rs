@@ -2880,6 +2880,10 @@ impl App {
             }
             // A ship's Reload Object picks the port, dock or ship to reload
             // at (pointer mode 12, command 0x1f).
+            Command::UNLOAD => {
+                self.pending = Some(Command::UNLOAD);
+                self.say("Choose your port or settlement to unload at");
+            }
             Command::LOAD if obj_is_ship => {
                 self.pending = Some(Command::LOAD);
                 self.say("Choose your port, shipyard, dock or ship to reload at");
@@ -3347,6 +3351,21 @@ impl App {
             }
             return;
         }
+        if self.pending == Some(Command::UNLOAD) {
+            let order = match self.object_at(pos) {
+                Some(port) => self.order_each(|ship| Order::Unload { ship, port }),
+                None => Err("Choose one of your ports or settlements".into()),
+            };
+            match order {
+                Ok(()) => {
+                    self.pending = None;
+                    self.status = None;
+                    self.confirm(pos);
+                }
+                Err(e) => self.say(e),
+            }
+            return;
+        }
         if self.pending == Some(Command::TREASURE) {
             let order = match self.object_at(pos) {
                 Some(target) => self.order_each(|ship| Order::Take { ship, target }),
@@ -3516,6 +3535,18 @@ impl App {
                 Command::REPAIR_SHIP | Command::REPAIR_BUILDING => {
                     (P::Repair, !target.is_some_and(own))
                 }
+                Command::UNLOAD => (
+                    P::Unload,
+                    !target.is_some_and(|o| {
+                        own(o)
+                            && matches!(
+                                o.class,
+                                openconquest_formats::ObjectClass::Building(
+                                    economy::PORT | economy::SETTLEMENT | economy::TOWN
+                                )
+                            )
+                    }),
+                ),
                 Command::LOAD => (
                     P::Load,
                     !target.is_some_and(|o| own(o) && is_load_target(o, selected)),

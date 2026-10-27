@@ -655,7 +655,9 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
     set(menu, 1, Command::STOP, true);
     if kind <= 1 {
         // Merchants (0x4e6e90): cargo and gathering.
-        set(menu, 2, Command::UNLOAD, false);
+        // Unload resource (0x4e6e90 slot 2): to one of the player's ports
+        // or settlements, once there are goods aboard.
+        set(menu, 2, Command::UNLOAD, ship.cargo >= 1.0);
         set(menu, 4, Command::AMBER, true);
         set(menu, 5, Command::FISH, true);
         set(menu, 6, Command::WHALE, true);
