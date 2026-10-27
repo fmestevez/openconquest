@@ -1229,16 +1229,12 @@ pub enum BuildingState {
 }
 
 impl BuildingState {
-    /// The standing state for a condition in percent (thirds, as the nests
-    /// at 0x41d010 do).
+    /// The standing state for a condition in percent (LandObjClassTy
+    /// 0x422e30: above 67 intact, above 33 level 2, else 1).
     pub fn for_condition(percent: f32) -> Self {
-        Self::Standing(if percent > 66.0 {
-            3
-        } else if percent > 33.0 {
-            2
-        } else {
-            1
-        })
+        // ceil(health x 2 / 67) of the whole percent (0x594ab0), at least 1.
+        let level = (percent.floor() * 2.0 / 67.0).ceil() as u32;
+        Self::Standing(level.clamp(1, 3))
     }
 }
 
