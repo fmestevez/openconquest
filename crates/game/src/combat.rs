@@ -602,15 +602,18 @@ const RATE: [[u32; 3]; 11] = [
     [60, 80, 80],
 ];
 
-/// Seconds between shots of item `item` at rate of fire level `level`. The
-/// unit of the rate is not known: a rate of 100 is taken as one shot every
-/// three seconds.
+/// Seconds between shots of item `item` at rate of fire level `level`:
+/// 6000 / rate ticks (0x4ac0e0); the ship adds 0-29 ticks at random each
+/// time (0x4c0230, `RELOAD_JITTER`).
 pub fn reload_seconds(item: u8, level: u8) -> f32 {
     let rate = RATE
         .get(item as usize)
         .map_or(100, |r| r[level.min(2) as usize]);
-    300.0 / rate.max(1) as f32
+    crate::clock::ticks(6000 / rate.max(1))
 }
+
+/// The random ticks added to each reload (0x4c0230: rand % 30).
+pub const RELOAD_JITTER: u32 = 30;
 
 /// Longest and shortest range of item `item` in cells, at range level
 /// `level` (0x598154: maximum, 12 items per level; 0x598178: minimum).

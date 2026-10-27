@@ -159,7 +159,8 @@ impl Scene {
                     } else {
                         1.0
                     };
-                    c.reloads[k] = combat::reload_seconds(w, levels.rate_for(w)) / rate;
+                    let jitter = crate::clock::ticks(self.rng.next() % combat::RELOAD_JITTER);
+                    c.reloads[k] = (combat::reload_seconds(w, levels.rate_for(w)) + jitter) / rate;
                     fired.push(w);
                 }
             }
