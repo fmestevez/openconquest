@@ -56,8 +56,12 @@ impl Combatant {
             ObjectClass::Barbarian(_)
             | ObjectClass::Castle(_)
             | ObjectClass::HarpyNest
-            | ObjectClass::CreatureSpawn
-            | ObjectClass::Monster(0x1f4..=0x1f6 | 0x1f8..=0x1fb | 0x1fd) => {
+            | ObjectClass::CreatureSpawn => (
+                building_strength(rec.class_id),
+                100,
+                creature_weapons(rec.class_id),
+            ),
+            ObjectClass::Monster(0x1f4..=0x1f6 | 0x1f8..=0x1fb | 0x1fd) => {
                 (MONSTER_STRENGTH, 100, creature_weapons(rec.class_id))
             }
             _ => return None,
@@ -291,15 +295,36 @@ pub const BOARD_ROUND: f32 = 1.0;
 /// Distance at which ships touch, for ramming and boarding. Placeholder.
 pub const CONTACT: f32 = 48.0;
 
-/// Hull points of barbarian strongholds, creatures and lairs. Placeholder.
+/// Hull points of creatures. Placeholder.
 pub const MONSTER_STRENGTH: f32 = 2000.0;
 
 /// The owner given to creatures and their lairs: hostile to every player.
 pub const MONSTERS: (u32, u32) = (99, 0);
 
-/// Hull points of a building. Placeholder: three times its amber cost.
+/// Strength of a building, barbarian stronghold, castle, nest or lair, by
+/// class (LandBuilding 0x424910), over 15 as hulls are (see
+/// `hull_strength`). It takes blows whole, a fifth of them under a magic
+/// shield (0x425990).
 pub fn building_strength(class: u32) -> f32 {
-    (crate::economy::building_cost(class).max(400) * 3) as f32
+    let points = match class {
+        0x32 => 160_000,
+        0x33 => 220_000,
+        0x34..=0x36 | 0x3f..=0x41 => 180_000,
+        0x37 | 0x3a | 0x46 => 100_000,
+        0x38 | 0x39 => 130_000,
+        0x3b => 140_000,
+        0x3c => 81_500,
+        0x3d => 67_500,
+        0x3e => 110_000,
+        0x42 | 0x43 => 300_000,
+        0x44 => 350_000,
+        0x45 => 280_000,
+        0x47 => 80_000,
+        0x48 => 60_000,
+        0x49 => 40_000,
+        _ => 100_000,
+    };
+    points as f32 / 15.0
 }
 
 /// Forts (classes 0x34-0x36) shoot from their emplacements. Fort records

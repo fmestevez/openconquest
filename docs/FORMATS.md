@@ -958,6 +958,16 @@ for its type's price (0x59b388: 140, 280, 800, 910, 650, 560, 490, 420,
 for `cost[kind / 3] x (100 - condition) x 9 / 1000`; short of amber, the
 human's ship gets what the amber buys, a computer player's stops.
 
+Buildings, strongholds, castles, nests and lairs hold points out of a
+maximum by class (0x424910: settlement 160000, town 220000, forts and
+barbarian strongholds 180000, workshop, shipyard and cyclops lair 100000,
+smithy and port 130000, dock 140000, school 81500, Temple of the Sea
+67500, Temple of War 110000, castles 300000, dragon nest 350000, harpy
+nest 280000, minotaur lair 80000, amazon lair 60000, class 0x49 40000),
+their percentage at `+0xa8`. They take a blow whole (message 0xda96 and
+the like), a fifth of it under a magic shield (`+0x15c`), and fall at 1
+(0x425990).
+
 ## Training and repair at a settlement
 
 A settlement's stock places (`[+0x244] + 0x23`, twelve) list units of two
