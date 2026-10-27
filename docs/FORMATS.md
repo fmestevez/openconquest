@@ -1038,7 +1038,11 @@ between, then dies away (`SLIGHT3`, 60, event 147). At a strike's frame 4
 harpy, dragon, gorgon, sea monster, siren, castle, nest and lair within 2
 cells, each carrying 88000 / min(targets, 4) / (strikes - 1). Lightning
 shows `LTSPR_1` over water, `LTSPR_2` over land, and strikes at its
-frame 11 or 40. View, lightning and fireball casts add a sight point to
+frame 11 or 40. Flame is the Temple of War's work 1 (0x439260): 250
+ticks of brewing, then the player's flag (+0xa8) is set and 1500 ticks are
+added to its time (+0xb0); while it is set the player's ships shoot
+flaming shots striking x 150 / 100 (0x4c0230). View, lightning and
+fireball casts add a sight point to
 the fog (dark.cpp 0x48b9e0: cell, player, radius 2, 3000 ticks), dropped
 when its time is up (0x48bae0).
 

@@ -564,6 +564,11 @@ fn war_magic() {
     assert!(scene.object_index(enemy).is_none(), "struck down");
     // Flame makes our weapons stronger for a while.
     scene.cast_flame().unwrap();
+    // It brews at the temple first, 250 ticks.
+    assert_eq!(scene.flame, 0.0);
+    for _ in 0..50 * 11 {
+        scene.update(0.02, &data, &mut caches);
+    }
     assert!(scene.flame > 0.0);
 }
 

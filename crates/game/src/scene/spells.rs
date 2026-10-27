@@ -164,7 +164,7 @@ impl Scene {
     /// Makes the player's weapons stronger for a while.
     pub fn cast_flame(&mut self) -> Result<(), String> {
         self.pay_spell(Spell::Flame)?;
-        self.flame = magic::FLAME_SECONDS;
+        self.magic.brew_flame();
         self.sounds.push(("fireball", f32::NAN, f32::NAN));
         Ok(())
     }
@@ -235,9 +235,10 @@ impl Scene {
         }
     }
 
-    /// The Flame wears off.
+    /// The Flame wears off; a brewed one lights.
     pub(super) fn run_fires(&mut self, dt: f32, _data: &GameData, _caches: &mut Caches) {
         self.flame = (self.flame - dt).max(0.0);
+        self.flame += self.magic.take_flames() as f32 * magic::FLAME_SECONDS;
     }
 
     /// Calls up a strong wind towards `direction`.

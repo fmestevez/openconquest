@@ -541,6 +541,13 @@ fn temple_menu(scene: &Scene, temple: Temple, menu: &mut Menu) {
             spell.implemented() && (free(spell) || scene.amber >= amber && scene.fish >= fish);
         if slot < SLOTS {
             set(menu, slot, spell.command(), enabled);
+            // A brewing Flame shows its progress, and waits (0x439260).
+            if spell == Spell::Flame {
+                if let (Some(p), Some(b)) = (scene.magic.flame_brewing(), menu[slot].as_mut()) {
+                    b.progress = Some(p);
+                    b.enabled = false;
+                }
+            }
         }
         slot += 1;
     }

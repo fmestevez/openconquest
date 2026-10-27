@@ -115,6 +115,7 @@ impl Scene {
             if k != self.active {
                 s.magic.update(dt);
                 s.flame = (s.flame - dt).max(0.0);
+                s.flame += s.magic.take_flames() as f32 * crate::magic::FLAME_SECONDS;
             }
         }
     }

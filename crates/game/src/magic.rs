@@ -204,10 +204,13 @@ pub const LEARN_COST: u32 = 1000;
 /// Seconds to learn a spell: 200 ticks for the human, 100 for computer
 /// players (the school, 0x439260).
 pub const LEARN_SECONDS: f32 = 200.0 * crate::clock::TICK;
-/// Flame makes the player's weapons this much stronger for this long.
-/// Placeholders.
+/// Flame makes the player's ships' weapons strike half again as hard
+/// (0x4c0230: x 150 / 100 while player +0xa8 is set); it brews 250 ticks
+/// at the Temple of War, then lights for 1500 ticks more each (0x439260,
+/// player +0xb0).
 pub const FLAME_FACTOR: f32 = 1.5;
-pub const FLAME_SECONDS: f32 = 60.0;
+pub const FLAME_SECONDS: f32 = 1500.0 * crate::clock::TICK;
+pub const FLAME_BREW_SECONDS: f32 = 250.0 * crate::clock::TICK;
 /// The shields' protection (the manual): weapon shield 80% against weapons;
 /// magic shield neutralises lightning and 80% against fireballs,
 /// waterspouts and sea monsters.
@@ -262,6 +265,12 @@ pub struct Magic {
     known: [usize; 2],
     /// Seconds spent learning the next spell, while learning.
     learning: [Option<f32>; 2],
+    /// Seconds the Temple of War has brewed a Flame, while it does, and
+    /// Flames brewed and not yet lit.
+    #[serde(default)]
+    flame_brew: Option<f32>,
+    #[serde(default)]
+    flames: u32,
 }
 
 impl Magic {
@@ -290,6 +299,25 @@ impl Magic {
         self.learning[temple.slot()] = Some(0.0);
     }
 
+    /// Starts brewing a Flame (the Temple of War's work 1, 0x439260: 250
+    /// ticks).
+    pub fn brew_flame(&mut self) {
+        if self.flame_brew.is_none() {
+            self.flame_brew = Some(0.0);
+        }
+    }
+
+    /// Whether a Flame is brewing, and how far along (0-1).
+    pub fn flame_brewing(&self) -> Option<f32> {
+        self.flame_brew.map(|t| (t / FLAME_BREW_SECONDS).min(1.0))
+    }
+
+    /// Flames brewed since the last call: each lights the player's weapons
+    /// for `FLAME_SECONDS` more.
+    pub fn take_flames(&mut self) -> u32 {
+        std::mem::take(&mut self.flames)
+    }
+
     pub fn update(&mut self, dt: f32) {
         for (learning, known) in self.learning.iter_mut().zip(&mut self.known) {
             if let Some(t) = learning.as_mut() {
@@ -298,6 +326,13 @@ impl Magic {
                     *learning = None;
                     *known += 1;
                 }
+            }
+        }
+        if let Some(t) = self.flame_brew.as_mut() {
+            *t += dt;
+            if *t >= FLAME_BREW_SECONDS {
+                self.flame_brew = None;
+                self.flames += 1;
             }
         }
     }
