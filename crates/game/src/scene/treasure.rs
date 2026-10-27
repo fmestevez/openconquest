@@ -164,13 +164,12 @@ impl Scene {
                     }
                     Some(s @ (Spell::Phantom | Spell::ProtectWeapons | Spell::ProtectMagic)) => {
                         let c = self.objects[i].combat.as_mut().unwrap();
-                        match s {
-                            Spell::Phantom => c.phantom = crate::magic::PROTECTION_SECONDS,
-                            Spell::ProtectWeapons => {
-                                c.protect_weapons = crate::magic::PROTECTION_SECONDS
-                            }
-                            _ => c.protect_magic = crate::magic::PROTECTION_SECONDS,
-                        }
+                        let left = match s {
+                            Spell::Phantom => &mut c.phantom,
+                            Spell::ProtectWeapons => &mut c.protect_weapons,
+                            _ => &mut c.protect_magic,
+                        };
+                        *left = left.max(0.0) + crate::magic::PROTECTION_SECONDS;
                         self.messages.push(format!("{name}: {}", s.name()));
                     }
                     _ => {}

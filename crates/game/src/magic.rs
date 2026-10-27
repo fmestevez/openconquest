@@ -224,8 +224,10 @@ pub const VIEW_RADIUS: i32 = 8;
 /// magic shield neutralises lightning and 80% against fireballs,
 /// waterspouts and sea monsters.
 pub const SHIELD_FACTOR: f32 = 0.2;
-/// Seconds a protection lasts. Placeholder.
-pub const PROTECTION_SECONDS: f32 = 60.0;
+/// Seconds a protection or phantom adds to what is left of it: 3000 ticks
+/// (Magic.cpp 0x42f580; the ship adds them up on messages 0xda97 and
+/// 0xda9a, 0x4dc630).
+pub const PROTECTION_SECONDS: f32 = 3000.0 * crate::clock::TICK;
 
 /// A tornado: how long it lasts, how fast it drifts (world pixels per
 /// second at wind strength 6) and the damage per second to ships it passes

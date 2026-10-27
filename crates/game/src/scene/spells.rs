@@ -95,15 +95,18 @@ impl Scene {
         self.pay_spell(spell)?;
         let (x, y) = (self.objects[t].x, self.objects[t].y);
         let c = self.objects[t].combat.as_mut().unwrap();
-        match spell {
-            Spell::ProtectWeapons => c.protect_weapons = magic::PROTECTION_SECONDS,
-            Spell::ProtectMagic => c.protect_magic = magic::PROTECTION_SECONDS,
-            _ => c.phantom = magic::PROTECTION_SECONDS,
-        }
+        // Casting again adds to the time left.
+        let left = match spell {
+            Spell::ProtectWeapons => &mut c.protect_weapons,
+            Spell::ProtectMagic => &mut c.protect_magic,
+            _ => &mut c.phantom,
+        };
+        *left = left.max(0.0) + magic::PROTECTION_SECONDS;
+        let left = *left;
         self.sounds.push(("prote1", x, y));
         if spell != Spell::Phantom {
             let name = magic::fx_protection(spell, large);
-            self.spawn_aura(data, caches, &name, target, magic::PROTECTION_SECONDS);
+            self.spawn_aura(data, caches, &name, target, left);
         }
         Ok(())
     }
