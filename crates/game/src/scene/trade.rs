@@ -1699,7 +1699,12 @@ impl Scene {
                 // porters' pace where no walkway shows).
                 let before = ship.cargo;
                 let after = if walkway {
-                    (before - trips * super::unload::TRIP_LOAD).max(0.0)
+                    // The original counts whole units: a fraction left
+                    // (rounding at large steps) is not worth a trip, and
+                    // would keep the ship waiting for one.
+                    Some((before - trips * super::unload::TRIP_LOAD).max(0.0))
+                        .filter(|&a| a >= 1.0)
+                        .unwrap_or(0.0)
                 } else {
                     (before - super::unload::UNLOAD_RATE * dt).max(0.0)
                 };

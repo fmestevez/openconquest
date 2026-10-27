@@ -5198,3 +5198,65 @@ fn ships_burn_and_go_out() {
     assert!(scene.fires.is_empty(), "the Torch of Ares");
 }
 
+/// At a faster game speed (larger steps) the goods gathered are not whole
+/// trips; the fraction left after the last porter must not keep the ship
+/// moored for ever (needs `OPENCONQUEST_DATA`).
+#[test]
+fn unloading_ends_at_any_speed() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let amber = scene
+        .objects
+        .iter()
+        .filter(|o| {
+            o.deposit
+                .is_some_and(|d| d.resource == crate::objects::Resource::Amber)
+        })
+        .min_by(|a, b| {
+            (a.x - 1100.0)
+                .hypot(a.y)
+                .total_cmp(&(b.x - 1100.0).hypot(b.y))
+        })
+        .unwrap()
+        .id;
+    let boats: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| {
+            scene.is_own(o)
+                && o.ship
+                    .as_ref()
+                    .is_some_and(|s| crate::objects::cargo_capacity(s.kind) > 0.0)
+        })
+        .map(|o| o.id)
+        .collect();
+    for &b in &boats {
+        scene.order_gather(b, amber).unwrap();
+    }
+    let mut since: HashMap<u32, usize> = HashMap::new();
+    for t in 0..15000 {
+        scene.update(crate::clock::TICK * 2.0, &data, &mut caches);
+        for &b in &boats {
+            let Some(k) = scene.object_index(b) else {
+                continue;
+            };
+            let unloading = matches!(
+                scene.objects[k].ship.as_ref().unwrap().task,
+                Some(crate::objects::Task::Gather {
+                    phase: crate::objects::GatherPhase::Unloading(_),
+                    ..
+                })
+            );
+            if unloading {
+                let s = *since.entry(b).or_insert(t);
+                assert!(t - s < 1500, "ship {b} stuck unloading");
+            } else {
+                since.remove(&b);
+            }
+        }
+    }
+}
