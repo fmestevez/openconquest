@@ -119,6 +119,9 @@ pub struct Shot {
     /// Where it is drawn now.
     pub x: f32,
     pub y: f32,
+    /// A grappling hook's line back to the ship that threw it (bomb slot
+    /// 2, a line in palette colour 0x6d, 0x496f40, 0x4964c0).
+    pub rope: Option<u32>,
 }
 
 impl Shot {
@@ -134,12 +137,15 @@ impl Shot {
 
 /// The fireball's shots fly as K, flaming (slight.cpp 0x405c20).
 pub const FIREBALL: u8 = 255;
+/// Grappling hooks fly as J (bomb kind 9, 0x4b84b0).
+pub const HOOK: u8 = 254;
 
 /// The letter and variant for item `item` (0x4c0230: Greek fire flies as
 /// M, flaming; quick lime as N).
 fn letter_of(item: u8, flaming: bool) -> (u8, u8) {
     match item {
         FIREBALL => (10, 1),
+        HOOK => (9, 0),
         combat::GREEK_FIRE => (12, 1),
         combat::QUICKLIME => (13, 0),
         _ => (item.min(8), u8::from(flaming)),
@@ -193,6 +199,8 @@ pub struct SavedShot {
     age: f32,
     flight: f32,
     apex: f32,
+    #[serde(default)]
+    rope: Option<u32>,
 }
 
 impl Shot {
@@ -212,6 +220,7 @@ impl Shot {
             age: self.age,
             flight: self.flight,
             apex: self.apex,
+            rope: self.rope,
         }
     }
 
@@ -235,6 +244,7 @@ impl Shot {
             frames: flight_frames(s.letter, s.variant, dir, data, caches),
             x: s.from.0,
             y: s.from.1,
+            rope: s.rope,
         }
     }
 }
@@ -257,6 +267,8 @@ pub(super) struct Firing {
     pub damage: f32,
     pub wounds: f32,
     pub wear: f32,
+    /// The ship a hook's line runs back to.
+    pub rope: Option<u32>,
 }
 
 impl Scene {
@@ -323,6 +335,7 @@ impl Scene {
             frames,
             x: f.from.0,
             y: f.from.1,
+            rope: f.rope,
         });
     }
 
@@ -384,6 +397,14 @@ impl Scene {
         if !choices.is_empty() {
             let pick = choices[self.gull_rng.next() as usize % choices.len()];
             self.sounds.push((pick, s.to.0, s.to.1));
+        }
+        // A hook carries no blow: it holds or falls in the water
+        // (0x4bbfc0, 0x4983d0).
+        if s.item == HOOK {
+            if let Some(from) = s.rope {
+                self.hook_landed(from, s.target, target.is_some());
+            }
+            return;
         }
         // The hull's share first, then the crew's and the weapons'
         // (0x4bf170).

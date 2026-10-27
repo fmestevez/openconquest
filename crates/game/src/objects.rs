@@ -300,6 +300,85 @@ pub struct Ship {
     /// heals a point.
     #[serde(default)]
     pub healing: [f32; 2],
+    /// Lying grappled to another ship in a boarding (0x4b5df0 states 8,
+    /// 10, 0xb, 3, 0xc and 6 for the boarder, 0x4c3410 for the boarded).
+    #[serde(default)]
+    pub grapple: Option<Grapple>,
+    /// Charging into a ship to ram it, the blow, and backing off
+    /// (0x4c2230 states 2, 3 and 6).
+    #[serde(default)]
+    pub ram_run: Option<RamRun>,
+}
+
+/// What a grappled ship is doing, a game tick at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GrappleStage {
+    /// Sliding alongside and turning parallel (0x4b54a0, 0x4b57e0).
+    Pull,
+    /// Furling the sail, a frame every 5 ticks (0x4b8aa0).
+    Furl,
+    /// The boarded ship waiting for the fight's end (0x4c3410 states 3, 4).
+    Lie,
+    /// The boarders' walkway `MOST0_` going down, a frame a tick (state 0xb).
+    Plank,
+    /// The fight `ABORD_`, a frame a tick (state 3).
+    Fight,
+    /// The walkway coming up again (state 0xc).
+    Retract,
+    /// Unfurling and sliding back to the cell's middle (state 6).
+    Leave,
+}
+
+/// A ship lying grappled to `with` (see `Ship::grapple`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Grapple {
+    pub with: u32,
+    /// It is the boarder (else the boarded ship).
+    pub boarder: bool,
+    pub stage: GrappleStage,
+    /// Where it lies alongside, and the middle of its cell it returns to.
+    pub at: (f32, f32),
+    pub home: (f32, f32),
+    /// Where the current slide began.
+    pub from: (f32, f32),
+    /// The heading it turns to (parallel to the other) and the direction
+    /// of the other ship (`+0x6e7`, the walkway's facing).
+    pub face: u8,
+    pub facing: u8,
+    /// Ticks in the stage, and seconds owed to the next tick.
+    pub ticks: u32,
+    pub clock: f32,
+    /// The fight's length in ticks and whether the boarders win it.
+    pub fight: u32,
+    pub won: bool,
+    /// The hook's line still runs to the other ship (held by the boarded
+    /// one until its sail is furled).
+    pub rope: bool,
+}
+
+/// What a ramming ship is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RamStage {
+    /// Sailing at the target until its bow touches the hull (state 2).
+    Charge,
+    /// The splinters `BOMBH30` at the bow, a frame a tick; the blow at
+    /// their end (state 3).
+    Impact,
+    /// Backing off to the middle of its cell (state 6).
+    Back,
+}
+
+/// A ram under way (see `Ship::ram_run`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RamRun {
+    pub target: u32,
+    pub stage: RamStage,
+    /// The middle of the cell it charged from.
+    pub home: (f32, f32),
+    pub ticks: u32,
+    pub clock: f32,
+    /// The impact picture's length in ticks.
+    pub frames: u32,
 }
 
 /// What a ship's picture shows (0x4e5da0 picks its composite's layers):
@@ -501,14 +580,16 @@ pub enum Task {
     },
     /// Run into an enemy ship.
     Ram { target: u32 },
-    /// Come alongside an enemy ship and fight for it: once grappled, the
-    /// fight is decided (`won`) and shown, and `round` counts down to its
-    /// end.
+    /// Close in on an enemy ship and throw grappling hooks onto it
+    /// (0x4b5df0 states 1 and 7, 0x4b84b0): `thrown` is the scene clock
+    /// when the last hook went (`+0x6be`), `hooking` while one flies. Once
+    /// a hook holds, the ships lie grappled (`Ship::grapple`).
     Board {
         target: u32,
-        round: f32,
         #[serde(default)]
-        won: Option<bool>,
+        thrown: Option<f32>,
+        #[serde(default)]
+        hooking: bool,
     },
     /// Sail to an own dock and be repaired there.
     Repair { dock: u32 },
@@ -1183,6 +1264,8 @@ pub fn resolve(
         velocity: 0.0,
         face: None,
         furl: 0.0,
+        grapple: None,
+        ram_run: None,
         cargo: 0.0,
         cargo_kind: None,
         task: None,

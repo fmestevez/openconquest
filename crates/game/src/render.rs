@@ -232,6 +232,25 @@ pub fn draw_objects(
             draw(frame, layers, p.x, p.y);
         }
     }
+    // Boarders' walkways, and hooks' lines (palette colour 0x6d, 0x4964c0).
+    for (layers, x, y) in scene.planks_shown() {
+        draw(frame, layers, x, y);
+    }
+    let rope = Image::new(1, 1, vec![Some(lut[0x6d])]);
+    for ((x0, y0), (x1, y1)) in scene.ropes() {
+        let (x0, y0, x1, y1) = (
+            x0.round() as i32,
+            y0.round() as i32,
+            x1.round() as i32,
+            y1.round() as i32,
+        );
+        let n = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
+        for k in 0..=n {
+            let x = x0 + (x1 - x0) * k / n;
+            let y = y0 + (y1 - y0) * k / n;
+            draw_image(frame, screen, camera, lut, &rope, x, y);
+        }
+    }
     for obj in above {
         draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y);
     }
