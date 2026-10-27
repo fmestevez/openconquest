@@ -3777,3 +3777,43 @@ fn fleece_and_argus_mend() {
         (hull - before) / max
     );
 }
+
+/// A settlement mends a building's hull over 200 ticks for its price:
+/// half of a settlement's in 100 ticks for 200 amber (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn mending_takes_the_original_time_and_price() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let home = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.class == ObjectClass::Building(SETTLEMENT))
+        .unwrap()
+        .id;
+    let h = scene.object_index(home).unwrap();
+    let c = scene.objects[h].combat.as_mut().unwrap();
+    c.hull = c.max_hull / 2.0;
+    let max = c.max_hull;
+    scene.order_mend(home, home).unwrap();
+    let amber = scene.amber;
+    let mut t = 0.0;
+    while t < 95.0 * crate::clock::TICK {
+        scene.update(0.02, &data, &mut caches);
+        t += 0.02;
+    }
+    let c = scene.objects[h].combat.as_ref().unwrap();
+    assert!(c.hull < max, "not whole before 100 ticks");
+    while t < 105.0 * crate::clock::TICK {
+        scene.update(0.02, &data, &mut caches);
+        t += 0.02;
+    }
+    let c = scene.objects[h].combat.as_ref().unwrap();
+    assert_eq!(c.hull, max);
+    let paid = amber as i64 - scene.amber as i64;
+    assert!((199..=201).contains(&paid), "paid {paid}");
+}

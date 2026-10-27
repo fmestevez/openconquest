@@ -8,19 +8,17 @@ use super::Scene;
 use crate::economy::{DOCK, SETTLEMENT, TOWN};
 use crate::objects::Task;
 
-/// The share of its strength a settlement mends on a building a second,
-/// and the share of the building's cost a whole mending costs.
-/// Placeholders.
-pub const REPAIR_RATE: f32 = 0.02;
-pub const REPAIR_COST: f32 = 0.7;
+/// A settlement mends a building (message 0x1389, 0x425100) a hundredth of
+/// its strength every hundredth of its class's cycle (+0xc0: 200 ticks for
+/// every player building), each step costing a hundredth of the building's
+/// price; it stops when whole or when the amber runs out.
+const MEND_CYCLE: u32 = 200;
 /// At a dock a ship gets up to a tenth of its hull back every 9 ticks, for
 /// its type's repair price (0x59b388) times the share mended (0x4b1fc0).
 const DOCK_TICKS: u32 = 9;
 const DOCK_REPAIR_PRICE: [u32; 12] = [140, 280, 800, 910, 650, 560, 490, 420, 420, 630, 420, 630];
-/// How near (cells) a ship must lie to the dock, and a building to the
-/// settlement or town mending it. Placeholders.
+/// How near (cells) a ship must lie to the dock. Placeholder.
 pub const DOCK_REACH: f32 = 2.6;
-pub const MEND_REACH: f32 = 8.0;
 
 impl Scene {
     /// Orders own ship `ship` to sail to own dock `dock` and be repaired.
@@ -60,9 +58,18 @@ impl Scene {
         if !matches!(obj.class, ObjectClass::Building(_)) || !self.is_own(obj) {
             return Err("Choose one of your buildings".into());
         }
-        let d = ((home.x - obj.x).powi(2) + (home.y - obj.y).powi(2)).sqrt();
-        if d > MEND_REACH * TILE_SIZE as f32 {
-            return Err("Too far from the settlement".into());
+        // A settlement repairs itself and its own buildings (0x441350),
+        // those in the ground it builds on.
+        if site != target {
+            let (Some((hx, hy)), Some((cx, cy))) = (home.cell, obj.cell) else {
+                return Err("Not one of this settlement's buildings".into());
+            };
+            let size = super::trade::building_cells(home);
+            let dx = (hx - cx).max(cx - (hx + size - 1)).max(0);
+            let dy = (hy - cy).max(cy - (hy + size - 1)).max(0);
+            if dx.max(dy) > super::BUILD_RADIUS {
+                return Err("Not one of this settlement's buildings".into());
+            }
         }
         let c = obj.combat.as_ref().ok_or("Nothing to repair")?;
         if c.hull >= c.max_hull || self.construction_at(target).is_some() {
@@ -123,8 +130,8 @@ impl Scene {
                         _ => 0,
                     };
                     (
-                        REPAIR_RATE * c.max_hull,
-                        REPAIR_COST * cost as f32 / c.max_hull.max(1.0),
+                        c.max_hull / crate::clock::ticks(MEND_CYCLE),
+                        cost as f32 / c.max_hull.max(1.0),
                     )
                 }
             };

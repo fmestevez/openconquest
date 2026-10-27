@@ -1049,7 +1049,20 @@ condition) / 100` (0x597164: 30, 50, 70, ...) and time `ticks[kind / 3] x
 ...; 0x440fd0), takes the amber at once and enters state 2 (`+0x110`),
 mending the units one after another as the time passes and all of them at
 its end (0x441ba0). State 1 is training, a queued unit taking
-`ticks[kind / 3]`. Docks (`Shipserv.cpp`, 0x4e7640) serve ships alongside
+`ticks[kind / 3]`.
+
+Repairing a building (sub-order 1, a target id, checked by 0x43fcb0) is
+for the settlement itself and its own buildings (0x441350: those whose
+vtable +0x6c says they are damaged). It sends 0x1389 to the building, which
+(0x423d60) marks itself busy (+0x10c) with work 0xff (+0x110) from its
+current condition (+0xa8, percent). Every `cycle / 100` ticks (`+0xc0`,
+200 for every player building) 0x425100 takes `cost / 100` amber
+(0x42d8b0) and raises the condition 1%, the hull following
+(`max x condition / 100`). It stops at 100%, or as soon as the owner cannot
+pay. So a full repair takes 200 ticks and costs the building's price. Blows
+taken meanwhile lower the target (0x423f9c).
+
+Docks (`Shipserv.cpp`, 0x4e7640) serve ships alongside
 (reloading); a dock's own queue (0x416f90, every 25 ticks) builds ships.
 
 ## Magic

@@ -1785,7 +1785,7 @@ impl Scene {
 }
 
 /// How many cells across a building stands on: settlements and towns two.
-fn building_cells(o: &MapObject) -> i32 {
+pub(super) fn building_cells(o: &MapObject) -> i32 {
     match o.class {
         ObjectClass::Building(SETTLEMENT | TOWN) => 2,
         _ => 1,
