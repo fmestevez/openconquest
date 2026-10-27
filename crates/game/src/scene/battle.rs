@@ -679,6 +679,8 @@ impl Scene {
         let heading = heading_towards(t.x - a.x, t.y - a.y);
         let (x, y) = ((a.x + t.x) / 2.0, (a.y + t.y) / 2.0);
         let name = format!("ABORD_{}{heading}", u8::from(!gained));
+        // The grappling's sound (event 83, 0x4b5df0).
+        self.sounds.push(("abor6a", x, y));
         match objects::sequence_frames(data, caches, &name) {
             Ok(frames) if !frames.is_empty() => {
                 let round = frames.len() as f32 * crate::clock::TICK;
