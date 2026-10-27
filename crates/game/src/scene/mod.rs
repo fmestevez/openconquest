@@ -303,7 +303,7 @@ pub use flyers::{Flyer, Nest};
 pub use order::Order;
 pub use stats::Stats;
 pub use story::{goal_name, Carry, Goal};
-pub use walkers::{walker_sequence, Walker};
+pub use walkers::{walker_frame_ms, walker_sequence, Walker};
 #[cfg(test)]
 mod tests;
 mod trade;

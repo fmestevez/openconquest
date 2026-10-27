@@ -17,7 +17,6 @@ use crate::objects::{self, Caches};
 const SPAWN_STEP: f32 = 2.0;
 const ROAM: i32 = 5;
 const SPEED: f32 = 24.0;
-const APPEAR: f32 = 1.6;
 
 /// What a creature is doing.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -47,6 +46,14 @@ fn creature_of(lair: u32) -> u32 {
 
 /// A land creature's sprite sequence: state 0 appearing, 1 walking, 2
 /// standing, 3 throwing, 4 turning, 5 vanishing; then the heading.
+/// Milliseconds a frame of a land creature's picture in `state`: ticks by
+/// state (0x59538c: 1, 25, 1, 1, 1, 2, 2; the 25 drops to 5 after the
+/// first frame, 0x411520).
+pub fn walker_frame_ms(state: u8) -> u64 {
+    const TICKS: [u64; 7] = [1, 5, 1, 1, 1, 2, 2];
+    TICKS[(state as usize).min(6)] * crate::clock::TICK_MS
+}
+
 pub fn walker_sequence(class: u32, state: u8, heading: usize) -> String {
     let prefix = match class {
         0x1f4 => "CLPSPR",
@@ -128,12 +135,14 @@ impl Scene {
             fields,
         };
         if let Ok(Some(obj)) = objects::resolve(data, caches, &rec) {
+            // It comes out over its appearing picture, a frame a tick.
+            let appear = obj.frames.len() as f32 * walker_frame_ms(0) as f32 / 1000.0;
             self.objects.push(obj);
             self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
             self.walkers.push(Walker {
                 id,
                 lair,
-                walk: Walk::Appear(APPEAR),
+                walk: Walk::Appear(appear),
                 shown: (0, 0),
             });
         }
@@ -223,6 +232,7 @@ impl Scene {
                 if let Ok(frames) = objects::sequence_frames(data, caches, &name) {
                     if !frames.is_empty() {
                         self.objects[i].frames = frames;
+                        self.objects[i].frame_ms = walker_frame_ms(state);
                     }
                 }
             }

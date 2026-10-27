@@ -799,7 +799,7 @@ pub fn resolve(
                 CellCentre(f(4), f(5)),
                 Visual {
                     frames,
-                    frame_ms: DEFAULT_FRAME_MS,
+                    frame_ms: crate::scene::walker_frame_ms(0),
                 },
             )
         }
