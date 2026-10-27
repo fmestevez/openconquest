@@ -4056,10 +4056,11 @@ impl App {
             {
                 Ok(v) => {
                     self.video = Some(v);
-                    // The music waits.
+                    // The music waits, and the menus' music stops.
                     if let Some(m) = &self.music {
                         m.set_volume(0.0);
                     }
+                    self.menu_music = None;
                     return true;
                 }
                 Err(e) => eprintln!("video: {e:#}"),
