@@ -2,9 +2,10 @@
 //!
 //! The wind has a strength 0-10 and a direction 0-7 (the heading it blows
 //! towards: 0 east, counting counter-clockwise in 45 degree steps, like ship
-//! headings). Every 1.5 to 11.5 seconds it takes the value prepared at the
-//! previous change and prepares the next one, which usually drifts by up to
-//! two steps in strength and direction.
+//! headings). Every 1500 to 11500 game ticks (a minute to nearly eight;
+//! the counter adds the clock's ticks, `[clock+0xe2]`) it takes the value
+//! prepared at the previous change and prepares the next one, which usually
+//! drifts by up to two steps in strength and direction.
 
 use crate::combat::Rng;
 
@@ -31,8 +32,11 @@ pub struct Wind {
     pub direction: u32,
     next_strength: u32,
     next_direction: u32,
-    elapsed_ms: f32,
-    period_ms: f32,
+    /// Ticks since the last change, and until the next (the first 10000).
+    #[serde(alias = "elapsed_ms")]
+    elapsed: f32,
+    #[serde(alias = "period_ms")]
+    period: f32,
     rng: Rng,
     /// A wind called up by magic: seconds left, and the wind to return to.
     forced: Option<(f32, u32, u32)>,
@@ -49,8 +53,8 @@ impl Wind {
             direction: 0,
             next_strength,
             next_direction,
-            elapsed_ms: 0.0,
-            period_ms: 10_000.0,
+            elapsed: 0.0,
+            period: 10_000.0,
             rng,
             forced: None,
         };
@@ -97,20 +101,23 @@ impl Wind {
             }
             return;
         }
-        self.elapsed_ms += dt * 1000.0;
-        if self.elapsed_ms >= self.period_ms {
-            self.elapsed_ms = 0.0;
-            self.period_ms = (self.rng.next() % 10_000 + 1_500) as f32;
+        self.elapsed += dt / crate::clock::TICK;
+        if self.elapsed >= self.period {
+            self.elapsed = 0.0;
+            self.period = (self.rng.next() % 10_000 + 1_500) as f32;
             self.change();
         }
     }
 
-    /// Raises a strong wind (strength 7) towards `direction` for `seconds`
-    /// (message 0x1103), after which the previous wind returns.
-    pub fn force(&mut self, direction: u32, seconds: f32) {
-        let (strength, old) = match self.forced {
-            Some((_, s, d)) => (s, d),
-            None => (self.strength, self.direction),
+    /// Raises a strong wind (strength 7) towards `direction` (message
+    /// 0x1103, 0x407a80) for the current period, after which the previous
+    /// wind returns; called again while it blows, what was left becomes
+    /// what has passed.
+    pub fn force(&mut self, direction: u32) {
+        let period = self.period * crate::clock::TICK;
+        let (seconds, strength, old) = match self.forced {
+            Some((left, s, d)) => (period - left, s, d),
+            None => (period, self.strength, self.direction),
         };
         self.forced = Some((seconds, strength, old));
         self.strength = 7;
@@ -150,8 +157,9 @@ mod tests {
     fn wind_stays_in_range_and_changes() {
         let mut wind = Wind::new(42);
         let mut seen = std::collections::HashSet::new();
-        for _ in 0..20_000 {
-            wind.update(0.1);
+        // Changes come every 1500-11500 ticks: some hours of play.
+        for _ in 0..200_000 {
+            wind.update(1.0);
             assert!(wind.strength <= 10 && wind.direction <= 7);
             seen.insert((wind.strength, wind.direction));
         }
@@ -176,14 +184,14 @@ mod tests {
     fn a_called_wind_blows_then_returns() {
         let mut wind = Wind::new(7);
         let before = (wind.strength, wind.direction);
-        wind.force(4, 10.0);
-        for _ in 0..90 {
-            wind.update(0.1);
+        wind.force(4);
+        // It blows for the current period: the first is 10000 ticks.
+        let period = 10_000.0 * crate::clock::TICK;
+        for _ in 0..(period as usize - 1) {
+            wind.update(1.0);
             assert_eq!((wind.strength, wind.direction), (7, 4));
         }
-        for _ in 0..20 {
-            wind.update(0.1);
-        }
+        wind.update(2.0);
         assert_eq!((wind.strength, wind.direction), before);
     }
 }

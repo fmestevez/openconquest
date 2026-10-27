@@ -324,9 +324,12 @@ Wind (WeatherClassTy, Weather.cpp; global object at 0x5c6a40):
   current (3 if calm) + rand%5 - 2, wrapped (negative: 11 - v; above 10:
   v - 11), 1 becomes 0, and the next direction is current + rand%5 - 2
   mod 8; otherwise both are random (rand%11, rand&7). Changes happen
-  after rand%10000 + 1500 ms.
-- Message 0x1103 forces strength 7 in a given direction for a while (the
-  CBUT_WIND command), then the old wind returns.
+  after rand%10000 + 1500 game ticks (the counter adds `[clock+0xe2]`,
+  the ticks of the update; the first period is 10000).
+- Message 0x1103 forces strength 7 in a given direction (the CBUT_WIND
+  command) for the current period, its own counter running; sent again
+  while it blows, the counter becomes period less counter. Then the old
+  wind returns.
 - Ship speed (0x4a68b0, 0x4a3f40): base speed x 0x597b2c[(merchant ? 11 :
   0) + strength][angle] / 100, where angle = |wind - heading| folded to 0-4
   (0x4e0100). Calm 60%; strength 9: 120 100 80 60 40; strength 10 (storm

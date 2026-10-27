@@ -243,7 +243,7 @@ impl Scene {
     /// Calls up a strong wind towards `direction`.
     pub fn cast_wind(&mut self, direction: u32) -> Result<(), String> {
         self.pay_spell(Spell::Wind)?;
-        self.wind.force(direction, magic::WIND_SECONDS);
+        self.wind.force(direction);
         self.sounds.push(("wind8", f32::NAN, f32::NAN));
         Ok(())
     }

@@ -204,8 +204,6 @@ pub const LEARN_COST: u32 = 1000;
 /// Seconds to learn a spell: 200 ticks for the human, 100 for computer
 /// players (the school, 0x439260).
 pub const LEARN_SECONDS: f32 = 200.0 * crate::clock::TICK;
-/// Seconds a called wind blows. Placeholder.
-pub const WIND_SECONDS: f32 = 60.0;
 /// Flame makes the player's weapons this much stronger for this long.
 /// Placeholders.
 pub const FLAME_FACTOR: f32 = 1.5;
