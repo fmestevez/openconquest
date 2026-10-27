@@ -1387,6 +1387,41 @@ sails, waits 3 s; 0x449810 patrols, and once the player has more warships
 (types 4-7) than a difficulty-dependent number sails to one of two places
 and attacks.
 
+Barbarian structures (`BarbarianClassTy`, 0x40e000-0x410000) build their
+ships for nothing. The class pays only to mend its units (0x40eba0), while
+ordinary shipyards check and take the price (0x416a40).
+
+miss007 (0x45f770):
+
+- **Members.** Group 0 is the barbarians (player 0x10, 12 members) and
+  group 1 the Persians (player 0xf, 7 members).
+- **The barbarians' yards.** Yard member 0 does nothing (0x406330 is
+  empty). Yards 1-5 (0x45ca00) each build what fleet member (yard + 5) asks
+  for (brain `+0xf5 + member x 4`: ship code `<< 16 |` wait). After the
+  launch they wait the request's ticks, then clear it.
+- **The barbarians' fleets.** Fleets 6-10 (0x45cbf0, 0x45d0b0, 0x45d640,
+  0x45dbd0) ask for royal ships, bombers or ship killers (codes 0xca, 0xcb,
+  0xce) while short of a target size. The target is re-rolled every turn
+  otherwise: `rand(difficulty + 2..3) + 3..4`. The wait is `(60 or 70 +
+  rand 61) x 25` ticks.
+- **Patrols and raids.** Each fleet patrols its round (0x5b0ea0 and the
+  like) with events: the player in its zone (attack it 1500 ticks); size
+  at least the target after 7500 ticks (raid); fired on (answer 375). The
+  raid goes against the player's strong fort at (15, 26), unless a
+  1-in-(difficulty + 2) roll, else one of their towns (anywhere, or in
+  (10, 10, 30, 30)), else the first fallback zone they are in (0x479f40).
+  It lasts 6000 or 10500 ticks, called off at 2 ships left. With nothing
+  found it waits `(30 + rand 41) x 25` ticks and looks again.
+- **The Persians.** Their yard (0x45e510) serves the members' requests,
+  resting `(40 + rand 31) x 25` ticks after each. Merchants gather amber in
+  (0, 0, 12, 15) `(3 + rand(difficulty + 1)) x 1500` ticks; fishers fish
+  15000. Two guards patrol 4500 ticks at a time (their zone: 6000; home
+  (0, 0, 15, 10): 1500). Raiders attack a town in (40, 0, 13, 20) once
+  `difficulty + 3` strong. Member 6 mends prizes.
+- **Reefs.** A big reef (0x259) goes up at (41, 69) or (39, 70) at the
+  start, and at (22, 17) the first time the player's ships enter
+  (14, 17, 8, 14).
+
 Primitives not yet ported (the later brains use them):
 
 - **0x47a7e0, repair** (ported as prizes sailing to a dock; `(group,

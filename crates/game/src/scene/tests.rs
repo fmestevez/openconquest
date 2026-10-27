@@ -4064,3 +4064,32 @@ fn brains_mend_their_prizes() {
         scene.objects[i].ship.as_ref().unwrap().task
     );
 }
+
+/// miss007's brain: the barbarian yards build for their own fleets, and
+/// the Persians' yard for its merchants and guards (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn miss007_brain_builds_its_fleets() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    assert!(scene.brain.is_some());
+    // Twenty minutes, in ticks.
+    for _ in 0..30_000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let brain = scene.brain.as_ref().unwrap();
+    let ships = |k: usize| brain.fleets[k].ships.len();
+    let barbarians: usize = (6..=10).map(ships).sum();
+    let persians: usize = (13..=17).map(ships).sum();
+    eprintln!(
+        "barbarian fleets {:?}, persian fleets {:?}",
+        (6..=10).map(ships).collect::<Vec<_>>(),
+        (13..=17).map(ships).collect::<Vec<_>>()
+    );
+    assert!(barbarians > 0, "the barbarian yards built for their fleets");
+    assert!(persians > 0, "the Persians built ships");
+}

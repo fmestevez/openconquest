@@ -246,6 +246,9 @@ pub struct Scene {
     pub creature_clock: f32,
     /// Wizards' casting.
     pub wizards: BTreeMap<u32, script::Wizard>,
+    /// Big reefs a brain raises this tick: cell and kind (not saved: raised
+    /// at once).
+    pending_reefs: Vec<(i32, i32, u32)>,
     /// Spells the player may cast once for nothing (disposable magic).
     pub free_casts: std::collections::BTreeMap<Spell, u32>,
     /// Buildings being repaired by a settlement or town.
@@ -467,6 +470,7 @@ impl Scene {
             free_casts: Default::default(),
             creature_clock: 0.0,
             wizards: BTreeMap::new(),
+            pending_reefs: Vec::new(),
             story: Vec::new(),
             start_sites: Vec::new(),
             delivered: Vec::new(),
@@ -1224,6 +1228,9 @@ impl Scene {
         while self.brain_clock >= crate::clock::TICK {
             self.brain_clock -= crate::clock::TICK;
             self.run_brain();
+            for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {
+                self.big_reef(x, y, kind, data, caches);
+            }
         }
         // The mission is judged every 250 ticks (0x448d40), a campaign
         // mission by its brain every 125.
