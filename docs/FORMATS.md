@@ -934,6 +934,31 @@ fitting cost; no fish. Message 0x248f sells a building: 75 % of its cost
 times its health (0x425990), and a settlement's stock likewise, fish at
 75 % too.
 
+## Training and repair at a settlement
+
+A settlement's stock places (`[+0x244] + 0x23`, twelve) list units of two
+bytes: kind and condition (percent). Message 0x1e with sub-order 2 (its
+Repair) sums, over units below 100, amber `cost[kind / 3] x (100 -
+condition) / 100` (0x597164: 30, 50, 70, ...) and time `ticks[kind / 3] x
+(100 - condition) / 100` (0x5971a0: 70, 80, 95, 1200, 1300, 0, 400, 450,
+...; 0x440fd0), takes the amber at once and enters state 2 (`+0x110`),
+mending the units one after another as the time passes and all of them at
+its end (0x441ba0). State 1 is training, a queued unit taking
+`ticks[kind / 3]`. Docks (`Shipserv.cpp`, 0x4e7640) serve ships alongside
+(reloading); a dock's own queue (0x416f90, every 25 ticks) builds ships.
+
+## Land creatures
+
+Lairs (`CreaturesFlatClassTy`, 0x414f00) send out another creature once
+`(10 - field 9) x (20-25)` ticks have passed since the last, drawn afresh
+at each look, up to field 8 out. A creature (0x4111b0) shows
+`<CLP|MNT|AMZ>SPR_<state><heading>` with a frame delay by state
+(0x59538c: 1, 25, 1, 1, 1, 2, 2 ticks; walking's 25 becomes 5 after the
+first frame, 0x411520) and walks a cell a pass of its walking picture. It
+wanders (0x413240) to any land cell (tile type 8) it can reach within a
+round mask about where it stands (13 x 13 cells: 0x594ba0 cyclopes, radius
+5; 0x594e44 and 0x5950e8 minotaurs and amazons, radius 4).
+
 ## Sheep
 
 A flock (0x4331c0; record: cell x, y at fields 4-5, count at 7) keeps its
