@@ -134,6 +134,99 @@ const WALKWAY_AT: [[[(i8, i8); 8]; 2]; 5] = [
     ],
 ];
 
+/// Where the walkway to amber lies: its top-left from the top-left of the
+/// ship's frame, by ship type, for a shore east, west, north (shore groups
+/// 4, 5 and 11, or 6 and 7) or south (0, 1 and 10, or 2 and 3) (0x4b0590,
+/// state 0xb).
+const AMBER_WALKWAY_E: [(i8, i8); 12] = [
+    (30, 26),
+    (38, 26),
+    (45, 34),
+    (45, 34),
+    (38, 33),
+    (38, 33),
+    (38, 33),
+    (38, 33),
+    (38, 33),
+    (38, 33),
+    (38, 33),
+    (38, 33),
+];
+const AMBER_WALKWAY_W: [(i8, i8); 12] = [
+    (-25, 26),
+    (-23, 26),
+    (-20, 34),
+    (-20, 33),
+    (-21, 33),
+    (-20, 34),
+    (-21, 33),
+    (-21, 33),
+    (-21, 33),
+    (-21, 33),
+    (-21, 33),
+    (-21, 33),
+];
+const AMBER_WALKWAY_N: [[(i8, i8); 12]; 2] = [
+    [
+        (37, -22),
+        (40, -20),
+        (52, -9),
+        (52, -9),
+        (52, -12),
+        (51, -14),
+        (52, -12),
+        (52, -12),
+        (52, -12),
+        (52, -12),
+        (52, -12),
+        (52, -12),
+    ],
+    [
+        (4, -18),
+        (12, -21),
+        (16, -6),
+        (16, -6),
+        (10, -14),
+        (10, -15),
+        (12, -6),
+        (12, -6),
+        (12, -6),
+        (12, -6),
+        (12, -6),
+        (12, -6),
+    ],
+];
+const AMBER_WALKWAY_S: [[(i8, i8); 12]; 2] = [
+    [
+        (38, 26),
+        (44, 29),
+        (52, 39),
+        (52, 39),
+        (50, 32),
+        (47, 31),
+        (50, 32),
+        (50, 32),
+        (50, 32),
+        (50, 32),
+        (50, 32),
+        (50, 32),
+    ],
+    [
+        (4, 24),
+        (7, 28),
+        (15, 37),
+        (15, 37),
+        (10, 32),
+        (12, 32),
+        (10, 32),
+        (12, 32),
+        (10, 32),
+        (12, 32),
+        (10, 32),
+        (12, 32),
+    ],
+];
+
 /// Which of a walkway's two placings a ship on `heading` uses for `facing`
 /// (0x4b8a40).
 fn walkway_side(facing: usize, heading: usize) -> usize {
@@ -193,6 +286,9 @@ pub struct Plank {
     top_left: (f32, f32),
     facing: usize,
     pub trips: u32,
+    /// Where the looped work (porters bringing amber aboard, the net) is
+    /// drawn about.
+    loop_at: (f32, f32),
 }
 
 /// A trip of porters over a walkway (0x4adda0): one picture laid on it
@@ -222,15 +318,22 @@ impl Plank {
     }
 
     /// The walkway's frame, and the looped work over it once it is down.
-    pub fn frame(&self) -> Vec<&[Layer]> {
+    /// The walkway's frame, and the looped work over it once it is down,
+    /// each with the point it is drawn about.
+    pub fn frame(&self) -> Vec<(&[Layer], f32, f32)> {
         let step = (self.age_ms / self.frame_ms()) as usize;
         let n = self.frames.len();
         let mut out = Vec::new();
         if n > 0 {
-            out.push(self.frames[step.min(n - 1)].as_slice());
+            out.push((self.frames[step.min(n - 1)].as_slice(), self.x, self.y));
         }
         if step >= n && !self.looping.is_empty() {
-            out.push(self.looping[(step - n) % self.looping.len()].as_slice());
+            let (lx, ly) = self.loop_at;
+            out.push((
+                self.looping[(step - n) % self.looping.len()].as_slice(),
+                lx,
+                ly,
+            ));
         }
         out
     }
@@ -245,6 +348,29 @@ impl Porter {
 }
 
 impl Scene {
+    /// The direction of the shore and the top-left offset of the walkway
+    /// ship `i` lays to amber deposit `d`, when the deposit's cell lies
+    /// straight beside the ship's.
+    fn amber_walkway(&self, i: usize, d: usize) -> Option<(usize, (i8, i8))> {
+        let t = openac_formats::map::TILE_SIZE as f32;
+        let o = &self.objects[i];
+        let k = o.ship.as_ref()?.kind as usize % 12;
+        let f = self.objects[d].record.fields.get(6..8)?;
+        let (tx, ty) = (f[0] as i32, f[1] as i32);
+        let (cx, cy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let group = super::trade::shore_group(&self.grid, tx, ty);
+        let in_group = |gs: &[usize]| group.is_some_and(|g| gs.contains(&g));
+        match (tx - cx, ty - cy) {
+            (1, 0) => Some((0, AMBER_WALKWAY_E[k])),
+            (-1, 0) => Some((4, AMBER_WALKWAY_W[k])),
+            (0, -1) if in_group(&[4, 5, 11]) => Some((2, AMBER_WALKWAY_N[0][k])),
+            (0, -1) if in_group(&[6, 7]) => Some((2, AMBER_WALKWAY_N[1][k])),
+            (0, 1) if in_group(&[0, 1, 10]) => Some((6, AMBER_WALKWAY_S[0][k])),
+            (0, 1) if in_group(&[2, 3]) => Some((6, AMBER_WALKWAY_S[1][k])),
+            _ => None,
+        }
+    }
+
     /// Ship `i` works at `target` (a building it unloads at or a deposit):
     /// a walkway to the shore on the way there, or its net, if it has none
     /// yet.
@@ -273,7 +399,7 @@ impl Scene {
         let (dx, dy) = (bx - sx, by - sy);
         let heading = heading_towards(dx, dy);
         let mut seq = |name: &str| objects::sequence_frames(data, caches, name).unwrap_or_default();
-        let (frames, looping) = match activity {
+        let (mut frames, mut looping) = match activity {
             Activity::Unloading => (
                 objects::composite_layer_frames(data, caches, "MOST0_", heading)
                     .unwrap_or_default(),
@@ -324,6 +450,35 @@ impl Scene {
                 y = top_left.1 + l.image.height as f32 / 2.0;
             }
         }
+        // A walkway to amber likewise (0x4b0590, state 0xb), by the
+        // direction of the shore and its shape; its porters on it.
+        let mut facing = heading;
+        if activity == Activity::Amber {
+            if let Some((dir, off)) = self.amber_walkway(i, s) {
+                facing = dir;
+                frames = objects::sequence_frames(data, caches, &format!("AMOST_{dir}"))
+                    .unwrap_or_default();
+                looping = objects::sequence_frames(data, caches, &format!("ANOSIL_{dir}"))
+                    .unwrap_or_default();
+                if let Some(l) = frames.last().and_then(|f| f.first()) {
+                    let k = self.objects[i]
+                        .ship
+                        .as_ref()
+                        .map_or(0, |s| s.kind as usize % 12);
+                    let half = objects::SHIP_FRAME[k] / 2.0;
+                    top_left = (sx - half + off.0 as f32, sy - half + off.1 as f32);
+                    x = top_left.0 + l.image.width as f32 / 2.0;
+                    y = top_left.1 + l.image.height as f32 / 2.0;
+                }
+            }
+        }
+        let loop_at = match looping.first().and_then(|f| f.first()) {
+            Some(l) if activity == Activity::Amber => (
+                top_left.0 + l.image.width as f32 / 2.0,
+                top_left.1 + l.image.height as f32 / 2.0,
+            ),
+            _ => (x, y),
+        };
         // The net lies where the ship type's table puts it for its heading
         // (0x4ae760, state 6); drawn by its middle.
         if activity == Activity::Fishing {
@@ -347,8 +502,9 @@ impl Scene {
             looping,
             age_ms: 0.0,
             top_left,
-            facing: heading,
+            facing,
             trips: 0,
+            loop_at,
         });
     }
 
@@ -393,7 +549,11 @@ impl Scene {
             p.age_ms += dt * 1000.0;
         }
         // A laden trip done puts a slot of goods ashore.
-        for p in self.porters.iter().filter(|p| p.laden && p.frame(0).is_none()) {
+        for p in self
+            .porters
+            .iter()
+            .filter(|p| p.laden && p.frame(0).is_none())
+        {
             self.unloaded.push(p.ship);
         }
         self.porters.retain(|p| p.frame(0).is_some());

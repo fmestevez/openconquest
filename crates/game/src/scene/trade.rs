@@ -1640,10 +1640,7 @@ impl Scene {
         } else {
             // The shore's shape: its tile among the groups at 0x5bb870
             // (0x4b3770), then the distance by direction, type and group.
-            let cell = self.grid.get(0, target.0 as u32, target.1 as u32);
-            let group = SHORE_GROUPS
-                .iter()
-                .position(|g| g.contains(&cell.variant))?;
+            let group = shore_group(&self.grid, target.0, target.1)?;
             APPROACH[dir / 2][k][group]
         };
         if dist == 0 {
@@ -1723,6 +1720,15 @@ fn building_cells(o: &MapObject) -> i32 {
         ObjectClass::Building(SETTLEMENT | TOWN) => 2,
         _ => 1,
     }
+}
+
+/// The group (`SHORE_GROUPS`) of the shore tile on cell `(x, y)` (0x4b3770).
+pub(super) fn shore_group(grid: &openac_formats::MapGrid, x: i32, y: i32) -> Option<usize> {
+    if x < 0 || y < 0 || x as u32 >= grid.width || y as u32 >= grid.height {
+        return None;
+    }
+    let cell = grid.get(0, x as u32, y as u32);
+    SHORE_GROUPS.iter().position(|g| g.contains(&cell.variant))
 }
 
 /// Shore tiles (layer 0 variants of island ground) in the groups the

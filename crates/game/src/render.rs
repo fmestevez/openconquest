@@ -176,8 +176,8 @@ pub fn draw_objects(
     }
     // Walkways of unloading ships, and their porters.
     for p in &scene.planks {
-        for layers in p.frame() {
-            draw(frame, layers, p.x, p.y);
+        for (layers, x, y) in p.frame() {
+            draw(frame, layers, x, y);
         }
     }
     for p in &scene.porters {

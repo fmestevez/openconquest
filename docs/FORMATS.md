@@ -933,7 +933,11 @@ A fishing ship's net (0x4ae760, state 6) lies with its picture's top-left
 at the ship frame's top-left plus 0x59afa8[type x 8 + heading] (x, y; the
 same for headings four apart), a frame a tick. A walkway to a port
 (0x4adef0, state 0xb) lies at the ship frame's top-left plus
-0x59a8e8[(type x 2 + side) x 8 + facing]. Porters (`NOSIL_<loaded><n><heading>`,
+0x59a8e8[(type x 2 + side) x 8 + facing]. A walkway to amber (0x4b0590, state 0xb)
+lies at the ship frame's top-left plus, by ship type: east 0x599e88,
+west 0x59a128, north 0x59a408 (shore groups 4, 5, 11) or 0x59a468 (6, 7),
+south 0x59a708 (0, 1, 10) or 0x59a768 (2, 3); its porters (`ANOSIL_`) on
+its top-left. Porters (`NOSIL_<loaded><n><heading>`,
 39 frames of 71x38) are one picture laid over the walkway: the men walk
 across its frame as it plays, a frame a tick, 1.56 s a trip; they do not
 walk to the building. `NOSIL_<laden><way><facing>`: way 0 from the ship
