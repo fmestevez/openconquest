@@ -1014,6 +1014,8 @@ pub struct GameView<'a> {
     /// When each selected object was selected (`time_ms`), for the frame's
     /// zoom.
     pub selected_since: &'a HashMap<u32, u64>,
+    /// When objects were deselected (`time_ms`), for their frames' zoom out.
+    pub deselected: &'a HashMap<u32, u64>,
     /// A selection box being dragged (window pixels).
     pub select_box: Option<(f32, f32, f32, f32)>,
     pub status: Option<&'a str>,
@@ -1191,6 +1193,22 @@ impl GameView<'_> {
         draw_world(frame, &screen, self.scene, self.camera, &lut);
         draw_objects(frame, &screen, self.scene, self.camera, &lut, self.time_ms);
         draw_fog(frame, &screen, self.scene, self.camera, &lut);
+        for (&id, &t) in self.deselected {
+            let ticks = (self.time_ms.saturating_sub(t) / crate::clock::TICK_MS) as usize;
+            if let Some(zoom) = (crate::render::SELECTION_FRAMES - 2).checked_sub(ticks) {
+                crate::render::draw_deselection(
+                    frame,
+                    &screen,
+                    self.data,
+                    self.scene,
+                    self.camera,
+                    id,
+                    self.time_ms,
+                    zoom,
+                    &lut,
+                );
+            }
+        }
         for &id in self.selected.iter().chain(self.group) {
             // Ticks since it was selected pick the frame's zoom; unknown
             // (a screenshot) shows it whole.

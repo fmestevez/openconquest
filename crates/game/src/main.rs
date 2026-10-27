@@ -466,6 +466,7 @@ fn screenshot(
     let since = std::collections::HashMap::new();
     let mut view = GameView {
         selected_since: &since,
+        deselected: &since,
         data,
         scene: &scene,
         camera: &initial,

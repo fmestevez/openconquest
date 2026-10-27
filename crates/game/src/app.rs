@@ -396,6 +396,8 @@ pub struct App {
     groups: [Vec<u32>; 10],
     /// When each selected object was selected, for its frame's zoom.
     selected_since: HashMap<u32, u64>,
+    /// When objects were deselected, for their frames' zoom out.
+    deselected: HashMap<u32, u64>,
     /// The map places assigned with Shift+F1 ... Shift+F10, centred on with
     /// F1 ... F10.
     places: [Option<(f32, f32)>; 10],
@@ -582,6 +584,7 @@ impl App {
             group: Vec::new(),
             groups: Default::default(),
             selected_since: HashMap::new(),
+            deselected: HashMap::new(),
             places: [None; 10],
             box_from: None,
             pending: None,
@@ -704,6 +707,7 @@ impl App {
             });
         GameView {
             selected_since: &self.selected_since,
+            deselected: &self.deselected,
             data: &self.data,
             scene: &self.scene,
             camera: &self.camera,
@@ -4245,7 +4249,19 @@ impl App {
                 // Newly selected objects start their frame's zoom.
                 let now = self.time_ms;
                 let chosen: Vec<u32> = self.selected.iter().chain(&self.group).copied().collect();
-                self.selected_since.retain(|id, _| chosen.contains(id));
+                let gone: Vec<u32> = self
+                    .selected_since
+                    .keys()
+                    .filter(|id| !chosen.contains(id))
+                    .copied()
+                    .collect();
+                for id in gone {
+                    self.selected_since.remove(&id);
+                    self.deselected.insert(id, now);
+                }
+                let span = crate::render::SELECTION_FRAMES as u64 * crate::clock::TICK_MS;
+                self.deselected
+                    .retain(|id, t| !chosen.contains(id) && now.saturating_sub(*t) < span);
                 for id in chosen {
                     self.selected_since.entry(id).or_insert(now);
                 }

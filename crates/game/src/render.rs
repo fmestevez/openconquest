@@ -435,7 +435,7 @@ pub fn draw_selection(
     let Some(obj) = scene.objects.iter().find(|o| o.id == id) else {
         return;
     };
-    if draw_frame_sprite(frame, screen, data, obj, camera, time_ms, zoom, lut) {
+    if draw_frame_sprite(frame, screen, data, obj, camera, time_ms, zoom, true, lut) {
         return;
     }
     let scale = camera.scale(screen);
@@ -578,6 +578,26 @@ fn selection_frame(
     FRAMES.with(|c| c.borrow_mut().get(data, &name).ok().flatten())
 }
 
+/// The selection frame of an object just deselected, shrinking (0x427648:
+/// from the last frame but one, a frame a tick, gone at 0), without its
+/// hull bar.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_deselection(
+    frame: &mut Frame,
+    screen: &Screen,
+    data: &GameData,
+    scene: &Scene,
+    camera: &Camera,
+    id: u32,
+    time_ms: u64,
+    zoom: usize,
+    lut: &[u32; 256],
+) {
+    if let Some(obj) = scene.objects.iter().find(|o| o.id == id) {
+        draw_frame_sprite(frame, screen, data, obj, camera, time_ms, zoom, false, lut);
+    }
+}
+
 /// Draws the selection frame sprite and the hull bar on its top edge;
 /// false if the object has none (the drawn corners serve instead). A
 /// ship's frame is centred on its picture (the frame is 4 pixels larger),
@@ -591,6 +611,7 @@ fn draw_frame_sprite(
     camera: &Camera,
     time_ms: u64,
     zoom: usize,
+    bar: bool,
     lut: &[u32; 256],
 ) -> bool {
     let Some(first) = obj.frame_at(time_ms).first() else {
@@ -620,7 +641,9 @@ fn draw_frame_sprite(
     );
     // The hull bar on the top edge: a black frame 4 high, two rows of
     // colour inside (as the panel's slot bars), from 14 in, width - 28.
-    let Some(c) = &obj.combat else { return true };
+    let Some(c) = obj.combat.as_ref().filter(|_| bar) else {
+        return true;
+    };
     let scale = camera.scale(screen);
     let thick = (scale.round() as i64).max(1);
     let ox = screen.x as i64 + ((left.round() - camera.x) * scale) as i64;
