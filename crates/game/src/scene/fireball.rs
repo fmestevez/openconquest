@@ -158,6 +158,7 @@ impl Scene {
             self.fire_shot(
                 super::shot::Firing {
                     item: super::shot::FIREBALL,
+                    letter: None,
                     flaming: true,
                     from,
                     target,

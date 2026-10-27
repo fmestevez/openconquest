@@ -591,19 +591,40 @@ pub fn special_weapon(kind: u8) -> Option<u8> {
     }
 }
 
-/// What the wild creatures strike with, as the nearest weapons (the
-/// manual: cyclops throw stones, minotaurs axes "similar to a Scorpion's",
-/// amazons arrows; sea monsters bite). Their lairs send them out
-/// (`scene::walkers`) and do not fight themselves. Placeholders. (Harpies and dragons
-/// strike as they fly: `scene::flyers`.)
+/// What the wild creatures strike with. Cyclopes, minotaurs and amazons
+/// throw a level-1 weapon's blow (0x4126f0 reads the A x 15 cache's copy
+/// at 0x5c73a8): a ballista's (item 6), a small catapult's (5) and item
+/// 3's, drawn as `throw_letter`. Their lairs send them out
+/// (`scene::walkers`) and do not fight themselves. Sea monsters' bite is a
+/// placeholder. (Harpies and dragons strike as they fly: `scene::flyers`.)
 pub fn creature_weapons(class_id: u32) -> Vec<u8> {
     match class_id {
-        0x1f4 => vec![5],
-        0x1f5 => vec![3],
-        0x1f6 => vec![0, 0],
+        0x1f4 => vec![6],
+        0x1f5 => vec![5],
+        0x1f6 => vec![3],
         0x1fb => vec![4; 4],
         _ => Vec::new(),
     }
+}
+
+/// The picture a land creature's throw flies as (0x4126f0): cyclopes G,
+/// minotaurs O, amazons A.
+pub fn throw_letter(class: u32) -> u8 {
+    match class {
+        0x1f4 => 6,
+        0x1f5 => 14,
+        _ => 0,
+    }
+}
+
+/// What a land creature's throw keeps of its blow by the creature's health
+/// (0x594ab8, by tenths lost).
+pub fn throw_weakness(health: f32) -> f32 {
+    const LEFT: [f32; 11] = [
+        1000.0, 947.0, 894.0, 837.0, 775.0, 740.0, 532.0, 548.0, 447.0, 376.0, 30.0,
+    ];
+    let lost = ((1.0 - health.clamp(0.0, 1.0)) * 10.0) as usize;
+    LEFT[lost.min(10)] / 1000.0
 }
 
 /// Hull points of a ship type: its chart value (0x5bb4b0) x 650 (0x4ac210),

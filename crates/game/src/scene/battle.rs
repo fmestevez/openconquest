@@ -269,6 +269,18 @@ impl Scene {
             let Some(t) = self.object_index(target) else {
                 continue;
             };
+            // Land creatures throw as the original's (CyclopClassTy
+            // 0x412740, 0x4126f0): their own picture, a level-1 weapon's
+            // blow less as they weaken (0x594ab8), sure to hit but for a
+            // 1 in (8 - cells) miss from 2 cells off.
+            let thrower = match self.objects[s].class {
+                ObjectClass::Monster(c @ 0x1f4..=0x1f6) => Some(c),
+                _ => None,
+            };
+            let health = self.objects[s]
+                .combat
+                .as_ref()
+                .map_or(1.0, |c| (c.hull / c.max_hull.max(1.0)).clamp(0.0, 1.0));
             let dist = (self.objects[t].x - from.0).hypot(self.objects[t].y - from.1);
             for w in weapons {
                 let aim = match (&self.objects[t].ship, &self.objects[t].combat) {
@@ -279,13 +291,28 @@ impl Scene {
                     },
                     _ => combat::Aim::Other,
                 };
-                let chance = combat::hit_chance(w, dist, aim)
-                    + if atalanta { objects::ATALANTA_HIT } else { 0 };
-                let strikes = self.rng.chance(chance);
-                let level = levels.arms_for(w);
+                let (strikes, level, letter, weaken) = match thrower {
+                    Some(class) => {
+                        let cells = (dist / TILE_SIZE as f32) as u32;
+                        let missed = cells >= 2 && cells < 8 && self.rng.next() % (8 - cells) == 0;
+                        (
+                            !missed,
+                            1,
+                            Some(combat::throw_letter(class)),
+                            combat::throw_weakness(health),
+                        )
+                    }
+                    None => {
+                        let chance = combat::hit_chance(w, dist, aim)
+                            + if atalanta { objects::ATALANTA_HIT } else { 0 };
+                        (self.rng.chance(chance), levels.arms_for(w), None, 1.0)
+                    }
+                };
+                let (factor, wound_factor) = (factor * weaken, wound_factor * weaken);
                 self.fire_shot(
                     super::shot::Firing {
                         item: w,
+                        letter,
                         flaming,
                         from,
                         target,

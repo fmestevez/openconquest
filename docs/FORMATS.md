@@ -1106,7 +1106,13 @@ at each look, up to field 8 out. A creature (0x4111b0) shows
 first frame, 0x411520) and walks a cell a pass of its walking picture. It
 wanders (0x413240) to any land cell (tile type 8) it can reach within a
 round mask about where it stands (13 x 13 cells: 0x594ba0 cyclopes, radius
-5; 0x594e44 and 0x5950e8 minotaurs and amazons, radius 4).
+5; 0x594e44 and 0x5950e8 minotaurs and amazons, radius 4). A creature
+throws (0x412740) a shot (`BOMB<letter>`, 0x4126f0: cyclopes G with a
+ballista's level-1 blow, minotaurs O with a small catapult's, amazons A
+with item 3's; the A x 15 cache's copy at 0x5c73a8), its blow kept by
+health (0x594ab8: 1000, 947, 894, 837, 775, 740, 532, 548, 447, 376, 30
+thousandths by tenths lost); it hits but from 2 cells off, where 1 in
+(8 - cells) misses.
 
 ## Sheep
 

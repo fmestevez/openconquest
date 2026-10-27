@@ -154,6 +154,8 @@ fn direction(dx: f32, dy: f32) -> usize {
 /// A shot about to be fired.
 pub(super) struct Firing {
     pub item: u8,
+    /// The picture's letter, when not the item's (creatures' throws).
+    pub letter: Option<u8>,
     pub flaming: bool,
     pub from: (f32, f32),
     pub target: u32,
@@ -183,7 +185,10 @@ impl Scene {
             tx += off(r);
             ty += off(r);
         }
-        let (letter, variant) = letter_of(f.item, f.flaming);
+        let (letter, variant) = match f.letter {
+            Some(l) => (l, 0),
+            None => letter_of(f.item, f.flaming),
+        };
         let l = letter as usize;
         let (dx, dy) = (tx - f.from.0, ty - f.from.1);
         let dist = dx.hypot(dy);
