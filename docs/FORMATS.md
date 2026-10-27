@@ -1389,6 +1389,25 @@ sails, waits 3 s; 0x449810 patrols, and once the player has more warships
 (types 4-7) than a difficulty-dependent number sails to one of two places
 and attacks.
 
+A ship's treasures each get a category when taken (0x4bd0c0, from
+0x4b9740 by kind):
+
+- **2:** kinds 0-5 and 8, barrels and the like.
+- **4:** kinds 6, 7 and 27, handed over at a building.
+- **8:** heroes' items (9, 17-26).
+- **0x10:** lasting gifts (10-14).
+- **1:** the Cup and the Fleece (15, 16).
+
+A barbarian ship (player 0x10) marks everything 4. When a ship finishes
+unloading at a building (0x4add10 -> 0x4ad9f0), its category-4 items, and
+for a computer player its 0x10 ones too, go to the building (0x4bdc10 ->
+0x424b30), which stores them if it has room (0x424af0, table 0x5c1094)
+and announces message 0x5d94 with 1. Message 0x5d94 with 0 is a ship
+taking a treasure (0x4b6e80). So the human never hands the Golden Fleece
+over by unloading. miss010's brain waits for it (0x5d94, 1, kind 16).
+Docks (0x4e7861) and towns (0x441480) can also take items from a ship
+alongside, perhaps through the ship's slots; this is not traced.
+
 Barbarian structures (`BarbarianClassTy`, 0x40e000-0x410000) build their
 ships for nothing. The class pays only to mend its units (0x40eba0), while
 ordinary shipyards check and take the price (0x416a40).
