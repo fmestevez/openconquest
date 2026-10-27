@@ -282,6 +282,9 @@ impl Scene {
                 .as_ref()
                 .map_or(1.0, |c| (c.hull / c.max_hull.max(1.0)).clamp(0.0, 1.0));
             let dist = (self.objects[t].x - from.0).hypot(self.objects[t].y - from.1);
+            let shooters = self.objects[s].shooters();
+            let same = |w: u8| shooters.iter().filter(|&&x| x == w).count();
+            let target_is_ship = self.objects[t].ship.is_some();
             for w in weapons {
                 let aim = match (&self.objects[t].ship, &self.objects[t].combat) {
                     (Some(ship), c) => combat::Aim::Ship {
@@ -303,9 +306,25 @@ impl Scene {
                         )
                     }
                     None => {
+                        // A sure hit strikes whole; a miss strikes the hull
+                        // anyway for its chance in percent of the blow,
+                        // unless it is the ship's only one of the item, when
+                        // it flies wide (0x4c0230, 0x4bf7f0, 0x4bfc20).
                         let chance = combat::hit_chance(w, dist, aim)
                             + if atalanta { objects::ATALANTA_HIT } else { 0 };
-                        (self.rng.chance(chance), levels.arms_for(w), None, 1.0)
+                        let accuracy = if self.rng.chance(chance) {
+                            100
+                        } else if same(w) > 1 || !target_is_ship {
+                            chance
+                        } else {
+                            0
+                        };
+                        (
+                            accuracy > 0,
+                            levels.arms_for(w),
+                            None,
+                            accuracy as f32 / 100.0,
+                        )
                     }
                 };
                 let (factor, wound_factor) = (factor * weaken, wound_factor * weaken);

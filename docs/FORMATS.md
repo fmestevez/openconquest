@@ -999,7 +999,12 @@ ticks, the table being 6000 / the rate of fire (0x597a3c; 0x4ac0e0). A shot hits
 9, 9, 13, 11, 11, 7, 9 by item, alike at every level); the ease is 25,
 for a ship its type's (0x597acc: 5, 8, 20, 25, 15, 15, 10, 10, 10, 15,
 10, 15), 1 with hero 3 aboard, and a phantom is hit at 20 % whatever the
-range; Greek fire always hits.
+range; Greek fire always hits. The roll's result is the shot's accuracy:
+100 for a hit, the chance itself for a miss, made 0 when the ship carries
+only one of that item and the target is a ship (0x4c0230). The shot is
+aimed at the hull (0x4e07c0, leading a ship under way) unless that is 0,
+when it goes for the picture's edge and flies wide; its blow is the
+weapon's x the accuracy / 100 (0x4bfc20), a fiftieth when it is 0.
 
 ## Ramming
 
