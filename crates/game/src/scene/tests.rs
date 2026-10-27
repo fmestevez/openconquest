@@ -360,6 +360,16 @@ fn temple_magic() {
         }
     }
     assert!(scene.magic.knows(Spell::Whirlpool) && !scene.magic.knows(Spell::Reef));
+    // View lets us see a far corner for 3000 ticks.
+    let far = (scene.nav.width as i32 - 2, scene.nav.height as i32 - 2);
+    scene
+        .cast_area(Spell::ViewMap, far.0, far.1, &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.seen(far.0, far.1), Seen::InSight);
+    for _ in 0..50 * 121 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert_ne!(scene.seen(far.0, far.1), Seen::InSight);
     scene.cast_wind(6).unwrap();
     assert_eq!((scene.wind.strength, scene.wind.direction), (7, 6));
     let i = scene.object_index(ship).unwrap();

@@ -126,11 +126,12 @@ impl Scene {
         match spell {
             Spell::ViewMap => {
                 self.pay_spell(spell)?;
-                self.reveal(cx, cy, magic::VIEW_RADIUS);
+                self.add_sight_point(cx, cy);
                 self.sounds.push(("flash", x, y));
             }
             Spell::Lightning => {
                 self.pay_spell(spell)?;
+                self.add_sight_point(cx, cy);
                 let t = TILE_SIZE as f32;
                 let water = self
                     .nav
@@ -144,6 +145,7 @@ impl Scene {
             }
             Spell::Fireball => {
                 self.pay_spell(spell)?;
+                self.add_sight_point(cx, cy);
                 let owner = self.human.map(|h| (h.nation, h.slot));
                 let t = TILE_SIZE as f32;
                 self.spawn_fireball(

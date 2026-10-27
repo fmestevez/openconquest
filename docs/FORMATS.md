@@ -1034,7 +1034,10 @@ between, then dies away (`SLIGHT3`, 60, event 147). At a strike's frame 4
 (0x405c20) it throws a shot (`BOMBK1`, sure to hit) at every enemy ship,
 harpy, dragon, gorgon, sea monster, siren, castle, nest and lair within 2
 cells, each carrying 88000 / min(targets, 4) / (strikes - 1). Lightning
-shows `LTSPR_1` over water, `LTSPR_2` over land.
+shows `LTSPR_1` over water, `LTSPR_2` over land, and strikes at its
+frame 11 or 40. View, lightning and fireball casts add a sight point to
+the fog (dark.cpp 0x48b9e0: cell, player, radius 2, 3000 ticks), dropped
+when its time is up (0x48bae0).
 
 ## Land creatures
 

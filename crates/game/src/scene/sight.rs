@@ -390,6 +390,8 @@ impl Scene {
                 eyes.extend(cells.iter().map(|&(dx, dy)| (cx + dx, cy + dy, r)));
             }
         }
+        // Spells' passing sight (dark.cpp 0x48b9e0).
+        eyes.extend(self.sight_points.iter().map(|p| (p.0, p.1, p.2)));
         for (cx, cy, r) in eyes {
             let r = r.clamp(0, 5);
             for (row, bits) in mask(r).iter().enumerate() {
@@ -405,18 +407,25 @@ impl Scene {
         self.refresh_codes();
     }
 
-    /// Clears the clouds within `r` cells of `(cx, cy)` (the View spell).
-    pub fn reveal(&mut self, cx: i32, cy: i32, r: i32) {
-        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
-        for y in (cy - r).max(0)..=(cy + r).min(h - 1) {
-            for x in (cx - r).max(0)..=(cx + r).min(w - 1) {
-                let cell = &mut self.sight[(y * w + x) as usize];
-                if *cell == Seen::Unexplored && (x - cx).pow(2) + (y - cy).pow(2) <= r * r + r {
-                    *cell = Seen::Explored;
-                }
-            }
+    /// Lets the player see within 2 cells of `(cx, cy)` for 3000 ticks
+    /// (the View, lightning and fireball casts: dark.cpp 0x48b9e0 with
+    /// radius 2, gone at 0x48bae0).
+    pub(super) fn add_sight_point(&mut self, cx: i32, cy: i32) {
+        self.sight_points
+            .push((cx, cy, 2, crate::clock::ticks(3000)));
+        self.refresh_sight();
+    }
+
+    /// Sight points wear off.
+    pub(super) fn run_sight_points(&mut self, dt: f32) {
+        let before = self.sight_points.len();
+        for p in &mut self.sight_points {
+            p.3 -= dt;
         }
-        self.refresh_codes();
+        self.sight_points.retain(|p| p.3 > 0.0);
+        if self.sight_points.len() != before {
+            self.refresh_sight();
+        }
     }
 
     /// Lifts the darkness from the whole map.

@@ -250,6 +250,9 @@ pub struct Scene {
     pub mending: Vec<u32>,
     /// Fractions of amber owed for repairs, per player.
     pub repair_owed: std::collections::BTreeMap<(u32, u32), f32>,
+    /// Places seen for a while by spells: cell, radius, seconds left (not
+    /// saved).
+    pub sight_points: Vec<(i32, i32, i32, f32)>,
     /// Lightning cast: where, and seconds until it strikes (not saved).
     pub lightning: Vec<(f32, f32, f32)>,
     /// Fireballs over the map (not saved).
@@ -442,6 +445,7 @@ impl Scene {
             fog: true,
             fireballs: Vec::new(),
             lightning: Vec::new(),
+            sight_points: Vec::new(),
             mending: Vec::new(),
             free_casts: Default::default(),
             creature_clock: 0.0,
@@ -1178,6 +1182,7 @@ impl Scene {
         self.run_fires(dt, data, caches);
         self.run_fireballs(dt, data, caches);
         self.run_lightning(dt, data, caches);
+        self.run_sight_points(dt);
         self.run_repairs(dt);
         self.run_orders();
         self.run_treasures(dt, data, caches);

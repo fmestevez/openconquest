@@ -210,8 +210,6 @@ pub const WIND_SECONDS: f32 = 60.0;
 /// Placeholders.
 pub const FLAME_FACTOR: f32 = 1.5;
 pub const FLAME_SECONDS: f32 = 60.0;
-/// View clears the clouds within this many cells. Placeholder.
-pub const VIEW_RADIUS: i32 = 8;
 /// The shields' protection (the manual): weapon shield 80% against weapons;
 /// magic shield neutralises lightning and 80% against fireballs,
 /// waterspouts and sea monsters.
