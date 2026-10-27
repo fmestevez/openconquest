@@ -759,6 +759,52 @@ impl Scene {
         self.garrisons.get(&site).copied().unwrap_or_default()
     }
 
+    /// The conditions of the units in `site`'s stock by item, in their
+    /// order: stock places of two bytes, kind and condition (`[+0x244] +
+    /// 0x23`). As many as `garrison` counts: units added since are whole,
+    /// those gone the last.
+    pub fn stock_units(&self, site: u32) -> [Vec<u8>; 9] {
+        let counts = self.garrison(site);
+        let mut units = self
+            .stock_conditions
+            .get(&site)
+            .cloned()
+            .unwrap_or_default();
+        for (u, &n) in units.iter_mut().zip(&counts) {
+            u.resize(n as usize, 100);
+        }
+        units
+    }
+
+    /// Keeps the units' conditions, aboard ships and in stock, as many as
+    /// the units counted, those gone being the last: a unit counted in
+    /// later is whole.
+    pub(super) fn sync_units(&mut self) {
+        for o in &mut self.objects {
+            o.units();
+        }
+        let sites: Vec<u32> = self.stock_conditions.keys().copied().collect();
+        for site in sites {
+            let units = self.stock_units(site);
+            self.set_stock_units(site, units);
+        }
+    }
+
+    /// Sets `site`'s stock to `units` (their conditions by item).
+    pub(super) fn set_stock_units(&mut self, site: u32, units: [Vec<u8>; 9]) {
+        let counts: [u32; 9] = std::array::from_fn(|k| units[k].len() as u32);
+        if counts.iter().all(|&n| n == 0) {
+            self.garrisons.remove(&site);
+        } else {
+            self.garrisons.insert(site, counts);
+        }
+        if units.iter().flatten().all(|&c| c >= 100) {
+            self.stock_conditions.remove(&site);
+        } else {
+            self.stock_conditions.insert(site, units);
+        }
+    }
+
     /// Orders one more `item` (see `combat::ITEM_NAMES`) at `site`,
     /// paying for it: marines at a settlement or town, weapons at a
     /// workshop. A site makes one kind of item at a time.
@@ -859,22 +905,22 @@ impl Scene {
 
     /// Puts one unit of `item` from `site`'s stock aboard `ship`, which must
     /// lie alongside and have room (the original's load cursor, c_load.cpp).
-    /// Sells one `item` of settlement `site`'s stock for three quarters of
-    /// its amber price (0x441ba0, message 0x280f; the original scales it
-    /// by the item's condition, always whole here); no fish comes back.
+    /// Sells one `item` of settlement `site`'s stock, the first of its
+    /// place, for three quarters of its amber price times its condition
+    /// (0x441ba0, message 0x280f); no fish comes back.
     pub fn sell_item(&mut self, site: u32, item: u8) -> Result<(), String> {
         let i = self.object_index(site).ok_or("No such settlement")?;
         if !self.is_own(&self.objects[i]) {
             return Err("Not your settlement".into());
         }
-        let mut stock = self.garrison(site);
-        let n = stock.get_mut(item as usize).ok_or("No such item")?;
-        if *n == 0 {
+        let mut stock = self.stock_units(site);
+        let units = stock.get_mut(item as usize).ok_or("No such item")?;
+        if units.is_empty() {
             return Err("None left".into());
         }
-        *n -= 1;
-        self.garrisons.insert(site, stock);
-        let amber = combat::item_cost(item).0 * 75 / 100;
+        let condition = units.remove(0) as u32;
+        self.set_stock_units(site, stock);
+        let amber = combat::item_cost(item).0 * 75 / 100 * condition / 100;
         if let Some(owner) = self.objects[i].owner {
             self.earn(owner, amber as i64, 0);
         }
@@ -907,16 +953,19 @@ impl Scene {
             .as_ref()
             .map_or(1.0, |c| (c.hull / c.max_hull).clamp(0.0, 1.0));
         let owner = obj.owner;
-        let stock = self.garrison(site);
+        let stock = self.stock_units(site);
         let (mut amber, mut fish) = (0u64, 0u64);
-        for (item, &n) in stock.iter().enumerate() {
-            amber += (combat::item_cost(item as u8).0 * 75 / 100) as u64 * n as u64;
-            if item < 3 {
-                fish += (combat::CREW_COST[item].1 * 75 / 100) as u64 * n as u64;
+        for (item, units) in stock.iter().enumerate() {
+            for &c in units {
+                let c = c as u64;
+                amber += (combat::item_cost(item as u8).0 * 75 / 100) as u64 * c / 100;
+                if item < 3 {
+                    fish += (combat::CREW_COST[item].1 * 75 / 100) as u64 * c / 100;
+                }
             }
         }
         amber += (economy::building_cost(class) as f32 * health * 0.75) as u64;
-        self.garrisons.remove(&site);
+        self.set_stock_units(site, Default::default());
         if let Some(owner) = owner {
             self.earn(owner, amber as i64, fish as i64);
         }
@@ -933,8 +982,8 @@ impl Scene {
         if !self.is_own(&self.objects[i]) || self.objects[i].ship.is_none() {
             return Err("Choose one of your ships".into());
         }
-        let mut stock = self.garrison(site);
-        if stock.get(item as usize).is_none_or(|&n| n == 0) {
+        let mut stock = self.stock_units(site);
+        if stock.get(item as usize).is_none_or(|u| u.is_empty()) {
             return Err("None left".into());
         }
         let kind = self.objects[i].ship.as_ref().unwrap().kind;
@@ -960,17 +1009,12 @@ impl Scene {
             ship.task = Some(Task::Fetch { site, item });
             return Ok(());
         }
-        let obj = &mut self.objects[i];
-        let (Some(ship), Some(fight)) = (obj.ship.as_mut(), obj.combat.as_mut()) else {
+        if self.objects[i].combat.is_none() {
             return Err("Not a ship".into());
-        };
-        if item < 3 {
-            ship.crew.squads[item as usize] += 1;
-        } else {
-            fight.weapons.push(item);
         }
-        stock[item as usize] -= 1;
-        self.garrisons.insert(site, stock);
+        let condition = stock[item as usize].remove(0);
+        self.objects[i].add_unit(item, condition);
+        self.set_stock_units(site, stock);
         Ok(())
     }
 
@@ -999,10 +1043,7 @@ impl Scene {
         let room = combat::capacity(kind);
         let mut n = 0;
         for site in sites {
-            let mut stock = self.garrison(site);
-            let obj = &mut self.objects[i];
-            let crew = &mut obj.ship.as_mut().unwrap().crew;
-            let weapons = &mut obj.combat.as_mut().unwrap().weapons;
+            let mut stock = self.stock_units(site);
             // The heaviest weapons first, then swordsmen, the strongest
             // boarders, and the other marines.
             let order = (3..9u8)
@@ -1010,17 +1051,20 @@ impl Scene {
                 .filter(|_| combat::carries_weapons(kind))
                 .chain((0..3).rev());
             for item in order {
-                let free = room.saturating_sub(combat::load(crew, weapons));
-                let take = (free / combat::item_size(item)).min(stock[item as usize]);
-                if item < 3 {
-                    crew.squads[item as usize] += take;
-                } else {
-                    weapons.extend(std::iter::repeat_n(item, take as usize));
+                let obj = &self.objects[i];
+                let load = combat::load(
+                    &obj.ship.as_ref().unwrap().crew,
+                    &obj.combat.as_ref().unwrap().weapons,
+                );
+                let free = room.saturating_sub(load);
+                let units = &mut stock[item as usize];
+                let take = ((free / combat::item_size(item)) as usize).min(units.len());
+                for c in units.drain(..take) {
+                    self.objects[i].add_unit(item, c);
                 }
-                stock[item as usize] -= take;
-                n += take;
+                n += take as u32;
             }
-            self.garrisons.insert(site, stock);
+            self.set_stock_units(site, stock);
             // Heroes waiting there come aboard, as many as there is room
             // for.
             let obj = &mut self.objects[i];

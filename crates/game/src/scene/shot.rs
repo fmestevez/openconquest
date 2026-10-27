@@ -104,6 +104,8 @@ pub struct Shot {
     /// The blow to the hull and to the crew it carries.
     damage: f32,
     wounds: f32,
+    /// The weapons' part, in the units' points.
+    wear: f32,
     /// Seconds flown, and how long the flight lasts.
     age: f32,
     flight: f32,
@@ -179,6 +181,8 @@ pub struct SavedShot {
     strikes: bool,
     damage: f32,
     wounds: f32,
+    #[serde(default)]
+    wear: f32,
     age: f32,
     flight: f32,
     apex: f32,
@@ -195,6 +199,7 @@ impl Shot {
             strikes: self.strikes,
             damage: self.damage,
             wounds: self.wounds,
+            wear: self.wear,
             age: self.age,
             flight: self.flight,
             apex: self.apex,
@@ -212,6 +217,7 @@ impl Shot {
             strikes: s.strikes,
             damage: s.damage,
             wounds: s.wounds,
+            wear: s.wear,
             age: s.age,
             flight: s.flight,
             apex: s.apex,
@@ -239,6 +245,7 @@ pub(super) struct Firing {
     pub strikes: bool,
     pub damage: f32,
     pub wounds: f32,
+    pub wear: f32,
 }
 
 impl Scene {
@@ -296,6 +303,7 @@ impl Scene {
             strikes: f.strikes,
             damage: f.damage,
             wounds: f.wounds,
+            wear: f.wear,
             age: 0.0,
             flight,
             apex,
@@ -364,9 +372,12 @@ impl Scene {
             let pick = choices[self.gull_rng.next() as usize % choices.len()];
             self.sounds.push((pick, s.to.0, s.to.1));
         }
+        // The hull's share first, then the crew's and the weapons'
+        // (0x4bf170).
         if target.is_some() {
-            self.wound(s.target, s.wounds);
             self.strike(s.target, s.damage, false, data, caches);
+            self.wound(s.target, s.wounds);
+            self.wear(s.target, s.wear);
         }
     }
 }

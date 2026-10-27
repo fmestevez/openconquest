@@ -332,6 +332,11 @@ pub struct Scene {
     pub free_casts: std::collections::BTreeMap<Spell, u32>,
     /// Buildings being repaired by a settlement or town.
     pub mending: Vec<u32>,
+    /// The conditions of each settlement's stock units by item, in their
+    /// order (kept as long as `garrisons` counts; see `stock_units`).
+    pub stock_conditions: std::collections::BTreeMap<u32, [Vec<u8>; 9]>,
+    /// Settlements mending their stock (state 2, 0x441ba0).
+    pub stock_repairs: Vec<repair::StockRepair>,
     /// Fractions of amber owed for repairs, per player.
     pub repair_owed: std::collections::BTreeMap<(u32, u32), f32>,
     /// Ships under a siren's song (not saved), and seconds until each
@@ -385,7 +390,7 @@ mod creatures;
 mod gulls;
 pub mod load;
 mod orders;
-mod repair;
+pub mod repair;
 mod sheep;
 mod shot;
 mod sight;
@@ -407,6 +412,7 @@ pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use flyers::{Flyer, Nest};
 pub use load::{Cargo, Entry, LoadLink};
 pub use order::Order;
+pub use repair::StockRepair;
 pub use stats::Stats;
 pub use story::{goal_name, Carry, Goal};
 pub use walkers::{walker_frame_ms, walker_sequence, Walker};
@@ -548,6 +554,8 @@ impl Scene {
             gorgons: HashMap::new(),
             sea_monsters: HashMap::new(),
             mending: Vec::new(),
+            stock_conditions: Default::default(),
+            stock_repairs: Vec::new(),
             free_casts: Default::default(),
             creature_clock: 0.0,
             wizards: BTreeMap::new(),
@@ -714,6 +722,8 @@ impl Scene {
             sight: self.sight.iter().map(|&s| s as u8).collect(),
             research: self.research.clone(),
             mending: self.mending.clone(),
+            stock_conditions: self.stock_conditions.clone(),
+            stock_repairs: self.stock_repairs.clone(),
             free_casts: self
                 .free_casts
                 .iter()
@@ -808,6 +818,8 @@ impl Scene {
         scene.update_sight();
         scene.research = save.research.clone();
         scene.mending = save.mending.clone();
+        scene.stock_conditions = save.stock_conditions.clone();
+        scene.stock_repairs = save.stock_repairs.clone();
         scene.delivered = save.delivered.clone();
         scene.held = save.held.clone();
         scene.fittings = save.fittings.iter().cloned().collect();
@@ -1245,6 +1257,7 @@ impl Scene {
     }
 
     pub fn update(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+        self.sync_units();
         self.move_shoals(dt);
         self.move_gulls(dt);
         self.run_wakes(dt);

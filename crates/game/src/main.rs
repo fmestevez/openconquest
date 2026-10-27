@@ -567,9 +567,7 @@ fn train(
     let home = scene
         .objects
         .iter()
-        .filter(|o| {
-            scene.is_own(o) && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
-        })
+        .filter(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN)))
         .min_by(|a, b| near(a).total_cmp(&near(b)))?;
     let (home, cell) = (home.id, home.cell?);
     scene.amber += 10_000;

@@ -287,6 +287,16 @@ pub struct Ship {
     /// This is the Argo (a royal ship built with "Build Argo", 0x7d).
     #[serde(default)]
     pub argo: bool,
+    /// Each marine's and weapon's condition in percent, by item 0-8, in
+    /// their order (ship `+0x299`, eight u32 per item; record fields
+    /// 29-100). Kept as long as the units counted by `crew` and the
+    /// weapons: missing ones are whole (`MapObject::units`).
+    #[serde(default)]
+    pub conditions: [Vec<u8>; 9],
+    /// The Cup's and the Fleece's healing counts (0x4b98b0): every 1000
+    /// heals a point.
+    #[serde(default)]
+    pub healing: [f32; 2],
 }
 
 /// A warship's behaviour switches (ship byte +0x684 bits 0-2 and +0x633;
@@ -484,6 +494,122 @@ pub const SHIP_FURL_SECONDS: f32 = 5.0 * crate::clock::TICK;
 const SHIP_FURL_FRAMES: usize = 88;
 
 impl MapObject {
+    /// How many units of each item 0-8 a ship carries: its marines and
+    /// its weapons.
+    pub fn unit_counts(&self) -> [usize; 9] {
+        let mut n = [0; 9];
+        if let Some(s) = &self.ship {
+            for (n, &q) in n.iter_mut().zip(&s.crew.squads) {
+                *n = q as usize;
+            }
+        }
+        if let Some(c) = &self.combat {
+            for &w in &c.weapons {
+                if (3..9).contains(&w) {
+                    n[w as usize] += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// A ship's units' conditions by item, as many as it carries (units
+    /// added since are whole; those gone are the last).
+    pub fn units(&mut self) -> Option<&mut [Vec<u8>; 9]> {
+        let n = self.unit_counts();
+        let s = self.ship.as_mut()?;
+        for (c, n) in s.conditions.iter_mut().zip(n) {
+            c.resize(n, 100);
+        }
+        Some(&mut s.conditions)
+    }
+
+    /// The conditions of a ship's units by item, without changing it.
+    pub fn unit_conditions(&self) -> [Vec<u8>; 9] {
+        let n = self.unit_counts();
+        let mut out: [Vec<u8>; 9] = Default::default();
+        if let Some(s) = &self.ship {
+            for (k, o) in out.iter_mut().enumerate() {
+                *o = s.conditions[k].clone();
+                o.resize(n[k], 100);
+            }
+        }
+        out
+    }
+
+    /// Removes a ship's units at condition 0 (0x4bc6c0).
+    pub fn drop_broken_units(&mut self) {
+        let Some(units) = self.units() else {
+            return;
+        };
+        let mut gone = [0u32; 9];
+        for (k, u) in units.iter_mut().enumerate() {
+            let before = u.len();
+            u.retain(|&c| c > 0);
+            gone[k] = (before - u.len()) as u32;
+        }
+        for (k, &g) in gone.iter().enumerate() {
+            for _ in 0..g {
+                self.remove_unit(k as u8);
+            }
+        }
+    }
+
+    /// Takes one unit of item `item` off a ship's count (its condition is
+    /// the caller's).
+    fn remove_unit(&mut self, item: u8) {
+        if item < 3 {
+            if let Some(s) = self.ship.as_mut() {
+                s.crew.squads[item as usize] = s.crew.squads[item as usize].saturating_sub(1);
+            }
+        } else if let Some(c) = self.combat.as_mut() {
+            if let Some(p) = c.weapons.iter().rposition(|&w| w == item) {
+                c.weapons.remove(p);
+            }
+        }
+    }
+
+    /// Takes unit `index` of item `item` off a ship; its condition.
+    pub fn take_unit(&mut self, item: u8, index: usize) -> Option<u8> {
+        let units = self.units()?;
+        let list = units.get_mut(item as usize)?;
+        if index >= list.len() {
+            return None;
+        }
+        let c = list.remove(index);
+        self.remove_unit(item);
+        Some(c)
+    }
+
+    /// Puts a unit of item `item` at condition `condition` aboard a ship,
+    /// last of its item.
+    pub fn add_unit(&mut self, item: u8, condition: u8) {
+        if self.units().is_none() || item >= 9 {
+            return;
+        }
+        if item < 3 {
+            self.ship.as_mut().unwrap().crew.squads[item as usize] += 1;
+        } else if let Some(c) = self.combat.as_mut() {
+            c.weapons.push(item);
+        } else {
+            return;
+        }
+        self.ship.as_mut().unwrap().conditions[item as usize].push(condition);
+    }
+
+    /// The mean condition of a ship's units of item `item` (0x4bc360,
+    /// `+0x419`), 100 for others.
+    pub fn mean_condition(&self, item: u8) -> u32 {
+        if self.ship.is_none() || item >= 9 {
+            return 100;
+        }
+        let u = &self.unit_conditions()[item as usize];
+        if u.is_empty() {
+            return 100;
+        }
+        u.iter().map(|&c| c as u32).sum::<u32>() / u.len() as u32
+    }
+
     pub fn is_armed(&self) -> bool {
         !self.shooters().is_empty()
     }
@@ -995,6 +1121,16 @@ pub fn resolve(
         treasures: Vec::new(),
         heroes: Vec::new(),
         argo: false,
+        // Fields 29-100: each unit's condition, eight per item (the
+        // loader 0x4dfe00); as many count as the ship carries.
+        conditions: std::array::from_fn(|k| {
+            rec.fields
+                .get(29 + k * 8..37 + k * 8)
+                .map_or(Vec::new(), |c| {
+                    c.iter().map(|&v| v.min(100) as u8).collect()
+                })
+        }),
+        healing: [0.0; 2],
     });
     let combat = crate::combat::Combatant::from_record(rec, class);
     // Deposits: amber holds field 4 x 100 units; a negative amount starts

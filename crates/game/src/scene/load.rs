@@ -52,12 +52,13 @@ const SETTLEMENT_STORE: usize = 50;
 pub type Fittings = (Vec<u8>, Vec<u8>);
 
 /// What moves or is thrown away: one marine squad or weapon (`item` as in
-/// `combat::ITEM_NAMES`), armour or a ram of a level, the treasure at
+/// `combat::ITEM_NAMES`, and its index among the holder's of its item:
+/// entry bytes 2-5), armour or a ram of a level, the treasure at
 /// `index` among its holder's (its kind to check), a hero, or a merchant's
 /// last slot of goods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Cargo {
-    Unit(u8),
+    Unit(u8, u8),
     Armour(u8),
     Ram(u8),
     Treasure { index: u8, kind: u8 },
@@ -174,9 +175,10 @@ pub fn treasure_picture(kind: u8) -> u8 {
     }
 }
 
-/// What came out of a holder, on its way to the other.
+/// What came out of a holder, on its way to the other: a unit with its
+/// condition (the entry's bar, message 0x10ac +0xc).
 enum Payload {
-    Unit(u8),
+    Unit(u8, u8),
     Armour(u8),
     Ram(u8),
     Treasure(Treasure),
@@ -375,16 +377,18 @@ impl Scene {
             }
             return list;
         }
-        let stock = self.garrison(id);
+        let stock = self.stock_units(id);
         let have = |n: usize| if n > 0 { PRESENT } else { EMPTY };
         let mut list = vec![Entry::new(0, 0, 0); 11];
         for item in 0..9u8 {
-            let n = stock[item as usize];
+            let units = &stock[item as usize];
+            let n = units.len() as u32;
             let mut e = Entry::new(UNIT, item, have(n as usize));
             e.count = n;
-            if n > 0 {
-                e.bar = Some(100);
-                e.cargo = Some(Cargo::Unit(item));
+            // The place's bar is its first unit's condition (0x43c570).
+            if let Some(&c) = units.first() {
+                e.bar = Some(c);
+                e.cargo = Some(Cargo::Unit(item, 0));
             }
             list[item as usize + item as usize / 3] = e;
         }
@@ -407,18 +411,19 @@ impl Scene {
         let o = &self.objects[i];
         let ship = o.ship.as_ref().unwrap();
         let kind = ship.kind as usize % 12;
-        let weapons = o.combat.as_ref().map_or(&[][..], |c| c.weapons.as_slice());
+        let units = o.unit_conditions();
         let mut list = Vec::new();
-        let unit = |item: u8| {
+        // Each unit with its condition as its bar (0x4e5e40).
+        let unit = |item: u8, index: usize| {
             let mut e = Entry::new(UNIT, item, PRESENT);
-            e.bar = Some(100);
-            e.cargo = Some(Cargo::Unit(item));
+            e.bar = Some(units[item as usize][index]);
+            e.cargo = Some(Cargo::Unit(item, index as u8));
             e
         };
         if kind <= 1 {
             for item in 0..3u8 {
-                for _ in 0..ship.crew.squads[item as usize] {
-                    list.push(unit(item));
+                for k in 0..units[item as usize].len() {
+                    list.push(unit(item, k));
                 }
             }
             if let Some(goods) = ship.cargo_kind.filter(|_| ship.cargo > 0.0) {
@@ -442,13 +447,8 @@ impl Scene {
         } else {
             let mut room = 0;
             for item in 0..9u8 {
-                let n = if item < 3 {
-                    ship.crew.squads[item as usize] as usize
-                } else {
-                    weapons.iter().filter(|&&w| w == item).count()
-                };
-                for _ in 0..n {
-                    list.push(unit(item));
+                for k in 0..units[item as usize].len() {
+                    list.push(unit(item, k));
                     room += combat::item_size(item) as usize;
                 }
             }
@@ -537,7 +537,7 @@ impl Scene {
         }
         self.can_give(from, cargo)?;
         self.can_take(to, from, cargo)?;
-        let payload = self.take_out(from, cargo, None, data, caches)?;
+        let payload = self.take_out(from, cargo, false, None, data, caches)?;
         self.put_in(to, from, payload);
         Ok(())
     }
@@ -565,7 +565,7 @@ impl Scene {
         let i = self.object_index(id).unwrap();
         let at = (self.objects[i].x, self.objects[i].y);
         let overboard = self.objects[i].ship.is_some().then_some(at);
-        self.take_out(id, cargo, overboard, data, caches)?;
+        self.take_out(id, cargo, true, overboard, data, caches)?;
         Ok(())
     }
 
@@ -601,10 +601,11 @@ impl Scene {
             if s.kind == 11 {
                 return Err("The Argo's places are locked".into());
             }
-            let weapons = o.combat.as_ref().map_or(&[][..], |c| c.weapons.as_slice());
+            let units = o.unit_conditions();
             let ok = match cargo {
-                Cargo::Unit(k) if k < 3 => s.crew.squads[k as usize] > 0,
-                Cargo::Unit(k) => weapons.contains(&k) && k < 9,
+                Cargo::Unit(k, index) => units
+                    .get(k as usize)
+                    .is_some_and(|u| (index as usize) < u.len()),
                 Cargo::Armour(l) => l > 0 && s.armour == l,
                 Cargo::Ram(l) => l > 0 && s.ram == l,
                 Cargo::Treasure { index, kind } => s
@@ -618,7 +619,7 @@ impl Scene {
         }
         let (armour, rams) = self.fittings.get(&id).cloned().unwrap_or_default();
         let ok = match cargo {
-            Cargo::Unit(k) => self.garrison(id).get(k as usize).is_some_and(|&n| n > 0),
+            Cargo::Unit(k, _) => self.garrison(id).get(k as usize).is_some_and(|&n| n > 0),
             Cargo::Armour(l) => armour.contains(&l),
             Cargo::Ram(l) => rams.contains(&l),
             Cargo::Treasure { index, kind } => self
@@ -644,6 +645,10 @@ impl Scene {
         let Some(s) = &o.ship else {
             return match cargo {
                 Cargo::Goods => Err("Goods are unloaded with Unload".into()),
+                // Not while it mends its stock (0x440d40).
+                Cargo::Unit(..) if self.stock_repair_at(to).is_some() => {
+                    Err("The settlement is repairing its stock".into())
+                }
                 Cargo::Treasure { kind, .. } if kind >= 8 => {
                     if self.held_by(to).len() < SETTLEMENT_STORE {
                         Ok(())
@@ -662,7 +667,7 @@ impl Scene {
         let weapons = o.combat.as_ref().map_or(&[][..], |c| c.weapons.as_slice());
         let cargo_slots = (s.cargo / 100.0).ceil() as u32;
         match cargo {
-            Cargo::Unit(item) if kind <= 1 => {
+            Cargo::Unit(item, _) if kind <= 1 => {
                 if item >= 3 {
                     return Err("This ship carries no weapons".into());
                 }
@@ -671,7 +676,7 @@ impl Scene {
                 }
                 Ok(())
             }
-            Cargo::Unit(item) => {
+            Cargo::Unit(item, _) => {
                 let free =
                     combat::capacity(kind as u8).saturating_sub(combat::load(&s.crew, weapons));
                 if free < combat::item_size(item) {
@@ -741,12 +746,13 @@ impl Scene {
     }
 
     /// Takes `cargo` out of holder `id`: the first unit of a settlement's
-    /// place goes (0x4e7640 direction 0), a thrown away one its last. With
-    /// `overboard` a treasure falls into the sea there.
+    /// place goes (0x4e7640 direction 0), one thrown away (`kill`) its last
+    /// (0x446620). With `overboard` a treasure falls into the sea there.
     fn take_out(
         &mut self,
         id: u32,
         cargo: Cargo,
+        kill: bool,
         overboard: Option<(f32, f32)>,
         data: &GameData,
         caches: &mut Caches,
@@ -754,18 +760,13 @@ impl Scene {
         let i = self.object_index(id).ok_or("No such object")?;
         if self.objects[i].ship.is_some() {
             let o = &mut self.objects[i];
+            if let Cargo::Unit(k, index) = cargo {
+                let c = o.take_unit(k, index as usize).ok_or("It is not there")?;
+                return Ok(Payload::Unit(k, c));
+            }
             let s = o.ship.as_mut().unwrap();
             let payload = match cargo {
-                Cargo::Unit(k) if k < 3 => {
-                    s.crew.squads[k as usize] -= 1;
-                    Payload::Unit(k)
-                }
-                Cargo::Unit(k) => {
-                    let w = &mut o.combat.as_mut().ok_or("No weapons")?.weapons;
-                    let p = w.iter().rposition(|&x| x == k).ok_or("It is not there")?;
-                    w.remove(p);
-                    Payload::Unit(k)
-                }
+                Cargo::Unit(..) => unreachable!(),
                 Cargo::Armour(l) => {
                     s.armour = 0;
                     Payload::Armour(l)
@@ -800,11 +801,17 @@ impl Scene {
             return Ok(payload);
         }
         Ok(match cargo {
-            Cargo::Unit(k) => {
-                let mut stock = self.garrison(id);
-                stock[k as usize] -= 1;
-                self.garrisons.insert(id, stock);
-                Payload::Unit(k)
+            Cargo::Unit(k, _) => {
+                let mut stock = self.stock_units(id);
+                let units = &mut stock[k as usize];
+                let c = if kill {
+                    units.pop()
+                } else {
+                    (!units.is_empty()).then(|| units.remove(0))
+                }
+                .ok_or("It is not there")?;
+                self.set_stock_units(id, stock);
+                Payload::Unit(k, c)
             }
             Cargo::Armour(l) | Cargo::Ram(l) => {
                 let f = self.fittings.entry(id).or_default();
@@ -856,15 +863,14 @@ impl Scene {
         };
         if self.objects[i].ship.is_some() {
             let o = &mut self.objects[i];
+            if let Payload::Unit(k, c) = payload {
+                o.add_unit(k, c);
+                return;
+            }
             let s = o.ship.as_mut().unwrap();
             let mut back = None;
             match payload {
-                Payload::Unit(k) if k < 3 => s.crew.squads[k as usize] += 1,
-                Payload::Unit(k) => {
-                    if let Some(c) = o.combat.as_mut() {
-                        c.weapons.push(k);
-                    }
-                }
+                Payload::Unit(..) => unreachable!(),
                 Payload::Armour(l) => {
                     if s.armour > 0 {
                         back = Some(Payload::Armour(s.armour));
@@ -890,10 +896,10 @@ impl Scene {
             return;
         }
         match payload {
-            Payload::Unit(k) => {
-                let mut stock = self.garrison(to);
-                stock[k as usize] += 1;
-                self.garrisons.insert(to, stock);
+            Payload::Unit(k, c) => {
+                let mut stock = self.stock_units(to);
+                stock[k as usize].push(c);
+                self.set_stock_units(to, stock);
             }
             Payload::Armour(l) => self.fittings.entry(to).or_default().0.push(l),
             Payload::Ram(l) => self.fittings.entry(to).or_default().1.push(l),

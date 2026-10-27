@@ -22,7 +22,8 @@ pub struct Combatant {
     /// Seconds left burning (unused: kept for older saves).
     #[serde(default)]
     pub burning: f32,
-    /// Wounds of the crew aboard: every `SQUAD_LIFE` costs a squad.
+    /// Unused: kept for older saves (units keep their own conditions,
+    /// `objects::Ship::conditions`).
     #[serde(default)]
     pub wounds: f32,
     /// Seconds left turned to stone by the Gorgon: no moving, no firing.
@@ -216,28 +217,6 @@ impl Crew {
         self.squads.iter().sum()
     }
 
-    /// Takes away the `n`-th squad (counting across kinds).
-    pub fn lose(&mut self, mut n: u32) {
-        for s in &mut self.squads {
-            if n < *s {
-                *s -= 1;
-                return;
-            }
-            n -= *s;
-        }
-    }
-
-    /// The kind of the `n`-th squad.
-    pub fn kind_of(&self, mut n: u32) -> usize {
-        for (k, &s) in self.squads.iter().enumerate() {
-            if n < s {
-                return k;
-            }
-            n -= s;
-        }
-        0
-    }
-
     pub fn describe(&self) -> String {
         let parts: Vec<String> = self
             .squads
@@ -272,8 +251,10 @@ pub struct Rammer {
 }
 
 /// The share of a ram's blow the hull takes, over its share (0x598094:
-/// 150 for every type; the crew's is 40, 0x598090).
+/// 150 for every type), and the crew's (0x598090: 40); the weapons take
+/// theirs (0x4c1ad0).
 pub const RAM_HULL_FACTOR: f32 = 1.5;
+pub const RAM_CREW_FACTOR: f32 = 0.4;
 
 /// The blows of a ram (0x4c1c60), to the rammed ship and to the rammer,
 /// in our units (the original's over 15, see `hull_strength`). The
@@ -573,11 +554,6 @@ pub fn fires(weapon: u8) -> bool {
         && weapon != 2
 }
 
-/// Wound points that cost a crew one squad: a unit's condition, 100
-/// (0x4be410 takes a blow's crew share off the units' conditions, picked
-/// at random by kind, 0x597cfc: 2860, 2990, 3120, nearly alike).
-pub const SQUAD_LIFE: f32 = 100.0;
-
 /// The unique weapon built into a ship type, if any.
 pub fn special_weapon(kind: u8) -> Option<u8> {
     match kind {
@@ -631,22 +607,213 @@ pub fn hull_strength(kind: u8) -> f32 {
     CHART[kind as usize % 12] as f32 * 650.0 / 15.0
 }
 
-/// The share of a blow a ship's hull takes (0x4befc0, shares 0x4beb50):
-/// the type's hull share (0x597ad8) against it with the armour, the ram,
-/// the weapons aboard and the loads of cargo; the rest falls on what is
-/// aboard.
-/// The share of a blow that falls on the crew (0x4befc0): its units
-/// against the same sum as the hull's, which leaves the crew out.
-pub fn crew_share(kind: u8, armour: u8, ram: u8, weapons: usize, loads: u32, crew: u32) -> f32 {
-    const SHARE: [u32; 12] = [7, 10, 21, 18, 10, 12, 6, 6, 3, 4, 2, 4];
-    let hull = SHARE[kind as usize % 12];
-    crew as f32 / (hull + armour as u32 + ram as u32 + weapons as u32 + loads) as f32
+/// A ship's shares of a blow (0x4beb50, ship +0x269..+0x270): its hull
+/// (the type's share, 0x597ad8), its crew (the marines' room), its armour
+/// and ram (their levels), its weapons (their room: items 3-8, 0x4be780
+/// with 0x597cf0), its cargo (loads of goods and, on boats and merchants,
+/// the units carried as cargo, `+0x47f..+0x484`), its treasures and its
+/// heroes. A blow (0x4befc0, a shot's 0x4bf170, a ram's 0x4c1ad0) falls on
+/// the hull, the crew and the weapons each by its share against the sum of
+/// all but the crew's; what the other shares take is lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shares {
+    pub hull: u32,
+    pub crew: u32,
+    pub weapons: u32,
+    pub sum: u32,
 }
 
-pub fn hull_share(kind: u8, armour: u8, ram: u8, weapons: usize, loads: u32) -> f32 {
-    const SHARE: [u32; 12] = [7, 10, 21, 18, 10, 12, 6, 6, 3, 4, 2, 4];
-    let hull = SHARE[kind as usize % 12];
-    hull as f32 / (hull + armour as u32 + ram as u32 + weapons as u32 + loads) as f32
+impl Shares {
+    pub fn of(ship: &crate::objects::Ship, weapons: &[u8]) -> Self {
+        const HULL: [u32; 12] = [7, 10, 21, 18, 10, 12, 6, 6, 3, 4, 2, 4];
+        let kind = ship.kind as usize % 12;
+        let hull = HULL[kind];
+        // Boats and merchants carry their marines as cargo (`+0x4e5`).
+        let marines = ship.crew.count();
+        let (crew, as_cargo) = if kind <= 1 {
+            (0, marines)
+        } else {
+            (marines, 0)
+        };
+        let weapons: u32 = weapons
+            .iter()
+            .filter(|&&w| (3..9).contains(&w))
+            .map(|&w| item_size(w))
+            .sum();
+        let loads = (ship.cargo / 100.0).ceil().max(0.0) as u32;
+        let sum = hull
+            + ship.armour as u32
+            + ship.ram as u32
+            + weapons
+            + loads
+            + as_cargo
+            + ship.treasures.len() as u32
+            + ship.heroes.len() as u32;
+        Self {
+            hull,
+            crew,
+            weapons,
+            sum,
+        }
+    }
+
+    /// The part of `blow` falling on the hull.
+    pub fn hull_part(&self, blow: f32) -> f32 {
+        blow * self.hull as f32 / self.sum.max(1) as f32
+    }
+
+    pub fn crew_part(&self, blow: f32) -> f32 {
+        blow * self.crew as f32 / self.sum.max(1) as f32
+    }
+
+    pub fn weapons_part(&self, blow: f32) -> f32 {
+        blow * self.weapons as f32 / self.sum.max(1) as f32
+    }
+}
+
+/// A unit's full strength by item (0x597cfc): its condition is kept in
+/// percent of it (ship `+0x299`, eight u32 per item).
+pub const UNIT_POINTS: [u32; 9] = [2860, 2990, 3120, 5450, 5590, 5720, 8840, 9360, 9100];
+
+/// What a shot's blow does to the hull, in percent, by item (0x597fd8 by
+/// the shot's kind): marines' shots spare it.
+pub fn hull_percent(item: u8) -> u32 {
+    if item < 3 {
+        0
+    } else {
+        100
+    }
+}
+
+/// The crew's part of a shot's blow (0x4ac1b0 at level 0): by the B over
+/// the A of the shot's row of 0x597d2c, as is for a row without A. The
+/// unique ships' shots have rows of their own: Greek fire row 12 (650,
+/// 300), quick lime row 13 (no A).
+pub fn crew_scale(item: u8) -> f32 {
+    match item {
+        GREEK_FIRE => 300.0 / 650.0,
+        QUICKLIME => 1.0,
+        _ => {
+            let a = hull_damage_at(item, 0);
+            if a == 0.0 {
+                1.0
+            } else {
+                crew_damage_at(item, 0) / a
+            }
+        }
+    }
+}
+
+/// Takes `blow` (in the units' points) off the units of items `items`
+/// (0x4be410 marines 0-2, 0x4be110 weapons 3-8), whose conditions are in
+/// `units` by item: the units are laid out at random (each at a random
+/// place, the next free one if taken), one is picked at random weighted by
+/// its points, and the blow comes off it; a unit it breaks takes twice its
+/// points less the blow (as the original reckons) and the rest spills over
+/// to the next places in turn. The last unit standing is never broken: its
+/// condition is left as it was. A broken unit's condition is 0, or 10 for a
+/// boat's or merchant's weapon (`small`). Returns whether any unit is at 0.
+pub fn unit_blow(
+    units: &mut [Vec<u8>; 9],
+    items: std::ops::Range<usize>,
+    blow: u32,
+    small: bool,
+    rng: &mut Rng,
+) -> bool {
+    let n: usize = items.clone().map(|k| units[k].len()).sum();
+    if n == 0 {
+        return false;
+    }
+    // (item, index, points, touched)
+    let mut places: Vec<Option<(usize, usize, i64, bool)>> = vec![None; n];
+    let mut total: i64 = 0;
+    for k in items {
+        for (j, &c) in units[k].iter().enumerate() {
+            let pts = c as i64 * UNIT_POINTS[k] as i64 / 100;
+            total += pts;
+            let mut p = rng.next() as usize % n;
+            for _ in 0..n {
+                if places[p].is_none() {
+                    break;
+                }
+                p = (p + 1) % n;
+            }
+            places[p] = Some((k, j, pts, false));
+        }
+    }
+    if total == 0 {
+        return false;
+    }
+    let pts = |places: &Vec<Option<(usize, usize, i64, bool)>>, i: usize| places[i].unwrap().2;
+    let set =
+        |places: &mut Vec<Option<(usize, usize, i64, bool)>>, i: usize, v: i64, mark: bool| {
+            let p = places[i].as_mut().unwrap();
+            p.2 = v;
+            p.3 |= mark;
+        };
+    let r = (rng.next() as i64) % total;
+    let mut sum = 0;
+    let mut i = 0;
+    while i < n {
+        sum += pts(&places, i);
+        if r <= sum {
+            break;
+        }
+        i += 1;
+    }
+    if i < n {
+        let blow = blow as i64;
+        let left = pts(&places, i) - blow;
+        if left >= 0 {
+            set(&mut places, i, left, true);
+        } else {
+            let mut broken = 0;
+            let mut v = pts(&places, i) + left;
+            if v <= 0 {
+                v = 0;
+                broken = 1;
+            }
+            set(&mut places, i, v, false);
+            if broken < n {
+                set(&mut places, i, v, true);
+                let mut over = -left;
+                let mut count = 0;
+                loop {
+                    i = (i + 1) % n;
+                    let left = pts(&places, i) - over;
+                    if left >= 0 {
+                        set(&mut places, i, left, true);
+                        break;
+                    }
+                    let mut v = pts(&places, i) + left;
+                    if v <= 0 {
+                        v = 0;
+                        broken += 1;
+                    }
+                    set(&mut places, i, v, false);
+                    if broken >= n {
+                        break;
+                    }
+                    over = -left;
+                    count += 1;
+                    set(&mut places, i, v, true);
+                    if count >= n {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let mut any = false;
+    for &(k, j, v, touched) in places.iter().flatten() {
+        if !touched {
+            continue;
+        }
+        let c = (v * 100 / UNIT_POINTS[k] as i64) as u8;
+        units[k][j] = if c == 0 && small { 10 } else { c };
+        any |= units[k][j] == 0;
+    }
+    any
 }
 
 /// Rate of fire per item and level (0x597a3c, item x 3 + level; the
@@ -1170,25 +1337,55 @@ mod tests {
     }
 
     #[test]
-    fn crews_lose_squads_in_order() {
-        let mut crew = Crew {
+    fn blows_wear_units_down() {
+        let crew = Crew {
             class: 0,
             squads: [1, 0, 2],
         };
-        assert_eq!(
-            (
-                crew.count(),
-                crew.kind_of(0),
-                crew.kind_of(1),
-                crew.kind_of(2)
-            ),
-            (3, 0, 2, 2)
-        );
-        crew.lose(0);
-        assert_eq!(crew.squads, [0, 0, 2]);
-        crew.lose(1);
-        assert_eq!(crew.squads, [0, 0, 1]);
-        assert_eq!(crew.describe(), "1 swordsmen");
+        assert_eq!(crew.describe(), "1 bowmen, 2 swordsmen");
+        // A light blow wears one unit: 1000 of a swordsman's 3120 points
+        // leave 67% (or 65% of a bowman's 2860).
+        let mut units: [Vec<u8>; 9] = Default::default();
+        units[0] = vec![100];
+        units[2] = vec![100, 100];
+        let mut rng = Rng(7);
+        assert!(!unit_blow(&mut units, 0..3, 1000, false, &mut rng));
+        let mut worn: Vec<u8> = units.iter().flatten().copied().collect();
+        worn.sort();
+        assert!(worn == [65, 100, 100] || worn == [67, 100, 100], "{worn:?}");
+        // A unit broken takes twice its points less the blow, and the rest
+        // spills over to the next: a lone unit is never broken.
+        let mut units: [Vec<u8>; 9] = Default::default();
+        units[6] = vec![50];
+        assert!(!unit_blow(&mut units, 3..9, 100_000, false, &mut rng));
+        assert_eq!(units[6], [50]);
+        // Two units under a crushing blow: the first broken, the other
+        // spared as the last standing.
+        let mut units: [Vec<u8>; 9] = Default::default();
+        units[3] = vec![100, 100];
+        assert!(unit_blow(&mut units, 3..9, 100_000, false, &mut rng));
+        let mut left = units[3].clone();
+        left.sort();
+        assert_eq!(left, [0, 100]);
+        // A boat's or merchant's weapon is left at 10 instead.
+        let mut units: [Vec<u8>; 9] = Default::default();
+        units[4] = vec![100, 100];
+        assert!(!unit_blow(&mut units, 3..9, 100_000, true, &mut rng));
+        let mut left = units[4].clone();
+        left.sort();
+        assert_eq!(left, [10, 100]);
+        // A worn unit (2725 points) picked by a 4000 blow keeps twice its
+        // points less the blow, 1450 (26%), and the other (5450) takes the
+        // 1275 over (76%); picked second, it is left alone and the whole
+        // one takes the blow (26%).
+        for seed in 0..20 {
+            let mut u: [Vec<u8>; 9] = Default::default();
+            u[3] = vec![50, 100];
+            unit_blow(&mut u, 3..9, 4000, false, &mut Rng(seed));
+            let mut left = u[3].clone();
+            left.sort();
+            assert!(left == [26, 76] || left == [26, 50], "{left:?}");
+        }
     }
 
     #[test]
