@@ -1524,7 +1524,9 @@ impl Scene {
                 }
                 // It casts off once its porters are back aboard.
                 let id = self.objects[i].id;
-                if self.porters.iter().any(|p| p.ship == id) {
+                if self.porters.iter().any(|p| p.ship == id)
+                    || self.planks.iter().any(|p| p.ship == id && p.trips % 2 == 1)
+                {
                     return;
                 }
                 let ship = self.objects[i].ship.as_mut().unwrap();

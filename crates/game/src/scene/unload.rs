@@ -1,8 +1,8 @@
 //! What merchants are shown doing (Run_Ship.cpp, 0x4e1bb0): unloading at
 //! a port or settlement they lay a walkway to the shore (the composite
-//! `MOST0_`, one layer per facing) and
-//! porters (`NOSIL_<loaded><0><heading>`) carry the goods to the building
-//! and walk back, while the cargo comes in little by little; gathering
+//! `MOST0_`, one layer per facing) and porters
+//! (`NOSIL_<loaded><0><heading>`) walk it, laden ashore and back empty,
+//! while the cargo comes in little by little; gathering
 //! amber, a walkway to the deposit (`AMOST_<facing>`) with porters bringing
 //! it aboard (`ANOSIL_<facing>`); fishing, their net (`SETKA_<facing>`).
 //! All only shown; the goods are counted by the ship's task.
@@ -14,10 +14,128 @@ use crate::objects::{self, Caches, Layer};
 /// Units of cargo unloaded a second. An estimate (the original's looked
 /// slower than our first 100).
 pub const UNLOAD_RATE: f32 = 40.0;
-/// Seconds between porters setting out, and how fast they walk (world
-/// pixels a second). Placeholders.
-const PORTER_EVERY: f32 = 1.2;
-const PORTER_SPEED: f32 = 40.0;
+/// Where the unloading walkway lies: its picture's top-left from the
+/// top-left of the ship's frame, by ship type, side (see `walkway_side`)
+/// and facing (0x59a8e8, 0x4adef0 state 0xb). Types 4-11 share a row.
+const WALKWAY_AT: [[[(i8, i8); 8]; 2]; 5] = [
+    [
+        [
+            (19, 5),
+            (25, -8),
+            (3, -33),
+            (-13, -14),
+            (-29, 5),
+            (-6, 14),
+            (1, 7),
+            (10, 10),
+        ],
+        [
+            (19, 5),
+            (25, -8),
+            (19, -33),
+            (-13, -14),
+            (-29, 5),
+            (-6, 14),
+            (26, 12),
+            (10, 18),
+        ],
+    ],
+    [
+        [
+            (20, 8),
+            (29, -3),
+            (10, -29),
+            (-10, 0),
+            (-26, 12),
+            (-2, 20),
+            (1, 18),
+            (14, 17),
+        ],
+        [
+            (23, 8),
+            (29, -3),
+            (20, -29),
+            (-10, 0),
+            (-26, 12),
+            (-2, 20),
+            (28, 18),
+            (14, 17),
+        ],
+    ],
+    [
+        [
+            (31, 17),
+            (33, 2),
+            (7, -21),
+            (-6, 3),
+            (-22, 17),
+            (8, 22),
+            (10, 29),
+            (22, 26),
+        ],
+        [
+            (31, 17),
+            (32, 2),
+            (37, -21),
+            (-6, 3),
+            (-22, 17),
+            (8, 22),
+            (33, 29),
+            (22, 26),
+        ],
+    ],
+    [
+        [
+            (31, 17),
+            (33, 2),
+            (7, -21),
+            (-6, 3),
+            (-22, 17),
+            (8, 22),
+            (10, 29),
+            (22, 26),
+        ],
+        [
+            (31, 17),
+            (32, 2),
+            (37, -21),
+            (-6, 3),
+            (-22, 17),
+            (8, 22),
+            (33, 29),
+            (22, 26),
+        ],
+    ],
+    [
+        [
+            (22, 13),
+            (28, -3),
+            (9, -25),
+            (-9, -2),
+            (-21, 15),
+            (4, 26),
+            (6, 23),
+            (18, 18),
+        ],
+        [
+            (22, 13),
+            (28, -3),
+            (30, -25),
+            (-9, -2),
+            (-21, 15),
+            (4, 26),
+            (30, 22),
+            (18, 18),
+        ],
+    ],
+];
+
+/// Which of a walkway's two placings a ship on `heading` uses for `facing`
+/// (0x4b8a40).
+fn walkway_side(facing: usize, heading: usize) -> usize {
+    let not = [2, 3, 0, 1][facing % 4];
+    usize::from(heading != not)
+}
 /// Where a fishing ship's net lies: its picture's top-left from the top-left
 /// of the ship's frame, by ship type and heading (0x59afa8; headings four
 /// apart alike).
@@ -39,7 +157,6 @@ const NET_AT: [[(i8, i8); 4]; 12] = [
 /// amber aboard: one a game tick (0x4b0590, 0x4ae760); a load comes aboard
 /// each round.
 const PLANK_FRAME_MS: f32 = crate::clock::TICK_MS as f32;
-const PORTER_FRAME_MS: u64 = 100;
 
 /// What a merchant is shown doing (the ship's activity in Run_Ship.cpp,
 /// 0x4e1bb0).
@@ -66,23 +183,23 @@ pub struct Plank {
     pub frames: Vec<Vec<Layer>>,
     pub looping: Vec<Vec<Layer>>,
     pub age_ms: f32,
-    /// Where porters set out from (the shore end) and go, and the time
-    /// since the last set out.
-    from: (f32, f32),
-    to: (f32, f32),
-    clock: f32,
+    /// The walkway's top-left (porters walk it from there) and facing,
+    /// and how many porter trips it has seen: laden ashore on even ones,
+    /// back empty on odd ones.
+    top_left: (f32, f32),
+    facing: usize,
+    pub trips: u32,
 }
 
-/// A porter walking between a walkway and the building.
+/// A trip of porters over a walkway (0x4adda0): one picture laid on it
+/// (71 by 38), the men walking across it as it plays, a frame a tick.
 pub struct Porter {
     /// The ship whose goods it carries.
     pub ship: u32,
     pub x: f32,
     pub y: f32,
     pub frames: Vec<Vec<Layer>>,
-    from: (f32, f32),
-    to: (f32, f32),
-    loaded: bool,
+    age_ms: f32,
 }
 
 impl Plank {
@@ -115,9 +232,10 @@ impl Plank {
 }
 
 impl Porter {
-    pub fn frame(&self, time_ms: u64) -> Option<&[Layer]> {
-        let n = self.frames.len();
-        (n > 0).then(|| self.frames[(time_ms / PORTER_FRAME_MS) as usize % n].as_slice())
+    /// Its frame, while the trip lasts.
+    pub fn frame(&self, _time_ms: u64) -> Option<&[Layer]> {
+        let f = (self.age_ms / PLANK_FRAME_MS) as usize;
+        self.frames.get(f).map(|l| l.as_slice())
     }
 }
 
@@ -184,6 +302,23 @@ impl Scene {
             }
         };
         let (mut x, mut y) = (sx + ux * reach / 2.0, sy + uy * reach / 2.0);
+        let mut top_left = (x, y);
+        // A walkway to a port lies where the ship type's table puts it for
+        // its facing (0x4adef0, state 0xb); drawn by its middle.
+        if activity == Activity::Unloading {
+            if let (Some(s), Some(l)) = (
+                self.objects[i].ship.as_ref(),
+                frames.last().and_then(|f| f.first()),
+            ) {
+                let k = s.kind as usize % 12;
+                let side = walkway_side(heading, s.heading);
+                let (ox, oy) = WALKWAY_AT[k.min(4)][side][heading];
+                let half = objects::SHIP_FRAME[k] / 2.0;
+                top_left = (sx - half + ox as f32, sy - half + oy as f32);
+                x = top_left.0 + l.image.width as f32 / 2.0;
+                y = top_left.1 + l.image.height as f32 / 2.0;
+            }
+        }
         // The net lies where the ship type's table puts it for its heading
         // (0x4ae760, state 6); drawn by its middle.
         if activity == Activity::Fishing {
@@ -198,7 +333,6 @@ impl Scene {
                 y = sy - half + oy as f32 + l.image.height as f32 / 2.0;
             }
         }
-        let shore = (sx + ux * reach, sy + uy * reach);
         self.planks.push(Plank {
             ship,
             activity,
@@ -207,9 +341,9 @@ impl Scene {
             frames,
             looping,
             age_ms: 0.0,
-            from: shore,
-            to: (bx, by),
-            clock: PORTER_EVERY,
+            top_left,
+            facing: heading,
+            trips: 0,
         });
     }
 
@@ -248,67 +382,56 @@ impl Scene {
             .filter(|o| o.ship.as_ref().is_some_and(|s| s.cargo >= 1.0))
             .map(|o| o.id)
             .collect();
+        // Trips play one after another once the walkway is down: laden
+        // ashore while there are goods aboard, and back empty after each.
+        for p in &mut self.porters {
+            p.age_ms += dt * 1000.0;
+        }
+        self.porters.retain(|p| p.frame(0).is_some());
         let mut new = Vec::new();
         for p in &mut self.planks {
             p.age_ms += dt * 1000.0;
-            p.clock += dt;
-            // Porters start once the walkway is down, while there are
-            // goods to carry.
+            let down = p.age_ms >= p.frames.len() as f32 * p.frame_ms();
+            let busy = self.porters.iter().any(|t| t.ship == p.ship);
+            let back = p.trips % 2 == 1;
             if p.activity == Activity::Unloading
-                && p.age_ms >= p.frames.len() as f32 * p.frame_ms()
-                && p.clock >= PORTER_EVERY
-                && laden.contains(&p.ship)
+                && down
+                && !busy
+                && (back || laden.contains(&p.ship))
             {
-                p.clock = 0.0;
-                new.push((p.ship, p.from, p.to));
+                p.trips += 1;
+                // Laden from the ship towards the shore; empty, the other
+                // way.
+                let heading = if back { (p.facing + 4) % 8 } else { p.facing };
+                new.push((p.ship, p.top_left, !back, heading));
             }
         }
-        for (ship, from, to) in new {
-            let frames = porter_frames(data, caches, true, from, to);
+        for (ship, top_left, loaded, heading) in new {
+            let frames = porter_frames(data, caches, loaded, heading);
+            let (w, h) = frames
+                .iter()
+                .find_map(|f| f.first())
+                .map_or((0.0, 0.0), |l| {
+                    (l.image.width as f32, l.image.height as f32)
+                });
             self.porters.push(Porter {
                 ship,
-                x: from.0,
-                y: from.1,
+                x: top_left.0 + w / 2.0,
+                y: top_left.1 + h / 2.0,
                 frames,
-                from,
-                to,
-                loaded: true,
+                age_ms: 0.0,
             });
-        }
-        let mut done = Vec::new();
-        for (k, p) in self.porters.iter_mut().enumerate() {
-            let (dx, dy) = (p.to.0 - p.x, p.to.1 - p.y);
-            let d = dx.hypot(dy);
-            let step = PORTER_SPEED * dt;
-            if d <= step {
-                if p.loaded {
-                    // Goods delivered: back to the ship, empty-handed.
-                    p.loaded = false;
-                    std::mem::swap(&mut p.from, &mut p.to);
-                    p.frames = porter_frames(data, caches, false, p.from, p.to);
-                } else {
-                    done.push(k);
-                }
-            } else {
-                p.x += dx / d * step;
-                p.y += dy / d * step;
-            }
-        }
-        for k in done.into_iter().rev() {
-            self.porters.remove(k);
         }
     }
 }
 
-/// A porter's walking frames: loaded or not, heading from `from` to `to`.
+/// A porter trip's frames: laden or not, walking `heading`.
 fn porter_frames(
     data: &GameData,
     caches: &mut Caches,
     loaded: bool,
-    from: (f32, f32),
-    to: (f32, f32),
+    heading: usize,
 ) -> Vec<Vec<Layer>> {
-    let heading = heading_towards(to.0 - from.0, to.1 - from.1);
     let name = format!("NOSIL_{}0{heading}", u8::from(loaded));
     let mut frames = objects::sequence_frames(data, caches, &name).unwrap_or_default();
     // The first frame of a walk is empty.
