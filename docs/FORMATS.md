@@ -1348,6 +1348,18 @@ dispatches each member to its handler) last: miss011's handlers are
 0x453b00, miss005 0x457950, miss006 0x45b280, miss007 0x45f770, miss008
 0x463240, miss009 0x4663d0, miss010 0x46a0f0.
 
+Brains exist only in the campaign. When a mission starts (`Players.cpp`
+0x51f680), objects of registered types are created (registry at 0x5c0d00:
+type, constructor), among them always type 0x2427, `Ai\Boss_kib.cpp`
+(0x448e30). That object judges the mission every 250 ticks (0x448d40,
+0x448610): it counts each player's objects and checks the victory
+conditions; it commands nothing. Only for a campaign mission (game +0xd80 =
+1 and +0x3214 = 1) is a brain made, by mission number +0x3215: types
+0x2913f-0x2914c for miss000-miss013, or 0x2928c (`MissWEBClassTy`,
+0x47c910, a scripted variant of miss000) when +0xa81 is 0xddd1. Battles
+and single missions have no brain: computer players' ships and forts
+only act on their own behaviour.
+
 The brains share a small runtime (`missCOM.cpp`, 0x478000-0x47c000). A brain
 has groups of members (`this + 0x2c + group * 0xc` points to the members,
 0xb4 bytes each); each member is a fleet created by 0x479200(group, member,

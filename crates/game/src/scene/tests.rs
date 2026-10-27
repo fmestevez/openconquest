@@ -596,7 +596,10 @@ fn victory_and_defeat() {
         .map(|o| o.id)
         .collect();
     scene.objects.retain(|o| keep.contains(&o.id));
-    scene.update(1.0, &data, &mut caches);
+    // The mission is judged every 250 ticks.
+    for _ in 0..11 {
+        scene.update(1.0, &data, &mut caches);
+    }
     assert!(scene.objective_met(0) && !scene.objective_met(1));
     assert_eq!(scene.outcome, None, "the dragons still live");
     let nest = scene
@@ -606,7 +609,9 @@ fn victory_and_defeat() {
         .unwrap()
         .id;
     scene.hit(nest, 1.0e6, &data, &mut caches);
-    scene.update(1.0, &data, &mut caches);
+    for _ in 0..11 {
+        scene.update(1.0, &data, &mut caches);
+    }
     assert_eq!(scene.outcome, Some(Outcome::Victory));
 
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
@@ -617,50 +622,10 @@ fn victory_and_defeat() {
         .map(|o| o.id)
         .collect();
     scene.objects.retain(|o| !own.contains(&o.id));
-    scene.update(1.0, &data, &mut caches);
+    for _ in 0..11 {
+        scene.update(1.0, &data, &mut caches);
+    }
     assert_eq!(scene.outcome, Some(Outcome::Defeat));
-}
-
-/// Computer players gather and build ships, then attack after the grace
-/// period (needs `OPENCONQUEST_DATA`).
-#[test]
-fn computer_players_build_and_attack() {
-    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
-        return;
-    };
-    let data = GameData::open(std::path::Path::new(&root)).unwrap();
-    let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
-    let persians = (3, 3);
-    let ships = |s: &Scene| {
-        s.objects
-            .iter()
-            .filter(|o| o.owner == Some(persians) && o.ship.is_some())
-            .count()
-    };
-    let funds = scene.funds(persians);
-    for _ in 0..50 * 60 {
-        scene.update(0.02, &data, &mut caches);
-    }
-    assert!(ships(&scene) > 0, "the Persians launched ships");
-    assert!(scene.funds(persians).0 < funds.0, "and paid for them");
-    let attacking = |s: &Scene| {
-        s.objects.iter().any(|o| {
-            o.owner == Some(persians)
-                && matches!(
-                    o.ship.as_ref().and_then(|s| s.task),
-                    Some(Task::Attack { .. })
-                )
-        })
-    };
-    assert!(!attacking(&scene), "no attack during the grace period");
-    for _ in 0..50 * (ai::GRACE_SECONDS as usize) {
-        scene.update(0.02, &data, &mut caches);
-        if attacking(&scene) {
-            break;
-        }
-    }
-    assert!(attacking(&scene), "a wave set out");
 }
 
 /// A workshop builds a ballista and a ship alongside takes it on
@@ -1115,43 +1080,6 @@ fn buildings_fight() {
     assert!(
         ruins.combat.is_none() && ruins.owner.is_none(),
         "the fort was destroyed"
-    );
-}
-
-/// Computer warships attack a human ship that sails close.
-#[test]
-fn computer_ships_attack_intruders() {
-    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
-        return;
-    };
-    let data = GameData::open(std::path::Path::new(&root)).unwrap();
-    let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss009").unwrap();
-    // The stand-in AI, not miss009's brain.
-    scene.brain = None;
-    let enemy = scene
-        .objects
-        .iter()
-        .position(|o| !scene.is_own(o) && o.owner.is_some() && o.ship.is_some() && o.is_armed())
-        .unwrap();
-    let (x, y, enemy) = (
-        scene.objects[enemy].x,
-        scene.objects[enemy].y,
-        scene.objects[enemy].id,
-    );
-    let mine = scene
-        .objects
-        .iter()
-        .position(|o| scene.is_own(o) && o.ship.is_some())
-        .unwrap();
-    scene.objects[mine].x = x + 3.0 * 64.0;
-    scene.objects[mine].y = y;
-    let mine = scene.objects[mine].id;
-    scene.update(0.02, &data, &mut caches);
-    let i = scene.object_index(enemy).unwrap();
-    assert_eq!(
-        scene.objects[i].ship.as_ref().unwrap().task,
-        Some(Task::Attack { target: mine })
     );
 }
 
@@ -2234,7 +2162,7 @@ fn campaign_story() {
     scene
         .objects
         .retain(|o| o.owner.is_none() || o.owner == human || o.owner == Some(combat::MONSTERS));
-    for _ in 0..50 * 4 {
+    for _ in 0..50 * 6 {
         scene.update(0.02, &data, &mut caches);
     }
     assert_eq!(scene.outcome, None);
@@ -2253,7 +2181,8 @@ fn campaign_story() {
             param: 0,
             amount: 0,
         });
-    for _ in 0..50 * 4 {
+    // The brain judges every 125 ticks.
+    for _ in 0..50 * 6 {
         scene.update(0.02, &data, &mut caches);
     }
     assert_eq!(scene.outcome, Some(Outcome::Victory));

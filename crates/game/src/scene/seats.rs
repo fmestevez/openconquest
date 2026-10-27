@@ -62,18 +62,6 @@ impl Scene {
         }
     }
 
-    /// Whether `owner` is one of the human players.
-    pub fn is_seated(&self, owner: Option<(u32, u32)>) -> bool {
-        match owner {
-            Some(o) if self.seats.is_empty() => self.human.is_some_and(|h| (h.nation, h.slot) == o),
-            Some(o) => self
-                .seats
-                .iter()
-                .any(|s| (s.player.nation, s.player.slot) == o),
-            None => false,
-        }
-    }
-
     /// The seat of player `owner`.
     pub fn seat_of(&self, owner: (u32, u32)) -> Option<usize> {
         self.seats

@@ -1225,14 +1225,11 @@ impl Scene {
             self.brain_clock -= crate::clock::TICK;
             self.run_brain();
         }
+        // The mission is judged every 250 ticks (0x448d40), a campaign
+        // mission by its brain every 125.
         self.ai_timer -= dt;
         if self.ai_timer <= 0.0 {
-            self.ai_timer = 1.0;
-            self.run_ai();
-            // Every few seconds the computer players manage their economy.
-            if (self.clock as u32) % ai::ECONOMY_PERIOD == 0 {
-                self.run_computer_economy();
-            }
+            self.ai_timer = crate::clock::ticks(if self.brain.is_some() { 125 } else { 250 });
             if self.outcome.is_none() {
                 self.outcome = self.judge();
             }

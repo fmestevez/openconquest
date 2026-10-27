@@ -81,7 +81,8 @@ marked as a placeholder in the code.
 - Missions are won by their objectives or victory conditions, and the
   campaign reveals technology mission by mission as the original does.
 - The original's statistics and score at a mission's end.
-- Skirmish maps use a simpler stand-in AI.
+- As in the original, battles and single missions have no computer AI:
+  their computer players' ships and forts guard and answer fire.
 
 ### Sound and video
 

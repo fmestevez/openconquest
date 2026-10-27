@@ -304,14 +304,6 @@ impl Scene {
         (m.start)(self, data, caches);
     }
 
-    /// Whether ship `id` belongs to a brain's fleet (the simple AI leaves
-    /// it alone).
-    pub fn in_fleet(&self, id: u32) -> bool {
-        self.brain
-            .as_ref()
-            .is_some_and(|b| b.fleets.iter().any(|f| f.ships.contains(&id)))
-    }
-
     /// A ship launched at `site`: if the brain ordered it, it joins the
     /// fleet that asked.
     pub(super) fn ship_launched(&mut self, site: u32, kind: u8, id: u32) {
