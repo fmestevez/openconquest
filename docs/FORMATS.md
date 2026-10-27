@@ -903,6 +903,17 @@ speed is saved with a game (`SPEED_GAME`).
   orders that find no free berth wait in a queue that is retried every 25
   ticks (0x416f90).
 
+## Nets, walkways and porters
+
+A fishing ship's net (0x4ae760, state 6) lies with its picture's top-left
+at the ship frame's top-left plus 0x59afa8[type x 8 + heading] (x, y; the
+same for headings four apart), a frame a tick. A walkway to a port
+(0x4adef0, state 0xb) lies at the ship frame's top-left plus
+0x59a8e8[(type x 2 + side) x 8 + facing]. Porters (`NOSIL_<loaded><n><heading>`,
+39 frames of 71x38) are one picture laid over the walkway: the men walk
+across its frame as it plays, a frame a tick, 1.56 s a trip; they do not
+walk to the building.
+
 ## Gathering
 
 Gathering (0x4ad0e0): each take moves amber 100 (boats and merchants; 20

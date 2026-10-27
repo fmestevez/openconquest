@@ -1088,6 +1088,12 @@ pub const SHIP_NAMES: [&str; 12] = [
     "Ship of the Dead",
 ];
 
+/// The side of a ship type's frame (its `SHIP_` composite), centred on the
+/// ship: offsets in the original count from its top-left.
+pub const SHIP_FRAME: [f32; 12] = [
+    56.0, 64.0, 80.0, 80.0, 72.0, 72.0, 72.0, 72.0, 64.0, 72.0, 72.0, 72.0,
+];
+
 /// Top speeds by ship type (0x5bb4e0; the manual's chart, which swaps the
 /// sixth and seventh): x 400 in the original's units of 1/6000 pixel a
 /// tick (0x4ac210).

@@ -127,11 +127,6 @@ const STERN: [[(i8, i8); 8]; 12] = [
         (17, 17),
     ],
 ];
-/// The side of a ship type's frame (its `SHIP_` composite), centred on the
-/// ship.
-const FRAME: [f32; 12] = [
-    56.0, 64.0, 80.0, 80.0, 72.0, 72.0, 72.0, 72.0, 64.0, 72.0, 72.0, 72.0,
-];
 /// The speed above which a ship type throws a wake (0x5bb1f4).
 const WAKE_FROM: [u32; 12] = [
     26000, 25000, 20000, 13000, 18000, 25000, 23000, 23000, 18000, 20000, 22000, 20000,
@@ -228,7 +223,7 @@ impl Scene {
             let along = s.velocity * KEEP_UP / norm;
             let (px, py) = SIDE[h];
             let spread = SPREAD[k] as f32 + if h == 2 || h == 6 { 1.0 } else { 0.0 };
-            let half = FRAME[k] / 2.0;
+            let half = objects::SHIP_FRAME[k] / 2.0;
             let (x, y) = (o.x - half + sx as f32, o.y - half + sy as f32);
             for side in [1.0, -1.0] {
                 let (px, py) = (px as f32 * side, py as f32 * side);
