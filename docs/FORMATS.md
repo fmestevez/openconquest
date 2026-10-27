@@ -1046,6 +1046,13 @@ fireball casts add a sight point to
 the fog (dark.cpp 0x48b9e0: cell, player, radius 2, 3000 ticks), dropped
 when its time is up (0x48bae0).
 
+A sea monster (UMonsterClassTy, `umonster.cpp`) has 50000 x its record's
+percentage of strength (0x492360: max `+0x7c`, now `+0x80`, from fields
+at +0x14 and +0x18; a summoned one 100 %, 0x493780). Idle, it waits
+50-125 ticks a round (0x491830) and loses a hundredth of its maximum at
+each round's end (0x491fa0); at none it goes. Lightning takes half its
+maximum, blows what they carry.
+
 ## Land creatures
 
 Lairs (`CreaturesFlatClassTy`, 0x414f00) send out another creature once

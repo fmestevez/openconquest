@@ -350,7 +350,8 @@ impl Scene {
             if let Some(c) = obj.combat.as_mut() {
                 c.weapons = vec![magic::MONSTER_WEAPON; magic::MONSTER_WEAPONS];
             }
-            self.summons.push((id, magic::MONSTER_SECONDS));
+            // It stays while its strength lasts (below).
+            self.summons.push((id, f32::INFINITY));
         } else {
             // Cast whirlpools and reefs go after 7500-15000 ticks (Whirl.cpp
             // 0x447ee0, Reef.cpp 0x4306d0); the map's own stay.
@@ -378,6 +379,21 @@ impl Scene {
         // fade.
         for s in &mut self.summons {
             s.1 -= dt;
+        }
+        for k in 0..self.summons.len() {
+            let id = self.summons[k].0;
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            if self.objects[i].class != ObjectClass::Monster(0x1fb) {
+                continue;
+            }
+            if let Some(c) = self.objects[i].combat.as_mut() {
+                c.hull -= c.max_hull * 0.01 * dt / magic::MONSTER_ROUND_SECONDS;
+                if c.hull <= 0.0 {
+                    self.summons[k].1 = 0.0;
+                }
+            }
         }
         let gone: Vec<u32> = self
             .summons

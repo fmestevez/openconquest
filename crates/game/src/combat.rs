@@ -300,7 +300,8 @@ pub const CONTACT: f32 = 48.0;
 /// Strength of a creature, over 15 as hulls are: cyclopes 30000,
 /// minotaurs 16000, amazons 12000 (CyclopClassTy 0x413d70), the gorgon
 /// 150000 (MedusaClassTy 0x401000), sirens 100000 (SirenaClassTy 0x403050,
-/// 0x404a20); harpies, dragons and sea monsters not yet found (2000, a
+/// 0x404a20), sea monsters 50000 (UMonsterClassTy 0x492360, by the
+/// record's percentage); harpies and dragons not yet found (2000, a
 /// placeholder).
 pub fn creature_strength(class: u32) -> f32 {
     match class {
@@ -309,6 +310,7 @@ pub fn creature_strength(class: u32) -> f32 {
         0x1f6 => 12_000.0 / 15.0,
         0x1fa => 150_000.0 / 15.0,
         0x1fd => 100_000.0 / 15.0,
+        0x1fb => 50_000.0 / 15.0,
         _ => 2000.0,
     }
 }

@@ -789,7 +789,12 @@ fn tornado_and_sea_monster() {
         scene.object_index(ship).is_none(),
         "the monster sank the ship"
     );
-    for _ in 0..50 * (magic::MONSTER_SECONDS as usize) {
+    // It spends a hundredth of its strength a round of 50-125 ticks; near
+    // the end of it, it goes back to the deep.
+    let m = scene.object_index(monster).unwrap();
+    let c = scene.objects[m].combat.as_mut().unwrap();
+    c.hull = c.max_hull * 0.02;
+    for _ in 0..50 * 10 {
         scene.update(0.02, &data, &mut caches);
     }
     assert!(scene.object_index(monster).is_none(), "the monster left");
