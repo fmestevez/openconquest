@@ -690,20 +690,15 @@ impl Scene {
     }
 
     /// A side's boarding strength in the original's units (0x4b4e80,
-    /// 0x4bee60): each squad's C x 15 (0x597d2c, `melee`), the ship of the
-    /// dead's crews doubled.
+    /// 0x4bee60): each squad's C x 15 (0x597d2c, `melee`). (The ship of
+    /// the dead's crews are no stronger: it wins every boarding instead.)
     fn boarding_strength(&self, i: usize) -> u32 {
         let o = &self.objects[i];
         let Some(ship) = o.ship.as_ref() else {
             return 0;
         };
-        let undead = if ship.kind == 11 {
-            combat::UNDEAD_MELEE
-        } else {
-            1
-        };
         (0..ship.crew.count())
-            .map(|n| combat::melee(ship.crew.kind_of(n)) * 15 * undead)
+            .map(|n| combat::melee(ship.crew.kind_of(n)) * 15)
             .sum()
     }
 

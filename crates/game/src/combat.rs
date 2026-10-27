@@ -327,7 +327,8 @@ pub fn ram_angle(attacker_heading: usize, target_heading: usize) -> usize {
     }
 }
 
-/// Seconds between exchanges of blows when boarding. Placeholder.
+/// How long a boarding takes when its picture (`ABORD_`) cannot be found:
+/// the picture's length decides it otherwise (a frame a tick).
 pub const BOARD_ROUND: f32 = 1.0;
 
 /// Strength of a creature, over 15 as hulls are: cyclopes 30000,
@@ -574,9 +575,6 @@ pub fn fires(weapon: u8) -> bool {
 /// (0x4be410 takes a blow's crew share off the units' conditions, picked
 /// at random by kind, 0x597cfc: 2860, 2990, 3120, nearly alike).
 pub const SQUAD_LIFE: f32 = 100.0;
-/// The ship of the dead's undead crews are this much stronger in boarding.
-/// Placeholder.
-pub const UNDEAD_MELEE: u32 = 2;
 
 /// The unique weapon built into a ship type, if any.
 pub fn special_weapon(kind: u8) -> Option<u8> {
