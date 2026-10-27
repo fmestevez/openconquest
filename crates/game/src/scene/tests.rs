@@ -177,6 +177,9 @@ fn ramming_and_boarding() {
     }
     let i = scene.object_index(other_id).unwrap();
     scene.objects[i].owner = Some((1, (human.slot + 1) % 4));
+    // Sturdy enough to outlast a rammer's blow, to be boarded after.
+    let c = scene.objects[i].combat.as_mut().unwrap();
+    (c.max_hull, c.hull) = (1e6, 1e6);
     let hull = |s: &Scene, id| {
         s.objects[s.object_index(id).unwrap()]
             .combat
@@ -2103,6 +2106,11 @@ fn crews_under_fire() {
     // A barrel of powder adds its blast to a ram, once.
     let m = scene.object_index(mine).unwrap();
     scene.objects[m].combat.as_mut().unwrap().weapons = vec![combat::POWDER];
+    // Both sturdy enough to outlast the ram.
+    for k in [m, e] {
+        let c = scene.objects[k].combat.as_mut().unwrap();
+        (c.max_hull, c.hull) = (1e6, 1e6);
+    }
     let before = scene.objects[e].combat.as_ref().unwrap().hull;
     scene.ram(m, e, &data, &mut caches);
     let e = scene.object_index(enemy).unwrap();

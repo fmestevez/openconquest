@@ -173,8 +173,8 @@ pub const LOAD_REACH: f32 = 3.0;
 /// at level 0).
 const CREW_MELEE: [u32; 3] = [35, 68, 100];
 
-/// Crew quality used in ramming (0x598054, by crew class and level; level
-/// 0).
+/// Ram quality (0x598054, by the ram fitted and the player's level in it;
+/// level 0).
 const CREW_RAM: [u32; 3] = [100, 125, 160];
 
 /// The people on a ship: its crew class (record field 14 minus 3; ramming
@@ -262,23 +262,59 @@ const RAM_POWER: [u32; 12] = [10, 12, 100, 60, 30, 140, 20, 40, 10, 10, 190, 10]
 const RAM_ANGLE_ATTACK: [u32; 3] = [90, 55, 20];
 const RAM_ANGLE_DEFENCE: [u32; 3] = [4, 12, 20];
 
-/// Odds of a ram in percent, capped at 200 (0x4ba950): ramming power, crew
-/// quality and the angle of approach of both ships; rammers (type 5) hit
-/// half again as hard.
-pub fn ram_odds(attacker: (u8, Crew), target: (u8, Crew), angle: usize) -> u32 {
-    let power = |(kind, crew): (u8, Crew), angle_factor: u32| {
-        (CREW_RAM[crew.class as usize % 3] * RAM_POWER[kind as usize % 12]) as u64
-            * angle_factor as u64
+/// A ship in a ram: its type, ram level, heading and speed (world pixels
+/// a second).
+pub struct Rammer {
+    pub kind: u8,
+    pub ram: u8,
+    pub heading: usize,
+    pub speed: f32,
+}
+
+/// The share of a ram's blow the hull takes, over its share (0x598094:
+/// 150 for every type; the crew's is 40, 0x598090).
+pub const RAM_HULL_FACTOR: f32 = 1.5;
+
+/// The blows of a ram (0x4c1c60), to the rammed ship and to the rammer,
+/// in our units (the original's over 15, see `hull_strength`). The
+/// closing speed is the two headings' vectors times their speeds, less one
+/// from the other, times 0.707, half of it in percent of a boat's top
+/// speed; each blow is the striking side's ram quality (0x598054) x its
+/// power over the other's (0x598024) x the smaller of 500000 and its angle
+/// factor (0x598078 for the rammer, 0x598084 for the rammed) x its hull /
+/// 100 x that percentage, over 2500.
+pub fn ram_blows(a: Rammer, t: Rammer, angle: usize) -> (f32, f32) {
+    const DIRS: [(f32, f32); 8] = [
+        (1.0, 0.0),
+        (1.0, -1.0),
+        (0.0, -1.0),
+        (-1.0, -1.0),
+        (-1.0, 0.0),
+        (-1.0, 1.0),
+        (0.0, 1.0),
+        (1.0, 1.0),
+    ];
+    // Speeds in the original's units, 1/6000 pixel a tick.
+    let unit = crate::clock::TICK * 6000.0;
+    let (da, dt) = (DIRS[a.heading % 8], DIRS[t.heading % 8]);
+    let (va, vt) = (a.speed * unit, t.speed * unit);
+    let rel = (
+        (da.0 * va - dt.0 * vt) * 0.707,
+        (da.1 * va - dt.1 * vt) * 0.707,
+    );
+    // A boat's top speed: its chart's 150 x 400.
+    let impact = rel.0.hypot(rel.1) / 2.0 * 100.0 / 60_000.0;
+    let power = |k: u8| RAM_POWER[k as usize % 12] as f32;
+    let hull = |k: u8| hull_strength(k) * 15.0;
+    let blow = |q: u8, own: u8, other: u8, angle_factor: u32| {
+        let strike = (angle_factor as f32 * hull(own) / 100.0 * impact).min(500_000.0);
+        CREW_RAM[q.min(2) as usize] as f32 * power(own) / power(other) * strike / 2500.0 / 15.0
     };
-    let mut a = power(attacker, RAM_ANGLE_ATTACK[angle.min(2)]);
-    if attacker.0 == 5 {
-        a = a * 15 / 10;
-    }
-    let d = power(target, RAM_ANGLE_DEFENCE[angle.min(2)]);
-    if d == 0 {
-        return 200;
-    }
-    (a * 100 / d).min(200) as u32
+    let angle = angle.min(2);
+    (
+        blow(a.ram, a.kind, t.kind, RAM_ANGLE_ATTACK[angle]),
+        blow(t.ram, t.kind, a.kind, RAM_ANGLE_DEFENCE[angle]),
+    )
 }
 
 /// The angle class between two headings (0-7): 0 side on, 1 oblique, 2
@@ -1074,12 +1110,27 @@ mod tests {
     }
 
     #[test]
-    fn ram_odds_favour_rammers_and_side_hits() {
-        let royal = (2, SWORDS);
-        assert_eq!(ram_odds(royal, royal, 2), 100, "head on between equals");
-        assert_eq!(ram_odds(royal, royal, 0), 200, "side on, capped");
-        let rammer = (5, SWORDS);
-        assert!(ram_odds(rammer, royal, 2) > ram_odds(royal, rammer, 2));
+    fn rams_favour_rammers_speed_and_side_hits() {
+        let ship = |kind, heading, speed| Rammer {
+            kind,
+            ram: 0,
+            heading,
+            speed,
+        };
+        // Head on between equals, both under way: alike.
+        let (to_t, to_a) = ram_blows(ship(2, 0, 30.0), ship(2, 4, 30.0), 2);
+        assert!((to_t - to_a).abs() < 1e-3 && to_t > 0.0);
+        // Side on hits harder than head on; a rammer harder than a royal.
+        let side = ram_blows(ship(2, 0, 30.0), ship(2, 2, 0.0), 0).0;
+        let head = ram_blows(ship(2, 0, 30.0), ship(2, 4, 0.0), 2).0;
+        assert!(side > head);
+        // A rammer's power (140 against 100) makes the exchange its own.
+        let (dealt, taken) = ram_blows(ship(5, 0, 30.0), ship(2, 2, 0.0), 0);
+        let (dealt2, taken2) = ram_blows(ship(2, 0, 30.0), ship(2, 2, 0.0), 0);
+        assert!(dealt / taken > dealt2 / taken2);
+        // Faster, harder; standing still, nothing.
+        assert!(ram_blows(ship(2, 0, 60.0), ship(2, 2, 0.0), 0).0 > side);
+        assert_eq!(ram_blows(ship(2, 0, 0.0), ship(2, 2, 0.0), 0).0, 0.0);
     }
 
     #[test]

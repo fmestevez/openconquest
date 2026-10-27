@@ -552,25 +552,51 @@ impl Scene {
         }
     }
 
-    /// Ship `i` rams ship `ti`; both take damage by the odds of the ram.
+    /// Ship `i` rams ship `ti` (0x4c1c60): both take blows by the closing
+    /// speed, their ram quality and power, the angle and their hulls (see
+    /// `combat::ram_blows`); the rammed ship's armour softens its blow
+    /// (0x4c1ad0), and each hull takes its share.
     pub(super) fn ram(&mut self, i: usize, ti: usize, data: &GameData, caches: &mut Caches) {
         let (a, t) = (&self.objects[i], &self.objects[ti]);
         let (sa, st) = (a.ship.as_ref().unwrap(), t.ship.as_ref().unwrap());
         let angle = combat::ram_angle(sa.heading, st.heading);
         // The feather of Boreas strengthens the ram.
         let ram = (sa.ram + sa.has_treasure(objects::FEATHER) as u8).min(2);
-        // The ram quality table (0x598054) is read by the ships' ram levels.
-        let with_ram = |crew: combat::Crew, class: u8| combat::Crew { class, ..crew };
-        let odds = combat::ram_odds(
-            (sa.kind, with_ram(sa.crew, ram)),
-            (st.kind, with_ram(st.crew, st.ram)),
+        // The rammer charges at no less than its cruising speed here (ours
+        // may slow as it closes).
+        let (to_target, to_self) = combat::ram_blows(
+            combat::Rammer {
+                kind: sa.kind,
+                ram,
+                heading: sa.heading,
+                speed: sa.velocity.max(sa.speed),
+            },
+            combat::Rammer {
+                kind: st.kind,
+                ram: st.ram,
+                heading: st.heading,
+                speed: st.velocity,
+            },
             angle,
-        ) as f32
-            * combat::armour_factor(st.armour);
-        let max = |o: &MapObject| o.combat.as_ref().map_or(0.0, |c| c.max_hull);
-        // Placeholder scale: a ram at the best odds takes half the target's hull.
-        let to_target = max(t) * odds / 400.0;
-        let to_self = max(a) * 0.1 * (100.0 / odds.max(1.0)).min(1.0);
+        );
+        let share = |o: &MapObject| match (&o.ship, &o.combat) {
+            (Some(s), Some(c)) => ship_hull_share(s, c),
+            _ => 1.0,
+        };
+        // Argus takes three quarters off a ram's blow.
+        let argus = |o: &MapObject| {
+            if o.ship.as_ref().is_some_and(|s| s.has_hero(objects::ARGUS)) {
+                0.25
+            } else {
+                1.0
+            }
+        };
+        let to_target = to_target
+            * combat::armour_factor(st.armour)
+            * share(t)
+            * combat::RAM_HULL_FACTOR
+            * argus(t);
+        let to_self = to_self * share(a) * combat::RAM_HULL_FACTOR * argus(a);
         let (ida, idt) = (a.id, t.id);
         self.objects[i].ship.as_mut().unwrap().task = None;
         // A fire rammer's barrel of powder goes off in the ram.
@@ -587,8 +613,7 @@ impl Scene {
             None => (0.0, 0.0),
         };
         self.wound(idt, burn);
-        let to_target = to_target + blast;
-        self.hit(idt, to_target, data, caches);
+        self.hit(idt, to_target + blast, data, caches);
         self.hit(ida, to_self, data, caches);
     }
 

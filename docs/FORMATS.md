@@ -996,6 +996,23 @@ for a ship its type's (0x597acc: 5, 8, 20, 25, 15, 15, 10, 10, 10, 15,
 10, 15), 1 with hero 3 aboard, and a phantom is hit at 20 % whatever the
 range; Greek fire always hits.
 
+## Ramming
+
+A ram (0x4c1c60) takes the two ships' heading vectors (0x5c4f4c) times
+their speeds (`+0x59b`), the rammer's less the rammed's, times 0.707; half
+its length is the impact in percent of a boat's top speed at the
+player's rigging level (0x5c750c). Each side's blow is its ram quality
+(0x598054[ram x 3 + the player's ram level]: 100, 110, 117; 125, 135,
+145; 160, 175, 200) x its ram power over the other's (0x598024) x the
+smaller of 500000 and its angle factor (0x598078 the rammer's, 0x598084
+the rammed's, by the angle class of 0x4c19b0) x its hull / 100 x the
+impact, over 2500; a powder barrel in the cargo adds its percentage. A
+blow (0x4c1ad0) loses three quarters with hero 5 (Argus), the armour's
+cut on the rammed ship, and falls by the shares: the hull's x 150 / 100
+(0x598094), the crew's x 40 / 100 (0x598090), the weapons'. The odds of
+0x4ba950 (the same terms, the rammer type half again) only rank targets
+for the computer.
+
 ## Boarding
 
 A ship that grapples another (contact state machine 0x4b5df0, `+0x6a9`)
