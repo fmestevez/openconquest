@@ -1257,6 +1257,25 @@ Amber is taken once per round of the porters (0x4b0590 state 0xf, then
 the `ANOSIL_` cycle in state 6), fish once per cast of the net (0x4ae760
 states 2 and 6); walkways, nets and porters advance a frame a tick.
 
+Unloading ends with 0x4add10 calling 0x4ad9f0, which credits the whole load
+(amber at player `+0x20` through 0x4a8de0; fish at `+0x2c` through
+0x4a8c30, spent in hundreds):
+
+- **Fish** (`+0x47f`): one for one, but not at a fort.
+- **Amber** (`+0x481`, through 0x4a8fa0 with class 400): `amount x 3 x 40 /
+  100`, so 120 amber for 100.
+- **A leviathan** (`+0x480`, class 0x192): `amount x 125 x 40 / 100`, so 50
+  amber a unit, plus 2500 fish however much there was.
+
+A leviathan (`WhaleClassTy`, record 0x494f90; life 0x494b90) holds 100 x
+field 4: 100 in every mission, so the manual's 5000 amber and 2500 fish. A
+ship takes 50 of it a cast of the net (0x4ad0e0), whatever its type. Caught,
+it waits below `27750 - 3000 x field 40` ticks (state 5; field 40 is 2 in
+most missions, about 14.5 minutes), then comes up whole on a random water
+cell of its zone (fields 7 and 8 its corner, 10 and 11 its size; state 6).
+It does this until it has shown itself field 39 times (2 in most missions).
+Between dives while not caught it waits 25-75 ticks, as fish do.
+
 ## Sounds
 
 `sound/sounds.dkx` holds 163 sounds (kind 2): a `WAVEFORMATEX` (18 bytes;

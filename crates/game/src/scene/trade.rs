@@ -34,6 +34,8 @@ fn ruins_frame_seconds(frames: usize) -> f32 {
 /// once per round of the porters, fish once per cast of the net.
 fn take_per_round(resource: Resource, kind: u8, barbarian: bool) -> f32 {
     let n = match (resource, kind) {
+        // A leviathan 50 a cast, whoever hunts it (0x4ad0e0).
+        (Resource::Leviathan, _) => return 50.0,
         (Resource::Amber, 0 | 1) => 100.0,
         (Resource::Fish, 0) => 33.0,
         (Resource::Fish, 1) => 50.0,
@@ -1429,30 +1431,23 @@ impl Scene {
                 // A walkway to the amber, or the net out.
                 let activity = match dep.resource {
                     Resource::Amber => Some(super::unload::Activity::Amber),
-                    Resource::Fish => Some(super::unload::Activity::Fishing),
-                    Resource::Leviathan => None,
+                    Resource::Fish | Resource::Leviathan => Some(super::unload::Activity::Fishing),
                 };
                 if let Some(a) = activity {
                     self.show_activity(i, deposit, a, data, caches);
                 }
                 let ship = self.objects[i].ship.as_ref().unwrap();
-                // A leviathan is one catch, taken in a hunt.
-                let (rate, capacity) = if dep.resource == Resource::Leviathan {
-                    (1.0 / crate::objects::HUNT_SECONDS, 1.0)
-                } else {
-                    // Once the walkway is down or the net out, a load a
-                    // round of its animation.
-                    // Player 0x10: nation 4 (the barbarians), slot 0.
-                    let barbarian = self.objects[i].owner == Some((4, 0));
-                    let take = take_per_round(dep.resource, ship.kind, barbarian);
-                    let rate = self
-                        .planks
-                        .iter()
-                        .find(|p| p.ship == self.objects[i].id)
-                        .and_then(|p| p.round_seconds())
-                        .map_or(0.0, |s| take / s);
-                    (rate, capacity)
-                };
+                // Once the walkway is down or the net out, a load a round of
+                // its animation.
+                // Player 0x10: nation 4 (the barbarians), slot 0.
+                let barbarian = self.objects[i].owner == Some((4, 0));
+                let take = take_per_round(dep.resource, ship.kind, barbarian);
+                let rate = self
+                    .planks
+                    .iter()
+                    .find(|p| p.ship == self.objects[i].id)
+                    .and_then(|p| p.round_seconds())
+                    .map_or(0.0, |s| take / s);
                 let mut take = (rate * dt).min(capacity - ship.cargo);
                 if let Some(left) = dep.remaining {
                     take = take.min(left);
@@ -1559,17 +1554,10 @@ impl Scene {
                 self.unloaded.retain(|&s| s != id);
                 let ship = self.objects[i].ship.as_mut().unwrap();
                 let kind = ship.cargo_kind;
-                // A leviathan comes in whole, in a second; goods a slot a
-                // laden porter trip (at the porters' pace where no walkway
-                // shows).
-                let before = if kind == Some(Resource::Leviathan) {
-                    ship.cargo.round()
-                } else {
-                    ship.cargo
-                };
-                let after = if kind == Some(Resource::Leviathan) {
-                    (before - dt).max(0.0)
-                } else if walkway {
+                // Goods come ashore a slot a laden porter trip (at the
+                // porters' pace where no walkway shows).
+                let before = ship.cargo;
+                let after = if walkway {
                     (before - trips * super::unload::TRIP_LOAD).max(0.0)
                 } else {
                     (before - super::unload::UNLOAD_RATE * dt).max(0.0)
@@ -1577,12 +1565,24 @@ impl Scene {
                 ship.cargo = after;
                 let came = (before.floor() - after.floor()) as i64;
                 if let (Some(owner), true) = (self.objects[i].owner, came > 0) {
+                    // What it is worth (0x4ad9f0).
+                    let (num, den) = crate::objects::AMBER_WORTH;
+                    let whole = |v: f32| v.floor() as i64;
                     match kind {
-                        Some(Resource::Amber) => self.earn(owner, came, 0),
+                        Some(Resource::Amber) => {
+                            let paid = whole(before.floor() * num as f32 / den as f32)
+                                - whole(after.floor() * num as f32 / den as f32);
+                            self.earn(owner, paid, 0)
+                        }
                         Some(Resource::Fish) => self.earn(owner, 0, came),
                         Some(Resource::Leviathan) => {
-                            let (amber, fish) = crate::objects::LEVIATHAN_WORTH;
-                            self.earn(owner, amber * came, fish * came)
+                            // Its 2500 fish as the unloading ends.
+                            let fish = if after <= 0.0 {
+                                crate::objects::LEVIATHAN_FISH
+                            } else {
+                                0
+                            };
+                            self.earn(owner, crate::objects::LEVIATHAN_AMBER * came, fish)
                         }
                         None => {}
                     }

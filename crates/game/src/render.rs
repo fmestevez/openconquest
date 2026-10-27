@@ -399,7 +399,8 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
                     let (x, y, w, h) = if o.class == openconquest_formats::ObjectClass::FishZone {
                         (f(6), f(7), f(8), f(9))
                     } else {
-                        (f(7), f(8), f(9), f(10))
+                        // A leviathan's zone: fields 10 and 11 its size.
+                        (f(7), f(8), f(10), f(11))
                     };
                     cx >= x && cy >= y && cx < x + w.max(1) && cy < y + h.max(1)
                 }

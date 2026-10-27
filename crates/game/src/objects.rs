@@ -367,15 +367,17 @@ pub const ARMOUR_OF_ARES_PERCENT: u32 = 40;
 pub enum Resource {
     Amber,
     Fish,
-    /// A leviathan, caught whole.
+    /// A leviathan, taken as fish are.
     Leviathan,
 }
 
-/// What a leviathan brought home is worth: 5000 amber and 2500 fish (the
-/// manual).
-pub const LEVIATHAN_WORTH: (i64, i64) = (5000, 2500);
-/// Seconds to catch a leviathan. Placeholder.
-pub const HUNT_SECONDS: f32 = 30.0;
+/// What goods unloaded are worth (0x4ad9f0, 0x4a8fa0): amber 3 x 40% (120
+/// amber a hundred), fish one for one, a leviathan 125 x 40% = 50 amber a
+/// unit and 2500 fish an unloading (so the manual's 5000 amber and 2500
+/// fish for one of 100).
+pub const AMBER_WORTH: (i64, i64) = (6, 5);
+pub const LEVIATHAN_AMBER: i64 = 50;
+pub const LEVIATHAN_FISH: i64 = 2500;
 
 /// A deposit of a resource on the map.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1013,13 +1015,14 @@ pub fn resolve(
                 refill: 0.0,
             })
         }
-        // One leviathan to a zone (a placeholder: whether zones refill is
-        // not known).
+        // A leviathan (WhaleClassTy 0x494f90): 100 x field 4 to take; once
+        // caught it comes up again, whole, until it has shown itself field
+        // 39 times (0x494b90).
         ObjectClass::WhaleZone => Some(Deposit {
             resource: Resource::Leviathan,
-            remaining: Some(1.0),
-            regrows: 0,
-            refill: 0.0,
+            remaining: Some(f(4) as f32 * 100.0),
+            regrows: f(39).saturating_sub(1),
+            refill: f(4) as f32 * 100.0,
         }),
         _ => None,
     };

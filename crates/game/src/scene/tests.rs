@@ -1201,7 +1201,8 @@ fn merchant_gathers_amber() {
             break;
         }
     }
-    assert_eq!(scene.amber, amber + 400, "one full boat load delivered");
+    // 400 amber unloaded is worth 480 (0x4a8fa0: x 3 x 40%).
+    assert_eq!(scene.amber, amber + 480, "one full boat load delivered");
     assert!(partly && walkway && porters, "{partly} {walkway} {porters}");
     assert!(amber_walkway, "a walkway to the amber while gathering");
     let left = scene.objects[scene.object_index(deposit).unwrap()]
@@ -1591,9 +1592,10 @@ fn leviathan_hunt() {
         .unwrap()
         .id;
     let z = scene.object_index(zone).unwrap();
+    // A leviathan of 100, taken 50 a cast of the net.
     scene.objects[z].deposit = Some(crate::objects::Deposit {
         resource: Resource::Leviathan,
-        remaining: Some(1.0),
+        remaining: Some(100.0),
         regrows: 0,
         refill: 0.0,
     });
@@ -1601,7 +1603,7 @@ fn leviathan_hunt() {
     let (amber, fish) = (scene.amber, scene.fish);
     for _ in 0..60 * 600 {
         scene.update(1.0 / 60.0, &data, &mut caches);
-        if scene.amber > amber {
+        if scene.fish > fish {
             break;
         }
     }

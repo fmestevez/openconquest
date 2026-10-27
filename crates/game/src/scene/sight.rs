@@ -319,6 +319,10 @@ impl Scene {
         if self.shoal_gone(o.id) || self.creature_hidden(o.id) {
             return false;
         }
+        // A leviathan caught is below until it comes up again.
+        if o.class == ObjectClass::WhaleZone && o.deposit.is_none() {
+            return false;
+        }
         if !self.fog || self.is_own(o) {
             return true;
         }
