@@ -4447,3 +4447,34 @@ fn miss013_brain_builds_its_fleets() {
         "the Persian yards built for their gatherers"
     );
 }
+
+/// miss007's wizard guard turns on the player's ship holding Hercules's
+/// sword (needs `OPENCONQUEST_DATA`).
+#[test]
+fn miss007_guard_hunts_the_sword() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    scene.objects[i]
+        .ship
+        .as_mut()
+        .unwrap()
+        .treasures
+        .push(objects::Treasure {
+            kind: 22,
+            param: 0,
+            amount: 0,
+        });
+    for _ in 0..100 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[11].state, 25);
+}

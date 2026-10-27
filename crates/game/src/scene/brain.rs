@@ -867,6 +867,28 @@ impl Scene {
         }
     }
 
+    /// A treasure of kind `kind` lying on the map, if any.
+    pub(super) fn loose_treasure(&self, kind: u8) -> Option<u32> {
+        self.objects
+            .iter()
+            .find(|o| o.treasure.is_some_and(|t| t.kind == kind))
+            .map(|o| o.id)
+    }
+
+    /// The cell of the human player's ship or building holding a treasure
+    /// of kind `kind`.
+    pub(super) fn human_holder_of(&self, kind: u8) -> Option<(i32, i32)> {
+        let t = TILE_SIZE as f32;
+        self.objects
+            .iter()
+            .filter(|o| self.is_own(o))
+            .find(|o| {
+                o.ship.as_ref().is_some_and(|s| s.has_treasure(kind))
+                    || self.held.iter().any(|h| h.0 == o.id && h.1.kind == kind)
+            })
+            .map(|o| ((o.x / t) as i32, (o.y / t) as i32))
+    }
+
     /// Sets the area fleet `k` attacks next (`Target::Seen`).
     pub(super) fn set_fleet_area(&mut self, k: usize, area: Cells) {
         self.brain.as_mut().unwrap().fleets[k].area = Some(area);
@@ -4129,8 +4151,9 @@ mod miss006 {
 /// and member 11 guards the wind wizard's waters (0x45e120). The Persians
 /// (player 15, group 1) have one yard serving their merchants, fishers,
 /// two guards and raiders (0x45e510-0x45eff0), and a fleet mending prizes.
-/// (Not ported: member 11's hunt for Hercules's sword uses 0x47aed0, not
-/// yet decoded; it guards its waters.)
+/// Member 11 also hunts Hercules's sword: it takes it where it lies
+/// (0x47aed0, order 0xbe) and attacks about whoever of the player's holds
+/// it.
 mod miss007 {
     use super::*;
 
@@ -4323,6 +4346,19 @@ mod miss007 {
     /// others): what to ask the yard for; and once (every 5 ticks in the
     /// original) the big reef put up when the player sails into the strait.
     pub fn turn(scene: &mut Scene, k: usize) {
+        // Member 11 (0x45e120): while the player holds Hercules's sword,
+        // it attacks about the ship or building holding it.
+        if k == 11 {
+            let state = scene.brain.as_ref().unwrap().fleets[k].state;
+            if state != 25 {
+                if let Some(cell) = scene.human_holder_of(SWORD) {
+                    scene.set_fleet_area(k, (cell.0 - 2, cell.1 - 2, 5, 5));
+                    scene.brain.as_mut().unwrap().fleets[k].state = 25;
+                    scene.brain.as_mut().unwrap().fleets[k].started = false;
+                }
+            }
+            return;
+        }
         if k == 0 {
             let f = &scene.brain.as_ref().unwrap().fleets[0];
             if f.vars[0] == 0 && scene.human_ships_in((14, 17, 8, 14)) {
@@ -4682,6 +4718,61 @@ mod miss007 {
     fn wizard_guard(state: u32) -> Op {
         match state {
             0 => Op::Behave { next: 5 },
+            5 => Op::Attack {
+                next: 10,
+                target: Target::Area((13, 23, 5, 5)),
+                ticks: 1500,
+                events: &[],
+            },
+            // While the player's fort stands at (15, 26) it holds the
+            // waters; else it looks for the sword.
+            10 => Op::Custom(|scene, _| {
+                if scene.human_class_at(0x36, (15, 26)) {
+                    5
+                } else {
+                    15
+                }
+            }),
+            // 0x47aed0 (order 0xbe): a ship takes the sword (kind 22) where
+            // it lies anywhere on the map (0x4d9920); 5 if there is none.
+            15 => Op::Custom(|scene, k| match scene.loose_treasure(SWORD) {
+                Some(target) => {
+                    for id in scene.fleet_ships(k) {
+                        if scene.order_take(id, target).is_ok() {
+                            return 16;
+                        }
+                    }
+                    5
+                }
+                None => 5,
+            }),
+            16 => Op::Custom(|scene, k| {
+                let held = scene.fleet_ships(k).iter().any(|&id| {
+                    scene
+                        .object_index(id)
+                        .and_then(|i| scene.objects[i].ship.as_ref())
+                        .is_some_and(|s| s.has_treasure(SWORD))
+                });
+                if held {
+                    20
+                } else if scene.loose_treasure(SWORD).is_some() {
+                    16
+                } else {
+                    5
+                }
+            }),
+            // Taken: fleet 8 joins it (0x479370) and it holds the waters.
+            20 => Op::Custom(|scene, k| {
+                scene.fleet_merge(k, 8);
+                5
+            }),
+            // The player holds the sword: around its holder, 6000 ticks.
+            25 => Op::Attack {
+                next: 15,
+                target: Target::Seen,
+                ticks: 6000,
+                events: &[],
+            },
             _ => Op::Attack {
                 next: 0,
                 target: Target::Area((13, 23, 5, 5)),
@@ -4690,6 +4781,9 @@ mod miss007 {
             },
         }
     }
+
+    /// Hercules's sword (treasure kind 22, the brain's +0x104 watch).
+    const SWORD: u8 = 22;
 
     fn persian_amber(state: u32) -> Op {
         match state {
