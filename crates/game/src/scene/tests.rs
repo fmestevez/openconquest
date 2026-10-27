@@ -3454,3 +3454,30 @@ fn fishing_ships_follow_their_shoal() {
     assert!(spots.len() > 1, "the shoal never moved");
     assert!(caught > 0.0, "nothing caught");
 }
+
+/// Selling an item from a settlement's stock brings back three quarters of
+/// its amber price (needs `OPENAC_DATA`).
+#[test]
+fn settlement_sells_stock() {
+    let Some(root) = std::env::var_os("OPENAC_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let site = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.class == ObjectClass::Building(SETTLEMENT))
+        .unwrap()
+        .id;
+    let mut stock = [0u32; 9];
+    stock[4] = 2;
+    scene.garrisons.insert(site, stock);
+    let amber = scene.amber;
+    scene.sell_item(site, 4).unwrap();
+    assert_eq!(scene.amber, amber + 37);
+    assert_eq!(scene.garrison(site)[4], 1);
+    scene.sell_item(site, 4).unwrap();
+    assert!(scene.sell_item(site, 4).is_err());
+}

@@ -925,6 +925,15 @@ An amber deposit glints in bursts (0x48a430 state 0, 0x489bd0): it waits
 a frame every 1-4 ticks (random), at a random point of one of its
 variant's two rectangles (0x5b97cc, picked at random).
 
+## Selling
+
+A settlement's Sell Item (command 0x12, slot 5 of its menu) sends message
+0x280f with the chosen stock place (0x441ba0): an item brings back 75 % of
+its amber price times its condition, an armour piece or a ram 75 % of its
+fitting cost; no fish. Message 0x248f sells a building: 75 % of its cost
+times its health (0x425990), and a settlement's stock likewise, fish at
+75 % too.
+
 ## Sheep
 
 A flock (0x4331c0; record: cell x, y at fields 4-5, count at 7) keeps its

@@ -2507,6 +2507,24 @@ impl App {
                 }
             }
             // From a settlement: onto the ship alongside it.
+            Command::SELL_ITEM => {
+                let chosen = self.chosen_cell.filter(|&(site, _)| site == id);
+                let item = chosen.and_then(|(_, i)| {
+                    [0u8, 1, 2, 99, 3, 4, 5, 99, 6, 7, 8]
+                        .get(i)
+                        .copied()
+                        .filter(|&k| k != 99)
+                });
+                match item {
+                    Some(item) => {
+                        if let Err(e) = self.issue(Order::SellItem { site: id, item }) {
+                            self.say(e);
+                        }
+                        self.chosen_cell = None;
+                    }
+                    None => self.say("Choose an item in the stock to sell"),
+                }
+            }
             Command::LOAD => match self.issue(Order::LoadCrew {
                 ship: self.scene.ship_alongside(id).unwrap_or(id),
             }) {

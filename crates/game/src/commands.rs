@@ -40,6 +40,7 @@ impl Command {
     pub const WHALE: Command = Command(0x0f);
     pub const BUILD_STRUCTURES: Command = Command(0x10);
     pub const REPAIR_BUILDING: Command = Command(0x11);
+    pub const SELL_ITEM: Command = Command(0x12);
     pub const TRAIN_BOWMEN: Command = Command(0x2d);
     pub const UPGRADE_TOWN: Command = Command(0x3a);
     pub const UPGRADE_DOCK: Command = Command(0x3b);
@@ -67,6 +68,9 @@ impl Command {
             0x0f => "CBUT_WHALE",
             0x10 => "CBUT_BUILDGRG",
             0x11 | 0x14 => "CBUT_REPGRND",
+            0x12 => "CBUT_SELL",
+            0x7e => "CBUT_SELLFISH",
+            0x80 => "CBUT_SELLTOWN",
             0x6c => "CBUT_BEHMAIN",
             0x6d => "CBUT_BEHCONVEY",
             0x6e => "CBUT_BEHPATROL",
@@ -940,6 +944,8 @@ fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         });
     }
     set(menu, 2, Command::REPAIR_BUILDING, true);
+    // Selling the item chosen in its stock (0x43c740 slot 5, 0x441ba0).
+    set(menu, 5, Command::SELL_ITEM, true);
     if obj.class == ObjectClass::Building(SETTLEMENT) && scene.permits.town() {
         set(
             menu,

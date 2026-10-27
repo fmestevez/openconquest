@@ -806,6 +806,28 @@ impl Scene {
 
     /// Puts one unit of `item` from `site`'s stock aboard `ship`, which must
     /// lie alongside and have room (the original's load cursor, c_load.cpp).
+    /// Sells one `item` of settlement `site`'s stock for three quarters of
+    /// its amber price (0x441ba0, message 0x280f; the original scales it
+    /// by the item's condition, always whole here); no fish comes back.
+    pub fn sell_item(&mut self, site: u32, item: u8) -> Result<(), String> {
+        let i = self.object_index(site).ok_or("No such settlement")?;
+        if !self.is_own(&self.objects[i]) {
+            return Err("Not your settlement".into());
+        }
+        let mut stock = self.garrison(site);
+        let n = stock.get_mut(item as usize).ok_or("No such item")?;
+        if *n == 0 {
+            return Err("None left".into());
+        }
+        *n -= 1;
+        self.garrisons.insert(site, stock);
+        let amber = combat::item_cost(item).0 * 75 / 100;
+        if let Some(owner) = self.objects[i].owner {
+            self.earn(owner, amber as i64, 0);
+        }
+        Ok(())
+    }
+
     pub fn load_item(&mut self, site: u32, ship: u32, item: u8) -> Result<(), String> {
         let t = TILE_SIZE as f32;
         let s = self.object_index(site).ok_or("No such settlement")?;
