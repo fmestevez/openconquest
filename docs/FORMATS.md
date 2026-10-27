@@ -996,6 +996,22 @@ for a ship its type's (0x597acc: 5, 8, 20, 25, 15, 15, 10, 10, 10, 15,
 10, 15), 1 with hero 3 aboard, and a phantom is hit at 20 % whatever the
 range; Greek fire always hits.
 
+## Boarding
+
+A ship that grapples another (contact state machine 0x4b5df0, `+0x6a9`)
+decides the fight at once (0x4b5b00): each side's boarding strength
+(`+0x53c`, 0x4bee60: the units' health x C x 15 / 1000 summed, 0x4b4e80,
+C the third value of 0x597d2c, 35/68/100 for bowmen, javelin men and
+swordsmen at level 0; plus `+0x544`/100 percent of experience; halved
+while `+600` is set) plus 1, a and d; the boarders win with chance
+(2a - d) / (a + d). Hero 4 (Hercules) or the ship of the dead (type 11)
+always wins, unless the defender has the same. The attacker plays
+`ABORD_0<heading>` if it won, `ABORD_1<heading>` if not, on its picture
+slot 3, a frame a tick; when that ends (state 3) a win costs the boarders
+`d + prize hull / 100` spread over crew, weapons and hull (tenths, ten
+times) and the prize changes hands (0x4a91a0); a loss wipes out the
+boarders and costs the ship seven tenths of it on the hull.
+
 ## Training and repair at a settlement
 
 A settlement's stock places (`[+0x244] + 0x23`, twelve) list units of two

@@ -119,7 +119,11 @@ impl Scene {
                         ship.task = Some(if b.ram {
                             Task::Ram { target }
                         } else {
-                            Task::Board { target, round: 0.0 }
+                            Task::Board {
+                                target,
+                                round: 0.0,
+                                won: None,
+                            }
                         });
                         continue;
                     }
@@ -435,7 +439,11 @@ impl Scene {
         }
         ship.path.clear();
         ship.task = Some(if board {
-            Task::Board { target, round: 0.0 }
+            Task::Board {
+                target,
+                round: 0.0,
+                won: None,
+            }
         } else {
             Task::Ram { target }
         });
@@ -514,20 +522,29 @@ impl Scene {
                 Task::Ram { .. } => {
                     self.ram(i, ti, data, caches);
                 }
-                Task::Board { round, .. } => {
+                Task::Board { round, won, .. } => {
                     // Grappled: the target stops too.
                     self.objects[ti].ship.as_mut().unwrap().path.clear();
-                    let round = round - dt;
-                    if round > 0.0 {
-                        self.objects[i].ship.as_mut().unwrap().task =
-                            Some(Task::Board { target, round });
-                    } else {
-                        let round = self.board_round(id, target, data, caches);
-                        if let Some(ship) = self.objects.get_mut(i).and_then(|o| o.ship.as_mut()) {
-                            if matches!(ship.task, Some(Task::Board { .. })) {
-                                ship.task = Some(Task::Board { target, round });
-                            }
+                    match won {
+                        // The fight is decided at once and shown; its
+                        // outcome stands when the picture ends.
+                        None => {
+                            let won = self.board_roll(i, ti);
+                            let round = self.show_boarding(i, ti, won, data, caches);
+                            self.objects[i].ship.as_mut().unwrap().task = Some(Task::Board {
+                                target,
+                                round,
+                                won: Some(won),
+                            });
                         }
+                        Some(won) if round > dt => {
+                            self.objects[i].ship.as_mut().unwrap().task = Some(Task::Board {
+                                target,
+                                round: round - dt,
+                                won: Some(won),
+                            });
+                        }
+                        Some(won) => self.board_end(id, target, won, data, caches),
                     }
                 }
                 _ => {}
@@ -575,92 +592,84 @@ impl Scene {
         self.hit(ida, to_self, data, caches);
     }
 
-    /// One exchange of blows between the boarders of ship `a` and the crew
-    /// of ship `t`; when the defenders fall, the ship changes hands.
-    /// Returns the seconds until the next: the boarding picture's length.
-    pub(super) fn board_round(
-        &mut self,
-        a: u32,
-        t: u32,
-        data: &GameData,
-        caches: &mut Caches,
-    ) -> f32 {
+    /// A side's boarding strength in the original's units (0x4b4e80,
+    /// 0x4bee60): each squad's C x 15 (0x597d2c, `melee`), the ship of the
+    /// dead's crews doubled.
+    fn boarding_strength(&self, i: usize) -> u32 {
+        let o = &self.objects[i];
+        let Some(ship) = o.ship.as_ref() else {
+            return 0;
+        };
+        let undead = if ship.kind == 11 {
+            combat::UNDEAD_MELEE
+        } else {
+            1
+        };
+        (0..ship.crew.count())
+            .map(|n| combat::melee(ship.crew.kind_of(n)) * 15 * undead)
+            .sum()
+    }
+
+    /// Decides the fight for ship `ti` boarded from `i` (0x4b5b00): with
+    /// strengths a and d (each + 1), the boarders win with chance
+    /// (2a - d) / (a + d); Hercules and the ship of the dead always win
+    /// unless the defenders have the same; magic wood keeps boarders off.
+    fn board_roll(&mut self, i: usize, ti: usize) -> bool {
+        let sure = |o: &MapObject| {
+            o.ship
+                .as_ref()
+                .is_some_and(|s| s.has_hero(objects::HERCULES) || s.kind == 11)
+        };
+        let (attacker, defender) = (&self.objects[i], &self.objects[ti]);
+        if defender
+            .ship
+            .as_ref()
+            .is_some_and(|s| s.has_treasure(objects::MAGIC_WOOD))
+        {
+            return false;
+        }
+        if sure(attacker) {
+            return !sure(defender);
+        }
+        let a = self.boarding_strength(i) + 1;
+        let d = self.boarding_strength(ti) + 1;
+        let roll = self.rng.next() % (a + d);
+        let line = 2 * a as i64 - d as i64;
+        line >= (a + d) as i64 || (roll as i64) < line
+    }
+
+    /// The end of the fight for ship `t` boarded from `a` (0x4b5df0 state
+    /// 3): won, the boarders lose as much as the defenders' strength and a
+    /// hundredth of the prize's hull, and half of them man the prize; lost,
+    /// they all fall and their ship takes seven tenths of that.
+    fn board_end(&mut self, a: u32, t: u32, won: bool, data: &GameData, caches: &mut Caches) {
         let (Some(i), Some(ti)) = (self.object_index(a), self.object_index(t)) else {
-            return combat::BOARD_ROUND;
+            return;
         };
+        let hull_t = self.objects[ti].combat.as_ref().map_or(0.0, |c| c.hull);
+        // In the original's units: hulls here are a fifteenth.
+        let blow = self.boarding_strength(ti) as f32 + 1.0 + hull_t * 15.0 / 100.0;
+        self.objects[i].ship.as_mut().unwrap().task = None;
+        if !won {
+            self.objects[i].ship.as_mut().unwrap().crew.squads = [0; 3];
+            self.hit(a, blow * 0.7 / 15.0, data, caches);
+            return;
+        }
+        // The losses fall on squads at random, up to the blow's worth.
         let mut ca = self.objects[i].ship.as_ref().unwrap().crew;
-        let mut ct = self.objects[ti].ship.as_ref().unwrap().crew;
-        // Each squad strikes once a round at a random enemy squad, winning
-        // by the odds of their boarding strengths.
-        let mut strikes = Vec::new();
-        for (side, (from, to)) in [(&ca, &ct), (&ct, &ca)].into_iter().enumerate() {
-            for n in 0..from.count() {
-                if to.count() == 0 {
-                    break;
-                }
-                let target = self.rng.next() % to.count();
-                // The ship of the dead's crews are undead and stronger.
-                let undead = |side: usize| {
-                    let o = &self.objects[if side == 0 { i } else { ti }];
-                    if o.ship.as_ref().is_some_and(|s| s.kind == 11) {
-                        combat::UNDEAD_MELEE
-                    } else {
-                        1
-                    }
-                };
-                let (mine, theirs) = (
-                    combat::melee(from.kind_of(n)) * undead(side),
-                    combat::melee(to.kind_of(target)) * undead(1 - side),
-                );
-                if self.rng.chance(50 * mine / (mine + theirs)) {
-                    strikes.push((side, target));
-                }
+        let mut lost = 0.0;
+        while ca.count() > 1 {
+            let n = self.rng.next() % ca.count();
+            let worth = (combat::melee(ca.kind_of(n)) * 15) as f32;
+            if lost + worth > blow {
+                break;
             }
+            lost += worth;
+            ca.lose(n);
         }
-        // Hercules cannot be beaten aboard, and magic wood keeps boarders
-        // off: such a side loses no one.
-        let unbeatable = |o: &MapObject, defending: bool| {
-            o.ship.as_ref().is_some_and(|s| {
-                s.has_hero(objects::HERCULES) || (defending && s.has_treasure(objects::MAGIC_WOOD))
-            })
-        };
-        let (safe_attackers, safe_defenders) = (
-            unbeatable(&self.objects[i], false),
-            unbeatable(&self.objects[ti], true),
-        );
-        strikes.retain(|&(side, _)| {
-            if side == 0 {
-                !safe_defenders
-            } else {
-                !safe_attackers
-            }
-        });
-        // Losses fall after the exchange, highest squad numbers first.
-        strikes.sort_by_key(|&(side, n)| std::cmp::Reverse((side, n)));
-        strikes.dedup();
-        for (side, n) in strikes {
-            if side == 0 {
-                ct.lose(n)
-            } else {
-                ca.lose(n)
-            }
-        }
-        let gained = ct.count() < self.objects[ti].ship.as_ref().unwrap().crew.count();
-        self.objects[i].ship.as_mut().unwrap().crew = ca;
-        self.objects[ti].ship.as_mut().unwrap().crew = ct;
-        // The fight aboard (0x4b5df0, 0x4e1bb0): the boarders gaining,
-        // `ABORD_0<heading>`, or thrown back, `ABORD_1<heading>`, a frame
-        // a tick between the ships; the next exchange waits for it.
-        let round = self.show_boarding(i, ti, gained, data, caches);
-        if ca.count() == 0 {
-            self.objects[i].ship.as_mut().unwrap().task = None;
-            return round;
-        }
-        if ct.count() > 0 {
-            return round;
-        }
-        // Captured: half the boarding squads (at least one) stay on the
-        // prize, strongest first.
+        let ct = self.objects[ti].ship.as_ref().unwrap().crew;
+        // Half the boarding squads (at least one) stay on the prize,
+        // strongest first.
         let mut prize = combat::Crew {
             class: ct.class,
             squads: [0; 3],
@@ -673,11 +682,8 @@ impl Scene {
             stay -= take;
         }
         let owner = self.objects[i].owner;
-        let ship = self.objects[i].ship.as_mut().unwrap();
-        ship.crew = ca;
-        ship.task = None;
+        self.objects[i].ship.as_mut().unwrap().crew = ca;
         self.capture(t, owner, prize, data, caches);
-        round
     }
 
     /// Plays the boarding picture between ships `i` and `ti`; its length.

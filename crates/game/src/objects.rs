@@ -399,9 +399,15 @@ pub enum Task {
     },
     /// Run into an enemy ship.
     Ram { target: u32 },
-    /// Come alongside an enemy ship and fight for it; `round` counts down
-    /// to the next exchange of blows.
-    Board { target: u32, round: f32 },
+    /// Come alongside an enemy ship and fight for it: once grappled, the
+    /// fight is decided (`won`) and shown, and `round` counts down to its
+    /// end.
+    Board {
+        target: u32,
+        round: f32,
+        #[serde(default)]
+        won: Option<bool>,
+    },
     /// Sail to an own dock and be repaired there.
     Repair { dock: u32 },
     /// Sail out to scout, then back to `home`.
