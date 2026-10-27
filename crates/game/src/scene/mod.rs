@@ -1287,6 +1287,7 @@ impl Scene {
         self.run_lightning(dt, data, caches);
         self.run_sight_points(dt);
         self.run_repairs(dt);
+        self.run_collapses(dt);
         self.run_orders();
         self.run_treasures(dt, data, caches);
         self.run_creatures(dt, data, caches);

@@ -4822,4 +4822,10 @@ fn attacks_end_at_ruins() {
     }
     let i = scene.object_index(ship).unwrap();
     assert_eq!(scene.objects[i].ship.as_ref().unwrap().task, None);
+    // The collapse plays out in 75 ticks.
+    for _ in 0..(3.1 / 0.02) as usize {
+        scene.update(0.02, &data, &mut caches);
+    }
+    let t = scene.object_index(target).unwrap();
+    assert_eq!(scene.objects[t].progress, Some(1.0), "collapsed");
 }

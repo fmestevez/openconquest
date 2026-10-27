@@ -500,6 +500,23 @@ impl Scene {
         }
     }
 
+    /// Buildings fallen to ruins play their collapse once, over the third
+    /// entry of their class's cycle table (+0xc0: 75 ticks for every
+    /// player building and barbarian structure), then keep its last frame
+    /// (for a barbarian structure, the dust it leaves).
+    pub(super) fn run_collapses(&mut self, dt: f32) {
+        let step = dt / crate::clock::ticks(COLLAPSE_TICKS);
+        for o in &mut self.objects {
+            if o.combat.is_none() && o.owner.is_none() && o.ship.is_none() {
+                if let Some(p) = o.progress.as_mut() {
+                    if *p < 1.0 {
+                        *p = (*p + step).min(1.0);
+                    }
+                }
+            }
+        }
+    }
+
     /// Orders ship `ship` to ram or board the enemy ship `target`.
     pub fn order_close(&mut self, ship: u32, target: u32, board: bool) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
@@ -980,6 +997,9 @@ impl Scene {
         });
     }
 }
+
+/// Ticks a building's collapse lasts (cycle table entry 2).
+const COLLAPSE_TICKS: u32 = 75;
 
 /// The share of a blow ship `ship` takes on its hull.
 pub(super) fn ship_hull_share(ship: &objects::Ship, c: &combat::Combatant) -> f32 {
