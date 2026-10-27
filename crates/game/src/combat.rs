@@ -206,7 +206,6 @@ impl Crew {
     pub fn count(&self) -> u32 {
         self.squads.iter().sum()
     }
-
 }
 
 /// Boarding strength of a squad of marine kind `kind`.

@@ -5620,3 +5620,42 @@ fn idle_ships_make_way_at_the_dock() {
         assert_eq!(c.hull, c.max_hull, "ship {id} mended");
     }
 }
+
+/// A ship under way about to leave its cell cannot be hooked (0x4b84b0,
+/// 0x4b5140); one lying still, or just entering its cell, can (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn ships_slipping_away_cannot_be_hooked() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let i = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+    let t = 64.0;
+    let (cx, cy) = (
+        (scene.objects[i].x / t).floor() * t,
+        (scene.objects[i].y / t).floor() * t,
+    );
+    let set = |scene: &mut Scene, x: f32, heading: usize, velocity: f32| {
+        let o = &mut scene.objects[i];
+        o.x = cx + x;
+        o.y = cy + t / 2.0;
+        let s = o.ship.as_mut().unwrap();
+        s.heading = heading;
+        s.velocity = velocity;
+    };
+    // 60 pixels a second is 2.4 a tick: 17 ticks cover 41 pixels.
+    set(&mut scene, 40.0, 0, 60.0);
+    assert!(scene.slipping(i), "24 pixels from the east edge");
+    set(&mut scene, 10.0, 0, 60.0);
+    assert!(!scene.slipping(i), "54 pixels from it");
+    set(&mut scene, 10.0, 4, 60.0);
+    assert!(
+        scene.slipping(i),
+        "10 pixels from the west edge, going west"
+    );
+    set(&mut scene, 60.0, 0, 0.0);
+    assert!(!scene.slipping(i), "lying still");
+}

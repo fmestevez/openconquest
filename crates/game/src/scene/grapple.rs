@@ -365,7 +365,8 @@ impl Scene {
     /// Boarder `i`, next to its prey `ti`, throws a hook if its last one was
     /// long enough ago (0x4b84b0). The throw itself always "hits" (item 9,
     /// 0x4bf7f0); it flies wide when the prey carries the magic wood
-    /// (0x4ba190) or lies across a blocked corner (0x499ca0).
+    /// (0x4ba190), lies across a blocked corner (0x499ca0), or is under way
+    /// and about to leave its cell (`slipping`).
     pub(super) fn throw_hook(&mut self, i: usize, ti: usize, data: &GameData, caches: &mut Caches) {
         let Some(Task::Board { target, thrown, .. }) = self.objects[i].ship.as_ref().unwrap().task
         else {
@@ -380,7 +381,7 @@ impl Scene {
             .ship
             .as_ref()
             .is_some_and(|s| s.has_treasure(objects::MAGIC_WOOD));
-        let strikes = !wood && self.corner_free(i, ti);
+        let strikes = !wood && self.corner_free(i, ti) && !self.slipping(ti);
         let (id, from) = (self.objects[i].id, (self.objects[i].x, self.objects[i].y));
         self.objects[i].ship.as_mut().unwrap().task = Some(Task::Board {
             target,
@@ -403,6 +404,37 @@ impl Scene {
             data,
             caches,
         );
+    }
+
+    /// Whether ship `ti` is under way and about to leave its cell: a ship
+    /// slipping away cannot be hooked (0x4b84b0 with 0x4b5140). Its way
+    /// left to the cell's edge ahead (twice it straight on, three times on
+    /// a diagonal; 0x4b5140 by heading +0x5af, the south-west one counted
+    /// twice as the original does) times 3000 over its speed (+0x59b, in
+    /// 1/6000 pixel a tick) under 17.
+    pub(super) fn slipping(&self, ti: usize) -> bool {
+        let o = &self.objects[ti];
+        let Some(ship) = o.ship.as_ref() else {
+            return false;
+        };
+        let speed = ship.velocity * crate::clock::TICK * 6000.0;
+        if speed <= 0.0 {
+            return false;
+        }
+        let t = TILE_SIZE as f32;
+        let (cx, cy) = ((o.x / t).floor() * t, (o.y / t).floor() * t);
+        let (east, west) = (cx + t - o.x, o.x - cx);
+        let (north, south) = (o.y - cy, cy + t - o.y);
+        let way = match ship.heading % 8 {
+            0 => east * 2.0,
+            1 => east * 3.0,
+            2 => north * 2.0,
+            3 => north * 3.0,
+            4 | 5 => west * 2.0,
+            6 => south * 2.0,
+            _ => south * 3.0,
+        };
+        way * 3000.0 / speed < 17.0
     }
 
     /// A hook thrown by `from` lands, on ship `target` if `hit`. It holds
