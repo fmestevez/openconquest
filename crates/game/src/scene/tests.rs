@@ -781,7 +781,7 @@ fn tornado_and_sea_monster() {
         .unwrap();
     let monster = scene.summons[0].0;
     let m = scene.object_index(monster).unwrap();
-    assert!(scene.is_own(&scene.objects[m]) && scene.objects[m].is_armed());
+    assert!(scene.is_own(&scene.objects[m]), "it fights for us");
     for _ in 0..50 * 60 {
         scene.update(0.02, &data, &mut caches);
         if scene.object_index(ship).is_none() {

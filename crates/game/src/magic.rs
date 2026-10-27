@@ -229,11 +229,8 @@ pub const FX_TORNADO: &str = "TRNDSPR";
 /// A summoned sea monster spends its strength: a hundredth of it at the
 /// end of each idle round of 50-125 ticks (UMonsterClassTy 0x491fa0,
 /// 0x491830), here evenly over the rounds' mean; it goes back to the deep
-/// when none is left. What it strikes with (as four gastraphetes, which
-/// strike at close quarters) is a placeholder.
+/// when none is left. It bites (see `scene::creatures`).
 pub const MONSTER_ROUND_SECONDS: f32 = 87.5 * crate::clock::TICK;
-pub const MONSTER_WEAPON: u8 = 4;
-pub const MONSTER_WEAPONS: usize = 4;
 
 /// Lightning's picture (LightningObjClassTy, `LTSPR_%1u`, 0x42cfa0): over
 /// water `LTSPR_1`, over land `LTSPR_2`.

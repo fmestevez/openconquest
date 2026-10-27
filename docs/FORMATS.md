@@ -1094,7 +1094,11 @@ percentage of strength (0x492360: max `+0x7c`, now `+0x80`, from fields
 at +0x14 and +0x18; a summoned one 100 %, 0x493780). Idle, it waits
 50-125 ticks a round (0x491830) and loses a hundredth of its maximum at
 each round's end (0x491fa0); at none it goes. Lightning takes half its
-maximum, blows what they carry.
+maximum, blows what they carry. It bites in its attack state (0x490830)
+the ship on the cell beside it, at a frame of its picture (0x5ba4e0):
+message 0xf166 with 37500 x its strength left in percent (0x4900f0) / 100,
+type 0x1fb, three quarters off with hero 5 and to a fifth under a magic
+shield (0x4dc630), each bite costing it a twentieth of its maximum.
 
 The Gorgon (MedusaClassTy, `gorgona.cpp`) rests 200-500 ticks (0x4019d0),
 rises (`GORG1`, 30 frames), stares 1-3 times (`GORG2`, 28 frames, at

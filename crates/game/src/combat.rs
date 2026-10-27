@@ -595,14 +595,13 @@ pub fn special_weapon(kind: u8) -> Option<u8> {
 /// throw a level-1 weapon's blow (0x4126f0 reads the A x 15 cache's copy
 /// at 0x5c73a8): a ballista's (item 6), a small catapult's (5) and item
 /// 3's, drawn as `throw_letter`. Their lairs send them out
-/// (`scene::walkers`) and do not fight themselves. Sea monsters' bite is a
-/// placeholder. (Harpies and dragons strike as they fly: `scene::flyers`.)
+/// (`scene::walkers`) and do not fight themselves. Sea monsters bite
+/// (`scene::creatures`). (Harpies and dragons strike as they fly: `scene::flyers`.)
 pub fn creature_weapons(class_id: u32) -> Vec<u8> {
     match class_id {
         0x1f4 => vec![6],
         0x1f5 => vec![5],
         0x1f6 => vec![3],
-        0x1fb => vec![4; 4],
         _ => Vec::new(),
     }
 }

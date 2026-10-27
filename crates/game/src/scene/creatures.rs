@@ -17,6 +17,9 @@ use super::{Caches, GameData, Scene};
 /// magic shield keep it off, the mirror shield cuts the blow by its
 /// share.
 const GORGON_STARE: [u32; 3] = [1, 2, 3];
+/// Seconds between a sea monster's bites and its steps. Estimates.
+const MONSTER_BITE_SECONDS: f32 = 2.0;
+const MONSTER_STEP_SECONDS: f32 = 0.75;
 
 /// A Gorgon's cycle: seconds until her next stare, and the stares left in
 /// this rising (0 resting), and how many she has made.
@@ -63,6 +66,7 @@ impl Scene {
             c.stone = (c.stone - dt).max(0.0);
         }
         self.run_gorgons(dt, data, caches);
+        self.run_sea_monsters(dt, data, caches);
         self.run_sirens(dt, data, caches);
     }
 
@@ -249,6 +253,103 @@ impl Scene {
                 ticks(28 - 13 + 30 + 21) + rest(&mut self.rng)
             };
             self.gorgons.insert(id, g);
+        }
+    }
+
+    /// Sea monsters (UMonsterClassTy, umonster.cpp) bite the enemy ships
+    /// beside them: each bite (message 0xf166, 0x490830) strikes 37500 x
+    /// their strength left in percent / 100, through the hull's share,
+    /// three quarters off with Argus, to a fifth under a magic shield
+    /// (0x4dc630), and costs them a twentieth of their strength. They go
+    /// for the nearest within 7 cells a cell at a time. How often they
+    /// bite and how fast they go are estimates.
+    fn run_sea_monsters(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+        let t = TILE_SIZE as f32;
+        let cell = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
+        let monsters: Vec<u32> = self
+            .objects
+            .iter()
+            .filter(|o| o.class == ObjectClass::Monster(0x1fb))
+            .map(|o| o.id)
+            .collect();
+        for id in monsters {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            let clock = self.sea_monsters.entry(id).or_insert((0.0, 0.0));
+            clock.0 -= dt;
+            clock.1 -= dt;
+            let (bite_ready, step_ready) = (clock.0 <= 0.0, clock.1 <= 0.0);
+            let me = &self.objects[i];
+            let here = cell(me.x, me.y);
+            // The nearest enemy ship within 7 cells.
+            let prey = self
+                .objects
+                .iter()
+                .filter(|o| o.ship.is_some() && Self::are_enemies(me, o))
+                .filter(|o| {
+                    !o.ship
+                        .as_ref()
+                        .is_some_and(|s| s.has_hero(crate::objects::ORPHEUS))
+                })
+                .map(|o| {
+                    let c = cell(o.x, o.y);
+                    (o.id, c, (c.0 - here.0).abs().max((c.1 - here.1).abs()))
+                })
+                .filter(|p| p.2 <= 7)
+                .min_by_key(|p| p.2);
+            let Some((target, at, d)) = prey else {
+                continue;
+            };
+            if d <= 1 {
+                if !bite_ready {
+                    continue;
+                }
+                self.sea_monsters.get_mut(&id).unwrap().0 = MONSTER_BITE_SECONDS;
+                let c = self.objects[i].combat.as_mut().unwrap();
+                let strength = (c.hull / c.max_hull.max(1.0)).clamp(0.0, 1.0);
+                c.hull -= c.max_hull * 0.05;
+                let Some(ti) = self.object_index(target) else {
+                    continue;
+                };
+                let o = &self.objects[ti];
+                let (Some(s), Some(cb)) = (&o.ship, &o.combat) else {
+                    continue;
+                };
+                let mut blow = 37_500.0 * strength / 15.0 * super::battle::ship_hull_share(s, cb);
+                if s.has_hero(crate::objects::ARGUS) {
+                    blow *= 0.25;
+                }
+                if cb.protect_magic > 0.0 {
+                    blow *= 0.2;
+                }
+                let (mx, my) = (self.objects[i].x, self.objects[i].y);
+                self.sounds.push(("htk1", mx, my));
+                self.hit(target, blow, data, caches);
+                if self.objects[i]
+                    .combat
+                    .as_ref()
+                    .is_some_and(|c| c.hull <= 0.0)
+                {
+                    self.hit(id, 0.0, data, caches);
+                }
+            } else if step_ready {
+                self.sea_monsters.get_mut(&id).unwrap().1 = MONSTER_STEP_SECONDS;
+                let next = (
+                    here.0 + (at.0 - here.0).signum(),
+                    here.1 + (at.1 - here.1).signum(),
+                );
+                let free = self.nav.is_water(next.0, next.1)
+                    && !self
+                        .objects
+                        .iter()
+                        .any(|o| o.ship.is_some() && cell(o.x, o.y) == next);
+                if free {
+                    let o = &mut self.objects[i];
+                    o.x = next.0 as f32 * t + t / 2.0;
+                    o.y = next.1 as f32 * t + t / 2.0;
+                }
+            }
         }
     }
 }

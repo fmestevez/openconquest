@@ -345,11 +345,8 @@ impl Scene {
             .map_err(|e| format!("The spell failed: {e:#}"))?
             .ok_or("The spell failed")?;
         if spell == Spell::Monster {
-            // A summoned monster fights for its master for a while.
+            // A summoned monster bites its master's enemies (`creatures`).
             obj.owner = master;
-            if let Some(c) = obj.combat.as_mut() {
-                c.weapons = vec![magic::MONSTER_WEAPON; magic::MONSTER_WEAPONS];
-            }
             // It stays while its strength lasts (below).
             self.summons.push((id, f32::INFINITY));
         } else {
