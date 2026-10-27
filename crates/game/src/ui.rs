@@ -1276,6 +1276,7 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
             }
             Some(Task::Board { .. }) => text += ". Boarding",
             Some(Task::Repair { .. }) => text += ". Repairing",
+            Some(Task::Fetch { .. }) => text += ". Sailing to load",
             Some(Task::Scout { .. }) => text += ". Scouting",
             Some(Task::Patrol { .. }) => text += ". Patrolling",
             Some(Task::Zone { attack: false, .. }) => text += ". Guarding a zone",

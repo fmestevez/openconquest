@@ -1256,6 +1256,7 @@ impl Scene {
         self.run_treasures(dt, data, caches);
         self.run_creatures(dt, data, caches);
         self.run_wizards(dt, data, caches);
+        self.run_fetches();
         self.run_flyers(dt, data, caches);
         self.run_walkers(dt, data, caches);
         self.run_porters(dt, data, caches);

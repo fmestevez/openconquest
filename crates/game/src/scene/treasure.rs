@@ -335,7 +335,6 @@ impl Scene {
     /// Goods, weapons and scrolls are handed over at own settlements and
     /// towns.
     fn deliver_treasures(&mut self) {
-        let reach = combat::LOAD_REACH * TILE_SIZE as f32;
         let carriers: Vec<usize> = self
             .objects
             .iter()
@@ -348,17 +347,19 @@ impl Scene {
             .map(|(i, _)| i)
             .collect();
         for i in carriers {
-            let o = &self.objects[i];
-            let Some(owner) = o.owner else { continue };
+            let Some(owner) = self.objects[i].owner else {
+                continue;
+            };
             let site = self
                 .objects
                 .iter()
-                .find(|b| {
+                .enumerate()
+                .find(|(k, b)| {
                     matches!(b.class, ObjectClass::Building(SETTLEMENT | TOWN))
                         && b.owner == Some(owner)
-                        && ((b.x - o.x).powi(2) + (b.y - o.y).powi(2)).sqrt() <= reach
+                        && self.alongside(i, *k)
                 })
-                .map(|b| b.id);
+                .map(|(_, b)| b.id);
             let Some(site) = site else { continue };
             let s = self.objects[i].ship.as_mut().unwrap();
             let (given, kept): (Vec<Treasure>, Vec<Treasure>) = s

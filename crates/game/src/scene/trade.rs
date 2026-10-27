@@ -661,11 +661,10 @@ impl Scene {
     ) -> Option<usize> {
         let s = self.object_index(smithy)?;
         let (sx, sy) = (self.objects[s].x, self.objects[s].y);
-        let reach = combat::LOAD_REACH * TILE_SIZE as f32;
         self.objects
             .iter()
             .enumerate()
-            .filter(|(_, o)| self.is_own(o))
+            .filter(|(i, o)| self.is_own(o) && self.alongside(*i, s))
             .filter_map(|(i, o)| {
                 let ship = o.ship.as_ref()?;
                 let has = if upgrade == combat::Upgrade::Armour {
@@ -674,7 +673,7 @@ impl Scene {
                     ship.ram
                 };
                 let d = ((o.x - sx).powi(2) + (o.y - sy).powi(2)).sqrt();
-                (has < level && d <= reach).then_some((i, d))
+                (has < level).then_some((i, d))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(i, _)| i)
@@ -797,14 +796,44 @@ impl Scene {
     /// Returns how many items came aboard.
     /// The player's ship nearest to `site` within loading reach.
     pub fn ship_alongside(&self, site: u32) -> Option<u32> {
-        let t = TILE_SIZE as f32;
-        let s = self.objects.iter().find(|o| o.id == site)?;
+        let k = self.object_index(site)?;
+        let s = &self.objects[k];
         let dist = |o: &MapObject| ((o.x - s.x).powi(2) + (o.y - s.y).powi(2)).sqrt();
         self.objects
             .iter()
-            .filter(|o| self.is_own(o) && o.ship.is_some() && dist(o) <= combat::LOAD_REACH * t)
-            .min_by(|a, b| dist(a).total_cmp(&dist(b)))
-            .map(|o| o.id)
+            .enumerate()
+            .filter(|(i, o)| self.is_own(o) && o.ship.is_some() && self.alongside(*i, k))
+            .min_by(|a, b| dist(a.1).total_cmp(&dist(b.1)))
+            .map(|(_, o)| o.id)
+    }
+
+    /// Ships sent to load at a settlement take their unit aboard once
+    /// alongside it, or give up if they cannot get there.
+    pub(super) fn run_fetches(&mut self) {
+        let waiting: Vec<(u32, u32, u8)> = self
+            .objects
+            .iter()
+            .filter_map(|o| match o.ship.as_ref() {
+                Some(s) if s.path.is_empty() => match s.task {
+                    Some(Task::Fetch { site, item }) => Some((o.id, site, item)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        for (ship, site, item) in waiting {
+            let (Some(i), Some(s)) = (self.object_index(ship), self.object_index(site)) else {
+                continue;
+            };
+            self.objects[i].ship.as_mut().unwrap().task = None;
+            if self.alongside(i, s) {
+                if let Err(e) = self.load_item(site, ship, item) {
+                    if self.is_own(&self.objects[i]) {
+                        self.messages.push(e);
+                    }
+                }
+            }
+        }
     }
 
     /// Puts one unit of `item` from `site`'s stock aboard `ship`, which must
@@ -878,15 +907,10 @@ impl Scene {
     }
 
     pub fn load_item(&mut self, site: u32, ship: u32, item: u8) -> Result<(), String> {
-        let t = TILE_SIZE as f32;
         let s = self.object_index(site).ok_or("No such settlement")?;
         let i = self.object_index(ship).ok_or("No such ship")?;
         if !self.is_own(&self.objects[i]) || self.objects[i].ship.is_none() {
             return Err("Choose one of your ships".into());
-        }
-        let (a, b) = (&self.objects[s], &self.objects[i]);
-        if ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt() > combat::LOAD_REACH * t {
-            return Err("The ship must lie next to the settlement".into());
         }
         let mut stock = self.garrison(site);
         if stock.get(item as usize).is_none_or(|&n| n == 0) {
@@ -904,6 +928,21 @@ impl Scene {
         if free < combat::item_size(item) {
             return Err("No room aboard".into());
         }
+        // A ship away from the settlement sails alongside first, and takes
+        // the unit aboard there (the original's load pointer sends it).
+        if !self.alongside(i, s) {
+            let path = self
+                .route_beside(i, s)
+                .ok_or("The ship cannot reach the settlement")?;
+            let ship = self.objects[i].ship.as_mut().unwrap();
+            ship.path = path;
+            ship.task = Some(Task::Fetch { site, item });
+            return Ok(());
+        }
+        let obj = &mut self.objects[i];
+        let (Some(ship), Some(fight)) = (obj.ship.as_mut(), obj.combat.as_mut()) else {
+            return Err("Not a ship".into());
+        };
         if item < 3 {
             ship.crew.squads[item as usize] += 1;
         } else {
@@ -915,16 +954,17 @@ impl Scene {
     }
 
     pub fn load_crew(&mut self, ship: u32) -> Result<u32, String> {
-        let t = TILE_SIZE as f32;
         let i = self.object_index(ship).ok_or("No such ship")?;
-        let (sx, sy) = (self.objects[i].x, self.objects[i].y);
         let sites: Vec<u32> = self
             .objects
             .iter()
             .filter(|o| {
                 self.is_own(o)
                     && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN | WORKSHOP))
-                    && ((o.x - sx).powi(2) + (o.y - sy).powi(2)).sqrt() <= combat::LOAD_REACH * t
+            })
+            .filter(|o| {
+                self.object_index(o.id)
+                    .is_some_and(|k| self.alongside(i, k))
             })
             .map(|o| o.id)
             .collect();
@@ -1635,6 +1675,67 @@ impl Scene {
         self.nav
             .is_water(cx + dx, cy + dy)
             .then_some((cx + dx, cy + dy))
+    }
+
+    /// Object `b`'s footprint (corner cell and size) and how far out its
+    /// nearest water lies: ships lie alongside it in that ring (1 for a
+    /// building on the shore; up to 4 for one a little inland).
+    fn berth_ring(&self, b: usize) -> (i32, i32, i32, i32) {
+        let t = TILE_SIZE as f32;
+        let other = &self.objects[b];
+        let (x0, y0, n) = match (other.ship.is_none(), other.cell) {
+            (true, Some((bx, by))) => (bx, by, building_cells(other)),
+            _ => (
+                (other.x / t).floor() as i32,
+                (other.y / t).floor() as i32,
+                1,
+            ),
+        };
+        let ring = (1..=4)
+            .find(|&r| {
+                (y0 - r..=y0 + n - 1 + r)
+                    .any(|y| (x0 - r..=x0 + n - 1 + r).any(|x| self.nav.is_water(x, y)))
+            })
+            .unwrap_or(1);
+        (x0, y0, n, ring)
+    }
+
+    /// Whether ship `i` lies alongside object `b` (see `berth_ring`).
+    pub(super) fn alongside(&self, i: usize, b: usize) -> bool {
+        let t = TILE_SIZE as f32;
+        let o = &self.objects[i];
+        let (cx, cy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let (x0, y0, n, ring) = self.berth_ring(b);
+        let dx = (x0 - cx).max(cx - (x0 + n - 1)).max(0);
+        let dy = (y0 - cy).max(cy - (y0 + n - 1)).max(0);
+        dx.max(dy) <= ring
+    }
+
+    /// A route for ship `i` to lie alongside object `b`: to the nearest
+    /// water cell of its berth ring that the ship can reach.
+    pub(super) fn route_beside(&self, i: usize, b: usize) -> Option<VecDeque<(f32, f32)>> {
+        let from = (self.objects[i].x, self.objects[i].y);
+        self.beside_cells(b, from)
+            .into_iter()
+            .find_map(|(x, y)| self.plan_route(i, x, y))
+    }
+
+    /// The water cells of object `b`'s berth ring, nearest `from` first,
+    /// as world points.
+    pub(super) fn beside_cells(&self, b: usize, from: (f32, f32)) -> Vec<(f32, f32)> {
+        let t = TILE_SIZE as f32;
+        let (x0, y0, n, r) = self.berth_ring(b);
+        let mut cells = (y0 - r..=y0 + n - 1 + r)
+            .flat_map(|y| (x0 - r..=x0 + n - 1 + r).map(move |x| (x, y)))
+            .filter(|&(x, y)| self.nav.is_water(x, y))
+            .map(|(x, y)| (x as f32 * t + t / 2.0, y as f32 * t + t / 2.0))
+            .collect::<Vec<_>>();
+        cells.sort_by(|a, b| {
+            (a.0 - from.0)
+                .hypot(a.1 - from.1)
+                .total_cmp(&(b.0 - from.0).hypot(b.1 - from.1))
+        });
+        cells
     }
 
     /// Where a ship lies to unload at `p`: before a moorage's front, else at

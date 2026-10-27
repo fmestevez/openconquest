@@ -165,10 +165,6 @@ pub fn item_cost(item: u8) -> (u32, u32) {
     }
 }
 
-/// How close (in cells) a ship must lie to a settlement to take on marines.
-/// Placeholder.
-pub const LOAD_REACH: f32 = 3.0;
-
 /// Boarding strength of each marine kind (0x597d2c rows 0-2, third value
 /// at level 0).
 const CREW_MELEE: [u32; 3] = [35, 68, 100];

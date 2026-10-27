@@ -1,7 +1,6 @@
 //! Repairs: ships at a dock, buildings by a settlement or town (the
 //! manual's "Repairing a Ship" and "Repairing a Terrain Object").
 
-use openconquest_formats::map::TILE_SIZE;
 use openconquest_formats::ObjectClass;
 
 use super::Scene;
@@ -17,8 +16,6 @@ const MEND_CYCLE: u32 = 200;
 /// its type's repair price (0x59b388) times the share mended (0x4b1fc0).
 const DOCK_TICKS: u32 = 9;
 const DOCK_REPAIR_PRICE: [u32; 12] = [140, 280, 800, 910, 650, 560, 490, 420, 420, 630, 420, 630];
-/// How near (cells) a ship must lie to the dock. Placeholder.
-pub const DOCK_REACH: f32 = 2.6;
 
 impl Scene {
     /// Orders own ship `ship` to sail to own dock `dock` and be repaired.
@@ -35,9 +32,9 @@ impl Scene {
         if c.hull >= c.max_hull {
             return Err("The ship needs no repair".into());
         }
-        let (x, y) = (self.objects[d].x, self.objects[d].y);
+        // It sails alongside the dock (a water cell touching it).
         let path = self
-            .plan_route(i, x, y)
+            .route_beside(i, d)
             .ok_or("The ship cannot reach that dock")?;
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
         s.path = path;
@@ -84,21 +81,15 @@ impl Scene {
     /// Ships at their docks and buildings being mended get their strength
     /// back, at the owner's expense, until whole or the money runs out.
     pub(super) fn run_repairs(&mut self, dt: f32) {
-        let t = TILE_SIZE as f32;
         let mut work: Vec<(u32, bool)> = self.mending.iter().map(|&id| (id, false)).collect();
-        for o in &self.objects {
+        for (i, o) in self.objects.iter().enumerate() {
             let Some(Task::Repair { dock }) = o.ship.as_ref().and_then(|s| s.task) else {
                 continue;
             };
+            // Mended once alongside the dock.
             match self.object_index(dock) {
-                Some(d) => {
-                    let dd = &self.objects[d];
-                    let near =
-                        ((o.x - dd.x).powi(2) + (o.y - dd.y).powi(2)).sqrt() <= DOCK_REACH * t;
-                    if near {
-                        work.push((o.id, true));
-                    }
-                }
+                Some(d) if self.alongside(i, d) => work.push((o.id, true)),
+                Some(_) => {}
                 None => work.push((o.id, true)),
             }
         }

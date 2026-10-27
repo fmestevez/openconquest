@@ -425,6 +425,9 @@ pub enum Task {
     },
     /// Sail to an own dock and be repaired there.
     Repair { dock: u32 },
+    /// Sail alongside own settlement `site` and take one `item` of its
+    /// stock aboard.
+    Fetch { site: u32, item: u8 },
     /// Sail out to scout, then back to `home`.
     Scout { home: (f32, f32) },
     /// Sail to `to`, then back to `from`, and so on.

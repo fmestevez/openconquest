@@ -3988,3 +3988,59 @@ fn merchants_answer_gather_orders() {
         scene.sounds
     );
 }
+
+/// A ship told to load at a settlement it is away from sails alongside
+/// and takes the unit aboard there (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ships_sail_to_load() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let site = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN)))
+        .unwrap()
+        .id;
+    let mut stock = scene.garrison(site);
+    stock[0] = 3;
+    scene.garrisons.insert(site, stock);
+    let s = scene.object_index(site).unwrap();
+    // The warship farthest from the settlement that is still near enough.
+    let ship = scene
+        .objects
+        .iter()
+        .enumerate()
+        .filter(|(i, o)| {
+            scene.is_own(o)
+                && o.ship.as_ref().is_some_and(|sh| sh.kind >= 2)
+                && !scene.alongside(*i, s)
+        })
+        .map(|(_, o)| o.id)
+        .next()
+        .expect("a warship away from the settlement");
+    // Room aboard.
+    let k = scene.object_index(ship).unwrap();
+    scene.objects[k].ship.as_mut().unwrap().crew.squads = [0, 0, 0];
+    scene.objects[k].combat.as_mut().unwrap().weapons.clear();
+    let before = scene.objects[scene.object_index(ship).unwrap()]
+        .ship
+        .as_ref()
+        .unwrap()
+        .crew
+        .squads[0];
+    scene.load_item(site, ship, 0).unwrap();
+    for _ in 0..50 * 120 {
+        scene.update(0.02, &data, &mut caches);
+        let i = scene.object_index(ship).unwrap();
+        if scene.objects[i].ship.as_ref().unwrap().crew.squads[0] > before {
+            assert!(scene.alongside(i, scene.object_index(site).unwrap()));
+            return;
+        }
+    }
+    panic!("the ship never loaded");
+}
