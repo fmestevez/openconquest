@@ -1167,15 +1167,10 @@ impl Scene {
             Ok(_) => {}
             Err(e) => eprintln!("could not load building frames: {e:#}"),
         }
-        // A damaged building's frames show it ever more broken: the frame
-        // follows its condition within the third (intact ones animate).
-        self.objects[i].progress = match state {
-            BuildingState::Standing(level @ (1 | 2)) => {
-                let top = level as f32 * 100.0 / 3.0;
-                Some(((top - percent) * 3.0 / 100.0).clamp(0.0, 1.0))
-            }
-            _ => None,
-        };
+        // Its condition picks the picture (thirds); the picture's frames
+        // then play round on the building's cycle, damaged or not
+        // (LandObjClassTy 0x422e30).
+        self.objects[i].progress = None;
     }
 
     /// Ruins collapse once, then lie still on their last frame.

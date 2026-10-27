@@ -222,9 +222,9 @@ other); 88-151 8 headings x 8 frames furling the sail. Ships keep to the
 grid: they turn on the spot to the next cell, then sail to its centre,
 straight or diagonal, one ship to a cell. Where the player sent a ship is
 marked with `WPMOVE` (controlm: `_WPMOVE`, and `_WPNUM` digits numbering
-waypoints) until it gets there. A damaged building's 12 frames
-(`<prefix>11x`/`12x` level 1 and 2) show it ever more broken, not an
-animation; its ruins (`<prefix>21`) collapse once. The fishing net
+waypoints) until it gets there. A damaged building's picture is chosen
+by its condition and loops like any other (0x422e30); its ruins
+(`<prefix>21`) collapse once. The fishing net
 `SETKA_<heading % 4>` lies along the hull.
 
 ### Font, kind 3 (verified)
