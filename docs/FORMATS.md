@@ -577,7 +577,7 @@ game's own, from its error strings.
 | 0x192 | `WhaleClassTy` | leviathan zone | 7, 8 | 9, 10: width, height |
 | 0x1f4-0x1f6 | `CyclopClassTy` | cyclops, minotaur, amazon | | |
 | 0x1f7 | `CyclopsJamClassTy` | | | |
-| 0x1f8, 0x1f9 | `HarpyClassTy` | harpy, dragon (sent out by their nests) | 4, 5 | 6: player, 7: 1 (new), 8-10: the nest's fields 7, 8, 11 |
+| 0x1f8, 0x1f9 | `HarpyClassTy` | harpy, dragon (sent out by their nests) | 4, 5 | 6: the nest, 7: 1 (new), 8-10: the nest's fields 7, 8 (range), 11 (rest) |
 | 0x1fa | `MedusaClassTy` | medusa (`GORG%1d`) | 5, 6 | 7, 8: area |
 | 0x1fb | `UMonsterClassTy` | sea monster | 7, 8 | 4: type |
 | 0x1fc | `LandingClassTy` | landing party | | |
@@ -1144,6 +1144,31 @@ drawn as P (15) on the cell ahead of it, carrying no blow of its own
 (0x41f1c0 picks a free cell beside it, land next to buildings first): its
 teeth, which rise there as a cyclops, a minotaur or an amazon at random on
 land (message 0x1497) or as a wild sea monster on water (0x493780).
+
+A flyer keeps to its nest's range: the nest's fields 7 and 8 (5 and 5 in
+most missions, 15 and 15 for miss010's dragon) are how many cells it may go
+either way, and field 11 shortens its rests. Its states (0x41f680, run a
+tick at a time by 0x41fbd0, moved by 0x41e4b0):
+
+- **Rest (1).** It stays on the nest until `rand(1100 - 100 x field 11)`
+  ticks have passed. A dragon then takes off only if an object of a side is
+  in its range (0x41ef00); otherwise it rests again.
+- **Take-off (2), fly (3), land (6).** Each leg goes to a cell picked by
+  0x41e840. The cell lies within the 13 x 13 round mask at 0x595a30 around
+  the flyer and within the range. Each cell weighs 1, plus 10 x the sum of
+  (1 + count) over the marine groups aboard the ships beside it, and the
+  pick is weighted random.
+- **Moving.** Its route steps cell to cell. Each step spreads over one cycle
+  of the flying picture, so it covers a cell per 15 ticks. When a step's
+  heading differs, it turns first through `HRPSPR_4`/`DRGSPR_4`: 8 frames a
+  heading, one a tick.
+- **At each cell (0x41efb0).** It strikes (state 5) what is beside it,
+  except on its way home.
+- **After a strike.** It flies home (+0xc6), lands and rests. A leg without
+  a strike is followed by another.
+- **Picture delays.** By state at 0x595d10 (harpy) and 0x595d30 (dragon):
+  0 or 1 (a frame a tick), except 2 for a harpy waiting. Take-off and
+  landing play 35 frames for a harpy and 20 for a dragon.
 
 ## Land creatures
 

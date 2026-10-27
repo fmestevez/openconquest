@@ -826,12 +826,13 @@ pub fn resolve(
         ObjectClass::Monster(cls @ (0x1f8 | 0x1f9)) => {
             // A harpy or dragon (HarpyClassTy, 0x4207b0) out of its nest:
             // `HRPSPR_`/`DRGSPR_` + state + heading; resting at first.
+            // A frame a tick (delays 0x595d10, 0x595d30).
             let frames = flyer_frames(data, caches, &flyer_sequence(cls, 0, 1))?;
             (
                 CellCentre(f(4), f(5)),
                 Visual {
                     frames,
-                    frame_ms: DEFAULT_FRAME_MS,
+                    frame_ms: crate::clock::TICK_MS,
                 },
             )
         }

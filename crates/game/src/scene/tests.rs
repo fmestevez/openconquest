@@ -3817,3 +3817,50 @@ fn mending_takes_the_original_time_and_price() {
     let paid = amber as i64 - scene.amber as i64;
     assert!((199..=201).contains(&paid), "paid {paid}");
 }
+
+/// A harpy wanders its nest's range, strikes a crewed ship beside it,
+/// then flies home and rests (needs `OPENCONQUEST_DATA`).
+#[test]
+fn harpy_strikes_and_goes_home() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    let t = TILE_SIZE as f32;
+    let harpy = scene.flyers[0].clone();
+    let nest = &scene.objects[scene.object_index(harpy.nest).unwrap()];
+    let (nx, ny) = (nest.x, nest.y);
+    // A crewed ship two cells off, the only one in reach.
+    let ship = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    scene.objects[ship].x = (nx / t).floor() * t + t / 2.0 + 2.0 * t;
+    scene.objects[ship].y = ((ny - t / 2.0) / t).floor() * t + t / 2.0;
+    scene.objects[ship].ship.as_mut().unwrap().crew.squads = [3, 0, 0];
+    scene.objects[ship].combat.as_mut().unwrap().max_hull = 1e9;
+    scene.objects[ship].combat.as_mut().unwrap().hull = 1e9;
+    let id = scene.objects[ship].id;
+    let mut struck = false;
+    let mut home_again = false;
+    for _ in 0..50 * 240 {
+        scene.update(0.02, &data, &mut caches);
+        let i = scene.object_index(id).unwrap();
+        // Hold the ship where it is.
+        scene.objects[i].ship.as_mut().unwrap().path.clear();
+        let f = scene.flyers.iter().find(|f| f.id == harpy.id).unwrap();
+        if matches!(f.flight, flyers::Flight::Striking { .. }) {
+            struck = true;
+        }
+        if struck && matches!(f.flight, flyers::Flight::Rest(_)) {
+            home_again = true;
+            break;
+        }
+    }
+    assert!(struck, "the harpy struck");
+    assert!(home_again, "and went home to rest");
+}

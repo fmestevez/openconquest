@@ -96,8 +96,8 @@ marked as a placeholder in the code.
 - The campaign scripts' story events (partly decoded).
 - The original's multiplayer screens and network play with the original game
   (OpenConquest has its own lobby).
-- Some values are still estimates, among them how far harpies and dragons
-  look for ships, and how strongly some gifts and heroes help.
+- Some values are still estimates, among them how strongly some gifts and
+  heroes help.
 
 ### Modern improvements
 
