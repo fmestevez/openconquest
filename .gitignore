@@ -3,3 +3,4 @@
 *.png
 /dist
 .DS_Store
+.claude/worktrees/

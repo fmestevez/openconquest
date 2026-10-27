@@ -1086,7 +1086,7 @@ impl GameView<'_> {
             lines.extend(wrap(self.text, p, width / scale));
         }
         lines.push(String::new());
-        lines.push("Click or press Enter to begin (F1 shows this again)".to_string());
+        lines.push("Click or press Enter to begin (B shows this again)".to_string());
         let height = (lines.len() as u32 * line).min(screen.h.saturating_sub(2 * pad));
         let x = screen.x + screen.w.saturating_sub(width) / 2;
         let y = screen.y + screen.h.saturating_sub(height) / 2;
