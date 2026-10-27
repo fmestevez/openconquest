@@ -368,6 +368,12 @@ pub enum RamStage {
     Back,
 }
 
+/// Ship types that back off from a ram with their under-way frames run
+/// backwards (0x597a24).
+const BACKS_UNDER_WAY: [bool; 12] = [
+    false, false, true, true, true, true, true, true, true, true, false, true,
+];
+
 /// A ram under way (see `Ship::ram_run`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RamRun {
@@ -816,6 +822,16 @@ impl MapObject {
                 // frames from 88, 8 a heading).
                 None if ship.furl > 0.0 && n >= SHIP_FURL_FRAMES + 64 => {
                     SHIP_FURL_FRAMES + ship.heading * 8 + (ship.furl as usize).min(7)
+                }
+                // Backing off from a ram, most types step their under-way
+                // frames backwards, one every other step of 3 ticks
+                // (0x4c29c7, the types flagged in 0x597a24).
+                None if ship.ram_run.is_some_and(|r| r.stage == RamStage::Back)
+                    && BACKS_UNDER_WAY[ship.kind.min(11) as usize] =>
+                {
+                    let back = ship.ram_run.map_or(0, |r| r.ticks as usize) / 6;
+                    ship.heading * SHIP_FRAMES_PER_HEADING
+                        + (SHIP_FRAMES_PER_HEADING - 1 - back % SHIP_FRAMES_PER_HEADING)
                 }
                 None if ship.path.is_empty() => {
                     let rock = (time_ms / SHIP_ROCK_MS) as usize;
