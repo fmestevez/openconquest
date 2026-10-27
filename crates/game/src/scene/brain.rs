@@ -19,7 +19,8 @@ pub type Cells = (i32, i32, i32, i32);
 /// Go back to the state before (the original's 0xffffff0).
 pub const PREVIOUS: u32 = u32::MAX;
 
-/// A patrol's length taken from the fleet's variable 0.
+/// A patrol's or gathering's length taken from the fleet's variable 0
+/// (for a length the original rolls when the step starts).
 pub const VAR0: u32 = u32::MAX;
 
 /// A comparison of a fleet's size (0x47a1e0, 0x47a2a0: 0 equal, 1 at
@@ -81,7 +82,8 @@ pub enum Op {
         ticks: u32,
         events: &'static [Event],
     },
-    /// Gather a resource in a zone (0x47a570) until `ticks` have passed.
+    /// Gather a resource in a zone (0x47a570) until `ticks` have passed
+    /// (`VAR0`: the fleet's variable 0).
     Gather {
         next: u32,
         area: Cells,
@@ -236,7 +238,7 @@ fn mission(name: &str) -> Option<Mission> {
         "miss008" => Some(Mission {
             fleets: miss008::FLEETS,
             start: miss008::start,
-            turn: None,
+            turn: Some(miss008::turn),
         }),
         "miss009" => Some(Mission {
             fleets: miss009::FLEETS,
@@ -527,6 +529,11 @@ impl Scene {
                         return;
                     }
                 }
+                let ticks = if ticks == VAR0 {
+                    self.brain.as_ref().unwrap().fleets[k].vars[0]
+                } else {
+                    ticks
+                };
                 if !started {
                     self.fleet_gather(k, area, resource);
                 } else if ticks > 0 && elapsed >= ticks {
@@ -843,6 +850,92 @@ impl Scene {
     /// Sets the area fleet `k` attacks next (`Target::Seen`).
     pub(super) fn set_fleet_area(&mut self, k: usize, area: Cells) {
         self.brain.as_mut().unwrap().fleets[k].area = Some(area);
+    }
+
+    /// Fleet `from`'s ships join fleet `into` (0x479370, op 0xe), keeping
+    /// what they were doing until `into` gives its next order.
+    pub(super) fn fleet_merge(&mut self, into: usize, from: usize) {
+        if into == from {
+            return;
+        }
+        let brain = self.brain.as_mut().unwrap();
+        let ships = std::mem::take(&mut brain.fleets[from].ships);
+        brain.fleets[into].ships.extend(ships);
+    }
+
+    /// Fleet `k`'s damaged ships with nothing to do sail to one of their
+    /// player's docks, picked at random, to be mended (0x47a7e0 with order
+    /// 0x82: the repair member sends each ship that joins it to a dock,
+    /// message 300; as `brain_prize` does for prizes).
+    pub(super) fn fleet_to_docks(&mut self, k: usize) {
+        for id in self.fleet_ships(k) {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            let o = &self.objects[i];
+            let idle = o
+                .ship
+                .as_ref()
+                .is_some_and(|s| s.path.is_empty() && s.task.is_none());
+            let hurt = o.combat.as_ref().is_some_and(|c| c.hull < c.max_hull);
+            if !idle || !hurt {
+                continue;
+            }
+            let owner = o.owner;
+            let docks: Vec<u32> = self
+                .objects
+                .iter()
+                .filter(|d| {
+                    d.owner == owner
+                        && d.class
+                            == openconquest_formats::ObjectClass::Building(crate::economy::DOCK)
+                })
+                .map(|d| d.id)
+                .collect();
+            if docks.is_empty() {
+                continue;
+            }
+            let dock = docks[self.rng.next() as usize % docks.len()];
+            let _ = self.order_repair(id, dock);
+        }
+    }
+
+    /// Puts a leviathan zone (class 0x192, 0x4960b0) of `area` on the map:
+    /// one leviathan (100 to take) that comes up `shows` times; the record
+    /// as the original's message 0x167d fills it.
+    fn add_leviathan(
+        &mut self,
+        (x, y, w, h): Cells,
+        shows: u32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
+        let mut fields = vec![0u32; 41];
+        fields[0] = 0x192;
+        fields[1] = 2;
+        fields[4] = 1;
+        fields[5] = 100;
+        fields[6] = 100;
+        fields[7] = x as u32;
+        fields[8] = y as u32;
+        fields[10] = w as u32;
+        fields[11] = h as u32;
+        fields[13] = 8;
+        fields[39] = shows;
+        let rec = openconquest_formats::ObjectRecord {
+            id,
+            class_id: 0x192,
+            fields,
+        };
+        match crate::objects::resolve(data, caches, &rec) {
+            Ok(Some(obj)) => {
+                self.objects.push(obj);
+                self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("could not put a leviathan: {e:#}"),
+        }
     }
 
     /// A few cells around one of the human player's buildings.
@@ -4703,25 +4796,70 @@ mod miss007 {
     }
 }
 
-/// miss008's brain (0x463240), ported coarsely: the barbarians in the
-/// north-west and the Persians in the east (who threaten Iolcus) each
-/// build, gather, patrol and raid.
+/// miss008's brain (0x463240). The barbarians (player 16, group 0) have a
+/// builder (member 0) and three yards: yards 1 and 2 (0x461050) each build
+/// what raiders (member 4, 0x461480) ask of it, yard 3 (0x461220) what the
+/// home guard (member 5, 0x461720) and the fishers (member 6, 0x461a40)
+/// ask. The Persians (player 15, group 1) have a builder (member 0) and two
+/// yards (0x461b30), yard 1 serving members 3-7, yard 2 members 8-12; their
+/// merchants and fishers (0x462020, 0x462270), four patrols that answer the
+/// player in their waters (0x462440, 0x462630, 0x4629b0, 0x462c40,
+/// 0x462e30), member 7 (0x4628d0), the strike on (0, 30, 10, 10) that
+/// members 6 and 10 hand their ships to, which then hands them to member
+/// 13 to be mended (0x462fb0).
+/// (Not ported: the spells the Persians cast on their patrols when they
+/// attack (0x47acf0, kinds 9, 12 and 15, paid by member 2); the builders'
+/// own orders of class 0x60 and the Persian yards' order of class 1
+/// (0x47b130, also skipped in miss007); the Persians' technology bit 79
+/// and workshop levels set at the start; a launch the brain did not order
+/// joining members 3/8, 4/9 or 10 by type (message 0x5d98): every launch
+/// here is ordered. An attack's "failed" exit is taken as its "ok" one,
+/// the runtime telling them apart only by time. 0x479ed0's test with
+/// buildings (mask 0xffffff) is taken as `human_in`, without as
+/// `human_ships_in`.)
 mod miss008 {
     use super::*;
 
+    const BOAT: u8 = 0;
     const MERCHANT: u8 = 1;
     const ROYAL: u8 = 2;
     const BOMBER: u8 = 3;
     const BOARDER: u8 = 4;
     const RAMMER: u8 = 5;
-    const SHIP_KILLER: u8 = 6;
+    const KILLER: u8 = 6;
+    /// The Persians' second own ship (code 0xd3).
+    const PERSIAN_B: u8 = 11;
+
+    /// Fleet variables: 0 the size a size event compares with (a yard: its
+    /// rest; a merchant: its gathering's length), 1 the ticks before a
+    /// size event looks, 2 the ship asked for (type + 1, 0 none; brain
+    /// `+0x105` and on; a barbarian yard 1 or 2 holds the raiders' request
+    /// it serves), 3 the size at which a raid is called off (a yard: the
+    /// fleet it serves; Persian member 6: how often it has handed its
+    /// ships on).
+    const N: usize = 0;
+    const AFTER: usize = 1;
+    const ASKED: usize = 2;
+    const FEW: usize = 3;
+    const WAIT: usize = 0;
+    const SERVING: usize = 3;
+    const SENT: usize = 3;
+
+    /// Fleet indices: the barbarians' members 0-6 are fleets 0-6, the
+    /// Persians' members 0-13 fleets 7-20.
+    const RAIDERS: usize = 4;
+    const HOME: usize = 5;
+    const FISHERS: usize = 6;
+    const PERSIANS: usize = 7;
+    const STRIKE: usize = PERSIANS + 7;
+    const REPAIR: usize = PERSIANS + 13;
 
     pub const FLEETS: &[FleetDef] = &[
-        // The barbarians (player 16; 0x461050-0x461a40).
+        // The barbarians.
         FleetDef {
             group: 0,
             cells: &[(12, 17, 1, 1), (18, 14, 1, 1), (20, 9, 1, 1)],
-            program: yard,
+            program: idle,
             wants: &[],
         },
         FleetDef {
@@ -4745,26 +4883,36 @@ mod miss008 {
         FleetDef {
             group: 0,
             cells: &[],
-            program: barbarian_sea,
-            wants: &[(SHIP_KILLER, [1; 3]), (ROYAL, [1, 2, 2]), (BOMBER, [1; 3])],
+            program: raiders,
+            wants: &[],
         },
         FleetDef {
             group: 0,
             cells: &[],
-            program: barbarian_home,
-            wants: &[(ROYAL, [1, 2, 2]), (BOMBER, [1; 3])],
+            program: home_guard,
+            wants: &[],
         },
         FleetDef {
             group: 0,
             cells: &[],
             program: barbarian_fish,
-            wants: &[(MERCHANT, [1; 3])],
+            wants: &[],
         },
-        // The Persians (player 15; 0x461b30-0x462fb0).
+        // The Persians.
         FleetDef {
             group: 1,
-            cells: &[(47, 10, 1, 1), (53, 8, 1, 1), (53, 14, 1, 1)],
-            program: yard,
+            cells: &[
+                (47, 10, 1, 1),
+                (53, 8, 1, 1),
+                (53, 14, 1, 1),
+                (51, 18, 1, 1),
+                (43, 17, 1, 1),
+                (46, 27, 1, 1),
+                (53, 27, 1, 1),
+                (53, 31, 1, 1),
+                (46, 37, 1, 1),
+            ],
+            program: idle,
             wants: &[],
         },
         FleetDef {
@@ -4782,121 +4930,472 @@ mod miss008 {
         FleetDef {
             group: 1,
             cells: &[],
-            program: persian_amber,
-            wants: &[(MERCHANT, [1; 3])],
+            program: south_amber,
+            wants: &[],
         },
         FleetDef {
             group: 1,
             cells: &[],
-            program: persian_fish,
-            wants: &[(MERCHANT, [1; 3])],
+            program: south_fish,
+            wants: &[],
         },
         FleetDef {
             group: 1,
             cells: &[],
-            program: persian_raiders,
-            wants: &[(ROYAL, [2, 2, 3]), (RAMMER, [1, 2, 2])],
+            program: south_guard,
+            wants: &[],
         },
         FleetDef {
             group: 1,
             cells: &[],
-            program: persian_north,
-            wants: &[(RAMMER, [1; 3]), (ROYAL, [1, 2, 2]), (BOARDER, [1; 3])],
+            program: south_raiders,
+            wants: &[],
         },
         FleetDef {
             group: 1,
             cells: &[],
-            program: persian_middle,
-            wants: &[(BOARDER, [2; 3])],
+            program: strike,
+            wants: &[],
         },
         FleetDef {
             group: 1,
             cells: &[],
-            program: persian_east,
-            wants: &[(BOMBER, [1, 1, 2])],
+            program: north_amber,
+            wants: &[],
+        },
+        FleetDef {
+            group: 1,
+            cells: &[],
+            program: north_fish,
+            wants: &[],
+        },
+        FleetDef {
+            group: 1,
+            cells: &[],
+            program: north_guard,
+            wants: &[],
+        },
+        FleetDef {
+            group: 1,
+            cells: &[],
+            program: middle_guard,
+            wants: &[],
+        },
+        FleetDef {
+            group: 1,
+            cells: &[],
+            program: east_guard,
+            wants: &[],
+        },
+        // Mends what is handed to it (0x462fb0; prizes: `brain_prize`).
+        FleetDef {
+            group: 1,
+            cells: &[],
+            program: repair,
+            wants: &[],
         },
     ];
 
+    /// The start (message 0x8d1): deposits by difficulty (0x48b180 amber,
+    /// 0x48ebc0 fish, 0x4960b0 a leviathan: easy and normal in the west,
+    /// normal a few more, hard some in the Persians' waters), the Persians'
+    /// purse (normal 5000 amber and fish, hard 10000: 0x4a8de0, 0x4a8c30),
+    /// and the fleets' numbers.
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
-        for (x, y) in [(12, 41), (17, 35), (12, 34), (13, 36), (54, 31), (49, 31)] {
-            scene.add_deposit(0x190, (x, y, 1, 1), data, caches);
+        let level = difficulty();
+        if level == NORMAL {
+            for (x, y) in [(12, 34), (13, 36)] {
+                scene.add_deposit(0x190, (x, y, 1, 1), data, caches);
+            }
+            scene.add_deposit(0x191, (2, 42, 5, 5), data, caches);
         }
-        for (x, y) in [(4, 34), (2, 42), (55, 33)] {
-            scene.add_deposit(0x191, (x, y, 5, 5), data, caches);
+        if level <= NORMAL {
+            for (x, y) in [(12, 41), (17, 35)] {
+                scene.add_deposit(0x190, (x, y, 1, 1), data, caches);
+            }
+            scene.add_deposit(0x191, (4, 34, 5, 5), data, caches);
+            scene.add_leviathan((25, 33, 5, 5), 0, data, caches);
         }
-        if let Some(br) = scene.brain.as_mut() {
-            br.fleets[12].vars = [7500, 4, 0, 0];
+        if level == HARD {
+            for (x, y) in [(54, 31), (49, 31)] {
+                scene.add_deposit(0x190, (x, y, 1, 1), data, caches);
+            }
+            scene.add_deposit(0x191, (55, 33, 5, 5), data, caches);
+        }
+        let purse = [0, 5000, 10000][level];
+        let persian = (PERSIANS..PERSIANS + 3)
+            .flat_map(|k| scene.brain.as_ref().unwrap().fleets[k].ships.clone())
+            .find_map(|id| scene.object_index(id).and_then(|i| scene.objects[i].owner));
+        if let (Some(owner), true) = (persian, purse > 0) {
+            scene.earn(owner, purse, purse);
+        }
+        let brain = scene.brain.as_mut().unwrap();
+        // The raiders' and home guard's size events (0x5b1a08, 0x5b1a40
+        // and the like): at least 0 after 4500 ticks, at most 2.
+        brain.fleets[RAIDERS].vars = [0, 4500, 0, 2];
+        brain.fleets[HOME].vars = [0, 4500, 0, 2];
+        // Persian member 6's: at least 4 after 7500 ticks (0x5b1e70).
+        brain.fleets[PERSIANS + 6].vars = [4, 7500, 0, 0];
+    }
+
+    /// Asks for ship `kind` in `holder`'s request if it is free.
+    fn ask(scene: &mut Scene, holder: usize, kind: u8) {
+        let f = &mut scene.brain.as_mut().unwrap().fleets[holder];
+        if f.vars[ASKED] == 0 {
+            f.vars[ASKED] = kind as u32 + 1;
         }
     }
 
+    fn free(scene: &Scene, holder: usize) -> bool {
+        scene.brain.as_ref().unwrap().fleets[holder].vars[ASKED] == 0
+    }
+
+    /// Each member's bookkeeping on its turn (the start of each member's
+    /// routine): what to ask its yard for, handing ships on, and the
+    /// barbarian home guard's strike while the player is in the Persians'
+    /// waters.
+    pub fn turn(scene: &mut Scene, k: usize) {
+        let d = difficulty() as u32;
+        let n = scene.fleet_types(k);
+        let count = |types: &[u8]| types.iter().map(|&t| n[t as usize]).sum::<usize>() as u32;
+        match k {
+            // Two requests at a time, one in each of yards 1 and 2.
+            RAIDERS => {
+                if count(&[ROYAL, BOMBER, KILLER]) < 2 * d + 3 && (free(scene, 1) || free(scene, 2))
+                {
+                    let holder = if free(scene, 1) { 1 } else { 2 };
+                    let kind = match scene.rng.next() % (d + 2) {
+                        0 => KILLER,
+                        3 => BOMBER,
+                        _ => ROYAL,
+                    };
+                    ask(scene, holder, kind);
+                }
+            }
+            HOME => {
+                let have = count(&[ROYAL, BOMBER]);
+                // The raiders all but gone and the player near the
+                // barbarians' home: the guard joins them.
+                let r = scene.fleet_types(RAIDERS);
+                if r[ROYAL as usize] + r[BOMBER as usize] + r[KILLER as usize] < 2
+                    && scene.human_in((9, 7, 14, 13))
+                    && have != 0
+                {
+                    scene.fleet_merge(RAIDERS, HOME);
+                }
+                if have < d + 4 && free(scene, HOME) {
+                    match scene.rng.next() % (d + 1) {
+                        0 | 1 => ask(scene, HOME, ROYAL),
+                        2 => ask(scene, HOME, BOMBER),
+                        _ => {}
+                    }
+                }
+                // The player's ships in the Persians' waters: strike at
+                // (0, 30, 10, 10), anew every turn.
+                if scene.human_ships_in((40, 0, 20, 20)) {
+                    scene.set_state(k, 25);
+                }
+            }
+            FISHERS if count(&[MERCHANT]) < 2 => ask(scene, FISHERS, MERCHANT),
+            // Merchants (members 3, 8): a boat on easy, else a merchant.
+            10 | 15 if count(&[BOAT, MERCHANT]) == 0 => {
+                ask(scene, k, if d != 0 { MERCHANT } else { BOAT });
+            }
+            11 | 16 if count(&[MERCHANT]) < 1 => ask(scene, k, MERCHANT),
+            12 => {
+                if count(&[ROYAL, BOMBER]) < d + 3 && free(scene, k) {
+                    let kind = if scene.rng.next() & 1 == 0 {
+                        ROYAL
+                    } else {
+                        BOMBER
+                    };
+                    ask(scene, k, kind);
+                }
+            }
+            13 => {
+                let mut have = count(&[ROYAL, BOMBER, BOARDER, RAMMER]);
+                // The player near the barbarians (table 0x5b1db8) and the
+                // fleet strong enough: it joins the strike, up to 3 times.
+                let sent = scene.brain.as_ref().unwrap().fleets[k].vars[SENT];
+                if scene
+                    .first_human_zone(&[(10, 7, 10, 10), (16, 0, 14, 10)])
+                    .is_some()
+                    && have >= d + 2
+                    && sent < 3
+                {
+                    scene.fleet_merge(STRIKE, k);
+                    have = 0;
+                    scene.brain.as_mut().unwrap().fleets[k].vars[SENT] = sent + 1;
+                }
+                if have < d + 3 && free(scene, k) {
+                    let kind = [ROYAL, BOMBER, BOARDER, RAMMER][scene.rng.next() as usize & 3];
+                    ask(scene, k, kind);
+                }
+            }
+            17 => {
+                if count(&[ROYAL, BOARDER, RAMMER]) < d + 3 && free(scene, k) {
+                    let kind = [RAMMER, ROYAL, BOARDER][scene.rng.next() as usize % 3];
+                    ask(scene, k, kind);
+                }
+            }
+            18 => {
+                if count(&[BOARDER, PERSIAN_B]) < d + 3 && free(scene, k) {
+                    match scene.rng.next() % (d + 1) {
+                        0 => ask(scene, k, BOARDER),
+                        _ => ask(scene, k, PERSIAN_B),
+                    }
+                }
+            }
+            19 if count(&[BOMBER]) < d + 3 => ask(scene, k, BOMBER),
+            _ => {}
+        }
+    }
+
+    fn idle(_: u32) -> Op {
+        Op::Wait {
+            next: 0,
+            ticks: 1500,
+        }
+    }
+
+    /// The fleet whose request yard `k` takes next: yards 1 and 2 hold the
+    /// raiders' requests themselves; yard 3 serves the fishers before the
+    /// home guard; the Persian yards their members in order.
+    fn next_request(scene: &Scene, k: usize) -> Option<usize> {
+        let asked = |f: usize| !free(scene, f);
+        match k {
+            1 | 2 => asked(k).then_some(k),
+            3 => [FISHERS, HOME].into_iter().find(|&f| asked(f)),
+            8 => (PERSIANS + 3..PERSIANS + 8).find(|&f| asked(f)),
+            9 => (PERSIANS + 8..PERSIANS + 13).find(|&f| asked(f)),
+            _ => None,
+        }
+    }
+
+    /// A yard (0x461050, 0x461220, 0x461b30): takes the next request,
+    /// builds it for the fleet that asked, rests `(30 + rand 41) x 25`
+    /// ticks once it is launched, then clears the request. Codes a yard
+    /// does not build are dropped (barbarians: merchants, royal ships,
+    /// bombers, rammers, ship killers; Persians: types 0-6, 10, 11).
     fn yard(state: u32) -> Op {
         match state {
-            0 => Op::Build { next: 11 },
-            _ => Op::Wait {
+            0 => Op::Custom(|scene, k| match next_request(scene, k) {
+                Some(f) => {
+                    scene.brain.as_mut().unwrap().fleets[k].vars[SERVING] = f as u32;
+                    10
+                }
+                None => 0,
+            }),
+            10 => Op::Custom(|scene, k| {
+                let holder = scene.brain.as_ref().unwrap().fleets[k].vars[SERVING] as usize;
+                let asked = scene.brain.as_ref().unwrap().fleets[holder].vars[ASKED];
+                if asked == 0 {
+                    return 0;
+                }
+                let kind = asked as u8 - 1;
+                let builds = if k < PERSIANS {
+                    matches!(kind, 1 | 2 | 3 | 5 | 6)
+                } else {
+                    matches!(kind, 0..=6 | 10 | 11)
+                };
+                if !builds {
+                    return 13;
+                }
+                let fleet = if k < 3 { RAIDERS } else { holder };
+                if scene.fleet_build_for(k, fleet, kind) {
+                    11
+                } else {
+                    10
+                }
+            }),
+            11 => Op::Custom(|scene, k| {
+                if scene.fleet_building(k) {
+                    return 11;
+                }
+                let wait = (scene.rng.next() % 41 + 30) * 25;
+                scene.brain.as_mut().unwrap().fleets[k].vars[WAIT] = wait;
+                12
+            }),
+            12 => Op::WaitVar {
+                next: 13,
+                var: WAIT,
+            },
+            _ => Op::Custom(|scene, k| {
+                let holder = scene.brain.as_ref().unwrap().fleets[k].vars[SERVING] as usize;
+                scene.brain.as_mut().unwrap().fleets[holder].vars[ASKED] = 0;
+                0
+            }),
+        }
+    }
+
+    /// A barbarian fleet (0x461480, 0x461720): behaves, then patrols (5)
+    /// or, already strong (`start`), patrols watching more of the sea
+    /// (10); after 4500 ticks of the first it goes on to the second, which
+    /// it leaves at two ships left. The player in its home waters is
+    /// fought 1500 ticks (15), in the wider waters 6000 (20).
+    fn barbarian(
+        state: u32,
+        start: fn(&mut Scene, usize) -> u32,
+        round: &'static [(i32, i32, u32)],
+        watch: &'static [Event],
+        wide: &'static [Event],
+    ) -> Op {
+        match state {
+            // Behave (a no-op here), then choose.
+            0 => Op::Custom(start),
+            5 => Op::Patrol {
+                timeout: 0,
+                points: round,
+                ticks: 0,
+                events: watch,
+            },
+            10 => Op::Patrol {
+                timeout: 0,
+                points: round,
+                ticks: 0,
+                events: wide,
+            },
+            15 => Op::Attack {
                 next: 0,
+                target: Target::Seen,
                 ticks: 1500,
+                events: &[],
+            },
+            _ => Op::Attack {
+                next: 0,
+                target: Target::Seen,
+                ticks: 6000,
+                events: wide,
             },
         }
     }
 
-    fn barbarian_sea(state: u32) -> Op {
-        const ROUND: &[(i32, i32, u32)] = &[
-            (11, 21, 750),
-            (16, 26, 1000),
-            (26, 24, 750),
-            (32, 19, 1000),
-            (30, 13, 750),
-            (23, 13, 1000),
+    const RAIDER_ROUND: &[(i32, i32, u32)] = &[
+        (11, 21, 750),
+        (16, 26, 1000),
+        (26, 24, 750),
+        (32, 19, 1000),
+        (30, 13, 750),
+        (23, 13, 1000),
+    ];
+
+    /// The raiders (member 4, 0x461480; round 0x5b18c0, events 0x5b1a70,
+    /// 0x5b1a88).
+    fn raiders(state: u32) -> Op {
+        const ZONE: Event = Event::Zone {
+            state: 15,
+            area: (9, 8, 15, 14),
+        };
+        const WATCH: &[Event] = &[
+            ZONE,
+            Event::Size {
+                state: 10,
+                after: Some(AFTER),
+                cmp: Cmp::AtLeast,
+                n: N,
+            },
         ];
-        const W: &[Event] = &[Event::Zone {
-            state: 20,
-            area: (8, 8, 26, 22),
-        }];
-        match state {
-            0 => Op::Behave { next: 5 },
-            20 => Op::Attack {
-                next: 0,
-                target: Target::Seen,
-                ticks: 3000,
-                events: &[],
+        const WIDE: &[Event] = &[
+            ZONE,
+            Event::Zone {
+                state: 20,
+                area: (0, 0, 8, 20),
             },
-            _ => Op::Patrol {
-                timeout: 5,
-                points: ROUND,
-                ticks: 0,
-                events: W,
+            Event::Zone {
+                state: 20,
+                area: (8, 20, 25, 12),
             },
-        }
+            Event::Zone {
+                state: 20,
+                area: (30, 10, 11, 11),
+            },
+            Event::Size {
+                state: 0,
+                after: None,
+                cmp: Cmp::AtMost,
+                n: FEW,
+            },
+        ];
+        barbarian(
+            state,
+            |scene, k| {
+                let n = scene.fleet_types(k);
+                let have = n[ROYAL as usize] + n[BOMBER as usize] + n[KILLER as usize];
+                if (have as u32) < 2 * difficulty() as u32 + 2 {
+                    5
+                } else {
+                    10
+                }
+            },
+            RAIDER_ROUND,
+            WATCH,
+            WIDE,
+        )
     }
 
-    fn barbarian_home(state: u32) -> Op {
+    /// The home guard (member 5, 0x461720; round 0x5b1aa0, events
+    /// 0x5b1be8, 0x5b1c00), and its strike at (0, 30, 10, 10) while the
+    /// player's ships are in the Persians' waters (25; see `turn`).
+    fn home_guard(state: u32) -> Op {
         const ROUND: &[(i32, i32, u32)] = &[(2, 6, 750), (5, 11, 1000), (1, 10, 750)];
-        const W: &[Event] = &[Event::Zone {
-            state: 20,
-            area: (0, 0, 22, 18),
-        }];
+        const ZONE: Event = Event::Zone {
+            state: 15,
+            area: (0, 0, 6, 12),
+        };
+        const WATCH: &[Event] = &[
+            ZONE,
+            Event::Size {
+                state: 10,
+                after: Some(AFTER),
+                cmp: Cmp::AtLeast,
+                n: N,
+            },
+        ];
+        const WIDE: &[Event] = &[
+            ZONE,
+            Event::Zone {
+                state: 20,
+                area: (9, 7, 14, 13),
+            },
+            Event::Size {
+                state: 0,
+                after: None,
+                cmp: Cmp::AtMost,
+                n: FEW,
+            },
+        ];
         match state {
-            0 => Op::Behave { next: 5 },
-            20 => Op::Attack {
+            25 => Op::Attack {
                 next: 0,
-                target: Target::Seen,
-                ticks: 3000,
-                events: &[],
+                target: Target::Area((0, 30, 10, 10)),
+                ticks: 6000,
+                events: WIDE,
             },
-            _ => Op::Patrol {
-                timeout: 5,
-                points: ROUND,
-                ticks: 0,
-                events: W,
-            },
+            _ => barbarian(
+                state,
+                |scene, k| {
+                    let n = scene.fleet_types(k);
+                    let have = n[ROYAL as usize] + n[BOMBER as usize];
+                    if (have as u32) < difficulty() as u32 + 3 {
+                        5
+                    } else {
+                        10
+                    }
+                },
+                ROUND,
+                WATCH,
+                WIDE,
+            ),
         }
     }
 
+    /// The barbarians' fishers (member 6, 0x461a40): fish (0, 7, 23, 15)
+    /// 7500 ticks, rest 1500.
     fn barbarian_fish(state: u32) -> Op {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Gather {
-                next: 7,
+                next: 15,
                 area: (0, 7, 23, 15),
                 resource: Resource::Fish,
                 ticks: 7500,
@@ -4909,20 +5408,28 @@ mod miss008 {
         }
     }
 
-    fn persian_amber(state: u32) -> Op {
+    /// A Persian merchant (members 3, 8; 0x462020): gathers amber
+    /// `(3 + rand(difficulty + 1)) x 1500` ticks, sails to `to` (750 ticks
+    /// at most), waits 500.
+    fn merchant(state: u32, area: Cells, to: (i32, i32)) -> Op {
         match state {
             0 => Op::Behave { next: 5 },
-            5 => Op::Gather {
+            5 => Op::Custom(|scene, k| {
+                let ticks = (scene.rng.next() % (difficulty() as u32 + 1) + 3) * 1500;
+                scene.brain.as_mut().unwrap().fleets[k].vars[0] = ticks;
+                6
+            }),
+            6 => Op::Gather {
                 next: 15,
-                area: (42, 2, 20, 30),
+                area,
                 resource: Resource::Amber,
-                ticks: 4500,
+                ticks: VAR0,
                 events: &[],
             },
             15 => Op::Move {
                 ok: 20,
                 failed: 20,
-                to: (50, 23),
+                to,
                 ticks: 750,
                 events: &[],
             },
@@ -4933,20 +5440,30 @@ mod miss008 {
         }
     }
 
-    fn persian_fish(state: u32) -> Op {
+    fn south_amber(state: u32) -> Op {
+        merchant(state, (27, 30, 35, 14), (52, 34))
+    }
+
+    fn north_amber(state: u32) -> Op {
+        merchant(state, (42, 2, 20, 30), (50, 23))
+    }
+
+    /// A Persian fisher (members 4, 9; 0x462270): fishes `ticks`, sails to
+    /// `to` (500 ticks at most), waits 250.
+    fn fisher(state: u32, area: Cells, ticks: u32, to: (i32, i32)) -> Op {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Gather {
                 next: 15,
-                area: (40, 0, 22, 25),
+                area,
                 resource: Resource::Fish,
-                ticks: 15000,
+                ticks,
                 events: &[],
             },
             15 => Op::Move {
                 ok: 20,
                 failed: 20,
-                to: (50, 23),
+                to,
                 ticks: 500,
                 events: &[],
             },
@@ -4957,130 +5474,203 @@ mod miss008 {
         }
     }
 
-    /// Patrols the south-east; once four strong and it has been a while,
-    /// raids the player; answers fire (0x462630).
-    fn persian_raiders(state: u32) -> Op {
-        const ROUND: &[(i32, i32, u32)] =
-            &[(47, 33, 500), (36, 26, 750), (32, 32, 500), (37, 42, 750)];
-        const W: &[Event] = &[
-            Event::Zone {
-                state: 30,
-                area: (40, 30, 22, 14),
-            },
-            Event::Size {
-                state: 10,
-                after: Some(0),
-                cmp: Cmp::AtLeast,
-                n: 1,
-            },
-            Event::Attacked {
-                state: 50,
-                after: 375,
-            },
-        ];
+    fn south_fish(state: u32) -> Op {
+        fisher(state, (40, 30, 22, 14), 7500, (52, 34))
+    }
+
+    fn north_fish(state: u32) -> Op {
+        fisher(state, (40, 0, 22, 25), 15000, (50, 23))
+    }
+
+    /// A Persian patrol (members 5, 6, 10, 11, 12): patrols its round 4500
+    /// ticks at a time (then behaves anew); the player in a zone of its
+    /// list is fought 4500 ticks with the same watch (20), in its first
+    /// zone 1500 (30); whoever fires on it 375 (50). `done` follows a
+    /// fight that ends.
+    fn patrol(
+        state: u32,
+        round: &'static [(i32, i32, u32)],
+        watch: &'static [Event],
+        fight: u32,
+        done: u32,
+    ) -> Op {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
-                points: ROUND,
+                points: round,
                 ticks: 4500,
-                events: W,
+                events: watch,
             },
-            10 => Op::Attack {
-                next: 0,
-                target: Target::HumanBuilding,
-                ticks: 4500,
+            20 => Op::Attack {
+                next: done,
+                target: Target::Seen,
+                ticks: fight,
+                events: watch,
+            },
+            30 => Op::Attack {
+                next: done,
+                target: Target::Seen,
+                ticks: 1500,
                 events: &[],
             },
-            50 => Op::Attack {
+            _ => Op::Attack {
                 next: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
             },
-            _ => Op::Attack {
-                next: 0,
-                target: Target::Seen,
-                ticks: 1500,
-                events: &[],
-            },
         }
     }
 
-    fn persian_north(state: u32) -> Op {
-        const ROUND: &[(i32, i32, u32)] =
-            &[(39, 11, 500), (41, 16, 750), (46, 20, 500), (51, 11, 750)];
+    /// Member 5 (0x462440; round 0x5b1ca8, events 0x5b1cd0): the south
+    /// coast, its fights 1500 ticks.
+    fn south_guard(state: u32) -> Op {
+        const ROUND: &[(i32, i32, u32)] = &[(36, 34, 500), (43, 40, 750), (41, 38, 750)];
         const W: &[Event] = &[
             Event::Zone {
                 state: 30,
-                area: (43, 20, 19, 8),
-            },
-            Event::Zone {
-                state: 20,
-                area: (30, 10, 30, 10),
-            },
-            Event::Zone {
-                state: 20,
                 area: (50, 30, 12, 14),
             },
-            Event::Attacked {
-                state: 50,
-                after: 375,
-            },
-        ];
-        match state {
-            0 => Op::Behave { next: 5 },
-            5 => Op::Patrol {
-                timeout: 0,
-                points: ROUND,
-                ticks: 4500,
-                events: W,
-            },
-            50 => Op::Attack {
-                next: 0,
-                target: Target::Attacker,
-                ticks: 375,
-                events: &[],
-            },
-            _ => Op::Attack {
-                next: 0,
-                target: Target::Seen,
-                ticks: 1500,
-                events: &[],
-            },
-        }
-    }
-
-    fn persian_middle(state: u32) -> Op {
-        const ROUND: &[(i32, i32, u32)] = &[(44, 23, 750), (51, 25, 750), (48, 20, 750)];
-        const W: &[Event] = &[
             Event::Zone {
-                state: 30,
-                area: (43, 20, 19, 8),
+                state: 20,
+                area: (30, 26, 10, 24),
             },
             Event::Zone {
                 state: 20,
-                area: (30, 10, 30, 10),
+                area: (40, 30, 10, 14),
             },
         ];
-        match state {
-            0 => Op::Behave { next: 5 },
-            5 => Op::Patrol {
-                timeout: 0,
-                points: ROUND,
-                ticks: 4500,
-                events: W,
+        patrol(state, ROUND, W, 1500, 0)
+    }
+
+    const SOUTH_ROUND: &[(i32, i32, u32)] =
+        &[(47, 33, 500), (36, 26, 750), (32, 32, 500), (37, 42, 750)];
+
+    /// Member 6 (0x462630; round 0x5b1ea8, events 0x5b1f28, 0x5b1f10): the
+    /// south-west; at least 4 strong after 7500 ticks (never, as its
+    /// patrol restarts every 4500) it would watch wider (10). It hands its
+    /// ships to the strike (see `turn`).
+    fn south_raiders(state: u32) -> Op {
+        const HOME: Event = Event::Zone {
+            state: 30,
+            area: (40, 30, 22, 14),
+        };
+        const FIRED_ON: Event = Event::Attacked {
+            state: 50,
+            after: 375,
+        };
+        const W: &[Event] = &[
+            HOME,
+            Event::Size {
+                state: 10,
+                after: Some(AFTER),
+                cmp: Cmp::AtLeast,
+                n: N,
             },
-            _ => Op::Attack {
+            FIRED_ON,
+        ];
+        const WIDE: &[Event] = &[
+            HOME,
+            Event::Zone {
+                state: 20,
+                area: (27, 24, 13, 19),
+            },
+            Event::Zone {
+                state: 20,
+                area: (40, 27, 5, 3),
+            },
+            Event::Zone {
+                state: 20,
+                area: (35, 4, 25, 15),
+            },
+            Event::Zone {
+                state: 20,
+                area: (45, 30, 17, 10),
+            },
+            FIRED_ON,
+        ];
+        match state {
+            10 => Op::Patrol {
+                timeout: 0,
+                points: SOUTH_ROUND,
+                ticks: 4500,
+                events: WIDE,
+            },
+            20 => Op::Attack {
                 next: 0,
                 target: Target::Seen,
-                ticks: 1500,
-                events: &[],
+                ticks: 4500,
+                events: WIDE,
             },
+            _ => patrol(state, SOUTH_ROUND, W, 4500, 0),
         }
     }
 
-    fn persian_east(state: u32) -> Op {
+    /// Member 7 (0x4628d0): with the ships handed to it, attacks
+    /// (0, 30, 10, 10) until done, then hands them to the repair member
+    /// (and so whatever it gets until member 10 starts it again).
+    fn strike(state: u32) -> Op {
+        match state {
+            0 => Op::Behave { next: 5 },
+            5 => Op::Attack {
+                next: 10,
+                target: Target::Area((0, 30, 10, 10)),
+                ticks: 0,
+                events: &[],
+            },
+            _ => Op::Custom(|scene, k| {
+                scene.fleet_merge(REPAIR, k);
+                10
+            }),
+        }
+    }
+
+    const NORTH_WATCH: &[Event] = &[
+        Event::Zone {
+            state: 30,
+            area: (43, 20, 19, 8),
+        },
+        Event::Zone {
+            state: 20,
+            area: (30, 10, 30, 10),
+        },
+        Event::Zone {
+            state: 20,
+            area: (50, 30, 12, 14),
+        },
+        Event::Attacked {
+            state: 50,
+            after: 375,
+        },
+    ];
+
+    /// Member 10 (0x4629b0; round 0x5b1fd8, events 0x5b2040): the north;
+    /// a fight won (40) sends it, members 5, 6 and 12 to the strike,
+    /// which starts again.
+    fn north_guard(state: u32) -> Op {
+        const ROUND: &[(i32, i32, u32)] =
+            &[(39, 11, 500), (41, 16, 750), (46, 20, 500), (51, 11, 750)];
+        match state {
+            40 => Op::Custom(|scene, k| {
+                for from in [PERSIANS + 5, PERSIANS + 6, k, PERSIANS + 12] {
+                    scene.fleet_merge(STRIKE, from);
+                }
+                scene.set_state(STRIKE, 0);
+                5
+            }),
+            _ => patrol(state, ROUND, NORTH_WATCH, 4500, 40),
+        }
+    }
+
+    /// Member 11 (0x462c40; round 0x5b20c8, events 0x5b20f0).
+    fn middle_guard(state: u32) -> Op {
+        const ROUND: &[(i32, i32, u32)] = &[(44, 23, 750), (51, 25, 750), (48, 20, 750)];
+        patrol(state, ROUND, &NORTH_WATCH[..2], 4500, 0)
+    }
+
+    /// Member 12 (0x462e30; round 0x5b2170, events 0x5b2188).
+    fn east_guard(state: u32) -> Op {
         const ROUND: &[(i32, i32, u32)] = &[(56, 16, 750), (60, 15, 750)];
         const W: &[Event] = &[
             Event::Zone {
@@ -5092,21 +5682,15 @@ mod miss008 {
                 area: (45, 10, 10, 10),
             },
         ];
-        match state {
-            0 => Op::Behave { next: 5 },
-            5 => Op::Patrol {
-                timeout: 0,
-                points: ROUND,
-                ticks: 4500,
-                events: W,
-            },
-            _ => Op::Attack {
-                next: 0,
-                target: Target::Seen,
-                ticks: 1500,
-                events: &[],
-            },
-        }
+        patrol(state, ROUND, W, 4500, 0)
+    }
+
+    /// Member 13 (0x462fb0): sends what it is handed to the docks.
+    fn repair(_: u32) -> Op {
+        Op::Custom(|scene, k| {
+            scene.fleet_to_docks(k);
+            0
+        })
     }
 }
 

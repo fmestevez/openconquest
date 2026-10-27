@@ -1422,6 +1422,48 @@ miss007 (0x45f770):
   start, and at (22, 17) the first time the player's ships enter
   (14, 17, 8, 14).
 
+miss008 (0x463240):
+
+- **Members.** Group 0 is the barbarians (player 0x10, 7 members) and
+  group 1 the Persians (player 0xf, 14 members). Each member's request is
+  a short at brain `+0x105` and on (ship code, -1 none); a yard serves
+  them, builds with 0x47b130 for the member that asked, rests `(30 + rand
+  41) x 25` ticks after the launch and clears the request.
+- **The barbarians.** Yards 1 and 2 (0x461050) each hold one of the
+  raiders' requests (`+0x107`, `+0x109`); yard 3 (0x461220) serves the
+  fishers (`+0x10d`) before the home guard (`+0x10b`). The raiders (member
+  4, 0x461480) ask for ship killers, royal ships or bombers while under
+  `2 x difficulty + 3`, and patrol (0x5b18c0): the player in (9, 8, 15,
+  14) is fought 1500 ticks; after 4500 ticks they watch three more zones
+  (6000 ticks of fighting) until two ships are left. The home guard
+  (member 5, 0x461720) does the same about (0, 0, 6, 12); it joins the
+  raiders when they are down to one ship and the player is in (9, 7, 14,
+  13), and while the player's ships are in (40, 0, 20, 20) it strikes at
+  (0, 30, 10, 10). The fishers (member 6) fish (0, 7, 23, 15) 7500 ticks.
+- **The Persians.** Yard 1 (0x461b30) serves members 3-7, yard 2 members
+  8-12. Merchants (0x462020) gather amber `(3 + rand(difficulty + 1)) x
+  1500` ticks and fishers (0x462270) fish 7500 or 15000, in the south-east
+  and the north-east. Five patrols (0x462440, 0x462630, 0x4629b0,
+  0x462c40, 0x462e30) patrol 4500 ticks at a time and fight the player in
+  their zones (4500 ticks, their first zone 1500). Member 7 (0x4628d0)
+  attacks (0, 30, 10, 10) with the ships handed to it (0x479370, op 0xe:
+  one member's ships join another), then hands them to member 13, which
+  mends them. Member 6 hands its ships to member 7 (at most three times)
+  while it is `difficulty + 2` strong and the player is near the
+  barbarians; member 10, having won a fight, hands its own and members 5,
+  6 and 12's and restarts member 7. On attacking, members 5, 6 and 11
+  have member 2 cast spell 15, 9 or 12 on their ships, and member 10
+  spell 9 on member 7's (0x47acf0: kinds 9, 12, 15, 16, cast by 0x479c20
+  on each ship, paid by member 2's player; not ported).
+- **The start.** Easy and normal lay amber at (12, 41) and (17, 35), fish
+  at (4, 34) and a leviathan zone at (25, 33, 5, 5) (0x4960b0: message
+  0x167d with class 0x192, fields 7 and 8 the corner, 10 and 11 the
+  size); normal adds amber at (12, 34) and (13, 36) and fish at (2, 42);
+  hard lays amber at (54, 31), (49, 31) and fish at (55, 33) in the
+  Persians' waters. The Persians get 5000 amber and fish on normal, 10000
+  on hard (0x4a8de0, 0x4a8c30), technology bit 79 and workshop levels
+  (not ported).
+
 Primitives not yet ported (the later brains use them):
 
 - **0x47a7e0, repair** (ported as prizes sailing to a dock; `(group,

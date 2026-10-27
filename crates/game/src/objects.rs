@@ -874,7 +874,13 @@ pub fn resolve(
         }
         ObjectClass::FishZone | ObjectClass::WhaleZone => {
             // Zones are areas the creatures roam; show one in the middle.
-            let (x, y) = (f(6) + f(8) / 2, f(7) + f(9) / 2);
+            // A leviathan's zone has its corner in fields 7 and 8, its
+            // size in 10 and 11 (0x494f90).
+            let (x, y) = if class == ObjectClass::FishZone {
+                (f(6) + f(8) / 2, f(7) + f(9) / 2)
+            } else {
+                (f(7) + f(10) / 2, f(8) + f(11) / 2)
+            };
             let frames = if class == ObjectClass::FishZone {
                 sequence_frames(data, caches, "FISH_12")?
             } else {
