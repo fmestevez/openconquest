@@ -106,6 +106,10 @@ pub enum Order {
         site: u32,
         item: u8,
     },
+    /// Sell settlement or town `site`, with its stock.
+    SellTown {
+        site: u32,
+    },
     BuildShip {
         site: u32,
         kind: u8,
@@ -222,6 +226,7 @@ impl Scene {
             LoadCrew { ship } => self.load_crew(ship),
             LoadItem { site, ship, item } => done(self.load_item(site, ship, item)),
             SellItem { site, item } => done(self.sell_item(site, item)),
+            SellTown { site } => done(self.sell_town(site, data, caches)),
             BuildShip { site, kind } => done(self.start_ship(site, kind)),
             BuildArgo { site } => done(self.start_argo(site)),
             Train { site, item } => done(self.train(site, item)),

@@ -3482,4 +3482,21 @@ fn settlement_sells_stock() {
     assert_eq!(scene.garrison(site)[4], 1);
     scene.sell_item(site, 4).unwrap();
     assert!(scene.sell_item(site, 4).is_err());
+    // Selling the settlement: a bowman's squad (22 amber, 150 fish) and
+    // three quarters of the building, which falls to ruins.
+    let mut stock = [0u32; 9];
+    stock[0] = 1;
+    scene.garrisons.insert(site, stock);
+    let (amber, fish) = (scene.amber, scene.fish);
+    scene.sell_town(site, &data, &mut caches).unwrap();
+    assert_eq!(
+        scene.amber,
+        amber + 22 + economy::building_cost(SETTLEMENT) * 3 / 4
+    );
+    assert_eq!(scene.fish, fish + 150);
+    let i = scene.object_index(site);
+    assert!(i.is_none_or(|i| scene.objects[i]
+        .combat
+        .as_ref()
+        .is_none_or(|c| c.hull <= 0.0)));
 }

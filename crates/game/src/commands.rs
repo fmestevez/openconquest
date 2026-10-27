@@ -41,6 +41,7 @@ impl Command {
     pub const BUILD_STRUCTURES: Command = Command(0x10);
     pub const REPAIR_BUILDING: Command = Command(0x11);
     pub const SELL_ITEM: Command = Command(0x12);
+    pub const SELL_TOWN: Command = Command(0x80);
     pub const TRAIN_BOWMEN: Command = Command(0x2d);
     pub const UPGRADE_TOWN: Command = Command(0x3a);
     pub const UPGRADE_DOCK: Command = Command(0x3b);
@@ -944,8 +945,14 @@ fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         });
     }
     set(menu, 2, Command::REPAIR_BUILDING, true);
-    // Selling the item chosen in its stock (0x43c740 slot 5, 0x441ba0).
-    set(menu, 5, Command::SELL_ITEM, true);
+    // With the permit, selling the item chosen in its stock, or the
+    // settlement itself, while it is not training (0x43c740 slots 5 and 6,
+    // 0x441ba0).
+    if scene.permits.selling() {
+        let idle = training.is_none();
+        set(menu, 5, Command::SELL_ITEM, idle);
+        set(menu, 6, Command::SELL_TOWN, idle);
+    }
     if obj.class == ObjectClass::Building(SETTLEMENT) && scene.permits.town() {
         set(
             menu,

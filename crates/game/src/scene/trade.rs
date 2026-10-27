@@ -828,6 +828,52 @@ impl Scene {
         Ok(())
     }
 
+    /// Sells settlement or town `site` (message 0x248f): three quarters of
+    /// each stock unit's amber price, and of a crew's fish, by its condition
+    /// (0x441ba0), and of the building's cost by its health (0x425990);
+    /// then it falls to ruins.
+    pub fn sell_town(
+        &mut self,
+        site: u32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Result<(), String> {
+        let i = self.object_index(site).ok_or("No such settlement")?;
+        let obj = &self.objects[i];
+        if !self.is_own(obj) || !matches!(obj.class, ObjectClass::Building(SETTLEMENT | TOWN)) {
+            return Err("Not your settlement".into());
+        }
+        if self.construction_at(site).is_some() || self.training_at(site).is_some() {
+            return Err("The settlement is busy".into());
+        }
+        let ObjectClass::Building(class) = obj.class else {
+            unreachable!()
+        };
+        let health = obj
+            .combat
+            .as_ref()
+            .map_or(1.0, |c| (c.hull / c.max_hull).clamp(0.0, 1.0));
+        let owner = obj.owner;
+        let stock = self.garrison(site);
+        let (mut amber, mut fish) = (0u64, 0u64);
+        for (item, &n) in stock.iter().enumerate() {
+            amber += (combat::item_cost(item as u8).0 * 75 / 100) as u64 * n as u64;
+            if item < 3 {
+                fish += (combat::CREW_COST[item].1 * 75 / 100) as u64 * n as u64;
+            }
+        }
+        amber += (economy::building_cost(class) as f32 * health * 0.75) as u64;
+        self.garrisons.remove(&site);
+        if let Some(owner) = owner {
+            self.earn(owner, amber as i64, fish as i64);
+        }
+        if let Some(c) = self.objects[i].combat.as_mut() {
+            c.hull = 0.0;
+        }
+        self.hit(site, 0.0, data, caches);
+        Ok(())
+    }
+
     pub fn load_item(&mut self, site: u32, ship: u32, item: u8) -> Result<(), String> {
         let t = TILE_SIZE as f32;
         let s = self.object_index(site).ok_or("No such settlement")?;

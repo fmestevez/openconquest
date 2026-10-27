@@ -2525,6 +2525,11 @@ impl App {
                     None => self.say("Choose an item in the stock to sell"),
                 }
             }
+            Command::SELL_TOWN => {
+                if let Err(e) = self.issue(Order::SellTown { site: id }) {
+                    self.say(e);
+                }
+            }
             Command::LOAD => match self.issue(Order::LoadCrew {
                 ship: self.scene.ship_alongside(id).unwrap_or(id),
             }) {

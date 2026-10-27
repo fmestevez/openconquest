@@ -932,7 +932,13 @@ A settlement's Sell Item (command 0x12, slot 5 of its menu) sends message
 its amber price times its condition, an armour piece or a ram 75 % of its
 fitting cost; no fish. Message 0x248f sells a building: 75 % of its cost
 times its health (0x425990), and a settlement's stock likewise, fish at
-75 % too.
+75 % too. Sell Town (command 0x80, slot 6) sends 0x248f to the settlement: its
+stock units at 75 % of `cost[kind / 3]` and of crews' fish (0x597170) by
+condition, armour, rams and goods at 75 %, the building at 75 % of its
+cost by health, which then falls to ruins (state 3). Sell Item and Sell
+Town show only with permit bit 10 (player +0x46 bit 2) and are enabled
+while the settlement is built and idle; Sell Town also hides while a ship
+is taken up for loading (+0x1c8). No menu offers Sell Fish (0x7e).
 
 ## Training and repair at a settlement
 

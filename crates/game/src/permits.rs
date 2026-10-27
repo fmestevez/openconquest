@@ -130,6 +130,12 @@ impl Permits {
         self.allows(bit)
     }
 
+    /// Settlements may sell their stock and themselves (player + 0x46 bit
+    /// 2; 0x43c740 shows Sell Item and Sell Town only then).
+    pub fn selling(self) -> bool {
+        self.allows(10)
+    }
+
     /// The Argo may be built.
     pub fn argo(self) -> bool {
         self.allows(ARGO)
