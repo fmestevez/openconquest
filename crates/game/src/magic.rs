@@ -206,11 +206,6 @@ pub const LEARN_COST: u32 = 1000;
 pub const LEARN_SECONDS: f32 = 200.0 * crate::clock::TICK;
 /// Seconds a called wind blows. Placeholder.
 pub const WIND_SECONDS: f32 = 60.0;
-/// A fireball burns enemy objects within this radius for this long at this
-/// many hull points a second. Placeholders.
-pub const FIREBALL_RADIUS: f32 = 96.0;
-pub const FIREBALL_SECONDS: f32 = 15.0;
-pub const FIREBALL_DPS: f32 = 120.0;
 /// Flame makes the player's weapons this much stronger for this long.
 /// Placeholders.
 pub const FLAME_FACTOR: f32 = 1.5;
@@ -238,9 +233,15 @@ pub const MONSTER_SECONDS: f32 = 90.0;
 pub const MONSTER_WEAPON: u8 = 4;
 pub const MONSTER_WEAPONS: usize = 4;
 
-/// Effect animations.
-pub const FX_LIGHTNING: &str = "SLIGHT1";
-pub const FX_FLAME: &str = "FIRE0";
+/// Lightning's picture (LightningObjClassTy, `LTSPR_%1u`, 0x42cfa0): over
+/// water `LTSPR_1`, over land `LTSPR_2`.
+pub fn fx_lightning(water: bool) -> &'static str {
+    if water {
+        "LTSPR_1"
+    } else {
+        "LTSPR_2"
+    }
+}
 /// Protection auras, for small and large ships.
 pub fn fx_protection(spell: Spell, large: bool) -> String {
     let kind = if spell == Spell::ProtectWeapons {

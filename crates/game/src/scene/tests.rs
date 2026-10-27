@@ -523,15 +523,15 @@ fn war_magic() {
     scene
         .cast_area(Spell::Fireball, ex, ey, &data, &mut caches)
         .unwrap();
-    for _ in 0..50 * 5 {
+    assert_eq!(scene.fireballs.len(), 1);
+    for _ in 0..50 * 20 {
         scene.update(0.02, &data, &mut caches);
     }
+    assert!(scene.fireballs.is_empty(), "the fireball died away");
+    // 2-4 strikes, each sharing 88000 / 15 out, a fifth through the shield.
     let burnt = before - hull(&scene, enemy);
-    let expected = magic::FIREBALL_DPS * magic::SHIELD_FACTOR * 5.0;
-    assert!(
-        (burnt - expected).abs() < expected * 0.1,
-        "burnt {burnt}, expected {expected}"
-    );
+    let most = 88_000.0 / 15.0 * 2.0 * magic::SHIELD_FACTOR;
+    assert!(burnt > 0.0 && burnt <= most + 1.0, "burnt {burnt}");
     assert!(
         hull(&scene, mine) > 10_000.0 - 600.0,
         "the fireball spares our own"

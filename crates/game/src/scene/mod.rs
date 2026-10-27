@@ -250,8 +250,8 @@ pub struct Scene {
     pub mending: Vec<u32>,
     /// Fractions of amber owed for repairs, per player.
     pub repair_owed: std::collections::BTreeMap<(u32, u32), f32>,
-    /// Fireballs burning: position and seconds left.
-    pub fires: Vec<(f32, f32, f32)>,
+    /// Fireballs over the map (not saved).
+    pub fireballs: Vec<fireball::Fireball>,
     /// Seconds left of the player's Flame (stronger weapons).
     pub flame: f32,
     /// Fog of war on, and what the player knows of each map cell.
@@ -293,6 +293,7 @@ mod sparkle;
 mod treasure;
 mod wake;
 pub use sight::{FogArt, Seen};
+mod fireball;
 mod flyers;
 mod order;
 mod script;
@@ -437,7 +438,7 @@ impl Scene {
             ai_timer: 0.0,
             clock: 0.0,
             fog: true,
-            fires: Vec::new(),
+            fireballs: Vec::new(),
             mending: Vec::new(),
             free_casts: Default::default(),
             creature_clock: 0.0,
@@ -1172,6 +1173,7 @@ impl Scene {
         self.seat_upkeep(dt);
         self.run_statuses(dt, data, caches);
         self.run_fires(dt, data, caches);
+        self.run_fireballs(dt, data, caches);
         self.run_repairs(dt);
         self.run_orders();
         self.run_treasures(dt, data, caches);

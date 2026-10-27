@@ -131,7 +131,11 @@ impl Scene {
             }
             Spell::Lightning => {
                 self.pay_spell(spell)?;
-                self.spawn_effect(data, caches, magic::FX_LIGHTNING, x, y);
+                let t = TILE_SIZE as f32;
+                let water = self
+                    .nav
+                    .is_water((x / t).floor() as i32, (y / t).floor() as i32);
+                self.spawn_effect(data, caches, magic::fx_lightning(water), x, y);
                 self.sounds.push(("molniya2", x, y));
                 // It strikes the 3 x 3 cells about its cell, whoever's
                 // (LightningObjClassTy 0x42cfa0, message 0xda93): ships go
@@ -182,23 +186,15 @@ impl Scene {
             }
             Spell::Fireball => {
                 self.pay_spell(spell)?;
-                self.fires.push((x, y, magic::FIREBALL_SECONDS));
-                self.sounds.push(("fireball", x, y));
-                if let Ok(frames) = objects::sequence_frames(data, caches, magic::FX_FLAME) {
-                    if !frames.is_empty() {
-                        self.effects.push(Effect {
-                            x,
-                            y,
-                            frames,
-                            age_ms: 0.0,
-                            follow: None,
-                            life_ms: Some(magic::FIREBALL_SECONDS * 1000.0),
-                            frame_ms: crate::combat::FX_FRAME_MS,
-                            tornado: None,
-                            site: None,
-                        });
-                    }
-                }
+                let owner = self.human.map(|h| (h.nation, h.slot));
+                let t = TILE_SIZE as f32;
+                self.spawn_fireball(
+                    (x / t).floor() as i32,
+                    (y / t).floor() as i32,
+                    owner,
+                    data,
+                    caches,
+                );
             }
             _ => return Err("That spell is not cast on an area".into()),
         }
@@ -213,52 +209,9 @@ impl Scene {
         Ok(())
     }
 
-    /// Fireballs burn enemy objects around them.
-    pub(super) fn run_fires(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+    /// The Flame wears off.
+    pub(super) fn run_fires(&mut self, dt: f32, _data: &GameData, _caches: &mut Caches) {
         self.flame = (self.flame - dt).max(0.0);
-        for f in &mut self.fires {
-            f.2 -= dt;
-        }
-        self.fires.retain(|f| f.2 > 0.0);
-        if self.fires.is_empty() {
-            return;
-        }
-        let human = self.human.map(|h| (h.nation, h.slot));
-        let mut wrecked = Vec::new();
-        for o in self.objects.iter_mut() {
-            if o.owner.is_none() || o.owner == human {
-                continue;
-            }
-            // The torch of Ares protects from all kinds of fire.
-            if o.ship
-                .as_ref()
-                .is_some_and(|s| s.has_treasure(objects::FIRE_TORCH))
-            {
-                continue;
-            }
-            let Some(c) = o.combat.as_mut() else { continue };
-            let inside = self
-                .fires
-                .iter()
-                .filter(|f| {
-                    ((o.x - f.0).powi(2) + (o.y - f.1).powi(2)).sqrt() <= magic::FIREBALL_RADIUS
-                })
-                .count();
-            if inside > 0 {
-                let shield = if c.protect_magic > 0.0 {
-                    magic::SHIELD_FACTOR
-                } else {
-                    1.0
-                };
-                c.hull -= magic::FIREBALL_DPS * inside as f32 * shield * dt;
-                if c.hull <= 0.0 {
-                    wrecked.push(o.id);
-                }
-            }
-        }
-        for id in wrecked {
-            self.hit(id, 0.0, data, caches);
-        }
     }
 
     /// Calls up a strong wind towards `direction`.

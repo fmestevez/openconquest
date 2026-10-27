@@ -127,10 +127,14 @@ impl Shot {
     }
 }
 
+/// The fireball's shots fly as K, flaming (slight.cpp 0x405c20).
+pub const FIREBALL: u8 = 255;
+
 /// The letter and variant for item `item` (0x4c0230: Greek fire flies as
 /// M, flaming; quick lime as N).
 fn letter_of(item: u8, flaming: bool) -> (u8, u8) {
     match item {
+        FIREBALL => (10, 1),
         combat::GREEK_FIRE => (12, 1),
         combat::QUICKLIME => (13, 0),
         _ => (item.min(8), u8::from(flaming)),

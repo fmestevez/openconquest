@@ -762,8 +762,9 @@ impl Scene {
                 age_ms: 0.0,
                 follow: None,
                 life_ms: None,
-                // Shots' pictures step a frame a tick (bomb.cpp).
-                frame_ms: if name.starts_with("BOMB") {
+                // Shots' and lightning's pictures step a frame a tick
+                // (bomb.cpp, lightn.cpp).
+                frame_ms: if name.starts_with("BOMB") || name.starts_with("LTSPR") {
                     crate::clock::TICK_MS as f32
                 } else {
                     crate::combat::FX_FRAME_MS

@@ -1026,6 +1026,16 @@ when it stands on the struck cell itself (0x441ba0, 0x414f00, 0x4207b0);
 a sea monster loses half its strength (0x492360), a land creature a
 quarter (0x413d70); other buildings ignore it.
 
+A fireball (class 0x25d, SlightClassTy `slight.cpp`, made by message
+0x16e1) sits on any free cell and is drawn a cell up, a frame a tick: it
+appears (`SLIGHT1`, 60 frames, sound event 146), hovers (`SLIGHT2`, 60)
+and strikes (`SLIGHT4`, 9, event 148) 2-4 times (0x4059e0), hovering
+between, then dies away (`SLIGHT3`, 60, event 147). At a strike's frame 4
+(0x405c20) it throws a shot (`BOMBK1`, sure to hit) at every enemy ship,
+harpy, dragon, gorgon, sea monster, siren, castle, nest and lair within 2
+cells, each carrying 88000 / min(targets, 4) / (strikes - 1). Lightning
+shows `LTSPR_1` over water, `LTSPR_2` over land.
+
 ## Land creatures
 
 Lairs (`CreaturesFlatClassTy`, 0x414f00) send out another creature once

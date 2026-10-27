@@ -232,6 +232,26 @@ pub fn draw_objects(
             }
         }
     }
+    // Fireballs over their cells.
+    for f in scene
+        .fireballs
+        .iter()
+        .filter(|f| scene.seen(f.cell.0, f.cell.1) == Seen::InSight)
+    {
+        if let Some((layers, left, top)) = f.picture() {
+            for l in layers {
+                draw_image(
+                    frame,
+                    screen,
+                    camera,
+                    lut,
+                    &l.image,
+                    (left + l.dx as f32) as i32,
+                    (top + l.dy as f32) as i32,
+                );
+            }
+        }
+    }
     // Shots in flight, over everything below them.
     for s in scene
         .shots
