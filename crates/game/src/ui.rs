@@ -134,9 +134,6 @@ pub struct Layout {
     pub minimap: MinimapRect,
     field_w: u32,
     pub bar_x: f32,
-    /// Top-left of the object panel's text area, in window pixels.
-    pub info_text: (f32, f32),
-    pub info_width: f32,
 }
 
 impl Interface {
@@ -294,18 +291,12 @@ impl Interface {
             to_px(mw),
             to_px(mh),
         );
-        let (_, py, _, ph) = self.picture_slot;
         Layout {
             scale,
             view,
             minimap,
             field_w,
             bar_x,
-            info_text: (
-                bar_x + (OBJECT_PANEL_POS.0 + 8) as f32 * scale,
-                (OBJECT_PANEL_POS.1 + py + ph + 6) as f32 * scale,
-            ),
-            info_width: (self.object_panel.width - 16) as f32 * scale,
         }
     }
 
@@ -1347,29 +1338,9 @@ impl GameView<'_> {
                     if !slots.is_empty() {
                         ui.draw_slots(frame, self.data, layout, &slots, self.chosen_cell);
                     }
-                    // Ships show their slots instead (no text, as on the
-                    // original).
-                    let (tx, ty) = layout.info_text;
-                    let lines = if !slots.is_empty() {
-                        Vec::new()
-                    } else {
-                        wrap(
-                            self.text,
-                            &match self.group.len() {
-                                0 => details(self.scene, obj),
-                                n => format!(
-                                    "{}. With {n} more ship{}",
-                                    details(self.scene, obj),
-                                    if n == 1 { "" } else { "s" }
-                                ),
-                            },
-                            (layout.info_width / text_scale as f32) as u32,
-                        )
-                    };
-                    for (i, line) in lines.iter().enumerate() {
-                        let y = ty + (i as u32 * (self.text.line_height() + 1) * text_scale) as f32;
-                        self.text.draw(frame, tx as i32, y as i32, text_scale, line);
-                    }
+                    // Only the portrait and the slots: the original writes
+                    // no text about a selected object (c_info.cpp writes a
+                    // slot's description when it is clicked).
                 }
             }
         }
@@ -1487,142 +1458,6 @@ pub fn wrap(font: &TextRenderer, text: &str, width: u32) -> Vec<String> {
         }
     }
     lines
-}
-
-/// The object panel text: name, owner and what the object is doing.
-fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
-    use crate::objects::{GatherPhase, Resource, Task};
-    let mut text = obj.label.clone();
-    let goods = |r: Resource| match r {
-        Resource::Amber => "amber",
-        Resource::Fish => "fish",
-        Resource::Leviathan => "leviathan",
-    };
-    if let Some(d) = obj.deposit {
-        match d.remaining {
-            Some(n) => text += &format!(". {} {} left", n as u32, goods(d.resource)),
-            None => text += ". Inexhaustible",
-        }
-    }
-    if let Some(c) = &obj.combat {
-        text += &format!(
-            ". Hull {}/{}",
-            c.hull.clamp(0.0, c.max_hull).ceil() as u32,
-            c.max_hull.ceil() as u32
-        );
-    }
-    if let Some(ship) = &obj.ship {
-        if ship.armour > 0 || ship.ram > 0 {
-            text += &format!(". Armour {}, ram {}", ship.armour, ship.ram);
-        }
-        if ship.crew.count() > 0 {
-            text += &format!(". Marines: {}", ship.crew.describe());
-        }
-        if let Some(c) = obj.combat.as_ref().filter(|c| !c.weapons.is_empty()) {
-            let names: Vec<&str> = c
-                .weapons
-                .iter()
-                .map(|&w| crate::combat::item_name(w))
-                .collect();
-            text += &format!(". Weapons: {}", names.join(", "));
-        }
-        if obj.combat.as_ref().is_some_and(|c| c.stone > 0.0) {
-            text += ". Turned to stone";
-        }
-        if !ship.heroes.is_empty() {
-            let names: Vec<&str> = ship
-                .heroes
-                .iter()
-                .map(|&h| crate::objects::HERO_NAMES[h as usize % 9])
-                .collect();
-            text += &format!(". Heroes: {}", names.join(", "));
-        }
-        if !ship.treasures.is_empty() {
-            let names: Vec<String> = ship
-                .treasures
-                .iter()
-                .map(|t| crate::objects::treasure_name(t.kind))
-                .collect();
-            text += &format!(". Treasures: {}", names.join(", "));
-        }
-        if let (Some(kind), true) = (ship.cargo_kind, ship.cargo >= 1.0) {
-            text += &format!(". Carrying {} {}", ship.cargo as u32, goods(kind));
-        }
-        match ship.task {
-            Some(Task::Gather {
-                phase: GatherPhase::Collecting,
-                ..
-            }) => text += ". Gathering",
-            Some(Task::Gather {
-                phase: GatherPhase::ToPort(_),
-                ..
-            }) => text += ". Returning to port",
-            Some(Task::Gather {
-                phase: GatherPhase::Unloading(_),
-                ..
-            }) => text += ". Unloading",
-            Some(Task::Gather {
-                phase: GatherPhase::ToDeposit,
-                ..
-            }) => text += ". Sailing to gather",
-            Some(Task::Attack { .. }) => text += ". Attacking",
-            Some(Task::Ram { .. }) => text += ". Ramming",
-            Some(Task::Found { class, .. }) => {
-                text += &format!(
-                    ". Sailing to build a {}",
-                    crate::objects::building_label(class).to_lowercase()
-                )
-            }
-            Some(Task::Board { .. }) => text += ". Boarding",
-            Some(Task::Repair { .. }) => text += ". Repairing",
-            Some(Task::Fetch { .. } | Task::LoadAt { .. }) => text += ". Sailing to load",
-            Some(Task::Scout { .. }) => text += ". Scouting",
-            Some(Task::Patrol { .. }) => text += ". Patrolling",
-            Some(Task::Zone { attack: false, .. }) => text += ". Guarding a zone",
-            Some(Task::Zone { attack: true, .. }) => text += ". Attacking a zone",
-            Some(Task::Convoy { .. }) => text += ". Escorting",
-            Some(Task::Take { .. }) => text += ". Sailing to take a treasure",
-            None => {}
-        }
-    }
-    if let Some(heroes) = scene.site_heroes.get(&obj.id).filter(|h| !h.is_empty()) {
-        let names: Vec<&str> = heroes
-            .iter()
-            .map(|&h| crate::objects::HERO_NAMES[h as usize % 9])
-            .collect();
-        text += &format!(". Heroes waiting: {}", names.join(", "));
-    }
-    let garrison = scene.garrison(obj.id);
-    if garrison.iter().any(|&n| n > 0) {
-        let parts: Vec<String> = garrison
-            .iter()
-            .zip(crate::combat::ITEM_NAMES)
-            .filter(|(n, _)| **n > 0)
-            .map(|(n, name)| format!("{n} {name}"))
-            .collect();
-        text += &format!(". Waiting: {}", parts.join(", "));
-    }
-    if let Some(t) = scene.training_at(obj.id) {
-        let parts: Vec<String> = (0..9u8)
-            .filter(|&k| t.count(k) > 0)
-            .map(|k| format!("{} {}", t.count(k), crate::combat::ITEM_NAMES[k as usize]))
-            .collect();
-        text += &format!(". Making {}", parts.join(", "));
-    }
-    if let Some(c) = scene.construction_at(obj.id) {
-        text += &format!(
-            ". Under construction: {}%",
-            (c.elapsed / c.total * 100.0) as u32
-        );
-    }
-    if let Some(p) = scene.production_at(obj.id) {
-        text += &format!(
-            ". Building a {}: {}%",
-            crate::objects::SHIP_NAMES[p.ship as usize],
-            (p.elapsed / p.total * 100.0) as u32
-        );
-    }
-    text
 }
 
 /// A cell of the object panel's slot grid (c_load.cpp 0x4f9520): a

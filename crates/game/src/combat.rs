@@ -106,16 +106,6 @@ pub const ITEM_NAMES: [&str; 9] = [
     "onager",
 ];
 
-/// The name of any item, the unique ships' weapons included.
-pub fn item_name(item: u8) -> &'static str {
-    match item {
-        GREEK_FIRE => "Greek fire",
-        QUICKLIME => "quicklime",
-        POWDER => "barrel of powder",
-        _ => ITEM_NAMES[item as usize % 9],
-    }
-}
-
 pub const CREW_NAMES: [&str; 3] = ["bowmen", "javelin men", "swordsmen"];
 
 /// Cost of training a squad of marines: 30 amber each (u16 at 0x597164)
@@ -217,16 +207,6 @@ impl Crew {
         self.squads.iter().sum()
     }
 
-    pub fn describe(&self) -> String {
-        let parts: Vec<String> = self
-            .squads
-            .iter()
-            .zip(CREW_NAMES)
-            .filter(|(n, _)| **n > 0)
-            .map(|(n, name)| format!("{n} {name}"))
-            .collect();
-        parts.join(", ")
-    }
 }
 
 /// Boarding strength of a squad of marine kind `kind`.
@@ -1338,11 +1318,6 @@ mod tests {
 
     #[test]
     fn blows_wear_units_down() {
-        let crew = Crew {
-            class: 0,
-            squads: [1, 0, 2],
-        };
-        assert_eq!(crew.describe(), "1 bowmen, 2 swordsmen");
         // A light blow wears one unit: 1000 of a swordsman's 3120 points
         // leave 67% (or 65% of a bowman's 2860).
         let mut units: [Vec<u8>; 9] = Default::default();
