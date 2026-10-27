@@ -1464,6 +1464,60 @@ miss008 (0x463240):
   on hard (0x4a8de0, 0x4a8c30), technology bit 79 and workshop levels
   (not ported).
 
+miss009 (0x4663d0):
+
+- **Members.** Group 0 is the barbarians (player 0x10, 8 members) and
+  group 1 the Persians (player 0xe, 7 members). Requests are shorts at
+  brain `+0x116`-`+0x11a` (the barbarian yards' own) and `+0x11e`-`+0x124`
+  (Persian members 1-4; `+0x11c` the one being served).
+- **The barbarians.** Yards 1-3 (0x464930) build the code in their
+  request for member yard + 3 (a merchant, 0xc9, for member 7), rest
+  `(50 + rand(41 - 10 x difficulty)) x 25` ticks after the launch and clear
+  it. Member 4 (0x464b20) asks yard 1 for ship killers, royal ships or
+  bombers while under difficulty + 3 (`+0x5b2324`, set by the constructor
+  0x466260, also the number its size event waits for). It sleeps until the
+  player first comes into (0, 9, 18, 5), then patrols (0x5b21e8): the
+  player in (8, 1, 7, 10) is fought 1500 ticks; at difficulty + 3 after
+  4500 ticks it watches three more zones (6000 ticks of fighting) until two
+  ships are left. Member 5 (0x464da0) asks yard 2 for difficulty + 4 ships,
+  patrols (0x5b23e8) fighting the player in (0, 15, 30, 20), and the first
+  time it is at full strength strikes at (0, 30, 10, 15) for 2250 ticks.
+  Member 6 (0x465010) asks yard 3 for `2 x (difficulty + 2)` rammers, royal
+  ships and bombers; every turn the player is in one of six zones
+  (0x5b24b0) and it is not attacking, it attacks that zone (`(difficulty +
+  1) x 1500` ticks), otherwise (so every other turn) it sails home to
+  (45, 41). Member 7 (0x465200) asks yard 2 or 3 for merchants (up to 2)
+  and fishes (10, 20, 20, 20) or (35, 30, 15, 16) 7500 ticks.
+- **The Persians.** The yard (0x465390) serves members 1-4 in order,
+  resting `(30 + rand(41 - 10 x difficulty)) x 25` ticks. Member 1
+  (0x465830) gathers amber in (50, 28, 20, 18) `(3 + rand(difficulty +
+  1)) x 1500` ticks, member 2 (0x4659d0) fishes there 3000, both then
+  sailing to (62, 36). Members 3 and 4 (0x465b20, 0x465da0) patrol
+  (0x5b2668) 4500 ticks at a time and fight the player in (50, 30, 20, 16)
+  and (39, 0, 23, 30) 1500 ticks; member 3 wants `2 x (difficulty + 2)`
+  royal ships, bombers and boarders, member 4 `2 x difficulty + 5` of the
+  Persians' first ship (0xd2). Once the fire wizard's castle at (30, 1)
+  is gone (`+0x131`), member 4 takes member 3's ships and strikes at
+  (20, 0, 20, 15) for `(difficulty + 5) x 1500` ticks. Member 5 (0x466060,
+  the ships in (55, 0, 15, 5)) attacks the cells about one of the
+  player's ships carrying heroes (ship `+0x259`) for 500 ticks while the
+  player is in those waters. Member 6 mends prizes (message 0x5d97).
+  Members 3 and 4 cast kinds 9 and 15 on their own ships when they fight
+  (0x47acf0; not ported).
+- **The tick.** About once every 50 ticks: lightning (0x42f580 kind 6, a
+  free cast) at (10 or 12, 9) the first time the player comes into (0, 9,
+  18, 5); on normal and hard, while the wizard lives, lightning on each of
+  the player's temples (0x3d, 0x3e) in (10, 0, 40, 20) and message 8
+  (0x445e00) to lava flows at given cells when the player enters six zones.
+- **The start.** Easy and normal lay amber at (7, 43) and (18, 25), fish at
+  (21, 34), a leviathan zone (17, 30, 5, 5) and a barrel of 2500 amber at
+  (15, 16) (0x520c70); normal adds amber at (13, 1) and (28, 20), fish at
+  (32, 14) and 2000 amber at (27, 11) and (36, 8). The Persians get 8000
+  amber and 6000 fish on normal, 7000 and 4000 more on hard (0x4a8de0 and
+  0x4a8c30 add), a sea monster at (33, 14) on normal and hard (0x493780)
+  and a siren at (31, 14) on hard (0x404a20: class 0x1fd, field 4 its
+  strength 100000, 5 and 6 the cell).
+
 Primitives not yet ported (the later brains use them):
 
 - **0x47a7e0, repair** (ported as prizes sailing to a dock; `(group,

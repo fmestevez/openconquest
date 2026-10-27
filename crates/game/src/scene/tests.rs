@@ -4132,3 +4132,46 @@ fn miss008_brain_builds_its_fleets() {
     assert!(barbarians > 0, "the barbarian yards built for their fleets");
     assert!(persians > 0, "the Persians built ships");
 }
+
+/// miss009's yards build for the barbarians' and the Persians' fleets
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn miss009_brain_builds_its_fleets() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss009").unwrap();
+    let brain = scene.brain.as_ref().unwrap();
+    let sites = |k: usize| brain.fleets[k].ships.len();
+    // The builder and yards hold their buildings.
+    assert!([0, 1, 2, 3, 8].iter().all(|&k| sites(k) > 0));
+    // The leviathan laid on normal swims in its zone (17, 30, 5, 5).
+    let t = TILE_SIZE as f32;
+    assert!(scene.objects.iter().any(|o| {
+        o.class == ObjectClass::WhaleZone
+            && (17..22).contains(&((o.x / t) as i32))
+            && (30..35).contains(&((o.y / t) as i32))
+    }));
+    // Twenty minutes, in ticks.
+    for _ in 0..30_000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let brain = scene.brain.as_ref().unwrap();
+    let ships = |k: usize| brain.fleets[k].ships.len();
+    eprintln!(
+        "barbarian fleets {:?}, persian fleets {:?}",
+        (4..=7).map(ships).collect::<Vec<_>>(),
+        (9..=14).map(ships).collect::<Vec<_>>()
+    );
+    // The south-western raiders and the fishers start with nothing.
+    assert!(
+        ships(5) + ships(7) > 0,
+        "the barbarian yards built for their fleets"
+    );
+    assert!(
+        (9..=12).map(ships).sum::<usize>() > 0,
+        "the Persians built ships"
+    );
+}
