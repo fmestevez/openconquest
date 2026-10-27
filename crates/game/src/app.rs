@@ -4795,9 +4795,10 @@ impl ApplicationHandler for App {
                                 self.cancel_button(slot);
                             } else if self.settings.modern_mouse {
                                 self.right_click(c);
-                            } else if self.pointer_modes(c).len() > 1 {
-                                self.step_pointer(c);
-                            } else if self.carrying.is_some() || self.pending.is_some() {
+                            } else if self.pointer_modes(c).len() > 1
+                                || self.carrying.is_some()
+                                || self.pending.is_some()
+                            {
                                 self.step_pointer(c);
                             } else {
                                 // Nothing else to point at: the selection
