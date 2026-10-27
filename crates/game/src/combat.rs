@@ -838,12 +838,11 @@ pub fn refit_cost(upgrade: Upgrade, level: u8, kind: u8) -> u32 {
     base * SIZE[kind as usize % 12]
 }
 
-/// How much hull damage a ship of armour level 0-2 takes, and how much
-/// faster rigging of level 0-2 sails. Placeholders: where the original
-/// applies these levels has not been found yet. Weapon levels use the
-/// damage table; ram levels, the ram quality table (`ram_odds`).
+/// What armour leaves of a blow (0x4befc0): the cut at 0x597a00 by the
+/// fitted kind's row (kind x 3) and the player's level in it, taken here at
+/// 0: none, medium and strong armour cut 0, 20 and 37 percent.
 pub fn armour_factor(level: u8) -> f32 {
-    [1.0, 0.85, 0.7][level.min(2) as usize]
+    [1.0, 0.8, 0.63][level.min(2) as usize]
 }
 
 /// Rigging: 115 and 130 percent of the top speed (0x4ac210).
