@@ -11,9 +11,7 @@ use super::{heading_towards, Scene};
 use crate::assets::GameData;
 use crate::objects::{self, Caches};
 
-/// Seconds between a lair's creatures per step of field 9 below 10; how
-/// far from the lair they roam (cells). Placeholders.
-const SPAWN_STEP: f32 = 2.0;
+/// How far from the lair they roam (cells). A placeholder.
 const ROAM: i32 = 5;
 /// Walking speed, world pixels a second: a cell (64 pixels) a pass of the
 /// 16-frame walking picture at 5 ticks a frame (0x411520, 0x59538c).
@@ -83,10 +81,12 @@ impl Scene {
             .collect();
         for (id, class, x, y, max, speed) in lairs {
             let out = self.walkers.iter().filter(|w| w.lair == id).count() as u32;
+            // Another comes out once (10 - field 9) x 20-25 ticks have
+            // passed since the last, drawn afresh at each look (0x414f00).
+            let ticks = (10 - speed.min(9)) * ((self.rng.next() % 21 + 80) * 25 / 100);
             let clock = self.lair_clocks.entry(id).or_insert(0.0);
             *clock += dt;
-            let every = SPAWN_STEP * (10 - speed.min(9)) as f32;
-            if out >= max || *clock < every {
+            if out >= max || *clock <= crate::clock::ticks(ticks) {
                 continue;
             }
             *clock = 0.0;
