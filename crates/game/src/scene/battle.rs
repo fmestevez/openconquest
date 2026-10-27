@@ -180,6 +180,7 @@ impl Scene {
         }
         for (target, weapons, owner, shooter, theseus) in volleys {
             self.scout_attacked(target);
+            self.wizard_attacked(target, shooter);
             // A brain's fleet notes who fired on it.
             if owner == self.human.map(|h| (h.nation, h.slot)) {
                 if let Some(s) = self.object_index(shooter) {

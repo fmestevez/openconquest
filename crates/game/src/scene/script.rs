@@ -7,15 +7,19 @@ use openconquest_formats::{ObjectClass, ObjectRecord};
 
 use super::Scene;
 use crate::assets::GameData;
+use crate::magic::Spell;
 use crate::objects::{self, Caches, Treasure};
 
-/// Seconds between a wizard's strikes at level 0, less a second a level,
-/// and the hull points a strike takes. Placeholders.
-const WIZARD_PERIOD: f32 = 20.0;
-const WIZARD_DAMAGE: f32 = 150.0;
-/// Effects of the wind wizard's lightning and the fire wizard's fire.
-const FX_WIND: &str = "SLIGHT1";
-const FX_FIRE: &str = "FIRE0";
+/// A wizard's casting (CastleClassTy, 0x410790): the next cast's time,
+/// and who last attacked him and until when he hurries (3000 ticks).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Wizard {
+    pub next: f32,
+    pub attacker: Option<(u32, f32)>,
+}
+
+/// How long a wizard hurries after he is attacked.
+const WIZARD_ANGER: u32 = 3000;
 
 impl Scene {
     /// Places mission `mission`'s scripted objects at `difficulty`.
@@ -140,51 +144,131 @@ impl Scene {
         }
     }
 
-    /// Wizards strike at the player's ships within their reach (field 23,
-    /// in cells), the more often the higher their level (field 22).
+    /// Ticks to a wizard's next cast (0x410790, 0x410e6e): (1250 - 125 x
+    /// level) x 80-100%.
+    fn wizard_wait(&mut self, level: u32) -> f32 {
+        let base = 1250u32.saturating_sub(125 * level);
+        crate::clock::ticks(base * (80 + self.rng.next() % 21) / 100)
+    }
+
+    /// A shot from `shooter` at `target`: a wizard attacked hurries.
+    pub(super) fn wizard_attacked(&mut self, target: u32, shooter: u32) {
+        if let Some(w) = self.wizards.get_mut(&target) {
+            w.attacker = Some((shooter, crate::clock::ticks(WIZARD_ANGER)));
+        }
+    }
+
+    /// Wizards cast at what lies around them (0x410790): the wind wizard
+    /// (sea castle) a waterspout, the fire wizard (war castle) a fireball,
+    /// on a cell within fields 23 and 24 of his castle picked at random,
+    /// weighted by what is around it (each ship or fort 10 less its
+    /// distance from the castle, any other building 1, four times as much
+    /// for his last attacker), every (1250 - 125 x level) x 80-100% ticks,
+    /// twice as often for 3000 ticks after he is attacked.
     pub(super) fn run_wizards(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         let t = TILE_SIZE as f32;
-        let wizards: Vec<(f32, f32, u32, u32, &'static str)> = self
+        let castles: Vec<(u32, (i32, i32), u32, i32, i32, u32)> = self
             .objects
             .iter()
             .filter_map(|o| match o.class {
                 ObjectClass::Castle(c) if o.combat.as_ref().is_some_and(|c| c.hull > 0.0) => {
-                    Some((
-                        o.x,
-                        o.y,
-                        o.record.field(22).unwrap_or(5),
-                        o.record.field(23).unwrap_or(8),
-                        if c == 0x42 { FX_WIND } else { FX_FIRE },
-                    ))
+                    let f = |k, d| o.record.field(k).unwrap_or(d);
+                    let cell = o.cell.unwrap_or(((o.x / t) as i32, (o.y / t) as i32));
+                    Some((o.id, cell, f(22, 5), f(23, 8) as i32, f(24, 8) as i32, c))
                 }
                 _ => None,
             })
             .collect();
-        for (x, y, level, reach, fx) in wizards {
-            let period = (WIZARD_PERIOD - level as f32).max(4.0);
-            if self.creature_clock % period >= dt {
+        for (id, (cx, cy), level, rx, ry, class) in castles {
+            if !self.wizards.contains_key(&id) {
+                let next = self.wizard_wait(level);
+                self.wizards.insert(
+                    id,
+                    Wizard {
+                        next,
+                        attacker: None,
+                    },
+                );
+            }
+            let w = self.wizards.get_mut(&id).unwrap();
+            if let Some((_, left)) = w.attacker.as_mut() {
+                *left -= dt;
+                if *left <= 0.0 {
+                    w.attacker = None;
+                }
+            }
+            w.next -= dt;
+            if w.next > 0.0 {
                 continue;
             }
-            let reach = reach as f32 * t;
-            let target = self
-                .objects
-                .iter()
-                .filter(|o| o.ship.is_some() && self.is_own(o))
-                .map(|o| (o.id, o.x, o.y, (o.x - x).hypot(o.y - y)))
-                .filter(|s| s.3 <= reach)
-                .min_by(|a, b| a.3.total_cmp(&b.3));
-            if let Some((id, tx, ty, _)) = target {
-                self.spawn_effect(data, caches, fx, tx, ty);
-                self.sounds.push((
-                    if fx == FX_WIND {
-                        "molniya2"
-                    } else {
-                        "fireball"
-                    },
-                    tx,
-                    ty,
-                ));
-                self.hit(id, WIZARD_DAMAGE, data, caches);
+            let attacker = w.attacker.map(|a| a.0);
+            let mut wait = self.wizard_wait(level);
+            if attacker.is_some() {
+                wait /= 2.0;
+            }
+            self.wizards.get_mut(&id).unwrap().next = wait;
+            // What lies on each cell around him.
+            let mut marks: Vec<((i32, i32), u32)> = Vec::new();
+            for o in &self.objects {
+                if o.owner.is_none() || o.owner == Some(crate::combat::MONSTERS) {
+                    continue;
+                }
+                if o.combat.as_ref().is_none_or(|c| c.hull <= 0.0) {
+                    continue;
+                }
+                let cell = match (&o.ship, o.cell) {
+                    (None, Some(c)) => c,
+                    _ => ((o.x / t).floor() as i32, (o.y / t).floor() as i32),
+                };
+                let far = (cell.0 - cx).abs().max((cell.1 - cy).abs()) as u32;
+                let mut weight = match o.class {
+                    ObjectClass::Ship => 10u32.saturating_sub(far),
+                    ObjectClass::Building(b) if (0x34..=0x36).contains(&b) => {
+                        10u32.saturating_sub(far)
+                    }
+                    ObjectClass::Building(_) => 1,
+                    _ => 0,
+                };
+                if Some(o.id) == attacker {
+                    weight *= 4;
+                }
+                if weight > 0 {
+                    marks.push((cell, weight));
+                }
+            }
+            let mut cells: Vec<((i32, i32), u32)> = Vec::new();
+            for y in cy - ry..=cy + ry {
+                for x in cx - rx..=cx + rx {
+                    let weight: u32 = marks
+                        .iter()
+                        .filter(|(c, _)| (c.0 - x).abs() <= 1 && (c.1 - y).abs() <= 1)
+                        .map(|m| m.1)
+                        .sum();
+                    if weight > 0 {
+                        cells.push(((x, y), weight));
+                    }
+                }
+            }
+            let total: u32 = cells.iter().map(|c| c.1).sum();
+            if total == 0 {
+                continue;
+            }
+            let mut pick = self.rng.next() % total;
+            let Some(&((x, y), _)) = cells.iter().find(|c| {
+                if pick < c.1 {
+                    true
+                } else {
+                    pick -= c.1;
+                    false
+                }
+            }) else {
+                continue;
+            };
+            let monsters = Some(crate::combat::MONSTERS);
+            if class == 0x42 {
+                let _ = self.spawn_hazard(Spell::Waterspout, x, y, monsters, data, caches);
+            } else {
+                self.spawn_fireball(x, y, monsters, data, caches);
             }
         }
     }

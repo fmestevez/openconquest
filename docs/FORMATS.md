@@ -1462,6 +1462,21 @@ its inventory: the fire wizard gets scroll 13 and a disposable magic, the
 dragon the Golden Fleece (kind 16). 0x520c70 lays a treasure on a cell
 (miss010: 2000-2500 amber).
 
+The wizards (CastleClassTy, `Castle.cpp`; constructor 0x410ca0, per tick
+0x410790) cast real spells (0x42f580, with a free cast) on a cell chosen
+near the castle:
+
+- **Which spell.** The sea castle (0x42, the wind wizard) casts spell 3, the
+  waterspout; the war castle (0x43, the fire wizard) spell 7, the fireball.
+- **Where.** A cell within fields 23 and 24 either way of the castle. Each
+  cell weighs the sum over the objects of a side within a cell of it: a
+  ship or a building 0x34-0x36 counts 10 less its distance from the castle,
+  any other building 1. The wizard's last attacker counts four times. The
+  pick is weighted random.
+- **When.** The castle's picture shows the cast at frame 7. The next comes
+  `(1250 - 125 x level) x (80 + rand(21)) / 100` ticks later, level being
+  field 22; at half that delay for 3000 ticks after he is attacked (+0x1f4).
+
 Buildings, lairs, nests and monsters hold treasures in their records: a
 count, then five dwords per treasure like a treasure record's fields 4-8
 (kind, holder -1, 0, parameter, amount), at field 10 for lairs (0x46-0x48),

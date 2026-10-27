@@ -16,7 +16,7 @@ use crate::render::palette_lut;
 use crate::save::{self, SaveGame, SavedObject};
 use crate::terrain::Terrain;
 use crate::weather::Wind;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// Marines being trained at a settlement, one at a time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -244,6 +244,8 @@ pub struct Scene {
     pub permits: crate::permits::Permits,
     /// Seconds since the mission began, for the creatures' rhythms.
     pub creature_clock: f32,
+    /// Wizards' casting.
+    pub wizards: BTreeMap<u32, script::Wizard>,
     /// Spells the player may cast once for nothing (disposable magic).
     pub free_casts: std::collections::BTreeMap<Spell, u32>,
     /// Buildings being repaired by a settlement or town.
@@ -464,6 +466,7 @@ impl Scene {
             mending: Vec::new(),
             free_casts: Default::default(),
             creature_clock: 0.0,
+            wizards: BTreeMap::new(),
             story: Vec::new(),
             start_sites: Vec::new(),
             delivered: Vec::new(),
@@ -652,6 +655,7 @@ impl Scene {
                 siren_shown: self.siren_shown.iter().map(|(k, v)| (*k, *v)).collect(),
                 gorgons: self.gorgons.iter().map(|(k, v)| (*k, *v)).collect(),
                 sea_monsters: self.sea_monsters.iter().map(|(k, v)| (*k, *v)).collect(),
+                wizards: self.wizards.iter().map(|(k, v)| (*k, v.clone())).collect(),
             },
         }
     }
@@ -747,6 +751,7 @@ impl Scene {
         scene.siren_shown = b.siren_shown.iter().copied().collect();
         scene.gorgons = b.gorgons.iter().copied().collect();
         scene.sea_monsters = b.sea_monsters.iter().copied().collect();
+        scene.wizards = b.wizards.iter().cloned().collect();
         scene.refresh_sight();
         if !save.start_sites.is_empty() {
             scene.start_sites = save.start_sites.clone();
@@ -1507,6 +1512,8 @@ pub struct Battle {
     pub gorgons: Vec<(u32, creatures::GorgonCycle)>,
     #[serde(default)]
     pub sea_monsters: Vec<(u32, (f32, f32))>,
+    #[serde(default)]
+    pub wizards: Vec<(u32, script::Wizard)>,
 }
 
 /// The least way a ship keeps while bound somewhere, in world pixels a

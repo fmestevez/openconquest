@@ -97,7 +97,7 @@ marked as a placeholder in the code.
 - The original's multiplayer screens and network play with the original game
   (OpenConquest has its own lobby).
 - A few values are still estimates (marked in the code), such as the
-  wizards' strikes and the leviathan hunt.
+  leviathan hunt and the boarding pace.
 
 ### Modern improvements
 
