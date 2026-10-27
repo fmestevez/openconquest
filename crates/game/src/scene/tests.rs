@@ -3723,3 +3723,57 @@ fn battles_survive_a_save() {
     );
     assert_eq!(restored.lightning.len(), 1);
 }
+
+/// The Golden Fleece mends 1% of the hull every 100 ticks, Argus every
+/// 50 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn fleece_and_argus_mend() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let max = scene.objects[i].combat.as_ref().unwrap().max_hull;
+    scene.objects[i].combat.as_mut().unwrap().hull = max / 2.0;
+    scene.objects[i]
+        .ship
+        .as_mut()
+        .unwrap()
+        .treasures
+        .push(objects::Treasure {
+            kind: 16,
+            param: 0,
+            amount: 10,
+        });
+    let seconds = 100.0 * crate::clock::TICK;
+    let mut t = 0.0;
+    while t < seconds {
+        scene.update(0.02, &data, &mut caches);
+        t += 0.02;
+    }
+    let hull = scene.objects[i].combat.as_ref().unwrap().hull;
+    assert!(
+        ((hull - max / 2.0) / max - 0.01).abs() < 0.002,
+        "{}",
+        (hull - max / 2.0) / max
+    );
+    scene.objects[i].ship.as_mut().unwrap().heroes.push(5);
+    let before = hull;
+    let mut t = 0.0;
+    while t < seconds {
+        scene.update(0.02, &data, &mut caches);
+        t += 0.02;
+    }
+    let hull = scene.objects[i].combat.as_ref().unwrap().hull;
+    assert!(
+        ((hull - before) / max - 0.03).abs() < 0.003,
+        "{}",
+        (hull - before) / max
+    );
+}

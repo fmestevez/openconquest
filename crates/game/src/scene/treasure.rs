@@ -16,10 +16,13 @@ use crate::objects::{self, Caches, Task, Treasure};
 /// house to take the hero.
 const TAKE_REACH: f32 = 1.0;
 const HERO_REACH: f32 = 2.6;
-/// Hull points a second mended by the Golden Fleece and by Argus.
-/// Placeholders.
-pub const FLEECE_REPAIR: f32 = 10.0;
-pub const ARGUS_REPAIR: f32 = 5.0;
+/// What heals aboard (0x4b98b0, a tick at a time): each Cup of Asclepius
+/// and Golden Fleece adds its treasure amount (field 8: 40 and 10 in the
+/// campaign) and Argus 20 (0x4bd36a) to a count; every 1000 heals each
+/// wounded unit a point of its 100 (the Cup and the Fleece) and mends 1%
+/// of the hull (the Fleece and Argus).
+const HEAL_STEP: f32 = 1000.0;
+pub const ARGUS_RATE: f32 = 20.0;
 
 impl Scene {
     /// Sends own ship `ship` to take the treasure or the hero `target`.
@@ -107,19 +110,23 @@ impl Scene {
             let (Some(s), Some(c)) = (o.ship.as_ref(), o.combat.as_mut()) else {
                 continue;
             };
-            let mut rate = 0.0;
-            if s.treasures.iter().any(|tr| tr.kind == 16) {
-                rate += FLEECE_REPAIR;
-            }
-            // The cup of Asclepius and the Fleece heal the crew's wounds.
-            if s.treasures.iter().any(|tr| tr.kind == 15 || tr.kind == 16) {
-                c.wounds = (c.wounds - combat::CREW_HEALING * dt).max(0.0);
-            }
+            let rate = |kind: u8| -> f32 {
+                s.treasures
+                    .iter()
+                    .filter(|tr| tr.kind == kind)
+                    .map(|tr| tr.amount as f32)
+                    .sum()
+            };
+            let ticks = dt / crate::clock::TICK;
+            let crew = (rate(15) + rate(16)) * ticks / HEAL_STEP;
+            c.wounds = (c.wounds - crew).max(0.0);
+            let mut mend = rate(16);
             if s.heroes.contains(&5) {
-                rate += ARGUS_REPAIR;
+                mend += ARGUS_RATE;
             }
+            let rate = c.max_hull / 100.0 * mend * ticks / HEAL_STEP;
             if rate > 0.0 && c.hull < c.max_hull {
-                c.hull = (c.hull + rate * dt).min(c.max_hull);
+                c.hull = (c.hull + rate).min(c.max_hull);
             }
         }
     }

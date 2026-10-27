@@ -1499,3 +1499,20 @@ starts at 8000 amber and 2300 fish on Easy: 4000 + 4000 and 300 + 2000). Every m
 Saved games (`demo.dkd`) add `DARK_MAP` (fog of war), `ALIANCES`,
 `NAME_PLAYERS`, `AI_PLAYERS`, `DIFFICULTY`, `SPEED_GAME`, `RND_INIT` and
 others.
+
+## Healing aboard
+
+`0x4b98b0` runs on every ship each tick. Each item slot (`+0x489`, 0x18
+bytes each) holding a Cup of Asclepius (kind 15) or a Golden Fleece (kind
+16) adds its rate (the treasure's field 8: 40 for the Cup, 10 for the
+Fleece in the campaign) to a count. Each hero slot (`+0x4b5`) holding Argus
+(hero 5) does the same with rate 20, which `0x4bd36a` sets when he comes
+aboard. Every 1000 of a count:
+
+- the Cup heals each wounded unit of the first three crew groups by 1 of
+  its 100;
+- the Fleece heals every group by 1 and mends 1% of the ship's full hull;
+- Argus mends 1% of the full hull.
+
+So the Fleece mends 1% every 100 ticks (4 s) and Argus 1% every 50 ticks
+(2 s).

@@ -97,8 +97,8 @@ marked as a placeholder in the code.
 - The original's multiplayer screens and network play with the original game
   (OpenConquest has its own lobby).
 - Some values are still estimates, among them how far harpies and dragons
-  look for ships, how the Golden Fleece and Argus mend ships, how settlements
-  repair buildings, and how strongly gifts and heroes help.
+  look for ships, how settlements repair buildings, and how strongly some
+  gifts and heroes help.
 
 ### Modern improvements
 

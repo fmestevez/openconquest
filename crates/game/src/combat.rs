@@ -574,9 +574,6 @@ pub fn fires(weapon: u8) -> bool {
 /// (0x4be410 takes a blow's crew share off the units' conditions, picked
 /// at random by kind, 0x597cfc: 2860, 2990, 3120, nearly alike).
 pub const SQUAD_LIFE: f32 = 100.0;
-/// Crew wound points healed a second by the Cup of Asclepius and the Golden
-/// Fleece. Placeholder.
-pub const CREW_HEALING: f32 = 5.0;
 /// The ship of the dead's undead crews are this much stronger in boarding.
 /// Placeholder.
 pub const UNDEAD_MELEE: u32 = 2;
