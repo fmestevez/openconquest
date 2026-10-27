@@ -4175,3 +4175,65 @@ fn miss009_brain_builds_its_fleets() {
         "the Persians built ships"
     );
 }
+
+/// miss010's brain: the builders and yards hold their buildings, the
+/// strait patrol its ships, and after twenty minutes the barbarian yards
+/// have built for their fleets and the Persians for theirs.
+#[test]
+fn miss010_brain_builds_its_fleets() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss010").unwrap();
+    let brain = scene.brain.as_ref().unwrap();
+    let sites = |k: usize| brain.fleets[k].ships.len();
+    eprintln!(
+        "start: {:?}",
+        (0..brain.fleets.len()).map(sites).collect::<Vec<_>>()
+    );
+    // The builders and yards hold their buildings; the raiders and the
+    // strait patrol start with ships.
+    assert!([0, 1, 2, 3, 8, 9, 10].iter().all(|&k| sites(k) > 0));
+    assert!(sites(4) > 0 && sites(16) > 0);
+    // The leviathan laid on normal swims in its zone (10, 20, 5, 5).
+    let t = TILE_SIZE as f32;
+    assert!(scene.objects.iter().any(|o| {
+        o.class == ObjectClass::WhaleZone
+            && (10..15).contains(&((o.x / t) as i32))
+            && (20..25).contains(&((o.y / t) as i32))
+    }));
+    // A barbarian building holds a disposable magic, the Persian yard at
+    // (26, 30) 2500 amber.
+    assert!(scene.held.iter().any(|h| h.1.kind == 9 && h.1.param == 6));
+    assert!(scene
+        .held
+        .iter()
+        .any(|h| h.1.kind == 2 && h.1.amount == 2500));
+    // Twenty minutes, in ticks. The eastern patrol and the nest's guard
+    // sail near the dragon and lose ships: note the most each fleet held.
+    let mut most = [0usize; 19];
+    for _ in 0..30_000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let brain = scene.brain.as_ref().unwrap();
+        for (m, f) in most.iter_mut().zip(&brain.fleets) {
+            *m = (*m).max(f.ships.len());
+        }
+    }
+    eprintln!(
+        "most: barbarian fleets {:?}, persian fleets {:?}",
+        &most[4..=7],
+        &most[11..=18]
+    );
+    // The eastern patrol, the nest's guard and the fishers start with
+    // nothing.
+    assert!(
+        most[5..=7].iter().all(|&n| n > 0),
+        "the barbarian yards built for their fleets"
+    );
+    assert!(
+        most[11..=15].iter().all(|&n| n > 0),
+        "the Persians built for their gatherers and patrol"
+    );
+}

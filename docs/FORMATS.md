@@ -1518,6 +1518,69 @@ miss009 (0x4663d0):
   and a siren at (31, 14) on hard (0x404a20: class 0x1fd, field 4 its
   strength 100000, 5 and 6 the cell).
 
+miss010 (0x46a0f0; constructor 0x469d90):
+
+- **Members.** Group 0 is the barbarians (8 members), group 1 the
+  Persians (player 0xf, 11 members); the human is player 5 (`+0xe4`).
+  Member 0 of each group holds the builders (barbarians: (5, 9), (11, 4),
+  (51, 19), (58, 29), (56, 33); Persians: (23, 24)) and runs nothing.
+  Requests are shorts: the barbarian yards' own at `+0x104`-`+0x108`,
+  Persian yard 1's slots `+0x10e`-`+0x114` (members 3-6) and yard 2's
+  `+0x116`-`+0x11c` (members 6-9), each yard's member served at `+0x10a`,
+  `+0x10c`. The constructor sets the patrols' size events (and the
+  strength they ask up to): `2 x difficulty + 4` for barbarian members 4
+  and 5 and Persian member 8, `difficulty + 4` for Persian member 5,
+  `3 x difficulty + 5` for Persian member 9.
+- **The barbarians.** Yards 1-3 (0x468050, at (4, 6), (53, 30), (60, 32))
+  build as miss009's (merchants for member 7, warships for member yard +
+  3; rest `(50 + rand(41 - 10 x difficulty)) x 25`). Member 4 (0x468240,
+  the ships in (0, 0, 8, 4)) asks yard 1 for rammers, royal ships and
+  bombers, patrols (0x5b2780) watching (0, 0, 10, 10) (1500 ticks of
+  fighting), at full strength after 4500 ticks also (0, 10, 10, 20) and
+  (10, 0, 20, 20) (6000 ticks, then a strike at (0, 35, 20, 8) for 6000)
+  until two ships are left. Member 5 (0x4684e0) asks yard 2 for royal
+  ships and bombers and patrols (0x5b2958) watching (50, 20, 15, 20), at
+  full strength (40, 14, 25, 29); whenever the player is about the
+  dragon's nest (40, 0, 25, 10) (0x479fd0) and it is not patrolling it
+  attacks there 1500 ticks. Member 6 (0x4687a0) asks yard 3 for
+  `difficulty + 5` royal ships (easy) or bombers, patrols (0x5b2b18)
+  watching the same two zones and, more than two strong with the player
+  about the nest, attacks about one of the player's ships carrying heroes
+  500 ticks, else the nest's waters 1500. Member 7 (0x468ad0) asks yard 1
+  for two merchants and fishes (0, 0, 20, 30) 7500 ticks, resting 1500.
+- **The Persians.** Yards 1 and 2 (0x468bc0, at (26, 30) and (24, 14))
+  serve their slots in order and rest `(30 + rand(41)) x 25` ticks; yard 2
+  also gives a one-off order of class 1 (`+0x12a`). Members 3 and 6
+  (0x4690b0) ask for a boat (easy) or merchant when they have neither and
+  gather amber in (20, 30, 20, 13) and (20, 0, 10, 25) `(rand(difficulty
+  + 1) + 1) x 1500` ticks, sail home to (26, 27) and (27, 9) (`1500 - 250
+  x difficulty` ticks at most) and rest 750; members 4 and 7 (0x469320)
+  ask for a merchant and fish (20, 20, 10, 10) and (20, 5, 15, 10) (member
+  7 1500 ticks longer), resting `1500 - 500 x difficulty`. Member 5
+  (0x469580) counts royal ships and bombers but asks for rammers or royal
+  ships, patrolling (0x5b2c40) (20, 25, 10, 15), at full strength (20, 20,
+  10, 20) and (0, 20, 20, 10). Members 8 and 9 (0x4697d0, 0x469a80;
+  member 8 the ships in (19, 6, 6, 6)) patrol (0x5b2e08, 0x5b2fe8)
+  watching (20, 10, 10, 10), at full strength (0, 10, 20, 10) and (20,
+  20, 10, 20), a fight there going on to (0, 35, 20, 8). Member 9 checks
+  its request slot `+0x11c` but writes the Persians' own ships (0xd2,
+  0xd3) into member 8's `+0x11a`: it never gets a ship, member 8 does.
+  Member 10 (0x469d10) mends prizes (0x5d97). Unordered launches (0x5d98)
+  join member 7 (boats), 6 (merchants) or 8 (warships).
+- **The tick.** About once every 50 ticks: once the dragon's nest at (59,
+  4) is gone, message 9 (0x445e00) to the lava flows at (58, 4), (59, 5)
+  and (64, 4) (cell + 4 of the grid); once the player has delivered the
+  Golden Fleece to one of their buildings (0x5d94 with kind 16, `+0x130`),
+  lightning (0x42f580 kind 6) at (58, 5), then at (59, 4) (`+0x12f`).
+- **The start.** The nest (0x41dd30) and its fleece; a disposable magic
+  (kind 9, parameter 6) in the barbarian building at (58, 29) or (56, 33)
+  at random. Easy and normal lay amber at (30, 40) and (30, 28), fish at
+  (3, 25), a leviathan zone (10, 20, 5, 5), a barrel of 2500 amber at
+  (39, 40) and 2500 amber in the Persian yard at (26, 30); normal adds
+  amber at (29, 12) and (39, 22), fish at (56, 23) and a barrel of 2000 at
+  (27, 19). The Persians get 10000 amber and 8000 fish on normal, twice
+  that on hard, technology bits 78, 79 and workshop levels (not ported).
+
 Primitives not yet ported (the later brains use them):
 
 - **0x47a7e0, repair** (ported as prizes sailing to a dock; `(group,
