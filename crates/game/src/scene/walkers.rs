@@ -11,8 +11,32 @@ use super::{heading_towards, Scene};
 use crate::assets::GameData;
 use crate::objects::{self, Caches};
 
-/// How far from the lair they roam (cells). A placeholder.
-const ROAM: i32 = 5;
+/// Where creatures may wander, around where they stand (0x594ba0: the
+/// cyclopes'; 0x594e44 and 0x5950e8, alike: the minotaurs' and amazons').
+const CYCLOPS_REACH: [&str; 11] = [
+    "..#######..",
+    ".#########.",
+    "###########",
+    "###########",
+    "###########",
+    "#####.#####",
+    "###########",
+    "###########",
+    "###########",
+    ".#########.",
+    "..#######..",
+];
+const OTHER_REACH: [&str; 9] = [
+    "..#####..",
+    ".#######.",
+    "#########",
+    "#########",
+    "####.####",
+    "#########",
+    "#########",
+    ".#######.",
+    "..#####..",
+];
 /// Walking speed, world pixels a second: a cell (64 pixels) a pass of the
 /// 16-frame walking picture at 5 ticks a frame (0x411520, 0x59538c).
 const SPEED: f32 = 64.0 / (16.0 * 5.0 * crate::clock::TICK);
@@ -198,7 +222,7 @@ impl Scene {
                 Walk::Appear(_) | Walk::Throw => walk = Walk::Stand(2.0),
                 Walk::Stand(left) if left > dt => walk = Walk::Stand(left - dt),
                 Walk::Stand(_) => {
-                    walk = match self.roam_target(w.lair) {
+                    walk = match self.roam_target(class, ((x / t) as i32, (y / t) as i32)) {
                         Some((cx, cy)) => Walk::To(cx, cy),
                         None => Walk::Stand(4.0),
                     };
@@ -242,25 +266,50 @@ impl Scene {
         }
     }
 
-    /// A land cell near lair `lair` to wander to.
-    fn roam_target(&mut self, lair: u32) -> Option<(i32, i32)> {
-        let t = TILE_SIZE as f32;
-        let i = self.object_index(lair)?;
-        let (lx, ly) = (
-            (self.objects[i].x / t) as i32,
-            (self.objects[i].y / t) as i32,
-        );
-        for _ in 0..8 {
-            let r = self.rng.next();
-            let span = (2 * ROAM + 1) as u32;
-            let (cx, cy) = (
-                lx - ROAM + (r % span) as i32,
-                ly - ROAM + (r / span % span) as i32,
-            );
-            if (cx, cy) != (lx, ly) && self.is_land(cx, cy) {
-                return Some((cx, cy));
+    /// A land cell to wander to (0x413240): any, alike, within the class's
+    /// round reach of where the creature stands (0x594ba0 cyclopes,
+    /// 0x594e44 minotaurs, 0x5950e8 amazons), that it can walk to.
+    fn roam_target(&mut self, class: u32, (cx, cy): (i32, i32)) -> Option<(i32, i32)> {
+        let reach: &[&str] = if class == 0x1f4 {
+            &CYCLOPS_REACH
+        } else {
+            &OTHER_REACH
+        };
+        let n = reach.len() as i32 / 2;
+        let inside = |x: i32, y: i32| {
+            (x - cx).abs() <= n
+                && (y - cy).abs() <= n
+                && reach[(y - cy + n) as usize].as_bytes()[(x - cx + n) as usize] == b'#'
+        };
+        // Those it can reach on land (0x558fa0), within the window.
+        let mut seen = std::collections::HashSet::from([(cx, cy)]);
+        let mut todo = vec![(cx, cy)];
+        let mut cells = Vec::new();
+        while let Some((x, y)) = todo.pop() {
+            for (dx, dy) in [
+                (1, 0),
+                (-1, 0),
+                (0, 1),
+                (0, -1),
+                (1, 1),
+                (1, -1),
+                (-1, 1),
+                (-1, -1),
+            ] {
+                let (nx, ny) = (x + dx, y + dy);
+                if (nx - cx).abs() <= n
+                    && (ny - cy).abs() <= n
+                    && self.is_land(nx, ny)
+                    && seen.insert((nx, ny))
+                {
+                    todo.push((nx, ny));
+                    if inside(nx, ny) {
+                        cells.push((nx, ny));
+                    }
+                }
             }
         }
-        None
+        cells.sort_unstable();
+        (!cells.is_empty()).then(|| cells[self.rng.next() as usize % cells.len()])
     }
 }
