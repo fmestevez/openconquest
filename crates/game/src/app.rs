@@ -3005,9 +3005,19 @@ impl App {
     }
 
     /// The world viewport and minimap rectangle for the current window.
+    /// The view and minimap rectangles (as `GameView::placement`, without
+    /// building the whole view, which asks for the hovered object).
     fn placement(&self) -> (Screen, MinimapRect) {
-        let (screen, minimap, _) = self.view().placement(self.window_size());
-        (screen, minimap)
+        let window = self.window_size();
+        if self.show_interface {
+            let layout = self.interface.layout(window, &self.camera.policy, &self.scene);
+            (layout.view, layout.minimap)
+        } else {
+            (
+                Screen::full(window.0, window.1),
+                MinimapRect::overlay(&self.scene, window),
+            )
+        }
     }
 
     fn update_title(&self) {
