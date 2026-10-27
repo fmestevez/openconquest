@@ -421,6 +421,10 @@ pub struct App {
     /// original plays looped when no other is asked for: 0x525370), while
     /// the front-end menus are up.
     menu_music: Option<rodio::Sink>,
+    /// The sea's surf under a mission (`prib3`, event 273).
+    ambience: Option<rodio::Sink>,
+    /// The surf could not be loaded: not tried again.
+    no_ambience: bool,
     /// `mus_menu` could not be played: do not try again.
     no_menu_music: bool,
     music_volume: f32,
@@ -594,6 +598,8 @@ impl App {
             briefing: !restored,
             music: None,
             menu_music: None,
+            ambience: None,
+            no_ambience: false,
             no_menu_music: false,
             music_volume: 0.5,
             cd_audio,
@@ -2591,6 +2597,31 @@ impl App {
         }
     }
 
+    /// The surf under a mission (event 273, `prib3`): the original loops
+    /// it on its ambient channel 9 (0x525370 kind 3) from the mission's
+    /// start (0x50f910) while "ambient sound effects" is on (0x524f40).
+    fn choose_ambience(&mut self) {
+        let want = self.in_game
+            && self.menu.is_none()
+            && self.video.is_none()
+            && self.settings.config.ambient_sounds
+            && !self.no_ambience;
+        if want != self.ambience.is_some() {
+            self.ambience = None;
+            if want {
+                if let (Some(audio), Some(sounds)) =
+                    (self.audio.as_mut(), self.data.sounds.as_ref())
+                {
+                    self.ambience = audio.loop_sound(sounds, "prib3");
+                    self.no_ambience = self.ambience.is_none();
+                }
+            }
+        }
+        if let (Some(s), Some(audio)) = (&self.ambience, &self.audio) {
+            s.set_volume(if audio.muted { 0.0 } else { audio.volume });
+        }
+    }
+
     /// The menus' music in the front-end menus (not over a game, nor while
     /// a video plays), the game's music otherwise.
     fn choose_music(&mut self) {
@@ -4092,6 +4123,7 @@ impl App {
                         m.set_volume(0.0);
                     }
                     self.menu_music = None;
+                    self.ambience = None;
                     return true;
                 }
                 Err(e) => eprintln!("video: {e:#}"),
@@ -4174,6 +4206,7 @@ impl App {
         }
         self.play_scene_sounds();
         self.choose_music();
+        self.choose_ambience();
         if let Some(m) = self.music.as_mut() {
             m.keep_playing();
         }
