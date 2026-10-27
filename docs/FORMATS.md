@@ -1253,6 +1253,22 @@ through 0x50e570. A ship sinking (0x4dec40) plays event 3 (`deadsh`) if
 it was the viewing player's and event 319 (`deny`, despite its name a
 fanfare) if not. No sound was found for clicking an unavailable command.
 
+Units' voices come in groups of four events, one per nation, `base + [0, 1,
+3, 2][nation]`. Only nations 1 (Greeks) and 3 (Persians) are recorded, and
+their sounds are alike. They play only for the viewing player's units:
+
+- **Gathering.** A merchant sent to gather answers on the interface's voice
+  channel (0x49d3c0, 0x525370 channel 2): amber 156 (`am…`, `come…`), fish
+  160 (`fi…`, `fish…`), a leviathan 164 (`lev…`, `levi…`).
+- **Treasures.** A ship reaching a treasure's cell plays 172 (`piw…`,
+  0x4a3f40). Taking a treasure plays 168 (`pit3`, 0x4a5bc0).
+- **Launch.** A ship launched plays 184 (`jb_d1`, 0x4b3ab0).
+- **Buildings.** They have groups 212-251 (`re_o…`, played by the town,
+  shipyard, workshop, sage school and temples' handlers). The
+  heroes have a pair each from 252 (`ja1`/`ja4`, ...).
+
+No voice was found for moving or attacking.
+
 Music: missions' `TRACKS_MID` (Other(20)) is a playlist: a 28-byte header
 (u32s 0, 0, 260, 4, 10, 10, 0; entry size and count) then four 260-byte
 entries naming `Ancient1`-`Ancient4` (`sound/ancientN.mid`, standard MIDI

@@ -144,6 +144,11 @@ impl Scene {
         self.objects[i].ship.as_mut().unwrap().task = None;
         if self.is_own(&self.objects[i]) {
             self.stats.treasures_found += 1;
+            // Its crew cheers (events 168-171 by nation, 0x4a5bc0).
+            if matches!(owner, Some((1 | 3, _))) {
+                let (sx, sy) = (self.objects[i].x, self.objects[i].y);
+                self.sounds.push(("pit3", sx, sy));
+            }
         }
         match tr.kind {
             0..=5 => {

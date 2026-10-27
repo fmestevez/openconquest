@@ -3939,3 +3939,50 @@ fn no_fishing_over_a_dived_shoal() {
     }
     assert_eq!(bad, 0, "fished where the shoal was not");
 }
+
+/// A merchant sent to fish answers (0x49d3c0, needs `OPENCONQUEST_DATA`).
+#[test]
+fn merchants_answer_gather_orders() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| {
+            scene.is_own(o)
+                && o.ship
+                    .as_ref()
+                    .is_some_and(|s| objects::cargo_capacity(s.kind) > 0.0)
+        })
+        .unwrap()
+        .id;
+    let shoal = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::FishZone)
+        .unwrap()
+        .id;
+    scene.sounds.clear();
+    scene
+        .apply(
+            &order::Order::Gather {
+                ship,
+                deposit: shoal,
+            },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    assert!(
+        scene
+            .sounds
+            .iter()
+            .any(|s| s.0.starts_with("fi") && s.1.is_nan()),
+        "{:?}",
+        scene.sounds
+    );
+}

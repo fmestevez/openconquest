@@ -213,7 +213,13 @@ impl Scene {
                 resource,
             } => done(self.order_gather_zone(ship, a, b, resource)),
             Convoy { ship, a, b } => done(self.order_convoy(ship, a, b)),
-            Gather { ship, deposit } => done(self.order_gather(ship, deposit)),
+            Gather { ship, deposit } => {
+                let r = self.order_gather(ship, deposit);
+                if r.is_ok() {
+                    self.gather_voice(ship, deposit);
+                }
+                done(r)
+            }
             Take { ship, target } => done(self.order_take(ship, target)),
             Found {
                 ship,
@@ -250,5 +256,40 @@ impl Scene {
             CastArea { spell, cx, cy } => done(self.cast_area(spell, cx, cy, data, caches)),
             CastHazard { spell, cx, cy } => done(self.cast_hazard(spell, cx, cy, data, caches)),
         }
+    }
+}
+
+/// What a merchant answers when sent to gather (0x49d3c0, played on the
+/// interface's voice channel): events 156-159 for amber, 160-163 for fish,
+/// 164-167 for a leviathan, + 0, 1, 3, 2 by nation; only the Greeks' and
+/// the Persians' are recorded, alike.
+const AMBER_VOICES: [&str; 5] = ["am4", "am1", "am3", "come4", "come5a"];
+const FISH_VOICES: [&str; 6] = ["fi3", "fi1", "fi4", "fish1", "fish2", "fish3"];
+const LEVIATHAN_VOICES: [&str; 8] = [
+    "lev3", "lev1", "lev4", "levi1", "levi2", "levi3", "levi4", "levi5",
+];
+
+impl Scene {
+    /// The viewing player's merchant `ship` answers an order to gather
+    /// from `deposit`.
+    fn gather_voice(&mut self, ship: u32, deposit: u32) {
+        let (Some(i), Some(d)) = (self.object_index(ship), self.object_index(deposit)) else {
+            return;
+        };
+        if !self.is_own(&self.objects[i]) {
+            return;
+        }
+        // Nations 1 and 3 have voices.
+        if !matches!(self.objects[i].owner, Some((1 | 3, _))) {
+            return;
+        }
+        let voices: &[&'static str] = match self.objects[d].deposit.map(|d| d.resource) {
+            Some(Resource::Amber) => &AMBER_VOICES,
+            Some(Resource::Fish) => &FISH_VOICES,
+            Some(Resource::Leviathan) => &LEVIATHAN_VOICES,
+            None => return,
+        };
+        let pick = voices[self.gull_rng.next() as usize % voices.len()];
+        self.sounds.push((pick, f32::NAN, f32::NAN));
     }
 }

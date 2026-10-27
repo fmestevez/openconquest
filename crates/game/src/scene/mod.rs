@@ -1188,6 +1188,14 @@ impl Scene {
                     if p.argo {
                         self.christen_argo(id);
                     }
+                    // The new ship's crew reports (events 184-187 by
+                    // nation, 0x4b3ab0).
+                    if let Some(k) = self.object_index(id) {
+                        let o = &self.objects[k];
+                        if self.is_own(o) && matches!(o.owner, Some((1 | 3, _))) {
+                            self.sounds.push(("jb_d1", o.x, o.y));
+                        }
+                    }
                     self.ship_launched(p.site, p.ship, id)
                 }
                 Ok(None) => {}
