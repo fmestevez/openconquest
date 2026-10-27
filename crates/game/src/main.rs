@@ -165,6 +165,10 @@ struct Args {
     /// weapons at a workshop put up beside it, and show the settlement.
     #[arg(long, hide = true, value_delimiter = ',', value_name = "ITEMS")]
     train: Vec<u8>,
+    /// Debugging: set every ship's hull to this percent before simulating
+    /// (to see the damaged pictures).
+    #[arg(long, hide = true, value_name = "PCT")]
+    hull: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -400,6 +404,13 @@ fn screenshot(
     } else {
         None
     };
+    if let Some(pct) = args.hull {
+        for o in scene.objects.iter_mut().filter(|o| o.ship.is_some()) {
+            if let Some(c) = o.combat.as_mut() {
+                c.hull = c.max_hull * pct / 100.0;
+            }
+        }
+    }
     let training = (!args.train.is_empty())
         .then(|| train(&mut scene, data, &mut caches, args.focus, &args.train))
         .flatten();

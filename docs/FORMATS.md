@@ -218,7 +218,16 @@ Ships (`SHIP_xxxxx`, 9 layers x 152 frames): frames 0-31 are 8 headings x 4
 frames under way (oars and wake `BLB`); 32-55 the 24 hull rotations
 (`CORP_1A0000`-`0023`, 3 a heading) a ship turns through; 56-87 8 headings
 x 4 frames lying still (at rest, rocking one way, at rest, rocking the
-other); 88-151 8 headings x 8 frames furling the sail. Ships keep to the
+other); 88-151 8 headings x 8 frames furling the sail. Which layers show is a
+mask (0x4e5da0) from the ship's state (+0x74) and fittings: the wake (layer
+0) always; state 1 (and 4, a ship being built) the whole hull (1) and sail
+(7), state 2 the whole hull and the torn sail (8), state 3 the damaged hull
+(2) and torn sail; the Argo (+0x259, a type-2 ship so marked by the loader
+0x4dfa90) its own sail, layers 9 and 10 for 7 and 8. The ram shows layer 3
+or 4 for ram level (+0x27b, record field 14 - 3) 1 or 2, the armour layer 5
+or 6 for armour level (+0x27a, field 15) 1 or 2. The state follows the hull
+(0x4be030, after each change of it): above 70% of the type's strength 1,
+above 35% 2, else 3. Ships keep to the
 grid: they turn on the spot to the next cell, then sail to its centre,
 straight or diagonal, one ship to a cell. Where the player sent a ship is
 marked with `WPMOVE` (controlm: `_WPMOVE`, and `_WPNUM` digits numbering

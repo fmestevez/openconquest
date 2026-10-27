@@ -500,6 +500,30 @@ impl Scene {
         }
     }
 
+    /// Redraws ships whose look changed (0x4be030 after each blow or
+    /// mending: the hull band; refits: ram and armour).
+    pub(super) fn refresh_ship_looks(&mut self, data: &GameData, caches: &mut Caches) {
+        for o in &mut self.objects {
+            let Some(ship) = o.ship.as_ref() else {
+                continue;
+            };
+            if o.frames.is_empty() {
+                continue;
+            }
+            let look = objects::ShipLook::of(ship, o.combat.as_ref());
+            if ship.look == Some(look) {
+                continue;
+            }
+            let f = |i: usize| o.record.fields.get(i).copied().unwrap_or(0);
+            match objects::ship_frames(data, caches, ship.kind, f(5), f(6), look) {
+                Ok(frames) if !frames.is_empty() => o.frames = frames,
+                Ok(_) => {}
+                Err(e) => eprintln!("could not redraw ship {}: {e:#}", o.id),
+            }
+            o.ship.as_mut().unwrap().look = Some(look);
+        }
+    }
+
     /// Buildings fallen to ruins play their collapse once, over the third
     /// entry of their class's cycle table (+0xc0: 75 ticks for every
     /// player building and barbarian structure), then keep its last frame
@@ -871,6 +895,8 @@ impl Scene {
             ship.crew = crew;
             ship.task = None;
             ship.path.clear();
+            // Its new colours drawn with its damage.
+            ship.look = None;
         }
         match objects::resolve(data, caches, &rec) {
             Ok(Some(new)) => {

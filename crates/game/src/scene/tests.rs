@@ -4864,3 +4864,37 @@ fn attacks_end_at_ruins() {
     let t = scene.object_index(target).unwrap();
     assert_eq!(scene.objects[t].progress, Some(1.0), "collapsed");
 }
+
+/// A ship's picture follows its hull (0x4be030) and fittings (0x4e5da0)
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ship_looks_follow_damage() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let i = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+    let look_at = |scene: &mut Scene, pct: f32| {
+        let c = scene.objects[i].combat.as_mut().unwrap();
+        c.hull = c.max_hull * pct / 100.0;
+        let o = &scene.objects[i];
+        crate::objects::ShipLook::of(o.ship.as_ref().unwrap(), o.combat.as_ref())
+    };
+    assert_eq!(look_at(&mut scene, 71.0).band, 1);
+    assert_eq!(look_at(&mut scene, 70.0).band, 2);
+    assert_eq!(look_at(&mut scene, 36.0).band, 2);
+    let low = look_at(&mut scene, 35.0);
+    assert_eq!(low.band, 3);
+    let mask = crate::objects::ShipLook {
+        ram: 2,
+        armour: 1,
+        argo: false,
+        ..low
+    }
+    .layers();
+    assert_eq!(mask, 0x105 | 0x10 | 0x20);
+    scene.update(0.02, &data, &mut caches);
+    assert_eq!(scene.objects[i].ship.as_ref().unwrap().look, Some(low));
+}

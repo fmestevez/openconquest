@@ -287,6 +287,83 @@ pub struct Ship {
     /// This is the Argo (a royal ship built with "Build Argo", 0x7d).
     #[serde(default)]
     pub argo: bool,
+    /// What its frames show; they are rebuilt when it changes.
+    #[serde(skip)]
+    pub look: Option<ShipLook>,
+}
+
+/// What a ship's picture shows (0x4e5da0 picks its composite's layers):
+/// its hull band (0x4be030: 1 above 70% of its hull, 2 above 35%, else 3),
+/// its ram and armour levels, and whether it is the Argo (ship +0x259, set
+/// by the loader 0x4dfa90 for a type-2 ship so marked).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShipLook {
+    pub band: u8,
+    pub ram: u8,
+    pub armour: u8,
+    pub argo: bool,
+}
+
+impl ShipLook {
+    pub fn of(ship: &Ship, combat: Option<&crate::combat::Combatant>) -> Self {
+        let pct = combat.map_or(100, |c| {
+            (c.hull.max(0.0) * 100.0 / c.max_hull.max(1.0)) as i32
+        });
+        Self {
+            band: match pct {
+                71.. => 1,
+                36.. => 2,
+                _ => 3,
+            },
+            ram: ship.ram,
+            armour: ship.armour,
+            argo: ship.argo,
+        }
+    }
+
+    /// The composite layers shown (0x4e5da0): the wake (0); the hull,
+    /// whole (1) or damaged (2); the sail, whole (7) or torn (8), the
+    /// Argo's 9 or 10; the ram for its level (3, 4) and the armour for its
+    /// (5, 6).
+    pub fn layers(self) -> u32 {
+        let mut mask = match (self.band, self.argo) {
+            (1, false) => 0x83,
+            (1, true) => 0x203,
+            (2, false) => 0x103,
+            (2, true) => 0x403,
+            (_, false) => 0x105,
+            (_, true) => 0x405,
+        };
+        mask |= match self.ram {
+            1 => 0x08,
+            2 => 0x10,
+            _ => 0,
+        };
+        mask |= match self.armour {
+            1 => 0x20,
+            2 => 0x40,
+            _ => 0,
+        };
+        mask
+    }
+}
+
+/// Ship type `kind`'s frames for nation `nation`, player `player`, showing
+/// `look` (composite `SHIP_<type><nation><nation><player>0`).
+pub fn ship_frames(
+    data: &GameData,
+    caches: &mut Caches,
+    kind: u8,
+    nation: u32,
+    player: u32,
+    look: ShipLook,
+) -> Result<Vec<Vec<Layer>>> {
+    let letter = (b'A' + kind.min(25)) as char;
+    let name = format!("SHIP_{letter}{nation}{nation}{player}0");
+    let mask = look.layers();
+    composite_frames_with(data, caches, &name, 0..usize::MAX, |k, _| {
+        k < 32 && mask & (1 << k) != 0
+    })
 }
 
 /// A warship's behaviour switches (ship byte +0x684 bits 0-2 and +0x633;
@@ -720,18 +797,16 @@ pub fn resolve(
             (anchor, Visual { frames, frame_ms })
         }
         ObjectClass::Ship => {
-            let letter = (b'A' + f(7).min(25) as u8) as char;
-            let (nation, player) = (f(5), f(6));
-            let name = format!("SHIP_{letter}{nation}{nation}{player}0");
             // 8 headings x 4 frames under sail, then (frames 88-151) 8
-            // headings x 8 frames furling the sail. The layers are the wake
-            // and pairs (hull, ram, armour, sail); the original shows the
-            // first of each pair, and the ram only on rammers (5) and fire
-            // rammers (10) (fitted to the original's first frame of miss000).
-            let rammer = matches!(f(7), 5 | 10);
-            let frames = composite_frames_with(data, caches, &name, 0..usize::MAX, |k, s| {
-                (k == 0 || k % 2 == 1) && (rammer || !s.starts_with("TARAN_"))
-            })?;
+            // headings x 8 frames furling the sail; the layers as the
+            // ship's look picks them (see `ShipLook`), a new ship whole.
+            let look = ShipLook {
+                band: 1,
+                ram: crate::combat::Crew::from_record(&rec.fields, 0).class,
+                armour: rec.fields.get(15).map_or(0, |&v| v.min(2) as u8),
+                argo: false,
+            };
+            let frames = ship_frames(data, caches, f(7) as u8, f(5), f(6), look)?;
             (
                 CellCentre(f(9), f(10)),
                 Visual {
@@ -995,6 +1070,7 @@ pub fn resolve(
         treasures: Vec::new(),
         heroes: Vec::new(),
         argo: false,
+        look: None,
     });
     let combat = crate::combat::Combatant::from_record(rec, class);
     // Deposits: amber holds field 4 x 100 units; a negative amount starts
@@ -1391,6 +1467,32 @@ pub fn ship_mode_frames(
         caches,
         &format!("SHIP_{letter}{nation}00{mode}"),
         0..usize::MAX,
+    )
+}
+
+/// A ship being built (composite mode 2), its layers picked as a whole
+/// ship's (0x4e1bb0 sets state 4 and masks it through 0x4e5da0).
+pub fn ship_build_frames(
+    data: &GameData,
+    caches: &mut Caches,
+    kind: u8,
+    nation: u32,
+    argo: bool,
+) -> Result<Vec<Vec<Layer>>> {
+    let letter = (b'A' + kind.min(25)) as char;
+    let mask = ShipLook {
+        band: 1,
+        ram: 0,
+        armour: 0,
+        argo,
+    }
+    .layers();
+    composite_frames_with(
+        data,
+        caches,
+        &format!("SHIP_{letter}{nation}002"),
+        0..usize::MAX,
+        |k, _| k < 32 && mask & (1 << k) != 0,
     )
 }
 

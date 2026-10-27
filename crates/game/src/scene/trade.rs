@@ -439,7 +439,8 @@ impl Scene {
                 continue;
             };
             let nation = self.objects[i].owner.map_or(1, |o| o.0);
-            let Ok(frames) = objects::ship_mode_frames(data, caches, p.ship, nation, 2) else {
+            let Ok(frames) = objects::ship_build_frames(data, caches, p.ship, nation, p.argo)
+            else {
                 continue;
             };
             if frames.len() < 80 {
