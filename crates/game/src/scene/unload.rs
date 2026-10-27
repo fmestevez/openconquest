@@ -472,15 +472,9 @@ impl Scene {
                 }
             }
         }
-        let loop_at = match looping.first().and_then(|f| f.first()) {
-            Some(l) if activity == Activity::Amber => (
-                top_left.0 + l.image.width as f32 / 2.0,
-                top_left.1 + l.image.height as f32 / 2.0,
-            ),
-            _ => (x, y),
-        };
         // The net lies where the ship type's table puts it for its heading
-        // (0x4ae760, state 6); drawn by its middle.
+        // (0x4ae760, state 6): its picture's top-left that far from the
+        // ship frame's; drawn by its middle.
         if activity == Activity::Fishing {
             if let (Some(s), Some(l)) = (
                 self.objects[i].ship.as_ref(),
@@ -489,10 +483,17 @@ impl Scene {
                 let k = s.kind as usize % 12;
                 let (ox, oy) = NET_AT[k][s.heading % 4];
                 let half = objects::SHIP_FRAME[k] / 2.0;
-                x = sx - half + ox as f32 + l.image.width as f32 / 2.0;
-                y = sy - half + oy as f32 + l.image.height as f32 / 2.0;
+                x = sx - half + ox as f32 - l.dx as f32 + l.image.width as f32 / 2.0;
+                y = sy - half + oy as f32 - l.dy as f32 + l.image.height as f32 / 2.0;
             }
         }
+        let loop_at = match looping.first().and_then(|f| f.first()) {
+            Some(l) if activity == Activity::Amber => (
+                top_left.0 + l.image.width as f32 / 2.0,
+                top_left.1 + l.image.height as f32 / 2.0,
+            ),
+            _ => (x, y),
+        };
         self.planks.push(Plank {
             ship,
             activity,

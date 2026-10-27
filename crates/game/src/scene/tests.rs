@@ -3517,6 +3517,7 @@ fn fishing_ships_follow_their_shoal() {
     scene.order_gather(ship, shoal).unwrap();
     let mut spots = std::collections::HashSet::new();
     let mut caught = 0.0f32;
+    let (mut nets, mut off) = (0, false);
     for _ in 0..50 * 90 {
         scene.update(0.02, &data, &mut caches);
         let o = &scene.objects[scene.object_index(shoal).unwrap()];
@@ -3526,7 +3527,17 @@ fn fishing_ships_follow_their_shoal() {
             .as_ref()
             .unwrap();
         caught = caught.max(s.cargo);
+        // The net lies off the ship by its table, not on its middle.
+        let o = &scene.objects[scene.object_index(ship).unwrap()];
+        for p in scene.planks.iter().filter(|p| p.ship == ship) {
+            for (_, x, y) in p.frame() {
+                nets += 1;
+                off |= (x - o.x).hypot(y - o.y) > 4.0;
+            }
+        }
     }
+    assert!(nets > 0, "no net was cast");
+    assert!(off, "the net lies off the ship's middle");
     assert!(spots.len() > 1, "the shoal never moved");
     assert!(caught > 0.0, "nothing caught");
 }
