@@ -206,9 +206,6 @@ pub const LEARN_COST: u32 = 1000;
 pub const LEARN_SECONDS: f32 = 200.0 * crate::clock::TICK;
 /// Seconds a called wind blows. Placeholder.
 pub const WIND_SECONDS: f32 = 60.0;
-/// Lightning destroys every enemy object unprotected from magic within
-/// this radius (world pixels) of the strike. Placeholder.
-pub const LIGHTNING_RADIUS: f32 = 96.0;
 /// A fireball burns enemy objects within this radius for this long at this
 /// many hull points a second. Placeholders.
 pub const FIREBALL_RADIUS: f32 = 96.0;

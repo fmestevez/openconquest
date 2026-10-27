@@ -998,6 +998,14 @@ the objects on it (0xda96, 30000, a fifth on a ship shielded from magic)
 and picks a neighbour (0x43a6c0: weight 3 within one heading of the wind,
 else 2), sinking at the first hop after 250 ticks of moving.
 
+Lightning (LightningObjClassTy 0x42cfa0) strikes at frame 11 of its
+picture over water (40 over land) and posts 0xda93 to every object on the
+3 x 3 cells about its cell, whoever's: a ship unshielded from magic wrecks
+(0x4dc630); a settlement or town (unshielded), lair, nest or harpy only
+when it stands on the struck cell itself (0x441ba0, 0x414f00, 0x4207b0);
+a sea monster loses half its strength (0x492360), a land creature a
+quarter (0x413d70); other buildings ignore it.
+
 ## Land creatures
 
 Lairs (`CreaturesFlatClassTy`, 0x414f00) send out another creature once

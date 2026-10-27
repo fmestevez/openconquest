@@ -133,22 +133,51 @@ impl Scene {
                 self.pay_spell(spell)?;
                 self.spawn_effect(data, caches, magic::FX_LIGHTNING, x, y);
                 self.sounds.push(("molniya2", x, y));
-                // Everything of the enemy's in the strike goes, unless
-                // shielded from magic.
-                let struck: Vec<u32> = self
-                    .objects
-                    .iter()
-                    .filter(|o| {
-                        o.owner.is_some()
-                            && !self.is_own(o)
-                            && o.combat.as_ref().is_some_and(|c| c.protect_magic <= 0.0)
-                            && ((o.x - x).powi(2) + (o.y - y).powi(2)).sqrt()
-                                <= magic::LIGHTNING_RADIUS
-                    })
-                    .map(|o| o.id)
-                    .collect();
-                for id in struck {
-                    self.hit(id, f32::MAX, data, caches);
+                // It strikes the 3 x 3 cells about its cell, whoever's
+                // (LightningObjClassTy 0x42cfa0, message 0xda93): ships go
+                // down unless shielded from magic; a settlement or town
+                // (unshielded), lair, nest or castle, or a harpy or dragon,
+                // only when struck on its own cell; sea monsters lose half
+                // their strength, land creatures and the gorgon a quarter.
+                let t = TILE_SIZE as f32;
+                let (cx, cy) = ((x / t).floor() as i32, (y / t).floor() as i32);
+                let mut blows: Vec<(u32, f32)> = Vec::new();
+                for o in &self.objects {
+                    let Some(c) = o.combat.as_ref() else { continue };
+                    let (ox, oy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+                    let f = |i| o.record.field(i).unwrap_or(0) as i32;
+                    let home = match o.class {
+                        ObjectClass::Building(_)
+                        | ObjectClass::Barbarian(_)
+                        | ObjectClass::Castle(_) => (f(5), f(6)),
+                        ObjectClass::HarpyNest | ObjectClass::CreatureSpawn => (f(4), f(5)),
+                        _ => (ox, oy),
+                    };
+                    let near = (home.0 - cx).abs() <= 1 && (home.1 - cy).abs() <= 1;
+                    let centre = home == (cx, cy);
+                    let shielded = c.protect_magic > 0.0;
+                    let blow = match o.class {
+                        ObjectClass::Ship if near && !shielded => c.hull,
+                        ObjectClass::Building(SETTLEMENT | TOWN) if centre && !shielded => c.hull,
+                        ObjectClass::Barbarian(_)
+                        | ObjectClass::Castle(_)
+                        | ObjectClass::HarpyNest
+                        | ObjectClass::CreatureSpawn
+                        | ObjectClass::Monster(0x1f8 | 0x1f9)
+                            if centre =>
+                        {
+                            c.hull
+                        }
+                        ObjectClass::Monster(0x1fb) if near => c.max_hull / 2.0,
+                        ObjectClass::Monster(0x1f4..=0x1f6 | 0x1fa) if near => c.max_hull / 4.0,
+                        _ => 0.0,
+                    };
+                    if blow > 0.0 {
+                        blows.push((o.id, blow));
+                    }
+                }
+                for (id, blow) in blows {
+                    self.hit(id, blow, data, caches);
                 }
             }
             Spell::Fireball => {
