@@ -251,6 +251,10 @@ pub struct Ship {
     /// up to its speed and loses it to stop where it is bound or to turn.
     #[serde(default)]
     pub velocity: f32,
+    /// The heading it turns to while closing in on a shore or pier, to lie
+    /// side-on (0x4afe50).
+    #[serde(default)]
+    pub face: Option<usize>,
     /// Goods on board.
     pub cargo: f32,
     pub cargo_kind: Option<Resource>,
@@ -953,6 +957,7 @@ pub fn resolve(
         turn_clock: 0.0,
         blocked: 0.0,
         velocity: 0.0,
+        face: None,
         cargo: 0.0,
         cargo_kind: None,
         task: None,

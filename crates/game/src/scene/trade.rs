@@ -1200,7 +1200,7 @@ impl Scene {
             .deposit
             .ok_or("Nothing to gather there")?
             .resource;
-        let (x, y) = (self.objects[d].x, self.objects[d].y);
+        let (x, y) = self.deposit_goal(i, d);
         let path = self
             .plan_route(i, x, y)
             .ok_or("The ship cannot sail there")?;
@@ -1318,38 +1318,19 @@ impl Scene {
                     let amber = self.objects[d]
                         .deposit
                         .is_some_and(|dep| dep.resource == Resource::Amber);
-                    if amber {
-                        let (dx, dy) = (self.objects[d].x - sx, self.objects[d].y - sy);
-                        let len = dx.hypot(dy).max(1.0);
-                        let (ux, uy) = (dx / len, dy / len);
-                        let water = |x: f32, y: f32| {
-                            self.nav
-                                .is_water((x / t).floor() as i32, (y / t).floor() as i32)
-                        };
-                        // How far the hull reaches that way: its bow along
-                        // the keel, less across it.
-                        let heading = self.objects[i].ship.as_ref().map_or(0, |s| s.heading);
-                        let reach = hull_reach(heading, ux, uy);
-                        let mut step = 0.0;
-                        while step < len
-                            && water(
-                                sx + ux * (step + 2.0 + reach),
-                                sy + uy * (step + 2.0 + reach),
-                            )
-                        {
-                            step += 2.0;
-                        }
-                        if step >= 4.0 {
-                            let to = (sx + ux * step, sy + uy * step);
-                            set(
-                                self,
-                                Some(Task::Gather {
-                                    deposit,
-                                    phase: GatherPhase::ToDeposit,
-                                }),
-                                Some([to].into()),
-                            );
-                            return;
+                    let cell = self.objects[d]
+                        .record
+                        .fields
+                        .get(6..8)
+                        .map(|f| (f[0] as i32, f[1] as i32));
+                    if let (true, Some(cell)) = (amber, cell) {
+                        if let Some(((ax, ay), face)) = self.approach(i, cell, false) {
+                            let ship = self.objects[i].ship.as_mut().unwrap();
+                            ship.face = Some(face);
+                            if (ax - sx).hypot(ay - sy) > 1.0 {
+                                ship.path = [(ax, ay)].into();
+                                return;
+                            }
                         }
                     }
                 }
@@ -1465,13 +1446,16 @@ impl Scene {
                         if (bx - sx).hypot(by - sy) > 0.75 * t {
                             false
                         } else {
-                            // In its cell, it closes in alongside.
-                            let heading = self.objects[i].ship.as_ref().map_or(0, |s| s.heading);
-                            let (ax, ay) = self.alongside(p, heading);
-                            if (ax - sx).hypot(ay - sy) > 1.0 {
-                                let ship = self.objects[i].ship.as_mut().unwrap();
-                                ship.path = [(ax, ay)].into();
-                                return;
+                            // In its cell, it closes in on the pier.
+                            if let Some(cell) = self.objects[p].cell {
+                                if let Some(((ax, ay), face)) = self.approach(i, cell, true) {
+                                    let ship = self.objects[i].ship.as_mut().unwrap();
+                                    ship.face = Some(face);
+                                    if (ax - sx).hypot(ay - sy) > 1.0 {
+                                        ship.path = [(ax, ay)].into();
+                                        return;
+                                    }
+                                }
                             }
                             true
                         }
@@ -1534,7 +1518,7 @@ impl Scene {
                 ship.cargo_kind = None;
                 match deposit_at {
                     Some(d) => {
-                        let (x, y) = (self.objects[d].x, self.objects[d].y);
+                        let (x, y) = self.deposit_goal(i, d);
                         let path = self.plan_route(i, x, y);
                         let task = path.as_ref().map(|_| Task::Gather {
                             deposit,
@@ -1579,16 +1563,89 @@ impl Scene {
         }
     }
 
-    /// Where a ship lies unloading at moorage `p`: its berth, closer in
-    /// towards the building.
-    pub(super) fn alongside(&self, p: usize, heading: usize) -> (f32, f32) {
-        let (bx, by) = self.berth(p);
-        let (dx, dy) = (self.objects[p].x - bx, self.objects[p].y - by);
-        let len = dx.hypot(dy).max(1.0);
-        let (ux, uy) = (dx / len, dy / len);
-        // Until the hull is about to touch the pier at the cell's edge.
-        let close_in = (TILE_SIZE as f32 / 2.0 - hull_reach(heading, ux, uy) - 2.0).max(0.0);
-        (bx + ux * close_in, by + uy * close_in)
+    /// Where ship `i` sails to work deposit `d`: for amber, the water cell
+    /// straight beside it nearest the ship (so it can close in, 0x4afe50);
+    /// else the deposit.
+    pub(super) fn deposit_goal(&self, i: usize, d: usize) -> (f32, f32) {
+        let t = TILE_SIZE as f32;
+        let o = &self.objects[d];
+        let amber = o.deposit.is_some_and(|dep| dep.resource == Resource::Amber);
+        let cell = o
+            .record
+            .fields
+            .get(6..8)
+            .map(|f| (f[0] as i32, f[1] as i32));
+        let (sx, sy) = (self.objects[i].x, self.objects[i].y);
+        if let (true, Some((cx, cy))) = (amber, cell) {
+            let best = [(1, 0), (0, -1), (-1, 0), (0, 1)]
+                .iter()
+                .map(|&(dx, dy)| (cx + dx, cy + dy))
+                .filter(|&(x, y)| self.nav.is_water(x, y))
+                .map(|(x, y)| (x as f32 * t + t / 2.0, y as f32 * t + t / 2.0))
+                .min_by(|a, b| {
+                    (a.0 - sx)
+                        .hypot(a.1 - sy)
+                        .total_cmp(&(b.0 - sx).hypot(b.1 - sy))
+                });
+            if let Some(p) = best {
+                return p;
+            }
+        }
+        (o.x, o.y)
+    }
+
+    /// How ship `i` closes in on the shore cell `target` to load amber or
+    /// (`port`) to unload (0x4afe50): only from straight beside it, a set
+    /// distance from its cell's middle towards it, turning to lie side-on
+    /// (whichever way is nearer its heading). The point and that heading.
+    pub(super) fn approach(
+        &self,
+        i: usize,
+        target: (i32, i32),
+        port: bool,
+    ) -> Option<((f32, f32), usize)> {
+        let t = TILE_SIZE as f32;
+        let o = &self.objects[i];
+        let ship = o.ship.as_ref()?;
+        let (cx, cy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let dir = match (target.0 - cx, target.1 - cy) {
+            (1, 0) => 0,
+            (0, -1) => 2,
+            (-1, 0) => 4,
+            (0, 1) => 6,
+            _ => return None,
+        };
+        let k = ship.kind as usize % 12;
+        let dist = if port {
+            // 0x59a7c8 across, 0x59a82c up and down.
+            if dir % 4 == 0 {
+                10
+            } else {
+                13
+            }
+        } else {
+            // The shore's shape: its tile among the groups at 0x5bb870
+            // (0x4b3770), then the distance by direction, type and group.
+            let cell = self.grid.get(0, target.0 as u32, target.1 as u32);
+            let group = SHORE_GROUPS
+                .iter()
+                .position(|g| g.contains(&cell.variant))?;
+            APPROACH[dir / 2][k][group]
+        };
+        if dist == 0 {
+            return None;
+        }
+        let (ux, uy) = [(1.0, 0.0), (0.0, -1.0), (-1.0, 0.0), (0.0, 1.0)][dir / 2];
+        let (mx, my) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
+        // Side-on: north or south to a shore east or west, east or west to
+        // one north or south.
+        let (a, b) = if dir % 4 == 0 { (2, 6) } else { (0, 4) };
+        let turn = |h: usize| {
+            let d = (h as i32 - ship.heading as i32).rem_euclid(8);
+            d.min(8 - d)
+        };
+        let face = if turn(a) < turn(b) { a } else { b };
+        Some(((mx + ux * dist as f32, my + uy * dist as f32), face))
     }
 
     pub(super) fn send_to_port(&mut self, i: usize, deposit: u32) {
@@ -1654,15 +1711,81 @@ fn building_cells(o: &MapObject) -> i32 {
     }
 }
 
-/// How far a ship's bow reaches ahead of its middle, and its side out
-/// from it, in world pixels. Estimates.
-const BOW: f32 = 36.0;
-const BEAM: f32 = 14.0;
+/// Shore tiles (layer 0 variants of island ground) in the groups the
+/// approach distances go by (0x5bb870).
+const SHORE_GROUPS: [&[u8]; 12] = [
+    &[2, 3, 4, 5],
+    &[6],
+    &[7, 8, 9, 10],
+    &[11],
+    &[12, 13, 14, 15],
+    &[16],
+    &[17, 18, 19, 20],
+    &[21],
+    &[30, 31],
+    &[32, 33],
+    &[34, 35, 36],
+    &[37, 38, 39, 40, 41],
+];
 
-/// How far a ship on `heading` reaches from its middle in the direction
-/// `(ux, uy)`: its bow along the keel, less across it.
-fn hull_reach(heading: usize, ux: f32, uy: f32) -> f32 {
-    let a = heading as f32 * std::f32::consts::FRAC_PI_4;
-    let along = (ux * a.cos() - uy * a.sin()).abs();
-    BEAM + (BOW - BEAM) * along
-}
+/// How far a ship closes in on amber from its cell's middle, by direction
+/// (east 0x599c44, north 0x59a1c8, west 0x599ee8, south 0x59a4c8), ship
+/// type and shore group; 0 where it does not.
+const APPROACH: [[[u8; 12]; 12]; 4] = [
+    [
+        [16, 16, 0, 0, 33, 33, 0, 0, 27, 0, 0, 0],
+        [20, 20, 0, 0, 38, 38, 0, 0, 30, 0, 0, 0],
+        [16, 16, 0, 0, 33, 33, 0, 0, 25, 0, 0, 0],
+        [18, 18, 0, 0, 35, 35, 0, 0, 25, 0, 0, 0],
+        [15, 15, 0, 0, 35, 35, 0, 0, 25, 0, 0, 0],
+        [19, 19, 0, 0, 33, 33, 0, 0, 25, 0, 0, 0],
+        [18, 18, 0, 0, 35, 35, 0, 0, 25, 0, 0, 0],
+        [18, 18, 0, 0, 35, 35, 0, 0, 25, 0, 0, 0],
+        [18, 18, 0, 0, 35, 35, 0, 0, 25, 0, 0, 0],
+        [18, 18, 0, 0, 35, 35, 0, 0, 25, 0, 0, 0],
+        [18, 18, 0, 0, 35, 35, 0, 0, 25, 0, 0, 0],
+        [18, 18, 0, 0, 35, 35, 0, 0, 25, 0, 0, 0],
+    ],
+    [
+        [0, 0, 0, 0, 19, 19, 19, 19, 0, 0, 0, 19],
+        [0, 0, 0, 0, 18, 18, 18, 18, 0, 0, 0, 18],
+        [0, 0, 0, 0, 20, 20, 20, 20, 0, 0, 0, 20],
+        [0, 0, 0, 0, 20, 20, 20, 20, 0, 0, 0, 20],
+        [0, 0, 0, 0, 14, 14, 14, 14, 0, 0, 0, 14],
+        [0, 0, 0, 0, 17, 17, 17, 17, 0, 0, 0, 17],
+        [0, 0, 0, 0, 17, 17, 17, 17, 0, 0, 0, 17],
+        [0, 0, 0, 0, 17, 17, 17, 17, 0, 0, 0, 17],
+        [0, 0, 0, 0, 17, 17, 17, 17, 0, 0, 0, 17],
+        [0, 0, 0, 0, 17, 17, 17, 17, 0, 0, 0, 17],
+        [0, 0, 0, 0, 17, 17, 17, 17, 0, 0, 0, 17],
+        [0, 0, 0, 0, 17, 17, 17, 17, 0, 0, 0, 17],
+    ],
+    [
+        [0, 0, 16, 16, 0, 0, 33, 33, 0, 16, 0, 0],
+        [0, 0, 20, 20, 0, 0, 38, 38, 0, 20, 0, 0],
+        [0, 0, 16, 16, 0, 0, 33, 33, 0, 16, 0, 0],
+        [0, 0, 18, 18, 0, 0, 35, 35, 0, 18, 0, 0],
+        [0, 0, 15, 15, 0, 0, 35, 35, 0, 15, 0, 0],
+        [0, 0, 19, 19, 0, 0, 33, 33, 0, 19, 0, 0],
+        [0, 0, 18, 18, 0, 0, 35, 35, 0, 18, 0, 0],
+        [0, 0, 18, 18, 0, 0, 35, 35, 0, 18, 0, 0],
+        [0, 0, 18, 18, 0, 0, 35, 35, 0, 18, 0, 0],
+        [0, 0, 18, 18, 0, 0, 35, 35, 0, 18, 0, 0],
+        [0, 0, 18, 18, 0, 0, 35, 35, 0, 18, 0, 0],
+        [0, 0, 18, 18, 0, 0, 35, 35, 0, 18, 0, 0],
+    ],
+    [
+        [21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 21, 0],
+        [21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 21, 0],
+        [21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 21, 0],
+        [21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 21, 0],
+        [21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 21, 0],
+        [21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 21, 0],
+        [21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 21, 0],
+        [21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 21, 0],
+        [21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 21, 0],
+        [23, 23, 23, 23, 0, 0, 0, 0, 0, 0, 23, 0],
+        [21, 20, 20, 20, 0, 0, 0, 0, 0, 0, 20, 0],
+        [21, 21, 21, 21, 0, 0, 0, 0, 0, 0, 21, 0],
+    ],
+];

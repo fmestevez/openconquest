@@ -1365,17 +1365,31 @@ const TURN_STEP_SECONDS: f32 = objects::SHIP_FRAME_MS as f32 / 1000.0;
 /// Turns a ship at `(x, y)` towards its next waypoint, a rotation at a
 /// time; true once it lies on that course.
 fn turn_ship(ship: &mut objects::Ship, x: f32, y: f32, dt: f32) -> bool {
-    let Some(&(tx, ty)) = ship.path.front() else {
-        ship.rotation = None;
-        return true;
-    };
-    let (dx, dy) = (tx - x, ty - y);
-    // Short shifts (closing in alongside, back to the cell's centre) it
+    let short = ship
+        .path
+        .front()
+        .is_none_or(|&(tx, ty)| (tx - x).hypot(ty - y) < 24.0);
+    // Closing in on a shore or pier it turns side-on as it goes
+    // (0x4afe50); otherwise short shifts (back to the cell's centre) it
     // makes without turning.
-    if dx.hypot(dy) < 24.0 {
+    if short {
+        match ship.face {
+            Some(face) => {
+                rotate_ship(ship, face as i32 * 3, dt);
+            }
+            None => ship.rotation = None,
+        }
         return true;
     }
-    let want = heading_towards(dx, dy) as i32 * 3;
+    ship.face = None;
+    let &(tx, ty) = ship.path.front().unwrap();
+    let (dx, dy) = (tx - x, ty - y);
+    rotate_ship(ship, heading_towards(dx, dy) as i32 * 3, dt)
+}
+
+/// Turns a ship's hull a rotation of 24 at a time towards `want`; true
+/// once it lies so.
+fn rotate_ship(ship: &mut objects::Ship, want: i32, dt: f32) -> bool {
     let mut at = ship.rotation.map_or(ship.heading as i32 * 3, i32::from);
     if at == want {
         ship.rotation = None;

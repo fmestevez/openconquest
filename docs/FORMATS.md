@@ -916,6 +916,17 @@ speed is saved with a game (`SPEED_GAME`).
   orders that find no free berth wait in a queue that is retried every 25
   ticks (0x416f90).
 
+## Closing in on shore
+
+A ship loading amber or unloading (0x4afe50) closes in only when the
+deposit's or building's cell lies straight beside its own (0x59791d gives
+the direction): from its cell's middle it slides a set distance towards
+it, at amber by direction (east 0x599c44, north 0x59a1c8, west 0x599ee8,
+south 0x59a4c8), ship type and the shore tile's group (0x5bb870, 0x4b3770;
+0 means not at all), at a port 10 pixels across or 13 up and down
+(0x59a7c8, 0x59a82c), turning as it goes to lie side-on, whichever of the
+two ways is nearer its heading. It records the way and backs out along it.
+
 ## Nets, walkways and porters
 
 A fishing ship's net (0x4ae760, state 6) lies with its picture's top-left
