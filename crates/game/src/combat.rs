@@ -35,6 +35,16 @@ pub struct Combatant {
     /// Seconds left of protection from weapons and from magic.
     pub protect_weapons: f32,
     pub protect_magic: f32,
+    /// Each unit's condition in percent by its index in `weapons`, for
+    /// forts and barbarian structures (their places' units, `+0x4d0` and
+    /// `+0x20c`; record fields from 34). Missing ones are whole. Ships keep
+    /// theirs in `objects::Ship::conditions`.
+    #[serde(default)]
+    pub conditions: Vec<u8>,
+    /// A fort's count towards its next healing by a Cup of Asclepius or a
+    /// Golden Fleece it stores (every 1000 heals a point).
+    #[serde(default)]
+    pub healing: f32,
 }
 
 impl Combatant {
@@ -73,10 +83,22 @@ impl Combatant {
             ),
             _ => return None,
         };
+        // Forts' and barbarian structures' units have their conditions in
+        // the fields from 34, one after another (FortressClassTy 0x419f80
+        // message 2; saved by 0x4190a0, at most 30).
+        let conditions = if matches!(class, ObjectClass::Building(_) | ObjectClass::Barbarian(_)) {
+            (0..weapons.len())
+                .map(|k| rec.fields.get(34 + k).map_or(100, |&c| c.min(100) as u8))
+                .collect()
+        } else {
+            Vec::new()
+        };
         Some(Self {
             hull: max_hull * condition.min(100) as f32 / 100.0,
             max_hull,
             weapons,
+            conditions,
+            healing: 0.0,
             reload: 0.0,
             reloads: Vec::new(),
             burning: 0.0,
@@ -343,20 +365,151 @@ pub fn building_strength(class: u32) -> f32 {
 /// Forts (classes 0x34-0x36) shoot with what they hold. Fort records give
 /// the count of each item 0-11 in fields 22-33 and the units' conditions
 /// from field 34 on, as a settlement's stock (FortressClassTy 0x419f80
-/// builds a unit per count into its store).
+/// builds a unit per count into its store). Items 9-11 (whose weights
+/// 0x59729c has none for) are never there.
 fn fort_weapons(class: u32, fields: &[u32]) -> Vec<u8> {
     // Forts and barbarian structures (whose records have the same layout:
     // the counts in fields 22-33, the units' conditions from field 34).
-    if !(0x34..=0x36).contains(&class) && !(0x3f..=0x41).contains(&class) {
+    if !holds_units(class) {
         return Vec::new();
     }
-    fields.get(22..34).map_or(Vec::new(), |counts| {
+    fields.get(22..31).map_or(Vec::new(), |counts| {
         counts
             .iter()
             .enumerate()
             .flat_map(|(item, &n)| std::iter::repeat_n(item as u8, n.min(16) as usize))
             .collect()
     })
+}
+
+/// Whether objects of `class` hold units in places as a fort does: forts
+/// 0x34-0x36 (`FortressClassTy`, places at `+0x4d0`) and barbarian
+/// structures 0x3f-0x41 (`BarbarianClassTy`, `+0x20c`).
+pub fn holds_units(class: u32) -> bool {
+    (0x34..=0x36).contains(&class) || (0x3f..=0x41).contains(&class)
+}
+
+/// The room a fort of `class` has for units (0x5966d8 by class: small 4,
+/// medium 7, big 10), counted as ships count theirs (`item_power`: 0x59729c,
+/// marines and light weapons 1, heavy weapons 2); its default arming fills
+/// it.
+pub fn fort_room(class: u32) -> u32 {
+    match class {
+        0x34 => 4,
+        0x35 => 7,
+        0x36 => 10,
+        _ => 0,
+    }
+}
+
+/// The room units of `items` take in a fort (the byte 0x417ef0 sums).
+pub fn fort_load(items: &[u8]) -> u32 {
+    items.iter().map(|&w| item_power(w)).sum::<u32>() & 0xff
+}
+
+/// The units' share of a blow `blow` to a fort or barbarian structure of
+/// `class` holding `items` (message 0x138e): `blow x load / (base + load)`,
+/// the base by class (0x595920: forts 25, 30, 35, 0x4184f0; barbarian
+/// structures 80, 0x40e0f0). The fort's supplies (`+0x4d4`, brought by its
+/// settlement with command 0x2d, 0x419690) add to the base; nothing here
+/// keeps them.
+pub fn fort_share(class: u32, items: &[u8], blow: u32) -> u32 {
+    let load = fort_load(items);
+    if load == 0 {
+        return 0;
+    }
+    let base = match class {
+        0x34 => 25,
+        0x35 => 30,
+        0x36 => 35,
+        _ => 80,
+    };
+    (blow as u64 * load as u64 / (base + load) as u64) as u32
+}
+
+/// Takes `blow` (in the units' points) off the units of a fort's or
+/// barbarian structure's places (conditions by item) of items `items`
+/// (0x4184f0, 0x40e0f0 inline for weapons 3-8; 0x40ff00 for marines 0-2):
+/// a number is drawn below the units' points less the blow (`rand %
+/// (total - blow)`, 0 when the blow is all they have) and the units are
+/// walked index by index, each index through the places in item order,
+/// adding up their points until the sum reaches it. From that unit on,
+/// each takes what is left of the blow: one that holds is left with its
+/// points less it (`x 100 / full` in percent), one that does not is gone
+/// and the blow goes on less its points. A walk that ends with some of the
+/// blow left draws again (the total kept as the original keeps it: a unit
+/// gone does not lower it). Units at 0 are gone. Returns whether any unit
+/// went.
+pub fn fort_unit_blow(
+    places: &mut [Vec<u8>; 9],
+    items: std::ops::Range<usize>,
+    blow: u32,
+    rng: &mut Rng,
+) -> bool {
+    let points = |k: usize, c: u8| c as u32 * UNIT_POINTS[k] / 100;
+    let mut total: u32 = items
+        .clone()
+        .flat_map(|k| places[k].iter().map(move |&c| (k, c)))
+        .map(|(k, c)| points(k, c))
+        .sum();
+    if total == 0 {
+        return false;
+    }
+    let mut left = blow.min(total);
+    let mut gone = false;
+    // The original draws until it lands; a bound keeps a stale total from
+    // drawing for ever.
+    for _ in 0..1000 {
+        let r = if left < total {
+            rng.next() % (total - left)
+        } else {
+            0
+        };
+        let most = items.clone().map(|k| places[k].len()).max().unwrap_or(0);
+        if most == 0 {
+            break;
+        }
+        let mut hit = false;
+        let mut sum = 0;
+        'walk: for index in 0..most {
+            for k in items.clone() {
+                let Some(&c) = places[k].get(index) else {
+                    continue;
+                };
+                let p = points(k, c);
+                if !hit {
+                    sum += p;
+                    hit = r <= sum;
+                }
+                if hit {
+                    if left < p {
+                        let rest = p - left;
+                        left = 0;
+                        total -= p;
+                        let c = (rest * 100 / UNIT_POINTS[k]) as u8;
+                        if c == 0 {
+                            places[k].remove(index);
+                            gone = true;
+                        } else {
+                            places[k][index] = c;
+                            total += rest;
+                        }
+                    } else {
+                        left -= p;
+                        places[k].remove(index);
+                        gone = true;
+                    }
+                }
+                if left == 0 {
+                    break 'walk;
+                }
+            }
+        }
+        if left == 0 {
+            break;
+        }
+    }
+    gone
 }
 
 /// Items a ship type carries when built (0x5964d8: a count and up to nine
@@ -1313,6 +1466,50 @@ mod tests {
         // Faster, harder; standing still, nothing.
         assert!(ram_blows(ship(2, 0, 60.0), ship(2, 2, 0.0), 0).0 > side);
         assert_eq!(ram_blows(ship(2, 0, 0.0), ship(2, 2, 0.0), 0).0, 0.0);
+    }
+
+    /// A fort's units take its blow's share (0x4184f0): load 10 against a
+    /// big fort's 35; a blow a unit holds comes off it, one larger takes
+    /// units away until it is spent.
+    #[test]
+    fn forts_units_take_blows() {
+        use super::*;
+        assert_eq!(fort_share(0x36, &[0, 1, 4, 5, 6, 7, 8], 4500), 1000);
+        assert_eq!(fort_share(0x34, &[], 4500), 0);
+        assert_eq!(fort_share(0x40, &[4, 4], 820), 20);
+        assert_eq!(fort_room(0x35), 7);
+        let points = |p: &[Vec<u8>; 9]| -> u32 {
+            p.iter()
+                .enumerate()
+                .flat_map(|(k, u)| u.iter().map(move |&c| c as u32 * UNIT_POINTS[k] / 100))
+                .sum()
+        };
+        let mut rng = Rng(7);
+        let mut places: [Vec<u8>; 9] = Default::default();
+        places[3] = vec![100];
+        places[6] = vec![100];
+        let before = points(&places);
+        assert!(!fort_unit_blow(&mut places, 3..9, 1000, &mut rng));
+        let lost = before - points(&places);
+        assert!((1000..1100).contains(&lost), "{lost}");
+        // Marines are not touched by the weapons' blow.
+        places[0] = vec![100];
+        let before = places[0].clone();
+        assert!(fort_unit_blow(&mut places, 3..9, 100_000, &mut rng));
+        assert!(places[3].is_empty() && places[6].is_empty());
+        assert_eq!(places[0], before);
+        // Nothing to take it: nothing happens.
+        assert!(!fort_unit_blow(&mut places, 3..9, 500, &mut rng));
+    }
+
+    /// Saves from before forts kept their units' conditions load with
+    /// whole units.
+    #[test]
+    fn old_saves_have_whole_fort_units() {
+        let json = r#"{"hull":1.0,"max_hull":2.0,"weapons":[4,4],"reload":0.0,
+            "protect_weapons":0.0,"protect_magic":0.0}"#;
+        let c: super::Combatant = serde_json::from_str(json).unwrap();
+        assert!(c.conditions.is_empty());
     }
 
     #[test]

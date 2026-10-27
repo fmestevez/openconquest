@@ -40,6 +40,32 @@ impl StockRepair {
     }
 }
 
+/// Fish to make a unit of each item (0x597170 x 100: marines 200, 200,
+/// 300; weapons none).
+const UNIT_FISH: [u32; 9] = [200, 200, 300, 0, 0, 0, 0, 0, 0];
+
+/// A fort or barbarian structure mending its units along with its
+/// structure (message 0x1389: 0x418300 notes each unit, place and index,
+/// with its condition twice; 0x419ba0 and 0x40eba0 mend them as the
+/// structure's repair goes on): the structure's percentage when it began
+/// and its units.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UnitMend {
+    pub site: u32,
+    pub start: u32,
+    pub units: Vec<MendingUnit>,
+}
+
+/// A unit being mended: its item and index in its place, the condition it
+/// is mended from and the one it had last.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MendingUnit {
+    pub item: u8,
+    pub index: u8,
+    pub from: u8,
+    pub last: u8,
+}
+
 /// What mending the worn `units` (by item) costs at a settlement
 /// (0x440fd0): amber and ticks, each `(100 - condition) / 100` of the
 /// unit's price and making time.
@@ -53,6 +79,11 @@ pub fn stock_repair_cost(units: &[Vec<u8>; 9]) -> (u32, u32) {
         }
     }
     (amber, ticks)
+}
+
+/// A building's strength in whole percent (`+0xa8`).
+fn structure_percent(c: &crate::combat::Combatant) -> u32 {
+    ((c.hull / c.max_hull.max(1.0)) * 100.0).clamp(0.0, 100.0) as u32
 }
 
 impl Scene {
@@ -118,8 +149,107 @@ impl Scene {
         }
         if !self.mending.contains(&target) {
             self.mending.push(target);
+            self.begin_unit_mend(t);
         }
         Ok(())
+    }
+
+    /// A fort or barbarian structure begins being mended: its units are
+    /// noted with their conditions (0x418300) and the structure's
+    /// percentage (`+0x114`).
+    fn begin_unit_mend(&mut self, t: usize) {
+        let o = &self.objects[t];
+        let Some(c) = o.combat.as_ref().filter(|_| o.holds_units()) else {
+            return;
+        };
+        let start = structure_percent(c);
+        let mut units = Vec::new();
+        for (k, place) in o.fort_places().iter().enumerate() {
+            for (j, &cond) in place.iter().enumerate() {
+                units.push(MendingUnit {
+                    item: k as u8,
+                    index: j as u8,
+                    from: cond,
+                    last: cond,
+                });
+            }
+        }
+        let site = o.id;
+        self.unit_mends.retain(|m| m.site != site);
+        self.unit_mends.push(UnitMend { site, start, units });
+    }
+
+    /// Drops the units mending at `site` that are no longer there, at
+    /// their place and index (0x418430, 0x40eae0: after a blow, or when one
+    /// is missed).
+    pub(super) fn forget_gone_units(&mut self, site: u32) {
+        let Some(i) = self.object_index(site) else {
+            return;
+        };
+        let places = self.objects[i].fort_places();
+        if let Some(m) = self.unit_mends.iter_mut().find(|m| m.site == site) {
+            m.units.retain(|u| {
+                places
+                    .get(u.item as usize)
+                    .is_some_and(|p| (u.index as usize) < p.len())
+            });
+        }
+    }
+
+    /// A fort or barbarian structure being mended mends its units as far
+    /// as the structure's repair has gone (0x419ba0, 0x40eba0): the repair's
+    /// progress (`+0x120`, the share of what was lost that is back) of what
+    /// each unit lacked, a unit worn meanwhile counting from that much less,
+    /// each step paid `0x597164[item / 3]` amber and `0x597170[item]` fish
+    /// x 100 a hundredth of the unit (the owner's, barbarians too) and done
+    /// only when both suffice.
+    fn mend_fort_units(&mut self, i: usize, owner: (u32, u32)) {
+        let site = self.objects[i].id;
+        let Some(c) = self.objects[i].combat.as_ref() else {
+            return;
+        };
+        let Some(k) = self.unit_mends.iter().position(|m| m.site == site) else {
+            return;
+        };
+        let now = structure_percent(c);
+        let start = self.unit_mends[k].start.min(99);
+        let progress = now.saturating_sub(start) * 100 / (100 - start);
+        let mut places = self.objects[i].fort_places();
+        let mut units = std::mem::take(&mut self.unit_mends[k].units);
+        let mut changed = false;
+        for u in &mut units {
+            let Some(cond) = places
+                .get_mut(u.item as usize)
+                .and_then(|p| p.get_mut(u.index as usize))
+            else {
+                // One is gone: the rest wait for the next tick (0x418430).
+                self.unit_mends[k].units = units;
+                self.forget_gone_units(site);
+                return;
+            };
+            if *cond < u.last {
+                u.from = u.from.saturating_sub(u.last - *cond);
+                u.last = *cond;
+            }
+            let from = u.from as u32;
+            let goal = (100 - from) * progress / 100 + from;
+            if (*cond as u32) < goal {
+                let step = goal - *cond as u32;
+                let amber = UNIT_PRICE[u.item as usize / 3] * step / 100;
+                let fish = UNIT_FISH[u.item as usize] * step / 100;
+                let (have_amber, have_fish) = self.funds(owner);
+                if amber <= have_amber && fish <= have_fish {
+                    self.earn(owner, -(amber as i64), -(fish as i64));
+                    *cond = goal as u8;
+                    u.last = goal as u8;
+                    changed = true;
+                }
+            }
+        }
+        self.unit_mends[k].units = units;
+        if changed {
+            self.objects[i].set_fort_places(places);
+        }
     }
 
     /// Has the settlement of own workshop `workshop` mend its stock's worn
@@ -272,12 +402,17 @@ impl Scene {
             }
             let c = self.objects[i].combat.as_mut().unwrap();
             c.hull += heal;
-            if c.hull >= c.max_hull {
+            let whole = c.hull >= c.max_hull;
+            if !is_ship {
+                self.mend_fort_units(i, owner);
+            }
+            if whole {
                 done.push(id);
             }
         }
         for id in done {
             self.mending.retain(|&m| m != id);
+            self.unit_mends.retain(|m| m.site != id);
             if let Some(i) = self.object_index(id) {
                 if let Some(s) = self.objects[i].ship.as_mut() {
                     if matches!(s.task, Some(Task::Repair { .. })) {

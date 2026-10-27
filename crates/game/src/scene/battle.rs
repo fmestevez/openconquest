@@ -219,7 +219,12 @@ impl Scene {
             // (0x4bf170, `combat::Shares`).
             let mut factor = 1.0;
             let mut lime_factor = 1.0;
-            if warded {
+            // A fort shares its blow out first and cuts each part under the
+            // shield on its own (`fort_blow`).
+            let holder = self
+                .object_index(target)
+                .is_some_and(|t| self.objects[t].holds_units());
+            if warded && !holder {
                 factor *= magic::SHIELD_FACTOR;
                 lime_factor *= magic::SHIELD_FACTOR;
             }
@@ -379,6 +384,95 @@ impl Scene {
         if combat::unit_blow(units, 0..3, points.max(0.0) as u32, false, &mut self.rng) {
             o.drop_broken_units();
         }
+    }
+
+    /// A shot's blow on a fort or barbarian structure (message 0x138e:
+    /// FortressClassTy 0x4184f0, BarbarianClassTy 0x40e0f0): its units take
+    /// their share (`combat::fort_share`), the weapons 3-8 all of it and the
+    /// marines it by the shot's B over its A (0x4ac1b0), each spread by
+    /// `combat::fort_unit_blow`; the structure takes the rest. `damage` is
+    /// the shot's blow (ours, a fifteenth of the original's), `lime` quick
+    /// lime's, which spares structures, in the units' points. Under a magic
+    /// shield (`+0x15c`) the structure takes a fifth and a fort's units a
+    /// fifth of a fireball's share and two thirds of a flaming shot's.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn fort_blow(
+        &mut self,
+        target: u32,
+        damage: f32,
+        lime: f32,
+        item: u8,
+        flaming: bool,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        let Some(t) = self.object_index(target) else {
+            return;
+        };
+        let o = &self.objects[t];
+        let class = o.record.class_id;
+        let Some(c) = o.combat.as_ref() else {
+            return;
+        };
+        let shielded = c.protect_weapons > 0.0;
+        let mut blow = if damage > 0.0 {
+            (damage * 15.0) as u32
+        } else {
+            lime.max(0.0) as u32
+        };
+        // A fort's Torch of Ares takes a third off a flaming blow and puts
+        // its flame out (0x418f60, flag `+0x4ac` from its store, 0x419e00).
+        // Its Armour of Ares (`+0x4b0`, the treasure's amount in percent)
+        // only stops a blow it would cut to nothing: the original reckons
+        // the cut, then posts the blow uncut. (Both at once would post the
+        // blow twice; a fort stores one treasure.)
+        let mut damage = damage;
+        let mut flaming = flaming;
+        if (0x34..=0x36).contains(&class) {
+            let held: Vec<objects::Treasure> = self.held_by(target).into_iter().copied().collect();
+            if flaming && held.iter().any(|tr| tr.kind == objects::FIRE_TORCH) {
+                let before = blow;
+                blow = blow * 100 / 150;
+                flaming = false;
+                if before > 0 && damage > 0.0 {
+                    damage *= blow as f32 / before as f32;
+                }
+            }
+            if let Some(ares) = held.iter().find(|tr| tr.kind == objects::ARMOUR_OF_ARES) {
+                let pct = ares.amount;
+                if pct > 0 && blow as u64 * pct as u64 / 100 == blow as u64 {
+                    return;
+                }
+            }
+        }
+        let c = self.objects[t].combat.as_ref().unwrap();
+        let mut share = combat::fort_share(class, &c.weapons, blow);
+        let mut hull = if blow > 0 && damage > 0.0 {
+            damage * (blow - share) as f32 / blow as f32
+        } else {
+            damage
+        };
+        if shielded {
+            hull *= magic::SHIELD_FACTOR;
+            if (0x34..=0x36).contains(&class) {
+                if item == super::shot::FIREBALL {
+                    share = share * 20 / 100;
+                } else if flaming {
+                    share = share * 100 / 150;
+                }
+            }
+        }
+        if share > 0 {
+            let crew = (share as f32 * combat::crew_scale(item)) as u32;
+            let mut places = self.objects[t].fort_places();
+            combat::fort_unit_blow(&mut places, 3..9, share, &mut self.rng);
+            combat::fort_unit_blow(&mut places, 0..3, crew, &mut self.rng);
+            self.objects[t].set_fort_places(places);
+            // A unit gone from a fort being mended leaves its mending
+            // (0x418430).
+            self.forget_gone_units(target);
+        }
+        self.strike(target, hull, false, data, caches);
     }
 
     /// Takes `points` off the weapons of ship `target` (0x4be110); those

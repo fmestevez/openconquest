@@ -5706,3 +5706,337 @@ fn boarding_called_off_before_the_fight() {
         "the boarded ship let go too"
     );
 }
+
+/// A big fort of miss012 with water beside it, handed to the human with
+/// the settlement whose ground it stands in and a warship: the scene, the
+/// fort and its settlement.
+fn own_fort(data: &GameData, caches: &mut Caches) -> (Scene, u32, u32) {
+    let mut scene = Scene::load(data, caches, "miss012").unwrap();
+    scene.brain = None;
+    let human = scene.human.unwrap();
+    let me = Some((human.nation, human.slot));
+    let near = |scene: &Scene, f: &MapObject, s: &MapObject| {
+        let (Some((hx, hy)), Some((cx, cy))) = (s.cell, f.cell) else {
+            return false;
+        };
+        let size = super::trade::building_cells(s);
+        let dx = (hx - cx).max(cx - (hx + size - 1)).max(0);
+        let dy = (hy - cy).max(cy - (hy + size - 1)).max(0);
+        let _ = scene;
+        dx.max(dy) <= BUILD_RADIUS && s.owner == f.owner
+    };
+    let (f, site) = scene
+        .objects
+        .iter()
+        .enumerate()
+        .filter(|(i, o)| {
+            o.class == ObjectClass::Building(0x36) && !scene.beside_cells(*i, (o.x, o.y)).is_empty()
+        })
+        .find_map(|(i, o)| {
+            scene
+                .objects
+                .iter()
+                .position(|s| {
+                    matches!(s.class, ObjectClass::Building(SETTLEMENT | TOWN))
+                        && near(&scene, o, s)
+                })
+                .map(|s| (i, s))
+        })
+        .unwrap();
+    let owner = scene.objects[f].owner;
+    let ship = scene
+        .objects
+        .iter()
+        .position(|o| o.ship.as_ref().is_some_and(|s| (2..10).contains(&s.kind)))
+        .unwrap();
+    // All of the fort's player's becomes the human's.
+    for o in scene.objects.iter_mut() {
+        if o.owner == owner {
+            o.owner = me;
+        }
+    }
+    scene.objects[ship].owner = me;
+    let (fort, site) = (scene.objects[f].id, scene.objects[site].id);
+    assert_eq!(scene.home_settlement(f), Some(site));
+    (scene, fort, site)
+}
+
+/// Forts as load partners (FortressClassTy 0x419f80, 0x4179b0; the
+/// settlement's Reload Object 0x441ba0 case 0x1f): a settlement takes up
+/// one of its forts at once; the fort lists its units with their
+/// conditions, its room left and a treasure place; units move within the
+/// fort's room (0x5966d8: 10 for a big one), each with its condition; it
+/// stores one treasure and no hero; a ship alongside reloads with it too
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn forts_reload_with_settlements_and_ships() {
+    use crate::scene::load::{Cargo, EMPTY, PRESENT, TREASURE, UNIT};
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, fort, site) = own_fort(&data, &mut caches);
+    let f = scene.object_index(fort).unwrap();
+    // Its record: bowmen, javelin men, items 4-8 (load 1+1+1+1+2+2+2).
+    assert_eq!(
+        scene.objects[f].fort_places().map(|p| p.len()),
+        [1, 1, 0, 0, 1, 1, 1, 1, 1]
+    );
+    scene.objects[f].combat.as_mut().unwrap().conditions = vec![100, 90, 80, 70, 60, 50, 40];
+    // The settlement's Reload Object takes up its fort, not another's.
+    let other = scene
+        .objects
+        .iter()
+        .enumerate()
+        .find(|(i, o)| {
+            matches!(o.class, ObjectClass::Building(0x34..=0x36))
+                && scene.home_settlement(*i) != Some(site)
+        })
+        .unwrap()
+        .1
+        .id;
+    assert!(scene.order_load(site, other).is_err());
+    assert!(scene.forts_of(site).contains(&fort));
+    scene
+        .apply(
+            &Order::LoadObject {
+                ship: site,
+                target: fort,
+            },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    assert_eq!(scene.load_sides(site), Some([site, fort]));
+    assert_eq!(scene.load_sides(fort), Some([fort, site]));
+    scene.run_loads();
+    assert_eq!(
+        scene.load_sides(fort),
+        Some([fort, site]),
+        "no contact needed"
+    );
+    // The fort's list: seven units, full (no empty place), a treasure place.
+    let list = scene.load_list(fort, None);
+    assert_eq!(list.len(), 8);
+    assert_eq!(
+        (list[0].cat, list[0].sub, list[0].flags),
+        (UNIT, 0, PRESENT)
+    );
+    assert_eq!(list[1].bar, Some(90));
+    assert_eq!(list[6].cargo, Some(Cargo::Unit(8, 0)));
+    assert_eq!((list[7].cat, list[7].flags), (TREASURE, EMPTY));
+    // Full: a settlement's swordsman has no room.
+    scene.garrisons.insert(site, [0, 0, 1, 0, 0, 0, 0, 0, 0]);
+    assert!(scene
+        .transfer(site, fort, Cargo::Unit(2, 0), &data, &mut caches)
+        .is_err());
+    // The javelin men go ashore with their condition, the swordsman in.
+    scene
+        .apply(
+            &Order::Transfer {
+                from: fort,
+                to: site,
+                cargo: Cargo::Unit(1, 0),
+            },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    assert_eq!(scene.stock_units(site)[1], vec![90]);
+    scene
+        .transfer(site, fort, Cargo::Unit(2, 0), &data, &mut caches)
+        .unwrap();
+    let f = scene.object_index(fort).unwrap();
+    assert_eq!(scene.objects[f].fort_places()[2], vec![100]);
+    assert!(scene.objects[f].fort_places()[1].is_empty());
+    // Kill item throws the chosen unit away: the onager.
+    scene
+        .discard(fort, Cargo::Unit(8, 0), &data, &mut caches)
+        .unwrap();
+    let list = scene.load_list(fort, None);
+    let empty = list
+        .iter()
+        .filter(|e| e.cat == UNIT && e.flags == EMPTY)
+        .count();
+    assert_eq!(empty, 2, "an onager's room");
+    // One treasure fits, a second does not, and no hero.
+    let tr = |kind| crate::objects::Treasure {
+        kind,
+        param: 0,
+        amount: 0,
+    };
+    scene.held.push((site, tr(11)));
+    scene.held.push((site, tr(15)));
+    let store = Cargo::Treasure { index: 0, kind: 11 };
+    scene
+        .transfer(site, fort, store, &data, &mut caches)
+        .unwrap();
+    let second = Cargo::Treasure { index: 0, kind: 15 };
+    assert!(scene
+        .transfer(site, fort, second, &data, &mut caches)
+        .is_err());
+    assert_eq!(scene.load_list(fort, None).last().unwrap().sub, 11);
+    scene.site_heroes.insert(site, vec![1]);
+    assert!(scene
+        .transfer(site, fort, Cargo::Hero(1), &data, &mut caches)
+        .is_err());
+    // Finish reload parts them; then a ship alongside takes the fort up.
+    scene.end_load(site).unwrap();
+    assert!(scene.load_sides(fort).is_none());
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| (2..10).contains(&s.kind)))
+        .unwrap()
+        .id;
+    reload_beside(&mut scene, ship, fort);
+    assert_eq!(scene.load_sides(fort), Some([fort, ship]));
+    scene.run_loads();
+    assert_eq!(scene.load_sides(ship), Some([ship, fort]));
+    let s = scene.object_index(ship).unwrap();
+    scene.objects[s].ship.as_mut().unwrap().crew.squads = [0; 3];
+    scene.objects[s].combat.as_mut().unwrap().weapons.clear();
+    scene
+        .transfer(fort, ship, Cargo::Unit(5, 0), &data, &mut caches)
+        .unwrap();
+    let s = scene.object_index(ship).unwrap();
+    assert_eq!(scene.objects[s].unit_conditions()[5], vec![70]);
+    scene
+        .transfer(ship, fort, Cargo::Unit(5, 0), &data, &mut caches)
+        .unwrap();
+    let f = scene.object_index(fort).unwrap();
+    assert_eq!(scene.objects[f].fort_places()[5], vec![70]);
+}
+
+/// A shot on a fort (0x4184f0): the units take `blow x load / (35 + load)`
+/// of a big fort's blow, the structure the rest; broken units are gone
+/// and each place fires by its units' mean condition (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn forts_units_take_their_share_of_blows() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, fort, _) = own_fort(&data, &mut caches);
+    let points = |scene: &Scene| -> u32 {
+        let o = &scene.objects[scene.object_index(fort).unwrap()];
+        o.fort_places()
+            .iter()
+            .enumerate()
+            .flat_map(|(k, p)| {
+                p.iter()
+                    .map(move |&c| c as u32 * combat::UNIT_POINTS[k] / 100)
+            })
+            .sum()
+    };
+    let hull = |scene: &Scene| {
+        let o = &scene.objects[scene.object_index(fort).unwrap()];
+        o.combat.as_ref().unwrap().hull
+    };
+    let (p0, h0) = (points(&scene), hull(&scene));
+    // A ballista's shot of 3500 (the original's); load 10 of 45.
+    scene.fort_blow(fort, 3500.0 / 15.0, 0.0, 6, false, &data, &mut caches);
+    let share = 3500 * 10 / 45;
+    assert!((h0 - hull(&scene) - (3500 - share) as f32 / 15.0).abs() < 0.05);
+    // The weapons take the share, the marines it by the ballista's B over
+    // its A.
+    let crew = (share as f32 * combat::crew_scale(6)) as u32;
+    let lost = p0 - points(&scene);
+    assert!(lost >= share && lost <= share + crew + 200, "{lost}");
+    // Blow on blow, units break and go; each place fires by its mean.
+    for _ in 0..40 {
+        scene.fort_blow(fort, 3500.0 / 15.0, 0.0, 6, false, &data, &mut caches);
+    }
+    let o = &scene.objects[scene.object_index(fort).unwrap()];
+    assert!(o.combat.as_ref().unwrap().weapons.len() < 7);
+    for item in 0..9u8 {
+        let p = &o.fort_places()[item as usize];
+        if !p.is_empty() {
+            let mean = p.iter().map(|&c| c as u32).sum::<u32>() / p.len() as u32;
+            assert_eq!(o.mean_condition(item), mean);
+        }
+    }
+}
+
+/// A fort being mended mends its units as far as its structure's repair
+/// has gone (0x418300, 0x419ba0), paying for them; its units cannot move
+/// meanwhile (needs `OPENCONQUEST_DATA`).
+#[test]
+fn forts_mend_units_with_their_structure() {
+    use crate::scene::load::Cargo;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, fort, site) = own_fort(&data, &mut caches);
+    let f = scene.object_index(fort).unwrap();
+    {
+        let c = scene.objects[f].combat.as_mut().unwrap();
+        c.hull = c.max_hull / 2.0;
+        c.conditions = vec![50, 100, 20, 100, 100, 100, 100];
+    }
+    scene.amber = 100_000;
+    scene.fish = 100_000;
+    scene.order_mend(site, fort).unwrap();
+    scene.load_fort(site, fort).unwrap();
+    assert!(scene
+        .transfer(fort, site, Cargo::Unit(0, 0), &data, &mut caches)
+        .is_err());
+    let mut half = None;
+    for _ in 0..20000 {
+        scene.update(1.0 / 25.0, &data, &mut caches);
+        let o = &scene.objects[scene.object_index(fort).unwrap()];
+        let c = o.combat.as_ref().unwrap();
+        if half.is_none() && c.hull >= c.max_hull * 0.75 {
+            half = Some(o.fort_places());
+        }
+        if !scene.mending.contains(&fort) {
+            break;
+        }
+    }
+    // Halfway there, the bowmen are about halfway from 50 to 100.
+    let half = half.unwrap();
+    assert!((70..=80).contains(&half[0][0]), "{half:?}");
+    let o = &scene.objects[scene.object_index(fort).unwrap()];
+    assert!(o.fort_places().iter().flatten().all(|&c| c == 100));
+    assert!(scene.amber < 100_000 && scene.fish < 100_000);
+    assert!(scene.unit_mends.is_empty());
+}
+
+/// A Cup of Asclepius stored in a fort heals its marines a point every
+/// 1000 of its rate, a Golden Fleece every unit and its structure (0x419e00,
+/// 0x419f80; needs `OPENCONQUEST_DATA`).
+#[test]
+fn fort_gifts_heal_units() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, fort, _) = own_fort(&data, &mut caches);
+    let f = scene.object_index(fort).unwrap();
+    scene.objects[f].combat.as_mut().unwrap().conditions = vec![50; 7];
+    let gift = |kind| crate::objects::Treasure {
+        kind,
+        param: 0,
+        amount: 40,
+    };
+    scene.held.push((fort, gift(15)));
+    // 250 ticks at 40: ten points, to the marines only.
+    scene.heal_forts(250.0 * crate::clock::TICK);
+    let places = scene.objects[f].fort_places();
+    assert_eq!((places[0][0], places[1][0], places[4][0]), (60, 60, 50));
+    scene.held.retain(|h| h.0 != fort);
+    scene.held.push((fort, gift(16)));
+    let c = scene.objects[f].combat.as_mut().unwrap();
+    c.hull = c.max_hull / 2.0;
+    scene.heal_forts(250.0 * crate::clock::TICK);
+    let o = &scene.objects[f];
+    assert_eq!(o.fort_places()[4][0], 60);
+    let c = o.combat.as_ref().unwrap();
+    assert!((c.hull / c.max_hull - 0.6).abs() < 0.001);
+}

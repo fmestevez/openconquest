@@ -341,6 +341,8 @@ pub struct Scene {
     pub free_casts: std::collections::BTreeMap<Spell, u32>,
     /// Buildings being repaired by a settlement or town.
     pub mending: Vec<u32>,
+    /// Forts and barbarian structures being mended mending their units.
+    pub unit_mends: Vec<repair::UnitMend>,
     /// The conditions of each settlement's stock units by item, in their
     /// order (kept as long as `garrisons` counts; see `stock_units`).
     pub stock_conditions: std::collections::BTreeMap<u32, [Vec<u8>; 9]>,
@@ -423,7 +425,7 @@ pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use flyers::{Flyer, Nest};
 pub use load::{Cargo, Entry, LoadLink};
 pub use order::Order;
-pub use repair::StockRepair;
+pub use repair::{StockRepair, UnitMend};
 pub use stats::Stats;
 pub use story::{goal_name, Carry, Goal};
 pub use walkers::{walker_frame_ms, walker_sequence, Walker};
@@ -570,6 +572,7 @@ impl Scene {
             gorgons: HashMap::new(),
             sea_monsters: HashMap::new(),
             mending: Vec::new(),
+            unit_mends: Vec::new(),
             stock_conditions: Default::default(),
             stock_repairs: Vec::new(),
             free_casts: Default::default(),
@@ -738,6 +741,7 @@ impl Scene {
             sight: self.sight.iter().map(|&s| s as u8).collect(),
             research: self.research.clone(),
             mending: self.mending.clone(),
+            unit_mends: self.unit_mends.clone(),
             stock_conditions: self.stock_conditions.clone(),
             stock_repairs: self.stock_repairs.clone(),
             free_casts: self
@@ -834,6 +838,7 @@ impl Scene {
         scene.update_sight();
         scene.research = save.research.clone();
         scene.mending = save.mending.clone();
+        scene.unit_mends = save.unit_mends.clone();
         scene.stock_conditions = save.stock_conditions.clone();
         scene.stock_repairs = save.stock_repairs.clone();
         scene.delivered = save.delivered.clone();

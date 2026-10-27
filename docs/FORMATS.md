@@ -967,8 +967,10 @@ arrow (`COBJ_SSPEC_00`, `01` without stock) to open its units; place 3 its
 armour and rams (0x20, dim 0x1f), place 7 its goods (0x2e, dim 0x2d).
 Clicking a cell with stock lists its units; clicking one again picks it up
 to load onto a ship. Its starting stock is record fields 14-22. Its menu
-(0x43c740): building (0), reload object (1, command 0x1f: with one of its
-own forts 0x34-0x36, see Load panel), repair
+(0x43c740): building (0), reload object (1, button 5, command 0x1f: with
+one of its own forts 0x34-0x36, see Load panel; there when the player may
+have marines, player `+0x46` bit 7, enabled while it is idle, `+0xa4` 1
+and `+0x10c` 0, and has a fort, `+0x214`-`+0x21c`), repair
 (2), upgrade to town (4), sell item (5), sell town (6), and from slot 8 the
 marines it can train: only with a workshop of the settlement, and for
 swordsmen a smithy (0x43da20, +0x1fc, +0x200).
@@ -984,7 +986,11 @@ not a settlement. The ship sails alongside through its contact machine
 it sends 0x2875 to the target (0x4b3930), which takes it up (LandObj
 0x425990: `+0x104` = 1, `+0x108` = the ship's id). A settlement's own
 Reload Object (menu slot 1) does the same with one of its forts (0x441ba0
-case 0x1f, checked in 0xc452: target classes 0x34-0x36). When the
+case 0x1f, checked in 0xc452: one of its own buildings, its list
+`+0x1d0` of `+0x1c8`, of classes 0x34-0x36, while it is idle): there is no
+sailing, the settlement sets `+0x104`/`+0x108` and sends 0x2875 to the fort
+at once and opens the panel (0xc453), and the two stay linked until Finish
+reload. When the
 object panel is rebuilt (0xc453, 0x4fffe0) it asks the selected object
 0xc45a: a building answers `+0x104`, a ship 1 in contact state 6
 (`+0x58c`); if set, panel 0x22e (c_load, ctor 0x4f7e40, handler
@@ -1004,7 +1010,13 @@ dock (`ShipServiceObjClassTy`, 0x4e7640) fills side 0 with its
 settlement's stock (`+0x1c8`, the settlement's vtable +0x64 = 0x43c570) and
 side 1 with the ship; a settlement side 0 with its stock and side 1 with
 the fort (0x441ba0, partner class 0x1494 `FortressClassTy`); a fort
-(0x419f80) its own weapons and its settlement's or ship's. Entries are
+(0x419f80) side 0 with its own list (vtable +0x5c, 0x4179b0) and side 1
+with its settlement's (its `+0x1c8`) or a ship's (0x4e4120). A fort lists
+each unit, place by place (category 1, flags 2, its condition the bar;
+all flags 1 while it is being mended, `+0x10c` with `+0x110` 0xff), an
+empty unit place for each room left (0x5966d8 by class: 4, 7, 10, less
+the load counted with 0x59729c: 1, 1, 2 by group), then its treasures
+(0x4237b0, `+0x19c`, flags 2) or one empty treasure place. Entries are
 0x14 bytes: category (+0), its byte (+1: item, level, hero, treasure
 kind), index within the category (+2), flags (+6: 1 nothing there,
 dimmed; 2 something there; 4 a group to open, arrow `COBJ_SSPEC_00`/`01`;
@@ -1060,6 +1072,21 @@ is repairing: `+0x10c` and state 2), armour or a ram into its lists
 amber, 3-5 fish, 6 goods credited; the rest stored if the building has
 room, 0x424af0: table 0x5c1094 by class, settlements and towns 50, forts
 1, others 2, and announced with 0x5d94, 1). Goods do not go ashore here.
+
+At a fort (0x419f80 with the fort chosen, 0x441ba0 with its settlement
+chosen; the same cases): a unit goes into the fort when its room allows
+(0x419390 → 0x417ef0: the load plus the item's weight within 0x5966d8;
+never while the fort is mended) as the last of its place (0x446500); out
+of the fort it is the entry chosen (0x419340, by the entry's index in the
+list); with a settlement the settlement's first unit goes in (0x446620
+index 0) and a unit coming out joins its stock with its condition
+(0x440d40); with a ship 0x4bc8c0 and 0x4bcd10 as at a port. A treasure goes
+into the fort's store through 0x424b30 (barrels and goods credited, the
+rest kept while there is room, 0x424af0: 1 for forts, none while it is
+mended, state `+0xa4` 2) and out of it to a settlement through 0x441480 or
+to a ship through 0x4bc8c0, then 0x424cf0. A hero is refused (0x424ed0
+asks the fort's vtable +0x80, 0x40dec0: 0). Armour, rams and goods have no
+case.
 
 **Kill** (direction 2 or 3): a settlement's unit is its place's last
 (0x446620), armour or rams their entry, a treasure is dropped from its
@@ -1401,9 +1428,7 @@ whole; units are refused (0x440d40) meanwhile. Cancelled, it refunds the
 part not done (`(100 - progress) x amber / 100`) and seems to mend units
 as far as the time spent goes (not decoded in full; not done here).
 Selling a stock unit brings 75% of its price times its condition.
-Forts hold units with conditions too (record fields from 34; 0x4184f0
-appears to take blows on them and remove units, 0x446620): not decoded
-further.
+Forts hold units with conditions too: see Forts' units.
 
 Buildings, strongholds, castles, nests and lairs hold points out of a
 maximum by class (0x424910: settlement 160000, town 220000, forts and
@@ -1414,6 +1439,85 @@ nest 280000, minotaur lair 80000, amazon lair 60000, class 0x49 40000),
 their percentage at `+0xa8`. They take a blow whole (message 0xda96 and
 the like), a fifth of it under a magic shield (`+0x15c`), and fall at 1
 (0x425990).
+
+## Forts' units
+
+A fort (`FortressClassTy`, Fortress.cpp, handler 0x419f80, vtable
+0x59592c) keeps its units in twelve places, one per item, at `+0x4d0 +
+0x23 + item x 4` (Weap.cpp objects of 0x4a bytes: `+0x38` item, `+0x3b`
+count, `+0x3f` the units, two bytes each: item and condition in percent);
+`+0x4d0 + 0` is its own LCG. Message 2 builds them from the record:
+counts of items 0-11 in fields 22-33, conditions from field 34 one after
+another (saved back by 0x4190a0, at most 30). Barbarian structures
+(`BarbarianClassTy`, Barb.cpp) have the same at `+0x20c`. Items 9-11 have
+no weight in 0x59729c and never occur.
+
+**Room.** 0x5966d8 by class: small 4, medium 7, big 10, each unit
+taking 0x59729c[item / 3] (1, 1, 2): the default arming fills it.
+
+**Blows** (message 0x138e but for kind 9, the hook: shots, 0x496xxx and
+0x498xxx; 0x158bf, a stare, becomes kind 4). The message's `+4` is the
+bomb kind, `+5` the flaming flag, `+9` the blow, `+0x15` the shooter's
+player. 0x418f60 (vtable +4) first: with a Torch of Ares in store (flag
+`+0x4ac`, 0x419e00) a flaming blow is posted again at 100 / 150 with the
+flag cleared; with an Armour of Ares (`+0x4b0`, its amount in percent) the
+cut is reckoned but the blow posted uncut, so it only stops a blow it
+would bring to nothing (with both, both blows go). 0x4184f0 then gives
+the units the share `blow x load / (base + load + supplies)` (base
+0x595920 by class: 25, 30, 35; load as above, a byte; supplies `+0x4d4`,
+below) and takes it off the blow, which the structure takes afterwards
+(LandObj, a fifth under a magic shield). Under the shield (`+0x15c`) the
+units' share is cut to 20/100 for bomb kind 10 (the fireball) or to 100 /
+150 if flaming; `+0x17c` cuts it to 20/100 too (not identified). The
+weapons (items 3-8) take the share, the marines (0-2) `0x4ac1b0(kind,
+the shooter's level, share)`. Barbarian structures (0x40e0f0) share
+`blow x load / (load + 80)` with no cuts, the marines through 0x40ff00.
+
+Spreading a share over units of a mask: points are `condition x
+0x597cfc[item] / 100` (copied to 0x5c7438 by 0x44788c), the total their
+sum, the blow at most the total. A number is drawn, `rand % (total -
+blow)` from the fort's LCG (0 when the blow is the total), and the units
+are walked index by index (to the longest place's count, taken when the
+walk begins), each index through the places in item order, summing points
+until the sum reaches the number. From that unit on each takes what is
+left: if it holds, its condition becomes `(points - blow) x 100 / full`
+and the blow is spent (gone at 0); if not it is gone (0x446620, the
+place's later units moving up) and the blow goes on less its points. A
+walk that ends with blow left draws again; the total is lowered only by a
+unit that held. During a mending, units gone leave it (0x418430).
+
+**Fire.** Each place fires on its own (0x4469c0 per tick in state 1),
+reloading by 0x5c76e0 like a ship's item, with 0x446710: the sum of its
+units' `condition x the A x 15 cache / 100` (x 1.5 with the Flame,
+player `+0xa8`). A worn place hits weaker; an empty one does not fire.
+
+**Mending.** A fort being repaired (command 0x1e → message 0x1389;
+0x418300) notes each unit (item, index, its condition twice) at `+0x4cc`
+(`+0x4c8` of them). The structure mends as other buildings (0x425100: a
+percent at a time, `+0x120` the progress = (now - start) x 100 / (100 -
+start), start `+0x114`); each tick 0x419ba0 (vtable +0x70; barbarians
+0x40eba0, the same) lifts each noted unit to `start + (100 - start) x
+progress / 100`, a unit worn meanwhile counting from that much less,
+paying `0x597164[item / 3]` amber (30, 50, 70) and `0x597170[item]` x 100
+fish (200, 200, 300 for marines) times the points gained / 100 when both
+suffice; a unit no longer at its place and index drops the notes of all
+gone (0x418430). A whole structure needs no repair, so its units are not
+mended. At the end (vtable +0x74, 0x419910) a computer player's fort
+(side value 3 or 4) buys back its default arming where it has room.
+Barbarian structures pay too (0x40eba0).
+
+**Gifts.** 0x419e00 (vtable +0x7c) reads the fort's store: kind 9 a
+spell to cast (`+0x1b4`), 10 the Torch, 11 the Armour of Ares, 14 a
+mirror shield (`+0x4b4`, its percent off a stare, 0x158bf), 15 the Cup
+(`+0x4b8`), 16 the Fleece (`+0x4c4`), the rate `+0x4bc` the amount. Every
+tick, when `(now - +0x4c0) x rate` is a multiple of 1000, its thousands
+heal: the Cup the marines, else the Fleece every unit and as many percent
+of the structure (`+0xa8`, not capped).
+
+**Supplies.** Command 0x2d (sub-order 1, 0x419690) moves the settlement's
+`+0x250`/`+0x251` (hundreds and a rest) into the fort's `+0x4d4`/`+0x4d5`
+up to 1200 and 16 hundreds (0x417fd0); `+0x4d4` adds to the blow's base
+and shows x 5 on its panel (0x417d20). Not identified further.
 
 ## Projectiles
 

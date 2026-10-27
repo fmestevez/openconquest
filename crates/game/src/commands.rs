@@ -983,14 +983,21 @@ fn research_menu(scene: &Scene, obj: &MapObject) -> Menu {
 /// upgrade of a settlement to a town.
 fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     set(menu, 0, Command::BUILD_STRUCTURES, true);
-    // Its stock onto a ship alongside (0x43c740 slot 1).
-    let stocked = scene.garrison(obj.id).iter().any(|&n| n > 0);
-    set(
-        menu,
-        1,
-        Command::LOAD,
-        stocked && scene.ship_alongside(obj.id).is_some(),
-    );
+    // Reload Object with one of its forts (0x43c740 slot 1, button 5:
+    // there when the player may have marines, player +0x46 bit 7; enabled
+    // while the settlement stands idle and has a fort, +0x214-+0x21c).
+    if scene.permits.item(0) {
+        let idle = scene.training_at(obj.id).is_none()
+            && scene.stock_repair_at(obj.id).is_none()
+            && !scene.mending.contains(&obj.id)
+            && scene.construction_at(obj.id).is_none();
+        set(
+            menu,
+            1,
+            Command::LOAD,
+            idle && !scene.forts_of(obj.id).is_empty(),
+        );
+    }
     // Marines: one button per crew type in slots 8-10, showing the training
     // in progress.
     let training = scene.training_at(obj.id);

@@ -149,6 +149,57 @@ impl Scene {
                 c.hull = (c.hull + rate).min(c.max_hull);
             }
         }
+        self.heal_forts(dt);
+    }
+
+    /// A fort storing a Cup of Asclepius or a Golden Fleece (0x419e00 sets
+    /// `+0x4b8`/`+0x4c4` and the rate `+0x4bc`, the treasure's amount; the
+    /// tick of 0x419f80 heals): every 1000 of the rate a point, the Cup to
+    /// its marines, else the Fleece to every unit and a percent to the
+    /// structure.
+    pub(super) fn heal_forts(&mut self, dt: f32) {
+        let ticks = dt / crate::clock::TICK;
+        let gifts: Vec<(u32, bool, f32)> = self
+            .objects
+            .iter()
+            .filter(|o| matches!(o.class, ObjectClass::Building(0x34..=0x36)) && o.holds_units())
+            .filter_map(|o| {
+                let held = self.held_by(o.id);
+                let cup = held.iter().any(|tr| tr.kind == 15);
+                let fleece = held.iter().any(|tr| tr.kind == 16);
+                let rate = held
+                    .iter()
+                    .rev()
+                    .find(|tr| tr.kind == 15 || tr.kind == 16)?
+                    .amount as f32;
+                (cup || fleece).then_some((o.id, cup, rate))
+            })
+            .collect();
+        for (id, cup, rate) in gifts {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            let o = &mut self.objects[i];
+            let c = o.combat.as_mut().unwrap();
+            c.healing += rate * ticks;
+            let heal = (c.healing / HEAL_STEP) as u32;
+            c.healing -= heal as f32 * HEAL_STEP;
+            if heal == 0 {
+                continue;
+            }
+            let mut places = o.fort_places();
+            let items = if cup { 0..3 } else { 0..9 };
+            for c in places[items].iter_mut().flatten() {
+                *c = (*c as u32 + heal).min(100) as u8;
+            }
+            o.set_fort_places(places);
+            if !cup {
+                // The structure's percentage (`+0xa8`) and its points.
+                let c = o.combat.as_mut().unwrap();
+                let pct = ((c.hull / c.max_hull.max(1.0)) * 100.0) as u32 + heal;
+                c.hull = c.max_hull * pct.min(100) as f32 / 100.0;
+            }
+        }
     }
 
     /// Ship `i` takes the treasure object `g`.
