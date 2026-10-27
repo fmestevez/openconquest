@@ -142,8 +142,8 @@ impl Scene {
                         } else {
                             Task::Board {
                                 target,
-                                round: 0.0,
-                                won: None,
+                                thrown: None,
+                                hooking: false,
                             }
                         });
                         continue;
@@ -350,6 +350,7 @@ impl Scene {
                         damage,
                         wounds,
                         wear,
+                        rope: None,
                     },
                     data,
                     caches,
@@ -601,8 +602,8 @@ impl Scene {
         ship.task = Some(if board {
             Task::Board {
                 target,
-                round: 0.0,
-                won: None,
+                thrown: None,
+                hooking: false,
             }
         } else {
             Task::Ram { target }
@@ -634,17 +635,21 @@ impl Scene {
         Ok(())
     }
 
-    /// Ships ordered to ram or board close in on their target and, on
-    /// contact, ram it or fight its crew.
+    /// Ships ordered to ram or board close in on their target to a
+    /// neighbouring cell (0x4b7f10, 0x4c1f60); there a rammer charges it
+    /// and a boarder throws hooks at it (see `grapple`).
     pub(super) fn run_contact(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+        self.run_grapples(dt, data, caches);
+        self.run_ram_runs(dt, data, caches);
         let closing: Vec<u32> = self
             .objects
             .iter()
             .filter(|o| {
-                matches!(
-                    o.ship.as_ref().and_then(|s| s.task),
-                    Some(Task::Ram { .. } | Task::Board { .. })
-                )
+                o.ship.as_ref().is_some_and(|s| {
+                    s.grapple.is_none()
+                        && s.ram_run.is_none()
+                        && matches!(s.task, Some(Task::Ram { .. } | Task::Board { .. }))
+                })
             })
             .map(|o| o.id)
             .collect();
@@ -663,6 +668,24 @@ impl Scene {
                 self.objects[i].ship.as_mut().unwrap().task = None;
                 continue;
             };
+            // A boarder waits for its hook to land (0x4b5df0 state 7); one
+            // lost (a save does not keep it) frees it.
+            if let Task::Board {
+                hooking: true,
+                thrown,
+                ..
+            } = task
+            {
+                if self.shots.iter().any(|s| s.rope == Some(id)) {
+                    self.objects[i].ship.as_mut().unwrap().path.clear();
+                    continue;
+                }
+                self.objects[i].ship.as_mut().unwrap().task = Some(Task::Board {
+                    target,
+                    thrown,
+                    hooking: false,
+                });
+            }
             let (tx, ty) = (self.objects[ti].x, self.objects[ti].y);
             // Ships touch from neighbouring cells: one ship to a cell.
             let t = TILE_SIZE as f32;
@@ -683,34 +706,8 @@ impl Scene {
             }
             self.objects[i].ship.as_mut().unwrap().path.clear();
             match task {
-                Task::Ram { .. } => {
-                    self.ram(i, ti, data, caches);
-                }
-                Task::Board { round, won, .. } => {
-                    // Grappled: the target stops too.
-                    self.objects[ti].ship.as_mut().unwrap().path.clear();
-                    match won {
-                        // The fight is decided at once and shown; its
-                        // outcome stands when the picture ends.
-                        None => {
-                            let won = self.board_roll(i, ti);
-                            let round = self.show_boarding(i, ti, won, data, caches);
-                            self.objects[i].ship.as_mut().unwrap().task = Some(Task::Board {
-                                target,
-                                round,
-                                won: Some(won),
-                            });
-                        }
-                        Some(won) if round > dt => {
-                            self.objects[i].ship.as_mut().unwrap().task = Some(Task::Board {
-                                target,
-                                round: round - dt,
-                                won: Some(won),
-                            });
-                        }
-                        Some(won) => self.board_end(id, target, won, data, caches),
-                    }
-                }
+                Task::Ram { .. } => self.start_ram(i, ti),
+                Task::Board { .. } => self.throw_hook(i, ti, data, caches),
                 _ => {}
             }
         }
@@ -820,21 +817,15 @@ impl Scene {
     /// Decides the fight for ship `ti` boarded from `i` (0x4b5b00): with
     /// strengths a and d (each + 1), the boarders win with chance
     /// (2a - d) / (a + d); Hercules and the ship of the dead always win
-    /// unless the defenders have the same; magic wood keeps boarders off.
-    fn board_roll(&mut self, i: usize, ti: usize) -> bool {
+    /// unless the defenders have the same. (The magic wood keeps boarders
+    /// off sooner: their hooks fly wide, 0x4b84b0.)
+    pub(super) fn board_roll(&mut self, i: usize, ti: usize) -> bool {
         let sure = |o: &MapObject| {
             o.ship
                 .as_ref()
                 .is_some_and(|s| s.has_hero(objects::HERCULES) || s.kind == 11)
         };
         let (attacker, defender) = (&self.objects[i], &self.objects[ti]);
-        if defender
-            .ship
-            .as_ref()
-            .is_some_and(|s| s.has_treasure(objects::MAGIC_WOOD))
-        {
-            return false;
-        }
         if sure(attacker) {
             return !sure(defender);
         }
@@ -857,7 +848,14 @@ impl Scene {
     /// tenths of it on the hull, and the defenders a tenth ten times on
     /// crew and weapons and all of it on the hull. Hercules or the ship of
     /// the dead only take theirs on the hull.
-    fn board_end(&mut self, a: u32, t: u32, won: bool, data: &GameData, caches: &mut Caches) {
+    pub(super) fn board_end(
+        &mut self,
+        a: u32,
+        t: u32,
+        won: bool,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         let (Some(i), Some(ti)) = (self.object_index(a), self.object_index(t)) else {
             return;
         };
@@ -942,41 +940,6 @@ impl Scene {
             self.wound(id, blow as f32);
         }
         self.hit(id, hull as f32 / 15.0, data, caches);
-    }
-
-    /// Plays the boarding picture between ships `i` and `ti`; its length.
-    fn show_boarding(
-        &mut self,
-        i: usize,
-        ti: usize,
-        gained: bool,
-        data: &GameData,
-        caches: &mut Caches,
-    ) -> f32 {
-        let (a, t) = (&self.objects[i], &self.objects[ti]);
-        let heading = heading_towards(t.x - a.x, t.y - a.y);
-        let (x, y) = ((a.x + t.x) / 2.0, (a.y + t.y) / 2.0);
-        let name = format!("ABORD_{}{heading}", u8::from(!gained));
-        // The grappling's sound (event 83, 0x4b5df0).
-        self.sounds.push(("abor6a", x, y));
-        match objects::sequence_frames(data, caches, &name) {
-            Ok(frames) if !frames.is_empty() => {
-                let round = frames.len() as f32 * crate::clock::TICK;
-                self.effects.push(Effect {
-                    x,
-                    y,
-                    frames,
-                    age_ms: 0.0,
-                    follow: None,
-                    life_ms: None,
-                    frame_ms: crate::clock::TICK_MS as f32,
-                    tornado: None,
-                    site: None,
-                });
-                round
-            }
-            _ => combat::BOARD_ROUND,
-        }
     }
 
     /// Gives ship `id` to `owner`, redrawing it in the new owner's colours.

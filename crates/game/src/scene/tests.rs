@@ -189,7 +189,17 @@ fn ramming_and_boarding() {
     };
     let before = hull(&scene, other_id);
     scene.order_close(mine_id, other_id, false).unwrap();
-    scene.update(0.02, &data, &mut caches);
+    // The rammer charges, shows the splinters at its bow (BOMBH30) and
+    // strikes as they end.
+    let mut splinters = false;
+    for _ in 0..50 * 10 {
+        scene.update(0.02, &data, &mut caches);
+        splinters |= !scene.effects.is_empty();
+        if hull(&scene, other_id) < before {
+            break;
+        }
+    }
+    assert!(splinters, "the impact was shown");
     assert!(hull(&scene, other_id) < before, "the ram did damage");
     scene.order_close(mine_id, other_id, true).unwrap();
     // The fight aboard shows (ABORD_ pictures run 40-67 frames).
@@ -3640,6 +3650,311 @@ fn ram_from_afar_connects() {
         }
     }
     assert!(hull(&scene) < before, "the ram struck");
+}
+
+/// Two ships in neighbouring cells of open water, the first the human
+/// player's boarder (Hercules aboard, so it wins) and the second an
+/// unarmed enemy merchant, both heading east; their ids and the first's
+/// cell.
+fn boarding_pair(scene: &mut Scene, dx: i32, dy: i32) -> (u32, u32, (i32, i32)) {
+    let human = scene.human.unwrap();
+    let mine = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let other = scene
+        .objects
+        .iter()
+        .find(|o| o.ship.is_some() && o.id != mine)
+        .unwrap()
+        .id;
+    scene
+        .objects
+        .retain(|o| o.ship.is_none() || o.id == mine || o.id == other);
+    scene
+        .objects
+        .retain(|o| o.ship.is_some() || o.combat.as_ref().is_none_or(|c| c.weapons.is_empty()));
+    let t = TILE_SIZE as f32;
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let cell = (2..h - 2)
+        .flat_map(|y| (2..w - 2).map(move |x| (x, y)))
+        .find(|&(x, y)| (-2..=2).all(|j| (-2..=2).all(|i| scene.nav.is_water(x + i, y + j))))
+        .expect("open water");
+    for (id, (cx, cy), kind, crew) in [
+        (mine, cell, 4u8, 6u32),
+        (other, (cell.0 + dx, cell.1 + dy), 1, 1),
+    ] {
+        let k = scene.object_index(id).unwrap();
+        let o = &mut scene.objects[k];
+        o.x = cx as f32 * t + t / 2.0;
+        o.y = cy as f32 * t + t / 2.0;
+        o.combat.as_mut().unwrap().weapons.clear();
+        let s = o.ship.as_mut().unwrap();
+        s.path.clear();
+        s.task = None;
+        s.heading = 0;
+        s.kind = kind;
+        s.crew = combat::Crew {
+            class: 2,
+            squads: [0, 0, crew],
+        };
+        if id == mine {
+            s.heroes = vec![objects::HERCULES];
+        } else {
+            o.owner = Some((1, (human.slot + 1) % 4));
+            let c = o.combat.as_mut().unwrap();
+            (c.max_hull, c.hull) = (1e6, 1e6);
+        }
+    }
+    (mine, other, cell)
+}
+
+/// Boarders throw a grappling hook with its line, pull both ships
+/// alongside and parallel, furl, lower the walkway, fight, raise it and
+/// both go back to their cells, at the original's pace (0x4b84b0,
+/// 0x4b54a0, 0x4b5df0, 0x4c3410; needs `OPENCONQUEST_DATA`).
+#[test]
+fn boarders_hook_and_lie_alongside() {
+    use crate::objects::GrappleStage;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let (mine, other, cell) = boarding_pair(&mut scene, 1, 0);
+    scene.order_close(mine, other, true).unwrap();
+    let t = TILE_SIZE as f32;
+    let grapple = |s: &Scene, id| {
+        s.objects[s.object_index(id).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap()
+            .grapple
+    };
+    let mut hook = None;
+    let mut roped = false;
+    let mut stages: Vec<(GrappleStage, u32)> = Vec::new();
+    let mut lying = None;
+    let mut walkway = false;
+    let mut end = None;
+    for tick in 0..3000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        if hook.is_none() && scene.shots.iter().any(|s| s.rope == Some(mine)) {
+            hook = Some(tick);
+            roped = !scene.ropes().is_empty();
+        }
+        walkway |= !scene.planks_shown().is_empty();
+        match grapple(&scene, mine) {
+            Some(g) => {
+                if stages.last().is_none_or(|&(s, _)| s != g.stage) {
+                    stages.push((g.stage, tick));
+                }
+                // A save keeps the boarding under way.
+                if g.stage == GrappleStage::Fight && g.ticks == 1 {
+                    let path = std::env::temp_dir()
+                        .join(format!("openconquest-board-{}.json", std::process::id()));
+                    scene.save().write(&path).unwrap();
+                    let save = SaveGame::read(&path).unwrap();
+                    let _ = std::fs::remove_file(&path);
+                    let restored = Scene::restore(&data, &mut caches, &save).unwrap();
+                    assert_eq!(grapple(&restored, mine), Some(g));
+                    assert!(grapple(&restored, other).is_some());
+                }
+                if g.stage == GrappleStage::Plank && lying.is_none() {
+                    let pos = |id| {
+                        let o = &scene.objects[scene.object_index(id).unwrap()];
+                        (o.x, o.y, o.ship.as_ref().unwrap().heading)
+                    };
+                    lying = Some((pos(mine), pos(other), grapple(&scene, other)));
+                }
+            }
+            None if !stages.is_empty() => {
+                end = Some(tick);
+                break;
+            }
+            None => {}
+        }
+    }
+    assert!(hook.is_some() && roped, "a hook flew on its line");
+    let order: Vec<GrappleStage> = stages.iter().map(|s| s.0).collect();
+    use GrappleStage::*;
+    assert_eq!(order, [Pull, Furl, Plank, Fight, Retract, Leave]);
+    let at = |s: GrappleStage| stages.iter().find(|x| x.0 == s).unwrap().1;
+    // Four frames of furling, five ticks each; the walkway's 18 frames
+    // down and up, a tick each; the fight as long as its picture.
+    assert_eq!(at(Plank) - at(Furl), 20);
+    assert_eq!(at(Fight) - at(Plank), 18);
+    assert!((40..=67).contains(&(at(Retract) - at(Fight))));
+    assert_eq!(at(Leave) - at(Retract), 18);
+    assert!(walkway, "the walkway was shown");
+    // Alongside: each slid 10 pixels towards the other and lies parallel,
+    // north or south; the boarded ship has dropped the line by then.
+    let ((ax, ay, ah), (bx, by, bh), bg) = lying.unwrap();
+    let mid = (cell.0 as f32 * t + t / 2.0, cell.1 as f32 * t + t / 2.0);
+    assert_eq!((ax, ay), (mid.0 + 10.0, mid.1));
+    assert_eq!((bx, by), (mid.0 + t - 10.0, mid.1));
+    assert!(matches!(ah, 2 | 6) && matches!(bh, 2 | 6), "{ah} {bh}");
+    let bg = bg.unwrap();
+    assert!(!bg.rope && bg.stage == Lie);
+    // Won (Hercules): the prize is ours; both ships end back in their cells
+    // with their sails set.
+    assert!(end.is_some());
+    for _ in 0..100 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let prize = &scene.objects[scene.object_index(other).unwrap()];
+    assert!(scene.is_own(prize), "the ship was captured");
+    for (id, c) in [(mine, cell), (other, (cell.0 + 1, cell.1))] {
+        let o = &scene.objects[scene.object_index(id).unwrap()];
+        let s = o.ship.as_ref().unwrap();
+        assert!(s.grapple.is_none() && s.furl == 0.0);
+        assert_eq!(
+            (o.x, o.y),
+            (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0)
+        );
+    }
+}
+
+/// The magic wood aboard keeps boarders off: their hooks fly wide, one
+/// every reload of the strong weapons (85 ticks at level 0; 0x4b84b0,
+/// 0x4ba190; needs `OPENCONQUEST_DATA`).
+#[test]
+fn magic_wood_keeps_hooks_off() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let (mine, other, _) = boarding_pair(&mut scene, 1, 1);
+    let k = scene.object_index(other).unwrap();
+    scene.objects[k]
+        .ship
+        .as_mut()
+        .unwrap()
+        .treasures
+        .push(objects::Treasure {
+            kind: objects::MAGIC_WOOD,
+            param: 0,
+            amount: 0,
+        });
+    scene.order_close(mine, other, true).unwrap();
+    let mut throws = Vec::new();
+    let mut flying = false;
+    for tick in 0..400 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let now = scene.shots.iter().any(|s| s.rope == Some(mine));
+        if now && !flying {
+            throws.push(tick);
+        }
+        flying = now;
+        let s = scene.objects[scene.object_index(mine).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap();
+        assert!(s.grapple.is_none(), "never grappled");
+    }
+    assert!(throws.len() >= 3, "{throws:?}");
+    assert!(throws.windows(2).all(|w| w[1] - w[0] == 85), "{throws:?}");
+}
+
+/// The pull's slide and turn as the original steps them (0x4b5220,
+/// 0x4b57e0, 0x4b54a0).
+#[test]
+fn grapple_slide_and_parallel() {
+    use super::grapple::{parallel, slide};
+    // Ten pixels: two points a tick, over at the sixth (12 points, padded).
+    assert_eq!(slide((0.0, 0.0), (10.0, 0.0), 5), ((10.0, 0.0), false));
+    assert_eq!(slide((0.0, 0.0), (10.0, 0.0), 6), ((10.0, 0.0), true));
+    assert!(slide((0.0, 0.0), (0.0, -13.0), 7).1);
+    assert!(!slide((0.0, 0.0), (19.0, 19.0), 9).1);
+    assert!(slide((0.0, 0.0), (19.0, 19.0), 10).1);
+    // The other ship east: north or south, the nearer; a tie goes south.
+    assert_eq!(parallel(0, 0), 6);
+    assert_eq!(parallel(0, 3), 2);
+    assert_eq!(parallel(4, 21), 6);
+    // North-east: north-west or south-east.
+    assert_eq!(parallel(1, 0), 7);
+    assert_eq!(parallel(1, 6), 3);
+    // North: east or west.
+    assert_eq!(parallel(2, 9), 4);
+    assert_eq!(parallel(2, 3), 0);
+}
+
+/// A rammer sails into its prey until the bow touches the hull, shows the
+/// splinters there a frame a tick, recoils, strikes as they end and backs
+/// off to the middle of its cell (0x4c2230; needs `OPENCONQUEST_DATA`).
+#[test]
+fn rammer_charges_strikes_and_backs_off() {
+    use crate::objects::RamStage;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let (mine, other, cell) = boarding_pair(&mut scene, 1, 0);
+    let hull = |s: &Scene| {
+        s.objects[s.object_index(other).unwrap()]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hull
+    };
+    let before = hull(&scene);
+    scene.order_close(mine, other, false).unwrap();
+    let run = |s: &Scene| {
+        s.objects[s.object_index(mine).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap()
+            .ram_run
+    };
+    let mut stages = Vec::new();
+    let mut impact_x = None;
+    for tick in 0..1000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let r = run(&scene);
+        let stage = r.map(|r| r.stage);
+        if stages.last().map(|s: &(Option<RamStage>, u32)| s.0) != Some(stage) {
+            stages.push((stage, tick));
+        }
+        let o = &scene.objects[scene.object_index(mine).unwrap()];
+        if stage == Some(RamStage::Impact) && impact_x.is_none() {
+            impact_x = Some(o.x);
+            // The bow lies on the target's hull, the rammer short of
+            // the target's middle.
+            assert!(o.x < cell.0 as f32 * 64.0 + 96.0);
+        }
+        if stages.len() > 1 && stage.is_none() {
+            break;
+        }
+    }
+    let order: Vec<_> = stages.iter().map(|s| s.0).collect();
+    assert_eq!(
+        order,
+        [
+            Some(RamStage::Charge),
+            Some(RamStage::Impact),
+            Some(RamStage::Back),
+            None
+        ]
+    );
+    assert!(hull(&scene) < before, "the ram struck");
+    let impact = stages[2].1 - stages[1].1;
+    let splinters = objects::sequence_frames(&data, &mut caches, "BOMBH30")
+        .unwrap()
+        .len() as u32;
+    assert_eq!(impact, splinters);
+    let o = &scene.objects[scene.object_index(mine).unwrap()];
+    assert_eq!(
+        (o.x, o.y),
+        (cell.0 as f32 * 64.0 + 32.0, cell.1 as f32 * 64.0 + 32.0)
+    );
+    assert!(o.ship.as_ref().unwrap().task.is_none());
 }
 
 /// A game saved mid-battle keeps the shots in flight and the spells

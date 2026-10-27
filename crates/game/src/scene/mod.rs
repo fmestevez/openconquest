@@ -267,6 +267,8 @@ pub struct Scene {
     /// Amber deposits' glints and the sparkle's frames (`ASTAR_`).
     pub sparkles: sparkle::Sparkles,
     pub sparkle_art: std::rc::Rc<Frames>,
+    /// The boarders' walkway `MOST0_` by facing (a layer each).
+    pub plank_art: std::rc::Rc<[Frames; 8]>,
     /// Ships whose laden porter trips have just put a slot ashore.
     unloaded: Vec<u32>,
     wake_clock: f32,
@@ -403,6 +405,7 @@ mod wake;
 pub use sight::{FogArt, Seen};
 mod fireball;
 mod flyers;
+mod grapple;
 mod order;
 mod script;
 mod seats;
@@ -533,6 +536,9 @@ impl Scene {
                     objects::sequence_frames(data, caches, &format!("SHEEP_{dir}{state}"))
                         .unwrap_or_default()
                 })
+            })),
+            plank_art: std::rc::Rc::new(std::array::from_fn(|facing| {
+                objects::composite_layer_frames(data, caches, "MOST0_", facing).unwrap_or_default()
             })),
             sparkle_art: std::rc::Rc::new(
                 objects::sequence_frames(data, caches, "ASTAR_").unwrap_or_default(),
@@ -1417,6 +1423,18 @@ impl Scene {
             .collect();
         // Ships under a siren's song go no faster than 7000 units (0x4a74c0).
         let charmed: HashSet<u32> = self.charmed.keys().copied().collect();
+        // Ships grappled, ramming or being rammed keep still (they are
+        // moved by the boarding and the ram); a charging rammer may sail
+        // into its target's cell.
+        let held_still = self.held_by_contact();
+        let charging: HashMap<u32, u32> = self
+            .objects
+            .iter()
+            .filter_map(|o| {
+                let r = o.ship.as_ref()?.ram_run?;
+                (r.stage == objects::RamStage::Charge).then_some((o.id, r.target))
+            })
+            .collect();
         // Ships held up: the cell ahead, and whether a ship lies in it.
         let mut held = Vec::new();
         for obj in &mut self.objects {
@@ -1425,6 +1443,10 @@ impl Scene {
             };
             // A ship turned to stone does not move.
             if obj.combat.as_ref().is_some_and(|c| c.stone > 0.0) {
+                continue;
+            }
+            if held_still.contains(&obj.id) {
+                ship.velocity = 0.0;
                 continue;
             }
             // The wind speeds or slows the ship by its heading.
@@ -1518,7 +1540,9 @@ impl Scene {
                 let next = cell_of(tx, ty);
                 if next != cell_of(obj.x, obj.y) {
                     match taken.get(&next) {
-                        Some(&other) if other != obj.id => {
+                        Some(&other)
+                            if other != obj.id && charging.get(&obj.id) != Some(&other) =>
+                        {
                             ship.blocked += dt;
                             ship.velocity = 0.0;
                             held.push((obj.id, next, lying.contains(&other)));
@@ -1621,6 +1645,10 @@ impl Scene {
             let (id, Some(s)) = (o.id, o.ship.as_mut()) else {
                 continue;
             };
+            // A grappled ship's sail is the boarding's to furl.
+            if s.grapple.is_some() {
+                continue;
+            }
             s.furl = if lying.contains(&id) {
                 (s.furl.max(1.0) + step).min(7.0)
             } else {

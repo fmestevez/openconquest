@@ -156,6 +156,11 @@ struct Args {
     /// focus to this cell.
     #[arg(long, hide = true, value_parser = parse_size, value_name = "X,Y")]
     sail: Option<(u32, u32)>,
+    /// Debugging: before simulating, bring the nearest enemy ship two cells
+    /// from the ship nearest the focus and order that one to board or ram
+    /// it (to see the hooks, walkway and fight, or the ram).
+    #[arg(long, hide = true, value_name = "board|ram")]
+    close: Option<String>,
     /// Centre the screenshot where the mission's view starts.
     #[arg(long, hide = true)]
     at_start: bool,
@@ -365,6 +370,55 @@ fn skirmish(scene: &mut Scene, focus: Option<(u32, u32)>) -> Option<u32> {
     None
 }
 
+fn close(scene: &mut Scene, focus: Option<(u32, u32)>, board: bool) -> Option<u32> {
+    let (fx, fy) = focus.map_or((0.0, 0.0), |(x, y)| {
+        ((x * 64 + 32) as f32, (y * 64 + 32) as f32)
+    });
+    let d = |o: &crate::objects::MapObject, x: f32, y: f32| (o.x - x).powi(2) + (o.y - y).powi(2);
+    let a = scene
+        .objects
+        .iter()
+        .filter(|o| {
+            o.owner.is_some()
+                && o.ship
+                    .as_ref()
+                    .is_some_and(|s| !board || s.crew.count() > 0)
+        })
+        .min_by(|p, q| d(p, fx, fy).total_cmp(&d(q, fx, fy)))?;
+    let (aid, ax, ay) = (a.id, a.x, a.y);
+    let t = scene
+        .objects
+        .iter()
+        .filter(|o| o.ship.is_some() && Scene::are_enemies(a, o))
+        .min_by(|p, q| d(p, ax, ay).total_cmp(&d(q, ax, ay)))?
+        .id;
+    let (cx, cy) = ((ax / 64.0).floor() as i32, (ay / 64.0).floor() as i32);
+    let spot = [(2, 0), (-2, 0), (0, 2), (0, -2), (2, 2), (-2, -2)]
+        .into_iter()
+        .map(|(dx, dy)| (cx + dx, cy + dy))
+        .find(|&(x, y)| {
+            scene.nav.is_water(x, y)
+                && !scene.objects.iter().any(|o| {
+                    o.ship.is_some()
+                        && (o.x / 64.0).floor() as i32 == x
+                        && (o.y / 64.0).floor() as i32 == y
+                })
+        })?;
+    if let Some(o) = scene.objects.iter_mut().find(|o| o.id == t) {
+        o.x = (spot.0 * 64 + 32) as f32;
+        o.y = (spot.1 * 64 + 32) as f32;
+        if let Some(s) = o.ship.as_mut() {
+            s.path.clear();
+            s.task = None;
+        }
+    }
+    if let Err(e) = scene.order_close(aid, t, board) {
+        eprintln!("close: {e}");
+    }
+    eprintln!("close: {aid} at ({cx},{cy}) goes for {t} at {spot:?}");
+    Some(aid)
+}
+
 fn gather(scene: &mut Scene, focus: Option<(u32, u32)>, what: &str) -> Option<u32> {
     use crate::objects::{cargo_capacity, Resource};
     let (fx, fy) = focus.map_or((0.0, 0.0), |(x, y)| {
@@ -431,6 +485,8 @@ fn screenshot(
         .flatten();
     let attacker = if args.skirmish {
         skirmish(&mut scene, args.focus)
+    } else if let Some(how) = &args.close {
+        close(&mut scene, args.focus, how == "board")
     } else if let Some(what) = &args.gather {
         gather(&mut scene, args.focus, what)
     } else if let Some((x, y)) = args.sail {

@@ -21,7 +21,7 @@ pub const UNLOAD_RATE: f32 = TRIP_LOAD / (76.0 * crate::clock::TICK);
 /// Where the unloading walkway lies: its picture's top-left from the
 /// top-left of the ship's frame, by ship type, side (see `walkway_side`)
 /// and facing (0x59a8e8, 0x4adef0 state 0xb). Types 4-11 share a row.
-const WALKWAY_AT: [[[(i8, i8); 8]; 2]; 5] = [
+pub(super) const WALKWAY_AT: [[[(i8, i8); 8]; 2]; 5] = [
     [
         [
             (19, 5),
@@ -229,7 +229,7 @@ const AMBER_WALKWAY_S: [[(i8, i8); 12]; 2] = [
 
 /// Which of a walkway's two placings a ship on `heading` uses for `facing`
 /// (0x4b8a40).
-fn walkway_side(facing: usize, heading: usize) -> usize {
+pub(super) fn walkway_side(facing: usize, heading: usize) -> usize {
     let not = [2, 3, 0, 1][facing % 4];
     usize::from(heading != not)
 }

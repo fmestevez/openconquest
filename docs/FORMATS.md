@@ -1476,7 +1476,95 @@ always wins, unless the defender has the same. The attacker plays
 slot 3, a frame a tick; when that ends (state 3) a win costs the boarders
 `d + prize hull / 100` spread over crew, weapons and hull (tenths, ten
 times) and the prize changes hands (0x4a91a0); a loss wipes out the
-boarders and costs the ship seven tenths of it on the hull.
+boarders and costs the ship seven tenths of it on the hull. (0x4a91a0
+only counts the prize in the player's statistics.)
+
+### Hooks, pulling alongside and the walkway
+
+The boarder's contact machine (0x4b5df0, `+0x6a9`; the boarded ship's is
+0x4c3410, `+0x71e`; each ship's contact record `+0x8e6`: type 200 a
+ship, 0x32 a building, 300 a hook in the air) runs a game tick at a time:
+
+- **State 1, closing in** (0x4b7f10): it scans a square of
+  0x59aee8[type] = 5 cells and routes to a cell next to the prey; there
+  (Chebyshev distance 1) 0x4b84b0 throws a **grappling hook**, at most
+  once per `0x5c7740[player byte +0x90]` ticks since the last (`+0x6be`):
+  the 25th entry of the reload table 0x5c76e0, i.e. item 8's reload at the
+  player's rate of fire level for the strong weapons (85 ticks at level
+  0, 66 above). The hit roll 0x4bf7f0 with item 9 always gives 100; the
+  hook flies wide (accuracy 0) if the prey carries the magic wood
+  (treasure 13 active, 0x4ba190), if it lies across a corner whose two
+  side cells hold ships lying against each other (0x499ca0), or if the
+  prey is under way and almost out of its cell (0x4b5140 x 3000 /
+  `+0x59b` < 17). The hook is a projectile of kind 9 (`BOMBJ00`, 16
+  directions; flight frame delay 2; it arcs like the others; launch
+  sound event 276 `cross1`, landing 279 `strel1` on a ship, 277 `aas005`
+  in the water); while it flies the boarder's contact is type 300 and the
+  hook's picture slot 2 is a **line** (picture type 0x80, colour 0x6d)
+  from the hook to the boarder's hull centre (0x496f40, 0x4964c0). State
+  7 waits for it.
+- **The hook lands** (0x4bbfc0, from the ship's bomb list): if the prey
+  has no contact, accepts one (`+0x261` bit 0x1000) and is not a phantom,
+  sinking or stone, both contacts point at each other (the boarder's state
+  3, the prey's 4), the line moves to the prey's picture slot 2, and the
+  prey gets message 2 (code 2, ProcPostRam 0x4aa2c0) putting it in state
+  9. A hook in the water frees the boarder's contact (0x4983d0): back to
+  state 1, the next hook after the reload.
+- **Prey state 9**: unless the two ships still lie in neighbouring cells
+  (distance exactly 1) and 0x499ca0 allows the corner, the grapple fails
+  (its contact cleared; the boarder goes back to state 1). Otherwise it
+  answers (record state 5), stops, and both ships run 0x4b54a0: each
+  **slides** from where its picture is to its cell's middle plus a step
+  towards the other, 10 pixels across (0x59a7c8), 13 up or down
+  (0x59a828), 19 and 19 slanting (0x59a888), alike for every type, along
+  a line of points (0x4b5220, padded to an even count) two points a tick;
+  and **turns parallel** to the other: for the other ship east or west it
+  turns north or south, north or south east or west, north-east or
+  south-west north-west or south-east and the reverse, whichever is
+  fewer rotations away (0x4b5390), the second on a tie, through the hull's
+  24 rotation frames one a tick (0x4b57e0).
+- **State 8 then 10** (boarder; the prey's 8 then 10 likewise): once the
+  slide and the turn are done, and for the boarder once the prey is
+  furling too (its state 10, 3 or 4), the sail furls: hull frames
+  0x58 + 8 x heading to + 3, a frame once more than 4 ticks have passed (20
+  ticks in all; 0x4b8aa0). The prey drops the hook's line when furled
+  and waits (state 3).
+- **State 0xb**: the boarder lowers the walkway `MOST0_` (picture slot 1,
+  the composite layer of the facing `+0x6e7` = direction of the prey,
+  0x59791d), 18 frames a tick each, its top-left at the hull's plus
+  0x59a8e8[type][side 0x4b8a40][facing]; then the fight starts: sound
+  event 83 (`abor6a`), the roll of 0x4b5b00, and `ABORD_<lost><facing>`
+  on slot 3 at the walkway's top-left, a frame a tick (state 3). As it
+  ends the blows above fall (and the prey's in its state 3).
+- **State 0xc**: the walkway comes up, a frame a tick; **state 6**: the
+  sail unfurls a frame a tick and the ship slides back to its cell's
+  middle (0x4c3320, two points a tick); the prey does the same once the
+  boarder is in state 6 (its states 4 and 6). The boarder's order is
+  then done (message 8, 0x90).
+
+A new order (`+0x6a2` < 0) before the fight rolls the walkway back up
+and leaves; it is not checked during the fight.
+
+### The ram's run
+
+The rammer's machine (0x4c2230): states 1 and 2 route it (0x4b8d80,
+window 0x5991c8[type] = 5) next to its prey (0x4c1f60: distance 0 or 1);
+there, if neither ship has a contact (0x4c1760), the two contacts are
+made and it keeps on into the prey's cell. Each tick 0x4c1870 tests its
+**bow** — the point 0x599204[type x 24 + hull rotation] from its
+picture's top-left — against the prey's picture: inside it and on a
+solid pixel of its current frame (0x557640). Then **state 3**: the prey
+is told to stop (message 2, code 3: its state 3), sound event 84 (`109`)
+plays at the rammer's cell, and picture slot 1 shows `BOMBH30` (the big
+catapult's splinters, 0x4e0340 via 0x4e0370) centred on the bow, a frame
+a tick; at its second frame the rammer recoils 4 pixels against its
+heading, and when it ends the blow 0x4c1c60 falls. **State 6**: the
+rammer backs off to its cell's middle a pixel on each axis per frame of
+its hull (delay 2: every third tick), types with 0x597a24 set (all but
+boats, merchants and the fire rammer) stepping their under-way frames
+backwards on odd ticks as they go; there the order ends (message 8,
+0x90) and the prey's contact clears (it slides back to its own cell's
+middle if it was moved).
 
 ## Training and repair at a settlement
 
