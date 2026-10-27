@@ -50,6 +50,8 @@ pub enum PanelHit {
     Restart,
     Quit,
     Slider(Slider, f32),
+    /// The mouse controls' switch, on the settings tab.
+    MouseControls,
     /// The help panel's up and down buttons.
     HelpUp,
     HelpDown,
@@ -66,6 +68,8 @@ pub struct PanelView<'a> {
     pub selected_slot: Option<usize>,
     pub game_speed: f32,
     pub scroll_speed: f32,
+    /// Modern mouse controls (right click gives orders).
+    pub modern_mouse: bool,
     pub volume: f32,
     /// Music volume, if music is playing.
     pub music: Option<f32>,
@@ -85,6 +89,8 @@ const SAVE_BUTTONS: [(u32, u32); 3] = [(4, 336), (70, 336), (136, 336)];
 const RESTART_BUTTON: (u32, u32) = (3, 460);
 const QUIT_BUTTON: (u32, u32) = (54, 508);
 const TRACK_X: u32 = 33;
+/// The mouse controls' switch on the settings tab, below the sliders (ours).
+const MOUSE_ROW: (u32, u32, u32, u32) = (33, 180, 150, 20);
 // The help panel (Viewsys 0x526930), measured on the original: its
 // background, text (`HELP_FONT`, 2 pixels between letters and lines,
 // 188 wide, 445 high), up and down buttons and its two page tabs.
@@ -277,6 +283,14 @@ impl Panels {
                 } else {
                     &[("Sound volume", Slider::Volume, view.volume)]
                 };
+                if view.tab == Tab::Settings {
+                    let label = if view.modern_mouse {
+                        "Mouse: modern"
+                    } else {
+                        "Mouse: original"
+                    };
+                    write(frame, MOUSE_ROW.0, PANEL.1 + MOUSE_ROW.1, label);
+                }
                 for &(label, slider, value) in rows {
                     let y = slider_y(slider);
                     write(frame, TRACK_X, y - 20, label);
@@ -390,6 +404,10 @@ impl Panels {
                     .map(PanelHit::Slot)
             }
             Tab::Settings | Tab::Sound => {
+                let (x, y, w, h) = MOUSE_ROW;
+                if tab == Tab::Settings && inside(p, (x, PANEL.1 + y, w, h)) {
+                    return Some(PanelHit::MouseControls);
+                }
                 let sliders: &[Slider] = if tab == Tab::Settings {
                     &[Slider::GameSpeed, Slider::ScrollSpeed]
                 } else {

@@ -1,5 +1,6 @@
 //! Window, input handling and the frame loop.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -300,11 +301,21 @@ impl MenuPage {
     }
 }
 
+/// What the pointer is over (see `App::hover_key`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HoverKey {
+    Object(u32),
+    Cell((i32, i32)),
+}
+
 /// Player settings from the wrench panel, as slider positions 0..1.
 #[derive(Debug, Clone, Copy)]
 struct Settings {
     game_speed: f32,
     scroll_speed: f32,
+    /// Right click gives orders, instead of the original's stepping through
+    /// the pointers (saved with the game's settings).
+    modern_mouse: bool,
 }
 
 impl Default for Settings {
@@ -312,6 +323,7 @@ impl Default for Settings {
         Self {
             game_speed: 1.0 / 3.0,
             scroll_speed: 0.5,
+            modern_mouse: crate::launch::modern_mouse(),
         }
     }
 }
@@ -375,6 +387,9 @@ pub struct App {
     drag_from: Option<PhysicalPosition<f64>>,
     /// Where the right button went down, and whether it has since been dragged.
     right_press: Option<(PhysicalPosition<f64>, bool)>,
+    /// The original mouse's right button stepping through the pointers:
+    /// what the pointer was over, and how many steps on.
+    cycle: Cell<(Option<HoverKey>, usize)>,
     minimap_drag: bool,
     selected: Option<u32>,
     /// Other own ships selected with it.
@@ -539,6 +554,7 @@ impl App {
             focused: true,
             drag_from: None,
             right_press: None,
+            cycle: Cell::new((None, 0)),
             minimap_drag: false,
             selected: None,
             group: Vec::new(),
@@ -672,6 +688,7 @@ impl App {
                 selected_slot: self.selected_slot,
                 game_speed: self.settings.game_speed,
                 scroll_speed: self.settings.scroll_speed,
+                modern_mouse: self.settings.modern_mouse,
                 volume: self.audio.as_ref().map_or(0.0, |a| a.volume),
                 music: self.music.as_ref().map(|_| self.music_volume),
                 help: &self.help_text,
@@ -747,6 +764,16 @@ impl App {
             PanelHit::Slider(slider, v) => {
                 self.slider_drag = Some(slider);
                 self.set_slider(slider, v);
+            }
+            PanelHit::MouseControls => {
+                let on = !self.settings.modern_mouse;
+                self.settings.modern_mouse = on;
+                crate::launch::set_modern_mouse(on);
+                self.say(if on {
+                    "Modern mouse: right click gives orders"
+                } else {
+                    "Original mouse: right click changes the pointer"
+                });
             }
         }
         true
@@ -3022,17 +3049,25 @@ impl App {
         }
         // As in the original, the left button gives orders too: with own
         // ships selected, a click where the pointer shows an order (the sea,
-        // an enemy, a treasure, a deposit) carries it out; anywhere else it
-        // selects.
+        // an enemy, a treasure, a deposit, a dock) carries it out; anywhere
+        // else it selects.
         if self.pending.is_none() {
             use crate::cursor::Pointer as P;
             let (pointer, greyed) = self.pointer(pos);
             let order = matches!(
                 pointer,
-                P::Sea | P::Attack | P::Treasure | P::Amber | P::Fish | P::Whale
+                P::Sea
+                    | P::Attack
+                    | P::Board
+                    | P::Ram
+                    | P::Repair
+                    | P::Treasure
+                    | P::Amber
+                    | P::Fish
+                    | P::Whale
             );
             if order && !greyed {
-                self.right_click(pos);
+                self.act(pointer, pos);
                 return;
             }
         }
@@ -3056,7 +3091,7 @@ impl App {
     /// The pointer for the mouse at `pos` and whether it is greyed (the
     /// action cannot be done there): as the original (0x5175b0), by what
     /// the selected units would do to what is under it.
-    fn pointer(&self, pos: PhysicalPosition<f64>) -> (crate::cursor::Pointer, bool) {
+    fn default_pointer(&self, pos: PhysicalPosition<f64>) -> (crate::cursor::Pointer, bool) {
         use crate::cursor::Pointer as P;
         if self.video.is_some() || self.menu.is_some() || self.button_at(pos).is_some() {
             return (P::Standard, false);
@@ -3142,6 +3177,113 @@ impl App {
             Some(o) if o.combat.is_some() || o.deposit.is_some() => (P::Select, false),
             _ => (P::Standard, false),
         }
+    }
+
+    /// What the pointer is over, for the right button's stepping: an
+    /// object, or a map cell.
+    fn hover_key(&self, pos: PhysicalPosition<f64>) -> Option<HoverKey> {
+        match self.object_at(pos) {
+            Some(id) => Some(HoverKey::Object(id)),
+            None => self.cell_at(pos).map(HoverKey::Cell),
+        }
+    }
+
+    /// The pointers a click may take at `pos`: the one the original picks
+    /// (0x5175b0) first, then the others possible there with own ships
+    /// selected, in the order its right button steps through them (0x5180e0:
+    /// own, sea, attack, board, ram, repair, ..., fish, amber, leviathan,
+    /// treasure).
+    fn pointer_modes(&self, pos: PhysicalPosition<f64>) -> Vec<(crate::cursor::Pointer, bool)> {
+        use crate::cursor::Pointer as P;
+        let first = self.default_pointer(pos);
+        let mut modes = vec![first];
+        if self.pending.is_some() {
+            return modes;
+        }
+        let ship = self
+            .selected
+            .and_then(|id| self.scene.object_index(id))
+            .map(|i| &self.scene.objects[i])
+            .filter(|o| o.ship.is_some() && self.scene.is_own(o));
+        let target = self
+            .object_at(pos)
+            .and_then(|id| self.scene.object_index(id))
+            .map(|i| &self.scene.objects[i]);
+        let (Some(s), Some(t)) = (ship, target) else {
+            return modes;
+        };
+        let sh = s.ship.as_ref().unwrap();
+        let enemy = t.combat.is_some() && Scene::are_enemies(s, t) && !self.scene.is_own(t);
+        let mut more = Vec::new();
+        if enemy {
+            more.push((P::Attack, !s.is_armed()));
+            if t.ship.is_some() {
+                more.push((P::Board, sh.crew.count() == 0));
+                more.push((P::Ram, sh.kind < 2));
+            }
+        }
+        let own_dock = self.scene.is_own(t)
+            && t.class == openconquest_formats::ObjectClass::Building(economy::DOCK);
+        if own_dock {
+            more.push((P::Repair, false));
+        }
+        for m in more {
+            if !modes.iter().any(|x| x.0 == m.0) {
+                modes.push(m);
+            }
+        }
+        modes
+    }
+
+    /// The pointer for the mouse at `pos` and whether it is greyed: the
+    /// original's pick, or with its mouse controls the one the right button
+    /// has stepped to.
+    fn pointer(&self, pos: PhysicalPosition<f64>) -> (crate::cursor::Pointer, bool) {
+        let modes = self.pointer_modes(pos);
+        if self.settings.modern_mouse || modes.len() == 1 {
+            return modes[0];
+        }
+        let (key, steps) = self.cycle.get();
+        let steps = if key == self.hover_key(pos) { steps } else { 0 };
+        modes[steps % modes.len()]
+    }
+
+    /// The original's right button: puts back what is carried, drops a
+    /// command waiting for its target, or steps the pointer on to the next
+    /// thing the selected ships could do there (0x5180e0).
+    fn step_pointer(&mut self, pos: PhysicalPosition<f64>) {
+        if self.carrying.take().is_some() || self.pending.take().is_some() {
+            self.status = None;
+            return;
+        }
+        let key = self.hover_key(pos);
+        let (was, steps) = self.cycle.get();
+        let steps = if was == key { steps + 1 } else { 1 };
+        self.cycle.set((key, steps));
+    }
+
+    /// Carries out pointer `pointer` at `pos` for the selected ships (the
+    /// original's left button).
+    fn act(&mut self, pointer: crate::cursor::Pointer, pos: PhysicalPosition<f64>) {
+        use crate::cursor::Pointer as P;
+        let target = self.object_at(pos);
+        let result = match (pointer, target) {
+            (P::Attack, Some(target)) => self.order_each(|ship| Order::Attack { ship, target }),
+            (P::Board | P::Ram, Some(target)) => self.order_each(|ship| Order::Close {
+                ship,
+                target,
+                board: pointer == P::Board,
+            }),
+            (P::Repair, Some(dock)) => self.order_each(|ship| Order::Repair { ship, dock }),
+            _ => {
+                self.right_click(pos);
+                Ok(())
+            }
+        };
+        if let Err(e) = result {
+            self.say(e);
+        }
+        self.cycle.set((None, 0));
     }
 
     /// Gives `order` for the player: at once in a single-player game, in a
@@ -3995,7 +4137,11 @@ impl ApplicationHandler for App {
                     if button == MouseButton::Right {
                         if let (Some((_, false)), Some(c)) = (self.right_press.take(), self.cursor)
                         {
-                            self.right_click(c);
+                            if self.settings.modern_mouse {
+                                self.right_click(c);
+                            } else {
+                                self.step_pointer(c);
+                            }
                         }
                     }
                 }

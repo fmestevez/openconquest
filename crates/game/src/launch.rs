@@ -16,6 +16,38 @@ const TITLE: &str = "OpenConquest";
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct Config {
     data: Option<PathBuf>,
+    /// Right click gives orders (instead of the original's stepping through
+    /// the pointers).
+    #[serde(default)]
+    modern_mouse: bool,
+}
+
+fn read_config() -> Config {
+    config_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .or_else(|| std::fs::read_to_string(old_config_path()?).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn write_config(config: &Config) {
+    let Some(path) = config_path() else { return };
+    if let (Some(dir), Ok(text)) = (path.parent(), serde_json::to_string_pretty(config)) {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::write(&path, text);
+    }
+}
+
+/// Whether the player chose modern mouse controls.
+pub fn modern_mouse() -> bool {
+    read_config().modern_mouse
+}
+
+/// Remembers the player's choice of mouse controls.
+pub fn set_modern_mouse(on: bool) {
+    let mut config = read_config();
+    config.modern_mouse = on;
+    write_config(&config);
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -28,21 +60,13 @@ fn old_config_path() -> Option<PathBuf> {
 }
 
 fn remembered() -> Option<PathBuf> {
-    let text = std::fs::read_to_string(config_path()?)
-        .ok()
-        .or_else(|| std::fs::read_to_string(old_config_path()?).ok())?;
-    serde_json::from_str::<Config>(&text).ok()?.data
+    read_config().data
 }
 
 fn remember(data: &Path) {
-    let Some(path) = config_path() else { return };
-    let config = Config {
-        data: Some(data.to_path_buf()),
-    };
-    if let (Some(dir), Ok(text)) = (path.parent(), serde_json::to_string_pretty(&config)) {
-        let _ = std::fs::create_dir_all(dir);
-        let _ = std::fs::write(&path, text);
-    }
+    let mut config = read_config();
+    config.data = Some(data.to_path_buf());
+    write_config(&config);
 }
 
 /// Where data installed from a CD goes.

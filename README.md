@@ -171,21 +171,21 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 | Mouse wheel, trackpad pinch, `+` / `-`, `0` | Zoom, reset zoom |
 | Trackpad two-finger swipe | Move the map |
 | Mouse wheel on a menu list | Scroll it |
-| Left click | Select a ship, building or creature |
+| Left click | Do what the pointer shows: select, or with your ships selected sail there, attack, board, ram, gather, take a treasure, repair at a dock (a group spreads out around the point) |
 | Left drag | Select your ships inside the box |
 | Shift + left click / drag | Add a ship to the selection or remove it / add the ships in the box |
-| Right click (with ships selected) | Sail there (straight courses where the water allows, around islands and, for deep ships, shoals; a group spreads out around the point) |
-| Shift + right click | Add a waypoint to the route |
+| Right click (original mouse) | Step the pointer on to the next thing your ships could do there (e.g. attack, board, ram an enemy); cancel a command waiting for its target |
+| Right click (modern mouse) | Give the order the pointer shows, as a left click on it would |
+| Shift + click to sail | Add a waypoint to the route |
 | Command buttons | Move (then click the destination), Stop, Fire (then click an enemy ship or building), Collect amber / Fish / Hunt leviathan (then click a deposit or zone), Repair (then click a dock, or for a settlement a damaged building), Behaviour, ship building and upgrades work, for every selected ship where it applies; the rest are shown greyed until implemented |
-| Right click on amber or fish (with a merchant selected) | Gather it |
 | Build structures (settlement or town) | Pick a building, then click a land cell nearby (green outline: allowed; ports and shipyards need the shore); Esc goes back |
-| Right click on an enemy ship or building (with a warship selected), or Fire | Attack it (unarmed fire ships ram instead) |
+| Fire, then click an enemy ship or building | Attack it |
 | Ram / Board, then click an enemy ship | Ram it / board it |
 | Build (merchant), then click a shore cell | Sail there and found a settlement |
 | Esc | Cancel, close a panel, deselect |
 | Click/drag on the minimap | Jump |
 | Tab | Toggle the interface (full-window view) |
-| Bar tabs (wheel, disk, wrench, clef, scroll) | Object panel; save slots, restart and quit; game and scroll speed; sound volume; objectives and briefing |
+| Bar tabs (wheel, disk, wrench, clef, scroll) | Object panel; save slots, restart and quit; game and scroll speed and the mouse controls (original or modern, remembered); sound volume; objectives and briefing |
 | P | Pause |
 | Esc (nothing selected) | Main menu (Resume returns to the game) |
 | Best results (main menu) | Your fastest win of each mission (kept in `<data>/saves/best.json`) |

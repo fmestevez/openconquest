@@ -454,6 +454,7 @@ fn screenshot(
             selected_slot: Some(0),
             game_speed: 1.0 / 3.0,
             scroll_speed: 0.5,
+            modern_mouse: false,
             volume: 0.6,
             music: Some(0.5),
             help: &help,
