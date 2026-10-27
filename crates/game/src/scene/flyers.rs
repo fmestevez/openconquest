@@ -2,8 +2,9 @@
 //! sends out its creature when the mission starts and, while it has
 //! creatures left (record field 9), a new one some time after the last
 //! fell (55500 ticks less 6000 per field 10). The creature rests by its nest,
-//! flies at a ship in reach, strikes (harpies at the crew, dragons drop
-//! their teeth on the hull) and flies home.
+//! flies at a ship in reach, strikes (a harpy with a sure shot shared
+//! out on the ship as any blow; a dragon drops its teeth, a placeholder)
+//! and flies home.
 
 use openac_formats::map::TILE_SIZE;
 use openac_formats::{ObjectClass, ObjectRecord};
@@ -190,7 +191,7 @@ impl Scene {
                 Flight::Chase(prey) => match self.prey_at(class, prey) {
                     Some((px, py)) if (px - x).hypot(py - y) <= t / 2.0 => {
                         flight = Flight::Strike(prey, STRIKE);
-                        self.flyer_strikes(class, prey, data, caches);
+                        self.flyer_strikes(class, prey, (x, y), data, caches);
                     }
                     Some(p) => target_at = Some(p),
                     None => flight = Flight::Home,
@@ -259,21 +260,58 @@ impl Scene {
         self.is_prey(class, o).then_some((o.x, o.y))
     }
 
-    fn flyer_strikes(&mut self, class: u32, prey: u32, data: &GameData, caches: &mut Caches) {
+    fn flyer_strikes(
+        &mut self,
+        class: u32,
+        prey: u32,
+        from: (f32, f32),
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         let Some(i) = self.object_index(prey) else {
             return;
         };
         let (x, y) = (self.objects[i].x, self.objects[i].y);
-        self.sounds.push(("hitmed", x, y));
         if class == 0x1f9 {
+            self.sounds.push(("hitmed", x, y));
             self.hit(prey, TEETH, data, caches);
-        } else {
-            let ship = self.objects[i].ship.as_mut().unwrap();
-            let n = ship.crew.count();
-            ship.crew.lose(n.div_ceil(2));
-            if self.is_own(&self.objects[i]) {
-                self.messages.push("Harpies tear at a crew".into());
-            }
+            return;
         }
+        // A harpy's strike (0x41fbd0, state 5 at frame 7): a sure shot,
+        // drawn as L, carrying 20 x item 4's level-1 blow (the A x 15
+        // cache's copy, 0x5c73dc), shared out on the ship as any blow.
+        let blow = crate::combat::hull_damage_at(4, 1) * 20.0;
+        let o = &self.objects[i];
+        let (Some(s), Some(c)) = (&o.ship, &o.combat) else {
+            return;
+        };
+        let armour = crate::combat::armour_factor(s.armour);
+        let loads = (s.cargo / 100.0).ceil().max(0.0) as u32;
+        let damage = blow * armour * super::battle::ship_hull_share(s, c);
+        let wounds = blow
+            * 15.0
+            * armour
+            * crate::combat::crew_share(
+                s.kind,
+                s.armour,
+                s.ram,
+                c.weapons.len(),
+                loads,
+                s.crew.count(),
+            );
+        self.fire_shot(
+            super::shot::Firing {
+                item: 4,
+                letter: Some(11),
+                flaming: false,
+                from,
+                target: prey,
+                strikes: true,
+                damage,
+                wounds,
+            },
+            data,
+            caches,
+        );
     }
 }

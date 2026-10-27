@@ -1118,6 +1118,13 @@ ticks, no faster than 7000 units, and adds the share each tick, taking a
 blow of 300 (type 0x1fd) at each thousand (0x4a74c0; three quarters off
 with hero 5, none on a ship shielded from magic).
 
+Harpy nests (0x41d4a0) send out a new creature 55500 - 6000 x field 10
+game ticks after the last fell. A harpy (0x41fbd0, state 5) strikes at
+frame 7 of its picture with a sure shot drawn as L (letter 11) carrying
+20 x item 4's level-1 blow (0x5c73dc); a dragon at frame 16 drops a shot
+drawn as P (15) on the cell ahead of it, carrying no blow of its own
+(0x41f1c0 finds it a target).
+
 ## Land creatures
 
 Lairs (`CreaturesFlatClassTy`, 0x414f00) send out another creature once
