@@ -316,7 +316,7 @@ impl Scene {
     /// players' ships and creatures only in sight, buildings and scenery
     /// once explored.
     pub fn is_visible(&self, o: &MapObject) -> bool {
-        if self.shoal_gone(o.id) {
+        if self.shoal_gone(o.id) || self.creature_hidden(o.id) {
             return false;
         }
         if !self.fog || self.is_own(o) {

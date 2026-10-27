@@ -28,6 +28,8 @@ pub struct GorgonCycle {
     next: f32,
     left: u32,
     made: u32,
+    /// Seconds she stays up sinking after her last stare.
+    shown: f32,
 }
 /// A siren (SirenaClassTy, sirena.cpp) hides 250-1000 ticks (0x403650),
 /// surfaces and sings once (her `SIRENA`, 163 frames a tick, at frame 45;
@@ -82,6 +84,9 @@ impl Scene {
             .collect();
         for (id, cell) in sirens {
             let first = crate::clock::ticks(250 + self.rng.next() % 751 + 45);
+            if let Some(v) = self.siren_shown.get_mut(&id) {
+                *v = (*v - dt).max(0.0);
+            }
             let left = self.siren_songs.entry(id).or_insert(first);
             *left -= dt;
             if *left > 0.0 {
@@ -89,6 +94,8 @@ impl Scene {
             }
             // The next song: the rest of her picture, a dive, a surfacing.
             *left = crate::clock::ticks(SONG_CYCLE_FRAMES - 45 + 250 + self.rng.next() % 751 + 45);
+            self.siren_shown
+                .insert(id, crate::clock::ticks(SONG_CYCLE_FRAMES - 45));
             let heard: Vec<u32> = self
                 .objects
                 .iter()
@@ -189,8 +196,10 @@ impl Scene {
                 next: first,
                 left: 0,
                 made: 0,
+                shown: 0.0,
             });
             g.next -= dt;
+            g.shown = (g.shown - dt).max(0.0);
             if g.next > 0.0 {
                 self.gorgons.insert(id, g);
                 continue;
@@ -246,6 +255,9 @@ impl Scene {
             }
             g.made += 1;
             g.left -= 1;
+            if g.left == 0 {
+                g.shown = ticks(28 - 13 + 30 + 21);
+            }
             g.next = if g.left > 0 {
                 ticks(28)
             } else {
@@ -351,5 +363,21 @@ impl Scene {
                 }
             }
         }
+    }
+
+    /// Whether a siren or the Gorgon is under the water now: a siren from
+    /// the end of her picture until 45 frames before her next song
+    /// (0x403650 hides her picture at state 0), the Gorgon from the end of
+    /// her sinking until 43 ticks before her next stare.
+    pub fn creature_hidden(&self, id: u32) -> bool {
+        let ticks = crate::clock::ticks;
+        if let Some(&left) = self.siren_songs.get(&id) {
+            let up = self.siren_shown.get(&id).copied().unwrap_or(0.0) > 0.0;
+            return !up && left > ticks(45);
+        }
+        if let Some(g) = self.gorgons.get(&id) {
+            return g.left == 0 && g.shown <= 0.0 && g.next > ticks(43);
+        }
+        false
     }
 }

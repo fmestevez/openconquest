@@ -254,6 +254,8 @@ pub struct Scene {
     /// siren sings.
     pub charmed: HashMap<u32, creatures::Charm>,
     pub siren_songs: HashMap<u32, f32>,
+    /// Seconds each siren stays up after her song (not saved).
+    pub siren_shown: HashMap<u32, f32>,
     /// Each Gorgon's cycle (not saved).
     pub gorgons: HashMap<u32, creatures::GorgonCycle>,
     /// Each sea monster's seconds to its next bite and step (not saved).
@@ -456,6 +458,7 @@ impl Scene {
             sight_points: Vec::new(),
             charmed: HashMap::new(),
             siren_songs: HashMap::new(),
+            siren_shown: HashMap::new(),
             gorgons: HashMap::new(),
             sea_monsters: HashMap::new(),
             mending: Vec::new(),

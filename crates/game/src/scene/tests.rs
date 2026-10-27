@@ -2052,8 +2052,19 @@ fn gorgon_and_siren() {
     // for her.
     let before = dist(&scene);
     let mut charmed = false;
+    let siren = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Monster(0x1fd))
+        .unwrap()
+        .id;
+    scene.update(0.02, &data, &mut caches);
+    assert!(scene.creature_hidden(siren), "she starts under the water");
     for _ in 0..50 * 45 {
         scene.update(0.02, &data, &mut caches);
+        if !charmed && scene.charmed.contains_key(&ships[0]) {
+            assert!(!scene.creature_hidden(siren), "she is up when she sings");
+        }
         charmed |= scene.charmed.contains_key(&ships[0]);
         if charmed && dist(&scene) < before {
             break;
