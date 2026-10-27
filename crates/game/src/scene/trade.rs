@@ -1480,16 +1480,30 @@ impl Scene {
                 if self.object_index(port).is_none() {
                     return self.send_to_port(i, deposit);
                 }
+                let id = self.objects[i].id;
+                let walkway = self
+                    .planks
+                    .iter()
+                    .any(|p| p.ship == id && p.activity == super::unload::Activity::Unloading);
+                let trips = self.unloaded.iter().filter(|&&s| s == id).count() as f32;
+                self.unloaded.retain(|&s| s != id);
                 let ship = self.objects[i].ship.as_mut().unwrap();
                 let kind = ship.cargo_kind;
-                // A leviathan comes in whole, in a second; goods at the
-                // porters' pace.
-                let (before, rate) = if kind == Some(Resource::Leviathan) {
-                    (ship.cargo.round(), 1.0)
+                // A leviathan comes in whole, in a second; goods a slot a
+                // laden porter trip (at the porters' pace where no walkway
+                // shows).
+                let before = if kind == Some(Resource::Leviathan) {
+                    ship.cargo.round()
                 } else {
-                    (ship.cargo, super::unload::UNLOAD_RATE)
+                    ship.cargo
                 };
-                let after = (before - rate * dt).max(0.0);
+                let after = if kind == Some(Resource::Leviathan) {
+                    (before - dt).max(0.0)
+                } else if walkway {
+                    (before - trips * super::unload::TRIP_LOAD).max(0.0)
+                } else {
+                    (before - super::unload::UNLOAD_RATE * dt).max(0.0)
+                };
                 ship.cargo = after;
                 let came = (before.floor() - after.floor()) as i64;
                 if let (Some(owner), true) = (self.objects[i].owner, came > 0) {

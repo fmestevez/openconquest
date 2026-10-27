@@ -11,9 +11,13 @@ use super::{heading_towards, Scene};
 use crate::assets::GameData;
 use crate::objects::{self, Caches, Layer};
 
-/// Units of cargo unloaded a second. An estimate (the original's looked
-/// slower than our first 100).
-pub const UNLOAD_RATE: f32 = 40.0;
+/// Goods a laden porter trip carries ashore: a cargo slot of 100 (the ship
+/// holds its load in slots of 100, 0x4ad300, and each trip is started by
+/// one message, 0x4aab00).
+pub const TRIP_LOAD: f32 = 100.0;
+/// Units of cargo unloaded a second where there is no walkway to show
+/// (a slot a laden and an empty trip, 2 x 38 ticks).
+pub const UNLOAD_RATE: f32 = TRIP_LOAD / (76.0 * crate::clock::TICK);
 /// Where the unloading walkway lies: its picture's top-left from the
 /// top-left of the ship's frame, by ship type, side (see `walkway_side`)
 /// and facing (0x59a8e8, 0x4adef0 state 0xb). Types 4-11 share a row.
@@ -200,6 +204,7 @@ pub struct Porter {
     pub y: f32,
     pub frames: Vec<Vec<Layer>>,
     age_ms: f32,
+    laden: bool,
 }
 
 impl Plank {
@@ -387,6 +392,10 @@ impl Scene {
         for p in &mut self.porters {
             p.age_ms += dt * 1000.0;
         }
+        // A laden trip done puts a slot of goods ashore.
+        for p in self.porters.iter().filter(|p| p.laden && p.frame(0).is_none()) {
+            self.unloaded.push(p.ship);
+        }
         self.porters.retain(|p| p.frame(0).is_some());
         let mut new = Vec::new();
         for p in &mut self.planks {
@@ -400,14 +409,11 @@ impl Scene {
                 && (back || laden.contains(&p.ship))
             {
                 p.trips += 1;
-                // Laden from the ship towards the shore; empty, the other
-                // way.
-                let heading = if back { (p.facing + 4) % 8 } else { p.facing };
-                new.push((p.ship, p.top_left, !back, heading));
+                new.push((p.ship, p.top_left, !back, p.facing));
             }
         }
-        for (ship, top_left, loaded, heading) in new {
-            let frames = porter_frames(data, caches, loaded, heading);
+        for (ship, top_left, loaded, facing) in new {
+            let frames = porter_frames(data, caches, loaded, facing);
             let (w, h) = frames
                 .iter()
                 .find_map(|f| f.first())
@@ -420,19 +426,22 @@ impl Scene {
                 y: top_left.1 + h / 2.0,
                 frames,
                 age_ms: 0.0,
+                laden: loaded,
             });
         }
     }
 }
 
-/// A porter trip's frames: laden or not, walking `heading`.
+/// A porter trip's frames (`NOSIL_<laden><way><facing>`, 0x4b6ca0): laden
+/// from the ship ashore (way 0), or empty back aboard (way 1), over a
+/// walkway facing `facing`.
 fn porter_frames(
     data: &GameData,
     caches: &mut Caches,
     loaded: bool,
-    heading: usize,
+    facing: usize,
 ) -> Vec<Vec<Layer>> {
-    let name = format!("NOSIL_{}0{heading}", u8::from(loaded));
+    let name = format!("NOSIL_{}{}{facing}", u8::from(loaded), u8::from(!loaded));
     let mut frames = objects::sequence_frames(data, caches, &name).unwrap_or_default();
     // The first frame of a walk is empty.
     if frames.len() > 1 {

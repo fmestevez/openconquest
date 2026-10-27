@@ -185,6 +185,8 @@ pub struct Scene {
     pub gull_art: std::rc::Rc<(Frames, Frames)>,
     /// Ships' wakes (only shown) and their sprites: `TRAKS00`, `TRAKS14`.
     pub droplets: Vec<wake::Droplet>,
+    /// Ships whose laden porter trips have just put a slot ashore.
+    unloaded: Vec<u32>,
     wake_clock: f32,
     pub wake_art: std::rc::Rc<(Frames, Frames)>,
     /// Seconds until the computer players next decide.
@@ -393,6 +395,7 @@ impl Scene {
             gulls,
             gull_rng: Rng(0x6011_5eed),
             droplets: Vec::new(),
+            unloaded: Vec::new(),
             wake_clock: 0.0,
             wake_art: std::rc::Rc::new((
                 objects::sequence_frames(data, caches, "TRAKS00").unwrap_or_default(),

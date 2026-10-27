@@ -936,7 +936,9 @@ same for headings four apart), a frame a tick. A walkway to a port
 0x59a8e8[(type x 2 + side) x 8 + facing]. Porters (`NOSIL_<loaded><n><heading>`,
 39 frames of 71x38) are one picture laid over the walkway: the men walk
 across its frame as it plays, a frame a tick, 1.56 s a trip; they do not
-walk to the building.
+walk to the building. `NOSIL_<laden><way><facing>`: way 0 from the ship
+ashore, 1 back. A ship holds its load in slots of 100 (0x4ad300); each
+laden trip, started by a message (0x4aab00, type 5), carries a slot.
 
 ## Gathering
 
