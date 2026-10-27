@@ -250,6 +250,10 @@ pub struct Scene {
     pub mending: Vec<u32>,
     /// Fractions of amber owed for repairs, per player.
     pub repair_owed: std::collections::BTreeMap<(u32, u32), f32>,
+    /// Ships under a siren's song (not saved), and seconds until each
+    /// siren sings.
+    pub charmed: HashMap<u32, creatures::Charm>,
+    pub siren_songs: HashMap<u32, f32>,
     /// Places seen for a while by spells: cell, radius, seconds left (not
     /// saved).
     pub sight_points: Vec<(i32, i32, i32, f32)>,
@@ -446,6 +450,8 @@ impl Scene {
             fireballs: Vec::new(),
             lightning: Vec::new(),
             sight_points: Vec::new(),
+            charmed: HashMap::new(),
+            siren_songs: HashMap::new(),
             mending: Vec::new(),
             free_casts: Default::default(),
             creature_clock: 0.0,
@@ -1186,7 +1192,7 @@ impl Scene {
         self.run_repairs(dt);
         self.run_orders();
         self.run_treasures(dt, data, caches);
-        self.run_creatures(dt);
+        self.run_creatures(dt, data, caches);
         self.run_wizards(dt, data, caches);
         self.run_flyers(dt, data, caches);
         self.run_walkers(dt, data, caches);
@@ -1224,6 +1230,8 @@ impl Scene {
             .filter(|o| o.ship.as_ref().is_some_and(|s| s.path.is_empty()))
             .map(|o| o.id)
             .collect();
+        // Ships under a siren's song go no faster than 7000 units (0x4a74c0).
+        let charmed: HashSet<u32> = self.charmed.keys().copied().collect();
         // Ships held up: the cell ahead, and whether a ship lies in it.
         let mut held = Vec::new();
         for obj in &mut self.objects {
@@ -1263,7 +1271,10 @@ impl Scene {
             // It gathers way up to its speed, and loses it in time to stop
             // where it is bound or before a turn of more than 45 degrees
             // (0x4a3f40, 0x4a2f60).
-            let top = ship.speed * wind * rigging * feather;
+            let mut top = ship.speed * wind * rigging * feather;
+            if charmed.contains(&obj.id) {
+                top = top.min(creatures::CHARMED_SPEED);
+            }
             let accel = objects::ship_accel(ship.kind) * wind.max(0.1);
             let ahead = {
                 let mut d = 0.0;

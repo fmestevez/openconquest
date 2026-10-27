@@ -1096,6 +1096,15 @@ at +0x14 and +0x18; a summoned one 100 %, 0x493780). Idle, it waits
 each round's end (0x491fa0); at none it goes. Lightning takes half its
 maximum, blows what they carry.
 
+A siren (SirenaClassTy, `sirena.cpp`) hides 250-1000 ticks (0x403650),
+surfaces and sings as her `SIRENA` passes frame 45 (0x403ba0), then dives.
+Her song (message 0x15ca7, 750 and a share: 88 / the ships, 22 from five)
+reaches every object within 7 cells; a ship without hero 7 (Odysseus) is
+charmed for 750 ticks more (0x4a7390): it heads for her cell every 30
+ticks, no faster than 7000 units, and adds the share each tick, taking a
+blow of 300 (type 0x1fd) at each thousand (0x4a74c0; three quarters off
+with hero 5, none on a ship shielded from magic).
+
 ## Land creatures
 
 Lairs (`CreaturesFlatClassTy`, 0x414f00) send out another creature once

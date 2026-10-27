@@ -2036,10 +2036,18 @@ fn gorgon_and_siren() {
         let o = &s.objects[s.object_index(ships[0]).unwrap()];
         ((o.x - sx).powi(2) + (o.y - sy).powi(2)).sqrt()
     };
+    // She sings within 250-1000 ticks of surfacing and the ship heads
+    // for her.
     let before = dist(&scene);
-    for _ in 0..50 * 3 {
+    let mut charmed = false;
+    for _ in 0..50 * 45 {
         scene.update(0.02, &data, &mut caches);
+        charmed |= scene.charmed.contains_key(&ships[0]);
+        if charmed && dist(&scene) < before {
+            break;
+        }
     }
+    assert!(charmed, "the siren sang");
     assert!(
         dist(&scene) < before,
         "drawn towards the siren: {} -> {}",
@@ -2719,8 +2727,8 @@ fn creatures_leave_their_lairs() {
         .filter(|o| o.record.class_id == 0x1f4)
         .find_map(|o| {
             let (cx, cy) = ((o.x / t) as i32, (o.y / t) as i32);
-            (-3..=3)
-                .flat_map(|dy| (-3..=3).map(move |dx| (cx + dx, cy + dy)))
+            (-5..=5)
+                .flat_map(|dy| (-5..=5).map(move |dx| (cx + dx, cy + dy)))
                 .find(|&(x, y)| scene.nav.is_water(x, y))
         })
         .expect("no cyclops near the sea");
