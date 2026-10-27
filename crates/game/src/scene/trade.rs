@@ -244,14 +244,40 @@ impl Scene {
         Some(price)
     }
 
-    /// Whether the player may have `item` made: it is permitted and they
-    /// have a workshop (and a smithy for swordsmen), as the settlement's
-    /// training asks.
+    /// Whether the player may have `item` made (0x43da20 case 1, without
+    /// the price): it is permitted, the sage school's arming has reached
+    /// its group (player +0xa3 >= item / 3), and they have a workshop, and
+    /// for swordsmen or item 5 a smithy.
     pub fn can_make(&self, item: u8) -> bool {
         let Some(h) = self.human else { return false };
         let have = self.buildings_of((h.nation, h.slot));
         let owns = |class: u32| have & (1 << (class - SETTLEMENT)) != 0;
-        self.permits.item(item) && owns(WORKSHOP) && (item != 2 || owns(economy::SMITHY))
+        self.permits.item(item)
+            && self.levels_of(Some((h.nation, h.slot))).weapons >= item / 3
+            && owns(WORKSHOP)
+            && (!matches!(item, 2 | 5) || owns(economy::SMITHY))
+    }
+
+    /// Whether the player has ship type `kind` unlocked (0x43da20 case 4,
+    /// without the price): permitted, studied if a unique ship, and the
+    /// buildings it needs standing. Locked ones are left off the
+    /// shipyard's menu; unlocked ones it cannot pay for are greyed.
+    pub fn ship_unlocked(&self, kind: u8) -> bool {
+        match self.can_build_ship(kind) {
+            Ok(()) => true,
+            Err(_) => {
+                let Some(h) = self.human else { return false };
+                let owner = (h.nation, h.slot);
+                let need = economy::ship_requirements(kind) | 1;
+                self.permits.ship(kind)
+                    && (!(8..12).contains(&kind)
+                        || self
+                            .levels_of(Some(owner))
+                            .get(combat::Upgrade::Special(kind - 8))
+                            > 0)
+                    && self.buildings_of(owner) & need == need
+            }
+        }
     }
 
     /// The player's settlement or town nearest building `i`: whose stock

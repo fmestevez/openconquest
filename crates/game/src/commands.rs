@@ -691,7 +691,22 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
 fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     let Some(human) = scene.human else { return };
     let building = scene.production_at(obj.id);
-    for (slot, kind) in economy::buildable_ships(human.nation).enumerate() {
+    // The ship types by slot (0x42d750): boat, merchant, royal ship,
+    // bomber, boarder, rammer, ship killer, men killer in fixed places,
+    // the unique ships packed after; locked ones are left out (0x43da20).
+    const BY_SLOT: [u8; 12] = [0, 1, 7, 6, 4, 5, 3, 2, 8, 9, 10, 11];
+    let mut next = 8;
+    for (place, kind) in BY_SLOT.into_iter().enumerate() {
+        if !economy::buildable_ships(human.nation).any(|k| k == kind) || !scene.ship_unlocked(kind)
+        {
+            continue;
+        }
+        let slot = if place < 8 {
+            place
+        } else {
+            next += 1;
+            next - 1
+        };
         let command = economy::ship_command(kind);
         let mut entry = Slot {
             checked: false,
@@ -712,7 +727,7 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     }
     // The Argo, after the ship types (0x4164e0), once Argus has come.
     if scene.permits.argo() && crate::scene::is_campaign(&scene.mission) {
-        let slot = menu.iter().position(|s| s.is_none()).unwrap_or(10);
+        let slot = next.min(10);
         let mut entry = Slot {
             checked: false,
             closes: false,
@@ -804,7 +819,8 @@ fn school_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
 /// (commands 0x30-0x35), in slots 0-2 and 4-6.
 fn workshop_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     let making = scene.training_at(obj.id);
-    for item in 3u8..9 {
+    // Only what the player may make (0x4361c0 asks 0x43da20 first).
+    for item in (3u8..9).filter(|&k| scene.can_make(k)) {
         let slot = (item % 3) as usize + (item as usize / 3) * 4 - 4;
         let (amber, fish) = crate::combat::item_cost(item);
         menu[slot] = Some(Slot {
@@ -812,8 +828,7 @@ fn workshop_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             closes: false,
             command: Command(0x2d + item),
             // While making, its buttons stay on (0x4361c0).
-            enabled: scene.permits.item(item)
-                && (scene.amber >= amber && scene.fish >= fish || making.is_some()),
+            enabled: scene.amber >= amber && scene.fish >= fish || making.is_some(),
             progress: making.and_then(|t| t.progress(item, true)),
             count: making.map_or(0, |t| t.count(item)),
         });
@@ -974,17 +989,9 @@ fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     // Marines: one button per crew type in slots 8-10, showing the training
     // in progress.
     let training = scene.training_at(obj.id);
-    // Only those the player may train, and only with a workshop (and for
-    // swordsmen a smithy) to equip them (0x43c740: 0x43da20 needs the
+    // Only those the player may train (0x43c740 asks 0x43da20: the
     // settlement's workshops and smithies, +0x1fc and +0x200).
-    let owns = |class: u32| {
-        scene.objects.iter().any(|o| {
-            scene.is_own(o)
-                && o.class == ObjectClass::Building(class)
-                && scene.construction_at(o.id).is_none()
-        })
-    };
-    let trainable = |k: u8| scene.permits.item(k) && owns(WORKSHOP) && (k != 2 || owns(SMITHY));
+    let trainable = |k: u8| scene.can_make(k);
     for kind in (0..3u8).filter(|&k| trainable(k)) {
         let command = Command(Command::TRAIN_BOWMEN.0 + kind);
         let (amber, fish) = crate::combat::CREW_COST[kind as usize];

@@ -1446,8 +1446,8 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
     if let Some(c) = &obj.combat {
         text += &format!(
             ". Hull {}/{}",
-            c.hull.max(0.0).ceil() as u32,
-            c.max_hull as u32
+            c.hull.clamp(0.0, c.max_hull).ceil() as u32,
+            c.max_hull.ceil() as u32
         );
     }
     if let Some(ship) = &obj.ship {
