@@ -1096,11 +1096,6 @@ mod tests {
 
     use super::*;
 
-    const SWORDS: Crew = Crew {
-        class: 2,
-        squads: [0, 0, 1],
-    };
-
     #[test]
     fn ram_angles() {
         assert_eq!(ram_angle(0, 2), 0, "east into a northbound ship: side on");
