@@ -209,12 +209,15 @@ impl Scene {
             // Argus, the armour and the hull's share.
             let mut factor = 1.0;
             let mut wound_factor = 1.0;
+            let mut lime_factor = 1.0;
             if warded {
                 factor *= magic::SHIELD_FACTOR;
                 wound_factor *= magic::SHIELD_FACTOR;
+                lime_factor *= magic::SHIELD_FACTOR;
             }
             if theseus {
                 wound_factor *= objects::THESEUS_DAMAGE;
+                lime_factor *= objects::THESEUS_DAMAGE;
                 factor *= objects::THESEUS_DAMAGE;
             }
             let flaming = self.flame_of(owner) > 0.0;
@@ -241,6 +244,21 @@ impl Scene {
                 }
                 if let (Some(ship), Some(c)) = (&self.objects[t].ship, &self.objects[t].combat) {
                     factor *= combat::armour_factor(ship.armour) * ship_hull_share(ship, c);
+                    // The crew's share of the blow, in the original's units
+                    // (units of 100 condition points).
+                    let loads = (ship.cargo / 100.0).ceil().max(0.0) as u32;
+                    wound_factor *= combat::armour_factor(ship.armour)
+                        * combat::crew_share(
+                            ship.kind,
+                            ship.armour,
+                            ship.ram,
+                            c.weapons.len(),
+                            loads,
+                            ship.crew.count(),
+                        )
+                        * 15.0;
+                } else {
+                    wound_factor = 0.0;
                 }
             }
             // Each weapon sends a shot off, carrying its blow (bomb.cpp).
@@ -273,7 +291,13 @@ impl Scene {
                         target,
                         strikes,
                         damage: combat::hull_damage_at(w, level) * factor,
-                        wounds: combat::crew_damage_at(w, level) * wound_factor,
+                        // A blow's crew share; quick lime, which spares
+                        // hulls, burns crews by its own figure.
+                        wounds: if combat::hull_damage_at(w, level) > 0.0 {
+                            combat::hull_damage_at(w, level) * wound_factor
+                        } else {
+                            combat::crew_damage_at(w, level) * lime_factor
+                        },
                     },
                     data,
                     caches,

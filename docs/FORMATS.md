@@ -954,7 +954,9 @@ the player's level of the fitted kind `+0x27a`), then shared out
 (0x4beb50) among the hull (type share 0x597ad8: 7, 10, 21, 18, 10, 12, 6,
 6, 3, 4, 2, 4), the armour kind, the ram, the weapons aboard and the cargo
 loads; the crew's share (its unit count) is reckoned against the same sum
-without counting itself. The hull at 0 wrecks the ship (state 4). At a
+without counting itself, and comes off the units' conditions (100 each),
+the unit picked at random weighted by kind (0x597cfc: 2860, 2990, 3120;
+0x4be410), spilling over to the next. The hull at 0 wrecks the ship (state 4). At a
 dock (0x4b1fc0) every 9 ticks a ship gets back up to a tenth of its hull
 for its type's price (0x59b388: 140, 280, 800, 910, 650, 560, 490, 420,
 420, 630, 420, 630) times the share mended, and worn units are made whole

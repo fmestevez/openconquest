@@ -570,8 +570,10 @@ pub fn fires(weapon: u8) -> bool {
         && weapon != 2
 }
 
-/// Wound points that cost a crew one squad. Placeholder.
-pub const SQUAD_LIFE: f32 = 150.0;
+/// Wound points that cost a crew one squad: a unit's condition, 100
+/// (0x4be410 takes a blow's crew share off the units' conditions, picked
+/// at random by kind, 0x597cfc: 2860, 2990, 3120, nearly alike).
+pub const SQUAD_LIFE: f32 = 100.0;
 /// Crew wound points healed a second by the Cup of Asclepius and the Golden
 /// Fleece. Placeholder.
 pub const CREW_HEALING: f32 = 5.0;
@@ -616,6 +618,14 @@ pub fn hull_strength(kind: u8) -> f32 {
 /// the type's hull share (0x597ad8) against it with the armour, the ram,
 /// the weapons aboard and the loads of cargo; the rest falls on what is
 /// aboard.
+/// The share of a blow that falls on the crew (0x4befc0): its units
+/// against the same sum as the hull's, which leaves the crew out.
+pub fn crew_share(kind: u8, armour: u8, ram: u8, weapons: usize, loads: u32, crew: u32) -> f32 {
+    const SHARE: [u32; 12] = [7, 10, 21, 18, 10, 12, 6, 6, 3, 4, 2, 4];
+    let hull = SHARE[kind as usize % 12];
+    crew as f32 / (hull + armour as u32 + ram as u32 + weapons as u32 + loads) as f32
+}
+
 pub fn hull_share(kind: u8, armour: u8, ram: u8, weapons: usize, loads: u32) -> f32 {
     const SHARE: [u32; 12] = [7, 10, 21, 18, 10, 12, 6, 6, 3, 4, 2, 4];
     let hull = SHARE[kind as usize % 12];
