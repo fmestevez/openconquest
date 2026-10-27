@@ -18,22 +18,86 @@ use crate::terrain::Terrain;
 use crate::weather::Wind;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-/// Marines being trained at a settlement, one at a time.
+/// What a settlement (marines) or a workshop (weapons) has been ordered to
+/// make: one queue of items of any kinds, paid when ordered, made one after
+/// another (0x43ba60 appends to the settlement's byte array at +0x260,
+/// head +0x254, tail +0x258; the workshop's is at +0x1ec), the run timed
+/// from its start (+0x124).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Training {
     pub site: u32,
-    /// The item being made (see `combat::ITEM_NAMES`).
-    pub kind: u8,
-    /// Marines ordered and not yet trained.
-    pub queued: u32,
-    /// Seconds spent on the current one.
+    /// The items ordered, in order (see `combat::ITEM_NAMES`).
+    #[serde(default)]
+    pub queue: Vec<u8>,
+    /// How many of them are done.
+    #[serde(default)]
+    pub head: usize,
+    /// Seconds since the run started.
     pub elapsed: f32,
+    /// Saves from before the queue held kinds: one kind, `queued` of it.
+    #[serde(default, skip_serializing)]
+    kind: Option<u8>,
+    #[serde(default, skip_serializing)]
+    queued: Option<u32>,
 }
 
 impl Training {
-    /// Progress 0..1 of the marine in training.
-    pub fn progress(&self) -> f32 {
-        (self.elapsed / combat::train_seconds(self.kind)).min(1.0)
+    pub fn new(site: u32) -> Self {
+        Self {
+            site,
+            queue: Vec::new(),
+            head: 0,
+            elapsed: 0.0,
+            kind: None,
+            queued: None,
+        }
+    }
+
+    /// Converts a save from before the queue held kinds.
+    pub(crate) fn upgrade_save(&mut self) {
+        if let (Some(kind), Some(n)) = (self.kind.take(), self.queued.take()) {
+            if self.queue.is_empty() {
+                self.queue = vec![kind; n as usize];
+                self.head = 0;
+            }
+        }
+    }
+
+    /// Items of kind `kind` ordered and not yet made.
+    pub fn count(&self, kind: u8) -> u32 {
+        self.queue[self.head.min(self.queue.len())..]
+            .iter()
+            .filter(|&&k| k == kind)
+            .count() as u32
+    }
+
+    /// The share 0..1 of the items of kind `kind` made, as the button shows
+    /// it, for a settlement (0x43c740: the time since the run started over
+    /// the time when the last of them is done) or a workshop (0x435ec0:
+    /// the time spent on them over all their time); `None` with none left.
+    pub fn progress(&self, kind: u8, workshop: bool) -> Option<f32> {
+        if self.count(kind) == 0 {
+            return None;
+        }
+        let time = |k: u8| combat::train_seconds(k);
+        if !workshop {
+            let last = self.queue.iter().rposition(|&k| k == kind)?;
+            return Some((self.elapsed / (time(kind) * (last + 1) as f32)).min(1.0));
+        }
+        let (mut done, mut left, mut start) = (0.0, 0.0, 0.0);
+        for (i, &k) in self.queue.iter().enumerate() {
+            if k == kind {
+                let spent = (self.elapsed - start).clamp(0.0, time(k));
+                if i < self.head {
+                    done += time(k);
+                } else {
+                    done += spent;
+                    left += time(k) - spent;
+                }
+            }
+            start += time(k);
+        }
+        Some(done / (done + left).max(f32::EPSILON))
     }
 }
 
@@ -717,6 +781,7 @@ impl Scene {
         scene.productions = save.productions.clone();
         scene.constructions = save.constructions.clone();
         scene.trainings = save.trainings.clone();
+        scene.trainings.iter_mut().for_each(Training::upgrade_save);
         scene.garrisons = save.garrisons.clone();
         scene.purses = save.purses.iter().copied().collect();
         scene.summons = save.summons.clone();

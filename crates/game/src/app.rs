@@ -2515,6 +2515,32 @@ impl App {
         self.status = Some((msg.into(), Instant::now()));
     }
 
+    /// A right click on command button `slot` (0x4f46c0): on a marine or
+    /// weapon button, takes the last one ordered off the queue (message
+    /// 0x3c), its price paid back.
+    fn cancel_button(&mut self, slot: usize) {
+        let Some(obj) = self
+            .selected
+            .and_then(|id| self.scene.object_index(id))
+            .map(|i| &self.scene.objects[i])
+        else {
+            return;
+        };
+        let Some(entry) = menu(&self.scene, obj, self.page)[slot] else {
+            return;
+        };
+        let train = Command::TRAIN_BOWMEN.0;
+        if (train..train + 9).contains(&entry.command.0) && entry.count > 0 {
+            let order = Order::CancelTrain {
+                site: obj.id,
+                item: entry.command.0 - train,
+            };
+            if let Err(e) = self.issue(order) {
+                self.say(e);
+            }
+        }
+    }
+
     fn press_button(&mut self, slot: usize) {
         let Some(obj) = self
             .selected
@@ -4326,7 +4352,9 @@ impl ApplicationHandler for App {
                     if button == MouseButton::Right {
                         if let (Some((_, false)), Some(c)) = (self.right_press.take(), self.cursor)
                         {
-                            if self.settings.modern_mouse {
+                            if let Some(slot) = self.button_at(c) {
+                                self.cancel_button(slot);
+                            } else if self.settings.modern_mouse {
                                 self.right_click(c);
                             } else {
                                 self.step_pointer(c);

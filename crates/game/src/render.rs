@@ -32,6 +32,12 @@ impl Frame<'_> {
             self.pixels[(y as u32 * self.width + x as u32) as usize] = c;
         }
     }
+
+    #[inline]
+    pub fn get(&self, x: i64, y: i64) -> Option<u32> {
+        (x >= 0 && y >= 0 && (x as u32) < self.width && (y as u32) < self.height)
+            .then(|| self.pixels[(y as u32 * self.width + x as u32) as usize])
+    }
 }
 
 /// Palette lookup table for animated pixels at time `time_ms`.

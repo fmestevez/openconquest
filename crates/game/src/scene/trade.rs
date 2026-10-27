@@ -777,17 +777,38 @@ impl Scene {
             return Err("Not enough amber or fish".into());
         }
         match self.trainings.iter_mut().find(|t| t.site == site) {
-            Some(t) if t.kind != item => return Err("The building is busy with other work".into()),
-            Some(t) => t.queued += 1,
-            None => self.trainings.push(Training {
-                site,
-                kind: item,
-                queued: 1,
-                elapsed: 0.0,
-            }),
+            Some(t) => t.queue.push(item),
+            None => {
+                let mut t = Training::new(site);
+                t.queue.push(item);
+                self.trainings.push(t);
+            }
         }
         self.amber -= amber;
         self.fish -= fish;
+        Ok(())
+    }
+
+    /// Takes the last item of kind `item` still to be made off `site`'s
+    /// queue and pays its price back (message 0x3c, sub-order 2, sent by a
+    /// right click on its button, 0x4f46c0). The time already spent stays
+    /// with the run.
+    pub fn cancel_training(&mut self, site: u32, item: u8) -> Result<(), String> {
+        let t = self
+            .trainings
+            .iter_mut()
+            .find(|t| t.site == site)
+            .ok_or("Nothing is being made here")?;
+        let k = t
+            .queue
+            .iter()
+            .rposition(|&k| k == item)
+            .filter(|&k| k >= t.head)
+            .ok_or("None of those are being made")?;
+        t.queue.remove(k);
+        let (amber, fish) = combat::item_cost(item);
+        self.amber += amber;
+        self.fish += fish;
         Ok(())
     }
 
@@ -1036,15 +1057,24 @@ impl Scene {
     pub(super) fn run_training(&mut self, dt: f32) {
         for t in &mut self.trainings {
             t.elapsed += dt;
-            if t.elapsed >= combat::train_seconds(t.kind) {
-                t.elapsed = 0.0;
-                t.queued -= 1;
-                self.garrisons.entry(t.site).or_default()[t.kind as usize] += 1;
+            // Each item is ready once the run has lasted to its end
+            // (0x441ba0: 0x248c for the one before the item now in hand).
+            loop {
+                let end: f32 = t.queue[..(t.head + 1).min(t.queue.len())]
+                    .iter()
+                    .map(|&k| combat::train_seconds(k))
+                    .sum();
+                if t.head >= t.queue.len() || t.elapsed < end {
+                    break;
+                }
+                let kind = t.queue[t.head];
+                self.garrisons.entry(t.site).or_default()[kind as usize] += 1;
+                t.head += 1;
             }
         }
         let alive: Vec<u32> = self.objects.iter().map(|o| o.id).collect();
         self.trainings
-            .retain(|t| t.queued > 0 && alive.contains(&t.site));
+            .retain(|t| t.head < t.queue.len() && alive.contains(&t.site));
     }
 
     /// The construction going on at `site`, if any.

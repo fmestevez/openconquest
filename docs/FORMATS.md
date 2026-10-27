@@ -1179,6 +1179,28 @@ mending the units one after another as the time passes and all of them at
 its end (0x441ba0). State 1 is training, a queued unit taking
 `ticks[kind / 3]`.
 
+Queues. A settlement (marines) and a workshop (weapons) each keep one
+queue of item kinds, mixed, in a byte array (settlement +0x260, head
++0x254, tail +0x258; workshop +0x1ec, +0x1e0, +0x1e4). An order pays at
+once and appends; an idle building starts timing the run (+0x124 = now,
+0x43ba60). Each item is ready once the run has lasted to its end (the sum of
+`0x5971a0[kind / 3]` up to it), the last ending the run. Message 0x3c,
+sub-order 2 (sent by a right click on the button, 0x4f46c0, through the
+button's second id 0x1d83 + slot) takes the last of that kind still to be
+made off the queue and pays its amber and fish back; the time spent stays
+with the run. The menus give each button the count of its kind still to
+be made (menu byte 0x26 + slot) and the part not done (0x1a + slot, as
+100 - done): a settlement's done is the time since the run started over
+the time when the last of the kind is done (0x43c740), a workshop's the
+time spent on the kind over all its time (0x435ec0). While a building
+makes things, its buttons stay on.
+
+Buttons in progress (0x4f2a90): after the picture, marks and caption, a
+non-zero "not done" byte shades the 49x49 button (0x54a580) clockwise from
+12 o'clock: the part beyond `done x 3.6` degrees has its palette indexes
+remapped through the table at 0x5c1658 (a dark grey-blue). Then, on
+buttons 0x21-0x39 with a count, the count in `NUMBER_FONT` at (3, 3).
+
 Repairing a building (sub-order 1, a target id, checked by 0x43fcb0) is
 for the settlement itself and its own buildings (0x441350: those whose
 vtable +0x6c says they are damaged). It sends 0x1389 to the building, which

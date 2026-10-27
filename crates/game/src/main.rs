@@ -160,6 +160,11 @@ struct Args {
     /// ship to get there).
     #[arg(long, hide = true)]
     reload: bool,
+    /// Debugging: before simulating, order these items (comma-separated,
+    /// see `combat::ITEM_NAMES`) at the own settlement nearest the focus,
+    /// weapons at a workshop put up beside it, and show the settlement.
+    #[arg(long, hide = true, value_delimiter = ',', value_name = "ITEMS")]
+    train: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -395,6 +400,9 @@ fn screenshot(
     } else {
         None
     };
+    let training = (!args.train.is_empty())
+        .then(|| train(&mut scene, data, &mut caches, args.focus, &args.train))
+        .flatten();
     let attacker = if args.skirmish {
         skirmish(&mut scene, args.focus)
     } else if let Some(what) = &args.gather {
@@ -515,6 +523,9 @@ fn screenshot(
             })
             .map(|o| o.id)
     });
+    if training.is_some() {
+        view.selected = training;
+    }
     if let Some(target) = reloading {
         view.selected = Some(target);
         view.load = Some((
@@ -536,6 +547,57 @@ fn screenshot(
     };
     view.draw(&mut frame);
     write_png(path, size, &pixels)
+}
+
+/// Orders `items` at the player's settlement nearest `focus` (see
+/// `--train`), putting up a workshop beside it if there is none; returns
+/// the settlement.
+fn train(
+    scene: &mut Scene,
+    data: &GameData,
+    caches: &mut Caches,
+    focus: Option<(u32, u32)>,
+    items: &[u8],
+) -> Option<u32> {
+    use crate::economy::{SETTLEMENT, TOWN, WORKSHOP};
+    use openconquest_formats::ObjectClass;
+    let t = openconquest_formats::map::TILE_SIZE as f32;
+    let (fx, fy) = focus.map_or((0.0, 0.0), |(x, y)| (x as f32 * t, y as f32 * t));
+    let near = |o: &crate::objects::MapObject| (o.x - fx).powi(2) + (o.y - fy).powi(2);
+    let home = scene
+        .objects
+        .iter()
+        .filter(|o| {
+            scene.is_own(o) && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
+        })
+        .min_by(|a, b| near(a).total_cmp(&near(b)))?;
+    let (home, cell) = (home.id, home.cell?);
+    scene.amber += 10_000;
+    scene.fish += 10_000;
+    let owned = |scene: &Scene| {
+        scene
+            .objects
+            .iter()
+            .find(|o| scene.is_own(o) && o.class == ObjectClass::Building(WORKSHOP))
+            .map(|o| o.id)
+    };
+    if owned(scene).is_none() {
+        let r = crate::scene::BUILD_RADIUS;
+        let site = (-r..=r)
+            .flat_map(|dy| (-r..=r).map(move |dx| (cell.0 + dx, cell.1 + dy)))
+            .find(|&(x, y)| scene.check_site(home, WORKSHOP, x, y).is_ok())?;
+        scene
+            .place_building(home, WORKSHOP, site.0, site.1, data, caches)
+            .ok()?;
+    }
+    let workshop = owned(scene)?;
+    for &item in items {
+        let site = if item < 3 { home } else { workshop };
+        if let Err(e) = scene.train(site, item) {
+            eprintln!("train: {e}");
+        }
+    }
+    Some(home)
 }
 
 /// Sends the player's ship nearest `focus` to reload at the own port,

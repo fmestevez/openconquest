@@ -148,6 +148,10 @@ pub enum Order {
         site: u32,
         item: u8,
     },
+    CancelTrain {
+        site: u32,
+        item: u8,
+    },
     Refit {
         smithy: u32,
         upgrade: Upgrade,
@@ -268,6 +272,7 @@ impl Scene {
             BuildShip { site, kind } => done(self.start_ship(site, kind)),
             BuildArgo { site } => done(self.start_argo(site)),
             Train { site, item } => done(self.train(site, item)),
+            CancelTrain { site, item } => done(self.cancel_training(site, item)),
             Refit {
                 smithy,
                 upgrade,

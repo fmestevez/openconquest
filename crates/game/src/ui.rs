@@ -82,6 +82,9 @@ pub struct Interface {
     small_slot: Option<Image>,
     /// Counts on slot cells (`NUMBER_FONT`, letters 2 apart).
     number_font: TextRenderer,
+    /// The shading of work not yet done (table 0x5c1658, palette index to
+    /// index), by colour.
+    shade: HashMap<u32, u32>,
     /// The health bar colours (palette 200 and 199, 203 and 157, 65 and
     /// 68: green, yellow, red).
     bar_colours: [[u32; 2]; 3],
@@ -195,6 +198,14 @@ impl Interface {
                 Some(&data.palette),
             )?
             .with_spacing(2),
+            shade: {
+                let mut map = HashMap::new();
+                for (i, &to) in SHADE.iter().enumerate() {
+                    map.entry(rgb(data.palette.0[i]))
+                        .or_insert(rgb(data.palette.0[to as usize]));
+                }
+                map
+            },
             bar_colours: [[200, 199], [203, 157], [65, 68]]
                 .map(|pair| pair.map(|i| rgb(data.palette.0[i]))),
             field_view,
@@ -587,9 +598,7 @@ impl Interface {
             let frames = self.button(data, &base);
             let Some(last) = frames.last() else { continue };
             let animated = frames.len() > 2;
-            let img = if let (Some(p), true) = (slot.progress, animated) {
-                &frames[((p * (frames.len() - 1) as f32) as usize).min(frames.len() - 2)]
-            } else if !slot.enabled {
+            let img = if !slot.enabled {
                 last
             } else if hover == Some(i) && animated {
                 &frames[(time_ms / BUTTON_FRAME_MS) as usize % (frames.len() - 1)]
@@ -620,6 +629,52 @@ impl Interface {
             }
             if let Some(caption) = data.strings.get(&slot.command.caption_id()) {
                 self.draw_caption(frame, layout, caption, slot.enabled, (x, y));
+            }
+            // Work in hand: the part still to do shaded (0x54a580), then
+            // the count of items ordered on buttons 0x21-0x39 in
+            // `NUMBER_FONT` at (3, 3).
+            if let Some(p) = slot.progress {
+                self.shade_unfinished(frame, (x, y), s, p);
+            }
+            if slot.count > 0 && (0x21..0x3a).contains(&slot.command.0) {
+                self.number_font.draw(
+                    frame,
+                    (x + 3.0 * s) as i32,
+                    (y + 3.0 * s) as i32,
+                    s.round().max(1.0) as u32,
+                    &slot.count.to_string(),
+                );
+            }
+        }
+    }
+
+    /// Shades the part of a button not yet done, as the original's clock
+    /// (0x54a580): swept clockwise from 12 o'clock by `done` (0..1) about
+    /// the picture's centre, the rest remapped through the shading table at
+    /// 0x5c1658. Nothing at all once done.
+    fn shade_unfinished(&self, frame: &mut Frame, (x, y): (f32, f32), s: f32, done: f32) {
+        let pct = (done * 100.0) as i32;
+        if pct > 99 {
+            return;
+        }
+        let size = BUTTON_SIZE as i32;
+        let centre = (size / 2) as f32;
+        let sweep = pct.max(0) as f32 * 3.6;
+        let (x0, y0) = (x.round() as i64, y.round() as i64);
+        let n = (size as f32 * s).round() as i64;
+        for py in 0..n {
+            for px in 0..n {
+                let (bx, by) = (px as f32 / s, py as f32 / s);
+                let (dx, dy) = (bx - centre, centre - by);
+                let angle = dx.atan2(dy).to_degrees().rem_euclid(360.0);
+                if angle >= sweep {
+                    let (fx, fy) = (x0 + px, y0 + py);
+                    if let Some(c) = frame.get(fx, fy) {
+                        if let Some(&d) = self.shade.get(&c) {
+                            frame.put(fx, fy, d);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1487,11 +1542,11 @@ fn details(scene: &Scene, obj: &crate::objects::MapObject) -> String {
         text += &format!(". Waiting: {}", parts.join(", "));
     }
     if let Some(t) = scene.training_at(obj.id) {
-        text += &format!(
-            ". Training {} {}",
-            t.queued,
-            crate::combat::ITEM_NAMES[t.kind as usize % 9]
-        );
+        let parts: Vec<String> = (0..9u8)
+            .filter(|&k| t.count(k) > 0)
+            .map(|k| format!("{} {}", t.count(k), crate::combat::ITEM_NAMES[k as usize]))
+            .collect();
+        text += &format!(". Making {}", parts.join(", "));
     }
     if let Some(c) = scene.construction_at(obj.id) {
         text += &format!(
@@ -1660,6 +1715,27 @@ pub fn ship_slots(obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
     }
     cells
 }
+
+/// The shading of work not yet done (0x5c1658): palette index to index.
+#[rustfmt::skip]
+const SHADE: [u8; 256] = [
+    0, 29, 144, 27, 27, 27, 27, 13, 14, 142, 142, 141, 141, 141, 140, 140,
+    205, 142, 142, 141, 141, 141, 141, 141, 140, 140, 140, 141, 142, 14, 13, 27,
+    27, 28, 144, 144, 29, 30, 30, 141, 142, 141, 140, 140, 28, 27, 27, 13,
+    142, 142, 141, 141, 141, 140, 140, 140, 205, 205, 14, 142, 142, 142, 141, 141,
+    141, 142, 141, 141, 141, 141, 141, 140, 13, 13, 14, 140, 140, 205, 141, 141,
+    141, 140, 14, 142, 141, 141, 140, 140, 205, 205, 141, 141, 140, 140, 140, 140,
+    140, 140, 140, 140, 205, 140, 141, 142, 143, 13, 13, 13, 27, 27, 27, 28,
+    144, 144, 144, 29, 144, 28, 27, 28, 27, 28, 27, 27, 27, 27, 27, 27,
+    14, 14, 14, 142, 141, 141, 140, 140, 205, 205, 205, 205, 205, 205, 140, 142,
+    142, 142, 14, 14, 14, 142, 142, 142, 142, 141, 142, 14, 14, 13, 13, 14,
+    142, 141, 140, 205, 205, 141, 142, 13, 13, 27, 27, 27, 144, 144, 144, 29,
+    30, 13, 142, 14, 14, 13, 14, 142, 141, 141, 141, 141, 141, 142, 142, 14,
+    142, 27, 142, 141, 140, 205, 140, 140, 141, 140, 14, 28, 144, 205, 205, 205,
+    140, 141, 140, 140, 141, 140, 141, 141, 142, 142, 142, 142, 142, 142, 142, 13,
+    13, 13, 27, 27, 27, 27, 27, 27, 27, 28, 144, 235, 236, 237, 238, 239,
+    240, 241, 242, 243, 244, 245, 27, 247, 248, 27, 13, 27, 27, 144, 27, 255,
+];
 
 /// A settlement's or town's slot cells (0x43bfe0, page 0): its stock of each
 /// item, marines in the first row, medium and strong weapons in the next

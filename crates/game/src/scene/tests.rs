@@ -292,14 +292,34 @@ fn marines_train_and_embark() {
     scene.garrisons.remove(&home);
     let (amber, fish) = (scene.amber, scene.fish);
     scene.train(home, 2).unwrap();
+    scene.train(home, 0).unwrap();
     scene.train(home, 2).unwrap();
-    assert!(scene.train(home, 0).is_err(), "one crew type at a time");
-    assert_eq!((scene.amber, scene.fish), (amber - 60, fish - 600));
-    for _ in 0..50 * (2 * combat::train_seconds(0).ceil() as usize + 1) {
+    scene.train(home, 0).unwrap();
+    // Kinds mix in one queue; a right click takes the last bowman back.
+    let t = scene.training_at(home).unwrap();
+    assert_eq!((t.count(0), t.count(2), t.count(1)), (2, 2, 0));
+    let (a0, f0) = combat::item_cost(0);
+    scene.cancel_training(home, 0).unwrap();
+    assert_eq!(scene.training_at(home).unwrap().queue, [2, 0, 2]);
+    assert!(scene.cancel_training(home, 1).is_err());
+    assert_eq!(
+        (scene.amber, scene.fish),
+        (amber - 60 - a0, fish - 600 - f0)
+    );
+    // Halfway through the first, the swordsmen's button shows a sixth
+    // (the time to the last of them, the third), the bowmen's a quarter.
+    for _ in 0..(combat::train_seconds(0) / 2.0 / 0.02).round() as usize {
         scene.update(0.02, &data, &mut caches);
     }
-    assert_eq!(scene.garrison(home)[..3], [0, 0, 2]);
+    let t = scene.training_at(home).unwrap();
+    assert!((t.progress(2, false).unwrap() - 1.0 / 6.0).abs() < 0.02);
+    assert!((t.progress(0, false).unwrap() - 0.25).abs() < 0.02);
+    for _ in 0..50 * (3 * combat::train_seconds(0).ceil() as usize + 1) {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert_eq!(scene.garrison(home)[..3], [1, 0, 2]);
     assert!(scene.training_at(home).is_none());
+    scene.garrisons.get_mut(&home).unwrap()[0] = 0;
     let i = scene.object_index(ship).unwrap();
     scene.objects[i].ship.as_mut().unwrap().crew = combat::Crew {
         class: 0,
@@ -673,6 +693,21 @@ fn workshop_builds_weapons() {
         scene.update(0.02, &data, &mut caches);
     }
     assert_eq!(scene.garrison(workshop)[6], 1);
+    // The workshop's button: the time spent on that kind over its time.
+    scene.train(workshop, 3).unwrap();
+    scene.train(workshop, 6).unwrap();
+    for _ in 0..(combat::train_seconds(3) / 0.02).round() as usize + 5 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    let t = scene.training_at(workshop).unwrap();
+    assert_eq!((t.count(3), t.count(6)), (0, 1));
+    assert!(t.progress(6, true).unwrap() < 0.05);
+    for _ in 0..50 * (combat::train_seconds(6).ceil() as usize + 1) {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert_eq!(scene.garrison(workshop)[6], 2);
+    scene.garrisons.get_mut(&workshop).unwrap()[3] = 0;
+    scene.garrisons.get_mut(&workshop).unwrap()[6] = 1;
     let ship = scene
         .objects
         .iter()
