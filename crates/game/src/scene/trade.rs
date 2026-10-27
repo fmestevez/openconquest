@@ -22,8 +22,11 @@ pub struct Price {
     pub stock_left: [u32; 9],
 }
 
-/// Seconds a frame of a building collapsing into ruins. An estimate.
-const RUINS_FRAME_SECONDS: f32 = 0.1;
+/// Seconds a frame of a building collapsing into ruins: the ruins' cycle
+/// (`objects::BUILDING_CYCLE`, 75 ticks) over its frames, in whole ticks.
+fn ruins_frame_seconds(frames: usize) -> f32 {
+    crate::clock::ticks((objects::BUILDING_CYCLE[2] / frames.max(1) as u32).max(1))
+}
 
 /// Goods a ship takes aboard each time (0x4ad0e0): amber 100 for boats and
 /// merchants (20 for other ships), fish by ship type from 0x59b2a8 (boat
@@ -1157,7 +1160,10 @@ impl Scene {
         let percent = c.hull / c.max_hull * 100.0;
         let state = BuildingState::for_condition(percent);
         match objects::building_frames(data, caches, &obj.record, state) {
-            Ok(frames) if !frames.is_empty() => self.objects[i].frames = frames,
+            Ok(frames) if !frames.is_empty() => {
+                self.objects[i].frame_ms = objects::building_frame_ms(frames.len());
+                self.objects[i].frames = frames;
+            }
             Ok(_) => {}
             Err(e) => eprintln!("could not load building frames: {e:#}"),
         }
@@ -1183,7 +1189,7 @@ impl Scene {
             }
             if let Some(p) = obj.progress.as_mut().filter(|p| **p < 1.0) {
                 let n = obj.frames.len().max(1) as f32;
-                *p = (*p + dt / (n * RUINS_FRAME_SECONDS)).min(1.0);
+                *p = (*p + dt / (n * ruins_frame_seconds(obj.frames.len()))).min(1.0);
             }
         }
     }

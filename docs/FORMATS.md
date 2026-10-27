@@ -851,7 +851,9 @@ themselves step a frame each 100 ms; both run on the clock, not on ticks.
 Buildings (LandObjClassTy 0x422e30, TownObjClassTy 0x43bd60): the
 picture's damage digit is ceil(health x 2 / 67) (0x594ab0) for a standing
 building, 3 otherwise; its frames step every cycle[state] / frames ticks
-(the class's cycle table at +0xc0).
+(the class's cycle table at +0xc0: every player building's is 200, 75,
+75, 75 ticks, 0x596ab8 and its siblings; so a standing building's 12
+frames step every 6 ticks and its ruins' 20 every 3).
 
 ## Resource counters
 

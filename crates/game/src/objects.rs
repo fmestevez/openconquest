@@ -689,6 +689,7 @@ pub fn resolve(
                 return Ok(None);
             };
             let frames = composite_frames(data, caches, &name, 0..usize::MAX)?;
+            let frame_ms = building_frame_ms(frames.len());
             // The picture's top left is the cell's corner less a per-class
             // offset (LandObjClassTy 0x422e30; the constructors' +0xc4,
             // +0xc8): ports and docks (0, 7), forts (4, 12), settlements and
@@ -700,13 +701,7 @@ pub fn resolve(
                 0x37 | 0x38 | 0x3c | 0x3d | 0x3e => CellCorner(f(5), f(6), 4, 4),
                 _ => CellCentre(f(5), f(6)),
             };
-            (
-                anchor,
-                Visual {
-                    frames,
-                    frame_ms: DEFAULT_FRAME_MS,
-                },
-            )
+            (anchor, Visual { frames, frame_ms })
         }
         ObjectClass::Ship => {
             let letter = (b'A' + f(7).min(25) as u8) as char;
@@ -1098,6 +1093,17 @@ pub const SHIP_NAMES: [&str; 12] = [
 pub const SHIP_FRAME: [f32; 12] = [
     56.0, 64.0, 80.0, 80.0, 72.0, 72.0, 72.0, 72.0, 64.0, 72.0, 72.0, 72.0,
 ];
+
+/// Game ticks a player building's picture takes to play through in each
+/// state (construction, standing, ruins, ...): the constructors' cycle
+/// tables (+0xc0, e.g. 0x596ab8), alike for all of them.
+pub const BUILDING_CYCLE: [u32; 4] = [200, 75, 75, 75];
+
+/// Milliseconds a frame of a standing building's `frames`-frame picture:
+/// the cycle over the frames, in whole ticks (0x422e30).
+pub fn building_frame_ms(frames: usize) -> u64 {
+    (BUILDING_CYCLE[1] as u64 / frames.max(1) as u64).max(1) * TICK_MS
+}
 
 /// Top speeds by ship type (0x5bb4e0; the manual's chart, which swaps the
 /// sixth and seventh): x 400 in the original's units of 1/6000 pixel a
