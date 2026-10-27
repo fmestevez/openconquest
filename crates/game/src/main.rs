@@ -65,7 +65,7 @@ struct Args {
     port: u16,
     #[arg(long, default_value_t = 2)]
     players: usize,
-    /// Continue a saved game (F5 saves to <data>/saves/quick.json).
+    /// Continue a saved game (Ctrl+S saves to <data>/saves/quick.json).
     #[arg(long, value_name = "FILE")]
     load: Option<PathBuf>,
     /// List the available missions and exit.
@@ -567,9 +567,7 @@ fn train(
     let home = scene
         .objects
         .iter()
-        .filter(|o| {
-            scene.is_own(o) && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
-        })
+        .filter(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN)))
         .min_by(|a, b| near(a).total_cmp(&near(b)))?;
     let (home, cell) = (home.id, home.cell?);
     scene.amber += 10_000;

@@ -394,6 +394,12 @@ pub struct App {
     selected: Option<u32>,
     /// Other own ships selected with it.
     group: Vec<u32>,
+    /// The groups assigned with Ctrl+1 ... Ctrl+0 (Cmd on macOS), recalled
+    /// with 1 ... 0 (the manual's "Game Hot Keys").
+    groups: [Vec<u32>; 10],
+    /// The map places assigned with Shift+F1 ... Shift+F10, centred on with
+    /// F1 ... F10.
+    places: [Option<(f32, f32)>; 10],
     /// Where a left-button selection box started.
     box_from: Option<PhysicalPosition<f64>>,
     /// A command waiting for a target on the map (e.g. Move).
@@ -561,6 +567,8 @@ impl App {
             minimap_drag: false,
             selected: None,
             group: Vec::new(),
+            groups: Default::default(),
+            places: [None; 10],
             box_from: None,
             pending: None,
             drawn_size: (1, 1),
@@ -2872,7 +2880,7 @@ impl App {
         self.data.save_dir().join("quick.json")
     }
 
-    /// Saves the game in progress (F5).
+    /// Saves the game in progress (Ctrl+S).
     fn quick_save(&mut self) {
         if self.net.is_some() {
             self.say("Multiplayer games cannot be saved");
@@ -2885,7 +2893,7 @@ impl App {
         }
     }
 
-    /// Loads the quick save (F9).
+    /// Loads the quick save (Ctrl+O).
     fn quick_load(&mut self) {
         let path = self.quick_save_path();
         self.load_game(&path);
@@ -3525,6 +3533,26 @@ impl App {
             .copied()
             .filter(|&id| self.scene.object_index(id).is_some())
             .collect()
+    }
+
+    /// Selects group `n` again (key 1 ... 0): those of its objects still
+    /// there and still the player's.
+    fn recall_group(&mut self, n: usize) {
+        let ids: Vec<u32> = self.groups[n]
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.scene
+                    .object_index(id)
+                    .is_some_and(|i| self.scene.is_own(&self.scene.objects[i]))
+            })
+            .collect();
+        if let Some((&first, rest)) = ids.split_first() {
+            self.selected = Some(first);
+            self.group = rest.to_vec();
+            self.page = Page::Main;
+            self.chosen_cell = None;
+        }
     }
 
     /// Whether `id` is one of the player's ships.
@@ -4227,7 +4255,7 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                if code == KeyCode::F1 {
+                if code == KeyCode::KeyB {
                     self.briefing = !self.briefing;
                     return;
                 }
@@ -4246,7 +4274,30 @@ impl ApplicationHandler for App {
                     screen.x as f32 + screen.w as f32 / 2.0,
                     screen.y as f32 + screen.h as f32 / 2.0,
                 );
+                let command = self.modifiers.control_key() || self.modifiers.super_key();
+                if let Some(n) = digit_index(code) {
+                    if command {
+                        self.groups[n] = self.selection();
+                        if !self.groups[n].is_empty() {
+                            self.say(format!("Group {} set", (n + 1) % 10));
+                        }
+                    } else {
+                        self.recall_group(n);
+                    }
+                    return;
+                }
+                if let Some(n) = function_index(code) {
+                    if self.modifiers.shift_key() {
+                        let (vw, vh) = self.camera.view_size(&screen);
+                        self.places[n] = Some((self.camera.x + vw / 2.0, self.camera.y + vh / 2.0));
+                    } else if let Some((x, y)) = self.places[n] {
+                        self.camera.center_on(x, y, &screen, map);
+                    }
+                    return;
+                }
                 match code {
+                    KeyCode::KeyS if command => self.quick_save(),
+                    KeyCode::KeyO if command => self.quick_load(),
                     KeyCode::Escape if self.carrying.is_some() => {
                         self.carrying = None;
                         self.status = None;
@@ -4272,9 +4323,7 @@ impl ApplicationHandler for App {
                     KeyCode::Escape if self.menus.is_some() => self.menu = Some(MenuState::Main),
                     KeyCode::Escape => event_loop.exit(),
                     KeyCode::F11 => self.toggle_fullscreen(),
-                    KeyCode::F5 => self.quick_save(),
                     KeyCode::KeyP | KeyCode::Pause => self.paused = !self.paused,
-                    KeyCode::F9 => self.quick_load(),
                     KeyCode::KeyM => {
                         if let Some(a) = self.audio.as_mut() {
                             a.muted = !a.muted;
@@ -4303,7 +4352,7 @@ impl ApplicationHandler for App {
                         self.camera
                             .zoom_at(1.0 / ZOOM_STEP, center.0, center.1, &screen, map)
                     }
-                    KeyCode::Digit0 => {
+                    KeyCode::Home => {
                         let z = 1.0 / self.camera.zoom;
                         self.camera.zoom_at(z, center.0, center.1, &screen, map);
                     }
@@ -4510,4 +4559,22 @@ fn is_load_target(o: &crate::objects::MapObject, ship: Option<&crate::objects::M
         ObjectClass::Building(c) => matches!(c, economy::PORT | economy::SHIPYARD | economy::DOCK),
         _ => false,
     }
+}
+
+/// Group key `code` (1 ... 9, 0) as an index 0-9.
+fn digit_index(code: KeyCode) -> Option<usize> {
+    use KeyCode::*;
+    [
+        Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9, Digit0,
+    ]
+    .iter()
+    .position(|&k| k == code)
+}
+
+/// Place key `code` (F1 ... F10) as an index 0-9.
+fn function_index(code: KeyCode) -> Option<usize> {
+    use KeyCode::*;
+    [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10]
+        .iter()
+        .position(|&k| k == code)
 }

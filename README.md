@@ -122,7 +122,7 @@ marked as a placeholder in the code.
   TCP/IP). The screens are drawn from the original's own widget pictures
   and fonts. The mission accomplished and failed screens are OpenConquest's own
   so far.
-- Quick save and load at any moment (F5 / F9), plus eight save slots.
+- Quick save and load at any moment (Ctrl+S / Ctrl+O), plus eight save slots.
 - Adjustable game speed (half to double) and scroll speed.
 - Minimap markers coloured by side: yours, enemies, creatures.
 - Building sites are outlined green or red while you choose them,
@@ -169,7 +169,7 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 |-------|--------|
 | Arrows / WASD, screen edge (fullscreen or `--edge-scroll`) | Scroll |
 | Right or middle mouse drag | Pan |
-| Mouse wheel, trackpad pinch, `+` / `-`, `0` | Zoom, reset zoom |
+| Mouse wheel, trackpad pinch, `+` / `-`, Home | Zoom, reset zoom |
 | Trackpad two-finger swipe | Move the map |
 | Mouse wheel on a menu list | Scroll it |
 | Left click | Do what the pointer shows: select, or with your ships selected sail there, attack, board, ram, gather, take a treasure, repair at a dock (a group spreads out around the point) |
@@ -190,9 +190,12 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 | P | Pause |
 | Esc (nothing selected) | Main menu (Resume returns to the game) |
 | Best results (main menu) | Your fastest win of each mission (kept in `<data>/saves/best.json`) |
-| F5 / F9 | Quick save / quick load (`<data>/saves/quick.json`; `--load FILE` continues a save) |
+| Ctrl+S / Ctrl+O (Cmd on macOS) | Quick save / quick load, as the original's keys (`<data>/saves/quick.json`; `--load FILE` continues a save) |
+| Ctrl+1 ... Ctrl+0 (Cmd on macOS), then 1 ... 0 | Assign the selection to a group, then select the group again |
+| Shift+F1 ... Shift+F10, then F1 ... F10 | Remember the place in view, then centre on it again |
+| Right click on a marine or weapon button | Take the last one ordered off the queue, refunded |
 | M | Sound and music on/off (`--mute` starts with it off) |
-| F1 | Show the mission briefing again (it is shown at the start; the game waits until it is closed) |
+| B | Show the mission briefing again (it is shown at the start; the game waits until it is closed) |
 | Page Up / Page Down | Previous / next mission |
 | F11, Alt+Enter | Fullscreen |
 
