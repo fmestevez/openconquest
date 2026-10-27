@@ -1027,6 +1027,8 @@ pub struct GameView<'a> {
     pub site_preview: Option<&'a crate::objects::MapObject>,
     /// How many cells across the building to put up is.
     pub site_cells: i32,
+    /// The radar map in place of the view (Tab).
+    pub radar: bool,
     /// Show the mission briefing over the view.
     pub briefing: bool,
     /// The bar's tabs and open panel (with the interface shown).
@@ -1346,6 +1348,12 @@ impl GameView<'_> {
         }
         if self.interface.is_none() || !panel_open {
             draw_minimap(frame, &minimap, self.scene, self.camera, &screen, &lut);
+        }
+        // Tab: the whole map, as the minimap draws it, over the view.
+        if self.radar {
+            crate::render::shade_rect(frame, screen.x, screen.y, screen.w, screen.h);
+            let radar = MinimapRect::fit(self.scene, screen.x, screen.y, screen.w, screen.h);
+            draw_minimap(frame, &radar, self.scene, self.camera, &screen, &lut);
         }
         if let (Some(ui), Some(layout), Some(view)) = (self.interface, &layout, &self.panel) {
             let origin = (layout.bar_x, 0.0);

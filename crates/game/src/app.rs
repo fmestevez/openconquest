@@ -408,6 +408,8 @@ pub struct App {
     /// A left press on the map with something selected, held back: a drag
     /// from it draws a selection box, a release without one clicks there.
     left_down: Option<PhysicalPosition<f64>>,
+    /// The radar map shown in place of the view (Tab).
+    radar: bool,
     /// A command waiting for a target on the map (e.g. Move).
     pending: Option<Command>,
     /// The window size the frame being drawn has (see `window_size`).
@@ -598,6 +600,7 @@ impl App {
             places: [None; 10],
             box_from: None,
             left_down: None,
+            radar: false,
             pending: None,
             drawn_size: (1, 1),
             pointers: Default::default(),
@@ -719,6 +722,7 @@ impl App {
                 self.data.strings.get(&id).map(|s| s.as_str())
             });
         GameView {
+            radar: self.radar,
             site_preview: None,
             site_cells: match self.pending.and_then(economy::building_of_command) {
                 Some(economy::SETTLEMENT | economy::TOWN) => 2,
@@ -3205,6 +3209,18 @@ impl App {
     }
 
     fn left_click(&mut self, pos: PhysicalPosition<f64>) {
+        // A click on the radar map goes there.
+        if self.radar {
+            let (screen, _) = self.placement();
+            let radar = MinimapRect::fit(&self.scene, screen.x, screen.y, screen.w, screen.h);
+            if radar.contains(pos.x as f32, pos.y as f32) {
+                let (wx, wy) = radar.to_world(pos.x as f32, pos.y as f32);
+                self.camera
+                    .center_on(wx, wy, &screen, self.scene.map_size());
+                self.radar = false;
+                return;
+            }
+        }
         if self.panel_click(pos) {
             return;
         }
@@ -4704,6 +4720,12 @@ impl ApplicationHandler for App {
                     KeyCode::Escape => event_loop.exit(),
                     KeyCode::F11 => self.toggle_fullscreen(),
                     KeyCode::KeyP | KeyCode::Pause => self.paused = !self.paused,
+                    // Backspace shows where the player was last attacked.
+                    KeyCode::Backspace => {
+                        if let Some((x, y)) = self.scene.last_attack {
+                            self.camera.center_on(x, y, &screen, map);
+                        }
+                    }
                     KeyCode::KeyM => {
                         if let Some(a) = self.audio.as_mut() {
                             a.muted = !a.muted;
@@ -4720,7 +4742,11 @@ impl ApplicationHandler for App {
                     KeyCode::Enter if self.modifiers.alt_key() => self.toggle_fullscreen(),
                     KeyCode::PageDown => self.switch_mission(1),
                     KeyCode::PageUp => self.switch_mission(-1),
-                    KeyCode::Tab => {
+                    // Tab puts the radar map in place of the view.
+                    KeyCode::Tab => self.radar = !self.radar,
+                    // Space hides or shows the control bar (the manual's
+                    // Game Hot Keys).
+                    KeyCode::Space => {
                         self.show_interface = !self.show_interface;
                         let (screen, _) = self.placement();
                         self.camera.clamp(&screen, map);

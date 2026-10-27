@@ -185,7 +185,9 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 | Build (merchant), then click a shore cell | Sail there and found a settlement |
 | Esc | Cancel, close a panel, deselect |
 | Click/drag on the minimap | Jump |
-| Tab | Toggle the interface (full-window view) |
+| Tab | Radar map in place of the view (click it to go there) |
+| Space | Hide or show the control bar (full-window view) |
+| Backspace | Go to where you were last attacked |
 | Bar tabs (wheel, disk, wrench, clef, scroll) | Object panel; save slots, restart and quit; game and scroll speed and the mouse controls (original or modern, remembered); sound volume; objectives and briefing |
 | P | Pause |
 | Esc (nothing selected) | Main menu (Resume returns to the game) |

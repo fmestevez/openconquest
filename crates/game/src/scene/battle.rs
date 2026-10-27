@@ -447,6 +447,10 @@ impl Scene {
         let Some(ti) = self.object_index(target) else {
             return;
         };
+        // Where the player was last struck (Backspace goes there).
+        if damage > 0.0 && self.is_own(&self.objects[ti]) {
+            self.last_attack = Some((self.objects[ti].x, self.objects[ti].y));
+        }
         let (tx, ty) = (self.objects[ti].x, self.objects[ti].y);
         let jitter = |rng: &mut Rng| (rng.next() % 33) as f32 - 16.0;
         let (fx, fy) = (tx + jitter(&mut self.rng), ty + jitter(&mut self.rng));

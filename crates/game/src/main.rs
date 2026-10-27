@@ -179,6 +179,9 @@ struct Args {
     /// (to see the damaged pictures).
     #[arg(long, hide = true, value_name = "PCT")]
     hull: Option<f32>,
+    /// Debugging: show the radar map (Tab) in the screenshot.
+    #[arg(long, hide = true)]
+    radar: bool,
     /// Debugging: show the site of a workshop at this cell, as when
     /// placing one from the settlement nearest it.
     #[arg(long, hide = true, value_parser = parse_size, value_name = "X,Y")]
@@ -558,6 +561,7 @@ fn screenshot(
         selected_since: &since,
         site_preview: site_shown.as_ref().and_then(|s| s.2.as_ref()),
         site_cells: 1,
+        radar: args.radar,
         deselected: &since,
         data,
         scene: &scene,
