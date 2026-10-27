@@ -405,6 +405,9 @@ pub struct App {
     places: [Option<(f32, f32)>; 10],
     /// Where a left-button selection box started.
     box_from: Option<PhysicalPosition<f64>>,
+    /// A left press on the map with something selected, held back: a drag
+    /// from it draws a selection box, a release without one clicks there.
+    left_down: Option<PhysicalPosition<f64>>,
     /// A command waiting for a target on the map (e.g. Move).
     pending: Option<Command>,
     /// The window size the frame being drawn has (see `window_size`).
@@ -594,6 +597,7 @@ impl App {
             deselected: HashMap::new(),
             places: [None; 10],
             box_from: None,
+            left_down: None,
             pending: None,
             drawn_size: (1, 1),
             pointers: Default::default(),
@@ -3747,6 +3751,21 @@ impl App {
     /// The original's right button: puts back what is carried, drops a
     /// command waiting for its target, or steps the pointer on to the next
     /// thing the selected ships could do there (0x5180e0).
+    /// Whether a left press at `pos` waits to see if it becomes a drag: on
+    /// the map, with something selected and no command waiting for its
+    /// target.
+    fn holds_press(&self, pos: PhysicalPosition<f64>) -> bool {
+        let (screen, minimap) = self.placement();
+        let (x, y) = (pos.x as f32, pos.y as f32);
+        self.selected.is_some()
+            && self.pending.is_none()
+            && self.carrying.is_none()
+            && self.menu.is_none()
+            && screen.contains(x, y)
+            && !minimap.contains(x, y)
+            && self.button_at(pos).is_none()
+    }
+
     fn step_pointer(&mut self, pos: PhysicalPosition<f64>) {
         if self.carrying.take().is_some() || self.pending.take().is_some() {
             self.status = None;
@@ -4734,6 +4753,13 @@ impl ApplicationHandler for App {
                         self.set_slider(slider, v);
                     }
                 }
+                if let Some(start) = self.left_down {
+                    let (dx, dy) = (position.x - start.x, position.y - start.y);
+                    if dx * dx + dy * dy > CLICK_SLOP * CLICK_SLOP {
+                        self.left_down = None;
+                        self.box_from = Some(start);
+                    }
+                }
                 if let Some((start, moved)) = self.right_press.as_mut() {
                     let (dx, dy) = (position.x - start.x, position.y - start.y);
                     *moved |= dx * dx + dy * dy > CLICK_SLOP * CLICK_SLOP;
@@ -4769,8 +4795,16 @@ impl ApplicationHandler for App {
                                 self.cancel_button(slot);
                             } else if self.settings.modern_mouse {
                                 self.right_click(c);
-                            } else {
+                            } else if self.pointer_modes(c).len() > 1 {
                                 self.step_pointer(c);
+                            } else if self.carrying.is_some() || self.pending.is_some() {
+                                self.step_pointer(c);
+                            } else {
+                                // Nothing else to point at: the selection
+                                // is let go.
+                                self.selected = None;
+                                self.group.clear();
+                                self.page = Page::Main;
                             }
                         }
                     }
@@ -4790,10 +4824,17 @@ impl ApplicationHandler for App {
                 }
                 (MouseButton::Left, ElementState::Pressed) => {
                     if let Some(c) = self.cursor {
-                        self.left_click(c);
+                        if self.holds_press(c) {
+                            self.left_down = Some(c);
+                        } else {
+                            self.left_click(c);
+                        }
                     }
                 }
                 (MouseButton::Left, ElementState::Released) => {
+                    if let Some(c) = self.left_down.take() {
+                        self.left_click(c);
+                    }
                     self.load_pressed = None;
                     self.panel_pressed = None;
                     self.minimap_drag = false;
