@@ -2184,7 +2184,7 @@ impl App {
             MenuHit::Tab(t) => {
                 if let MenuState::Load(..) = state {
                     let tab = [LoadTab::Scenario, LoadTab::Custom, LoadTab::StartFrom][t.min(2)];
-                    self.menu = Some(MenuState::Load(tab, None));
+                    self.open_list(MenuState::Load(tab, None));
                     self.list_first = 0;
                     self.desc_first = 0;
                     self.map_at = None;
@@ -2262,6 +2262,21 @@ impl App {
             }
             other => other,
         });
+    }
+
+    /// Opens list screen `state` with its first entry chosen, as the
+    /// original's list does (`_slist.cpp` sets its cursor to 0 and sends
+    /// 0x189, which shows that mission).
+    fn open_list(&mut self, state: MenuState) {
+        self.menu = Some(state);
+        let any = match state {
+            MenuState::Missions(c, _) => !self.screen_missions(c).is_empty(),
+            MenuState::Load(tab, _) => !self.load_entries(tab).is_empty(),
+            _ => false,
+        };
+        if any {
+            self.menu_select(state, 0);
+        }
     }
 
     /// Shows mission `index`'s map and description (loaded again if
@@ -2362,12 +2377,12 @@ impl App {
     fn menu_action(&mut self, state: MenuState, caption: &str) {
         match (state, caption) {
             (_, "Resume") => self.menu = None,
-            (_, "Campaign") => self.menu = Some(MenuState::Missions(Category::Campaign, None)),
-            (_, "Single missions") => self.menu = Some(MenuState::Missions(Category::Single, None)),
-            (_, "Battles") => self.menu = Some(MenuState::Missions(Category::Battle, None)),
+            (_, "Campaign") => self.open_list(MenuState::Missions(Category::Campaign, None)),
+            (_, "Single missions") => self.open_list(MenuState::Missions(Category::Single, None)),
+            (_, "Battles") => self.open_list(MenuState::Missions(Category::Battle, None)),
             (_, "Load game") => {
                 self.refresh_panels();
-                self.menu = Some(MenuState::Load(LoadTab::Scenario, None));
+                self.open_list(MenuState::Load(LoadTab::Scenario, None));
             }
             (_, "Quit") | (_, "Quit game") => self.quit = true,
             // The campaign from its first mission, on its briefing.
@@ -2379,7 +2394,7 @@ impl App {
                     self.open_mission(first);
                 }
             }
-            (_, "Custom missions") => self.menu = Some(MenuState::Missions(Category::Single, None)),
+            (_, "Custom missions") => self.open_list(MenuState::Missions(Category::Single, None)),
             (_, "Best Conquerors") => self.menu = Some(MenuState::Best),
             (MenuState::Best, "OK") => self.menu = Some(MenuState::Main),
             (_, "MultiPlayer game") => self.menu = Some(MenuState::Connect),
