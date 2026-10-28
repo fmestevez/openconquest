@@ -454,14 +454,33 @@ impl Scene {
         if self.amber < cost {
             return Err(format!("Not enough amber: {cost} needed"));
         }
+        if self.construction_at(id).is_some() {
+            return Err("It is still being built".into());
+        }
         let mut rec = self.objects[i].record.clone();
         rec.class_id = to;
         rec.fields[0] = to;
-        let obj = objects::resolve(data, caches, &rec)
+        let mut obj = objects::resolve(data, caches, &rec)
             .map_err(|e| e.to_string())?
             .ok_or("Missing upgrade graphics")?;
+        // It goes up as a new building does (the town or dock in its
+        // building state, 0x43c740 / 0x4164e0 showing the work on the
+        // upgrade's button), whole: the price mends it first.
+        if let Ok(frames) =
+            objects::building_frames(data, caches, &rec, BuildingState::Construction)
+        {
+            if !frames.is_empty() {
+                obj.frames = frames;
+            }
+        }
+        obj.progress = Some(0.0);
         self.amber -= cost;
         self.objects[i] = obj;
+        self.constructions.push(Construction {
+            site: id,
+            elapsed: 0.0,
+            total: economy::BUILDING_SECONDS,
+        });
         Ok(())
     }
 

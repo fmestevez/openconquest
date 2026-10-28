@@ -616,7 +616,27 @@ fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
 /// implemented yet are shown disabled.
 pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
     let mut menu: Menu = [None; SLOTS];
-    if !scene.is_own(obj) || scene.construction_at(obj.id).is_some() {
+    if !scene.is_own(obj) {
+        return menu;
+    }
+    if let Some(c) = scene.construction_at(obj.id) {
+        // A town or dock going up from a settlement or shipyard shows the
+        // work on its upgrade button (0x43c740 slot 4, 0x4164e0 slot 11).
+        let slot = match obj.class {
+            ObjectClass::Building(TOWN) => Some((4, Command::UPGRADE_TOWN)),
+            ObjectClass::Building(DOCK) => Some((11, Command::UPGRADE_DOCK)),
+            _ => None,
+        };
+        if let Some((k, command)) = slot {
+            menu[k] = Some(Slot {
+                checked: false,
+                closes: false,
+                command,
+                enabled: true,
+                progress: Some((c.elapsed / c.total).min(1.0)),
+                count: 0,
+            });
+        }
         return menu;
     }
     match obj.class {

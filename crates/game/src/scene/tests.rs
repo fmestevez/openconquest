@@ -64,7 +64,15 @@ fn shipyard_builds_and_settlement_upgrades() {
     assert_eq!(scene.amber, 500);
     let town = &scene.objects[scene.object_index(settlement).unwrap()];
     assert_eq!(town.class, ObjectClass::Building(TOWN));
+    // It goes up as a new building does: no town until it stands.
+    assert!(scene.construction_at(settlement).is_some());
+    assert!(scene.can_build_ship(1).is_err());
+    for _ in 0..(60.0 * (economy::BUILDING_SECONDS + 1.0)) as usize {
+        scene.update(1.0 / 60.0, &data, &mut caches);
+    }
+    assert!(scene.construction_at(settlement).is_none());
     // With a town and 500 amber, a merchant (400 amber, 200 fish) is possible.
+    scene.amber = 500;
     assert_eq!(scene.can_build_ship(1), Ok(()));
 }
 
@@ -5596,6 +5604,10 @@ fn idle_ships_make_way_at_the_dock() {
         .unwrap()
         .id;
     scene.upgrade(yard, &data, &mut caches).unwrap();
+    // The dock goes up first.
+    for _ in 0..(50.0 * (economy::BUILDING_SECONDS + 1.0)) as usize {
+        scene.update(0.02, &data, &mut caches);
+    }
     let ids: Vec<u32> = scene
         .objects
         .iter()
