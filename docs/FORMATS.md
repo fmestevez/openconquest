@@ -788,7 +788,9 @@ screens, Custom missions and Load game, created by 0x52c5c0). A scroll bar
 (_strack.cpp, 0x5526c0): the arrows (messages 0x2f, 0x30) move it a
 position back or on unless at an end, repeating while held after 500 ms
 every 50 ms (75 for the mission list's); a press on the track takes the
-position under the pointer (0x5524a0) and follows it while held. The track
+position under the pointer (0x5524a0) and follows it while held (mouse
+moves, message 0x61, set the position the same way; the thumb is drawn
+from the position, 0x552400, so it steps from one to the next). The track
 is its picture 4 pixels in on each side; `*_TR1` thumbs are 15x15. An
 arrow shows picture `02` when it cannot move its bar. The map preview is a
 viewer (_sviewer.cpp, 0x54c320) of 19 x 19 cells, 8 pixels a cell, scrolled
