@@ -1844,7 +1844,10 @@ of the structure (`+0xa8`, not capped).
 **Supplies.** Command 0x2d (sub-order 1, 0x419690) moves the settlement's
 `+0x250`/`+0x251` (hundreds and a rest) into the fort's `+0x4d4`/`+0x4d5`
 up to 1200 and 16 hundreds (0x417fd0); `+0x4d4` adds to the blow's base
-and shows x 5 on its panel (0x417d20). Not identified further.
+and shows x 5 on its panel (0x417d20). Nothing fills the settlement's
+`+0x250`: its constructor (0x43b000) zeroes it, only 0x419690 takes from
+it and the settlement's panel shows it x 5 (0x43c650), so supplies stay 0
+in play and the port leaves them out.
 
 ## Projectiles
 
