@@ -54,7 +54,7 @@ pub struct ObjectInfo {
 
 /// The A x 15 cache (0x4ac140 at 0x5c75cc, its copy at 0x5c73a8): row
 /// `item` of 0x597d2c, its A (or B without one) at `level`, x 1500 / 100.
-fn cache(item: u8, level: u8) -> u32 {
+pub(crate) fn cache(item: u8, level: u8) -> u32 {
     let a = combat::hull_damage_at(item, level) as u32;
     let a = if a == 0 {
         combat::crew_damage_at(item, level) as u32

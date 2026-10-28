@@ -985,37 +985,101 @@ impl Scene {
         Some((rect, self.strength_in(ai.owner, rect)))
     }
 
-    /// Enemy strength in an area (0x4a2390): their ships and buildings,
-    /// less one.
-    fn strength_in(&self, owner: (u32, u32), (x, y, w, h): Cells) -> i32 {
-        let n = (0..self.objects.len())
-            .filter(|&i| {
-                let o = &self.objects[i];
-                let (cx, cy) = self.cell_of(i);
-                o.combat.is_some()
-                    && o.owner.is_some_and(|w| w != owner)
-                    && (o.ship.is_some() || matches!(o.class, ObjectClass::Building(_)))
-                    && cx >= x
-                    && cx < x + w
-                    && cy >= y
-                    && cy < y + h
-            })
-            .count();
-        n as i32 - 1
+    /// Foes and creatures in an area (the count 0x4a2390 can return).
+    fn foes_in(&self, owner: (u32, u32), rect: Cells) -> usize {
+        self.foes_at(owner, rect).count()
     }
 
-    /// A flotilla's strength (0x482d80): its armed ships; -1 if empty.
+    fn foes_at(&self, owner: (u32, u32), (x, y, w, h): Cells) -> impl Iterator<Item = usize> + '_ {
+        (0..self.objects.len()).filter(move |&i| {
+            let o = &self.objects[i];
+            let (cx, cy) = self.cell_of(i);
+            let foe = match o.owner {
+                Some(w) => w != owner,
+                None => matches!(o.class, ObjectClass::Monster(_)),
+            };
+            foe && o.combat.is_some() && cx >= x && cx < x + w && cy >= y && cy < y + h
+        })
+    }
+
+    /// Enemy strength in an area (0x4a2390, every class): the strength
+    /// (0x50ea70) of each foe or creature there, less one.
+    fn strength_in(&self, owner: (u32, u32), rect: Cells) -> i32 {
+        self.foes_at(owner, rect)
+            .map(|i| self.strength(i))
+            .sum::<i32>()
+            - 1
+    }
+
+    /// A flotilla's strength (0x482d80, 0x4a2290): its ships' strengths
+    /// (0x50ea70); -1 if empty.
     fn fleet_strength(&self, f: &Flotilla) -> i32 {
         if f.ships.is_empty() {
             return -1;
         }
         f.ships
             .iter()
-            .filter(|&&id| {
-                self.object_index(id)
-                    .is_some_and(|i| self.objects[i].is_armed())
-            })
-            .count() as i32
+            .filter_map(|&id| self.object_index(id))
+            .map(|i| self.strength(i))
+            .sum()
+    }
+
+    /// An object's strength as the computer players weigh it (0x50ea70).
+    /// Ships: boarding strength (`+0x53c`, with the crew's experience,
+    /// none here) / 10, plus the armour's (`+0x534`: level 1 40, 2 70; the
+    /// ram's `+0x538` tests the armour level for 4 or 5, so it is always
+    /// 0, 0x4bee60) plus the fire power (`+0x479`: each item's A x 15 x
+    /// count x mean condition / 100, summed / 100, 0x4bc360). Forts: their
+    /// units' fire (0x446710, x 1.5 under the Flame) / 10. Nests: 20 x item
+    /// 4's level-1 blow (0x5c73dc); sea serpents item 4's level-0 / 10
+    /// (0x5c75fc), Medusa 8800, the sea monster 5000; others none.
+    pub(super) fn strength(&self, i: usize) -> i32 {
+        use crate::object_info::cache;
+        let o = &self.objects[i];
+        let levels = self.levels_of(o.owner);
+        if let Some(s) = o.ship.as_ref() {
+            let units = o.unit_conditions();
+            let fire: u32 = units
+                .iter()
+                .enumerate()
+                .filter(|(_, u)| !u.is_empty())
+                .map(|(k, u)| {
+                    let n = u.len() as u32;
+                    let mean = u.iter().map(|&c| c as u32).sum::<u32>() / n;
+                    cache(k as u8, levels.arms_for(k as u8)) * n * mean / 100
+                })
+                .sum::<u32>()
+                / 100;
+            let armour = match s.armour {
+                1 => 40,
+                2 => 70,
+                _ => 0,
+            };
+            return (self.boarding_strength(i) / 10 + armour + fire) as i32;
+        }
+        match o.class {
+            ObjectClass::Building(0x34..=0x36) => {
+                let flame = self.flame_of(o.owner) > 0.0;
+                let places = o.fort_places();
+                let sum: u32 = (0..9u8)
+                    .map(|k| {
+                        let a = cache(k, levels.arms_for(k));
+                        let p: u32 = places[k as usize].iter().map(|&c| c as u32 * a / 100).sum();
+                        if flame {
+                            p * 150 / 100
+                        } else {
+                            p
+                        }
+                    })
+                    .sum();
+                (sum / 10) as i32
+            }
+            ObjectClass::HarpyNest => cache(4, 1) as i32 * 20,
+            ObjectClass::Monster(0x1f4) => cache(4, 0) as i32 / 10,
+            ObjectClass::Monster(0x1fa) => 0x2260,
+            ObjectClass::Monster(0x1fb) => 5000,
+            _ => 0,
+        }
     }
 
     /// Asks each other flotilla whether it can help fleet `f` against
@@ -3424,7 +3488,7 @@ impl Scene {
                     .as_ref()
                     .is_none_or(|s| s.path.is_empty())
             }),
-            FleetOrder::Attack(area) => fl.ships.is_empty() || self.strength_in(ai.owner, area) < 0,
+            FleetOrder::Attack(area) => fl.ships.is_empty() || self.foes_in(ai.owner, area) == 0,
             FleetOrder::Found(ship, cell, _) => {
                 !fl.ships.contains(&ship)
                     || self.building_at(cell) && {

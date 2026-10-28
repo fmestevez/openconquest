@@ -6169,3 +6169,34 @@ fn computer_forts_rearm_after_repair() {
     scene.rearm_fort(id);
     assert!(scene.objects[f].combat.as_ref().unwrap().weapons.is_empty());
 }
+
+/// The computer players weigh objects as the original (0x50ea70): armed
+/// ships by fire, boarding and armour; forts by their units (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn computer_strength_follows_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss012").unwrap();
+    let ship = scene
+        .objects
+        .iter()
+        .position(|o| o.ship.as_ref().is_some_and(|s| s.kind >= 2) && o.is_armed())
+        .unwrap();
+    scene.objects[ship].ship.as_mut().unwrap().armour = 0;
+    let base = scene.strength(ship);
+    assert!(base > 0);
+    scene.objects[ship].ship.as_mut().unwrap().armour = 2;
+    assert_eq!(scene.strength(ship), base + 70);
+    let fort = scene
+        .objects
+        .iter()
+        .position(|o| o.class == ObjectClass::Building(0x36))
+        .unwrap();
+    let full = scene.strength(fort);
+    scene.objects[fort].set_fort_places(Default::default());
+    assert!(full > 0 && scene.strength(fort) == 0);
+}
