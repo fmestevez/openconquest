@@ -175,13 +175,11 @@ enum LoadEntry {
 }
 
 /// What the mission screens show of the chosen mission: its map, size,
-/// briefing and players.
+/// players and briefing.
 struct Preview {
     index: usize,
     size: (u32, u32),
     map: Option<Rc<crate::assets::Image>>,
-    briefing: Vec<String>,
-    players: Vec<String>,
     /// Each player's nation, slot and whether the computer plays it.
     seats: Vec<(u32, u32, bool)>,
     /// The cell at the top left of the human player's starting view.
@@ -223,11 +221,6 @@ impl Preview {
         }
         let (w, h, pixels) =
             crate::terrain::Terrain::small(data, &grid, &mut caches.tiles, &screen)?;
-        let nation = |n: u32| match n {
-            1 => "Greeks",
-            3 => "Persians",
-            _ => "Barbarians",
-        };
         let infos = openconquest_formats::players(&archive).unwrap_or_default();
         let seats = infos
             .iter()
@@ -238,14 +231,6 @@ impl Preview {
             .find(|p| !p.computer)
             .and_then(|p| openconquest_formats::mission::start_view(&archive, p.nation, p.slot))
             .unwrap_or((0, 0));
-        let players = infos
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let who = if p.computer { "computer" } else { "you" };
-                format!("{}. {} ({who})", i + 1, nation(p.nation))
-            })
-            .collect();
         Ok(Self {
             index,
             size: (grid.width, grid.height),
@@ -254,8 +239,6 @@ impl Preview {
                 h,
                 pixels.into_iter().map(Some).collect(),
             ))),
-            briefing: openconquest_formats::briefing(&archive).unwrap_or_default(),
-            players,
             seats,
             start,
             text: openconquest_formats::briefing_text(&archive).unwrap_or_default(),
@@ -1242,9 +1225,7 @@ impl App {
                 backdrop: Backdrop::Title,
                 buttons: column(&[
                     "Resume",
-                    "Campaign",
                     "Single missions",
-                    "Battles",
                     "Multiplayer",
                     "Load game",
                     "Best results",
@@ -1275,84 +1256,12 @@ impl App {
             // every widget placed where the original draws it (fitted to
             // its screen): the map panel with its scroll bars and the tick,
             // the description, the missions and the players.
-            MenuState::Missions(Category::Single, selected) => {
-                let list = self.screen_missions(Category::Single);
-                let chosen = selected.and_then(|i| list.get(i)).copied();
-                let preview = self.preview.as_ref().filter(|p| Some(p.index) == chosen);
-                self.custom_page(&list, selected, preview, empty)
-            }
-            // "Select custom mission" as the original lays it out (panel
-            // frames measured on its screen): the map of the chosen
-            // mission, its description, the missions and its players;
-            // Start and Cancel below.
             MenuState::Missions(category, selected) => {
                 let list = self.screen_missions(category);
                 let chosen = selected.and_then(|i| list.get(i)).copied();
                 let preview = self.preview.as_ref().filter(|p| Some(p.index) == chosen);
-                let panel = |rect, title: String, arrows| crate::menus::Panel {
-                    rect,
-                    title,
-                    arrows,
-                };
-                let size = preview.map_or((0, 0), |p| p.size);
-                let missions = panel((2.0, 216.0, 190.0, 338.0), "Missions".into(), true);
-                let players = panel((195.0, 216.0, 598.0, 338.0), "Players".into(), true);
-                let about = panel(
-                    (195.0, 27.0, 599.0, 186.0),
-                    "Mission description".into(),
-                    true,
-                );
-                let mut boxes = Vec::new();
-                if let Some(p) = preview {
-                    boxes.push((about.inner(), p.briefing.clone()));
-                    boxes.push((players.inner(), p.players.clone()));
-                }
-                let heading = match category {
-                    Category::Campaign => "Select scenario mission",
-                    Category::Single => "Select custom mission",
-                    Category::Battle => "Select battle",
-                };
-                MenuPage {
-                    backdrop: Backdrop::TitleDim,
-                    labels: vec![(heading.into(), self.centred(heading, 494.0), 6.0)],
-                    items: list
-                        .iter()
-                        .map(|&i| self.mission_titles[i].clone())
-                        .collect(),
-                    selected,
-                    list_rect: Some(missions.inner()),
-                    picture: preview
-                        .and_then(|p| p.map.clone())
-                        .map(|m| (m, (8.0, 29.0, 153.0, 153.0))),
-                    boxes,
-                    panels: vec![
-                        panel(
-                            (2.0, 3.0, 190.0, 210.0),
-                            format!("Map ({}x{})", size.0, size.1),
-                            false,
-                        ),
-                        about,
-                        missions,
-                        players,
-                    ],
-                    buttons: vec![
-                        Button {
-                            caption: "Start".into(),
-                            x: 225.0,
-                            y: 557.0,
-                            shape: 2,
-                        },
-                        Button {
-                            caption: "Cancel".into(),
-                            x: 459.0,
-                            y: 557.0,
-                            shape: 3,
-                        },
-                    ],
-                    ..empty
-                }
+                self.custom_page(&list, selected, preview, empty)
             }
-            // "Select mission to load" as the original's.
             MenuState::Load(tab, selected) => {
                 let entries = self.load_entries(tab);
                 let chosen = selected.and_then(|i| entries.get(i)).map(|e| e.0);
@@ -2421,9 +2330,7 @@ impl App {
     fn menu_action(&mut self, state: MenuState, caption: &str) {
         match (state, caption) {
             (_, "Resume") => self.menu = None,
-            (_, "Campaign") => self.open_list(MenuState::Missions(Category::Campaign, None)),
             (_, "Single missions") => self.open_list(MenuState::Missions(Category::Single, None)),
-            (_, "Battles") => self.open_list(MenuState::Missions(Category::Battle, None)),
             (_, "Load game") => {
                 self.refresh_panels();
                 self.open_list(MenuState::Load(LoadTab::Scenario, None));
@@ -2469,10 +2376,6 @@ impl App {
                 self.menu = Some(MenuState::Multiplayer(None));
             }
             (MenuState::Missions(c, Some(i)), "Start") => {
-                // The story opens before the first campaign mission.
-                if c == Category::Campaign && i == 0 {
-                    self.queue_video(crate::video::OPENING);
-                }
                 if let Some(&index) = self.screen_missions(c).get(i) {
                     self.carry = None;
                     if c == Category::Single {
@@ -2554,7 +2457,6 @@ impl App {
         };
         let state = match which {
             "main" => MenuState::Main,
-            "missions" => MenuState::Missions(Category::Campaign, Some(1)),
             "custom" => MenuState::Missions(Category::Single, Some(0)),
             "load" => {
                 self.refresh_panels();
@@ -2564,10 +2466,6 @@ impl App {
             "victory" => MenuState::Outcome(crate::scene::Outcome::Victory),
             "defeat" => MenuState::Outcome(crate::scene::Outcome::Defeat),
             "best" => MenuState::Best,
-            "battles" => {
-                self.list_first = 10;
-                MenuState::Missions(Category::Battle, Some(12))
-            }
             "connect" => {
                 self.player_name.clear();
                 MenuState::Connect
@@ -3120,13 +3018,6 @@ impl App {
                 self.missions.iter().position(|m| *m == name)
             }
         }
-    }
-
-    /// Where text in the big menu font starts to be centred on `x`.
-    fn centred(&self, text: &str, x: f32) -> f32 {
-        self.menus
-            .as_ref()
-            .map_or(x, |m| x - m.big.measure(text) as f32 / 2.0)
     }
 
     /// The answer under the pointer, if a question is asked.

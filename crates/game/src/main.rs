@@ -121,7 +121,7 @@ struct Args {
     /// Map cell to centre the screenshot on, e.g. 12,30 (default: map centre).
     #[arg(long, value_parser = parse_size, value_name = "X,Y")]
     focus: Option<(u32, u32)>,
-    /// Render a front-end screen instead of the game (main, missions, load,
+    /// Render a front-end screen instead of the game (main, custom, load,
     /// briefing, victory, defeat).
     #[arg(long, hide = true)]
     menu_shot: Option<String>,
