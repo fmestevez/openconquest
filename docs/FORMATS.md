@@ -2986,7 +2986,7 @@ Not ported (the port's own instead): the terrain helpers of
 simpler searches; zones weigh the lanes before nearness, since ships here
 cannot pass one another), the land fleet's placing of buildings (the
 nearest free cell to the settlement), the spells, the temples' studies
-and studies 27-32, the crews' test for the worn, and
+and studies 27-32, and
 fleets' behaviour masks (0x482eb0, 0x4847d0).
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
@@ -3000,6 +3000,11 @@ a carrier sails home (0x4d9f50). With no treasure left in the area
 (0x4d9920) the order reports done and the round goes on to the zone. Ours
 takes any treasure, nearest first, one ship each, and brings the
 settlement's alongside the base's town, where ours hands them over.
+
+**Worn crews** (0x486970): a warship (types 2-7) also goes to the reserve
+when its crew condition (0x4bc590: the mean of its items' mean conditions,
+`+0x419`; 0 with none) is under 35-65 (rolled after the hull's limit);
+ships in a dock (state 2) are left alone.
 
 **Repairs** (order 96, part 0x3ec, 0x429f60): of the town's buildings
 (0x43fcb0) and forts (types 0x1a6b, 0x1494: worn, vtable +0x6c; affordable,

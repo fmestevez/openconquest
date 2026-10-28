@@ -3194,14 +3194,23 @@ impl Scene {
             let (Some(s), Some(c)) = (&self.objects[i].ship, &self.objects[i].combat) else {
                 continue;
             };
+            // Not while in a dock (state 2).
+            if matches!(s.task, Some(Task::Repair { .. })) {
+                continue;
+            }
             let hull = (c.hull * 100.0 / c.max_hull.max(1.0)) as u32;
             let limit = match s.kind {
                 0 | 1 => ai.roll(0x15) + 0x19,
                 2..=7 => {
                     let l = ai.roll(0x1a) + 0x32;
-                    // The crew's test (0x4bc590 against 35-65) is not ported.
-                    let _ = ai.roll(0x1f);
-                    l
+                    // Or its crew: the mean of its items' mean conditions
+                    // (0x4bc590; none counts 0) under 35-65.
+                    let crew = ai.roll(0x1f) + 0x23;
+                    if self.crew_condition(i) < crew {
+                        101
+                    } else {
+                        l
+                    }
                 }
                 _ => ai.roll(0x1a) + 0x32,
             };
@@ -3210,6 +3219,23 @@ impl Scene {
                 let r = ai.reserve;
                 ai.flotillas[r].ships.push(id);
             }
+        }
+    }
+
+    /// A ship's crew condition (0x4bc590): the mean of the mean
+    /// conditions of the items it carries; 0 with none.
+    fn crew_condition(&self, i: usize) -> u32 {
+        let units = self.objects[i].unit_conditions();
+        let means: Vec<u32> = units
+            .iter()
+            .filter(|u| !u.is_empty())
+            .map(|u| u.iter().map(|&c| c as u32).sum::<u32>() / u.len() as u32)
+            .filter(|&m| m != 0)
+            .collect();
+        if means.is_empty() {
+            0
+        } else {
+            means.iter().sum::<u32>() / means.len() as u32
         }
     }
 
@@ -4514,6 +4540,41 @@ mod tests {
         let step = scene.order_part(&mut ai, 0, None, part, &data, &mut caches);
         assert!(matches!(step, PartStep::Done));
         assert!(scene.mending.contains(&id));
+    }
+
+    /// A warship whose crew is worn goes to the reserve for repairs, its
+    /// hull whole (0x486970 with 0x4bc590).
+    #[test]
+    fn computer_sends_worn_crews_to_the_reserve() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        for _ in 0..600 {
+            scene.update(0.1, &data, &mut caches);
+        }
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        let (f, id) = ai
+            .flotillas
+            .iter()
+            .enumerate()
+            .find_map(|(f, fl)| {
+                fl.ships.iter().find_map(|&id| {
+                    let i = scene.object_index(id)?;
+                    let k = scene.objects[i].ship.as_ref()?.kind;
+                    (2..=7).contains(&k).then_some((f, id))
+                })
+            })
+            .unwrap();
+        let i = scene.object_index(id).unwrap();
+        let n = scene.objects[i].unit_counts();
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        for k in 0..9 {
+            s.conditions[k] = vec![20; n[k]];
+        }
+        scene.send_worn(&mut ai, f, 10_000);
+        assert!(ai.flotillas[ai.reserve].ships.contains(&id));
     }
 
     #[test]
