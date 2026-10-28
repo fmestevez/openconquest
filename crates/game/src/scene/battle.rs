@@ -567,8 +567,19 @@ impl Scene {
         if destroyed {
             self.note_destroyed(ti);
             self.drop_held(target, data, caches);
-            self.sounds
-                .push((if is_building { "razru2" } else { "wreck1" }, tx, ty));
+            // Creatures die with their own cry (land creatures 0x413ad0:
+            // events 100-102 by class; the harpy 0x41fb02 event 103; the
+            // sea's creatures events 105-107), buildings fall, ships wreck.
+            let sound = match self.objects[ti].class {
+                ObjectClass::Monster(0x1f4 | 0x1f5) => "deac1d",
+                ObjectClass::Monster(0x1f6) => "destr1",
+                ObjectClass::Monster(0x1f8) => "deadga1",
+                ObjectClass::Monster(0x1f9) => "dedr2",
+                ObjectClass::Monster(_) => "deamons",
+                _ if is_building => "razru2",
+                _ => "wreck1",
+            };
+            self.sounds.push((sound, tx, ty));
             // A ship gone: a lament if it was the player's, a fanfare
             // ("deny", event 319) if not (0x4dec40).
             if !is_building {

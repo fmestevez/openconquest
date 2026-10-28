@@ -6049,3 +6049,4 @@ fn fort_gifts_heal_units() {
     let c = o.combat.as_ref().unwrap();
     assert!((c.hull / c.max_hull - 0.6).abs() < 0.001);
 }
+
