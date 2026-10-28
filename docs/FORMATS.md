@@ -1384,9 +1384,21 @@ pointer modes, pages and refusals. The input loop (Sinput.cpp 0x553090)
 fires an accelerator on the key's press when its second key is held, or,
 without one, when no Shift, Ctrl or Alt is held (unless the key is one of
 them). The fixed accelerators: Ctrl+S / Ctrl+O save and load (0x511c00,
-both Ctrls) and Alt+Q (0x4ef) and Alt+X (0x4f5) there (not followed up), Ctrl+C
+both Ctrls) and Alt+Q (0x4ef: string 13 "Exit to Windows. Are you
+sure?", yes 0x4f0) and Alt+X (0x4f5: string 15 "Exit to main menu", yes
+0x4fc) there; the file panel's Main menu and Quit buttons send the same
+(0x50a700), Restart asks string 16. Ctrl+C
 (0x163, screenshot) and Ctrl+M (0x163, from the bar), Enter and Space on
-message boxes (0x528390, 0x53f360). The button's help line (0x505e70) ends
+message boxes (0x528390, 0x53f360).
+
+**Message box** (gamesys.cpp 0x512af0, 0x512f00): `MESS_BKGND` (197x205)
+centred on the screen, the game held meanwhile; the string in
+`SYSTEM_FONT` (gaps 2, 5) line by line, centred in (10, 10, width - 20,
+130); a question has `MESS_BUT11` at (7, 152) and `MESS_BUT12` at (99,
+152), keys Y and N (scan codes 0x15, 0x31), messages 0x5b0 and 0x5b2; a
+notice `MESS_BUT01` at (53, 152), Enter, 0x5b4. Captions (0x512cd0):
+strings 11 Yes, 12 No, 10 OK in `SYSTEM_FONT` (gaps 1, 1), centred, the
+rectangle w - 2, h + 2 when pressed. The button's help line (0x505e70) ends
 `" - &0<key>"` (or `<second>-<key>`), the names from the table at
 0x5bf598 (20 bytes a scan code).
 

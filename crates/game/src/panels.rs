@@ -472,7 +472,30 @@ pub struct Panels {
     /// The objectives and quick help page tabs: normal, selected.
     help_tabs: [States; 2],
     pages: Vec<HelpPage>,
+    // The message box.
+    ask_bg: Option<Image>,
+    /// `MESS_BUT01` OK, `MESS_BUT11` yes, `MESS_BUT12` no.
+    ask_buttons: [States; 3],
+    ask_font: Option<Face>,
+    /// The buttons' captions' (gaps 1, 1; 0x512cd0).
+    ask_button_font: Option<Face>,
 }
+
+/// A question the game asks (gamesys.cpp, 0x512af0 and 0x512f00): the
+/// string, and whether it is answered yes or no (else OK).
+pub struct AskView<'a> {
+    pub text: &'a str,
+    pub yes_no: bool,
+    /// The button held down: yes or OK (true), no (false).
+    pub pressed: Option<bool>,
+}
+
+/// The message box's buttons, from its top left: OK at (53, 152), yes at
+/// (7, 152), no at (99, 152), 91 x 46 (0x512f00).
+const ASK_OK: (i32, i32) = (53, 152);
+const ASK_YES: (i32, i32) = (7, 152);
+const ASK_NO: (i32, i32) = (99, 152);
+const ASK_BUTTON: (u32, u32) = (91, 46);
 
 impl Panels {
     pub fn load(data: &GameData, theme: char) -> Result<Self> {
@@ -564,7 +587,85 @@ impl Panels {
             help_buttons: ["VIEW_BUTUP_", "VIEW_BUTDN_"].map(states),
             help_tabs: ["HVIEW_TASK", "HVIEW_HELP"].map(states),
             pages,
+            ask_bg: bitmap("MESS_BKGND"),
+            ask_buttons: ["MESS_BUT01", "MESS_BUT11", "MESS_BUT12"].map(states),
+            ask_font: font("SYSTEM_FONT", 2, 5),
+            ask_button_font: font("SYSTEM_FONT", 1, 1),
         })
+    }
+
+    /// The message box's size: `MESS_BKGND`'s, which the original centres
+    /// on its screen (0x512af0).
+    pub fn ask_size(&self) -> (u32, u32) {
+        self.ask_bg
+            .as_ref()
+            .map_or((197, 205), |b| (b.width, b.height))
+    }
+
+    /// Draws a question with the box's top left at `origin` (window
+    /// pixels): its text in `SYSTEM_FONT` (letter gap 2, line gap 5)
+    /// centred in the box 10 pixels in, 130 high, and its buttons.
+    pub fn draw_ask(&self, frame: &mut Frame, origin: (f32, f32), scale: f32, ask: &AskView) {
+        let p = Painter {
+            origin,
+            scale,
+            ts: scale.round().max(1.0) as u32,
+        };
+        let (x, y) = (0, 0);
+        let Some(bg) = &self.ask_bg else {
+            return;
+        };
+        p.blit(frame, bg, x, y);
+        if let Some(f) = &self.ask_font {
+            let rect = (x + 10, y + 10, bg.width as i32 - 20, 130);
+            p.lines(frame, f, 0, rect, ask.text);
+        }
+        // Captioned with strings 10 OK, 11 Yes, 12 No (0x512cd0), centred;
+        // pressed, the text a pixel left and down.
+        let buttons: &[(usize, (i32, i32), bool, (u32, &str))] = if ask.yes_no {
+            &[
+                (1, ASK_YES, true, (11, "Yes")),
+                (2, ASK_NO, false, (12, "No")),
+            ]
+        } else {
+            &[(0, ASK_OK, true, (10, "OK"))]
+        };
+        for &(k, at, answer, (id, fallback)) in buttons {
+            let pressed = ask.pressed == Some(answer);
+            let Some(img) = state_image(&self.ask_buttons[k], usize::from(pressed)) else {
+                continue;
+            };
+            let (bx, by) = (x + at.0, y + at.1);
+            p.blit(frame, img, bx, by);
+            let (w, h) = (img.width as i32, img.height as i32);
+            let rect = if pressed {
+                (bx, by, w - 2, h + 2)
+            } else {
+                (bx, by, w, h)
+            };
+            if let Some(f) = &self.ask_button_font {
+                p.lines(frame, f, 0, rect, &self.string(id, fallback));
+            }
+        }
+    }
+
+    /// The answer under point `p` (original pixels from the box's top
+    /// left): yes or OK true, no false.
+    pub fn ask_hit(&self, yes_no: bool, p: (u32, u32)) -> Option<bool> {
+        let (x, y) = (0, 0);
+        let at =
+            |(bx, by): (i32, i32)| ((x + bx) as u32, (y + by) as u32, ASK_BUTTON.0, ASK_BUTTON.1);
+        if yes_no {
+            if inside(p, at(ASK_YES)) {
+                return Some(true);
+            }
+            if inside(p, at(ASK_NO)) {
+                return Some(false);
+            }
+            None
+        } else {
+            inside(p, at(ASK_OK)).then_some(true)
+        }
     }
 
     /// The game's string `id` (`fallback` without the executable).

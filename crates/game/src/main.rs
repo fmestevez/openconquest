@@ -636,6 +636,7 @@ fn screenshot(
         }),
         panel_hover: None,
         paused: args.paused,
+        ask: None,
         load: Some((load_panel::LoadView::default(), None)),
         object_info: None,
         hover_object: None,

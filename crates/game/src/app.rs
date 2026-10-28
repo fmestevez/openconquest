@@ -90,6 +90,25 @@ const TITLE_BUTTONS: [&str; 6] = [
     "Quit game",
 ];
 
+/// A question asked before the game is left (gamesys.cpp 0x511c00,
+/// 0x512f00): strings 13, 15 and 16.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ask {
+    Quit,
+    MainMenu,
+    Restart,
+}
+
+impl Ask {
+    fn string(self) -> (u32, &'static str) {
+        match self {
+            Ask::Quit => (13, "Exit to Windows.\nAre you sure?"),
+            Ask::MainMenu => (15, "Exit to main menu.\nAre you sure?"),
+            Ask::Restart => (16, "Restart mission.\nAre you sure?"),
+        }
+    }
+}
+
 /// Mission groups on the front end, by archive name prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Category {
@@ -503,6 +522,10 @@ pub struct App {
     help_page: Option<usize>,
     /// A panel button held down.
     panel_pressed: Option<PanelHit>,
+    /// A question asked before the game is left (the game holds still
+    /// meanwhile), and the answer held down.
+    ask: Option<Ask>,
+    ask_pressed: Option<bool>,
     /// The SoundFont given for MIDI music.
     soundfont: Option<std::path::PathBuf>,
     /// The music's tracks as the sound panel lists them.
@@ -691,6 +714,8 @@ impl App {
             help_first: 0,
             help_page: None,
             panel_pressed: None,
+            ask: None,
+            ask_pressed: None,
             soundfont: soundfont.clone(),
             track_names: Vec::new(),
             info_view: Default::default(),
@@ -827,6 +852,7 @@ impl App {
             panel: Some(self.panel_view()),
             panel_hover: self.cursor.and_then(|c| self.bar_point(c)),
             paused: self.paused,
+            ask: self.ask.map(|a| (self.ask_text(a), self.ask_pressed)),
             load: Some((self.load_state(), self.load_pressed)),
             object_info: self.hovered_info(),
         }
@@ -1035,13 +1061,11 @@ impl App {
             }
             PanelHit::ListThumb(first) => self.save_first = first,
             PanelHit::FileAction => self.file_action(),
-            PanelHit::Restart => self.switch_mission(0),
-            PanelHit::MainMenu => {
-                if self.menus.is_some() {
-                    self.menu = Some(MenuState::Main);
-                }
-            }
-            PanelHit::Quit => self.quit = true,
+            // Each asks first (the file panel sends 0x4fd's question,
+            // 0x4f5 and 0x4ef, 0x50a700).
+            PanelHit::Restart => self.ask = Some(Ask::Restart),
+            PanelHit::MainMenu => self.ask = Some(Ask::MainMenu),
+            PanelHit::Quit => self.ask = Some(Ask::Quit),
             PanelHit::Slider(slider, v) => {
                 self.slider_drag = Some(slider);
                 self.set_slider(slider, v);
@@ -3105,6 +3129,57 @@ impl App {
             .map_or(x, |m| x - m.big.measure(text) as f32 / 2.0)
     }
 
+    /// The answer under the pointer, if a question is asked.
+    fn ask_answer_at(&self) -> Option<bool> {
+        let c = self.cursor?;
+        if !self.show_interface {
+            return None;
+        }
+        let scale = self
+            .interface
+            .layout(self.window_size(), &self.camera.policy, &self.scene)
+            .scale;
+        let (screen, _) = self.placement();
+        let (w, h) = self.interface.panels.ask_size();
+        let x0 = screen.x as f32 + (screen.w as f32 - w as f32 * scale) / 2.0;
+        let y0 = screen.y as f32 + (screen.h as f32 - h as f32 * scale) / 2.0;
+        let (x, y) = ((c.x as f32 - x0) / scale, (c.y as f32 - y0) / scale);
+        if x < 0.0 || y < 0.0 {
+            return None;
+        }
+        self.interface.panels.ask_hit(true, (x as u32, y as u32))
+    }
+
+    /// A question's text, from the game's strings.
+    fn ask_text(&self, ask: Ask) -> String {
+        let (id, fallback) = ask.string();
+        self.data
+            .strings
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| fallback.into())
+    }
+
+    /// The question answered: yes ends the game as asked, no goes on.
+    fn answer(&mut self, yes: bool) {
+        let Some(ask) = self.ask.take() else {
+            return;
+        };
+        self.ask_pressed = None;
+        if !yes {
+            return;
+        }
+        match ask {
+            Ask::Restart => self.switch_mission(0),
+            Ask::MainMenu => {
+                if self.menus.is_some() {
+                    self.menu = Some(MenuState::Main);
+                }
+            }
+            Ask::Quit => self.quit = true,
+        }
+    }
+
     fn say(&mut self, msg: impl Into<String>) {
         self.status = Some((msg.into(), Instant::now()));
     }
@@ -4667,7 +4742,7 @@ impl App {
             // Multiplayer games run at one speed and do not pause, menus
             // open or not.
             self.run_turns(dt);
-        } else if !self.briefing && !self.paused && self.menu.is_none() {
+        } else if !self.briefing && !self.paused && self.menu.is_none() && self.ask.is_none() {
             self.scene.update(
                 dt * self.settings.config.speed(),
                 &self.data,
@@ -4932,6 +5007,31 @@ impl ApplicationHandler for App {
                 // never come.)
                 if !self.modifiers.super_key() {
                     self.keys.insert(code);
+                }
+                // A question takes Y or N (its buttons' keys, scan codes
+                // 0x15 and 0x31) and nothing else.
+                if self.ask.is_some() {
+                    match code {
+                        KeyCode::KeyY => self.answer(true),
+                        KeyCode::KeyN => self.answer(false),
+                        _ => {}
+                    }
+                    return;
+                }
+                // Alt+Q leaves the game, Alt+X goes to the main menu, each
+                // asking first (accelerators 0x4ef, 0x4f5; 0x511c00).
+                if self.menu.is_none() && self.modifiers.alt_key() {
+                    match code {
+                        KeyCode::KeyQ => {
+                            self.ask = Some(Ask::Quit);
+                            return;
+                        }
+                        KeyCode::KeyX => {
+                            self.ask = Some(Ask::MainMenu);
+                            return;
+                        }
+                        _ => {}
+                    }
                 }
                 if event.repeat {
                     return;
@@ -5266,6 +5366,15 @@ impl ApplicationHandler for App {
                 }
                 (MouseButton::Left, ElementState::Pressed) if self.video.is_some() => {
                     self.skip_video(false);
+                }
+                (MouseButton::Left, ElementState::Pressed) if self.ask.is_some() => {
+                    self.ask_pressed = self.ask_answer_at();
+                }
+                (MouseButton::Left, ElementState::Released) if self.ask.is_some() => {
+                    let held = self.ask_pressed.take();
+                    if held.is_some() && held == self.ask_answer_at() {
+                        self.answer(held.unwrap());
+                    }
                 }
                 (MouseButton::Left, ElementState::Pressed)
                     if self.menu.is_some() && self.menus.is_some() =>

@@ -1181,6 +1181,8 @@ pub struct GameView<'a> {
     pub panel_hover: Option<(u32, u32)>,
     /// The game is paused.
     pub paused: bool,
+    /// A question asked, and the answer held down.
+    pub ask: Option<(String, Option<bool>)>,
     /// The load panel's state, and the panel button held down.
     pub load: Option<(load_panel::LoadView, Option<load_panel::Hit>)>,
     /// What the strip below the view tells of the object under the
@@ -1562,6 +1564,22 @@ impl GameView<'_> {
         }
         if let Some(outcome) = self.scene.outcome {
             self.draw_outcome(frame, &screen, outcome, text_scale);
+        }
+        if let (Some(ui), Some(layout), Some((text, pressed))) =
+            (self.interface, &layout, &self.ask)
+        {
+            let ask = crate::panels::AskView {
+                text,
+                yes_no: true,
+                pressed: *pressed,
+            };
+            // Centred on the view, as the original on its screen.
+            let (w, h) = ui.panels.ask_size();
+            let origin = (
+                screen.x as f32 + (screen.w as f32 - w as f32 * layout.scale) / 2.0,
+                screen.y as f32 + (screen.h as f32 - h as f32 * layout.scale) / 2.0,
+            );
+            ui.panels.draw_ask(frame, origin, layout.scale, &ask);
         }
         if self.briefing && !self.scene.briefing.is_empty() {
             self.draw_briefing(frame, &screen, text_scale);
