@@ -84,6 +84,9 @@ pub struct Layer {
     pub dy: i32,
 }
 
+/// A banner's frames.
+pub type Banner = Rc<Vec<Rc<Image>>>;
+
 /// A placed, drawable object.
 pub struct MapObject {
     /// Object id from the mission (`OBJ_xxxxxxxx`).
@@ -118,9 +121,10 @@ pub struct MapObject {
     /// Shows the frame this far (0..1) through the animation instead of
     /// playing it: a building going up.
     pub progress: Option<f32>,
-    /// A building's banner (`FLAGSPR_<nation><slot>`, its first frame) and
-    /// where its top left lies from the building's.
-    pub banner: Option<(Rc<Image>, i32, i32)>,
+    /// A building's banner (`FLAGSPR_<nation><slot>`, its frames: it waves
+    /// a frame every 75 ms, LandObj 0x4247b0 and 0x425990) and where its
+    /// top left lies from the building's.
+    pub banner: Option<(Banner, i32, i32)>,
     /// The map cell a building stands on (its record's).
     pub cell: Option<(i32, i32)>,
 }
@@ -1287,12 +1291,17 @@ pub fn resolve(
                 at,
                 caches.composite(data, &format!("FLAGSPR_{nation}{slot}"))?,
             ) {
-                (Some((dx, dy)), Some(comp)) => comp
-                    .frame(0)
-                    .first()
-                    .map(|c| c.sprite.clone())
-                    .and_then(|s| caches.sprites.get(data, &s).ok().flatten())
-                    .map(|img| (img, dx, dy)),
+                (Some((dx, dy)), Some(comp)) => {
+                    let mut frames = Vec::new();
+                    for k in 0..comp.frames {
+                        if let Some(c) = comp.frame(k).first() {
+                            if let Some(img) = caches.sprites.get(data, &c.sprite)? {
+                                frames.push(img);
+                            }
+                        }
+                    }
+                    (!frames.is_empty()).then(|| (Rc::new(frames), dx, dy))
+                }
                 _ => None,
             }
         }

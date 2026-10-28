@@ -211,11 +211,13 @@ pub fn draw_objects(
             }
         }
         // Its banner, from the picture's top left.
-        if let (Some((flag, dx, dy)), Some(first), true) = (
+        if let (Some((flags, dx, dy)), Some(first), true) = (
             &obj.banner,
             obj.frame_at(time_ms).first(),
             obj.owner.is_some(),
         ) {
+            const FLAG_MS: u64 = 75;
+            let flag = &flags[(time_ms / FLAG_MS) as usize % flags.len()];
             let left = (obj.x - first.image.width as f32 / 2.0).round() as i32 + dx;
             let top = (obj.y - first.image.height as f32 / 2.0).round() as i32 + dy;
             draw_image(frame, screen, camera, lut, flag, left, top);
