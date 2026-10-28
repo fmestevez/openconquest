@@ -120,14 +120,24 @@ impl Scene {
     /// Has settlement or town `site` mend own building `target`.
     pub fn order_mend(&mut self, site: u32, target: u32) -> Result<(), String> {
         let s = self.object_index(site).ok_or("No such building")?;
+        if !self.is_own(&self.objects[s]) {
+            return Err("Only your settlements and towns repair".into());
+        }
+        self.mend_by(site, target)
+    }
+
+    /// Settlement or town `site` mends `target`, a building of the same
+    /// player (command 0x1e, for any player).
+    pub(super) fn mend_by(&mut self, site: u32, target: u32) -> Result<(), String> {
+        let s = self.object_index(site).ok_or("No such building")?;
         let t = self
             .object_index(target)
             .ok_or("Choose one of your buildings")?;
         let (home, obj) = (&self.objects[s], &self.objects[t]);
-        if !matches!(home.class, ObjectClass::Building(SETTLEMENT | TOWN)) || !self.is_own(home) {
+        if !matches!(home.class, ObjectClass::Building(SETTLEMENT | TOWN)) {
             return Err("Only your settlements and towns repair".into());
         }
-        if !matches!(obj.class, ObjectClass::Building(_)) || !self.is_own(obj) {
+        if !matches!(obj.class, ObjectClass::Building(_)) || obj.owner != home.owner {
             return Err("Choose one of your buildings".into());
         }
         // A settlement repairs itself and its own buildings (0x441350),

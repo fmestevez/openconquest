@@ -263,7 +263,10 @@ enum Op {
     Upgrade(u32),
     /// 0x3ef: a study (0x42a860), by its number.
     Study(u8),
-    /// 0x3ec, 0x3ed and the like, not ported.
+    /// 0x3ec: repairs (0x429f60): the town mends the first of its
+    /// buildings that is worn (command 0x1e).
+    Repair,
+    /// 0x3ed and the like, not ported.
     #[default]
     Other,
 }
@@ -2035,6 +2038,31 @@ impl Scene {
                     PartStep::Wait
                 }
             }
+            Op::Repair => {
+                let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
+                    return PartStep::Failed;
+                };
+                let worn: Vec<u32> = self
+                    .objects
+                    .iter()
+                    .filter(|o| {
+                        o.owner == Some(owner)
+                            && matches!(o.class, ObjectClass::Building(_))
+                            && !self.mending.contains(&o.id)
+                            && o.combat.as_ref().is_some_and(|c| c.hull < c.max_hull)
+                    })
+                    .map(|o| o.id)
+                    .collect();
+                if worn.is_empty() {
+                    return PartStep::Done;
+                }
+                for target in worn {
+                    if self.mend_by(site, target).is_ok() {
+                        return PartStep::Done;
+                    }
+                }
+                PartStep::Wait
+            }
             Op::Other => PartStep::Done,
         }
     }
@@ -3801,7 +3829,7 @@ fn order_parts(code: u32) -> Vec<(Op, bool, After)> {
         52 => vec![(Build(0x36), false, Nothing)],
         0x50..=0x5b => vec![(Ship((code - 0x50) as u8), false, Nothing)],
         0x5c => vec![(Ship(0), false, Nothing)],
-        96 => vec![(Op::Other, false, Nothing)],
+        96 => vec![(Op::Repair, false, Nothing)],
         97 => vec![(Build(PORT), false, Nothing)],
         98 => vec![
             (Build(SHIPYARD), false, Nothing),
@@ -4457,6 +4485,37 @@ mod tests {
     /// sails against the human player, who (doing nothing) loses.
     /// The builders hunt treasures about their base (task 5 state 2, order
     /// 0xbe): a treasure lying by a computer's town is taken.
+    /// The repairs order (96, part 0x3ec): the town mends a worn building.
+    #[test]
+    fn computer_repairs_worn_buildings() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        scene.update(0.1, &data, &mut caches);
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        let owner = ai.owner;
+        let worn = scene
+            .objects
+            .iter()
+            .position(|o| {
+                o.owner == Some(owner)
+                    && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
+            })
+            .unwrap();
+        let c = scene.objects[worn].combat.as_mut().unwrap();
+        c.hull = c.max_hull / 2.0;
+        let id = scene.objects[worn].id;
+        let part = Part {
+            op: Op::Repair,
+            ..Default::default()
+        };
+        let step = scene.order_part(&mut ai, 0, None, part, &data, &mut caches);
+        assert!(matches!(step, PartStep::Done));
+        assert!(scene.mending.contains(&id));
+    }
+
     #[test]
     fn computer_hunts_treasures() {
         let Some(data) = data() else {
