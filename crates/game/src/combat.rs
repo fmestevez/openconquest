@@ -1367,7 +1367,7 @@ impl Effect {
 
 /// The original's random generator (0x4bb670): a 32-bit LCG whose high
 /// half is used.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Rng(pub u32);
 
 impl Rng {

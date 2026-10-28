@@ -292,6 +292,8 @@ pub struct Scene {
     /// The campaign mission's ported brain, if any, and time owed to it.
     pub brain: Option<brain::Brain>,
     brain_clock: f32,
+    /// The computer players of a battle or single mission.
+    pub computers: computer::Computers,
     /// Heroes the campaign brought to this mission, and heroes waiting at
     /// settlements and towns (by site).
     pub carried: Vec<u8>,
@@ -397,6 +399,7 @@ pub struct Scene {
 mod ai;
 mod battle;
 mod brain;
+mod computer;
 mod creatures;
 mod fire;
 mod gulls;
@@ -422,6 +425,7 @@ mod story;
 mod unload;
 mod walkers;
 pub use brain::{Brain, EASY, HARD, NORMAL};
+pub use computer::Computers;
 pub use flyers::{Flyer, Nest};
 pub use load::{Cargo, Entry, LoadLink};
 pub use order::Order;
@@ -604,6 +608,11 @@ impl Scene {
             site_heroes: Default::default(),
             brain: None,
             brain_clock: 0.0,
+            computers: computer::Computers {
+                on: is_custom(mission),
+                level: difficulty,
+                ..Default::default()
+            },
             repair_owed: Default::default(),
             flame: 0.0,
             shown: [1, 1],
@@ -766,6 +775,7 @@ impl Scene {
                 .map(|(k, v)| (*k, v.clone()))
                 .collect(),
             brain: self.brain.clone(),
+            computers: Some(self.computers.clone()),
             battle: Battle {
                 shots: self.shots.iter().map(|s| s.saved()).collect(),
                 fireballs: self.fireballs.iter().map(|f| f.saved()).collect(),
@@ -859,6 +869,9 @@ impl Scene {
         scene.site_heroes = save.site_heroes.iter().cloned().collect();
         if save.brain.is_some() {
             scene.brain = save.brain.clone();
+        }
+        if let Some(c) = &save.computers {
+            scene.computers = c.clone();
         }
         let b = &save.battle;
         scene.shots = b
@@ -1402,7 +1415,8 @@ impl Scene {
                             self.sounds.push(("jb_d1", o.x, o.y));
                         }
                     }
-                    self.ship_launched(p.site, p.ship, id)
+                    self.ship_launched(p.site, p.ship, id);
+                    self.computer_launched(p.site, p.ship, id);
                 }
                 Ok(None) => {}
                 Err(e) => eprintln!("could not launch ship: {e:#}"),
@@ -1430,6 +1444,7 @@ impl Scene {
         while self.brain_clock >= crate::clock::TICK {
             self.brain_clock -= crate::clock::TICK;
             self.run_brain();
+            self.run_computers(data, caches);
             for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {
                 self.big_reef(x, y, kind, data, caches);
             }
