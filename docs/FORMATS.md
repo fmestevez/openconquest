@@ -975,6 +975,106 @@ and `+0x10c` 0, and has a fort, `+0x214`-`+0x21c`), repair
 marines it can train: only with a workshop of the settlement, and for
 swordsmen a smithy (0x43da20, +0x1fc, +0x200).
 
+## Object panel (c_info.cpp)
+
+`CObjInfoTy` (0x4f5130-0x4f7b9e; ProcOnCreate 0x4f5230, PaintInfoObj
+0x4f5800, ClearInfoObj 0x4f5c90, CreateInfoButtons 0x4f5dc0, ChangeButs
+0x4f5f20, CreateBut 0x4f64c0, PaintGrpBut 0x4f6640, PaintObjBut 0x4f69e0,
+DoInfoBut 0x4f72d0, CreateScrolling 0x4f76e0, GetMessage 0x4f79e0) is the
+object panel's upper part. Fonts: `<theme>SYSTEM_FONT` (gaps 2, 4),
+`NUMBER_FONT` (0, 0), `BSLT_FONT` (letters 1, lines -1).
+
+**Contents.** With nothing selected it draws `COBJ_CLEAR` (208x209) at bar
+(0, 206) and nothing else (checked against the original: no strip, no
+`COBJ_BKMAIN`). Otherwise it asks the selection (game `+0x3219`, the
+flotilla) with message 0x109f; the flotilla (nik_Flotil 0x49f9e0) passes
+it to its only member, or with more than one fills the panel's group flag
+(`+0x23`) and a list of 0x10-byte entries: class (+0), portrait set 1/3
+(+4, ship `+0x250`), type (+5), life percent | 100 << 8 (+9, vtable
++0x10), id (+0xc). PaintInfoObj draws nothing at all for classes other
+than buildings 0x32-0x3e and ships 200-211 (so deposits, creatures,
+treasures and others show no portrait and no text).
+
+**Group panel.** `CGRP_BKG` (202x197) at bar (3, 206), covering the strip
+(c_ctrl 0x4f06f0 draws `CCTRL_CLRDEF*` only without the group flag). A
+button per member (CreateBut: `CGRP_BUTFRAME` 44x42 plus 1, 2): rows 47
+apart from y 211, four to a row 48 apart from x 10; with 17 members and
+more three to a row, twelve shown, `CGRP_BKGSCROLL` at (168, 213) and a
+slider: `SLIDER_UP_`/`SLIDER_DN_` at (172, 217)/(172, 369), the track
+`CGRP_BKSCROLL` (30x130) at (168, 239), `SLIDER_BB`; ceil(n / 3) - 3
+positions, a row of three each (message 0x537). PaintGrpBut: the shadow
+sprite `CGRP_BUTBK` at button + (0, 2), then `CGRP_BUTFRAME` with the
+portrait at (1, 1) (ships `INF_SHIP` as on the panel via 0x5004d0, forts
+0x34-0x36 `INF_GOBJ<(class - 0x34) * 4 + nation>`) and the life bar as a
+slot's (black 4 high from (1, h - 5), (w - 2) x life / 100; colours 200/199,
+203/157 below half, 65/68 below a quarter), drawn at button + (1, 0), or
+(0, 1) held down. Message 0x10ad updates a member's life. A click on a
+member centres the view on it (0x517dd0: 0xc450 finds it, 0xc459 gives its
+position, 0xcbb to the field; the selection stays). Checked pixel for
+pixel against the original (four boats in miss000).
+
+**Single object.** `COBJ_BKMAIN` with the portrait; the cells (0x1c57 +
+i clicks, 0x1cbb + i paints) as in the load panel's closed and opened
+lists: places after the portrait, or an opened group's header at (9, 312)
+and its entries three to a row from x 57, or with ten and more two to a
+row from x 62 behind a slider; the slider and `COBJ_BKGSCROLL` (panel
+(165, 6)) already show from nine entries; its arrows at (172, 216)/(172,
+334), track `COBJ_BKSCROLL` at (168, 238); ceil(n / 2) - 2 positions. A
+click in x 9-56, y 210-260 (the portrait) centres the view on the object
+(GetMessage 0x61). A settlement's places are its stock (0x43bfe0 page 0:
+each item's place flags (stock ? 2 : 1) | 4, its count, no bar; armour
+and rams place 3, treasures and heroes place 7). DoInfoBut on a cell:
+- cursor in mode 0x34 (Sell Item) and the entry's flags exactly 2 with
+  category 1, 2 or 4: the press sends 0x518db0(mode 0x34) with the entry's
+  word and its index less the header (the settlement sells it);
+- empty (flag 1): nothing;
+- flags 2 with 4 or 0x10: a group opens (the list becomes a header, the
+  entry's word with flags 0x12, then the object's entries for that key:
+  0x43bfe0 case 1 the units of an item, each flags 2 with its condition as
+  bar; cases 2/4/8 armour and rams; 0x20/0x40/0x80 treasures, heroes), or
+  the header closes it;
+- anything else: on the press (state 2) the button's rectangle becomes (9,
+  210, 191, 152) and it paints big; on the release it shrinks back and the
+  panel repaints (a refresh asked meanwhile, 0x10a2, waits for it).
+
+**The big slot** (PaintObjBut with `+0x8a` = the cell): `COBJ_BKBIGSLOT`
+(191x152) with a 188x144 picture at (3, 7): units `COBJ_ARMING09`-`11`
+(the panel's nation 3: `12`-`14`) for marines 0-2, `COBJ_ARMING<item - 3>`
+for weapons 3-11, `COBJ_ARMING<item + 3>` for the live crews 12-14 (the
+ship of the dead's marines, 0x4e5e40); armour and rams `COBJ_ARMORAM<byte>`
+(rams 3-5); goods `COBJ_RC<kind>`; heroes `COBJ_HEROY<hero>`; treasures
+`COBJ_TREAS<0x5005a0(kind)>`. Then the text of 0x5234b0 in `BSLT_FONT`,
+target rectangle (15, 12, 80, 120), wrapped to 80 (0x548590: `#` starts a
+paragraph; words end after one of " ,.;:!?" and keep it; a word that
+would pass the width (letter gap + its width + the line's) starts a line,
+which loses its leading blanks (0x5712c0) unless it is the paragraph's
+first; a paragraph's last line gets a space added when it still fits,
+0x546a30), drawn by 0x5479f0(x -2, y 0): each line centred, from the top,
+advancing by its tallest glyph - 1. The texts (string ids):
+- unit (0x4a9870, by the local player's levels, `+0x9c`/`+0x95`/`+0x8e` +
+  item / 3): `%s#%s#%d #%s#%d / %d#%s#%d - %d#%s#%d#%s#%d` = name
+  (0x3a0 + item: BOWMEN ... LIVE SWORDSMEN), Weight 0x3c3 (1, strong
+  weapons 6-8 2), Effectiveness 0x3c0 (0x597d2c B x condition / 100, then
+  C for marines or A for weapons x condition / 100), Range 0x3c4
+  (0x598178 - 0x598154 by range level), Rate of fire 0x3c5 (0x597a3c),
+  Costs 0x3c2 (u16 0x597164 by item / 3: 30, 50, 70, and 2 for items 9-11);
+- armour (0x4a99e0): `%s#%s#%d#%s#%d#%s#%d` = 0x3b1 + level, Effectiveness
+  0x597a00[level * 3 + player level `+0x60 + level`] | byte 0x597a30 << 8,
+  Level 0x3c1 (the player level), Costs (0x42d960: 0, 30, 60); a ram
+  (0x4a9a60): 0x3b4 + level, 0x598054[...] | byte 0x598084 (4) << 8 (so
+  1124, 1149, 1184 at level 0), Costs 0x42d940 (0, 25, 50);
+- goods `%s#%s`: 0x3b8 + kind (AMBER./FISH./LEVIATHAN), 0x3bd + kind (" ");
+- hero: 900 + hero;
+- treasure by kind: 6 `%s %s %2d %s` (0x3b8-0x3ba by the entry's +0xc 400,
+  401, 402; 0x3b7 "After delivering ..."; +0x10 the amount; 0x3bb money,
+  0x3bc measures); 7 `%s %s.#%s%2d` (+0xc low word 1/2/4 and high word
+  the item or level: 0x3a0 + item, 0x3b1 + level, 0x3b4 + level - 3, else
+  string 7; 0x3af "IN A DISASSEMBLED STATE"; 0x3b0 QUANTITY; +0x10 the
+  amount); 9-17 0x396 + kind - 9; 18-26 0x38d + kind - 18; 27 0x39f, or
+  by the scroll's number (0x47b4a0: 0 2105, 1 2106, 3 2108, 4 2107, 5
+  2112, 12 2113); others empty. A ship's treasure entry carries the
+  treasure's +0xc and +0x10 (record fields 7 and 8).
+
 ## Load panel (c_load.cpp)
 
 **Opening.** A ship's Reload Object (button 0x05, string 429; pointer mode

@@ -79,7 +79,7 @@ fn scaled(v: u32) -> u16 {
 
 /// Life in percent as the objects keep it (ships 0x4e53e0: hull x 100 /
 /// the type's; buildings `+0xa8`; creatures their own).
-fn life(obj: &MapObject) -> u8 {
+pub fn life(obj: &MapObject) -> u8 {
     obj.combat.as_ref().map_or(0, |c| {
         if c.max_hull > 0.0 {
             (c.hull.max(0.0) * 100.0 / c.max_hull).min(100.0) as u8

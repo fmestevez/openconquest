@@ -5281,11 +5281,8 @@ fn units_wear_and_move_with_their_condition() {
     assert_eq!(worn(&units[2]), 1, "{units:?}");
     assert_eq!(worn(&units[4]) + worn(&units[6]), 1, "{units:?}");
     // The worn unit's bar, on the panel and in the load list.
-    let cells = crate::ui::ship_slots(o);
-    assert!(cells
-        .iter()
-        .flatten()
-        .any(|c| c.bar.is_some_and(|b| b < 100)));
+    let cells = crate::info_panel::entries(&scene, o, None);
+    assert!(cells.iter().any(|c| c.bar.is_some_and(|b| b < 100)));
     // Crushing blows break units but leave the last of the crew and of
     // the weapons standing.
     for _ in 0..20 {

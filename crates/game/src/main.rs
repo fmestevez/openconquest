@@ -8,6 +8,7 @@ mod combat;
 mod commands;
 mod cursor;
 mod economy;
+mod info_panel;
 mod launch;
 mod load_panel;
 mod magic;
@@ -193,6 +194,14 @@ struct Args {
     /// centre (or the nearest one) in the strip below the view.
     #[arg(long, hide = true, value_parser = parse_size, value_name = "X,Y")]
     hover: Option<(u32, u32)>,
+    /// Debugging: select this many of the player's ships nearest the
+    /// focus (the object panel's group buttons).
+    #[arg(long, hide = true, value_name = "N")]
+    select_group: Option<usize>,
+    /// Debugging: press these object panel slot cells in turn (a group
+    /// opens or closes; anything else is shown big, as held down).
+    #[arg(long, hide = true, value_delimiter = ',', value_name = "CELLS")]
+    slot_press: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -556,6 +565,20 @@ fn screenshot(
         let preview = facing.and_then(|f| scene.site_preview(class, x, y, f, data, &mut caches));
         Some(((x, y), facing.is_some(), preview))
     });
+    let group_sel: Vec<u32> = match (args.select_group, args.focus) {
+        (Some(n), Some((cx, cy))) => {
+            let (fx, fy) = ((cx * 64 + 32) as f32, (cy * 64 + 32) as f32);
+            let mut ships: Vec<&crate::objects::MapObject> = scene
+                .objects
+                .iter()
+                .filter(|o| o.ship.is_some() && scene.is_own(o))
+                .collect();
+            let d = |o: &crate::objects::MapObject| (o.x - fx).powi(2) + (o.y - fy).powi(2);
+            ships.sort_by(|a, b| d(a).total_cmp(&d(b)));
+            ships.iter().take(n).map(|o| o.id).collect()
+        }
+        _ => Vec::new(),
+    };
     let since = std::collections::HashMap::new();
     let mut view = GameView {
         selected_since: &since,
@@ -569,12 +592,12 @@ fn screenshot(
         interface: (!args.no_interface).then_some(&interface),
         text: &text,
         selected: None,
-        group: &[],
+        group: group_sel.get(1..).unwrap_or(&[]),
         select_box: None,
         status: None,
         time_ms,
         hover_button: args.hover_button,
-        chosen_cell: None,
+        info: Default::default(),
         sent: None,
         page: match args.page.as_deref() {
             Some("behaviour") => commands::Page::Behaviour,
@@ -647,6 +670,36 @@ fn screenshot(
     });
     if training.is_some() {
         view.selected = training;
+    }
+    if let Some(&first) = group_sel.first() {
+        view.selected = Some(first);
+    }
+    if let Some(sel) = view.selected {
+        use info_panel::{Hit, InfoView, Shown};
+        let selection: Vec<u32> = std::iter::once(sel)
+            .chain(view.group.iter().copied())
+            .collect();
+        let mut info = InfoView {
+            owner: (sel, view.group.len()),
+            ..Default::default()
+        };
+        for &i in &args.slot_press {
+            if let Shown::Single(_, list) = info_panel::shown(&scene, &selection, &info) {
+                match list.get(i) {
+                    Some(e) if e.is_group() => {
+                        info.open =
+                            (e.flags & crate::scene::load::HEADER == 0).then_some((e.cat, e.sub));
+                        info.scroll = 0;
+                    }
+                    Some(e) if info_panel::describable(e) => {
+                        info.big = Some(i);
+                        info.pressed = Some(Hit::Cell(i));
+                    }
+                    e => eprintln!("slot {i}: nothing to press ({e:?})"),
+                }
+            }
+        }
+        view.info = info;
     }
     if let Some(target) = reloading {
         view.selected = Some(target);
