@@ -845,7 +845,17 @@ pop-up (0x7a, y 200, [0x5ca77f]); control bar left / right (0x74, 0x75, y
 (0x73, 385, [0x5ca55a]; disabled when [game+0xa81] is 0xd0dd); help string
 (0x78, 410, [0x5ca542]); graphic trails (0x7e, 435, [0x5ca78f]); lighting
 effects (0x7f, 460, [0x5ca790]); pack save file (0x80, 485, [0x5ca791]);
-in network games guaranteed sending (0x7d, 510, [0x5ca78e]). Defaults read
+in network games guaranteed sending (0x7d, 510, [0x5ca78e]). What they do:
+message pop-up shows the game's messages (chat.cpp: `MESS_FONT`, a line
+every 20 pixels from (8, 8) of the view, 0x4ff390), the oldest going every
+"message speed" seconds or while there are more than "message lines"
+(0x4ff4c0); button animation off keeps a hovered button's first frame
+(0x4f2a90 zeroes its frame); graphic trails gate the ships' wake droplets
+(0x4a3f40) and the trails of projectile letters 12, 13, 16-18 (0x4974d0,
+particles of kinds 8, 1, 7, 8, 9 through 0x48fc90; not ported); lighting
+effects set the sprite system's `+0x638` (0x4ed8d0: 0 on, 1 off), beside
+its remap table, read nowhere found (the port leaves shadows out with it
+off); pack save file is passed to the archive writer (0x51f4c0). Defaults read
 from the original's memory: speed 5, mouse 59 ms, keys 14 ms, scroll speed
 5, lines 10, bar right, all boxes set.
 
@@ -865,7 +875,10 @@ entries 17 pixels in, "Track n" (0x8e) for the CD), its arrows at bar
 Buttons `CFGSND_MARK_`, `_UP_`, `_DN_`, `_PLAY_` (`_STOP_` while playing;
 47x25) at (6, 54, 102, 150; 268). Check boxes at (7, 313 / 336 / 359): unit
 report (0x83), battle sound effects (0x85), ambient sound effects (0x84)
-([0x5ca55f] bits 1, 2, 4). Volume captions centred in (0, y, 202, 22): Music
+([0x5ca55f] bits 1, 2, 4: the sound player 0x525370 plays channel 2,
+the units' voices, only with bit 1; channels 1 and 4, firing, shots
+landing, boarding, ramming and lightning, only with bit 2; channels 3, 5
+and 6, the world's other sounds, only with bit 4). Volume captions centred in (0, y, 202, 22): Music
 (0x87, 385; not with no music), Effects (0x89, 420), FX (0x86, 455), Main
 (0x88, 490); `MIN`/`MAX` at y 400 + 35i. Sliders at x 30: `CFGSND_MUSVOL`
 405 (the CD or MIDI mixer control, or for FX music 4001 positions of
