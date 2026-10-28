@@ -561,6 +561,9 @@ pub struct App {
     menus: Option<Menus>,
     /// The mission chosen on a mission screen, shown.
     preview: Option<Preview>,
+    /// A mission to show and when: the list loads it 200 ms after the
+    /// choice last changed (0x52dc40).
+    preview_due: Option<(usize, Instant)>,
     /// Mission titles from their briefings, by mission index.
     mission_titles: Vec<String>,
     /// A game is under way (the main menu offers to resume it).
@@ -719,6 +722,7 @@ impl App {
             menu: start_menu.then_some(MenuState::Main),
             menus,
             preview: None,
+            preview_due: None,
             mission_titles,
             in_game: !start_menu,
             outcome_at: None,
@@ -2289,9 +2293,20 @@ impl App {
     fn show_preview(&mut self, index: usize, load: bool) {
         self.desc_first = 0;
         self.map_at = None;
-        if !load {
+        if load {
+            self.preview_due = Some((index, Instant::now() + Duration::from_millis(200)));
+        }
+    }
+
+    /// Loads the mission the list chose once its 200 ms are up.
+    fn load_due_preview(&mut self) {
+        let Some((index, at)) = self.preview_due else {
+            return;
+        };
+        if Instant::now() < at {
             return;
         }
+        self.preview_due = None;
         match Preview::load(&self.data, &mut self.caches, &self.missions[index], index) {
             Ok(p) => self.preview = Some(p),
             Err(e) => self.say(format!("{e:#}")),
@@ -4737,6 +4752,7 @@ impl App {
         self.time_ms = (now - self.started).as_millis() as u64;
         self.update(dt);
         self.menu_repeat_step();
+        self.load_due_preview();
         let (screen, _) = self.placement();
         let (vw, vh) = self.camera.view_size(&screen);
         let t = openconquest_formats::map::TILE_SIZE as f32;
