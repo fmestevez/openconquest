@@ -717,6 +717,22 @@ impl App {
                     _ => return None,
                 };
                 self.data.strings.get(&id).map(|s| s.as_str())
+            })
+            .or_else(|| {
+                // With "help string" on, the object under the pointer
+                // names itself in the message line (gcursor 0x516c10 sends
+                // its info to the line, +0x17de, as to the strip).
+                if !self.settings.config.help_string || self.pending.is_some() {
+                    return None;
+                }
+                let i = self
+                    .cursor
+                    .and_then(|c| self.object_at(c))
+                    .and_then(|id| self.scene.object_index(id))?;
+                if !self.scene.is_visible(&self.scene.objects[i]) {
+                    return None;
+                }
+                self.scene.objects[i].label.split(" (").next()
             });
         GameView {
             radar: self.radar,
