@@ -2985,8 +2985,7 @@ Not ported (the port's own instead): the terrain helpers of
 `artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
 simpler searches; zones weigh the lanes before nearness, since ships here
 cannot pass one another), the land fleet's placing of buildings (the
-nearest free cell to the settlement), the spells, the temples' studies
-and studies 27-32, and
+nearest free cell to the settlement), studies 27-32, and
 fleets' behaviour masks (0x482eb0, 0x4847d0).
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
@@ -3000,6 +2999,29 @@ a carrier sails home (0x4d9f50). With no treasure left in the area
 (0x4d9920) the order reports done and the round goes on to the zone. Ours
 takes any treasure, nearest first, one ship each, and brings the
 settlement's alongside the base's town, where ours hands them over.
+
+**Spells.** Order 117's studies 33 and 34 have the Temple of the Sea or
+of War learn its next spell (1000 amber; 100 ticks for a computer,
+0x439260). When a town is hit (0x488960, message 0x5d9c) the shooter's
+5 x 5 cells are counted (0x486d50: others' ships and buildings, less one,
+n) and four letters may go to the commander, each when n is at least 7-8
+(easy), 6-7 (normal) or 5-6 (hard) (0x4886d0), each "urgent" with
+n >= 12-14 / 10-12 / 8-10 or by chance 1 in 9 / 1 in 8 / 1 in 6
+(0x4885a0): 6 a spell at the shooter's cell; 7 kind 9 (the Flame) for the
+forts' flotilla; 6 kind 15 (weapon shield) over the base's area (flags
+0x1000); 7 a spell on the base's guards. The commander's turn reads them,
+newest first: at a place at most every 1500-3000 ticks (+0x188), on a
+fleet every 3000-4500 (+0x18c), at once if urgent. Unnamed spells: at a
+place n < 12 kind 11 or 14, n < 18 6 or 11, else 10 (1 in 3) or 6; on a
+fleet 9 (1 in 3), else 16 (1 in 16), else 12 or 15. With the grand attack
+it also casts kind 9 when 3000-4500 ticks have passed or 1 in 6. A cast
+needs the town's check (0x487640 -> 0x43fee0) and goes out as order
+0x3ee (0x4839e0-0x483c40, part 0x42a500: command 0x22 with spell 1-8,
+12-15 for kinds 5-12, 13-16). Kinds as the brains': 5 reef, 6 whirlpool, 7
+waterspout, 8 sea monster, 9 the Flame, 10 lightning, 11 fireball, 12
+phantom, 13 big reef (`Magic.cpp` 0x42f580 case 12: class 0x259), 15 and
+16 the shields; 14 (case 13, message 0x158bf) is not identified and not
+cast here.
 
 **Worn crews** (0x486970): a warship (types 2-7) also goes to the reserve
 when its crew condition (0x4bc590: the mean of its items' mean conditions,

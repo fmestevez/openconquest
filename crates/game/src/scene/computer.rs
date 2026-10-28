@@ -121,6 +121,35 @@ pub struct Computer {
     known: Vec<u32>,
     /// Shots taken since its last turn: (target, shooter).
     attacks: Vec<(u32, u32)>,
+    /// What its temples know (computers learn in 100 ticks, 0x439260).
+    #[serde(default)]
+    pub magic: crate::magic::Magic,
+    /// Seconds of the Flame left (player `+0xa8`).
+    #[serde(default)]
+    pub flame: f32,
+    /// Spells asked of the commander (letters 6 and 7), and when it last
+    /// cast each kind (commander `+0x188`, `+0x18c`).
+    #[serde(default)]
+    asks: Vec<SpellAsk>,
+}
+
+/// A letter asking the commander for a spell (0x488960 for message
+/// 0x5d9c; read by 0x482160).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct SpellAsk {
+    /// 6: on a cell (or, with `rect`, own things in an area); 7: on a
+    /// flotilla's ships.
+    letter: u8,
+    /// Cast now, whatever the time since the last (0x4885a0).
+    urgent: bool,
+    base: usize,
+    cell: (i32, i32),
+    rect: Option<Cells>,
+    flotilla: Option<usize>,
+    /// Enemies about the shooter, less one (0x486d50).
+    enemies: i32,
+    /// The spell kind asked, if any (5-16, as 0x47ae10's).
+    kind: Option<u32>,
 }
 
 /// A base (+0x60 + i x 0x15c).
@@ -311,6 +340,27 @@ impl Computer {
     /// The original's generator: the next value below `n`.
     fn roll(&mut self, n: u32) -> u32 {
         self.rng.next() % n
+    }
+
+    /// Whether `enemies` are many enough to ask for a spell (0x4886d0):
+    /// at least 7-8 on easy, 6-7 on normal, 5-6 on hard.
+    fn many(&mut self, enemies: i32) -> bool {
+        let base = [7, 6, 5][self.difficulty.min(2)];
+        (self.rng.next() & 1) as i32 + base <= enemies
+    }
+
+    /// Whether the spell is wanted at once (0x4885a0): 12-14 enemies or 1
+    /// in 9 on easy, 10-12 or 1 in 8 on normal, 8-10 or 1 in 6 on hard.
+    fn urgent(&mut self, enemies: i32) -> bool {
+        let base = [12, 10, 8][self.difficulty.min(2)];
+        if self.roll(3) as i32 + base <= enemies {
+            return true;
+        }
+        match self.difficulty {
+            0 => self.roll(9) == 1,
+            1 => self.rng.next() & 7 == 1,
+            _ => self.roll(6) == 2,
+        }
     }
 
     fn id(&self) -> u32 {
@@ -937,8 +987,72 @@ impl Scene {
                         ..Default::default()
                     },
                 );
+                self.ask_spells(ai, b, s);
             }
         }
+    }
+
+    /// The town of base `b` under fire from `s` asks the commander for
+    /// spells (0x488960), each if the enemies about the shooter are many
+    /// enough (0x4886d0): one at the shooter, the Flame for the forts, the
+    /// weapon shield over the base, and one on the guards.
+    fn ask_spells(&mut self, ai: &mut Computer, b: usize, s: usize) {
+        let cell = self.cell_of(s);
+        let enemies = self.enemies_about(ai.owner, cell);
+        let ask = |ai: &mut Computer, letter, rect, flotilla, kind| {
+            let urgent = ai.urgent(enemies);
+            ai.asks.push(SpellAsk {
+                letter,
+                urgent,
+                base: b,
+                cell,
+                rect,
+                flotilla,
+                enemies,
+                kind,
+            });
+        };
+        if ai.many(enemies) {
+            ask(ai, 6, None, None, None);
+        }
+        if ai.many(enemies) && !ai.flotillas[ai.forts].ships.is_empty() {
+            let forts = ai.forts;
+            ask(ai, 7, None, Some(forts), Some(9));
+        }
+        if ai.many(enemies) {
+            let area = ai.bases[b].rect;
+            ask(ai, 6, Some(area), None, Some(15));
+        }
+        if ai.many(enemies) {
+            if let Some(g) = ai
+                .flotillas
+                .iter()
+                .position(|f| f.role == GUARD && f.base == b)
+            {
+                ask(ai, 7, None, Some(g), None);
+            }
+        }
+    }
+
+    /// Ships and buildings of others in the 5 x 5 cells about `cell`, less
+    /// one (0x486d50).
+    fn enemies_about(&self, owner: (u32, u32), (cx, cy): (i32, i32)) -> i32 {
+        let (w, h) = self.map_cells();
+        let (x0, y0) = ((cx - 2).max(0), (cy - 2).max(0));
+        let (x1, y1) = ((x0 + 5).min(w), (y0 + 5).min(h));
+        let n = (0..self.objects.len())
+            .filter(|&i| {
+                let o = &self.objects[i];
+                let (x, y) = self.cell_of(i);
+                o.owner.is_some_and(|w| w != owner)
+                    && (o.ship.is_some() || matches!(o.class, ObjectClass::Building(_)))
+                    && x >= x0
+                    && x < x1
+                    && y >= y0
+                    && y < y1
+            })
+            .count();
+        n as i32 - 1
     }
 
     /// Who keeps hitting it becomes the enemy (0x4845e0).
@@ -2006,6 +2120,32 @@ impl Scene {
                     Ok(()) => PartStep::Started(0),
                     Err(_) => PartStep::Wait,
                 }
+            }
+            Op::Study(n @ (33 | 34)) => {
+                // The temples' next spell (Temple of the Sea 33, of War 34;
+                // `get magic`, 1000 amber).
+                use crate::magic::Temple;
+                let temple = if n == 33 { Temple::Sea } else { Temple::War };
+                if part.state == 2 {
+                    return if ai.magic.learning(temple).is_some() {
+                        PartStep::Wait
+                    } else {
+                        PartStep::Done
+                    };
+                }
+                if ai.magic.all_known(temple) {
+                    return PartStep::Done;
+                }
+                if self.base_building(ai, b, temple.class()).is_none() {
+                    return PartStep::Wait;
+                }
+                let cost = crate::magic::LEARN_COST as i64;
+                if (self.funds(owner).0 as i64) < cost {
+                    return PartStep::Hold;
+                }
+                self.earn(owner, -cost, 0);
+                ai.magic.start_learning(temple);
+                PartStep::Started(0)
             }
             Op::Study(n) => {
                 let Some(upgrade) = study(n, ai.nation()) else {
@@ -3313,6 +3453,147 @@ impl Scene {
         }
     }
 
+    /// The commander reads the spells asked (letters 6 and 7, 0x482160):
+    /// at a place at most every 1500-3000 ticks, on a fleet every
+    /// 3000-4500, sooner when urgent; the spell by the enemies about when
+    /// none was named.
+    fn read_spell_asks(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        for ask in std::mem::take(&mut ai.asks).into_iter().rev() {
+            if ask.letter == 6 {
+                let r = ai.roll(0x5dd);
+                if r + 0x5dc + ai.flotillas[f].clocks[0] > now && !ask.urgent {
+                    continue;
+                }
+                let kind = ask.kind.unwrap_or_else(|| {
+                    if ask.enemies < 12 {
+                        if ai.rng.next() & 1 == 1 {
+                            11
+                        } else {
+                            14
+                        }
+                    } else if ask.enemies < 18 {
+                        if ai.rng.next() & 1 == 1 {
+                            6
+                        } else {
+                            11
+                        }
+                    } else if ai.roll(3) == 1 {
+                        10
+                    } else {
+                        6
+                    }
+                });
+                if self.computer_cast(ai, ask.base, kind, Some(ask.cell), ask.rect, None) {
+                    ai.flotillas[f].clocks[0] = now;
+                }
+            } else {
+                let r = ai.roll(0x5dd);
+                let Some(fl) = ask.flotilla.filter(|&k| k < ai.flotillas.len()) else {
+                    continue;
+                };
+                if (r + 3000 + ai.flotillas[f].clocks[1] > now && !ask.urgent)
+                    || ai.flotillas[fl].ships.is_empty()
+                {
+                    continue;
+                }
+                let kind = ask.kind.unwrap_or_else(|| {
+                    if ai.roll(3) == 1 {
+                        9
+                    } else if ai.rng.next() & 0xf == 5 {
+                        16
+                    } else if ai.rng.next() & 1 == 1 {
+                        12
+                    } else {
+                        15
+                    }
+                });
+                let base = ai.flotillas[fl].base;
+                if self.computer_cast(ai, base, kind, None, None, Some(fl)) {
+                    ai.flotillas[f].clocks[1] = now;
+                }
+            }
+        }
+    }
+
+    /// Base `b`'s town casts spell `kind` (5-16, as 0x47ae10's; 0x42a500
+    /// sends it as command 0x22) if one of the player's temples knows it
+    /// and the player can pay (0x487640, 0x43fee0): at `cell`, over own
+    /// things in `rect`, or on flotilla `fl`'s ships. Kind 14 is not
+    /// known here.
+    fn computer_cast(
+        &mut self,
+        ai: &mut Computer,
+        b: usize,
+        kind: u32,
+        cell: Option<(i32, i32)>,
+        rect: Option<Cells>,
+        fl: Option<usize>,
+    ) -> bool {
+        use crate::magic::Spell;
+        let spell = match kind {
+            5 | 13 => Spell::Reef,
+            6 => Spell::Whirlpool,
+            7 => Spell::Waterspout,
+            8 => Spell::Monster,
+            9 => Spell::Flame,
+            10 => Spell::Lightning,
+            11 => Spell::Fireball,
+            12 => Spell::Phantom,
+            15 => Spell::ProtectWeapons,
+            16 => Spell::ProtectMagic,
+            _ => return false,
+        };
+        let owner = ai.owner;
+        if ai.bases.get(b).and_then(|b| b.site).is_none() || !ai.magic.knows(spell) {
+            return false;
+        }
+        let temple = spell.temple().class();
+        let has_temple = self.objects.iter().any(|o| {
+            o.owner == Some(owner)
+                && o.class == ObjectClass::Building(temple)
+                && self.construction_at(o.id).is_none()
+        });
+        let (amber, fish) = spell.cost();
+        let (have_a, have_f) = self.funds(owner);
+        if !has_temple || have_a < amber || have_f < fish {
+            return false;
+        }
+        let targets: Vec<u32> = match (rect, fl) {
+            (_, Some(fl)) => ai.flotillas[fl].ships.clone(),
+            (Some((x, y, w, h)), None) => (0..self.objects.len())
+                .filter(|&i| {
+                    let (cx, cy) = self.cell_of(i);
+                    self.objects[i].owner == Some(owner)
+                        && self.objects[i].combat.is_some()
+                        && cx >= x
+                        && cx < x + w
+                        && cy >= y
+                        && cy < y + h
+                })
+                .map(|i| self.objects[i].id)
+                .collect(),
+            _ => Vec::new(),
+        };
+        match spell {
+            Spell::Flame => ai.flame += crate::magic::FLAME_SECONDS,
+            Spell::Phantom | Spell::ProtectWeapons | Spell::ProtectMagic => {
+                if targets.is_empty() {
+                    return false;
+                }
+                self.pending_ship_casts
+                    .extend(targets.iter().map(|&id| (spell, id)));
+            }
+            _ => {
+                let Some((cx, cy)) = cell else {
+                    return false;
+                };
+                self.pending_casts.push((spell, cx, cy, Some(owner)));
+            }
+        }
+        self.earn(owner, -(amber as i64), -(fish as i64));
+        true
+    }
+
     /// The commander's turn (0x482160): pick a new enemy when the last is
     /// gone, send the warships against it when strong enough, and found
     /// settlements.
@@ -3355,6 +3636,14 @@ impl Scene {
                 let ready = self.ready_warships(ai);
                 if need <= ready {
                     if let Some(rect) = self.attack_target(ai) {
+                        // The Flame for the attack, now and then.
+                        let r = ai.roll(0x5dd);
+                        if (r + 3000 + ai.flotillas[f].clocks[1] <= now || ai.roll(6) == 3)
+                            && !ai.bases.is_empty()
+                            && self.computer_cast(ai, 0, 9, None, None, None)
+                        {
+                            ai.flotillas[f].clocks[1] = now;
+                        }
                         let len = ai.roll(0x1d4d) as i32 + 15000;
                         let mut p = [0; 12];
                         p[0] = 0;
@@ -3384,6 +3673,7 @@ impl Scene {
                 }
             }
         }
+        self.read_spell_asks(ai, f, now);
         // A new settlement.
         let r = ai.roll(0x1195);
         if r + 0x1d4c + ai.flotillas[f].clocks[2] >= now {
@@ -4575,6 +4865,58 @@ mod tests {
         }
         scene.send_worn(&mut ai, f, 10_000);
         assert!(ai.flotillas[ai.reserve].ships.contains(&id));
+    }
+
+    /// The temples' studies (order 117, studies 33/34) teach the computer
+    /// spells, and its commander casts them when its town is under fire
+    /// from many (letters 6 and 7, 0x488960, 0x482160).
+    #[test]
+    fn computer_learns_and_casts_spells() {
+        use crate::magic::{Spell, Temple};
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        for _ in 0..600 {
+            scene.update(0.1, &data, &mut caches);
+        }
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        let owner = ai.owner;
+        // A Temple of War for the base (its workshop, renamed).
+        let w = scene
+            .objects
+            .iter()
+            .position(|o| o.owner == Some(owner) && o.class == ObjectClass::Building(WORKSHOP))
+            .unwrap();
+        scene.objects[w].class = ObjectClass::Building(TEMPLE_OF_WAR);
+        scene.earn(owner, 100_000, 100_000);
+        let part = Part {
+            op: Op::Study(34),
+            ..Default::default()
+        };
+        let step = scene.order_part(&mut ai, 0, None, part, &data, &mut caches);
+        assert!(matches!(step, PartStep::Started(_)));
+        assert!(ai.magic.learning(Temple::War).is_some());
+        // Learnt in 100 ticks: run the war temple through its list.
+        for _ in 0..6 {
+            ai.magic.start_learning(Temple::War);
+            ai.magic.update(crate::magic::LEARN_SECONDS);
+        }
+        assert!(ai.magic.knows(Spell::Lightning) && ai.magic.knows(Spell::Flame));
+        // The Flame on its own.
+        let funds = scene.funds(owner);
+        assert!(scene.computer_cast(&mut ai, 0, 9, None, None, None));
+        assert!(ai.flame > 0.0 && scene.funds(owner).0 < funds.0);
+        // Lightning at a cell.
+        assert!(scene.computer_cast(&mut ai, 0, 10, Some((5, 5)), None, None));
+        assert_eq!(
+            scene.pending_casts.last().map(|c| c.0),
+            Some(Spell::Lightning)
+        );
+        // Unknown kinds and spells of a temple it lacks are not cast.
+        assert!(!scene.computer_cast(&mut ai, 0, 14, Some((5, 5)), None, None));
+        assert!(!scene.computer_cast(&mut ai, 0, 6, Some((5, 5)), None, None));
     }
 
     #[test]

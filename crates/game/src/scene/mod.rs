@@ -1472,6 +1472,11 @@ impl Scene {
         self.run_training(dt);
         self.run_research(dt);
         self.magic.update(dt);
+        // Computer players learn spells in 100 ticks, not 200 (0x439260).
+        for c in &mut self.computers.players {
+            c.magic.update(dt * 2.0);
+            c.flame = (c.flame - dt).max(0.0);
+        }
         self.seat_upkeep(dt);
         self.run_statuses(dt, data, caches);
         self.run_fires(dt, data, caches);

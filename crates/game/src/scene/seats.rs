@@ -180,6 +180,9 @@ impl Scene {
         if self.human.is_some_and(|h| (h.nation, h.slot) == owner) {
             return self.flame;
         }
+        if let Some(c) = self.computers.players.iter().find(|c| c.owner == owner) {
+            return c.flame;
+        }
         self.seat_of(owner).map_or(0.0, |k| self.seats[k].flame)
     }
 }
