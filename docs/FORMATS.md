@@ -1588,10 +1588,15 @@ Unloading (0x4ad9f0) draws the ship a new priority of 91 + rand % 10 each
 time (when its priority is 1-234), above the 90 of ships coming in to
 gather, so a ship leaving the berth may push them aside.
 
-When a navy gathering zone has no deposit left, its idle ships make for
-their places in the fleet by plain moves (0x4ca290, 0x4cf070) and those
-still laden go to unload (0x4c6640, priority 90); the port sends idle
-zone gatherers to the zone's middle.
+When a navy gathering zone has no deposit left (0x4ca290, the search
+0x4c5b90 finding none), each of its ships: on the zone's list of points
+(+0x61; 0x4cea20 finds the ship's), once lying still sails by a plain move
+to the next point (0x4ce7c0 steps the list, wrapping by its last argument;
+0x4cf070); laden, goes to unload (0x4c6640, priority 90); idle in the
+zone, is sent message `*` (0x4d8b30: 1, 1, 0 and the id of a ship of the
+zone picked at random) whose handling is not decoded. When none is laden,
+listed or under way, a human's zone is marked done (+0x5d). The port sends
+idle zone gatherers to the zone's middle.
 
 Pushing aside (0x4b4b50): the blocker picks at random one of the eight
 cells about it that it may enter; failing one, a cell held by another
