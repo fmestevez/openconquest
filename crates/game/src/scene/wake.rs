@@ -175,6 +175,24 @@ pub struct Droplet {
     pub age: f32,
     /// `TRAKS00` (true) or `TRAKS14`.
     pub small: bool,
+    /// A projectile's trail instead: its particle kind (`TRAKS<kind>`).
+    pub trail: Option<u8>,
+}
+
+impl Droplet {
+    /// A projectile's trail particle of `kind` at `(x, y)`, drifting
+    /// `v` tenths of a pixel a tick (0x4974d0 through 0x48fc90).
+    pub fn trail(kind: u8, x: f32, y: f32, v: (f32, f32)) -> Self {
+        Self {
+            x0: x,
+            y0: y,
+            v: (v.0 / 10.0, v.1 / 10.0),
+            a: (0.0, 0.0),
+            age: 0.0,
+            small: false,
+            trail: Some(kind),
+        }
+    }
 }
 
 impl Droplet {
@@ -199,9 +217,16 @@ impl Scene {
     /// fade.
     pub(super) fn run_wakes(&mut self, dt: f32) {
         let (small, big) = (self.wake_art.0.len(), self.wake_art.1.len());
+        let trail_frames: std::collections::BTreeMap<u8, usize> =
+            self.trail_art.iter().map(|(k, f)| (*k, f.len())).collect();
         self.droplets.retain_mut(|d| {
             d.age += dt;
-            d.frame(if d.small { small } else { big }).is_some()
+            let n = match d.trail {
+                Some(k) => trail_frames.get(&k).copied().unwrap_or(0),
+                None if d.small => small,
+                None => big,
+            };
+            d.frame(n).is_some()
         });
         self.wake_clock += dt;
         // "Graphic trails" off: no new droplets (0x4a3f40 asks
@@ -246,6 +271,7 @@ impl Scene {
                     a: ((px * accel) as f32 / 20.0, (py * accel) as f32 / 20.0),
                     age: 0.0,
                     small: SMALL[k],
+                    trail: None,
                 });
             }
         }

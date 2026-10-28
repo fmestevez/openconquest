@@ -852,7 +852,11 @@ every 20 pixels from (8, 8) of the view, 0x4ff390), the oldest going every
 (0x4ff4c0); button animation off keeps a hovered button's first frame
 (0x4f2a90 zeroes its frame); graphic trails gate the ships' wake droplets
 (0x4a3f40) and the trails of projectile letters 12, 13, 16-18 (0x4974d0,
-particles of kinds 8, 1, 7, 8, 9 through 0x48fc90; not ported); lighting
+in flight a particle a tick through 0x48fc90: `TRAKS<kind>`, kinds 8, 1
+for Greek fire and quick lime where they are, 7, 8, 9 for flaming
+letters 16-18 drifting 10 tenths of a pixel a tick down and right; from
+the picture's top left plus 0x5975c8 by letter: 9, 14, 6, 8, 10 on both
+axes in every direction); lighting
 effects set the sprite system's `+0x638` (0x4ed8d0: 0 on, 1 off), beside
 its remap table, read nowhere found (the port leaves shadows out with it
 off); pack save file is passed to the archive writer (0x51f4c0). Defaults read

@@ -6409,3 +6409,52 @@ fn sounds_follow_the_panel_switches() {
     assert_eq!(sound_kind("pit3"), SoundKind::Ambient);
     assert_eq!(sound_kind("deny"), SoundKind::Always);
 }
+
+/// Greek fire in flight leaves a trail of `TRAKS08` particles a tick, with
+/// graphic trails on (0x4974d0); none with them off (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn greek_fire_leaves_a_trail() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let ships: Vec<usize> = (0..scene.objects.len())
+        .filter(|&i| scene.objects[i].ship.is_some())
+        .take(2)
+        .collect();
+    let (from, target) = (
+        (scene.objects[ships[0]].x, scene.objects[ships[0]].y),
+        scene.objects[ships[1]].id,
+    );
+    let fire = |scene: &mut Scene, caches: &mut Caches| {
+        scene.fire_shot(
+            super::shot::Firing {
+                item: combat::GREEK_FIRE,
+                letter: None,
+                flaming: true,
+                from,
+                target,
+                strikes: true,
+                damage: 0.0,
+                wounds: 0.0,
+                wear: 0.0,
+                rope: None,
+            },
+            &data,
+            caches,
+        );
+    };
+    scene.droplets.clear();
+    scene.trails = false;
+    fire(&mut scene, &mut caches);
+    scene.run_shots(0.2, &data, &mut caches);
+    assert!(scene.droplets.iter().all(|d| d.trail.is_none()));
+    scene.trails = true;
+    fire(&mut scene, &mut caches);
+    scene.run_shots(0.2, &data, &mut caches);
+    assert!(scene.droplets.iter().any(|d| d.trail == Some(8)));
+    assert!(!scene.trail_art[&8].is_empty(), "TRAKS08 loaded");
+}

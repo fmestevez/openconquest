@@ -160,10 +160,13 @@ pub fn draw_objects(
     }
     // Ships' wakes, under the hulls.
     for d in &scene.droplets {
-        let frames = if d.small {
-            &scene.wake_art.0
-        } else {
-            &scene.wake_art.1
+        let frames = match d.trail {
+            Some(k) => match scene.trail_art.get(&k) {
+                Some(f) => f,
+                None => continue,
+            },
+            None if d.small => &scene.wake_art.0,
+            None => &scene.wake_art.1,
         };
         if let Some(layers) = d.frame(frames.len()).and_then(|f| frames.get(f)) {
             let (x, y) = d.at();

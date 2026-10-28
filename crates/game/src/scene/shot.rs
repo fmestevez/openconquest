@@ -351,9 +351,57 @@ impl Scene {
                 landed.push(k);
             }
         }
+        self.throw_trails(dt, data, caches);
         for k in landed.into_iter().rev() {
             let s = self.shots.swap_remove(k);
             self.land_shot(s, data, caches);
+        }
+    }
+
+    /// With graphic trails, projectiles leave a particle a tick (0x4974d0,
+    /// in flight): Greek fire (letter 12) kind 8 and quick lime (13) kind
+    /// 1 where they are; flaming shots of letters 16, 17 and 18 kinds 7, 8
+    /// and 9 drifting a pixel a tick down and right; each from the
+    /// picture's top left plus 0x5975c8 by letter (the same in every
+    /// direction).
+    fn throw_trails(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+        self.trail_clock += dt;
+        let tick = crate::clock::TICK;
+        while self.trail_clock >= tick {
+            self.trail_clock -= tick;
+            if !self.trails {
+                continue;
+            }
+            let mut new = Vec::new();
+            for s in &self.shots {
+                let (kind, off, v) = match (s.letter, s.flaming) {
+                    (12, _) => (8, 9.0, 0.0),
+                    (13, _) => (1, 14.0, 0.0),
+                    (16, true) => (7, 6.0, 10.0),
+                    (17, true) => (8, 8.0, 10.0),
+                    (18, true) => (9, 10.0, 10.0),
+                    _ => continue,
+                };
+                let Some(l) = s.layer() else { continue };
+                let (left, top) = (
+                    s.x - l.image.width as f32 / 2.0,
+                    s.y - l.image.height as f32 / 2.0,
+                );
+                new.push(super::wake::Droplet::trail(
+                    kind,
+                    left + off,
+                    top + off,
+                    (v, v),
+                ));
+            }
+            for d in &new {
+                let kind = d.trail.unwrap_or(0);
+                self.trail_art.entry(kind).or_insert_with(|| {
+                    objects::sequence_frames(data, caches, &format!("TRAKS{kind:02}"))
+                        .unwrap_or_default()
+                });
+            }
+            self.droplets.extend(new);
         }
     }
 

@@ -266,8 +266,13 @@ pub struct Scene {
     pub gull_art: std::rc::Rc<(Frames, Frames)>,
     /// Ships' wakes (only shown) and their sprites: `TRAKS00`, `TRAKS14`.
     pub droplets: Vec<wake::Droplet>,
-    /// The configuration's "graphic trails": ships throw off droplets.
+    /// The configuration's "graphic trails": ships throw off droplets,
+    /// some projectiles leave trails.
     pub trails: bool,
+    /// Projectiles' trail particles by kind (`TRAKS<kind>`), and the
+    /// tick clock they come by.
+    pub trail_art: BTreeMap<u8, Frames>,
+    trail_clock: f32,
     /// Flocks of sheep (only shown), their clock, and their pictures by
     /// direction, grazing and walking (`SHEEP_<dir><1|2>`).
     pub flocks: sheep::Flocks,
@@ -545,6 +550,8 @@ impl Scene {
             gull_rng: Rng(0x6011_5eed),
             droplets: Vec::new(),
             trails: true,
+            trail_art: BTreeMap::new(),
+            trail_clock: 0.0,
             unloaded: Vec::new(),
             sparkles: Default::default(),
             flocks: Default::default(),
