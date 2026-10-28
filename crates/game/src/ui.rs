@@ -120,6 +120,9 @@ pub struct Interface {
     pub load_art: load_panel::LoadArt,
     /// The green tick where a ship was sent (`TAKE_CMD`, controlm).
     take_cmd: Vec<Image>,
+    /// A site refused (`VETOBUILD`, controlm; gcursor.cpp 0x516010):
+    /// frame 0 a cell, 1 a settlement's two by two.
+    veto: Vec<Image>,
     /// The object info in the strip below the view.
     info_art: crate::object_info::InfoArt,
     /// The group panel's and the big slot's pictures (`info_panel`).
@@ -305,6 +308,14 @@ impl Interface {
                 .filter_map(|i| {
                     let menus = data.menus.as_ref()?;
                     data.load_image(menus, &format!("TAKE_CMD{i:02}"), false)
+                        .ok()
+                        .flatten()
+                })
+                .collect(),
+            veto: (0..2)
+                .filter_map(|i| {
+                    let menus = data.menus.as_ref()?;
+                    data.load_image(menus, &format!("VETOBUILD_{i}"), false)
                         .ok()
                         .flatten()
                 })
@@ -1440,11 +1451,26 @@ impl GameView<'_> {
         if let Some(b) = self.select_box {
             crate::render::draw_box(frame, &screen, b);
         }
-        // Where it may go, the building as it will stand; where not, a red
-        // frame hatched across its ground.
+        // Where it may go, the building as it will stand; where not, the
+        // hatched `VETOBUILD` at the site's top-left cell (0x516010:
+        // frame 1 for a settlement, else 0).
+        let veto = self.interface.and_then(|ui| {
+            ui.veto
+                .get(usize::from(self.site_cells >= 2))
+                .or(ui.veto.first())
+        });
         match (self.site, self.site_preview) {
             (Some((_, true)), Some(b)) => {
                 crate::render::draw_object(frame, &screen, camera, &lut, b, self.time_ms)
+            }
+            (Some((cell, false)), _) if veto.is_some() => {
+                let Some(img) = veto else { return };
+                let t = openconquest_formats::map::TILE_SIZE as f32;
+                let (cx, cy) = (
+                    cell.0 as f32 * t + img.width as f32 / 2.0,
+                    cell.1 as f32 * t + img.height as f32 / 2.0,
+                );
+                crate::render::draw_centred(frame, &screen, camera, &lut, img, cx, cy);
             }
             (Some((cell, ok)), _) => draw_site(frame, &screen, camera, cell, self.site_cells, ok),
             _ => {}

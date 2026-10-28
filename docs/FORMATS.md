@@ -1487,7 +1487,11 @@ Clicks (gcursor.cpp 0x5180e0, `CursorClassTy`; message 0x62 the left button,
 - **Confirmation.** The tick (`CreateConfirmSprite`, `TAKE_CMD`) follows
   modes 7, 12, 13, 20, 30 and 50 only. It does not follow gathering or
   attacking. The cursor class's only other sprite is `VETOBUILD`, for
-  building sites.
+  building sites: CreateBuildSprite (0x516010) shows, where the site is
+  refused (pointer mode 100), `VETOBUILD` (controlm) frame 1 for a
+  settlement's two by two, else frame 0 (a cell's square of hatching,
+  red), its top left on the site's cell; where it may go, the building's
+  own picture (0x4288c0), forts and ports through the blend at 0x5c1358.
 
 Buildings (LandObjClassTy 0x422e30, TownObjClassTy 0x43bd60): the
 picture's damage digit is ceil(health x 2 / 67) (0x594ab0) for a standing
