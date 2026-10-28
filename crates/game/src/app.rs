@@ -4320,8 +4320,10 @@ impl App {
     }
 
     /// Ends a left click or drag in the world view: a click selects what
-    /// is under it (with Shift, adds or removes an own ship), a drag every
-    /// own ship inside the box (with Shift, added to the selection).
+    /// is under it (with Shift, adds or removes an own ship, 0xc455; with
+    /// Ctrl, its group), a drag every own ship inside the box (with Shift,
+    /// added to the selection). The box is the port's own: the original
+    /// selects by clicks and groups only.
     fn finish_select(&mut self, from: PhysicalPosition<f64>, to: PhysicalPosition<f64>) {
         if self.pending == Some(crate::commands::CONVOY) {
             let order = match (self.world_at(from), self.world_at(to)) {
@@ -4379,6 +4381,17 @@ impl App {
         }
         let shift = self.modifiers.shift_key();
         let dragged = (from.x - to.x).abs() + (from.y - to.y).abs() > BOX_THRESHOLD;
+        // Ctrl-click on an own ship selects its group (0x5180e0 with
+        // MK_CONTROL: message 0xc456, 0x49ecb0, the ship's fleet +0x5c).
+        let ctrl = self.modifiers.control_key() || self.modifiers.super_key();
+        if ctrl && !shift && !dragged {
+            if let Some(id) = self.object_at(to).filter(|&id| self.own_ship(id)) {
+                if let Some(n) = self.groups.iter().position(|g| g.contains(&id)) {
+                    self.recall_group(n);
+                    return;
+                }
+            }
+        }
         let mut chosen: Vec<u32> = if dragged {
             let (a, b) = (self.view_world_any(from), self.view_world_any(to));
             let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));

@@ -1473,6 +1473,14 @@ Clicks (gcursor.cpp 0x5180e0, `CursorClassTy`; message 0x62 the left button,
   13 unload, 14 build, 15 repair, 16 magic, 20 treasure, 30 info, 40 sell,
   50 behaviour, 100 ban, 101 `HTEXT`, 102 clock). So with ships selected it
   gives orders, and elsewhere it selects.
+- **Own ships** (mode 5, by the click's key flags): a plain click clears
+  the selection (0x518d00) and selects the ship (message 0xc453 to the
+  player's fleets, Flotil.cpp 0x49ab30); with Shift (MK_SHIFT) it is added
+  to the selection, or taken out if in it (0xc455, 0x49e850); with Ctrl
+  (MK_CONTROL) its whole fleet is selected (0xc456, 0x49ecb0, the ship's
+  fleet number +0x5c). There is no rectangle to select with: the cursor,
+  field and fleet code handle no drag but the zone orders' (cursor mode
+  0x34, cancelled by the right button).
 - **Right button.** With something selected it cycles the pointer through
   the modes possible there (`+0xe4` stepping through the mask `+0xe2`).
   With nothing selected it returns to the standard pointer.
