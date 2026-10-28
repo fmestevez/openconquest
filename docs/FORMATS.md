@@ -1493,8 +1493,18 @@ up plain moves only. The re-plan (0x4a6330) does nothing on the tick the
 route was last planned; a ship one cell from its goal with a priority
 below 51 does not plan when it cannot enter that cell; a ship that has
 not waited plans with 0x4a5740, one that has with 0x4a51b0, both given
-the wait (not decoded: how it weighs ships in the way). A stop (its first
-argument) sets the priority to 0.
+the wait. 0x4a51b0 plans on a copy of the passability map where
+0x4a4e20 marks, within 3 cells of the ship, the cells of other ships as
+closed: those lying still (state 0 or 6), or once the wait passes 50 +
+rand % 30, all not under way (states 4, 5); not those of its own group
+(+0x5e) unless impatient; and when its priority is 51 or more, ships of
+lower priority, or equal priority and a later id, not under way, are
+listed to plan through (0x4a5540) instead, taking that route if 0x4a56a0
+prefers it to the plain one. A stop (its first argument) sets the
+priority to 0. (Tried here on top of the port's own re-planning, these
+rules made battle01's computer economy worse; the port keeps avoiding
+every ship and every ship's destination until the move states are
+ported.)
 
 When a navy gathering zone has no deposit left, its idle ships make for
 their places in the fleet by plain moves (0x4ca290, 0x4cf070) and those
