@@ -296,6 +296,8 @@ enum FleetOrder {
     Found(u32, (i32, i32), u32),
     /// 200: to the docks for repairs.
     Dock,
+    /// 0xbe: take the treasures in an area (0x4da550), bringing them home.
+    Treasure(Cells),
 }
 
 /// What a want table entry asks: (ship type, how many, flag, priority);
@@ -2457,6 +2459,46 @@ impl Scene {
         }
     }
 
+    /// The square about the base's town, from `r` cells and 4 more a time
+    /// (the side 8 more), that holds a treasure; the whole map if none
+    /// does (0x4854f0, counting with 0x48f020).
+    fn treasure_area(&self, ai: &Computer, f: usize, r: i32) -> Cells {
+        let (w, h) = self.map_cells();
+        let b = ai.flotillas[f].base;
+        let Some(t) = ai
+            .bases
+            .get(b)
+            .and_then(|b| b.site)
+            .and_then(|s| self.object_index(s))
+        else {
+            return (0, 0, w, h);
+        };
+        let (tx, ty) = self.cell_of(t);
+        let mut r = r;
+        loop {
+            let (x0, y0) = ((tx - r).max(0), (ty - r).max(0));
+            let side = 2 * r + 1;
+            let (rw, rh) = (side.min(w - x0), side.min(h - y0));
+            if self.treasures_in((x0, y0, rw, rh)).next().is_some() {
+                return (x0, y0, rw, rh);
+            }
+            if rw >= w && rh >= h {
+                return (0, 0, w, h);
+            }
+            r += 4;
+        }
+    }
+
+    /// Treasures lying in an area (class 700, 0x4d9920).
+    fn treasures_in(&self, (x, y, w, h): Cells) -> impl Iterator<Item = usize> + '_ {
+        (0..self.objects.len()).filter(move |&i| {
+            self.objects[i].class == ObjectClass::Treasure && {
+                let (cx, cy) = self.cell_of(i);
+                cx >= x && cx < x + w && cy >= y && cy < y + h
+            }
+        })
+    }
+
     fn deposits_in(&self, res: Resource, (x, y, w, h): Cells) -> usize {
         let t = TILE_SIZE as f32;
         self.objects
@@ -2495,12 +2537,29 @@ impl Scene {
                 fl.p[1] = total as i32;
                 ai.push(f, 2);
             }
-            // The treasure hunt (order 0xbe) is not ported: on to the zone.
+            // The treasure hunt: order 0xbe in the area about the base
+            // holding a treasure (0x4854f0), until none is left or the time
+            // is up.
             2 => {
-                if Self::size(ai, f) < 1 {
-                    ai.push(f, 0);
+                if !fl.step {
+                    if Self::size(ai, f) < 1 {
+                        ai.push(f, 0);
+                    } else {
+                        let len = fl.p[3] as u32;
+                        let area = self.treasure_area(ai, f, 4);
+                        let fl = &mut ai.flotillas[f];
+                        fl.step = true;
+                        fl.since = now;
+                        fl.len = len;
+                        fl.order = FleetOrder::Treasure(area);
+                        self.give_order(ai, f);
+                    }
                 } else {
-                    ai.push(f, 5);
+                    self.keep_order(ai, f);
+                    let done = self.report(ai, f) == Some(DONE);
+                    if done || Computer::over(&ai.flotillas[f], now) {
+                        ai.push(f, 5);
+                    }
                 }
             }
             5 => {
@@ -3405,7 +3464,10 @@ impl Scene {
         }
         if !matches!(
             order,
-            FleetOrder::Gather(..) | FleetOrder::Guard(_) | FleetOrder::Attack(_)
+            FleetOrder::Gather(..)
+                | FleetOrder::Guard(_)
+                | FleetOrder::Attack(_)
+                | FleetOrder::Treasure(_)
         ) {
             return;
         }
@@ -3470,7 +3532,59 @@ impl Scene {
                     let _ = self.order_repair(id, d);
                 }
             }
+            FleetOrder::Treasure(area) => {
+                let f = ai.flotillas.iter().position(|fl| fl.ships.contains(&id));
+                self.hunt_treasure(ai, f, i, area)
+            }
             FleetOrder::Found(..) | FleetOrder::None => {}
+        }
+    }
+
+    /// One ship of a treasure hunt (0x4da3e0): carrying treasures for the
+    /// settlement it brings them home (0x4d9f50; here alongside the base's
+    /// town), else it sails for the nearest treasure in the area no other
+    /// ship of the flotilla is after (0x4cf070).
+    fn hunt_treasure(&mut self, ai: &Computer, f: Option<usize>, i: usize, area: Cells) {
+        let id = self.objects[i].id;
+        let carrying = self.objects[i]
+            .ship
+            .as_ref()
+            .is_some_and(|s| s.treasures.iter().any(|tr| matches!(tr.kind, 6 | 7 | 27)));
+        if carrying {
+            let home = f
+                .and_then(|f| ai.bases.get(ai.flotillas[f].base))
+                .and_then(|b| b.site)
+                .and_then(|s| self.object_index(s));
+            if let Some(t) = home {
+                let (x, y) = (self.objects[t].x, self.objects[t].y);
+                self.order_move(id, x, y);
+            }
+            return;
+        }
+        let taken: Vec<u32> = f
+            .map(|f| ai.flotillas[f].ships.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|&s| self.object_index(s))
+            .filter_map(|k| match self.objects[k].ship.as_ref()?.task {
+                Some(Task::Take { target }) => Some(target),
+                _ => None,
+            })
+            .collect();
+        let (x, y) = (self.objects[i].x, self.objects[i].y);
+        let mut near: Vec<(f32, u32)> = self
+            .treasures_in(area)
+            .filter(|&k| !taken.contains(&self.objects[k].id))
+            .map(|k| {
+                let o = &self.objects[k];
+                ((o.x - x).hypot(o.y - y), o.id)
+            })
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, t) in near {
+            if self.order_take(id, t).is_ok() {
+                return;
+            }
         }
     }
 
@@ -3511,6 +3625,7 @@ impl Scene {
                         Some(Task::Repair { .. })
                     )
             }),
+            FleetOrder::Treasure(area) => self.treasures_in(area).next().is_none(),
             FleetOrder::Gather(..) | FleetOrder::Guard(_) => false,
         };
         done.then_some(DONE)
@@ -4340,6 +4455,44 @@ mod tests {
     /// In battle01 the computer player (normal) builds its town up, fills
     /// its flotillas with ships, gathers amber and fish, and in the end
     /// sails against the human player, who (doing nothing) loses.
+    /// The builders hunt treasures about their base (task 5 state 2, order
+    /// 0xbe): a treasure lying by a computer's town is taken.
+    #[test]
+    fn computer_hunts_treasures() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        let mut took = false;
+        let mut sent = false;
+        for k in 0..12 * 60 * 10 {
+            scene.update(0.1, &data, &mut caches);
+            let ai = &mut scene.computers.players[0];
+            let Some(f) = ai.flotillas.iter().position(|f| f.role == BUILDERS) else {
+                continue;
+            };
+            if !sent && !ai.flotillas[f].ships.is_empty() {
+                // The builders' round, from its treasure hunt.
+                let mut p = [0; 12];
+                p[7] = 1;
+                ai.set_task(f, 5, p);
+                sent = true;
+            }
+            if sent && k % 10 == 0 {
+                let owner = ai.owner;
+                took |= scene.objects.iter().any(|o| {
+                    o.owner == Some(owner)
+                        && matches!(
+                            o.ship.as_ref().and_then(|s| s.task),
+                            Some(Task::Take { .. })
+                        )
+                });
+            }
+        }
+        assert!(sent && took, "the computer never went for a treasure");
+    }
+
     #[test]
     fn computer_builds_gathers_and_attacks() {
         let Some(data) = data() else {

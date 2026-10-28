@@ -2985,10 +2985,29 @@ Not ported (the port's own instead): the terrain helpers of
 `artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
 simpler searches; zones weigh the lanes before nearness, since ships here
 cannot pass one another), the land fleet's placing of buildings (the
-nearest free cell to the settlement), treasure hunting (order 0xbe), the
-spells, the temples' studies and studies 27-32, repairs (order 96), the
-crews' test for the worn, fleets' behaviour masks (0x482eb0, 0x4847d0),
-and fleet strength (0x50ea70: here one per armed ship or building).
+nearest free cell to the settlement), the spells, the temples' studies
+and studies 27-32, repairs (order 96), the crews' test for the worn, and
+fleets' behaviour masks (0x482eb0, 0x4847d0).
+
+**Treasure hunting** (builders, task 5 state 2): the area is the square
+about the base's town, from 4 cells and 4 more a time, that holds a
+treasure (0x4854f0, counting with 0x48f020); the whole map if none. Order
+0xbe (0x4da550; fleet state 0x79) holds the area, a mask of treasure kinds
+(`+0xb0` bits), and where to bring them: the town's ports (class 0x39,
+0x4d9a70). Each turn (0x4da3e0) a ship with room for a treasure (0x4e6700)
+or none aboard (0x4be800 mode 6) sails to take one (0x4d9690, 0x4cf070);
+a carrier sails home (0x4d9f50). With no treasure left in the area
+(0x4d9920) the order reports done and the round goes on to the zone. Ours
+takes any treasure, nearest first, one ship each, and brings the
+settlement's alongside the base's town, where ours hands them over.
+
+**Strength** (0x50ea70): ships boarding strength (`+0x53c`) / 10 + armour
+(`+0x534`: 40, 70; the ram's `+0x538` tests the armour level for 4 or 5,
+so is 0) + fire (`+0x479`, 0x4bc360: each item's A x 15 x count x mean
+condition / 100, summed, / 100); forts their units' fire (0x446710, x 1.5
+under the Flame) / 10; nests 20 x 0x5c73dc; sea serpents 0x5c75fc / 10,
+Medusa 8800, the sea monster 5000. An area's (0x4a2390) sums foes' and
+creatures' less one; a flotilla's (0x482d80, 0x4a2290) its ships'.
 
 ## Videos (`video/*.avi`; verified)
 
