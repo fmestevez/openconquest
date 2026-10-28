@@ -1829,7 +1829,9 @@ suffice; a unit no longer at its place and index drops the notes of all
 gone (0x418430). A whole structure needs no repair, so its units are not
 mended. At the end (vtable +0x74, 0x419910) a computer player's fort
 (side value 3 or 4) buys back its default arming where it has room.
-Barbarian structures pay too (0x40eba0).
+Barbarian structures pay too (0x40eba0), but only once mending, which
+starts on their Repair command (0x1e, 0x40ef70 sending 0x1389 to
+itself); no player or brain gives it to them, so in play they never mend.
 
 **Gifts.** 0x419e00 (vtable +0x7c) reads the fort's store: kind 9 a
 spell to cast (`+0x1b4`), 10 the Torch, 11 the Armour of Ares, 14 a
