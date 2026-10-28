@@ -98,6 +98,7 @@ impl GameData {
             .flatten()
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|exe| openconquest_formats::string_table(&exe).ok())
+            .map(port_not_moorage)
             .unwrap_or_default();
         let anim = maplib
             .find("ANIM_PALETTE", ResourceKind::PaletteAnimation)
@@ -311,4 +312,21 @@ pub fn find_ci(dir: &Path, name: &str) -> Result<Option<PathBuf>> {
         }
     }
     Ok(None)
+}
+
+/// The port is "MOORAGE" in this English string table, "PORT" in the
+/// release the project follows (likely a localisation): its build button's
+/// caption (0x1b4) and the hints that name it.
+fn port_not_moorage(
+    mut strings: std::collections::HashMap<u32, String>,
+) -> std::collections::HashMap<u32, String> {
+    for s in strings.values_mut() {
+        if s.contains("MOORAGE") || s.contains("moorage") || s.contains("Moorage") {
+            *s = s
+                .replace("MOORAGE", "PORT")
+                .replace("Moorage", "Port")
+                .replace("moorage", "port");
+        }
+    }
+    strings
 }
