@@ -2181,6 +2181,45 @@ fn unique_ships_need_study() {
     assert_eq!(combat::Upgrade::Special(0).max_level(), 1);
 }
 
+/// From the start a workshop makes medium weapons (the original's arming
+/// starts at 1), strong ones after the school's arming; a settlement may
+/// put up the forts whose fallback weapons can be had, the stone fort only
+/// at a town (needs `OPENCONQUEST_DATA`).
+#[test]
+fn arming_opens_weapons_and_forts() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.permits = crate::permits::Permits::ALL;
+    let human = scene.human.unwrap();
+    let owner = (human.nation, human.slot);
+    let own: Vec<usize> = (0..scene.objects.len())
+        .filter(|&i| {
+            scene.is_own(&scene.objects[i])
+                && matches!(scene.objects[i].class, ObjectClass::Building(_))
+        })
+        .take(2)
+        .collect();
+    assert_eq!(own.len(), 2, "two buildings to work with");
+    scene.objects[own[0]].class = ObjectClass::Building(economy::SETTLEMENT);
+    scene.objects[own[1]].class = ObjectClass::Building(WORKSHOP);
+    let site = scene.objects[own[0]].id;
+    assert_eq!(scene.levels_of(Some(owner)).weapons, 0);
+    assert!(scene.can_make(4) && !scene.can_make(6));
+    assert!(scene.fort_allowed(site, 0x34) && scene.fort_allowed(site, 0x35));
+    assert!(!scene.fort_allowed(site, 0x36), "stone forts at towns only");
+    scene.objects[own[0]].class = ObjectClass::Building(TOWN);
+    // The stone fort falls back on ballistae (6), out of reach yet.
+    assert!(!scene.fort_allowed(site, 0x36));
+    let mut levels = scene.levels_of(Some(owner));
+    levels.weapons = 1;
+    scene.levels.insert(owner, levels);
+    assert!(scene.can_make(6) && scene.fort_allowed(site, 0x36));
+}
+
 /// The smithy studies each armour and ram kind to level 2, the silver and
 /// golden kinds once the school has studied that far, one armour and one
 /// ram study at a time; armour cuts more by its level (needs

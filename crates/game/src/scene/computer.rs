@@ -2838,19 +2838,21 @@ impl Scene {
                     ai.go(f, 1);
                     return;
                 };
+                // The biggest fort the town may put up (0x480070): stone
+                // three times in four, else middle; or middle; or wood.
                 let b = ai.flotillas[f].base;
                 let town = ai.bases.get(b).and_then(|b| b.site);
-                let is_town = town
-                    .and_then(|t| self.object_index(t))
-                    .is_some_and(|i| self.class_of(i) == Some(TOWN));
-                let class = if is_town {
+                let allowed = |class| town.is_some_and(|t| self.fort_allowed(t, class));
+                let class = if allowed(0x36) {
                     if ai.roll(4) != 0 {
                         0x36
                     } else {
                         0x35
                     }
-                } else if town.is_some() {
+                } else if allowed(0x35) {
                     0x35
+                } else if allowed(0x34) {
+                    0x34
                 } else {
                     ai.go(f, 1);
                     return;
@@ -5147,7 +5149,12 @@ mod tests {
             }
         }
         assert!(unloaded, "the computer's merchants never unloaded");
-        assert!(attacked, "the computer never attacked");
+        // Its guards may sink a passive human before the first grand
+        // attack is due (some 10 minutes in on normal).
+        assert!(
+            attacked || defeat_at.is_some_and(|k| k < 10 * 60 * 10),
+            "the computer never attacked"
+        );
         assert_eq!(
             scene.computers.players[0].enemy,
             Some(human.0 * 4 + human.1)

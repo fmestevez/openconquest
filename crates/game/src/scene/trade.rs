@@ -270,16 +270,42 @@ impl Scene {
 
     /// Whether the player may have `item` made (0x43da20 case 1, without
     /// the price): it is permitted, the sage school's arming has reached
-    /// its group (player +0xa3 >= item / 3), and they have a workshop, and
+    /// its group (player +0xa3, from 1, >= item / 3), and they have a workshop, and
     /// for swordsmen or item 5 a smithy.
     pub fn can_make(&self, item: u8) -> bool {
-        let Some(h) = self.human else { return false };
-        let have = self.buildings_of((h.nation, h.slot));
+        self.human
+            .is_some_and(|h| self.can_make_by((h.nation, h.slot), item))
+    }
+
+    /// Whether player `owner` may have `item` made (see `can_make`).
+    pub(super) fn can_make_by(&self, owner: (u32, u32), item: u8) -> bool {
+        let have = self.buildings_of(owner);
         let owns = |class: u32| have & (1 << (class - SETTLEMENT)) != 0;
         self.permits.item(item)
-            && self.levels_of(Some((h.nation, h.slot))).weapons >= item / 3
+            // The original's arming (+0xa3) starts at 1: ours one less.
+            && self.levels_of(Some(owner)).weapons + 1 >= item / 3
             && owns(WORKSHOP)
             && (!matches!(item, 2 | 5) || owns(economy::SMITHY))
+    }
+
+    /// Whether settlement `site` may put up a fort of `class` (0x43d430
+    /// with its items checked, no price): permitted, the stone fort only
+    /// at a town, and each fallback weapon in its stock or to be made by
+    /// its owner.
+    pub(super) fn fort_allowed(&self, site: u32, class: u32) -> bool {
+        let Some(i) = self.object_index(site) else {
+            return false;
+        };
+        let Some(owner) = self.objects[i].owner else {
+            return false;
+        };
+        let stock = self.garrison(site);
+        let (_, fallbacks) = combat::fort_arming(class);
+        self.permits.building(class)
+            && (class != 0x36 || self.objects[i].class == ObjectClass::Building(TOWN))
+            && fallbacks
+                .iter()
+                .all(|&w| stock[w as usize] > 0 || self.can_make_by(owner, w))
     }
 
     /// Whether the player has ship type `kind` unlocked (0x43da20 case 4,

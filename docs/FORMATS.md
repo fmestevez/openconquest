@@ -2740,7 +2740,7 @@ the sage school, 0x436030 and 0x4361c0 the workshop, 0x43c740 settlements,
 | 73, 74 | building a small, big fortress (the big one in towns); docks are free |
 | 8, 10, 11, 13 | settlement commands 0x05 (load), 0x3a (become a town), 0x11 (repair), 0x12 |
 | 37 | upgrading a shipyard to a dock (0x3b) |
-| 15-17 | items of group item / 3 (marines, medium, strong weapons; also the arming studied >= the group) |
+| 15-17 | items of group item / 3 (marines, medium, strong weapons; also the arming studied, +0xa3 from 1, >= the group: medium weapons from the start) |
 | 18-26 | workshop research of group g: range 18 + 3g, damage 19 + 3g, rate 20 + 3g |
 | 29, 30 | armour level 1, 2 (silver, golden): fitting it (also the armour research), and researching it from level - 1 |
 | 32, 33 | ram level 1, 2 (fitting); ram research level l to l + 1 needs 24 + l |
@@ -2903,7 +2903,7 @@ computer while the enemy is human) becomes the enemy.
 |------|---------|------|------|
 | 0 manager | 0x480580 | 2 (0x47d2e0) | each base's building script and founding; serves the ship requests (0x480270) |
 | 2 amber, 3 fish | 0x480680, 0x480840 | 4 (0x47dc60) | gather (order 0x78) in the area about the base holding more than 3 deposits (from 4 cells, +2 a time, 0x485380) for 7500 ticks (fish 15000), sail to the zone (100) for 750-1500, then pick the resource: amber gatherers turn to fish while fish < 3000 and amber > 4500; fish gatherers to amber when fish > 3000 and amber < 2000, or 1 in 11; 7500 ticks for their own resource, 3000 otherwise, fish x 3 |
-| 5 builders | 0x480a00 | 6 (0x47f200), 5 (0x47dfb0) | found a guarding fort (order 0x8c; 0x36 or 0x35 by a town, 1 in 4 medium, 0x35 by a settlement) at `LAiFindPlaceGuardianFortress` (0x409b30), unless there are more than map cells / 70 + 10 forts; when done or impossible, task 5: hunt treasure (0xbe, 3000-4500 ticks), sail to the zone (250-500), hunt leviathans (0x192, 6000-10500), gather (500-1500; fish while fish < 1000), the round cut to 2/3 on normal, 1/2 on hard; then task 6 again |
+| 5 builders | 0x480a00 | 6 (0x47f200), 5 (0x47dfb0) | found a guarding fort (order 0x8c; the biggest the base's town may put up, 0x480070 asking 0x43d430 with its items checked: stone 0x36, 1 in 4 middle instead; else middle 0x35; else wood 0x34; none, the task gives up) at `LAiFindPlaceGuardianFortress` (0x409b30), unless there are more than map cells / 70 + 10 forts; when done or impossible, task 5: hunt treasure (0xbe, 3000-4500 ticks), sail to the zone (250-500), hunt leviathans (0x192, 6000-10500), gather (500-1500; fish while fish < 1000), the round cut to 2/3 on normal, 1/2 on hard; then task 6 again |
 | 6 guard | 0x481a10 | 7 (0x47eed0) | guard its zone (order 0x6e) |
 | 7 defence | 0x4815a0 | 8 (0x47eb70) | guard its zone; given an area (help, the base attacked, the grand attack) attack it (order 0x70) for 9000-18000 ticks |
 | 8 raiders | 0x480c40 | 9 (0x47e3c0) | guard the zone 6000-15000 ticks until as many ships as the target size (0x485650), wait 1000, attack one of the enemy's towns (100) or settlements (50) (0x485be0) 6000-15000 ticks, back at 3 ships; on normal and hard with more than 4 ships they strike early at a town where the enemy is weaker (0x485fc0) |
