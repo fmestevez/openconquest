@@ -67,7 +67,10 @@ pub enum Check {
     GraphicTrails,
     Lighting,
     PackSaves,
-    /// This port's: right click gives orders (kept in `config.json`).
+    /// This port's (kept in `config.json`): left click selects, a double
+    /// click every own ship of its kind in view, a click on nothing lets
+    /// go, dragging draws a selection box, right click gives orders.
+    /// Without it the mouse is the original's.
     ModernMouse,
     UnitReport,
     BattleSounds,

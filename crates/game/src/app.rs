@@ -60,6 +60,8 @@ const STATUS_TIME: Duration = Duration::from_secs(3);
 
 /// Window pixels the mouse must move before a click becomes a box.
 const BOX_THRESHOLD: f64 = 6.0;
+/// Two clicks on a ship within this make a double click (modern mouse).
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// Where the `k`-th ship of a group goes relative to the point it is sent
 /// to: rings of places 48 pixels apart.
@@ -525,6 +527,9 @@ pub struct App {
     /// meanwhile), and the answer held down.
     ask: Option<Ask>,
     ask_pressed: Option<bool>,
+    /// The own ship last clicked and when (the modern mouse's double
+    /// click).
+    last_click: Option<(u32, Instant)>,
     /// The SoundFont given for MIDI music.
     soundfont: Option<std::path::PathBuf>,
     /// The music's tracks as the sound panel lists them.
@@ -715,6 +720,7 @@ impl App {
             panel_pressed: None,
             ask: None,
             ask_pressed: None,
+            last_click: None,
             soundfont: soundfont.clone(),
             track_names: Vec::new(),
             info_view: Default::default(),
@@ -834,10 +840,16 @@ impl App {
             text: &self.text,
             selected: self.selected,
             group: &self.group,
-            select_box: self.box_from.zip(self.cursor).and_then(|(a, b)| {
-                ((a.x - b.x).abs() + (a.y - b.y).abs() > BOX_THRESHOLD)
-                    .then_some((a.x as f32, a.y as f32, b.x as f32, b.y as f32))
-            }),
+            // A selection box with the modern mouse; a zone being drawn
+            // with either.
+            select_box: self
+                .box_from
+                .zip(self.cursor)
+                .filter(|_| self.settings.modern_mouse || self.pending.is_some())
+                .and_then(|(a, b)| {
+                    ((a.x - b.x).abs() + (a.y - b.y).abs() > BOX_THRESHOLD)
+                        .then_some((a.x as f32, a.y as f32, b.x as f32, b.y as f32))
+                }),
             status,
             time_ms: self.time_ms,
             sent: self
@@ -3944,7 +3956,9 @@ impl App {
         // ships selected, a click where the pointer shows an order (the sea,
         // an enemy, a treasure, a deposit, a dock) carries it out; anywhere
         // else it selects.
-        if self.pending.is_none() {
+        // With the modern mouse the left button only selects (orders go
+        // with the right).
+        if self.pending.is_none() && !self.settings.modern_mouse {
             use crate::cursor::Pointer as P;
             let (pointer, greyed) = self.pointer(pos);
             let order = matches!(
@@ -4311,6 +4325,40 @@ impl App {
         }
     }
 
+    /// Selects every own ship of `id`'s kind within the view, `id` first.
+    fn select_kind_in_view(&mut self, id: u32) {
+        let Some(kind) = self
+            .scene
+            .object_index(id)
+            .and_then(|i| self.scene.objects[i].ship.as_ref())
+            .map(|s| s.kind)
+        else {
+            return;
+        };
+        let (screen, _) = self.placement();
+        let (vw, vh) = self.camera.view_size(&screen);
+        let (x0, y0) = (self.camera.x, self.camera.y);
+        let mut all: Vec<u32> = vec![id];
+        all.extend(
+            self.scene
+                .objects
+                .iter()
+                .filter(|o| {
+                    o.id != id
+                        && self.scene.is_own(o)
+                        && o.ship.as_ref().is_some_and(|s| s.kind == kind)
+                        && (x0..x0 + vw).contains(&o.x)
+                        && (y0..y0 + vh).contains(&o.y)
+                })
+                .map(|o| o.id),
+        );
+        if self.selected != Some(id) {
+            self.page = Page::Main;
+        }
+        self.selected = Some(id);
+        self.group = all.into_iter().skip(1).collect();
+    }
+
     /// Whether `id` is one of the player's ships.
     fn own_ship(&self, id: u32) -> bool {
         self.scene.object_index(id).is_some_and(|i| {
@@ -4380,7 +4428,26 @@ impl App {
             return;
         }
         let shift = self.modifiers.shift_key();
-        let dragged = (from.x - to.x).abs() + (from.y - to.y).abs() > BOX_THRESHOLD;
+        let dragged = self.settings.modern_mouse
+            && (from.x - to.x).abs() + (from.y - to.y).abs() > BOX_THRESHOLD;
+        // With the modern mouse a double click on an own ship selects
+        // every own ship of its kind in view.
+        if self.settings.modern_mouse && !shift && !dragged {
+            let now = Instant::now();
+            let hit = self.object_at(to).filter(|&id| self.own_ship(id));
+            let double = hit.is_some()
+                && self.last_click.is_some_and(|(id, at)| {
+                    Some(id) == hit && now.duration_since(at) < DOUBLE_CLICK
+                });
+            self.last_click = hit.map(|id| (id, now));
+            if double {
+                if let Some(id) = hit {
+                    self.select_kind_in_view(id);
+                    self.last_click = None;
+                    return;
+                }
+            }
+        }
         // Ctrl-click on an own ship selects its group (0x5180e0 with
         // MK_CONTROL: message 0xc456, 0x49ecb0, the ship's fleet +0x5c).
         let ctrl = self.modifiers.control_key() || self.modifiers.super_key();
@@ -5256,7 +5323,9 @@ impl ApplicationHandler for App {
                         self.set_slider(slider, v);
                     }
                 }
-                if let Some(start) = self.left_down {
+                // Dragging draws a selection box with the modern mouse only
+                // (the original selects by clicks and groups).
+                if let Some(start) = self.left_down.filter(|_| self.settings.modern_mouse) {
                     let (dx, dy) = (position.x - start.x, position.y - start.y);
                     if dx * dx + dy * dy > CLICK_SLOP * CLICK_SLOP {
                         self.left_down = None;
@@ -5299,14 +5368,11 @@ impl ApplicationHandler for App {
                                 self.cancel_button(slot);
                             } else if self.settings.modern_mouse {
                                 self.right_click(c);
-                            } else if self.pointer_modes(c).len() > 1 || self.pending.is_some() {
-                                self.step_pointer(c);
                             } else {
-                                // Nothing else to point at: the selection
-                                // is let go.
-                                self.selected = None;
-                                self.group.clear();
-                                self.page = Page::Main;
+                                // The original's right button: drops a
+                                // waiting command or steps the pointer on;
+                                // it never lets the selection go.
+                                self.step_pointer(c);
                             }
                         }
                     }
