@@ -1485,13 +1485,23 @@ patience tripled (while below 200) and the wait cleared. A blocker in state
 the step is refused the ship slows to a stop over the distance left
 (0x4a2f60: state 4, deceleration speed^2 / (distance x 6000)).
 
-The priority is a byte of each order (ship +0x823, +0x838 and the like,
-copied from the order message; 0xff leaves it as it was), 0 for a plain
-move (0x4a638d); 0x4ad9f0 replaces one between 1 and 234 with 91-100 at
-random. The navy passes it down with its orders (0x4ce6c0, fifth
-argument); which value each order carries is not decoded yet. The port
-instead has idle ships with no orders make way for their player's others
-(see `Scene::make_way`), and computer zones avoid the amber lanes.
+Pushing aside (0x4b4b50): the blocker picks at random one of the eight
+cells about it that it may enter; failing one, a cell held by another
+ship of its player with a priority below the pusher's (which is pushed in
+turn when it gets there); and is sent there (message 0x80, or 0x14 with
+`param_2`) with the pusher's priority.
+
+The priority is a byte of each order message (+0x19 of a move; 0xff
+leaves it as it was), set by the navy as it hands its orders down: a
+plain move 0 (0x4cf070; a re-sent one 0xff, 0x4cc650), attacking a
+target 69 (message 0x17, 0x4d0190, 0x4cfd3f), in an attack zone 75
+(0x1f, 0x4d74a0), docking for repairs 80 (0x1e, 0x4dbb40, 0x4cd930),
+gathering and taking treasure 90 (0x1a, 0x1f; 0x4c89b0, 0x4d9fa0),
+founding 100 (0x20, 0x4cb0b0). Unloading (0x4ad9f0) rolls one between 1
+and 234 again, 91-100. Orders of the ships' own behaviours (patrol,
+scout, convoy, ram, board, reload) are not decoded and leave it as it
+was. Computer zones here still avoid the amber lanes (see the computer
+players' notes).
 
 ## Resource counters
 

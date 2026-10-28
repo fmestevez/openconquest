@@ -981,6 +981,10 @@ impl Scene {
         ship.path = path;
         ship.task = None;
         ship.zone = None;
+        // A plain move carries priority 0 (0x4cf070).
+        ship.priority = 0;
+        ship.patience = objects::PATIENCE;
+        ship.order_tag = 0;
         true
     }
 
@@ -1078,70 +1082,91 @@ impl Scene {
         Some(points.into())
     }
 
-    /// Idle ship `idle` (no orders, lying still) moves out of ship
-    /// `mover`'s way, if both are the same player's: to the nearest free
-    /// cell not on `mover`'s route. True if it set off.
-    fn make_way(&mut self, idle: u32, mover: u32) -> bool {
+    /// Ship `mover`, held up by ship `still` lying in its way, pushes it
+    /// aside (0x4a3a70, 0x4b4b50) once it has waited out its patience, if
+    /// both are the same player's and `still`'s priority is the lower:
+    /// `still` sails to a free cell about it, chosen at random, or failing
+    /// one, into a cell of another of theirs of lower priority (which is
+    /// pushed in turn), taking `mover`'s priority. The patience triples.
+    /// True if it pushed.
+    fn push_aside(&mut self, still: u32, mover: u32) -> bool {
         let t = TILE_SIZE as f32;
         let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
-        let (Some(k), Some(m)) = (self.object_index(idle), self.object_index(mover)) else {
+        let (Some(k), Some(m)) = (self.object_index(still), self.object_index(mover)) else {
             return false;
         };
         let (o, mo) = (&self.objects[k], &self.objects[m]);
-        let Some(ship) = o.ship.as_ref() else {
+        let (Some(s), Some(ms)) = (o.ship.as_ref(), mo.ship.as_ref()) else {
             return false;
         };
-        if o.owner != mo.owner || o.owner.is_none() || ship.task.is_some() || !ship.path.is_empty()
+        // Ships busy where they lie (collecting, unloading, grappled,
+        // ramming) stay.
+        let busy = s.grapple.is_some()
+            || s.ram_run.is_some()
+            || matches!(
+                s.task,
+                Some(Task::Gather {
+                    phase: objects::GatherPhase::Collecting | objects::GatherPhase::Unloading(_),
+                    ..
+                })
+            );
+        if o.owner != mo.owner
+            || o.owner.is_none()
+            || busy
+            || s.priority >= ms.priority
+            || ms.blocked <= crate::clock::ticks(ms.patience as u32)
         {
             return false;
         }
+        let priority = ms.priority;
         let here = cell_of(o.x, o.y);
-        let mut avoid: HashSet<(i32, i32)> = mo
-            .ship
-            .as_ref()
-            .map(|s| s.path.iter().map(|&(x, y)| cell_of(x, y)).collect())
-            .unwrap_or_default();
-        avoid.insert(cell_of(mo.x, mo.y));
-        for p in &self.objects {
-            if p.id != idle {
-                if let Some(s) = p.ship.as_ref() {
-                    avoid.insert(cell_of(p.x, p.y));
-                    if let Some(&(x, y)) = s.path.back() {
-                        avoid.insert(cell_of(x, y));
+        let deep = objects::deep_draught(s.kind);
+        let mut free = Vec::new();
+        let mut weaker = Vec::new();
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let c = (here.0 + dx, here.1 + dy);
+                if (dx, dy) == (0, 0) || !self.nav.passable(c.0, c.1, deep) {
+                    continue;
+                }
+                let lying = self.objects.iter().find(|p| {
+                    p.id != still
+                        && p.ship.as_ref().is_some_and(|ps| {
+                            cell_of(p.x, p.y) == c
+                                || ps.path.back().is_some_and(|&(x, y)| cell_of(x, y) == c)
+                        })
+                });
+                match lying {
+                    None => free.push(c),
+                    Some(p)
+                        if p.owner == o.owner
+                            && p.ship.as_ref().is_some_and(|ps| ps.priority < priority) =>
+                    {
+                        weaker.push(c)
                     }
+                    Some(_) => {}
                 }
             }
         }
-        let deep = objects::deep_draught(ship.kind);
-        let (x, y) = (o.x, o.y);
-        let free = (1..=4).find_map(|r: i32| {
-            let mut ring: Vec<(i32, i32)> = (-r..=r)
-                .flat_map(|dx| (-r..=r).map(move |dy| (here.0 + dx, here.1 + dy)))
-                .filter(|&(cx, cy)| (cx - here.0).abs().max((cy - here.1).abs()) == r)
-                .filter(|&c| self.nav.passable(c.0, c.1, deep) && !avoid.contains(&c))
-                .collect();
-            ring.sort_by(|a, b| {
-                let d = |c: &(i32, i32)| {
-                    let (px, py) = (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
-                    (px - x).hypot(py - y)
-                };
-                d(a).total_cmp(&d(b))
-            });
-            ring.first().copied()
-        });
-        let Some(c) = free else {
-            return false;
-        };
-        let (fx, fy) = (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
-        let Some(path) = self.plan_route_avoiding(k, (x, y), fx, fy, &avoid) else {
-            return false;
-        };
-        if path.is_empty() {
+        let pool = if free.is_empty() { &weaker } else { &free };
+        if pool.is_empty() {
             return false;
         }
+        let c = pool[self.rng.next() as usize % pool.len()];
         let s = self.objects[k].ship.as_mut().unwrap();
-        s.path = path;
+        s.path = std::iter::once((c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0)).collect();
+        s.task = None;
+        s.zone = None;
         s.face = None;
+        s.priority = priority;
+        s.patience = objects::PATIENCE;
+        s.order_tag = 0;
+        s.blocked = 0.0;
+        let ms = self.objects[m].ship.as_mut().unwrap();
+        if ms.patience < 200 {
+            ms.patience = ms.patience.wrapping_mul(3);
+        }
+        ms.blocked = 0.0;
         true
     }
 
@@ -1156,7 +1181,7 @@ impl Scene {
         for (id, cell, by_lying, other) in held {
             // An idle ship of the same player in the way makes room: it
             // moves to the nearest free cell off the other's way.
-            if by_lying && self.make_way(other, id) {
+            if by_lying && self.push_aside(other, id) {
                 continue;
             }
             let Some(i) = self.object_index(id) else {
@@ -1188,7 +1213,19 @@ impl Scene {
                 .flatten()
                 .collect();
             let deep = objects::deep_draught(ship.kind);
-            let route = if retarget {
+            // Bound for a dock, another free cell of its berth ring.
+            let berth = match ship.task {
+                Some(Task::Repair { dock }) if retarget => self.object_index(dock).and_then(|d| {
+                    self.beside_cells(d, (x, y))
+                        .into_iter()
+                        .find(|&(bx, by)| !others.contains(&cell_of(bx, by)))
+                }),
+                _ => None,
+            };
+            let route = if let Some((bx, by)) = berth {
+                self.plan_route_avoiding(i, (x, y), bx, by, &others)
+                    .or(Some(VecDeque::new()))
+            } else if retarget {
                 let free = (1..=8).find_map(|r: i32| {
                     let mut ring: Vec<(i32, i32)> = (-r..=r)
                         .flat_map(|dx| (-r..=r).map(move |dy| (cell.0 + dx, cell.1 + dy)))
@@ -1555,6 +1592,19 @@ impl Scene {
             let Some(ship) = obj.ship.as_mut() else {
                 continue;
             };
+            // An order sets the ship's priority and patience (see
+            // `Task::priority`).
+            match ship.task {
+                Some(task) if task.tag() != ship.order_tag => {
+                    ship.order_tag = task.tag();
+                    ship.patience = objects::PATIENCE;
+                    if let Some(p) = task.priority() {
+                        ship.priority = p;
+                    }
+                }
+                None if ship.path.is_empty() => ship.order_tag = 0,
+                _ => {}
+            }
             // A ship turned to stone does not move.
             if obj.combat.as_ref().is_some_and(|c| c.stone > 0.0) {
                 continue;

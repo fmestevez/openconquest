@@ -6297,3 +6297,51 @@ fn computer_strength_follows_the_original() {
     scene.objects[fort].set_fort_places(Default::default());
     assert!(full > 0 && scene.strength(fort) == 0);
 }
+
+/// A ship held up by one of its player's lying still pushes it aside once
+/// its patience is out, if the other's priority is lower (0x4a3a70,
+/// 0x4b4b50); orders give priorities (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ships_push_lower_priority_ones_aside() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let own: Vec<usize> = (0..scene.objects.len())
+        .filter(|&i| scene.is_own(&scene.objects[i]) && scene.objects[i].ship.is_some())
+        .take(2)
+        .collect();
+    assert_eq!(own.len(), 2);
+    let (still, mover) = (scene.objects[own[0]].id, scene.objects[own[1]].id);
+    let set = |scene: &mut Scene, k: usize, priority: u8, blocked: f32| {
+        let s = scene.objects[own[k]].ship.as_mut().unwrap();
+        s.priority = priority;
+        s.blocked = blocked;
+        s.path.clear();
+    };
+    let wait = crate::clock::ticks(crate::objects::PATIENCE as u32) + 0.01;
+    // Equal priorities: it waits.
+    set(&mut scene, 0, 0, 0.0);
+    set(&mut scene, 1, 0, wait);
+    assert!(!scene.push_aside(still, mover));
+    // Not yet out of patience.
+    set(&mut scene, 1, 90, 0.0);
+    assert!(!scene.push_aside(still, mover));
+    // A gatherer pushes an idle ship, which takes its priority.
+    set(&mut scene, 1, 90, wait);
+    assert!(scene.push_aside(still, mover));
+    let s = scene.objects[own[0]].ship.as_ref().unwrap();
+    assert_eq!((s.path.len(), s.priority), (1, 90));
+    let m = scene.objects[own[1]].ship.as_ref().unwrap();
+    assert_eq!(m.patience, crate::objects::PATIENCE * 3);
+    assert_eq!(
+        crate::objects::Task::Gather {
+            deposit: 0,
+            phase: crate::objects::GatherPhase::ToDeposit
+        }
+        .priority(),
+        Some(90)
+    );
+}

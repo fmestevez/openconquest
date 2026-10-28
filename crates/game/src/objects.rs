@@ -251,6 +251,18 @@ pub struct Ship {
     /// Seconds it has waited for another ship to clear the cell ahead.
     #[serde(default)]
     pub blocked: f32,
+    /// The priority of its last order (+0x5c7): a ship held up by one of
+    /// its player's lying still with a lower one pushes it aside (see
+    /// `Task::priority`).
+    #[serde(default)]
+    pub priority: u8,
+    /// Ticks it waits on such a ship before pushing it (+0x5c8): 5 with
+    /// each order, tripled with each push.
+    #[serde(default = "default_patience")]
+    pub patience: u8,
+    /// The kind of order its priority was last taken from (`Task::tag`).
+    #[serde(default)]
+    pub order_tag: u8,
     /// How fast it is going now, in world pixels a second: it gathers way
     /// up to its speed and loses it to stop where it is bound or to turn.
     #[serde(default)]
@@ -624,6 +636,51 @@ pub enum Task {
     /// Sail alongside own port, shipyard, dock or ship `target` and reload
     /// there (Reload Object; see `scene::load`).
     LoadAt { target: u32 },
+}
+
+/// A ship's patience with each new order (+0x5c8).
+pub const PATIENCE: u8 = 5;
+
+fn default_patience() -> u8 {
+    PATIENCE
+}
+
+impl Task {
+    /// The priority its order gives the ship (+0x5c7, a byte of the order
+    /// message the navy sends): gathering and taking a treasure 90
+    /// (0x4c89b0, 0x4d9fa0), founding 100 (0x4cb0b0), docking for repairs
+    /// 80 (0x4dbb40), attacking a target 69 (0x4d0190) and in an attack
+    /// zone 75 (0x4d74a0); `None` for those whose order is not decoded,
+    /// which leave it as it was.
+    pub fn priority(&self) -> Option<u8> {
+        match self {
+            Task::Gather { .. } | Task::Take { .. } => Some(90),
+            Task::Found { .. } => Some(100),
+            Task::Repair { .. } => Some(80),
+            Task::Attack { .. } => Some(69),
+            Task::Zone { attack: true, .. } => Some(75),
+            _ => None,
+        }
+    }
+
+    /// The kind of order, 1 up.
+    pub fn tag(&self) -> u8 {
+        match self {
+            Task::Gather { .. } => 1,
+            Task::Attack { .. } => 2,
+            Task::Found { .. } => 3,
+            Task::Ram { .. } => 4,
+            Task::Board { .. } => 5,
+            Task::Repair { .. } => 6,
+            Task::Fetch { .. } => 7,
+            Task::Scout { .. } => 8,
+            Task::Patrol { .. } => 9,
+            Task::Zone { .. } => 10,
+            Task::Convoy { .. } => 11,
+            Task::Take { .. } => 12,
+            Task::LoadAt { .. } => 13,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1333,6 +1390,9 @@ pub fn resolve(
         rotation: None,
         turn_clock: 0.0,
         blocked: 0.0,
+        priority: 0,
+        patience: PATIENCE,
+        order_tag: 0,
         velocity: 0.0,
         face: None,
         furl: 0.0,

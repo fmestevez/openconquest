@@ -1936,9 +1936,15 @@ impl Scene {
                 {
                     return;
                 }
+                let roll = 91 + (self.rng.next() % 10) as u8;
                 let ship = self.objects[i].ship.as_mut().unwrap();
                 ship.cargo = 0.0;
                 ship.cargo_kind = None;
+                // Unloaded, an order's priority between 1 and 234 is
+                // rolled again, 91-100 (0x4ad9f0).
+                if (1..=234).contains(&ship.priority) {
+                    ship.priority = roll;
+                }
                 match deposit_at {
                     Some(d) => {
                         let (x, y) = self.deposit_goal(i, d);
