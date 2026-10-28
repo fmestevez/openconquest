@@ -532,10 +532,10 @@ Combat tables:
   workshop page opens this one with 0x3d.
 - Starting levels (the navy's set-up, Navy.cpp 0x4a78a0, copies them from
   each `DESCRIPTOR` player block, u32s from block +0x14): armour (+0x5f),
-  three unknown (+0x60..+0x62), ram (+0x5e), crew quality per crew type
-  (+0x67..+0x69), arming (+0xa3, 0 read as 1), an unknown u32, then rate of
-  fire, range and damage per item group (+0x8e, +0x95, +0x9c). Nothing else
-  writes the crew levels: crews are not upgraded in play. All zero except
+  the smithy's level per armour kind (+0x60..+0x62), ram (+0x5e), the
+  smithy's level per ram kind (+0x67..+0x69), arming (+0xa3, 0 read as 1),
+  an unknown u32, then rate of fire, range and damage per item group
+  (+0x8e, +0x95, +0x9c). All zero except
   some computer players of miss007-009 and the human of single06 (armour,
   ram and workshop levels 1-2, arming 2).
 - The sage school (SchoolClassTy, menu 0x430f90) studies per-player levels
@@ -546,9 +546,20 @@ Combat tables:
   2000/3000 at 0x42d980); Greek schools add the special-ship upgrades
   (0x50-0x53, 2000 amber, after arming level 2). The damage level is the
   workshop's, not this "arming". The smithy (0x433e60) then
-  refits ships to armour M/S (0x36, 0x37) and ram M/S (0x38, 0x39) up to the
-  researched level, for 30/60 and 25/50 amber times a ship size factor;
-  its 0x49-0x4e are the W/M/S variants.
+  refits ships to armour M/S (0x36, 0x37) and ram M/S (0x38, 0x39; slots
+  0-3) up to the researched level, for 30/60 and 25/50 amber times a ship
+  size factor. It also studies each kind of ram (0x4c-0x4e, slots 4-6;
+  player bytes +0x67 + kind) and armour (0x49-0x4b, slots 8-10; +0x60 +
+  kind), regular, silver and golden (`CBUT_UPRAMW/M/S`,
+  `CBUT_UPARMORW/M/S`), to level 2: silver and golden once the school's ram
+  or armour level is 1 or 2, permit bits 31-33 (rams) and 34-36 (armour).
+  Message 0x138a (0x434a00) pays kind x 3 + level at 0x5967b4 (armour 300
+  600, 400 700, 500 900) or 0x5967fc (rams 500 700, 600 800, 700 900) and
+  sets the player's flag +0x63 (armour) or +0x6a (rams), so one of each is
+  studied at a time; GetMessage (0x434ed0) raises the level after kind x 3
+  + level ticks at 0x5967d8 or 0x596820 (465 480, 470 485, 475 495 both).
+  The levels pick the column of the cut of armour (0x597a00) and the
+  quality of rams (0x598054) of that kind.
 - Building records (66 fields): field 7 condition in percent; on forts
   fields 22-33 count each item 0-11 they hold and fields from 34 give the
   units' conditions (FortressClassTy 0x419f80 builds a unit for each into
@@ -2953,12 +2964,13 @@ part in field 21, 2 every part before): 0x3e9 a building (0x428a70; the
 town places it, `m_build.cpp` 0x42d9c0), 0x3ea ships (0x428f20), 0x3eb an
 upgrade (settlement to town, shipyard to dock), 0x3ec repairs, 0x3ef a
 study (0x42a860: 1 arming, 2 ram, 3 armour, 17 rigging, 18-26 the
-workshop's range, damage and rate of fire by group, 33/34 the temples'
-spells, 35-38 the unique ships). Orders used: 2 port, sage school,
+workshop's range, damage and rate of fire by group, 27-29 the smithy's
+regular, silver and golden rams, 30-32 its armour kinds, 33/34 the
+temples' spells, 35-38 the unique ships). Orders used: 2 port, sage school,
 shipyard, smithy, town, dock, school; 3 the temples; 48, 50, 52 a medium,
 small, big fort; 96 repairs; 97 a port; 98 a shipyard and dock;
-117 the temples' spells; 118-120 arming, ram, armour; 128-132 the
-workshop; 133 rigging; 134 the nation's unique ships (0x73 Greek, 0x74
+117 the temples' spells; 118-120 arming, ram, armour; 128-130 the
+workshop; 131 the smithy's armour kinds, 132 its ram kinds; 133 rigging; 134 the nation's unique ships (0x73 Greek, 0x74
 Persian). A part waits for its price as long as it takes and gives up
 after 10-25 passes otherwise.
 
@@ -2985,8 +2997,7 @@ Not ported (the port's own instead): the terrain helpers of
 `artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
 simpler searches; zones weigh the lanes before nearness, since ships here
 cannot pass one another), the land fleet's placing of buildings (the
-nearest free cell to the settlement), studies 27-32, and
-fleets' behaviour masks (0x482eb0, 0x4847d0).
+nearest free cell to the settlement), and fleets' behaviour masks (0x482eb0, 0x4847d0).
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
 about the base's town, from 4 cells and 4 more a time, that holds a
