@@ -204,7 +204,7 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 | Backspace | Go to where you were last attacked |
 | Bar tabs (wheel, disk, wrench, clef, scroll) | Object panel; save slots, restart and quit; game and scroll speed and the mouse controls (original or modern, remembered); sound volume; objectives and briefing |
 | Alt+P, Pause | Pause |
-| Esc (nothing selected) | Main menu (Resume returns to the game) |
+| Alt+X / Alt+Q | Leave for the main menu / quit, after asking (also the file panel's buttons) |
 | Best results (main menu) | Your fastest win of each mission (kept in `<data>/saves/best.json`) |
 | Ctrl+S / Ctrl+O (Cmd on macOS) | Quick save / quick load, as the original's keys (`<data>/saves/quick.json`; `--load FILE` continues a save) |
 | Ctrl+1 ... Ctrl+0 (Cmd on macOS), then 1 ... 0 | Assign the selection to a group, then select the group again |
