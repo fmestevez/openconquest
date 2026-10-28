@@ -734,7 +734,7 @@ impl Scene {
         if self.construction_at(site).is_some() {
             return Err("It is still being built".into());
         }
-        if self.research.iter().any(|r| r.0 == site) {
+        if self.research.iter().any(|r| r.0 == site) || self.refits.iter().any(|r| r.0 == site) {
             return Err("The building is busy".into());
         }
         let level = self.next_level(upgrade).ok_or_else(|| {
@@ -779,7 +779,7 @@ impl Scene {
         self.objects
             .iter()
             .enumerate()
-            .filter(|(i, o)| self.is_own(o) && self.alongside(*i, s))
+            .filter(|(i, o)| o.owner == self.objects[s].owner && self.alongside(*i, s))
             .filter_map(|(i, o)| {
                 let ship = o.ship.as_ref()?;
                 let has = if upgrade == combat::Upgrade::Armour {
@@ -794,8 +794,11 @@ impl Scene {
             .map(|(i, _)| i)
     }
 
-    /// Refits the nearest own ship at smithy `smithy` with armour or ram of
-    /// `level`, up to what the sage school has studied.
+    /// Orders a refit of armour or ram of `level` at smithy `smithy`, up
+    /// to what the sage school has studied, for a ship of ours alongside
+    /// (0x433e60 offers it only then). It is paid now and queued (message
+    /// 0x138c, 0x434a00); when its time is up the ship then alongside gets
+    /// it (0x43542a, messages 0x248d and 0x248e).
     pub fn refit(
         &mut self,
         smithy: u32,
@@ -814,24 +817,73 @@ impl Scene {
         if studied < level {
             return Err("Your sage school has not studied that yet".into());
         }
-        let i = self
-            .refit_candidate(smithy, upgrade, level)
+        if self.research_at(smithy).is_some() {
+            return Err("The smithy is busy".into());
+        }
+        self.refit_candidate(smithy, upgrade, level)
             .ok_or("No ship of yours lies next to the smithy needing it")?;
-        let kind = self.objects[i].ship.as_ref().unwrap().kind;
-        let cost = combat::refit_cost(upgrade, level, kind);
+        let cost = combat::refit_cost(upgrade, level);
         if self.amber < cost {
             return Err(format!("Not enough amber: {cost} needed"));
         }
         self.amber -= cost;
-        let ship = self.objects[i].ship.as_mut().unwrap();
-        if upgrade == combat::Upgrade::Armour {
-            ship.armour = level;
-        } else {
-            ship.ram = level;
-        }
-        self.sounds
-            .push(("bild6", self.objects[i].x, self.objects[i].y));
+        self.refits.push((smithy, upgrade, level, 0.0));
         Ok(())
+    }
+
+    /// The refits queued at `smithy` of `upgrade` to `level`: how many,
+    /// and the progress 0..1 of the one under way if it is one of them
+    /// (0x433d10).
+    pub fn refits_at(
+        &self,
+        smithy: u32,
+        upgrade: combat::Upgrade,
+        level: u8,
+    ) -> (u32, Option<f32>) {
+        let mut queue = self.refits.iter().filter(|r| r.0 == smithy);
+        let head = queue
+            .next()
+            .filter(|r| (r.1, r.2) == (upgrade, level))
+            .map(|r| (r.3 / combat::refit_seconds(r.2)).min(1.0));
+        let count = self
+            .refits
+            .iter()
+            .filter(|r| r.0 == smithy && (r.1, r.2) == (upgrade, level))
+            .count() as u32;
+        (count, head)
+    }
+
+    /// Each smithy works on its first refit; when done, the ship of its
+    /// owner alongside that needs it most nearly gets it.
+    pub(super) fn run_refits(&mut self, dt: f32) {
+        let alive: Vec<u32> = self.objects.iter().map(|o| o.id).collect();
+        self.refits.retain(|r| alive.contains(&r.0));
+        let mut seen = Vec::new();
+        let mut done = Vec::new();
+        for (k, r) in self.refits.iter_mut().enumerate() {
+            if seen.contains(&r.0) {
+                continue;
+            }
+            seen.push(r.0);
+            r.3 += dt;
+            if r.3 >= combat::refit_seconds(r.2) {
+                done.push(k);
+            }
+        }
+        for k in done.into_iter().rev() {
+            let (smithy, upgrade, level, _) = self.refits.remove(k);
+            let Some(i) = self.refit_candidate(smithy, upgrade, level) else {
+                continue;
+            };
+            let ship = self.objects[i].ship.as_mut().unwrap();
+            if upgrade == combat::Upgrade::Armour {
+                ship.armour = level;
+            } else {
+                ship.ram = level;
+            }
+            self.sounds
+                .push(("bild6", self.objects[i].x, self.objects[i].y));
+        }
     }
 
     /// Research at `site`: the upgrade and its progress 0..1.

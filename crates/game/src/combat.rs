@@ -1315,19 +1315,21 @@ pub fn refit_of_command(c: u8) -> Option<(Upgrade, u8)> {
     }
 }
 
-/// What a refit to `level` costs for a ship of type `kind`: 30/60 amber
-/// (armour, 0x42d960) or 25/50 (ram, 0x42d940) times the ship's size. The
-/// size is taken from the per-type values at 0x596110 (boat 10, merchant
-/// 20, royal ship 25, ...), which is an assumption.
-pub fn refit_cost(upgrade: Upgrade, level: u8, kind: u8) -> u32 {
-    const SIZE: [u32; 12] = [10, 20, 25, 20, 10, 10, 10, 10, 10, 10, 10, 20];
-    let base = match (upgrade, level) {
+/// What a refit to `level` costs (0x434a00, message 0x138c): 30/60 amber
+/// for armour (0x42d960) or 25/50 for a ram (0x42d940), whatever the ship.
+pub fn refit_cost(upgrade: Upgrade, level: u8) -> u32 {
+    match (upgrade, level) {
         (Upgrade::Armour, 1) => 30,
         (Upgrade::Armour, _) => 60,
         (_, 1) => 25,
         _ => 50,
-    };
-    base * SIZE[kind as usize % 12]
+    }
+}
+
+/// How long a refit to `level` takes at the smithy: 150 or 200 ticks
+/// (0x434a00, 0x43542a).
+pub fn refit_seconds(level: u8) -> f32 {
+    crate::clock::ticks(if level <= 1 { 150 } else { 200 })
 }
 
 /// What armour leaves of a blow (0x4befc0): the cut in percent at

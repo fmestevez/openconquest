@@ -221,6 +221,9 @@ pub struct Scene {
     pub levels: std::collections::BTreeMap<(u32, u32), combat::Levels>,
     /// Research at a sage school: site, upgrade, level, seconds spent.
     pub research: Vec<(u32, combat::Upgrade, u8, f32)>,
+    /// Refits queued at a smithy, done in turn: site, armour or ram,
+    /// level, seconds spent.
+    pub refits: Vec<(u32, combat::Upgrade, u8, f32)>,
     /// Summoned creatures and cast whirlpools and reefs, and the seconds
     /// they have left.
     pub summons: Vec<(u32, f32)>,
@@ -508,6 +511,7 @@ impl Scene {
                 .map(|p| ((p.nation, p.slot), combat::Levels::starting(&p.levels)))
                 .collect(),
             research: Vec::new(),
+            refits: Vec::new(),
             purses: players
                 .iter()
                 .filter(|p| p.computer)
@@ -1471,6 +1475,7 @@ impl Scene {
         }
         self.run_training(dt);
         self.run_research(dt);
+        self.run_refits(dt);
         self.magic.update(dt);
         // Computer players learn spells in 100 ticks, not 200 (0x439260).
         for c in &mut self.computers.players {

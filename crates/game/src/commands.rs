@@ -789,18 +789,24 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
 fn smithy_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     use crate::combat::Upgrade;
     let studied = scene.levels_of(scene.human.map(|h| (h.nation, h.slot)));
+    // While refitting, its buttons stay on and show the work (0x433e60).
     for (slot, command) in [(0, 0x36u8), (1, 0x37), (2, 0x38), (3, 0x39)] {
         let (upgrade, level) = crate::combat::refit_of_command(command).unwrap();
         if studied.get(upgrade) < level || !scene.permits.fit(upgrade, level) {
             continue;
         }
-        let affordable = scene
-            .refit_candidate(obj.id, upgrade, level)
-            .is_some_and(|i| {
-                let kind = scene.objects[i].ship.as_ref().unwrap().kind;
-                scene.amber >= crate::combat::refit_cost(upgrade, level, kind)
-            });
-        set(menu, slot, Command(command), affordable);
+        let (count, progress) = scene.refits_at(obj.id, upgrade, level);
+        let alongside = scene.refit_candidate(obj.id, upgrade, level).is_some();
+        menu[slot] = Some(Slot {
+            checked: false,
+            closes: false,
+            command: Command(command),
+            enabled: alongside
+                && scene.research_at(obj.id).is_none()
+                && scene.amber >= crate::combat::refit_cost(upgrade, level),
+            progress,
+            count,
+        });
     }
     let busy = scene.research_at(obj.id);
     let studies = (0..3u8).flat_map(|k| {
@@ -823,7 +829,9 @@ fn smithy_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
                 checked: false,
                 closes: false,
                 command: Command(upgrade.command()),
-                enabled: busy.is_none() && scene.amber >= upgrade.cost(level),
+                enabled: busy.is_none()
+                    && !scene.refits.iter().any(|r| r.0 == obj.id)
+                    && scene.amber >= upgrade.cost(level),
                 progress: None,
                 count: 0,
             },

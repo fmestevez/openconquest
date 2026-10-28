@@ -547,8 +547,15 @@ Combat tables:
   (0x50-0x53, 2000 amber, after arming level 2). The damage level is the
   workshop's, not this "arming". The smithy (0x433e60) then
   refits ships to armour M/S (0x36, 0x37) and ram M/S (0x38, 0x39; slots
-  0-3) up to the researched level, for 30/60 and 25/50 amber times a ship
-  size factor. It also studies each kind of ram (0x4c-0x4e, slots 4-6;
+  0-3) up to the researched level, offered while a ship lies alongside
+  (+0x1c8). Each order (message 0x138c, 0x434a00; its count byte +0xe, 1
+  by default) pays 30/60 (0x42d960) or 25/50 (0x42d940) amber a unit and
+  queues one byte a unit (+0x1ec; slot 1, 2, 4, 5), done in turn, 150 or
+  200 ticks each (0x43542a); when one is done the smithy sends the ship
+  alongside message 0x248d (armour) or 0x248e (ram) with the level. The
+  buttons show the count left and the progress (0x433d10); cancelling
+  (0x435a58) refunds and clears the queue. Studies wait for an idle
+  smithy. It also studies each kind of ram (0x4c-0x4e, slots 4-6;
   player bytes +0x67 + kind) and armour (0x49-0x4b, slots 8-10; +0x60 +
   kind), regular, silver and golden (`CBUT_UPRAMW/M/S`,
   `CBUT_UPARMORW/M/S`), to level 2: silver and golden once the school's ram

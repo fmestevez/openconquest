@@ -1006,22 +1006,24 @@ fn smithy_refits() {
     assert!(scene.refit(id, armour, 1).is_err(), "not studied yet");
     let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
     scene.levels.entry(human).or_default().set(armour, 1);
-    let kind = scene.objects[scene.object_index(ship).unwrap()]
-        .ship
-        .as_ref()
-        .unwrap()
-        .kind;
     let amber = scene.amber;
     scene.refit(id, armour, 1).unwrap();
-    assert_eq!(scene.amber, amber - combat::refit_cost(armour, 1, kind));
-    assert_eq!(
+    assert_eq!(scene.amber, amber - combat::refit_cost(armour, 1));
+    let armour_of = |scene: &Scene| {
         scene.objects[scene.object_index(ship).unwrap()]
             .ship
             .as_ref()
             .unwrap()
-            .armour,
-        1
-    );
+            .armour
+    };
+    // Fitted once its 150 ticks are up, the button showing the work.
+    assert_eq!(armour_of(&scene), 0);
+    assert_eq!(scene.refits_at(id, armour, 1), (1, Some(0.0)));
+    scene.run_refits(combat::refit_seconds(1) / 2.0);
+    assert_eq!(armour_of(&scene), 0);
+    scene.run_refits(combat::refit_seconds(1) / 2.0 + 0.01);
+    assert_eq!(armour_of(&scene), 1);
+    assert_eq!(scene.refits_at(id, armour, 1), (0, None));
     assert!(scene.refit(id, armour, 1).is_err(), "already fitted");
     assert!(scene.refit(id, armour, 2).is_err(), "level 2 not studied");
 }
