@@ -869,6 +869,15 @@ pub fn draw_fog(
     }
 }
 
+/// Fills a screen rectangle with colour `c`.
+pub fn fill_rect(frame: &mut Frame, x: u32, y: u32, w: u32, h: u32, c: u32) {
+    for py in y..(y + h).min(frame.height) {
+        for px in x..(x + w).min(frame.width) {
+            frame.pixels[(py * frame.width + px) as usize] = c;
+        }
+    }
+}
+
 /// Darkens a screen rectangle (for text backgrounds).
 pub fn shade_rect(frame: &mut Frame, x: u32, y: u32, w: u32, h: u32) {
     for py in y..(y + h).min(frame.height) {
@@ -961,6 +970,29 @@ impl MinimapRect {
         }
     }
 
+    /// The radar map (Tab) in the view's place `screen`, `zoom` window
+    /// pixels a minimap pixel (Mapa.cpp 0x51b8c0, mode 2): 8 pixels a cell,
+    /// as many cells as fit (72 x 64 at 800x600, from the view's corner); a
+    /// smaller map centred by whole cells, a larger one from cell `origin`.
+    pub fn radar(scene: &Scene, screen: &Screen, zoom: f32, origin: (i32, i32)) -> Self {
+        let cell = TILE_SIZE / MINIMAP_DIVISOR;
+        let (cols, rows) = radar_cells(screen, zoom);
+        let map = (
+            (scene.minimap_size.0 / cell) as i32,
+            (scene.minimap_size.1 / cell) as i32,
+        );
+        let px = |cells: i32| (cells as f32 * cell as f32 * zoom) as u32;
+        let shown = (map.0.min(cols), map.1.min(rows));
+        Self {
+            x: screen.x + px((cols - shown.0).max(0) / 2),
+            y: screen.y + px((rows - shown.1).max(0) / 2),
+            w: px(shown.0),
+            h: px(shown.1),
+            zoom,
+            origin: (origin.0.max(0) as u32 * cell, origin.1.max(0) as u32 * cell),
+        }
+    }
+
     /// An overlay in the bottom-right corner (used when the interface is hidden).
     pub fn overlay(scene: &Scene, window: (u32, u32)) -> Self {
         let size = window.1 / 4;
@@ -989,6 +1021,28 @@ impl MinimapRect {
             ((sy - self.y as f32) / self.zoom + self.origin.1 as f32) * d,
         )
     }
+}
+
+/// How many cells the radar map shows in `screen` (`zoom` window pixels a
+/// minimap pixel).
+pub fn radar_cells(screen: &Screen, zoom: f32) -> (i32, i32) {
+    let cell = (TILE_SIZE / MINIMAP_DIVISOR) as f32 * zoom.max(0.01);
+    (
+        (screen.w as f32 / cell) as i32,
+        (screen.h as f32 / cell) as i32,
+    )
+}
+
+/// The radar map's first cell on an axis after the view moved to cell
+/// `view` (Mapa.cpp 0x51c7e0, 0x51b8c0): the least scroll that keeps the
+/// view's frame (`frame` cells) inside the `window` cells shown, within a
+/// map of `map` cells.
+pub fn radar_scroll(origin: i32, view: i32, frame: i32, window: i32, map: i32) -> i32 {
+    let mut o = origin.min(view);
+    if o + window < view + frame {
+        o = view + frame - window;
+    }
+    o.clamp(0, (map - window).max(0))
 }
 
 pub fn draw_minimap(
@@ -1186,4 +1240,34 @@ pub fn darken(px: u32) -> u32 {
     let g = (px >> 8 & 0xff) * 3 / 4;
     let b = (px & 0xff) * 3 / 4;
     r << 16 | g << 8 | b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn radar_fits_the_view_in_cells() {
+        // 800x600: the view is 576 x 512, 72 x 64 cells at 8 pixels.
+        let view = Screen {
+            x: 8,
+            y: 8,
+            w: 576,
+            h: 512,
+            window_h: 600,
+        };
+        assert_eq!(radar_cells(&view, 1.0), (72, 64));
+        assert_eq!(radar_cells(&view, 2.0), (36, 32));
+    }
+
+    #[test]
+    fn radar_scrolls_to_keep_the_frame() {
+        // A map that fits does not scroll.
+        assert_eq!(radar_scroll(0, 15, 9, 72, 24), 0);
+        // A larger one: the least scroll keeping the 9-cell frame inside.
+        assert_eq!(radar_scroll(0, 60, 9, 72, 128), 0);
+        assert_eq!(radar_scroll(0, 70, 9, 72, 128), 7);
+        assert_eq!(radar_scroll(7, 3, 9, 72, 128), 3);
+        assert_eq!(radar_scroll(40, 119, 9, 72, 128), 56);
+    }
 }

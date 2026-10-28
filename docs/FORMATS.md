@@ -1279,6 +1279,93 @@ small masks and `<n>OBL_SM`, over the icons of things that stay put (ships
 and creatures only shown in sight); then the view as `LMAPVIEW_n`, a dashed
 red frame.
 
+### Radar map (Tab; verified on the original)
+
+A `MapaTy` has a mode (`+0x58`, set by message 0xcbc, read by 0xcbd): 1 the
+view (cells of 64 pixels, DrawCellBig 0x519750, the sprites' viewport set to
+it), 2 the radar map in the view's place, 3 the bar's minimap, 4 the bar's
+window showing the view at full size. InitMapaSmall (0x51b8c0) gives mode 2
+72 x 64 cells of 8 pixels at the field's (8, 8) (576 x 512, the view's
+place), a smaller map centred by whole cells (`(72 - w) / 2 x 8`), mode 3 24
+x 24 at bar (8, 8); InitMapaBig (0x51bd20) gives mode 4 3 x 3 cells at bar
+(8, 8), from the view's top-left cell. Tab is an accelerator (scan code
+0x0f, set up at 0x503c87) sending 0xcbc to the field (0x504620): unless the
+bar is hidden (`[game+0x328d]`), the view's mapa goes 1 <-> 2 and the bar's
+(0x4fffe0) 3 <-> 4. Space (0x50f910, message 0x4e1) first puts a radar map
+back. On the radar map the frame `LMAPVIEW_n` (9 x 8 cells) stays where the
+view is; the pointer over it moves the bar's window to the 3 x 3 cells
+around the cell under it (MouMoveLMapa 0x51c6b0: top-left = cell - 1,
+clamped to the map less 3; message 0xcb9); presses and clicks go to the
+pointer (0x517ad0, 0x5180e0) with the cell under it as clicks on the view do
+(a click selects a ship there; a key's pointer mode works there). The bar's
+window takes no clicks. Tab again shows the view where it was. When the
+frame would leave the radar map, it scrolls the least that keeps it in
+(0x51c7e0).
+
+## Command hot keys (verified on the original)
+
+ancient.exe reads the registry key `HKLM\SOFTWARE\Megamedia\Megamedia
+Australia\Ancient conquest\Config` (0x500810; written back by 0x501090):
+value `Config`, REG_BINARY 0x26c bytes into `[0x5ca528]` (its first dword a
+byte sum checksum; a mismatch resets all to the defaults, 0x501710),
+`EditorConfig` (0x114 bytes, `[0x5ca410]`), `Result` (0x540 bytes,
+encrypted, the best results, `[0x5c9ed0]`) and `CRCResult`. config.exe
+(its own copy at `[0x418938]`) writes the same blob. At Config+0x154
+(`[0x5ca67c]`) is the key table: a word per command id c = 1-0x81 at
+`[0x5ca67a + 2c]`, the low byte a DirectInput scan code, the high byte a
+second key to hold with it (0: none). The defaults (0x501550; config.exe
+0x4055ee, which its "Default keys" button calls) are single keys:
+
+| Key | Commands |
+|-----|----------|
+| S | 0x01 Stop, 0x02, 0x1d smithy, 0x24 shipkiller, 0x2f swordsmen, 0x4f speed |
+| F | 0x03 Fire, 0x0d fishing, 0x18 medium fort, 0x29 Greek fire ship, 0x2b fire rammer, 0x50 Greek fire, 0x52 fire ram |
+| M | 0x04 Move, 0x1a port, 0x23 menkiller, 0x47 armour |
+| L | 0x05 Load/unload (reload) |
+| P | 0x06 Repair at dock |
+| D | 0x07 / 0x10 Build ground object, 0x13 build ship, 0x1b shipyard, 0x25 boarder, 0x2c ship of the dead, 0x53 live crew |
+| T | 0x08 Treasure or hero, 0x1c workshop, 0x22 merchant ship, 0x30 scorpion |
+| B | 0x09 Board, 0x21 boat, 0x2d bowmen, 0x33 ballista |
+| R | 0x0a Ram, 0x0c gather zones, 0x11 / 0x14 repair building, 0x15 repair arming, 0x26 rammer, 0x48 ram |
+| U | 0x0b Unload resource |
+| A | 0x0e amber, 0x20 temple of war, 0x3d upgrade arming, 0x7d the Argo |
+| V | 0x0f leviathan |
+| E | 0x12 Sell item |
+| C | 0x16 settlement, 0x1e sage school, 0x32 small catapult, 0x6c Behaviour |
+| W | 0x1f temple of the sea |
+| O | 0x27 bomber, 0x35 onager |
+| K | 0x28 royal ship |
+| Q | 0x2a quicklime ship, 0x51 quicklime |
+| J | 0x2e javelinmen |
+| G | 0x31 gastrafetes, 0x54 learn magic |
+| I | 0x34 big catapult |
+| Escape | 0x81 |
+
+The rest (small and big forts, behaviours, spells, sell town, ...) have
+none. config.exe's Hotkey editor lists its entries (a table at
+`[0x411030]`: 15 levels of 63 x {string id, parent id, tree item, index};
+the index is command - 1) under Buildings (Settlement/Town, Fortress, Port,
+Shipyard/Dock, Workshop, Smithy, Sage School, Temples), Ships (military,
+merchant and their groups) and Special abilities, and refuses a key that
+is predefined ("This is a predefined key"). Its entries "Build the ARGO
+ship" (index 121) and "Sell Settlement/Town" (124) point at other
+commands' keys (0x7a, 0x7d).
+
+When the command panel makes a slot's button (0x4f2750) it asks 0x4f2140
+for its key: Escape (scan code 1) on a slot with the red cross (flag 2),
+else the table's; if any, it adds an accelerator (InputClassTy::AddAcc
+0x553670 through message 0x10, `MSystemClassTy::SetAccelerator` 0x4e9710)
+whose press sends the button's id (0x1d1f + slot) as a click does: the same
+pointer modes, pages and refusals. The input loop (Sinput.cpp 0x553090)
+fires an accelerator on the key's press when its second key is held, or,
+without one, when no Shift, Ctrl or Alt is held (unless the key is one of
+them). The fixed accelerators: Ctrl+S / Ctrl+O save and load (0x511c00,
+both Ctrls) and Alt+Q (0x4ef) and Alt+X (0x4f5) there (not followed up), Ctrl+C
+(0x163, screenshot) and Ctrl+M (0x163, from the bar), Enter and Space on
+message boxes (0x528390, 0x53f360). The button's help line (0x505e70) ends
+`" - &0<key>"` (or `<second>-<key>`), the names from the table at
+0x5bf598 (20 bytes a scan code).
+
 ## Building sites
 
 The landscape grid (`[0x5c74fc]`: width, height, cell width and height as

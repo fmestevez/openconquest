@@ -145,6 +145,64 @@ pub struct Layout {
     pub bar_x: f32,
 }
 
+/// The radar map (Tab): its first cell, and the view the bar's map
+/// window shows meanwhile (the view's own place is kept, its frame drawn
+/// on the radar map).
+#[derive(Debug, Clone, Copy)]
+pub struct Radar {
+    pub origin: (i32, i32),
+    pub view: crate::view::Camera,
+}
+
+/// With the radar map (Tab): the view, in the bar's map window, 24 x 24
+/// minimap pixels (3 x 3 cells at the view's scale; Mapa.cpp 0x51bd20, mode
+/// 4), and the radar map in the view's place (mode 2), from cell `origin`.
+pub fn radar_placement(
+    layout: &Layout,
+    scene: &Scene,
+    origin: (i32, i32),
+) -> (Screen, MinimapRect) {
+    let m = layout.minimap;
+    let cell = (openconquest_formats::map::TILE_SIZE / crate::terrain::MINIMAP_DIVISOR) as f32;
+    let side = (crate::scene::MINIMAP_CELLS as f32 * cell * m.zoom).round() as u32;
+    let bar = Screen {
+        x: m.x,
+        y: m.y,
+        w: side,
+        h: side,
+        window_h: layout.view.window_h,
+    };
+    (bar, MinimapRect::radar(scene, &layout.view, m.zoom, origin))
+}
+
+/// The radar map's first cell once the view is where `camera` has it,
+/// scrolled from `origin` (Mapa.cpp 0x51c7e0): the least scroll keeping
+/// the view's frame, the size of the view in its usual place, inside.
+pub fn radar_origin(
+    layout: &Layout,
+    scene: &Scene,
+    camera: &crate::view::Camera,
+    origin: (i32, i32),
+) -> (i32, i32) {
+    let t = openconquest_formats::map::TILE_SIZE as f32;
+    let (cols, rows) = crate::render::radar_cells(&layout.view, layout.minimap.zoom);
+    let (vw, vh) = camera.view_size(&layout.view);
+    let map = scene.map_size();
+    let axis = |o: i32, pos: f32, view: f32, window: i32, map: u32| {
+        crate::render::radar_scroll(
+            o,
+            (pos / t).floor() as i32,
+            (view / t).ceil() as i32,
+            window,
+            (map as f32 / t) as i32,
+        )
+    };
+    (
+        axis(origin.0, camera.x, vw, cols, map.0),
+        axis(origin.1, camera.y, vh, rows, map.1),
+    )
+}
+
 impl Interface {
     pub fn load(data: &GameData, theme: char) -> Result<Self> {
         let load = |name: &str, transparent_black: bool| -> Result<Image> {
@@ -1112,7 +1170,9 @@ pub struct GameView<'a> {
     /// How many cells across the building to put up is.
     pub site_cells: i32,
     /// The radar map in place of the view (Tab).
-    pub radar: bool,
+    pub radar: Option<Radar>,
+    /// The command keys, told on the buttons' help line.
+    pub hotkeys: &'a crate::hotkeys::Hotkeys,
     /// Show the mission briefing over the view.
     pub briefing: bool,
     /// The bar's tabs and open panel (with the interface shown).
@@ -1258,7 +1318,11 @@ impl GameView<'_> {
         match self.interface {
             Some(ui) => {
                 let layout = ui.layout(window, &self.camera.policy, self.scene);
-                (layout.view, layout.minimap, Some(layout))
+                let (view, minimap) = match self.radar {
+                    Some(r) => radar_placement(&layout, self.scene, r.origin),
+                    None => (layout.view, layout.minimap),
+                };
+                (view, minimap, Some(layout))
             }
             None => (
                 Screen::full(window.0, window.1),
@@ -1272,9 +1336,56 @@ impl GameView<'_> {
         let window = (frame.width, frame.height);
         let (screen, minimap, layout) = self.placement(window);
         let lut = palette_lut(self.data, self.time_ms);
-        draw_world(frame, &screen, self.scene, self.camera, &lut);
-        draw_objects(frame, &screen, self.scene, self.camera, &lut, self.time_ms);
-        draw_fog(frame, &screen, self.scene, self.camera, &lut);
+        let radar = layout
+            .as_ref()
+            .filter(|_| self.radar.is_some())
+            .map(|l| l.view);
+        match radar {
+            // Tab: the radar map in the view's place (Mapa.cpp mode 2), its
+            // frame the view's size; the view goes to the bar's window.
+            Some(field) => {
+                crate::render::fill_rect(frame, field.x, field.y, field.w, field.h, 0);
+                draw_minimap(frame, &minimap, self.scene, self.camera, &field, &lut);
+            }
+            None => self.draw_view(frame, &screen, self.camera, &lut),
+        }
+        let selected = self
+            .selected
+            .and_then(|id| self.scene.object_index(id))
+            .map(|i| &self.scene.objects[i]);
+        let ui_scale = self.camera.policy.base_scale(window.1);
+        let text_scale = ui_scale.round().max(1.0) as u32;
+        let panel_open = self
+            .panel
+            .as_ref()
+            .is_some_and(|p| Panels::covers_bar(p.tab));
+        self.draw_interface(
+            frame,
+            &screen,
+            &minimap,
+            &layout,
+            &lut,
+            radar.is_some(),
+            selected,
+            panel_open,
+            ui_scale,
+            text_scale,
+        );
+    }
+
+    /// The world in `screen`: terrain, objects, fog and the marks on them.
+    fn draw_view(
+        &self,
+        frame: &mut Frame,
+        screen: &Screen,
+        camera: &crate::view::Camera,
+        lut: &[u32; 256],
+    ) {
+        let screen = *screen;
+        let lut = *lut;
+        draw_world(frame, &screen, self.scene, camera, &lut);
+        draw_objects(frame, &screen, self.scene, camera, &lut, self.time_ms);
+        draw_fog(frame, &screen, self.scene, camera, &lut);
         for (&id, &t) in self.deselected {
             let ticks = (self.time_ms.saturating_sub(t) / crate::clock::TICK_MS) as usize;
             if let Some(zoom) = (crate::render::SELECTION_FRAMES - 2).checked_sub(ticks) {
@@ -1283,7 +1394,7 @@ impl GameView<'_> {
                     &screen,
                     self.data,
                     self.scene,
-                    self.camera,
+                    camera,
                     id,
                     self.time_ms,
                     zoom,
@@ -1302,7 +1413,7 @@ impl GameView<'_> {
                 &screen,
                 self.data,
                 self.scene,
-                self.camera,
+                camera,
                 id,
                 self.time_ms,
                 zoom,
@@ -1321,7 +1432,7 @@ impl GameView<'_> {
                     x - 11.0 + img.width as f32 / 2.0,
                     y - 24.0 + img.height as f32 / 2.0,
                 );
-                crate::render::draw_centred(frame, &screen, self.camera, &lut, img, cx, cy);
+                crate::render::draw_centred(frame, &screen, camera, &lut, img, cx, cy);
             }
         }
         if let Some(b) = self.select_box {
@@ -1331,24 +1442,29 @@ impl GameView<'_> {
         // frame hatched across its ground.
         match (self.site, self.site_preview) {
             (Some((_, true)), Some(b)) => {
-                crate::render::draw_object(frame, &screen, self.camera, &lut, b, self.time_ms)
+                crate::render::draw_object(frame, &screen, camera, &lut, b, self.time_ms)
             }
-            (Some((cell, ok)), _) => {
-                draw_site(frame, &screen, self.camera, cell, self.site_cells, ok)
-            }
+            (Some((cell, ok)), _) => draw_site(frame, &screen, camera, cell, self.site_cells, ok),
             _ => {}
         }
-        let selected = self
-            .selected
-            .and_then(|id| self.scene.object_index(id))
-            .map(|i| &self.scene.objects[i]);
-        let ui_scale = self.camera.policy.base_scale(window.1);
-        let text_scale = ui_scale.round().max(1.0) as u32;
-        let panel_open = self
-            .panel
-            .as_ref()
-            .is_some_and(|p| Panels::covers_bar(p.tab));
-        if let (Some(ui), Some(layout)) = (self.interface, &layout) {
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_interface(
+        &self,
+        frame: &mut Frame,
+        screen: &Screen,
+        minimap: &MinimapRect,
+        layout: &Option<Layout>,
+        lut: &[u32; 256],
+        radar: bool,
+        selected: Option<&crate::objects::MapObject>,
+        panel_open: bool,
+        ui_scale: f32,
+        text_scale: u32,
+    ) {
+        let (screen, minimap, lut) = (*screen, *minimap, *lut);
+        if let (Some(ui), Some(layout)) = (self.interface, layout) {
             let selection: Vec<u32> = self.selected.iter().chain(self.group).copied().collect();
             let shown = crate::info_panel::shown(self.scene, &selection, &self.info);
             let reloading_now =
@@ -1427,13 +1543,11 @@ impl GameView<'_> {
             }
         }
         if self.interface.is_none() || !panel_open {
-            draw_minimap(frame, &minimap, self.scene, self.camera, &screen, &lut);
-        }
-        // Tab: the whole map, as the minimap draws it, over the view.
-        if self.radar {
-            crate::render::shade_rect(frame, screen.x, screen.y, screen.w, screen.h);
-            let radar = MinimapRect::fit(self.scene, screen.x, screen.y, screen.w, screen.h);
-            draw_minimap(frame, &radar, self.scene, self.camera, &screen, &lut);
+            if let Some(r) = self.radar.filter(|_| radar) {
+                self.draw_view(frame, &screen, &r.view, &lut);
+            } else {
+                draw_minimap(frame, &minimap, self.scene, self.camera, &screen, &lut);
+            }
         }
         if let (Some(ui), Some(layout), Some(view)) = (self.interface, &layout, &self.panel) {
             let origin = (layout.bar_x, 0.0);
@@ -1469,13 +1583,15 @@ impl GameView<'_> {
                 let s = layout.scale;
                 ui.info_art.draw(frame, x as f32 * s, y as f32 * s, s, info);
             }
-            // The button under the cursor says what it does and costs.
+            // The button under the cursor says what it does and costs, and
+            // its key (0x505e70).
             let hovered = self.hover_button.and_then(|slot| {
                 let obj = self
                     .selected
                     .and_then(|id| self.scene.object_index(id))
                     .map(|i| &self.scene.objects[i])?;
-                menu(self.scene, obj, self.page)[slot].map(|e| e.command.describe(Some(self.scene)))
+                menu(self.scene, obj, self.page)[slot]
+                    .map(|e| e.command.describe(Some(self.scene)) + &self.hotkeys.suffix(&e))
             });
             // Blank with nothing to say, as on the original (the objectives
             // are in the help panel).

@@ -8,6 +8,7 @@ mod combat;
 mod commands;
 mod cursor;
 mod economy;
+mod hotkeys;
 mod info_panel;
 mod launch;
 mod load_panel;
@@ -580,11 +581,20 @@ fn screenshot(
         _ => Vec::new(),
     };
     let since = std::collections::HashMap::new();
+    let hotkeys = hotkeys::Hotkeys::default();
+    let radar = args.radar.then(|| {
+        let layout = interface.layout(size, &initial.policy, &scene);
+        crate::ui::Radar {
+            origin: crate::ui::radar_origin(&layout, &scene, &initial, (0, 0)),
+            view: initial,
+        }
+    });
     let mut view = GameView {
+        hotkeys: &hotkeys,
         selected_since: &since,
         site_preview: site_shown.as_ref().and_then(|s| s.2.as_ref()),
         site_cells: 1,
-        radar: args.radar,
+        radar,
         deselected: &since,
         data,
         scene: &scene,
