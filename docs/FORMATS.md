@@ -3024,7 +3024,13 @@ vtable 0x59745c, message handler 0x488960, object type 0x29596, 0xe68
 bytes, constructor 0x487cc0). On message 8 (0x522d50, `Players.cpp`),
 unless the mission is the campaign's (game +0xd80 = 1) or +0x30d9 = 2, one
 is made for every player whose side (+0x1a1d by player id) is 3; for side
-4 the game calls 0x51eef0 instead (not decoded; network play). Its name in a save is `AIPLAYER%02d` (0x487c90). Message 2
+4, a player at another machine, the game only queues a network message
+(0x51eef0 appends type, length and data to the outgoing buffer). Mode
++0x30d9 = 2 is set with game +0xd80 = 2 by the application's command 0x103
+(0x4ec1a0, toggling +0xd85, keeping the player's id at +0x30d5); in it no
+computer players are made and the interface panels are not updated
+(0x4bc820, 0x4b7190, 0x49ab30, 0x448610). No menu here sends 0x103; the
+port has no such mode. Its name in a save is `AIPLAYER%02d` (0x487c90). Message 2
 gives it its player id (+0x1c), its difficulty (+0x20, the player's
 +0x1a31 byte), the map size (+0x24, +0x28) and seeds its generator (+0x18,
 the usual LCG `x * 0x41c64e6d + 0x3039`, high half) from timeGetTime.
