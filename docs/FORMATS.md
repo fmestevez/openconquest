@@ -1489,7 +1489,12 @@ While held up a ship plans its route again every 25 ticks (+0x57b,
 +0x57f; 0x4a618d, through 0x4a6330 with the wait); once the wait reaches
 150 it gives the move up (message 0x80, sub 8) and lies still, where
 ships of its player with a higher priority may push it. The port gives
-up plain moves only.
+up plain moves only. The re-plan (0x4a6330) does nothing on the tick the
+route was last planned; a ship one cell from its goal with a priority
+below 51 does not plan when it cannot enter that cell; a ship that has
+not waited plans with 0x4a5740, one that has with 0x4a51b0, both given
+the wait (not decoded: how it weighs ships in the way). A stop (its first
+argument) sets the priority to 0.
 
 When a navy gathering zone has no deposit left, its idle ships make for
 their places in the fleet by plain moves (0x4ca290, 0x4cf070) and those
