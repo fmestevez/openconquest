@@ -6101,3 +6101,31 @@ fn attacks_on_land_plan_once() {
     let (x, y) = (scene.objects[i].x, scene.objects[i].y);
     assert_eq!((x.rem_euclid(64.0), y.rem_euclid(64.0)), (32.0, 32.0));
 }
+
+/// A blow that is not a shot (a spell's, a tornado's) wears a fort's units
+/// too: every blow comes through message 0x138e (needs `OPENCONQUEST_DATA`).
+#[test]
+fn spells_wear_fort_units() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, fort, _) = own_fort(&data, &mut caches);
+    let f = scene.object_index(fort).unwrap();
+    let whole: u32 = scene.objects[f]
+        .fort_places()
+        .iter()
+        .flatten()
+        .map(|&c| c as u32)
+        .sum();
+    scene.hit(fort, 3500.0 / 15.0, &data, &mut caches);
+    let f = scene.object_index(fort).unwrap();
+    let after: u32 = scene.objects[f]
+        .fort_places()
+        .iter()
+        .flatten()
+        .map(|&c| c as u32)
+        .sum();
+    assert!(after < whole, "{after} of {whole}");
+}

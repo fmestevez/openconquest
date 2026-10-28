@@ -397,7 +397,7 @@ impl Scene {
         }
     }
 
-    /// A shot's blow on a fort or barbarian structure (message 0x138e:
+    /// A blow on a fort or barbarian structure (message 0x138e:
     /// FortressClassTy 0x4184f0, BarbarianClassTy 0x40e0f0): its units take
     /// their share (`combat::fort_share`), the weapons 3-8 all of it and the
     /// marines it by the shot's B over its A (0x4ac1b0), each spread by
@@ -536,6 +536,16 @@ impl Scene {
     /// Deals `damage` to the hull of `target`, with a hit (or splash) effect;
     /// a sunk ship is removed and a destroyed building left in ruins.
     pub(super) fn hit(&mut self, target: u32, damage: f32, data: &GameData, caches: &mut Caches) {
+        // A fort's or barbarian structure's every blow comes through
+        // message 0x138e, its units taking their share: spells, tornadoes
+        // and the like too, not only shots.
+        if self
+            .object_index(target)
+            .is_some_and(|t| self.objects[t].holds_units())
+        {
+            self.fort_blow(target, damage, 0.0, NOT_A_WEAPON, false, data, caches);
+            return;
+        }
         self.strike(target, damage, true, data, caches);
     }
 
@@ -1231,6 +1241,10 @@ impl Scene {
         });
     }
 }
+
+/// The item of a blow that is not a weapon's (a spell's, a tornado's):
+/// its marines' share is the weapons' (B over A as 1).
+const NOT_A_WEAPON: u8 = 254;
 
 /// Ticks a building's collapse lasts (cycle table entry 2).
 const COLLAPSE_TICKS: u32 = 75;
