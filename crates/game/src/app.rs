@@ -5372,8 +5372,8 @@ impl ApplicationHandler for App {
                 }
                 (MouseButton::Left, ElementState::Released) if self.ask.is_some() => {
                     let held = self.ask_pressed.take();
-                    if held.is_some() && held == self.ask_answer_at() {
-                        self.answer(held.unwrap());
+                    if let Some(yes) = held.filter(|&h| Some(h) == self.ask_answer_at()) {
+                        self.answer(yes);
                     }
                 }
                 (MouseButton::Left, ElementState::Pressed)
