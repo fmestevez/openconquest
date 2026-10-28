@@ -1546,8 +1546,10 @@ the step is refused the ship slows to a stop over the distance left
 While held up a ship plans its route again every 25 ticks (+0x57b,
 +0x57f; 0x4a618d, through 0x4a6330 with the wait); once the wait reaches
 150 it gives the move up (message 0x80, sub 8) and lies still, where
-ships of its player with a higher priority may push it. The port gives
-up plain moves only. The re-plan (0x4a6330) does nothing on the tick the
+ships of its player with a higher priority may push it. The give-up returns 3 to the behaviour moving the ship, which sends it
+again (0x4c2e75 and the others). The port gives up plain moves and
+gathering (a gatherer bound for its deposit is sent on again while that
+brings it nearer); ships with other tasks keep waiting. The re-plan (0x4a6330) does nothing on the tick the
 route was last planned; a ship one cell from its goal with a priority
 below 51 does not plan when it cannot enter that cell; a ship that has
 not waited plans with 0x4a5740, one that has with 0x4a51b0, both given
