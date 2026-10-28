@@ -160,6 +160,11 @@ pub enum Order {
         site: u32,
         item: u8,
     },
+    CancelRefit {
+        smithy: u32,
+        upgrade: Upgrade,
+        level: u8,
+    },
     Refit {
         smithy: u32,
         upgrade: Upgrade,
@@ -288,6 +293,11 @@ impl Scene {
                 upgrade,
                 level,
             } => done(self.refit(smithy, upgrade, level)),
+            CancelRefit {
+                smithy,
+                upgrade,
+                level,
+            } => done(self.cancel_refit(smithy, upgrade, level)),
             Research { site, upgrade } => done(self.start_research(site, upgrade)),
             Upgrade { id } => done(self.upgrade(id, data, caches)),
             PlaceBuilding {

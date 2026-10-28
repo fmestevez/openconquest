@@ -3094,9 +3094,9 @@ impl App {
         self.status = Some((msg.into(), Instant::now()));
     }
 
-    /// A right click on command button `slot` (0x4f46c0): on a marine or
-    /// weapon button, takes the last one ordered off the queue (message
-    /// 0x3c), its price paid back.
+    /// A right click on command button `slot` (0x4f46c0): on a ship,
+    /// marine, weapon or refit button, takes the last one ordered off the
+    /// queue (message 0x3c), its price paid back.
     fn cancel_button(&mut self, slot: usize) {
         let Some(obj) = self
             .selected
@@ -3111,6 +3111,19 @@ impl App {
         if let Some(kind) = economy::ship_of_command(entry.command) {
             if entry.count > 0 {
                 let order = Order::CancelShip { site: obj.id, kind };
+                if let Err(e) = self.issue(order) {
+                    self.say(e);
+                }
+            }
+            return;
+        }
+        if let Some((upgrade, level)) = crate::combat::refit_of_command(entry.command.0) {
+            if entry.count > 0 {
+                let order = Order::CancelRefit {
+                    smithy: obj.id,
+                    upgrade,
+                    level,
+                };
                 if let Err(e) = self.issue(order) {
                     self.say(e);
                 }

@@ -831,6 +831,25 @@ impl Scene {
         Ok(())
     }
 
+    /// Takes the last refit of `upgrade` to `level` off `smithy`'s queue,
+    /// even the one under way, and pays its price back (message 0x3c,
+    /// sent by a right click on its button).
+    pub fn cancel_refit(
+        &mut self,
+        smithy: u32,
+        upgrade: combat::Upgrade,
+        level: u8,
+    ) -> Result<(), String> {
+        let k = self
+            .refits
+            .iter()
+            .rposition(|r| r.0 == smithy && (r.1, r.2) == (upgrade, level))
+            .ok_or("None of those are queued")?;
+        self.refits.remove(k);
+        self.amber += combat::refit_cost(upgrade, level);
+        Ok(())
+    }
+
     /// The refits queued at `smithy` of `upgrade` to `level`: how many,
     /// and the progress 0..1 of the one under way if it is one of them
     /// (0x433d10).

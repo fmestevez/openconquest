@@ -1024,6 +1024,14 @@ fn smithy_refits() {
     scene.run_refits(combat::refit_seconds(1) / 2.0 + 0.01);
     assert_eq!(armour_of(&scene), 1);
     assert_eq!(scene.refits_at(id, armour, 1), (0, None));
+    // A right click takes a queued refit back, its price returned.
+    scene.levels.entry(human).or_default().set(armour, 2);
+    let amber = scene.amber;
+    scene.refit(id, armour, 2).unwrap();
+    scene.cancel_refit(id, armour, 2).unwrap();
+    assert_eq!(scene.amber, amber);
+    assert!(scene.cancel_refit(id, armour, 2).is_err());
+    scene.levels.entry(human).or_default().armour = 1;
     assert!(scene.refit(id, armour, 1).is_err(), "already fitted");
     assert!(scene.refit(id, armour, 2).is_err(), "level 2 not studied");
 }

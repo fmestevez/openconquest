@@ -553,8 +553,12 @@ Combat tables:
   queues one byte a unit (+0x1ec; slot 1, 2, 4, 5), done in turn, 150 or
   200 ticks each (0x43542a); when one is done the smithy sends the ship
   alongside message 0x248d (armour) or 0x248e (ram) with the level. The
-  buttons show the count left and the progress (0x433d10); cancelling
-  (0x435a58) refunds and clears the queue. Studies wait for an idle
+  buttons show the count left and the progress (0x433d10). A right click
+  (message 0x3c, sub 3 or 4) takes the last unit of that kind off the
+  queue, even the one under way, its price paid back; a stop (message 10)
+  clears the queue, or ends a study, paying back the share not yet
+  worked (100 - progress percent of the price; a study also clears
+  +0x63/+0x6a). Studies wait for an idle
   smithy. It also studies each kind of ram (0x4c-0x4e, slots 4-6;
   player bytes +0x67 + kind) and armour (0x49-0x4b, slots 8-10; +0x60 +
   kind), regular, silver and golden (`CBUT_UPRAMW/M/S`,
