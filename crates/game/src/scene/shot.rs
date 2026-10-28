@@ -41,11 +41,11 @@ const HEIGHT: [u32; 19] = [
 
 /// Sounds by letter: launching (events at 0x5bbca4) and landing, by state
 /// 1-4 (events at 0x5bbcec), as `SND_n` lists them.
-const LAUNCH: [&str; 14] = [
+pub(super) const LAUNCH: [&str; 14] = [
     "bas031", "cross1", "thrcat1", "bas034", "gastsn1", "thrcat1", "thrbal1", "thrcat1", "thrbal1",
     "cross1", "", "", "fir1", "thrcat1",
 ];
-const LAND: [[&[&str]; 4]; 14] = [
+pub(super) const LAND: [[&[&str]; 4]; 14] = [
     [
         &["bowla1", "strel1"],
         &["aas005"],

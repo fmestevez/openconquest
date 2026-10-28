@@ -136,16 +136,37 @@ pub struct SavedObject {
 }
 
 impl SaveGame {
-    pub fn write(&self, path: &Path) -> Result<()> {
+    /// Writes the game, packed (gzip) when `pack` (the configuration's
+    /// "pack save file": the original's saves compress their entries,
+    /// 0x51f4c0 passing `[0x5ca791]` to its archive writer).
+    pub fn write(&self, path: &Path, pack: bool) -> Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let json = serde_json::to_vec(self)?;
-        std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))
+        let bytes = if pack {
+            use std::io::Write;
+            let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            gz.write_all(&json)?;
+            gz.finish()?
+        } else {
+            json
+        };
+        std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
     }
 
+    /// Reads a saved game, packed or not.
     pub fn read(path: &Path) -> Result<Self> {
-        let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        let mut data =
+            std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        if data.starts_with(&[0x1f, 0x8b]) {
+            use std::io::Read;
+            let mut json = Vec::new();
+            flate2::read::GzDecoder::new(&data[..])
+                .read_to_end(&mut json)
+                .context("not a saved game")?;
+            data = json;
+        }
         let save: Self = serde_json::from_slice(&data).context("not a saved game")?;
         if save.version != VERSION {
             bail!("saved by an incompatible version ({})", save.version);

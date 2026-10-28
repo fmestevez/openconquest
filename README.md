@@ -92,6 +92,16 @@ marked as a placeholder in the code.
   SoundFont (`--soundfont FILE.sf2` or `OPENCONQUEST_SOUNDFONT`).
 - The original's intro and story videos, decoded from the CD.
 
+### Settings
+
+The bar's configuration and sound panels work as the original's: game
+speed, scrolling speeds, message pop-up, message speed and lines (the
+game's messages at the view's top left), control bar side, button
+animation, help string, graphic trails (ships' wakes), lighting effects
+(shadows), packed saved games, the music choice, unit reports, battle and
+ambient sound effects, and the music, effects, FX and main volumes. They
+are kept in `config.json`.
+
 ### Not yet done
 
 - The campaign scripts' story events (partly decoded).
@@ -182,7 +192,7 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 | Right click (modern mouse) | Give the order the pointer shows |
 | Shift + click to sail | Add a waypoint to the route |
 | Command keys | Press the selection's command button, as clicking it (the original's defaults, shown on the button's help line): Move M, Stop S, Fire F, Board B, Ram R, Treasure/hero T, Reload L, Repair at dock P, Build D (settlement C, medium fort F), Behaviour C; merchants Unload U, Amber A, Fishing F, Leviathan V, Gather zones R; settlements Train bowmen B / javelinmen J / swordsmen S, Repair R, Sell E; Esc the red cross. Not with Shift, Ctrl or Alt held. Changed in `config.json` (`"hotkeys": {"0x04": "G", "0x01": "Shift+X"}`, command id to key) |
-| Command buttons | Move (then click the destination), Stop, Fire (then click an enemy ship or building), Collect amber / Fish / Hunt leviathan (then click a deposit or zone), Repair (then click a dock, or for a settlement a damaged building), Behaviour, ship building and upgrades work, for every selected ship where it applies; the rest are shown greyed until implemented |
+| Command buttons | Move (then click the destination), Stop, Fire (then click an enemy ship or building), Collect amber / Fish / Hunt leviathan (then click a deposit or zone), Repair (then click a dock, or for a settlement a damaged building), Behaviour, ship building and upgrades work, for every selected ship where it applies; a greyed button says why it cannot be used now |
 | Build structures (settlement or town) | Pick a building, then click a land cell nearby (green outline: allowed; ports and shipyards need the shore); Esc goes back |
 | Fire, then click an enemy ship or building | Attack it |
 | Ram / Board, then click an enemy ship | Ram it / board it |

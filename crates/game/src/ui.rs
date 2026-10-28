@@ -116,6 +116,8 @@ pub struct Interface {
     pub panels: Panels,
     /// The animated "pause" sign (`WIN_PAUSE`).
     pause_sign: Vec<Rc<Image>>,
+    /// The messages' font (`MESS_FONT`, chat.cpp).
+    mess_font: Option<TextRenderer>,
     /// The load panel's pictures.
     pub load_art: load_panel::LoadArt,
     /// The green tick where a ship was sent (`TAKE_CMD`, controlm).
@@ -303,6 +305,7 @@ impl Interface {
             buttons: RefCell::default(),
             panels: Panels::load(data, theme)?,
             pause_sign: sequence(&format!("{theme}WIN_PAUSE")),
+            mess_font: TextRenderer::load(&data.controls, "MESS_FONT", 0).ok(),
             load_art: load_panel::LoadArt::load(data, theme),
             take_cmd: (0..4)
                 .filter_map(|i| {
@@ -1166,6 +1169,9 @@ pub struct GameView<'a> {
     pub time_ms: u64,
     /// Command slot under the cursor.
     pub hover_button: Option<usize>,
+    /// The configuration's "button animation": a hovered button's picture
+    /// plays (off, 0x4f2a90 keeps its first frame).
+    pub button_animation: bool,
     /// The object panel's state (`info_panel`).
     pub info: crate::info_panel::InfoView,
     /// Where the player last sent ships (world point) and how many
@@ -1194,6 +1200,9 @@ pub struct GameView<'a> {
     pub paused: bool,
     /// A question asked, and the answer held down.
     pub ask: Option<(String, bool, Option<bool>)>,
+    /// The game's messages shown over the view, oldest first (empty with
+    /// "message pop-up" off).
+    pub chat: &'a [String],
     /// The load panel's state, and the panel button held down.
     pub load: Option<(load_panel::LoadView, Option<load_panel::Hit>)>,
     /// What the strip below the view tells of the object under the
@@ -1559,7 +1568,7 @@ impl GameView<'_> {
                         layout,
                         &menu(self.scene, obj, self.page),
                         nation,
-                        self.hover_button,
+                        self.hover_button.filter(|_| self.button_animation),
                         self.time_ms,
                     );
                     // Only the portrait and the slots, or the group's
@@ -1587,6 +1596,15 @@ impl GameView<'_> {
                 self.text,
                 self.panel_hover,
             );
+        }
+        // The messages (chat.cpp 0x4ff390, 0x4ff4c0): a line every 20
+        // pixels from (8, 8) of the view, in `MESS_FONT`.
+        if let Some(font) = self.interface.and_then(|ui| ui.mess_font.as_ref()) {
+            for (k, line) in self.chat.iter().enumerate() {
+                let x = screen.x as i32 + 8 * text_scale as i32;
+                let y = screen.y as i32 + (8 + 20 * k as i32) * text_scale as i32;
+                font.draw(frame, x, y, text_scale, line);
+            }
         }
         if let Some(outcome) = self.scene.outcome {
             self.draw_outcome(frame, &screen, outcome, text_scale);

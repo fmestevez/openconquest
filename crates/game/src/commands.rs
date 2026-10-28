@@ -680,7 +680,6 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
         return;
     };
     let kind = ship.kind;
-    // Commands that are not implemented yet are shown disabled.
     set(menu, 0, Command::MOVE, true);
     set(menu, 1, Command::STOP, true);
     if kind <= 1 {

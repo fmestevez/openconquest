@@ -130,7 +130,12 @@ pub struct Config {
     /// 0x5ca568, 0x5ca56c); the wave (FX) and main ones the mixer's.
     pub music_volume: u16,
     pub effects_volume: u16,
+    /// The wave and master mixer controls (0x5011d0 sets the system's;
+    /// here linear scales, the wave of the effects, the master of all).
+    /// Kept under new names: earlier versions stored them unused.
+    #[serde(rename = "wave_volume")]
     pub fx_volume: u16,
+    #[serde(rename = "master_volume")]
     pub main_volume: u16,
 }
 
@@ -157,8 +162,8 @@ impl Default for Config {
             // Half loud, as this port played music before.
             music_volume: 3398,
             effects_volume: 4000,
-            fx_volume: 0,
-            main_volume: 2000,
+            fx_volume: 4000,
+            main_volume: 4000,
         }
     }
 }

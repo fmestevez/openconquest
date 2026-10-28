@@ -1105,6 +1105,34 @@ impl Scene {
         Ok(())
     }
 
+    /// Sells an armour piece, or with `ram` a ram, of `level` from
+    /// settlement `site`'s stock (message 0x280f): three quarters of its
+    /// fitting cost (0x441ba0).
+    pub fn sell_fitting(&mut self, site: u32, ram: bool, level: u8) -> Result<(), String> {
+        let i = self.object_index(site).ok_or("No such settlement")?;
+        if !self.is_own(&self.objects[i]) {
+            return Err("Not your settlement".into());
+        }
+        let (armour, rams) = self.fittings.entry(site).or_default();
+        let pieces = if ram { rams } else { armour };
+        let k = pieces.iter().position(|&l| l == level).ok_or("None left")?;
+        pieces.remove(k);
+        let upgrade = if ram {
+            combat::Upgrade::Ram
+        } else {
+            combat::Upgrade::Armour
+        };
+        let amber = if level == 0 {
+            0
+        } else {
+            combat::refit_cost(upgrade, level) * 75 / 100
+        };
+        if let Some(owner) = self.objects[i].owner {
+            self.earn(owner, amber as i64, 0);
+        }
+        Ok(())
+    }
+
     /// Sells settlement or town `site` (message 0x248f): three quarters of
     /// each stock unit's amber price, and of a crew's fish, by its condition
     /// (0x441ba0), and of the building's cost by its health (0x425990);

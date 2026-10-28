@@ -338,6 +338,13 @@ fn draw_image(
     draw_image_as(frame, screen, camera, lut, img, left, top, false);
 }
 
+/// The configuration's "lighting effects": with them off, shadows are not
+/// drawn. The original's switch (0x4ed8d0) sets the sprite system's flag
+/// `+0x638` beside its remap table (`+0x63c`, the shadow table for
+/// shadows and flames, 0x55dd10); that it turns those remaps off is
+/// inferred, the blitter reading it not being found.
+pub static LIGHTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 /// Draws `img` at world `(left, top)`; `as_shadow` darkens what lies under
 /// its pixels instead (the original's shadow table, 0x5c1358).
 #[allow(clippy::too_many_arguments)]
@@ -371,6 +378,10 @@ fn draw_image_as(
     {
         return;
     }
+    let lighting = LIGHTING.load(std::sync::atomic::Ordering::Relaxed);
+    if as_shadow && !lighting {
+        return;
+    }
     let (sx0, sx1) = span(camera.x, left, right, w);
     let (sy0, sy1) = span(camera.y, top, bottom, h);
     let cols: Vec<u32> = (sx0..sx1)
@@ -386,12 +397,14 @@ fn draw_image_as(
         let start = ((screen.y + sy) * frame.width + screen.x + sx0) as usize;
         let dst = &mut frame.pixels[start..][..cols.len()];
         for (d, &ix) in dst.iter_mut().zip(&cols) {
-            if let Some(px) = src[ix as usize] {
-                *d = if px == SHADOW || as_shadow {
-                    darken(*d)
-                } else {
-                    resolve(px, lut)
-                };
+            match src[ix as usize] {
+                Some(px) if px == SHADOW || as_shadow => {
+                    if lighting {
+                        *d = darken(*d);
+                    }
+                }
+                Some(px) => *d = resolve(px, lut),
+                None => {}
             }
         }
     }

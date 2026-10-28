@@ -607,6 +607,7 @@ fn screenshot(
         status: None,
         time_ms,
         hover_button: args.hover_button,
+        button_animation: true,
         info: Default::default(),
         sent: None,
         page: match args.page.as_deref() {
@@ -637,6 +638,7 @@ fn screenshot(
         panel_hover: None,
         paused: args.paused,
         ask: None,
+        chat: &[],
         load: Some((load_panel::LoadView::default(), None)),
         object_info: None,
         hover_object: None,

@@ -204,7 +204,9 @@ impl Scene {
             d.frame(if d.small { small } else { big }).is_some()
         });
         self.wake_clock += dt;
-        if self.wake_clock < EVERY {
+        // "Graphic trails" off: no new droplets (0x4a3f40 asks
+        // `[0x5ca78f]`).
+        if self.wake_clock < EVERY || !self.trails {
             return;
         }
         self.wake_clock -= EVERY;

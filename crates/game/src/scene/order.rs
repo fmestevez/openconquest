@@ -133,6 +133,13 @@ pub enum Order {
         site: u32,
         item: u8,
     },
+    /// Sell an armour piece (or with `ram` a ram) of `level` from
+    /// settlement `site`'s stock.
+    SellFitting {
+        site: u32,
+        ram: bool,
+        level: u8,
+    },
     /// Sell settlement or town `site`, with its stock.
     SellTown {
         site: u32,
@@ -281,6 +288,7 @@ impl Scene {
             Discard { holder, cargo } => done(self.discard(holder, cargo, data, caches)),
             EndLoad { id } => done(self.end_load(id)),
             SellItem { site, item } => done(self.sell_item(site, item)),
+            SellFitting { site, ram, level } => done(self.sell_fitting(site, ram, level)),
             SellTown { site } => done(self.sell_town(site, data, caches)),
             RepairStock { workshop } => done(self.order_repair_stock(workshop)),
             BuildShip { site, kind } => done(self.start_ship(site, kind)),
@@ -320,9 +328,9 @@ impl Scene {
 /// interface's voice channel): events 156-159 for amber, 160-163 for fish,
 /// 164-167 for a leviathan, + 0, 1, 3, 2 by nation; only the Greeks' and
 /// the Persians' are recorded, alike.
-const AMBER_VOICES: [&str; 5] = ["am4", "am1", "am3", "come4", "come5a"];
-const FISH_VOICES: [&str; 6] = ["fi3", "fi1", "fi4", "fish1", "fish2", "fish3"];
-const LEVIATHAN_VOICES: [&str; 8] = [
+pub(super) const AMBER_VOICES: [&str; 5] = ["am4", "am1", "am3", "come4", "come5a"];
+pub(super) const FISH_VOICES: [&str; 6] = ["fi3", "fi1", "fi4", "fish1", "fish2", "fish3"];
+pub(super) const LEVIATHAN_VOICES: [&str; 8] = [
     "lev3", "lev1", "lev4", "levi1", "levi2", "levi3", "levi4", "levi5",
 ];
 

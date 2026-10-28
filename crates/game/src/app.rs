@@ -530,6 +530,10 @@ pub struct App {
     /// The own ship last clicked and when (the modern mouse's double
     /// click).
     last_click: Option<(u32, Instant)>,
+    /// The game's messages over the view, oldest first, and when the
+    /// oldest last went (chat.cpp).
+    chat: Vec<String>,
+    chat_since: Instant,
     /// The SoundFont given for MIDI music.
     soundfont: Option<std::path::PathBuf>,
     /// The music's tracks as the sound panel lists them.
@@ -721,6 +725,8 @@ impl App {
             ask: None,
             ask_pressed: None,
             last_click: None,
+            chat: Vec::new(),
+            chat_since: Instant::now(),
             soundfont: soundfont.clone(),
             track_names: Vec::new(),
             info_view: Default::default(),
@@ -856,6 +862,7 @@ impl App {
                 .sent
                 .map(|(x, y, at)| (x, y, self.time_ms.saturating_sub(at))),
             hover_button: self.cursor.and_then(|c| self.button_at(c)),
+            button_animation: self.settings.config.button_animation,
             info: self.info_state(),
             page: self.page,
             site: None,
@@ -866,6 +873,11 @@ impl App {
             ask: self
                 .ask
                 .map(|a| (self.ask_text(a), a.yes_no(), self.ask_pressed)),
+            chat: if self.settings.config.message_popup {
+                &self.chat
+            } else {
+                &[]
+            },
             load: Some((self.load_state(), self.load_pressed)),
             object_info: self.hovered_info(),
         }
@@ -1153,7 +1165,11 @@ impl App {
     fn save_now(&mut self) {
         let name = self.save_slot_name();
         let path = self.data.save_dir().join(format!("{name}.json"));
-        match self.scene.save().write(&path) {
+        match self
+            .scene
+            .save()
+            .write(&path, self.settings.config.pack_saves)
+        {
             Ok(()) => {
                 self.say("Game saved");
                 self.refresh_panels();
@@ -1180,8 +1196,11 @@ impl App {
     /// Sets the effects' and the music's volumes from the sound panel's.
     fn apply_volumes(&mut self) {
         let c = &self.settings.config;
-        let effects = panels::Config::gain(c.effects_volume);
-        self.music_volume = panels::Config::gain(c.music_volume);
+        // The wave and master controls scale linearly over the
+        // DirectSound attenuations (as the system mixer would).
+        let (wave, master) = (c.fx_volume as f32 / 4000.0, c.main_volume as f32 / 4000.0);
+        let effects = panels::Config::gain(c.effects_volume) * wave * master;
+        self.music_volume = panels::Config::gain(c.music_volume) * master;
         let music = self.music_volume;
         let muted = self.audio.as_ref().is_some_and(|a| a.muted);
         if let Some(a) = self.audio.as_mut() {
@@ -2785,11 +2804,17 @@ impl App {
                                 site: *site,
                                 item: e.sub,
                             },
-                            _ => {
-                                self.say("Only marines and weapons can be sold yet");
-                                self.info_view = view;
-                                return true;
-                            }
+                            // Armour kinds 0-2, rams 3-5.
+                            ARMOUR => Order::SellFitting {
+                                site: *site,
+                                ram: false,
+                                level: e.sub.min(2),
+                            },
+                            _ => Order::SellFitting {
+                                site: *site,
+                                ram: true,
+                                level: e.sub.saturating_sub(3).min(2),
+                            },
                         };
                         match self.issue(order) {
                             Ok(_) => {
@@ -3028,9 +3053,20 @@ impl App {
         let (cx, cy) = (self.camera.x + vw / 2.0, self.camera.y + vh / 2.0);
         let reach = (vw * vw + vh * vh).sqrt() / 2.0;
         let mut played: Vec<&str> = Vec::new();
+        let c = &self.settings.config;
         for (name, x, y) in sounds {
             // One of each sound per frame, and not too many at once.
             if played.contains(&name) || played.len() >= 8 {
+                continue;
+            }
+            // The sound panel's switches (see `sound_kind`).
+            let on = match crate::scene::sound_kind(name) {
+                crate::scene::SoundKind::Voice => c.unit_report,
+                crate::scene::SoundKind::Battle => c.battle_sounds,
+                crate::scene::SoundKind::Ambient => c.ambient_sounds,
+                crate::scene::SoundKind::Always => true,
+            };
+            if !on {
                 continue;
             }
             let gain = if x.is_nan() {
@@ -3238,7 +3274,26 @@ impl App {
                 {
                     "Not enough amber or fish".to_string()
                 }
-                None => format!("{}: not available yet", entry.command.name()),
+                None => match entry.command {
+                    Command::UNLOAD => "Nothing aboard to unload".to_string(),
+                    Command::FIRE => "This ship has no weapons".to_string(),
+                    Command::BOARD => "No marines aboard to board with".to_string(),
+                    Command::REPAIR_SHIP => "The ship needs no repair".to_string(),
+                    Command::LOAD => "The settlement is busy, or has no fort".to_string(),
+                    Command::SELL_ITEM | Command::SELL_TOWN => "The settlement is busy".to_string(),
+                    Command::REPAIR_STOCK => {
+                        "Nothing worn to mend, the settlement is busy, or not enough amber"
+                            .to_string()
+                    }
+                    Command::BUILD_ARGO => {
+                        "The shipyard is busy, or not enough amber or fish".to_string()
+                    }
+                    crate::commands::FIRE_ON_AGGRESSOR => "Only while guarding".to_string(),
+                    crate::commands::GUARD_ZONE | crate::commands::ATTACK_ZONE => {
+                        "This ship has no weapons".to_string()
+                    }
+                    _ => "Not possible now".to_string(),
+                },
             };
             // The original only greys the button: no sound (its "deny"
             // sound, event 319, is the sting for an enemy ship sunk).
@@ -3534,7 +3589,11 @@ impl App {
             return;
         }
         let path = self.quick_save_path();
-        match self.scene.save().write(&path) {
+        match self
+            .scene
+            .save()
+            .write(&path, self.settings.config.pack_saves)
+        {
             Ok(()) => self.say("Game saved"),
             Err(e) => self.say(format!("Could not save: {e:#}")),
         }
@@ -4768,6 +4827,11 @@ impl App {
         if self.menu == Some(MenuState::Waiting) {
             self.run_lobby();
         }
+        self.scene.trails = self.settings.config.graphic_trails;
+        crate::render::LIGHTING.store(
+            self.settings.config.lighting,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         if self.net.is_some() {
             // Multiplayer games run at one speed and do not pause, menus
             // open or not.
@@ -4785,9 +4849,20 @@ impl App {
         if let Some(m) = self.music.as_mut() {
             m.keep_playing();
         }
-        let latest = std::mem::take(&mut self.scene.messages).pop();
-        if let Some(msg) = latest {
-            self.say(msg);
+        // The game's messages join the lines over the view (chat.cpp
+        // 0x4ff390); the oldest goes every "message speed" seconds, or at
+        // once while there are more than "message lines" (0x4ff4c0).
+        self.chat.append(&mut self.scene.messages);
+        let lines = self.settings.config.chat_lines.max(1) as usize;
+        let every = Duration::from_secs(self.settings.config.chat_speed.max(1) as u64);
+        if self.chat.len() > lines || self.chat_since.elapsed() >= every {
+            self.chat_since = Instant::now();
+            if !self.chat.is_empty() {
+                self.chat.remove(0);
+            }
+        }
+        while self.chat.len() > lines {
+            self.chat.remove(0);
         }
         let window = self.window_size();
         let (screen, _) = self.placement();

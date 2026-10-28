@@ -266,6 +266,8 @@ pub struct Scene {
     pub gull_art: std::rc::Rc<(Frames, Frames)>,
     /// Ships' wakes (only shown) and their sprites: `TRAKS00`, `TRAKS14`.
     pub droplets: Vec<wake::Droplet>,
+    /// The configuration's "graphic trails": ships throw off droplets.
+    pub trails: bool,
     /// Flocks of sheep (only shown), their clock, and their pictures by
     /// direction, grazing and walking (`SHEEP_<dir><1|2>`).
     pub flocks: sheep::Flocks,
@@ -542,6 +544,7 @@ impl Scene {
             gulls,
             gull_rng: Rng(0x6011_5eed),
             droplets: Vec::new(),
+            trails: true,
             unloaded: Vec::new(),
             sparkles: Default::default(),
             flocks: Default::default(),
@@ -1945,4 +1948,43 @@ pub fn heading_towards(dx: f32, dy: f32) -> usize {
     let angle = (-dy).atan2(dx);
     let step = std::f32::consts::FRAC_PI_4;
     ((angle / step).round() as i32).rem_euclid(8) as usize
+}
+
+/// Which of the sound panel's switches a sound answers to: the original's
+/// player (0x525370) plays channel 2 (voices) only with unit reports on
+/// (bit 1 of `[0x5ca55f]`), channels 1 and 4 (firing, shots landing,
+/// boarding, ramming, lightning) only with battle sounds (bit 2), and
+/// channels 3, 5 and 6 (the world's other sounds: buildings, hits, spells,
+/// creatures, treasures, wrecks) only with ambient sounds (bit 4); the
+/// rest always.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoundKind {
+    Voice,
+    Battle,
+    Ambient,
+    Always,
+}
+
+/// The kind of scene sound `name`.
+pub fn sound_kind(name: &str) -> SoundKind {
+    let voice = order::AMBER_VOICES
+        .iter()
+        .chain(&order::FISH_VOICES)
+        .chain(&order::LEVIATHAN_VOICES)
+        .any(|v| *v == name)
+        || ["jb_d1", "pe1", "bi_c4"].contains(&name)
+        || name.starts_with("re_o")
+        || name.starts_with("come");
+    let battle = shot::LAUNCH.contains(&name)
+        || shot::LAND.iter().flatten().any(|l| l.contains(&name))
+        || ["firee1", "abor6a", "109", "flash", "molniya2"].contains(&name);
+    if voice {
+        SoundKind::Voice
+    } else if battle {
+        SoundKind::Battle
+    } else if ["deadsh", "deny"].contains(&name) {
+        SoundKind::Always
+    } else {
+        SoundKind::Ambient
+    }
 }

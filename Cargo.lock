@@ -1904,6 +1904,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs",
+ "flate2",
  "openconquest-formats",
  "png",
  "rfd",

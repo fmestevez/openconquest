@@ -860,7 +860,7 @@ fn save_and_restore() {
         "openconquest-save-test-{}.json",
         std::process::id()
     ));
-    scene.save().write(&path).unwrap();
+    scene.save().write(&path, true).unwrap();
     let save = SaveGame::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
     let mut copy = Scene::restore(&data, &mut caches, &save).unwrap();
@@ -3865,7 +3865,7 @@ fn boarders_hook_and_lie_alongside() {
                 if g.stage == GrappleStage::Fight && g.ticks == 1 {
                     let path = std::env::temp_dir()
                         .join(format!("openconquest-board-{}.json", std::process::id()));
-                    scene.save().write(&path).unwrap();
+                    scene.save().write(&path, false).unwrap();
                     let save = SaveGame::read(&path).unwrap();
                     let _ = std::fs::remove_file(&path);
                     let restored = Scene::restore(&data, &mut caches, &save).unwrap();
@@ -4106,7 +4106,7 @@ fn battles_survive_a_save() {
     scene.lightning.push((x, y, 1.0));
     let path =
         std::env::temp_dir().join(format!("openconquest-battle-{}.json", std::process::id()));
-    scene.save().write(&path).unwrap();
+    scene.save().write(&path, false).unwrap();
     let save = SaveGame::read(&path).unwrap();
     let _ = std::fs::remove_file(&path);
     let restored = Scene::restore(&data, &mut caches, &save).unwrap();
@@ -6371,4 +6371,41 @@ fn ships_give_up_a_move_held_up_too_long() {
     };
     assert!(!hold(&mut scene, crate::clock::ticks(100)));
     assert!(hold(&mut scene, crate::clock::ticks(150)));
+}
+
+/// A settlement sells an armour piece or a ram from its stock for three
+/// quarters of its fitting cost (needs `OPENCONQUEST_DATA`).
+#[test]
+fn settlements_sell_armour_and_rams() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let site = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(_)))
+        .unwrap()
+        .id;
+    scene.fittings.insert(site, (vec![2], vec![1]));
+    let amber = scene.amber;
+    scene.sell_fitting(site, false, 2).unwrap();
+    assert_eq!(scene.amber, amber + 45);
+    scene.sell_fitting(site, true, 1).unwrap();
+    assert_eq!(scene.amber, amber + 45 + 18);
+    assert!(scene.sell_fitting(site, true, 1).is_err(), "none left");
+}
+
+/// The sound panel's switches answer for the original's channels.
+#[test]
+fn sounds_follow_the_panel_switches() {
+    use crate::scene::{sound_kind, SoundKind};
+    assert_eq!(sound_kind("am4"), SoundKind::Voice);
+    assert_eq!(sound_kind("jb_d1"), SoundKind::Voice);
+    assert_eq!(sound_kind("abor6a"), SoundKind::Battle);
+    assert_eq!(sound_kind("htk1"), SoundKind::Battle);
+    assert_eq!(sound_kind("pit3"), SoundKind::Ambient);
+    assert_eq!(sound_kind("deny"), SoundKind::Always);
 }
