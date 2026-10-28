@@ -182,6 +182,9 @@ impl Permits {
             Upgrade::Arms(g) => self.allows(19 + 3 * g),
             Upgrade::Rate(g) => self.allows(20 + 3 * g),
             Upgrade::Special(s) => self.allows(76 + s),
+            // The smithy's studies (0x433e60, 0x4404e0).
+            Upgrade::RamKind(k) => self.allows(31 + k.min(2)),
+            Upgrade::ArmourKind(k) => self.allows(34 + k.min(2)),
         }
     }
 

@@ -186,10 +186,6 @@ pub fn item_cost(item: u8) -> (u32, u32) {
 /// at level 0).
 const CREW_MELEE: [u32; 3] = [35, 68, 100];
 
-/// Ram quality (0x598054, by the ram fitted and the player's level in it;
-/// level 0).
-const CREW_RAM: [u32; 3] = [100, 125, 160];
-
 /// The people on a ship: its crew class (record field 14 minus 3; ramming
 /// uses it for crew quality) and squads of marines by kind.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -247,8 +243,17 @@ const RAM_ANGLE_DEFENCE: [u32; 3] = [4, 12, 20];
 pub struct Rammer {
     pub kind: u8,
     pub ram: u8,
+    /// The owner's smithy level in that ram kind.
+    pub level: u8,
     pub heading: usize,
     pub speed: f32,
+}
+
+impl Rammer {
+    /// Its row of 0x598054: ram kind x 3 + level.
+    fn quality(&self) -> usize {
+        self.ram.min(2) as usize * 3 + self.level.min(2) as usize
+    }
 }
 
 /// The share of a ram's blow the hull takes, over its share (0x598094:
@@ -288,14 +293,14 @@ pub fn ram_blows(a: Rammer, t: Rammer, angle: usize) -> (f32, f32) {
     let impact = rel.0.hypot(rel.1) / 2.0 * 100.0 / 60_000.0;
     let power = |k: u8| RAM_POWER[k as usize % 12] as f32;
     let hull = |k: u8| hull_strength(k) * 15.0;
-    let blow = |q: u8, own: u8, other: u8, angle_factor: u32| {
+    let blow = |q: usize, own: u8, other: u8, angle_factor: u32| {
         let strike = (angle_factor as f32 * hull(own) / 100.0 * impact).min(500_000.0);
-        CREW_RAM[q.min(2) as usize] as f32 * power(own) / power(other) * strike / 2500.0 / 15.0
+        RAM_QUALITY[q] as f32 * power(own) / power(other) * strike / 2500.0 / 15.0
     };
     let angle = angle.min(2);
     (
-        blow(a.ram, a.kind, t.kind, RAM_ANGLE_ATTACK[angle]),
-        blow(t.ram, t.kind, a.kind, RAM_ANGLE_DEFENCE[angle]),
+        blow(a.quality(), a.kind, t.kind, RAM_ANGLE_ATTACK[angle]),
+        blow(t.quality(), t.kind, a.kind, RAM_ANGLE_DEFENCE[angle]),
     )
 }
 
@@ -1056,6 +1061,13 @@ pub enum Upgrade {
     /// dead (commands 0x50-0x53, 2000 amber each, offered once the arming
     /// is at level 2; menu 0x430f90).
     Special(u8),
+    /// The smithy's study of an armour kind, 0 regular, 1 silver, 2 golden
+    /// (commands 0x49-0x4b, player bytes +0x60 + kind): the cut of the
+    /// kind's armour (0x597a00) by the level.
+    ArmourKind(u8),
+    /// The smithy's study of a ram kind (0x4c-0x4e, +0x67 + kind): the
+    /// quality of the kind's ram (0x598054).
+    RamKind(u8),
 }
 
 impl Upgrade {
@@ -1080,6 +1092,8 @@ impl Upgrade {
             Upgrade::Rate(g) => 0x3e + 3 * g.min(2),
             Upgrade::Reach(g) => 0x40 + 3 * g.min(2),
             Upgrade::Special(k) => 0x50 + k.min(3),
+            Upgrade::ArmourKind(k) => 0x49 + k.min(2),
+            Upgrade::RamKind(k) => 0x4c + k.min(2),
         }
     }
 
@@ -1088,7 +1102,29 @@ impl Upgrade {
             .into_iter()
             .chain((0..3).flat_map(|g| [Upgrade::Arms(g), Upgrade::Rate(g), Upgrade::Reach(g)]))
             .chain((0..4).map(Upgrade::Special))
+            .chain((0..3).flat_map(|k| [Upgrade::ArmourKind(k), Upgrade::RamKind(k)]))
             .find(|u| u.command() == c)
+    }
+
+    /// Whether a player studying `other` keeps `self` from being studied:
+    /// the same upgrade, or two smithy studies of armour (player flag
+    /// +0x63) or of rams (+0x6a) at once (0x434a00).
+    pub fn excludes(self, other: Upgrade) -> bool {
+        matches!(
+            (self, other),
+            (Upgrade::ArmourKind(_), Upgrade::ArmourKind(_))
+                | (Upgrade::RamKind(_), Upgrade::RamKind(_))
+        ) || self == other
+    }
+
+    /// The building that studies it: the workshop its arms, the smithy the
+    /// armour and ram kinds, the sage school the rest.
+    pub fn building(self) -> u32 {
+        match self {
+            Upgrade::Arms(_) | Upgrade::Rate(_) | Upgrade::Reach(_) => crate::economy::WORKSHOP,
+            Upgrade::ArmourKind(_) | Upgrade::RamKind(_) => crate::economy::SMITHY,
+            _ => crate::economy::SCHOOL,
+        }
     }
 
     /// The highest level: 2, except rate of fire, which marines cannot
@@ -1117,6 +1153,10 @@ impl Upgrade {
             Upgrade::Rate(n) => [[0, 0], [1500, 0], [1700, 1900]][g(n)],
             Upgrade::Reach(n) => [[1000, 1900], [1800, 2400], [1900, 2800]][g(n)],
             Upgrade::Special(_) => [2000, 2000],
+            // The smithy (0x434a00): 0x5967b4 and 0x5967fc by kind x 3 +
+            // level.
+            Upgrade::ArmourKind(k) => [[300, 600], [400, 700], [500, 900]][g(k)],
+            Upgrade::RamKind(k) => [[500, 700], [600, 800], [700, 900]][g(k)],
         };
         costs[level.min(1) as usize]
     }
@@ -1126,7 +1166,8 @@ impl Upgrade {
     /// arming starting at 1), ram, armour and rigging 600 then 700, a
     /// unique ship 400. The workshop (0x436ee0): the second half of each
     /// cost table, by group x 3 + level (0x5971e8 rate of fire, 0x597230
-    /// range, 0x597278 damage).
+    /// range, 0x597278 damage). The smithy (0x434ed0): by kind x 3 + level
+    /// at 0x5967d8 (armour) and 0x596820 (rams), the same figures.
     pub fn seconds(self, from: u8) -> f32 {
         let l = from.min(1) as usize;
         let g = |g: u8| g.min(2) as usize * 3 + l;
@@ -1137,6 +1178,9 @@ impl Upgrade {
             Upgrade::Rate(n) => [0, 0, 0, 200, 0, 0, 250, 290, 0][g(n)],
             Upgrade::Reach(n) => [150, 285, 0, 270, 360, 0, 240, 420, 0][g(n)],
             Upgrade::Arms(n) => [100, 125, 0, 100, 170, 0, 170, 150, 0][g(n)],
+            Upgrade::ArmourKind(k) | Upgrade::RamKind(k) => {
+                [465, 480, 0, 470, 485, 0, 475, 495, 0][g(k)]
+            }
         };
         crate::clock::ticks(ticks)
     }
@@ -1160,6 +1204,12 @@ impl Upgrade {
             Upgrade::Special(1) => "quick lime ships",
             Upgrade::Special(2) => "fire rammers",
             Upgrade::Special(_) => "ships of the dead",
+            Upgrade::ArmourKind(0) => "regular armour",
+            Upgrade::ArmourKind(1) => "silver armour",
+            Upgrade::ArmourKind(_) => "golden armour",
+            Upgrade::RamKind(0) => "regular rams",
+            Upgrade::RamKind(1) => "silver rams",
+            Upgrade::RamKind(_) => "golden rams",
         }
     }
 }
@@ -1182,6 +1232,12 @@ pub struct Levels {
     /// Unique ships studied (see `Upgrade::Special`).
     #[serde(default)]
     pub special: [u8; 4],
+    /// The smithy's levels per armour and ram kind (see
+    /// `Upgrade::ArmourKind`, `Upgrade::RamKind`).
+    #[serde(default)]
+    pub armour_kinds: [u8; 3],
+    #[serde(default)]
+    pub ram_kinds: [u8; 3],
 }
 
 impl Levels {
@@ -1198,6 +1254,8 @@ impl Levels {
             rate: s.rate.map(cap),
             reach: s.reach.map(cap),
             special: [0; 4],
+            armour_kinds: s.armour_kinds.map(cap),
+            ram_kinds: s.ram_kinds.map(cap),
         }
     }
 
@@ -1211,6 +1269,8 @@ impl Levels {
             Upgrade::Rate(g) => self.rate[g.min(2) as usize],
             Upgrade::Reach(g) => self.reach[g.min(2) as usize],
             Upgrade::Special(k) => self.special[k.min(3) as usize],
+            Upgrade::ArmourKind(k) => self.armour_kinds[k.min(2) as usize],
+            Upgrade::RamKind(k) => self.ram_kinds[k.min(2) as usize],
         }
     }
 
@@ -1238,6 +1298,8 @@ impl Levels {
             Upgrade::Rate(g) => &mut self.rate[g.min(2) as usize],
             Upgrade::Reach(g) => &mut self.reach[g.min(2) as usize],
             Upgrade::Special(k) => &mut self.special[k.min(3) as usize],
+            Upgrade::ArmourKind(k) => &mut self.armour_kinds[k.min(2) as usize],
+            Upgrade::RamKind(k) => &mut self.ram_kinds[k.min(2) as usize],
         };
         *slot = (*slot).max(v.min(u.max_level()));
     }
@@ -1268,12 +1330,19 @@ pub fn refit_cost(upgrade: Upgrade, level: u8, kind: u8) -> u32 {
     base * SIZE[kind as usize % 12]
 }
 
-/// What armour leaves of a blow (0x4befc0): the cut at 0x597a00 by the
-/// fitted kind's row (kind x 3) and the player's level in it, taken here at
-/// 0: none, medium and strong armour cut 0, 20 and 37 percent.
-pub fn armour_factor(level: u8) -> f32 {
-    [1.0, 0.8, 0.63][level.min(2) as usize]
+/// What armour leaves of a blow (0x4befc0): the cut in percent at
+/// 0x597a00 by the fitted kind's row (kind x 3) and the owner's smithy
+/// level in that kind.
+pub fn armour_factor(kind: u8, levels: &Levels) -> f32 {
+    let k = kind.min(2) as usize;
+    1.0 - ARMOUR_CUT[k * 3 + levels.armour_kinds[k].min(2) as usize] as f32 / 100.0
 }
+
+/// 0x597a00: armour's cut by kind and level.
+pub const ARMOUR_CUT: [u16; 9] = [0, 7, 14, 20, 27, 33, 37, 44, 50];
+
+/// 0x598054: ram quality by kind and level.
+pub const RAM_QUALITY: [u16; 9] = [100, 110, 117, 125, 135, 145, 160, 175, 200];
 
 /// What a ship's state takes off its top speed and acceleration
 /// (0x4bece0): its damage half of the hull lost, and its armour (fitted
@@ -1449,6 +1518,7 @@ mod tests {
         let ship = |kind, heading, speed| Rammer {
             kind,
             ram: 0,
+            level: 0,
             heading,
             speed,
         };

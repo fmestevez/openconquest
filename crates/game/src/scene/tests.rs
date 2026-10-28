@@ -2181,6 +2181,54 @@ fn unique_ships_need_study() {
     assert_eq!(combat::Upgrade::Special(0).max_level(), 1);
 }
 
+/// The smithy studies each armour and ram kind to level 2, the silver and
+/// golden kinds once the school has studied that far, one armour and one
+/// ram study at a time; armour cuts more by its level (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn smithy_studies_armour_and_ram_kinds() {
+    use combat::Upgrade::{ArmourKind, RamKind};
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.permits = crate::permits::Permits::ALL;
+    let human = scene.human.unwrap();
+    let owner = (human.nation, human.slot);
+    scene.amber = 100_000;
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(_)))
+        .unwrap();
+    scene.objects[i].class = ObjectClass::Building(economy::SMITHY);
+    let smithy = scene.objects[i].id;
+    // Silver rams wait for the school's rams.
+    assert_eq!(scene.next_level(RamKind(1)), None);
+    let mut levels = scene.levels_of(Some(owner));
+    levels.ram = 1;
+    scene.levels.insert(owner, levels);
+    assert_eq!(scene.next_level(RamKind(1)), Some(0));
+    let amber = scene.amber;
+    scene.start_research(smithy, RamKind(1)).unwrap();
+    assert_eq!(scene.amber, amber - 600);
+    // One ram study at a time; armour may go on elsewhere.
+    assert_eq!(scene.next_level(RamKind(0)), None);
+    assert_eq!(scene.next_level(ArmourKind(0)), Some(0));
+    scene.run_research(RamKind(1).seconds(0) + 0.1);
+    assert_eq!(scene.levels_of(Some(owner)).ram_kinds, [0, 1, 0]);
+    assert_eq!(scene.next_level(RamKind(1)), Some(1));
+    // Silver armour at level 1 cuts 27 percent, not 20.
+    let mut levels = scene.levels_of(Some(owner));
+    assert!((combat::armour_factor(1, &levels) - 0.8).abs() < 1e-6);
+    levels.set(ArmourKind(1), 1);
+    assert!((combat::armour_factor(1, &levels) - 0.73).abs() < 1e-6);
+    assert_eq!(combat::Upgrade::of_command(0x4b), Some(ArmourKind(2)));
+    assert_eq!(ArmourKind(2).cost(1), 900);
+}
+
 /// Campaign missions are judged by their story: miss000 is won with the
 /// barbarians gone and the parchment aboard (needs `OPENCONQUEST_DATA`).
 #[test]

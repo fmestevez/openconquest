@@ -298,10 +298,12 @@ pub struct StartLevels {
     /// Armour (+0x5f) and ram (+0x5e) studied.
     pub armour: u8,
     pub ram: u8,
-    /// Three more levels (+0x60..+0x62), not yet identified.
-    pub unknown: [u8; 3],
-    /// Crew quality level per crew type (+0x67..+0x69; 0x598054).
-    pub crew: [u8; 3],
+    /// The smithy's level in each armour kind, regular, silver and golden
+    /// (+0x60..+0x62; the cut at 0x597a00).
+    pub armour_kinds: [u8; 3],
+    /// The smithy's level in each ram kind (+0x67..+0x69; the quality at
+    /// 0x598054).
+    pub ram_kinds: [u8; 3],
     /// The sage school's arming (+0xa3; 0 is read as 1).
     pub arming: u8,
     /// The workshop's rate of fire (+0x8e), range (+0x95) and damage
@@ -325,8 +327,8 @@ pub struct StartLevels {
 ///        +0x08 u32 nation
 ///        +0x0c u32 colour slot
 ///        +0x10 u32 amber
-///        +0x14 u32 armour level      +0x18 3 x u32 unknown levels
-///        +0x24 u32 ram level         +0x28 3 x u32 crew levels
+///        +0x14 u32 armour level      +0x18 3 x u32 armour kind levels
+///        +0x24 u32 ram level         +0x28 3 x u32 ram kind levels
 ///        +0x34 u32 arming            +0x38 u32 unknown
 ///        +0x3c 3 x u32 rate of fire, +0x48 3 x u32 range,
 ///        +0x54 3 x u32 damage levels (per item group)
@@ -357,8 +359,8 @@ pub fn players(archive: &Archive) -> Result<Vec<PlayerInfo>> {
                     StartLevels {
                         armour: byte(0x14),
                         ram: byte(0x24),
-                        unknown: three(0x18),
-                        crew: three(0x28),
+                        armour_kinds: three(0x18),
+                        ram_kinds: three(0x28),
                         arming: byte(0x34),
                         rate: three(0x3c),
                         reach: three(0x48),

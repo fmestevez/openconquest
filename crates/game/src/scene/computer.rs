@@ -2149,7 +2149,6 @@ impl Scene {
             }
             Op::Study(n) => {
                 let Some(upgrade) = study(n, ai.nation()) else {
-                    // Studies not ported (temples' spells, 27-32).
                     return PartStep::Failed;
                 };
                 let level = self.levels_of(Some(owner)).get(upgrade);
@@ -2210,10 +2209,7 @@ impl Scene {
     /// Starts studying `upgrade` from `level` at base `b`'s school or
     /// workshop, paying for it (0x4404e0 for the computer).
     fn computer_study(&mut self, ai: &Computer, b: usize, upgrade: Upgrade, level: u8) -> bool {
-        let class = match upgrade {
-            Upgrade::Arms(_) | Upgrade::Rate(_) | Upgrade::Reach(_) => WORKSHOP,
-            _ => SCHOOL,
-        };
+        let class = upgrade.building();
         if let Upgrade::Special(k) = upgrade {
             if self.levels_of(Some(ai.owner)).weapons < 1 || (ai.nation() == 1) != (k < 2) {
                 return false;
@@ -2225,7 +2221,7 @@ impl Scene {
         if self.construction_at(site).is_some()
             || self.research.iter().any(|r| r.0 == site)
             || self.research.iter().any(|r| {
-                r.1 == upgrade
+                r.1.excludes(upgrade)
                     && self
                         .object_index(r.0)
                         .is_some_and(|i| self.objects[i].owner == Some(ai.owner))
@@ -4115,6 +4111,8 @@ fn study(n: u8, _nation: u32) -> Option<Upgrade> {
         24 => Upgrade::Reach(2),
         25 => Upgrade::Arms(2),
         26 => Upgrade::Rate(2),
+        27..=29 => Upgrade::RamKind(n - 27),
+        30..=32 => Upgrade::ArmourKind(n - 30),
         35..=38 => Upgrade::Special(n - 35),
         _ => return None,
     })
@@ -4917,6 +4915,39 @@ mod tests {
         // Unknown kinds and spells of a temple it lacks are not cast.
         assert!(!scene.computer_cast(&mut ai, 0, 14, Some((5, 5)), None, None));
         assert!(!scene.computer_cast(&mut ai, 0, 6, Some((5, 5)), None, None));
+    }
+
+    #[test]
+    fn computer_studies_at_the_smithy() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        for _ in 0..600 {
+            scene.update(0.1, &data, &mut caches);
+        }
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        let owner = ai.owner;
+        // A smithy for the base (its workshop, renamed).
+        let w = scene
+            .objects
+            .iter()
+            .position(|o| o.owner == Some(owner) && o.class == ObjectClass::Building(WORKSHOP))
+            .unwrap();
+        scene.objects[w].class = ObjectClass::Building(SMITHY);
+        scene.earn(owner, 100_000, 100_000);
+        // Study 28: silver rams.
+        let part = Part {
+            op: Op::Study(28),
+            ..Default::default()
+        };
+        let step = scene.order_part(&mut ai, 0, None, part, &data, &mut caches);
+        assert!(matches!(step, PartStep::Started(_)));
+        assert!(scene.research.iter().any(|r| r.1 == Upgrade::RamKind(1)));
+        scene.run_research(Upgrade::RamKind(1).seconds(0) + 0.1);
+        assert_eq!(scene.levels_of(Some(owner)).ram_kinds[1], 1);
+        assert_eq!(study(32, 0), Some(Upgrade::ArmourKind(2)));
     }
 
     #[test]

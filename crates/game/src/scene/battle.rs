@@ -264,7 +264,8 @@ impl Scene {
                     }
                 }
                 if let (Some(ship), Some(c)) = (&self.objects[t].ship, &self.objects[t].combat) {
-                    factor *= combat::armour_factor(ship.armour);
+                    let levels = self.levels_of(self.objects[t].owner);
+                    factor *= combat::armour_factor(ship.armour, &levels);
                     shares = Some(combat::Shares::of(ship, &c.weapons));
                 }
             }
@@ -860,12 +861,14 @@ impl Scene {
             combat::Rammer {
                 kind: sa.kind,
                 ram: sa.ram,
+                level: self.levels_of(a.owner).ram_kinds[sa.ram.min(2) as usize],
                 heading: sa.heading,
                 speed: sa.velocity.max(sa.speed),
             },
             combat::Rammer {
                 kind: st.kind,
                 ram: st.ram,
+                level: self.levels_of(t.owner).ram_kinds[st.ram.min(2) as usize],
                 heading: st.heading,
                 speed: st.velocity,
             },
@@ -879,7 +882,10 @@ impl Scene {
                 1.0
             }
         };
-        let to_target = to_target * feather * combat::armour_factor(st.armour) * argus(t);
+        let to_target = to_target
+            * feather
+            * combat::armour_factor(st.armour, &self.levels_of(t.owner))
+            * argus(t);
         let to_self = to_self * argus(a);
         let (ida, idt) = (a.id, t.id);
         self.objects[i].ship.as_mut().unwrap().task = None;

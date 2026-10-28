@@ -111,6 +111,12 @@ impl Command {
             0x46 => "CBUT_UPGARMINGS2",
             0x47 => "CBUT_UPARMOR",
             0x48 => "CBUT_UPRAM",
+            0x49 => "CBUT_UPARMORW",
+            0x4a => "CBUT_UPARMORM",
+            0x4b => "CBUT_UPARMORS",
+            0x4c => "CBUT_UPRAMW",
+            0x4d => "CBUT_UPRAMM",
+            0x4e => "CBUT_UPRAMS",
             0x4f => "CBUT_MOVE",
             0x65 => "CBUT_PROTWEAPON",
             0x66 => "CBUT_GHOST",
@@ -360,6 +366,10 @@ impl Command {
             }
             0x47 => "Study better armour",
             0x48 => "Study better rams",
+            0x49..=0x4e => {
+                return crate::combat::Upgrade::of_command(self.0)
+                    .map_or("Research".into(), |u| format!("Improve {}", u.name()))
+            }
             0x4f => "Study better rigging",
             0x50..=0x53 => {
                 return crate::combat::Upgrade::of_command(self.0)
@@ -774,10 +784,12 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
 }
 
 /// The smithy (0x433e60): refits a ship lying next to it with armour M/S
-/// or ram M/S (slots 0, 1 and 4, 5), up to the studied level.
+/// or ram M/S (slots 0-3), up to the studied level; studies the ram kinds
+/// (slots 4-6) and armour kinds (slots 8-10), each to level 2.
 fn smithy_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
+    use crate::combat::Upgrade;
     let studied = scene.levels_of(scene.human.map(|h| (h.nation, h.slot)));
-    for (slot, command) in [(0, 0x36u8), (1, 0x37), (4, 0x38), (5, 0x39)] {
+    for (slot, command) in [(0, 0x36u8), (1, 0x37), (2, 0x38), (3, 0x39)] {
         let (upgrade, level) = crate::combat::refit_of_command(command).unwrap();
         if studied.get(upgrade) < level || !scene.permits.fit(upgrade, level) {
             continue;
@@ -789,6 +801,35 @@ fn smithy_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
                 scene.amber >= crate::combat::refit_cost(upgrade, level, kind)
             });
         set(menu, slot, Command(command), affordable);
+    }
+    let busy = scene.research_at(obj.id);
+    let studies = (0..3u8).flat_map(|k| {
+        [
+            (4 + k as usize, Upgrade::RamKind(k)),
+            (8 + k as usize, Upgrade::ArmourKind(k)),
+        ]
+    });
+    for (slot, upgrade) in studies {
+        let entry = match (busy, scene.next_level(upgrade)) {
+            (Some((u, progress)), _) if u == upgrade => Slot {
+                checked: false,
+                closes: false,
+                command: Command(upgrade.command()),
+                enabled: true,
+                progress: Some(progress),
+                count: 0,
+            },
+            (_, Some(level)) => Slot {
+                checked: false,
+                closes: false,
+                command: Command(upgrade.command()),
+                enabled: busy.is_none() && scene.amber >= upgrade.cost(level),
+                progress: None,
+                count: 0,
+            },
+            _ => continue,
+        };
+        menu[slot] = Some(entry);
     }
 }
 

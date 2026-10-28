@@ -673,23 +673,34 @@ impl Scene {
     /// The human player's current level of `upgrade`, if it can still be
     /// raised and no school is already studying it.
     pub fn next_level(&self, upgrade: combat::Upgrade) -> Option<u8> {
-        let level = self
-            .levels_of(self.human.map(|h| (h.nation, h.slot)))
-            .get(upgrade);
-        let pending = self.research.iter().any(|r| r.1 == upgrade);
-        (level < upgrade.max_level() && !pending && self.permits.research(upgrade, level))
+        let owner = self.human.map(|h| (h.nation, h.slot));
+        let levels = self.levels_of(owner);
+        let level = levels.get(upgrade);
+        let pending = self.research.iter().any(|r| {
+            r.1.excludes(upgrade)
+                && self
+                    .object_index(r.0)
+                    .is_some_and(|i| self.objects[i].owner == owner)
+        });
+        // The smithy offers silver and golden kinds once the sage school
+        // has studied armour or rams that far (0x433e60).
+        let known = match upgrade {
+            combat::Upgrade::ArmourKind(k) => levels.armour >= k,
+            combat::Upgrade::RamKind(k) => levels.ram >= k,
+            _ => true,
+        };
+        (level < upgrade.max_level() && !pending && known && self.permits.research(upgrade, level))
             .then_some(level)
     }
 
     /// Starts studying `upgrade` at sage school `site`.
     pub fn start_research(&mut self, site: u32, upgrade: combat::Upgrade) -> Result<(), String> {
         let i = self.object_index(site).ok_or("No such building")?;
-        // The workshop improves arms; the sage school everything else.
-        let (class, building) = match upgrade {
-            combat::Upgrade::Arms(_) | combat::Upgrade::Rate(_) | combat::Upgrade::Reach(_) => {
-                (WORKSHOP, "workshop")
-            }
-            _ => (economy::SCHOOL, "sage school"),
+        let class = upgrade.building();
+        let building = match class {
+            WORKSHOP => "workshop",
+            economy::SMITHY => "smithy",
+            _ => "sage school",
         };
         if self.objects[i].class != ObjectClass::Building(class) || !self.is_own(&self.objects[i]) {
             return Err(format!("Only your {building} can do that"));

@@ -368,10 +368,7 @@ const RATE: [[u16; 3]; 12] = [
 /// 0x597164: price by item group, a u16 every four bytes (the fourth is
 /// the fish table's first, 2).
 const PRICE: [u16; 4] = [30, 50, 70, 2];
-/// 0x597a00 (armour) and 0x598054 (rams): by kind and the player's level
-/// in it; a ram's high byte is read from 0x598084 (4).
-const ARMOUR_CUT: [u16; 9] = [0, 7, 14, 20, 27, 33, 37, 44, 50];
-const RAM_QUALITY: [u16; 9] = [100, 110, 117, 125, 135, 145, 160, 175, 200];
+/// A ram's effectiveness reads its high byte from 0x598084 (4).
 const RAM_HIGH_BYTE: u16 = 4;
 
 /// What 0x5234b0 writes about `e` (`#` starts a new paragraph): a unit's
@@ -425,18 +422,25 @@ pub fn describe(
             )
         }
         ARMOUR | RAM => {
-            // The player's level in each kind (+0x60, +0x67) is not kept:
-            // 0, as the missions start the human players.
-            let level = 0usize;
-            let (name, effect, price) = if e.cat == ARMOUR {
+            // By the player's smithy level in the kind (+0x60, +0x67).
+            use crate::combat::{ARMOUR_CUT, RAM_QUALITY};
+            let (name, effect, price, level) = if e.cat == ARMOUR {
                 let k = e.sub.min(2) as usize;
-                (0x3b1 + k as u32, ARMOUR_CUT[k * 3 + level], [0, 30, 60][k])
+                let level = levels.armour_kinds[k].min(2) as usize;
+                (
+                    0x3b1 + k as u32,
+                    ARMOUR_CUT[k * 3 + level],
+                    [0, 30, 60][k],
+                    level,
+                )
             } else {
                 let k = e.sub.saturating_sub(3).min(2) as usize;
+                let level = levels.ram_kinds[k].min(2) as usize;
                 (
                     0x3b4 + k as u32,
                     RAM_QUALITY[k * 3 + level] | RAM_HIGH_BYTE << 8,
                     [0, 25, 50][k],
+                    level,
                 )
             };
             format!(

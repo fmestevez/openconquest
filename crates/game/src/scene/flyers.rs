@@ -656,7 +656,7 @@ impl Scene {
         } else {
             crate::combat::hull_damage_at(4, 1) * 20.0
         };
-        let blow = blow * crate::combat::armour_factor(s.armour);
+        let blow = blow * crate::combat::armour_factor(s.armour, &self.levels_of(o.owner));
         let sh = crate::combat::Shares::of(s, &c.weapons);
         let damage = sh.hull_part(blow);
         let wounds = sh.crew_part(blow) * 15.0;
