@@ -448,6 +448,10 @@ mod tests;
 mod trade;
 pub use trade::Arming;
 
+/// A ship held up: its id, the cell ahead, whether the ship there lies
+/// still (state 0) and whether it lies idle without a route, and its id.
+type Held = (u32, (i32, i32), bool, bool, u32);
+
 impl Scene {
     pub fn load(data: &GameData, caches: &mut Caches, mission: &str) -> Result<Self> {
         Self::load_at(data, caches, mission, brain::NORMAL)
@@ -1130,7 +1134,7 @@ impl Scene {
             || o.owner.is_none()
             || busy
             || s.priority >= ms.priority
-            || ms.blocked <= crate::clock::ticks(ms.patience as u32)
+            || ms.waited <= crate::clock::ticks(ms.patience as u32)
         {
             return false;
         }
@@ -1169,32 +1173,45 @@ impl Scene {
             return false;
         }
         let c = pool[self.rng.next() as usize % pool.len()];
+        let aside = (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+        // A ship lying still on its way (waiting) goes on from there about
+        // its task; one idle simply moves.
+        let on = match (s.task, s.path.back()) {
+            (Some(_), Some(&(lx, ly))) => self.plan_route_from(k, aside, lx, ly),
+            _ => None,
+        };
         let s = self.objects[k].ship.as_mut().unwrap();
-        s.path = std::iter::once((c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0)).collect();
-        s.task = None;
-        s.zone = None;
+        s.path = std::iter::once(aside).collect();
+        match on {
+            Some(rest) => s.path.extend(rest.into_iter().skip_while(|&p| p == aside)),
+            None => {
+                s.task = None;
+                s.zone = None;
+                s.order_tag = 0;
+            }
+        }
         s.face = None;
+        s.stalled = 0.0;
         s.priority = priority;
         s.patience = objects::PATIENCE;
-        s.order_tag = 0;
         s.blocked = 0.0;
         let ms = self.objects[m].ship.as_mut().unwrap();
         if ms.patience < 200 {
             ms.patience = ms.patience.wrapping_mul(3);
         }
-        ms.blocked = 0.0;
+        ms.waited = 0.0;
         true
     }
 
     /// Ships held up by others: one whose last cell is taken by a ship
     /// lying there makes for the nearest free cell instead; one held up on
     /// the way long enough goes round.
-    fn go_round(&mut self, held: Vec<(u32, (i32, i32), bool, u32)>) {
+    fn go_round(&mut self, held: Vec<Held>) {
         const PATIENCE: f32 = 1.0;
         let t = TILE_SIZE as f32;
         let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
         let centre = |(cx, cy): (i32, i32)| (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
-        for (id, cell, by_lying, other) in held {
+        for (id, cell, by_lying, by_idle, other) in held {
             // An idle ship of the same player in the way makes room: it
             // moves to the nearest free cell off the other's way.
             if by_lying && self.push_aside(other, id) {
@@ -1212,6 +1229,7 @@ impl Scene {
                 if s.task.is_none() && s.waited >= crate::clock::ticks(150) {
                     s.path.clear();
                     s.waited = 0.0;
+                    s.stalled = 0.0;
                     s.blocked = 0.0;
                     continue;
                 }
@@ -1222,7 +1240,7 @@ impl Scene {
                 continue;
             };
             let last = cell_of(lx, ly);
-            let retarget = last == cell && by_lying;
+            let retarget = last == cell && by_idle;
             if !retarget && ship.blocked <= PATIENCE {
                 continue;
             }
@@ -1595,10 +1613,32 @@ impl Scene {
                 taken.entry(cell_of(nx, ny)).or_insert(o.id);
             }
         }
+        // The original's move states (+0x58c): 0 lying still, 3 waiting at
+        // a cell for the next (0x4a3560), 6 held by a boarding, ram or
+        // dock; the rest under way (2 turning, 4 stopping, 5 sailing). A
+        // ship waiting 50 ticks falls to lying still, its route kept, and
+        // may be pushed aside like any (0x4a374a).
+        let rest = crate::clock::ticks(50);
         let lying: HashSet<u32> = self
             .objects
             .iter()
+            .filter(|o| {
+                o.ship
+                    .as_ref()
+                    .is_some_and(|s| s.path.is_empty() || s.stalled >= rest)
+            })
+            .map(|o| o.id)
+            .collect();
+        let idle: HashSet<u32> = self
+            .objects
+            .iter()
             .filter(|o| o.ship.as_ref().is_some_and(|s| s.path.is_empty()))
+            .map(|o| o.id)
+            .collect();
+        let waiting: HashSet<u32> = self
+            .objects
+            .iter()
+            .filter(|o| o.ship.as_ref().is_some_and(|s| s.stalled > 0.0))
             .map(|o| o.id)
             .collect();
         // Ships under a siren's song go no faster than 7000 units (0x4a74c0).
@@ -1737,14 +1777,30 @@ impl Scene {
                             if other != obj.id && charging.get(&obj.id) != Some(&other) =>
                         {
                             ship.blocked += dt;
-                            ship.waited += dt;
+                            ship.stalled += dt;
+                            // Only a ship lying still, waiting or held
+                            // counts towards giving up; one under way
+                            // will clear (0x4a3a70).
+                            if lying.contains(&other)
+                                || waiting.contains(&other)
+                                || held_still.contains(&other)
+                            {
+                                ship.waited += dt;
+                            }
                             ship.velocity = 0.0;
-                            held.push((obj.id, next, lying.contains(&other), other));
+                            held.push((
+                                obj.id,
+                                next,
+                                lying.contains(&other),
+                                idle.contains(&other),
+                                other,
+                            ));
                             break;
                         }
                         _ => {
                             taken.insert(next, obj.id);
                             ship.blocked = 0.0;
+                            ship.stalled = 0.0;
                             ship.waited = 0.0;
                         }
                     }

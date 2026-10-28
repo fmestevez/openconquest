@@ -6315,10 +6315,10 @@ fn ships_push_lower_priority_ones_aside() {
         .collect();
     assert_eq!(own.len(), 2);
     let (still, mover) = (scene.objects[own[0]].id, scene.objects[own[1]].id);
-    let set = |scene: &mut Scene, k: usize, priority: u8, blocked: f32| {
+    let set = |scene: &mut Scene, k: usize, priority: u8, waited: f32| {
         let s = scene.objects[own[k]].ship.as_mut().unwrap();
         s.priority = priority;
-        s.blocked = blocked;
+        s.waited = waited;
         s.path.clear();
     };
     let wait = crate::clock::ticks(crate::objects::PATIENCE as u32) + 0.01;
@@ -6344,6 +6344,31 @@ fn ships_push_lower_priority_ones_aside() {
         .priority(),
         Some(90)
     );
+    // A gatherer waiting on its way is pushed with its task kept, going
+    // on from the cell aside.
+    let task = crate::objects::Task::Gather {
+        deposit: 0,
+        phase: crate::objects::GatherPhase::ToDeposit,
+    };
+    let (sx, sy) = (scene.objects[own[0]].x, scene.objects[own[0]].y);
+    let goal = scene
+        .plan_route(own[0], sx + 3.0 * 64.0, sy)
+        .or_else(|| scene.plan_route(own[0], sx - 3.0 * 64.0, sy));
+    if let Some(goal) = goal.filter(|g| !g.is_empty()) {
+        set(&mut scene, 0, 50, 0.0);
+        let s = scene.objects[own[0]].ship.as_mut().unwrap();
+        s.task = Some(task);
+        s.order_tag = task.tag();
+        s.path = goal.clone();
+        let m = scene.objects[own[1]].ship.as_mut().unwrap();
+        m.priority = 90;
+        m.patience = crate::objects::PATIENCE;
+        m.waited = wait;
+        assert!(scene.push_aside(still, mover));
+        let s = scene.objects[own[0]].ship.as_ref().unwrap();
+        assert_eq!(s.task, Some(task));
+        assert_eq!(s.path.back(), goal.back());
+    }
 }
 
 /// Held up 150 ticks on a plain move, a ship gives the move up and lies
@@ -6366,7 +6391,7 @@ fn ships_give_up_a_move_held_up_too_long() {
         let s = scene.objects[own[0]].ship.as_mut().unwrap();
         s.path = std::iter::once((0.0, 0.0)).collect();
         s.waited = waited;
-        scene.go_round(vec![(id, (0, 0), false, other)]);
+        scene.go_round(vec![(id, (0, 0), false, false, other)]);
         scene.objects[own[0]].ship.as_ref().unwrap().path.is_empty()
     };
     assert!(!hold(&mut scene, crate::clock::ticks(100)));

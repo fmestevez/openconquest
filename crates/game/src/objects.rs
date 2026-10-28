@@ -297,6 +297,11 @@ pub struct Ship {
     /// counted to 150 ticks): then it gives the move up (0x4a618d).
     #[serde(default)]
     pub waited: f32,
+    /// Seconds since it last made a step while held up (+0x58d, not
+    /// touched by a re-plan): at 50 ticks it lies still (state 0), its
+    /// route kept, and may be pushed aside.
+    #[serde(default)]
+    pub stalled: f32,
     /// How fast it is going now, in world pixels a second: it gathers way
     /// up to its speed and loses it to stop where it is bound or to turn.
     #[serde(default)]
@@ -1428,6 +1433,7 @@ pub fn resolve(
         patience: PATIENCE,
         order_tag: 0,
         waited: 0.0,
+        stalled: 0.0,
         velocity: 0.0,
         face: None,
         furl: 0.0,

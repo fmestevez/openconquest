@@ -1931,6 +1931,12 @@ impl Scene {
                 };
                 ship.cargo = after;
                 let came = (before.floor() - after.floor()) as i64;
+                // Each unloading draws the ship a priority of 91-100
+                // (0x4ad9f0), above those coming in to gather (90), so
+                // leaving it may push them aside.
+                if came > 0 && (1..235).contains(&ship.priority) {
+                    ship.priority = 91 + (self.rng.next() % 10) as u8;
+                }
                 if let (Some(owner), true) = (self.objects[i].owner, came > 0) {
                     // What it is worth (0x4ad9f0).
                     let (num, den) = crate::objects::AMBER_WORTH;

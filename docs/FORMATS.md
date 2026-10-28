@@ -1537,7 +1537,9 @@ player's (+0x24f), has a lower priority (+0x5c7) than the mover, and the
 wait has passed the mover's patience (+0x5c8, 5 when an order is taken),
 the blocker is moved aside (0x4b4b50 with the mover's priority), the
 patience tripled (while below 200) and the wait cleared. A blocker in state
-3 or 6 is only waited on; anything else in the cell is waited on too. When
+3 or 6 is only waited on, as is anything in the cell not a ship; a ship
+under way there (states 1, 2, 4, 5) does not count towards the wait. The
+push compares the wait (+0x591), which a re-plan leaves alone. When
 the step is refused the ship slows to a stop over the distance left
 (0x4a2f60: state 4, deceleration speed^2 / (distance x 6000)).
 
@@ -1561,6 +1563,21 @@ priority to 0. (Tried here on top of the port's own re-planning, these
 rules made battle01's computer economy worse; the port keeps avoiding
 every ship and every ship's destination until the move states are
 ported.)
+
+The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
+still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
+stop (0x4a38f0, then 4), 2 turning on the spot (0x4a3320), 3 at a cell
+choosing the next (0x4a3560: the step checked by 0x4a3a70; refused, it
+waits; free, under way as 5, or turning as 2 for more than 45 degrees), 4
+slowing to a stop (0x4a2f60), 5 under way between cells, 6 held by a
+boarding, ram or dock (0x4b5fbf, 0x4b7452, 0x4c3410, 0x4ae470). The tick
+stamps +0x58d every frame but in state 3, so a ship waiting there 50 ticks
+(0x4a374a) falls to state 0 with its route kept, where the push rule
+applies to it.
+
+Unloading (0x4ad9f0) draws the ship a new priority of 91 + rand % 10 each
+time (when its priority is 1-234), above the 90 of ships coming in to
+gather, so a ship leaving the berth may push them aside.
 
 When a navy gathering zone has no deposit left, its idle ships make for
 their places in the fleet by plain moves (0x4ca290, 0x4cf070) and those
