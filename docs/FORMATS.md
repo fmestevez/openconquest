@@ -3168,11 +3168,14 @@ the same enemy; when it changes, letter 8 has every flotilla send it
 again. Ships pick targets only among players whose bit is set (+0x689,
 0x4bfc60; the fleet tests +0x19 in 0x4d5430). The other two are always all
 ones but for the reserve and spare tasks (0xb, 0xd), whose +0x150 is
-0x1ffffff; a ship tests one of them (+0x68d) against the target's kind
-(0x50ed20: ship types bits 0-11, buildings 12-17, lairs 18-20, creatures
-21-23, nests 24-25, castles 26-27), so those fleets may leave nests and
-castles alone; which of the two lands there is not settled, and that
-part is not ported.
+0x1ffffff. Order 0x72 carries them as +4 (+0x14c), +8 (+0x148), +0xc
+(+0x150), kept at fleet +0x19, +0x1d, +0x21 and passed on in each `#`; a
+ship keeps the first as +0x689 (players) and the second as +0x68d, the
+kinds it may target (0x50ebb0 with 0x50ed20: ship types bits 0-11,
+buildings 12-17, lairs 18-20, creatures 21-23, nests 24-25, castles
+26-27), as the fleet's own check shows (0x4ccd80 compares +0x689 with
++0x19 and +0x68d with +0x1d). The third is only ever passed along, so the
+reserve's mask has no effect and every fleet may target every kind.
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
 about the base's town, from 4 cells and 4 more a time, that holds a
