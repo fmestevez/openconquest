@@ -558,7 +558,8 @@ Combat tables:
   queue, even the one under way, its price paid back; a stop (message 10)
   clears the queue, or ends a study, paying back the share not yet
   worked (100 - progress percent of the price; a study also clears
-  +0x63/+0x6a). Studies wait for an idle
+  +0x63/+0x6a). Only the computer's town orders send a building that
+  stop (0x42a330, 0x42a3b3); no button of the player's does. Studies wait for an idle
   smithy. It also studies each kind of ram (0x4c-0x4e, slots 4-6;
   player bytes +0x67 + kind) and armour (0x49-0x4b, slots 8-10; +0x60 +
   kind), regular, silver and golden (`CBUT_UPRAMW/M/S`,
