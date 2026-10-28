@@ -2117,8 +2117,8 @@ conditions; it commands nothing. Only for a campaign mission (game +0xd80 =
 1 and +0x3214 = 1) is a brain made, by mission number +0x3215: types
 0x2913f-0x2914c for miss000-miss013, or 0x2928c (`MissWEBClassTy`,
 0x47c910, a scripted variant of miss000) when +0xa81 is 0xddd1. Battles
-and single missions have no brain: computer players' ships and forts
-only act on their own behaviour.
+and single missions have no brain; their computer players are run by
+`AIPlayerClassTy` instead (see "Computer players" below).
 
 The brains share a small runtime (`missCOM.cpp`, 0x478000-0x47c000). A brain
 has groups of members (`this + 0x2c + group * 0xc` points to the members,
@@ -2762,6 +2762,146 @@ count, then five dwords per treasure like a treasure record's fields 4-8
 nests (0x44, 0x45), 17 for sea monsters and 60 for settlements and towns.
 They fall when the holder is destroyed; this is where the campaign keeps
 its scrolls and most heroes' items.
+
+## Computer players (`AIPlayerClassTy`; decoded, ported in `scene/computer.rs`)
+
+`ai\Plr_fsrv.cpp`, `Plr_kib.cpp` and `Plr_mail.cpp` (0x47d230-0x489990,
+vtable 0x59745c, message handler 0x488960, object type 0x29596, 0xe68
+bytes, constructor 0x487cc0). On message 8 (0x522d50, `Players.cpp`),
+unless the mission is the campaign's (game +0xd80 = 1) or +0x30d9 = 2, one
+is made for every player whose side (+0x1a1d by player id) is 3; for side
+4 the game calls 0x51eef0 instead (not decoded; network play). Its name in a save is `AIPLAYER%02d` (0x487c90). Message 2
+gives it its player id (+0x1c), its difficulty (+0x20, the player's
++0x1a31 byte), the map size (+0x24, +0x28) and seeds its generator (+0x18,
+the usual LCG `x * 0x41c64e6d + 0x3039`, high half) from timeGetTime.
+Message 0 (each tick, while the player has objects) runs every flotilla;
++0xe1c is the game tick (game +0xde).
+
+**Set-up** (message 0x8d1, 0x487230). Flotilla 0 is the manager (+0x30),
+1 the forts (+0x34). The player's towns, then settlements, become bases
+(+0x60, 0x15c bytes each, at most 9, at least one; +0xdf8 how many) and
+join the manager's fleet; forts (0x34-0x36) join flotilla 1. Then the
+commander (role 4, +0x3c), the fleet (role 9, +0x40) and the reserve (role
+10, +0x38), and for each base the amber and fish gatherers (2, 3), guards
+(6), defence (7), raiders (8), builders (5) and spare ships (11). A
+flotilla (0x483e10, 0x34c bytes) has its role (+0), navy fleet (+8), base
+(+0xc), a period of 25-75 ticks (+0x14: `rand 51 + 25`; it runs when +0x18
++ period <= now), its task (+0x6c) with 50 parameters (+0x70), the task's
+state (+0x20) on a ring of ten (+0x24, 0x482bc0: 0x7fffffff goes back),
+the step's start (+0x50, +0x54 length, +0x58 time) and a mailbox (+0x138:
+letters of 0x35 dwords, kind, time; the newest is read first, 0x4897a0).
+The ships it starts with go to the flotilla whose want table asks for
+their type first (the table's first entries sorted by priority, 0x4803a0,
+0x480480), else by type (0x484170). The enemy is then picked (0x4844b0):
+every other player weighted 250 (a local human, side 1), 200 (a remote
+human, 2) or 10 (a computer); 0x484770 picks again once it has nothing
+left, and a player who keeps hitting it (0x4845e0: more than 1-3 hits for
+a human while the enemy is a computer, 8-15 otherwise, 100-150 for a
+computer while the enemy is human) becomes the enemy.
+
+**Roles and tasks** (0x4829d0; tasks 0x47f8c0):
+
+| Role | Handler | Task | Does |
+|------|---------|------|------|
+| 0 manager | 0x480580 | 2 (0x47d2e0) | each base's building script and founding; serves the ship requests (0x480270) |
+| 2 amber, 3 fish | 0x480680, 0x480840 | 4 (0x47dc60) | gather (order 0x78) in the area about the base holding more than 3 deposits (from 4 cells, +2 a time, 0x485380) for 7500 ticks (fish 15000), sail to the zone (100) for 750-1500, then pick the resource: amber gatherers turn to fish while fish < 3000 and amber > 4500; fish gatherers to amber when fish > 3000 and amber < 2000, or 1 in 11; 7500 ticks for their own resource, 3000 otherwise, fish x 3 |
+| 5 builders | 0x480a00 | 6 (0x47f200), 5 (0x47dfb0) | found a guarding fort (order 0x8c; 0x36 or 0x35 by a town, 1 in 4 medium, 0x35 by a settlement) at `LAiFindPlaceGuardianFortress` (0x409b30), unless there are more than map cells / 70 + 10 forts; when done or impossible, task 5: hunt treasure (0xbe, 3000-4500 ticks), sail to the zone (250-500), hunt leviathans (0x192, 6000-10500), gather (500-1500; fish while fish < 1000), the round cut to 2/3 on normal, 1/2 on hard; then task 6 again |
+| 6 guard | 0x481a10 | 7 (0x47eed0) | guard its zone (order 0x6e) |
+| 7 defence | 0x4815a0 | 8 (0x47eb70) | guard its zone; given an area (help, the base attacked, the grand attack) attack it (order 0x70) for 9000-18000 ticks |
+| 8 raiders | 0x480c40 | 9 (0x47e3c0) | guard the zone 6000-15000 ticks until as many ships as the target size (0x485650), wait 1000, attack one of the enemy's towns (100) or settlements (50) (0x485be0) 6000-15000 ticks, back at 3 ships; on normal and hard with more than 4 ships they strike early at a town where the enemy is weaker (0x485fc0) |
+| 9 fleet | 0x481100 | 10 (0x47e7c0) | as the raiders, target size 0x485960, no early strike, waits 1500 |
+| 10 reserve | 0x481e60 | 0xb (0x47f460) | sail to the base (500-1000 ticks), to the docks for repairs (order 200 mode 2, 6000-12000), then hand each ship to the flotilla wanting its type most (0x486910: 0x4866d0, else 0x47fd50) |
+| 11 spare | 0x481fe0 | 0xd (0x47f6b0) | the same without handing out (mode 1) |
+| 4 commander | 0x482160 | none | the grand attack, founding settlements, spells |
+
+Any flotilla with ships may be mailed task 0xc (0x47f050): found a
+settlement (order 0x8c, class 0x32) at a cell. Letters (kind 1 a task, 2
+start over, 3 the zones changed, 4 the home area changed, 0x65 the base
+is attacked: defend its area with task 8). Roles 5-9 ask for ships on each
+turn (0x4800c0; gatherers always) and, while guarding, send ships worn
+below 25-45% (boats, merchants) or 50-75% (warships; or crews below 35-65%,
+0x4bc590) to the reserve every 375 ticks when the base has a dock
+(0x486970).
+
+**Want tables** (by difficulty, 0x47f980; the Persians, player ids 12-15,
+have their own for roles 6, 8, 9): groups of 16-byte entries (ship type,
+count, flag, priority), each group ending in -1. For each group the first
+type the base's town can build (0x480000 -> 0x43da20 case 4) is asked for
+when the flotilla has fewer than `count` and the reserve none; the request
+(+0xe00, 0x90 bytes) keys on `priority - flag x 2500 + 22767`, waits 12-50
+ticks, is sent to the town as order `0x50 + type` (0x5c for boats), and is
+forgotten 1500 ticks after it is served. Tables: gatherers 0x5b5fa0,
+0x5b7030, 0x5b8020 (a merchant, a boat, a second merchant); builders
+0x5b68e0, 0x5b7590, 0x5b8760; guards 0x5b6010/0x5b61e0 (Persian),
+0x5b70a0/0x5b7250, 0x5b8090/0x5b82f0; defence 0x5b63b0, 0x5b7400, 0x5b8550;
+raiders 0x5b6540/0x5b6710, 0x5b7620/0x5b77b0, 0x5b8810/0x5b8a90; fleet
+0x5b6970/0x5b6b80, 0x5b7940/0x5b7b90, 0x5b8d10/0x5b9000.
+
+**Bases.** Each base runs a building script (0x47faf0: the first base easy
+0x5b6d90, normal 0x5b7de0, hard 0x5b9330; the others 0x5b6f30, 0x5b7f70,
+0x5b94d0; after a whole round 0x5b6fe0: 2, 96, 52, 48), 16-byte entries
+(order, 0, weight, 1), each sent to the town as message 1000 with priority
+`22767 + weight + 1` (+100 for order 2); when it reports done or failed the
+base waits 1500 ticks (750 on hard) and takes the next. If the town lacks
+its port, shipyard or dock, sage school or smithy, the script starts over.
+A base without a settlement (lost, or new) founds one: early in the game
+(before `(3000 + rand 3001) x 5` ticks) the first base near its ships'
+position, otherwise anywhere near its cell (`LAiFindTownPlace`, 0x40ca90,
+0x40cb60), by a flotilla of the base picked by size and nearness
+(0x484df0). Each base also has an area (its town's buildings, 2 cells
+about, 0x484aa0 with 0x4218f0) and four waiting zones (0x484900 with
+`LAiFindDispositionZones` 0x4093a0, 0x408bf0: in the 31 x 31 cells about
+the town, a square of side s, s x s >= n + n / 4, holding water for n = 5
+to 12 ships, ranked by cells beside the base's ports and yards, then
+weights from the table 0x594470 (+20 within 10 cells of its town, -20 near
+enemy towns, forts and ships, -10 near lairs, nests and monsters), then
+nearness, then open water and the lanes from the ports to the amber).
+
+**Town orders** are run by the town's land fleet (`LFleet.cpp`,
+0x42b910, every 50 ticks, by priority): the table at 0x5ac7c8 (7 dwords:
+order, flags, ..., parts, part list) splits each into parts of 0xcc bytes
+(operation, flags (1, 2, 4 wait for the price; 0x20 done if it is there
+already), class or number, field 20 what it waits for: 0 nothing, 1 the
+part in field 21, 2 every part before): 0x3e9 a building (0x428a70; the
+town places it, `m_build.cpp` 0x42d9c0), 0x3ea ships (0x428f20), 0x3eb an
+upgrade (settlement to town, shipyard to dock), 0x3ec repairs, 0x3ef a
+study (0x42a860: 1 arming, 2 ram, 3 armour, 17 rigging, 18-26 the
+workshop's range, damage and rate of fire by group, 33/34 the temples'
+spells, 35-38 the unique ships). Orders used: 2 port, sage school,
+shipyard, smithy, town, dock, school; 3 the temples; 48, 50, 52 a medium,
+small, big fort; 96 repairs; 97 a port; 98 a shipyard and dock;
+117 the temples' spells; 118-120 arming, ram, armour; 128-132 the
+workshop; 133 rigging; 134 the nation's unique ships (0x73 Greek, 0x74
+Persian). A part waits for its price as long as it takes and gives up
+after 10-25 passes otherwise.
+
+**Fights.** Message 0x5d9c (an object of the player hit): at most every
+50-100 ticks. A fleet weaker than the enemies about the shooter
+(0x486b70) asks the others (message 100: guards with more than 3 ships,
+defence without a target, raiders and fleet not attacking) and one,
+weighted 110, +90 if strong enough, -90 of another base (0x486e80), is sent
+to attack there (task 8, 9000-18000 ticks); pairs helped/helping are kept
+at +0xe04. A town hit makes its base's flotillas defend it (letter 0x65)
+and asks the commander for spells (letters 6, 7: 0x4839e0-0x483c40, magic
+order 0x3ee). The commander (0x482160) every turn: after the first attack
+time (easy 22500-27000 ticks, normal 15000-22500, hard 13500-18000) and
+then every 1500-3000 ticks, if the free warships (message 0x66) number
+the enemy's warships rounded down to 5 plus 12 (at most 30 easy, 35
+otherwise), it mails task 8 against one of the enemy's towns (0x487690) to
+every guard, defence, raider and fleet flotilla (mask 0x3c0), 15000-22500
+ticks; and every 7500-12000 ticks, below `map cells / 500` bases (at most 1,
+2, 3 by difficulty), once it has studied a unique ship (player +0x6e or
++0x7e easy, +0x76 or +0x86 otherwise) and has ships, it has the nearest
+flotilla found a settlement (0x484d60, 0x484f60).
+
+Not ported (the port's own instead): the terrain helpers of
+`artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
+simpler searches; zones weigh the lanes before nearness, since ships here
+cannot pass one another), the land fleet's placing of buildings (the
+nearest free cell to the settlement), treasure hunting (order 0xbe), the
+spells, the temples' studies and studies 27-32, repairs (order 96), the
+crews' test for the worn, fleets' behaviour masks (0x482eb0, 0x4847d0),
+and fleet strength (0x50ea70: here one per armed ship or building).
 
 ## Videos (`video/*.avi`; verified)
 

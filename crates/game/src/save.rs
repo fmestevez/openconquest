@@ -93,6 +93,9 @@ pub struct SaveGame {
     /// The mission's brain.
     #[serde(default)]
     pub brain: Option<crate::scene::Brain>,
+    /// The computer players of a battle or single mission.
+    #[serde(default)]
+    pub computers: Option<crate::scene::Computers>,
     /// The human player's technology permissions.
     #[serde(default)]
     pub permits: Option<crate::permits::Permits>,

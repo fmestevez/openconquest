@@ -451,7 +451,8 @@ impl Scene {
             return Err("The shipyard is busy".into());
         }
         let cost = economy::building_cost(to);
-        if self.amber < cost {
+        let owner = self.objects[i].owner.ok_or("No owner")?;
+        if self.funds(owner).0 < cost {
             return Err(format!("Not enough amber: {cost} needed"));
         }
         if self.construction_at(id).is_some() {
@@ -474,7 +475,7 @@ impl Scene {
             }
         }
         obj.progress = Some(0.0);
-        self.amber -= cost;
+        self.earn(owner, -(cost as i64), 0);
         self.objects[i] = obj;
         self.constructions.push(Construction {
             site: id,
@@ -805,24 +806,32 @@ impl Scene {
     }
 
     pub(super) fn run_research(&mut self, dt: f32) {
-        let Some(human) = self.human.map(|h| (h.nation, h.slot)) else {
-            return;
-        };
+        let human = self.human.map(|h| (h.nation, h.slot));
         let alive: Vec<u32> = self.objects.iter().map(|o| o.id).collect();
         self.research.retain(|r| alive.contains(&r.0));
         let mut done = Vec::new();
         for r in &mut self.research {
             r.3 += dt;
             if r.3 >= r.1.seconds(r.2.saturating_sub(1)) {
-                done.push((r.1, r.2));
+                done.push((r.0, r.1, r.2));
             }
         }
         self.research
             .retain(|r| r.3 < r.1.seconds(r.2.saturating_sub(1)));
-        for (upgrade, level) in done {
-            self.levels.entry(human).or_default().set(upgrade, level);
-            self.messages
-                .push(format!("Better {} (level {level})", upgrade.name()));
+        // The school's player learns it (a computer player's too).
+        for (site, upgrade, level) in done {
+            let Some(owner) = self
+                .object_index(site)
+                .and_then(|i| self.objects[i].owner)
+                .or(human)
+            else {
+                continue;
+            };
+            self.levels.entry(owner).or_default().set(upgrade, level);
+            if Some(owner) == human {
+                self.messages
+                    .push(format!("Better {} (level {level})", upgrade.name()));
+            }
         }
     }
 
@@ -1324,10 +1333,16 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) -> Result<(), String> {
-        let human = self.human.ok_or("No player")?;
+        // The settlement's (or founding ship's) player builds it.
+        let owner = self
+            .object_index(settlement)
+            .and_then(|i| self.objects[i].owner)
+            .ok_or("No settlement")?;
+        let human = self.human.is_some_and(|h| (h.nation, h.slot) == owner);
         // A fort comes armed (default arming), its weapons paid for or
-        // taken from the nearest settlement's stock.
-        let fort = if (0x34..=0x36).contains(&class) {
+        // taken from the nearest settlement's stock; a computer player's
+        // with its standard weapons.
+        let fort = if human && (0x34..=0x36).contains(&class) {
             let home = self
                 .object_index(settlement)
                 .and_then(|i| self.home_settlement(i));
@@ -1341,7 +1356,8 @@ impl Scene {
         let (cost, fish) = fort
             .as_ref()
             .map_or((economy::building_cost(class), 0), |p| (p.amber, p.fish));
-        if self.amber < cost || self.fish < fish {
+        let (have_amber, have_fish) = self.funds(owner);
+        if have_amber < cost || have_fish < fish {
             return Err("Not enough resources".into());
         }
         let facing = self.check_site(settlement, class, cx, cy)?;
@@ -1349,8 +1365,8 @@ impl Scene {
         let mut fields = vec![0u32; 66];
         fields[0] = class;
         fields[1] = 1;
-        fields[2] = human.nation;
-        fields[3] = human.slot;
+        fields[2] = owner.0;
+        fields[3] = owner.1;
         fields[5] = cx as u32;
         fields[6] = cy as u32;
         fields[7] = 100;
@@ -1374,8 +1390,7 @@ impl Scene {
         if let Some(c) = obj.combat.as_mut() {
             c.hull = c.max_hull * 0.1;
         }
-        self.amber -= cost;
-        self.fish -= fish;
+        self.earn(owner, -(cost as i64), -(fish as i64));
         if let Some(price) = fort {
             if let Some(home) = price.home {
                 self.garrisons.insert(home, price.stock_left);
@@ -1536,7 +1551,11 @@ impl Scene {
             }
             self.objects[i].ship.as_mut().unwrap().task = None;
             let id = self.objects[i].id;
+            let own = self.is_own(&self.objects[i]);
             if let Err(e) = self.place_building(id, class, cx, cy, data, caches) {
+                if !own {
+                    return;
+                }
                 self.messages.push(format!(
                     "Cannot build the {}: {e}",
                     crate::objects::building_label(class)
@@ -2068,14 +2087,16 @@ impl Scene {
         if !(class == SETTLEMENT || (0x34..=0x36).contains(&class)) {
             return Err("Ships found settlements and forts".into());
         }
-        let cost = if (0x34..=0x36).contains(&class) {
+        let owner = self.objects[i].owner.ok_or("No owner")?;
+        let human = self.human.is_some_and(|h| (h.nation, h.slot) == owner);
+        let cost = if human && (0x34..=0x36).contains(&class) {
             self.fort_price(self.home_settlement(i), class)
                 .ok_or("Its weapons cannot be had yet")?
                 .amber
         } else {
             economy::building_cost(class)
         };
-        if self.amber < cost {
+        if self.funds(owner).0 < cost {
             return Err("Not enough amber".into());
         }
         self.check_ground(class, cx, cy)?;

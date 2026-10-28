@@ -1,8 +1,7 @@
 //! The mission's victory conditions (`Ai\Boss_kib.cpp`, 0x448610: judged
-//! every 250 ticks). Computer players have no AI of their own beyond the
-//! campaign's mission brains (`brain`): in battles and single missions,
-//! as in the original (0x51f680 makes a brain only for the campaign),
-//! their ships and forts only guard and answer fire.
+//! every 250 ticks). Computer players are run by the campaign's mission
+//! brains (`brain`) in the campaign and by `AIPlayerClassTy`
+//! (`computer`) in battles and single missions.
 
 use super::*;
 

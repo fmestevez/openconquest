@@ -1,0 +1,4384 @@
+//! The computer players of battles and single missions: the original's
+//! `AIPlayerClassTy` (`ai\Plr_fsrv.cpp`, `Plr_kib.cpp`, `Plr_mail.cpp`,
+//! 0x47d230-0x489990), ported. `Players.cpp` (0x522d50) makes one for every
+//! computer player (side +0x1a1d 3 or 4) of a mission that is not the
+//! campaign's (game +0xd80 != 1); the campaign's computer players are run
+//! by the mission brains (`brain`) instead.
+//!
+//! A computer player has bases (its settlements and towns, up to 9) and
+//! flotillas (groups of ships, each of a role: gatherers, guards, raiders,
+//! ...). Each flotilla takes its turn every 25-75 ticks and runs a task: a
+//! small state machine over the original's fleet orders (gather in a zone,
+//! guard a zone, attack a zone, sail somewhere, found a settlement or a
+//! fort). Flotillas ask for ships from want tables by difficulty; the
+//! manager flotilla puts the requests and each base's building script
+//! (0x5b6d90 and the others) to the base's town as orders. The commander
+//! picks an enemy player, sends the warships on a grand attack when they
+//! are strong enough, and founds new settlements. See docs/FORMATS.md
+//! ("Computer players").
+//!
+//! The original rolls its own generator (the usual LCG, +0x18), seeded
+//! from the clock; here it is seeded from the scene's, so every machine of
+//! a multiplayer game computes the same. Where the original asks its
+//! terrain helpers (`artem\_L_Ai_*.cpp`: places for towns, forts and
+//! waiting zones) or the land fleet (`LFleet.cpp`: executing the town's
+//! orders, placing buildings with `m_build.cpp`), this port uses simpler
+//! searches of its own (see `town_place` and the others).
+
+use openconquest_formats::map::TILE_SIZE;
+use openconquest_formats::ObjectClass;
+use serde::{Deserialize, Serialize};
+
+use super::{Scene, BUILD_RADIUS, FOUND_REACH};
+use crate::assets::GameData;
+use crate::combat::{Rng, Upgrade};
+use crate::economy::{
+    self, DOCK, PORT, SCHOOL, SETTLEMENT, SHIPYARD, SMITHY, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR, TOWN,
+    WORKSHOP,
+};
+use crate::objects::{Caches, Resource, Task};
+
+/// A rectangle of map cells: x, y, width, height.
+type Cells = (i32, i32, i32, i32);
+
+/// Flotilla roles (`AIPlayer + 0xdfc` entries, field 0; 0x483e10).
+const MANAGER: u8 = 0;
+const FORTS: u8 = 1;
+const AMBER: u8 = 2;
+const FISH: u8 = 3;
+const COMMANDER: u8 = 4;
+const BUILDERS: u8 = 5;
+const GUARD: u8 = 6;
+const DEFENCE: u8 = 7;
+const RAIDERS: u8 = 8;
+const FLEET: u8 = 9;
+const RESERVE: u8 = 10;
+const SPARE: u8 = 11;
+
+/// "Go back to the state before" (0x7fffffff, 0x482bc0).
+const BACK: u32 = 0x7fff_ffff;
+
+/// A fleet order's report (the navy's 0x1f5 "done").
+const DONE: u32 = 0x1f5;
+
+/// Resource classes of the original (0x190 amber, 0x191 fish, 0x192 a
+/// leviathan).
+const AMBER_CLASS: i32 = 400;
+const FISH_CLASS: i32 = 0x191;
+const WHALE_CLASS: i32 = 0x192;
+
+/// The game's computer players and their clock.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Computers {
+    /// The mission is a custom one: its computer players act.
+    pub on: bool,
+    /// The difficulty chosen for them (+0x1a31 by player, 0-2).
+    pub level: usize,
+    /// Game ticks since the start (game +0xde).
+    pub tick: u32,
+    pub started: bool,
+    pub players: Vec<Computer>,
+}
+
+/// One computer player (`AIPlayerClassTy`, 0xe68 bytes, 0x487cc0).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Computer {
+    pub owner: (u32, u32),
+    /// +0x20: 0 easy, 1 normal, 2 hard.
+    pub difficulty: usize,
+    /// +0x18: its own random generator.
+    rng: Rng,
+    /// +0x60 (0x15c bytes each, +0xdf8 how many).
+    pub bases: Vec<Base>,
+    /// +0xdfc.
+    pub flotillas: Vec<Flotilla>,
+    /// +0xe00: ships and buildings asked of the towns.
+    requests: Vec<Request>,
+    /// +0xe04: (flotilla helped, flotilla helping).
+    helps: Vec<(usize, usize)>,
+    /// +0xe08: the enemy player (id nation x 4 + slot), +0xe0c the hits
+    /// taken from +0xe10, the player who hit last.
+    pub enemy: Option<u32>,
+    hits: u32,
+    hitter: Option<u32>,
+    /// +0xe14: when a fleet last got help.
+    helped_at: u32,
+    /// Role flotillas: +0x30 manager, +0x34 forts, +0x3c commander, +0x40
+    /// the base-0 fleet, +0x38 reserve; and the last base's +0x44-+0x5c.
+    manager: usize,
+    forts: usize,
+    reserve: usize,
+    commander: usize,
+    by_role: [usize; 12],
+    /// Ships being built for a flotilla: (shipyard, ship type, flotilla).
+    building: Vec<(u32, u8, usize)>,
+    /// The town orders under way (the land fleet's, `LFleet.cpp`).
+    orders: Vec<TownOrder>,
+    next_order: u32,
+    /// Ticks of the land fleet's next pass (every 50, 0x42b910).
+    land_pass: u32,
+    /// Objects already known, to tell new ones (message 0x5d95).
+    known: Vec<u32>,
+    /// Shots taken since its last turn: (target, shooter).
+    attacks: Vec<(u32, u32)>,
+}
+
+/// A base (+0x60 + i x 0x15c).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Base {
+    /// +0x60: the settlement or town.
+    pub site: Option<u32>,
+    /// +0xf4 its state, +0xf8 started, +0xfc the step's start.
+    state: u32,
+    started: bool,
+    at: u32,
+    /// +0x100: the step of the building script, +0x194 how many times it
+    /// ran to its end.
+    step: usize,
+    rounds: u32,
+    /// +0x80 the order sent, +0x90 its progress, +0xa0 when it ended.
+    order: u32,
+    progress: u32,
+    ended: u32,
+    /// The order's run (its id in `orders`).
+    run: Option<u32>,
+    /// +0x104: the town's area.
+    pub rect: Cells,
+    /// +0x114: its cell.
+    pub cell: (i32, i32),
+    /// +0x11c: four waiting zones (ships, area).
+    zones: [(u32, Cells); 4],
+}
+
+/// A flotilla (0x34c bytes, 0x483e10).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Flotilla {
+    pub role: u8,
+    pub base: usize,
+    pub ships: Vec<u32>,
+    /// +0x14 its period (25-75 ticks), +0x18 its last turn, +0x1c started.
+    period: u32,
+    last: u32,
+    started: bool,
+    /// +0x6c the task, +0x70 its 50 parameters (the first 12 kept).
+    pub task: u8,
+    p: [i32; 12],
+    /// +0x20 the task's state and the ring of states before (+0x24, 0x482bc0).
+    pub state: u32,
+    stack: [u32; 10],
+    sp: usize,
+    /// +0x50 the step started, +0x54 its length, +0x58 its start.
+    step: bool,
+    len: u32,
+    since: u32,
+    /// +0x60 ask for ships this turn, +0x64 send the worn to the reserve,
+    /// +0x68 when it last looked.
+    wants: bool,
+    worn: bool,
+    worn_at: u32,
+    /// +0x144: ships counted.
+    count: i32,
+    /// +0x158 the area ordered, +0x168 its waiting zone, +0x178 home.
+    area: Cells,
+    zone: Cells,
+    home: Cells,
+    /// +0x138: mail.
+    mail: Vec<Mail>,
+    /// The fleet order given and what it reports.
+    order: FleetOrder,
+    /// Commander's clocks: +0x188 spells at a place, +0x18c spells at a
+    /// fleet, +0x190 the last settlement founded, +0x194 the last attack.
+    clocks: [u32; 4],
+}
+
+/// A letter between flotillas (0xd4 bytes, `Plr_mail.cpp`).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+struct Mail {
+    /// 1 a new task, 2 start over, 3 the zones changed, 4 the home
+    /// changed, 0x65 the base is attacked.
+    kind: u32,
+    /// The newest is read first.
+    at: u32,
+    task: u8,
+    p: [i32; 12],
+}
+
+/// A ship or building asked of a town (+0xe00 entries, 0x90 bytes).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Request {
+    /// The ship type and how many the flotilla wants of it.
+    kind: u8,
+    count: i32,
+    flag: i32,
+    prio: i32,
+    fleet: usize,
+    base: usize,
+    /// +0x28: the priority (prio - flag x 2500 + 22767).
+    key: i32,
+    /// +0x2c: 0 waiting, 1 sent, 2 done, 3 failed; +0x30 the wait before
+    /// it is sent, +0x34 its time, +0x3c when it ended.
+    state: u32,
+    delay: u32,
+    at: u32,
+    ended: u32,
+    run: Option<u32>,
+}
+
+/// An order to a town (the land fleet's message 1000 and its parts,
+/// 0x42c050 with the table at 0x5ac7c8).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct TownOrder {
+    id: u32,
+    prio: i32,
+    base: usize,
+    /// For ships: the flotilla to join.
+    fleet: Option<usize>,
+    parts: Vec<Part>,
+    /// 3 done, 4 failed, 0 under way.
+    result: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+struct Part {
+    op: Op,
+    /// Done at once if the town has it already (flag 0x20).
+    once: bool,
+    after: After,
+    /// 0 waiting, 2 under way, 3 done, 4 failed.
+    state: u8,
+    /// Passes left (0x595170, 0x595198 by operation).
+    tries: u32,
+    /// Buildings of the class before it was ordered.
+    before: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum Op {
+    /// 0x3e9: put up a building of the class.
+    Build(u32),
+    /// 0x3ea: build a ship of the type.
+    Ship(u8),
+    /// 0x3eb: upgrade the building of the class (a settlement to a town,
+    /// a shipyard to a dock).
+    Upgrade(u32),
+    /// 0x3ef: a study (0x42a860), by its number.
+    Study(u8),
+    /// 0x3ec, 0x3ed and the like, not ported.
+    #[default]
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum After {
+    /// Field 20 = 0.
+    #[default]
+    Nothing,
+    /// 1: after part field 21.
+    Part(usize),
+    /// 2: after all the parts before.
+    All,
+}
+
+/// A fleet order and its report (the navy's orders 0x6e-0xc9).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+enum FleetOrder {
+    #[default]
+    None,
+    /// 0x78: gather in an area.
+    Gather(Cells, Resource),
+    /// 0x6e: guard an area.
+    Guard(Cells),
+    /// 0x70: attack an area.
+    Attack(Cells),
+    /// 100: sail to a cell.
+    Move((i32, i32)),
+    /// 0x8c: found a building of the class at a cell, by a ship.
+    Found(u32, (i32, i32), u32),
+    /// 200: to the docks for repairs.
+    Dock,
+}
+
+/// What a want table entry asks: (ship type, how many, flag, priority);
+/// each group lists alternatives, the first the town can build counting.
+type Want = (u8, i32, i32, i32);
+
+impl Computer {
+    /// The original's generator: the next value below `n`.
+    fn roll(&mut self, n: u32) -> u32 {
+        self.rng.next() % n
+    }
+
+    fn id(&self) -> u32 {
+        self.owner.0 * 4 + self.owner.1
+    }
+
+    fn nation(&self) -> u32 {
+        self.owner.0
+    }
+
+    /// Makes a flotilla (0x483e10): its period 25-75 ticks.
+    fn add_flotilla(&mut self, role: u8, base: usize) -> usize {
+        let period = self.roll(0x33) + 0x19;
+        self.flotillas.push(Flotilla {
+            role,
+            base,
+            period,
+            ..Default::default()
+        });
+        self.by_role[role as usize] = self.flotillas.len() - 1;
+        self.flotillas.len() - 1
+    }
+
+    /// The flotilla of role `role` at base `base` (0x484110).
+    fn flotilla_of(&self, base: usize, role: u8) -> Option<usize> {
+        self.flotillas
+            .iter()
+            .position(|f| f.role == role && f.base == base)
+    }
+
+    /// Mails flotilla `f` (0x489500).
+    fn mail(&mut self, f: usize, m: Mail) {
+        if let Some(fl) = self.flotillas.get_mut(f) {
+            fl.mail.push(m);
+        }
+    }
+
+    /// Mails every flotilla of base `b` (0x489730).
+    fn mail_base(&mut self, b: usize, m: Mail) {
+        for f in &mut self.flotillas {
+            if f.base == b {
+                f.mail.push(m);
+            }
+        }
+    }
+
+    /// The want table of a role (0x483d20, tables 0x5b5fa0-0x5b9000 chosen
+    /// by difficulty at 0x47f980; the Persians, player ids 12-15, have
+    /// their own for some).
+    fn wants_of(&self, role: u8) -> &'static [&'static [Want]] {
+        let persian = self.id() & !3 == 12;
+        let d = self.difficulty.min(2);
+        match role {
+            AMBER | FISH => GATHERERS,
+            BUILDERS => [BUILDERS_0, BUILDERS_1, BUILDERS_2][d],
+            GUARD => {
+                if persian {
+                    [GUARD_0P, GUARD_1P, GUARD_2P][d]
+                } else {
+                    [GUARD_0, GUARD_1, GUARD_2][d]
+                }
+            }
+            DEFENCE => [DEFENCE_0, DEFENCE_1, DEFENCE_2][d],
+            RAIDERS => {
+                if persian {
+                    [RAIDERS_0P, RAIDERS_1P, RAIDERS_2P][d]
+                } else {
+                    [RAIDERS_0, RAIDERS_1, RAIDERS_2][d]
+                }
+            }
+            FLEET => {
+                if persian {
+                    [FLEET_0P, FLEET_1P, FLEET_2P][d]
+                } else {
+                    [FLEET_0, FLEET_1, FLEET_2][d]
+                }
+            }
+            _ => &[],
+        }
+    }
+
+    /// The building script of base `b` (0x47faf0): the first round from
+    /// a table by difficulty and whether it is the first base; later
+    /// rounds from 0x5b6fe0.
+    fn script(&self, b: usize) -> &'static [(u32, i32)] {
+        if self.bases[b].rounds > 0 {
+            return SCRIPT_AGAIN;
+        }
+        match (self.difficulty.min(2), b == 0) {
+            (0, true) => SCRIPT_0,
+            (0, false) => SCRIPT_0B,
+            (1, true) => SCRIPT_1,
+            (1, false) => SCRIPT_1B,
+            (_, true) => SCRIPT_2,
+            (_, false) => SCRIPT_2B,
+        }
+    }
+
+    /// Pushes state `s` on flotilla `f` (0x482bc0; `BACK` pops).
+    fn push(&mut self, f: usize, s: u32) {
+        let fl = &mut self.flotillas[f];
+        if s == BACK {
+            fl.sp = (fl.sp + 9) % 10;
+        } else {
+            fl.sp = (fl.sp + 1) % 10;
+            fl.stack[fl.sp] = s;
+        }
+        fl.state = fl.stack[fl.sp];
+        fl.step = false;
+    }
+
+    /// Sets flotilla `f`'s task (0x47d290).
+    fn set_task(&mut self, f: usize, task: u8, p: [i32; 12]) {
+        let fl = &mut self.flotillas[f];
+        fl.task = task;
+        fl.p = p;
+        fl.sp = 0;
+        fl.stack = [0; 10];
+        fl.state = 0;
+        fl.step = false;
+    }
+
+    /// Reads the newest letter of flotilla `f` (0x4897a0).
+    fn read(&mut self, f: usize) -> Option<Mail> {
+        let mail = &mut self.flotillas[f].mail;
+        let mut best: Option<usize> = None;
+        for (k, m) in mail.iter().enumerate() {
+            if best.is_none_or(|b| mail[b].at < m.at) {
+                best = Some(k);
+            }
+        }
+        best.map(|k| mail.remove(k))
+    }
+
+    /// Drops flotilla `f`'s letters of kind `kind` (0x489820).
+    fn drop_mail(&mut self, f: usize, kind: u32) {
+        self.flotillas[f].mail.retain(|m| m.kind != kind);
+    }
+
+    /// The step started at `since` with length `len` is over.
+    fn over(fl: &Flotilla, now: u32) -> bool {
+        fl.len != 0 && fl.since + fl.len <= now
+    }
+
+    /// The task's own end: when the time `p[len]` from `p[start]` is up,
+    /// go to `p[next]`: 0 to state 0, 1 a letter to start over, another
+    /// task, or `BACK` nothing.
+    fn task_end(&mut self, f: usize, now: u32, len: usize, start: usize, next: usize) {
+        let p = self.flotillas[f].p;
+        if p[len] != 0 && (p[start] + p[len]) as u32 <= now {
+            self.go(f, p[next]);
+        }
+    }
+
+    /// Goes to `next` (the tasks' common ending): 0 state 0, 1 a letter to
+    /// start over, another task.
+    fn go(&mut self, f: usize, next: i32) {
+        match next {
+            n if n == BACK as i32 => {}
+            0 => self.push(f, 0),
+            1 => self.mail(
+                f,
+                Mail {
+                    kind: 2,
+                    ..Default::default()
+                },
+            ),
+            t => self.set_task(f, t as u8, [0; 12]),
+        }
+    }
+}
+
+impl Scene {
+    /// Notes which players the computer runs (0x522d50): those of a
+    /// custom mission that are neither the human nor a seat of a
+    /// multiplayer game.
+    pub(super) fn start_computers(&mut self) {
+        let c = &mut self.computers;
+        if !c.on || c.started {
+            return;
+        }
+        c.started = true;
+        let humans: Vec<(u32, u32)> = self
+            .human
+            .iter()
+            .map(|h| (h.nation, h.slot))
+            .chain(self.seats.iter().map(|s| (s.player.nation, s.player.slot)))
+            .collect();
+        let owners: Vec<(u32, u32)> = self
+            .purses
+            .keys()
+            .copied()
+            .filter(|o| !humans.contains(o))
+            .collect();
+        let level = self.computers.level.min(2);
+        for owner in owners {
+            // The original seeds from the clock (timeGetTime, message 2).
+            let seed = self.rng.next() << 16 | self.rng.next();
+            let mut ai = Computer {
+                owner,
+                difficulty: level,
+                rng: Rng(seed),
+                ..Default::default()
+            };
+            self.computer_setup(&mut ai);
+            self.computers.players.push(ai);
+        }
+    }
+
+    /// Runs the computer players one game tick (message 0 to each).
+    pub(super) fn run_computers(&mut self, data: &GameData, caches: &mut Caches) {
+        if !self.computers.on {
+            return;
+        }
+        self.start_computers();
+        self.computers.tick += 1;
+        for k in 0..self.computers.players.len() {
+            let mut ai = std::mem::take(&mut self.computers.players[k]);
+            self.computer_tick(&mut ai, data, caches);
+            self.computers.players[k] = ai;
+        }
+    }
+
+    /// A ship launched at `site`: a computer player's flotilla that asked
+    /// for it takes it.
+    pub(super) fn computer_launched(&mut self, site: u32, kind: u8, id: u32) {
+        for ai in &mut self.computers.players {
+            if let Some(k) = ai.building.iter().position(|b| b.0 == site && b.1 == kind) {
+                let (_, _, f) = ai.building.remove(k);
+                if let Some(fl) = ai.flotillas.get_mut(f) {
+                    fl.ships.push(id);
+                }
+                ai.known.push(id);
+                return;
+            }
+        }
+    }
+
+    /// Notes that `shooter` fired on `target` (message 0x5d9c to the
+    /// target's player).
+    pub(super) fn computer_attacked(&mut self, target: u32, shooter: u32) {
+        let Some(owner) = self
+            .object_index(target)
+            .and_then(|i| self.objects[i].owner)
+        else {
+            return;
+        };
+        if let Some(ai) = self.computers.players.iter_mut().find(|a| a.owner == owner) {
+            if ai.attacks.len() < 64 {
+                ai.attacks.push((target, shooter));
+            }
+        }
+    }
+
+    fn now(&self) -> u32 {
+        self.computers.tick
+    }
+
+    /// The computer player's objects, in the objects' order (0x4a8620).
+    fn owned(&self, owner: (u32, u32)) -> Vec<usize> {
+        (0..self.objects.len())
+            .filter(|&i| self.objects[i].owner == Some(owner) && self.objects[i].combat.is_some())
+            .collect()
+    }
+
+    fn class_of(&self, i: usize) -> Option<u32> {
+        match self.objects[i].class {
+            ObjectClass::Building(c) | ObjectClass::Barbarian(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// The cell of object `i` (its top-left for a building).
+    fn cell_of(&self, i: usize) -> (i32, i32) {
+        let t = TILE_SIZE as f32;
+        self.objects[i].cell.unwrap_or((
+            (self.objects[i].x / t) as i32,
+            (self.objects[i].y / t) as i32,
+        ))
+    }
+
+    fn map_cells(&self) -> (i32, i32) {
+        (self.nav.width as i32, self.nav.height as i32)
+    }
+
+    /// Sets up a computer player (message 0x8d1, 0x487230).
+    fn computer_setup(&mut self, ai: &mut Computer) {
+        ai.manager = ai.add_flotilla(MANAGER, 0);
+        let forts = ai.add_flotilla(FORTS, 0);
+        ai.forts = forts;
+        let mine = self.owned(ai.owner);
+        // Towns first, then settlements, become bases; forts join the
+        // forts' flotilla.
+        let mut sites = Vec::new();
+        for &i in &mine {
+            match self.class_of(i) {
+                Some(TOWN) => sites.push(i),
+                Some(0x34..=0x36) => ai.flotillas[forts].ships.push(self.objects[i].id),
+                _ => {}
+            }
+        }
+        for &i in &mine {
+            if self.class_of(i) == Some(SETTLEMENT) {
+                sites.push(i);
+            }
+        }
+        let bases = sites.len().clamp(1, 9);
+        ai.commander = ai.add_flotilla(COMMANDER, 0);
+        ai.add_flotilla(FLEET, 0);
+        ai.reserve = ai.add_flotilla(RESERVE, 0);
+        for b in 0..bases {
+            let mut base = Base {
+                cell: (-1, -1),
+                ..Default::default()
+            };
+            if let Some(&i) = sites.get(b) {
+                base.site = Some(self.objects[i].id);
+                base.cell = self.cell_of(i);
+            }
+            ai.bases.push(base);
+            if ai.bases[b].site.is_some() {
+                self.base_zones(ai, b);
+                self.base_rect(ai, b);
+            }
+            for role in [AMBER, FISH, GUARD, DEFENCE, RAIDERS, BUILDERS, SPARE] {
+                ai.add_flotilla(role, b);
+            }
+        }
+        // The ships it starts with go where a flotilla wants their type
+        // (0x4803a0, 0x480510), else by type (0x484170).
+        let mut asked: Vec<(u8, usize, i32)> = Vec::new();
+        for f in 0..ai.flotillas.len() {
+            for group in ai.wants_of(ai.flotillas[f].role) {
+                let (kind, _, flag, prio) = group[0];
+                asked.push((kind, f, prio - flag * 2500 + 22767));
+                let _ = ai.roll(0x27);
+            }
+        }
+        // By priority, highest first (0x480480).
+        asked.sort_by_key(|a| -a.2);
+        for &i in &mine {
+            let Some(kind) = self.objects[i].ship.as_ref().map(|s| s.kind) else {
+                continue;
+            };
+            let id = self.objects[i].id;
+            let f = match asked.iter().position(|a| a.0 == kind) {
+                Some(k) => Some(asked.remove(k).1),
+                None => ai.fleet_for_type(kind),
+            };
+            if let Some(f) = f {
+                ai.flotillas[f].ships.push(id);
+            }
+        }
+        ai.known = mine.iter().map(|&i| self.objects[i].id).collect();
+        self.choose_enemy(ai);
+    }
+
+    /// One tick of a computer player (message 0, 0x488960).
+    fn computer_tick(&mut self, ai: &mut Computer, data: &GameData, caches: &mut Caches) {
+        let now = self.now();
+        // Ships sunk or taken leave their flotillas.
+        let owner = ai.owner;
+        for f in &mut ai.flotillas {
+            f.ships.retain(|&id| {
+                self.object_index(id)
+                    .is_some_and(|i| self.objects[i].owner == Some(owner))
+            });
+        }
+        self.computer_news(ai);
+        for (target, shooter) in std::mem::take(&mut ai.attacks) {
+            self.computer_hit(ai, target, shooter);
+        }
+        // Nothing left: the original stops sending it message 0.
+        if self.owned(owner).is_empty() {
+            return;
+        }
+        for f in 0..ai.flotillas.len() {
+            self.flotilla_turn(ai, f, now);
+        }
+        if now >= ai.land_pass {
+            ai.land_pass = now + 50;
+            self.land_fleet(ai, data, caches);
+        }
+    }
+
+    /// New and lost objects (messages 0x5d95, 0x5d97 and 0x5d9b).
+    fn computer_news(&mut self, ai: &mut Computer) {
+        // A settlement lost: its base waits to be founded again (0x5d9b).
+        for b in 0..ai.bases.len() {
+            if let Some(site) = ai.bases[b].site {
+                let ours = self.object_index(site).is_some_and(|i| {
+                    self.objects[i].owner == Some(ai.owner)
+                        && matches!(self.class_of(i), Some(SETTLEMENT | TOWN))
+                });
+                if !ours {
+                    ai.bases[b].site = None;
+                    ai.bases[b].state = 0;
+                    ai.bases[b].started = false;
+                }
+            }
+        }
+        let mine = self.owned(ai.owner);
+        let new: Vec<usize> = mine
+            .iter()
+            .copied()
+            .filter(|&i| !ai.known.contains(&self.objects[i].id))
+            .collect();
+        ai.known = mine.iter().map(|&i| self.objects[i].id).collect();
+        for i in new {
+            let id = self.objects[i].id;
+            if let Some(kind) = self.objects[i].ship.as_ref().map(|s| s.kind) {
+                // A ship nobody ordered (0x5d97): to the reserve if some
+                // flotilla wants its type, else to the spare flotilla.
+                if ai.flotillas.iter().any(|f| f.ships.contains(&id)) {
+                    continue;
+                }
+                let f = if ai.nobody_wants(kind) {
+                    ai.by_role[SPARE as usize]
+                } else {
+                    ai.reserve
+                };
+                ai.flotillas[f].ships.push(id);
+                continue;
+            }
+            let Some(class) = self.class_of(i) else {
+                continue;
+            };
+            match class {
+                // A new settlement (0x5d95 case 0).
+                SETTLEMENT | TOWN => self.new_base(ai, i),
+                0x34..=0x36 => ai.flotillas[ai.forts].ships.push(id),
+                _ => {
+                    // A building of a base: its zones and area again.
+                    if let Some(b) = self.base_near(ai, i) {
+                        let now = self.now();
+                        if matches!(class, PORT | SHIPYARD | DOCK) {
+                            self.base_zones(ai, b);
+                            ai.mail_base(
+                                b,
+                                Mail {
+                                    kind: 3,
+                                    at: now,
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                        self.base_rect(ai, b);
+                        ai.mail_base(
+                            b,
+                            Mail {
+                                kind: 4,
+                                at: now,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The base whose town building `i` belongs to.
+    fn base_near(&self, ai: &Computer, i: usize) -> Option<usize> {
+        let (x, y) = self.cell_of(i);
+        ai.bases.iter().position(|b| {
+            b.site.is_some()
+                && (x - b.cell.0).abs() <= BUILD_RADIUS + 2
+                && (y - b.cell.1).abs() <= BUILD_RADIUS + 2
+        })
+    }
+
+    /// A settlement founded or taken (0x5d95 case 0): the base waiting at
+    /// its cell gets it, else it makes a new base with its flotillas.
+    fn new_base(&mut self, ai: &mut Computer, i: usize) {
+        let id = self.objects[i].id;
+        if ai.bases.iter().any(|b| b.site == Some(id)) {
+            return;
+        }
+        let cell = self.cell_of(i);
+        let now = self.now();
+        let near = |b: &Base| (b.cell.0 - cell.0).abs() <= 1 && (b.cell.1 - cell.1).abs() <= 1;
+        let b = match ai.bases.iter().position(|b| b.site.is_none() && near(b)) {
+            Some(b) => {
+                let base = &mut ai.bases[b];
+                base.site = Some(id);
+                base.cell = cell;
+                base.step = 0;
+                base.state = 0;
+                base.started = false;
+                b
+            }
+            None => {
+                if ai.bases.len() >= 9 {
+                    return;
+                }
+                ai.bases.push(Base {
+                    site: Some(id),
+                    cell,
+                    ..Default::default()
+                });
+                let b = ai.bases.len() - 1;
+                for role in [AMBER, FISH, GUARD, DEFENCE, RAIDERS, BUILDERS, SPARE] {
+                    ai.add_flotilla(role, b);
+                }
+                b
+            }
+        };
+        self.base_zones(ai, b);
+        self.base_rect(ai, b);
+        for kind in [3, 4] {
+            ai.mail_base(
+                b,
+                Mail {
+                    kind,
+                    at: now,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    /// Picks the enemy (0x4844b0): any other player, the humans weighted
+    /// 250 (200 a remote one) and computers 10.
+    fn choose_enemy(&mut self, ai: &mut Computer) {
+        let mut sides: Vec<(i32, u32)> = Vec::new();
+        if let Some(h) = self.human {
+            sides.push((250, h.nation * 4 + h.slot));
+        }
+        for s in self.seats.iter().skip(1) {
+            sides.push((200, s.player.nation * 4 + s.player.slot));
+        }
+        for o in self.purses.keys() {
+            let id = o.0 * 4 + o.1;
+            if !sides.iter().any(|s| s.1 == id) {
+                sides.push((10, id));
+            }
+        }
+        sides.retain(|s| s.1 != ai.id());
+        sides.sort_by_key(|s| s.1);
+        if sides.is_empty() {
+            ai.enemy = None;
+            return;
+        }
+        let weights: Vec<i32> = sides.iter().map(|s| s.0).collect();
+        let k = ai.pick(&weights);
+        ai.hits = 0;
+        ai.enemy = Some(sides[k].1);
+        ai.hitter = ai.enemy;
+    }
+
+    /// Whether player `id` has anything left (0x484770).
+    fn alive(&self, id: u32) -> bool {
+        let owner = (id / 4, id % 4);
+        self.objects
+            .iter()
+            .any(|o| o.owner == Some(owner) && o.combat.is_some())
+    }
+
+    fn is_human_id(&self, id: u32) -> bool {
+        self.human.is_some_and(|h| h.nation * 4 + h.slot == id)
+            || self
+                .seats
+                .iter()
+                .any(|s| s.player.nation * 4 + s.player.slot == id)
+    }
+
+    /// A shot at one of the computer's objects (message 0x5d9c).
+    fn computer_hit(&mut self, ai: &mut Computer, target: u32, shooter: u32) {
+        let now = self.now();
+        // At most one answer every 50-100 ticks.
+        let wait = ai.roll(0x33) + 0x32;
+        if wait + ai.helped_at > now {
+            return;
+        }
+        ai.helped_at = now;
+        let (Some(t), Some(s)) = (self.object_index(target), self.object_index(shooter)) else {
+            return;
+        };
+        self.note_hitter(ai, s);
+        if self.objects[t].ship.is_some() {
+            // A fleet under fire weaker than the enemy about gets help from
+            // another (0x486b70, 0x486e80).
+            let Some(f) = ai.flotillas.iter().position(|f| f.ships.contains(&target)) else {
+                return;
+            };
+            if ai.helps.iter().any(|h| h.0 == f || h.1 == f) {
+                return;
+            }
+            let Some((rect, strength)) = self.enemy_group(ai, s) else {
+                return;
+            };
+            let Some(helper) = self.find_helper(ai, f, strength) else {
+                return;
+            };
+            let len = ai.roll(0x2329) as i32 + 9000;
+            let mut p = [0; 12];
+            p[0] = f as i32;
+            p[1] = rect.0;
+            p[2] = rect.1;
+            p[3] = rect.2;
+            p[4] = rect.3;
+            p[7] = len;
+            p[8] = 1;
+            p[9] = 1;
+            ai.mail(
+                helper,
+                Mail {
+                    kind: 1,
+                    at: now,
+                    task: 8,
+                    p,
+                },
+            );
+            ai.helps.push((f, helper));
+            ai.helps.push((helper, helper));
+        } else if matches!(self.class_of(t), Some(SETTLEMENT | TOWN)) {
+            // The town is attacked: its flotillas defend it.
+            if let Some(b) = ai.bases.iter().position(|b| b.site == Some(target)) {
+                ai.mail_base(
+                    b,
+                    Mail {
+                        kind: 0x65,
+                        at: now,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
+
+    /// Who keeps hitting it becomes the enemy (0x4845e0).
+    fn note_hitter(&mut self, ai: &mut Computer, s: usize) {
+        let Some(owner) = self.objects[s].owner else {
+            return;
+        };
+        if owner.0 > 4 {
+            return;
+        }
+        let who = owner.0 * 4 + owner.1;
+        if Some(who) == ai.enemy || who == ai.id() {
+            return;
+        }
+        if ai.hitter != Some(who) {
+            ai.hitter = Some(who);
+            ai.hits = 1;
+            return;
+        }
+        ai.hits += 1;
+        let enemy_human = ai.enemy.is_some_and(|e| self.is_human_id(e));
+        let limit = if self.is_human_id(who) {
+            if enemy_human {
+                ai.roll(8) + 8
+            } else {
+                ai.roll(3) + 1
+            }
+        } else if enemy_human {
+            ai.roll(0x33) + 100
+        } else {
+            ai.roll(8) + 8
+        };
+        if ai.hits <= limit {
+            return;
+        }
+        ai.hits = 0;
+        ai.enemy = Some(who);
+        ai.hitter = Some(who);
+    }
+
+    /// The enemies about the object `s` that fired (0x486b70): their area
+    /// and strength.
+    fn enemy_group(&self, ai: &Computer, s: usize) -> Option<(Cells, i32)> {
+        let (x, y) = self.cell_of(s);
+        let (w, h) = self.map_cells();
+        let x0 = (x - 2).max(0);
+        let y0 = (y - 2).max(0);
+        let rect = (x0, y0, 5.min(w - x0), 5.min(h - y0));
+        Some((rect, self.strength_in(ai.owner, rect)))
+    }
+
+    /// Enemy strength in an area (0x4a2390): their ships and buildings,
+    /// less one.
+    fn strength_in(&self, owner: (u32, u32), (x, y, w, h): Cells) -> i32 {
+        let n = (0..self.objects.len())
+            .filter(|&i| {
+                let o = &self.objects[i];
+                let (cx, cy) = self.cell_of(i);
+                o.combat.is_some()
+                    && o.owner.is_some_and(|w| w != owner)
+                    && (o.ship.is_some() || matches!(o.class, ObjectClass::Building(_)))
+                    && cx >= x
+                    && cx < x + w
+                    && cy >= y
+                    && cy < y + h
+            })
+            .count();
+        n as i32 - 1
+    }
+
+    /// A flotilla's strength (0x482d80): its armed ships; -1 if empty.
+    fn fleet_strength(&self, f: &Flotilla) -> i32 {
+        if f.ships.is_empty() {
+            return -1;
+        }
+        f.ships
+            .iter()
+            .filter(|&&id| {
+                self.object_index(id)
+                    .is_some_and(|i| self.objects[i].is_armed())
+            })
+            .count() as i32
+    }
+
+    /// Asks each other flotilla whether it can help fleet `f` against
+    /// `strength` (message 100), and picks one by weight: 110, +90 strong
+    /// enough, -90 of another base (0x486e80).
+    fn find_helper(&mut self, ai: &mut Computer, f: usize, strength: i32) -> Option<usize> {
+        let own = self.fleet_strength(&ai.flotillas[f]);
+        if own < 0 || own > strength {
+            return None;
+        }
+        let mut found: Vec<(i32, usize)> = Vec::new();
+        for k in 0..ai.flotillas.len() {
+            if k == f {
+                continue;
+            }
+            let Some(reply) = self.can_help(ai, k, strength) else {
+                continue;
+            };
+            let mut w = 0x6e;
+            if ai.flotillas[k].base != ai.flotillas[f].base {
+                w -= 90;
+            }
+            if reply >= 1 {
+                w += 90;
+            }
+            found.push((w, k));
+        }
+        if found.is_empty() {
+            return None;
+        }
+        let weights: Vec<i32> = found.iter().map(|x| x.0).collect();
+        Some(found[ai.pick(&weights)].1)
+    }
+
+    /// Message 100: 1 if flotilla `k` is free and as strong as `strength`,
+    /// -1 if free but weaker, `None` if it cannot help.
+    fn can_help(&self, ai: &Computer, k: usize, strength: i32) -> Option<i32> {
+        let fl = &ai.flotillas[k];
+        let free = match fl.role {
+            GUARD => fl.task == 7 && fl.ships.len() > 3,
+            DEFENCE => fl.task == 8 && fl.p[0] < 0,
+            RAIDERS => fl.task == 9 && fl.state != 0xc,
+            FLEET => fl.task == 10 && fl.state != 0xc,
+            _ => false,
+        };
+        if !free {
+            return None;
+        }
+        let s = self.fleet_strength(fl);
+        (s > 0).then_some(if s < strength { -1 } else { 1 })
+    }
+
+    /// One flotilla's turn (0x4829d0 by role).
+    fn flotilla_turn(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        let role = ai.flotillas[f].role;
+        if role == FORTS {
+            return;
+        }
+        if role == COMMANDER {
+            self.commander_turn(ai, f, now);
+            return;
+        }
+        if !ai.flotillas[f].started {
+            ai.flotillas[f].started = true;
+            self.default_task(ai, f);
+            return;
+        }
+        {
+            let fl = &mut ai.flotillas[f];
+            if fl.last + fl.period > now {
+                return;
+            }
+            fl.last = now;
+        }
+        if matches!(role, BUILDERS | GUARD | DEFENCE | RAIDERS | FLEET) {
+            ai.flotillas[f].wants = true;
+            ai.flotillas[f].worn = false;
+        }
+        // The letters, newest first, until one is acted on.
+        while let Some(m) = ai.read(f) {
+            let acted = self.letter(ai, f, m);
+            ai.drop_mail(f, m.kind);
+            if acted {
+                break;
+            }
+        }
+        self.ai_run_task(ai, f, now);
+        match role {
+            AMBER | FISH => self.ai_ask_ships(ai, f, now),
+            BUILDERS | GUARD | DEFENCE | RAIDERS | FLEET => {
+                if ai.flotillas[f].wants {
+                    self.ai_ask_ships(ai, f, now);
+                }
+                if ai.flotillas[f].worn {
+                    self.send_worn(ai, f, now);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The task a flotilla starts with (on its first turn and after a
+    /// letter to start over).
+    fn default_task(&mut self, ai: &mut Computer, f: usize) {
+        let mut p = [0; 12];
+        let task = match ai.flotillas[f].role {
+            MANAGER => 2,
+            AMBER => {
+                p[0] = AMBER_CLASS;
+                p[1] = AMBER_CLASS;
+                p[2] = 7500;
+                4
+            }
+            FISH => {
+                p[0] = FISH_CLASS;
+                p[1] = FISH_CLASS;
+                p[2] = 15000;
+                4
+            }
+            BUILDERS => {
+                p[7] = 1;
+                6
+            }
+            GUARD => 7,
+            DEFENCE => {
+                p[0] = -1;
+                p[7] = ai.roll(0x2329) as i32 + 9000;
+                8
+            }
+            RAIDERS => {
+                p[1] = ai.roll(0x2329) as i32 + 6000;
+                p[2] = ai.roll(0x2329) as i32 + 6000;
+                p[3] = self.target_size(ai, f, false) as i32;
+                p[4] = 3;
+                9
+            }
+            FLEET => {
+                p[2] = ai.roll(0x2329) as i32 + 6000;
+                p[3] = self.target_size(ai, f, true) as i32;
+                p[4] = 3;
+                10
+            }
+            RESERVE => 0xb,
+            SPARE => 0xd,
+            _ => return,
+        };
+        ai.set_task(f, task, p);
+    }
+
+    /// Acts on a letter; false if the flotilla does not know its kind (it
+    /// is dropped and the next one read).
+    fn letter(&mut self, ai: &mut Computer, f: usize, m: Mail) -> bool {
+        let role = ai.flotillas[f].role;
+        let known: &[u32] = match role {
+            MANAGER => &[1],
+            AMBER | FISH => &[1, 2, 3],
+            RESERVE | SPARE => &[1, 2],
+            _ => &[1, 2, 3, 4, 0x65],
+        };
+        if !known.contains(&m.kind) {
+            return false;
+        }
+        match m.kind {
+            1 => {
+                let ok = match role {
+                    MANAGER => m.task == 2,
+                    AMBER | FISH => m.task == 0xc || m.task == 4,
+                    BUILDERS | RESERVE | SPARE => m.task == 0xc,
+                    _ => m.task == 0xc || m.task == 8,
+                };
+                if !ok {
+                    return true;
+                }
+                if m.task == 4 {
+                    // A gatherer told to gather again starts over.
+                    ai.flotillas[f].started = false;
+                } else {
+                    ai.set_task(f, m.task, m.p);
+                }
+                true
+            }
+            2 => {
+                if role == BUILDERS {
+                    // The builders take turns founding forts and exploring.
+                    let mut p = [0; 12];
+                    if ai.flotillas[f].task == 5 {
+                        p[3..8].fill(1);
+                        ai.set_task(f, 6, p);
+                    } else {
+                        p[7] = 1;
+                        ai.set_task(f, 5, p);
+                    }
+                } else {
+                    ai.flotillas[f].started = false;
+                }
+                true
+            }
+            3 => {
+                self.read_zone(ai, f);
+                if matches!(role, BUILDERS | GUARD | DEFENCE | RAIDERS | FLEET)
+                    && ai.flotillas[f].state == 5
+                {
+                    ai.push(f, 5);
+                }
+                true
+            }
+            4 => {
+                self.read_home(ai, f);
+                true
+            }
+            0x65 => {
+                // The base is attacked: defend its area (task 8).
+                let fl = &ai.flotillas[f];
+                let mine = match role {
+                    GUARD => 7,
+                    DEFENCE => 8,
+                    RAIDERS => 9,
+                    FLEET => 10,
+                    _ => return true,
+                };
+                if fl.task != mine && fl.task != 8 {
+                    return true;
+                }
+                if fl.task == 8 {
+                    if fl.p[0] == ai.manager as i32 {
+                        return true;
+                    }
+                    ai.helps.retain(|h| h.1 != f);
+                }
+                let b = ai.flotillas[f].base;
+                let r = ai.bases[b].rect;
+                let mut p = [0; 12];
+                p[0] = ai.manager as i32;
+                p[1] = r.0;
+                p[2] = r.1;
+                p[3] = r.2;
+                p[4] = r.3;
+                p[7] = ai.roll(0x2329) as i32 + 9000;
+                p[8] = 1;
+                p[9] = 1;
+                ai.set_task(f, 8, p);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Runs flotilla `f`'s task (0x47f8c0).
+    fn ai_run_task(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        match ai.flotillas[f].task {
+            2 => self.task_manage(ai, f, now),
+            4 => self.task_gather(ai, f, now),
+            5 => self.task_explore(ai, f, now),
+            6 => self.task_fort(ai, f, now),
+            7 => self.task_guard(ai, f, now),
+            8 => self.task_defend(ai, f, now),
+            9 | 10 => self.task_raid(ai, f, now),
+            0xb | 0xd => self.task_rest(ai, f, now),
+            0xc => self.task_found(ai, f, now),
+            _ => {}
+        }
+    }
+
+    /// Task 2 (0x47d2e0), the manager's: each base's building script and
+    /// founding, then the ships asked for.
+    fn task_manage(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        match ai.flotillas[f].state {
+            0 => {
+                ai.flotillas[f].p[4] = now as i32;
+                ai.push(f, 5);
+            }
+            5 => {
+                if !ai.flotillas[f].step {
+                    ai.flotillas[f].step = true;
+                } else {
+                    for b in 0..ai.bases.len() {
+                        self.manage_base(ai, b, now);
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.serve_requests(ai, now);
+    }
+
+    /// One base of the manager's task.
+    fn manage_base(&mut self, ai: &mut Computer, b: usize, now: u32) {
+        let hard = ai.difficulty == 2;
+        if ai.bases[b].site.is_some() {
+            let base = &ai.bases[b];
+            if base.state == 5 {
+                if base.started {
+                    let wait = if hard { 0 } else { 1500 };
+                    if now > base.ended + wait {
+                        ai.bases[b].state = 0;
+                        ai.bases[b].started = false;
+                    }
+                } else {
+                    ai.bases[b].started = true;
+                    self.base_zones(ai, b);
+                    ai.mail_base(
+                        b,
+                        Mail {
+                            kind: 3,
+                            at: now,
+                            ..Default::default()
+                        },
+                    );
+                    ai.bases[b].step += 1;
+                    ai.bases[b].ended = now;
+                }
+                return;
+            }
+            if base.state != 0 {
+                return;
+            }
+            if base.started {
+                match base.progress {
+                    0 => ai.bases[b].progress = if base.order == 0x60 { 2 } else { 1 },
+                    1 => {
+                        let result = base
+                            .run
+                            .and_then(|id| ai.orders.iter().find(|o| o.id == id))
+                            .map_or(4, |o| o.result);
+                        if result == 3 || result == 4 {
+                            ai.bases[b].progress = result - 1;
+                            ai.bases[b].ended = now;
+                        }
+                        // Without its port, shipyard, sage school and
+                        // smithy the script starts again.
+                        let order = ai.script(b).get(ai.bases[b].step).map_or(0, |e| e.0);
+                        if order != 2 && !self.has_basics(ai, b) {
+                            ai.bases[b].step = 0;
+                            ai.bases[b].state = 0;
+                            ai.bases[b].started = false;
+                        }
+                    }
+                    _ => {
+                        let wait = 1500 / if hard { 2 } else { 1 };
+                        if ai.bases[b].ended + wait < now {
+                            ai.bases[b].state = 5;
+                            ai.bases[b].started = false;
+                        }
+                    }
+                }
+                return;
+            }
+            ai.bases[b].started = true;
+            let (order, weight) = ai
+                .script(b)
+                .get(ai.bases[b].step)
+                .copied()
+                .unwrap_or((0, 0));
+            if order == 0 {
+                ai.bases[b].step = 0;
+                ai.bases[b].rounds += 1;
+                ai.bases[b].state = 0;
+                ai.bases[b].started = false;
+                return;
+            }
+            let base = &mut ai.bases[b];
+            base.order = order;
+            base.progress = 0;
+            base.at = now;
+            let _ = ai.roll(0x27);
+            let prio = if order == 2 { 100 } else { 0 } + weight + 1 + 22767;
+            let id = self.town_order(ai, b, order, None, prio);
+            ai.bases[b].run = id;
+            return;
+        }
+        // No settlement: found one (again).
+        let base = &ai.bases[b];
+        let (state, started, at) = (base.state, base.started, base.at);
+        let start = |ai: &mut Computer| {
+            ai.bases[b].started = true;
+            ai.bases[b].at = now;
+        };
+        let set = |ai: &mut Computer, s: u32| {
+            ai.bases[b].state = s;
+            ai.bases[b].started = false;
+        };
+        match state {
+            0 => {
+                let r = ai.roll(0xbb9);
+                if now < (r + 3000) * 5 && b == 0 {
+                    set(ai, 0x32);
+                } else {
+                    set(ai, 5);
+                }
+            }
+            5 | 0x32 => {
+                if started {
+                    let wait = if state == 5 { 500 } else { 0xfa };
+                    if now > at + wait {
+                        set(ai, if state == 5 { 0xb } else { 0x33 });
+                    }
+                    return;
+                }
+                ai.bases[b].started = true;
+                let fail = if state == 5 { 0x1e } else { 0x37 };
+                let Some(fleet) = self.founders(ai, Some(b), None) else {
+                    set(ai, fail);
+                    return;
+                };
+                let near = if state == 5 {
+                    ai.bases[b].cell
+                } else {
+                    self.fleet_cell(&ai.flotillas[fleet]).unwrap_or((10, 10))
+                };
+                let Some(cell) = self.town_place(ai, near) else {
+                    set(ai, fail);
+                    return;
+                };
+                ai.bases[b].cell = cell;
+                let len = ai.roll(0xbb9) as i32 + 3000;
+                let mut p = [0; 12];
+                p[0] = 0x32;
+                p[1] = len;
+                p[3..8].fill(1);
+                p[8] = -1;
+                p[9] = -1;
+                ai.mail(
+                    fleet,
+                    Mail {
+                        kind: 1,
+                        at: now,
+                        task: 0xc,
+                        p,
+                    },
+                );
+                ai.bases[b].at = now;
+            }
+            0xb | 0x33 => {
+                if !started {
+                    start(ai);
+                    return;
+                }
+                if !self.founding(ai) {
+                    set(ai, if state == 0xb { 0xc } else { 0x34 });
+                } else if at + if state == 0xb { 1500 } else { 500 } < now {
+                    set(ai, 0);
+                }
+            }
+            0xc | 0x34 => {
+                if !started {
+                    start(ai);
+                    return;
+                }
+                let cell = ai.bases[b].cell;
+                if self.building_at(cell) {
+                    set(ai, if state == 0xc { 0xd } else { 0x35 });
+                } else if at + 375 < now {
+                    set(ai, 0);
+                }
+            }
+            0xd | 0x35 | 0x1e | 0x37 => {
+                if !started {
+                    start(ai);
+                    return;
+                }
+                let wait = match state {
+                    0x1e => 1500,
+                    0x37 => 375,
+                    _ => 1000,
+                };
+                if at + wait < now {
+                    set(ai, 0);
+                }
+            }
+            _ => set(ai, 0),
+        }
+    }
+
+    /// Whether a building stands on `cell` (the map's object grid).
+    fn building_at(&self, (x, y): (i32, i32)) -> bool {
+        self.objects.iter().any(|o| {
+            o.cell.is_some_and(|(cx, cy)| {
+                let size = super::trade::building_cells(o);
+                (cx..cx + size).contains(&x) && (cy..cy + size).contains(&y)
+            }) && matches!(o.class, ObjectClass::Building(_))
+        })
+    }
+
+    /// A flotilla with ships to found a settlement, weighted by its size
+    /// and nearness: one of base `base`, near the first base's cell
+    /// (0x484df0), or any near `near` (0x484f60).
+    fn founders(
+        &mut self,
+        ai: &mut Computer,
+        base: Option<usize>,
+        near: Option<(i32, i32)>,
+    ) -> Option<usize> {
+        let to = near.unwrap_or(ai.bases.first().map_or((0, 0), |b| b.cell));
+        let mut found: Vec<(i32, usize)> = Vec::new();
+        for (k, fl) in ai.flotillas.iter().enumerate() {
+            if fl.role <= 1
+                || fl.role == COMMANDER
+                || fl.ships.is_empty()
+                || base.is_some_and(|b| fl.base != b)
+            {
+                continue;
+            }
+            let d = self
+                .fleet_cell(fl)
+                .map_or(1, |(x, y)| ((to.0 - x).abs() + (to.1 - y).abs()).max(1));
+            found.push((10000 / d + fl.ships.len() as i32 * 100, k));
+        }
+        if found.is_empty() {
+            return None;
+        }
+        let weights: Vec<i32> = found.iter().map(|x| x.0).collect();
+        Some(found[ai.pick(&weights)].1)
+    }
+
+    /// Whether some flotilla is still founding (message 0x67).
+    fn founding(&self, ai: &Computer) -> bool {
+        ai.flotillas
+            .iter()
+            .any(|f| f.task == 0xc && !f.ships.is_empty())
+    }
+
+    /// The flotilla's ships' mean cell (0x482dc0).
+    fn fleet_cell(&self, f: &Flotilla) -> Option<(i32, i32)> {
+        let cells: Vec<(i32, i32)> = f
+            .ships
+            .iter()
+            .filter_map(|&id| self.object_index(id).map(|i| self.cell_of(i)))
+            .collect();
+        let n = cells.len() as i32;
+        (n > 0).then(|| {
+            (
+                cells.iter().map(|c| c.0).sum::<i32>() / n,
+                cells.iter().map(|c| c.1).sum::<i32>() / n,
+            )
+        })
+    }
+
+    /// Whether base `b`'s town has its port, shipyard, sage school and
+    /// smithy (0x43d220 with 0x39, 0x3a/0x3b, 0x37, 0x38).
+    fn has_basics(&self, ai: &Computer, b: usize) -> bool {
+        let n = |c: u32| self.town_count(ai, b, c);
+        n(PORT) > 0 && n(SHIPYARD) + n(DOCK) > 0 && n(WORKSHOP) > 0 && n(SMITHY) > 0
+    }
+
+    /// Buildings of class `class` of base `b`'s town, standing or going up.
+    fn town_count(&self, ai: &Computer, b: usize, class: u32) -> usize {
+        let Some(site) = ai.bases[b].site else {
+            return 0;
+        };
+        let Some(t) = self.object_index(site) else {
+            return 0;
+        };
+        let (tx, ty) = self.cell_of(t);
+        self.objects
+            .iter()
+            .filter(|o| {
+                o.owner == Some(ai.owner)
+                    && o.class == ObjectClass::Building(class)
+                    && o.cell.is_some_and(|(x, y)| {
+                        (x - tx).abs() <= BUILD_RADIUS + 2 && (y - ty).abs() <= BUILD_RADIUS + 2
+                    })
+            })
+            .count()
+    }
+
+    /// Ships asked for (0x4800c0): for each group of the flotilla's want
+    /// table, the first type its town can build, if it has fewer than
+    /// wanted and the reserve has none.
+    fn ai_ask_ships(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        let b = ai.flotillas[f].base;
+        if ai.bases.get(b).is_none_or(|b| b.site.is_none()) {
+            return;
+        }
+        let have = self.type_counts(&ai.flotillas[f]);
+        let spare = self.type_counts(&ai.flotillas[ai.reserve]);
+        for group in ai.wants_of(ai.flotillas[f].role) {
+            let Some(&(kind, count, flag, prio)) =
+                group.iter().find(|w| self.can_produce(ai.owner, w.0))
+            else {
+                continue;
+            };
+            if have[kind as usize] < count && spare[kind as usize] == 0 {
+                let exists = ai
+                    .requests
+                    .iter()
+                    .any(|r| r.kind == kind && r.count == count && r.fleet == f && r.base == b);
+                if !exists {
+                    let delay = ai.roll(0x27) + 0xc;
+                    ai.requests.push(Request {
+                        kind,
+                        count,
+                        flag,
+                        prio,
+                        fleet: f,
+                        base: b,
+                        key: prio - flag * 2500 + 22767,
+                        delay,
+                        at: now,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    /// Ships of the flotilla by type (0x482c70).
+    fn type_counts(&self, f: &Flotilla) -> [i32; 12] {
+        let mut n = [0; 12];
+        for &id in &f.ships {
+            if let Some(s) = self
+                .object_index(id)
+                .and_then(|i| self.objects[i].ship.as_ref())
+            {
+                n[s.kind as usize % 12] += 1;
+            }
+        }
+        n
+    }
+
+    /// Whether the player can have ships of type `kind` built (0x43da20
+    /// case 4 without the price): its nation's, studied if unique, the
+    /// buildings it needs standing.
+    fn can_produce(&self, owner: (u32, u32), kind: u8) -> bool {
+        if !economy::buildable_ships(owner.0).any(|k| k == kind) {
+            return false;
+        }
+        if (8..12).contains(&kind)
+            && self.levels_of(Some(owner)).get(Upgrade::Special(kind - 8)) == 0
+        {
+            return false;
+        }
+        let need = economy::ship_requirements(kind) | 1;
+        self.buildings_of(owner) & need == need
+    }
+
+    /// Sends the asked ships to the towns and forgets the served (0x480270).
+    fn serve_requests(&mut self, ai: &mut Computer, now: u32) {
+        let mut k = 0;
+        while k < ai.requests.len() {
+            let r = ai.requests[k].clone();
+            if r.delay + r.at > now {
+                k += 1;
+                continue;
+            }
+            match r.state {
+                0 => {
+                    let id =
+                        self.town_order(ai, r.base, 0x50 + r.kind as u32, Some(r.fleet), r.key);
+                    ai.requests[k].run = id;
+                    ai.requests[k].state = 1;
+                }
+                1 => {
+                    let result = r
+                        .run
+                        .and_then(|id| ai.orders.iter().find(|o| o.id == id))
+                        .map_or(4, |o| o.result);
+                    if result == 3 {
+                        ai.requests[k].state = 2;
+                        ai.requests[k].ended = now;
+                    } else if result == 4 {
+                        ai.requests[k].state = 3;
+                        ai.requests[k].ended = now;
+                    }
+                }
+                _ => {
+                    if r.ended + 1500 < now {
+                        ai.requests.remove(k);
+                        continue;
+                    }
+                }
+            }
+            k += 1;
+        }
+    }
+
+    /// Puts an order to base `b`'s town (0x482f50, message 1000): `code`
+    /// from the land fleet's table (0x5ac7c8). Its id, or `None` if the
+    /// base has no town.
+    fn town_order(
+        &mut self,
+        ai: &mut Computer,
+        b: usize,
+        code: u32,
+        fleet: Option<usize>,
+        prio: i32,
+    ) -> Option<u32> {
+        ai.bases.get(b)?.site?;
+        let code = if code == 0x86 {
+            // The nation's unique ships' study.
+            match ai.nation() {
+                1 => 0x73,
+                3 => 0x74,
+                _ => 0,
+            }
+        } else {
+            code
+        };
+        let parts: Vec<Part> = order_parts(code)
+            .iter()
+            .map(|&(op, once, after)| Part {
+                op,
+                once,
+                after,
+                tries: match op {
+                    Op::Build(_) | Op::Upgrade(_) => 20,
+                    Op::Ship(_) => 25,
+                    _ => 10,
+                },
+                ..Default::default()
+            })
+            .collect();
+        ai.next_order += 1;
+        let id = ai.next_order;
+        // The land fleet keeps its orders by priority, highest first, the
+        // newest after its equals (0x42c050, 0x42c430).
+        let at = ai
+            .orders
+            .iter()
+            .position(|o| o.prio < prio)
+            .unwrap_or(ai.orders.len());
+        ai.orders.insert(
+            at,
+            TownOrder {
+                id,
+                base: b,
+                fleet,
+                prio,
+                result: if parts.is_empty() { 4 } else { 0 },
+                parts,
+            },
+        );
+        // Old finished orders are forgotten.
+        if ai.orders.len() > 64 {
+            if let Some(k) = ai.orders.iter().position(|o| o.result != 0) {
+                ai.orders.remove(k);
+            }
+        }
+        Some(id)
+    }
+
+    /// The land fleet's pass (every 50 ticks, 0x42b910): each order's
+    /// parts in turn, the most urgent order first.
+    fn land_fleet(&mut self, ai: &mut Computer, data: &GameData, caches: &mut Caches) {
+        for k in 0..ai.orders.len() {
+            if ai.orders[k].result != 0 {
+                continue;
+            }
+            let b = ai.orders[k].base;
+            for p in 0..ai.orders[k].parts.len() {
+                let part = ai.orders[k].parts[p];
+                if part.state >= 3 {
+                    continue;
+                }
+                if part.state == 0 {
+                    let dep = match part.after {
+                        After::Nothing => Some(true),
+                        After::Part(d) => match ai.orders[k].parts.get(d).map(|x| x.state) {
+                            Some(3) | None => Some(true),
+                            Some(4) => None,
+                            _ => Some(false),
+                        },
+                        After::All => {
+                            let before = &ai.orders[k].parts[..p];
+                            if before.iter().any(|x| x.state == 4) {
+                                None
+                            } else {
+                                Some(before.iter().all(|x| x.state == 3))
+                            }
+                        }
+                    };
+                    match dep {
+                        None => {
+                            ai.orders[k].parts[p].state = 4;
+                            continue;
+                        }
+                        Some(false) => continue,
+                        Some(true) => {}
+                    }
+                }
+                let fleet = ai.orders[k].fleet;
+                let state = self.order_part(ai, b, fleet, part, data, caches);
+                let x = &mut ai.orders[k].parts[p];
+                match state {
+                    PartStep::Done => x.state = 3,
+                    PartStep::Started(before) => {
+                        x.state = 2;
+                        x.before = before;
+                        x.tries = 20;
+                    }
+                    PartStep::Wait => {
+                        x.tries = x.tries.saturating_sub(1);
+                        if x.tries == 0 {
+                            x.state = 4;
+                        }
+                    }
+                    PartStep::Hold => {}
+                    PartStep::Failed => x.state = 4,
+                }
+            }
+            let parts = &ai.orders[k].parts;
+            if parts.iter().all(|x| x.state == 3) {
+                ai.orders[k].result = 3;
+            } else if parts.iter().all(|x| x.state >= 3) {
+                ai.orders[k].result = 4;
+            }
+        }
+    }
+
+    /// One pass at a part of a town's order.
+    fn order_part(
+        &mut self,
+        ai: &mut Computer,
+        b: usize,
+        fleet: Option<usize>,
+        part: Part,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> PartStep {
+        let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
+            return PartStep::Failed;
+        };
+        if self.object_index(site).is_none() {
+            return PartStep::Failed;
+        }
+        let owner = ai.owner;
+        match part.op {
+            Op::Build(class) => {
+                let have = self.town_count(ai, b, class)
+                    + if class == SHIPYARD {
+                        self.town_count(ai, b, DOCK)
+                    } else {
+                        0
+                    };
+                if part.state == 2 {
+                    return if have > part.before {
+                        PartStep::Done
+                    } else {
+                        PartStep::Wait
+                    };
+                }
+                if part.once && have > 0 {
+                    return PartStep::Done;
+                }
+                // Schools, temples and big forts go up only by towns.
+                let is_town = self
+                    .object_index(site)
+                    .is_some_and(|i| self.class_of(i) == Some(TOWN));
+                if matches!(class, SCHOOL | TEMPLE_OF_THE_SEA | TEMPLE_OF_WAR | 0x36) && !is_town {
+                    return PartStep::Wait;
+                }
+                if self.funds(owner).0 < economy::building_cost(class) {
+                    return PartStep::Hold;
+                }
+                let Some((x, y)) = self.building_place(site, class) else {
+                    return PartStep::Wait;
+                };
+                match self.place_building(site, class, x, y, data, caches) {
+                    Ok(()) => PartStep::Started(have),
+                    Err(_) => PartStep::Wait,
+                }
+            }
+            Op::Ship(kind) => {
+                if part.state == 2 {
+                    return PartStep::Done;
+                }
+                let Some(yard) = self.base_yard(ai, b) else {
+                    return PartStep::Wait;
+                };
+                let (amber, fish) = economy::ship_cost(kind);
+                let (have_amber, have_fish) = self.funds(owner);
+                if have_amber < amber || have_fish < fish {
+                    return PartStep::Hold;
+                }
+                match self.start_ship(yard, kind) {
+                    Ok(()) => {
+                        if let Some(f) = fleet {
+                            ai.building.push((yard, kind, f));
+                        }
+                        PartStep::Done
+                    }
+                    Err(_) => PartStep::Wait,
+                }
+            }
+            Op::Upgrade(class) => {
+                let to = if class == SETTLEMENT { TOWN } else { DOCK };
+                let target = if class == SETTLEMENT {
+                    Some(site)
+                } else {
+                    self.base_building(ai, b, SHIPYARD)
+                };
+                if part.state == 2 {
+                    return match target.and_then(|t| self.object_index(t)) {
+                        Some(i)
+                            if self.class_of(i) == Some(to)
+                                && self.construction_at(self.objects[i].id).is_none() =>
+                        {
+                            PartStep::Done
+                        }
+                        Some(_) => PartStep::Wait,
+                        None => PartStep::Failed,
+                    };
+                }
+                let upgraded = if to == TOWN {
+                    self.object_index(site)
+                        .is_some_and(|i| self.class_of(i) == Some(TOWN))
+                } else {
+                    self.town_count(ai, b, DOCK) > 0
+                };
+                if part.once && upgraded {
+                    return PartStep::Done;
+                }
+                let Some(t) = target else {
+                    return PartStep::Wait;
+                };
+                if self.funds(owner).0 < economy::building_cost(to) {
+                    return PartStep::Hold;
+                }
+                match self.upgrade(t, data, caches) {
+                    Ok(()) => PartStep::Started(0),
+                    Err(_) => PartStep::Wait,
+                }
+            }
+            Op::Study(n) => {
+                let Some(upgrade) = study(n, ai.nation()) else {
+                    // Studies not ported (temples' spells, 27-32).
+                    return PartStep::Failed;
+                };
+                let level = self.levels_of(Some(owner)).get(upgrade);
+                let top = match n {
+                    1..=3 | 17 => 2.min(upgrade.max_level()),
+                    _ => upgrade.max_level(),
+                };
+                if part.state == 2 {
+                    let busy = self.research.iter().any(|r| {
+                        r.1 == upgrade
+                            && self
+                                .object_index(r.0)
+                                .is_some_and(|i| self.objects[i].owner == Some(owner))
+                    });
+                    return if busy { PartStep::Wait } else { PartStep::Done };
+                }
+                if level >= top {
+                    return PartStep::Done;
+                }
+                if self.funds(owner).0 < upgrade.cost(level) {
+                    return PartStep::Hold;
+                }
+                if self.computer_study(ai, b, upgrade, level) {
+                    PartStep::Started(0)
+                } else {
+                    PartStep::Wait
+                }
+            }
+            Op::Other => PartStep::Done,
+        }
+    }
+
+    /// Starts studying `upgrade` from `level` at base `b`'s school or
+    /// workshop, paying for it (0x4404e0 for the computer).
+    fn computer_study(&mut self, ai: &Computer, b: usize, upgrade: Upgrade, level: u8) -> bool {
+        let class = match upgrade {
+            Upgrade::Arms(_) | Upgrade::Rate(_) | Upgrade::Reach(_) => WORKSHOP,
+            _ => SCHOOL,
+        };
+        if let Upgrade::Special(k) = upgrade {
+            if self.levels_of(Some(ai.owner)).weapons < 1 || (ai.nation() == 1) != (k < 2) {
+                return false;
+            }
+        }
+        let Some(site) = self.base_building(ai, b, class) else {
+            return false;
+        };
+        if self.construction_at(site).is_some()
+            || self.research.iter().any(|r| r.0 == site)
+            || self.research.iter().any(|r| {
+                r.1 == upgrade
+                    && self
+                        .object_index(r.0)
+                        .is_some_and(|i| self.objects[i].owner == Some(ai.owner))
+            })
+        {
+            return false;
+        }
+        let cost = upgrade.cost(level);
+        if self.funds(ai.owner).0 < cost {
+            return false;
+        }
+        self.earn(ai.owner, -(cost as i64), 0);
+        self.research.push((site, upgrade, level + 1, 0.0));
+        true
+    }
+
+    /// A standing building of class `class` of base `b`'s town.
+    fn base_building(&self, ai: &Computer, b: usize, class: u32) -> Option<u32> {
+        let site = ai.bases.get(b)?.site?;
+        let (tx, ty) = self.cell_of(self.object_index(site)?);
+        self.objects
+            .iter()
+            .filter(|o| {
+                o.owner == Some(ai.owner)
+                    && o.class == ObjectClass::Building(class)
+                    && self.construction_at(o.id).is_none()
+                    && o.cell.is_some_and(|(x, y)| {
+                        (x - tx).abs() <= BUILD_RADIUS + 2 && (y - ty).abs() <= BUILD_RADIUS + 2
+                    })
+            })
+            .map(|o| o.id)
+            .next()
+    }
+
+    /// The shipyard or dock building base `b`'s ships, the least busy.
+    fn base_yard(&self, ai: &Computer, b: usize) -> Option<u32> {
+        [DOCK, SHIPYARD]
+            .iter()
+            .filter_map(|&c| self.base_building(ai, b, c))
+            .min_by_key(|&y| self.productions.iter().filter(|p| p.site == y).count())
+    }
+
+    /// Where building `class` may go up by settlement `site` (the land
+    /// fleet asks `m_build.cpp`, 0x42d9c0): the free cell nearest the
+    /// settlement, scanning rows from the top.
+    fn building_place(&self, site: u32, class: u32) -> Option<(i32, i32)> {
+        let (tx, ty) = self.cell_of(self.object_index(site)?);
+        let r = BUILD_RADIUS + 1;
+        let mut best: Option<(i32, (i32, i32))> = None;
+        for y in ty - r..=ty + 1 + r {
+            for x in tx - r..=tx + 1 + r {
+                if self.check_site(site, class, x, y).is_err() {
+                    continue;
+                }
+                let d = (x - tx).abs().max((y - ty).abs());
+                if best.is_none_or(|b| d < b.0) {
+                    best = Some((d, (x, y)));
+                }
+            }
+        }
+        best.map(|b| b.1)
+    }
+
+    /// A place for a new settlement near `near` (`LAiFindTownPlace`,
+    /// 0x40ca90 and 0x40cb60): a free inland cell a ship can reach, at
+    /// least 7 cells from every settlement, the nearest.
+    fn town_place(&self, ai: &Computer, near: (i32, i32)) -> Option<(i32, i32)> {
+        let _ = ai;
+        let (w, h) = self.map_cells();
+        let towns: Vec<(i32, i32)> = (0..self.objects.len())
+            .filter(|&i| matches!(self.class_of(i), Some(SETTLEMENT | TOWN)))
+            .map(|i| self.cell_of(i))
+            .collect();
+        let mut best: Option<(i32, (i32, i32))> = None;
+        for y in 1..h - 2 {
+            for x in 1..w - 2 {
+                if towns
+                    .iter()
+                    .any(|t| (t.0 - x).abs().max((t.1 - y).abs()) < 7)
+                {
+                    continue;
+                }
+                if !(0..2).all(|dy| {
+                    (0..2).all(|dx| self.check_ground(SETTLEMENT, x + dx, y + dy).is_ok())
+                }) {
+                    continue;
+                }
+                if !self.water_within(x, y, FOUND_REACH) {
+                    continue;
+                }
+                let d = (x - near.0).abs() + (y - near.1).abs();
+                if best.is_none_or(|b| d < b.0) {
+                    best = Some((d, (x, y)));
+                }
+            }
+        }
+        best.map(|b| b.1)
+    }
+
+    /// Whether open water lies within `r` cells of `(x, y)`.
+    fn water_within(&self, x: i32, y: i32, r: i32) -> bool {
+        (-r..=r).any(|dy| (-r..=r).any(|dx| self.nav.is_water(x + dx, y + dy)))
+    }
+
+    /// Base `b`'s area (0x484aa0 with 0x4218f0: the town and its buildings,
+    /// 2 cells around).
+    fn base_rect(&self, ai: &mut Computer, b: usize) {
+        let Some(site) = ai.bases[b].site else {
+            return;
+        };
+        let Some(t) = self.object_index(site) else {
+            return;
+        };
+        let (tx, ty) = self.cell_of(t);
+        let (mut x0, mut y0, mut x1, mut y1) = (tx, ty, tx + 1, ty + 1);
+        for o in &self.objects {
+            if o.owner != Some(ai.owner) || !matches!(o.class, ObjectClass::Building(_)) {
+                continue;
+            }
+            if let Some((x, y)) = o.cell {
+                if (x - tx).abs() <= BUILD_RADIUS + 2 && (y - ty).abs() <= BUILD_RADIUS + 2 {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+            }
+        }
+        let (w, h) = self.map_cells();
+        let (x0, y0) = ((x0 - 2).max(0), (y0 - 2).max(0));
+        let (x1, y1) = ((x1 + 2).min(w - 1), (y1 + 2).min(h - 1));
+        ai.bases[b].rect = (x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    }
+
+    /// Base `b`'s waiting zones (0x484900 with `LAiFindDispositionZones`,
+    /// 0x4093a0): in the 31 x 31 cells about the town, for the guards,
+    /// defence, raiders and (first base only) the fleet in turn, a square
+    /// for its ships (5-12: side s, the least with s x s >= n + n / 4,
+    /// 0x408bb0) holding water for them all, apart from the zones before;
+    /// the fewest cells beside the base's ports and yards first, then the
+    /// nearest the town, then the most open water (0x408bf0). The
+    /// original also weighs the lanes from the ports to the amber, lairs,
+    /// nests and deposits about (0x40bbf0); not ported.
+    fn base_zones(&self, ai: &mut Computer, b: usize) {
+        let Some(t) = ai.bases[b].site.and_then(|s| self.object_index(s)) else {
+            return;
+        };
+        let (tx, ty) = self.cell_of(t);
+        let (w, h) = self.map_cells();
+        let span = |c: i32, size: i32| {
+            let mut c0 = (c - 15).max(0);
+            while size < c0 + 31 && c0 > 0 {
+                c0 -= 1;
+            }
+            (c0, 31.min(size - c0))
+        };
+        let ((x0, rw), (y0, rh)) = (span(tx, w), span(ty, h));
+        // Cells beside the base's ports and yards (0x80000).
+        let harbour: Vec<(i32, i32)> = self
+            .objects
+            .iter()
+            .filter(|o| {
+                o.owner == Some(ai.owner)
+                    && matches!(o.class, ObjectClass::Building(PORT | SHIPYARD | DOCK))
+            })
+            .filter_map(|o| o.cell)
+            .collect();
+        let beside = |x: i32, y: i32| {
+            harbour
+                .iter()
+                .any(|&(hx, hy)| (x - hx).abs() <= 1 && (y - hy).abs() <= 1)
+        };
+        // The lanes from the base's ports to the amber about (0x90000).
+        let t = TILE_SIZE as f32;
+        let inside = |(x, y): (i32, i32)| x >= x0 && x < x0 + rw && y >= y0 && y < y0 + rh;
+        let mut lanes = std::collections::BTreeSet::new();
+        let ports: Vec<(i32, i32)> = self
+            .objects
+            .iter()
+            .filter(|o| o.owner == Some(ai.owner) && matches!(o.class, ObjectClass::Building(PORT)))
+            .filter_map(|o| o.cell)
+            .filter_map(|(x, y)| self.nav.nearest_water(x, y))
+            .collect();
+        let ambers: Vec<(i32, i32)> = self
+            .objects
+            .iter()
+            .filter(|o| o.deposit.is_some_and(|d| d.resource == Resource::Amber))
+            .map(|o| ((o.x / t) as i32, (o.y / t) as i32))
+            .filter(|&c| inside(c))
+            .filter_map(|(x, y)| self.nav.nearest_water(x, y))
+            .collect();
+        for &p in &ports {
+            for &a in &ambers {
+                if let Some(path) = self.nav.find_path_avoiding(p, a, false, |_| false) {
+                    lanes.extend(path);
+                }
+            }
+        }
+        let slots = if b == 0 { 4 } else { 3 };
+        let mut taken: Vec<Cells> = Vec::new();
+        for k in 0..4 {
+            let n = if k < slots {
+                let role = [GUARD, DEFENCE, RAIDERS, FLEET][k];
+                ai.flotilla_of(b, role)
+                    .map(|f| ai.flotillas[f].ships.len() as u32)
+                    .filter(|&n| n > 5)
+                    .map_or(5, |n| n.min(12))
+            } else {
+                5
+            };
+            let need = n as i32 + n as i32 / 4;
+            let mut side = 1;
+            while side * side < need {
+                side += 1;
+            }
+            let mut best: Option<((i32, i32, i32), Cells)> = None;
+            for apart in [true, false] {
+                for y in y0..=y0 + rh - side {
+                    for x in x0..=x0 + rw - side {
+                        let rect = (x, y, side, side);
+                        let over = |r: &Cells| {
+                            x < r.0 + r.2 && r.0 < x + side && y < r.1 + r.3 && r.1 < y + side
+                        };
+                        if apart && taken.iter().any(over) {
+                            continue;
+                        }
+                        let mut water = 0;
+                        let mut near = 0;
+                        for cy in y..y + side {
+                            for cx in x..x + side {
+                                if self.nav.is_water(cx, cy) {
+                                    water += 1;
+                                    if beside(cx, cy) || lanes.contains(&(cx, cy)) {
+                                        near += 1;
+                                    }
+                                }
+                            }
+                        }
+                        if water < n as i32 {
+                            continue;
+                        }
+                        let (mx, my) = (x * 2 + side - 2 * tx - 1, y * 2 + side - 2 * ty - 1);
+                        let d = mx * mx + my * my;
+                        let key = (near, d, -water);
+                        if best.is_none_or(|bb| key < bb.0) {
+                            best = Some((key, rect));
+                        }
+                    }
+                }
+                if best.is_some() {
+                    break;
+                }
+            }
+            let rect = best.map_or((0, 0, 0, 0), |b| b.1);
+            if k < slots {
+                taken.push(rect);
+            }
+            ai.bases[b].zones[k] = (n, rect);
+        }
+    }
+
+    /// The flotilla's waiting zone (0x485120: guards slot 0, gatherers'
+    /// and defence slot 1, raiders slot 2, the fleet slot 3).
+    fn read_zone(&self, ai: &mut Computer, f: usize) {
+        let slot = match ai.flotillas[f].role {
+            AMBER | RAIDERS => 2,
+            FISH | DEFENCE | SPARE => 1,
+            BUILDERS | GUARD => 0,
+            FLEET | RESERVE => 3,
+            _ => return,
+        };
+        let b = ai.flotillas[f].base;
+        if let Some(base) = ai.bases.get(b) {
+            ai.flotillas[f].zone = base.zones[slot].1;
+        }
+    }
+
+    /// The flotilla's home: its base's area (0x485210).
+    fn read_home(&self, ai: &mut Computer, f: usize) {
+        let b = ai.flotillas[f].base;
+        if let Some(base) = ai.bases.get(b) {
+            ai.flotillas[f].home = base.rect;
+        }
+    }
+
+    /// Ships of the flotilla, if any (message 6).
+    fn size(ai: &Computer, f: usize) -> i32 {
+        ai.flotillas[f].ships.len() as i32
+    }
+
+    /// Task 4 (0x47dc60): gather near the base, sail to the zone and look
+    /// again; amber gatherers turn to fish when fish runs short and amber
+    /// is plenty, and back.
+    fn task_gather(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        let fl = &ai.flotillas[f];
+        let state = fl.state;
+        match state {
+            0 => {
+                ai.flotillas[f].p[4] = now as i32;
+                ai.push(f, 2);
+            }
+            2 => {
+                if Self::size(ai, f) < 1 {
+                    ai.push(f, 0);
+                } else {
+                    let res = ai.flotillas[f].p[0];
+                    self.resource_area(ai, f, 4, res);
+                    self.read_zone(ai, f);
+                    ai.push(f, 5);
+                }
+            }
+            5 => {
+                if !fl.step {
+                    let len = fl.p[2] as u32;
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = len;
+                    let res = resource(fl.p[0]);
+                    fl.order = FleetOrder::Gather(fl.area, res);
+                    self.give_order(ai, f);
+                } else {
+                    self.keep_order(ai, f);
+                    if Computer::over(&ai.flotillas[f], now) {
+                        ai.push(f, 7);
+                    }
+                }
+            }
+            7 => {
+                if !fl.step {
+                    let len = ai.roll(0x2ef) + 0x2ee;
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = len;
+                    self.move_to_zone(ai, f);
+                } else if self.report(ai, f) == Some(DONE) || Computer::over(&ai.flotillas[f], now)
+                {
+                    self.switch_resource(ai, f);
+                    ai.push(f, 2);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Picks the resource to gather next (0x47dc60's ending).
+    fn switch_resource(&mut self, ai: &mut Computer, f: usize) {
+        let (amber, fish) = self.funds(ai.owner);
+        let p = ai.flotillas[f].p;
+        let mut res = p[0];
+        if res == AMBER_CLASS {
+            if p[1] != AMBER_CLASS || (fish < 3000 && amber > 0x1194) {
+                res = FISH_CLASS;
+            }
+        } else if p[1] == AMBER_CLASS || (fish > 3000 && amber < 2000) || ai.roll(0xb) == 0 {
+            res = AMBER_CLASS;
+        }
+        let mut len = if res == p[1] { 7500 } else { 3000 };
+        if res == FISH_CLASS {
+            len *= 3;
+        }
+        let fl = &mut ai.flotillas[f];
+        fl.p[0] = res;
+        fl.p[2] = len;
+    }
+
+    /// The area about the base holding more than 3 deposits of the
+    /// resource (any for leviathans), growing from `r` cells by 2 (0x485380).
+    fn resource_area(&self, ai: &mut Computer, f: usize, r: i32, res: i32) {
+        let b = ai.flotillas[f].base;
+        let (w, h) = self.map_cells();
+        let Some(t) = ai
+            .bases
+            .get(b)
+            .and_then(|b| b.site)
+            .and_then(|s| self.object_index(s))
+        else {
+            ai.flotillas[f].area = (0, 0, w, h);
+            return;
+        };
+        let (tx, ty) = self.cell_of(t);
+        let need = if res == WHALE_CLASS { 0 } else { 3 };
+        let mut r = r;
+        loop {
+            let (x0, y0) = ((tx - r).max(0), (ty - r).max(0));
+            let side = 2 * r + 1;
+            let (rw, rh) = (side.min(w - x0), side.min(h - y0));
+            let n = self.deposits_in(resource(res), (x0, y0, rw, rh));
+            if n > need || (rw >= w && rh >= h) {
+                ai.flotillas[f].area = if n > 0 {
+                    (x0, y0, rw, rh)
+                } else {
+                    (0, 0, w, h)
+                };
+                return;
+            }
+            r += 2;
+        }
+    }
+
+    fn deposits_in(&self, res: Resource, (x, y, w, h): Cells) -> usize {
+        let t = TILE_SIZE as f32;
+        self.objects
+            .iter()
+            .filter(|o| {
+                o.deposit.is_some_and(|d| d.resource == res) && {
+                    let (cx, cy) = ((o.x / t) as i32, (o.y / t) as i32);
+                    cx >= x && cx < x + w && cy >= y && cy < y + h
+                }
+            })
+            .count()
+    }
+
+    /// Task 5 (0x47dfb0): the builders' rounds: sail the waiting zone,
+    /// hunt leviathans, then gather (amber if fish is plenty).
+    fn task_explore(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        let fl = &ai.flotillas[f];
+        match fl.state {
+            0 => {
+                let a = ai.roll(0x5dd) as i32 + 3000;
+                let b = ai.roll(0xfb) as i32 + 0xfa;
+                let c = ai.roll(0x1195) as i32 + 6000;
+                let d = ai.roll(0x3e9) as i32 + 500;
+                let total = (a + b + c + d) as u32;
+                let total = match ai.difficulty {
+                    1 => total * 2 / 3,
+                    2 => total / 2,
+                    _ => total,
+                };
+                let fl = &mut ai.flotillas[f];
+                fl.p[2] = now as i32;
+                fl.p[3] = a;
+                fl.p[4] = b;
+                fl.p[5] = c;
+                fl.p[6] = d;
+                fl.p[1] = total as i32;
+                ai.push(f, 2);
+            }
+            // The treasure hunt (order 0xbe) is not ported: on to the zone.
+            2 => {
+                if Self::size(ai, f) < 1 {
+                    ai.push(f, 0);
+                } else {
+                    ai.push(f, 5);
+                }
+            }
+            5 => {
+                if !fl.step {
+                    let len = fl.p[4] as u32;
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = len;
+                    self.read_zone(ai, f);
+                    self.move_to_zone(ai, f);
+                } else {
+                    let done = self.report(ai, f) == Some(DONE);
+                    if done || Computer::over(&ai.flotillas[f], now) {
+                        ai.push(f, 7);
+                    }
+                }
+            }
+            7 | 10 => {
+                if !fl.step {
+                    let (len, r, res) = if fl.state == 7 {
+                        (fl.p[5], 10, WHALE_CLASS)
+                    } else {
+                        let fish = self.funds(ai.owner).1;
+                        (
+                            fl.p[6],
+                            4,
+                            if fish < 1000 { FISH_CLASS } else { AMBER_CLASS },
+                        )
+                    };
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = len as u32;
+                    fl.p[0] = res;
+                    self.resource_area(ai, f, r, res);
+                    let fl = &mut ai.flotillas[f];
+                    fl.order = FleetOrder::Gather(fl.area, resource(res));
+                    self.give_order(ai, f);
+                } else {
+                    self.keep_order(ai, f);
+                    if Computer::over(&ai.flotillas[f], now) {
+                        let next = if ai.flotillas[f].state == 7 { 10 } else { 2 };
+                        ai.push(f, next);
+                    }
+                }
+            }
+            _ => {}
+        }
+        ai.task_end(f, now, 1, 2, 7);
+    }
+
+    /// Task 6 (0x47f200): found a fort guarding the base, unless there are
+    /// forts enough (more than the map's cells / 70 + 10).
+    fn task_fort(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        let fl = &ai.flotillas[f];
+        match fl.state {
+            0 => {
+                let len = ai.roll(0xbb9) as i32 + 6000;
+                ai.flotillas[f].p[2] = now as i32;
+                ai.flotillas[f].p[1] = len;
+                let (w, h) = self.map_cells();
+                let forts = ai.flotillas[ai.forts].ships.len() as i32;
+                if forts > w * h / 0x46 + 10 {
+                    ai.go(f, 1);
+                    return;
+                }
+                let Some(cell) = self.fort_place(ai, f) else {
+                    ai.go(f, 1);
+                    return;
+                };
+                let b = ai.flotillas[f].base;
+                let town = ai.bases.get(b).and_then(|b| b.site);
+                let is_town = town
+                    .and_then(|t| self.object_index(t))
+                    .is_some_and(|i| self.class_of(i) == Some(TOWN));
+                let class = if is_town {
+                    if ai.roll(4) != 0 {
+                        0x36
+                    } else {
+                        0x35
+                    }
+                } else if town.is_some() {
+                    0x35
+                } else {
+                    ai.go(f, 1);
+                    return;
+                };
+                let fl = &mut ai.flotillas[f];
+                fl.p[0] = class;
+                fl.home = (cell.0, cell.1, 1, 1);
+                ai.push(f, 5);
+            }
+            5 => {
+                if !fl.step {
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = fl.p[1] as u32;
+                    self.found(ai, f);
+                } else {
+                    self.keep_order(ai, f);
+                    if self.report(ai, f) == Some(DONE) {
+                        let next = ai.flotillas[f].p[5];
+                        ai.go(f, next);
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+        let p = ai.flotillas[f].p;
+        if p[1] != 0 && (p[2] + p[1]) as u32 <= now {
+            ai.go(f, p[3]);
+        }
+    }
+
+    /// Where a guarding fort may go (`LAiFindPlaceGuardianFortress`,
+    /// 0x409b30): a free inland cell 3-8 cells from the town that a ship
+    /// can reach, the nearest the guards' zone.
+    fn fort_place(&self, ai: &Computer, f: usize) -> Option<(i32, i32)> {
+        let b = ai.flotillas[f].base;
+        let base = ai.bases.get(b)?;
+        let t = self.object_index(base.site?)?;
+        let (tx, ty) = self.cell_of(t);
+        let z = base.zones[0].1;
+        let to = (z.0 + z.2 / 2, z.1 + z.3 / 2);
+        let mut best: Option<(i32, (i32, i32))> = None;
+        for y in ty - 8..=ty + 9 {
+            for x in tx - 8..=tx + 9 {
+                let d = (x - tx).abs().max((y - ty).abs());
+                if !(3..=8).contains(&d)
+                    || self.check_ground(0x35, x, y).is_err()
+                    || !self.water_within(x, y, FOUND_REACH)
+                {
+                    continue;
+                }
+                let e = (x - to.0).abs() + (y - to.1).abs();
+                if best.is_none_or(|bb| e < bb.0) {
+                    best = Some((e, (x, y)));
+                }
+            }
+        }
+        best.map(|b| b.1)
+    }
+
+    /// Task 7 (0x47eed0): guard the waiting zone.
+    fn task_guard(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        let fl = &ai.flotillas[f];
+        match fl.state {
+            0 => {
+                ai.flotillas[f].p[1] = now as i32;
+                ai.push(f, 2);
+            }
+            2 => {
+                self.read_zone(ai, f);
+                self.read_home(ai, f);
+                let z = ai.flotillas[f].zone;
+                if z.2 > 0 && z.3 > 0 {
+                    ai.push(f, 5);
+                }
+            }
+            5 => {
+                if !fl.step {
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = 0;
+                    fl.order = FleetOrder::Guard(fl.zone);
+                    self.give_order(ai, f);
+                } else {
+                    ai.flotillas[f].worn = true;
+                    self.keep_order(ai, f);
+                }
+            }
+            _ => {}
+        }
+        ai.task_end(f, now, 0, 1, 2);
+    }
+
+    /// Task 8 (0x47eb70): guard the zone; with a target area, attack it
+    /// for a while, then go back.
+    fn task_defend(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        let fl = &ai.flotillas[f];
+        match fl.state {
+            0 => {
+                ai.flotillas[f].p[6] = now as i32;
+                let next = if ai.flotillas[f].p[0] < 0 { 2 } else { 0xc };
+                ai.push(f, next);
+            }
+            2 => {
+                self.read_zone(ai, f);
+                self.read_home(ai, f);
+                let z = ai.flotillas[f].zone;
+                if z.2 > 0 && z.3 > 0 {
+                    ai.push(f, 5);
+                }
+                if ai.flotillas[f].p[0] >= 0 {
+                    ai.push(f, 0xc);
+                }
+            }
+            5 => {
+                if !fl.step {
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = 0;
+                    fl.order = FleetOrder::Guard(fl.zone);
+                    self.give_order(ai, f);
+                } else {
+                    ai.flotillas[f].worn = true;
+                    self.keep_order(ai, f);
+                    if ai.flotillas[f].p[0] >= 0 {
+                        ai.push(f, 0xc);
+                    }
+                }
+            }
+            0xc => {
+                if !fl.step {
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = fl.p[7] as u32;
+                    fl.area = (fl.p[1], fl.p[2], fl.p[3], fl.p[4]);
+                    fl.order = FleetOrder::Attack(fl.area);
+                    self.give_order(ai, f);
+                } else {
+                    ai.flotillas[f].wants = false;
+                    self.keep_order(ai, f);
+                    let done = self.report(ai, f) == Some(DONE);
+                    if done || Computer::over(&ai.flotillas[f], now) {
+                        ai.flotillas[f].p[0] = -1;
+                        ai.helps.retain(|h| h.1 != f);
+                        let next = ai.flotillas[f].p[if done { 9 } else { 8 }];
+                        ai.go(f, next);
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+        ai.task_end(f, now, 5, 6, 8);
+    }
+
+    /// Tasks 9 and 10 (0x47e3c0, 0x47e7c0): wait in the zone until strong
+    /// enough, then raid the enemy's towns; back home when down to a few.
+    fn task_raid(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        let fleet = ai.flotillas[f].task == 10;
+        let fl = &ai.flotillas[f];
+        match fl.state {
+            0 => {
+                ai.flotillas[f].p[5] = now as i32;
+                ai.push(f, 2);
+            }
+            2 => {
+                self.read_zone(ai, f);
+                self.read_home(ai, f);
+                let size = self.target_size(ai, f, fleet) as i32;
+                ai.flotillas[f].p[3] = size;
+                let z = ai.flotillas[f].zone;
+                if z.2 > 0 && z.3 > 0 {
+                    ai.push(f, 5);
+                }
+            }
+            5 => {
+                if !fl.step {
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = fl.p[1] as u32;
+                    fl.order = FleetOrder::Guard(fl.zone);
+                    self.give_order(ai, f);
+                    return;
+                }
+                ai.flotillas[f].worn = true;
+                self.keep_order(ai, f);
+                if self.report(ai, f) == Some(DONE) {
+                    ai.push(f, 2);
+                }
+                if Computer::over(&ai.flotillas[f], now) {
+                    ai.push(f, 10);
+                }
+                let n = Self::size(ai, f);
+                ai.flotillas[f].count = n;
+                if ai.flotillas[f].p[3] <= n {
+                    ai.push(f, 7);
+                }
+                // Raiders of the harder levels strike early at a weak town.
+                if !fleet
+                    && (ai.difficulty == 1 || ai.difficulty == 2)
+                    && n > ai.flotillas[f].p[4] + 1
+                    && ai.enemy.is_some()
+                    && self.weak_target(ai, f)
+                {
+                    ai.push(f, 0xc);
+                }
+            }
+            7 => {
+                if !fl.step {
+                    let len = if fleet { 0x5dc } else { 1000 };
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = len;
+                } else if Computer::over(&ai.flotillas[f], now) {
+                    ai.push(f, 10);
+                }
+            }
+            10 => {
+                if ai.enemy.is_none() {
+                    return;
+                }
+                if self.enemy_town(ai, f) {
+                    ai.push(f, 0xc);
+                }
+            }
+            0xc => {
+                if !fl.step {
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = fl.p[2] as u32;
+                    fl.order = FleetOrder::Attack(fl.area);
+                    self.give_order(ai, f);
+                    return;
+                }
+                ai.flotillas[f].wants = false;
+                self.keep_order(ai, f);
+                if self.report(ai, f) == Some(DONE) || Computer::over(&ai.flotillas[f], now) {
+                    ai.push(f, 2);
+                }
+                let n = Self::size(ai, f);
+                ai.flotillas[f].count = n;
+                if n <= ai.flotillas[f].p[4] {
+                    ai.push(f, 2);
+                }
+            }
+            _ => {}
+        }
+        let p = ai.flotillas[f].p;
+        if p[6] != 0 && (p[5] + p[6]) as u32 <= now && p[7] != 0 {
+            ai.go(f, p[7]);
+        }
+    }
+
+    /// How many ships the raiders wait for (0x485650; the fleet 0x485960):
+    /// by difficulty and whether the town builds bombers (3), fire ships or
+    /// fire rammers (8, 10), quick lime ships or ships of the dead (9, 11).
+    fn target_size(&self, ai: &mut Computer, f: usize, fleet: bool) -> u32 {
+        let b = ai.flotillas[f].base;
+        if ai.bases.get(b).and_then(|b| b.site).is_none() {
+            return ai.roll(3) + if fleet { 6 } else { 5 };
+        }
+        let o = ai.owner;
+        let bomb = self.can_produce(o, 3);
+        let fire = self.can_produce(o, 8) || self.can_produce(o, 10);
+        let lime = self.can_produce(o, 9) || self.can_produce(o, 11);
+        let d = ai.difficulty;
+        if !fleet {
+            match d {
+                0 if bomb => match (fire, lime) {
+                    (true, false) => (ai.rng.next() & 3) + 7,
+                    (true, true) => ai.roll(5) + 8,
+                    (false, false) => ai.roll(3) + 7,
+                    (false, true) => (ai.rng.next() & 3) + 7,
+                },
+                1 if !bomb => ai.roll(3) + 5,
+                1 => match (fire, lime) {
+                    (true, true) => (ai.rng.next() & 3) + 9,
+                    (true, false) => (ai.rng.next() & 3) + 7,
+                    (false, true) => (ai.rng.next() & 3) + 7,
+                    (false, false) => ai.roll(3) + 6,
+                },
+                2 if bomb => match (fire, lime) {
+                    (false, false) => ai.roll(3) + 8,
+                    (false, true) | (true, false) => ai.roll(3) + 10,
+                    (true, true) => ai.roll(3) + 12,
+                },
+                0 | 2 => ai.roll(3) + 6,
+                _ => 5,
+            }
+        } else {
+            match d {
+                1 => {
+                    if !bomb {
+                        (ai.rng.next() & 1) + 6
+                    } else {
+                        match (fire, lime) {
+                            (false, false) => ai.roll(3) + 9,
+                            (true, true) => ai.roll(5) + 12,
+                            _ => ai.roll(3) + 12,
+                        }
+                    }
+                }
+                0 | 2 if bomb => match (fire, lime) {
+                    (false, false) => ai.roll(3) + 8,
+                    (false, true) | (true, false) => ai.roll(3) + 10,
+                    (true, true) => ai.roll(3) + 12,
+                },
+                0 | 2 => ai.roll(3) + 6,
+                _ => 5,
+            }
+        }
+    }
+
+    /// A weak enemy town to strike at (0x485fc0): one about which the enemy
+    /// is weaker than the flotilla.
+    fn weak_target(&mut self, ai: &mut Computer, f: usize) -> bool {
+        let ours = self.fleet_strength(&ai.flotillas[f]);
+        if ours < 1 {
+            return false;
+        }
+        let Some(enemy) = ai.enemy else {
+            return false;
+        };
+        let (w, h) = self.map_cells();
+        let mut found: Vec<(i32, Cells)> = Vec::new();
+        for i in 0..self.objects.len() {
+            let o = &self.objects[i];
+            if o.owner != Some((enemy / 4, enemy % 4)) {
+                continue;
+            }
+            let weight = match self.class_of(i) {
+                Some(TOWN) => 100,
+                Some(SETTLEMENT) => 0x32,
+                _ => continue,
+            };
+            let (x, y) = self.cell_of(i);
+            let (x0, y0) = ((x - 3).max(0), (y - 3).max(0));
+            let rect = (x0, y0, 8.min(w - x0), 8.min(h - y0));
+            if self.strength_in(ai.owner, rect) < ours {
+                found.push((weight, rect));
+            }
+        }
+        if found.is_empty() {
+            return false;
+        }
+        let weights: Vec<i32> = found.iter().map(|x| x.0).collect();
+        ai.flotillas[f].area = found[ai.pick(&weights)].1;
+        true
+    }
+
+    /// The enemy's town to raid (0x485be0): towns weigh 100, settlements
+    /// 50; without any, any of its ships or buildings.
+    fn enemy_town(&mut self, ai: &mut Computer, f: usize) -> bool {
+        let Some(enemy) = ai.enemy else {
+            return false;
+        };
+        let (w, h) = self.map_cells();
+        let theirs: Vec<usize> = (0..self.objects.len())
+            .filter(|&i| {
+                self.objects[i].owner == Some((enemy / 4, enemy % 4))
+                    && self.objects[i].combat.is_some()
+            })
+            .collect();
+        let towns: Vec<(i32, usize)> = theirs
+            .iter()
+            .filter_map(|&i| match self.class_of(i) {
+                Some(TOWN) => Some((100, i)),
+                Some(SETTLEMENT) => Some((0x32, i)),
+                _ => None,
+            })
+            .collect();
+        let (pick, size, back) = if !towns.is_empty() {
+            let weights: Vec<i32> = towns.iter().map(|x| x.0).collect();
+            (towns[ai.pick(&weights)].1, 8, 3)
+        } else {
+            let all: Vec<(i32, usize)> = theirs
+                .iter()
+                .map(|&i| {
+                    let w = if self.objects[i].ship.is_some()
+                        || matches!(self.objects[i].class, ObjectClass::Building(_))
+                    {
+                        100
+                    } else {
+                        1
+                    };
+                    (w, i)
+                })
+                .collect();
+            if all.is_empty() {
+                return false;
+            }
+            let weights: Vec<i32> = all.iter().map(|x| x.0).collect();
+            (all[ai.pick(&weights)].1, 7, 3)
+        };
+        let (x, y) = self.cell_of(pick);
+        let (x0, y0) = ((x - back).max(0), (y - back).max(0));
+        ai.flotillas[f].area = (x0, y0, size.min(w - x0), size.min(h - y0));
+        true
+    }
+
+    /// Tasks 0xb and 0xd (0x47f460, 0x47f6b0): the reserve and the spare
+    /// ships rest at the base and go for repairs; the reserve then hands
+    /// its ships to the flotillas that want them.
+    fn task_rest(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        let fl = &ai.flotillas[f];
+        match fl.state {
+            0 => {
+                ai.flotillas[f].p[2] = now as i32;
+                ai.push(f, 5);
+            }
+            5 => {
+                if !fl.step {
+                    let len = ai.roll(0x1f5) + 500;
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = len;
+                    self.read_zone(ai, f);
+                    self.move_to_zone(ai, f);
+                } else if self.report(ai, f) == Some(DONE) || Computer::over(&ai.flotillas[f], now)
+                {
+                    ai.push(f, 10);
+                }
+            }
+            10 => {
+                if !fl.step {
+                    let len = ai.roll(0x1771) + 6000;
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = len;
+                    fl.order = FleetOrder::Dock;
+                    self.give_order(ai, f);
+                } else if self.report(ai, f) == Some(DONE) {
+                    if ai.flotillas[f].task == 0xb {
+                        for id in std::mem::take(&mut ai.flotillas[f].ships) {
+                            self.hand_ship(ai, id);
+                        }
+                    }
+                    let next = ai.flotillas[f].p[4];
+                    ai.go(f, next);
+                    return;
+                } else if Computer::over(&ai.flotillas[f], now) {
+                    ai.push(f, 5);
+                }
+            }
+            _ => {}
+        }
+        ai.task_end(f, now, 1, 2, 3);
+    }
+
+    /// Gives a reserve ship to the flotilla that wants its type most
+    /// (0x486910: 0x4866d0, else by type, 0x47fd50).
+    fn hand_ship(&mut self, ai: &mut Computer, id: u32) {
+        let Some(kind) = self
+            .object_index(id)
+            .and_then(|i| self.objects[i].ship.as_ref())
+            .map(|s| s.kind)
+        else {
+            return;
+        };
+        let mut best: Option<(i32, usize)> = None;
+        for f in 0..ai.flotillas.len() {
+            if let Some(prio) = self.want_of(ai, f, kind) {
+                if prio > 0 && best.is_none_or(|b| prio > b.0) {
+                    best = Some((prio, f));
+                }
+            }
+        }
+        let f = match best {
+            Some((_, f)) => Some(f),
+            None => ai.fleet_by_type(kind),
+        };
+        if let Some(f) = f {
+            ai.flotillas[f].ships.push(id);
+        }
+    }
+
+    /// How much flotilla `f` wants a ship of type `kind` (0x486670): the
+    /// highest priority of its table's entries of the type, while it has
+    /// fewer than entries.
+    fn want_of(&self, ai: &Computer, f: usize, kind: u8) -> Option<i32> {
+        let mut n = 0;
+        let mut top = 0;
+        for group in ai.wants_of(ai.flotillas[f].role) {
+            for w in group.iter() {
+                if w.0 == kind {
+                    n += 1;
+                    top = top.max(w.3 - w.2 * 2500 + 22767);
+                }
+            }
+        }
+        (n > 0 && self.type_counts(&ai.flotillas[f])[kind as usize] < n).then_some(top)
+    }
+
+    /// Sends the flotilla's worn ships to the reserve when its base has a
+    /// dock (0x486970, every 375 ticks): boats and merchants under 25-45%
+    /// of their hull, warships under 50-75%.
+    fn send_worn(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        if ai.flotillas[f].worn_at + 0x177 > now {
+            return;
+        }
+        ai.flotillas[f].worn_at = now;
+        let b = ai.flotillas[f].base;
+        if self.base_building(ai, b, DOCK).is_none() {
+            return;
+        }
+        for id in ai.flotillas[f].ships.clone() {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            let (Some(s), Some(c)) = (&self.objects[i].ship, &self.objects[i].combat) else {
+                continue;
+            };
+            let hull = (c.hull * 100.0 / c.max_hull.max(1.0)) as u32;
+            let limit = match s.kind {
+                0 | 1 => ai.roll(0x15) + 0x19,
+                2..=7 => {
+                    let l = ai.roll(0x1a) + 0x32;
+                    // The crew's test (0x4bc590 against 35-65) is not ported.
+                    let _ = ai.roll(0x1f);
+                    l
+                }
+                _ => ai.roll(0x1a) + 0x32,
+            };
+            if hull < limit {
+                ai.flotillas[f].ships.retain(|&x| x != id);
+                let r = ai.reserve;
+                ai.flotillas[r].ships.push(id);
+            }
+        }
+    }
+
+    /// Task 0xc (0x47f050): found a settlement at the given cell (or the
+    /// base's), then start over.
+    fn task_found(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        let fl = &ai.flotillas[f];
+        match fl.state {
+            0 => {
+                let fl = &mut ai.flotillas[f];
+                fl.p[2] = now as i32;
+                if fl.p[8] < 0 || fl.p[9] < 0 {
+                    let b = fl.base;
+                    let c = ai.bases.get(b).map_or((0, 0), |b| b.cell);
+                    ai.flotillas[f].home = (c.0, c.1, 1, 1);
+                } else {
+                    fl.home = (fl.p[8], fl.p[9], 1, 1);
+                }
+                ai.flotillas[f].p[0] = 0x32;
+                ai.push(f, 5);
+            }
+            5 => {
+                if !fl.step {
+                    let fl = &mut ai.flotillas[f];
+                    fl.step = true;
+                    fl.since = now;
+                    fl.len = fl.p[1] as u32;
+                    self.found(ai, f);
+                } else {
+                    self.keep_order(ai, f);
+                    if self.report(ai, f) == Some(DONE) {
+                        let next = ai.flotillas[f].p[5];
+                        ai.go(f, next);
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+        let p = ai.flotillas[f].p;
+        if p[1] != 0 && (p[2] + p[1]) as u32 <= now {
+            ai.go(f, p[3]);
+        }
+    }
+
+    /// Order 0x8c: the flotilla's first ship founds class `p[0]` at the
+    /// home cell.
+    fn found(&mut self, ai: &mut Computer, f: usize) {
+        let fl = &ai.flotillas[f];
+        let cell = (fl.home.0, fl.home.1);
+        let class = fl.p[0] as u32;
+        let Some(&ship) = fl.ships.first() else {
+            ai.flotillas[f].order = FleetOrder::None;
+            return;
+        };
+        ai.flotillas[f].order = FleetOrder::Found(ship, cell, class);
+        self.found_by(ship, cell, class);
+    }
+
+    /// Ship `ship` founds `class` at `cell`; while the price cannot be
+    /// paid it sails there and waits (the order stands until the step's
+    /// time is up).
+    fn found_by(&mut self, ship: u32, cell: (i32, i32), class: u32) {
+        if self.order_found(ship, cell.0, cell.1, class).is_ok() {
+            return;
+        }
+        let t = TILE_SIZE as f32;
+        let Some(i) = self.object_index(ship) else {
+            return;
+        };
+        let (x, y) = (cell.0 as f32 * t + t / 2.0, cell.1 as f32 * t + t / 2.0);
+        let o = &self.objects[i];
+        if (o.x - x).hypot(o.y - y) > (FOUND_REACH as f32 + 0.5) * t {
+            self.order_move(ship, x, y);
+        }
+    }
+
+    /// The commander's turn (0x482160): pick a new enemy when the last is
+    /// gone, send the warships against it when strong enough, and found
+    /// settlements.
+    fn commander_turn(&mut self, ai: &mut Computer, f: usize, now: u32) {
+        if !ai.flotillas[f].started {
+            ai.flotillas[f].started = true;
+            return;
+        }
+        {
+            let fl = &mut ai.flotillas[f];
+            if fl.last + fl.period > now {
+                return;
+            }
+            fl.last = now;
+        }
+        if !ai.enemy.is_some_and(|e| self.alive(e)) {
+            self.choose_enemy(ai);
+        }
+        // The grand attack.
+        let r = ai.roll(0x5dd);
+        if r + 0x5dc + ai.flotillas[f].clocks[3] < now && ai.enemy.is_some() {
+            let first = match ai.difficulty {
+                0 => ai.roll(0x1195) + 0x57e4,
+                1 => ai.roll(0x1d4d) + 15000,
+                _ => ai.roll(0x1195) + 0x34bc,
+            };
+            if first < now {
+                ai.flotillas[f].clocks[3] = now;
+                let enemy = ai.enemy.unwrap_or(0);
+                let theirs = self
+                    .objects
+                    .iter()
+                    .filter(|o| {
+                        o.owner == Some((enemy / 4, enemy % 4))
+                            && o.ship.as_ref().is_some_and(|s| (2..12).contains(&s.kind))
+                    })
+                    .count() as i32;
+                let cap = if ai.difficulty == 0 { 0x1e } else { 0x23 };
+                let need = ((theirs / 5) * 5 + 0xc).min(cap);
+                let ready = self.ready_warships(ai);
+                if need <= ready {
+                    if let Some(rect) = self.attack_target(ai) {
+                        let len = ai.roll(0x1d4d) as i32 + 15000;
+                        let mut p = [0; 12];
+                        p[0] = 0;
+                        p[1] = rect.0;
+                        p[2] = rect.1;
+                        p[3] = rect.2;
+                        p[4] = rect.3;
+                        p[7] = len;
+                        p[8] = 1;
+                        p[9] = 1;
+                        // To the guards, defence, raiders and the fleet
+                        // (mask 0x3c0).
+                        for k in 0..ai.flotillas.len() {
+                            if (6..=9).contains(&ai.flotillas[k].role) {
+                                ai.mail(
+                                    k,
+                                    Mail {
+                                        kind: 1,
+                                        at: now * 2,
+                                        task: 8,
+                                        p,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // A new settlement.
+        let r = ai.roll(0x1195);
+        if r + 0x1d4c + ai.flotillas[f].clocks[2] >= now {
+            return;
+        }
+        let (w, h) = self.map_cells();
+        let cap = (w * h / 500).min(ai.difficulty as i32 + 1);
+        if cap <= ai.bases.len() as i32 {
+            return;
+        }
+        // Only once the nation's unique ships are studied (+0x6e and the
+        // like): easy 8 or 10, otherwise 9 or 11.
+        let levels = self.levels_of(Some(ai.owner));
+        let studied = if ai.difficulty == 0 {
+            levels.get(Upgrade::Special(0)) > 0 || levels.get(Upgrade::Special(2)) > 0
+        } else {
+            levels.get(Upgrade::Special(1)) > 0 || levels.get(Upgrade::Special(3)) > 0
+        };
+        let has_ships = self
+            .objects
+            .iter()
+            .any(|o| o.owner == Some(ai.owner) && o.ship.is_some());
+        if !studied || !has_ships {
+            return;
+        }
+        let near = ai.bases.first().map_or((0, 0), |b| b.cell);
+        let Some(cell) = self.town_place(ai, near) else {
+            return;
+        };
+        let Some(fleet) = self.founders(ai, None, Some(cell)) else {
+            return;
+        };
+        let len = ai.roll(0xbb9) as i32 + 3000;
+        let mut p = [0; 12];
+        p[0] = 0x32;
+        p[1] = len;
+        p[3..8].fill(1);
+        p[8] = cell.0;
+        p[9] = cell.1;
+        ai.mail(
+            fleet,
+            Mail {
+                kind: 1,
+                at: now,
+                task: 0xc,
+                p,
+            },
+        );
+        ai.flotillas[f].clocks[2] = now;
+    }
+
+    /// Warships free for a grand attack (message 0x66 summed, 0x4871a0).
+    fn ready_warships(&self, ai: &Computer) -> i32 {
+        ai.flotillas
+            .iter()
+            .filter(|f| match f.role {
+                RAIDERS => f.task == 9 && f.state != 0xc,
+                FLEET => f.task == 10 && f.state != 0xc,
+                GUARD => f.task == 7,
+                DEFENCE => f.task == 8 && f.p[0] < 0,
+                _ => false,
+            })
+            .map(|f| f.ships.len() as i32)
+            .sum()
+    }
+
+    /// The grand attack's target (0x487690): one of the enemy's towns (100)
+    /// or settlements (50), else any of its buildings.
+    fn attack_target(&mut self, ai: &mut Computer) -> Option<Cells> {
+        let enemy = ai.enemy?;
+        let (w, h) = self.map_cells();
+        let mut found: Vec<(i32, Cells)> = Vec::new();
+        for i in 0..self.objects.len() {
+            if self.objects[i].owner != Some((enemy / 4, enemy % 4)) {
+                continue;
+            }
+            let weight = match self.class_of(i) {
+                Some(TOWN) => 100,
+                Some(SETTLEMENT) => 0x32,
+                _ => continue,
+            };
+            let (x, y) = self.cell_of(i);
+            let (x0, y0) = ((x - 3).max(0), (y - 3).max(0));
+            found.push((weight, (x0, y0, 8.min(w - x0), 8.min(h - y0))));
+        }
+        if found.is_empty() {
+            for i in 0..self.objects.len() {
+                if self.objects[i].owner == Some((enemy / 4, enemy % 4))
+                    && matches!(self.objects[i].class, ObjectClass::Building(_))
+                {
+                    let (x, y) = self.cell_of(i);
+                    let (x0, y0) = ((x - 3).max(0), (y - 3).max(0));
+                    found.push((10, (x0, y0, 7.min(w - x0), 7.min(h - y0))));
+                }
+            }
+        }
+        if found.is_empty() {
+            return None;
+        }
+        let weights: Vec<i32> = found.iter().map(|x| x.0).collect();
+        Some(found[ai.pick(&weights)].1)
+    }
+
+    /// Order 100: the flotilla sails to its zone's middle.
+    fn move_to_zone(&mut self, ai: &mut Computer, f: usize) {
+        let z = ai.flotillas[f].zone;
+        let to = (z.0 + z.2 / 2, z.1 + z.3 / 2);
+        ai.flotillas[f].order = FleetOrder::Move(to);
+        self.give_order(ai, f);
+    }
+
+    /// Gives the flotilla's order to its ships.
+    fn give_order(&mut self, ai: &mut Computer, f: usize) {
+        let order = ai.flotillas[f].order;
+        for id in ai.flotillas[f].ships.clone() {
+            self.order_ship(ai, id, order);
+        }
+    }
+
+    /// Ships that joined, or fell idle, take up the order again.
+    fn keep_order(&mut self, ai: &mut Computer, f: usize) {
+        let order = ai.flotillas[f].order;
+        if let FleetOrder::Found(ship, cell, class) = order {
+            let idle = self
+                .object_index(ship)
+                .and_then(|i| self.objects[i].ship.as_ref())
+                .is_some_and(|s| s.task.is_none() && s.path.is_empty());
+            if idle && !self.building_at(cell) {
+                self.found_by(ship, cell, class);
+            }
+            return;
+        }
+        if !matches!(
+            order,
+            FleetOrder::Gather(..) | FleetOrder::Guard(_) | FleetOrder::Attack(_)
+        ) {
+            return;
+        }
+        for id in ai.flotillas[f].ships.clone() {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            let idle = self.objects[i]
+                .ship
+                .as_ref()
+                .is_some_and(|s| s.task.is_none() && s.path.is_empty() && s.zone.is_none());
+            if idle {
+                self.order_ship(ai, id, order);
+            }
+        }
+    }
+
+    fn order_ship(&mut self, ai: &Computer, id: u32, order: FleetOrder) {
+        let t = TILE_SIZE as f32;
+        let world = |(x, y, w, h): Cells| {
+            (
+                (x as f32 * t, y as f32 * t),
+                ((x + w) as f32 * t, (y + h) as f32 * t),
+            )
+        };
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        let merchant = self.objects[i]
+            .ship
+            .as_ref()
+            .is_some_and(|s| crate::objects::cargo_capacity(s.kind) > 0.0);
+        match order {
+            FleetOrder::Gather(area, res) => {
+                if merchant {
+                    let (a, b) = world(area);
+                    let _ = self.order_gather_zone(id, a, b, res);
+                }
+            }
+            FleetOrder::Guard(area) | FleetOrder::Attack(area) => {
+                let (a, b) = world(area);
+                let attack = matches!(order, FleetOrder::Attack(_));
+                if self.order_zone(id, a, b, attack).is_err() {
+                    let (cx, cy) = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+                    self.order_move(id, cx, cy);
+                }
+            }
+            FleetOrder::Move((x, y)) => {
+                self.order_move(id, x as f32 * t + t / 2.0, y as f32 * t + t / 2.0);
+            }
+            FleetOrder::Dock => {
+                let dock = self
+                    .objects
+                    .iter()
+                    .find(|o| {
+                        o.owner == Some(ai.owner)
+                            && o.class == ObjectClass::Building(DOCK)
+                            && self.construction_at(o.id).is_none()
+                    })
+                    .map(|o| o.id);
+                if let Some(d) = dock {
+                    let _ = self.order_repair(id, d);
+                }
+            }
+            FleetOrder::Found(..) | FleetOrder::None => {}
+        }
+    }
+
+    /// The flotilla's order's report (the navy's query): `DONE` when it
+    /// is over (a move arrived, an attacked area cleared, a founding ship
+    /// done, the ships mended).
+    fn report(&self, ai: &Computer, f: usize) -> Option<u32> {
+        let fl = &ai.flotillas[f];
+        let ships = || fl.ships.iter().filter_map(|&id| self.object_index(id));
+        let done = match fl.order {
+            FleetOrder::None => true,
+            FleetOrder::Move(_) => ships().all(|i| {
+                self.objects[i]
+                    .ship
+                    .as_ref()
+                    .is_none_or(|s| s.path.is_empty())
+            }),
+            FleetOrder::Attack(area) => fl.ships.is_empty() || self.strength_in(ai.owner, area) < 0,
+            FleetOrder::Found(ship, cell, _) => {
+                !fl.ships.contains(&ship)
+                    || self.building_at(cell) && {
+                        let i = self.object_index(ship);
+                        i.is_none_or(|i| {
+                            !matches!(
+                                self.objects[i].ship.as_ref().and_then(|s| s.task),
+                                Some(Task::Found { .. })
+                            )
+                        })
+                    }
+            }
+            FleetOrder::Dock => ships().all(|i| {
+                self.objects[i]
+                    .combat
+                    .as_ref()
+                    .is_none_or(|c| c.hull >= c.max_hull)
+                    && !matches!(
+                        self.objects[i].ship.as_ref().and_then(|s| s.task),
+                        Some(Task::Repair { .. })
+                    )
+            }),
+            FleetOrder::Gather(..) | FleetOrder::Guard(_) => false,
+        };
+        done.then_some(DONE)
+    }
+}
+
+impl Computer {
+    /// Picks an index by weight (0x488540).
+    fn pick(&mut self, weights: &[i32]) -> usize {
+        if weights.len() == 1 {
+            return 0;
+        }
+        let total: i32 = weights.iter().sum();
+        let r = (self.rng.next() % (total.max(0) as u32 + 1)) as i32;
+        let mut acc = 0;
+        for (k, &w) in weights.iter().enumerate() {
+            acc += w;
+            if r <= acc {
+                return k;
+            }
+        }
+        0
+    }
+
+    /// Whether no flotilla wants ships of type `kind` and the reserve has
+    /// none (0x4867e0, for boats and merchants).
+    fn nobody_wants(&self, kind: u8) -> bool {
+        if kind > 1 {
+            return false;
+        }
+        !self.flotillas.iter().any(|f| {
+            self.wants_of(f.role)
+                .iter()
+                .flat_map(|g| g.iter())
+                .any(|w| w.0 == kind)
+        })
+    }
+
+    /// The flotilla of the last base a reserve ship nobody wants goes to
+    /// (0x47fd50): boats and merchants to the gatherers, bombers and
+    /// rammers to the guards, royal ships and boarders to the raiders,
+    /// killers and fire ships to the defence or the raiders, quick lime
+    /// ships and ships of the dead to the guards or the raiders.
+    fn fleet_by_type(&mut self, kind: u8) -> Option<usize> {
+        let f = match kind {
+            0 | 1 => {
+                if self.rng.next() & 1 != 0 {
+                    self.by_role[FISH as usize]
+                } else {
+                    self.by_role[AMBER as usize]
+                }
+            }
+            2 | 4 => self.by_role[RAIDERS as usize],
+            3 | 5 => self.by_role[GUARD as usize],
+            6 | 7 | 8 | 10 => {
+                if self.rng.next() & 1 == 0 {
+                    self.by_role[DEFENCE as usize]
+                } else {
+                    self.by_role[RAIDERS as usize]
+                }
+            }
+            9 | 11 => {
+                if self.rng.next() & 1 != 0 {
+                    self.by_role[GUARD as usize]
+                } else {
+                    self.by_role[RAIDERS as usize]
+                }
+            }
+            _ => return None,
+        };
+        (f < self.flotillas.len()).then_some(f)
+    }
+
+    /// The flotilla a ship it starts with goes to without a request
+    /// (0x484170): boats and merchants to the gatherers, bombers to the
+    /// guards or the fleet, royal ships, boarders and rammers to the
+    /// defence or the raiders, the rest to a flotilla picked at random.
+    fn fleet_for_type(&mut self, kind: u8) -> Option<usize> {
+        let of = |roles: &[u8], s: &Self| -> Vec<usize> {
+            (0..s.flotillas.len())
+                .filter(|&k| roles.contains(&s.flotillas[k].role))
+                .collect()
+        };
+        let pool = match kind {
+            0 | 1 => of(&[AMBER, FISH], self),
+            2 | 4 | 5 => of(&[DEFENCE, RAIDERS], self),
+            3 => of(&[GUARD, FLEET], self),
+            _ => {
+                let n = self.flotillas.len() as u32;
+                if n < 4 {
+                    return Some(2.min(self.flotillas.len().saturating_sub(1)));
+                }
+                return Some((self.roll(n - 2) + 2) as usize);
+            }
+        };
+        if pool.is_empty() {
+            return None;
+        }
+        let k = if pool.len() > 1 {
+            self.roll(pool.len() as u32) as usize
+        } else {
+            0
+        };
+        Some(pool[k])
+    }
+}
+
+/// How a part of a town's order went this pass.
+enum PartStep {
+    Done,
+    /// Ordered; the count of buildings before.
+    Started(usize),
+    /// Not yet: a pass less to try.
+    Wait,
+    /// Waiting for the price, as long as it takes (the town's refusals
+    /// -1 to -3 with the order's flags 1, 2, 4: 0x428a70).
+    Hold,
+    Failed,
+}
+
+/// The resource of an original resource class.
+fn resource(class: i32) -> Resource {
+    match class {
+        AMBER_CLASS => Resource::Amber,
+        WHALE_CLASS => Resource::Leviathan,
+        _ => Resource::Fish,
+    }
+}
+
+/// The upgrade of a study number (0x42a860), if ported.
+fn study(n: u8, _nation: u32) -> Option<Upgrade> {
+    Some(match n {
+        1 => Upgrade::Weapons,
+        2 => Upgrade::Ram,
+        3 => Upgrade::Armour,
+        17 => Upgrade::Speed,
+        18 => Upgrade::Reach(0),
+        19 => Upgrade::Arms(0),
+        20 => Upgrade::Rate(0),
+        21 => Upgrade::Reach(1),
+        22 => Upgrade::Arms(1),
+        23 => Upgrade::Rate(1),
+        24 => Upgrade::Reach(2),
+        25 => Upgrade::Arms(2),
+        26 => Upgrade::Rate(2),
+        35..=38 => Upgrade::Special(n - 35),
+        _ => return None,
+    })
+}
+
+/// The parts of a town's order (the land fleet's table at 0x5ac7c8, each
+/// part 0xcc bytes: operation, flags (0x20 "once"), class or number,
+/// field 20 what it waits for).
+fn order_parts(code: u32) -> Vec<(Op, bool, After)> {
+    use After::{All, Nothing, Part};
+    use Op::{Build, Ship, Study, Upgrade as Up};
+    match code {
+        2 => vec![
+            (Build(PORT), true, Nothing),
+            (Build(WORKSHOP), true, All),
+            (Build(SHIPYARD), true, All),
+            (Build(SMITHY), true, All),
+            (Up(SETTLEMENT), true, All),
+            (Up(SHIPYARD), true, Part(4)),
+            (Build(SCHOOL), true, Part(5)),
+        ],
+        3 => vec![
+            (Build(TEMPLE_OF_THE_SEA), true, Nothing),
+            (Build(TEMPLE_OF_WAR), true, Nothing),
+        ],
+        48 => vec![(Build(0x35), false, Nothing)],
+        50 => vec![(Build(0x34), false, Nothing)],
+        52 => vec![(Build(0x36), false, Nothing)],
+        0x50..=0x5b => vec![(Ship((code - 0x50) as u8), false, Nothing)],
+        0x5c => vec![(Ship(0), false, Nothing)],
+        96 => vec![(Op::Other, false, Nothing)],
+        97 => vec![(Build(PORT), false, Nothing)],
+        98 => vec![
+            (Build(SHIPYARD), false, Nothing),
+            (Up(SHIPYARD), false, All),
+        ],
+        0x73 => vec![(Study(35), true, Nothing), (Study(36), true, All)],
+        0x74 => vec![(Study(37), true, Nothing), (Study(38), true, All)],
+        117 => vec![(Study(33), true, Nothing), (Study(34), true, Nothing)],
+        118 => vec![(Study(1), true, Nothing)],
+        119 => vec![(Study(2), true, Nothing), (Study(2), true, All)],
+        120 => vec![(Study(3), true, Nothing), (Study(3), true, All)],
+        128 => vec![(Study(18), true, Nothing), (Study(19), true, All)],
+        129 => vec![
+            (Study(21), true, Nothing),
+            (Study(22), true, All),
+            (Study(23), true, All),
+        ],
+        130 => vec![
+            (Study(24), true, Nothing),
+            (Study(25), true, All),
+            (Study(26), true, All),
+        ],
+        131 => vec![
+            (Study(30), true, Nothing),
+            (Study(31), true, All),
+            (Study(32), true, All),
+        ],
+        132 => vec![
+            (Study(27), true, Nothing),
+            (Study(28), true, All),
+            (Study(29), true, All),
+        ],
+        133 => vec![(Study(17), true, Nothing)],
+        _ => Vec::new(),
+    }
+}
+
+// The base building scripts (0x47faf0): town orders in turn. Easy
+// 0x5b6d90 (first base) and 0x5b6f30, normal 0x5b7de0 and 0x5b7f70, hard
+// 0x5b9330 and 0x5b94d0; after a full round 0x5b6fe0.
+// Each entry 16 bytes: the order, 0, a weight, 1; the order's priority is
+// 22767 + weight + 1, and 100 more for order 2 (0x47d2e0).
+const SCRIPT_0: &[(u32, i32)] = &[
+    (2, 40),
+    (96, 40),
+    (50, 40),
+    (118, 40),
+    (48, 40),
+    (52, 40),
+    (119, 40),
+    (52, 40),
+    (120, 40),
+    (97, 40),
+    (98, 40),
+    (130, 40),
+    (129, 40),
+    (131, 40),
+    (132, 40),
+    (128, 40),
+    (134, 40),
+    (3, 40),
+    (52, 40),
+    (117, 40),
+    (130, 10),
+    (129, 10),
+    (131, 10),
+    (132, 10),
+    (128, 10),
+];
+const SCRIPT_0B: &[(u32, i32)] = &[
+    (2, 40),
+    (96, 40),
+    (52, 40),
+    (52, 40),
+    (52, 40),
+    (97, 40),
+    (52, 40),
+    (52, 40),
+    (3, 40),
+    (98, 40),
+];
+const SCRIPT_1: &[(u32, i32)] = &[
+    (2, 40),
+    (96, 40),
+    (118, 40),
+    (119, 40),
+    (120, 40),
+    (134, 40),
+    (48, 22),
+    (52, 22),
+    (98, 40),
+    (97, 40),
+    (130, 18),
+    (129, 18),
+    (131, 18),
+    (132, 18),
+    (128, 18),
+    (3, 18),
+    (117, 18),
+    (48, 10),
+    (52, 10),
+    (130, 10),
+    (129, 10),
+    (131, 10),
+    (132, 10),
+    (128, 10),
+];
+const SCRIPT_1B: &[(u32, i32)] = SCRIPT_0B;
+const SCRIPT_2: &[(u32, i32)] = &[
+    (2, 40),
+    (96, 40),
+    (118, 40),
+    (50, 40),
+    (97, 40),
+    (3, 40),
+    (117, 40),
+    (98, 40),
+    (119, 40),
+    (48, 40),
+    (134, 80),
+    (52, 40),
+    (120, 40),
+    (52, 40),
+    (130, 40),
+    (131, 40),
+    (129, 40),
+    (132, 40),
+    (128, 40),
+    (52, 40),
+    (130, 40),
+    (131, 40),
+    (129, 40),
+    (132, 40),
+    (128, 40),
+];
+const SCRIPT_2B: &[(u32, i32)] = SCRIPT_0B;
+const SCRIPT_AGAIN: &[(u32, i32)] = &[(2, 40), (96, 40), (52, 40), (48, 40)];
+
+// The want tables (0x5b5fa0 and the others; see `Computer::wants_of`):
+// groups of alternatives (ship type, how many, flag, priority).
+const GATHERERS: &[&[Want]] = &[&[(1, 1, 0, 45)], &[(0, 1, 0, 45)], &[(1, 2, 1, 45)]];
+
+const GUARD_0P: &[&[Want]] = &[
+    &[(2, 1, 0, 34)],
+    &[(2, 2, 0, 34)],
+    &[(2, 3, 0, 34)],
+    &[(4, 1, 0, 34)],
+    &[(4, 2, 0, 34)],
+    &[(5, 1, 0, 34)],
+    &[(5, 2, 0, 34)],
+    &[(3, 1, 0, 35)],
+    &[(3, 2, 0, 35)],
+    &[(3, 3, 0, 35)],
+    &[(3, 4, 0, 35)],
+    &[(3, 5, 0, 35)],
+    &[(10, 1, 1, 34)],
+    &[(11, 1, 1, 34)],
+];
+const GUARD_0: &[&[Want]] = &[
+    &[(2, 1, 0, 34)],
+    &[(2, 2, 0, 34)],
+    &[(2, 3, 0, 34)],
+    &[(4, 1, 0, 34)],
+    &[(4, 2, 0, 34)],
+    &[(5, 1, 0, 34)],
+    &[(5, 2, 0, 34)],
+    &[(3, 1, 0, 35)],
+    &[(3, 2, 0, 35)],
+    &[(3, 3, 0, 35)],
+    &[(8, 1, 1, 34)],
+    &[(9, 1, 1, 34)],
+    &[(8, 2, 1, 34)],
+    &[(9, 2, 1, 34)],
+];
+const GUARD_1P: &[&[Want]] = &[
+    &[(2, 1, 0, 34)],
+    &[(2, 2, 0, 34)],
+    &[(4, 1, 0, 34)],
+    &[(4, 2, 0, 34)],
+    &[(5, 1, 0, 34)],
+    &[(3, 1, 0, 35)],
+    &[(3, 2, 0, 35)],
+    &[(3, 3, 0, 35)],
+    &[(3, 4, 0, 35)],
+    &[(10, 1, 1, 34)],
+    &[(11, 1, 1, 34)],
+    &[(3, 5, 1, 34)],
+    &[(3, 6, 1, 34)],
+];
+const GUARD_1: &[&[Want]] = &[
+    &[(2, 1, 0, 34)],
+    &[(2, 2, 0, 34)],
+    &[(4, 1, 0, 34)],
+    &[(4, 2, 0, 34)],
+    &[(5, 1, 0, 34)],
+    &[(3, 1, 0, 35)],
+    &[(3, 2, 0, 35)],
+    &[(3, 3, 0, 35)],
+    &[(3, 4, 0, 35)],
+    &[(8, 1, 1, 34)],
+    &[(9, 1, 1, 34)],
+    &[(8, 2, 1, 34)],
+    &[(9, 2, 1, 34)],
+];
+const GUARD_2P: &[&[Want]] = &[
+    &[(10, 1, 0, 34), (3, 1, 0, 34), (6, 1, 0, 34)],
+    &[(11, 1, 0, 34), (3, 2, 0, 34), (7, 1, 0, 34)],
+    &[(2, 1, 0, 34)],
+    &[(2, 2, 0, 34)],
+    &[(4, 1, 0, 34)],
+    &[(11, 2, 0, 34), (4, 2, 0, 34)],
+    &[(10, 2, 0, 34), (5, 1, 0, 34)],
+    &[(3, 3, 0, 34), (5, 2, 0, 34)],
+    &[(3, 4, 0, 34), (2, 3, 0, 40)],
+    &[(3, 5, 0, 34), (2, 4, 0, 40)],
+    &[(10, 3, 1, 34)],
+    &[(11, 3, 1, 34)],
+    &[(3, 6, 0, 34)],
+    &[(3, 7, 0, 34)],
+];
+const GUARD_2: &[&[Want]] = &[
+    &[(8, 1, 0, 34), (3, 1, 0, 34), (6, 1, 0, 34)],
+    &[(9, 1, 0, 34), (3, 2, 0, 34), (7, 1, 0, 34)],
+    &[(2, 1, 0, 34)],
+    &[(2, 2, 0, 34)],
+    &[(4, 1, 0, 34)],
+    &[(9, 2, 0, 34), (4, 2, 0, 34)],
+    &[(8, 2, 0, 34), (5, 1, 0, 34)],
+    &[(3, 3, 0, 34), (5, 2, 0, 34)],
+    &[(3, 4, 0, 34), (2, 3, 0, 40)],
+    &[(3, 5, 0, 34), (2, 4, 0, 40)],
+    &[(8, 3, 1, 34)],
+    &[(9, 3, 1, 34)],
+    &[(8, 4, 1, 34)],
+    &[(9, 4, 1, 34)],
+];
+
+const DEFENCE_0: &[&[Want]] = &[
+    &[(6, 1, 0, 36)],
+    &[(7, 1, 0, 36)],
+    &[(4, 1, 0, 35)],
+    &[(4, 2, 0, 35)],
+    &[(5, 1, 0, 35)],
+    &[(5, 2, 0, 35)],
+    &[(2, 1, 0, 35)],
+    &[(2, 2, 0, 35)],
+    &[(8, 1, 1, 35)],
+    &[(10, 1, 1, 35)],
+    &[(9, 1, 1, 35)],
+    &[(11, 1, 1, 35)],
+];
+const DEFENCE_1: &[&[Want]] = &[
+    &[(6, 1, 0, 35)],
+    &[(7, 1, 0, 35)],
+    &[(4, 1, 0, 35)],
+    &[(4, 2, 0, 35)],
+    &[(5, 1, 0, 35)],
+    &[(2, 1, 0, 35)],
+    &[(2, 2, 0, 35)],
+    &[(2, 3, 0, 35)],
+    &[(8, 1, 1, 35)],
+    &[(10, 1, 1, 35)],
+    &[(9, 1, 1, 35)],
+    &[(11, 1, 1, 35)],
+];
+const DEFENCE_2: &[&[Want]] = &[
+    &[(10, 1, 0, 35), (8, 1, 0, 35), (6, 1, 0, 35)],
+    &[(11, 1, 0, 35), (9, 1, 0, 35), (7, 1, 0, 35)],
+    &[(4, 1, 0, 35)],
+    &[(11, 2, 0, 35), (9, 2, 0, 35), (4, 2, 0, 35)],
+    &[(5, 1, 0, 35)],
+    &[(10, 2, 0, 35), (8, 2, 0, 35), (5, 2, 0, 35)],
+    &[(2, 1, 0, 35)],
+    &[(2, 2, 0, 35)],
+    &[(8, 3, 1, 35)],
+    &[(10, 3, 1, 35)],
+    &[(9, 3, 1, 35)],
+    &[(11, 3, 1, 35)],
+];
+
+const BUILDERS_0: &[&[Want]] = &[
+    &[(1, 1, 0, 25)],
+    &[(7, 1, 0, 24)],
+    &[(8, 1, 1, 24)],
+    &[(10, 1, 1, 24)],
+];
+const BUILDERS_1: &[&[Want]] = &[
+    &[(1, 1, 0, 25)],
+    &[(6, 1, 0, 24)],
+    &[(8, 1, 1, 24)],
+    &[(10, 1, 1, 24)],
+];
+const BUILDERS_2: &[&[Want]] = &[
+    &[(1, 1, 0, 25)],
+    &[(10, 1, 0, 24), (8, 1, 0, 24), (7, 1, 0, 24)],
+    &[(2, 1, 1, 24)],
+    &[(2, 2, 1, 24)],
+];
+
+const RAIDERS_0P: &[&[Want]] = &[
+    &[(6, 1, 0, 20)],
+    &[(7, 1, 0, 20)],
+    &[(4, 1, 0, 20)],
+    &[(5, 1, 0, 20)],
+    &[(2, 1, 0, 20)],
+    &[(2, 2, 0, 20)],
+    &[(2, 3, 0, 20)],
+    &[(2, 4, 0, 20)],
+    &[(3, 1, 0, 21)],
+    &[(3, 2, 0, 21)],
+    &[(10, 1, 1, 20)],
+    &[(3, 3, 0, 21)],
+    &[(11, 1, 1, 20)],
+    &[(3, 4, 0, 21)],
+];
+const RAIDERS_0: &[&[Want]] = &[
+    &[(6, 1, 0, 20)],
+    &[(7, 1, 0, 20)],
+    &[(4, 1, 0, 20)],
+    &[(5, 1, 0, 20)],
+    &[(2, 1, 0, 20)],
+    &[(2, 2, 0, 20)],
+    &[(2, 3, 0, 20)],
+    &[(2, 4, 0, 20)],
+    &[(3, 1, 0, 21)],
+    &[(3, 2, 0, 21)],
+    &[(8, 1, 1, 20)],
+    &[(8, 2, 1, 20)],
+    &[(9, 1, 1, 20)],
+    &[(9, 2, 1, 20)],
+];
+const RAIDERS_1P: &[&[Want]] = &[
+    &[(4, 1, 0, 20)],
+    &[(5, 1, 0, 20)],
+    &[(2, 1, 0, 20)],
+    &[(2, 2, 0, 20)],
+    &[(2, 3, 0, 20)],
+    &[(2, 4, 0, 20)],
+    &[(3, 1, 0, 20)],
+    &[(3, 2, 0, 20)],
+    &[(10, 1, 1, 20)],
+    &[(3, 4, 0, 21)],
+    &[(11, 1, 1, 20)],
+    &[(3, 4, 0, 21)],
+];
+const RAIDERS_1: &[&[Want]] = &[
+    &[(4, 1, 0, 20)],
+    &[(5, 1, 0, 20)],
+    &[(2, 1, 0, 20)],
+    &[(2, 2, 0, 20)],
+    &[(2, 3, 0, 20)],
+    &[(2, 4, 0, 20)],
+    &[(3, 1, 0, 20)],
+    &[(3, 2, 0, 20)],
+    &[(8, 1, 1, 20)],
+    &[(8, 2, 1, 20)],
+    &[(9, 1, 1, 20)],
+    &[(9, 2, 1, 20)],
+];
+const RAIDERS_2P: &[&[Want]] = &[
+    &[(10, 1, 0, 20), (3, 1, 0, 20), (6, 1, 0, 20)],
+    &[(11, 1, 0, 20), (3, 2, 0, 20), (7, 1, 0, 20)],
+    &[(4, 1, 0, 20)],
+    &[(5, 1, 0, 20), (6, 2, 0, 20)],
+    &[(2, 1, 0, 20), (4, 2, 0, 20), (6, 3, 0, 20)],
+    &[(2, 2, 0, 20), (6, 4, 0, 20)],
+    &[(2, 3, 0, 20), (4, 3, 0, 20), (7, 2, 0, 20)],
+    &[(2, 4, 0, 20), (7, 3, 0, 20)],
+    &[(3, 3, 0, 20)],
+    &[(3, 4, 0, 20)],
+    &[(10, 2, 1, 20)],
+    &[(3, 5, 0, 20)],
+    &[(11, 2, 1, 20)],
+    &[(3, 6, 0, 20)],
+];
+const RAIDERS_2: &[&[Want]] = &[
+    &[(8, 1, 0, 20), (3, 1, 0, 20), (6, 1, 0, 20)],
+    &[(9, 1, 0, 20), (3, 2, 0, 20), (7, 1, 0, 20)],
+    &[(4, 1, 0, 20)],
+    &[(5, 1, 0, 20), (6, 2, 0, 20)],
+    &[(2, 1, 0, 20), (4, 2, 0, 20), (6, 3, 0, 20)],
+    &[(2, 2, 0, 20), (6, 4, 0, 20)],
+    &[(2, 3, 0, 20), (4, 3, 0, 20), (7, 2, 0, 20)],
+    &[(2, 4, 0, 20), (7, 3, 0, 20)],
+    &[(3, 3, 0, 20)],
+    &[(3, 4, 0, 20)],
+    &[(8, 2, 1, 20)],
+    &[(8, 3, 1, 20)],
+    &[(9, 2, 1, 20)],
+    &[(9, 3, 1, 20)],
+];
+
+const FLEET_0P: &[&[Want]] = &[
+    &[(2, 1, 0, 15)],
+    &[(2, 2, 0, 15)],
+    &[(4, 1, 0, 15)],
+    &[(4, 2, 0, 15)],
+    &[(5, 1, 0, 15)],
+    &[(5, 2, 0, 15)],
+    &[(3, 1, 0, 15)],
+    &[(3, 2, 0, 15)],
+    &[(3, 3, 0, 15)],
+    &[(3, 4, 0, 15)],
+    &[(10, 1, 1, 10)],
+    &[(10, 2, 1, 10)],
+    &[(3, 5, 0, 11)],
+    &[(11, 1, 1, 10)],
+    &[(3, 6, 1, 10)],
+    &[(3, 7, 0, 11)],
+];
+const FLEET_0: &[&[Want]] = &[
+    &[(2, 1, 0, 15)],
+    &[(2, 2, 0, 15)],
+    &[(4, 1, 0, 15)],
+    &[(4, 2, 0, 15)],
+    &[(5, 1, 0, 15)],
+    &[(5, 2, 0, 15)],
+    &[(3, 1, 0, 15)],
+    &[(3, 2, 0, 15)],
+    &[(3, 3, 0, 15)],
+    &[(3, 4, 0, 15)],
+    &[(8, 1, 1, 10)],
+    &[(8, 2, 1, 10)],
+    &[(3, 5, 0, 11)],
+    &[(9, 1, 1, 10)],
+    &[(9, 2, 1, 10)],
+    &[(3, 6, 0, 11)],
+];
+const FLEET_1P: &[&[Want]] = &[
+    &[(2, 1, 0, 15)],
+    &[(2, 2, 0, 15)],
+    &[(2, 3, 0, 15)],
+    &[(4, 1, 0, 15)],
+    &[(4, 2, 0, 15)],
+    &[(5, 1, 0, 15)],
+    &[(5, 2, 0, 15)],
+    &[(3, 1, 0, 15)],
+    &[(3, 2, 0, 15)],
+    &[(3, 3, 0, 15)],
+    &[(3, 4, 0, 15)],
+    &[(3, 5, 0, 15)],
+    &[(10, 1, 1, 10)],
+    &[(10, 2, 1, 10)],
+    &[(3, 6, 0, 15)],
+    &[(11, 1, 1, 10)],
+    &[(3, 7, 0, 15)],
+    &[(3, 8, 0, 15)],
+];
+const FLEET_1: &[&[Want]] = &[
+    &[(2, 1, 0, 15)],
+    &[(2, 2, 0, 15)],
+    &[(2, 3, 0, 15)],
+    &[(4, 1, 0, 15)],
+    &[(4, 2, 0, 15)],
+    &[(5, 1, 0, 15)],
+    &[(5, 2, 0, 15)],
+    &[(3, 1, 0, 15)],
+    &[(3, 2, 0, 15)],
+    &[(3, 3, 0, 15)],
+    &[(3, 4, 0, 15)],
+    &[(3, 5, 0, 15)],
+    &[(8, 1, 1, 10)],
+    &[(8, 2, 1, 10)],
+    &[(3, 6, 0, 15)],
+    &[(9, 1, 1, 10)],
+    &[(9, 2, 1, 10)],
+    &[(3, 7, 0, 15)],
+];
+const FLEET_2P: &[&[Want]] = &[
+    &[(10, 1, 0, 15), (3, 1, 0, 15), (6, 1, 0, 15)],
+    &[(10, 2, 0, 15), (3, 2, 0, 15), (6, 2, 0, 15)],
+    &[(11, 1, 0, 15), (3, 3, 0, 15), (7, 1, 0, 15)],
+    &[(11, 2, 0, 15), (3, 4, 0, 15), (7, 2, 0, 15)],
+    &[(2, 1, 0, 15)],
+    &[(2, 2, 0, 15)],
+    &[(4, 1, 0, 15)],
+    &[(3, 5, 0, 15), (4, 2, 0, 15)],
+    &[(5, 1, 0, 15)],
+    &[(3, 6, 0, 15), (5, 2, 0, 15)],
+    &[(3, 7, 0, 15)],
+    &[(3, 8, 0, 15)],
+    &[(3, 9, 0, 10)],
+    &[(10, 3, 1, 10)],
+    &[(10, 4, 1, 10)],
+    &[(3, 10, 0, 10)],
+    &[(3, 11, 0, 10)],
+    &[(11, 3, 1, 10)],
+    &[(3, 12, 0, 10)],
+    &[(3, 13, 0, 10)],
+];
+const FLEET_2: &[&[Want]] = &[
+    &[(8, 1, 0, 15), (3, 1, 0, 15), (6, 1, 0, 15)],
+    &[(8, 2, 0, 15), (3, 2, 0, 15), (6, 2, 0, 15)],
+    &[(9, 1, 0, 15), (3, 3, 0, 15), (7, 1, 0, 15)],
+    &[(9, 2, 0, 15), (3, 4, 0, 15), (7, 2, 0, 15)],
+    &[(2, 1, 0, 15)],
+    &[(2, 2, 0, 15)],
+    &[(4, 1, 0, 15)],
+    &[(3, 5, 0, 15), (4, 2, 0, 15)],
+    &[(5, 1, 0, 15)],
+    &[(3, 6, 0, 15), (5, 2, 0, 15)],
+    &[(3, 7, 0, 15)],
+    &[(3, 8, 0, 15)],
+    &[(8, 3, 1, 10)],
+    &[(8, 4, 1, 10)],
+    &[(3, 9, 0, 10)],
+    &[(9, 3, 1, 10)],
+    &[(9, 4, 1, 10)],
+    &[(3, 10, 0, 10)],
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::GameData;
+
+    fn data() -> Option<GameData> {
+        let root = std::env::var_os("OPENCONQUEST_DATA")?;
+        Some(GameData::open(std::path::Path::new(&root)).unwrap())
+    }
+
+    /// Runs `mission` for `minutes` of game time; prints what each computer
+    /// player has.
+    fn play(data: &GameData, mission: &str, minutes: u32) -> Scene {
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(data, &mut caches, mission).unwrap();
+        let steps = minutes * 60 * 10;
+        for k in 0..steps {
+            scene.update(0.1, data, &mut caches);
+            if k % 1500 == 1499 {
+                report(&scene, k / 600 + 1);
+            }
+        }
+        scene
+    }
+
+    fn report(scene: &Scene, minute: u32) {
+        for ai in &scene.computers.players {
+            let mut ships = [0; 12];
+            let mut b = std::collections::BTreeMap::new();
+            for o in scene.objects.iter().filter(|o| o.owner == Some(ai.owner)) {
+                if let Some(s) = &o.ship {
+                    ships[s.kind as usize] += 1;
+                }
+                if let ObjectClass::Building(c) = o.class {
+                    *b.entry(c).or_insert(0) += 1;
+                }
+            }
+            let tasks: Vec<String> = ai
+                .flotillas
+                .iter()
+                .map(|f| format!("{}:{}/{}x{}", f.role, f.task, f.state, f.ships.len()))
+                .collect();
+            println!(
+                "min {minute} {:?} funds {:?} ships {ships:?} bld {b:x?} enemy {:?} {}",
+                ai.owner,
+                scene.funds(ai.owner),
+                ai.enemy,
+                tasks.join(" ")
+            );
+            if std::env::var_os("AI_DEBUG").is_some() {
+                for f in &ai.flotillas {
+                    for &id in &f.ships {
+                        let Some(i) = scene.object_index(id) else {
+                            continue;
+                        };
+                        let o = &scene.objects[i];
+                        let Some(s) = o.ship.as_ref() else {
+                            continue;
+                        };
+                        println!(
+                            "   role {} ship {} kind {} at ({:.0},{:.0}) task {:?} zone {:?} cargo {:.1} {:?} path {}",
+                            f.role,
+                            id,
+                            s.kind,
+                            o.x / 64.0,
+                            o.y / 64.0,
+                            s.task,
+                            s.zone,
+                            s.cargo,
+                            s.cargo_kind,
+                            s.path.len()
+                        );
+                    }
+                }
+                if std::env::var_os("AI_MAP").is_some() {
+                    let (w, h) = scene.map_cells();
+                    for y in 0..h.min(30) {
+                        let mut line = String::from("   ");
+                        for x in 0..w.min(60) {
+                            let mut c = if scene.nav.is_water(x, y) { '.' } else { '#' };
+                            for (i, o) in scene.objects.iter().enumerate() {
+                                if o.combat.is_none() {
+                                    continue;
+                                }
+                                if scene.cell_of(i) == (x, y) {
+                                    c = match (&o.ship, o.owner == Some(ai.owner)) {
+                                        (Some(_), true) => 's',
+                                        (Some(_), false) => 'e',
+                                        (None, true) => 'B',
+                                        (None, false) => 'X',
+                                    };
+                                }
+                            }
+                            line.push(c);
+                        }
+                        println!("{line}");
+                    }
+                }
+                println!(
+                    "   commander clocks {:?} levels {:?} outcome {:?} orders {}",
+                    ai.flotillas[ai.commander].clocks,
+                    scene.levels_of(Some(ai.owner)),
+                    scene.outcome,
+                    ai.orders.iter().filter(|o| o.result == 0).count()
+                );
+            }
+        }
+    }
+
+    /// Prints what the computer players do (`AI_MISSION`, `AI_MINUTES`;
+    /// `AI_DEBUG` for every ship, `AI_MAP` for a map).
+    #[test]
+    #[ignore]
+    fn probe() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mission = std::env::var("AI_MISSION").unwrap_or("battle01".into());
+        let minutes = std::env::var("AI_MINUTES").map_or(30, |m| m.parse().unwrap());
+        play(&data, &mission, minutes);
+    }
+
+    /// What the scene looks like, to compare two runs.
+    type Print = Vec<(u32, i64, i64, Option<(u32, u32)>)>;
+
+    fn fingerprint(scene: &Scene) -> Print {
+        let mut v: Vec<_> = scene
+            .objects
+            .iter()
+            .map(|o| (o.id, (o.x * 16.0) as i64, (o.y * 16.0) as i64, o.owner))
+            .collect();
+        v.sort();
+        for ai in &scene.computers.players {
+            let (a, f) = scene.funds(ai.owner);
+            v.push((u32::MAX, a as i64, f as i64, Some(ai.owner)));
+        }
+        v
+    }
+
+    /// In battle01 the computer player (normal) builds its town up, fills
+    /// its flotillas with ships, gathers amber and fish, and in the end
+    /// sails against the human player, who (doing nothing) loses.
+    #[test]
+    fn computer_builds_gathers_and_attacks() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let mut unloaded = false;
+        let mut attacked = false;
+        let mut defeat_at = None;
+        // 25 minutes of game time.
+        for k in 0..25 * 60 * 10 {
+            scene.update(0.1, &data, &mut caches);
+            let ai = &scene.computers.players[0];
+            if k % 5 == 0 {
+                unloaded |= scene.objects.iter().any(|o| {
+                    o.owner == Some(ai.owner)
+                        && matches!(
+                            o.ship.as_ref().and_then(|s| s.task),
+                            Some(Task::Gather {
+                                phase: crate::objects::GatherPhase::Unloading(_),
+                                ..
+                            })
+                        )
+                });
+                attacked |= ai.flotillas.iter().any(|f| f.task == 8 && f.state == 0xc);
+            }
+            if k == 5 * 60 * 10 {
+                // Five minutes in: a town with its port and yard, and ships.
+                let owner = ai.owner;
+                let has = |c: u32| {
+                    scene
+                        .objects
+                        .iter()
+                        .any(|o| o.owner == Some(owner) && o.class == ObjectClass::Building(c))
+                };
+                assert!(has(TOWN) && has(PORT) && (has(SHIPYARD) || has(DOCK)));
+                let ships = scene
+                    .objects
+                    .iter()
+                    .filter(|o| o.owner == Some(owner) && o.ship.is_some())
+                    .count();
+                assert!(ships >= 10, "{ships} ships");
+                assert!(ai
+                    .flotillas
+                    .iter()
+                    .any(|f| f.role == AMBER && !f.ships.is_empty()));
+                assert!(ai
+                    .flotillas
+                    .iter()
+                    .any(|f| f.role == FISH && !f.ships.is_empty()));
+            }
+            if defeat_at.is_none() && scene.outcome == Some(super::super::Outcome::Defeat) {
+                defeat_at = Some(k);
+            }
+        }
+        assert!(unloaded, "the computer's merchants never unloaded");
+        assert!(attacked, "the computer never attacked");
+        assert_eq!(
+            scene.computers.players[0].enemy,
+            Some(human.0 * 4 + human.1)
+        );
+        assert!(defeat_at.is_some(), "the human player still stands");
+    }
+
+    /// Two runs of a mission with two computer players are the same (so
+    /// the machines of a multiplayer game agree), and a saved game keeps
+    /// the computer players.
+    #[test]
+    fn computers_are_deterministic_and_saved() {
+        let Some(data) = data() else {
+            return;
+        };
+        let run = || {
+            let mut caches = Caches::default();
+            let mut scene = Scene::load(&data, &mut caches, "battle05").unwrap();
+            for _ in 0..4 * 60 * 10 {
+                scene.update(0.1, &data, &mut caches);
+            }
+            scene
+        };
+        let (a, b) = (run(), run());
+        assert_eq!(a.computers.players.len(), 2);
+        assert_eq!(fingerprint(&a), fingerprint(&b));
+        let mut caches = Caches::default();
+        let restored = Scene::restore(&data, &mut caches, &a.save()).unwrap();
+        assert_eq!(restored.computers.players.len(), 2);
+        for (x, y) in restored.computers.players.iter().zip(&a.computers.players) {
+            assert_eq!(x.flotillas.len(), y.flotillas.len());
+            assert_eq!(x.enemy, y.enemy);
+        }
+    }
+
+    /// The campaign's computer players are the brains', not these.
+    #[test]
+    fn campaign_has_no_computer_players() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+        scene.update(0.5, &data, &mut caches);
+        assert!(scene.computers.players.is_empty());
+    }
+}
