@@ -37,9 +37,6 @@ const MINIMAP_POS: (u32, u32) = (4, 4);
 const OBJECT_PANEL_POS: (u32, u32) = (3, 206);
 /// The strip above the command buttons (0x4f06f0: y 0x16e).
 const STRIP_Y: u32 = 366;
-/// The object panel's slot grid (measured on the original).
-const SLOTS_ORIGIN: (u32, u32) = (9, 210);
-const SLOT_STEP: (u32, u32) = (48, 51);
 /// Command buttons (0x4f31b0): 4 columns x 3 rows of 49x49 buttons.
 const BUTTON_ORIGIN: (u32, u32) = (2, 403);
 const BUTTON_STEP: (u32, u32) = (51, 52);
@@ -125,6 +122,18 @@ pub struct Interface {
     take_cmd: Vec<Image>,
     /// The object info in the strip below the view.
     info_art: crate::object_info::InfoArt,
+    /// The group panel's and the big slot's pictures (`info_panel`).
+    panel_art: crate::info_panel::InfoArt,
+}
+
+/// The object panel's background: `COBJ_BKMAIN` and the strip for one
+/// object, `CGRP_BKG` for a group of `n`, `COBJ_CLEAR` for none
+/// (`info_panel`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelBack {
+    Object,
+    Group(usize),
+    Clear,
 }
 
 /// Window-space placement of the interface for one window size.
@@ -254,6 +263,7 @@ impl Interface {
                     .with_spacing(0),
             ],
             info_art: crate::object_info::InfoArt::load(data, theme),
+            panel_art: crate::info_panel::InfoArt::load(data, theme),
             arming_box: load("TRIGGER_BKGND", false).ok(),
             arming_tick: data
                 .load_image(&data.controls, &format!("{theme}MARKER"), false)
@@ -300,8 +310,9 @@ impl Interface {
         }
     }
 
-    /// Draws the interface over the (already rendered) world view.
-    pub fn draw(&self, frame: &mut Frame, layout: &Layout) {
+    /// Draws the interface over the (already rendered) world view, the
+    /// object panel's background as `back` says.
+    pub fn draw(&self, frame: &mut Frame, layout: &Layout, back: PanelBack) {
         let s = layout.scale;
         let f = &self.field;
         // Frame: left and right edges as they are, the middle tiled.
@@ -335,16 +346,23 @@ impl Interface {
             my,
             s,
         );
-        let (ox, oy) = at(OBJECT_PANEL_POS);
-        blit_scaled(
-            frame,
-            &self.object_panel,
-            full(&self.object_panel),
-            ox,
-            oy,
-            s,
-        );
-        self.draw_strip(frame, layout, true);
+        match back {
+            PanelBack::Object => {
+                let (ox, oy) = at(OBJECT_PANEL_POS);
+                blit_scaled(
+                    frame,
+                    &self.object_panel,
+                    full(&self.object_panel),
+                    ox,
+                    oy,
+                    s,
+                );
+                self.draw_strip(frame, layout, true);
+            }
+            // No strip with a group (c_ctrl 0x4f06f0) or nothing selected.
+            PanelBack::Group(n) => self.panel_art.draw_group_back(frame, layout.bar_x, s, n),
+            PanelBack::Clear => self.panel_art.draw_clear(frame, layout.bar_x, s),
+        }
         let (mx, my) = self.money_panel_origin(layout);
         blit_scaled(frame, &self.money_panel, full(&self.money_panel), mx, my, s);
         blit_scaled(
@@ -498,26 +516,6 @@ impl Interface {
         )
     }
 
-    /// The command slot under window position `(x, y)`.
-    /// The slot cell (its index in the panel's list) under window position
-    /// `(x, y)`.
-    pub fn slot_cell_at(&self, layout: &Layout, x: f32, y: f32) -> Option<usize> {
-        let s = layout.scale;
-        let (fx, fy) = ((x - layout.bar_x) / s, y / s);
-        let (ox, oy) = (fx - SLOTS_ORIGIN.0 as f32, fy - SLOTS_ORIGIN.1 as f32);
-        if ox < 0.0 || oy < 0.0 {
-            return None;
-        }
-        let (col, row) = (
-            (ox / SLOT_STEP.0 as f32) as u32,
-            (oy / SLOT_STEP.1 as f32) as u32,
-        );
-        if col >= 4 || row >= 3 || ox % SLOT_STEP.0 as f32 >= 47.0 {
-            return None;
-        }
-        (row * 4 + col).checked_sub(1).map(|i| i as usize)
-    }
-
     /// Where the "default arming" checkbox and its caption are clicked:
     /// the box at (7, 371) of the bar, 20 pixels, and the caption after it
     /// (measured on the original).
@@ -560,6 +558,7 @@ impl Interface {
         );
     }
 
+    /// The command slot under window position `(x, y)`.
     pub fn button_at(&self, layout: &Layout, x: f32, y: f32) -> Option<usize> {
         (0..SLOTS).find(|&i| {
             let (bx, by, size) = self.button_rect(layout, i);
@@ -722,25 +721,109 @@ impl Interface {
         }
     }
 
-    /// A ship's slot grid (c_load.cpp): four cells to a row, 48 apart from
-    /// bar (9, 210), rows 51 apart; the first cell is the portrait's.
-    fn draw_slots(
+    /// The selected object's portrait in the object panel's picture slot.
+    fn draw_portrait(
         &self,
         frame: &mut Frame,
         data: &GameData,
         layout: &Layout,
-        cells: &[Option<SlotCell>],
-        chosen: Option<usize>,
+        obj: &crate::objects::MapObject,
     ) {
+        if let Some((name, (px, py))) = &obj.picture {
+            if let Some(img) = self.picture(data, name) {
+                let (sx, sy, _, _) = self.picture_slot(layout);
+                let (ox, oy) = self.picture_slot_offset();
+                blit_scaled(
+                    frame,
+                    &img,
+                    (0, 0, img.width, img.height),
+                    sx + (*px as f32 - ox as f32) * layout.scale,
+                    sy + (*py as f32 - oy as f32) * layout.scale,
+                    layout.scale,
+                );
+            }
+        }
+    }
+
+    /// The object panel's slot cells, or the group's buttons, their slider
+    /// and the cell held down shown big (`info_panel`, c_info.cpp).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_info(
+        &self,
+        frame: &mut Frame,
+        data: &GameData,
+        layout: &Layout,
+        scene: &Scene,
+        shown: &crate::info_panel::Shown,
+        view: &crate::info_panel::InfoView,
+    ) {
+        use crate::info_panel::{self as ip, Hit, Shown};
         let s = layout.scale;
-        for (i, cell) in cells.iter().enumerate() {
-            let Some(cell) = cell else { continue };
-            let n = i as u32 + 1;
-            let (x, y) = (
-                layout.bar_x + (SLOTS_ORIGIN.0 + n % 4 * SLOT_STEP.0) as f32 * s,
-                (SLOTS_ORIGIN.1 + n / 4 * SLOT_STEP.1) as f32 * s,
+        let bx = layout.bar_x;
+        let at = |x: u32, y: u32| (bx + x as f32 * s, y as f32 * s);
+        let mut big = None;
+        match shown {
+            Shown::Clear => {}
+            Shown::Group(ids) => {
+                for (i, x, y) in ip::group_cells(ids.len(), view.scroll) {
+                    let Some(o) = scene.object_index(ids[i]).map(|k| &scene.objects[k]) else {
+                        continue;
+                    };
+                    let portrait = ip::member_portrait(o).and_then(|n| self.picture(data, &n));
+                    self.panel_art.draw_member(
+                        frame,
+                        at(x, y),
+                        s,
+                        portrait.as_deref(),
+                        crate::object_info::life(o),
+                        &self.bar_colours,
+                        view.pressed == Some(Hit::Member(i)),
+                    );
+                }
+            }
+            Shown::Single(id, list) => {
+                let Some(obj) = scene.object_index(*id).map(|k| &scene.objects[k]) else {
+                    return;
+                };
+                let nation3 = obj.owner.is_some_and(|o| o.0 == 3);
+                if ip::list_scroll_back(shown) {
+                    if let Some(img) = &self.load_art.scroll_back[0] {
+                        let (x, y) = at(168, 212);
+                        blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
+                    }
+                }
+                for (i, x, y) in ip::cells(list, view.scroll) {
+                    let e = &list[i];
+                    let cell = SlotCell {
+                        frame: e.frame(nation3),
+                        bar: e.bar,
+                        count: e.count,
+                    };
+                    self.draw_cell(frame, data, layout, at(x, y), &cell, &e.marks(), false);
+                }
+                if let Some(e) = view.big.and_then(|i| list.get(i)) {
+                    let picture = ip::big_picture(e, nation3).and_then(|n| self.picture(data, &n));
+                    let levels = scene.levels_of(scene.human.map(|h| (h.nation, h.slot)));
+                    let text =
+                        ip::describe(&data.strings, e, &levels, ip::treasure_of(scene, obj, e));
+                    big = self.panel_art.big_slot(picture.as_deref(), &text);
+                }
+            }
+        }
+        if let Some((group, scroll, max)) = ip::slider(shown, view) {
+            self.panel_art.draw_slider(
+                frame,
+                bx,
+                s,
+                &self.load_art,
+                group,
+                (scroll, max),
+                view.pressed,
             );
-            self.draw_cell(frame, data, layout, (x, y), cell, &[], chosen == Some(i));
+        }
+        if let Some(img) = big {
+            let (x, y) = at(ip::BIG_SLOT.0, ip::BIG_SLOT.1);
+            blit_scaled(frame, &img, (0, 0, img.width, img.height), x, y, s);
         }
     }
 
@@ -800,7 +883,7 @@ impl Interface {
                 blit_scaled(frame, img, (0, 0, img.width, img.height), x + s, y + s, s);
             }
         }
-        for mark in cell.mark.iter().chain(more_marks) {
+        for mark in more_marks {
             if let Ok(Some(img)) =
                 data.load_image(&data.controls, &format!("COBJ_SSPEC_{mark:02}"), false)
             {
@@ -870,7 +953,6 @@ impl Interface {
                 let cell = SlotCell {
                     frame: e.frame(nation3),
                     bar: e.bar,
-                    mark: None,
                     count: e.count,
                 };
                 self.draw_cell(
@@ -1013,8 +1095,8 @@ pub struct GameView<'a> {
     pub time_ms: u64,
     /// Command slot under the cursor.
     pub hover_button: Option<usize>,
-    /// The panel's slot cell chosen (its index), shown framed.
-    pub chosen_cell: Option<usize>,
+    /// The object panel's state (`info_panel`).
+    pub info: crate::info_panel::InfoView,
     /// Where the player last sent ships (world point) and how many
     /// milliseconds ago.
     pub sent: Option<(f32, f32, u64)>,
@@ -1265,21 +1347,22 @@ impl GameView<'_> {
             .as_ref()
             .is_some_and(|p| Panels::covers_bar(p.tab));
         if let (Some(ui), Some(layout)) = (self.interface, &layout) {
-            ui.draw(frame, layout);
+            let selection: Vec<u32> = self.selected.iter().chain(self.group).copied().collect();
+            let shown = crate::info_panel::shown(self.scene, &selection, &self.info);
+            let reloading_now =
+                selected.is_some_and(|o| reloading_shown(self.load, self.scene, o.id));
+            let back = match &shown {
+                crate::info_panel::Shown::Group(ids) if !reloading_now => {
+                    PanelBack::Group(ids.len())
+                }
+                crate::info_panel::Shown::Clear => PanelBack::Clear,
+                _ => PanelBack::Object,
+            };
+            ui.draw(frame, layout, back);
             if let (Some(obj), false) = (selected, panel_open) {
-                if let Some((name, (px, py))) = &obj.picture {
-                    if let Some(img) = ui.picture(self.data, name) {
-                        let (sx, sy, _, _) = ui.picture_slot(layout);
-                        let (ox, oy) = ui.picture_slot_offset();
-                        blit_scaled(
-                            frame,
-                            &img,
-                            (0, 0, img.width, img.height),
-                            sx + (*px as f32 - ox as f32) * layout.scale,
-                            sy + (*py as f32 - oy as f32) * layout.scale,
-                            layout.scale,
-                        );
-                    }
+                let group = matches!(back, PanelBack::Group(_));
+                if !group {
+                    ui.draw_portrait(frame, self.data, layout, obj);
                 }
                 // Reloading: the load panel takes the slots' and the
                 // buttons' place (0x4fffe0).
@@ -1292,7 +1375,7 @@ impl GameView<'_> {
                         frame, self.data, layout, self.scene, &panel, &view, pressed,
                     );
                 }
-                if reloading_shown(self.load, self.scene, obj.id) {
+                if reloading_now {
                     // Nothing else of the object panel.
                 } else {
                     // Also over a shipyard's or dock's ships (c_ctrl 0x4f4cc0:
@@ -1304,7 +1387,7 @@ impl GameView<'_> {
                                 crate::economy::SHIPYARD | crate::economy::DOCK
                             )
                         );
-                    if self.page != Page::Main || yard && self.scene.is_own(obj) {
+                    if !group && (self.page != Page::Main || yard && self.scene.is_own(obj)) {
                         ui.draw_strip(frame, layout, false);
                     }
                     if (matches!(self.page, Page::Structures | Page::Ground) || yard)
@@ -1333,16 +1416,11 @@ impl GameView<'_> {
                         self.hover_button,
                         self.time_ms,
                     );
-                    let mut slots = ship_slots(obj);
-                    if slots.is_empty() && self.scene.is_own(obj) {
-                        slots = settlement_slots(self.scene, obj);
-                    }
-                    if !slots.is_empty() {
-                        ui.draw_slots(frame, self.data, layout, &slots, self.chosen_cell);
-                    }
-                    // Only the portrait and the slots: the original writes
-                    // no text about a selected object (c_info.cpp writes a
-                    // slot's description when it is clicked).
+                    // Only the portrait and the slots, or the group's
+                    // buttons: the original writes nothing more about the
+                    // selection (c_info.cpp: a slot held down tells what
+                    // it holds).
+                    ui.draw_info(frame, self.data, layout, self.scene, &shown, &self.info);
                 }
             }
         }
@@ -1475,146 +1553,8 @@ pub fn wrap(font: &TextRenderer, text: &str, width: u32) -> Vec<String> {
 pub struct SlotCell {
     pub frame: u8,
     pub bar: Option<u8>,
-    /// A `COBJ_SSPEC` mark (0 green arrow, 1 dark arrow: units to open).
-    pub mark: Option<u8>,
     /// A count shown in the corner (`NUMBER_FONT`), if not 0.
     pub count: u32,
-}
-
-/// Slot counts by ship type (0x597ae4 weapon and crew places, 0x597af0
-/// cargo, 0x597afc treasures, 0x597b08 heroes; 0x597b14 and 0x597b20
-/// whether it shows its armour and ram).
-const SLOT_ITEMS: [usize; 12] = [0, 0, 5, 7, 4, 3, 2, 2, 0, 1, 1, 3];
-const SLOT_CARGO: [usize; 12] = [4, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const SLOT_TREASURES: [usize; 12] = [1, 1, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0];
-const SLOT_HEROES: [usize; 12] = [0, 0, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0];
-const SLOT_ARMOUR: [bool; 12] = [
-    false, false, true, true, true, true, false, true, false, true, false, false,
-];
-const SLOT_RAM: [bool; 12] = [
-    false, false, true, false, false, true, true, false, false, false, false, false,
-];
-
-/// A treasure's picture among the slots (0x5005a0): kinds 6-27 in order,
-/// but for kind 17 last.
-fn treasure_frame(kind: u8) -> u8 {
-    let n = match kind {
-        6 | 7 => kind - 6,
-        9..=16 => kind - 7,
-        17 => 20,
-        18..=27 => kind - 8,
-        _ => return 0x3a,
-    };
-    0x3a + n
-}
-
-/// A ship's slot cells by grid position (0x4e5e40): its crew and weapons
-/// (merchants: their cargo, a hundred units a slot), empty places, armour
-/// and ram; then, from the eighth place on, treasures and heroes, with their
-/// empty places dimmed.
-pub fn ship_slots(obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
-    let Some(ship) = &obj.ship else {
-        return Vec::new();
-    };
-    let kind = ship.kind as usize % 12;
-    let mut cells: Vec<Option<SlotCell>> = Vec::new();
-    let full = |frame: u8| {
-        Some(SlotCell {
-            frame,
-            bar: Some(100),
-            mark: None,
-            count: 0,
-        })
-    };
-    let bare = |frame: u8| {
-        Some(SlotCell {
-            frame,
-            bar: None,
-            mark: None,
-            count: 0,
-        })
-    };
-    if kind <= 1 {
-        let capacity = SLOT_CARGO[kind];
-        if let Some(goods) = ship.cargo_kind.filter(|_| ship.cargo > 0.0) {
-            let frame = match goods {
-                crate::objects::Resource::Fish => 0x2b,
-                crate::objects::Resource::Leviathan => 0x2c,
-                crate::objects::Resource::Amber => 0x2a,
-            };
-            let units = (ship.cargo / 100.0).ceil() as usize;
-            for k in 0..units.min(capacity) {
-                let left = ship.cargo - k as f32 * 100.0;
-                cells.push(Some(SlotCell {
-                    frame,
-                    bar: Some(left.clamp(0.0, 100.0).round() as u8),
-                    mark: None,
-                    count: 0,
-                }));
-            }
-        }
-        while cells.len() < capacity {
-            cells.push(bare(0x29));
-        }
-    } else {
-        // Soldiers look different for nation 3.
-        let nation3 = obj.owner.is_some_and(|o| o.0 == 3);
-        let mut big = 0;
-        // Each unit with its condition as its bar.
-        let units = obj.unit_conditions();
-        for item in 0..9u8 {
-            for &c in &units[item as usize] {
-                let frame = match item {
-                    0..=2 if kind == 11 => item + 12 + 0x43,
-                    0..=2 => item + if nation3 { 13 } else { 10 },
-                    _ => item - 2,
-                };
-                cells.push(Some(SlotCell {
-                    frame,
-                    bar: Some(c),
-                    mark: None,
-                    count: 0,
-                }));
-                if (6..9).contains(&item) {
-                    big += 1;
-                }
-            }
-        }
-        // The unique ships' own weapon.
-        match kind {
-            8 => cells.push(full(7)),
-            9 => cells.push(full(8)),
-            10 => cells.push(full(9)),
-            _ => {}
-        }
-        while cells.len() + big < SLOT_ITEMS[kind] {
-            cells.push(bare(0));
-        }
-        if SLOT_ARMOUR[kind] {
-            cells.push(bare(0x22 + ship.armour.min(2)));
-        }
-        if SLOT_RAM[kind] {
-            cells.push(bare(0x26 + ship.ram.min(2)));
-        }
-    }
-    if SLOT_TREASURES[kind] + SLOT_HEROES[kind] > 0 {
-        while cells.len() < 7 {
-            cells.push(None);
-        }
-        for t in ship.treasures.iter().take(SLOT_TREASURES[kind]) {
-            cells.push(full(treasure_frame(t.kind)));
-        }
-        for _ in ship.treasures.len()..SLOT_TREASURES[kind] {
-            cells.push(bare(0x39));
-        }
-        for &h in ship.heroes.iter().take(SLOT_HEROES[kind]) {
-            cells.push(bare(0x30 + h));
-        }
-        for _ in ship.heroes.len()..SLOT_HEROES[kind] {
-            cells.push(bare(0x2f));
-        }
-    }
-    cells
 }
 
 /// The shading of work not yet done (0x5c1658): palette index to index.
@@ -1637,43 +1577,3 @@ const SHADE: [u8; 256] = [
     13, 13, 27, 27, 27, 27, 27, 27, 27, 28, 144, 235, 236, 237, 238, 239,
     240, 241, 242, 243, 244, 245, 27, 247, 248, 27, 13, 27, 27, 144, 27, 255,
 ];
-
-/// A settlement's or town's slot cells (0x43bfe0, page 0): its stock of each
-/// item, marines in the first row, medium and strong weapons in the next
-/// two, dimmed where there is none, each with an arrow to open its units;
-/// at the start of the second row its armour and rams, of the third its
-/// goods.
-pub fn settlement_slots(scene: &Scene, obj: &crate::objects::MapObject) -> Vec<Option<SlotCell>> {
-    if !matches!(
-        obj.class,
-        openconquest_formats::ObjectClass::Building(
-            crate::economy::SETTLEMENT | crate::economy::TOWN
-        )
-    ) {
-        return Vec::new();
-    }
-    let stock = scene.garrison(obj.id);
-    let nation3 = obj.owner.is_some_and(|o| o.0 == 3);
-    let mut cells = vec![None; 11];
-    let cell = |frame: u8, dim: u8, count: u32| {
-        Some(SlotCell {
-            frame: if count > 0 { frame } else { dim },
-            bar: None,
-            mark: Some(u8::from(count == 0)),
-            count,
-        })
-    };
-    for item in 0..9u8 {
-        let (frame, dim) = match item {
-            0..=2 => {
-                let f = item + if nation3 { 13 } else { 10 };
-                (f, f + 15)
-            }
-            _ => (item - 2, item + 13),
-        };
-        cells[item as usize * 4 / 3] = cell(frame, dim, stock[item as usize]);
-    }
-    cells[3] = cell(0x20, 0x1f, 0);
-    cells[7] = cell(0x2e, 0x2d, 0);
-    cells
-}

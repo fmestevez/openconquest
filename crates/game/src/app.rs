@@ -461,10 +461,8 @@ pub struct App {
     soundfont: Option<std::path::PathBuf>,
     /// The music's tracks as the sound panel lists them.
     track_names: Vec<String>,
-    /// The object panel's slot cell chosen: the object and the cell.
-    chosen_cell: Option<(u32, usize)>,
-    /// A unit picked up from a settlement's stock: the settlement and item.
-    carrying: Option<(u32, u8)>,
+    /// The object panel's state (`info_panel`).
+    info_view: crate::info_panel::InfoView,
     /// The load panel's state (`load_panel`), and its button held down.
     load_view: crate::load_panel::LoadView,
     load_pressed: Option<crate::load_panel::Hit>,
@@ -635,8 +633,7 @@ impl App {
             panel_pressed: None,
             soundfont: soundfont.clone(),
             track_names: Vec::new(),
-            chosen_cell: None,
-            carrying: None,
+            info_view: Default::default(),
             load_view: Default::default(),
             load_pressed: None,
             settings: Settings::default(),
@@ -747,10 +744,7 @@ impl App {
                 .sent
                 .map(|(x, y, at)| (x, y, self.time_ms.saturating_sub(at))),
             hover_button: self.cursor.and_then(|c| self.button_at(c)),
-            chosen_cell: self
-                .chosen_cell
-                .filter(|&(site, _)| Some(site) == self.selected)
-                .map(|(_, i)| i),
+            info: self.info_state(),
             page: self.page,
             site: None,
             briefing: self.briefing,
@@ -2466,50 +2460,99 @@ impl App {
         Some(((wx / t).floor() as i32, (wy / t).floor() as i32))
     }
 
-    /// A click on the object panel's slot cells: a settlement's stocked
-    /// item is chosen, and chosen again picked up to load onto a ship
-    /// (c_load.cpp 0x4f9da0).
-    fn slot_click(&mut self, pos: PhysicalPosition<f64>) -> bool {
+    /// The object panel's state for the selection (fresh when it
+    /// changed: the panel is made anew, ProcOnCreate 0x4f5230).
+    fn info_state(&self) -> crate::info_panel::InfoView {
+        let owner = (self.selected.unwrap_or(u32::MAX), self.group.len());
+        if self.info_view.owner == owner {
+            self.info_view
+        } else {
+            crate::info_panel::InfoView {
+                owner,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// A press on the object panel (c_info.cpp DoInfoBut 0x4f72d0 and
+    /// GetMessage 0x4f79e0): a settlement's place opens its group and the
+    /// header closes it; anything else there shows big while the button
+    /// is held (or, while selling, is sold); a group member's button or
+    /// the portrait centres the view on its object; the arrows scroll.
+    fn info_press(&mut self, pos: PhysicalPosition<f64>) -> bool {
+        use crate::info_panel::{self as ip, Hit, Shown};
+        use crate::scene::load::{ARMOUR, PRESENT, RAM, UNIT};
         if !self.show_interface || Panels::covers_bar(self.tab) || self.reloading().is_some() {
             return false;
         }
         let layout = self
             .interface
             .layout(self.window_size(), &self.camera.policy, &self.scene);
-        let Some(i) = self
-            .interface
-            .slot_cell_at(&layout, pos.x as f32, pos.y as f32)
-        else {
+        let (x, y) = (
+            (pos.x as f32 - layout.bar_x) / layout.scale,
+            pos.y as f32 / layout.scale,
+        );
+        let mut view = self.info_state();
+        let shown = ip::shown(&self.scene, &self.selection(), &view);
+        let Some(hit) = ip::hit(&shown, &view, x, y) else {
             return false;
         };
-        let Some(site) = self.selected else {
-            return false;
+        view.pressed = Some(hit);
+        let centre = |app: &mut Self, id: u32| {
+            if let Some(i) = app.scene.object_index(id) {
+                let (ox, oy) = (app.scene.objects[i].x, app.scene.objects[i].y);
+                let (screen, _) = app.placement();
+                app.camera.center_on(ox, oy, &screen, app.scene.map_size());
+            }
         };
-        let Some(obj) = self.scene.objects.iter().find(|o| o.id == site) else {
-            return false;
-        };
-        let cells = crate::ui::settlement_slots(&self.scene, obj);
-        let Some(Some(cell)) = cells.get(i) else {
-            return true;
-        };
-        // Places 3 and 7 are the armour and goods stores.
-        let item = [0, 1, 2, 99, 3, 4, 5, 99, 6, 7, 8]
-            .get(i)
-            .copied()
-            .unwrap_or(99);
-        if cell.count == 0 || item == 99 || !self.scene.is_own(obj) {
-            self.chosen_cell = None;
-            return true;
+        match (hit, &shown) {
+            (Hit::Member(i), Shown::Group(ids)) => centre(self, ids[i]),
+            (Hit::Portrait, Shown::Single(id, _)) => centre(self, *id),
+            (Hit::Up | Hit::Down, _) => {
+                let mut v = view;
+                ip::step(&shown, &mut v, hit == Hit::Down);
+                view.scroll = v.scroll;
+            }
+            (Hit::Cell(i), Shown::Single(site, list)) => {
+                let e = list[i];
+                let selling = self.pending == Some(Command::SELL_ITEM);
+                if selling && e.flags == PRESENT {
+                    // The pointer's sell mode (0x34) takes a stock unit,
+                    // armour or ram (message 0x280f to the settlement).
+                    if matches!(e.cat, UNIT | ARMOUR | RAM) {
+                        let order = match e.cat {
+                            UNIT => Order::SellItem {
+                                site: *site,
+                                item: e.sub,
+                            },
+                            _ => {
+                                self.say("Only marines and weapons can be sold yet");
+                                self.info_view = view;
+                                return true;
+                            }
+                        };
+                        match self.issue(order) {
+                            Ok(_) => {
+                                self.pending = None;
+                                self.status = None;
+                            }
+                            Err(err) => self.say(err),
+                        }
+                    }
+                } else if e.is_group() {
+                    view.open = if e.flags & crate::scene::load::HEADER != 0 {
+                        None
+                    } else {
+                        Some((e.cat, e.sub))
+                    };
+                    view.scroll = 0;
+                } else if ip::describable(&e) {
+                    view.big = Some(i);
+                }
+            }
+            _ => {}
         }
-        if self.chosen_cell == Some((site, i)) {
-            self.carrying = Some((site, item));
-            self.say(format!(
-                "Choose a ship alongside to take the {}",
-                crate::combat::ITEM_NAMES[item as usize]
-            ));
-        } else {
-            self.chosen_cell = Some((site, i));
-        }
+        self.info_view = view;
         true
     }
 
@@ -2908,24 +2951,11 @@ impl App {
                     Err(e) => self.say(e),
                 }
             }
-            // From a settlement: onto the ship alongside it.
+            // The pointer's sell mode: the stock unit pressed next is
+            // sold (c_info.cpp 0x4f72d0 with the cursor in mode 0x34).
             Command::SELL_ITEM => {
-                let chosen = self.chosen_cell.filter(|&(site, _)| site == id);
-                let item = chosen.and_then(|(_, i)| {
-                    [0u8, 1, 2, 99, 3, 4, 5, 99, 6, 7, 8]
-                        .get(i)
-                        .copied()
-                        .filter(|&k| k != 99)
-                });
-                match item {
-                    Some(item) => {
-                        if let Err(e) = self.issue(Order::SellItem { site: id, item }) {
-                            self.say(e);
-                        }
-                        self.chosen_cell = None;
-                    }
-                    None => self.say("Choose an item in the stock to sell"),
-                }
+                self.pending = Some(Command::SELL_ITEM);
+                self.say("Choose an item in the stock to sell");
             }
             Command::SELL_TOWN => {
                 if let Err(e) = self.issue(Order::SellTown { site: id }) {
@@ -3227,20 +3257,7 @@ impl App {
         if self.load_click(pos) {
             return;
         }
-        if self.slot_click(pos) {
-            return;
-        }
-        // A unit picked up from a settlement's stock goes aboard the ship
-        // clicked.
-        if let Some((site, item)) = self.carrying.take() {
-            self.status = None;
-            match self.object_at(pos) {
-                Some(ship) => match self.issue(Order::LoadItem { site, ship, item }) {
-                    Ok(_) => self.confirm(pos),
-                    Err(e) => self.say(e),
-                },
-                None => self.say("Choose a ship alongside the settlement"),
-            }
+        if self.info_press(pos) {
             return;
         }
         if let Some(slot) = self.button_at(pos) {
@@ -3574,10 +3591,6 @@ impl App {
         let water = self
             .cell_at(pos)
             .is_some_and(|(x, y)| self.scene.nav.is_water(x, y));
-        // A unit picked up from a settlement's stock: onto one of own ships.
-        if self.carrying.is_some() {
-            return (P::Load, !target.is_some_and(|o| own(o) && o.ship.is_some()));
-        }
         // A command waiting for its target.
         if let Some(cmd) = self.pending {
             let deposit = |r: Resource| target.and_then(resource) == Some(r);
@@ -3775,7 +3788,6 @@ impl App {
         let (x, y) = (pos.x as f32, pos.y as f32);
         self.selected.is_some()
             && self.pending.is_none()
-            && self.carrying.is_none()
             && self.menu.is_none()
             && screen.contains(x, y)
             && !minimap.contains(x, y)
@@ -3783,7 +3795,7 @@ impl App {
     }
 
     fn step_pointer(&mut self, pos: PhysicalPosition<f64>) {
-        if self.carrying.take().is_some() || self.pending.take().is_some() {
+        if self.pending.take().is_some() {
             self.status = None;
             return;
         }
@@ -3869,7 +3881,6 @@ impl App {
             self.selected = Some(first);
             self.group = rest.to_vec();
             self.page = Page::Main;
-            self.chosen_cell = None;
         }
     }
 
@@ -4024,11 +4035,6 @@ impl App {
     }
 
     fn right_click(&mut self, pos: PhysicalPosition<f64>) {
-        // A unit picked up is put back.
-        if self.carrying.take().is_some() {
-            self.status = None;
-            return;
-        }
         // Ships of a group spread out around the point they are sent to.
         for (k, id) in self.selection().into_iter().enumerate() {
             self.right_click_for(id, k, pos);
@@ -4694,10 +4700,6 @@ impl ApplicationHandler for App {
                 match code {
                     KeyCode::KeyS if command => self.quick_save(),
                     KeyCode::KeyO if command => self.quick_load(),
-                    KeyCode::Escape if self.carrying.is_some() => {
-                        self.carrying = None;
-                        self.status = None;
-                    }
                     KeyCode::Escape if self.pending.is_some() => {
                         self.pending = None;
                         self.status = None;
@@ -4821,10 +4823,7 @@ impl ApplicationHandler for App {
                                 self.cancel_button(slot);
                             } else if self.settings.modern_mouse {
                                 self.right_click(c);
-                            } else if self.pointer_modes(c).len() > 1
-                                || self.carrying.is_some()
-                                || self.pending.is_some()
-                            {
+                            } else if self.pointer_modes(c).len() > 1 || self.pending.is_some() {
                                 self.step_pointer(c);
                             } else {
                                 // Nothing else to point at: the selection
@@ -4864,6 +4863,9 @@ impl ApplicationHandler for App {
                     }
                     self.load_pressed = None;
                     self.panel_pressed = None;
+                    // The cell shown big shrinks back (DoInfoBut).
+                    self.info_view.big = None;
+                    self.info_view.pressed = None;
                     self.minimap_drag = false;
                     self.slider_drag = None;
                     if let (Some(from), Some(to)) = (self.box_from.take(), self.cursor) {
