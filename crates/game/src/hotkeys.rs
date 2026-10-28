@@ -171,25 +171,36 @@ impl Hotkeys {
         }
     }
 
-    /// The slot of `menu` whose key `pressed` is (with `held` telling which
-    /// keys are down), the first enabled one if several share it.
-    pub fn slot_for(
+    /// The slots of `menu` whose key `pressed` is (with `held` telling
+    /// which keys are down): every enabled one, in order, as the original
+    /// fires each accelerator of the key (Sinput.cpp 0x553090 goes through
+    /// them all); a greyed one only when none is enabled (its refusal).
+    pub fn slots_for(
         &self,
         menu: &Menu,
         pressed: KeyCode,
         held: &dyn Fn(u8) -> bool,
-    ) -> Option<usize> {
-        let mut found = None;
-        for (i, slot) in menu.iter().enumerate() {
-            let Some(slot) = slot else { continue };
-            if fires(self.slot_binding(slot), pressed, held) {
-                if slot.enabled {
-                    return Some(i);
-                }
-                found.get_or_insert(i);
-            }
+    ) -> Vec<usize> {
+        let matching: Vec<(usize, bool)> = menu
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                let s = s.as_ref()?;
+                fires(self.slot_binding(s), pressed, held).then_some((i, s.enabled))
+            })
+            .collect();
+        let enabled: Vec<usize> = matching.iter().filter(|m| m.1).map(|m| m.0).collect();
+        if enabled.is_empty() {
+            matching.first().map(|m| m.0).into_iter().collect()
+        } else {
+            enabled
         }
-        found
+    }
+
+    /// The first of `slots_for`.
+    #[cfg(test)]
+    fn slot_for(&self, menu: &Menu, pressed: KeyCode, held: &dyn Fn(u8) -> bool) -> Option<usize> {
+        self.slots_for(menu, pressed, held).first().copied()
     }
 
     /// What the button's help line adds: ` - M` (0x505e70: `%s - &0%s`
@@ -465,12 +476,17 @@ mod tests {
     }
 
     #[test]
-    fn duplicates_take_the_first_enabled() {
+    fn duplicates_press_every_enabled_one() {
         let h = Hotkeys::default();
         let mut menu: Menu = [None; SLOTS];
         menu[2] = slot(0x0a, false); // Ram: R, greyed
         menu[6] = slot(0x0c, true); // Gather zones: R
-        assert_eq!(h.slot_for(&menu, KeyCode::KeyR, &none_held), Some(6));
+        assert_eq!(h.slots_for(&menu, KeyCode::KeyR, &none_held), vec![6]);
+        menu[2] = slot(0x0a, true);
+        assert_eq!(h.slots_for(&menu, KeyCode::KeyR, &none_held), vec![2, 6]);
+        menu[2] = slot(0x0a, false);
+        menu[6] = slot(0x0c, false);
+        assert_eq!(h.slots_for(&menu, KeyCode::KeyR, &none_held), vec![2]);
     }
 
     #[test]

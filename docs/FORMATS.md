@@ -1388,7 +1388,9 @@ whose press sends the button's id (0x1d1f + slot) as a click does: the same
 pointer modes, pages and refusals. The input loop (Sinput.cpp 0x553090)
 fires an accelerator on the key's press when its second key is held, or,
 without one, when no Shift, Ctrl or Alt is held (unless the key is one of
-them). The fixed accelerators: Ctrl+S / Ctrl+O save and load (0x511c00,
+them); it goes through the whole list, so every accelerator of the key
+fires, in the order they were added (two buttons of a menu sharing a key
+are both pressed). The fixed accelerators: Ctrl+S / Ctrl+O save and load (0x511c00,
 both Ctrls) and Alt+Q (0x4ef: string 13 "Exit to Windows. Are you
 sure?", yes 0x4f0) and Alt+X (0x4f5: string 15 "Exit to main menu", yes
 0x4fc) there; the file panel's Main menu and Quit buttons send the same

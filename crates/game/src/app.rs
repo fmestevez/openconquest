@@ -2853,16 +2853,19 @@ impl App {
         px >= x && py >= y && px < x + w && py < y + h
     }
 
-    /// The command slot whose key `code` is (0x4f2140): the buttons'
+    /// The command slots whose key `code` is (0x4f2140): the buttons'
     /// accelerators live while the command panel shows them.
-    fn hotkey_slot(&self, code: KeyCode) -> Option<usize> {
+    fn hotkey_slots(&self, code: KeyCode) -> Vec<(usize, Command)> {
         if !self.show_interface || Panels::covers_bar(self.tab) || self.reloading().is_some() {
-            return None;
+            return Vec::new();
         }
-        let obj = self
+        let Some(obj) = self
             .selected
             .and_then(|id| self.scene.object_index(id))
-            .map(|i| &self.scene.objects[i])?;
+            .map(|i| &self.scene.objects[i])
+        else {
+            return Vec::new();
+        };
         let shown = menu(&self.scene, obj, self.page);
         let m = self.modifiers;
         let held = |scan: u8| match scan {
@@ -2871,7 +2874,21 @@ impl App {
             0x38 | 0xb8 => m.alt_key(),
             s => crate::hotkeys::key_code(s).is_some_and(|k| self.keys.contains(&k)),
         };
-        self.settings.hotkeys.slot_for(&shown, code, &held)
+        self.settings
+            .hotkeys
+            .slots_for(&shown, code, &held)
+            .into_iter()
+            .filter_map(|i| shown[i].map(|s| (i, s.command)))
+            .collect()
+    }
+
+    /// The command in slot `slot` of the command panel now.
+    fn command_in(&self, slot: usize) -> Option<Command> {
+        let obj = self
+            .selected
+            .and_then(|id| self.scene.object_index(id))
+            .map(|i| &self.scene.objects[i])?;
+        menu(&self.scene, obj, self.page)[slot].map(|s| s.command)
     }
 
     /// The command slot under a window position, if the interface is shown.
@@ -5222,8 +5239,19 @@ impl ApplicationHandler for App {
                 // Hotkey editor sets them), after Esc's cancelling.
                 let cancels = code == KeyCode::Escape
                     && (self.pending.is_some() || self.reloading().is_some());
-                if let Some(slot) = self.hotkey_slot(code).filter(|_| !cancels) {
-                    self.press_button(slot);
+                let slots = if cancels {
+                    Vec::new()
+                } else {
+                    self.hotkey_slots(code)
+                };
+                if !slots.is_empty() {
+                    // Each button of the key in turn, while the panel still
+                    // shows it there.
+                    for (slot, command) in slots {
+                        if self.command_in(slot) == Some(command) {
+                            self.press_button(slot);
+                        }
+                    }
                     return;
                 }
                 match code {
