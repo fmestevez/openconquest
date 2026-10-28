@@ -549,7 +549,7 @@ Combat tables:
   refits ships to armour M/S (0x36, 0x37) and ram M/S (0x38, 0x39; slots
   0-3) up to the researched level, offered while a ship lies alongside
   (+0x1c8). Each order (message 0x138c, 0x434a00; its count byte +0xe, 1
-  by default) pays 30/60 (0x42d960) or 25/50 (0x42d940) amber a unit and
+  when 0, which the command panel leaves it for refits, 0x4f3a61) pays 30/60 (0x42d960) or 25/50 (0x42d940) amber a unit and
   queues one byte a unit (+0x1ec; slot 1, 2, 4, 5), done in turn, 150 or
   200 ticks each (0x43542a); when one is done the smithy sends the ship
   alongside message 0x248d (armour) or 0x248e (ram) with the level. The
