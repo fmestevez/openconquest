@@ -51,7 +51,8 @@ pub enum ObjectClass {
     Treasure,
     /// 0x2be (`SheepsObjClassTy`): sheep flock.
     Sheep,
-    /// Anything else, e.g. 0x2bf (`TraksClassTy`, music tracks) and 0x2c1
+    /// Anything else, e.g. 0x2bf (`TraksClassTy`, the particles: wakes'
+    /// droplets and projectiles' trails, `Grig\traks.cpp`) and 0x2c1
     /// (`SkarbClassTy`).
     Other(u32),
 }

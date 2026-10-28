@@ -691,7 +691,7 @@ game's own, from its error strings.
 | 0x25e | `VolcanoClassTy` | lava flow | 6, 7 | 4: lava sequence 0-10 |
 | 0x2bc | `TreasClassTy` | treasure (sprite sequence `TREAS<kind>`) | 9, 10 | 4: kind 0-27, 5: holder id or -1 for lying on the map, 7: parameter, 8: amount |
 | 0x2be | `SheepsObjClassTy` | sheep flock | 4, 5 | 7: count |
-| 0x2bf | `TraksClassTy` | music tracks (not drawn) | | |
+| 0x2bf | `TraksClassTy` | the particles' keeper: wakes' droplets and projectiles' trails (`Grig\traks.cpp`; nothing of its own to draw) | | |
 | 0x2c1 | `SkarbClassTy` | | | |
 
 Positions are map cell coordinates. For buildings and ships, dword 1 is the

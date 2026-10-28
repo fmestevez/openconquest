@@ -471,8 +471,13 @@ impl Scene {
             );
         }
         let objs = objects::load(data, caches, &archive)?;
-        if !objs.unresolved.is_empty() {
-            let mut classes: Vec<_> = objs.unresolved.iter().collect();
+        // The particles' keeper (0x2bf) has nothing of its own to draw.
+        if objs.unresolved.keys().any(|&c| c != 0x2bf) {
+            let mut classes: Vec<_> = objs
+                .unresolved
+                .iter()
+                .filter(|(&c, _)| c != 0x2bf)
+                .collect();
             classes.sort();
             let list: Vec<String> = classes.iter().map(|(c, n)| format!("{c:#x}x{n}")).collect();
             eprintln!(
