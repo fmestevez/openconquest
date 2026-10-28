@@ -6050,3 +6050,54 @@ fn fort_gifts_heal_units() {
     assert!((c.hull / c.max_hull - 0.6).abs() < 0.001);
 }
 
+/// A ship sent against something on land plans its way to the water
+/// nearest it once, rather than every tick (the route's end lies far from
+/// a target inland), and stops in range at a cell's middle (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn attacks_on_land_plan_once() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let village = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::CreatureSpawn)
+        .unwrap()
+        .id;
+    let s = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 7))
+        .unwrap()
+        .id;
+    let i = scene.object_index(s).unwrap();
+    let c = scene.objects[i].combat.as_mut().unwrap();
+    c.max_hull = 1e9;
+    c.hull = 1e9;
+    let v = scene.object_index(village).unwrap();
+    if scene.objects[v].owner.is_none() {
+        scene.objects[v].owner = Some((9, 9));
+    }
+    scene.order_attack(s, village).unwrap();
+    let mut last = None;
+    let mut plans = 0;
+    for _ in 0..1500 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let i = scene.object_index(s).unwrap();
+        let end = scene.objects[i].ship.as_ref().unwrap().path.back().copied();
+        if end.is_some() && end != last {
+            plans += 1;
+        }
+        last = end;
+    }
+    assert!(plans <= 3, "re-planned {plans} times");
+    // In range it stopped at a cell's middle, keeping to the grid.
+    let i = scene.object_index(s).unwrap();
+    let (x, y) = (scene.objects[i].x, scene.objects[i].y);
+    assert_eq!((x.rem_euclid(64.0), y.rem_euclid(64.0)), (32.0, 32.0));
+}

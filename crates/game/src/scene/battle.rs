@@ -157,9 +157,16 @@ impl Scene {
                 let Some(ship) = self.objects[i].ship.as_ref() else {
                     continue;
                 };
-                let stale = ship.path.back().is_none_or(|&(px, py)| {
-                    ((px - tx).powi(2) + (py - ty).powi(2)).sqrt() > range / 2.0
-                });
+                // A ship may sail off: follow it. A building or creature on
+                // land stays put, and the route ends where the water does,
+                // maybe far from it: plan once, not every tick.
+                let moving = self.objects[ti].ship.is_some();
+                let stale = match ship.path.back() {
+                    None => true,
+                    Some(&(px, py)) => {
+                        moving && ((px - tx).powi(2) + (py - ty).powi(2)).sqrt() > range / 2.0
+                    }
+                };
                 if ordered.is_some() && stale {
                     if let Some(path) = self.plan_route(i, tx, ty) {
                         self.objects[i].ship.as_mut().unwrap().path = path;
@@ -168,8 +175,11 @@ impl Scene {
                 continue;
             }
             let target_id = self.objects[ti].id;
+            // In range: it stops - at the end of the step it is on, ships
+            // keeping to the grid's cell centres.
             if ordered.is_some() {
-                self.objects[i].ship.as_mut().unwrap().path.clear();
+                let path = &mut self.objects[i].ship.as_mut().unwrap().path;
+                path.truncate(1);
             }
             // Each weapon fires when it is loaded and the target lies
             // between its shortest and longest range.
