@@ -1558,11 +1558,15 @@ rand % 30, all not under way (states 4, 5); not those of its own group
 (+0x5e) unless impatient; and when its priority is 51 or more, ships of
 lower priority, or equal priority and a later id, not under way, are
 listed to plan through (0x4a5540) instead, taking that route if 0x4a56a0
-prefers it to the plain one. A stop (its first argument) sets the
+prefers it to the plain one (0x4a56a0 with the two routes' lengths:
+the plain one, if it exists, unless it is longer by more than 4 cells,
+5 up to 10 cells long, 6 up to 15, 7 up to 20, and by half or more
+beyond). A stop (its first argument) sets the
 priority to 0. (Tried here on top of the port's own re-planning, these
 rules made battle01's computer economy worse; the port keeps avoiding
-every ship and every ship's destination until the move states are
-ported.)
+every ship and every ship's destination. With the move states ported, the
+original zone order still jams battle01's merchants once a founding ship
+has pushed them all to its priority of 100: equal priorities never push.)
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
