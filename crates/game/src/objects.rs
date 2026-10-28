@@ -1559,6 +1559,50 @@ fn nation_name(n: u32) -> &'static str {
 }
 
 /// Name of a player building class.
+/// What the message line calls object `o` under the pointer (InfoStringTy
+/// 0x506c70, message 0x627): a player's "<NATION> <CLASS>" (strings
+/// 0x2f5-0x2f9 for Egypt, Greek, Rome, Persian, Barbarian; 0x1d between),
+/// anything else its class alone (strings 0x2bc-0x2f4; ships by 200 plus
+/// their type; "None", string 7, for what has none).
+pub fn info_name(data: &GameData, o: &MapObject) -> String {
+    let class = match o.class {
+        ObjectClass::Ship => 200 + o.ship.as_ref().map_or(0, |s| s.kind as u32),
+        _ => o.record.class_id,
+    };
+    let id = match class {
+        0x32..=0x49 => 0x2bc + class - 0x32,
+        200..=0xd3 => 0x2d4 + class - 200,
+        0x191 => 0x2e0,
+        0x192 => 0x2e1,
+        400 => 0x2e2,
+        600 => 0x2e3,
+        0x259 => 0x2e4,
+        0x25a => 0x2e5,
+        0x25c => 0x2e6,
+        0x25d => 0x2e7,
+        0x25e => 0x2e8,
+        500 => 0x2e9,
+        0x1f5 => 0x2ea,
+        0x1f6 => 0x2eb,
+        0x1f8 => 0x2ec,
+        0x1f9 => 0x2ed,
+        0x1fa => 0x2ee,
+        0x1fb => 0x2ef,
+        0x1fd => 0x2f0,
+        700 => 0x2f1,
+        0x2c1 => 0x2f4,
+        _ => 7,
+    };
+    let s = |id: u32| data.strings.get(&id).cloned().unwrap_or_default();
+    match o.owner {
+        Some((nation, _)) if nation < 5 => {
+            let lead = [0x2f5, 0x2f7, 0x2f6, 0x2f8, 0x2f9][nation as usize];
+            format!("{}{}{}", s(lead), s(0x1d), s(id))
+        }
+        _ => s(id),
+    }
+}
+
 pub fn building_label(class: u32) -> &'static str {
     match class {
         0x32 => "Settlement",

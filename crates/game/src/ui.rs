@@ -1092,6 +1092,8 @@ pub struct GameView<'a> {
     /// A selection box being dragged (window pixels).
     pub select_box: Option<(f32, f32, f32, f32)>,
     pub status: Option<&'a str>,
+    /// The object under the pointer, named in the message line.
+    pub hover_object: Option<u32>,
     pub time_ms: u64,
     /// Command slot under the cursor.
     pub hover_button: Option<usize>,
@@ -1477,10 +1479,17 @@ impl GameView<'_> {
             });
             // Blank with nothing to say, as on the original (the objectives
             // are in the help panel).
+            let named = || {
+                let i = self.scene.object_index(self.hover_object?)?;
+                let o = &self.scene.objects[i];
+                self.scene
+                    .is_visible(o)
+                    .then(|| crate::objects::info_name(self.data, o))
+            };
             let msg = match (self.status, hovered) {
                 (Some(s), _) => s.to_string(),
                 (None, Some(h)) => h,
-                (None, None) => String::new(),
+                (None, None) => named().unwrap_or_default(),
             };
             ui.draw_message(frame, layout, self.text, &msg);
             return;

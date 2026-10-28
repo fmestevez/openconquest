@@ -628,6 +628,7 @@ fn screenshot(
         paused: args.paused,
         load: Some((load_panel::LoadView::default(), None)),
         object_info: None,
+        hover_object: None,
     };
     let (screen, _, _) = view.placement(size);
     let map = scene.map_size();
@@ -728,6 +729,7 @@ fn screenshot(
     });
     if let Some(o) = hovered {
         view.object_info = object_info::of(&scene, o);
+        view.hover_object = Some(o.id);
         eprintln!("hover: {} {:?}: {:?}", o.id, o.class, view.object_info);
     }
     let mut pixels = vec![0u32; (size.0 * size.1) as usize];
