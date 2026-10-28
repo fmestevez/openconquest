@@ -622,7 +622,8 @@ impl Panels {
         }
         // Captioned with strings 10 OK, 11 Yes, 12 No (0x512cd0), centred;
         // pressed, the text a pixel left and down.
-        let buttons: &[(usize, (i32, i32), bool, (u32, &str))] = if ask.yes_no {
+        type AskButton = (usize, (i32, i32), bool, (u32, &'static str));
+        let buttons: &[AskButton] = if ask.yes_no {
             &[
                 (1, ASK_YES, true, (11, "Yes")),
                 (2, ASK_NO, false, (12, "No")),
