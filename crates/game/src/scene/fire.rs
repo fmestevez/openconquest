@@ -115,7 +115,10 @@ impl Scene {
             return;
         }
         let shown = size.min(2);
-        let Ok(frames) = objects::sequence_frames(data, caches, &format!("FIRE{shown}")) else {
+        // Their colour 0x26 darkens what is beneath through the shadow
+        // table (0x50e050 with 0x5c1358, 0x50e130(1, 0x26); 0x4e2117,
+        // 0x4e4fb0); the rest is painted.
+        let Ok(frames) = caches.shaded_frames(data, &format!("FIRE{shown}"), 0x26) else {
             return;
         };
         if frames.is_empty() {

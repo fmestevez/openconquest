@@ -198,6 +198,20 @@ impl GameData {
     /// Loads an image by name. Sprites are preferred; bitmaps are cut out
     /// with their mask, if any.
     pub fn load_image(&self, lib: &Archive, name: &str, shadows: bool) -> Result<Option<Image>> {
+        self.load_image_shading(lib, name, shadows.then_some(SHADOW_INDEX))
+    }
+
+    /// As `load_image`, palette index `shade` (if any) drawn as a shadow,
+    /// darkening what is beneath through the table at 0x5c1358: the
+    /// original's frame remap (0x55dd40; blitter 0x57b7f0 draws a colour in
+    /// [value, value + count) as `table[(colour - value) x 256 + beneath]`,
+    /// count 1), 0xfe for objects' shadows, 0x26 for ships' flames.
+    pub fn load_image_shading(
+        &self,
+        lib: &Archive,
+        name: &str,
+        shade: Option<u8>,
+    ) -> Result<Option<Image>> {
         // Shelf tiles come twice: the bitmap shades into the open sea, the
         // sprite is a hard-edged shape. The map shows the bitmap.
         let bitmap_first = name.starts_with("b_shelf_");
@@ -213,7 +227,7 @@ impl GameData {
                     if s.opaque[i] != 0 {
                         pixels[((s.y + y) * s.width + s.x + x) as usize] =
                             Some(match s.pixels[i] {
-                                SHADOW_INDEX if shadows => SHADOW,
+                                index if Some(index) == shade => SHADOW,
                                 index => self.global_pixel(index),
                             });
                     }

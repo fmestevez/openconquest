@@ -36,6 +36,9 @@ pub struct Caches {
     pub sprites: ImageCache,
     composites: HashMap<String, Option<Rc<Composite>>>,
     sequences: HashMap<String, Rc<Vec<String>>>,
+    /// Sequences' frames with a palette index drawn as shadow, by name
+    /// and index (see `shaded_frames`).
+    shaded: HashMap<(String, u8), Vec<Vec<Layer>>>,
 }
 
 impl Default for Caches {
@@ -45,6 +48,7 @@ impl Default for Caches {
             sprites: ImageCache::new(Source::Objects),
             composites: HashMap::new(),
             sequences: HashMap::new(),
+            shaded: HashMap::new(),
         }
     }
 }
@@ -60,6 +64,32 @@ impl Caches {
         };
         self.composites.insert(name.to_string(), c.clone());
         Ok(c)
+    }
+
+    /// The frames of sequence `name` with palette index `shade` drawn as
+    /// shadow (`GameData::load_image_shading`).
+    pub fn shaded_frames(
+        &mut self,
+        data: &GameData,
+        name: &str,
+        shade: u8,
+    ) -> Result<Vec<Vec<Layer>>> {
+        let key = (name.to_string(), shade);
+        if let Some(f) = self.shaded.get(&key) {
+            return Ok(f.clone());
+        }
+        let mut frames = Vec::new();
+        for n in self.sequence(data, name)?.iter() {
+            if let Some(image) = data.load_image_shading(&data.objects, n, Some(shade))? {
+                frames.push(vec![Layer {
+                    image: Rc::new(image),
+                    dx: 0,
+                    dy: 0,
+                }]);
+            }
+        }
+        self.shaded.insert(key, frames.clone());
+        Ok(frames)
     }
 
     fn sequence(&mut self, data: &GameData, name: &str) -> Result<Rc<Vec<String>>> {
