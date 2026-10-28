@@ -1768,6 +1768,20 @@ impl Scene {
                         }
                     }
                 }
+                // Stopped short (it gave a jammed route up, 0x4a618d): its
+                // gathering sends it on again while that gets it nearer.
+                if let (false, Some(d)) = (arrived, deposit_at) {
+                    let (dx, dy) = (self.objects[d].x, self.objects[d].y);
+                    let gap = |(x, y): (f32, f32)| (x - dx).hypot(y - dy);
+                    if let Some(path) = self.plan_route(i, dx, dy) {
+                        if path
+                            .back()
+                            .is_some_and(|&e| gap(e) + t / 2.0 < gap((sx, sy)))
+                        {
+                            return set(self, Some(Task::Gather { deposit, phase }), Some(path));
+                        }
+                    }
+                }
                 let next = arrived.then_some(Task::Gather {
                     deposit,
                     phase: GatherPhase::Collecting,

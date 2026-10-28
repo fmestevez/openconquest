@@ -1220,13 +1220,14 @@ impl Scene {
             let Some(i) = self.object_index(id) else {
                 continue;
             };
-            // Held up 150 ticks on a plain move, it gives the move up and
-            // lies still (0x4a618d: message 0x80, sub 8), where its
-            // player's ships of higher priority may push it aside. Ships
-            // with a task here keep waiting.
+            // Held up 150 ticks, it gives the move up and lies still
+            // (0x4a618d: message 0x80, sub 8), where its player's ships of
+            // higher priority may push it aside; a gatherer's task sends
+            // it on again. Ships with other tasks here keep waiting.
             {
                 let s = self.objects[i].ship.as_mut().unwrap();
-                if s.task.is_none() && s.waited >= crate::clock::ticks(150) {
+                let gives_up = matches!(s.task, None | Some(Task::Gather { .. }));
+                if gives_up && s.waited >= crate::clock::ticks(150) {
                     s.path.clear();
                     s.waited = 0.0;
                     s.stalled = 0.0;
