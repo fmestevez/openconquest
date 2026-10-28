@@ -1387,7 +1387,10 @@ them). The fixed accelerators: Ctrl+S / Ctrl+O save and load (0x511c00,
 both Ctrls) and Alt+Q (0x4ef: string 13 "Exit to Windows. Are you
 sure?", yes 0x4f0) and Alt+X (0x4f5: string 15 "Exit to main menu", yes
 0x4fc) there; the file panel's Main menu and Quit buttons send the same
-(0x50a700), Restart asks string 16. Ctrl+C
+(0x50a700), Restart asks string 16, and its action button (0x4fb) asks
+14 before deleting, 17 before loading, 18 before saving over a slot of
+that name, and gives notice 19 when no name is typed (20 when saving
+fails); a yes goes on with message 0x4ff. Ctrl+C
 (0x163, screenshot) and Ctrl+M (0x163, from the bar), Enter and Space on
 message boxes (0x528390, 0x53f360).
 

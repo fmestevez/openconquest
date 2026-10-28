@@ -90,22 +90,38 @@ const TITLE_BUTTONS: [&str; 6] = [
     "Quit game",
 ];
 
-/// A question asked before the game is left (gamesys.cpp 0x511c00,
-/// 0x512f00): strings 13, 15 and 16.
+/// A question the game asks before acting (gamesys.cpp 0x511c00,
+/// 0x512f00; the file panel's, 0x50a700), or a notice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ask {
     Quit,
     MainMenu,
     Restart,
+    Overwrite,
+    Load,
+    Delete,
+    /// Notices, answered OK.
+    NoName,
+    SaveFailed,
 }
 
 impl Ask {
     fn string(self) -> (u32, &'static str) {
         match self {
             Ask::Quit => (13, "Exit to Windows.\nAre you sure?"),
+            Ask::Delete => (14, "Delete game.\nAre you sure?"),
             Ask::MainMenu => (15, "Exit to main menu.\nAre you sure?"),
             Ask::Restart => (16, "Restart mission.\nAre you sure?"),
+            Ask::Load => (17, "Load game.\nAre you sure?"),
+            Ask::Overwrite => (18, "Slot already exists.\nOverwrite saved game?"),
+            Ask::NoName => (19, "Slot name is\nnot entered!"),
+            Ask::SaveFailed => (20, "Error while saving\ngame!"),
         }
+    }
+
+    /// Answered yes or no (else OK).
+    fn yes_no(self) -> bool {
+        !matches!(self, Ask::NoName | Ask::SaveFailed)
     }
 }
 
@@ -835,7 +851,9 @@ impl App {
             panel: Some(self.panel_view()),
             panel_hover: self.cursor.and_then(|c| self.bar_point(c)),
             paused: self.paused,
-            ask: self.ask.map(|a| (self.ask_text(a), self.ask_pressed)),
+            ask: self
+                .ask
+                .map(|a| (self.ask_text(a), a.yes_no(), self.ask_pressed)),
             load: Some((self.load_state(), self.load_pressed)),
             object_info: self.hovered_info(),
         }
@@ -1085,6 +1103,9 @@ impl App {
 
     /// The file panel's wide button (0x50a700 message 0x4fa): saves under
     /// the name typed, or loads or deletes the chosen game.
+    /// The file panel's action button (0x4fb, 0x50a700): saving asks
+    /// before overwriting a slot (string 18) and wants a name (19);
+    /// loading and deleting ask first (17, 14).
     fn file_action(&mut self) {
         match self.file_mode {
             FileMode::Save => {
@@ -1092,39 +1113,43 @@ impl App {
                     self.say("Multiplayer games cannot be saved");
                     return;
                 }
-                let name: String = self
-                    .save_name
-                    .trim()
-                    .chars()
-                    .filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
-                    .collect();
+                let name = self.save_slot_name();
                 if name.is_empty() {
-                    self.say("Type a name for the saved game");
-                    return;
-                }
-                let path = self.data.save_dir().join(format!("{name}.json"));
-                match self.scene.save().write(&path) {
-                    Ok(()) => {
-                        self.say("Game saved");
-                        self.refresh_panels();
-                        self.selected_save = self.save_names.iter().position(|n| *n == name);
-                    }
-                    Err(e) => self.say(format!("Could not save: {e:#}")),
+                    self.ask = Some(Ask::NoName);
+                } else if self.save_names.contains(&name) {
+                    self.ask = Some(Ask::Overwrite);
+                } else {
+                    self.save_now();
                 }
             }
-            FileMode::Load => {
-                if let Some(e) = self.selected_save.and_then(|i| self.saves.get(i)) {
-                    let path = e.path.clone();
-                    self.load_game(&path);
-                }
+            FileMode::Load if self.selected_save.is_some() => self.ask = Some(Ask::Load),
+            FileMode::Delete if self.selected_save.is_some() => self.ask = Some(Ask::Delete),
+            _ => {}
+        }
+    }
+
+    /// The name typed for a saved game, without characters files cannot
+    /// have.
+    fn save_slot_name(&self) -> String {
+        self.save_name
+            .trim()
+            .chars()
+            .filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+            .collect()
+    }
+
+    fn save_now(&mut self) {
+        let name = self.save_slot_name();
+        let path = self.data.save_dir().join(format!("{name}.json"));
+        match self.scene.save().write(&path) {
+            Ok(()) => {
+                self.say("Game saved");
+                self.refresh_panels();
+                self.selected_save = self.save_names.iter().position(|n| *n == name);
             }
-            FileMode::Delete => {
-                if let Some(e) = self.selected_save.and_then(|i| self.saves.get(i)) {
-                    let _ = std::fs::remove_file(&e.path);
-                    self.selected_save = None;
-                    self.save_name.clear();
-                    self.refresh_panels();
-                }
+            Err(e) => {
+                self.say(format!("Could not save: {e:#}"));
+                self.ask = Some(Ask::SaveFailed);
             }
         }
     }
@@ -3038,7 +3063,8 @@ impl App {
         if x < 0.0 || y < 0.0 {
             return None;
         }
-        self.interface.panels.ask_hit(true, (x as u32, y as u32))
+        let yes_no = self.ask.is_some_and(Ask::yes_no);
+        self.interface.panels.ask_hit(yes_no, (x as u32, y as u32))
     }
 
     /// A question's text, from the game's strings.
@@ -3061,6 +3087,22 @@ impl App {
             return;
         }
         match ask {
+            Ask::Overwrite => self.save_now(),
+            Ask::Load => {
+                if let Some(e) = self.selected_save.and_then(|i| self.saves.get(i)) {
+                    let path = e.path.clone();
+                    self.load_game(&path);
+                }
+            }
+            Ask::Delete => {
+                if let Some(e) = self.selected_save.and_then(|i| self.saves.get(i)) {
+                    let _ = std::fs::remove_file(&e.path);
+                    self.selected_save = None;
+                    self.save_name.clear();
+                    self.refresh_panels();
+                }
+            }
+            Ask::NoName | Ask::SaveFailed => {}
             Ask::Restart => self.switch_mission(0),
             Ask::MainMenu => {
                 if self.menus.is_some() {
@@ -4899,12 +4941,13 @@ impl ApplicationHandler for App {
                 if !self.modifiers.super_key() {
                     self.keys.insert(code);
                 }
-                // A question takes Y or N (its buttons' keys, scan codes
-                // 0x15 and 0x31) and nothing else.
-                if self.ask.is_some() {
+                // A question takes Y or N, a notice Enter (its buttons'
+                // keys, scan codes 0x15, 0x31, 0x1c), and nothing else.
+                if let Some(ask) = self.ask {
                     match code {
-                        KeyCode::KeyY => self.answer(true),
-                        KeyCode::KeyN => self.answer(false),
+                        KeyCode::KeyY if ask.yes_no() => self.answer(true),
+                        KeyCode::KeyN if ask.yes_no() => self.answer(false),
+                        KeyCode::Enter | KeyCode::NumpadEnter if !ask.yes_no() => self.answer(true),
                         _ => {}
                     }
                     return;

@@ -1182,7 +1182,7 @@ pub struct GameView<'a> {
     /// The game is paused.
     pub paused: bool,
     /// A question asked, and the answer held down.
-    pub ask: Option<(String, Option<bool>)>,
+    pub ask: Option<(String, bool, Option<bool>)>,
     /// The load panel's state, and the panel button held down.
     pub load: Option<(load_panel::LoadView, Option<load_panel::Hit>)>,
     /// What the strip below the view tells of the object under the
@@ -1565,12 +1565,12 @@ impl GameView<'_> {
         if let Some(outcome) = self.scene.outcome {
             self.draw_outcome(frame, &screen, outcome, text_scale);
         }
-        if let (Some(ui), Some(layout), Some((text, pressed))) =
+        if let (Some(ui), Some(layout), Some((text, yes_no, pressed))) =
             (self.interface, &layout, &self.ask)
         {
             let ask = crate::panels::AskView {
                 text,
-                yes_no: true,
+                yes_no: *yes_no,
                 pressed: *pressed,
             };
             // Centred on the view, as the original on its screen.
