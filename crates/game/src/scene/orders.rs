@@ -72,6 +72,7 @@ impl Scene {
             .filter(|o| {
                 (o.ship.is_some() || (attack && o.combat.is_some()))
                     && Self::are_enemies(me, o)
+                    && !self.holds_fire(me, o)
                     && (rect.0..=rect.2).contains(&o.x)
                     && (rect.1..=rect.3).contains(&o.y)
                     && o.combat.as_ref().is_none_or(|c| c.phantom <= 0.0)

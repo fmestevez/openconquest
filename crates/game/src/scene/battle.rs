@@ -119,6 +119,7 @@ impl Scene {
                     .filter(|(_, o)| {
                         o.ship.is_some()
                             && Self::are_enemies(me, o)
+                            && !self.holds_fire(me, o)
                             && dist(me, o) <= range
                             && o.combat.as_ref().is_none_or(|c| c.phantom <= 0.0)
                             && !(me.owner == Some(combat::MONSTERS)

@@ -2997,7 +2997,26 @@ Not ported (the port's own instead): the terrain helpers of
 `artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
 simpler searches; zones weigh the lanes before nearness, since ships here
 cannot pass one another), the land fleet's placing of buildings (the
-nearest free cell to the settlement), and fleets' behaviour masks (0x482eb0, 0x4847d0).
+nearest free cell to the settlement), and the object-kind masks of the
+fleets' behaviour (see below).
+
+**Behaviour masks.** Every task gives its fleet a behaviour (0x482e80
+stores three masks at flotilla +0x14c, +0x148, +0x150; 0x482eb0 sends order
+0x72 with 0 and the three; 0x4c4350 keeps them at fleet +0x15..+0x21 and
+sends each ship message `#` sub 1, 0x4c42f0). The first is the players to
+fight, the AIPlayer's +0xe18: 0x4847d0 (on the commander's first turn and
+with every new enemy, 0x4844b0, 0x4845e0) sets every bit, then, if the
+enemy's side (+0x1a1d) is 1 or 2 and the AIPlayer's difficulty is not
+easy, clears those of the other computer players (side 3, not easy) after
+the same enemy; when it changes, letter 8 has every flotilla send it
+again. Ships pick targets only among players whose bit is set (+0x689,
+0x4bfc60; the fleet tests +0x19 in 0x4d5430). The other two are always all
+ones but for the reserve and spare tasks (0xb, 0xd), whose +0x150 is
+0x1ffffff; a ship tests one of them (+0x68d) against the target's kind
+(0x50ed20: ship types bits 0-11, buildings 12-17, lairs 18-20, creatures
+21-23, nests 24-25, castles 26-27), so those fleets may leave nests and
+castles alone; which of the two lands there is not settled, and that
+part is not ported.
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
 about the base's town, from 4 cells and 4 more a time, that holds a

@@ -101,6 +101,10 @@ pub struct Computer {
     pub enemy: Option<u32>,
     hits: u32,
     hitter: Option<u32>,
+    /// The players its ships hold their fire on: the bits +0xe18 clears
+    /// (see `Scene::update_spared`).
+    #[serde(default)]
+    spared: u32,
     /// +0xe14: when a fleet last got help.
     helped_at: u32,
     /// Role flotillas: +0x30 manager, +0x34 forts, +0x3c commander, +0x40
@@ -909,6 +913,7 @@ impl Scene {
         ai.hits = 0;
         ai.enemy = Some(sides[k].1);
         ai.hitter = ai.enemy;
+        self.update_spared(ai);
     }
 
     /// Whether player `id` has anything left (0x484770).
@@ -1091,6 +1096,44 @@ impl Scene {
         ai.hits = 0;
         ai.enemy = Some(who);
         ai.hitter = Some(who);
+        self.update_spared(ai);
+    }
+
+    /// The players a computer's ships spare (0x4847d0, on the commander's
+    /// first turn and with each new enemy): while its enemy is on the
+    /// humans' side, the other computer players that are after the same
+    /// enemy, neither of them on easy. The mask (+0xe18) goes to every
+    /// fleet with its behaviour (order 0x72, 0x482eb0: fleet +0x19), and
+    /// on to the ships (+0x689), which only pick targets whose owner's bit
+    /// is set (0x4bfc60).
+    fn update_spared(&self, ai: &mut Computer) {
+        ai.spared = 0;
+        if ai.difficulty == 0 || !ai.enemy.is_some_and(|e| self.is_human_id(e)) {
+            return;
+        }
+        for other in &self.computers.players {
+            if other.owner != ai.owner && other.difficulty > 0 && other.enemy == ai.enemy {
+                ai.spared |= 1 << other.id();
+            }
+        }
+    }
+
+    /// Whether ship `me` holds its fire on `o` (see `update_spared`).
+    pub(super) fn holds_fire(
+        &self,
+        me: &crate::objects::MapObject,
+        o: &crate::objects::MapObject,
+    ) -> bool {
+        let (Some(mine), Some(theirs)) = (me.owner, o.owner) else {
+            return false;
+        };
+        me.ship.is_some()
+            && theirs.0 <= 4
+            && self
+                .computers
+                .players
+                .iter()
+                .any(|c| c.owner == mine && c.spared & 1 << (theirs.0 * 4 + theirs.1) != 0)
     }
 
     /// The enemies about the object `s` that fired (0x486b70): their area
@@ -3596,6 +3639,7 @@ impl Scene {
     fn commander_turn(&mut self, ai: &mut Computer, f: usize, now: u32) {
         if !ai.flotillas[f].started {
             ai.flotillas[f].started = true;
+            self.update_spared(ai);
             return;
         }
         {
@@ -4948,6 +4992,65 @@ mod tests {
         scene.run_research(Upgrade::RamKind(1).seconds(0) + 0.1);
         assert_eq!(scene.levels_of(Some(owner)).ram_kinds[1], 1);
         assert_eq!(study(32, 0), Some(Upgrade::ArmourKind(2)));
+    }
+
+    #[test]
+    fn computers_after_the_same_human_spare_each_other() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        // Ships to point at each other.
+        for _ in 0..600 {
+            scene.update(0.1, &data, &mut caches);
+        }
+        let human = scene.human.unwrap();
+        let foe = human.nation * 4 + human.slot;
+        // Two computers, after the same human.
+        let others: Vec<(u32, u32)> = (0..16)
+            .map(|id| (id / 4, id % 4))
+            .filter(|&o| o != (human.nation, human.slot))
+            .take(2)
+            .collect();
+        let mut a = Computer {
+            owner: others[0],
+            ..Default::default()
+        };
+        let mut b = Computer {
+            owner: others[1],
+            ..Default::default()
+        };
+        for c in [&mut a, &mut b] {
+            c.enemy = Some(foe);
+            c.difficulty = 1;
+        }
+        scene.computers.players = vec![a.clone(), b.clone()];
+        let mut a = std::mem::take(&mut scene.computers.players[0]);
+        scene.update_spared(&mut a);
+        assert_eq!(a.spared, 1 << b.id());
+        scene.computers.players[0] = a.clone();
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(3)
+            .collect();
+        for (&i, owner) in ships
+            .iter()
+            .zip([a.owner, b.owner, (human.nation, human.slot)])
+        {
+            scene.objects[i].owner = Some(owner);
+        }
+        let o = |k: usize| &scene.objects[ships[k]];
+        assert!(scene.holds_fire(o(0), o(1)));
+        assert!(!scene.holds_fire(o(0), o(2)));
+        // On easy, or against another computer, everyone is fair game.
+        a.difficulty = 0;
+        scene.update_spared(&mut a);
+        assert_eq!(a.spared, 0);
+        a.difficulty = 1;
+        a.enemy = Some(b.id());
+        scene.update_spared(&mut a);
+        assert_eq!(a.spared, 0);
     }
 
     #[test]
