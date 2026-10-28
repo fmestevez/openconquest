@@ -1269,7 +1269,12 @@ only goes back to the middle of its flames. A Torch of Ares aboard
 identified). The flames' bottom middle stands at the ship type's and
 heading's spot (0x598ad8, 8 a type) from its picture's top left, 23 pixels
 lower. The layer is drawn through the shadow table (0x50e050 with
-0x5c1358) and 0x50e130(1, 0x26), not decoded: we draw it plainly. `SMOKE`
+0x5c1358) and 0x50e130(1, 0x26), not decoded: we draw it plainly. Both go
+to the sprite frame's remap (0x55dd40: flag 0x100, table at +0x5c, a
+value at +0x60, mode +0x64): the build preview passes table 0x5c1358 and
+0xfe (the shadow index), the flames table 0 (the layer's, 0x55dd10) and
+0x26. Palette 0x26 is white, the flames' hottest pixels, so it is not
+simply drawn as shadow; the blitter that reads +0x60 is not found yet. `SMOKE`
 (layer 6) is only restored from saves; nothing starts it in play.
 
 ## Selection box
