@@ -1277,18 +1277,6 @@ impl App {
                 .collect()
         };
         match state {
-            MenuState::Main if self.in_game => MenuPage {
-                backdrop: Backdrop::Title,
-                buttons: column(&[
-                    "Resume",
-                    "Single missions",
-                    "Multiplayer",
-                    "Load game",
-                    "Best results",
-                    "Quit",
-                ]),
-                ..empty
-            },
             // The original's title screen (Startmm.cpp, 0x530cb0): six
             // buttons down a diagonal from (70, 232), 40 right and 52 down
             // apart, the two wide shapes taking turns; captions are string
@@ -2385,13 +2373,11 @@ impl App {
 
     fn menu_action(&mut self, state: MenuState, caption: &str) {
         match (state, caption) {
-            (_, "Resume") => self.menu = None,
-            (_, "Single missions") => self.open_list(MenuState::Missions(Category::Single, None)),
             (_, "Load game") => {
                 self.refresh_panels();
                 self.open_list(MenuState::Load(LoadTab::Scenario, None));
             }
-            (_, "Quit") | (_, "Quit game") => self.quit = true,
+            (_, "Quit game") => self.quit = true,
             // The campaign from its first mission, on its briefing.
             (_, "Start scenario") => {
                 if let Some(&first) = self.category_missions(Category::Campaign).first() {
@@ -2410,11 +2396,6 @@ impl App {
                 self.menu = Some(MenuState::Multiplayer(None));
             }
             (MenuState::Connect, "Cancel") => self.menu = Some(MenuState::Main),
-            (_, "Best results") => self.menu = Some(MenuState::Best),
-            (_, "Multiplayer") => {
-                self.find_battle_maps();
-                self.menu = Some(MenuState::Multiplayer(None));
-            }
             (MenuState::Multiplayer(sel), "More players") => {
                 let most = sel
                     .and_then(|i| self.battle_maps.get(i))
@@ -2644,11 +2625,24 @@ impl App {
         }
     }
 
+    /// Ends the game under way and shows the title screen (Main menu,
+    /// message 0x4fc).
+    fn leave_game(&mut self) {
+        self.in_game = false;
+        self.net = None;
+        self.hosting = None;
+        self.joining = None;
+        self.paused = false;
+        self.selected = None;
+        self.group.clear();
+        self.pending = None;
+        self.menu = Some(MenuState::Main);
+    }
+
     /// Esc on the front end: back a screen, or out of the main menu.
     fn menu_back(&mut self, event_loop: &ActiveEventLoop) {
         self.list_first = 0;
         self.menu = match self.menu {
-            Some(MenuState::Main) if self.in_game => None,
             Some(MenuState::Main) => {
                 event_loop.exit();
                 return;
@@ -3169,9 +3163,10 @@ impl App {
             }
             Ask::NoName | Ask::SaveFailed => {}
             Ask::Restart => self.switch_mission(0),
+            // The game ends and the title screen comes back (0x4fc).
             Ask::MainMenu => {
                 if self.menus.is_some() {
-                    self.menu = Some(MenuState::Main);
+                    self.leave_game();
                 }
             }
             Ask::Quit => self.quit = true,
@@ -5350,7 +5345,9 @@ impl ApplicationHandler for App {
                         self.selected = None;
                         self.group.clear();
                     }
-                    KeyCode::Escape if self.menus.is_some() => self.menu = Some(MenuState::Main),
+                    // With nothing to cancel Esc does no more (the main
+                    // menu is the file panel's or Alt+X's).
+                    KeyCode::Escape if self.menus.is_some() => {}
                     KeyCode::Escape => event_loop.exit(),
                     KeyCode::F11 => self.toggle_fullscreen(),
                     // Alt+P (the manual's Game Hot Keys; P is Repair).
