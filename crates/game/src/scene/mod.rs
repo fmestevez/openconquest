@@ -985,6 +985,7 @@ impl Scene {
         ship.priority = 0;
         ship.patience = objects::PATIENCE;
         ship.order_tag = 0;
+        ship.waited = 0.0;
         true
     }
 
@@ -1187,6 +1188,19 @@ impl Scene {
             let Some(i) = self.object_index(id) else {
                 continue;
             };
+            // Held up 150 ticks on a plain move, it gives the move up and
+            // lies still (0x4a618d: message 0x80, sub 8), where its
+            // player's ships of higher priority may push it aside. Ships
+            // with a task here keep waiting.
+            {
+                let s = self.objects[i].ship.as_mut().unwrap();
+                if s.task.is_none() && s.waited >= crate::clock::ticks(150) {
+                    s.path.clear();
+                    s.waited = 0.0;
+                    s.blocked = 0.0;
+                    continue;
+                }
+            }
             let (x, y) = (self.objects[i].x, self.objects[i].y);
             let ship = self.objects[i].ship.as_ref().unwrap();
             let Some(&(lx, ly)) = ship.path.back() else {
@@ -1708,6 +1722,7 @@ impl Scene {
                             if other != obj.id && charging.get(&obj.id) != Some(&other) =>
                         {
                             ship.blocked += dt;
+                            ship.waited += dt;
                             ship.velocity = 0.0;
                             held.push((obj.id, next, lying.contains(&other), other));
                             break;
@@ -1715,6 +1730,7 @@ impl Scene {
                         _ => {
                             taken.insert(next, obj.id);
                             ship.blocked = 0.0;
+                            ship.waited = 0.0;
                         }
                     }
                 }

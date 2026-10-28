@@ -1485,6 +1485,17 @@ patience tripled (while below 200) and the wait cleared. A blocker in state
 the step is refused the ship slows to a stop over the distance left
 (0x4a2f60: state 4, deceleration speed^2 / (distance x 6000)).
 
+While held up a ship plans its route again every 25 ticks (+0x57b,
++0x57f; 0x4a618d, through 0x4a6330 with the wait); once the wait reaches
+150 it gives the move up (message 0x80, sub 8) and lies still, where
+ships of its player with a higher priority may push it. The port gives
+up plain moves only.
+
+When a navy gathering zone has no deposit left, its idle ships make for
+their places in the fleet by plain moves (0x4ca290, 0x4cf070) and those
+still laden go to unload (0x4c6640, priority 90); the port sends idle
+zone gatherers to the zone's middle.
+
 Pushing aside (0x4b4b50): the blocker picks at random one of the eight
 cells about it that it may enter; failing one, a cell held by another
 ship of its player with a priority below the pusher's (which is pushed in

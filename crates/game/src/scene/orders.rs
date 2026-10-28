@@ -211,6 +211,19 @@ impl Scene {
                 .map(|o| o.id);
             if let Some(d) = deposit {
                 let _ = self.order_gather(id, d);
+                continue;
+            }
+            // None left: it sails to its zone's middle (the navy's
+            // gatherers make for their places in the fleet by a plain
+            // move, priority 0: 0x4ca290, 0x4cf070), off the berth it
+            // unloaded at.
+            let (cx, cy) = ((rect.0 + rect.2) / 2.0, (rect.1 + rect.3) / 2.0);
+            if ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() > 64.0 {
+                if let Some(path) = self.plan_route(i, cx, cy) {
+                    let s = self.objects[i].ship.as_mut().unwrap();
+                    s.path = path;
+                    s.priority = 0;
+                }
             }
         }
         let zones: Vec<(usize, Rect, bool)> = self

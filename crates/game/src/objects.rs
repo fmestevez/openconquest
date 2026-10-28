@@ -263,6 +263,10 @@ pub struct Ship {
     /// The kind of order its priority was last taken from (`Task::tag`).
     #[serde(default)]
     pub order_tag: u8,
+    /// Seconds it has been held up since it last made a step (+0x591,
+    /// counted to 150 ticks): then it gives the move up (0x4a618d).
+    #[serde(default)]
+    pub waited: f32,
     /// How fast it is going now, in world pixels a second: it gathers way
     /// up to its speed and loses it to stop where it is bound or to turn.
     #[serde(default)]
@@ -1393,6 +1397,7 @@ pub fn resolve(
         priority: 0,
         patience: PATIENCE,
         order_tag: 0,
+        waited: 0.0,
         velocity: 0.0,
         face: None,
         furl: 0.0,

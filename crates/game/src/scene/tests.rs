@@ -6345,3 +6345,30 @@ fn ships_push_lower_priority_ones_aside() {
         Some(90)
     );
 }
+
+/// Held up 150 ticks on a plain move, a ship gives the move up and lies
+/// still (0x4a618d); one with a task keeps waiting (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn ships_give_up_a_move_held_up_too_long() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let own: Vec<usize> = (0..scene.objects.len())
+        .filter(|&i| scene.is_own(&scene.objects[i]) && scene.objects[i].ship.is_some())
+        .take(2)
+        .collect();
+    let (id, other) = (scene.objects[own[0]].id, scene.objects[own[1]].id);
+    let hold = |scene: &mut Scene, waited: f32| {
+        let s = scene.objects[own[0]].ship.as_mut().unwrap();
+        s.path = std::iter::once((0.0, 0.0)).collect();
+        s.waited = waited;
+        scene.go_round(vec![(id, (0, 0), false, other)]);
+        scene.objects[own[0]].ship.as_ref().unwrap().path.is_empty()
+    };
+    assert!(!hold(&mut scene, crate::clock::ticks(100)));
+    assert!(hold(&mut scene, crate::clock::ticks(150)));
+}
