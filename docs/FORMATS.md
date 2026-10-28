@@ -1471,6 +1471,28 @@ building, 3 otherwise; its frames step every cycle[state] / frames ticks
 75, 75 ticks, 0x596ab8 and its siblings; so a standing building's 12
 frames step every 6 ticks and its ruins' 20 every 3).
 
+## Ships in each other's way
+
+Each tick a ship under way checks the next cell of its route (0x4a3a70,
+from the move tick 0x4a3f40). If another ship lies there (class 200-211),
+the mover takes the blocker's state (+0x58c) into +0x5c6 and counts its
+wait (+0x591, up to 150). If the blocker lies still (state 0), is the same
+player's (+0x24f), has a lower priority (+0x5c7) than the mover, and the
+wait has passed the mover's patience (+0x5c8, 5 when an order is taken),
+the blocker is moved aside (0x4b4b50 with the mover's priority), the
+patience tripled (while below 200) and the wait cleared. A blocker in state
+3 or 6 is only waited on; anything else in the cell is waited on too. When
+the step is refused the ship slows to a stop over the distance left
+(0x4a2f60: state 4, deceleration speed^2 / (distance x 6000)).
+
+The priority is a byte of each order (ship +0x823, +0x838 and the like,
+copied from the order message; 0xff leaves it as it was), 0 for a plain
+move (0x4a638d); 0x4ad9f0 replaces one between 1 and 234 with 91-100 at
+random. The navy passes it down with its orders (0x4ce6c0, fifth
+argument); which value each order carries is not decoded yet. The port
+instead has idle ships with no orders make way for their player's others
+(see `Scene::make_way`), and computer zones avoid the amber lanes.
+
 ## Resource counters
 
 The money panel (0x505530) draws each amount as `%7d` centred in a black
