@@ -3560,6 +3560,11 @@ impl App {
         if self.video.is_some() || self.menu.is_some() || self.button_at(pos).is_some() {
             return (P::Standard, false);
         }
+        // Selling, the sell pointer (0x441ba0 answers the sell mode 0x34
+        // with gcursor mode 0x28, CUR_SELL_).
+        if self.pending == Some(Command::SELL_ITEM) {
+            return (P::Sell, false);
+        }
         // Over a quick help link, the hypertext pointer (0x51728a).
         if self.tab == Tab::Help {
             let link = self

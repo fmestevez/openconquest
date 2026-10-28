@@ -42,6 +42,9 @@ pub enum Pointer {
     GetWhale,
     /// Over a quick help hyperlink (`CUR_HTEXT_`, never greyed).
     Hypertext,
+    /// Selling: what to sell is clicked (gcursor 0x516ea0 mode 0x28, asked
+    /// for by the settlement's sell command).
+    Sell,
 }
 
 impl Pointer {
@@ -68,6 +71,7 @@ impl Pointer {
             Unload => ("CUR_UNLOAD_", (-18, -29)),
             GetWhale => ("CUR_GETW_", (-15, -15)),
             Hypertext => ("CUR_HTEXT_", (-10, -3)),
+            Sell => ("CUR_SELL_", (-17, -16)),
         }
     }
 }
