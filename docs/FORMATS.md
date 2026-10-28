@@ -857,9 +857,12 @@ for Greek fire and quick lime where they are, 7, 8, 9 for flaming
 letters 16-18 drifting 10 tenths of a pixel a tick down and right; from
 the picture's top left plus 0x5975c8 by letter: 9, 14, 6, 8, 10 on both
 axes in every direction); lighting
-effects set the sprite system's `+0x638` (0x4ed8d0: 0 on, 1 off), beside
-its remap table, read nowhere found (the port leaves shadows out with it
-off); pack save file is passed to the archive writer (0x51f4c0). Defaults read
+effects set the sprite system's `+0x638` (0x4ed8d0: 0 on, 1 off), which
+the sprite drawing reads (0x57252b, 0x572825): off, a frame of encoding 1
+(`+0xd & 3`) with a colour remap goes to 0x57b470 instead of the remapping
+blitter, which leaves out each copied run whose first pixel is in the
+remapped range (shadows 0xfe, the flames' 0x26) and paints the rest,
+repeated runs included; pack save file is passed to the archive writer (0x51f4c0). Defaults read
 from the original's memory: speed 5, mouse 59 ms, keys 14 ms, scroll speed
 5, lines 10, bar right, all boxes set.
 

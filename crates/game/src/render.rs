@@ -341,11 +341,13 @@ fn draw_image(
     draw_image_as(frame, screen, camera, lut, img, left, top, false);
 }
 
-/// The configuration's "lighting effects": with them off, shadows are not
-/// drawn. The original's switch (0x4ed8d0) sets the sprite system's flag
-/// `+0x638` beside its remap table (`+0x63c`, the shadow table for
-/// shadows and flames, 0x55dd10); that it turns those remaps off is
-/// inferred, the blitter reading it not being found.
+/// The configuration's "lighting effects": with them off, the colours a
+/// frame darkens through the shadow table (shadows, the flames' 0x26) are
+/// left out. The original's switch (0x4ed8d0) sets the sprite system's
+/// flag `+0x638`, which the drawing (0x57252b, 0x572825) reads to send
+/// such frames to 0x57b470 instead of the remapping blitter: it skips a
+/// copied run starting in the range (repeated runs are still painted;
+/// not reproduced here).
 pub static LIGHTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Draws `img` at world `(left, top)`; `as_shadow` darkens what lies under
