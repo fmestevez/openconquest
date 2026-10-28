@@ -339,6 +339,51 @@ impl Scene {
 
     /// Ships at their docks and buildings being mended get their strength
     /// back, at the owner's expense, until whole or the money runs out.
+    /// A computer player's fort mended fills its room again (0x419910,
+    /// for sides 3 and 4): down its class's default arming (0x5966b8), each
+    /// unit that fits is added whole, until the room is full or the list
+    /// is done; their amber and fish are paid (0x597164, 0x597170 x 100).
+    pub(super) fn rearm_fort(&mut self, id: u32) {
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        let o = &self.objects[i];
+        let (ObjectClass::Building(class @ 0x34..=0x36), Some(owner)) = (o.class, o.owner) else {
+            return;
+        };
+        let human = Some(owner) == self.human.map(|h| (h.nation, h.slot));
+        if human || self.seat_of(owner).is_some() {
+            return;
+        }
+        let room = crate::combat::fort_room(class);
+        let mut places = o.fort_places();
+        let items = |p: &[Vec<u8>; 9]| -> Vec<u8> {
+            p.iter()
+                .enumerate()
+                .flat_map(|(k, v)| std::iter::repeat_n(k as u8, v.len()))
+                .collect()
+        };
+        let (list, _) = crate::combat::fort_arming(class);
+        let (mut amber, mut fish) = (0i64, 0i64);
+        for &item in list.iter().rev() {
+            let load = crate::combat::fort_load(&items(&places));
+            if load >= room {
+                break;
+            }
+            if load + crate::combat::item_power(item) > room {
+                continue;
+            }
+            places[item as usize].push(100);
+            let (a, f) = crate::combat::item_cost(item);
+            amber += a as i64;
+            fish += f as i64;
+        }
+        if amber > 0 || fish > 0 {
+            self.objects[i].set_fort_places(places);
+            self.earn(owner, -amber, -fish);
+        }
+    }
+
     pub(super) fn run_repairs(&mut self, dt: f32) {
         self.run_stock_repairs(dt);
         let mut work: Vec<(u32, bool)> = self.mending.iter().map(|&id| (id, false)).collect();
@@ -409,6 +454,9 @@ impl Scene {
             if whole {
                 done.push(id);
             }
+        }
+        for &id in &done {
+            self.rearm_fort(id);
         }
         for id in done {
             self.mending.retain(|&m| m != id);

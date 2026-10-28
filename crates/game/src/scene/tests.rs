@@ -6129,3 +6129,43 @@ fn spells_wear_fort_units() {
         .sum();
     assert!(after < whole, "{after} of {whole}");
 }
+
+/// A computer player's fort mended refills its room down its default
+/// arming and pays for it (0x419910); a human's does not (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn computer_forts_rearm_after_repair() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss012").unwrap();
+    scene.brain = None;
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    let f = scene
+        .objects
+        .iter()
+        .position(|o| {
+            o.class == ObjectClass::Building(0x36) && o.owner.is_some() && o.owner != human
+        })
+        .unwrap();
+    let (id, owner) = (scene.objects[f].id, scene.objects[f].owner.unwrap());
+    scene.objects[f].set_fort_places(Default::default());
+    scene.earn(owner, 10_000, 10_000);
+    let before = scene.funds(owner);
+    scene.rearm_fort(id);
+    let f = scene.object_index(id).unwrap();
+    let items: Vec<u8> = scene.objects[f].combat.as_ref().unwrap().weapons.clone();
+    assert_eq!(
+        combat::fort_load(&items),
+        combat::fort_room(0x36),
+        "{items:?}"
+    );
+    assert!(scene.funds(owner).0 < before.0, "paid");
+    // A human's fort is left as it is.
+    scene.objects[f].owner = human;
+    scene.objects[f].set_fort_places(Default::default());
+    scene.rearm_fort(id);
+    assert!(scene.objects[f].combat.as_ref().unwrap().weapons.is_empty());
+}
