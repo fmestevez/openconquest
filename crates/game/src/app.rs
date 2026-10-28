@@ -356,6 +356,8 @@ struct Settings {
     /// Right click gives orders, instead of the original's stepping through
     /// the pointers.
     modern_mouse: bool,
+    /// The command keys (config.exe's Hotkey editor; `config.json`).
+    hotkeys: crate::hotkeys::Hotkeys,
 }
 
 impl Default for Settings {
@@ -363,6 +365,7 @@ impl Default for Settings {
         Self {
             config: crate::launch::panel_config(),
             modern_mouse: crate::launch::modern_mouse(),
+            hotkeys: crate::launch::hotkeys(),
         }
     }
 }
@@ -446,8 +449,13 @@ pub struct App {
     /// A left press on the map with something selected, held back: a drag
     /// from it draws a selection box, a release without one clicks there.
     left_down: Option<PhysicalPosition<f64>>,
-    /// The radar map shown in place of the view (Tab).
+    /// The radar map shown in place of the view, the view in the bar's map
+    /// window (Tab).
     radar: bool,
+    /// The radar map's first cell (it scrolls to keep the view's frame).
+    radar_origin: (i32, i32),
+    /// What the bar's map window shows with the radar map.
+    radar_view: Camera,
     /// A command waiting for a target on the map (e.g. Move).
     pending: Option<Command>,
     /// The window size the frame being drawn has (see `window_size`).
@@ -646,6 +654,8 @@ impl App {
             box_from: None,
             left_down: None,
             radar: false,
+            radar_origin: (0, 0),
+            radar_view: camera,
             pending: None,
             drawn_size: (1, 1),
             pointers: Default::default(),
@@ -777,7 +787,11 @@ impl App {
             .flatten();
         GameView {
             hover_object,
-            radar: self.radar,
+            radar: self.radar_shown().then_some(crate::ui::Radar {
+                origin: self.radar_origin,
+                view: self.radar_view,
+            }),
+            hotkeys: &self.settings.hotkeys,
             site_preview: None,
             site_cells: match self.pending.and_then(economy::building_of_command) {
                 Some(economy::SETTLEMENT | economy::TOWN) => 2,
@@ -2727,13 +2741,7 @@ impl App {
 
     /// The map cell under a window position in the world view.
     fn cell_at(&self, pos: PhysicalPosition<f64>) -> Option<(i32, i32)> {
-        let (screen, _) = self.placement();
-        if !screen.contains(pos.x as f32, pos.y as f32) {
-            return None;
-        }
-        let (wx, wy) = self
-            .camera
-            .screen_to_world(&screen, pos.x as f32, pos.y as f32);
+        let (wx, wy) = self.view_world(pos)?;
         let t = openconquest_formats::map::TILE_SIZE as f32;
         Some(((wx / t).floor() as i32, (wy / t).floor() as i32))
     }
@@ -2869,6 +2877,27 @@ impl App {
         let (x, y, w, h) = self.interface.arming_rect(&layout);
         let (px, py) = (pos.x as f32, pos.y as f32);
         px >= x && py >= y && px < x + w && py < y + h
+    }
+
+    /// The command slot whose key `code` is (0x4f2140): the buttons'
+    /// accelerators live while the command panel shows them.
+    fn hotkey_slot(&self, code: KeyCode) -> Option<usize> {
+        if !self.show_interface || Panels::covers_bar(self.tab) || self.reloading().is_some() {
+            return None;
+        }
+        let obj = self
+            .selected
+            .and_then(|id| self.scene.object_index(id))
+            .map(|i| &self.scene.objects[i])?;
+        let shown = menu(&self.scene, obj, self.page);
+        let m = self.modifiers;
+        let held = |scan: u8| match scan {
+            0x2a | 0x36 => m.shift_key(),
+            0x1d | 0x9d => m.control_key() || m.super_key(),
+            0x38 | 0xb8 => m.alt_key(),
+            s => crate::hotkeys::key_code(s).is_some_and(|k| self.keys.contains(&k)),
+        };
+        self.settings.hotkeys.slot_for(&shown, code, &held)
     }
 
     /// The command slot under a window position, if the interface is shown.
@@ -3394,7 +3423,7 @@ impl App {
         if let Some(g) = &self.gfx {
             let s = &self.scene;
             g.window.set_title(&format!(
-                "OpenConquest — {} ({}x{}) — PgUp/PgDn: mission · Tab: interface · F11: fullscreen",
+                "OpenConquest — {} ({}x{}) — PgUp/PgDn: mission · Tab: radar map · F11: fullscreen",
                 s.mission, s.grid.width, s.grid.height
             ));
         }
@@ -3499,7 +3528,7 @@ impl App {
     /// Moves the camera to the world point under a minimap position.
     /// Returns false if the position is outside the minimap.
     fn minimap_jump(&mut self, pos: PhysicalPosition<f64>) -> bool {
-        if self.show_interface && Panels::covers_bar(self.tab) {
+        if self.show_interface && Panels::covers_bar(self.tab) || self.radar_shown() {
             return false;
         }
         let (screen, minimap) = self.placement();
@@ -3513,19 +3542,107 @@ impl App {
         true
     }
 
-    fn left_click(&mut self, pos: PhysicalPosition<f64>) {
-        // A click on the radar map goes there.
+    /// Whether the radar map is shown (Tab, with the control bar).
+    fn radar_shown(&self) -> bool {
+        self.radar && self.show_interface
+    }
+
+    /// The world point under a window position on the map: in the view,
+    /// or on the radar map in its place (where a click is one on the map,
+    /// Mapa.cpp 0x51cdd0 handing it to the pointer as the view does; the
+    /// view in the bar's window takes none).
+    fn view_world(&self, pos: PhysicalPosition<f64>) -> Option<(f32, f32)> {
+        let (sx, sy) = (pos.x as f32, pos.y as f32);
+        if let Some((_, radar)) = self.radar_rects() {
+            return radar.contains(sx, sy).then(|| radar.to_world(sx, sy));
+        }
+        let (screen, _) = self.placement();
+        screen
+            .contains(sx, sy)
+            .then(|| self.camera.screen_to_world(&screen, sx, sy))
+    }
+
+    /// As `view_world`, past the map's edges too.
+    fn view_world_any(&self, pos: PhysicalPosition<f64>) -> (f32, f32) {
+        let (sx, sy) = (pos.x as f32, pos.y as f32);
+        match self.radar_rects() {
+            Some((_, radar)) => radar.to_world(sx, sy),
+            None => self.camera.screen_to_world(&self.placement().0, sx, sy),
+        }
+    }
+
+    /// With the radar map: the bar's map window showing the view, and the
+    /// radar map in the view's place.
+    fn radar_rects(&self) -> Option<(Screen, MinimapRect)> {
+        if !self.radar_shown() {
+            return None;
+        }
+        let layout = self
+            .interface
+            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        Some(crate::ui::radar_placement(
+            &layout,
+            &self.scene,
+            self.radar_origin,
+        ))
+    }
+
+    /// Tab: the radar map in the view's place and the view in the bar's
+    /// map window, or back (0x504620 message 0xcbc: the view's mapa
+    /// between modes 1 and 2, the bar's between 3 and 4). Not with the bar
+    /// hidden.
+    fn toggle_radar(&mut self) {
+        if !self.show_interface {
+            return;
+        }
+        self.radar = !self.radar;
         if self.radar {
-            let (screen, _) = self.placement();
-            let radar = MinimapRect::fit(&self.scene, screen.x, screen.y, screen.w, screen.h);
-            if radar.contains(pos.x as f32, pos.y as f32) {
-                let (wx, wy) = radar.to_world(pos.x as f32, pos.y as f32);
-                self.camera
-                    .center_on(wx, wy, &screen, self.scene.map_size());
-                self.radar = false;
-                return;
+            self.radar_origin = (0, 0);
+            self.scroll_radar();
+            // The bar's window from the view's top-left corner (0x51bd20);
+            // the view itself stays put, and is back where it was after
+            // (seen on the original).
+            self.radar_view = self.camera;
+            if let Some((bar, _)) = self.radar_rects() {
+                self.radar_view.clamp(&bar, self.scene.map_size());
             }
         }
+    }
+
+    /// Keeps the view's frame on the radar map.
+    fn scroll_radar(&mut self) {
+        if !self.radar_shown() {
+            return;
+        }
+        let layout = self
+            .interface
+            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        self.radar_origin =
+            crate::ui::radar_origin(&layout, &self.scene, &self.camera, self.radar_origin);
+    }
+
+    /// The pointer over the radar map takes the bar's window there: the 3
+    /// x 3 cells around the cell under it (0x51c6b0, message 0xcb9); the
+    /// view's frame stays (seen on the original).
+    fn radar_hover(&mut self, pos: PhysicalPosition<f64>) {
+        if self.menu.is_some() {
+            return;
+        }
+        let Some((bar, radar)) = self.radar_rects() else {
+            return;
+        };
+        let (sx, sy) = (pos.x as f32, pos.y as f32);
+        if !radar.contains(sx, sy) {
+            return;
+        }
+        let t = openconquest_formats::map::TILE_SIZE as f32;
+        let (wx, wy) = radar.to_world(sx, sy);
+        let (cx, cy) = ((wx / t).floor() + 0.5, (wy / t).floor() + 0.5);
+        self.radar_view
+            .center_on(cx * t, cy * t, &bar, self.scene.map_size());
+    }
+
+    fn left_click(&mut self, pos: PhysicalPosition<f64>) {
         if self.panel_click(pos) {
             return;
         }
@@ -3818,14 +3935,9 @@ impl App {
             return;
         }
         self.minimap_drag = false;
-        let (screen, _) = self.placement();
-        if !screen.contains(pos.x as f32, pos.y as f32) {
+        if self.view_world(pos).is_none() {
             return;
         }
-        let (wx, wy) = self
-            .camera
-            .screen_to_world(&screen, pos.x as f32, pos.y as f32);
-        let _ = (wx, wy);
         self.box_from = Some(pos);
         self.pending = None;
     }
@@ -3852,8 +3964,7 @@ impl App {
                 return (P::Hypertext, false);
             }
         }
-        let (screen, _) = self.placement();
-        if !screen.contains(pos.x as f32, pos.y as f32) {
+        if self.view_world(pos).is_none() {
             return (P::Standard, false);
         }
         let target = self
@@ -4064,13 +4175,13 @@ impl App {
     /// the map, with something selected and no command waiting for its
     /// target.
     fn holds_press(&self, pos: PhysicalPosition<f64>) -> bool {
-        let (screen, minimap) = self.placement();
+        let (_, minimap) = self.placement();
         let (x, y) = (pos.x as f32, pos.y as f32);
         self.selected.is_some()
             && self.pending.is_none()
             && self.menu.is_none()
-            && screen.contains(x, y)
-            && !minimap.contains(x, y)
+            && self.view_world(pos).is_some()
+            && (self.radar_shown() || !minimap.contains(x, y))
             && self.button_at(pos).is_none()
     }
 
@@ -4233,19 +4344,14 @@ impl App {
         let shift = self.modifiers.shift_key();
         let dragged = (from.x - to.x).abs() + (from.y - to.y).abs() > BOX_THRESHOLD;
         let mut chosen: Vec<u32> = if dragged {
-            let (screen, _) = self.placement();
-            let (x0, x1) = (from.x.min(to.x) as f32, from.x.max(to.x) as f32);
-            let (y0, y1) = (from.y.min(to.y) as f32, from.y.max(to.y) as f32);
-            let scale = self.camera.scale(&screen);
+            let (a, b) = (self.view_world_any(from), self.view_world_any(to));
+            let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));
+            let (y0, y1) = (a.1.min(b.1), a.1.max(b.1));
             self.scene
                 .objects
                 .iter()
                 .filter(|o| o.ship.is_some() && self.scene.is_own(o))
-                .filter(|o| {
-                    let sx = screen.x as f32 + (o.x - self.camera.x) * scale;
-                    let sy = screen.y as f32 + (o.y - self.camera.y) * scale;
-                    (x0..=x1).contains(&sx) && (y0..=y1).contains(&sy)
-                })
+                .filter(|o| (x0..=x1).contains(&o.x) && (y0..=y1).contains(&o.y))
                 .map(|o| o.id)
                 .collect()
         } else {
@@ -4291,11 +4397,11 @@ impl App {
     /// The world point under a window position, in the view or on the
     /// minimap.
     fn world_at(&self, pos: PhysicalPosition<f64>) -> Option<(f32, f32)> {
-        let (screen, minimap) = self.placement();
+        let (_, minimap) = self.placement();
         let (sx, sy) = (pos.x as f32, pos.y as f32);
-        if screen.contains(sx, sy) {
-            Some(self.camera.screen_to_world(&screen, sx, sy))
-        } else if minimap.contains(sx, sy) {
+        if let Some(w) = self.view_world(pos) {
+            Some(w)
+        } else if minimap.contains(sx, sy) && !self.radar_shown() {
             Some(minimap.to_world(sx, sy))
         } else {
             None
@@ -4304,13 +4410,7 @@ impl App {
 
     /// The object under a window position in the world view.
     fn object_at(&self, pos: PhysicalPosition<f64>) -> Option<u32> {
-        let (screen, _) = self.placement();
-        if !screen.contains(pos.x as f32, pos.y as f32) {
-            return None;
-        }
-        let (wx, wy) = self
-            .camera
-            .screen_to_world(&screen, pos.x as f32, pos.y as f32);
+        let (wx, wy) = self.view_world(pos)?;
         hit_test(&self.scene, wx, wy, self.time_ms)
     }
 
@@ -4406,13 +4506,7 @@ impl App {
             let obj = &self.scene.objects[i];
             obj.ship.is_some() && self.scene.is_own(obj)
         });
-        let (screen, minimap) = self.placement();
-        let (sx, sy) = (pos.x as f32, pos.y as f32);
-        let target = if screen.contains(sx, sy) {
-            self.camera.screen_to_world(&screen, sx, sy)
-        } else if minimap.contains(sx, sy) {
-            minimap.to_world(sx, sy)
-        } else {
+        let Some(target) = self.world_at(pos) else {
             return;
         };
         let (dx, dy) = group_offset(k);
@@ -4582,16 +4676,16 @@ impl App {
         let (mut dx, mut dy) = (0.0f32, 0.0f32);
         let held = |k: &[KeyCode]| k.iter().any(|k| self.keys.contains(k));
         let mut keyed = false;
-        if held(&[KeyCode::ArrowLeft, KeyCode::KeyA]) {
+        if held(&[KeyCode::ArrowLeft]) {
             dx -= 1.0;
         }
-        if held(&[KeyCode::ArrowRight, KeyCode::KeyD]) {
+        if held(&[KeyCode::ArrowRight]) {
             dx += 1.0;
         }
-        if held(&[KeyCode::ArrowUp, KeyCode::KeyW]) {
+        if held(&[KeyCode::ArrowUp]) {
             dy -= 1.0;
         }
-        if held(&[KeyCode::ArrowDown, KeyCode::KeyS]) {
+        if held(&[KeyCode::ArrowDown]) {
             dy += 1.0;
         }
         keyed |= dx != 0.0 || dy != 0.0;
@@ -4620,6 +4714,7 @@ impl App {
                 .scroll(direction(dx) * speed, direction(dy) * speed, &screen, map);
         }
         self.camera.clamp(&screen, map);
+        self.scroll_radar();
     }
 
     fn redraw(&mut self) -> Result<()> {
@@ -4938,7 +5033,9 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                if code == KeyCode::KeyB {
+                // Alt+B: the briefing again (this port's; B is a command
+                // key).
+                if code == KeyCode::KeyB && self.modifiers.alt_key() {
                     self.briefing = !self.briefing;
                     return;
                 }
@@ -4978,6 +5075,14 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // A command's key presses its button (as config.exe's
+                // Hotkey editor sets them), after Esc's cancelling.
+                let cancels = code == KeyCode::Escape
+                    && (self.pending.is_some() || self.reloading().is_some());
+                if let Some(slot) = self.hotkey_slot(code).filter(|_| !cancels) {
+                    self.press_button(slot);
+                    return;
+                }
                 match code {
                     KeyCode::KeyS if command => self.quick_save(),
                     KeyCode::KeyO if command => self.quick_load(),
@@ -5002,14 +5107,17 @@ impl ApplicationHandler for App {
                     KeyCode::Escape if self.menus.is_some() => self.menu = Some(MenuState::Main),
                     KeyCode::Escape => event_loop.exit(),
                     KeyCode::F11 => self.toggle_fullscreen(),
-                    KeyCode::KeyP | KeyCode::Pause => self.paused = !self.paused,
+                    // Alt+P (the manual's Game Hot Keys; P is Repair).
+                    KeyCode::KeyP if self.modifiers.alt_key() => self.paused = !self.paused,
+                    KeyCode::Pause => self.paused = !self.paused,
                     // Backspace shows where the player was last attacked.
                     KeyCode::Backspace => {
                         if let Some((x, y)) = self.scene.last_attack {
                             self.camera.center_on(x, y, &screen, map);
                         }
                     }
-                    KeyCode::KeyM => {
+                    // Alt+M (this port's; M is Move).
+                    KeyCode::KeyM if self.modifiers.alt_key() => {
                         if let Some(a) = self.audio.as_mut() {
                             a.muted = !a.muted;
                             let muted = a.muted;
@@ -5026,10 +5134,15 @@ impl ApplicationHandler for App {
                     KeyCode::PageDown => self.switch_mission(1),
                     KeyCode::PageUp => self.switch_mission(-1),
                     // Tab puts the radar map in place of the view.
-                    KeyCode::Tab => self.radar = !self.radar,
+                    KeyCode::Tab => self.toggle_radar(),
                     // Space hides or shows the control bar (the manual's
                     // Game Hot Keys).
                     KeyCode::Space => {
+                        // The radar map goes first (0x50f910, message
+                        // 0x4e1).
+                        if self.radar {
+                            self.toggle_radar();
+                        }
                         self.show_interface = !self.show_interface;
                         let (screen, _) = self.placement();
                         self.camera.clamp(&screen, map);
@@ -5090,6 +5203,7 @@ impl ApplicationHandler for App {
                 } else if self.minimap_drag {
                     self.minimap_jump(position);
                 }
+                self.radar_hover(position);
                 self.cursor = Some(position);
             }
             WindowEvent::CursorLeft { .. } => self.cursor = None,

@@ -23,6 +23,11 @@ struct Config {
     /// The configuration and sound panels' settings.
     #[serde(default)]
     panels: crate::panels::Config,
+    /// Command keys changed from the original's defaults, as config.exe's
+    /// Hotkey editor would: command id (`"0x04"`) to key (`"M"`,
+    /// `"Shift+M"`, `""` for none).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    hotkeys: std::collections::BTreeMap<String, String>,
 }
 
 fn read_config() -> Config {
@@ -63,6 +68,11 @@ pub fn set_panel_config(panels: &crate::panels::Config) {
     let mut config = read_config();
     config.panels = *panels;
     write_config(&config);
+}
+
+/// The command keys: the original's defaults with the player's changes.
+pub fn hotkeys() -> crate::hotkeys::Hotkeys {
+    crate::hotkeys::Hotkeys::with_overrides(&read_config().hotkeys)
 }
 
 fn config_path() -> Option<PathBuf> {

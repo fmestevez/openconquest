@@ -167,7 +167,7 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 
 | Input | Action |
 |-------|--------|
-| Arrows / WASD, screen edge (fullscreen or `--edge-scroll`) | Scroll |
+| Arrows, screen edge (fullscreen or `--edge-scroll`) | Scroll |
 | Right or middle mouse drag | Pan |
 | Mouse wheel, trackpad pinch, `+` / `-`, Home | Zoom, reset zoom |
 | Trackpad two-finger swipe | Move the map |
@@ -178,6 +178,7 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 | Right click (original mouse) | Step the pointer on to the next thing your ships could do there (e.g. attack, board, ram an enemy); cancel a command waiting for its target |
 | Right click (modern mouse) | Give the order the pointer shows, as a left click on it would |
 | Shift + click to sail | Add a waypoint to the route |
+| Command keys | Press the selection's command button, as clicking it (the original's defaults, shown on the button's help line): Move M, Stop S, Fire F, Board B, Ram R, Treasure/hero T, Reload L, Repair at dock P, Build D (settlement C, medium fort F), Behaviour C; merchants Unload U, Amber A, Fishing F, Leviathan V, Gather zones R; settlements Train bowmen B / javelinmen J / swordsmen S, Repair R, Sell E; Esc the red cross. Not with Shift, Ctrl or Alt held. Changed in `config.json` (`"hotkeys": {"0x04": "G", "0x01": "Shift+X"}`, command id to key) |
 | Command buttons | Move (then click the destination), Stop, Fire (then click an enemy ship or building), Collect amber / Fish / Hunt leviathan (then click a deposit or zone), Repair (then click a dock, or for a settlement a damaged building), Behaviour, ship building and upgrades work, for every selected ship where it applies; the rest are shown greyed until implemented |
 | Build structures (settlement or town) | Pick a building, then click a land cell nearby (green outline: allowed; ports and shipyards need the shore); Esc goes back |
 | Fire, then click an enemy ship or building | Attack it |
@@ -185,19 +186,19 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 | Build (merchant), then click a shore cell | Sail there and found a settlement |
 | Esc | Cancel, close a panel, deselect |
 | Click/drag on the minimap | Jump |
-| Tab | Radar map in place of the view (click it to go there) |
+| Tab (with the control bar) | Radar map in place of the view, the view in the bar's map window following the pointer over the radar map; clicks on the radar map act on the map there; Tab again goes back |
 | Space | Hide or show the control bar (full-window view) |
 | Backspace | Go to where you were last attacked |
 | Bar tabs (wheel, disk, wrench, clef, scroll) | Object panel; save slots, restart and quit; game and scroll speed and the mouse controls (original or modern, remembered); sound volume; objectives and briefing |
-| P | Pause |
+| Alt+P, Pause | Pause |
 | Esc (nothing selected) | Main menu (Resume returns to the game) |
 | Best results (main menu) | Your fastest win of each mission (kept in `<data>/saves/best.json`) |
 | Ctrl+S / Ctrl+O (Cmd on macOS) | Quick save / quick load, as the original's keys (`<data>/saves/quick.json`; `--load FILE` continues a save) |
 | Ctrl+1 ... Ctrl+0 (Cmd on macOS), then 1 ... 0 | Assign the selection to a group, then select the group again |
 | Shift+F1 ... Shift+F10, then F1 ... F10 | Remember the place in view, then centre on it again |
 | Right click on a marine or weapon button | Take the last one ordered off the queue, refunded |
-| M | Sound and music on/off (`--mute` starts with it off) |
-| B | Show the mission briefing again (it is shown at the start; the game waits until it is closed) |
+| Alt+M | Sound and music on/off (`--mute` starts with it off) |
+| Alt+B | Show the mission briefing again (it is shown at the start; the game waits until it is closed) |
 | Page Up / Page Down | Previous / next mission |
 | F11, Alt+Enter | Fullscreen |
 
