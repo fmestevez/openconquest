@@ -4570,8 +4570,8 @@ mod tests {
         let i = scene.object_index(id).unwrap();
         let n = scene.objects[i].unit_counts();
         let s = scene.objects[i].ship.as_mut().unwrap();
-        for k in 0..9 {
-            s.conditions[k] = vec![20; n[k]];
+        for (c, &n) in s.conditions.iter_mut().zip(&n) {
+            *c = vec![20; n];
         }
         scene.send_worn(&mut ai, f, 10_000);
         assert!(ai.flotillas[ai.reserve].ships.contains(&id));
