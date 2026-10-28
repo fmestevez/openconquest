@@ -62,9 +62,8 @@ pub struct MenuView<'a> {
     pub story: Option<(Rect, &'a [String])>,
     /// The story's font and line pitch, if not the briefing's.
     pub story_style: Option<(Style, f32)>,
-    /// Where the story's down arrow goes: live if the story runs past its
-    /// box.
-    pub story_arrow: Option<(f32, f32)>,
+    /// The first line of the story shown (it scrolls).
+    pub story_first: usize,
     /// Labels in the big font, at their top left.
     pub labels: &'a [(String, f32, f32)],
     /// Checkboxes (`M_CHECK0`/`1`) with their captions.
@@ -89,6 +88,8 @@ pub struct MenuView<'a> {
     pub row_height: Option<f32>,
     /// Clickable spots beyond buttons and the list (scroll arrows).
     pub spots: &'a [(Rect, MenuHit)],
+    /// Scroll bar tracks: a click or a drag on one picks a position.
+    pub tracks: &'a [Track],
     /// Filled rectangles (a text field's cursor), drawn last.
     pub fills: &'a [(Rect, u32)],
     /// Tabs (`M_LOADZ`, wide ones `M_LOADZ_BIG`; the second picture is
@@ -156,9 +157,153 @@ pub enum MenuHit {
     Button(usize),
     Item(usize),
     Check(usize),
-    /// A panel's up (-1) or down (1) arrow.
-    Scroll(i32),
+    /// A scroll arrow: what it scrolls, back (-1) or on (1).
+    Step(Scroller, i32),
+    /// A scroll bar's track at a position of what it scrolls.
+    Track(Scroller, usize),
     Tab(usize),
+}
+
+/// What a scroll bar scrolls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scroller {
+    /// The screen's list.
+    List,
+    /// The mission description.
+    Story,
+    /// The map preview, across and down.
+    MapX,
+    MapY,
+}
+
+/// The thumb pictures of the front end's scroll bars (`*_TR1`) are 15
+/// pixels square.
+pub const THUMB: f32 = 15.0;
+
+/// A scroll bar's track (Ourlib's _strack.cpp): `count` positions along
+/// `rect` (the track picture 4 pixels in on each side), the thumb at `pos`.
+#[derive(Debug, Clone, Copy)]
+pub struct Track {
+    pub rect: Rect,
+    pub vertical: bool,
+    pub count: usize,
+    pub pos: usize,
+    pub target: Scroller,
+}
+
+impl Track {
+    /// The track whose picture's top left is at (`x`, `y`), `length`
+    /// pixels long along its axis.
+    pub fn at(
+        x: f32,
+        y: f32,
+        length: f32,
+        vertical: bool,
+        count: usize,
+        pos: usize,
+        target: Scroller,
+    ) -> Self {
+        let rect = if vertical {
+            (x + 4.0, y + 4.0, THUMB, length - 8.0)
+        } else {
+            (x + 4.0, y + 4.0, length - 8.0, THUMB)
+        };
+        Track {
+            rect,
+            vertical,
+            count,
+            pos,
+            target,
+        }
+    }
+
+    fn length(&self) -> f32 {
+        if self.vertical {
+            self.rect.3
+        } else {
+            self.rect.2
+        }
+    }
+
+    /// Where its thumb's top left goes (0x552400).
+    pub fn thumb(&self) -> (f32, f32) {
+        let travel = (self.length() - THUMB) as i32;
+        let off = crate::panels::thumb_offset(self.pos as u32, self.count as u32, travel) as f32;
+        if self.vertical {
+            (self.rect.0, self.rect.1 + off)
+        } else {
+            (self.rect.0 + off, self.rect.1)
+        }
+    }
+
+    /// The position under 800x600 point `p` (0x5524a0): the ends within
+    /// half a thumb of them.
+    pub fn pos_at(&self, p: (f32, f32)) -> usize {
+        let along = if self.vertical {
+            p.1 - self.rect.1
+        } else {
+            p.0 - self.rect.0
+        };
+        crate::panels::thumb_position(
+            along.floor() as i32,
+            self.count as u32,
+            self.length() as i32,
+            THUMB as i32,
+        ) as usize
+    }
+}
+
+/// The positions of a scroll bar over `total` lines (or cells) shown
+/// `visible` at a time: one for each first line that leaves none of the
+/// window empty (the original's viewer and edit, 0x54c320, 0x54ee70);
+/// none when everything fits.
+pub fn scroll_positions(total: usize, visible: usize) -> usize {
+    if total > visible {
+        total - visible + 1
+    } else {
+        0
+    }
+}
+
+/// A scroll bar's position a step back (`d` < 0) or on from `pos`, of
+/// `count`, staying put at the ends (_sslider.cpp, messages 0x2f, 0x30).
+pub fn step_position(pos: usize, count: usize, d: i32) -> usize {
+    if d < 0 {
+        pos.saturating_sub(1)
+    } else if pos + 1 < count {
+        pos + 1
+    } else {
+        pos
+    }
+}
+
+/// The first row shown of a list of `n` rows shown `rows` at a time,
+/// asked to start at `first`: never past the last full window, so that
+/// what is drawn and what is clicked agree.
+pub fn list_window(first: usize, n: usize, rows: usize) -> usize {
+    first.min(n.saturating_sub(rows))
+}
+
+/// The first row shown once row `cursor` is brought into view, the window
+/// moved no further than it must (Ourlib's _slist.cpp, 0x54cd00).
+pub fn follow(first: usize, cursor: usize, rows: usize) -> usize {
+    if cursor < first {
+        cursor
+    } else if rows > 0 && cursor >= first + rows {
+        cursor + 1 - rows
+    } else {
+        first
+    }
+}
+
+/// How many rows of the plain list fit in box `rect`.
+pub fn list_rows(rect: Rect) -> usize {
+    ((rect.3 - 8.0) / ROW).floor().max(0.0) as usize
+}
+
+/// How many lines of a story fit in its box `rect`, `pitch` apart.
+pub fn story_rows(rect: Rect, pitch: f32) -> usize {
+    ((rect.3 - 19.0) / pitch).floor().max(0.0) as usize
 }
 
 // The list and text boxes.
@@ -652,59 +797,14 @@ impl Menus {
                 );
             }
         }
-        if let Some(((bx, by, bw, _bh), paragraphs)) = view.story {
-            // Wrapped at spaces to the box (empty words keep double
-            // spaces), 19 a line from 19 down (fitted to the original).
-            let (font, pitch) = match view
-                .story_style
-                .and_then(|(st, l)| Some((self.styles.get(&st)?, l)))
-            {
-                Some(f) => f,
-                None => (&self.story_font, STORY_LINE),
-            };
-            let width = bw as u32;
-            let bottom = by + _bh;
-            let mut overflow = false;
-            let mut y = by + 19.0;
-            for p in paragraphs {
-                let mut line: Option<String> = None;
-                for word in p.split(' ') {
-                    let candidate = match &line {
-                        None => word.to_string(),
-                        Some(l) => format!("{l} {word}"),
-                    };
-                    match line {
-                        // A word fits with the space after it (matches every
-                        // break on the original's screen).
-                        Some(l)
-                            if !l.trim().is_empty()
-                                && font.measure(&format!("{candidate} ")) > width =>
-                        {
-                            if y + pitch <= bottom {
-                                write(frame, font, bx, y, &l);
-                            } else {
-                                overflow = true;
-                            }
-                            y += pitch;
-                            line = Some(word.to_string());
-                        }
-                        _ => line = Some(candidate),
-                    }
-                }
-                let line = line.unwrap_or_default();
-                if y + pitch <= bottom {
-                    write(frame, font, bx, y, &line);
-                } else if !line.trim().is_empty() {
-                    overflow = true;
-                }
-                y += pitch;
-            }
-            if let Some((ax, ay)) = view.story_arrow {
-                let name = if overflow { "M_LBUT_DN0" } else { "M_LBUT_DN2" };
-                if let Some(img) = self.pictures.get(name) {
-                    let (x, y) = at(ax, ay);
-                    blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
-                }
+        if let Some((rect, paragraphs)) = view.story {
+            // Wrapped to the box, 19 a line from 19 down (fitted to the
+            // original), from the first line scrolled to.
+            let (font, pitch) = self.story_font_of(view.story_style);
+            let lines = self.story_lines(view.story_style, rect.2, paragraphs);
+            let rows = story_rows(rect, pitch);
+            for (k, l) in lines.iter().skip(view.story_first).take(rows).enumerate() {
+                write(frame, font, rect.0, rect.1 + 19.0 + k as f32 * pitch, l);
             }
         }
         for t in view.texts {
@@ -842,6 +942,54 @@ impl Menus {
         );
     }
 
+    /// The font and line pitch of a story in style `style` (the
+    /// briefing's when none).
+    fn story_font_of(&self, style: Option<(Style, f32)>) -> (&TextRenderer, f32) {
+        style
+            .and_then(|(st, l)| Some((self.styles.get(&st)?, l)))
+            .unwrap_or((&self.story_font, STORY_LINE))
+    }
+
+    /// A story's paragraphs wrapped at spaces to `width` (empty words keep
+    /// double spaces), each paragraph from a new line, empty ones blank
+    /// lines; blank lines at the end left out.
+    pub fn story_lines(
+        &self,
+        style: Option<(Style, f32)>,
+        width: f32,
+        paragraphs: &[String],
+    ) -> Vec<String> {
+        let (font, _) = self.story_font_of(style);
+        let width = width as u32;
+        let mut lines = Vec::new();
+        for p in paragraphs {
+            let mut line: Option<String> = None;
+            for word in p.split(' ') {
+                let candidate = match &line {
+                    None => word.to_string(),
+                    Some(l) => format!("{l} {word}"),
+                };
+                match line {
+                    // A word fits with the space after it (matches every
+                    // break on the original's screen).
+                    Some(l)
+                        if !l.trim().is_empty()
+                            && font.measure(&format!("{candidate} ")) > width =>
+                    {
+                        lines.push(l);
+                        line = Some(word.to_string());
+                    }
+                    _ => line = Some(candidate),
+                }
+            }
+            lines.push(line.unwrap_or_default());
+        }
+        while lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.pop();
+        }
+        lines
+    }
+
     /// Width of `text` in style `style`, in screen pixels.
     pub fn measure(&self, style: Style, text: &str) -> f32 {
         self.styles
@@ -854,6 +1002,11 @@ impl Menus {
         for &(r, hit) in view.spots {
             if inside(p, r) {
                 return Some(hit);
+            }
+        }
+        for t in view.tracks {
+            if t.count > 0 && inside(p, t.rect) {
+                return Some(MenuHit::Track(t.target, t.pos_at(p)));
             }
         }
         for (i, c) in view.checks.iter().enumerate() {
@@ -877,7 +1030,7 @@ impl Menus {
         for panel in view.panels.iter().filter(|q| q.arrows) {
             for (k, (ax, ay)) in panel.arrow_spots().into_iter().enumerate() {
                 if inside(p, (ax, ay, 23.0, 23.0)) {
-                    return Some(MenuHit::Scroll(if k == 0 { -1 } else { 1 }));
+                    return Some(MenuHit::Step(Scroller::List, if k == 0 { -1 } else { 1 }));
                 }
             }
         }
@@ -949,4 +1102,79 @@ impl Panel {
 
 fn inside(p: (f32, f32), (x, y, w, h): (f32, f32, f32, f32)) -> bool {
     p.0 >= x && p.1 >= y && p.0 < x + w && p.1 < y + h
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bar_has_a_position_for_each_full_window() {
+        // A 24-cell map in the 19-cell viewer: first cells 0 to 5.
+        assert_eq!(scroll_positions(24, 19), 6);
+        assert_eq!(scroll_positions(19, 19), 0);
+        assert_eq!(scroll_positions(3, 7), 0);
+    }
+
+    #[test]
+    fn arrows_step_one_position_and_stop_at_the_ends() {
+        assert_eq!(step_position(0, 6, -1), 0);
+        assert_eq!(step_position(3, 6, -1), 2);
+        assert_eq!(step_position(3, 6, 1), 4);
+        assert_eq!(step_position(5, 6, 1), 5);
+        assert_eq!(step_position(0, 0, 1), 0);
+    }
+
+    #[test]
+    fn the_window_never_starts_past_the_last_full_one() {
+        assert_eq!(list_window(12, 14, 9), 5);
+        assert_eq!(list_window(3, 14, 9), 3);
+        assert_eq!(list_window(4, 5, 9), 0);
+    }
+
+    #[test]
+    fn the_window_follows_the_cursor_no_further_than_it_must() {
+        // Down past the bottom row: the cursor becomes the bottom row.
+        assert_eq!(follow(0, 9, 9), 1);
+        assert_eq!(follow(0, 13, 9), 5);
+        // Up past the top: the cursor becomes the top row.
+        assert_eq!(follow(5, 2, 9), 2);
+        // Already in view: the window stays.
+        assert_eq!(follow(5, 9, 9), 5);
+    }
+
+    #[test]
+    fn a_click_picks_the_row_drawn_there_after_scrolling() {
+        // The Load screen's list: rows 27 high from y 245, 9 shown, the
+        // window asked to start past its last full one (as the arrows and
+        // the wheel once did): drawn and clicked from the same row.
+        let rect = (8.0, 245.0, 755.0, 27.0 * 9.0);
+        let first = list_window(13, 14, 9);
+        let row = row_at(rect, Some(27.0), (300.0, 245.0 + 27.0 * 3.5)).unwrap();
+        assert_eq!(row + first, 8);
+        // The plain list's rows.
+        assert_eq!(list_rows(LIST), VISIBLE_ROWS);
+    }
+
+    #[test]
+    fn a_track_maps_points_and_positions_as_the_original() {
+        // The description's bar: DESC_TR0 (107 high) at (766, 76), its
+        // track 99 long, the thumb 15, so 84 pixels of travel.
+        let t = Track::at(766.0, 76.0, 107.0, true, 6, 0, Scroller::Story);
+        assert_eq!(t.rect, (770.0, 80.0, 15.0, 99.0));
+        assert_eq!(t.thumb(), (770.0, 80.0));
+        let last = Track { pos: 5, ..t };
+        assert_eq!(last.thumb(), (770.0, 164.0));
+        // Middle positions sit in the middle of their share (0x552400).
+        let mid = Track { pos: 2, ..t };
+        assert_eq!(mid.thumb(), (770.0, 80.0 + (84.0f32 / 6.0 * 2.5).floor()));
+        // Within half a thumb of an end: that end (0x5524a0).
+        assert_eq!(t.pos_at((775.0, 87.0)), 0);
+        assert_eq!(t.pos_at((775.0, 80.0 + 84.0 + 7.0)), 5);
+        assert_eq!(t.pos_at((775.0, 80.0 + 7.0 + 42.0)), 3);
+        // Across: the map's bar.
+        let h = Track::at(32.0, 185.0, 107.0, false, 6, 0, Scroller::MapX);
+        assert_eq!(h.rect, (36.0, 189.0, 99.0, 15.0));
+        assert_eq!(h.pos_at((36.0 + 7.0 + 42.0, 190.0)), 3);
+    }
 }

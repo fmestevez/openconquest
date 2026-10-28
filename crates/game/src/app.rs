@@ -19,7 +19,9 @@ use crate::audio::Audio;
 use crate::commands::{menu, Command, Page};
 use crate::economy;
 use crate::magic::{self, Spell, Target, Temple};
-use crate::menus::{Backdrop, Button, MenuHit, MenuView, Menus};
+use crate::menus::{
+    scroll_positions, step_position, Backdrop, Button, MenuHit, MenuView, Menus, Scroller,
+};
 use crate::music::Music;
 use crate::objects::Caches;
 use crate::objects::{Resource, SHIP_NAMES};
@@ -252,10 +254,12 @@ struct MenuPage {
     notes: Vec<String>,
     buttons: Vec<Button>,
     first: usize,
+    /// How many rows of the list show at once (0: as many as fit).
+    rows: usize,
     credits: bool,
     story: Option<(crate::menus::Rect, Vec<String>)>,
     story_style: Option<(crate::menus::Style, f32)>,
-    story_arrow: Option<(f32, f32)>,
+    story_first: usize,
     labels: Vec<(String, f32, f32)>,
     checks: Vec<crate::menus::Check>,
     panels: Vec<crate::menus::Panel>,
@@ -268,8 +272,41 @@ struct MenuPage {
     map: Option<(Rc<crate::assets::Image>, crate::menus::Rect, (u32, u32))>,
     row_height: Option<f32>,
     spots: Vec<(crate::menus::Rect, MenuHit)>,
+    tracks: Vec<crate::menus::Track>,
     fills: Vec<(crate::menus::Rect, u32)>,
 }
+
+/// The parts the mission screens share (see `App::mission_panels`).
+struct MissionPanels {
+    sprites: Vec<crate::menus::Placed>,
+    texts: Vec<crate::menus::Text>,
+    map: Option<(Rc<crate::assets::Image>, crate::menus::Rect, (u32, u32))>,
+    story: Vec<String>,
+    story_first: usize,
+    tracks: Vec<crate::menus::Track>,
+    spots: Vec<(crate::menus::Rect, MenuHit)>,
+}
+
+/// A mission screen's list bar (see `App::list_bar`).
+struct ListBar {
+    first: usize,
+    sprites: Vec<crate::menus::Placed>,
+    spots: Vec<(crate::menus::Rect, MenuHit)>,
+    track: crate::menus::Track,
+}
+
+/// The mission description's box and font on the mission screens.
+const STORY_BOX: crate::menus::Rect = (204.0, 58.0, 559.0, 145.0);
+const STORY_STYLE: (crate::menus::Style, f32) = (
+    crate::menus::Style {
+        font: "MH",
+        variant: 1,
+        spacing: 1,
+    },
+    18.0,
+);
+/// The map preview's viewer shows 19 x 19 cells (Startcom.cpp, 0x52c5c0).
+const MAP_CELLS: usize = 19;
 
 impl MenuPage {
     fn view(&self, hover: Option<(f32, f32)>) -> MenuView<'_> {
@@ -285,7 +322,7 @@ impl MenuPage {
             credits: self.credits,
             story: self.story.as_ref().map(|(r, p)| (*r, p.as_slice())),
             story_style: self.story_style,
-            story_arrow: self.story_arrow,
+            story_first: self.story_first,
             labels: &self.labels,
             checks: &self.checks,
             panels: &self.panels,
@@ -298,6 +335,7 @@ impl MenuPage {
             map: self.map.as_ref().map(|(i, r, o)| (&**i, *r, *o)),
             row_height: self.row_height,
             spots: &self.spots,
+            tracks: &self.tracks,
             fills: &self.fills,
         }
     }
@@ -494,6 +532,15 @@ pub struct App {
     /// yet a whole row (trackpads scroll in small steps).
     list_first: usize,
     wheel_rest: f32,
+    /// The first line of the mission description shown, and the map
+    /// preview's top left cell once scrolled (the player's starting view
+    /// till then).
+    desc_first: usize,
+    map_at: Option<(usize, usize)>,
+    /// The scroll bar being dragged on a front-end screen, and the scroll
+    /// arrow held with when it next repeats.
+    menu_drag: Option<crate::menus::Scroller>,
+    menu_repeat: Option<(MenuHit, u64)>,
     battle_maps: Vec<(usize, usize)>,
     hosting: Option<crate::net::Lobby>,
     joining: Option<crate::net::Joining>,
@@ -650,6 +697,10 @@ impl App {
             chat_line: None,
             list_first: 0,
             wheel_rest: 0.0,
+            desc_first: 0,
+            map_at: None,
+            menu_drag: None,
+            menu_repeat: None,
             battle_maps: Vec::new(),
             hosting: None,
             joining: None,
@@ -1093,6 +1144,49 @@ impl App {
 
     /// What front-end screen `state` shows.
     fn menu_page(&self, state: MenuState) -> MenuPage {
+        let empty = MenuPage {
+            backdrop: Backdrop::TitleDim,
+            title: None,
+            items: Vec::new(),
+            selected: None,
+            text: Vec::new(),
+            notes: Vec::new(),
+            buttons: Vec::new(),
+            first: self.list_first,
+            rows: 0,
+            credits: false,
+            story: None,
+            story_style: None,
+            story_first: 0,
+            labels: Vec::new(),
+            checks: Vec::new(),
+            panels: Vec::new(),
+            list_rect: None,
+            picture: None,
+            boxes: Vec::new(),
+            tabs: Vec::new(),
+            sprites: Vec::new(),
+            texts: Vec::new(),
+            map: None,
+            row_height: None,
+            spots: Vec::new(),
+            tracks: Vec::new(),
+            fills: Vec::new(),
+        };
+        let mut page = self.menu_page_of(state, empty);
+        // What is drawn and what is clicked start at the same row.
+        if page.rows == 0 {
+            page.rows = match (page.list_rect, page.row_height) {
+                (Some(r), Some(h)) => (r.3 / h).floor() as usize,
+                (Some(r), None) => crate::menus::list_rows(r),
+                (None, _) => crate::menus::VISIBLE_ROWS,
+            };
+        }
+        page.first = crate::menus::list_window(page.first, page.items.len(), page.rows);
+        page
+    }
+
+    fn menu_page_of(&self, state: MenuState, empty: MenuPage) -> MenuPage {
         let button = |caption: &str, x: f32, y: f32| Button {
             caption: caption.into(),
             x,
@@ -1109,33 +1203,6 @@ impl App {
                     button(c, 590.0, 220.0 + i as f32 * step)
                 })
                 .collect()
-        };
-        let empty = MenuPage {
-            backdrop: Backdrop::TitleDim,
-            title: None,
-            items: Vec::new(),
-            selected: None,
-            text: Vec::new(),
-            notes: Vec::new(),
-            buttons: Vec::new(),
-            first: self.list_first,
-            credits: false,
-            story: None,
-            story_style: None,
-            story_arrow: None,
-            labels: Vec::new(),
-            checks: Vec::new(),
-            panels: Vec::new(),
-            list_rect: None,
-            picture: None,
-            boxes: Vec::new(),
-            tabs: Vec::new(),
-            sprites: Vec::new(),
-            texts: Vec::new(),
-            map: None,
-            row_height: None,
-            spots: Vec::new(),
-            fills: Vec::new(),
         };
         match state {
             MenuState::Main if self.in_game => MenuPage {
@@ -1507,31 +1574,57 @@ impl App {
         list
     }
 
+    /// A mission screen's list bar (Ourlib's _slist.cpp, 0x54cd00): its
+    /// arrows and track move the chosen entry (the cursor, the first when
+    /// none is chosen), the window following it; the up arrow at
+    /// (x, 241) and the down one at `down`, the track picture `track` (its
+    /// name without the frame, its height) at (x, 265).
+    fn list_bar(
+        &self,
+        n: usize,
+        selected: Option<usize>,
+        rows: usize,
+        down: (f32, f32),
+        track: (&str, f32),
+    ) -> ListBar {
+        use crate::menus::{Placed, Scroller, Track};
+        let x = down.0;
+        let cursor = selected.unwrap_or(0).min(n.saturating_sub(1));
+        let bar = Track::at(x, 265.0, track.1, true, n, cursor, Scroller::List);
+        let arrow = |dir: &str, can: bool| format!("M_LBUT_{dir}{}", if can { 0 } else { 2 });
+        let at = |name: String, x: f32, y: f32| Placed { name, x, y };
+        let (tx, ty) = bar.thumb();
+        ListBar {
+            first: crate::menus::list_window(self.list_first, n, rows),
+            sprites: vec![
+                at(arrow("UP", cursor > 0), x, 241.0),
+                at(arrow("DN", cursor + 1 < n), down.0, down.1),
+                at(format!("{}0", track.0), x, 265.0),
+                at(format!("{}1", track.0), tx, ty),
+            ],
+            spots: vec![
+                ((x, 241.0, 23.0, 23.0), MenuHit::Step(Scroller::List, -1)),
+                (
+                    (down.0, down.1, 23.0, 23.0),
+                    MenuHit::Step(Scroller::List, 1),
+                ),
+            ],
+            track: bar,
+        }
+    }
+
     /// The map and description panels of the mission screens (Custom
-    /// missions, Load game), as the original's: the map 8 pixels a cell in
-    /// a 153-pixel window scrolled to the player's starting view, with its
-    /// scroll bars and the tick; the titles bright once a mission is chosen.
-    #[allow(clippy::type_complexity)]
-    fn map_panels(
-        preview: Option<&Preview>,
-    ) -> (
-        Vec<crate::menus::Placed>,
-        Vec<crate::menus::Text>,
-        Option<(Rc<crate::assets::Image>, crate::menus::Rect, (u32, u32))>,
-    ) {
-        use crate::menus::{Placed, Style, Text};
+    /// missions, Load game), as the original's (Startcom.cpp, 0x52c5c0):
+    /// the map in a viewer (Ourlib's _sviewer.cpp) of 19 x 19 cells, 8
+    /// pixels a cell, scrolled to the player's starting view; the
+    /// description in a read-only edit (_sedit.cpp); each with arrows and a
+    /// scroll bar (_sslider.cpp). The titles bright once a mission is chosen.
+    fn mission_panels(&self, preview: Option<&Preview>) -> MissionPanels {
+        use crate::menus::{Placed, Scroller, Style, Text, Track};
         let at = |name: &str, x: f32, y: f32| Placed {
             name: name.into(),
             x,
             y,
-        };
-        let arrow = |dir: &str, can: bool| format!("M_LBUT_{dir}{}", if can { 0 } else { 2 });
-        let thumb = |at: u32, most: u32, travel: f32| {
-            if most == 0 {
-                0.0
-            } else {
-                (at.min(most) as f32 / most as f32 * travel).round()
-            }
         };
         let title = Style {
             font: "BH",
@@ -1558,35 +1651,99 @@ impl App {
             },
         ];
         let mut sprites = vec![at("MP_MAP", 3.0, 3.0), at("MP_DESC", 196.0, 27.0)];
-        // The map, 8 pixels a cell in a 153-pixel window, scrolled to the
-        // player's starting view.
+        // The map: a position a cell, as many as the cells beyond the
+        // viewer's plus one (0x54c320).
         const VIEW: u32 = 153;
         let mut map = None;
-        let (mut mx, mut my, mut most_x, mut most_y) = (0, 0, 0, 0);
+        let (mut along, mut count) = ((0, 0), (0, 0));
         if let Some(p) = preview {
             if let Some(m) = &p.map {
-                most_x = m.width.saturating_sub(VIEW);
-                most_y = m.height.saturating_sub(VIEW);
-                mx = (p.start.0 * 8).min(most_x);
-                my = (p.start.1 * 8).min(most_y);
-                map = Some((m.clone(), (9.0, 29.0, VIEW as f32, VIEW as f32), (mx, my)));
+                count = (
+                    scroll_positions(p.size.0 as usize, MAP_CELLS),
+                    scroll_positions(p.size.1 as usize, MAP_CELLS),
+                );
+                let (x, y) = self
+                    .map_at
+                    .unwrap_or((p.start.0 as usize, p.start.1 as usize));
+                along = (
+                    x.min(count.0.saturating_sub(1)),
+                    y.min(count.1.saturating_sub(1)),
+                );
+                let off = (
+                    (along.0 as u32 * 8).min(m.width.saturating_sub(VIEW)),
+                    (along.1 as u32 * 8).min(m.height.saturating_sub(VIEW)),
+                );
+                map = Some((m.clone(), (9.0, 29.0, VIEW as f32, VIEW as f32), off));
             }
         }
+        // The track pictures' lengths: MAP_TR_V0, MAP_TR_H0 and DESC_TR0
+        // are 107 pixels long.
+        let down = Track::at(165.0, 52.0, 107.0, true, count.1, along.1, Scroller::MapY);
+        let across = Track::at(32.0, 185.0, 107.0, false, count.0, along.0, Scroller::MapX);
+        // The description, a position a line, as many as the lines past
+        // the box plus one (0x54ee70); none without a mission.
+        let story = preview.map(|p| p.text.clone()).unwrap_or_default();
+        let lines = self.menus.as_ref().map_or(0, |m| {
+            m.story_lines(Some(STORY_STYLE), STORY_BOX.2, &story).len()
+        });
+        let rows = crate::menus::story_rows(STORY_BOX, STORY_STYLE.1);
+        let lines_count = if story.is_empty() {
+            0
+        } else {
+            scroll_positions(lines, rows).max(1)
+        };
+        let first = self.desc_first.min(lines_count.saturating_sub(1));
+        let about = Track::at(
+            766.0,
+            76.0,
+            107.0,
+            true,
+            lines_count,
+            first,
+            Scroller::Story,
+        );
+        // An arrow is live while it can move its bar (picture 0, else 2).
+        let arrow = |dir: &str, t: &Track, back: bool| {
+            let can = if back { t.pos > 0 } else { t.pos + 1 < t.count };
+            format!("M_LBUT_{dir}{}", if can { 0 } else { 2 })
+        };
+        let thumb = |name: &str, t: &Track| {
+            let (x, y) = t.thumb();
+            at(name, x, y)
+        };
         sprites.extend([
-            at(&arrow("UP", my > 0), 165.0, 28.0),
-            at(&arrow("DN", my < most_y), 165.0, 160.0),
+            at(&arrow("UP", &down, true), 165.0, 28.0),
+            at(&arrow("DN", &down, false), 165.0, 160.0),
             at("MAP_TR_V0", 165.0, 52.0),
-            at("MAP_TR_V1", 169.0, 56.0 + thumb(my, most_y, 84.0)),
-            at(&arrow("LF", mx > 0), 8.0, 185.0),
-            at(&arrow("RT", mx < most_x), 140.0, 185.0),
+            thumb("MAP_TR_V1", &down),
+            at(&arrow("LF", &across, true), 8.0, 185.0),
+            at(&arrow("RT", &across, false), 140.0, 185.0),
             at("MAP_TR_H0", 32.0, 185.0),
-            at("MAP_TR_H1", 36.0 + thumb(mx, most_x, 84.0), 189.0),
+            thumb("MAP_TR_H1", &across),
             at("M_CHECK1", 165.0, 185.0),
-            at(&arrow("UP", false), 766.0, 52.0),
+            at(&arrow("UP", &about, true), 766.0, 52.0),
+            at(&arrow("DN", &about, false), 766.0, 184.0),
             at("DESC_TR0", 766.0, 76.0),
-            at("DESC_TR1", 770.0, 80.0),
+            thumb("DESC_TR1", &about),
         ]);
-        (sprites, texts, map)
+        let arrow_spot =
+            |x: f32, y: f32, s: Scroller, d: i32| ((x, y, 23.0, 23.0), MenuHit::Step(s, d));
+        MissionPanels {
+            sprites,
+            texts,
+            map,
+            story,
+            story_first: first,
+            tracks: vec![down, across, about],
+            spots: vec![
+                arrow_spot(165.0, 28.0, Scroller::MapY, -1),
+                arrow_spot(165.0, 160.0, Scroller::MapY, 1),
+                arrow_spot(8.0, 185.0, Scroller::MapX, -1),
+                arrow_spot(140.0, 185.0, Scroller::MapX, 1),
+                arrow_spot(766.0, 52.0, Scroller::Story, -1),
+                arrow_spot(766.0, 184.0, Scroller::Story, 1),
+            ],
+        }
     }
 
     /// The original's "Select mission to load" screen: the map and
@@ -1618,14 +1775,22 @@ impl App {
             y,
             text: t.into(),
         };
-        let (mut sprites, mut texts, map) = Self::map_panels(preview);
+        let panels = self.mission_panels(preview);
+        let (mut sprites, mut texts) = (panels.sprites, panels.texts);
         sprites.push(at("LOAD_RM1", 3.0, 216.0));
         texts.extend([
             text(style(2), 396.0, 2.0, "Select mission to load"),
             text(style(2), 13.0, 217.0, "Missions"),
         ]);
         const ROWS: usize = 9;
-        let first = self.list_first.min(entries.len().saturating_sub(ROWS));
+        let bar = self.list_bar(
+            entries.len(),
+            selected,
+            ROWS,
+            (767.0, 500.0),
+            ("LOAD_TR", 234.0),
+        );
+        let first = bar.first;
         for (k, (_, label)) in entries.iter().enumerate().skip(first).take(ROWS) {
             let y = 249.0 + 27.0 * (k - first) as f32;
             if selected == Some(k) {
@@ -1647,23 +1812,7 @@ impl App {
                 label,
             ));
         }
-        let most = entries.len().saturating_sub(ROWS);
-        let arrow = |dir: &str, can: bool| format!("M_LBUT_{dir}{}", if can { 0 } else { 2 });
-        sprites.extend([
-            at(&arrow("UP", first > 0), 767.0, 241.0),
-            at(&arrow("DN", first < most), 767.0, 500.0),
-            at("LOAD_TR0", 767.0, 265.0),
-            at(
-                "LOAD_TR1",
-                771.0,
-                269.0
-                    + if most == 0 {
-                        0.0
-                    } else {
-                        (first as f32 / most as f32 * 211.0).round()
-                    },
-            ),
-        ]);
+        sprites.extend(bar.sprites);
         // The tabs: the open one's picture and a bright caption a pixel
         // higher.
         let tabs = [
@@ -1692,35 +1841,32 @@ impl App {
                 caption,
             ));
         }
-        let story = preview.map(|p| p.text.clone()).unwrap_or_default();
         let tab_spot = |x: f32, w: f32, k: usize| ((x, 528.0, w, 28.0), MenuHit::Tab(k));
+        let mut spots = panels.spots;
+        spots.extend(bar.spots);
+        spots.extend([
+            tab_spot(322.0, 130.0, 0),
+            tab_spot(452.0, 130.0, 1),
+            tab_spot(582.0, 214.0, 2),
+        ]);
+        let mut tracks = panels.tracks;
+        tracks.push(bar.track);
         MenuPage {
             backdrop: Backdrop::TitleDim,
             items: entries.iter().map(|e| e.1.clone()).collect(),
             selected,
-            first: self.list_first,
+            first,
+            rows: ROWS,
             list_rect: Some((8.0, 245.0, 755.0, 27.0 * ROWS as f32)),
             row_height: Some(27.0),
-            story: Some(((204.0, 58.0, 559.0, 145.0), story)),
-            story_style: Some((
-                Style {
-                    font: "MH",
-                    variant: 1,
-                    spacing: 1,
-                },
-                18.0,
-            )),
-            story_arrow: Some((766.0, 184.0)),
+            story: Some((STORY_BOX, panels.story)),
+            story_style: Some(STORY_STYLE),
+            story_first: panels.story_first,
             sprites,
             texts,
-            map,
-            spots: vec![
-                ((767.0, 241.0, 23.0, 23.0), MenuHit::Scroll(-1)),
-                ((767.0, 500.0, 23.0, 23.0), MenuHit::Scroll(1)),
-                tab_spot(322.0, 130.0, 0),
-                tab_spot(452.0, 130.0, 1),
-                tab_spot(582.0, 214.0, 2),
-            ],
+            map: panels.map,
+            spots,
+            tracks,
             buttons: vec![
                 Button {
                     caption: "Load".into(),
@@ -1767,26 +1913,24 @@ impl App {
         };
         // Arrows: picture 0 when they can scroll, 2 when they cannot.
         let arrow = |dir: &str, can: bool| format!("M_LBUT_{dir}{}", if can { 0 } else { 2 });
-        // A thumb's offset along a track of travel `travel`.
-        let thumb = |at: u32, most: u32, travel: f32| {
-            if most == 0 {
-                0.0
-            } else {
-                (at.min(most) as f32 / most as f32 * travel).round()
-            }
-        };
-        let (mut sprites, mut texts, map) = Self::map_panels(preview);
+        let panels = self.mission_panels(preview);
+        let (mut sprites, mut texts) = (panels.sprites, panels.texts);
         sprites.extend([at("MP_LFILE1", 3.0, 216.0), at("SP_LPLAY1", 196.0, 216.0)]);
         texts.extend([
             text(title, 398.0, 2.0, "Select custom mission"),
             text(title, 13.0, 217.0, "Missions"),
             text(title, 209.0, 217.0, "Players"),
         ]);
-        // The description, from its first line.
-        let story = preview.map(|p| p.text.clone()).unwrap_or_default();
         // The missions, 27 apart; the chosen one framed and pale.
         const ROWS: usize = 11;
-        let first = self.list_first.min(list.len().saturating_sub(ROWS));
+        let bar = self.list_bar(
+            list.len(),
+            selected,
+            ROWS,
+            (165.0, 525.0),
+            ("LFILE_TR", 259.0),
+        );
+        let first = bar.first;
         for (k, &i) in list.iter().enumerate().skip(first).take(ROWS) {
             let y = 249.0 + 27.0 * (k - first) as f32;
             if selected == Some(k) {
@@ -1800,13 +1944,7 @@ impl App {
             };
             texts.push(text(style("MH", variant), 13.0, y + dy, &self.missions[i]));
         }
-        let most = list.len().saturating_sub(ROWS) as u32;
-        sprites.extend([
-            at(&arrow("UP", first > 0), 165.0, 241.0),
-            at(&arrow("DN", (first as u32) < most), 165.0, 525.0),
-            at("LFILE_TR0", 165.0, 265.0),
-            at("LFILE_TR1", 169.0, 269.0 + thumb(first as u32, most, 236.0)),
-        ]);
+        sprites.extend(bar.sprites);
         // The players: flag, who plays, the choice arrow, the name.
         if let Some(p) = preview {
             let frame = (self.time_ms / 100 % 10) as u32;
@@ -1843,17 +1981,22 @@ impl App {
             selected,
             list_rect: Some((8.0, 245.0, 155.0, 27.0 * ROWS as f32)),
             row_height: Some(27.0),
-            story: Some(((204.0, 58.0, 559.0, 145.0), story)),
-            story_style: Some((style("MH", 1), 18.0)),
-            story_arrow: Some((766.0, 184.0)),
+            first,
+            rows: ROWS,
+            story: Some((STORY_BOX, panels.story)),
+            story_style: Some(STORY_STYLE),
+            story_first: panels.story_first,
             sprites,
             texts,
-            map,
+            map: panels.map,
+            tracks: {
+                let mut tracks = panels.tracks;
+                tracks.push(bar.track);
+                tracks
+            },
             spots: {
-                let mut spots = vec![
-                    ((165.0, 241.0, 23.0, 23.0), MenuHit::Scroll(-1)),
-                    ((165.0, 525.0, 23.0, 23.0), MenuHit::Scroll(1)),
-                ];
+                let mut spots = panels.spots;
+                spots.extend(bar.spots);
                 if let Some(p) = preview {
                     for (k, s) in p.seats.iter().enumerate().take(10) {
                         if s.2 {
@@ -2022,11 +2165,17 @@ impl App {
     }
 
     fn menu_click(&mut self, pos: PhysicalPosition<f64>) {
+        let p = Menus::to_menu(self.window_size(), pos.x as f32, pos.y as f32);
+        self.menu_press(p);
+    }
+
+    /// A press of the left button at 800x600 point `p` of a front-end
+    /// screen.
+    fn menu_press(&mut self, p: (f32, f32)) {
         let (Some(state), Some(menus)) = (self.menu, &self.menus) else {
             return;
         };
         let page = self.menu_page(state);
-        let p = Menus::to_menu(self.window_size(), pos.x as f32, pos.y as f32);
         let Some(hit) = menus.hit(&page.view(None), p) else {
             return;
         };
@@ -2037,13 +2186,24 @@ impl App {
                     let tab = [LoadTab::Scenario, LoadTab::Custom, LoadTab::StartFrom][t.min(2)];
                     self.menu = Some(MenuState::Load(tab, None));
                     self.list_first = 0;
+                    self.desc_first = 0;
+                    self.map_at = None;
                 }
                 return;
             }
-            MenuHit::Scroll(d) => {
-                let most = page.items.len().saturating_sub(1);
-                self.list_first =
-                    (self.list_first as i64 + d as i64).clamp(0, most as i64) as usize;
+            // A scroll arrow moves its bar a position, and again while
+            // held: after 500 ms, then every 50 (75 for a list's), as the
+            // original's arrow buttons (Startcom.cpp, 0x52c5c0).
+            MenuHit::Step(target, d) => {
+                self.menu_step(state, &page, target, d);
+                self.menu_repeat = Some((hit, self.time_ms + 500));
+                return;
+            }
+            // A scroll bar's track takes the position under the pointer,
+            // and follows it while the button is held (_strack.cpp).
+            MenuHit::Track(target, pos) => {
+                self.menu_scroll_to(state, &page, target, pos);
+                self.menu_drag = Some(target);
                 return;
             }
             // A difficulty: the mission is set up again for it.
@@ -2062,47 +2222,7 @@ impl App {
                 return;
             }
             MenuHit::Item(i) => {
-                self.menu = Some(match state {
-                    MenuState::Missions(c, _) => {
-                        if let Some(&index) = self.screen_missions(c).get(i) {
-                            match Preview::load(
-                                &self.data,
-                                &mut self.caches,
-                                &self.missions[index],
-                                index,
-                            ) {
-                                Ok(p) => self.preview = Some(p),
-                                Err(e) => self.say(format!("{e:#}")),
-                            }
-                        }
-                        MenuState::Missions(c, Some(i))
-                    }
-                    MenuState::Load(tab, _) => {
-                        let entry = self.load_entries(tab).get(i).map(|e| e.0);
-                        if let Some(index) = entry.and_then(|e| self.entry_mission(e)) {
-                            if self.preview.as_ref().is_none_or(|p| p.index != index) {
-                                match Preview::load(
-                                    &self.data,
-                                    &mut self.caches,
-                                    &self.missions[index],
-                                    index,
-                                ) {
-                                    Ok(p) => self.preview = Some(p),
-                                    Err(e) => self.say(format!("{e:#}")),
-                                }
-                            }
-                        }
-                        MenuState::Load(tab, Some(i))
-                    }
-                    MenuState::Multiplayer(_) => {
-                        // A map takes at most so many players.
-                        if let Some(&(_, n)) = self.battle_maps.get(i) {
-                            self.lobby_players = self.lobby_players.min(n);
-                        }
-                        MenuState::Multiplayer(Some(i))
-                    }
-                    other => other,
-                });
+                self.menu_select(state, i);
                 return;
             }
         };
@@ -2110,6 +2230,132 @@ impl App {
         self.menu_action(state, &caption);
         if self.menu != was {
             self.list_first = 0;
+            self.desc_first = 0;
+            self.map_at = None;
+        }
+    }
+
+    /// Entry `i` of a front-end list chosen: on the mission screens its
+    /// mission's map and description shown from their start.
+    fn menu_select(&mut self, state: MenuState, i: usize) {
+        self.menu = Some(match state {
+            MenuState::Missions(c, _) => {
+                if let Some(&index) = self.screen_missions(c).get(i) {
+                    self.show_preview(index, true);
+                }
+                MenuState::Missions(c, Some(i))
+            }
+            MenuState::Load(tab, _) => {
+                let entry = self.load_entries(tab).get(i).map(|e| e.0);
+                if let Some(index) = entry.and_then(|e| self.entry_mission(e)) {
+                    let fresh = self.preview.as_ref().is_none_or(|p| p.index != index);
+                    self.show_preview(index, fresh);
+                }
+                MenuState::Load(tab, Some(i))
+            }
+            MenuState::Multiplayer(_) => {
+                // A map takes at most so many players.
+                if let Some(&(_, n)) = self.battle_maps.get(i) {
+                    self.lobby_players = self.lobby_players.min(n);
+                }
+                MenuState::Multiplayer(Some(i))
+            }
+            other => other,
+        });
+    }
+
+    /// Shows mission `index`'s map and description (loaded again if
+    /// `load`), each scrolled back to its start.
+    fn show_preview(&mut self, index: usize, load: bool) {
+        self.desc_first = 0;
+        self.map_at = None;
+        if !load {
+            return;
+        }
+        match Preview::load(&self.data, &mut self.caches, &self.missions[index], index) {
+            Ok(p) => self.preview = Some(p),
+            Err(e) => self.say(format!("{e:#}")),
+        }
+    }
+
+    /// A scroll arrow: its bar a position back (`d` < 0) or on, if it can
+    /// go (_sslider.cpp 0x551ca0, messages 0x2f and 0x30). A list without
+    /// a bar (screens of our own) moves its window a row.
+    fn menu_step(&mut self, state: MenuState, page: &MenuPage, target: Scroller, d: i32) {
+        match page.tracks.iter().find(|t| t.target == target) {
+            Some(t) => {
+                let pos = step_position(t.pos, t.count, d);
+                if pos != t.pos {
+                    self.menu_scroll_to(state, page, target, pos);
+                }
+            }
+            None => {
+                let last = page.items.len().saturating_sub(page.rows);
+                self.list_first = (page.first as i64 + d as i64).clamp(0, last as i64) as usize;
+            }
+        }
+    }
+
+    /// A scroll bar set to position `pos`: a list's chosen entry, with its
+    /// window following (_slist.cpp), the description's first line, the
+    /// map's top left cell.
+    fn menu_scroll_to(&mut self, state: MenuState, page: &MenuPage, target: Scroller, pos: usize) {
+        let along = |s: Scroller| {
+            page.tracks
+                .iter()
+                .find(|t| t.target == s)
+                .map_or(0, |t| t.pos)
+        };
+        match target {
+            Scroller::List => {
+                if pos >= page.items.len() {
+                    return;
+                }
+                if page.selected != Some(pos) {
+                    self.menu_select(state, pos);
+                }
+                self.list_first = crate::menus::follow(page.first, pos, page.rows);
+            }
+            Scroller::Story => self.desc_first = pos,
+            Scroller::MapX => self.map_at = Some((pos, along(Scroller::MapY))),
+            Scroller::MapY => self.map_at = Some((along(Scroller::MapX), pos)),
+        }
+    }
+
+    /// The scroll bar being dragged follows the pointer, at 800x600 point
+    /// `p`.
+    fn menu_drag_to(&mut self, p: (f32, f32)) {
+        let (Some(state), Some(target)) = (self.menu, self.menu_drag) else {
+            return;
+        };
+        let page = self.menu_page(state);
+        if let Some(t) = page.tracks.iter().find(|t| t.target == target) {
+            let pos = t.pos_at(p);
+            if pos != t.pos && t.count > 0 {
+                self.menu_scroll_to(state, &page, target, pos);
+            }
+        }
+    }
+
+    /// A held scroll arrow repeats while the pointer stays on it.
+    fn menu_repeat_step(&mut self) {
+        let (Some(state), Some((hit, due)), Some(c)) = (self.menu, self.menu_repeat, self.cursor)
+        else {
+            return;
+        };
+        if self.time_ms < due {
+            return;
+        }
+        let MenuHit::Step(target, d) = hit else {
+            return;
+        };
+        let every = if target == Scroller::List { 75 } else { 50 };
+        self.menu_repeat = Some((hit, self.time_ms + every));
+        let page = self.menu_page(state);
+        let p = Menus::to_menu(self.window_size(), c.x as f32, c.y as f32);
+        let here = self.menus.as_ref().and_then(|m| m.hit(&page.view(None), p));
+        if here == Some(hit) {
+            self.menu_step(state, &page, target, d);
         }
     }
 
@@ -2228,6 +2474,16 @@ impl App {
     /// Renders a front-end screen (`main`, `missions`, `load`, `briefing`,
     /// `victory`, `defeat`) into `frame`, for screenshots.
     pub fn draw_menu_screen(&mut self, which: &str, frame: &mut Frame) -> Result<()> {
+        // `screen+x,y+...`: after presses of the left button at those
+        // 800x600 points.
+        let mut parts = which.split('+');
+        let which = parts.next().unwrap_or_default();
+        let presses: Vec<(f32, f32)> = parts
+            .filter_map(|at| {
+                let (x, y) = at.split_once(',')?;
+                Some((x.parse().ok()?, y.parse().ok()?))
+            })
+            .collect();
         // `screen@x,y`: with the mouse at 800x600 point (x, y).
         let (which, hover) = match which.split_once('@') {
             Some((w, at)) => (
@@ -2264,16 +2520,16 @@ impl App {
             }
             other => anyhow::bail!("unknown menu screen {other}"),
         };
-        if let MenuState::Missions(c, Some(i)) = state {
-            if let Some(&index) = self.screen_missions(c).get(i) {
-                self.preview = Some(Preview::load(
-                    &self.data,
-                    &mut self.caches,
-                    &self.missions[index],
-                    index,
-                )?);
-            }
+        if let MenuState::Missions(_, Some(i)) | MenuState::Load(_, Some(i)) = state {
+            self.menu_select(state, i);
         }
+        self.menu = Some(state);
+        for p in presses {
+            self.menu_press(p);
+            self.menu_drag = None;
+            self.menu_repeat = None;
+        }
+        let state = self.menu.unwrap_or(state);
         let menus = self.menus.as_ref().context("menus are not installed")?;
         menus.draw(frame, &self.menu_page(state).view(hover));
         Ok(())
@@ -4366,6 +4622,7 @@ impl App {
         self.last_frame = now;
         self.time_ms = (now - self.started).as_millis() as u64;
         self.update(dt);
+        self.menu_repeat_step();
         let (screen, _) = self.placement();
         let (vw, vh) = self.camera.view_size(&screen);
         let t = openconquest_formats::map::TILE_SIZE as f32;
@@ -4786,6 +5043,11 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                if self.menu_drag.is_some() {
+                    let p =
+                        Menus::to_menu(self.window_size(), position.x as f32, position.y as f32);
+                    self.menu_drag_to(p);
+                }
                 if let Some(slider) = self.slider_drag {
                     if let Some(layout) = self.show_interface.then(|| {
                         self.interface
@@ -4886,6 +5148,8 @@ impl ApplicationHandler for App {
                     self.info_view.pressed = None;
                     self.minimap_drag = false;
                     self.slider_drag = None;
+                    self.menu_drag = None;
+                    self.menu_repeat = None;
                     if let (Some(from), Some(to)) = (self.box_from.take(), self.cursor) {
                         self.finish_select(from, to);
                     }
@@ -4897,16 +5161,34 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
                 };
-                // On the front end the wheel scrolls lists.
+                // On the front end the wheel scrolls the description under
+                // the pointer, else the list's window (the original has no
+                // wheel).
                 if let (Some(state), Some(_)) = (self.menu, &self.menus) {
-                    let rows = self.menu_page(state).items.len();
-                    let last = rows.saturating_sub(crate::menus::VISIBLE_ROWS);
+                    let page = self.menu_page(state);
                     self.wheel_rest += steps;
                     let whole = self.wheel_rest.trunc();
                     self.wheel_rest -= whole;
-                    let step = -whole as isize;
-                    self.list_first =
-                        (self.list_first as isize + step).clamp(0, last as isize) as usize;
+                    let step = -whole as i64;
+                    let p = self
+                        .cursor
+                        .map(|c| Menus::to_menu(self.window_size(), c.x as f32, c.y as f32));
+                    let story = page.tracks.iter().find(|t| t.target == Scroller::Story);
+                    let over_story = page.story.as_ref().is_some_and(|(r, _)| {
+                        p.is_some_and(|p| {
+                            p.0 >= r.0 && p.1 >= r.1 && p.0 < r.0 + r.2 + 30.0 && p.1 < r.1 + r.3
+                        })
+                    });
+                    match story {
+                        Some(t) if over_story => {
+                            let last = t.count.saturating_sub(1) as i64;
+                            self.desc_first = (t.pos as i64 + step).clamp(0, last) as usize;
+                        }
+                        _ => {
+                            let last = page.items.len().saturating_sub(page.rows) as i64;
+                            self.list_first = (page.first as i64 + step).clamp(0, last) as usize;
+                        }
+                    }
                     return;
                 }
                 let (screen, _) = self.placement();

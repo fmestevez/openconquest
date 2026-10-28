@@ -1344,7 +1344,7 @@ fn state_image(imgs: &States, state: usize) -> Option<&Image> {
 /// The thumb's offset along a track `travel` pixels long for position
 /// `pos` of `count` (0x552400): the ends at the ends, otherwise the middle
 /// of the position's share.
-fn thumb_offset(pos: u32, count: u32, travel: i32) -> i32 {
+pub(crate) fn thumb_offset(pos: u32, count: u32, travel: i32) -> i32 {
     if pos == 0 || count == 0 {
         0
     } else if pos + 1 >= count {
@@ -1356,7 +1356,7 @@ fn thumb_offset(pos: u32, count: u32, travel: i32) -> i32 {
 
 /// The position under a cursor `x` pixels along a track (0x5524a0): the
 /// ends within half a thumb of them.
-fn thumb_position(x: i32, count: u32, track: i32, thumb: i32) -> u32 {
+pub(crate) fn thumb_position(x: i32, count: u32, track: i32, thumb: i32) -> u32 {
     let travel = (track - thumb).max(1);
     if x <= thumb / 2 || count <= 1 {
         0

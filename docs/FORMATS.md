@@ -760,6 +760,28 @@ position 0, `travel` (track - thumb width) for the last of `count`, else
 `travel / count * (pos + 0.5)` truncated (0x552400); a click within half a
 thumb of an end takes that end (0x5524a0).
 
+**Front-end scrolling** (Ourlib's widgets, used by Startcom.cpp's mission
+screens, Custom missions and Load game, created by 0x52c5c0). A scroll bar
+(_sslider.cpp, 0x551ca0) is an up arrow, a down arrow and a track
+(_strack.cpp, 0x5526c0): the arrows (messages 0x2f, 0x30) move it a
+position back or on unless at an end, repeating while held after 500 ms
+every 50 ms (75 for the mission list's); a press on the track takes the
+position under the pointer (0x5524a0) and follows it while held. The track
+is its picture 4 pixels in on each side; `*_TR1` thumbs are 15x15. An
+arrow shows picture `02` when it cannot move its bar. The map preview is a
+viewer (_sviewer.cpp, 0x54c320) of 19 x 19 cells, 8 pixels a cell, scrolled
+a cell a position, (cells - 19 + 1) positions on each axis (none when the
+map fits); it opens on the human player's starting view. The description
+is a read-only edit (_sedit.cpp, 0x54f040): a line a position, (lines -
+visible + 1) positions (0x54ee70). The mission list (_slist.cpp, 0x54cd00)
+gives its bar one position per entry: the arrows and the track move the
+chosen entry (its notification 0x189 loads the mission's map and
+description 200 ms after the last change, 0x52dc40), the window following
+it no further than it must; the up arrow is live unless the first entry is
+chosen, the down one unless the last. Bars: map down (165, 28)/(165, 160),
+track `MAP_TR_V` at (165, 52); across (8, 185)/(140, 185), `MAP_TR_H` at
+(32, 185); description (766, 52)/(766, 184), `DESC_TR` at (766, 76).
+
 **Game file operations** (`Filesys.cpp`; created by 0x5099f0, messages
 0x50a700): `CFILE_BKGND` (200x454) at (3, 5). Fonts: `SYSTEM_FONT` gaps 2/1
 (+0x45) and `INT_FONT` gaps 0/-2 (+0x49). The name field (edit, 0x104
