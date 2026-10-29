@@ -2005,6 +2005,17 @@ miss009 boats (1, 2), merchants (1, 1), warships (1, 4); miss010 (1, 7),
 15 (1, 2) for boats and merchants, (1, 4) the rest, player 14 (2, 2) and
 (2, 4) (the "or" a draw of the brain's generator).
 
+**The brains' town orders** (0x47b130 through the member's land fleet):
+code 1, the full town (table 0x5ac7c8's order 2 and both temples: port,
+sage school, shipyard, smithy, the settlement made a town, the shipyard a
+dock, school, temple of the sea, temple of war; a part done if it stands
+already; flag 0x10 tries failed parts again), sent once by the Persian
+yards of miss007-miss010 beside their ship building (miss010 its yard 2
+only), and by those of miss011-miss013 in their state 0, before every ship;
+code 0x60, order 96 (the first worn building of the member mended once;
+after 10 idle passes the order fails, never sent again), at the start by
+the builders of miss007-miss010.
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships

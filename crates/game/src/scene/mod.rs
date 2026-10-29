@@ -1809,6 +1809,7 @@ impl Scene {
             self.brain_clock -= crate::clock::TICK;
             self.run_brain();
             self.run_computers(data, caches);
+            self.run_brain_jobs(data, caches);
             for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {
                 self.big_reef(x, y, kind, data, caches);
             }
