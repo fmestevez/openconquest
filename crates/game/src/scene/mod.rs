@@ -727,9 +727,14 @@ impl Scene {
             // carried arrive (0x522d50); picked from the list, the
             // campaign's heroes so far wait at the start.
             let arrived = carry.is_some_and(|c| scene.arrive(c, data, caches));
-            if !arrived {
+            // Picked from the list without a town of its own, a bare one
+            // where the carried town would stand; the heroes wait there.
+            let bare = if arrived {
+                None
+            } else {
                 scene.carried = story::carried_heroes(data, mission);
-            }
+                scene.bare_town(data, caches)
+            };
             scene.start_sites = scene.own_sites();
             // After miss002 they sail in the Argo; before, or without a
             // ship, they wait at the starting settlement.
@@ -747,6 +752,9 @@ impl Scene {
                         .position(|o| o.ship.is_some() && o.owner == human)
                 };
                 match (argo, scene.start_sites.first()) {
+                    (_, Some(&site)) if bare == Some(site) => {
+                        scene.site_heroes.insert(site, scene.carried.clone());
+                    }
                     (Some(i), _) => {
                         scene.objects[i].ship.as_mut().unwrap().heroes = scene.carried.clone()
                     }

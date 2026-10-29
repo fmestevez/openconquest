@@ -191,6 +191,7 @@ fn ramming_and_boarding() {
     scene.objects[i].owner = Some((1, (human.slot + 1) % 4));
     // Sturdy enough to outlast a rammer's blow, to be boarded after.
     let c = scene.objects[i].combat.as_mut().unwrap();
+    let ordinary = c.max_hull;
     (c.max_hull, c.hull) = (1e6, 1e6);
     let hull = |s: &Scene, id| {
         s.objects[s.object_index(id).unwrap()]
@@ -213,6 +214,11 @@ fn ramming_and_boarding() {
     }
     assert!(splinters, "the impact was shown");
     assert!(hull(&scene, other_id) < before, "the ram did damage");
+    // Ordinary again for the boarding: the boarders' toll counts a
+    // hundredth of the prize's hull.
+    let i = scene.object_index(other_id).unwrap();
+    let c = scene.objects[i].combat.as_mut().unwrap();
+    (c.max_hull, c.hull) = (ordinary, ordinary);
     scene.order_close(mine_id, other_id, true).unwrap();
     // The fight aboard shows (ABORD_ pictures run 40-67 frames).
     let mut fought = false;
@@ -2409,16 +2415,12 @@ fn campaign_heroes_carry_over() {
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
-    // miss005 starts with only a boat: they ride on it.
+    // miss005 holds no town of the player's: picked from the list, they
+    // wait in the bare one where the carried town would stand.
     let scene = Scene::load(&data, &mut caches, "miss005").unwrap();
     assert_eq!(scene.carried, vec![0, 5, 1, 8]);
-    let human = scene.human.map(|h| (h.nation, h.slot));
-    let boat = scene
-        .objects
-        .iter()
-        .find(|o| o.ship.is_some() && o.owner == human)
-        .unwrap();
-    assert_eq!(boat.ship.as_ref().unwrap().heroes, vec![0, 5, 1, 8]);
+    let town = scene.own_sites()[0];
+    assert_eq!(scene.site_heroes.get(&town), Some(&vec![0, 5, 1, 8]));
     // miss003 starts without a ship: the Argo comes, with Jason and Argus,
     // where the view starts.
     let scene = Scene::load(&data, &mut caches, "miss003").unwrap();
@@ -6564,4 +6566,30 @@ fn campaign_carries_the_town_and_the_argo() {
         .expect("the Argo arrives");
     let t = TILE_SIZE as f32;
     assert_eq!(((argo.x / t) as i32, (argo.y / t) as i32), (31, 31));
+}
+
+/// Campaign missions whose maps hold no town of the player's, picked from
+/// the list, start with a bare one where the carried town would stand,
+/// the heroes so far waiting there (needs `OPENCONQUEST_DATA`).
+#[test]
+fn list_picked_missions_get_a_bare_town() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for m in [
+        "miss005", "miss006", "miss007", "miss009", "miss010", "miss011", "miss012",
+    ] {
+        let scene = Scene::load(&data, &mut caches, m).unwrap();
+        let sites = scene.own_sites();
+        assert_eq!(sites.len(), 1, "{m} has one town");
+        let heroes = scene
+            .site_heroes
+            .get(&sites[0])
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(heroes, scene.carried, "{m}'s heroes wait in it");
+        assert!(!heroes.is_empty(), "{m} has heroes");
+    }
 }

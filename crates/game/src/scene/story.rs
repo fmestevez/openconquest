@@ -531,6 +531,56 @@ impl Scene {
         (objects, heroes)
     }
 
+    /// A mission picked from the list whose map holds no town of the
+    /// player's (the original only reaches it carrying one): a bare town
+    /// where the last victory would have put it. Its id, if one was made.
+    pub(super) fn bare_town(
+        &mut self,
+        data: &crate::assets::GameData,
+        caches: &mut crate::objects::Caches,
+    ) -> Option<u32> {
+        if !self.own_sites().is_empty() {
+            return None;
+        }
+        let cell = match self.mission.as_str() {
+            "miss005" => (32, 34),
+            "miss006" => (53, 67),
+            "miss007" => (52, 1),
+            "miss009" => (2, 37),
+            "miss010" => (2, 40),
+            // miss010's town lands at (x - 2, y + 26) of where it stood in
+            // x >= 50, y <= 8: the first place a town can stand there.
+            "miss011" => {
+                let w = self.nav.width as i32;
+                (26..=34)
+                    .flat_map(|y| (48..w).map(move |x| (x, y)))
+                    .find(|&(x, y)| self.check_ground(SETTLEMENT, x, y).is_ok())?
+            }
+            "miss012" => (43, 1),
+            _ => return None,
+        };
+        let town = Carried {
+            class: TOWN,
+            cell,
+            facing: 0,
+            ship: None,
+            combat: None,
+            treasures: Vec::new(),
+        };
+        let carry = Carry {
+            levels: Default::default(),
+            magic: self.magic.clone(),
+            permits: self.permits,
+            score: 0,
+            objects: vec![town],
+            heroes: Vec::new(),
+        };
+        let heroes = std::mem::take(&mut self.carried);
+        self.arrive(&carry, data, caches);
+        self.carried = heroes;
+        self.own_sites().first().copied()
+    }
+
     /// Puts what the campaign carried into this mission's map (0x522d50
     /// recreating the blobs, 0x4dfa90 a ship's), before its brain starts:
     /// the ships and buildings at their cells, and the heroes in the
