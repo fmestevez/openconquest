@@ -230,13 +230,8 @@ impl Scene {
             self.wizard_attacked(target, shooter);
             self.computer_attacked(target, shooter);
             self.brain_hit(target);
-            // A brain's fleet notes who fired on it.
-            if owner == self.human.map(|h| (h.nation, h.slot)) {
-                if let Some(s) = self.object_index(shooter) {
-                    let (x, y) = (self.objects[s].x, self.objects[s].y);
-                    self.fleet_attacked(target, x, y);
-                }
-            }
+            // A brain's fleet notes who fired on it, whoever it was.
+            self.fleet_attacked(target, shooter);
             // A guard told to fire on aggressors turns on whoever shoots it.
             if let Some(ship) = self
                 .object_index(target)
@@ -431,6 +426,7 @@ impl Scene {
     /// lime's, which spares structures, in the units' points. Under a magic
     /// shield (`+0x15c`) the structure takes a fifth and a fort's units a
     /// fifth of a fireball's share and two thirds of a flaming shot's.
+    /// `by`: the player who dealt it (see `strike`).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn fort_blow(
         &mut self,
@@ -439,6 +435,7 @@ impl Scene {
         lime: f32,
         item: u8,
         flaming: bool,
+        by: Option<Owner>,
         data: &GameData,
         caches: &mut Caches,
     ) {
@@ -508,7 +505,7 @@ impl Scene {
             // (0x418430).
             self.forget_gone_units(target);
         }
-        self.strike(target, hull, false, data, caches);
+        self.strike(target, hull, false, by, data, caches);
     }
 
     /// Takes `points` off the weapons of ship `target` (0x4be110); those
@@ -538,6 +535,7 @@ impl Scene {
         &mut self,
         target: u32,
         blow: f32,
+        by: Option<Owner>,
         data: &GameData,
         caches: &mut Caches,
     ) {
@@ -549,18 +547,25 @@ impl Scene {
             ))
         });
         let Some(sh) = shares else {
-            self.hit(target, blow, data, caches);
+            self.hit(target, blow, by, data, caches);
             return;
         };
         // The hull first; a wreck takes no more (0x4be0c0).
-        self.hit(target, sh.hull_part(blow), data, caches);
+        self.hit(target, sh.hull_part(blow), by, data, caches);
         self.wound(target, sh.crew_part(blow) * 15.0);
         self.wear(target, sh.weapons_part(blow) * 15.0);
     }
 
     /// Deals `damage` to the hull of `target`, with a hit (or splash) effect;
     /// a sunk ship is removed and a destroyed building left in ruins.
-    pub(super) fn hit(&mut self, target: u32, damage: f32, data: &GameData, caches: &mut Caches) {
+    pub(super) fn hit(
+        &mut self,
+        target: u32,
+        damage: f32,
+        by: Option<Owner>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         // Asleep, it ignores blows (0xda96, 0x158bf).
         if self
             .object_index(target)
@@ -575,19 +580,23 @@ impl Scene {
             .object_index(target)
             .is_some_and(|t| self.objects[t].holds_units())
         {
-            self.fort_blow(target, damage, 0.0, NOT_A_WEAPON, false, data, caches);
+            self.fort_blow(target, damage, 0.0, NOT_A_WEAPON, false, by, data, caches);
             return;
         }
-        self.strike(target, damage, true, data, caches);
+        self.strike(target, damage, true, by, data, caches);
     }
 
     /// The same, showing the hit or splash only if `show` (a shot shows
-    /// its own).
+    /// its own). `by` is the player who dealt the blow, if the port knows
+    /// it: the one the statistics take for the killer (a ship's sinking
+    /// blow keeps its giver, `+0x80b` to `+0x7f`, 0x4befc0, 0x4be0c0, and
+    /// the death reports it to 0x50e750).
     pub(super) fn strike(
         &mut self,
         target: u32,
         damage: f32,
         show: bool,
+        by: Option<Owner>,
         data: &GameData,
         caches: &mut Caches,
     ) {
@@ -613,7 +622,7 @@ impl Scene {
         if monster && hull <= 0.0 {
             self.objects[ti].combat.as_mut().unwrap().hull = 0.0;
             if was > 0.0 {
-                self.note_destroyed(ti);
+                self.note_destroyed(ti, by);
             }
         }
         let c = self.objects[ti].combat.as_mut().unwrap();
@@ -630,7 +639,7 @@ impl Scene {
         }
         let is_building = self.objects[ti].ship.is_none();
         if destroyed {
-            self.note_destroyed(ti);
+            self.note_destroyed(ti, by);
             self.drop_held(target, data, caches);
             // Creatures die with their own cry (land creatures 0x413ad0:
             // events 100-102 by class; the harpy 0x41fb02 event 103; the
@@ -928,6 +937,7 @@ impl Scene {
             * argus(t);
         let to_self = to_self * argus(a);
         let (ida, idt) = (a.id, t.id);
+        let by = a.owner;
         self.objects[i].ship.as_mut().unwrap().task = None;
         // A fire rammer's barrel of powder goes off in the ram. (Not
         // decoded: 0x4c1c60 and 0x4c1ad0 have no such term; where the
@@ -945,14 +955,23 @@ impl Scene {
             None => (0.0, 0.0),
         };
         self.wound(idt, burn);
-        self.ram_blow(idt, to_target, blast, data, caches);
-        self.ram_blow(ida, to_self, 0.0, data, caches);
+        // (Not decoded: whom the rammer's own blow is put down to.)
+        self.ram_blow(idt, to_target, blast, by, data, caches);
+        self.ram_blow(ida, to_self, 0.0, None, data, caches);
     }
 
     /// A ram's blow `blow` to ship `id` (0x4c1ad0): the hull takes its
     /// share x 1.5 (and `blast` whole), then the crew its share x 0.4 and
     /// the weapons theirs, in the units' points.
-    fn ram_blow(&mut self, id: u32, blow: f32, blast: f32, data: &GameData, caches: &mut Caches) {
+    fn ram_blow(
+        &mut self,
+        id: u32,
+        blow: f32,
+        blast: f32,
+        by: Option<Owner>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         let Some(sh) = self.object_index(id).and_then(|k| {
             let o = &self.objects[k];
             Some(combat::Shares::of(
@@ -963,7 +982,7 @@ impl Scene {
             return;
         };
         let hull = sh.hull_part(blow) * combat::RAM_HULL_FACTOR + blast;
-        self.hit(id, hull, data, caches);
+        self.hit(id, hull, by, data, caches);
         self.wound(id, sh.crew_part(blow) * 15.0 * combat::RAM_CREW_FACTOR);
         self.wear(id, sh.weapons_part(blow) * 15.0);
     }
@@ -1061,29 +1080,30 @@ impl Scene {
                 .is_some_and(|s| s.has_hero(objects::HERCULES) || s.kind == 11)
         };
         let (sure_a, sure_t) = (sure(&self.objects[i]), sure(&self.objects[ti]));
+        let (by_a, by_t) = (self.objects[i].owner, self.objects[ti].owner);
         self.objects[i].ship.as_mut().unwrap().task = None;
         if !won {
             if sure_a {
-                self.hit(a, blow as f32 / 15.0, data, caches);
+                self.hit(a, blow as f32 / 15.0, by_t, data, caches);
             } else {
-                self.rout(a, blow, blow / 10 * 7, data, caches);
+                self.rout(a, blow, blow / 10 * 7, by_t, data, caches);
             }
             for _ in 0..10 {
                 self.wound(t, (foe / 10) as f32);
                 self.wear(t, (foe / 10) as f32);
             }
-            self.hit(t, foe as f32 / 15.0, data, caches);
+            self.hit(t, foe as f32 / 15.0, by_a, data, caches);
             return;
         }
         for _ in 0..10 {
             self.wound(a, (blow / 10) as f32);
             self.wear(a, (blow / 10) as f32);
         }
-        self.hit(a, (blow / 10) as f32 / 15.0, data, caches);
+        self.hit(a, (blow / 10) as f32 / 15.0, by_t, data, caches);
         if sure_t {
-            self.hit(t, foe as f32 / 15.0, data, caches);
+            self.hit(t, foe as f32 / 15.0, by_a, data, caches);
         } else {
-            self.rout(t, foe, foe * 7, data, caches);
+            self.rout(t, foe, foe * 7, by_a, data, caches);
         }
         let (Some(i), Some(ti)) = (self.object_index(a), self.object_index(t)) else {
             return;
@@ -1119,7 +1139,15 @@ impl Scene {
     /// A side routed in a boarding: its marines fall (but a boat's or
     /// merchant's, carried as cargo), its weapons take `blow` nine times
     /// and its hull `hull` (original units).
-    fn rout(&mut self, id: u32, blow: u32, hull: u32, data: &GameData, caches: &mut Caches) {
+    fn rout(
+        &mut self,
+        id: u32,
+        blow: u32,
+        hull: u32,
+        by: Option<Owner>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         if let Some(k) = self.object_index(id) {
             let s = self.objects[k].ship.as_mut().unwrap();
             if s.kind > 1 {
@@ -1131,7 +1159,7 @@ impl Scene {
             self.wear(id, blow as f32);
             self.wound(id, blow as f32);
         }
-        self.hit(id, hull as f32 / 15.0, data, caches);
+        self.hit(id, hull as f32 / 15.0, by, data, caches);
     }
 
     /// Gives ship `id` to `owner`, redrawing it in the new owner's colours.
@@ -1287,7 +1315,7 @@ impl Scene {
             c.phantom = (c.phantom - dt).max(0.0);
         }
         for id in wrecked {
-            self.hit(id, 0.0, data, caches);
+            self.hit(id, 0.0, None, data, caches);
         }
         let positions: std::collections::HashMap<u32, (f32, f32)> =
             self.objects.iter().map(|o| (o.id, (o.x, o.y))).collect();

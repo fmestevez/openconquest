@@ -657,7 +657,8 @@ impl Scene {
             blow = blow * 20 / 100;
         }
         let (target, me) = (o.id, self.objects[i].id);
-        self.share_blow(target, blow as f32 / 15.0, data, caches);
+        let by = self.objects[i].owner;
+        self.share_blow(target, blow as f32 / 15.0, by, data, caches);
         if let Some(i) = self.object_index(me) {
             self.set_strength(i, now.saturating_sub(max * 5 / 100));
         }
@@ -707,7 +708,7 @@ impl Scene {
                         let theirs = self.monster_strength(v).0;
                         self.set_strength(i, now.saturating_sub(theirs * 80 / 100));
                         self.set_strength(v, 0);
-                        self.note_destroyed(v);
+                        self.note_destroyed(v, self.objects[i].owner);
                         self.monster_move(i, m, p.from);
                         self.monster_enter(i, m, STRIKING, data, caches);
                     }
@@ -866,7 +867,7 @@ impl Scene {
             m.hurried = true;
         }
         if self.monster_strength(i).0 == 0 {
-            self.note_destroyed(i);
+            self.note_destroyed(i, None);
         }
         self.sea_monster_states.insert(id, m);
     }

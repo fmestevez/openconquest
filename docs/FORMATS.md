@@ -2839,9 +2839,32 @@ timeout before switching state with 0x479750:
 resource class e.g. 0x191 fish); 0x47a6a0 attack a zone (order 0x71,
 0x479a40: rectangle from a per-mission table, strength by difficulty); 0x47a900
 patrol a list of (x, y, pause) points (order 100 for each in turn); 0x4797e0
-set the fleet's behaviour (order 0x72). The brain's tick (message 0) runs
-member m of group g every 50 ticks at an offset of 5 * m; every 125 ticks
-it judges the mission (vtable + 8, e.g. 0x448e90 for miss000, which counts
+set the fleet's behaviour (order 0x72). The brain's tick (message 0) is
+the game clock (0x47b2e0 copies `[game +0xde]` into `+0xfc`, and on
+message 0 counts `+0xf8` down, setting game `+0x3239` at 0). Every 5
+ticks each main does the brain's own work, then runs its members group by
+group, members in order, member (g, m) when the tick is 5 x (g + m) modulo
+50 and its fleet id (`+0`) is not negative, whether or not it has ships;
+the switches written `(m % 10) x 5` or `((m + 1) % 10) x 5` are the same
+value (0x4634b9). The brain's own work comes before the members in
+miss007 (the reef, `+0x107`), miss009 and miss010 (the random tick,
+below) and after them in miss003 (once each, `+0x114`, `+0x120`, when
+the player has things in (49, 26, 4, 3) or (48, 12, 3, 2) (0x4c46c0),
+calls of 0x414db0 with classes 0x1f5 and 0x1f6 at (53, 24) and other
+cells, each gated by 0x42ebf0 and an empty cell; not decoded further, not
+ported), miss005 (`+0x184` cleared once
+the cells of both harpy nests (23, 20) and (26, 19) are empty, `+0x18c`
+once the stronghold's (3, 29) is), miss006 (the raids' event-record
+times rerolled while the yards at (21, 68) and (1, 50) stand,
+0x45b863-0x45b993; not ported) and miss011 (`+0x19c`). Members made at
+the start (0x8d1) that the switch has no case for never run: miss004
+(0, 7), (2, 5); miss006 (1, 6); miss008 (0, 0), (1, 0); miss009 (0, 0);
+miss010 (0, 0), (1, 0). A member's index is not always its place among
+the port's fleets: miss002's Persian yard is (1, 7) (0x44cbd0; (1, 6) is
+0x406330, which does nothing, (1, 8) the repair 0x44cf20), miss003's
+southern guard (0, 5) ((0, 4) the repair 0x452fb0), miss005's raiders
+(1, 6) and (1, 7), at 35 and 40 ((1, 5) the repair 0x4564c0). Every 125
+ticks it judges the mission (vtable + 8, e.g. 0x448e90 for miss000, which counts
 objects with 0x4c46c0) and ends it as won or lost. At the start (message
 0x8d1) miss000's brain creates its three barbarian fleets and gives their
 player 4000 amber and 2000 fish (2000 and 1000 on the second difficulty,
@@ -2989,7 +3012,11 @@ miss009 (0x4663d0):
   Members 3 and 4 cast kinds 9 and 15 on their own ships when they fight
   (0x47acf0); a ship group cannot cast (0x4a09d0 drops it) and the Flame
   needs a spell the Persians never learn, so none is.
-- **The tick.** About once every 50 ticks: lightning (0x42f580 kind 6, a
+- **The tick.** Every 5 ticks (0x4665b2, before the members) the brain
+  draws a number and drops it, draws `x` and runs this when the tick is
+  `((x % 10 + x % 10) % 10) x 5` modulo 50: both terms read the seed
+  after the second draw, so only on a tick a multiple of 10, one time in
+  five (checked in the disassembly, 0x4665c9-0x466626). Lightning (0x42f580 kind 6, a
   free cast) at (10 or 12, 9) the first time the player comes into (0, 9,
   18, 5); on normal and hard, while the wizard lives, lightning on each of
   the player's temples (0x3d, 0x3e) in (10, 0, 40, 20) and message 8
@@ -3052,7 +3079,8 @@ miss010 (0x46a0f0; constructor 0x469d90):
   0xd3) into member 8's `+0x11a`: it never gets a ship, member 8 does.
   Member 10 (0x469d10) mends prizes (0x5d97). Unordered launches (0x5d98)
   join member 7 (boats), 6 (merchants) or 8 (warships).
-- **The tick.** About once every 50 ticks: once the dragon's nest at (59,
+- **The tick.** Every 5 ticks, on miss009's random phase (0x46a313,
+  0x46a32a-0x46a387): once the dragon's nest at (59,
   4) is gone, message 9 (0x445e00) to the lava flows at (58, 4), (59, 5)
   and (64, 4) (cell + 4 of the grid); once the player has delivered the
   Golden Fleece to one of their buildings (0x5d94 with kind 16, `+0x130`),
@@ -3305,9 +3333,29 @@ Primitives not yet ported (the later brains use them):
   **0x479f40** and **0x479fb0** test the brain's event list against
   objects (0x49c3f0).
 
-More `missCOM` pieces: event 0x47a060 fires when one of the fleet's ships is
-hit by the watched player (at least a given time into the step) and sets
-the attack area around the attacker; 0x47a2a0 compares the fleet's size
+More `missCOM` pieces: a blow landing on a ship (0x4bf170, per projectile)
+sets its `+0x691` and `+0x692` (the shooter's id), whoever shot; the AI
+module's fleet order handlers (0x4ca290 and nine more) report such a ship
+with message 0x5d9c (0x4a21c0: fleet number `+0x16`, shooter `+0x1a`) and
+clear it (ship message 0x28). The brain (0x47b2e0) keeps the report in its
+list `+0x100` unless one for the same fleet and player is there: the first
+waits, later ones are dropped. The event 0x47a060 `{brain, g, m, state,
+mask, after, stamp}` takes the member's report: younger than `after` into
+the step, it is dropped; its shooter gone (0x51f1f0), dropped; a shooter
+of a player not in `mask` (0x20, the human, in every campaign record), it
+stays and nothing fires; else the member's `+0x40` becomes the area about
+the shooter's cell now (0x4796c0 with 1 x 1 and 2: the corner 2 up and
+left but not below 0, the size 5 cut to end at the map's edge), the report
+is dropped and the event fires. Member `+0x40` (x, y, w, h; zero at
+first) is also written by every area order: attack 0x70 (0x479a40, when
+an attack state starts), gathering 0x78 (0x479970), founding 0x8c
+(0x479af0) and 0xbe (0x479c90; miss007's sword hunt gives the whole map),
+and by member code of miss007, miss009 and miss010; not by the zone event
+0x47a010, which writes only `+0x50`, the matching zone's index. So
+miss012 (2, 5)'s and miss013 (2, 4)'s state 0x1e, which their zone
+records (1, 34, 21, 7), (19, 39, 6, 13) and (14, 49, 24, 14), (37, 41,
+9, 8) lead to as well as their attacked record, attacks `+0x40` 375 ticks:
+the area of their last attack or attacker, not the zone. 0x47a2a0 compares the fleet's size
 (0x479d60) with a number once the step has lasted long enough (0 equal, 1
 at least, 2 more, -2 fewer, -1 at most) and 0x47a1e0 does so at once; a
 brain may rewrite these records' numbers at run time (miss001's raid:
@@ -3422,16 +3470,31 @@ unapplied.
 
 At a mission's end the brains' shared slot 0x478e30 fills the statistics
 at game + 0x3309 (twelve dwords, shown by 0x539b20 with strings
-1047-1058): enemy ships destroyed (from the player's kill counts by ship
-type, player + 0x704), boarded (+0x894), enemy and monsters' buildings
-destroyed (by class index 0-23, 16-23 the monsters'), monsters killed (ten
-kinds, +0x7a0), ships and buildings lost (+0x3e4), fish caught, amber
-earned, amber left, treasures found and the score: ships and monsters by
-their points (0x59b358: the ships' amber costs; monsters 700, 400, 200,
-200, 600, 1100, 1300, 800, 200, 900 by kind), less the ships lost, plus
-the amber earned, a fifth of the fish and 600 per treasure, a tenth of
-it, added to the campaign's running score. Buildings score nothing: the
-price lookup 0x42d8b0 is given the index, not the class.
+1047-1058) from the human's player record (`+0xe4` = 5): enemy ships
+destroyed (player + 0x704, by ship type), boarded (+0x894), enemy terrain
+objects destroyed (+0x734, classes 0x32-0x41), monsters killed (+0x7a0,
+classes 0x1f4-0x1fd), monsters' terrain objects destroyed (+0x734,
+classes 0x42-0x49: the wizards 0x42, 0x43 and the nests and lairs), ships
+lost (+0x3e4), terrain objects lost (+0x414, classes 0x32-0x49), fish
+caught (+0xab8), amber earned (+0xbb4), amber left (+0x20), treasures
+found (0x4a95c0) and the score: ships destroyed and boarded and monsters
+by their points (0x59b358: the ships' amber costs; monsters by class -
+0x1f4 through the jump table 0x479140: 700, 400, 200, 200, 600, 1100,
+1300, 800, 200, 900, so a dragon 0x1f9 1100, a siren 0x1fd 900), less the
+ships lost, plus the amber earned, a fifth of the fish and 600 per
+treasure; a tenth of it (0 if below), added to the campaign's running
+score. Buildings score nothing: the price lookup 0x42d8b0 is given the
+index, not the class. The counts are made as a thing is destroyed
+(0x4a9250, from 0x4a8410, the Navy's message 0x83 sent by 0x50e750 with
+the killer): a thing of the killer's own player counts nothing; else its
+player's loss (ships; buildings but classes 0x44-0x49) and the killer's
+gain, when the killer is a player (0 < killer < 20); class 0x4a is counted
+in neither sum, monster class 0x1fe (`+0x7c8`) in none. A ship's killer
+is the giver of its sinking blow (`+0x7f` from the blow's `+0x80b`,
+0x4befc0, 0x4be0c0; set by ship message 4, 0x4a9e30). Not decoded: the
+killer each of the 25 callers of 0x50e750 passes; the port takes the
+shooter's, rammer's or boarder's player, and where it has none (spells,
+fire, creatures) counts the thing the human's kill unless it was theirs.
 
 Some objects are created by the scripts at the start: 0x411010 (world,
 class, x, y, level, a, b) makes a castle record (class, 2, 4, 1, 0, x, y,

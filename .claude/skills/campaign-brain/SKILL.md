@@ -15,16 +15,31 @@ are in `story.rs`.
 
 - `mod missNNN { ... }` per mission: `FLEETS: &[FleetDef]`, `start`, and
   optionally `turn` (run for each fleet before its step: the members' own
-  bookkeeping). Registered in the `mission()` table.
-- `FleetDef { group, cells, program, wants }`: the member's group (computer
-  player), the cells its ships start in, its program, and the ship types it
-  asks its builder for, by difficulty.
+  bookkeeping). Registered in the `mission()` table, with `silent` (members
+  made at 0x8d1 that the main's switch has no case for: they never run)
+  and `before` / `after` (the brain's own work on its 5-tick pass, before
+  or after the members: miss007's reef, miss009/miss010's random tick,
+  miss005's and miss011's flags).
+- `FleetDef { group, member, cells, program, wants }`: the member's group
+  (computer player) and its original member index (not always its place
+  in `FLEETS`: miss002's yard is (1, 7), miss003's southern guard (0, 5),
+  miss005's raiders (1, 6), (1, 7)), the cells its ships start in, its
+  program, and the ship types it asks its builder for, by difficulty.
+- The cadence (`run_brain`): the brain's tick is the game clock; every 5
+  ticks `before`, then each member (g, m) when the tick is 5 x (g + m)
+  modulo 50, then `after`. Members run with or without ships (a step that
+  orders the fleet about is held while it has none: not decoded).
 - A program is `fn(state: u32) -> Op`. `Op` is one of the original's
   primitives: `Behave`, `Wait`, `WaitVar`, `Watch`, `Move`, `Gather`,
   `Patrol`, `Attack`, `Build`, or `Custom(fn(&mut Scene, usize) -> u32)` for
   the member-specific code between primitives (returns the next state).
 - `Event` (`Zone`, `Attacked`, `Size`, `Cell`) are the primitives' event
-  lists: conditions that jump to a state.
+  lists: conditions that jump to a state. `Zone` remembers the zone
+  (`Target::Seen`); `Attacked` takes the fleet's pending report of a blow
+  (`fleet_attacked`, the first kept) and writes `last_area`, member
+  `+0x40`, 5 x 5 about the shooter; attack, gather, found and 0xbe orders
+  write `last_area` too, and `Target::Attacker` / `Target::LastArea` attack
+  it.
 - Fleet vars (`fleets[k].vars`) are the member's fields; brain-wide state
   lives on `Brain` (serde-default fields, saved).
 - Shared helpers: `brain_cast_fleet`, `want_full_town`/`want_town_order`

@@ -627,11 +627,16 @@ impl Scene {
         // (0x4bf170).
         if let Some(i) = target.filter(|_| s.volcanic) {
             self.ignite(i, s.item, s.flaming, s.damage, data, caches);
-            self.strike(s.target, s.damage, false, data, caches);
+            self.strike(s.target, s.damage, false, None, data, caches);
             self.wound(s.target, s.wounds);
             self.wear(s.target, s.wear);
             return;
         }
+        // The blow's giver: the shooter's player, if it is still there.
+        let by = s
+            .shooter
+            .and_then(|id| self.object_index(id))
+            .and_then(|k| self.objects[k].owner);
         if let Some(i) = target {
             // Fire first, judged on the hull before the blow (0x4bf1a0).
             let holder = self.objects[i].holds_units();
@@ -648,10 +653,10 @@ impl Scene {
             self.ignite(i, s.item, s.flaming, s.damage, data, caches);
             if holder {
                 self.fort_blow(
-                    s.target, s.damage, s.wounds, s.item, s.flaming, data, caches,
+                    s.target, s.damage, s.wounds, s.item, s.flaming, by, data, caches,
                 );
             } else {
-                self.strike(s.target, s.damage, false, data, caches);
+                self.strike(s.target, s.damage, false, by, data, caches);
                 self.wound(s.target, s.wounds);
                 self.wear(s.target, s.wear);
             }

@@ -655,7 +655,7 @@ fn victory_and_defeat() {
         .find(|o| o.record.class_id == 0x44)
         .unwrap()
         .id;
-    scene.hit(nest, 1.0e6, &data, &mut caches);
+    scene.hit(nest, 1.0e6, None, &data, &mut caches);
     for _ in 0..11 {
         scene.update(1.0, &data, &mut caches);
     }
@@ -2322,7 +2322,7 @@ fn campaign_story() {
         .any(|o| o.treasure.is_some_and(|t| t.kind == 18)));
     let holder = scene.held.iter().find(|h| h.1.kind == 18).unwrap().0;
     assert_eq!(holder, 6);
-    scene.hit(holder, f32::MAX, &data, &mut caches);
+    scene.hit(holder, f32::MAX, None, &data, &mut caches);
     assert!(scene
         .objects
         .iter()
@@ -2763,7 +2763,7 @@ fn fire_wizard() {
         .object_index(ship)
         .map_or(0.0, |i| scene.objects[i].combat.as_ref().unwrap().hull);
     assert!(after < before, "the wizard struck ({before} -> {after})");
-    scene.hit(castle, f32::MAX, &data, &mut caches);
+    scene.hit(castle, f32::MAX, None, &data, &mut caches);
     assert!(scene
         .objects
         .iter()
@@ -2819,7 +2819,7 @@ fn dragon_flies_and_returns() {
     for n in scene.nests.iter_mut().filter(|n| n.id == dragon.nest) {
         n.delay = 5.0;
     }
-    scene.hit(dragon.id, f32::MAX, &data, &mut caches);
+    scene.hit(dragon.id, f32::MAX, None, &data, &mut caches);
     for _ in 0..50 * 60 {
         scene.update(0.02, &data, &mut caches);
     }
@@ -3065,8 +3065,8 @@ fn statistics_and_score() {
     };
     let (enemy, ek) = ship_of(&scene, false);
     let (mine, mk) = ship_of(&scene, true);
-    scene.hit(enemy, f32::MAX, &data, &mut caches);
-    scene.hit(mine, f32::MAX, &data, &mut caches);
+    scene.hit(enemy, f32::MAX, None, &data, &mut caches);
+    scene.hit(mine, f32::MAX, None, &data, &mut caches);
     assert_eq!(scene.stats.ships_destroyed[ek as usize], 1);
     assert_eq!(scene.stats.ships_lost[mk as usize], 1);
     let points = [
@@ -5308,7 +5308,7 @@ fn attacks_end_at_ruins() {
         .unwrap()
         .id;
     scene.order_attack(ship, target).unwrap();
-    scene.hit(target, f32::MAX, &data, &mut caches);
+    scene.hit(target, f32::MAX, None, &data, &mut caches);
     let t = scene.object_index(target).unwrap();
     assert!(scene.objects[t].combat.is_none(), "ruins");
     for _ in 0..50 {
@@ -5407,7 +5407,7 @@ fn units_wear_and_move_with_their_condition() {
         &scene.objects[k].combat.as_ref().unwrap().weapons,
     );
     assert_eq!((sh.hull, sh.crew, sh.weapons, sh.sum), (18, 2, 3, 21));
-    scene.share_blow(ship, 210.0, &data, &mut caches);
+    scene.share_blow(ship, 210.0, None, &data, &mut caches);
     let o = &scene.objects[scene.object_index(ship).unwrap()];
     assert_eq!(o.combat.as_ref().unwrap().hull, 1e6 - 180.0);
     let units = o.unit_conditions();
@@ -5420,7 +5420,7 @@ fn units_wear_and_move_with_their_condition() {
     // Crushing blows break units but leave the last of the crew and of
     // the weapons standing.
     for _ in 0..20 {
-        scene.share_blow(ship, 20_000.0, &data, &mut caches);
+        scene.share_blow(ship, 20_000.0, None, &data, &mut caches);
     }
     let k = scene.object_index(ship).unwrap();
     let o = &scene.objects[k];
@@ -6077,7 +6077,7 @@ fn forts_units_take_their_share_of_blows() {
     };
     let (p0, h0) = (points(&scene), hull(&scene));
     // A ballista's shot of 3500 (the original's); load 10 of 45.
-    scene.fort_blow(fort, 3500.0 / 15.0, 0.0, 6, false, &data, &mut caches);
+    scene.fort_blow(fort, 3500.0 / 15.0, 0.0, 6, false, None, &data, &mut caches);
     let share = 3500 * 10 / 45;
     assert!((h0 - hull(&scene) - (3500 - share) as f32 / 15.0).abs() < 0.05);
     // The weapons take the share, the marines it by the ballista's B over
@@ -6087,7 +6087,7 @@ fn forts_units_take_their_share_of_blows() {
     assert!(lost >= share && lost <= share + crew + 200, "{lost}");
     // Blow on blow, units break and go; each place fires by its mean.
     for _ in 0..40 {
-        scene.fort_blow(fort, 3500.0 / 15.0, 0.0, 6, false, &data, &mut caches);
+        scene.fort_blow(fort, 3500.0 / 15.0, 0.0, 6, false, None, &data, &mut caches);
     }
     let o = &scene.objects[scene.object_index(fort).unwrap()];
     assert!(o.combat.as_ref().unwrap().weapons.len() < 7);
@@ -6249,7 +6249,7 @@ fn spells_wear_fort_units() {
         .flatten()
         .map(|&c| c as u32)
         .sum();
-    scene.hit(fort, 3500.0 / 15.0, &data, &mut caches);
+    scene.hit(fort, 3500.0 / 15.0, None, &data, &mut caches);
     let f = scene.object_index(fort).unwrap();
     let after: u32 = scene.objects[f]
         .fort_places()
@@ -6662,7 +6662,7 @@ fn sleeping_buildings_wake_together() {
     let town = scene.own_sites()[0];
     let i = scene.object_index(town).unwrap();
     let hull = scene.objects[i].combat.as_ref().unwrap().hull;
-    scene.hit(town, 10.0, &data, &mut caches);
+    scene.hit(town, 10.0, None, &data, &mut caches);
     let i = scene.object_index(town).unwrap();
     assert_eq!(scene.objects[i].combat.as_ref().unwrap().hull, hull);
     // A while with the boat away: still asleep, not lost.
@@ -7278,4 +7278,209 @@ fn flocks_and_volcanoes_take_no_building() {
         }
     }
     assert!(flocks > 0 && volcanoes > 0);
+}
+
+/// The brains' members run as each mission's main runs them (message 0):
+/// every 5 ticks of the game clock, member (g, m) when the tick is 5 x
+/// (g + m) modulo 50, by the original's member index: miss002's Persian
+/// yard is (1, 7) (0x44cbd0, at 40), miss003's southern guard (0, 5)
+/// (0x44f050, at 25), miss005's raiders (1, 6) and (1, 7) (0x456580,
+/// 0x456e80, at 35 and 40); members the switch has no case for never run
+/// (miss008 (0, 0) and (1, 0)) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brain_members_run_at_their_phase() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    /// A member (group, member) and the tick modulo 50 it runs at.
+    type Phase = (u8, usize, u32);
+    let cases: [(&str, &[Phase]); 4] = [
+        ("miss002", &[(1, 7, 40)]),
+        ("miss003", &[(0, 5, 25)]),
+        ("miss005", &[(1, 6, 35), (1, 7, 40)]),
+        ("miss008", &[]),
+    ];
+    for (mission, members) in cases {
+        let mut scene = Scene::load(&data, &mut caches, mission).unwrap();
+        for _ in 0..2 * 120 {
+            scene.update(0.02, &data, &mut caches);
+        }
+        let brain = scene.brain.as_ref().unwrap();
+        assert_eq!(brain.tick, 120, "{mission}: the brain's tick is the game's");
+        for &(g, m, phase) in members {
+            let k = scene.member_fleet(g, m).unwrap();
+            let since = scene.brain.as_ref().unwrap().fleets[k].since;
+            assert!(since > 0, "{mission} ({g}, {m}) ran");
+            assert_eq!(since % 50, phase, "{mission} ({g}, {m})");
+        }
+        if mission == "miss008" {
+            for (g, m) in [(0, 0), (1, 0)] {
+                let f = &scene.brain.as_ref().unwrap().fleets[scene.member_fleet(g, m).unwrap()];
+                assert!(!f.started && f.since == 0, "miss008 ({g}, {m}) never runs");
+            }
+        }
+    }
+}
+
+/// miss009's and miss010's brain tick (0x4665c9, 0x46a32a): two numbers
+/// drawn every 5 ticks, the second, x, read twice, and the tick run when
+/// the tick is ((x % 10 + x % 10) % 10) x 5 modulo 50 (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn brain_random_tick_draws_twice() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss009").unwrap();
+    let lcg = |s: u32| s.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039);
+    let mut runs = [0u32; 50];
+    for seed in 0..2000u32 {
+        for tick in (0..50).step_by(5) {
+            scene.rng = crate::combat::Rng(seed);
+            scene.brain.as_mut().unwrap().tick = tick;
+            let s = lcg(lcg(seed));
+            let x = s >> 16;
+            let expect = tick % 50 == ((x % 10 + x % 10) % 10) * 5;
+            assert_eq!(brain::random_tick(&mut scene), expect);
+            assert_eq!(scene.rng.0, s, "two draws");
+            runs[tick as usize] += expect as u32;
+        }
+    }
+    // Only on ticks a multiple of 10.
+    for (tick, &n) in runs.iter().enumerate() {
+        assert_eq!(n > 0, tick % 10 == 0, "tick {tick}");
+    }
+}
+
+/// The attacked event (0x47a060) as miss013's member (2, 4) has it: the
+/// first report of a blow waits, later ones are dropped; one from another
+/// player is kept but never fires; one younger than the step's `after` is
+/// dropped; the human's fires and puts `last_area`, member `+0x40`, about
+/// the shooter where it is now: 2 cells about it, the corner not past 0,
+/// the size 5 cut at the map's edge (0x4796c0) (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn brain_attacked_event_sets_last_area() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss013").unwrap();
+    let k = scene.member_fleet(2, 4).unwrap();
+    let fleet = |s: &Scene| s.brain.as_ref().unwrap().fleets[k].clone();
+    assert_eq!(fleet(&scene).last_area, (0, 0, 0, 0));
+    let target = fleet(&scene).ships[0];
+    let mine = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let theirs = scene
+        .objects
+        .iter()
+        .find(|o| o.ship.is_some() && !scene.is_own(o) && o.id != target)
+        .map(|o| o.id)
+        .unwrap();
+    let me = scene.objects[mine].id;
+    let events = [brain::Event::Attacked {
+        state: 30,
+        after: 375,
+    }];
+    // Another player's report first: it stays, and keeps the human's out.
+    scene.fleet_attacked(target, theirs);
+    scene.fleet_attacked(target, me);
+    assert_eq!(fleet(&scene).attacked_by, Some(theirs));
+    assert_eq!(scene.event_fired(k, &events, 375), None);
+    assert_eq!(fleet(&scene).attacked_by, Some(theirs));
+    // Too early: dropped.
+    scene.brain.as_mut().unwrap().fleets[k].attacked_by = None;
+    scene.fleet_attacked(target, me);
+    assert_eq!(scene.event_fired(k, &events, 374), None);
+    assert_eq!(fleet(&scene).attacked_by, None);
+    // The shooter at cell (1, 1): (0, 0, 5, 5).
+    let t = TILE_SIZE as f32;
+    let at = |s: &mut Scene, x: i32, y: i32| {
+        s.objects[mine].x = x as f32 * t + t / 2.0;
+        s.objects[mine].y = y as f32 * t + t / 2.0;
+    };
+    at(&mut scene, 1, 1);
+    scene.fleet_attacked(target, me);
+    assert_eq!(scene.event_fired(k, &events, 375), Some(30));
+    assert_eq!(fleet(&scene).last_area, (0, 0, 5, 5));
+    assert_eq!(fleet(&scene).attacked_by, None);
+    // By the far corner: cut to the map.
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    at(&mut scene, w - 2, h - 1);
+    scene.fleet_attacked(target, me);
+    assert_eq!(scene.event_fired(k, &events, 375), Some(30));
+    assert_eq!(fleet(&scene).last_area, (w - 4, h - 3, 4, 3));
+}
+
+/// The score counts what the human player destroys (0x4a9250): monsters by
+/// class (a dragon, 0x1f9, 1100 points); a dragon's nest (0x44) is a
+/// monsters' terrain object worth nothing and no one's loss; another
+/// player's kill and the human's own thing destroyed by the human count
+/// nothing (needs `OPENCONQUEST_DATA`).
+#[test]
+fn score_counts_the_human_players_kills() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss010").unwrap();
+    scene.brain = None;
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    let find = |s: &Scene, class: u32| {
+        s.objects
+            .iter()
+            .find(|o| o.record.class_id == class && o.combat.is_some())
+            .map(|o| o.id)
+            .unwrap()
+    };
+    let dragon = find(&scene, 0x1f9);
+    scene.hit(dragon, f32::MAX, human, &data, &mut caches);
+    assert_eq!(scene.stats.monsters_killed[0x1f9 - 0x1f4], 1);
+    assert_eq!(scene.stats.score(), 1100 / 10);
+    let nest = find(&scene, 0x44);
+    scene.hit(nest, f32::MAX, human, &data, &mut caches);
+    assert_eq!(scene.stats.lairs_destroyed, 1);
+    assert_eq!(scene.stats.buildings_lost, 0);
+    assert_eq!(scene.stats.score(), 1100 / 10);
+    let v = scene.stats.values(scene.amber);
+    assert_eq!((v[2], v[3], v[4]), (0, 1, 1));
+    // Another player's kill.
+    let enemy = scene
+        .objects
+        .iter()
+        .find(|o| {
+            o.ship.is_some()
+                && !scene.is_own(o)
+                && o.owner.is_some_and(|w| w != crate::combat::MONSTERS)
+        })
+        .map(|o| o.id)
+        .unwrap();
+    let owner = scene.objects[scene.object_index(enemy).unwrap()].owner;
+    let other = scene
+        .objects
+        .iter()
+        .find(|o| o.owner.is_some() && o.owner != owner && o.owner != human)
+        .and_then(|o| o.owner);
+    scene.hit(enemy, f32::MAX, other, &data, &mut caches);
+    assert_eq!(scene.stats.ships_destroyed.iter().sum::<u32>(), 0);
+    // The human's own ship sunk by the human: neither lost nor destroyed.
+    let mine = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .map(|o| o.id)
+        .unwrap();
+    scene.hit(mine, f32::MAX, human, &data, &mut caches);
+    assert_eq!(scene.stats.ships_lost.iter().sum::<u32>(), 0);
+    assert_eq!(scene.stats.score(), 1100 / 10);
 }

@@ -2,18 +2,16 @@
 //! original does (0x478e30 counts them at the end into game + 0x3309; the
 //! screen 0x539b20 lists them with string resources 1047-1058).
 
-use openconquest_formats::ObjectClass;
-
-use super::Scene;
-use crate::combat;
+use super::{Owner, Scene};
 
 /// Points per ship type destroyed, boarded or lost (0x59b358: the ships'
 /// amber costs).
 const SHIP_POINTS: [i64; 12] = [200, 400, 1100, 1300, 900, 800, 700, 600, 600, 900, 600, 900];
-/// Points per kind of monster killed (0x59b358-0x59b374), in the order of
-/// the creature victory conditions (taken to be the original's order):
-/// dragons, wizards of fire, of wind, sirens, gorgons, harpies, sea
-/// creatures, amazons, minotaurs, cyclops.
+/// Points per monster killed, by class - 0x1f4 (the jump table 0x479140
+/// into 0x59b358-0x59b374): cyclops 700, minotaur 400, amazon 200, 0x1f7
+/// 200, harpy 600, dragon 1100, gorgon 1300, sea creature 800, 0x1fc 200,
+/// siren 900. (Class 0x1fe is counted, `+0x7c8`, but neither shown nor
+/// scored.)
 const MONSTER_POINTS: [i64; 10] = [700, 400, 200, 200, 600, 1100, 1300, 800, 200, 900];
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -37,7 +35,7 @@ impl Stats {
     /// monsters by their points, less the ships lost; plus the amber
     /// earned, a fifth of the fish caught and three boats' worth for each
     /// treasure; a tenth of it all. (Buildings count nothing: the original
-    /// looks their price up by index instead of class.)
+    /// looks their price up (0x42d8b0) by index instead of class.)
     pub fn score(&self) -> u64 {
         let ships =
             |n: &[u32; 12]| -> i64 { n.iter().zip(SHIP_POINTS).map(|(&n, p)| n as i64 * p).sum() };
@@ -81,52 +79,60 @@ impl Stats {
     }
 }
 
-/// The monster kind (index into `MONSTER_POINTS`) of a creature class.
-fn monster_kind(class: u32) -> Option<usize> {
-    Some(match class {
-        0x1f9 => 0,
-        0x43 => 1,
-        0x42 => 2,
-        0x1fd => 3,
-        0x1fa => 4,
-        0x1f8 => 5,
-        0x1fb => 6,
-        0x1f6 => 7,
-        0x1f5 => 8,
-        0x1f4 => 9,
-        _ => return None,
-    })
-}
-
 impl Scene {
-    /// Object `i` is destroyed: the player's gain or loss.
-    pub(super) fn note_destroyed(&mut self, i: usize) {
+    /// Object `i` is destroyed, the blow that did it given by `killer`
+    /// (0x4a9250 through 0x50e750, message 0x83): what it does to the human
+    /// player's statistics. A thing destroyed by its own player counts
+    /// nothing; else its player's loss is counted (ships, and buildings of
+    /// classes 0x32-0x43), and the killer's gain (ships by type, buildings
+    /// 0x32-0x41 as enemy terrain objects, 0x42-0x49, the wizards and the
+    /// lairs, as monsters' terrain objects, monsters 0x1f4-0x1fd by
+    /// class); only the human player's own are kept here. (Not decoded:
+    /// the killer each of the 25 callers of 0x50e750 passes; the port
+    /// gives the shooter's, rammer's or boarder's player, and where it has
+    /// none (`None`: spells, fire, creatures, volcanoes) counts the thing
+    /// as the human player's kill unless it was theirs.)
+    pub(super) fn note_destroyed(&mut self, i: usize, killer: Option<Owner>) {
         let o = &self.objects[i];
+        let human = self.human.map(|h| (h.nation, h.slot));
         let own = self.is_own(o);
+        if killer.is_some() && killer == o.owner {
+            return;
+        }
+        let by_human = match killer {
+            Some(k) => Some(k) == human,
+            None => !own,
+        };
         let class = o.record.class_id;
         let ship = o.ship.as_ref().map(|s| s.kind.min(11) as usize);
-        let monster = o.owner == Some(combat::MONSTERS) || o.owner.is_none();
         let s = &mut self.stats;
-        match ship {
-            Some(k) if own => s.ships_lost[k] += 1,
-            Some(k) if !monster => s.ships_destroyed[k] += 1,
-            Some(_) => {}
-            None if own => s.buildings_lost += 1,
-            None => {
-                if let Some(m) = monster_kind(class) {
-                    s.monsters_killed[m] += 1;
-                } else if matches!(
-                    o.class,
-                    ObjectClass::Castle(_) | ObjectClass::HarpyNest | ObjectClass::CreatureSpawn
-                ) {
-                    s.lairs_destroyed += 1;
-                } else if matches!(
-                    o.class,
-                    ObjectClass::Building(_) | ObjectClass::Barbarian(_)
-                ) {
-                    s.buildings_destroyed += 1;
+        match (ship, class) {
+            (Some(k), _) => {
+                if own {
+                    s.ships_lost[k] += 1;
+                }
+                if by_human {
+                    s.ships_destroyed[k] += 1;
                 }
             }
+            (None, 0x32..=0x4a) => {
+                // Classes 0x44-0x49 are no player's loss; 0x4a is counted
+                // in neither sum.
+                if own && class <= 0x43 {
+                    s.buildings_lost += 1;
+                }
+                if by_human {
+                    match class {
+                        0x32..=0x41 => s.buildings_destroyed += 1,
+                        0x42..=0x49 => s.lairs_destroyed += 1,
+                        _ => {}
+                    }
+                }
+            }
+            (None, 0x1f4..=0x1fd) if by_human => {
+                s.monsters_killed[(class - 0x1f4) as usize] += 1;
+            }
+            _ => {}
         }
     }
 }

@@ -319,7 +319,7 @@ impl Scene {
         for (id, blow) in blows {
             // 0xda93 heeds no sleep: struck straight (not through the
             // fort's units either).
-            self.strike(id, blow, true, data, caches);
+            self.strike(id, blow, true, None, data, caches);
         }
         let monsters: Vec<(u32, bool)> = self
             .objects
@@ -546,11 +546,11 @@ impl Scene {
             }
         }
         for id in wrecked {
-            self.hit(id, 0.0, data, caches);
+            self.hit(id, 0.0, None, data, caches);
         }
         // Shared out as any blow (hull, crew, weapons).
         for (id, blow) in spouts {
-            self.share_blow(id, blow, data, caches);
+            self.share_blow(id, blow, None, data, caches);
         }
     }
 

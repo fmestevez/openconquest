@@ -35,10 +35,12 @@ pub enum Cmp {
 #[derive(Debug, Clone, Copy)]
 pub enum Event {
     /// The human player has something in `area`: attack it (0x47a010,
-    /// 0x479f40; the fleet remembers the area to attack).
+    /// 0x479f40; the fleet remembers the area to attack, not as its
+    /// `last_area`: the event writes only `+0x50`, the zone's index).
     Zone { state: u32, area: Cells },
-    /// A ship of the fleet was fired on by the human player, at least
-    /// `after` ticks into the step: attack around the attacker (0x47a060).
+    /// The fleet's pending report of a blow (message 0x5d9c) is the human
+    /// player's, at least `after` ticks into the step: `last_area` becomes
+    /// the 5 x 5 cells about the shooter, where it is now (0x47a060).
     Attacked { state: u32, after: u32 },
     /// The fleet's size compares with the fleet's variable `n` once the
     /// step has lasted the fleet's variable `after` ticks (0x47a2a0), or
@@ -66,8 +68,12 @@ pub enum Target {
     Seen,
     /// A fixed area.
     Area(Cells),
-    /// Around the ship that fired on the fleet.
+    /// Around the ship that fired on the fleet: `last_area`, which the
+    /// attacked event has just written.
     Attacker,
+    /// The area of the fleet's last area order or attacked event
+    /// (`last_area`, member `+0x40`), whatever wrote it.
+    LastArea,
     /// Around one of the human player's buildings, picked at random.
     HumanBuilding,
 }
@@ -136,6 +142,9 @@ pub struct FleetDef {
     /// The computer player's group it belongs to (each group's builder
     /// serves its own fleets).
     pub group: u8,
+    /// Its member index in the group (0x479200 at message 0x8d1): it runs
+    /// when the tick is `5 x (group + member)` modulo 50.
+    pub member: u8,
     /// Areas whose ships (or, for a builder, buildings) it starts with.
     pub cells: &'static [Cells],
     pub program: Program,
@@ -150,15 +159,23 @@ pub struct Fleet {
     pub ships: Vec<u32>,
     pub state: u32,
     pub previous: u32,
-    started: bool,
-    since: u32,
+    pub(super) started: bool,
+    pub(super) since: u32,
     /// The area an event chose to attack.
     area: Option<Cells>,
     /// Patrol: the point sailed to, and when the pause there began.
     point: usize,
     paused_at: Option<u32>,
-    /// Who last fired on the fleet, and where.
-    pub attacked_from: Option<(f32, f32)>,
+    /// The pending report of a blow on one of its ships (message 0x5d9c,
+    /// the brain's list `+0x100`): the shooter's id. The first is kept,
+    /// later ones dropped until it is consumed.
+    #[serde(default)]
+    pub attacked_by: Option<u32>,
+    /// Member `+0x40`: the area of its last attack, gathering, founding or
+    /// order 0xbe, or of the last attacked event that fired; (0, 0, 0, 0)
+    /// until the first.
+    #[serde(default)]
+    pub last_area: Cells,
     /// The mission's own numbers (e.g. a raid's timing).
     pub vars: [u32; 4],
 }
@@ -186,6 +203,10 @@ pub struct Brain {
     /// miss006: squadron (2, 6) has joined (2, 7) (`+0x1b4`).
     #[serde(default)]
     pub joined: bool,
+    /// miss005: the harpy nests and the barbarians' stronghold found gone
+    /// (`+0x184`, `+0x18c` cleared by the brain's pass).
+    #[serde(default)]
+    pub gone: [bool; 2],
 }
 
 /// A town order a brain member gave (0x47b130 through the land fleet,
@@ -237,6 +258,13 @@ struct Mission {
     /// no ships (the original's members' own bookkeeping: what to ask the
     /// yards for, and the like).
     turn: Option<fn(&mut Scene, usize)>,
+    /// Members made at the start (0x8d1) that the main's switch has no
+    /// case for: they never run.
+    silent: &'static [(u8, u8)],
+    /// The brain's own work on its 5-tick pass, before the members and
+    /// after them.
+    before: Option<fn(&mut Scene)>,
+    after: Option<fn(&mut Scene)>,
 }
 
 /// A mission's fleets as it defines them.
@@ -250,74 +278,128 @@ fn mission(name: &str) -> Option<Mission> {
             fleets: miss000::FLEETS,
             start: miss000::start,
             turn: None,
+            silent: &[],
+            before: None,
+            after: None,
         }),
         "miss001" => Some(Mission {
             fleets: miss001::FLEETS,
             start: miss001::start,
             turn: None,
+            silent: &[],
+            before: None,
+            after: None,
         }),
         "miss002" => Some(Mission {
             fleets: miss002::FLEETS,
             start: miss002::start,
             turn: None,
+            silent: &[],
+            before: None,
+            after: None,
         }),
         "miss003" => Some(Mission {
             fleets: miss003::FLEETS,
             start: miss003::start,
             turn: None,
+            silent: &[],
+            before: None,
+            after: None,
         }),
         "miss004" => Some(Mission {
             fleets: miss004::FLEETS,
             start: miss004::start,
             turn: None,
+            silent: &[(0, 7), (2, 5)],
+            before: None,
+            after: None,
         }),
         "miss005" => Some(Mission {
             fleets: miss005::FLEETS,
             start: miss005::start,
             turn: Some(miss005::turn),
+            silent: &[],
+            before: None,
+            after: Some(miss005::after),
         }),
         "miss006" => Some(Mission {
             fleets: miss006::FLEETS,
             start: miss006::start,
             turn: Some(miss006::turn),
+            silent: &[(1, 6)],
+            before: None,
+            after: None,
         }),
         "miss007" => Some(Mission {
             fleets: miss007::FLEETS,
             start: miss007::start,
             turn: Some(miss007::turn),
+            silent: &[],
+            before: Some(miss007::before),
+            after: None,
         }),
         "miss008" => Some(Mission {
             fleets: miss008::FLEETS,
             start: miss008::start,
             turn: Some(miss008::turn),
+            silent: &[(0, 0), (1, 0)],
+            before: None,
+            after: None,
         }),
         "miss009" => Some(Mission {
             fleets: miss009::FLEETS,
             start: miss009::start,
             turn: Some(miss009::turn),
+            silent: &[(0, 0)],
+            before: Some(miss009::before),
+            after: None,
         }),
         "miss010" => Some(Mission {
             fleets: miss010::FLEETS,
             start: miss010::start,
             turn: Some(miss010::turn),
+            silent: &[(0, 0), (1, 0)],
+            before: Some(miss010::before),
+            after: None,
         }),
         "miss011" => Some(Mission {
             fleets: miss011::FLEETS,
             start: miss011::start,
             turn: Some(miss011::turn),
+            silent: &[],
+            before: None,
+            after: Some(miss011::after),
         }),
         "miss012" => Some(Mission {
             fleets: miss012::FLEETS,
             start: miss012::start,
             turn: Some(miss012::turn),
+            silent: &[],
+            before: None,
+            after: None,
         }),
         "miss013" => Some(Mission {
             fleets: miss013::FLEETS,
             start: miss013::start,
             turn: Some(miss013::turn),
+            silent: &[],
+            before: None,
+            after: None,
         }),
         _ => None,
     }
+}
+
+/// miss009's and miss010's every-5-ticks gate on their tick (0x4665c9,
+/// 0x46a32a): a number is drawn and dropped, another drawn, `x`, and the
+/// tick runs when the tick is `((x % 10 + x % 10) % 10) x 5` modulo 50
+/// (both terms read the seed again after the second draw: the same `x`).
+/// So only on a tick a multiple of 10, one time in five.
+pub(super) fn random_tick(scene: &mut Scene) -> bool {
+    scene.rng.next();
+    let x = scene.rng.next();
+    let phase = ((x % 10 + x % 10) % 10) * 5;
+    scene.brain.as_ref().unwrap().tick % 50 == phase
 }
 
 impl Scene {
@@ -339,6 +421,7 @@ impl Scene {
             jobs: Vec::new(),
             watch: [1, 0, 0],
             joined: false,
+            gone: [false; 2],
         };
         for def in m.fleets {
             // The ships (or buildings) standing in the given cells (0x479200).
@@ -370,7 +453,8 @@ impl Scene {
                 area: None,
                 point: 0,
                 paused_at: None,
-                attacked_from: None,
+                attacked_by: None,
+                last_area: (0, 0, 0, 0),
                 vars: [0; 4],
             });
         }
@@ -421,19 +505,30 @@ impl Scene {
         }
     }
 
-    /// Notes that the human player fired on ship `target` from `(x, y)`.
-    pub(super) fn fleet_attacked(&mut self, target: u32, x: f32, y: f32) {
+    /// A blow from `shooter` (anyone's ship or building) on ship `target`
+    /// (0x4bf170 marks the ship `+0x691`, `+0x692` the shooter's id; the
+    /// fleet's order handlers report it with message 0x5d9c, 0x4a21c0):
+    /// the brain keeps the report unless one for the same fleet is pending
+    /// (0x47b2e0). (Not decoded: which fleet orders report, and how often,
+    /// 0x4ca290 and the others; the port reports at once.)
+    pub(super) fn fleet_attacked(&mut self, target: u32, shooter: u32) {
         if let Some(b) = self.brain.as_mut() {
             for f in &mut b.fleets {
-                if f.ships.contains(&target) {
-                    f.attacked_from = Some((x, y));
+                if f.ships.contains(&target) && f.attacked_by.is_none() {
+                    f.attacked_by = Some(shooter);
                 }
             }
         }
     }
 
-    /// Runs the brain one tick: each fleet takes its turn every 50 ticks, a
-    /// fleet 5 ticks after the one before (0x44d0e0).
+    /// Runs the brain one tick (message 0 of each mission's main). Its
+    /// tick is the game clock (0x47b2e0 copies `[game +0xde]` into
+    /// `+0xfc`). Every 5 ticks the brain does its own work (`before`, for
+    /// miss007, miss009 and miss010), runs its members, group by group in
+    /// order, member (g, m) when the tick is `5 x (g + m)` modulo 50, and
+    /// does the rest of its own (`after`, for miss005 and miss011). A
+    /// member runs whether or not it has ships (the original checks only
+    /// its fleet id).
     pub(super) fn run_brain(&mut self) {
         let Some(brain) = self.brain.as_mut() else {
             return;
@@ -444,8 +539,20 @@ impl Scene {
         let Some(m) = mission(&brain.mission) else {
             return;
         };
-        for k in 0..m.fleets.len().min(brain.fleets.len()) {
-            if tick % 50 != (5 * k as u32) % 50 {
+        if tick % 5 != 0 {
+            return;
+        }
+        if let Some(before) = m.before {
+            before(self);
+        }
+        for k in 0..m
+            .fleets
+            .len()
+            .min(self.brain.as_ref().unwrap().fleets.len())
+        {
+            let (g, member) = (m.fleets[k].group, m.fleets[k].member);
+            if m.silent.contains(&(g, member)) || tick % 50 != (5 * (g as u32 + member as u32)) % 50
+            {
                 continue;
             }
             let ids = self.brain.as_ref().unwrap().fleets[k].ships.clone();
@@ -462,11 +569,22 @@ impl Scene {
                 turn(self, k);
             }
             self.ask_for_ships(k, &m.fleets[k]);
-            if self.brain.as_ref().unwrap().fleets[k].ships.is_empty() {
+            // Not decoded: what the fleet reports (0x4a0f60) for an order
+            // given to a fleet with no ships; the port holds a step that
+            // orders the fleet about until it has some.
+            let f = &self.brain.as_ref().unwrap().fleets[k];
+            let orders = matches!(
+                (m.fleets[k].program)(f.state),
+                Op::Move { .. } | Op::Gather { .. } | Op::Patrol { .. } | Op::Attack { .. }
+            );
+            if orders && f.ships.is_empty() {
                 continue;
             }
             let groups: Vec<u8> = m.fleets.iter().map(|f| f.group).collect();
             self.fleet_step(k, m.fleets[k].program, &groups, tick);
+        }
+        if let Some(after) = m.after {
+            after(self);
         }
     }
 
@@ -504,7 +622,7 @@ impl Scene {
     }
 
     /// The state the first firing event sends the fleet to, if any.
-    fn event_fired(&mut self, k: usize, events: &[Event], elapsed: u32) -> Option<u32> {
+    pub(super) fn event_fired(&mut self, k: usize, events: &[Event], elapsed: u32) -> Option<u32> {
         let t = TILE_SIZE as f32;
         for e in events {
             match *e {
@@ -515,14 +633,27 @@ impl Scene {
                     }
                 }
                 Event::Attacked { state, after } => {
-                    let f = &mut self.brain.as_mut().unwrap().fleets[k];
-                    if let Some((x, y)) = f.attacked_from.take() {
-                        if elapsed >= after {
-                            let (cx, cy) = ((x / t) as i32, (y / t) as i32);
-                            f.area = Some((cx - 1, cy - 1, 3, 3));
-                            return Some(state);
-                        }
+                    // 0x47a060: a report younger than the step's `after`
+                    // is dropped, as is one whose shooter is gone; one not
+                    // the human player's (mask 0x20) stays.
+                    let Some(shooter) = self.brain.as_ref().unwrap().fleets[k].attacked_by else {
+                        continue;
+                    };
+                    let found = self.object_index(shooter);
+                    if elapsed < after || found.is_none() {
+                        self.brain.as_mut().unwrap().fleets[k].attacked_by = None;
+                        continue;
                     }
+                    let o = &self.objects[found.unwrap()];
+                    if !self.is_own(o) {
+                        continue;
+                    }
+                    let cell = ((o.x / t) as i32, (o.y / t) as i32);
+                    let area = self.cells_about(cell, 2);
+                    let f = &mut self.brain.as_mut().unwrap().fleets[k];
+                    f.attacked_by = None;
+                    f.last_area = area;
+                    return Some(state);
                 }
                 Event::Size {
                     state,
@@ -644,6 +775,8 @@ impl Scene {
                     ticks
                 };
                 if !started {
+                    // Order 0x78 (0x479970) writes the area into `+0x40`.
+                    self.brain.as_mut().unwrap().fleets[k].last_area = area;
                     self.fleet_gather(k, area, resource);
                 } else if ticks > 0 && elapsed >= ticks {
                     self.fleet_stop(k);
@@ -706,14 +839,20 @@ impl Scene {
                     }
                 }
                 if !started {
-                    let seen = self.brain.as_ref().unwrap().fleets[k].area;
+                    let f = &self.brain.as_ref().unwrap().fleets[k];
+                    let (seen, last) = (f.area, f.last_area);
                     let area = match target {
                         Target::Area(a) => Some(a),
-                        Target::Seen | Target::Attacker => seen,
+                        Target::Seen => seen,
+                        Target::Attacker | Target::LastArea => Some(last),
                         Target::HumanBuilding => self.random_human_building(),
                     };
                     match area {
-                        Some(a) => self.fleet_attack(k, a),
+                        // Order 0x70 (0x479a40) writes the area into `+0x40`.
+                        Some(a) => {
+                            self.brain.as_mut().unwrap().fleets[k].last_area = a;
+                            self.fleet_attack(k, a);
+                        }
                         None => self.set_state(k, next),
                     }
                 } else if self.fleet_idle(k) || (ticks > 0 && elapsed >= ticks) {
@@ -980,6 +1119,19 @@ impl Scene {
             .map(|o| ((o.x / t) as i32, (o.y / t) as i32))
     }
 
+    /// `n` cells about the `w` x `h` cells at `(x, y)` (0x4796c0, here
+    /// with a 1 x 1 area): the corner moved `n` up and left but not past
+    /// 0, the size grown by `2 n`, then cut to end at the map's edge.
+    pub(super) fn cells_about(&self, (x, y): (i32, i32), n: i32) -> Cells {
+        let (mw, mh) = (self.nav.width as i32, self.nav.height as i32);
+        let x0 = if x - n < 1 { 0 } else { x - n };
+        let y0 = if y - n < 1 { 0 } else { y - n };
+        let (w, h) = (1 + 2 * n, 1 + 2 * n);
+        let w = if x0 + w > mw { mw - x0 } else { w };
+        let h = if y0 + h > mh { mh - y0 } else { h };
+        (x0, y0, w, h)
+    }
+
     /// Sets the area fleet `k` attacks next (`Target::Seen`).
     pub(super) fn set_fleet_area(&mut self, k: usize, area: Cells) {
         self.brain.as_mut().unwrap().fleets[k].area = Some(area);
@@ -1054,10 +1206,7 @@ impl Scene {
         };
         let Some(into) = defs
             .iter()
-            .enumerate()
-            .filter(|(_, d)| d.group == group)
-            .nth(member)
-            .map(|(k, _)| k)
+            .position(|d| d.group == group && d.member == member)
         else {
             return;
         };
@@ -1395,10 +1544,7 @@ impl Scene {
     pub(super) fn member_fleet(&self, group: u8, member: usize) -> Option<usize> {
         mission_fleets(&self.brain.as_ref()?.mission)?
             .iter()
-            .enumerate()
-            .filter(|(_, d)| d.group == group)
-            .nth(member)
-            .map(|(k, _)| k)
+            .position(|d| d.group == group && d.member as usize == member)
     }
 
     /// The orders a mission's members give their land fleets at the start
@@ -1720,18 +1866,21 @@ mod miss000 {
     pub const FLEETS: &[FleetDef] = &[
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[(9, 21, 1, 1), (10, 22, 1, 1)],
             program: guard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[(11, 18, 1, 1)],
             program: fisher,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[(6, 13, 1, 1), (6, 14, 1, 1)],
             program: raider,
             wants: &[],
@@ -1904,6 +2053,7 @@ mod miss001 {
         // The barbarians' yard and stronghold build what the others ask for.
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[(25, 1, 1, 1), (27, 3, 1, 1)],
             program: builder,
             wants: &[],
@@ -1912,6 +2062,7 @@ mod miss001 {
         // the hardest difficulty).
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[(23, 4, 1, 1), (23, 7, 1, 1)],
             program: coastguard,
             wants: &[(ROYAL, [0, 0, 1]), (RAMMER, [0, 0, 1])],
@@ -1919,6 +2070,7 @@ mod miss001 {
         // A merchant with a ship killer for escort gathers amber and fish.
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[],
             program: gatherers,
             wants: &[(MERCHANT, [1; 3]), (SHIP_KILLER, [1; 3])],
@@ -1926,6 +2078,7 @@ mod miss001 {
         // Ship killers patrol the middle of the sea (0x5adafc).
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[],
             program: patrol,
             wants: &[(SHIP_KILLER, [2, 3, 4])],
@@ -1934,6 +2087,7 @@ mod miss001 {
         // (0x5adb2c).
         FleetDef {
             group: 0,
+            member: 4,
             cells: &[],
             program: raiders,
             wants: &[(SHIP_KILLER, [2; 3]), (ROYAL, [1, 2, 3])],
@@ -2171,12 +2325,14 @@ mod miss002 {
         // The barbarians (0x44bba0, 0x44bd80).
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[(33, 3, 1, 1)],
             program: barbarian_yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[(30, 4, 3, 3)],
             program: barbarian_guard,
             wants: &[(RAMMER, [2, 3, 3]), (ROYAL, [1, 1, 2])],
@@ -2184,42 +2340,51 @@ mod miss002 {
         // The Persians (0x44bee0-0x44cbd0).
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[],
             program: amber_gatherers,
             wants: &[(MERCHANT, [1; 3]), (SHIP_KILLER, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[],
             program: fishers,
             wants: &[(MERCHANT, [1; 3]), (SHIP_KILLER, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[],
             program: home_guard,
             wants: &[(ROYAL, [3; 3]), (BOARDER, [1; 3]), (RAMMER, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[],
             program: raiders,
             wants: &[(ROYAL, [1, 1, 2]), (BOARDER, [1, 2, 1]), (RAMMER, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[],
             program: west_guard,
             wants: &[(ROYAL, [2; 3]), (BOARDER, [2; 3])],
         },
         FleetDef {
             group: 1,
+            member: 5,
             cells: &[],
             program: south_guard,
             wants: &[(ROYAL, [2; 3]), (RAMMER, [3; 3])],
         },
         FleetDef {
             group: 1,
+            // (1, 6) does nothing (0x406330), (1, 8) is the builders'
+            // repair (0x44cf20): the yard is (1, 7) (0x44cbd0).
+            member: 7,
             cells: &[(34, 29, 2, 2)],
             program: persian_yard,
             wants: &[],
@@ -2590,6 +2755,11 @@ mod miss002 {
 /// miss003's brain (0x44fd90): the Persians hold the north-east and the
 /// south-east and raid towards Chios; the barbarians in the south-west
 /// gather and guard, and raid the player.
+/// (Not ported: the brain's pass after the members, every 5 ticks: the
+/// player's things in (49, 26, 4, 3) or (48, 12, 3, 2) (0x4c46c0, once
+/// each, `+0x114` and `+0x120`) set off calls of 0x414db0 with classes
+/// 0x1f5 and 0x1f6 at given cells (each gated by 0x42ebf0 and an empty
+/// cell, more on normal and hard); not decoded.)
 mod miss003 {
     use super::*;
 
@@ -2603,30 +2773,36 @@ mod miss003 {
         // The Persians (0x44e290-0x44f050).
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[],
             program: persian_gatherers,
             wants: &[(MERCHANT, [1; 3]), (SHIP_KILLER, [1; 3])],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[(54, 3, 3, 3)],
             program: persian_guard,
             wants: &[(ROYAL, [2, 3, 3]), (RAMMER, [1, 1, 2])],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[(51, 0, 2, 2)],
             program: persian_raiders,
             wants: &[(BOARDER, [2, 3, 2]), (ROYAL, [2, 2, 3])],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[(58, 1, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
+        // (0, 4) mends (0x452fb0, not ported): the southern guard is (0, 5).
         FleetDef {
             group: 0,
+            member: 5,
             cells: &[(52, 40, 5, 5)],
             program: southern_guard,
             wants: &[(ROYAL, [2, 2, 3]), (BOARDER, [2, 3, 3])],
@@ -2634,30 +2810,35 @@ mod miss003 {
         // The barbarians (0x44f1e0-0x44f880).
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[(16, 31, 1, 1)],
             program: barbarian_yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[(11, 21, 1, 1)],
             program: barbarian_amber,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[(11, 20, 1, 1)],
             program: barbarian_fish,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[(12, 23, 3, 1)],
             program: barbarian_guard,
             wants: &[(ROYAL, [2; 3]), (RAMMER, [2; 3])],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[],
             program: barbarian_raiders,
             wants: &[(RAMMER, [1, 2, 2]), (ROYAL, [2; 3])],
@@ -3071,36 +3252,42 @@ mod miss004 {
         // The northern Persians (player 15; 0x4515f0-0x452240).
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[],
             program: north_amber,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[],
             program: north_fish,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[],
             program: north_post_a,
             wants: &[(ROYAL, [2, 3, 3])],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[],
             program: north_post_b,
             wants: &[(ROYAL, [2, 2, 3])],
         },
         FleetDef {
             group: 0,
+            member: 4,
             cells: &[],
             program: north_raiders,
             wants: &[(ROYAL, [2, 2, 3]), (BOARDER, [1, 2, 3])],
         },
         FleetDef {
             group: 0,
+            member: 5,
             cells: &[(1, 8, 2, 2)],
             program: yard_750,
             wants: &[],
@@ -3108,24 +3295,28 @@ mod miss004 {
         // The barbarians (player 16; 0x453030-0x4536c0).
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[(30, 34, 1, 1)],
             program: yard_var,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[(26, 29, 1, 1)],
             program: barbarian_gatherers,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[(31, 32, 2, 2)],
             program: barbarian_guard,
             wants: &[(ROYAL, [1, 2, 2])],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[(36, 30, 2, 2)],
             program: barbarian_raiders,
             wants: &[(RAMMER, [2, 2, 3]), (ROYAL, [1, 2, 2])],
@@ -3133,24 +3324,28 @@ mod miss004 {
         // The southern Persians (player 14; 0x452600-0x452c60).
         FleetDef {
             group: 2,
+            member: 0,
             cells: &[],
             program: south_amber,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 2,
+            member: 1,
             cells: &[],
             program: south_fish,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 2,
+            member: 2,
             cells: &[],
             program: south_raiders,
             wants: &[(ROYAL, [2, 2, 3]), (BOARDER, [1, 2, 2])],
         },
         FleetDef {
             group: 2,
+            member: 3,
             cells: &[(0, 29, 2, 2)],
             program: yard_2000,
             wants: &[],
@@ -3678,24 +3873,28 @@ mod miss005 {
         // The barbarians (player 16; 0x454f60-0x455620).
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[(3, 29, 1, 1)],
             program: yard_var,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[],
             program: barbarian_guard,
             wants: &[(ROYAL, [1, 2, 1]), (BOMBER, [1, 1, 2])],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[],
             program: barbarian_gatherers,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[],
             program: barbarian_raiders,
             wants: &[(ROYAL, [2, 2, 3]), (RAMMER, [1, 2, 2])],
@@ -3703,42 +3902,51 @@ mod miss005 {
         // The Persians (player 15; 0x455b80-0x456e80).
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[(8, 11, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[],
             program: persian_amber,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[],
             program: persian_fish,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[],
             program: persian_west,
             wants: &[(ROYAL, [2, 2, 3])],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[],
             program: persian_east,
             wants: &[(ROYAL, [1, 3, 3])],
         },
+        // (1, 5) mends (0x4564c0, not ported): the raiders are (1, 6) and
+        // (1, 7), run at 35 and 40 (0x457950).
         FleetDef {
             group: 1,
+            member: 6,
             cells: &[],
             program: persian_raiders_north,
             wants: &[(BOARDER, [2; 3]), (RAMMER, [1, 2, 2]), (ROYAL, [1, 2, 3])],
         },
         FleetDef {
             group: 1,
+            member: 7,
             cells: &[],
             program: persian_raiders_west,
             wants: &[(RAMMER, [2; 3]), (ROYAL, [1, 1, 2])],
@@ -4111,6 +4319,24 @@ mod miss005 {
     const FORT: u32 = 0x35;
     const FAR: Cells = (27, 28, 9, 8);
 
+    /// `Brain::gone`: the harpy nests (`+0x184`), the stronghold (`+0x18c`).
+    const NESTS: usize = 0;
+    const STRONGHOLD: usize = 1;
+
+    /// The brain's pass, after the members (0x457950, every 5 ticks):
+    /// `+0x184` is cleared once the cells of both harpy nests, (23, 20) and
+    /// (26, 19), are empty, `+0x18c` once the stronghold's (3, 29) is.
+    pub fn after(scene: &mut Scene) {
+        let mut gone = scene.brain.as_ref().unwrap().gone;
+        if !gone[NESTS] && !scene.standing_at((23, 20)) && !scene.standing_at((26, 19)) {
+            gone[NESTS] = true;
+        }
+        if !gone[STRONGHOLD] && !scene.standing_at((3, 29)) {
+            gone[STRONGHOLD] = true;
+        }
+        scene.brain.as_mut().unwrap().gone = gone;
+    }
+
     /// Each turn (`turn`): west, in its raids on settlements (85, 90 and
     /// their attacks), casts its spell again and clears north's instead
     /// (the original's slip at 0x456e80).
@@ -4351,13 +4577,13 @@ mod miss005 {
             },
             25 => Op::Custom(|scene, k| {
                 let west = k == WEST;
-                let stronghold = scene.standing_at((3, 29));
+                let gone = scene.brain.as_ref().unwrap().gone;
+                let stronghold = !gone[STRONGHOLD];
                 let landed = landed(scene, west);
                 let (fort_held, may_land) = if west {
                     ((17, 12, 6, 8), !stronghold)
                 } else {
-                    let nests = scene.standing_at((23, 20)) || scene.standing_at((26, 19));
-                    ((6, 18, 7, 7), !nests)
+                    ((6, 18, 7, 7), gone[NESTS])
                 };
                 if west && stronghold {
                     return 0;
@@ -4400,10 +4626,12 @@ mod miss005 {
                 ticks: 6000,
                 events: zones,
             },
-            // The landing: a medium fort (0x47b000, order 0x8c).
+            // The landing: a medium fort (0x47b000, order 0x8c, its 1 x 1
+            // area written into `+0x40` by 0x479af0).
             45 => Op::Custom(|scene, k| {
                 let west = k == WEST;
                 let at = if west { (8, 20) } else { (19, 16) };
+                scene.brain.as_mut().unwrap().fleets[k].last_area = (at.0, at.1, 1, 1);
                 if let Some(&ship) = scene.fleet_ships(k).first() {
                     scene.found_by(ship, at, FORT);
                 }
@@ -4486,6 +4714,11 @@ mod miss005 {
 /// miss006's brain (0x45b280): barbarians in the south-west, and two Persian
 /// players, one in the south and one in the north, each gathering,
 /// guarding and raiding.
+/// (Not ported: the brain's pass after the members, every 5 ticks
+/// (0x45b863-0x45b993), rerolls the times of the event records 0x5b06cc
+/// and 0x5b0c5c while the yards at (21, 68) and (1, 50) stand; which
+/// members read those records was not traced: the port rolls the raids'
+/// waits only at their state 0.)
 mod miss006 {
     use super::*;
 
@@ -4495,28 +4728,35 @@ mod miss006 {
     const BOARDER: u8 = 4;
     const RAMMER: u8 = 5;
 
+    /// Member (1, 7), the waterspouts' watch.
+    const WATCHER: usize = 11;
+
     pub const FLEETS: &[FleetDef] = &[
         // The barbarians (player 16; 0x458990-0x458f20).
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[(1, 50, 1, 1)],
             program: yard_1000,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[],
             program: barbarian_guard,
             wants: &[(ROYAL, [1, 2, 2]), (BOMBER, [1, 1, 2])],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[],
             program: barbarian_gatherers,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[],
             program: barbarian_raiders,
             wants: &[(BOMBER, [1; 3]), (ROYAL, [3, 3, 4]), (RAMMER, [2, 3, 3])],
@@ -4524,30 +4764,35 @@ mod miss006 {
         // The southern Persians (player 15; 0x459400-0x459b90).
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[(21, 68, 2, 2)],
             program: yard_500,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[],
             program: south_amber,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[],
             program: south_fish,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[],
             program: south_guard,
             wants: &[(ROYAL, [2, 2, 3]), (BOARDER, [2, 2, 1])],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[],
             program: south_raiders,
             wants: &[(BOARDER, [2, 2, 3]), (ROYAL, [2; 3])],
@@ -4555,20 +4800,24 @@ mod miss006 {
         // Mends what it is handed (0x459f60; the prizes: `brain_prize`).
         FleetDef {
             group: 1,
+            member: 5,
             cells: &[],
             program: repair,
             wants: &[],
         },
-        // Members (1, 6), none, and (1, 7), the waterspouts' watch
-        // (0x459fe0, run as `turn`): no ships.
+        // Members (1, 6), which never runs (no case in 0x45b280), and
+        // (1, 7), the waterspouts' watch (0x459fe0, run as `turn`): no
+        // ships.
         FleetDef {
             group: 1,
+            member: 6,
             cells: &[],
             program: idle,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 7,
             cells: &[],
             program: idle,
             wants: &[],
@@ -4576,30 +4825,35 @@ mod miss006 {
         // The northern Persians (player 14; 0x45a270-0x45af50).
         FleetDef {
             group: 2,
+            member: 0,
             cells: &[(14, 17, 2, 2)],
             program: yard_750,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 1,
             cells: &[],
             program: north_amber,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 2,
+            member: 2,
             cells: &[],
             program: north_fish,
             wants: &[(MERCHANT, [1; 3])],
         },
         FleetDef {
             group: 2,
+            member: 3,
             cells: &[],
             program: north_guard,
             wants: &[(ROYAL, [2, 2, 3]), (BOARDER, [2, 3, 2])],
         },
         FleetDef {
             group: 2,
+            member: 4,
             cells: &[],
             program: north_raiders,
             wants: &[(BOARDER, [2, 2, 3]), (ROYAL, [2, 3, 2]), (RAMMER, [2; 3])],
@@ -4607,6 +4861,7 @@ mod miss006 {
         // Mends what it is handed (0x477190; the prizes: `brain_prize`).
         FleetDef {
             group: 2,
+            member: 5,
             cells: &[],
             program: repair,
             wants: &[],
@@ -4614,6 +4869,7 @@ mod miss006 {
         // Member (2, 6) (0x45ae70).
         FleetDef {
             group: 2,
+            member: 6,
             cells: &[(49, 15, 1, 1), (50, 14, 1, 1), (51, 16, 1, 1)],
             program: squadron_patrol,
             wants: &[],
@@ -4621,6 +4877,7 @@ mod miss006 {
         // Member (2, 7) (0x45af50).
         FleetDef {
             group: 2,
+            member: 7,
             cells: &[
                 (51, 17, 1, 1),
                 (49, 18, 1, 1),
@@ -5230,14 +5487,14 @@ mod miss006 {
         }
     }
 
-    /// Member (1, 7)'s watch (0x459fe0, an empty fleet run here on member
-    /// 0's turn): every 1500 ticks, the first time the player comes into
+    /// Member (1, 7)'s watch (0x459fe0, an empty fleet run as its `turn`,
+    /// at 40): every 1500 ticks, the first time the player comes into
     /// one of four small zones, if more than so many of their ships are
     /// about, waterspouts on its cells through the sea temple (0x47ab40,
     /// kind 6, paid in full); two checks in all.
     pub fn turn(scene: &mut Scene, k: usize) {
         use crate::magic::Spell;
-        if k != 0 {
+        if k != WATCHER {
             return;
         }
         /// The zone, the cells counted about it, the ships needed, the
@@ -5412,6 +5669,7 @@ mod miss007 {
         // (0x406330 is empty); yards 1-5 (0x45ca00).
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[
                 (36, 26, 1, 1),
                 (34, 31, 1, 1),
@@ -5426,66 +5684,77 @@ mod miss007 {
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[(45, 30, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[(6, 40, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[(11, 40, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 4,
             cells: &[(15, 68, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 5,
             cells: &[(51, 74, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 6,
             cells: &[],
             program: east,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 7,
             cells: &[],
             program: west,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 8,
             cells: &[],
             program: south,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 9,
             cells: &[],
             program: south_west,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 10,
             cells: &[],
             program: south_east,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 11,
             cells: &[(14, 21, 10, 11)],
             program: wizard_guard,
             wants: &[],
@@ -5493,36 +5762,42 @@ mod miss007 {
         // The Persians (player 15; 0x45e510-0x45f370).
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[(9, 1, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[],
             program: persian_amber,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[],
             program: persian_fish,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[],
             program: persian_guard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[],
             program: persian_south_guard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 5,
             cells: &[],
             program: persian_raiders,
             wants: &[],
@@ -5530,6 +5805,7 @@ mod miss007 {
         // Mends the Persians' prizes (0x45f370; see `brain_prize`).
         FleetDef {
             group: 1,
+            member: 6,
             cells: &[],
             program: idle,
             wants: &[],
@@ -5580,9 +5856,20 @@ mod miss007 {
         f.vars = [d + 3, 7500, 0, 2];
     }
 
+    /// The brain's pass, before the members (0x45f770, every 5 ticks):
+    /// once (`+0x107`), the big reef put up at (22, 17) when the player's
+    /// ships sail into (14, 17, 8, 14) (0x479ed0, 0x430ec0).
+    pub fn before(scene: &mut Scene) {
+        let f = &scene.brain.as_ref().unwrap().fleets[0];
+        if f.vars[0] == 0 && scene.human_ships_in((14, 17, 8, 14)) {
+            scene.brain.as_mut().unwrap().fleets[0].vars[0] = 1;
+            let kind = scene.rng.next() % 3 + 1;
+            scene.pending_reefs.push((22, 17, kind));
+        }
+    }
+
     /// Each fleet's bookkeeping on its turn (the start of 0x45cbf0 and the
-    /// others): what to ask the yard for; and once (every 5 ticks in the
-    /// original) the big reef put up when the player sails into the strait.
+    /// others): what to ask the yard for.
     pub fn turn(scene: &mut Scene, k: usize) {
         // Member 11 (0x45e120): while the player holds Hercules's sword,
         // it attacks about the ship or building holding it.
@@ -5597,13 +5884,8 @@ mod miss007 {
             }
             return;
         }
+        // Member 0 does nothing (0x406330).
         if k == 0 {
-            let f = &scene.brain.as_ref().unwrap().fleets[0];
-            if f.vars[0] == 0 && scene.human_ships_in((14, 17, 8, 14)) {
-                scene.brain.as_mut().unwrap().fleets[0].vars[0] = 1;
-                let kind = scene.rng.next() % 3 + 1;
-                scene.pending_reefs.push((22, 17, kind));
-            }
             return;
         }
         let d = difficulty() as u32;
@@ -5972,17 +6254,22 @@ mod miss007 {
                 }
             }),
             // 0x47aed0 (order 0xbe): a ship takes the sword (kind 22) where
-            // it lies anywhere on the map (0x4d9920); 5 if there is none.
-            15 => Op::Custom(|scene, k| match scene.loose_treasure(SWORD) {
-                Some(target) => {
-                    for id in scene.fleet_ships(k) {
-                        if scene.order_take(id, target).is_ok() {
-                            return 16;
+            // it lies anywhere on the map (0x4d9920; the whole map written
+            // into `+0x40` by 0x479c90); 5 if there is none.
+            15 => Op::Custom(|scene, k| {
+                let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+                scene.brain.as_mut().unwrap().fleets[k].last_area = (0, 0, w, h);
+                match scene.loose_treasure(SWORD) {
+                    Some(target) => {
+                        for id in scene.fleet_ships(k) {
+                            if scene.order_take(id, target).is_ok() {
+                                return 16;
+                            }
                         }
+                        5
                     }
-                    5
+                    None => 5,
                 }
-                None => 5,
             }),
             16 => Op::Custom(|scene, k| {
                 let held = scene.fleet_ships(k).iter().any(|&id| {
@@ -6286,42 +6573,49 @@ mod miss008 {
         // The barbarians.
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[(12, 17, 1, 1), (18, 14, 1, 1), (20, 9, 1, 1)],
             program: idle,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[(10, 9, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[(14, 8, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[(3, 2, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 4,
             cells: &[],
             program: raiders,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 5,
             cells: &[],
             program: home_guard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 6,
             cells: &[],
             program: barbarian_fish,
             wants: &[],
@@ -6329,6 +6623,7 @@ mod miss008 {
         // The Persians.
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[
                 (47, 10, 1, 1),
                 (53, 8, 1, 1),
@@ -6345,72 +6640,84 @@ mod miss008 {
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[(55, 38, 2, 2)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[(58, 23, 2, 2)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[],
             program: south_amber,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[],
             program: south_fish,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 5,
             cells: &[],
             program: south_guard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 6,
             cells: &[],
             program: south_raiders,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 7,
             cells: &[],
             program: strike,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 8,
             cells: &[],
             program: north_amber,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 9,
             cells: &[],
             program: north_fish,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 10,
             cells: &[],
             program: north_guard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 11,
             cells: &[],
             program: middle_guard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 12,
             cells: &[],
             program: east_guard,
             wants: &[],
@@ -6418,6 +6725,7 @@ mod miss008 {
         // Mends what is handed to it (0x462fb0; prizes: `brain_prize`).
         FleetDef {
             group: 1,
+            member: 13,
             cells: &[],
             program: repair,
             wants: &[],
@@ -7149,9 +7457,8 @@ mod miss008 {
 /// member 3 kind 9, the Flame, up to difficulty + 3 times when it attacks;
 /// members 3 and 4 kind 15, the weapon shield, each turn they fight in
 /// their home waters; member 4 kinds 12 and 9 when it strikes, never in
-/// fact as `+0x12f` is never counted down). The
-/// brain's tick runs at a random tick of each 50 in the original, here
-/// on member 0's turn. A temple is "in" (10, 0, 40, 20) by its cell.)
+/// fact as `+0x12f` is never counted down). A temple is "in" (10, 0,
+/// 40, 20) by its cell.)
 mod miss009 {
     use super::*;
     use crate::magic::Spell;
@@ -7207,48 +7514,56 @@ mod miss009 {
         // The barbarians.
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[(0, 9, 1, 1), (8, 7, 1, 1), (13, 5, 1, 1)],
             program: idle,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[(8, 3, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[(17, 20, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[(37, 40, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 4,
             cells: &[(9, 2, 4, 5)],
             program: raiders,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 5,
             cells: &[],
             program: south_raiders,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 6,
             cells: &[(42, 39, 5, 4)],
             program: east_guard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 7,
             cells: &[],
             program: fishers,
             wants: &[],
@@ -7256,36 +7571,42 @@ mod miss009 {
         // The Persians.
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[(58, 43, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[],
             program: persian_amber,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[],
             program: persian_fish,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[(55, 35, 8, 6)],
             program: persian_patrol,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[],
             program: persian_guard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 5,
             cells: &[(55, 0, 15, 5)],
             program: hunters,
             wants: &[],
@@ -7293,6 +7614,7 @@ mod miss009 {
         // Mends the Persians' prizes (0x4661e0; see `brain_prize`).
         FleetDef {
             group: 1,
+            member: 6,
             cells: &[],
             program: repair,
             wants: &[],
@@ -7410,13 +7732,12 @@ mod miss009 {
 
     /// Each member's bookkeeping on its turn (the start of each member's
     /// routine): what to ask its yard for, and the moves a member makes
-    /// whatever its state; on member 0's turn the brain's own tick.
+    /// whatever its state.
     pub fn turn(scene: &mut Scene, k: usize) {
         let d = difficulty() as u32;
         let n = scene.fleet_types(k);
         let count = |types: &[u8]| types.iter().map(|&t| n[t as usize]).sum::<usize>() as u32;
         match k {
-            0 => tick(scene),
             RAIDERS => {
                 if count(&[ROYAL, BOMBER, RAMMER, KILLER]) < d + 3 && free(scene, YARD1) {
                     let kind = match scene.rng.next() % (d + 3) {
@@ -7520,7 +7841,16 @@ mod miss009 {
         }
     }
 
-    /// The brain's tick (message 0): lightning at (10 or 12, 9) the first
+    /// The brain's pass, before the members (0x4663d0, every 5 ticks):
+    /// two numbers drawn, its tick run on the 50-tick phase they pick
+    /// (`random_tick`).
+    pub fn before(scene: &mut Scene) {
+        if random_tick(scene) {
+            tick(scene);
+        }
+    }
+
+    /// The brain's tick (0x4665b2): lightning at (10 or 12, 9) the first
     /// time the player comes into (0, 9, 18, 5), which wakes the
     /// north-western raiders; on normal and hard, while the fire wizard
     /// lives, lightning on each of the player's temples (0x3d, 0x3e) in
@@ -8053,8 +8383,7 @@ mod miss009 {
 /// Member 9's request is checked in its own slot (`+0x11c`, which nothing
 /// sets) but written into member 8's (`+0x11a`), so member 9 never gets a
 /// ship and member 8 gets the Persians' own ships too; ported as is.
-/// (The brain's tick runs at a random tick of each 50 in the
-/// original, here on member 0's turn. The Golden Fleece is delivered by
+/// (The Golden Fleece is delivered by
 /// storing it in one of the player's buildings through the load panel
 /// (0x5d94; automatic unloading never hands it over). An
 /// attack's "failed" exit is taken as its "ok" one, as in miss008. A
@@ -8127,6 +8456,7 @@ mod miss010 {
         // The barbarians.
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[
                 (5, 9, 1, 1),
                 (11, 4, 1, 1),
@@ -8139,42 +8469,49 @@ mod miss010 {
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[(4, 6, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[(53, 30, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[(60, 32, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 4,
             cells: &[(0, 0, 8, 4)],
             program: raiders,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 5,
             cells: &[],
             program: east_patrol,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 6,
             cells: &[],
             program: nest_guard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 7,
             cells: &[],
             program: fishers,
             wants: &[],
@@ -8182,60 +8519,70 @@ mod miss010 {
         // The Persians.
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[(23, 24, 1, 1)],
             program: idle,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[(26, 30, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[(24, 14, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[],
             program: south_amber,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[],
             program: south_fish,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 5,
             cells: &[],
             program: south_patrol,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 6,
             cells: &[],
             program: north_amber,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 7,
             cells: &[],
             program: north_fish,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 8,
             cells: &[(19, 6, 6, 6)],
             program: strait_patrol,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 9,
             cells: &[],
             program: guard_patrol,
             wants: &[],
@@ -8243,6 +8590,7 @@ mod miss010 {
         // Mends the Persians' prizes (0x469d10; see `brain_prize`).
         FleetDef {
             group: 1,
+            member: 10,
             cells: &[],
             program: repair,
             wants: &[],
@@ -8383,14 +8731,13 @@ mod miss010 {
 
     /// Each member's bookkeeping on its turn (the start of each member's
     /// routine): what to ask its yard for, and the moves a member makes
-    /// whatever its state; on member 0's turn the brain's own tick.
+    /// whatever its state.
     pub fn turn(scene: &mut Scene, k: usize) {
         let d = difficulty() as u32;
         let n = scene.fleet_types(k);
         let have = count(scene, k, strength(k));
         let roll = |scene: &mut Scene| scene.rng.next() % (d + 3);
         match k {
-            0 => tick(scene),
             RAIDERS => {
                 if have < var(scene, k, N) && free(scene, YARD1) {
                     let kind = match roll(scene) {
@@ -8480,7 +8827,16 @@ mod miss010 {
         }
     }
 
-    /// The brain's tick (message 0): once the player has delivered the
+    /// The brain's pass, before the members (0x46a0f0, every 5 ticks):
+    /// two numbers drawn, its tick run on the 50-tick phase they pick
+    /// (`random_tick`).
+    pub fn before(scene: &mut Scene) {
+        if random_tick(scene) {
+            tick(scene);
+        }
+    }
+
+    /// The brain's tick (0x46a313): once the player has delivered the
     /// Golden Fleece to one of their buildings (message 0x5d94 with kind
     /// 16), lightning at (58, 5), and on the next tick at (59, 4).
     fn tick(scene: &mut Scene) {
@@ -9028,8 +9384,7 @@ mod miss010 {
 /// cell. A waterspout or sea monster asked for on land is not cast. An
 /// attack's "failed" exit is taken as its "ok" one, as in miss008; a
 /// fleet's move that becomes needless (members 3 and 6 growing to
-/// strength) is called off on its next turn. The brain's tick runs every
-/// 5 ticks in the original, here on member 0's turn.)
+/// strength) is called off on its next turn.)
 mod miss011 {
     use super::*;
     use crate::magic::Spell;
@@ -9098,66 +9453,77 @@ mod miss011 {
         // The barbarians.
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[(54, 11, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[],
             program: east_patrol,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[(6, 29, 2, 2)],
             program: coast_gatherers,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[(55, 15, 3, 3)],
             program: east_raiders,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 4,
             cells: &[(8, 31, 1, 1)],
             program: yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 5,
             cells: &[],
             program: west_patrol,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 6,
             cells: &[],
             program: west_raiders,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 7,
             cells: &[(0, 4, 2, 2)],
             program: sentry1,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 8,
             cells: &[(0, 10, 2, 2)],
             program: sentry2,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 9,
             cells: &[(1, 18, 2, 2)],
             program: sentry3,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 10,
             cells: &[(1, 23, 2, 2)],
             program: sentry4,
             wants: &[],
@@ -9165,36 +9531,42 @@ mod miss011 {
         // The Persians.
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[(32, 17, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[],
             program: persian_amber,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[],
             program: persian_fish,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[(32, 21, 2, 2)],
             program: guard1,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[(36, 17, 3, 2)],
             program: guard2,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 5,
             cells: &[(38, 20, 3, 3)],
             program: strikers,
             wants: &[],
@@ -9202,6 +9574,7 @@ mod miss011 {
         // Mends the Persians' prizes (0x46e090; see `brain_prize`).
         FleetDef {
             group: 1,
+            member: 6,
             cells: &[],
             program: repair,
             wants: &[],
@@ -9210,6 +9583,7 @@ mod miss011 {
         // `turn`: it has no ships).
         FleetDef {
             group: 1,
+            member: 7,
             cells: &[],
             program: idle,
             wants: &[],
@@ -9300,13 +9674,12 @@ mod miss011 {
 
     /// Each member's bookkeeping on its turn (the start of each member's
     /// handler): what to ask its yard for, and the moves a member makes
-    /// whatever its state; on member 0's turn the brain's own tick.
+    /// whatever its state.
     pub fn turn(scene: &mut Scene, k: usize) {
         let d = difficulty();
         let n = scene.fleet_types(k);
         let have = |kind: u8| n[kind as usize];
         match k {
-            YARD1 => tick(scene),
             EAST => {
                 if have(ROYAL) < [1, 1, 2][d] {
                     ask(scene, k, ROYAL);
@@ -9339,11 +9712,9 @@ mod miss011 {
             // A sentry fired on fights back, and the others join it at the
             // attacker (brain `+0x1c8`, states 0x1e and 0x28).
             7..=10 if state(scene, k) == 30 => {
-                let area = scene.brain.as_ref().unwrap().fleets[k].area;
+                let area = scene.brain.as_ref().unwrap().fleets[k].last_area;
                 for other in SENTRIES.into_iter().filter(|&o| o != k) {
-                    if let Some(a) = area {
-                        scene.set_fleet_area(other, a);
-                    }
+                    scene.set_fleet_area(other, area);
                     scene.set_state(other, 40);
                 }
             }
@@ -9380,10 +9751,10 @@ mod miss011 {
         }
     }
 
-    /// The brain's tick (message 0, every 5 ticks): once the barbarians'
-    /// yard at (54, 11) is gone, member 5 starts over (and, grown, strikes
-    /// at the player instead of patrolling on).
-    fn tick(scene: &mut Scene) {
+    /// The brain's pass, after the members (0x46e8e0, every 5 ticks): once
+    /// the barbarians' yard at (54, 11) is gone, member 5 starts over (and,
+    /// grown, strikes at the player instead of patrolling on).
+    pub fn after(scene: &mut Scene) {
         if var(scene, YARD1, STANDS) != 0 && !stands_at(scene, (54, 11)) {
             set_var(scene, YARD1, STANDS, 0);
             scene.set_state(STRIKERS, 0);
@@ -9727,7 +10098,8 @@ mod miss011 {
     /// its post (sailing there again every 750 ticks), watching (5, 7, 9,
     /// 7) (events 0x5b38f0 and on): the player there is attacked in (0, 0,
     /// 17, 20) 1500 ticks (20); fired on, it fights the attacker 1500
-    /// ticks (30) and the other sentries join it (40; see `turn`).
+    /// ticks (30, `+0x40` copied to the brain's `+0x1c8`) and the other
+    /// sentries join it (40; see `turn`).
     fn sentry(state: u32, post: (i32, i32)) -> Op {
         const W: &[Event] = &[zone((5, 7, 9, 7)), attacked(0)];
         match state {
@@ -9742,6 +10114,12 @@ mod miss011 {
             20 => Op::Attack {
                 next: 0,
                 target: Target::Area((0, 0, 17, 20)),
+                ticks: 1500,
+                events: &[],
+            },
+            30 => Op::Attack {
+                next: 0,
+                target: Target::LastArea,
                 ticks: 1500,
                 events: &[],
             },
@@ -10141,13 +10519,10 @@ mod miss011 {
 /// group 1's repair member (0x5d97): here each player's prizes sail to its
 /// own docks (`brain_prize`); the unreachable
 /// states of members (1, 4) and (1, 7) (0x19, 0x28: nothing sends them
-/// there). A zone that sends group 2 member 5 to state 0x1e attacks the
-/// zone seen here; the original attacks the area of the last ship that
-/// fired on the fleet (`+0x40`), whatever that was. The casters look
+/// there). The casters look
 /// through the player's things in the scene's order; a building is "in"
 /// an area by its cell. A waterspout or sea monster asked for on land is
-/// not cast. Fleet k takes its turn at tick 5k mod 50, not the original's
-/// 5 x (group + member).)
+/// not cast.)
 mod miss012 {
     use super::*;
     use crate::magic::Spell;
@@ -10213,24 +10588,28 @@ mod miss012 {
         // The barbarians (player 16).
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[(50, 32, 1, 1)],
             program: barbarian_yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[(50, 27, 2, 2)],
             program: east_guard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[(48, 31, 1, 1)],
             program: east_gatherers,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[(53, 26, 3, 3)],
             program: east_raiders,
             wants: &[],
@@ -10238,30 +10617,35 @@ mod miss012 {
         // Player 15, the north-west.
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[(15, 12, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[],
             program: north_amber,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[],
             program: north_fish,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[(10, 10, 3, 3)],
             program: north_patrol,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[(22, 12, 2, 2)],
             program: north_strikers,
             wants: &[],
@@ -10269,6 +10653,7 @@ mod miss012 {
         // Mends prizes (0x475a70; see `brain_prize`).
         FleetDef {
             group: 1,
+            member: 5,
             cells: &[],
             program: repair,
             wants: &[],
@@ -10277,12 +10662,14 @@ mod miss012 {
         // `turn`: it has no ships).
         FleetDef {
             group: 1,
+            member: 6,
             cells: &[],
             program: idle,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 7,
             cells: &[(19, 15, 2, 2)],
             program: north_guard,
             wants: &[],
@@ -10290,36 +10677,42 @@ mod miss012 {
         // Player 14, the south-west.
         FleetDef {
             group: 2,
+            member: 0,
             cells: &[(4, 50, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 1,
             cells: &[],
             program: south_amber,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 2,
             cells: &[],
             program: south_fish,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 3,
             cells: &[(1, 46, 2, 2)],
             program: south_patrol,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 4,
             cells: &[(10, 49, 3, 2)],
             program: south_patrol2,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 5,
             cells: &[],
             program: south_raiders,
             wants: &[],
@@ -10327,6 +10720,7 @@ mod miss012 {
         // Mends prizes (0x477190; see `brain_prize`).
         FleetDef {
             group: 2,
+            member: 6,
             cells: &[],
             program: repair,
             wants: &[],
@@ -10335,6 +10729,7 @@ mod miss012 {
         // `turn`: it has no ships).
         FleetDef {
             group: 2,
+            member: 7,
             cells: &[],
             program: idle,
             wants: &[],
@@ -11065,7 +11460,9 @@ mod miss012 {
     /// patrol wider waters (0x5b4958); both watching (0, 40, 19, 12) (the
     /// player there: the spell on their ships (0x47acf0 by member 0), then
     /// a fight of 1500 ticks; 20, 25), (1, 34, 21, 7) and (19, 39, 6, 13)
-    /// (fought 375 ticks, 30) (events 0x5b4ac8), and answer fire 375. They
+    /// (state 0x1e, 30: 375 ticks on `last_area`, the area of their last
+    /// attack or of the last attacker that fired the attacked event, not
+    /// the zone) (events 0x5b4ac8), and answer fire 375 (30 too). They
     /// ask for royal ships (3) and Persian ships (1, 2, 2 and 1, 1, 2).
     fn south_raiders(state: u32) -> Op {
         const W: &[Event] = &[
@@ -11124,6 +11521,12 @@ mod miss012 {
                 25
             }),
             25 => fight(20, 375),
+            30 => Op::Attack {
+                next: 0,
+                target: Target::LastArea,
+                ticks: 375,
+                events: &[],
+            },
             _ => fight(state, 375),
         }
     }
@@ -11267,16 +11670,13 @@ mod miss012 {
 /// look their zone up in a shorter table than the one its patrol watches
 /// (0x5b5138 against 0x5b51f0): the player seen in (0, 18, 8, 8) sends it
 /// back to 0 (an attack on an empty area), in (4, 17, 22, 7) to fight at
-/// (20, 7, 18, 6), as the misread record says. A zone that sends group 2
-/// member 4 to state 0x1e attacks the zone seen here; the original
-/// attacks the area of the last ship that fired on the fleet (`+0x40`),
-/// whatever that was. The areas about one of the player's settlements or
-/// towns are `human_site_area`'s. The brain looks through the player's
+/// (20, 7, 18, 6), as the misread record says. The areas about one of
+/// the player's settlements or towns are `human_site_area`'s. The brain
+/// looks through the player's
 /// things in the scene's order; a building is "in" an area by its cell. A
 /// waterspout or sea monster asked for on land is not cast. A strike
 /// started from a step of the port's own (member (1, 3)'s at 0x23) starts
-/// a turn later. Fleet k takes its turn at tick 5k mod 50, not the
-/// original's 5 x (group + member).)
+/// a turn later.)
 mod miss013 {
     use super::*;
     use crate::magic::Spell;
@@ -11347,24 +11747,28 @@ mod miss013 {
         // The barbarians (player 16), the north-west corner.
         FleetDef {
             group: 0,
+            member: 0,
             cells: &[(2, 4, 1, 1)],
             program: barbarian_yard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 1,
             cells: &[],
             program: corner_guard,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 2,
             cells: &[(6, 11, 1, 1)],
             program: corner_gatherers,
             wants: &[],
         },
         FleetDef {
             group: 0,
+            member: 3,
             cells: &[(8, 7, 3, 3)],
             program: corner_raiders,
             wants: &[],
@@ -11372,30 +11776,35 @@ mod miss013 {
         // Player 15, the middle channel.
         FleetDef {
             group: 1,
+            member: 0,
             cells: &[(14, 28, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 1,
             cells: &[],
             program: middle_amber,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 2,
             cells: &[],
             program: middle_fish,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 3,
             cells: &[(20, 26, 5, 3)],
             program: middle_guard,
             wants: &[],
         },
         FleetDef {
             group: 1,
+            member: 4,
             cells: &[(17, 20, 3, 4)],
             program: middle_strikers,
             wants: &[],
@@ -11403,6 +11812,7 @@ mod miss013 {
         // Mends prizes (0x475a70; see `brain_prize`).
         FleetDef {
             group: 1,
+            member: 5,
             cells: &[],
             program: repair,
             wants: &[],
@@ -11411,6 +11821,7 @@ mod miss013 {
         // `turn`: it has no ships).
         FleetDef {
             group: 1,
+            member: 6,
             cells: &[],
             program: idle,
             wants: &[],
@@ -11418,36 +11829,42 @@ mod miss013 {
         // Player 14, the south.
         FleetDef {
             group: 2,
+            member: 0,
             cells: &[(44, 59, 2, 2)],
             program: persian_yard,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 1,
             cells: &[],
             program: south_amber,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 2,
             cells: &[],
             program: south_fish,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 3,
             cells: &[(39, 56, 4, 3)],
             program: south_patrol,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 4,
             cells: &[(38, 61, 2, 3)],
             program: south_raiders,
             wants: &[],
         },
         FleetDef {
             group: 2,
+            member: 5,
             cells: &[(38, 65, 3, 2)],
             program: south_strikers,
             wants: &[],
@@ -11455,6 +11872,7 @@ mod miss013 {
         // Mends prizes (0x477190; see `brain_prize`).
         FleetDef {
             group: 2,
+            member: 6,
             cells: &[],
             program: repair,
             wants: &[],
@@ -11463,6 +11881,7 @@ mod miss013 {
         // `turn`: it has no ships).
         FleetDef {
             group: 2,
+            member: 7,
             cells: &[],
             program: idle,
             wants: &[],
@@ -12277,8 +12696,9 @@ mod miss013 {
     /// `(rand(4) + (10, 8, 6)) x 1500` (`+0x194`; 0); short of strength
     /// they sail to (46, 53), at strength patrol the southern sea
     /// (0x5b54f0); both watching the home waters (fought 1500 ticks),
-    /// (14, 49, 24, 14) and (37, 41, 9, 8) (fought 375, 30) (events
-    /// 0x5b56f0) and answering fire 375; then look (10): the first of the
+    /// (14, 49, 24, 14) and (37, 41, 9, 8) (state 0x1e, 30: 375 ticks on
+    /// `last_area`, not the zone) (events 0x5b56f0) and answering fire
+    /// 375 (30 too); then look (10): the first of the
     /// player's royal ships carrying heroes, if it lies below row 44, one
     /// time in two, they strike 2 cells about 4500 ticks (0x19; events
     /// 0x5b5708, until fewer than three are left); else in (0, 35, 50, 18)
@@ -12356,6 +12776,12 @@ mod miss013 {
                 target: Target::Seen,
                 ticks: 4500,
                 events: STRIKING,
+            },
+            30 => Op::Attack {
+                next: 0,
+                target: Target::LastArea,
+                ticks: 375,
+                events: &[],
             },
             55 => Op::Attack {
                 next: 0,

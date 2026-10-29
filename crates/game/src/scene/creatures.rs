@@ -164,7 +164,7 @@ impl Scene {
                     .as_ref()
                     .is_some_and(|s| s.has_hero(crate::objects::ARGUS));
                 let blow = 300.0 / 15.0 * if argus { 0.25 } else { 1.0 };
-                self.share_blow(id, blow * blows as f32, data, caches);
+                self.share_blow(id, blow * blows as f32, None, data, caches);
             }
             if c.left > 0.0 && self.object_index(id).is_some() {
                 self.charmed.insert(id, c);
@@ -236,7 +236,7 @@ impl Scene {
                     c.stone += ticks(150);
                 }
                 let hurt = blow * (100 - mirror) as f32 / 100.0;
-                self.share_blow(*ship, hurt, data, caches);
+                self.share_blow(*ship, hurt, None, data, caches);
             }
             if !caught.is_empty() {
                 self.messages
