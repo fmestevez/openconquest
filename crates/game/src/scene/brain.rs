@@ -49,6 +49,14 @@ pub enum Event {
         cmp: Cmp,
         n: usize,
     },
+    /// Cell `cell` holds (`holds`) or no longer holds a standing object of
+    /// `class` (0x456540).
+    Cell {
+        state: u32,
+        cell: (i32, i32),
+        class: u32,
+        holds: bool,
+    },
 }
 
 /// Where an attack goes.
@@ -254,7 +262,7 @@ fn mission(name: &str) -> Option<Mission> {
         "miss005" => Some(Mission {
             fleets: miss005::FLEETS,
             start: miss005::start,
-            turn: None,
+            turn: Some(miss005::turn),
         }),
         "miss006" => Some(Mission {
             fleets: miss006::FLEETS,
@@ -489,6 +497,21 @@ impl Scene {
                         Cmp::AtMost => size <= f.vars[n],
                     };
                     if ready && met {
+                        return Some(state);
+                    }
+                }
+                Event::Cell {
+                    state,
+                    cell,
+                    class,
+                    holds,
+                } => {
+                    let there = self.objects.iter().any(|o| {
+                        o.record.class_id == class
+                            && o.cell == Some(cell)
+                            && o.combat.as_ref().is_none_or(|c| c.hull > 0.0)
+                    });
+                    if there == holds {
                         return Some(state);
                     }
                 }
@@ -3590,8 +3613,8 @@ mod miss005 {
         if let Some(br) = scene.brain.as_mut() {
             br.fleets[0].vars[0] = YARD_REST[difficulty()];
             br.fleets[3].vars = [(r[0] + BARBARIAN_WAIT[difficulty()]) * 1500, 3, 0, 0];
-            br.fleets[9].vars = [(r[1] + NORTH_WAIT[difficulty()]) * 1500, 0, 0, 0];
-            br.fleets[10].vars = [(r[2] + WEST_WAIT[difficulty()]) * 1500, 0, 0, 0];
+            br.fleets[9].vars = [(r[1] + NORTH_WAIT[difficulty()]) * 1500, 5, 0, 2];
+            br.fleets[10].vars = [(r[2] + WEST_WAIT[difficulty()]) * 1500, 3, 0, 1];
         }
     }
 
@@ -3863,9 +3886,109 @@ mod miss005 {
         }
     }
 
-    /// Two raiding fleets patrol until they have waited long enough, then
-    /// raid the player (0x456580, 0x456e80; the original also lands
-    /// marines and coordinates the two, not ported).
+    /// Raider fleets: north 9, west 10. Their variables: 0 the wait before
+    /// a raid, 1 the size it raids at, 2 the spell it casts on its ships
+    /// as it attacks (0 none), 3 the size below which a raid is called off
+    /// ("fewer than" + 1). The barbarian yard's (fleet 0) 2 and 3: north
+    /// and west have landed.
+    const NORTH: usize = 9;
+    const WEST: usize = 10;
+    const SPELL: usize = 2;
+    const LANDED: [usize; 2] = [2, 3];
+
+    /// Casts raider `k`'s spell on its ships through the Persians' war
+    /// temple (0x47acf0 by member (1, 0), unpaid) and, unless `keep`,
+    /// clears it.
+    fn cast_spell(scene: &mut Scene, k: usize, clear: usize) {
+        use crate::magic::Spell;
+        let kind = scene.brain.as_ref().unwrap().fleets[k].vars[SPELL];
+        let spell = match kind {
+            9 => Some(Spell::Flame),
+            12 => Some(Spell::Phantom),
+            15 => Some(Spell::ProtectWeapons),
+            _ => None,
+        };
+        if let Some(spell) = spell {
+            let ships = scene.fleet_ships(k);
+            scene.brain_cast_fleet(ships, spell, false);
+        }
+        scene.brain.as_mut().unwrap().fleets[clear].vars[SPELL] = 0;
+    }
+
+    fn landed(scene: &Scene, west: bool) -> bool {
+        scene.brain.as_ref().unwrap().fleets[0].vars[LANDED[west as usize]] != 0
+    }
+
+    /// Rolls the raid's wait and spell (states 0 and 50).
+    fn roll(scene: &mut Scene, k: usize, second: bool) {
+        let d = difficulty();
+        let base = if k == NORTH {
+            [8, 7, 5][d]
+        } else {
+            [7, 6, 4][d]
+        };
+        let wait = (base + (scene.rng.next() & 3)) * 1500;
+        let r = scene.rng.next();
+        let spell = match (k == NORTH, second) {
+            (true, false) => [9, 15, 12, 9][(r & 3) as usize],
+            (false, false) => [9, 12, 9, 15][(r & 3) as usize],
+            (true, true) => [9, 0, 12, 9, 15][(r % 5) as usize],
+            (false, true) => [9, 12, 9, 0, 15][(r % 5) as usize],
+        };
+        let f = &mut scene.brain.as_mut().unwrap().fleets[k];
+        f.vars[0] = wait;
+        f.vars[SPELL] = spell;
+    }
+
+    /// A raid on one of the player's settlements or towns in the west
+    /// (0x421490, its area grown by 2), else on (27, 28, 9, 8).
+    fn raid_target(scene: &mut Scene, k: usize, found: u32, none: u32) -> u32 {
+        match scene.human_site_area(Some((0, 0, 35, 35))) {
+            Some(a) => {
+                scene.set_fleet_area(k, a);
+                found
+            }
+            None => none,
+        }
+    }
+
+    const FORT: u32 = 0x35;
+    const FAR: Cells = (27, 28, 9, 8);
+
+    /// Each turn (`turn`): west, in its raids on settlements (85, 90 and
+    /// their attacks), casts its spell again and clears north's instead
+    /// (the original's slip at 0x456e80).
+    pub fn turn(scene: &mut Scene, k: usize) {
+        let state = scene.brain.as_ref().unwrap().fleets[k].state;
+        if k == WEST && matches!(state, 86 | 91) {
+            cast_spell(scene, WEST, NORTH);
+        }
+        // Landing: the order waits for its price, its ship sailing there
+        // (0x4cbcf0, as `found_by`).
+        if matches!(k, NORTH | WEST) && state == 46 {
+            let at = if k == WEST { (8, 20) } else { (19, 16) };
+            let founding = scene.fleet_ships(k).iter().any(|&id| {
+                scene.object_index(id).is_some_and(|i| {
+                    matches!(
+                        scene.objects[i].ship.as_ref().and_then(|s| s.task),
+                        Some(crate::objects::Task::Found { .. })
+                    )
+                })
+            });
+            if !founding {
+                if let Some(&ship) = scene.fleet_ships(k).first() {
+                    scene.found_by(ship, at, FORT);
+                }
+            }
+        }
+    }
+
+    /// The northern raiders (0x456580): wait their time on patrol, then
+    /// once both harpy nests (23, 20) and (26, 19) are gone land (a medium
+    /// fort at (19, 16)) unless the player holds (6, 18, 7, 7); landed,
+    /// and the barbarians' stronghold (3, 29) gone, raid the player's
+    /// settlements; from the fort, patrol and raid, back to the start if
+    /// it falls.
     fn persian_raiders_north(state: u32) -> Op {
         const ROUND: &[(i32, i32, u32)] = &[(15, 7, 500), (13, 0, 750), (19, 0, 750)];
         const W: &[Event] = &[
@@ -3881,30 +4004,83 @@ mod miss005 {
                 state: 20,
                 area: (22, 4, 7, 8),
             },
+            Event::Size {
+                state: 25,
+                after: Some(0),
+                cmp: Cmp::AtLeast,
+                n: 1,
+            },
         ];
-        match state {
-            0 => Op::Behave { next: 5 },
-            5 => Op::Patrol {
-                timeout: 25,
-                points: ROUND,
-                ticks: VAR0,
-                events: W,
+        const Z: &[Event] = &[
+            Event::Zone {
+                state: 20,
+                area: (2, 7, 14, 12),
             },
-            25 => Op::Attack {
-                next: 0,
-                target: Target::HumanBuilding,
-                ticks: 3000,
-                events: &[],
+            Event::Zone {
+                state: 20,
+                area: (16, 0, 12, 8),
             },
-            _ => Op::Attack {
-                next: 0,
-                target: Target::Seen,
-                ticks: 3000,
-                events: &[],
+            Event::Zone {
+                state: 20,
+                area: (22, 4, 7, 8),
             },
-        }
+        ];
+        const FALLEN: Event = Event::Cell {
+            state: 0,
+            cell: (19, 16),
+            class: FORT,
+            holds: false,
+        };
+        const ZONES2: [Event; 4] = [
+            Event::Zone {
+                state: 70,
+                area: (18, 14, 5, 8),
+            },
+            Event::Zone {
+                state: 70,
+                area: (2, 7, 14, 12),
+            },
+            Event::Zone {
+                state: 70,
+                area: (22, 4, 7, 8),
+            },
+            Event::Zone {
+                state: 70,
+                area: (2, 7, 14, 12),
+            },
+        ];
+        const W2: &[Event] = &[
+            FALLEN,
+            ZONES2[0],
+            ZONES2[1],
+            ZONES2[2],
+            ZONES2[3],
+            Event::Size {
+                state: 80,
+                after: Some(0),
+                cmp: Cmp::AtLeast,
+                n: 1,
+            },
+        ];
+        const RAID: &[Event] = &[
+            FALLEN,
+            Event::Size {
+                state: 50,
+                after: None,
+                cmp: Cmp::AtMost,
+                n: 3,
+            },
+            ZONES2[0],
+            ZONES2[1],
+            ZONES2[2],
+            ZONES2[3],
+        ];
+        raider(state, NORTH, ROUND, W, Z, W2, RAID, (19, 16), (6, 18, 7, 7))
     }
 
+    /// The western raiders (0x456e80): as the northern, landing at (8, 20)
+    /// unless the player holds (17, 12, 6, 8), and only once the
+    /// barbarians' stronghold is gone.
     fn persian_raiders_west(state: u32) -> Op {
         const ROUND: &[(i32, i32, u32)] = &[(1, 10, 500), (1, 14, 750)];
         const W: &[Event] = &[
@@ -3916,27 +4092,232 @@ mod miss005 {
                 state: 20,
                 area: (16, 0, 12, 8),
             },
+            Event::Size {
+                state: 25,
+                after: Some(0),
+                cmp: Cmp::AtLeast,
+                n: 1,
+            },
         ];
+        const Z: &[Event] = &[
+            Event::Zone {
+                state: 20,
+                area: (2, 7, 14, 12),
+            },
+            Event::Zone {
+                state: 20,
+                area: (16, 0, 12, 8),
+            },
+        ];
+        const FALLEN: Event = Event::Cell {
+            state: 0,
+            cell: (8, 20),
+            class: FORT,
+            holds: false,
+        };
+        const W2: &[Event] = &[
+            FALLEN,
+            Event::Zone {
+                state: 70,
+                area: (6, 18, 7, 8),
+            },
+            Event::Zone {
+                state: 70,
+                area: (2, 7, 14, 12),
+            },
+            Event::Size {
+                state: 80,
+                after: Some(0),
+                cmp: Cmp::AtLeast,
+                n: 1,
+            },
+        ];
+        const RAID: &[Event] = &[
+            FALLEN,
+            Event::Size {
+                state: 50,
+                after: None,
+                cmp: Cmp::AtMost,
+                n: 3,
+            },
+            Event::Zone {
+                state: 70,
+                area: (6, 18, 7, 8),
+            },
+            Event::Zone {
+                state: 70,
+                area: (2, 7, 14, 12),
+            },
+        ];
+        raider(state, WEST, ROUND, W, Z, W2, RAID, (8, 20), (17, 12, 6, 8))
+    }
+
+    /// The raiders' common program.
+    #[allow(clippy::too_many_arguments)]
+    fn raider(
+        state: u32,
+        k: usize,
+        round: &'static [(i32, i32, u32)],
+        watch: &'static [Event],
+        zones: &'static [Event],
+        watch2: &'static [Event],
+        raid: &'static [Event],
+        fort: (i32, i32),
+        held: Cells,
+    ) -> Op {
+        let round2: &'static [(i32, i32, u32)] = if k == NORTH {
+            &[(19, 14, 500), (23, 14, 750)]
+        } else {
+            &[(9, 18, 500), (11, 21, 750)]
+        };
         match state {
-            0 => Op::Behave { next: 5 },
+            0 => Op::Custom(|scene, k| {
+                roll(scene, k, false);
+                1
+            }),
+            1 => Op::Behave { next: 5 },
             5 => Op::Patrol {
-                timeout: 25,
-                points: ROUND,
-                ticks: VAR0,
-                events: W,
+                timeout: 0,
+                points: round,
+                ticks: 0,
+                events: watch,
             },
-            25 => Op::Attack {
-                next: 0,
-                target: Target::HumanBuilding,
-                ticks: 3000,
-                events: &[],
-            },
-            _ => Op::Attack {
+            // A fight where the player was seen: north casts first.
+            20 if k == NORTH => Op::Custom(|scene, k| {
+                cast_spell(scene, k, k);
+                21
+            }),
+            20 | 21 => Op::Attack {
                 next: 0,
                 target: Target::Seen,
                 ticks: 3000,
                 events: &[],
             },
+            25 => Op::Custom(|scene, k| {
+                let west = k == WEST;
+                let stronghold = scene.standing_at((3, 29));
+                let landed = landed(scene, west);
+                let (fort_held, may_land) = if west {
+                    ((17, 12, 6, 8), !stronghold)
+                } else {
+                    let nests = scene.standing_at((23, 20)) || scene.standing_at((26, 19));
+                    ((6, 18, 7, 7), !nests)
+                };
+                if west && stronghold {
+                    return 0;
+                }
+                if may_land && !landed {
+                    return if scene.human_in(fort_held) { 30 } else { 45 };
+                }
+                if stronghold || !landed {
+                    return 0;
+                }
+                raid_target(scene, k, 37, 39)
+            }),
+            30 => Op::Custom(|scene, k| {
+                cast_spell(scene, k, k);
+                31
+            }),
+            31 => Op::Attack {
+                next: 0,
+                target: Target::Area(held),
+                ticks: 3000,
+                events: zones,
+            },
+            37 => Op::Custom(|scene, k| {
+                cast_spell(scene, k, k);
+                38
+            }),
+            38 => Op::Attack {
+                next: 50,
+                target: Target::Seen,
+                ticks: 6000,
+                events: zones,
+            },
+            39 => Op::Custom(|scene, k| {
+                cast_spell(scene, k, k);
+                40
+            }),
+            40 => Op::Attack {
+                next: 50,
+                target: Target::Area(FAR),
+                ticks: 6000,
+                events: zones,
+            },
+            // The landing: a medium fort (0x47b000, order 0x8c).
+            45 => Op::Custom(|scene, k| {
+                let west = k == WEST;
+                let at = if west { (8, 20) } else { (19, 16) };
+                if let Some(&ship) = scene.fleet_ships(k).first() {
+                    scene.found_by(ship, at, FORT);
+                }
+                scene.brain.as_mut().unwrap().fleets[0].vars[LANDED[west as usize]] = 1;
+                46
+            }),
+            46 => Op::Watch {
+                next: 50,
+                ticks: 3000,
+                events: if k == NORTH {
+                    &[Event::Cell {
+                        state: 50,
+                        cell: (19, 16),
+                        class: FORT,
+                        holds: true,
+                    }]
+                } else {
+                    &[Event::Cell {
+                        state: 50,
+                        cell: (8, 20),
+                        class: FORT,
+                        holds: true,
+                    }]
+                },
+            },
+            50 => Op::Custom(|scene, k| {
+                roll(scene, k, true);
+                51
+            }),
+            51 => Op::Behave { next: 60 },
+            60 => Op::Patrol {
+                timeout: 0,
+                points: round2,
+                ticks: 0,
+                events: watch2,
+            },
+            70 => Op::Attack {
+                next: 50,
+                target: Target::Seen,
+                ticks: 3000,
+                events: &[],
+            },
+            80 => Op::Custom(|scene, k| raid_target(scene, k, 85, 90)),
+            85 => Op::Custom(|scene, k| {
+                // West casts its own but clears north's (the slip).
+                let clear = if k == WEST { NORTH } else { k };
+                cast_spell(scene, k, clear);
+                86
+            }),
+            86 => Op::Attack {
+                next: 50,
+                target: Target::Seen,
+                ticks: 6000,
+                events: raid,
+            },
+            90 => Op::Custom(|scene, k| {
+                let clear = if k == WEST { NORTH } else { k };
+                cast_spell(scene, k, clear);
+                91
+            }),
+            91 => Op::Attack {
+                next: 50,
+                target: Target::Area(FAR),
+                ticks: 6000,
+                events: raid,
+            },
+            _ => {
+                let _ = fort;
+                Op::Behave { next: 0 }
+            }
         }
     }
 }

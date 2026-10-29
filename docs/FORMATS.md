@@ -2016,6 +2016,20 @@ code 0x60, order 96 (the first worn building of the member mended once;
 after 10 idle passes the order fails, never sent again), at the start by
 the builders of miss007-miss010.
 
+**miss005's Persian raiders** (0x456580 north, member 6; 0x456e80 west,
+member 7): each waits its rolled time ((8, 7, 5) or (7, 6, 4) + rand & 3,
+x 1500 ticks) on patrol and rolls a spell (the Flame, the phantom or the
+weapon shield) to cast on its ships as it attacks (0x47acf0 by member
+(1, 0), unpaid). Then north, once both harpy nests at (23, 20) and
+(26, 19) are gone, and west, once the barbarians' stronghold at (3, 29) is,
+land unless the player holds the place: a medium fort founded at (19, 16)
+or (8, 20) (0x47b000, fleet order 0x8c, waiting for its price; 3000
+ticks). Landed, and the stronghold gone, they raid one of the player's
+settlements or towns in (0, 0, 35, 35), else (27, 28, 9, 8), 6000 ticks,
+and live in a second patrol about their fort, back to the first if it
+falls. West casts its spell in its raids every turn and clears north's
+(its slip at 0x456e80).
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships

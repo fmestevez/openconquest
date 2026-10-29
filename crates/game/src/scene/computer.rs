@@ -3516,7 +3516,7 @@ impl Scene {
     /// Ship `ship` founds `class` at `cell`; while the price cannot be
     /// paid it sails there and waits (the order stands until the step's
     /// time is up).
-    fn found_by(&mut self, ship: u32, cell: (i32, i32), class: u32) {
+    pub(super) fn found_by(&mut self, ship: u32, cell: (i32, i32), class: u32) {
         if self.order_found(ship, cell.0, cell.1, class).is_ok() {
             return;
         }
