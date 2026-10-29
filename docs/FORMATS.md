@@ -1540,8 +1540,10 @@ player's (+0x24f), has a lower priority (+0x5c7) than the mover, and the
 wait has passed the mover's patience (+0x5c8, 5 when an order is taken),
 the blocker is moved aside (0x4b4b50 with the mover's priority), the
 patience tripled (while below 200) and the wait cleared. A blocker in state
-3 or 6 is only waited on, as is anything in the cell not a ship; a ship
-under way there (states 1, 2, 4, 5) does not count towards the wait. The
+3 or 6 is only waited on, as is anything in the cell not a ship (a tick of
+wait each); and any refused step but into the route's last cell adds a
+tick more, so a ship under way in the way (states 1, 2, 4, 5) counts once
+a tick, the others twice. The
 push compares the wait (+0x591), which a re-plan leaves alone. When
 the step is refused the ship slows to a stop over the distance left
 (0x4a2f60: state 4, deceleration speed^2 / (distance x 6000)).

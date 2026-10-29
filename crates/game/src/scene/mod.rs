@@ -1780,13 +1780,18 @@ impl Scene {
                         {
                             ship.blocked += dt;
                             ship.stalled += dt;
-                            // Only a ship lying still, waiting or held
-                            // counts towards giving up; one under way
-                            // will clear (0x4a3a70).
+                            // The wait grows a tick for a step refused
+                            // short of the route's last cell, and a tick
+                            // more when the ship there lies still, waits
+                            // or is held (0x4a3a70).
                             if lying.contains(&other)
                                 || waiting.contains(&other)
                                 || held_still.contains(&other)
                             {
+                                ship.waited += dt;
+                            }
+                            let last = ship.path.back().map(|&(lx, ly)| cell_of(lx, ly));
+                            if last != Some(next) {
                                 ship.waited += dt;
                             }
                             ship.velocity = 0.0;
