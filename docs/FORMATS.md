@@ -3163,9 +3163,34 @@ flotilla found a settlement (0x484d60, 0x484f60).
 Not ported (the port's own instead): the terrain helpers of
 `artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
 simpler searches; zones weigh the lanes before nearness, since ships here
-cannot pass one another), the land fleet's placing of buildings (the
-nearest free cell to the settlement), and the object-kind masks of the
-fleets' behaviour (see below).
+cannot pass one another). Ported: the town's placing of buildings (below)
+and the object-kind masks (see below).
+
+**Placing buildings** (the town's order 0x138c with no cell asked: message
+0x4ed, 0x42dac0, `m_build.cpp` 0x42d9c0, the helper 0x40cca0 over the whole
+map, taking the first of its results as cell and facing; none, the build
+is dropped). Flags by class: forts 0x34-0x36 0x20, port, shipyard and dock
+0x0e, the rest 0x05; only bits 1, 2 and 0x20 count. Each cell is coded:
+not ground a building may stand on (0x503150: layer 0 of tile type 4,
+island ground; none of tile sets 0x1a, 0x30 on layers 5-7) 1; free with
+the tile's edge mask (0x5acf3f by layer-0 variant: 0x1c for 2-6, 0x07
+7-11, 0x70 12-16, 0xc1 17-21, 0x10 30-31, 0x01 32-33, 0x04 34-36, 0x40
+37-41, else 0) zero 4, else 3; the town's own (the settlement, or its
+buildings and forts, +0x1c8) 0xb; and the front of every port, yard and
+dock 8. Regions join cells across edges both leave open, diagonals too
+(0x5597b0). Candidates are the cells of the town's region touching one of
+its own cells, each weighed once in scan order. Flag 1 takes code 4: 100
+for plain land (variant 1), +30 per shore cell about it, no facing. Flag 2
+takes code 3 with a closed edge south, north, west or east whose
+neighbour is water (keeping off a berth if it can): from the facing cell's
+3 x 3, +10 a water cell, -100 a berth (and -100 if the facing cell is one),
+-20 a water building, -15 amber. Flag 0x20 takes code 3 or 4 not plain:
+50, or 130 for variants 22-29 and 42-43; -50 an own fort about it, +75 its
+settlement, +50 a water building; +5 each water cell nearer than 7
+(0x557440: the longer side plus half the shorter); facing as for flag 2,
+else 0. The results go through the C runtime's qsort (0x58791f, highest
+score first, ties as it leaves them). Not ported: a third object pointer
+on the cell (+0x1c) and a layer nibble of 4 also blocking it.
 
 **Behaviour masks.** Every task gives its fleet a behaviour (0x482e80
 stores three masks at flotilla +0x14c, +0x148, +0x150; 0x482eb0 sends order

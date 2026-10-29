@@ -638,7 +638,7 @@ impl Scene {
     }
 
     /// The cell of object `i` (its top-left for a building).
-    fn cell_of(&self, i: usize) -> (i32, i32) {
+    pub(super) fn cell_of(&self, i: usize) -> (i32, i32) {
         let t = TILE_SIZE as f32;
         self.objects[i].cell.unwrap_or((
             (self.objects[i].x / t) as i32,
@@ -2095,10 +2095,10 @@ impl Scene {
                 if self.funds(owner).0 < economy::building_cost(class) {
                     return PartStep::Hold;
                 }
-                let Some((x, y)) = self.building_place(site, class) else {
+                let Some((x, y, facing)) = self.town_build_place(site, class) else {
                     return PartStep::Wait;
                 };
-                match self.place_building(site, class, x, y, data, caches) {
+                match self.place_building_facing(site, class, x, y, Some(facing), data, caches) {
                     Ok(()) => PartStep::Started(have),
                     Err(_) => PartStep::Wait,
                 }
@@ -2305,27 +2305,6 @@ impl Scene {
             .iter()
             .filter_map(|&c| self.base_building(ai, b, c))
             .min_by_key(|&y| self.productions.iter().filter(|p| p.site == y).count())
-    }
-
-    /// Where building `class` may go up by settlement `site` (the land
-    /// fleet asks `m_build.cpp`, 0x42d9c0): the free cell nearest the
-    /// settlement, scanning rows from the top.
-    fn building_place(&self, site: u32, class: u32) -> Option<(i32, i32)> {
-        let (tx, ty) = self.cell_of(self.object_index(site)?);
-        let r = BUILD_RADIUS + 1;
-        let mut best: Option<(i32, (i32, i32))> = None;
-        for y in ty - r..=ty + 1 + r {
-            for x in tx - r..=tx + 1 + r {
-                if self.check_site(site, class, x, y).is_err() {
-                    continue;
-                }
-                let d = (x - tx).abs().max((y - ty).abs());
-                if best.is_none_or(|b| d < b.0) {
-                    best = Some((d, (x, y)));
-                }
-            }
-        }
-        best.map(|b| b.1)
     }
 
     /// A place for a new settlement near `near` (`LAiFindTownPlace`,

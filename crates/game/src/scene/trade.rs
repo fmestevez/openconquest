@@ -1469,6 +1469,22 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) -> Result<(), String> {
+        self.place_building_facing(settlement, class, cx, cy, None, data, caches)
+    }
+
+    /// As `place_building`; with `facing` given, on a cell already chosen
+    /// (a computer town's, `m_build.cpp`) without the player's checks.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn place_building_facing(
+        &mut self,
+        settlement: u32,
+        class: u32,
+        cx: i32,
+        cy: i32,
+        facing: Option<u32>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Result<(), String> {
         // The settlement's (or founding ship's) player builds it.
         let owner = self
             .object_index(settlement)
@@ -1496,7 +1512,10 @@ impl Scene {
         if have_amber < cost || have_fish < fish {
             return Err("Not enough resources".into());
         }
-        let facing = self.check_site(settlement, class, cx, cy)?;
+        let facing = match facing {
+            Some(f) => f,
+            None => self.check_site(settlement, class, cx, cy)?,
+        };
         let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
         let mut fields = vec![0u32; 66];
         fields[0] = class;

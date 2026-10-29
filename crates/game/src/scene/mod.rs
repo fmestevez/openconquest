@@ -427,6 +427,7 @@ mod fireball;
 mod flyers;
 mod grapple;
 mod order;
+mod placement;
 mod script;
 mod seats;
 mod spells;
