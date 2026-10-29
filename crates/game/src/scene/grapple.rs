@@ -600,6 +600,25 @@ impl Scene {
                 }
             }
             Furl => {
+                // A fire rammer boarded blows up as it furls (0x4c3410
+                // state 10, 0x4c21c0): at each step Q and R at the boarder
+                // and two S at itself, all burning.
+                let fire_rammer = self.objects[k].ship.as_ref().is_some_and(|s| s.kind == 10);
+                if !g.boarder
+                    && fire_rammer
+                    && g.ticks > 0
+                    && g.ticks % FURL_STEP == 0
+                    && g.ticks <= FURL_STEP * FURL_FRAMES
+                {
+                    let me = (self.objects[k].x, self.objects[k].y);
+                    if let Some(b) = self.object_index(g.with) {
+                        let them = (self.objects[b].x, self.objects[b].y);
+                        self.fire_volcanic(16, true, me, them, true, data, caches);
+                        self.fire_volcanic(17, true, me, them, true, data, caches);
+                    }
+                    self.fire_volcanic(18, true, me, me, true, data, caches);
+                    self.fire_volcanic(18, true, me, me, true, data, caches);
+                }
                 if g.ticks >= FURL_STEP * FURL_FRAMES {
                     g.ticks = 0;
                     if g.boarder {
@@ -911,6 +930,12 @@ impl Scene {
         let bow = self
             .bow(i)
             .unwrap_or((self.objects[i].x, self.objects[i].y));
+        // A fire rammer throws a burning S at its prey besides (0x4c2566,
+        // 0x4c21c0: from its hull's middle).
+        if self.objects[i].ship.as_ref().is_some_and(|s| s.kind == 10) {
+            let me = (self.objects[i].x, self.objects[i].y);
+            self.fire_volcanic(18, true, me, to, true, data, caches);
+        }
         self.sounds.push(("109", bow.0, bow.1));
         let frames = objects::sequence_frames(data, caches, "BOMBH30").unwrap_or_default();
         let n = if frames.is_empty() {

@@ -247,6 +247,8 @@ pub struct Scene {
     pub shots: Vec<shot::Shot>,
     /// Ships burning (not saved: flames are short-lived).
     pub fires: Vec<fire::Fire>,
+    /// Volcanoes' sleep and eruptions.
+    pub volcanoes: HashMap<u32, volcano::Volcano>,
     /// Where one of the player's objects last took a blow.
     pub last_attack: Option<(f32, f32)>,
     rng: Rng,
@@ -434,6 +436,7 @@ mod spells;
 mod stats;
 mod story;
 mod unload;
+mod volcano;
 mod walkers;
 pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use computer::Computers;
@@ -544,6 +547,7 @@ impl Scene {
             effects: Vec::new(),
             shots: Vec::new(),
             fires: Vec::new(),
+            volcanoes: HashMap::new(),
             last_attack: None,
             rng: Rng(0x1234_5678),
             shoals_gone: Default::default(),
@@ -1595,6 +1599,7 @@ impl Scene {
         self.run_combat(dt, data, caches);
         self.run_shots(dt, data, caches);
         self.run_burning(dt);
+        self.run_volcanoes(dt, data, caches);
         self.run_contact(dt, data, caches);
         let mut moved = false;
         // One ship to a cell: the cells ships lie in, and those they are

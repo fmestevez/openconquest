@@ -1921,6 +1921,30 @@ and shows x 5 on its panel (0x417d20). Nothing fills the settlement's
 it and the settlement's panel shows it x 5 (0x43c650), so supplies stay 0
 in play and the port leaves them out.
 
+## Volcanoes
+
+A volcano (VolcanoClassTy, `Volcano.cpp`; record field 4 its lava picture,
+6 and 7 its cell, 8 its strength N, 9 a radius r) with N > 0 sleeps (45000
+- 4500 N) x 80-100% ticks, then erupts (sound `shum2`, `VOLCANOERAPTION`
+a frame every 2 ticks, looping frames 0x3c-0x77) for (15000 - 1500 N) x
+80-100%, throwing a volley every (50 - 5 N) x 80-100% while the picture
+shows (0x445e20, 0x445920, 0x4458d0; its own generator +0x18). A volley
+(0x445ad0): of the cells within r of its cell (r + 1 on the far sides)
+but its own 2 x 2, rand % N each on another cell, by rand % 6 a burning Q,
+R or S, a G or F burning one time in two, or nothing; three draws more,
+the last the sub-cell point (& 0x3f) and the trail (one in five); then
+`eject` or `eject1`. The stones (0x499410, no shooter, class 0x25e) leave
+the crater (0x5970c8 by the lava picture, from the cell's corner plus 0x46,
+0x82), always land after 25 ticks on an arc of P x d^2 / 4000 (P by
+distance, 0x599088) raised by 0x5baf28 (Q 55%, R 45%, S 35%, G 36%, F 54%)
+and strike what is where they land with level 0's blow (Q 18300, R 21300,
+S 23250; the crew's share by B / A). They only splash in water (305); none
+leaves a crater. The fire rammer (type 10) throws one S at its prey as its
+bow strikes (0x4c2566) and, boarded, Q and R at the boarder and two S at
+itself at each step of its sail furling (0x4c3410 state 10): it blows
+up. Letters 16-18 come from nowhere else. (The port does not save a
+volcano's clocks with a game.)
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships

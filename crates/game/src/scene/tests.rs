@@ -6483,3 +6483,25 @@ fn greek_fire_leaves_a_trail() {
     assert!(scene.droplets.iter().any(|d| d.trail == Some(8)));
     assert!(!scene.trail_art[&8].is_empty(), "TRAKS08 loaded");
 }
+
+/// A volcano with a strength (field 8) erupts in its time and throws
+/// burning stones, Q, R and S among them, about its crater (0x445ad0;
+/// needs `OPENCONQUEST_DATA`).
+#[test]
+fn volcanoes_erupt_and_throw_stones() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    let mut letters = std::collections::BTreeSet::new();
+    for _ in 0..10 * 60 * 25 {
+        scene.update(0.04, &data, &mut caches);
+        letters.extend(scene.shots.iter().filter(|s| s.volcanic).map(|s| s.letter));
+    }
+    assert!(
+        [16, 17, 18].iter().all(|l| letters.contains(l)),
+        "{letters:?}"
+    );
+}

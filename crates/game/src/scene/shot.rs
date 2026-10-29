@@ -122,6 +122,12 @@ pub struct Shot {
     /// A grappling hook's line back to the ship that threw it (bomb slot
     /// 2, a line in palette colour 0x6d, 0x496f40, 0x4964c0).
     pub rope: Option<u32>,
+    /// Thrown by a volcano or a fire ship (0x499410): no shooter, it
+    /// strikes whatever is where it lands, its pictures played once.
+    pub volcanic: bool,
+    /// Its burning trail is on (+0xe6; always but for a volcano's stones,
+    /// one in five).
+    pub trail: bool,
 }
 
 impl Shot {
@@ -131,7 +137,33 @@ impl Shot {
             return None;
         }
         let tick = (self.age / crate::clock::TICK) as usize;
-        Some(&self.frames[tick % self.frames.len()])
+        let k = if self.volcanic {
+            tick.min(self.frames.len() - 1)
+        } else {
+            tick % self.frames.len()
+        };
+        Some(&self.frames[k])
+    }
+}
+
+/// The arc's height by distance for a volcano's stones (0x599088, by
+/// clamp(d, 30, 350) / 10 - 3).
+const VOLCANIC_ARC: [f32; 33] = [
+    220.0, 200.0, 160.0, 140.0, 120.0, 100.0, 85.0, 70.0, 50.0, 45.0, 40.0, 36.0, 34.0, 33.0, 30.0,
+    28.0, 26.0, 24.0, 22.0, 21.0, 20.0, 19.0, 18.0, 17.0, 16.0, 15.0, 14.0, 13.0, 12.0, 11.0, 10.0,
+    10.0, 10.0,
+];
+
+/// A volcanic shot's letter: its blow at level 0 (A, ours a fifteenth of
+/// the original's: 0x5c75cc from 0x597d2c), its crew's share by B over A,
+/// and its arc's rise (0x5baf28, in thousandths).
+fn volcanic(letter: u8) -> (f32, f32, f32) {
+    match letter {
+        16 => (1220.0, 600.0 / 1220.0, 0.55),
+        17 => (1420.0, 1120.0 / 1420.0, 0.45),
+        18 => (1550.0, 1180.0 / 1550.0, 0.35),
+        6 => (combat::hull_damage_at(6, 0), combat::crew_scale(6), 0.36),
+        _ => (combat::hull_damage_at(5, 0), combat::crew_scale(5), 0.54),
     }
 }
 
@@ -201,6 +233,14 @@ pub struct SavedShot {
     apex: f32,
     #[serde(default)]
     rope: Option<u32>,
+    #[serde(default)]
+    volcanic: bool,
+    #[serde(default = "yes")]
+    trail: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Shot {
@@ -221,6 +261,8 @@ impl Shot {
             flight: self.flight,
             apex: self.apex,
             rope: self.rope,
+            volcanic: self.volcanic,
+            trail: self.trail,
         }
     }
 
@@ -245,6 +287,49 @@ impl Shot {
             x: s.from.0,
             y: s.from.1,
             rope: s.rope,
+            volcanic: s.volcanic,
+            trail: s.trail,
+        }
+    }
+}
+
+impl Scene {
+    /// What a volcanic shot strikes where it lands: a ship on the cell,
+    /// else a building standing there; its blow shared out as any.
+    fn aim_volcanic(&self, s: &mut Shot) {
+        let t = TILE_SIZE as f32;
+        let cell = ((s.to.0 / t).floor() as i32, (s.to.1 / t).floor() as i32);
+        let cell_of = |o: &objects::MapObject| ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let hit = self
+            .objects
+            .iter()
+            .find(|o| o.ship.is_some() && o.combat.is_some() && cell_of(o) == cell)
+            .or_else(|| {
+                self.objects.iter().find(|o| {
+                    o.combat.is_some()
+                        && o.cell.is_some_and(|(x, y)| {
+                            let n = super::trade::building_cells(o);
+                            (x..x + n).contains(&cell.0) && (y..y + n).contains(&cell.1)
+                        })
+                })
+            });
+        let Some(o) = hit else {
+            s.target = 0;
+            s.strikes = false;
+            return;
+        };
+        let (blow, crew, _) = volcanic(s.letter);
+        s.target = o.id;
+        s.strikes = true;
+        match (&o.ship, &o.combat) {
+            (Some(ship), Some(c)) => {
+                let blow = blow * combat::armour_factor(ship.armour, &self.levels_of(o.owner));
+                let sh = combat::Shares::of(ship, &c.weapons);
+                s.damage = sh.hull_part(blow);
+                s.wounds = sh.crew_part(blow) * 15.0 * crew;
+                s.wear = sh.weapons_part(blow) * 15.0;
+            }
+            _ => s.damage = blow,
         }
     }
 }
@@ -336,6 +421,60 @@ impl Scene {
             x: f.from.0,
             y: f.from.1,
             rope: f.rope,
+            volcanic: false,
+            trail: true,
+        });
+    }
+
+    /// An ownerless shot of `letter` (0x499410: a volcano's stones, a fire
+    /// ship's blasts) from `from` to the point `to`: it always lands there,
+    /// 25 ticks on whatever the distance, on the volcano's arc (0x497be0,
+    /// 0x4970e0), and strikes what it lands on.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn fire_volcanic(
+        &mut self,
+        letter: u8,
+        flaming: bool,
+        from: (f32, f32),
+        to: (f32, f32),
+        trail: bool,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let d = dx.hypot(dy);
+        let p = VOLCANIC_ARC[((d.clamp(30.0, 350.0) / 10.0) as usize - 3).min(32)];
+        let apex = volcanic(letter).2 * p * d * d / 4000.0;
+        let variant = u8::from(flaming);
+        let mut frames = flight_frames(letter, variant, direction(dx, dy), data, caches);
+        if frames.is_empty() {
+            frames = objects::sequence_frames(data, caches, &picture(letter, 0, variant))
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|f| f.into_iter().next())
+                .collect();
+        }
+        self.shots.push(Shot {
+            letter,
+            item: letter,
+            flaming,
+            variant,
+            from,
+            to,
+            target: 0,
+            strikes: true,
+            damage: 0.0,
+            wounds: 0.0,
+            wear: 0.0,
+            age: 0.0,
+            flight: crate::clock::ticks(25),
+            apex,
+            frames,
+            x: from.0,
+            y: from.1,
+            rope: None,
+            volcanic: true,
+            trail,
         });
     }
 
@@ -377,6 +516,7 @@ impl Scene {
                 let (kind, off, v) = match (s.letter, s.flaming) {
                     (12, _) => (8, 9.0, 0.0),
                     (13, _) => (1, 14.0, 0.0),
+                    (16..=18, true) if !s.trail => continue,
                     (16, true) => (7, 6.0, 10.0),
                     (17, true) => (8, 8.0, 10.0),
                     (18, true) => (9, 10.0, 10.0),
@@ -405,8 +545,11 @@ impl Scene {
         }
     }
 
-    fn land_shot(&mut self, s: Shot, data: &GameData, caches: &mut Caches) {
+    fn land_shot(&mut self, mut s: Shot, data: &GameData, caches: &mut Caches) {
         let t = TILE_SIZE as f32;
+        if s.volcanic {
+            self.aim_volcanic(&mut s);
+        }
         let target = self.object_index(s.target).filter(|_| s.strikes);
         let state = match target.map(|i| self.objects[i].class) {
             Some(ObjectClass::Ship) => 1,
@@ -441,7 +584,16 @@ impl Scene {
                 site: None,
             });
         }
-        let choices = LAND[(s.letter as usize).min(13)][(state as usize - 1).min(3)];
+        // Q, R and S only splash (events 305-308, only 305 recorded).
+        let choices: &[&str] = if s.letter >= 16 {
+            if state == 2 {
+                &["splash1"]
+            } else {
+                &[]
+            }
+        } else {
+            LAND[(s.letter as usize).min(13)][(state as usize - 1).min(3)]
+        };
         if !choices.is_empty() {
             let pick = choices[self.gull_rng.next() as usize % choices.len()];
             self.sounds.push((pick, s.to.0, s.to.1));
@@ -456,6 +608,13 @@ impl Scene {
         }
         // The hull's share first, then the crew's and the weapons'
         // (0x4bf170).
+        if let Some(i) = target.filter(|_| s.volcanic) {
+            self.ignite(i, s.item, s.flaming, s.damage, data, caches);
+            self.strike(s.target, s.damage, false, data, caches);
+            self.wound(s.target, s.wounds);
+            self.wear(s.target, s.wear);
+            return;
+        }
         if let Some(i) = target {
             // Fire first, judged on the hull before the blow (0x4bf1a0).
             let holder = self.objects[i].holds_units();
