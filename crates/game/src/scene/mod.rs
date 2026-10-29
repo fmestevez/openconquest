@@ -1349,9 +1349,9 @@ impl Scene {
             let moving = under_way(s);
             let still =
                 s.path.is_empty() || s.stalled >= crate::clock::ticks(50) || s.grapple.is_some();
-            if prio >= 51 && s.priority < prio && !moving {
-                listed.push((c, s.priority, moving));
-            } else if prio >= 51 && s.priority == prio && o.id > id {
+            let lower = s.priority < prio && !moving;
+            let later = s.priority == prio && o.id > id;
+            if prio >= 51 && (lower || later) {
                 listed.push((c, s.priority, moving));
             } else if (impatient && !moving) || (!impatient && still) {
                 closed.insert(c);
