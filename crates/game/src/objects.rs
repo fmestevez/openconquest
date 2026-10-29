@@ -328,6 +328,17 @@ pub struct Ship {
     /// furls while it lies loading or unloading and unfurls as it leaves.
     #[serde(default)]
     pub furl: f32,
+    /// Rocking at rest (0x4a3150): the frame of the four (0-3), swinging
+    /// back (`rock_back`), and the ticks since it last moved and the
+    /// seconds owed to the next tick.
+    #[serde(default)]
+    pub rock: u8,
+    #[serde(default)]
+    pub rock_back: bool,
+    #[serde(default)]
+    pub rock_ticks: u32,
+    #[serde(default)]
+    pub rock_clock: f32,
     /// Goods on board.
     pub cargo: f32,
     pub cargo_kind: Option<Resource>,
@@ -784,10 +795,8 @@ const SHIP_IDLE_FRAMES: usize = 56;
 /// picture's frame delay is 2 (0x4e0160 and the ship loader), a frame once
 /// more than 2 ticks have passed (0x4a3320).
 pub const SHIP_FRAME_MS: u64 = 3 * TICK_MS;
-/// Rocking at rest and furling the sail go slower: the delay of 4 a ship
-/// gets lying against something (0x4b5df0), a frame every 5 ticks (for the
-/// rocking an estimate).
-const SHIP_ROCK_MS: u64 = 5 * TICK_MS;
+/// Furling the sail goes slower: the delay of 4 a ship gets lying against
+/// something (0x4b5df0), a frame every 5 ticks.
 pub const SHIP_FURL_SECONDS: f32 = 5.0 * crate::clock::TICK;
 const SHIP_FURL_FRAMES: usize = 88;
 
@@ -1014,9 +1023,15 @@ impl MapObject {
                     ship.heading * SHIP_FRAMES_PER_HEADING
                         + (SHIP_FRAMES_PER_HEADING - 1 - back % SHIP_FRAMES_PER_HEADING)
                 }
+                // At rest it rocks over four frames (0x4a3150): from 56, 4 a
+                // heading; type 5 from 92, 8 a heading (its sail furled).
                 None if ship.path.is_empty() => {
-                    let rock = (time_ms / SHIP_ROCK_MS) as usize;
-                    SHIP_IDLE_FRAMES + ship.heading * 4 + rock % 4
+                    let rock = ship.rock.min(3) as usize;
+                    if ship.kind == 5 && n >= SHIP_FURL_FRAMES + 64 {
+                        SHIP_FURL_FRAMES + 4 + ship.heading * 8 + rock
+                    } else {
+                        SHIP_IDLE_FRAMES + ship.heading * 4 + rock
+                    }
                 }
                 None => ship.heading * SHIP_FRAMES_PER_HEADING + step % SHIP_FRAMES_PER_HEADING,
             },
@@ -1481,6 +1496,10 @@ pub fn resolve(
         velocity: 0.0,
         face: None,
         furl: 0.0,
+        rock: 0,
+        rock_back: false,
+        rock_ticks: 0,
+        rock_clock: 0.0,
         grapple: None,
         ram_run: None,
         cargo: 0.0,

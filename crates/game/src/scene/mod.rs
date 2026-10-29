@@ -1929,6 +1929,7 @@ impl Scene {
         self.run_walkers(dt, data, caches);
         self.run_porters(dt, data, caches);
         self.run_furling(dt);
+        self.run_rocking(dt);
         self.run_regrowth(dt, data, caches);
         self.offer_argo();
         self.run_hazards(dt, data, caches);
@@ -2243,6 +2244,46 @@ impl Scene {
 
     pub fn map_size(&self) -> (u32, u32) {
         (self.terrain.width, self.terrain.height)
+    }
+
+    /// Ships at rest rock (0x4a3150): each tick a fresh delay of 15 +
+    /// rand % 7 ticks is drawn, and the frame moves once more ticks than
+    /// that have passed since it last did, swinging over its four frames
+    /// and back (0, 1, 2, 3, 3, 2, 1, 0, 0, ...). Only shown.
+    fn run_rocking(&mut self, dt: f32) {
+        let tick = crate::clock::ticks(1);
+        for o in &mut self.objects {
+            let Some(s) = o.ship.as_mut() else {
+                continue;
+            };
+            if !s.path.is_empty() || s.rotation.is_some() {
+                s.rock = 0;
+                s.rock_back = false;
+                s.rock_ticks = 0;
+                s.rock_clock = 0.0;
+                continue;
+            }
+            s.rock_clock += dt;
+            while s.rock_clock >= tick {
+                s.rock_clock -= tick;
+                s.rock_ticks += 1;
+                let delay = 15 + self.gull_rng.next() % 7;
+                if s.rock_ticks > delay {
+                    s.rock_ticks = 0;
+                    if s.rock_back {
+                        if s.rock == 0 {
+                            s.rock_back = false;
+                        } else {
+                            s.rock -= 1;
+                        }
+                    } else if s.rock >= 3 {
+                        s.rock_back = true;
+                    } else {
+                        s.rock += 1;
+                    }
+                }
+            }
+        }
     }
 
     /// Ships lying loading or unloading furl their sails a frame every 5
