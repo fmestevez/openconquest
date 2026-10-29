@@ -3183,7 +3183,21 @@ Not ported (the port's own instead): the terrain helpers of
 `artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
 simpler searches; zones weigh the lanes before nearness, since ships here
 cannot pass one another). Ported: the town's placing of buildings and the
-guarding forts' places (below), and the object-kind masks (see below).
+guarding forts' places (below), the enemy groups, and the object-kind
+masks (see below).
+
+**Enemy groups** (`LAiFindEnemiesGroups`, `_L_Ai_en.cpp` 0x408830): over a
+rectangle, the live ships (once, at their cell) and forts and barbarian
+structures (each cell they cover) of players not marked friendly (0x4efe20,
+game +0x2f45), grouped apart within 4 (`max + min / 2`) by one raster pass
+(0x559070: a cell takes a label within 4 to its right or in the 4 rows
+below, else a new one, and hands it on), ship groups first; each group its
+count, extent, fire and boarding strength. With an id (0x408b70) each list
+keeps just the group holding it, when it does. Mode 2 (0x408b30) can never
+find anything: its callers (0x485fc0, 0x487690) always fall back to the
+enemy's buildings 0x32-0x3e, 7 x 7 about each, weight 10, ten at most. A
+hit (0x486b70) by a ship, fort or barbarian structure takes the first
+group, 2 cells wider all round, for the help request; others ask none.
 
 **Guarding forts' places** (`LAiFindPlaceGuardianFortress` 0x409b30, from
 task 6 through 0x4852c0 over the whole map; the first result becomes the

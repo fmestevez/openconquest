@@ -1136,15 +1136,110 @@ impl Scene {
                 .any(|c| c.owner == mine && c.spared & 1 << (theirs.0 * 4 + theirs.1) != 0)
     }
 
-    /// The enemies about the object `s` that fired (0x486b70): their area
-    /// and strength.
+    /// The enemies about shooter `s` (0x486b70): for a ship, fort or
+    /// barbarian structure, the first group `LAiFindEnemiesGroups` lists
+    /// (0x408b70 with its id: its own ship group, or for a building the
+    /// map's first enemy ship group if any), 2 cells wider all round, and
+    /// the enemy strength there; nothing for others (no help is asked).
     fn enemy_group(&self, ai: &Computer, s: usize) -> Option<(Cells, i32)> {
-        let (x, y) = self.cell_of(s);
         let (w, h) = self.map_cells();
-        let x0 = (x - 2).max(0);
-        let y0 = (y - 2).max(0);
-        let rect = (x0, y0, 5.min(w - x0), 5.min(h - y0));
+        if !matches!(
+            self.objects[s].class,
+            ObjectClass::Ship | ObjectClass::Building(0x34..=0x36) | ObjectClass::Barbarian(_)
+        ) {
+            return None;
+        }
+        let r = *self
+            .enemy_groups(ai.owner, Some(self.objects[s].id))
+            .first()?;
+        let (x, y) = ((r.0 - 2).max(0), (r.1 - 2).max(0));
+        let mut gw = r.2 + 4;
+        if x + gw >= w {
+            gw = w - x;
+        }
+        let mut gh = r.3 + 4;
+        if y + gh >= h {
+            gh = h - y;
+        }
+        let rect = (x, y, gw, gh);
         Some((rect, self.strength_in(ai.owner, rect)))
+    }
+
+    /// `LAiFindEnemiesGroups` (0x408830, mode 1, the whole map): the
+    /// others' ships (at their cell) and forts and barbarian structures
+    /// (each cell they cover), grouped apart within 4 (0x559070), ship
+    /// groups first; with `only`, in each list just the group holding it
+    /// when there. Their extents.
+    fn enemy_groups(&self, owner: (u32, u32), only: Option<u32>) -> Vec<Cells> {
+        let mut ships = Vec::new();
+        let mut forts = Vec::new();
+        for (i, o) in self.objects.iter().enumerate() {
+            let foe = o.owner.is_some_and(|w| w != owner)
+                || (o.owner.is_none() && matches!(o.class, ObjectClass::Barbarian(_)));
+            if !foe || o.combat.as_ref().is_some_and(|c| c.hull <= 0.0) {
+                continue;
+            }
+            match o.class {
+                ObjectClass::Ship => ships.push((self.cell_of(i), o.id)),
+                ObjectClass::Building(0x34..=0x36) | ObjectClass::Barbarian(_) => {
+                    let (x, y) = self.cell_of(i);
+                    let n = super::trade::building_cells(o);
+                    for dy in 0..n {
+                        for dx in 0..n {
+                            forts.push(((x + dx, y + dy), o.id));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // The scan goes row by row.
+        ships.sort_by_key(|&((x, y), _)| (y, x));
+        forts.sort_by_key(|&((x, y), _)| (y, x));
+        let mut out = Vec::new();
+        for list in [ships, forts] {
+            let cells: Vec<(i32, i32)> = list.iter().map(|e| e.0).collect();
+            let (labels, n) = cluster(&cells, 4);
+            let target = only.and_then(|id| list.iter().position(|e| e.1 == id).map(|k| labels[k]));
+            for g in 1..=n {
+                if target.is_some_and(|t| t != g) {
+                    continue;
+                }
+                let mut rect: Option<(i32, i32, i32, i32)> = None;
+                for (k, &(x, y)) in cells.iter().enumerate() {
+                    if labels[k] != g {
+                        continue;
+                    }
+                    rect = Some(match rect {
+                        None => (x, y, x, y),
+                        Some((a, b, c, d)) => (a.min(x), b.min(y), c.max(x), d.max(y)),
+                    });
+                }
+                if let Some((a, b, c, d)) = rect {
+                    out.push((a, b, c - a + 1, d - b + 1));
+                }
+            }
+        }
+        out
+    }
+
+    /// The enemy's buildings to strike when no town will do (0x485fc0,
+    /// 0x487690): of classes 0x32-0x3e, 7 x 7 about each, weight 10, ten
+    /// at most.
+    fn enemy_buildings(&self, enemy: u32) -> Vec<(i32, Cells)> {
+        let (w, h) = self.map_cells();
+        (0..self.objects.len())
+            .filter(|&i| {
+                self.objects[i].owner == Some((enemy / 4, enemy % 4))
+                    && matches!(self.objects[i].class, ObjectClass::Building(0x32..=0x3e))
+            })
+            .take(10)
+            .map(|i| {
+                let (x, y) = self.cell_of(i);
+                let (x0, y0) = ((x - 3).max(0), (y - 3).max(0));
+                (10, (x0, y0, 7.min(w - x0), 7.min(h - y0)))
+            })
+            .collect()
     }
 
     /// Foes and creatures in an area (the count 0x4a2390 can return).
@@ -3123,6 +3218,9 @@ impl Scene {
             }
         }
         if found.is_empty() {
+            found = self.enemy_buildings(enemy);
+        }
+        if found.is_empty() {
             return false;
         }
         let weights: Vec<i32> = found.iter().map(|x| x.0).collect();
@@ -3721,15 +3819,7 @@ impl Scene {
             found.push((weight, (x0, y0, 8.min(w - x0), 8.min(h - y0))));
         }
         if found.is_empty() {
-            for i in 0..self.objects.len() {
-                if self.objects[i].owner == Some((enemy / 4, enemy % 4))
-                    && matches!(self.objects[i].class, ObjectClass::Building(_))
-                {
-                    let (x, y) = self.cell_of(i);
-                    let (x0, y0) = ((x - 3).max(0), (y - 3).max(0));
-                    found.push((10, (x0, y0, 7.min(w - x0), 7.min(h - y0))));
-                }
-            }
+            found = self.enemy_buildings(enemy);
         }
         if found.is_empty() {
             return None;
@@ -4081,6 +4171,98 @@ fn study(n: u8, _nation: u32) -> Option<Upgrade> {
         35..=38 => Upgrade::Special(n - 35),
         _ => return None,
     })
+}
+
+/// `cluster` (0x559070): one raster pass over the cells' box, each cell
+/// taking a label found within `r` to its right or in the `r` rows below
+/// (`max + min / 2`), else a new one, and handing it on there. Labels from
+/// 1; their count.
+fn cluster(cells: &[(i32, i32)], r: i32) -> (Vec<u32>, u32) {
+    if cells.is_empty() {
+        return (Vec::new(), 0);
+    }
+    let x0 = cells.iter().map(|c| c.0).min().unwrap();
+    let y0 = cells.iter().map(|c| c.1).min().unwrap();
+    let w = cells.iter().map(|c| c.0).max().unwrap() - x0 + 1;
+    let h = cells.iter().map(|c| c.1).max().unwrap() - y0 + 1;
+    let dist = |dx: i32, dy: i32| {
+        let (a, b) = (dx.abs(), dy.abs());
+        (2 * a.max(b) + a.min(b)) / 2
+    };
+    let at = |x: i32, y: i32| (y * w + x) as usize;
+    let mut grid = vec![0i64; (w * h) as usize];
+    for &(x, y) in cells {
+        grid[at(x - x0, y - y0)] = -1;
+    }
+    let mut next = 1i64;
+    for y in 0..h {
+        for x in 0..w {
+            let mut v = grid[at(x, y)];
+            if v == 0 {
+                continue;
+            }
+            if v == -1 {
+                for i in 1..=r {
+                    if x + i >= w {
+                        break;
+                    }
+                    if grid[at(x + i, y)] > 0 {
+                        v = grid[at(x + i, y)];
+                        break;
+                    }
+                }
+                if v == -1 {
+                    'below: for k in 1..=r {
+                        let yy = y + k;
+                        if yy >= h {
+                            break;
+                        }
+                        for c in (x - r).max(0)..=x + r {
+                            if c >= w {
+                                break;
+                            }
+                            if grid[at(c, yy)] > 0 && dist(c - x, k) <= r {
+                                v = grid[at(c, yy)];
+                                break 'below;
+                            }
+                        }
+                    }
+                }
+                if v == -1 {
+                    v = next;
+                    next += 1;
+                }
+                grid[at(x, y)] = v;
+            }
+            for i in 1..=r {
+                if x + i >= w {
+                    break;
+                }
+                if grid[at(x + i, y)] == -1 {
+                    grid[at(x + i, y)] = v;
+                }
+            }
+            for k in 1..=r {
+                let yy = y + k;
+                if yy >= h {
+                    break;
+                }
+                for c in (x - r).max(0)..=x + r {
+                    if c >= w {
+                        break;
+                    }
+                    if grid[at(c, yy)] == -1 && dist(c - x, k) <= r {
+                        grid[at(c, yy)] = v;
+                    }
+                }
+            }
+        }
+    }
+    let labels = cells
+        .iter()
+        .map(|&(x, y)| grid[at(x - x0, y - y0)] as u32)
+        .collect();
+    (labels, (next - 1) as u32)
 }
 
 /// The parts of a town's order (the land fleet's table at 0x5ac7c8, each
@@ -5119,5 +5301,21 @@ mod tests {
         let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
         scene.update(0.5, &data, &mut caches);
         assert!(scene.computers.players.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod cluster_tests {
+    use super::cluster;
+
+    /// Cells within 4 (`max + min / 2`) share a label; a far one gets its
+    /// own (0x559070).
+    #[test]
+    fn near_cells_group_and_far_ones_do_not() {
+        let (labels, n) = cluster(&[(0, 0), (3, 0), (3, 3), (20, 20)], 4);
+        assert_eq!(n, 2);
+        assert_eq!(labels[0], labels[1]);
+        assert_eq!(labels[1], labels[2]);
+        assert_ne!(labels[0], labels[3]);
     }
 }
