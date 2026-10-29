@@ -475,6 +475,18 @@ impl Scene {
         mission: &str,
         difficulty: usize,
     ) -> Result<Self> {
+        Self::load_carried(data, caches, mission, difficulty, None)
+    }
+
+    /// Loads a campaign mission continued from the one before: what that
+    /// one's victory carried (`carry`) arrives before the brain starts.
+    pub fn load_carried(
+        data: &GameData,
+        caches: &mut Caches,
+        mission: &str,
+        difficulty: usize,
+        carry: Option<&Carry>,
+    ) -> Result<Self> {
         let archive = data.open_mission(mission)?;
         let grid = data.load_map(&archive, mission)?;
         let terrain = Terrain::compose(data, &grid, &mut caches.tiles)?;
@@ -711,17 +723,22 @@ impl Scene {
         // The campaign's missions are judged by their story.
         if is_campaign(mission) {
             scene.permits = crate::permits::Permits::campaign(mission[4..].parse().unwrap_or(0));
-            // The campaign's heroes so far wait at the starting settlement.
-            scene.carried = story::carried_heroes(data, mission);
+            // Continued, the Argo, the town and the heroes the last victory
+            // carried arrive (0x522d50); picked from the list, the
+            // campaign's heroes so far wait at the start.
+            let arrived = carry.is_some_and(|c| scene.arrive(c, data, caches));
+            if !arrived {
+                scene.carried = story::carried_heroes(data, mission);
+            }
             scene.start_sites = scene.own_sites();
             // After miss002 they sail in the Argo; before, or without a
             // ship, they wait at the starting settlement.
-            let argo = if mission > "miss002" {
+            let argo = if mission > "miss002" && !arrived {
                 scene.ready_argo(data, caches)
             } else {
                 None
             };
-            if !scene.carried.is_empty() {
+            if !arrived && !scene.carried.is_empty() {
                 let human = scene.human.map(|h| (h.nation, h.slot));
                 let first_ship = || {
                     scene

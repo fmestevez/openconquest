@@ -2064,6 +2064,28 @@ the settlement made a town, the shipyard a dock, the school, and a small
 (1, 7), miss003 (0, 3) and miss004 (2, 3) give it (flags 0x10) before every
 ship, resting 500, 1000 and 2000 ticks after each.
 
+**Objects carried on.** A won mission's victory handler (brain vtable
++0xc) sends 0x8d2 (`x | y << 16`, the cell in the next map) to what it
+carries; each answers with a record-shaped blob (0x479490 appends it) that
+the next load recreates before the brain starts (0x522d50, 0x51e810). A ship
+(0x4e5ab0 / 0x4dfa90) keeps its type, the Argo flag, hull, experience,
+levels, marines, weapons and treasures, not its heroes, goods or orders,
+facing east; a town (0x4416c0 cut by 0x4451f0) keeps its class, condition
+and treasures, its stock and marines emptied. Money is not carried. By the
+mission won: 000 the ship with the parchment to (1, 13); 001 every building
+in (0..13, 0..12) where it stands; 002 the Argo to (9, 8), its heroes
+aboard; 003 the Argo to (45, 10), the town in (0..4, 40..47) to (46, 6);
+004 (31, 31), Pylos (25..27, 5..7) to (32, 34); 005 (50, 64), (0..2, 0..2)
+to (53, 67); 006 (49, 3), (0..12, 0..8) to (52, 1); 007 the Argo to (4, 33),
+every hero to the town at (0, 30); 008 (5, 39), the buildings at x >= 56,
+y <= 8 to (x - 56, y + 37), every hero to (2, 37); 009 inside x >= 60,
+y <= 6 the town to (2, 40), the Argo to (3, 37); 010 every building and the
+Argo inside x >= 50, y <= 8 to (x - 2, y + 26); 011 (47, 2), (0..5, 0..5) to
+(43, 1); 012 (42, 7), (2..8, 48..52) to (41, 2). A town's heroes go with
+it (+0x33be); heroes left aboard the Argo are lost but in miss002.
+miss005-007 and miss009-012 hold no town of the player's but the one
+carried.
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships

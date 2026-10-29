@@ -2121,11 +2121,12 @@ impl App {
             self.say("Not in a multiplayer game");
             return;
         }
-        match Scene::load_at(
+        match Scene::load_carried(
             &self.data,
             &mut self.caches,
             &self.missions[index],
             self.difficulty,
+            self.carry.as_ref(),
         ) {
             Ok(scene) => {
                 self.scene = scene;

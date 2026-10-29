@@ -6512,3 +6512,56 @@ fn volcanoes_erupt_and_throw_stones() {
         "{letters:?}"
     );
 }
+
+/// A campaign victory carries the Argo and the town on: miss004's Pylos
+/// arrives at (32, 34) of miss005's map and the Argo at (31, 31), as the
+/// original's victory handler moves them (needs `OPENCONQUEST_DATA`).
+#[test]
+fn campaign_carries_the_town_and_the_argo() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut from = Scene::load(&data, &mut caches, "miss004").unwrap();
+    let pylos = from
+        .objects
+        .iter()
+        .find(|o| {
+            from.is_own(o)
+                && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
+                && o.cell
+                    .is_some_and(|(x, y)| (25..=27).contains(&x) && (5..=7).contains(&y))
+        })
+        .map(|o| o.id)
+        .expect("Pylos is the player's");
+    from.site_heroes.insert(pylos, vec![0, 3]);
+    // Picked from the list it has no royal ship to be the Argo: make one.
+    let ship = from
+        .objects
+        .iter()
+        .position(|o| from.is_own(o) && o.ship.is_some())
+        .unwrap();
+    from.objects[ship].ship.as_mut().unwrap().argo = true;
+    let carry = from.carry();
+    let scene =
+        Scene::load_carried(&data, &mut caches, "miss005", super::NORMAL, Some(&carry)).unwrap();
+    let town = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.cell == Some((32, 34)))
+        .expect("the town arrives");
+    assert!(matches!(
+        town.class,
+        ObjectClass::Building(SETTLEMENT | TOWN)
+    ));
+    assert_eq!(scene.site_heroes.get(&town.id), Some(&vec![0, 3]));
+    assert_eq!(scene.carried, vec![0, 3]);
+    let argo = scene
+        .objects
+        .iter()
+        .find(|o| o.ship.as_ref().is_some_and(|s| s.argo))
+        .expect("the Argo arrives");
+    let t = TILE_SIZE as f32;
+    assert_eq!(((argo.x / t) as i32, (argo.y / t) as i32), (31, 31));
+}
