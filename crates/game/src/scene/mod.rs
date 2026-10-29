@@ -2249,7 +2249,8 @@ impl Scene {
     /// Ships at rest rock (0x4a3150): each tick a fresh delay of 15 +
     /// rand % 7 ticks is drawn, and the frame moves once more ticks than
     /// that have passed since it last did, swinging over its four frames
-    /// and back (0, 1, 2, 3, 3, 2, 1, 0, 0, ...). Only shown.
+    /// and back (0, 1, 2, 3, 3, 2, 1, 0, 0, ...): its at-rest frames, or
+    /// lying with its sail furled, the furled ones. Only shown.
     fn run_rocking(&mut self, dt: f32) {
         let tick = crate::clock::ticks(1);
         for o in &mut self.objects {
@@ -2310,7 +2311,7 @@ impl Scene {
                 continue;
             }
             s.furl = if lying.contains(&id) {
-                (s.furl.max(1.0) + step).min(7.0)
+                (s.furl.max(1.0) + step).min(objects::SHIP_FURLED)
             } else {
                 (s.furl - step).max(0.0)
             };

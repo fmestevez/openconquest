@@ -324,8 +324,9 @@ pub struct Ship {
     /// side-on (0x4afe50).
     #[serde(default)]
     pub face: Option<usize>,
-    /// How far its sail is furled, in frames of the furling (0-7): it
-    /// furls while it lies loading or unloading and unfurls as it leaves.
+    /// How far its sail is furled, in frames of the furling (0-4, 4
+    /// furled): it furls while it lies loading or unloading and unfurls as
+    /// it leaves.
     #[serde(default)]
     pub furl: f32,
     /// Rocking at rest (0x4a3150): the frame of the four (0-3), swinging
@@ -799,6 +800,8 @@ pub const SHIP_FRAME_MS: u64 = 3 * TICK_MS;
 /// something (0x4b5df0), a frame every 5 ticks.
 pub const SHIP_FURL_SECONDS: f32 = 5.0 * crate::clock::TICK;
 const SHIP_FURL_FRAMES: usize = 88;
+/// The furling's four frames done: the sail furled.
+pub const SHIP_FURLED: f32 = 4.0;
 
 impl MapObject {
     /// How many units of each item 0-8 a ship carries: its marines and
@@ -1009,9 +1012,15 @@ impl MapObject {
             Some(ship) if n >= SHIP_IDLE_FRAMES + 32 => match ship.rotation {
                 Some(r) => SHIP_TURN_FRAMES + r as usize % 24,
                 // Lying loading or unloading, the sail furls (0x4b5df0, the
-                // frames from 88, 8 a heading).
+                // frames from 88, 8 a heading: four furling, then, the sail
+                // furled (+0x25b = 5), four it rocks over, 0x4a3150).
                 None if ship.furl > 0.0 && n >= SHIP_FURL_FRAMES + 64 => {
-                    SHIP_FURL_FRAMES + ship.heading * 8 + (ship.furl as usize).min(7)
+                    let base = SHIP_FURL_FRAMES + ship.heading * 8;
+                    if ship.furl >= SHIP_FURLED {
+                        base + 4 + ship.rock.min(3) as usize
+                    } else {
+                        base + (ship.furl as usize).min(3)
+                    }
                 }
                 // Backing off from a ram, most types step their under-way
                 // frames backwards, one every other step of 3 ticks
@@ -1023,15 +1032,10 @@ impl MapObject {
                     ship.heading * SHIP_FRAMES_PER_HEADING
                         + (SHIP_FRAMES_PER_HEADING - 1 - back % SHIP_FRAMES_PER_HEADING)
                 }
-                // At rest it rocks over four frames (0x4a3150): from 56, 4 a
-                // heading; type 5 from 92, 8 a heading (its sail furled).
+                // At rest it rocks over four frames (0x4a3150), from 56, 4 a
+                // heading.
                 None if ship.path.is_empty() => {
-                    let rock = ship.rock.min(3) as usize;
-                    if ship.kind == 5 && n >= SHIP_FURL_FRAMES + 64 {
-                        SHIP_FURL_FRAMES + 4 + ship.heading * 8 + rock
-                    } else {
-                        SHIP_IDLE_FRAMES + ship.heading * 4 + rock
-                    }
+                    SHIP_IDLE_FRAMES + ship.heading * 4 + ship.rock.min(3) as usize
                 }
                 None => ship.heading * SHIP_FRAMES_PER_HEADING + step % SHIP_FRAMES_PER_HEADING,
             },
