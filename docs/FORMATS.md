@@ -2030,6 +2030,17 @@ and live in a second patrol about their fort, back to the first if it
 falls. West casts its spell in its raids every turn and clears north's
 (its slip at 0x456e80).
 
+**miss006's Persians** cast on their raiders' and guard's ships through
+their group's member 0 (unpaid, paid in full each): south raiders (1, 4)
+the Flame as they raid, north guard (2, 3) the Flame as it fights at home,
+north raiders (2, 4) the phantom or the Flame (rand & 3) as they raid. The
+southern town (21, 68) has no war temple until its full-town order builds
+one. Member (1, 7), an empty fleet (0x459fe0), watches four small zones
+every 1500 ticks: the player there with more than 3 (2) ships about brings
+waterspouts on set cells through the sea temple (0x47ab40, kind 6), twice
+in all. The yards of miss004 (0, 5), miss005 (1, 0) and miss006 (1, 0) and
+(2, 0) give the full-town order before every ship too.
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships
@@ -2985,7 +2996,7 @@ Primitives not yet ported (the later brains use them):
 - **0x47ae10, cast** (`(group, member, kind, x, y, pay)`). The fleet casts
   spell `kind` (5-16, one per command; costs from 0x596844 by 0x47abb0,
   paid when `pay`) at cell (x, y) through message 0x3ee (0x47ab40). It is
-  used by miss011-miss013 and the wizard of miss007.
+  used by miss011-miss013 (miss006's waterspouts go through 0x47ab40).
 - **0x479ed0** makes a fleet (0x4a0480 op 0xb) with a type mask;
   **0x479f40** and **0x479fb0** test the brain's event list against
   objects (0x49c3f0).
