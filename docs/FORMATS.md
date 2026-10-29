@@ -3195,8 +3195,8 @@ within 10, others' towns, forts, barbarians and ships -20 within 10,
 others' buildings and deposits nothing, lairs x -10, nests -10 + d, castles
 -10, medusas and sirens -10 + d within 5, lava -1 x its strength). Each
 cell is closed to deep ships (1), beside the base's ports and yards (8), on
-a lane from the ports to the amber (9, flooded from each port's front,
-0x558fa0), taken by an earlier zone (10) or open (0). A square needs as
+a lane (9: the paths from each port's front to each amber, 0x558fa0,
+0x559470), taken by an earlier zone (10) or open (0). A square needs as
 many passable cells as ships (and, on the first pass, none taken); it beats
 the best (0x408bf0) with fewer cells beside the harbour, then more weight
 (over its passable cells), then nearer the town (`max + min / 2` to its

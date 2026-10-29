@@ -2525,7 +2525,7 @@ impl Scene {
             while side * side < need {
                 side += 1;
             }
-            let mut best: Option<((i32, i32, i32, i32, i32, i32), Cells)> = None;
+            let mut best: Option<(ZoneKey, Cells)> = None;
             for apart in [true, false] {
                 for y in y0..=y0 + rh - side {
                     for x in x0..=x0 + rw - side {
@@ -4284,6 +4284,9 @@ fn cluster(cells: &[(i32, i32)], r: i32) -> (Vec<u32>, u32) {
         .collect();
     (labels, (next - 1) as u32)
 }
+
+/// A waiting zone's rank (0x408bf0), least first.
+type ZoneKey = (i32, i32, i32, i32, i32, i32);
 
 /// The parts of a town's order (the land fleet's table at 0x5ac7c8, each
 /// part 0xcc bytes: operation, flags (0x20 "once"), class or number,
