@@ -194,7 +194,13 @@ pub enum Job {
     /// is made a town, its shipyard a dock, then the school and both
     /// temples, a part at a time, each when it can be paid for; failed
     /// parts tried again (flag 0x10).
-    FullTown { fleet: usize },
+    FullTown {
+        fleet: usize,
+        /// Order 240 (0xf0, the yards of miss002-miss004): a small and a
+        /// medium fort of the town's instead of the temples.
+        #[serde(default)]
+        forts: bool,
+    },
     /// Code 0x60 (order 96): the first worn building of the member's is
     /// mended, once; after 10 passes with none, the order fails.
     Repair { fleet: usize, idle: u32 },
@@ -1371,7 +1377,10 @@ impl Scene {
         let mut jobs = Vec::new();
         for &(g, m) in full {
             if let Some(fleet) = self.member_fleet(g, m) {
-                jobs.push(Job::FullTown { fleet });
+                jobs.push(Job::FullTown {
+                    fleet,
+                    forts: false,
+                });
             }
         }
         for &(g, m) in mend {
@@ -1403,7 +1412,7 @@ impl Scene {
     /// The first part of the full-town order the town at `t` lacks: a
     /// building class to put up, or a building to upgrade (`Err(id)`);
     /// `None` when it is complete. A part being built waits (`Some(Ok(0))`).
-    fn town_part(&self, t: usize) -> Option<Result<u32, u32>> {
+    fn town_part(&self, t: usize, forts: bool) -> Option<Result<u32, u32>> {
         use crate::economy::{
             DOCK, PORT, SCHOOL, SETTLEMENT, SHIPYARD, SMITHY, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR,
             TOWN,
@@ -1449,8 +1458,32 @@ impl Scene {
                 _ => Ok(0),
             });
         }
-        for class in [SCHOOL, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR] {
-            let have = of(&[class]);
+        let rest: &[u32] = if forts {
+            &[SCHOOL, 0x34, 0x35]
+        } else {
+            &[SCHOOL, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR]
+        };
+        // A town's forts are those about it (the town's counters +0x214,
+        // +0x218; free-standing forts further off do not count).
+        let (tx, ty) = self.objects[t].cell.unwrap_or((0, 0));
+        let r = super::BUILD_RADIUS + 2;
+        let forts_of = |class: u32| -> Vec<usize> {
+            (0..self.objects.len())
+                .filter(|&i| {
+                    self.objects[i].owner == owner
+                        && self.objects[i].class == ObjectClass::Building(class)
+                        && self.objects[i]
+                            .cell
+                            .is_some_and(|(x, y)| (x - tx).abs() <= r && (y - ty).abs() <= r)
+                })
+                .collect()
+        };
+        for &class in rest {
+            let have = if (0x34..=0x36).contains(&class) {
+                forts_of(class)
+            } else {
+                of(&[class])
+            };
             if have.is_empty() {
                 return Some(Ok(class));
             }
@@ -1464,13 +1497,24 @@ impl Scene {
     /// Whether yard `k`'s town has all the full-town order asks for.
     pub(super) fn yard_town_complete(&self, k: usize) -> bool {
         self.fleet_town(k)
-            .is_some_and(|t| self.town_part(t).is_none())
+            .is_some_and(|t| self.town_part(t, false).is_none())
+    }
+
+    /// Whether yard `k`'s town has all order 240 asks for.
+    pub(super) fn yard_town_fortified(&self, k: usize) -> bool {
+        self.fleet_town(k)
+            .is_some_and(|t| self.town_part(t, true).is_none())
     }
 
     /// Yard `k` gives its full-town order, if it has not already.
     pub(super) fn want_full_town(&mut self, k: usize) {
+        self.want_town_order(k, false);
+    }
+
+    /// The same, of order 240 with `forts` (the yards of miss002-004).
+    pub(super) fn want_town_order(&mut self, k: usize, forts: bool) {
         let brain = self.brain.as_mut().unwrap();
-        let job = Job::FullTown { fleet: k };
+        let job = Job::FullTown { fleet: k, forts };
         if !brain.jobs.contains(&job) {
             brain.jobs.push(job);
         }
@@ -1488,12 +1532,12 @@ impl Scene {
         let mut keep = Vec::new();
         for job in jobs {
             match job {
-                Job::FullTown { fleet } => {
+                Job::FullTown { fleet, forts } => {
                     let Some(t) = self.fleet_town(fleet) else {
                         continue;
                     };
                     let site = self.objects[t].id;
-                    match self.town_part(t) {
+                    match self.town_part(t, forts) {
                         None => continue,
                         Some(Ok(0)) => {}
                         Some(Ok(class)) => {
@@ -2176,7 +2220,16 @@ mod miss002 {
 
     fn persian_yard(state: u32) -> Op {
         match state {
-            0 => Op::Build { next: 11 },
+            // Order 240 before every ship (0x47b130 code 0xf0).
+            0 => Op::Custom(|scene, k| {
+                if scene.yard_town_fortified(k) {
+                    1
+                } else {
+                    scene.want_town_order(k, true);
+                    0
+                }
+            }),
+            1 => Op::Build { next: 11 },
             _ => Op::Wait {
                 next: 0,
                 ticks: 500,
@@ -2678,7 +2731,16 @@ mod miss003 {
 
     fn persian_yard(state: u32) -> Op {
         match state {
-            0 => Op::Build { next: 11 },
+            // Order 240 before every ship (0x47b130 code 0xf0).
+            0 => Op::Custom(|scene, k| {
+                if scene.yard_town_fortified(k) {
+                    1
+                } else {
+                    scene.want_town_order(k, true);
+                    0
+                }
+            }),
+            1 => Op::Build { next: 11 },
             _ => Op::Wait {
                 next: 0,
                 ticks: 1000,
@@ -3103,7 +3165,16 @@ mod miss004 {
 
     fn yard_2000(state: u32) -> Op {
         match state {
-            0 => Op::Build { next: 11 },
+            // Order 240 before every ship (0x47b130 code 0xf0).
+            0 => Op::Custom(|scene, k| {
+                if scene.yard_town_fortified(k) {
+                    1
+                } else {
+                    scene.want_town_order(k, true);
+                    0
+                }
+            }),
+            1 => Op::Build { next: 11 },
             _ => Op::Wait {
                 next: 0,
                 ticks: 2000,

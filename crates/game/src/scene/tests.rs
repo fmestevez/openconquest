@@ -3240,7 +3240,10 @@ fn missions_give_starting_levels() {
     // Started on its own, the human gets the mission's standalone levels.
     let mine = scene.levels_of(human);
     assert_eq!((mine.weapons, mine.ram, mine.armour), (1, 2, 1));
-    assert_eq!((mine.rate, mine.reach, mine.arms), ([2, 2, 0], [2, 2, 0], [2; 3]));
+    assert_eq!(
+        (mine.rate, mine.reach, mine.arms),
+        ([2, 2, 0], [2, 2, 0], [2; 3])
+    );
     let strong: Vec<_> = scene
         .levels
         .iter()

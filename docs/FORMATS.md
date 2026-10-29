@@ -2056,6 +2056,14 @@ true in the shipped game) for a standalone start: arming 2, rates (0, 1) or
 heroes of the missions before at a set cell. The port uses that for a
 mission picked from the list.
 
+**Order 240** (0xf0, table 0x5ac7c8 entry 40, parts 0x5abfd0, flags 0x27
+each): port, sage school, shipyard (a dock counts) and smithy at once, then
+the settlement made a town, the shipyard a dock, the school, and a small
+(0x34) and a medium (0x35) fort of the town's (its counters +0x214,
++0x218: free-standing forts do not count). The Persian yards of miss002
+(1, 7), miss003 (0, 3) and miss004 (2, 3) give it (flags 0x10) before every
+ship, resting 500, 1000 and 2000 ticks after each.
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships
