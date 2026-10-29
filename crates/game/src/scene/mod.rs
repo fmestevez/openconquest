@@ -1300,7 +1300,7 @@ impl Scene {
                 })
                 .or(Some(VecDeque::new()))
             } else {
-                self.plan_route_avoiding(i, (x, y), lx, ly, &others)
+                self.replan(i, (lx, ly))
             };
             // Try again a while later either way.
             let ship = self.objects[i].ship.as_mut().unwrap();
@@ -1311,10 +1311,120 @@ impl Scene {
         }
     }
 
+    /// A held-up ship's new route to `to` (0x4a6330 with 0x4a51b0): the
+    /// ships within 3 cells lying still are closed (when it is impatient,
+    /// past 50 + rand % 30 of wait, all not under way) and remembered; with
+    /// a priority of 51 or more, those of lower priority not under way and
+    /// those of its priority with a later id are listed instead (0x4a4e20).
+    /// It then plans through the listed ones (R1) and round those of them
+    /// not under way and of at least its priority (R2, 0x4a5540), keeping
+    /// round unless that is about twice as long and 5-8 cells longer
+    /// (0x4a56a0); going through, it remembers them. Remembered cells stay
+    /// closed while their ship lies there.
+    fn replan(&mut self, i: usize, to: (f32, f32)) -> Option<VecDeque<(f32, f32)>> {
+        let t = TILE_SIZE as f32;
+        let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
+        let me = &self.objects[i];
+        let ship = me.ship.as_ref()?;
+        let here = cell_of(me.x, me.y);
+        let start = (me.x, me.y);
+        let (id, prio) = (me.id, ship.priority);
+        let wait = (ship.waited / crate::clock::TICK) as u32;
+        let impatient = wait > 50 && self.rng.next() % 30 + 50 < wait;
+        // Each other ship: its cell, priority, id, whether under way and
+        // whether lying still or held.
+        let under_way = |s: &objects::Ship| !s.path.is_empty() && s.stalled <= 0.0;
+        let mut closed: HashSet<(i32, i32)> = HashSet::new();
+        let mut listed: Vec<((i32, i32), u8, bool)> = Vec::new();
+        let mut remember = Vec::new();
+        for o in &self.objects {
+            let Some(s) = o.ship.as_ref() else { continue };
+            if o.id == id {
+                continue;
+            }
+            let c = cell_of(o.x, o.y);
+            if (c.0 - here.0).abs() > 3 || (c.1 - here.1).abs() > 3 {
+                continue;
+            }
+            let moving = under_way(s);
+            let still =
+                s.path.is_empty() || s.stalled >= crate::clock::ticks(50) || s.grapple.is_some();
+            if prio >= 51 && s.priority < prio && !moving {
+                listed.push((c, s.priority, moving));
+            } else if prio >= 51 && s.priority == prio && o.id > id {
+                listed.push((c, s.priority, moving));
+            } else if (impatient && !moving) || (!impatient && still) {
+                closed.insert(c);
+                remember.push(c);
+            }
+        }
+        // Remembered cells whose ship still lies there stay closed.
+        let lying_at: HashMap<(i32, i32), bool> = self
+            .objects
+            .iter()
+            .filter(|o| o.id != id)
+            .filter_map(|o| Some((cell_of(o.x, o.y), under_way(o.ship.as_ref()?))))
+            .collect();
+        let mut memory = std::mem::take(&mut self.objects[i].ship.as_mut()?.remembered);
+        memory.retain(|c| lying_at.get(c).is_some_and(|&moving| !moving));
+        closed.extend(memory.iter().copied());
+        for c in remember {
+            if !memory.contains(&c) {
+                memory.push(c);
+            }
+        }
+        let cells = |r: &VecDeque<(f32, f32)>| r.len() as i32 + 1;
+        let route = if listed.is_empty() {
+            self.plan_route_avoiding(i, start, to.0, to.1, &closed)
+        } else {
+            let mut round = closed.clone();
+            round.extend(
+                listed
+                    .iter()
+                    .filter(|&&(_, p, moving)| !moving && p >= prio)
+                    .map(|l| l.0),
+            );
+            let r2 = self.plan_route_avoiding(i, start, to.0, to.1, &round);
+            let r1 = self.plan_route_avoiding(i, start, to.0, to.1, &closed);
+            let go_round = match (&r1, &r2) {
+                (None, None) => true,
+                (Some(_), None) => false,
+                (r1, Some(r2)) => {
+                    let (l1, l2) = (r1.as_ref().map_or(0, cells), cells(r2));
+                    let d = l2 - l1;
+                    l2 <= l1
+                        || d < 5
+                        || (l2 <= 10 && d < 6)
+                        || (l2 <= 15 && d < 7)
+                        || (l2 <= 20 && d < 8)
+                        || 2 * d < l2
+                }
+            };
+            if go_round {
+                // With no route through, a long way round is thrown away.
+                r2.filter(|r| r1.is_some() || cells(r) <= 7)
+            } else {
+                for l in &listed {
+                    if !memory.contains(&l.0) {
+                        memory.push(l.0);
+                    }
+                }
+                r1
+            }
+        };
+        self.objects[i].ship.as_mut()?.remembered = memory;
+        route
+    }
+
     /// Cancels a ship's route.
     pub fn stop(&mut self, id: u32) {
         if let Some(i) = self.object_index(id) {
             if let Some(ship) = self.objects[i].ship.as_mut() {
+                // A stop under way forgets the cells it kept closed
+                // (0x4a6330 with 1).
+                if !ship.path.is_empty() {
+                    ship.remembered.clear();
+                }
                 ship.path.clear();
                 ship.zone = None;
                 ship.task = None;

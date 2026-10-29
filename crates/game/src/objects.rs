@@ -302,6 +302,11 @@ pub struct Ship {
     /// route kept, and may be pushed aside.
     #[serde(default)]
     pub stalled: f32,
+    /// Cells it keeps closed when it plans (+0x5cd, 0x4a7230): ships it
+    /// found lying in its way or planned through, until they leave the
+    /// cell or get under way (0x4a7290).
+    #[serde(default)]
+    pub remembered: Vec<(i32, i32)>,
     /// How fast it is going now, in world pixels a second: it gathers way
     /// up to its speed and loses it to stop where it is bound or to turn.
     #[serde(default)]
@@ -1445,6 +1450,7 @@ pub fn resolve(
         order_tag: 0,
         waited: 0.0,
         stalled: 0.0,
+        remembered: Vec::new(),
         velocity: 0.0,
         face: None,
         furl: 0.0,

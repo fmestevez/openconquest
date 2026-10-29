@@ -2441,9 +2441,10 @@ impl Scene {
     /// for its ships (5-12: side s, the least with s x s >= n + n / 4,
     /// 0x408bb0) holding water for them all, apart from the zones before;
     /// the fewest cells beside the base's ports and yards first, then the
-    /// nearest the town, then the most open water (0x408bf0). The
-    /// original also weighs the lanes from the ports to the amber, lairs,
-    /// nests and deposits about (0x40bbf0); not ported.
+    /// nearest the town, then the most open water, then the fewest cells
+    /// on the lanes from the ports to the amber (0x408bf0). The original
+    /// also weighs threats and deposits about (0x594470) before nearness;
+    /// not ported.
     fn base_zones(&self, ai: &mut Computer, b: usize) {
         let Some(t) = ai.bases[b].site.and_then(|s| self.object_index(s)) else {
             return;
@@ -2516,7 +2517,7 @@ impl Scene {
             while side * side < need {
                 side += 1;
             }
-            let mut best: Option<((i32, i32, i32), Cells)> = None;
+            let mut best: Option<((i32, i32, i32, i32), Cells)> = None;
             for apart in [true, false] {
                 for y in y0..=y0 + rh - side {
                     for x in x0..=x0 + rw - side {
@@ -2529,12 +2530,16 @@ impl Scene {
                         }
                         let mut water = 0;
                         let mut near = 0;
+                        let mut lane = 0;
                         for cy in y..y + side {
                             for cx in x..x + side {
                                 if self.nav.is_water(cx, cy) {
                                     water += 1;
-                                    if beside(cx, cy) || lanes.contains(&(cx, cy)) {
+                                    if beside(cx, cy) {
                                         near += 1;
+                                    }
+                                    if lanes.contains(&(cx, cy)) {
+                                        lane += 1;
                                     }
                                 }
                             }
@@ -2544,7 +2549,7 @@ impl Scene {
                         }
                         let (mx, my) = (x * 2 + side - 2 * tx - 1, y * 2 + side - 2 * ty - 1);
                         let d = mx * mx + my * my;
-                        let key = (near, d, -water);
+                        let key = (near, d, -water, lane);
                         if best.is_none_or(|bb| key < bb.0) {
                             best = Some((key, rect));
                         }

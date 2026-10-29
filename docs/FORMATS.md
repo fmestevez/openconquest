@@ -1569,11 +1569,22 @@ prefers it to the plain one (0x4a56a0 with the two routes' lengths:
 the plain one, if it exists, unless it is longer by more than 4 cells,
 5 up to 10 cells long, 6 up to 15, 7 up to 20, and by half or more
 beyond). A stop (its first argument) sets the
-priority to 0. (Tried here on top of the port's own re-planning, these
-rules made battle01's computer economy worse; the port keeps avoiding
-every ship and every ship's destination. With the move states ported, the
-original zone order still jams battle01's merchants once a founding ship
-has pushed them all to its priority of 100: equal priorities never push.)
+priority to 0. Re-planning (0x4a6150) runs every 25 ticks
+whenever the wait, the ship's cell or its goal changed, or it lies still,
+under way too, never while turning; at a wait of 150 or on its goal it
+gives up (0x80 sub 8, returning 3). 0x4a6330 with no route adds a tick of
+wait; with a route that gets no nearer it adds one and returns 2, a
+give-up only at priority 50. 0x4a56a0 is called (R1, R2, len1, len2): R1
+planned through the listed ships, R2 round those (0x4a53f0) the mover
+cannot expect to clear (waited: not under way and of at least its
+priority; not waited: lying still); non-zero takes R2, so it goes round
+unless that is twice as long and 5-8 cells longer, and with no R1 an R2
+longer than 7 cells is thrown away. Closed ship cells, and listed ones
+gone through, are remembered (+0x5cd, 0x4a7230) and stay closed in every
+later plan while their ship lies there (0x4a7290), until a stop under way
+clears them. Ships planned through are never swapped: the mover waits,
+pushes one of lower priority lying still, or goes round. The port does
+this when a ship is held, on its own route finder.)
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
@@ -1634,8 +1645,8 @@ as plain moves and follows: 0. Stop (intake 8, 0x4aa540) sets 0 when the
 ship is moving (0x4a6330 with 1, 0x4a639a). Unloading (0x4ad9f0) rolls one
 between 1 and 234 again, 91-100. Only an order's intake sets it: each kept
 order copies its byte unless 0xff, with the patience 5 and the re-plan
-every 25 ticks; the ships' own behaviours move without touching it. Computer zones here still avoid the amber
-lanes (see the computer players' notes).
+every 25 ticks; the ships' own behaviours move without touching it. Computer zones here rank in the original's
+order but without its threat weights.
 
 ## Resource counters
 
@@ -3223,8 +3234,7 @@ flotilla found a settlement (0x484d60, 0x484f60).
 
 Not ported (the port's own instead): the terrain helpers of
 `artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
-simpler searches; zones weigh the lanes before nearness, since ships here
-cannot pass one another). Ported: the town's placing of buildings and the
+simpler searches; zones leave out the threat weights 0x594470). Ported: the town's placing of buildings and the
 guarding forts' places (below), the enemy groups, and the object-kind
 masks (see below).
 
