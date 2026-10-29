@@ -257,7 +257,7 @@ const PLANK_FRAME_MS: f32 = crate::clock::TICK_MS as f32;
 
 /// What a merchant is shown doing (the ship's activity in Run_Ship.cpp,
 /// 0x4e1bb0).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Activity {
     /// At a port or settlement: the walkway `MOST0_` (a composite of 18
     /// frames whose eight layers are the facings) and porters carrying the
@@ -275,6 +275,8 @@ pub enum Activity {
 pub struct Plank {
     pub ship: u32,
     pub activity: Activity,
+    /// What it reaches to (the port or the deposit).
+    pub target: u32,
     pub x: f32,
     pub y: f32,
     pub frames: Vec<Vec<Layer>>,
@@ -301,6 +303,7 @@ pub struct Porter {
     pub frames: Vec<Vec<Layer>>,
     age_ms: f32,
     laden: bool,
+    facing: usize,
 }
 
 impl Plank {
@@ -495,6 +498,7 @@ impl Scene {
             _ => (x, y),
         };
         self.planks.push(Plank {
+            target,
             ship,
             activity,
             x,
@@ -591,6 +595,7 @@ impl Scene {
                 frames,
                 age_ms: 0.0,
                 laden: loaded,
+                facing,
             });
         }
     }
@@ -699,6 +704,90 @@ impl Scene {
                 }
             }
             self.refresh_amber(i, data, caches);
+        }
+    }
+}
+
+/// A walkway or net as a save keeps it (its pictures are found again).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SavedPlank {
+    ship: u32,
+    activity: Activity,
+    target: u32,
+    age_ms: f32,
+    trips: u32,
+}
+
+/// A porters' trip as a save keeps it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SavedPorter {
+    ship: u32,
+    x: f32,
+    y: f32,
+    age_ms: f32,
+    laden: bool,
+    facing: usize,
+}
+
+impl Scene {
+    pub(super) fn saved_planks(&self) -> (Vec<SavedPlank>, Vec<SavedPorter>) {
+        (
+            self.planks
+                .iter()
+                .map(|p| SavedPlank {
+                    ship: p.ship,
+                    activity: p.activity,
+                    target: p.target,
+                    age_ms: p.age_ms,
+                    trips: p.trips,
+                })
+                .collect(),
+            self.porters
+                .iter()
+                .map(|p| SavedPorter {
+                    ship: p.ship,
+                    x: p.x,
+                    y: p.y,
+                    age_ms: p.age_ms,
+                    laden: p.laden,
+                    facing: p.facing,
+                })
+                .collect(),
+        )
+    }
+
+    /// Puts saved walkways, nets and porters back.
+    pub(super) fn restore_planks(
+        &mut self,
+        planks: &[SavedPlank],
+        porters: &[SavedPorter],
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        for p in planks {
+            let Some(i) = self.object_index(p.ship) else {
+                continue;
+            };
+            self.show_activity(i, p.target, p.activity, data, caches);
+            if let Some(q) = self
+                .planks
+                .iter_mut()
+                .find(|q| q.ship == p.ship && q.activity == p.activity)
+            {
+                q.age_ms = p.age_ms;
+                q.trips = p.trips;
+            }
+        }
+        for p in porters {
+            self.porters.push(Porter {
+                ship: p.ship,
+                x: p.x,
+                y: p.y,
+                frames: porter_frames(data, caches, p.laden, p.facing),
+                age_ms: p.age_ms,
+                laden: p.laden,
+                facing: p.facing,
+            });
         }
     }
 }

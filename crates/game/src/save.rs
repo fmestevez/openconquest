@@ -112,6 +112,28 @@ pub struct SaveGame {
     pub walkers: Vec<crate::scene::Walker>,
     #[serde(default)]
     pub lair_clocks: std::collections::BTreeMap<u32, f32>,
+    /// What was going on that the scene keeps besides: walkways and
+    /// porters, flames, refits, the Flame, repairs owed, clocks.
+    #[serde(default)]
+    pub planks: Vec<crate::scene::unload::SavedPlank>,
+    #[serde(default)]
+    pub porters: Vec<crate::scene::unload::SavedPorter>,
+    #[serde(default)]
+    pub unloaded: Vec<u32>,
+    #[serde(default)]
+    pub fires: Vec<crate::scene::fire::SavedFire>,
+    #[serde(default)]
+    pub refits: Vec<(u32, Upgrade, u8, f32)>,
+    #[serde(default)]
+    pub flame: f32,
+    #[serde(default)]
+    pub repair_owed: Vec<((u32, u32), f32)>,
+    #[serde(default)]
+    pub creature_clock: f32,
+    #[serde(default)]
+    pub gull_rng: Option<Rng>,
+    #[serde(default)]
+    pub last_attack: Option<(f32, f32)>,
     /// Volcanoes' sleep and eruptions.
     #[serde(default)]
     pub volcanoes: std::collections::HashMap<u32, crate::scene::volcano::Volcano>,

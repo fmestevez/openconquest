@@ -89,9 +89,12 @@ impl NavGrid {
         None
     }
 
-    /// A* over 8-connected water cells. Diagonal moves may not cut past land
-    /// corners. Returns the cells after `from` up to and including `to`:
-    /// the shortest route from `from` to `to`, avoiding shoals if `deep`.
+    /// The original's route finder (0x55ba50 with 0x5718f0 and 0x557910)
+    /// over 8-connected water cells: two straight runs if they are clear,
+    /// else a flood from `from` (a straight step 2, a diagonal 3; diagonals
+    /// may pass between closed cells) traced back downhill from `to`.
+    /// Returns the cells after `from` up to and including `to`, avoiding
+    /// shoals if `deep`.
     #[cfg(test)]
     pub fn find_path(
         &self,
@@ -110,68 +113,169 @@ impl NavGrid {
         deep: bool,
         avoid: impl Fn((i32, i32)) -> bool,
     ) -> Option<Vec<(i32, i32)>> {
-        if !self.passable(to.0, to.1, deep) {
+        if !self.passable(to.0, to.1, deep) || avoid(to) {
             return None;
         }
+        if from == to {
+            return Some(Vec::new());
+        }
+        let open = |c: (i32, i32)| self.passable(c.0, c.1, deep) && !avoid(c);
+        if let Some(path) = two_runs(from, to, &open) {
+            return Some(path);
+        }
         let w = self.width as i32;
+        let h = self.height as i32;
         let idx = |(x, y): (i32, i32)| (y * w + x) as usize;
         let n = (self.width * self.height) as usize;
-        const STRAIGHT: u32 = 10;
-        const DIAGONAL: u32 = 14;
-        let heuristic = |(x, y): (i32, i32)| {
-            let (dx, dy) = ((x - to.0).unsigned_abs(), (y - to.1).unsigned_abs());
-            STRAIGHT * dx.max(dy) + (DIAGONAL - STRAIGHT) * dx.min(dy)
-        };
-        let mut cost = vec![u32::MAX; n];
-        let mut came_from = vec![usize::MAX; n];
-        let mut open = BinaryHeap::new();
-        cost[idx(from)] = 0;
-        open.push(Reverse((heuristic(from), 0u32, from)));
-        while let Some(Reverse((_, g, cell))) = open.pop() {
-            if cell == to {
-                let mut path = vec![cell];
-                let mut i = idx(cell);
-                while came_from[i] != usize::MAX && came_from[i] != idx(from) {
-                    i = came_from[i];
-                    path.push((i as i32 % w, i as i32 / w));
-                }
-                path.reverse();
-                return Some(path);
-            }
-            if g > cost[idx(cell)] {
+        // The flood: the start 1, a straight step 2 more, a diagonal 3.
+        let mut value = vec![0u32; n];
+        let mut queue = BinaryHeap::new();
+        value[idx(from)] = 1;
+        queue.push(Reverse((1u32, from)));
+        while let Some(Reverse((v, cell))) = queue.pop() {
+            if v > value[idx(cell)] {
                 continue;
             }
-            for (dx, dy) in [
-                (1, 0),
-                (-1, 0),
-                (0, 1),
-                (0, -1),
-                (1, 1),
-                (1, -1),
-                (-1, 1),
-                (-1, -1),
-            ] {
+            if cell == to {
+                break;
+            }
+            for (d, &(dx, dy)) in DIRS.iter().enumerate() {
                 let next = (cell.0 + dx, cell.1 + dy);
-                if !self.passable(next.0, next.1, deep) || avoid(next) {
+                if next.0 < 0 || next.1 < 0 || next.0 >= w || next.1 >= h || !open(next) {
                     continue;
                 }
-                let diagonal = dx != 0 && dy != 0;
-                if diagonal
-                    && !(self.passable(cell.0 + dx, cell.1, deep)
-                        && self.passable(cell.0, cell.1 + dy, deep))
-                {
-                    continue;
-                }
-                let ng = g + if diagonal { DIAGONAL } else { STRAIGHT };
-                if ng < cost[idx(next)] {
-                    cost[idx(next)] = ng;
-                    came_from[idx(next)] = idx(cell);
-                    open.push(Reverse((ng + heuristic(next), ng, next)));
+                let nv = v + if d % 2 == 1 { 3 } else { 2 };
+                let k = idx(next);
+                if value[k] == 0 || nv < value[k] {
+                    value[k] = nv;
+                    queue.push(Reverse((nv, next)));
                 }
             }
         }
-        None
+        if value[idx(to)] == 0 {
+            return None;
+        }
+        // Back downhill from the goal: the diagonals first, each counted one
+        // more, then the straights; a tie keeps to the way it was going.
+        let mut path = vec![to];
+        let mut cell = to;
+        let mut prev: Option<usize> = None;
+        while cell != from {
+            let mut best: Option<(u32, usize)> = None;
+            for d in [1, 3, 5, 7, 0, 2, 4, 6] {
+                let (dx, dy) = DIRS[d];
+                let next = (cell.0 + dx, cell.1 + dy);
+                if next.0 < 0 || next.1 < 0 || next.0 >= w || next.1 >= h {
+                    continue;
+                }
+                let v = value[idx(next)];
+                if v == 0 {
+                    continue;
+                }
+                let score = if d % 2 == 1 { v + 1 } else { v };
+                let better = match best {
+                    None => true,
+                    Some((b, _)) => score < b || (score == b && prev == Some(d)),
+                };
+                if better {
+                    best = Some((score, d));
+                }
+            }
+            let (_, d) = best?;
+            let next = (cell.0 + DIRS[d].0, cell.1 + DIRS[d].1);
+            if value[idx(next)] >= value[idx(cell)] {
+                return None;
+            }
+            prev = Some(d);
+            cell = next;
+            if cell != from {
+                path.push(cell);
+            }
+        }
+        path.reverse();
+        Some(path)
     }
+}
+
+/// The eight directions: 0 east, counter-clockwise (north is up).
+const DIRS: [(i32, i32); 8] = [
+    (1, 0),
+    (1, -1),
+    (0, -1),
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+];
+
+/// A route of two straight runs from `from` to `to` (0x5718f0): one along
+/// the axis the way leans and one diagonal, the axis first when it leans
+/// twice as much; the run nearer east first, then the other order. Every
+/// cell must be open.
+fn two_runs(
+    from: (i32, i32),
+    to: (i32, i32),
+    open: &impl Fn((i32, i32)) -> bool,
+) -> Option<Vec<(i32, i32)>> {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let (sx, sy) = (dx.signum(), dy.signum());
+    let axis = if dx.abs() >= dy.abs() {
+        (sx, 0)
+    } else {
+        (0, sy)
+    };
+    let diagonal = (sx, sy);
+    let lean = dx.abs() >= 2 * dy.abs() || dy.abs() >= 2 * dx.abs();
+    let (first, second) = if lean {
+        (axis, diagonal)
+    } else {
+        (diagonal, axis)
+    };
+    let east = |(x, y): (i32, i32)| {
+        let d = DIRS.iter().position(|&v| v == (x, y)).unwrap_or(0) as i32;
+        d.min(8 - d)
+    };
+    let orders = if east(second) < east(first) {
+        [(second, first), (first, second)]
+    } else {
+        [(first, second), (second, first)]
+    };
+    'order: for (a, b) in orders {
+        let mut cell = from;
+        let mut path = Vec::new();
+        let mut leg = a;
+        while cell != to {
+            let (lx, ly) = (to.0 - cell.0, to.1 - cell.1);
+            // A straight run ends when the rest is a diagonal; a diagonal
+            // one when the rest is straight.
+            let straight = leg.0 == 0 || leg.1 == 0;
+            if leg == a
+                && ((straight && lx.abs() == ly.abs()) || (!straight && (lx == 0 || ly == 0)))
+            {
+                leg = b;
+            }
+            let step = if leg.0 == 0 || leg.1 == 0 {
+                if leg.0 == 0 {
+                    (0, ly.signum())
+                } else {
+                    (lx.signum(), 0)
+                }
+            } else {
+                (lx.signum(), ly.signum())
+            };
+            if step == (0, 0) {
+                continue 'order;
+            }
+            cell = (cell.0 + step.0, cell.1 + step.1);
+            if !open(cell) {
+                continue 'order;
+            }
+            path.push(cell);
+        }
+        return Some(path);
+    }
+    None
 }
 
 #[cfg(test)]

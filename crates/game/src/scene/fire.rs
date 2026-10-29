@@ -191,3 +191,41 @@ impl Scene {
         ))
     }
 }
+
+/// Flames as a save keeps them.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SavedFire {
+    ship: u32,
+    size: u8,
+    frame: usize,
+    clock: f32,
+}
+
+impl Scene {
+    pub(super) fn saved_fires(&self) -> Vec<SavedFire> {
+        self.fires
+            .iter()
+            .map(|f| SavedFire {
+                ship: f.ship,
+                size: f.size,
+                frame: f.frame,
+                clock: f.clock,
+            })
+            .collect()
+    }
+
+    pub(super) fn restore_fires(
+        &mut self,
+        fires: &[SavedFire],
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        for f in fires {
+            self.set_fire(f.ship, f.size, data, caches);
+            if let Some(g) = self.fires.iter_mut().find(|g| g.ship == f.ship) {
+                g.frame = f.frame;
+                g.clock = f.clock;
+            }
+        }
+    }
+}

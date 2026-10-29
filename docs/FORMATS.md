@@ -1602,7 +1602,16 @@ later plan while their ship lies there (0x4a7290), until a stop under way
 clears them. Ships planned through are never swapped: the mover waits,
 pushes one of lower priority lying still, or goes round. The port does
 this when a ship is held, and every 25 ticks under way (only re-routing
-when its route runs into a closed cell), on its own route finder.)
+when its route runs into a closed cell).)
+
+The route finder (0x55ba50; 0x55ca10 floods from the goal instead): two
+straight runs if every cell is open (0x5718f0: along the axis the way
+leans and diagonally, the axis first when it leans twice as much, the run
+nearer east first, then the other order); else a flood from the start (1,
+a straight step 2 more, a diagonal 3, through open cells, a diagonal free
+to pass between closed ones) traced back from the goal downhill, the
+diagonals (one more) before the straights, a tie keeping the way it went;
+past the goal the nearest reached cell within the tolerance.
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to

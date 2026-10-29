@@ -1928,6 +1928,7 @@ impl Scene {
                 ship.cargo_kind = Some(dep.resource);
                 let (full, cargo) = (ship.cargo >= capacity, ship.cargo);
                 let mut exhausted = false;
+                let mut rest = 0.0;
                 let mut thirds = None;
                 if let Some(left) = self.objects[d]
                     .deposit
@@ -1938,10 +1939,27 @@ impl Scene {
                     thirds = Some(third(*left));
                     *left -= take;
                     exhausted = *left <= 1e-3;
+                    if exhausted {
+                        // What rounding left of it goes aboard too.
+                        rest = left.max(0.0);
+                        *left = 0.0;
+                    }
                     // The picture shrinks as the amber runs out.
                     if thirds == Some(third(*left)) {
                         thirds = None;
                     }
+                }
+                if exhausted {
+                    // What rounding left of it goes aboard too, the load
+                    // made whole.
+                    let s = self.objects[i].ship.as_mut().unwrap();
+                    let c = s.cargo + rest;
+                    s.cargo = if (c - c.round()).abs() < 0.01 {
+                        c.round()
+                    } else {
+                        c
+                    }
+                    .min(capacity);
                 }
                 if thirds.is_some() && !exhausted {
                     self.refresh_amber(d, data, caches);

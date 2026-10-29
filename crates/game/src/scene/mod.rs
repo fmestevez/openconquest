@@ -413,7 +413,7 @@ mod battle;
 mod brain;
 mod computer;
 mod creatures;
-mod fire;
+pub mod fire;
 mod gulls;
 pub mod load;
 mod orders;
@@ -435,7 +435,7 @@ mod seats;
 mod spells;
 mod stats;
 mod story;
-mod unload;
+pub mod unload;
 pub mod volcano;
 mod walkers;
 pub use brain::{Brain, EASY, HARD, NORMAL};
@@ -798,6 +798,16 @@ impl Scene {
             walkers: self.walkers.clone(),
             lair_clocks: self.lair_clocks.clone(),
             volcanoes: self.volcanoes.clone(),
+            planks: self.saved_planks().0,
+            porters: self.saved_planks().1,
+            unloaded: self.unloaded.clone(),
+            fires: self.saved_fires(),
+            refits: self.refits.clone(),
+            flame: self.flame,
+            repair_owed: self.repair_owed.iter().map(|(&k, &v)| (k, v)).collect(),
+            creature_clock: self.creature_clock,
+            gull_rng: Some(self.gull_rng.clone()),
+            last_attack: self.last_attack,
             site_heroes: self
                 .site_heroes
                 .iter()
@@ -844,7 +854,8 @@ impl Scene {
             obj.combat = s.combat.clone();
             scene.objects.push(obj);
         }
-        scene.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
+        // Kept in the saved order: the drawing order as it stood, which
+        // also decides who goes first where ships meet.
         scene.amber = save.amber;
         scene.fish = save.fish;
         scene.productions = save.productions.clone();
@@ -893,6 +904,17 @@ impl Scene {
         scene.walkers = save.walkers.clone();
         scene.lair_clocks = save.lair_clocks.clone();
         scene.volcanoes = save.volcanoes.clone();
+        scene.unloaded = save.unloaded.clone();
+        scene.refits = save.refits.clone();
+        scene.flame = save.flame;
+        scene.repair_owed = save.repair_owed.iter().copied().collect();
+        scene.creature_clock = save.creature_clock;
+        if let Some(r) = &save.gull_rng {
+            scene.gull_rng = r.clone();
+        }
+        scene.last_attack = save.last_attack;
+        scene.restore_planks(&save.planks, &save.porters, data, caches);
+        scene.restore_fires(&save.fires, data, caches);
         if let Some(p) = save.permits {
             scene.permits = p;
         }
