@@ -337,11 +337,15 @@ impl Scene {
         fields[6] = cy as u32;
         fields[7] = 1;
         if spell == Spell::Monster {
-            // UMonster records: type (the nation's monster) in field 4, the
-            // cell in fields 7 and 8.
-            fields[4] = master.map_or(0, |m| m.0.min(3));
+            // UMonster records: the cell in fields 7 and 8, the type in
+            // field 10: the caster's nation's, a barbarian's at random
+            // (0x42f580 case 4, 0x493780).
             fields[7] = cx as u32;
             fields[8] = cy as u32;
+            fields[10] = match master {
+                Some((4, _)) | None => self.rng.next() & 3,
+                Some((n, _)) => n.min(3),
+            };
         }
         let rec = ObjectRecord {
             id,

@@ -3596,8 +3596,12 @@ impl Scene {
     /// Base `b`'s town casts spell `kind` (5-16, as 0x47ae10's; 0x42a500
     /// sends it as command 0x22) if one of the player's temples knows it
     /// and the player can pay (0x487640, 0x43fee0): at `cell`, over own
-    /// things in `rect`, or on flotilla `fl`'s ships. Kind 14 is not
-    /// known here.
+    /// things in `rect`, or on flotilla `fl`'s ships. The kinds go out as
+    /// the temple's codes 1-8 and 12-15 (0x42a500), which it casts as
+    /// `Magic.cpp`'s spells (0x42fc80): 5 a whirlpool, 6 a waterspout, 7 a
+    /// reef, 8 a big reef, 9 the Flame (the temple brews it), 10
+    /// lightning, 11 a fireball, 12 the phantom, 13 nothing (code 12 has no
+    /// spell), 14 a sea monster, 15 and 16 the shields.
     fn computer_cast(
         &mut self,
         ai: &mut Computer,
@@ -3609,10 +3613,10 @@ impl Scene {
     ) -> bool {
         use crate::magic::Spell;
         let spell = match kind {
-            5 | 13 => Spell::Reef,
-            6 => Spell::Whirlpool,
-            7 => Spell::Waterspout,
-            8 => Spell::Monster,
+            5 => Spell::Whirlpool,
+            6 => Spell::Waterspout,
+            7 | 8 => Spell::Reef,
+            14 => Spell::Monster,
             9 => Spell::Flame,
             10 => Spell::Lightning,
             11 => Spell::Fireball,
@@ -3665,7 +3669,13 @@ impl Scene {
                 let Some((cx, cy)) = cell else {
                     return false;
                 };
-                self.pending_casts.push((spell, cx, cy, Some(owner)));
+                if kind == 8 {
+                    // A big reef of kind 1-3 (0x42f580 case 12).
+                    let k = self.rng.next() % 3 + 1;
+                    self.pending_reefs.push((cx, cy, k));
+                } else {
+                    self.pending_casts.push((spell, cx, cy, Some(owner)));
+                }
             }
         }
         self.earn(owner, -(amber as i64), -(fish as i64));

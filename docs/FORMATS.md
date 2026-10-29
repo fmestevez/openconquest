@@ -3387,15 +3387,15 @@ fleet 9 (1 in 3), else 16 (1 in 16), else 12 or 15. With the grand attack
 it also casts kind 9 when 3000-4500 ticks have passed or 1 in 6. A cast
 needs the town's check (0x487640 -> 0x43fee0) and goes out as order
 0x3ee (0x4839e0-0x483c40, part 0x42a500: command 0x22 with spell 1-8,
-12-15 for kinds 5-12, 13-16). Kinds as the brains': 5 reef, 6 whirlpool, 7
-waterspout, 8 sea monster, 9 the Flame, 10 lightning, 11 fireball, 12
-phantom, 13 big reef (`Magic.cpp` 0x42f580 case 12: class 0x259), 15 and
-16 the shields; 14 is spell 13 (`Magic.cpp` case 13): the Gorgon's stare
-on a ship (message 0x158bf, 88000 and 150 ticks of stone). It has no
-permit bit (0x42ed40 gives it 0xffff), so it can only be cast with a free
-charge (`+0x10 + spell x 4`, from a spell treasure, kind 9); no mission
-holds one for spell 13, so the computer's casts of it always fail, and the
-port leaves it out.
+12-15 for kinds 5-12, 13-16), which the temple turns into `Magic.cpp`'s
+spells (0x42fc80: codes 1, 2, 3, 4, 6, 7, 8, 0xd, 0xe, 0xf to 2, 3, 1,
+12, 6, 7, 9, 4, 10, 11; code 5 the temple brews the Flame itself; code
+0xc none): kind 5 a whirlpool, 6 a waterspout, 7 a reef, 8 a big reef
+(class 0x259), 9 the Flame, 10 lightning, 11 a fireball, 12 the phantom,
+13 nothing, 14 a sea monster, 15 and 16 the shields. (`Magic.cpp`'s own
+numbering follows the spells' order: 1 reef ... 4 sea monster, 6
+lightning, 7 fireball, 9 phantom, 10 and 11 shields, 12 big reef, 13 the
+Gorgon's stare, which nothing casts.)
 
 **Worn crews** (0x486970): a warship (types 2-7) also goes to the reserve
 when its crew condition (0x4bc590: the mean of its items' mean conditions,
