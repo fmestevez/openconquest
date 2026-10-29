@@ -626,7 +626,7 @@ fn selection_frame(
         ObjectClass::Ship => format!("RAM_0{w}X0{h}"),
         ObjectClass::Building(0x32 | 0x33) => "RAM_128X128".into(),
         ObjectClass::Building(0x39..=0x3b) | ObjectClass::Barbarian(0x40) => "RAM_064X078".into(),
-        _ if obj.cell.is_some() => "RAM_072X072".into(),
+        ObjectClass::Building(_) if obj.cell.is_some() => "RAM_072X072".into(),
         _ => return None,
     };
     let name = format!("{base}{:02}", zoom.min(SELECTION_FRAMES - 1));

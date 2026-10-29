@@ -199,6 +199,10 @@ pub struct Scene {
     pub default_arming: bool,
     pub mission: String,
     pub grid: MapGrid,
+    /// Each cell's tile types, a nibble a layer (the landscape grid's
+    /// dword at +8, 0x5456c0: the tile set record's type, byte 4; 0 where
+    /// the layer is empty).
+    pub cell_types: Vec<u32>,
     pub terrain: Terrain,
     pub objects: Vec<MapObject>,
     pub nav: NavGrid,
@@ -472,6 +476,23 @@ impl Scene {
         let archive = data.open_mission(mission)?;
         let grid = data.load_map(&archive, mission)?;
         let terrain = Terrain::compose(data, &grid, &mut caches.tiles)?;
+        let cell_types: Vec<u32> = (0..grid.height)
+            .flat_map(|y| (0..grid.width).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                (0..grid.layers.min(8)).fold(0u32, |acc, l| {
+                    let t = grid.get(l, x, y);
+                    let kind = if t.variant == 0 {
+                        0
+                    } else {
+                        data.tilesets
+                            .by_id(t.tileset)
+                            .and_then(|s| s.raw.get(4))
+                            .map_or(0, |&b| b as u32 & 0xf)
+                    };
+                    acc | kind << (4 * l)
+                })
+            })
+            .collect();
         if !terrain.missing_tiles.is_empty() {
             eprintln!(
                 "warning: {mission}: missing tiles: {}",
@@ -516,6 +537,7 @@ impl Scene {
         let mut scene = Self {
             mission: mission.to_string(),
             grid,
+            cell_types,
             terrain,
             objects: objs.drawn,
             nav,

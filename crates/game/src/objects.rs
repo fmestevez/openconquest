@@ -1440,9 +1440,15 @@ pub fn resolve(
     };
     let t = TILE_SIZE as f32;
     let cell = match (class, &anchor) {
-        (ObjectClass::Building(_), CellCorner(cx, cy, ..) | CellCentre(cx, cy)) => {
-            Some((*cx as i32, *cy as i32))
-        }
+        (
+            ObjectClass::Building(_)
+            | ObjectClass::Barbarian(_)
+            | ObjectClass::Castle(_)
+            | ObjectClass::HarpyNest
+            | ObjectClass::CreatureSpawn
+            | ObjectClass::HeroHouse,
+            CellCorner(cx, cy, ..) | CellCentre(cx, cy),
+        ) => Some((*cx as i32, *cy as i32)),
         _ => None,
     };
     let (x, y) = match anchor {

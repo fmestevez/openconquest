@@ -1037,27 +1037,7 @@ impl Scene {
                             }
                         }
                         (ObjectClass::CreatureSpawn, _) if table.lair != 0 => {
-                            let isle = islands[k];
-                            if isle == 0 {
-                                continue;
-                            }
-                            let mut f = vec![0i32; (w * h) as usize];
-                            for cy in 0..h {
-                                for cx in 0..w {
-                                    if islands[at(cx, cy)] != isle || (cx, cy) == (x, y) {
-                                        continue;
-                                    }
-                                    f[at(cx, cy)] += 1;
-                                    for (dy, row) in DISK13.iter().enumerate() {
-                                        for (dx, c) in row.bytes().enumerate() {
-                                            let (px, py) = (cx + dx as i32 - 6, cy + dy as i32 - 6);
-                                            if c == b'#' && inside(px, py) {
-                                                f[at(px, py)] += 1;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            let f = self.lair_footprint(x, y, &islands);
                             for (v, fv) in wt.iter_mut().zip(&f) {
                                 *v += table.lair * fv;
                             }
@@ -1136,6 +1116,109 @@ impl Scene {
             }
         }
         wt
+    }
+
+    /// How strongly a lair at `(lx, ly)` threatens each cell (0x40b5a0,
+    /// 0x4080e0): over the box of its land region (`islands`), a walk of
+    /// half cells (0x42e720: a cell not land, of type 1 on layer 5 or with
+    /// anything on layers 6-7 shut; else the half cells along its shore
+    /// edges, 0x5acf13) flooded from the lair's cell, which itself does not
+    /// count; each cell reached counts 1, and 1 more for every cell reached
+    /// whose 13 x 13 disc (0x594ba0) holds it.
+    fn lair_footprint(&self, lx: i32, ly: i32, islands: &[u32]) -> Vec<i32> {
+        const EDGES: [u8; 45] = [
+            0, 0, 9, 9, 9, 9, 9, 3, 3, 3, 3, 3, 12, 12, 12, 12, 12, 6, 6, 6, 6, 6, 0, 0, 0, 0, 0,
+            0, 0, 0, 8, 8, 2, 2, 1, 1, 1, 4, 4, 4, 4, 4, 0, 0, 0,
+        ];
+        let g = &self.grid;
+        let (w, h) = (g.width as i32, g.height as i32);
+        let at = |x: i32, y: i32| (y * w + x) as usize;
+        let mut f = vec![0i32; (w * h) as usize];
+        let isle = islands[at(lx, ly)];
+        if isle == 0 {
+            return f;
+        }
+        let (mut bx0, mut by0, mut bx1, mut by1) = (lx, ly, lx, ly);
+        for y in 0..h {
+            for x in 0..w {
+                if islands[at(x, y)] == isle {
+                    bx0 = bx0.min(x);
+                    by0 = by0.min(y);
+                    bx1 = bx1.max(x);
+                    by1 = by1.max(y);
+                }
+            }
+        }
+        let (sw, sh) = (2 * (bx1 - bx0 + 1), 2 * (by1 - by0 + 1));
+        let sub = |x: i32, y: i32| (y * sw + x) as usize;
+        let mut shut = vec![false; (sw * sh) as usize];
+        for y in by0..=by1 {
+            for x in bx0..=bx1 {
+                let types = self.cell_types[at(x, y)];
+                let (sx, sy) = (2 * (x - bx0), 2 * (y - by0));
+                let closed = types & 0xf != 8
+                    || types & 0x00f0_0000 == 0x0010_0000
+                    || types & 0xff00_0000 != 0;
+                let e = EDGES
+                    .get(g.get(0, x as u32, y as u32).variant as usize)
+                    .copied()
+                    .unwrap_or(0);
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let edge = (dy == 0 && e & 1 != 0)
+                        || (dx == 1 && e & 2 != 0)
+                        || (dy == 1 && e & 4 != 0)
+                        || (dx == 0 && e & 8 != 0);
+                    shut[sub(sx + dx, sy + dy)] = closed || edge;
+                }
+            }
+        }
+        let (ox, oy) = (2 * (lx - bx0), 2 * (ly - by0));
+        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            shut[sub(ox + dx, oy + dy)] = false;
+        }
+        let mut reached = vec![false; (sw * sh) as usize];
+        reached[sub(ox, oy)] = true;
+        let mut stack = vec![(ox, oy)];
+        while let Some((cx, cy)) = stack.pop() {
+            for &(dx, dy) in &DIR {
+                let (nx, ny) = (cx + dx, cy + dy);
+                if nx < 0 || ny < 0 || nx >= sw || ny >= sh {
+                    continue;
+                }
+                let k = sub(nx, ny);
+                if !shut[k] && !reached[k] {
+                    reached[k] = true;
+                    stack.push((nx, ny));
+                }
+            }
+        }
+        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            reached[sub(ox + dx, oy + dy)] = false;
+        }
+        let mut cells = Vec::new();
+        for y in by0..=by1 {
+            for x in bx0..=bx1 {
+                let (sx, sy) = (2 * (x - bx0), 2 * (y - by0));
+                let any = [(0, 0), (1, 0), (0, 1), (1, 1)]
+                    .iter()
+                    .any(|&(dx, dy)| reached[sub(sx + dx, sy + dy)]);
+                if any {
+                    f[at(x, y)] += 1;
+                    cells.push((x, y));
+                }
+            }
+        }
+        for (cx, cy) in cells {
+            for (dy, row) in DISK13.iter().enumerate() {
+                for (dx, c) in row.bytes().enumerate() {
+                    let (px, py) = (cx + dx as i32 - 6, cy + dy as i32 - 6);
+                    if c == b'#' && px >= 0 && py >= 0 && px < w && py < h {
+                        f[at(px, py)] += 1;
+                    }
+                }
+            }
+        }
+        f
     }
 
     fn cell_of_obj(&self, o: &MapObject) -> (i32, i32) {

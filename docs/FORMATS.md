@@ -3206,8 +3206,12 @@ their ships -5 within 5, the player's own settlements and buildings -5 + d
 within 5, amber 5 - d and fish and leviathan zones 10 - d (each cell of
 them) on the water they touch, castles -20, nests -20 + d, medusas and
 sirens -20 + d within 5, sea monsters -20 over their area, lava -10 x its
-strength, and lairs -30 x (their island's cells and the 13 x 13 discs about
-them); a site scores the sum over the 10 x 10 cells about it (shifted
+strength, and lairs -30 x their spread (0x40b5a0, 0x4080e0: over the box of
+their land region, a walk of half cells, a cell not land, of type 1 on
+layer 5 or with anything on layers 6-7 shut, else the half cells on its
+shore edges, flooded from the lair's cell, which does not count; each
+cell reached 1, and 1 more for each reached cell whose 13 x 13 disc
+0x594ba0 holds it); a site scores the sum over the 10 x 10 cells about it (shifted
 inside the map), highest first (VC6 qsort). Nests weigh over their reach (record fields 7
 and 8, one more; nest +0x200, +0x204), sea monsters over their waters
 (fields 11 and 12 about them, else the whole map). The port counts players
