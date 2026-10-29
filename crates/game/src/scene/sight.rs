@@ -380,7 +380,7 @@ impl Scene {
         for o in self
             .objects
             .iter()
-            .filter(|o| self.is_own(o) && o.combat.is_some())
+            .filter(|o| self.is_own(o) && o.combat.is_some() && o.asleep.is_none())
         {
             if o.ship.is_some() {
                 let levels = self.levels_of(o.owner);

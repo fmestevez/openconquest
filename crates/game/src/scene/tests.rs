@@ -6624,3 +6624,50 @@ fn campaign_missions_start_unlost() {
         assert_eq!(scene.outcome, None, "miss{m:03}");
     }
 }
+
+/// miss001's settlement, port and dock sleep (record field 4 = 3): unseen
+/// on the radar, unclickable, unharmed, till a ship of the player's comes
+/// beside them, when all three wake together (needs `OPENCONQUEST_DATA`).
+#[test]
+fn sleeping_buildings_wake_together() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    let asleep: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| o.asleep.is_some())
+        .map(|o| o.id)
+        .collect();
+    assert_eq!(asleep.len(), 3);
+    let town = scene.own_sites()[0];
+    let i = scene.object_index(town).unwrap();
+    let hull = scene.objects[i].combat.as_ref().unwrap().hull;
+    scene.hit(town, 10.0, &data, &mut caches);
+    let i = scene.object_index(town).unwrap();
+    assert_eq!(scene.objects[i].combat.as_ref().unwrap().hull, hull);
+    // A while with the boat away: still asleep, not lost.
+    for _ in 0..200 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    assert!(!scene.woken);
+    // The boat beside the dock (2, 3).
+    let boat = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let t = TILE_SIZE as f32;
+    (scene.objects[boat].x, scene.objects[boat].y) = (3.5 * t, 4.5 * t);
+    for _ in 0..20 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    assert!(scene.woken);
+    assert!(asleep.iter().all(|&id| {
+        let i = scene.object_index(id).unwrap();
+        scene.objects[i].asleep.is_none() && scene.objects[i].record.fields[4] == 0
+    }));
+}

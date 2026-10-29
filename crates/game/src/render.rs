@@ -238,7 +238,7 @@ pub fn draw_objects(
         if let (Some((flags, dx, dy)), Some(first), true) = (
             &obj.banner,
             obj.frame_at(time_ms).first(),
-            obj.owner.is_some(),
+            obj.owner.is_some() && obj.asleep.is_none(),
         ) {
             const FLAG_MS: u64 = 75;
             let flag = &flags[(time_ms / FLAG_MS) as usize % flags.len()];
@@ -442,7 +442,14 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
             layer.image.is_solid(px - left, py - top)
         })
     };
-    let visible = || scene.objects.iter().rev().filter(|o| scene.is_visible(o));
+    // A building asleep cannot be clicked (0x423460).
+    let visible = || {
+        scene
+            .objects
+            .iter()
+            .rev()
+            .filter(|o| scene.is_visible(o) && o.asleep.is_none())
+    };
     // Ships, buildings and creatures first: what can be selected or fought.
     if let Some(o) = visible().find(|o| o.combat.is_some() && solid(o)) {
         return Some(o.id);
@@ -1217,6 +1224,9 @@ pub fn draw_minimap(
 /// An object's minimap icon (an index into `LMAP8X8`, or `LMAP16X16` when
 /// large) as the original picks it (0x50da60, 0x51cdd0).
 fn minimap_icon(obj: &MapObject) -> Option<(u32, bool)> {
+    if obj.asleep.is_some() {
+        return None;
+    }
     if let Some((nation, slot)) = obj
         .owner
         .filter(|_| matches!(obj.class, ObjectClass::Ship | ObjectClass::Building(_)))

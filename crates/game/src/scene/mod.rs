@@ -309,6 +309,8 @@ pub struct Scene {
     /// afloat, ticks the win has held, ticks to a loss once seen.
     pub joined: Vec<u8>,
     pub had_argo: bool,
+    /// One of the player's buildings has woken (0x5d9a).
+    pub woken: bool,
     pub winning: u32,
     pub losing: Option<u32>,
     /// The campaign mission's ported brain, if any, and time owed to it.
@@ -433,6 +435,7 @@ pub mod repair;
 mod sheep;
 mod shot;
 mod sight;
+mod sleep;
 mod sparkle;
 mod treasure;
 mod wake;
@@ -661,6 +664,7 @@ impl Scene {
             delivered: Vec::new(),
             joined: Vec::new(),
             had_argo: false,
+            woken: false,
             winning: 0,
             losing: None,
             held: Vec::new(),
@@ -863,6 +867,7 @@ impl Scene {
             delivered: self.delivered.clone(),
             joined: self.joined.clone(),
             had_argo: self.had_argo,
+            woken: self.woken,
             winning: self.winning,
             losing: self.losing,
             held: self.held.clone(),
@@ -972,6 +977,7 @@ impl Scene {
         scene.delivered = save.delivered.clone();
         scene.joined = save.joined.clone();
         scene.had_argo = save.had_argo;
+        scene.woken = save.woken;
         scene.winning = save.winning;
         scene.losing = save.losing;
         scene.held = save.held.clone();
@@ -1932,6 +1938,7 @@ impl Scene {
         self.run_shots(dt, data, caches);
         self.run_burning(dt);
         self.run_volcanoes(dt, data, caches);
+        self.run_wakeups(dt);
         self.run_contact(dt, data, caches);
         let mut moved = false;
         // One ship to a cell: the cells ships lie in, and those they are

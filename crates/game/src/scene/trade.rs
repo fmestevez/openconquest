@@ -1752,6 +1752,8 @@ impl Scene {
                     matches!(o.class, ObjectClass::Building(c) if classes.contains(&c))
                         && owner.is_some()
                         && o.owner == owner
+                        // Asleep, it takes no cargo (0x4aab00).
+                        && o.asleep.is_none()
                 })
                 .min_by(|a, b| dist(a).total_cmp(&dist(b)))
                 .map(|o| o.id)

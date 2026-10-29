@@ -5,8 +5,12 @@ use super::*;
 impl Scene {
     /// Whether two objects belong to different players. All players are
     /// treated as enemies of each other until diplomacy is implemented.
+    /// A building asleep is no one's enemy (0x40dfc0): nothing aims at it
+    /// and it aims at nothing.
     pub fn are_enemies(a: &MapObject, b: &MapObject) -> bool {
-        matches!((a.owner, b.owner), (Some(x), Some(y)) if x != y)
+        a.asleep.is_none()
+            && b.asleep.is_none()
+            && matches!((a.owner, b.owner), (Some(x), Some(y)) if x != y)
     }
 
     /// Orders armed ship `ship` to attack the enemy ship or building `target`.
@@ -538,6 +542,13 @@ impl Scene {
     /// Deals `damage` to the hull of `target`, with a hit (or splash) effect;
     /// a sunk ship is removed and a destroyed building left in ruins.
     pub(super) fn hit(&mut self, target: u32, damage: f32, data: &GameData, caches: &mut Caches) {
+        // Asleep, it ignores blows (0xda96, 0x158bf).
+        if self
+            .object_index(target)
+            .is_some_and(|t| self.objects[t].asleep.is_some())
+        {
+            return;
+        }
         // A fort's or barbarian structure's every blow comes through
         // message 0x138e, its units taking their share: spells, tornadoes
         // and the like too, not only shots.

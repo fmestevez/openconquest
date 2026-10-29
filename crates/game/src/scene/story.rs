@@ -59,6 +59,11 @@ pub enum Goal {
     PersiansGone(bool),
     /// No castle of the wind wizard (0x42) in the box.
     NoCastle(Cells),
+    /// A ship of the player's, or their settlement woken (miss001).
+    ShipOrWoken,
+    /// A settlement or town of the player's in the box, once one of
+    /// theirs has woken (miss004's Pylos).
+    TownOnceWoken(Cells),
 }
 
 /// A campaign mission's judge: checked every `period` ticks; won when
@@ -85,7 +90,12 @@ pub fn judge_of(mission: &str) -> Option<Judge> {
                 Stored(27, None),
                 Hero(JASON),
             ],
-            &[Kept(27), TownIn((0, 2, 1, 3)), KeptAfter(JASON)],
+            &[
+                Kept(27),
+                TownIn((0, 2, 1, 3)),
+                KeptAfter(JASON),
+                ShipOrWoken,
+            ],
         ),
         "miss002" => j(
             75,
@@ -115,7 +125,7 @@ pub fn judge_of(mission: &str) -> Option<Judge> {
                 Assemble((25, 5, 27, 7)),
                 Hero(JASON),
             ],
-            &[Argo, Hero(JASON), TownIn((25, 5, 27, 7))],
+            &[Argo, Hero(JASON), TownOnceWoken((25, 5, 27, 7))],
         ),
         "miss005" => j(
             125,
@@ -325,6 +335,8 @@ impl Scene {
                         _ => false,
                     }
             }),
+            Goal::ShipOrWoken => self.woken || self.own_ships().next().is_some(),
+            Goal::TownOnceWoken(b) => !self.woken || self.goal_met(Goal::TownIn(b)),
             Goal::NoCastle(b) => !self.objects.iter().any(|o| {
                 o.record.class_id == 0x42
                     && o.combat.as_ref().is_none_or(|c| c.hull > 0.0)
@@ -397,6 +409,8 @@ pub fn goal_name(goal: Goal) -> String {
         Goal::ArgoWith => "Build the Argo; Jason and Argus aboard".into(),
         Goal::PersiansGone(_) => "Defeat the Persians".into(),
         Goal::NoCastle(_) => "Overcome the wizard of wind".into(),
+        Goal::ShipOrWoken => "Keep a ship till your settlement wakes".into(),
+        Goal::TownOnceWoken(_) => "Hold Pylos".into(),
     }
 }
 

@@ -139,6 +139,11 @@ pub struct MapObject {
     /// An exhausted amber deposit growing back: its deposit and the
     /// seconds it has lain empty.
     pub dormant: Option<(Deposit, f32)>,
+    /// A building asleep (record field 4 = 3, state 0x10): seconds to its
+    /// next look about for its owner's ships or buildings (0x425590).
+    /// Unseen on the radar, unclickable, bannerless, blind, harmless and
+    /// unharmed till it wakes.
+    pub asleep: Option<f32>,
     /// Hull and weapons, for objects that can fight or be attacked.
     pub combat: Option<crate::combat::Combatant>,
     /// Owning player as `(nation, colour slot)`, for player-owned objects.
@@ -1580,6 +1585,9 @@ pub fn resolve(
         progress: None,
         banner,
         cell,
+        // The first look at load + rand % 15 ticks.
+        asleep: (matches!(class, ObjectClass::Building(_)) && f(4) == 3)
+            .then(|| crate::clock::ticks(rec.id % 15)),
     }))
 }
 

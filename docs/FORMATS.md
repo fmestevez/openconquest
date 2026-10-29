@@ -2111,6 +2111,21 @@ count), so a mission is never won without a town to carry:
 | 011 / 012 | Argo; town (0-5, 0-5) / (2-8, 48-52) with every hero and the Fleece; Jason | no Argo; Jason gone |
 | 013 | Argo; home (0-2, 58-60) with every hero and the Fleece; Jason; Persians without ships and buildings 0x32-0x3e | no Argo; Jason gone; home gone |
 
+**Buildings asleep.** A building's record field 4 sets its state
+(0x441ba0 for settlements and towns, 0x427f50 for the rest): 1 being built,
+2 a saved state, 3 asleep (0x10), else standing. Asleep it keeps its owner
+and counts for the judges, but has no banner, no radar dot, no sight, can
+not be clicked, does not fire, is not aimed at (0x40dfc0), ignores blows,
+and takes no cargo or trade. Every 15 ticks (first at load + rand % 15) it
+looks one cell round its footprint (0x425590) for a ship of its owner's or
+an awake building 0x32-0x3e of theirs; then it wakes (0x425720), waking its
+owner's sleepers round it in turn, and tells its owner (0x5d9a): miss001's
+and miss004's judges note it, miss003's first gives the player 2000 amber
+and 500 fish and starts members 2 and 9 over. Asleep: miss001 settlement,
+port and dock at (0, 2); miss002 three forts; miss003 the town (35, 20) and
+its four buildings; miss004 Pylos; miss008 Propontis and its port; single05
+and single13 a cluster each.
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships

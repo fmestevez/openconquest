@@ -83,6 +83,8 @@ pub struct SaveGame {
     #[serde(default)]
     pub had_argo: bool,
     #[serde(default)]
+    pub woken: bool,
+    #[serde(default)]
     pub winning: u32,
     #[serde(default)]
     pub losing: Option<u32>,
