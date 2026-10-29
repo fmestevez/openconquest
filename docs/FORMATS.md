@@ -1611,9 +1611,12 @@ target 69 (message 0x17, 0x4d0190, 0x4cfd3f), in an attack zone 75
 (0x1f, 0x4d74a0), docking for repairs 80 (0x1e, 0x4dbb40, 0x4cd930),
 gathering and taking treasure 90 (0x1a, 0x1f; 0x4c89b0, 0x4d9fa0),
 founding 100 (0x20, 0x4cb0b0). Unloading (0x4ad9f0) rolls one between 1
-and 234 again, 91-100. Orders of the ships' own behaviours (patrol,
-scout, convoy, ram, board, reload) are not decoded and leave it as it
-was. Computer zones here still avoid the amber lanes (see the computer
+and 234 again, 91-100. Only an order's intake sets it: each kept order
+(attack at +0x81d, and the others, 0x4aa840-0x4ab594) copies its byte
+unless 0xff, with the patience 5 and the re-plan every 25 ticks; the ships'
+own behaviours (patrol, scout, convoy, ram, board, reload) move without
+touching it. What the interface puts there for the player's own orders is
+not traced. Computer zones here still avoid the amber lanes (see the computer
 players' notes).
 
 ## Resource counters
