@@ -200,6 +200,11 @@ struct Mission {
     turn: Option<fn(&mut Scene, usize)>,
 }
 
+/// A mission's fleets as it defines them.
+fn mission_fleets(name: &str) -> Option<&'static [FleetDef]> {
+    mission(name).map(|m| m.fleets)
+}
+
 fn mission(name: &str) -> Option<Mission> {
     match name {
         "miss000" => Some(Mission {
@@ -905,6 +910,68 @@ impl Scene {
         let brain = self.brain.as_mut().unwrap();
         let ships = std::mem::take(&mut brain.fleets[from].ships);
         brain.fleets[into].ships.extend(ships);
+    }
+
+    /// A brain player's ship mended at a dock sails out (0x4b6d60, message
+    /// 0x5d98) and joins the member its mission names for its type
+    /// (0x479300, op 2), leaving whatever fleet it was in.
+    pub(super) fn brain_mended(&mut self, id: u32) {
+        let Some(brain) = self.brain.as_ref() else {
+            return;
+        };
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        let (Some((n, s)), Some(kind)) = (
+            self.objects[i].owner,
+            self.objects[i].ship.as_ref().map(|s| s.kind),
+        ) else {
+            return;
+        };
+        let player = n * 4 + s;
+        let mission = brain.mission.clone();
+        let bit = |scene: &mut Scene| scene.rng.next() & 1 != 0;
+        // Ship classes: 200 + type; 0xca-0xcf types 2-7, 0xd0-0xd1 8-9,
+        // 0xd2-0xd3 10-11.
+        let (group, member) = match (mission.as_str(), player, kind) {
+            ("miss007", 15, 0 | 1) => (1, if bit(self) { 1 } else { 2 }),
+            ("miss007", 15, 2..=7) => (1, if bit(self) { 4 } else { 5 }),
+            ("miss008", 15, 0) => (1, if bit(self) { 3 } else { 8 }),
+            ("miss008", 15, 1) => (1, if bit(self) { 4 } else { 9 }),
+            ("miss008", 15, 2..=7) => (1, 10),
+            ("miss009", 14, 0) => (1, 2),
+            ("miss009", 14, 1) => (1, 1),
+            ("miss009", 14, 2..=9) => (1, 4),
+            ("miss010", 15, 0) => (1, 7),
+            ("miss010", 15, 1) => (1, 6),
+            ("miss010", 15, 2..=9) => (1, 8),
+            ("miss011", 14, 0 | 1) => (1, 2),
+            ("miss011", 14, 2..=7) => (1, 5),
+            ("miss012" | "miss013", 15, 0 | 1) => (1, 2),
+            ("miss012" | "miss013", 15, _) => (1, 4),
+            ("miss012" | "miss013", 14, 0 | 1) => (2, 2),
+            ("miss012" | "miss013", 14, _) => (2, 4),
+            _ => return,
+        };
+        let Some(defs) = mission_fleets(&mission) else {
+            return;
+        };
+        let Some(into) = defs
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.group == group)
+            .nth(member)
+            .map(|(k, _)| k)
+        else {
+            return;
+        };
+        let brain = self.brain.as_mut().unwrap();
+        for f in &mut brain.fleets {
+            f.ships.retain(|&s| s != id);
+        }
+        if let Some(f) = brain.fleets.get_mut(into) {
+            f.ships.push(id);
+        }
     }
 
     /// Fleet `k`'s damaged ships with nothing to do sail to one of their
@@ -5097,10 +5164,7 @@ mod miss007 {
 /// (Not ported: the spells the Persians cast on their patrols when they
 /// attack (0x47acf0, kinds 9, 12 and 15, paid by member 2); the builders'
 /// own orders of class 0x60 and the Persian yards' order of class 1
-/// (0x47b130, also skipped in miss007); the Persians' technology bit 79
-/// and workshop levels set at the start; a launch the brain did not order
-/// joining members 3/8, 4/9 or 10 by type (message 0x5d98): every launch
-/// here is ordered. An attack's "failed" exit is taken as its "ok" one,
+/// (0x47b130, also skipped in miss007);. An attack's "failed" exit is taken as its "ok" one,
 /// the runtime telling them apart only by time. 0x479ed0's test with
 /// buildings (mask 0xffffff) is taken as `human_in`, without as
 /// `human_ships_in`.)
@@ -6006,9 +6070,7 @@ mod miss008 {
 /// their home waters; member 4 kinds 12 and 9 when it strikes, never in
 /// fact as `+0x12f` is never counted down); the builders' own orders of class
 /// 0x60 and the Persian yard's one-off order of class 1 (0x47b130, as in
-/// miss008); the Persians' technology bits 78, 79 and workshop levels
-/// set at the start; a launch the brain did not order joining member 1,
-/// 2 or 4 by type (message 0x5d98): every launch here is ordered. The
+/// miss008);. The
 /// brain's tick runs at a random tick of each 50 in the original, here
 /// on member 0's turn. A temple is "in" (10, 0, 40, 20) by its cell.)
 mod miss009 {
@@ -6910,10 +6972,7 @@ mod miss009 {
 /// ship and member 8 gets the Persians' own ships too; ported as is.
 /// (Not ported: the builders' own orders of class 0x60
 /// and Persian yard 2's one-off order of class 1 (0x47b130, as in
-/// miss008 and miss009); the Persians' technology bits 78, 79 and
-/// workshop levels set at the start; a launch the brain did not order
-/// joining member 6, 7 or 8 by type (message 0x5d98): every launch here
-/// is ordered. The brain's tick runs at a random tick of each 50 in the
+/// miss008 and miss009);. The brain's tick runs at a random tick of each 50 in the
 /// original, here on member 0's turn. The Golden Fleece is delivered by
 /// storing it in one of the player's buildings through the load panel
 /// (0x5d94; automatic unloading never hands it over). An
@@ -7878,12 +7937,7 @@ mod miss010 {
 /// lightning at (38, 14) and (30, 23) when the player comes into the
 /// middle sea's western zones.
 /// (Not ported: the Persian yard's one-off order of class 1 and its code
-/// 0x34 (class 0x30, never asked for) (0x47b130, as in miss008-miss010);
-/// the Persians' technology and workshop levels set at the start; a launch
-/// the brain did not order joining member 2 (boats, merchants) or 5
-/// (warships) (message 0x5d98): every launch here is ordered; the Flame
-/// (kind 9) cast on member 5's ships, the port's Flame being a player's,
-/// not a ship's; member 5's states 30 and 40 (0x1e, 0x28), which no event
+/// 0x34 (class 0x30, never asked for) (0x47b130, as in miss008-miss010); member 5's states 30 and 40 (0x1e, 0x28), which no event
 /// reaches. Member 7 looks through the player's things in the scene's
 /// order, not the player's list's; a building is "in" an area by its
 /// cell. A waterspout or sea monster asked for on land is not cast. An
@@ -8992,13 +9046,9 @@ mod miss011 {
 /// casts at the player near player 14's temple (as player 15).
 /// (Not ported: the Persian yards' order of class 1 at each round
 /// (0x47b130 with code 1) and code 0x34 (class 0x30, never asked for), as
-/// in miss011; the Persians' technology and workshop levels set at the
-/// start; launches the brain did not order joining members 2 (boats,
-/// merchants) or 4 (warships) of their player's group (message 0x5d98):
-/// every launch here is ordered; prizes of either Persian player handed to
+/// in miss011; prizes of either Persian player handed to
 /// group 1's repair member (0x5d97): here each player's prizes sail to its
-/// own docks (`brain_prize`); the Flame (kind 9, paid) cast on group 2
-/// member 5's ships, the port's Flame being a player's; the unreachable
+/// own docks (`brain_prize`); the unreachable
 /// states of members (1, 4) and (1, 7) (0x19, 0x28: nothing sends them
 /// there). A zone that sends group 2 member 5 to state 0x1e attacks the
 /// zone seen here; the original attacks the area of the last ship that
@@ -10112,14 +10162,10 @@ mod miss012 {
 /// 15).
 /// (Not ported: the Persian yards' order of class 1 at each round
 /// (0x47b130 with code 1) and code 0x34 (class 0x30, never asked for), as
-/// in miss012; the Persians' technology and workshop levels set at the
-/// start; launches the brain did not order joining members 2 (boats,
-/// merchants) or 4 (warships) of their player's group (message 0x5d98):
-/// every launch here is ordered; prizes handed to member (1, 5) (player
+/// in miss012; prizes handed to member (1, 5) (player
 /// 15's) or (1, 6) (player 14's: the caster, which never moves them)
 /// (0x5d97): here each player's prizes sail to its own docks
-/// (`brain_prize`); the Flame (kind 9, paid) cast on group 2 member 5's
-/// ships, the port's Flame being a player's; member (1, 4)'s state 0x19
+/// (`brain_prize`); member (1, 4)'s state 0x19
 /// (a sail to (42, 21)), which nothing sends it to. Member (1, 4)'s fights
 /// look their zone up in a shorter table than the one its patrol watches
 /// (0x5b5138 against 0x5b51f0): the player seen in (0, 18, 8, 8) sends it

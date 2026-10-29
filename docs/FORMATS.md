@@ -1995,6 +1995,16 @@ miss010, once the dragon's nest at (59, 4) is gone, the flows at (57, 4) and
 (58, 5) with 9 (its third call names (63, 4), where no flow is). The game
 word +0xa81 = 0xd0dd (never set in the retail game) stops eruptions.
 
+**Mended ships** (message 0x5d98, sent only by 0x4b6d60 when a ship sails
+out of a dock mended, or when a computer player cannot pay more): the
+brain moves the ship out of its fleet into a member chosen by its type
+(0x479300, op 2): miss007 boats and merchants (1, 1 or 2), warships (1, 4
+or 5); miss008 boats (1, 3 or 8), merchants (1, 4 or 9), warships (1, 10);
+miss009 boats (1, 2), merchants (1, 1), warships (1, 4); miss010 (1, 7),
+(1, 6), (1, 8); miss011 (1, 2), (1, 2), (1, 5); miss012 and miss013 player
+15 (1, 2) for boats and merchants, (1, 4) the rest, player 14 (2, 2) and
+(2, 4) (the "or" a draw of the brain's generator).
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships
@@ -2778,7 +2788,7 @@ miss011 (0x46e8e0; members 0x46b8d0-0x46e110):
   time each) at a temple 0x3d, fort or class 0x34, 0x35, and at anything
   else with four of the player's things within 3 cells a waterspout,
   fireball or sea monster (one time in (20, 15, 10) + 1 each); a roll
-  that picks nothing ends the look. Unordered launches (0x5d98) join
+  that picks nothing ends the look. Ships mended at a dock (0x5d98) join
   member 2 (boats, merchants) or 5 (warships).
 - **The start.** Amber at (57, 26), (57, 35) and (51, 34) and fish at
   (53, 31) on every difficulty; the Persians get 12000, 17000 or 25000

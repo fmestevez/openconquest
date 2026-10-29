@@ -465,6 +465,22 @@ impl Scene {
                 done.push(id);
             }
         }
+        // A brain's ship mended sails out and joins its member (0x5d98).
+        let leaving: Vec<u32> = done
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.object_index(id).is_some_and(|i| {
+                    matches!(
+                        self.objects[i].ship.as_ref().and_then(|s| s.task),
+                        Some(Task::Repair { .. })
+                    )
+                })
+            })
+            .collect();
+        for id in leaving {
+            self.brain_mended(id);
+        }
         for &id in &done {
             self.rearm_fort(id);
         }
