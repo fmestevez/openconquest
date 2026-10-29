@@ -1023,8 +1023,12 @@ impl Scene {
                         }
                         (ObjectClass::Castle(_), _) => paint(&mut wt, x, y, table.castle),
                         (ObjectClass::HarpyNest, _) if table.nest.0 != 0 => {
-                            for cy in y - 2..=y + 2 {
-                                for cx in x - 2..=x + 2 {
+                            // Over its reach, record fields 7 and 8, one more
+                            // (0x40b920, nest +0x200, +0x204).
+                            let rx = o.record.field(7).unwrap_or(1) as i32 + 1;
+                            let ry = o.record.field(8).unwrap_or(1) as i32 + 1;
+                            for cy in y - ry..=y + ry {
+                                for cx in x - rx..=x + rx {
                                     if inside(cx, cy) && cx > 0 {
                                         wt[at(cx, cy)] +=
                                             table.nest.0 - table.nest.2 * distance(cx - x, cy - y);
@@ -1092,7 +1096,27 @@ impl Scene {
                         (ObjectClass::Monster(0x1fa | 0x1fd), _) => {
                             paint(&mut wt, x, y, table.medusa)
                         }
-                        (ObjectClass::Monster(0x1fb), _) => wt[k] += table.medusa.0,
+                        (ObjectClass::Monster(0x1fb), _) => {
+                            // Over its waters: its fields 11 and 12 about it,
+                            // or the whole map (0x492403, 0x4936c0).
+                            let f = |n| o.record.field(n).unwrap_or(0) as i32;
+                            let (ax, ay) = (f(11), f(12));
+                            let (x0, x1, y0, y1) = if ax > 0 && ay > 0 {
+                                (
+                                    (x - ax).max(0),
+                                    (x + ax).min(w - 1),
+                                    (y - ay).max(0),
+                                    (y + ay).min(h - 1),
+                                )
+                            } else {
+                                (0, w - 1, 0, h - 1)
+                            };
+                            for cy in y0..=y1 {
+                                for cx in x0..=x1 {
+                                    wt[at(cx, cy)] += table.medusa.0;
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }

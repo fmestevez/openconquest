@@ -3208,9 +3208,10 @@ them) on the water they touch, castles -20, nests -20 + d, medusas and
 sirens -20 + d within 5, sea monsters -20 over their area, lava -10 x its
 strength, and lairs -30 x (their island's cells and the 13 x 13 discs about
 them); a site scores the sum over the 10 x 10 cells about it (shifted
-inside the map), highest first (VC6 qsort). The port leaves out lava and
-the sea monsters' and nests' areas (their cell and 2 about), and counts
-players by the owners present. Each base also has an area (its town's buildings, 2 cells
+inside the map), highest first (VC6 qsort). Nests weigh over their reach (record fields 7
+and 8, one more; nest +0x200, +0x204), sea monsters over their waters
+(fields 11 and 12 about them, else the whole map). The port counts players
+by the owners present. Each base also has an area (its town's buildings, 2 cells
 about, 0x484aa0 with 0x4218f0) and four waiting zones (0x484900 with
 `LAiFindDispositionZones` 0x4093a0, 0x408bf0: in the 31 x 31 cells about
 the town, a square of side s, s x s >= n + n / 4, holding water for n = 5

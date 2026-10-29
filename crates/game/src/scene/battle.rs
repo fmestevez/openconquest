@@ -633,13 +633,9 @@ impl Scene {
                 }
                 // A sea monster dies in a pool of its blood.
                 None if self.objects[ti].record.class_id == 0x1fb => {
-                    let kind = self.objects[ti]
-                        .record
-                        .fields
-                        .get(4)
-                        .copied()
-                        .unwrap_or(0)
-                        .min(3);
+                    let kind = crate::objects::sea_monster_type(
+                        self.objects[ti].record.fields.get(10).copied().unwrap_or(0),
+                    );
                     self.spawn_effect(data, caches, &format!("UMON{kind}40"), tx, ty);
                 }
                 None => self.spawn_effect(data, caches, combat::FX_SINK, tx, ty),

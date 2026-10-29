@@ -738,6 +738,15 @@ impl Task {
     }
 }
 
+/// A sea monster's type (record field 10, 1 for 4 or more; 0x492462).
+pub fn sea_monster_type(field: u32) -> u32 {
+    if field >= 4 {
+        1
+    } else {
+        field
+    }
+}
+
 fn convoy_range() -> u8 {
     2
 }
@@ -1282,8 +1291,10 @@ pub fn resolve(
         }
         ObjectClass::Monster(0x1fb) => {
             // Sea monster, `UMON<type><state><heading>` (0x490040): states 0
-            // surfacing, 1 swimming, 2 diving, 3 striking, 4 dying.
-            let frames = sequence_frames(data, caches, &format!("UMON{}10", f(4).min(3)))?;
+            // surfacing, 1 swimming, 2 diving, 3 striking, 4 dying; its type
+            // record field 10, 1 for 4 or more (0x492462).
+            let frames =
+                sequence_frames(data, caches, &format!("UMON{}10", sea_monster_type(f(10))))?;
             (
                 CellCentre(f(7), f(8)),
                 Visual {
