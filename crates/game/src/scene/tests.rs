@@ -3695,8 +3695,9 @@ fn settlement_sells_stock() {
     assert_eq!(scene.garrison(site)[4], 1);
     scene.sell_item(site, 4).unwrap();
     assert!(scene.sell_item(site, 4).is_err());
-    // Selling the settlement: a bowman's squad (22 amber, 150 fish) and
-    // three quarters of the building, which falls to ruins.
+    // Selling the settlement: a bowman's squad (30 x 100 x 75 / 10000 = 22
+    // amber, 150 fish) and three quarters of the building; it stands sold
+    // (state 3), still the player's, with no menu.
     let mut stock = [0u32; 9];
     stock[0] = 1;
     scene.garrisons.insert(site, stock);
@@ -3707,11 +3708,12 @@ fn settlement_sells_stock() {
         amber + 22 + economy::building_cost(SETTLEMENT) * 3 / 4
     );
     assert_eq!(scene.fish, fish + 150);
-    let i = scene.object_index(site);
-    assert!(i.is_none_or(|i| scene.objects[i]
-        .combat
-        .as_ref()
-        .is_none_or(|c| c.hull <= 0.0)));
+    let i = scene.object_index(site).expect("not destroyed");
+    assert!(scene.is_own(&scene.objects[i]));
+    assert!(scene.sold.contains(&site));
+    let menu = crate::commands::main_menu(&scene, &scene.objects[i]);
+    assert!(menu.iter().all(|b| b.is_none()));
+    assert!(scene.sell_town(site, &data, &mut caches).is_err(), "once");
 }
 
 /// A ram ordered from afar goes in and strikes from the neighbouring cell
@@ -5463,14 +5465,15 @@ fn units_wear_and_move_with_their_condition() {
         u[0] = vec![20, 70];
         u
     });
+    // (Kept least worn first, 0x440e70: [70, 20].)
     scene
         .discard(site, Cargo::Unit(0, 0), &data, &mut caches)
         .unwrap();
-    assert_eq!(scene.stock_units(site)[0], [20]);
+    assert_eq!(scene.stock_units(site)[0], [70]);
     // Selling it brings back 75% of its price by its condition.
     let amber = scene.amber;
     scene.sell_item(site, 0).unwrap();
-    assert_eq!(scene.amber, amber + 30 * 75 / 100 * 20 / 100);
+    assert_eq!(scene.amber, amber + 30 * 75 / 100 * 70 / 100);
 }
 
 /// Worn units are mended: at a dock for a share of their price (0x4b1fc0),
@@ -5568,7 +5571,10 @@ fn worn_units_are_mended() {
         .apply(&Order::RepairStock { workshop }, &data, &mut caches)
         .unwrap();
     assert_eq!(amber - scene.amber, 35);
-    assert!(scene.order_repair_stock(workshop).is_err(), "busy");
+    // Ordered again it pays again and starts over (0x4438a2: no busy
+    // test).
+    scene.order_repair_stock(workshop).unwrap();
+    assert_eq!(amber - scene.amber, 70);
     // No unit goes ashore meanwhile.
     reload_beside(&mut scene, ship, dock);
     assert!(scene
@@ -5577,7 +5583,7 @@ fn worn_units_are_mended() {
     for _ in 0..46 {
         scene.update(crate::clock::TICK, &data, &mut caches);
     }
-    assert_eq!(scene.stock_units(site)[6], [50, 100]);
+    assert_eq!(scene.stock_units(site)[6], [100, 50]);
     for _ in 0..2 {
         scene.update(crate::clock::TICK, &data, &mut caches);
     }
@@ -7055,4 +7061,49 @@ fn miss006_squadrons_join_when_struck() {
     // Once only.
     scene.brain_hit(b[0]);
     assert_eq!(ships(&scene, seven).len(), 7);
+}
+
+/// A settlement's stock repair (0x441ba0): nothing is mended till the
+/// end; called off, the part not done comes back and the units whose time
+/// fits are mended, least worn first, the first that does not fit ending
+/// it (needs `OPENCONQUEST_DATA`).
+#[test]
+fn stock_repair_called_off() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let site = scene.own_sites()[0];
+    // Bowmen at 90 and 50: 7 and 35 ticks to mend (70 x worn / 100).
+    let mut units: [Vec<u8>; 9] = Default::default();
+    units[0] = vec![50, 90];
+    scene.set_stock_units(site, units);
+    assert_eq!(scene.stock_units(site)[0], vec![90, 50], "least worn first");
+    scene.stock_repairs.push(crate::scene::repair::StockRepair {
+        site,
+        elapsed: 0.0,
+        seconds: crate::clock::ticks(42),
+        paid: 18,
+        progress: 0,
+    });
+    for _ in 0..20 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    let r = *scene.stock_repair_at(site).unwrap();
+    assert_eq!(r.progress, 20 * 100 / 42);
+    assert_eq!(
+        scene.stock_units(site)[0],
+        vec![90, 50],
+        "nothing mended yet"
+    );
+    let amber = scene.amber;
+    scene.cancel_stock_repair(site).unwrap();
+    assert_eq!(scene.amber, amber + (100 - r.progress) * 18 / 100);
+    // 20 ticks spent: the bowman at 90 (7 ticks) is mended, the one at 50
+    // (35 more) is not.
+    assert_eq!(scene.stock_units(site)[0], vec![100, 50]);
+    assert!(scene.stock_repair_at(site).is_none());
 }

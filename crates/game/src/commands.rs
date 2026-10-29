@@ -640,7 +640,8 @@ fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
 /// implemented yet are shown disabled.
 pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
     let mut menu: Menu = [None; SLOTS];
-    if !scene.is_own(obj) {
+    // A sold town has none (0x43c740).
+    if !scene.is_own(obj) || scene.sold.contains(&obj.id) {
         return menu;
     }
     if let Some(c) = scene.construction_at(obj.id) {
@@ -1102,10 +1103,10 @@ fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     }
     set(menu, 2, Command::REPAIR_BUILDING, true);
     // With the permit, selling the item chosen in its stock, or the
-    // settlement itself, while it is not training (0x43c740 slots 5 and 6,
-    // 0x441ba0).
+    // settlement itself, while it is idle (`+0x10c`: not training or
+    // mending its stock; 0x43c740 slots 5 and 6, 0x441ba0).
     if scene.permits.selling() {
-        let idle = training.is_none();
+        let idle = training.is_none() && scene.stock_repair_at(obj.id).is_none();
         set(menu, 5, Command::SELL_ITEM, idle);
         set(menu, 6, Command::SELL_TOWN, idle);
     }

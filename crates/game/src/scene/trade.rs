@@ -993,7 +993,12 @@ impl Scene {
     }
 
     /// Sets `site`'s stock to `units` (their conditions by item).
-    pub(super) fn set_stock_units(&mut self, site: u32, units: [Vec<u8>; 9]) {
+    pub(super) fn set_stock_units(&mut self, site: u32, mut units: [Vec<u8>; 9]) {
+        // Each kind's units are kept least worn first (0x440e70 sorts them
+        // after each comes in, 0x4478e0; taking from either end keeps it).
+        for u in &mut units {
+            u.sort_by(|a, b| b.cmp(a));
+        }
         let counts: [u32; 9] = std::array::from_fn(|k| units[k].len() as u32);
         if counts.iter().all(|&n| n == 0) {
             self.garrisons.remove(&site);
@@ -1141,10 +1146,14 @@ impl Scene {
         Ok(())
     }
 
-    /// Sells settlement or town `site` (message 0x248f): three quarters of
-    /// each stock unit's amber price, and of a crew's fish, by its condition
-    /// (0x441ba0), and of the building's cost by its health (0x425990);
-    /// then it falls to ruins.
+    /// Sells settlement or town `site` (command 0x80: order 0x34 byte 3,
+    /// which it turns into message 0x248f; 0x4f34c0, 0x441ba0): three
+    /// quarters of each stock unit's amber price, and of a crew's fish, by
+    /// its condition, of each armour and ram stored (0x42d960, 0x42d940),
+    /// and of the building's cost by its condition (0x425990), all in
+    /// integers. It is not destroyed: it stands sold (state 3), drawn as its
+    /// building picture's last frame, keeping its owner and stock, with no
+    /// menu and taking no orders.
     pub fn sell_town(
         &mut self,
         site: u32,
@@ -1156,38 +1165,67 @@ impl Scene {
         if !self.is_own(obj) || !matches!(obj.class, ObjectClass::Building(SETTLEMENT | TOWN)) {
             return Err("Not your settlement".into());
         }
-        if self.construction_at(site).is_some() || self.training_at(site).is_some() {
+        if self.sold.contains(&site) {
+            return Err(String::new());
+        }
+        // Standing and idle (`+0x10c`): not building, training or mending.
+        if self.construction_at(site).is_some()
+            || self.training_at(site).is_some()
+            || self.stock_repair_at(site).is_some()
+        {
             return Err("The settlement is busy".into());
         }
         let ObjectClass::Building(class) = obj.class else {
             unreachable!()
         };
-        let health = obj
-            .combat
-            .as_ref()
-            .map_or(1.0, |c| (c.hull / c.max_hull).clamp(0.0, 1.0));
+        let condition = obj.combat.as_ref().map_or(100, |c| {
+            (c.hull / c.max_hull * 100.0).clamp(0.0, 100.0) as i64
+        });
         let owner = obj.owner;
         let stock = self.stock_units(site);
-        let (mut amber, mut fish) = (0u64, 0u64);
+        let (mut amber, mut fish) = (0i64, 0i64);
         for (item, units) in stock.iter().enumerate() {
             for &c in units {
-                let c = c as u64;
-                amber += (combat::item_cost(item as u8).0 * 75 / 100) as u64 * c / 100;
+                let c = c as i64;
+                amber += combat::item_cost(item as u8).0 as i64 * c * 75 / 10000;
                 if item < 3 {
-                    fish += (combat::CREW_COST[item].1 * 75 / 100) as u64 * c / 100;
+                    // 0x597170 by the hundred: 2, 2, 3 fish.
+                    fish += combat::CREW_COST[item].1 as i64 / 100 * c * 7500 / 10000;
                 }
             }
         }
-        amber += (economy::building_cost(class) as f32 * health * 0.75) as u64;
-        self.set_stock_units(site, Default::default());
+        if let Some((armour, rams)) = self.fittings.get(&site) {
+            for &level in armour.iter().filter(|&&l| l > 0) {
+                amber +=
+                    combat::refit_cost(combat::Upgrade::Armour, level) as i64 * 100 * 75 / 10000;
+            }
+            for &level in rams.iter().filter(|&&l| l > 0) {
+                amber += combat::refit_cost(combat::Upgrade::Ram, level) as i64 * 100 * 75 / 10000;
+            }
+        }
+        amber += economy::building_cost(class) as i64 * condition * 75 / 10000;
         if let Some(owner) = owner {
-            self.earn(owner, amber as i64, fish as i64);
+            self.earn(owner, amber, fish);
         }
-        if let Some(c) = self.objects[i].combat.as_mut() {
-            c.hull = 0.0;
-        }
-        self.hit(site, 0.0, data, caches);
+        self.sold.push(site);
+        self.show_sold(site, data, caches);
         Ok(())
+    }
+
+    /// A sold town's look: its building picture held on its last frame
+    /// (0x422e30, state 3).
+    pub(super) fn show_sold(&mut self, site: u32, data: &GameData, caches: &mut Caches) {
+        let Some(i) = self.object_index(site) else {
+            return;
+        };
+        let rec = self.objects[i].record.clone();
+        if let Ok(frames) =
+            objects::building_frames(data, caches, &rec, BuildingState::Construction)
+        {
+            if let Some(last) = frames.last() {
+                self.objects[i].frames = vec![last.clone()];
+            }
+        }
     }
 
     pub fn load_item(&mut self, site: u32, ship: u32, item: u8) -> Result<(), String> {

@@ -337,6 +337,8 @@ pub struct Scene {
     /// Armour and rams stored at settlements (levels: armour, rams), put
     /// ashore from ships in the load panel.
     pub fittings: BTreeMap<u32, load::Fittings>,
+    /// Settlements and towns sold (state 3).
+    pub sold: Vec<u32>,
     /// Ships lying alongside an own port, dock or ship to reload.
     pub loads: Vec<load::LoadLink>,
     /// Harpies and dragons out of their nests, and the nests' counts.
@@ -682,6 +684,7 @@ impl Scene {
                 map
             },
             dug: Vec::new(),
+            sold: Vec::new(),
             strait_struck: false,
             strait_checked: false,
             winning: 0,
@@ -893,6 +896,7 @@ impl Scene {
                 .map(|&(l, x, y, t)| (l, x, y, t.variant, t.tileset))
                 .collect(),
             strait_struck: self.strait_struck,
+            sold: self.sold.clone(),
             strait_checked: self.strait_checked,
             winning: self.winning,
             losing: self.losing,
@@ -1011,6 +1015,10 @@ impl Scene {
         scene.had_argo = save.had_argo;
         scene.woken = save.woken;
         scene.strait_struck = save.strait_struck;
+        scene.sold = save.sold.clone();
+        for site in scene.sold.clone() {
+            scene.show_sold(site, data, caches);
+        }
         scene.strait_checked = save.strait_checked;
         let dug: Vec<_> = save
             .dug

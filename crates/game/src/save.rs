@@ -89,6 +89,8 @@ pub struct SaveGame {
     #[serde(default)]
     pub strait_struck: bool,
     #[serde(default)]
+    pub sold: Vec<u32>,
+    #[serde(default)]
     pub strait_checked: bool,
     #[serde(default)]
     pub winning: u32,

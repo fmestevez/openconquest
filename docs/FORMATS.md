@@ -1760,10 +1760,15 @@ A settlement's Sell Item (command 0x12, slot 5 of its menu) sends message
 its amber price times its condition, an armour piece or a ram 75 % of its
 fitting cost; no fish. Message 0x248f sells a building: 75 % of its cost
 times its health (0x425990), and a settlement's stock likewise, fish at
-75 % too. Sell Town (command 0x80, slot 6) sends 0x248f to the settlement: its
-stock units at 75 % of `cost[kind / 3]` and of crews' fish (0x597170) by
-condition, armour, rams and goods at 75 %, the building at 75 % of its
-cost by health, which then falls to ruins (state 3). Sell Item and Sell
+75 % too. Sell Town (command 0x80, slot 6) sends order 0x34 with byte 3
+(0x4f34c0), which the settlement turns into 0x248f: per stock unit amber
+`cost[kind / 3] x c x 75 / 10000` and fish `0x597170[kind] x c x 7500 /
+10000`, per armour piece `0x42d960(level) x c x 75 / 10000` (30, 60), per
+ram `0x42d940(level) x c x 75 / 10000` (25, 50), and the building `cost x
+condition x 75 / 10000` (0x425990), in integers, no goods. It is not
+destroyed: it goes to state 3, drawn as its building picture's last frame
+(0x422e30), keeping its owner and stock, with no menu and taking no orders.
+Only the human can sell (nothing else sends order 0x34). Sell Item and Sell
 Town show only with permit bit 10 (player +0x46 bit 2) and are enabled
 while the settlement is built and idle; Sell Town also hides while a ship
 is taken up for loading (+0x1c8). No menu offers Sell Fish (0x7e).
@@ -1867,9 +1872,13 @@ has the settlement repair: message 0x1e sub-order 2 (0x441ba0) takes
 `(100 - condition) x 0x597164[kind / 3] / 100` amber per worn unit
 (0x440fd0) at once and enters state 2 for `(100 - condition) x
 0x5971a0[kind / 3] / 100` ticks summed, at whose end every unit is
-whole; units are refused (0x440d40) meanwhile. Cancelled, it refunds the
-part not done (`(100 - progress) x amber / 100`) and seems to mend units
-as far as the time spent goes (not decoded in full; not done here).
+whole; units are refused (0x440d40) meanwhile. Each tick it notes its
+progress in whole percent (`+0x120`); nothing is mended before the end.
+Cancelled (order 10, 0x4430f0), it refunds `(100 - progress) x paid / 100`
+and walks the places in turn, each one's units least worn first (0x440e70
+keeps them sorted, 0x4478e0), making whole each worn one whose ticks still
+fit in the time spent, the first that does not ending the walk. Ordered
+again meanwhile it pays again and starts over (no busy test).
 Selling a stock unit brings 75% of its price times its condition.
 Forts hold units with conditions too: see Forts' units.
 
@@ -2353,8 +2362,7 @@ Repair) sums, over units below 100, amber `cost[kind / 3] x (100 -
 condition) / 100` (0x597164: 30, 50, 70, ...) and time `ticks[kind / 3] x
 (100 - condition) / 100` (0x5971a0: 70, 80, 95, 1200, 1300, 0, 400, 450,
 ...; 0x440fd0), takes the amber at once and enters state 2 (`+0x110`),
-mending the units one after another as the time passes and all of them at
-its end (0x441ba0). State 1 is training, a queued unit taking
+mending all of them at its end (0x441ba0). State 1 is training, a queued unit taking
 `ticks[kind / 3]`.
 
 Queues. A settlement (marines) and a workshop (weapons) each keep one
@@ -3290,9 +3298,10 @@ both behind permission bit 13; command 0x12 is "Sell item", `CBUT_SELL`);
 where the fish trade is offered is not known (perhaps only between
 players in multiplayer). The town's order handler (0x43b290, internal ids
 0x138a-0x138e) trains items with 0x138d (paying 0x597164 amber by group
-and 0x597170 fish by item) and, for Greek towns, answers 0x138e with
-message 0x5d9c (the town's owner and cell), likely the handing over of a
-sold town; what selling pays is not decoded.
+and 0x597170 fish by item); 0x138e is a blow (queued by 0x423c30): an
+owned object (`+0x57 == 1`) reports it to its owner's brain with message
+0x5d9c, and a town being built or upgraded (class 0x33, state 0) drops it
+unapplied.
 
 At a mission's end the brains' shared slot 0x478e30 fills the statistics
 at game + 0x3309 (twelve dwords, shown by 0x539b20 with strings

@@ -22,21 +22,32 @@ const UNIT_PRICE: [u32; 3] = [30, 50, 70];
 const UNIT_TICKS: [u32; 3] = [70, 80, 95];
 
 /// A settlement mending its stock (message 0x1e, sub-order 2; state 2 of
-/// 0x441ba0): the time it takes and how long it has been at it.
+/// 0x441ba0): how long it has been at it, the ticks it takes (`+0x114`),
+/// the amber paid (`+0x118`) and how far along the last tick found it, in
+/// whole percent (`+0x120`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StockRepair {
     pub site: u32,
     pub elapsed: f32,
     pub seconds: f32,
+    #[serde(default)]
+    pub paid: u32,
+    #[serde(default)]
+    pub progress: u32,
 }
 
 impl StockRepair {
     /// How far along it is, 0-100 (`+0x120`).
     pub fn done(&self) -> u32 {
-        if self.seconds <= 0.0 {
-            return 100;
-        }
-        ((self.elapsed / self.seconds) * 100.0).min(100.0) as u32
+        self.progress
+    }
+
+    fn ticks(&self) -> u32 {
+        (self.seconds / crate::clock::TICK).round() as u32
+    }
+
+    fn elapsed_ticks(&self) -> u32 {
+        (self.elapsed / crate::clock::TICK + 1e-3) as u32
     }
 }
 
@@ -274,7 +285,11 @@ impl Scene {
         let home = self
             .home_settlement(w)
             .ok_or("The workshop belongs to no settlement")?;
-        if self.stock_repairs.iter().any(|r| r.site == home) || self.training_at(home).is_some() {
+        // (Not ported: the original lets it begin while the settlement
+        // trains, overwriting that job, 0x4438a2; what its queue then does
+        // is not decoded.) Ordered again while mending, it pays again and
+        // starts over (no busy test there).
+        if self.training_at(home).is_some() {
             return Err("The settlement is busy".into());
         }
         let units = self.stock_units(home);
@@ -287,11 +302,64 @@ impl Scene {
             return Err(format!("Repairing costs {amber} amber"));
         }
         self.earn(owner, -(amber as i64), 0);
+        self.stock_repairs.retain(|r| r.site != home);
         self.stock_repairs.push(StockRepair {
             site: home,
             elapsed: 0.0,
             seconds: crate::clock::ticks(ticks),
+            paid: amber,
+            progress: 0,
         });
+        Ok(())
+    }
+
+    /// Calls off settlement `site`'s stock repair (order 10, 0x4430f0): the
+    /// part of the price not done comes back (`(100 - progress) x paid /
+    /// 100`), and the worn units are made whole in their order, kinds in
+    /// turn and least worn first, as long as each one's time still fits in
+    /// the time spent, the first that does not ending it. (Not wired: the
+    /// original gives it with the info pointer, mode 0x1e, whose use is not
+    /// decoded.)
+    #[allow(dead_code)]
+    pub fn cancel_stock_repair(&mut self, site: u32) -> Result<(), String> {
+        let k = self
+            .stock_repairs
+            .iter()
+            .position(|r| r.site == site)
+            .ok_or("Nothing to call off")?;
+        let r = self.stock_repairs.remove(k);
+        let i = self.object_index(site).ok_or("No such settlement")?;
+        let refund = (100 - r.progress.min(100) as i64) * r.paid as i64 / 100;
+        if let Some(owner) = self.objects[i].owner {
+            self.earn(owner, refund, 0);
+            // Its nation's call (events 0xdc, 0xdd, 0xdf, 0xde).
+            if self.human.is_some_and(|h| (h.nation, h.slot) == owner) {
+                let calls: &[&str] = match owner.0 {
+                    1 => &["re_o2a", "re_o4a", "re_o6a", "re_o5a"],
+                    3 => &["re_o2a", "re_o4a", "re_o5a", "re_o6a"],
+                    _ => &[],
+                };
+                if !calls.is_empty() {
+                    let pick = calls[self.gull_rng.next() as usize % calls.len()];
+                    let (x, y) = (self.objects[i].x, self.objects[i].y);
+                    self.sounds.push((pick, x, y));
+                }
+            }
+        }
+        let spent = r.elapsed_ticks();
+        let mut units = self.stock_units(site);
+        let mut sum = 0;
+        'walk: for (kind, list) in units.iter_mut().enumerate() {
+            for c in list.iter_mut().filter(|c| **c < 100) {
+                let t = UNIT_TICKS[kind / 3] * (100 - *c as u32) / 100;
+                if sum + t > spent {
+                    break 'walk;
+                }
+                sum += t;
+                *c = 100;
+            }
+        }
+        self.set_stock_units(site, units);
         Ok(())
     }
 
@@ -300,13 +368,17 @@ impl Scene {
         self.stock_repairs.iter().find(|r| r.site == site)
     }
 
-    /// Settlements mending their stock: at the end every worn unit is
-    /// whole.
+    /// Settlements mending their stock: each tick it notes how far along it
+    /// is, in whole percent; nothing is mended till the end, when every
+    /// worn unit is whole (0x441ba0 state 2).
     fn run_stock_repairs(&mut self, dt: f32) {
         let mut done = Vec::new();
         for r in &mut self.stock_repairs {
             r.elapsed += dt;
-            if r.elapsed >= r.seconds {
+            let (spent, ticks) = (r.elapsed_ticks(), r.ticks());
+            if spent < ticks {
+                r.progress = spent * 100 / ticks;
+            } else {
                 done.push(r.site);
             }
         }
