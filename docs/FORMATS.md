@@ -1458,9 +1458,9 @@ buildings or forts (+0x1c8 = id); with flag 8 a facing, the first of south,
 north and west whose edge is set and whose cell is not land, then east
 whatever the edge. The interface asks it as the pointer moves (0xc451):
 forts 0x20, ports and shipyards 0x1e, the rest 0x15; a refused cell shows
-the ban cursor and takes no click. (An earlier probe here saw a moorage
-two cells from a settlement; by the code one goes beside a cell of the
-town's, which a building of it there would explain.) A ship founds
+the ban cursor and takes no click. (Checked by hand on the original: a
+moorage goes beside the settlement or beside one of its buildings or
+forts, and is refused two cells away with none of them beside it.) A ship founds
 (0x4aa990, 0x4b3370, checking with 0x4e4420 on arrival and after landing)
 a fort on a shore tile (the nation's permission, then 0x4eb with flags
 0x20 and no id) and a settlement on 2 x 2 free inland cells with a shore
