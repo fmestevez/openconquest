@@ -1987,6 +1987,14 @@ bow strikes (0x4c2566) and, boarded, Q and R at the boarder and two S at
 itself at each step of its sail furling (0x4c3410 state 10): it blows
 up. Letters 16-18 come from nowhere else.
 
+A brain wakes a volcano (0x445e00, a direct call) with a strength: it
+erupts at once, even if it already was, and after that eruption sleeps for
+good (+0xb4). miss009 wakes, while the fire wizard lives, the flows of six
+zones with 8 whenever the player's ships or forts are in one (every tick);
+miss010, once the dragon's nest at (59, 4) is gone, the flows at (57, 4) and
+(58, 5) with 9 (its third call names (63, 4), where no flow is). The game
+word +0xa81 = 0xd0dd (never set in the retail game) stops eruptions.
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships

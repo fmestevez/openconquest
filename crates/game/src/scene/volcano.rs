@@ -40,6 +40,38 @@ pub struct Volcano {
     pub clock: f32,
     /// Its own generator (+0x18).
     pub rng: Rng,
+    /// Its strength N (+0x94: record field 8 at first, set when woken).
+    #[serde(default)]
+    pub n: u32,
+    /// Woken by a brain (+0xb4): after that eruption it sleeps for good.
+    #[serde(default)]
+    pub once: bool,
+}
+
+fn scaled(v: &mut Volcano, base: u32) -> f32 {
+    ticks(base * (v.rng.next() % 21 + 80) / 100)
+}
+
+impl Volcano {
+    fn new(id: u32, n: u32) -> Self {
+        let mut v = Volcano {
+            rng: Rng(id.wrapping_mul(0x9e37_79b9)),
+            n,
+            ..Default::default()
+        };
+        v.left = scaled(&mut v, 45000 - 4500 * n.min(9));
+        v
+    }
+
+    /// Erupts now (0x445920 with 1).
+    fn start(&mut self) {
+        let n = self.n.min(9);
+        self.erupting = true;
+        self.left = scaled(self, 15000 - 1500 * n);
+        self.volley = scaled(self, 50 - 5 * n);
+        self.frame = 0;
+        self.clock = 0.0;
+    }
 }
 
 impl Scene {
@@ -52,30 +84,26 @@ impl Scene {
             .iter()
             .filter(|o| o.class == ObjectClass::Lava)
             .map(|o| (o.id, o.record.field(8).unwrap_or(0)))
-            .filter(|&(_, n)| n > 0)
             .collect();
-        for (id, n) in ids {
-            let n = n.min(9);
-            let scaled = |v: &mut Volcano, base: u32| ticks(base * (v.rng.next() % 21 + 80) / 100);
-            let v = self.volcanoes.entry(id).or_insert_with(|| {
-                let mut v = Volcano {
-                    rng: Rng(id.wrapping_mul(0x9e37_79b9)),
-                    ..Default::default()
-                };
-                v.left = scaled(&mut v, 45000 - 4500 * n);
-                v
-            });
+        for (id, n0) in ids {
+            if n0 == 0 && !self.volcanoes.contains_key(&id) {
+                continue;
+            }
+            let v = self
+                .volcanoes
+                .entry(id)
+                .or_insert_with(|| Volcano::new(id, n0));
+            let n = v.n.min(9);
+            if n == 0 && !v.erupting {
+                continue;
+            }
             let mut volley = false;
             let mut started = false;
             let mut ended = false;
             v.left -= dt;
             if !v.erupting {
                 if v.left <= 0.0 {
-                    v.erupting = true;
-                    v.left = scaled(v, 15000 - 1500 * n);
-                    v.volley = scaled(v, 50 - 5 * n);
-                    v.frame = 0;
-                    v.clock = 0.0;
+                    v.start();
                     started = true;
                 }
             } else {
@@ -95,7 +123,10 @@ impl Scene {
                 }
                 if v.frame >= 180 {
                     v.erupting = false;
-                    v.left = scaled(v, 45000 - 4500 * n);
+                    if v.once {
+                        v.n = 0;
+                    }
+                    v.left = scaled(v, 45000 - 4500 * v.n.min(9));
                     ended = true;
                 }
             }
@@ -135,13 +166,54 @@ impl Scene {
         }
     }
 
+    /// The volcano recorded on cell `cell` (fields 6 and 7).
+    pub(super) fn volcano_at(&self, cell: (i32, i32)) -> Option<u32> {
+        self.objects
+            .iter()
+            .find(|o| {
+                o.class == ObjectClass::Lava
+                    && o.record.field(6) == Some(cell.0 as u32)
+                    && o.record.field(7) == Some(cell.1 as u32)
+            })
+            .map(|o| o.id)
+    }
+
+    /// Whether anything stands on cell `cell` (a building, nest, castle
+    /// or the like).
+    pub(super) fn standing_at(&self, cell: (i32, i32)) -> bool {
+        self.objects.iter().any(|o| {
+            o.cell.is_some_and(|(x, y)| {
+                let n = super::trade::building_cells(o);
+                (x..x + n).contains(&cell.0) && (y..y + n).contains(&cell.1)
+            }) && o.combat.as_ref().is_none_or(|c| c.hull > 0.0)
+        })
+    }
+
+    /// A brain wakes volcano `id` with strength `n` (0x445e00): it erupts
+    /// at once, even if it already was, and after that eruption sleeps for
+    /// good.
+    pub(super) fn wake_volcano(&mut self, id: u32, n: u32) {
+        let v = self
+            .volcanoes
+            .entry(id)
+            .or_insert_with(|| Volcano::new(id, n));
+        v.n = n;
+        v.once = true;
+        v.start();
+        if let Some(i) = self.object_index(id) {
+            let (x, y) = (self.objects[i].x, self.objects[i].y);
+            self.sounds.push(("shum2", x, y));
+        }
+    }
+
     /// A volley (0x445ad0): up to N - 1 stones, each on another cell within
     /// the radius (field 9) but the crater's 2 x 2; Q, R or S burning, G
     /// or F burning by chance, or (one in six) none.
     fn erupt(&mut self, i: usize, data: &GameData, caches: &mut Caches) {
         let o = &self.objects[i];
         let f = |k| o.record.field(k).unwrap_or(0) as i32;
-        let (pic, cx, cy, n, r) = (f(4), f(6), f(7), f(8), f(9));
+        let (pic, cx, cy, r) = (f(4), f(6), f(7), f(9));
+        let n = self.volcanoes.get(&o.id).map_or(f(8), |v| v.n as i32);
         let id = o.id;
         let t = TILE_SIZE as f32;
         let (x, y) = (o.x, o.y);

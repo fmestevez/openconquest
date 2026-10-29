@@ -6004,9 +6004,7 @@ mod miss008 {
 /// member 3 kind 9, the Flame, up to difficulty + 3 times when it attacks;
 /// members 3 and 4 kind 15, the weapon shield, each turn they fight in
 /// their home waters; member 4 kinds 12 and 9 when it strikes, never in
-/// fact as `+0x12f` is never counted down); the lava flows woken (message
-/// 8, 0x445e00) when the player enters six zones while the wizard lives
-/// (the port's lava has no states); the builders' own orders of class
+/// fact as `+0x12f` is never counted down); the builders' own orders of class
 /// 0x60 and the Persian yard's one-off order of class 1 (0x47b130, as in
 /// miss008); the Persians' technology bits 78, 79 and workshop levels
 /// set at the start; a launch the brain did not order joining member 1,
@@ -6402,6 +6400,28 @@ mod miss009 {
                 .collect();
             for (x, y) in temples {
                 scene.pending_casts.push((Spell::Lightning, x, y, None));
+            }
+        }
+        // While the fire wizard lives, the player's ships or forts in one
+        // of six zones wake the lava there with strength 8 (0x445e00), on
+        // every tick they stay.
+        if var(scene, GUARD, GONE) == 0 {
+            const LAVA: [(Cells, &[(i32, i32)]); 6] = [
+                ((14, 4, 12, 15), &[(16, 7), (21, 8), (18, 14)]),
+                ((15, 10, 16, 12), &[(18, 14), (22, 16), (27, 13)]),
+                ((20, 22, 13, 11), &[(24, 24), (29, 27)]),
+                ((33, 11, 11, 12), &[(36, 18), (39, 14)]),
+                ((36, 6, 12, 11), &[(39, 14), (43, 11)]),
+                ((30, 2, 12, 11), &[(33, 9), (37, 5)]),
+            ];
+            for (zone, flows) in LAVA {
+                if scene.human_in(zone) {
+                    for &cell in flows {
+                        if let Some(id) = scene.volcano_at(cell) {
+                            scene.wake_volcano(id, 8);
+                        }
+                    }
+                }
             }
         }
     }
@@ -6888,17 +6908,15 @@ mod miss009 {
 /// Member 9's request is checked in its own slot (`+0x11c`, which nothing
 /// sets) but written into member 8's (`+0x11a`), so member 9 never gets a
 /// ship and member 8 gets the Persians' own ships too; ported as is.
-/// (Not ported: the lava flows at (58, 4), (59, 5) and (64, 4) woken
-/// (message 9, 0x445e00) once the dragon's nest at (59, 4) is gone (the
-/// port's lava has no states); the builders' own orders of class 0x60
+/// (Not ported: the builders' own orders of class 0x60
 /// and Persian yard 2's one-off order of class 1 (0x47b130, as in
 /// miss008 and miss009); the Persians' technology bits 78, 79 and
 /// workshop levels set at the start; a launch the brain did not order
 /// joining member 6, 7 or 8 by type (message 0x5d98): every launch here
 /// is ordered. The brain's tick runs at a random tick of each 50 in the
-/// original, here on member 0's turn; the port hands over only goods,
-/// soldiers and scrolls at a settlement (`hand_over`), so the Golden
-/// Fleece is never "delivered" and the lightning does not come yet. An
+/// original, here on member 0's turn. The Golden Fleece is delivered by
+/// storing it in one of the player's buildings through the load panel
+/// (0x5d94; automatic unloading never hands it over). An
 /// attack's "failed" exit is taken as its "ok" one, as in miss008. A
 /// Persian yard that cannot pay tries again on its next turn.)
 mod miss010 {
@@ -6959,6 +6977,8 @@ mod miss010 {
     const WAIT: usize = 0;
     const SERVING: usize = 3;
     const CAST: usize = 0;
+    /// Fleet 0's: the lava has been woken.
+    const LAVA: usize = 1;
 
     /// The waters about the dragon's nest (40, 0, 25, 10) (0x479fd0).
     const NEST_WATERS: Cells = (40, 0, 25, 10);
@@ -7325,6 +7345,18 @@ mod miss010 {
             let (x, y) = if cast == 0 { (58, 5) } else { (59, 4) };
             scene.pending_casts.push((Spell::Lightning, x, y, None));
             set_var(scene, 0, CAST, cast + 1);
+        }
+        // Once the dragon's nest at (59, 4) is gone, the lava about it
+        // wakes with strength 9 (0x445e00): the flows recorded at (57, 4)
+        // and (58, 5); the third call names (63, 4), where no flow is (it
+        // lies at (63, 5)), and does nothing.
+        if var(scene, 0, LAVA) == 0 && !scene.standing_at((59, 4)) {
+            for cell in [(57, 4), (58, 5), (63, 4)] {
+                if let Some(id) = scene.volcano_at(cell) {
+                    scene.wake_volcano(id, 9);
+                }
+            }
+            set_var(scene, 0, LAVA, 1);
         }
     }
 
