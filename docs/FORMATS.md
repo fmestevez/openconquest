@@ -2131,8 +2131,15 @@ picture over water, 40 over land. It asks each of the 3 x 3 cells'
 occupants, row by row, whether it is shielded (0xda94): a ship there is
 wrecked at the asking, shielded or not (0x4dc630); a building shielded from
 magic (`+0x15c`) stops the asking. Unless one did, the struck cell is dug
-(0x5030c0 with layer 0: the map editor's erase on layers 0 and 2-7, then
-0x502fb0 clears loose things of layers 5-7 within two): its ground goes to
+(0x5030c0 with layer 0: the map editor's erase 0x502e60 on layers 0 and 2-7
+in turn, stopping at the first that fails, then 0x502fb0 clears what lies
+loose (record kind 0) on layers 5-7 within two, but on whole ground, kind 4
+variant 1; a re-tiled cell takes a random variant of its shape, 0x501bb0-
+0x501cb0, the lists 0x5be150 / 0x5be24c / 0x5be304 / 0x5be3ac / 0x5be438
+by kind 4-8; a cell one in from the map's side first notes the edges its
+outer neighbours give (0x502da0, 0x502b20, kept at 0x5ca798), which
+0x501e70 uses for neighbours off the map when the dug cell is on that ring,
+else it makes them up from the cell's own edges): its ground goes to
 sea (0x502350), the same ground about it whose edges it held goes too, the
 coast about it is re-tiled to fit (0x5028b0, 0x5027e0, the tables 0x5bdeb8
 shapes, 0x5bdef8 and 0x5bdfe8 edges, 0x5be0d6 / 0x5be150 ground and
@@ -2141,7 +2148,9 @@ within two goes deep and is laid again about the coast (0x502a80,
 0x5029d0); a dig never shuts water. Then the blow (0xda93) to every object
 of the 9 cells: unshielded ships go down; forts, ports, docks, workshops,
 temples, schools, castles and harpy nests (WorkLandObj 0x427f50, asleep or
-not) fall struck on their own cell unshielded or with their ground gone,
+not) fall struck on their own cell unshielded or when their site no longer
+holds (the town's check 0x4eb on their cell with their flags and 0x40,
+what stands there aside, and their town's id),
 else lose 25 points of condition (5 shielded); settlements and towns take
 nothing. The ships' ways are rebuilt (0x49a950) and the caster's brain told
 (0x5d9d, cell and caster): miss009's notes the player's strike in x 55-62,

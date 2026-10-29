@@ -1383,6 +1383,48 @@ impl Scene {
         self.check_ground(class, cx, cy)
     }
 
+    /// Whether building `i` (a fort, port, workshop and the like of a
+    /// town's) still stands on a site its town could build it on: the
+    /// town's check run on its own cell, what stands there aside (message
+    /// 0x4eb with its flags and 0x40, the town's id; WorkLandObj 0x427f50
+    /// asks it when lightning strikes about it).
+    pub(crate) fn site_holds(&self, i: usize) -> bool {
+        let o = &self.objects[i];
+        let (ObjectClass::Building(class @ 0x34..=0x3e), Some((cx, cy))) = (o.class, o.cell) else {
+            return true;
+        };
+        let Some(town) = self.home_settlement(i) else {
+            return false;
+        };
+        let owner = o.owner;
+        let own_cell = |x: i32, y: i32| {
+            self.objects.iter().enumerate().any(|(k, b)| {
+                let Some((bx, by)) = b.cell else { return false };
+                let n = building_cells(b);
+                (bx..bx + n).contains(&x)
+                    && (by..by + n).contains(&y)
+                    && b.owner == owner
+                    && match b.class {
+                        ObjectClass::Building(SETTLEMENT | TOWN) => b.id == town,
+                        ObjectClass::Building(0x34..=0x3e) => {
+                            k != i && self.home_settlement(k) == Some(town)
+                        }
+                        _ => false,
+                    }
+            })
+        };
+        let beside = (-1..=1)
+            .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+            .any(|(dx, dy)| (dx, dy) != (0, 0) && own_cell(cx + dx, cy + dy));
+        if !beside {
+            return false;
+        }
+        if (0x34..=0x36).contains(&class) {
+            return self.free_ground_but(cx, cy, false).is_ok();
+        }
+        self.check_ground_but(class, cx, cy, false).is_ok()
+    }
+
     /// The edges of the land tile on cell `(x, y)` that meet the water, a
     /// bit each: 1 north, 2 east, 4 south, 8 west (0x5acf13 by the tile's
     /// variant); none for inland tiles.
@@ -1403,6 +1445,12 @@ impl Scene {
     /// 0x1a and 0x30 on layers 5-7 (0x503150; trees and rocks do not
     /// matter).
     pub(super) fn free_ground(&self, cx: i32, cy: i32) -> Result<(), String> {
+        self.free_ground_but(cx, cy, true)
+    }
+
+    /// The same, minding what stands there only if `occupied` (0x42dae0
+    /// flag 0x40 leaves it out).
+    fn free_ground_but(&self, cx: i32, cy: i32, occupied: bool) -> Result<(), String> {
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
         if cx < 0 || cy < 0 || cx >= w || cy >= h {
             return Err("Off the map".into());
@@ -1433,7 +1481,7 @@ impl Scene {
                     (ox..ox + n).contains(&cx) && (oy..oy + n).contains(&cy)
                 })
         });
-        if barred || taken {
+        if barred || (taken && occupied) {
             return Err("There is no room there".into());
         }
         Ok(())
@@ -1447,9 +1495,19 @@ impl Scene {
     /// flags 0x20); a settlement on 2 x 2 free inland cells with a shore
     /// tile in the ring about them (0x42e1e0).
     pub fn check_ground(&self, class: u32, cx: i32, cy: i32) -> Result<u32, String> {
+        self.check_ground_but(class, cx, cy, true)
+    }
+
+    fn check_ground_but(
+        &self,
+        class: u32,
+        cx: i32,
+        cy: i32,
+        occupied: bool,
+    ) -> Result<u32, String> {
         if class == SETTLEMENT {
             for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                self.free_ground(cx + dx, cy + dy)?;
+                self.free_ground_but(cx + dx, cy + dy, occupied)?;
                 if self.tile_edges(cx + dx, cy + dy) != 0 {
                     return Err("This must be built inland, away from the shore".into());
                 }
@@ -1471,7 +1529,7 @@ impl Scene {
                 Err("A settlement goes near the shore".into())
             };
         }
-        self.free_ground(cx, cy)?;
+        self.free_ground_but(cx, cy, occupied)?;
         let edges = self.tile_edges(cx, cy);
         if (0x34..=0x36).contains(&class) {
             return if edges != 0 {

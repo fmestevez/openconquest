@@ -6714,3 +6714,97 @@ fn lightning_digs_miss009_strait() {
     strike(&mut scene, (57, 5), false, &mut caches);
     assert!(!scene.strait_struck);
 }
+
+/// Lightning on the cells one in from the map's side digs as anywhere
+/// else (0x502da0 gives the border's edges), and never shuts water (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn lightning_digs_at_the_border() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut dug = 0;
+    for m in ["miss001", "miss009", "miss010"] {
+        let base = Scene::load(&data, &mut caches, m).unwrap();
+        let (w, h) = (base.nav.width as i32, base.nav.height as i32);
+        let ring: Vec<(i32, i32)> = (1..w - 1)
+            .flat_map(|x| [(x, 1), (x, h - 2)])
+            .chain((1..h - 1).flat_map(|y| [(1, y), (w - 2, y)]))
+            .filter(|&(x, y)| !base.nav.is_water(x, y))
+            .take(12)
+            .collect();
+        for c in ring {
+            let mut s = Scene::load(&data, &mut caches, m).unwrap();
+            s.dig(c.0, c.1, &data, &mut caches);
+            dug += usize::from(s.nav.is_water(c.0, c.1));
+            for y in 0..h {
+                for x in 0..w {
+                    assert!(
+                        !base.nav.is_water(x, y) || s.nav.is_water(x, y),
+                        "{m} {c:?} shut {x},{y}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(dug > 0, "border cells dug");
+}
+
+/// A town's building beside a strike loses a quarter of its condition;
+/// with its ground dug away it falls (WorkLandObj 0x427f50, the town's
+/// check) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn lightning_on_a_towns_buildings() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let t = TILE_SIZE as f32;
+    let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+    scene.brain = None;
+    let i = (0..scene.objects.len())
+        .find(|&i| {
+            matches!(scene.objects[i].class, ObjectClass::Building(0x37..=0x3e))
+                && scene.site_holds(i)
+        })
+        .expect("a town's building");
+    let id = scene.objects[i].id;
+    let (cx, cy) = scene.objects[i].cell.unwrap();
+    let max = scene.objects[i].combat.as_ref().unwrap().max_hull;
+    // Struck beside it, on water or ground that leaves its site whole.
+    let beside = [
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+        (1, 1),
+        (-1, -1),
+        (1, -1),
+        (-1, 1),
+    ]
+    .into_iter()
+    .map(|(dx, dy)| (cx + dx, cy + dy))
+    .find(|&(x, y)| scene.nav.is_water(x, y))
+    .unwrap();
+    scene.lightning.push((
+        beside.0 as f32 * t + t / 2.0,
+        beside.1 as f32 * t + t / 2.0,
+        0.0,
+        None,
+    ));
+    scene.update(0.02, &data, &mut caches);
+    let i = scene.object_index(id).expect("still standing");
+    let hull = scene.objects[i].combat.as_ref().unwrap().hull;
+    assert!(
+        (hull - max * 0.75).abs() < 1.0,
+        "a quarter off: {hull} of {max}"
+    );
+    // Its own cell dug into sea: the site no longer holds.
+    let at = scene.objects[i].cell.unwrap();
+    scene.dig(at.0, at.1, &data, &mut caches);
+    let i = scene.object_index(id).unwrap();
+    assert!(!scene.site_holds(i));
+}

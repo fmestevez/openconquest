@@ -268,14 +268,14 @@ impl Scene {
                     | ObjectClass::Castle(_)
                     | ObjectClass::HarpyNest
             );
+            let k = self.object_index(o.id).unwrap_or(0);
             let blow = match o.class {
                 // The query wrecks the ship on the cell (0x4dc630, 0xda94);
                 // the blow, an unshielded one.
                 ObjectClass::Ship if wrecked.contains(&o.id) => c.hull,
                 ObjectClass::Ship if near(home) && !shielded => c.hull,
                 _ if work && near(home) => {
-                    let gone = (centre && !shielded)
-                        || o.cell.is_some_and(|(bx, by)| !self.nav_land(bx, by));
+                    let gone = (centre && !shielded) || !self.site_holds(k);
                     if gone {
                         c.hull
                     } else {
@@ -310,11 +310,6 @@ impl Scene {
         {
             self.strait_struck = true;
         }
-    }
-
-    /// Whether a building's cell is still ground (not dug into sea).
-    fn nav_land(&self, x: i32, y: i32) -> bool {
-        !self.nav.is_water(x, y)
     }
 
     /// The Flame wears off; a brewed one lights.
