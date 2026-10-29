@@ -397,7 +397,8 @@ pub struct Scene {
     /// Each Gorgon's cycle (not saved).
     pub gorgons: HashMap<u32, creatures::GorgonCycle>,
     /// Each sea monster's seconds to its next bite and step (not saved).
-    pub sea_monsters: HashMap<u32, (f32, f32)>,
+    /// Sea monsters' states (umonster.cpp).
+    pub sea_monster_states: HashMap<u32, sea_monster::SeaMonster>,
     /// Places seen for a while by spells: cell, radius, seconds left (not
     /// saved).
     pub sight_points: Vec<(i32, i32, i32, f32)>,
@@ -444,6 +445,7 @@ mod gulls;
 pub mod load;
 mod orders;
 pub mod repair;
+mod sea_monster;
 mod sheep;
 mod shot;
 mod sight;
@@ -646,7 +648,7 @@ impl Scene {
             siren_songs: HashMap::new(),
             siren_shown: HashMap::new(),
             gorgons: HashMap::new(),
-            sea_monsters: HashMap::new(),
+            sea_monster_states: HashMap::new(),
             mending: Vec::new(),
             unit_mends: Vec::new(),
             stock_conditions: Default::default(),
@@ -932,7 +934,12 @@ impl Scene {
                 siren_songs: self.siren_songs.iter().map(|(k, v)| (*k, *v)).collect(),
                 siren_shown: self.siren_shown.iter().map(|(k, v)| (*k, *v)).collect(),
                 gorgons: self.gorgons.iter().map(|(k, v)| (*k, *v)).collect(),
-                sea_monsters: self.sea_monsters.iter().map(|(k, v)| (*k, *v)).collect(),
+                sea_monsters: Vec::new(),
+                sea_monster_states: self
+                    .sea_monster_states
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect(),
                 wizards: self.wizards.iter().map(|(k, v)| (*k, v.clone())).collect(),
             },
         }
@@ -1074,7 +1081,7 @@ impl Scene {
         scene.siren_songs = b.siren_songs.iter().copied().collect();
         scene.siren_shown = b.siren_shown.iter().copied().collect();
         scene.gorgons = b.gorgons.iter().copied().collect();
-        scene.sea_monsters = b.sea_monsters.iter().copied().collect();
+        scene.sea_monster_states = b.sea_monster_states.iter().cloned().collect();
         scene.wizards = b.wizards.iter().cloned().collect();
         scene.refresh_sight();
         if !save.start_sites.is_empty() {
@@ -2397,8 +2404,11 @@ pub struct Battle {
     pub siren_shown: Vec<(u32, f32)>,
     #[serde(default)]
     pub gorgons: Vec<(u32, creatures::GorgonCycle)>,
+    /// Unused: kept for older saves.
     #[serde(default)]
     pub sea_monsters: Vec<(u32, (f32, f32))>,
+    #[serde(default)]
+    pub sea_monster_states: Vec<(u32, sea_monster::SeaMonster)>,
     #[serde(default)]
     pub wizards: Vec<(u32, script::Wizard)>,
 }

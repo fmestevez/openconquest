@@ -226,11 +226,6 @@ pub const PROTECTION_SECONDS: f32 = 3000.0 * crate::clock::TICK;
 /// takes its share.
 pub const WATERSPOUT_STRIKE: f32 = 30000.0 / 15.0;
 pub const FX_TORNADO: &str = "TRNDSPR";
-/// A summoned sea monster spends its strength: a hundredth of it at the
-/// end of each idle round of 50-125 ticks (UMonsterClassTy 0x491fa0,
-/// 0x491830), here evenly over the rounds' mean; it goes back to the deep
-/// when none is left. It bites (see `scene::creatures`).
-pub const MONSTER_ROUND_SECONDS: f32 = 87.5 * crate::clock::TICK;
 
 /// Lightning's picture (LightningObjClassTy, `LTSPR_%1u`, 0x42cfa0): over
 /// water `LTSPR_1`, over land `LTSPR_2`.

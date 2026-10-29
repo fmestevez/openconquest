@@ -673,6 +673,7 @@ impl Scene {
                 wounds,
                 wear,
                 rope: None,
+                shooter: None,
             },
             data,
             caches,

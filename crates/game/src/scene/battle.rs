@@ -390,6 +390,7 @@ impl Scene {
                         wounds,
                         wear,
                         rope: None,
+                        shooter: Some(shooter),
                     },
                     data,
                     caches,
@@ -603,7 +604,19 @@ impl Scene {
             return;
         };
         c.hull -= damage;
-        let destroyed = c.hull <= 0.0;
+        // A sea monster struck to nothing dies at its next turn under water
+        // (0x491fa0), its kill reported now (0x50e750).
+        let (hull, was) = (c.hull, c.hull + damage);
+        let monster = self.objects[ti].class == ObjectClass::Monster(0x1fb)
+            && self.sea_monster_states.contains_key(&target);
+        if monster && hull <= 0.0 {
+            self.objects[ti].combat.as_mut().unwrap().hull = 0.0;
+            if was > 0.0 {
+                self.note_destroyed(ti);
+            }
+        }
+        let c = self.objects[ti].combat.as_mut().unwrap();
+        let destroyed = c.hull <= 0.0 && !monster;
         if show {
             let name = if damage > 0.0 {
                 combat::FX_HIT
@@ -658,13 +671,6 @@ impl Scene {
                         }),
                         _ => self.spawn_effect(data, caches, combat::FX_SINK, tx, ty),
                     }
-                }
-                // A sea monster dies in a pool of its blood.
-                None if self.objects[ti].record.class_id == 0x1fb => {
-                    let kind = crate::objects::sea_monster_type(
-                        self.objects[ti].record.fields.get(10).copied().unwrap_or(0),
-                    );
-                    self.spawn_effect(data, caches, &format!("UMON{kind}40"), tx, ty);
                 }
                 None => self.spawn_effect(data, caches, combat::FX_SINK, tx, ty),
             }

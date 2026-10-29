@@ -122,6 +122,8 @@ pub struct Shot {
     /// A grappling hook's line back to the ship that threw it (bomb slot
     /// 2, a line in palette colour 0x6d, 0x496f40, 0x4964c0).
     pub rope: Option<u32>,
+    /// Who fired it.
+    pub shooter: Option<u32>,
     /// Thrown by a volcano or a fire ship (0x499410): no shooter, it
     /// strikes whatever is where it lands, its pictures played once.
     pub volcanic: bool,
@@ -234,6 +236,8 @@ pub struct SavedShot {
     #[serde(default)]
     rope: Option<u32>,
     #[serde(default)]
+    shooter: Option<u32>,
+    #[serde(default)]
     volcanic: bool,
     #[serde(default = "yes")]
     trail: bool,
@@ -261,6 +265,7 @@ impl Shot {
             flight: self.flight,
             apex: self.apex,
             rope: self.rope,
+            shooter: self.shooter,
             volcanic: self.volcanic,
             trail: self.trail,
         }
@@ -287,6 +292,7 @@ impl Shot {
             x: s.from.0,
             y: s.from.1,
             rope: s.rope,
+            shooter: s.shooter,
             volcanic: s.volcanic,
             trail: s.trail,
         }
@@ -354,6 +360,8 @@ pub(super) struct Firing {
     pub wear: f32,
     /// The ship a hook's line runs back to.
     pub rope: Option<u32>,
+    /// Who fired it (a sea monster remembers the ship that struck it).
+    pub shooter: Option<u32>,
 }
 
 impl Scene {
@@ -421,6 +429,7 @@ impl Scene {
             x: f.from.0,
             y: f.from.1,
             rope: f.rope,
+            shooter: f.shooter,
             volcanic: false,
             trail: true,
         });
@@ -473,6 +482,7 @@ impl Scene {
             x: from.0,
             y: from.1,
             rope: None,
+            shooter: None,
             volcanic: true,
             trail,
         });
@@ -550,7 +560,14 @@ impl Scene {
         if s.volcanic {
             self.aim_volcanic(&mut s);
         }
-        let target = self.object_index(s.target).filter(|_| s.strikes);
+        // A sea monster under water or dying has no picture to strike
+        // (0x492ec0).
+        let target = self
+            .object_index(s.target)
+            .filter(|_| s.strikes && self.sea_monster_hittable(s.target));
+        if target.is_some() && self.sea_monster_states.contains_key(&s.target) {
+            self.sea_monster_struck(s.target, s.shooter);
+        }
         let state = match target.map(|i| self.objects[i].class) {
             Some(ObjectClass::Ship) => 1,
             Some(ObjectClass::Monster(0x1f4..=0x1f6 | 0x1f8 | 0x1f9)) => 6,

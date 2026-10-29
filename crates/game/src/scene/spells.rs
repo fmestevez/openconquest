@@ -289,7 +289,7 @@ impl Scene {
                 {
                     c.hull
                 }
-                ObjectClass::Monster(0x1fb) if near(home) => c.max_hull / 2.0,
+                // A sea monster takes its own rule (below).
                 ObjectClass::Monster(0x1f4..=0x1f6 | 0x1fa) if near(home) => c.max_hull / 4.0,
                 _ => 0.0,
             };
@@ -301,6 +301,17 @@ impl Scene {
             // 0xda93 heeds no sleep: struck straight (not through the
             // fort's units either).
             self.strike(id, blow, true, data, caches);
+        }
+        let monsters: Vec<(u32, bool)> = self
+            .objects
+            .iter()
+            .filter(|o| o.class == ObjectClass::Monster(0x1fb))
+            .map(|o| ((o.x / t).floor() as i32, (o.y / t).floor() as i32, o.id))
+            .filter(|&(x, y, _)| near((x, y)))
+            .map(|(x, y, id)| (id, (x, y) == (cx, cy)))
+            .collect();
+        for (id, centre) in monsters {
+            self.sea_monster_lightning(id, centre, data, caches);
         }
         // miss009's brain (0x4663d0): the player's lightning in the strait.
         if caster.is_some()
@@ -400,18 +411,27 @@ impl Scene {
             return Ok(());
         }
         let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
-        let mut fields = vec![0u32; 12];
+        let mut fields = vec![0u32; 17];
         fields[0] = class;
         fields[1] = 1;
         fields[5] = cx as u32;
         fields[6] = cy as u32;
         fields[7] = 1;
         if spell == Spell::Monster {
-            // UMonster records: the cell in fields 7 and 8, the type in
-            // field 10: the caster's nation's, a barbarian's at random
-            // (0x42f580 case 4, 0x493780).
+            // UMonster records (0x42f580 case 4, 0x493780): full strength
+            // and whole (fields 5, 6, percent), the cell in fields 7 and 8,
+            // the area 4 about it (11, 12), a scan of 2 (13, 14), mode 2
+            // (15); the type in field 10: the caster's nation's, a
+            // barbarian's at random.
+            fields[5] = 100;
+            fields[6] = 100;
             fields[7] = cx as u32;
             fields[8] = cy as u32;
+            fields[11] = 4;
+            fields[12] = 4;
+            fields[13] = 2;
+            fields[14] = 2;
+            fields[15] = 2;
             fields[10] = match master {
                 Some((4, _)) | None => self.rng.next() & 3,
                 Some((n, _)) => n.min(3),
@@ -426,9 +446,9 @@ impl Scene {
             .map_err(|e| format!("The spell failed: {e:#}"))?
             .ok_or("The spell failed")?;
         if spell == Spell::Monster {
-            // A summoned monster bites its master's enemies (`creatures`).
+            // A summoned monster bites its master's enemies; it stays
+            // till it dies (`sea_monster`).
             obj.owner = master;
-            // It stays while its strength lasts (below).
             self.summons.push((id, f32::INFINITY));
         } else {
             // Cast whirlpools and reefs go after 7500-15000 ticks (Whirl.cpp
@@ -457,21 +477,6 @@ impl Scene {
         // fade.
         for s in &mut self.summons {
             s.1 -= dt;
-        }
-        for k in 0..self.summons.len() {
-            let id = self.summons[k].0;
-            let Some(i) = self.object_index(id) else {
-                continue;
-            };
-            if self.objects[i].class != ObjectClass::Monster(0x1fb) {
-                continue;
-            }
-            if let Some(c) = self.objects[i].combat.as_mut() {
-                c.hull -= c.max_hull * 0.01 * dt / magic::MONSTER_ROUND_SECONDS;
-                if c.hull <= 0.0 {
-                    self.summons[k].1 = 0.0;
-                }
-            }
         }
         let gone: Vec<u32> = self
             .summons

@@ -2436,15 +2436,41 @@ the fog (dark.cpp 0x48b9e0: cell, player, radius 2, 3000 ticks), dropped
 when its time is up (0x48bae0).
 
 A sea monster (UMonsterClassTy, `umonster.cpp`) has 50000 x its record's
-percentage of strength (0x492360: max `+0x7c`, now `+0x80`, from fields
-at +0x14 and +0x18; a summoned one 100 %, 0x493780). Idle, it waits
-50-125 ticks a round (0x491830) and loses a hundredth of its maximum at
-each round's end (0x491fa0); at none it goes. Lightning takes half its
-maximum, blows what they carry. It bites in its attack state (0x490830)
-the ship on the cell beside it, at a frame of its picture (0x5ba4e0):
-message 0xf166 with 37500 x its strength left in percent (0x4900f0) / 100,
-type 0x1fb, three quarters off with hero 5 and to a fifth under a magic
-shield (0x4dc630), each bite costing it a twentieth of its maximum.
+percentage of strength (0x492360: max `+0x7c` field 5, now `+0x80` field
+6; a summoned one 100 %, 0x493780), keeps to the cells within field 11
+and 12 of its start (all the map with either 0), looks over the cells
+within fields 13 and 14 (2 and 2) and starts in mode field 15 (2), type
+field 10 (0 for 4 or more). It is a state machine run each tick (0x491fa0;
+states entered by 0x491830): 0 under water, without a picture (unseen,
+not to be struck), waiting 50-125 ticks; then, in mode 0 losing a
+hundredth of its maximum, dying at none; its mode falls to 1 below 51 %
+and 0 below 11 %; it chooses (0x4911f0): the ship that last struck it,
+else over its scan an enemy monster under water weaker than it (eaten at
+once: it loses 80 % of the other's strength), else the enemy ships on
+their own cells not held by a boarding, ram or dock (a phantom seen one
+time in ten), weighted 100 lying still, 80 turning, 50 under way (and 70,
+90, 60 for the original's other move states), the most still kept and
+one picked by how near a bite brings it to sinking (`(100000 - v) / 100`
+if it would sink, else `/ 300`; the pick indexes the whole list, so it
+may fall on a less still one, and then it swims instead); it then jumps
+to the cell beside the prey it strikes from (0x491030: within two of it,
+free, the last one nearer than the first) and strikes (state 4,
+`UMON<t>3<h>`, 15 frames, 3 ticks each, sound event 129 `atmons3`),
+biting at frame 10, 6, 6 or 9 by type the ship on the prey's cell
+(message 0xf166: 37500 x its strength left in whole percent / 100, three
+quarters off with hero 5, a fifth under a magic shield, costing it a
+twentieth of its maximum; in mode 1 it must swim off before striking
+again), then moves into the prey's cell if free and dives. With nothing
+to strike it swims (0x490d60): an instant jump under water to one of the
+25 cells within two (weighted 10, 100 with a treasure on it, or towards
+the ship that struck it), surfacing (`UMON<t>0<h>`, 13 frames, 2 ticks,
+event 96 `apse`), swimming (`UMON<t>1<h>`, 2-3 ticks a frame) and diving
+(`UMON<t>2<h>`). Struck while up it hurries (a frame a tick). Lightning
+on its cell: under water half its maximum and a new wait, up its death;
+on a cell about, only up, half. Dying (state 6) shows `UMON040` frames
+3-35, 2 ticks each, event 107 `deamons`. Not ported: the treasure it
+takes up as it swims (0x491a40), and the test of the cell's +8 object
+(vfunc +0x30) in 0x402ee0.
 
 The Gorgon (MedusaClassTy, `gorgona.cpp`) rests 200-500 ticks (0x4019d0),
 rises (`GORG1`, 30 frames), stares 1-3 times (`GORG2`, 28 frames, at

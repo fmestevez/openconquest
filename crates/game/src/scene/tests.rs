@@ -809,12 +809,13 @@ fn tornado_and_sea_monster() {
         scene.object_index(ship).is_none(),
         "the monster sank the ship"
     );
-    // It spends a hundredth of its strength a round of 50-125 ticks; near
-    // the end of it, it goes back to the deep.
+    // Below a tenth of its strength (mode 0) it spends a hundredth of it
+    // each round of 50-125 ticks under water; with none left it dies, its
+    // dying picture 65 ticks (0x491fa0).
     let m = scene.object_index(monster).unwrap();
     let c = scene.objects[m].combat.as_mut().unwrap();
     c.hull = c.max_hull * 0.02;
-    for _ in 0..50 * 10 {
+    for _ in 0..50 * 30 {
         scene.update(0.02, &data, &mut caches);
     }
     assert!(scene.object_index(monster).is_none(), "the monster left");
@@ -6485,6 +6486,7 @@ fn greek_fire_leaves_a_trail() {
                 wounds: 0.0,
                 wear: 0.0,
                 rope: None,
+                shooter: None,
             },
             &data,
             caches,
@@ -6952,5 +6954,80 @@ fn quick_lime_stops_a_towns_work() {
         (t.elapsed - crate::clock::ticks(200)).abs() <= 0.04 + 1e-3,
         "from the lime's start: {}",
         t.elapsed
+    );
+}
+
+/// A sea monster (umonster.cpp) starts under water, unseen; it comes up
+/// to strike a ship beside it, biting once a strike, the strikes 43 ticks
+/// and a wait of 50-125 under water apart, each bite costing it a
+/// twentieth of its strength (needs `OPENCONQUEST_DATA`).
+#[test]
+fn sea_monster_strikes_in_turns() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let human = scene.human.unwrap();
+    let ship = scene.objects.iter().find(|o| o.ship.is_some()).unwrap().id;
+    scene.objects.retain(|o| o.ship.is_none() || o.id == ship);
+    let i = scene.object_index(ship).unwrap();
+    scene.objects[i].owner = Some((1, (human.slot + 1) % 4));
+    let c = scene.objects[i].combat.as_mut().unwrap();
+    c.weapons.clear();
+    (c.max_hull, c.hull) = (1e7, 1e7);
+    let cell = (
+        (scene.objects[i].x / 64.0) as i32,
+        (scene.objects[i].y / 64.0) as i32,
+    );
+    let me = Some((human.nation, human.slot));
+    scene
+        .spawn_hazard(Spell::Monster, cell.0, cell.1, me, &data, &mut caches)
+        .unwrap();
+    let monster = scene.summons[0].0;
+    scene.update(0.04, &data, &mut caches);
+    assert!(scene.creature_hidden(monster), "under water at first");
+    let mut bites = Vec::new();
+    let mut last = scene.objects[scene.object_index(ship).unwrap()]
+        .combat
+        .as_ref()
+        .unwrap()
+        .hull;
+    let strength = |s: &Scene| {
+        s.objects[s.object_index(monster).unwrap()]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hull
+    };
+    let full = strength(&scene);
+    for tick in 0..1500 {
+        scene.update(0.04, &data, &mut caches);
+        let hull = scene.objects[scene.object_index(ship).unwrap()]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hull;
+        if hull < last {
+            bites.push(tick);
+        }
+        last = hull;
+    }
+    assert!(bites.len() >= 3, "it bites: {bites:?}");
+    for w in bites.windows(2) {
+        let gap = w[1] - w[0];
+        assert!(
+            (93..=168).contains(&gap),
+            "strikes apart: {gap} ({bites:?})"
+        );
+    }
+    let spent = full - strength(&scene);
+    let each = full * 0.05;
+    assert!(
+        (spent - each * bites.len() as f32).abs() < 1.0,
+        "a twentieth a bite: {spent} for {}",
+        bites.len()
     );
 }
