@@ -440,9 +440,7 @@ impl Dig<'_> {
                 let t = dig.at(layer, n);
                 let mut u = 0;
                 if t.variant != 0 {
-                    let Some(rn) = dig.rec(t.tileset) else {
-                        return None;
-                    };
+                    let rn = dig.rec(t.tileset)?;
                     if rn.id == centre.id {
                         u = EDGE[shape_of(t.variant, rn.kind)?][column];
                     }
