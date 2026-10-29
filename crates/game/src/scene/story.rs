@@ -292,7 +292,14 @@ impl Scene {
             self.levels.insert((h.nation, h.slot), carry.levels);
         }
         self.magic = carry.magic.clone();
-        self.permits.0 |= carry.permits.0;
+        // The carried permissions replace the mission's, and only its own
+        // grants are added: scrolls not delivered stay unread.
+        let n = self
+            .mission
+            .get(4..)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        self.permits = crate::permits::Permits::continued(carry.permits, n);
         self.stats.earlier = carry.score;
     }
 }

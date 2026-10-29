@@ -3225,7 +3225,8 @@ fn amber_grows_back() {
 }
 
 /// Missions give some players research levels from the start: in miss008
-/// the computer players have armour, ram and the workshop's levels at 2
+/// the computer players have armour, ram and the workshop's levels at 2,
+/// and the human, the mission started on its own, its standalone levels
 /// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn missions_give_starting_levels() {
@@ -3236,7 +3237,10 @@ fn missions_give_starting_levels() {
     let mut caches = Caches::default();
     let scene = Scene::load(&data, &mut caches, "miss008").unwrap();
     let human = scene.human.map(|h| (h.nation, h.slot));
-    assert_eq!(scene.levels_of(human), combat::Levels::default());
+    // Started on its own, the human gets the mission's standalone levels.
+    let mine = scene.levels_of(human);
+    assert_eq!((mine.weapons, mine.ram, mine.armour), (1, 2, 1));
+    assert_eq!((mine.rate, mine.reach, mine.arms), ([2, 2, 0], [2, 2, 0], [2; 3]));
     let strong: Vec<_> = scene
         .levels
         .iter()

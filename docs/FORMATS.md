@@ -2041,6 +2041,21 @@ waterspouts on set cells through the sea temple (0x47ab40, kind 6), twice
 in all. The yards of miss004 (0, 5), miss005 (1, 0) and miss006 (1, 0) and
 (2, 0) give the full-town order before every ship too.
 
+**The campaign's carry-over.** A won mission (0x478e30, the brain's
+vtable +4, `(won, next)`) writes the next mission's number to the start
+report at game +0x3305 (a 0x151-byte block at +0x32fd, Startrpt.cpp, `.RPM`
+files; cleared by 0x537f60 when a campaign starts at mission 0); the end
+screen 0x539b20 starts it with the block kept. 0x4a9670 saves the player's
+96 permits, rigging, ram, armour and their kinds, rates, ranges, damages,
+arming, the spells learnt and the unique ships studied at +0x3361;
+0x4a9740 restores them (the permits replaced), then the mission's start adds
+its own grants; heroes come from +0x33be (nine entries: present, the object
+carrying them or a cell). miss007-miss010 alone test `+0x3305 <= 0` (never
+true in the shipped game) for a standalone start: arming 2, rates (0, 1) or
+(2, 2), ranges 2, 2, damages 2, armour 1 (2 from miss009), ram 4 (5), the
+heroes of the missions before at a set cell. The port uses that for a
+mission picked from the list.
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships

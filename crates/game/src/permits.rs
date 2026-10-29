@@ -99,6 +99,17 @@ impl Permits {
         p
     }
 
+    /// A campaign mission continued (0x4a9740 restores the record, then
+    /// the mission's start adds its own grants): the permissions carried,
+    /// replaced, and what mission `n` grants.
+    pub fn continued(carried: Permits, n: usize) -> Permits {
+        let mut p = carried;
+        for &b in MISSION_GRANTS.get(n).copied().unwrap_or(&[]) {
+            p.set(b, true);
+        }
+        p
+    }
+
     /// Grants scroll `number`'s knowledge, returning what it says.
     pub fn read_scroll(&mut self, number: u32) -> &'static str {
         match SCROLLS.iter().find(|s| s.0 == number) {

@@ -1265,6 +1265,26 @@ impl Scene {
     /// fire 1 and 2 for groups 2 and 3 and range and damage 2 for all
     /// (`+0x8e`, `+0x95`, `+0x9c`); and the unique ships of `special`
     /// studied. Players by id (nation x 4 + slot).
+    /// The human's levels when the mission is not continued from the one
+    /// before (miss007-miss010's start, `+0x3305 <= 0`): arming 2, rate of
+    /// fire and range for groups 1-2, damage for all, armour, ram. (In the
+    /// shipped game a campaign mission always starts continued; a mission
+    /// picked from the list here is the like.)
+    pub(super) fn standalone_levels(&mut self, rate: [u8; 2], armour: u8) {
+        let Some(h) = self.human else {
+            return;
+        };
+        let l = self.levels.entry((h.nation, h.slot)).or_default();
+        l.weapons = l.weapons.max(1);
+        l.rate[0] = l.rate[0].max(rate[0]);
+        l.rate[1] = l.rate[1].max(rate[1]);
+        l.reach[0] = l.reach[0].max(2);
+        l.reach[1] = l.reach[1].max(2);
+        l.arms = [2; 3];
+        l.armour = l.armour.max(armour);
+        l.ram = 2;
+    }
+
     pub(super) fn persian_bonus(&mut self, players: &[u32], workshop: bool, special: &[usize]) {
         for &p in players {
             let l = self.levels.entry((p / 4, p % 4)).or_default();
@@ -5338,6 +5358,8 @@ mod miss007 {
     /// deposits by difficulty (0x48b180 amber, 0x48ebc0 fish: easy all,
     /// normal the last three, hard none), and the fleets' numbers.
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // Started on its own: the human's levels (a carried game's replace them).
+        scene.standalone_levels([0, 1], 1);
         // The yards' full-town order and the builders' repairs (0x47b130).
         scene.start_jobs(&[(1, 0)], &[(0, 0)]);
         // The Persians' studies at the start (the main's 0x8d1).
@@ -6226,6 +6248,8 @@ mod miss008 {
     /// purse (normal 5000 amber and fish, hard 10000: 0x4a8de0, 0x4a8c30),
     /// and the fleets' numbers.
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // Started on its own: the human's levels (a carried game's replace them).
+        scene.standalone_levels([2, 2], 1);
         // The yards' full-town order and the builders' repairs (0x47b130).
         scene.start_jobs(&[(1, 1), (1, 2)], &[(0, 0), (1, 0)]);
         // The Persians' studies at the start (the main's 0x8d1).
@@ -7104,6 +7128,8 @@ mod miss009 {
     /// a wild sea monster comes up at (33, 14) on normal and hard
     /// (0x493780), a siren sings at (31, 14) on hard (0x404a20).
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // Started on its own: the human's levels (a carried game's replace them).
+        scene.standalone_levels([2, 2], 2);
         // The yards' full-town order and the builders' repairs (0x47b130).
         scene.start_jobs(&[(1, 0)], &[(0, 0)]);
         // The Persians' studies at the start (the main's 0x8d1).
@@ -8056,6 +8082,8 @@ mod miss010 {
     /// hard (0x4a8de0 and 0x4a8c30 add). The dragon's nest is laid by
     /// `place_scripted`.
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // Started on its own: the human's levels (a carried game's replace them).
+        scene.standalone_levels([2, 2], 2);
         // The yards' full-town order and the builders' repairs (0x47b130).
         scene.start_jobs(&[(1, 2)], &[(0, 0), (1, 0)]);
         // The Persians' studies at the start (the main's 0x8d1).
