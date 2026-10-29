@@ -1646,12 +1646,15 @@ impl Scene {
                     set(ai, fail);
                     return;
                 };
-                let near = if state == 5 {
-                    ai.bases[b].cell
+                // 0x484b90: the base's own site while it serves, else the
+                // best; early, the best near the founders.
+                let place = if state == 5 {
+                    self.town_site(ai.owner, Some(ai.bases[b].cell), None)
                 } else {
-                    self.fleet_cell(&ai.flotillas[fleet]).unwrap_or((10, 10))
+                    let near = self.fleet_cell(&ai.flotillas[fleet]);
+                    near.and_then(|n| self.town_site(ai.owner, None, Some(n)))
                 };
-                let Some(cell) = self.town_place(ai, near) else {
+                let Some(cell) = place else {
                     set(ai, fail);
                     return;
                 };
@@ -2305,47 +2308,6 @@ impl Scene {
             .iter()
             .filter_map(|&c| self.base_building(ai, b, c))
             .min_by_key(|&y| self.productions.iter().filter(|p| p.site == y).count())
-    }
-
-    /// A place for a new settlement near `near` (`LAiFindTownPlace`,
-    /// 0x40ca90 and 0x40cb60): a free inland cell a ship can reach, at
-    /// least 7 cells from every settlement, the nearest.
-    fn town_place(&self, ai: &Computer, near: (i32, i32)) -> Option<(i32, i32)> {
-        let _ = ai;
-        let (w, h) = self.map_cells();
-        let towns: Vec<(i32, i32)> = (0..self.objects.len())
-            .filter(|&i| matches!(self.class_of(i), Some(SETTLEMENT | TOWN)))
-            .map(|i| self.cell_of(i))
-            .collect();
-        let mut best: Option<(i32, (i32, i32))> = None;
-        for y in 1..h - 2 {
-            for x in 1..w - 2 {
-                if towns
-                    .iter()
-                    .any(|t| (t.0 - x).abs().max((t.1 - y).abs()) < 7)
-                {
-                    continue;
-                }
-                if !(0..2).all(|dy| {
-                    (0..2).all(|dx| self.check_ground(SETTLEMENT, x + dx, y + dy).is_ok())
-                }) {
-                    continue;
-                }
-                if !self.water_within(x, y, FOUND_REACH) {
-                    continue;
-                }
-                let d = (x - near.0).abs() + (y - near.1).abs();
-                if best.is_none_or(|b| d < b.0) {
-                    best = Some((d, (x, y)));
-                }
-            }
-        }
-        best.map(|b| b.1)
-    }
-
-    /// Whether open water lies within `r` cells of `(x, y)`.
-    fn water_within(&self, x: i32, y: i32, r: i32) -> bool {
-        (-r..=r).any(|dy| (-r..=r).any(|dx| self.nav.is_water(x + dx, y + dy)))
     }
 
     /// Base `b`'s area (0x484aa0 with 0x4218f0: the town and its buildings,
@@ -3698,8 +3660,8 @@ impl Scene {
         if !studied || !has_ships {
             return;
         }
-        let near = ai.bases.first().map_or((0, 0), |b| b.cell);
-        let Some(cell) = self.town_place(ai, near) else {
+        // The best site on the whole map (0x484d60).
+        let Some(cell) = self.town_site(ai.owner, None, None) else {
             return;
         };
         let Some(fleet) = self.founders(ai, None, Some(cell)) else {

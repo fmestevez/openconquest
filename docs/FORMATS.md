@@ -3110,10 +3110,26 @@ raiders 0x5b6540/0x5b6710, 0x5b7620/0x5b77b0, 0x5b8810/0x5b8a90; fleet
 base waits 1500 ticks (750 on hard) and takes the next. If the town lacks
 its port, shipyard or dock, sage school or smithy, the script starts over.
 A base without a settlement (lost, or new) founds one: early in the game
-(before `(3000 + rand 3001) x 5` ticks) the first base near its ships'
-position, otherwise anywhere near its cell (`LAiFindTownPlace`, 0x40ca90,
-0x40cb60), by a flotilla of the base picked by size and nearness
-(0x484df0). Each base also has an area (its town's buildings, 2 cells
+(before `(3000 + rand 3001) x 5` ticks) the first base the best site within
+`ceil(sqrt(cells / players))` of its ships' mean cell, if any is
+(0x40cb60), otherwise its stored site while it still serves (0x40ca90 with
+0x42e1e0: 2 x 2 free inland cells, shore in the ring about them), else the
+best on the map, by a flotilla of the base picked by size and nearness
+(0x484df0). The search (`LAiFindTownPlace`, `_L_Ai_tn.cpp` 0x40c5f0): a
+site is the top-left of 2 x 2 free inland cells (edge mask 0) with a shore
+cell in the 4 x 4 about them, in a land region of at least 9 inland and 2
+shore cells; every other cell adds its influence to a weight map (0x40b050,
+0x40bbf0, the table 0x5945c0): others' settlements -10 within 10 (at their
+cell), their forts, barbarians and buildings -10 within 10 for each cell,
+their ships -5 within 5, the player's own settlements and buildings -5 + d
+within 5, amber 5 - d and fish and leviathan zones 10 - d (each cell of
+them) on the water they touch, castles -20, nests -20 + d, medusas and
+sirens -20 + d within 5, sea monsters -20 over their area, lava -10 x its
+strength, and lairs -30 x (their island's cells and the 13 x 13 discs about
+them); a site scores the sum over the 10 x 10 cells about it (shifted
+inside the map), highest first (VC6 qsort). The port leaves out lava and
+the sea monsters' and nests' areas (their cell and 2 about), and counts
+players by the owners present. Each base also has an area (its town's buildings, 2 cells
 about, 0x484aa0 with 0x4218f0) and four waiting zones (0x484900 with
 `LAiFindDispositionZones` 0x4093a0, 0x408bf0: in the 31 x 31 cells about
 the town, a square of side s, s x s >= n + n / 4, holding water for n = 5
