@@ -242,8 +242,8 @@ pub fn melee(kind: usize) -> u32 {
 
 /// Ramming power of each ship type (0x598024).
 const RAM_POWER: [u32; 12] = [10, 12, 100, 60, 30, 140, 20, 40, 10, 10, 190, 10];
-/// Angle factors for the rammer and the rammed (0x598078, 0x598084): side
-/// on, oblique, head on.
+/// Angle factors for the rammer and the rammed (0x598078, 0x598084), by
+/// the angle class (`ram_angle`): crossing, same way, head on.
 const RAM_ANGLE_ATTACK: [u32; 3] = [90, 55, 20];
 const RAM_ANGLE_DEFENCE: [u32; 3] = [4, 12, 20];
 
@@ -256,6 +256,9 @@ pub struct Rammer {
     pub level: u8,
     pub heading: usize,
     pub speed: f32,
+    /// The owner's rigging level (player byte `+0x51`), which picks the
+    /// impact's divisor.
+    pub rigging: u8,
 }
 
 impl Rammer {
@@ -273,12 +276,15 @@ pub const RAM_CREW_FACTOR: f32 = 0.4;
 
 /// The blows of a ram (0x4c1c60), to the rammed ship and to the rammer,
 /// in our units (the original's over 15, see `hull_strength`). The
-/// closing speed is the two headings' vectors times their speeds, less one
-/// from the other, times 0.707, half of it in percent of a boat's top
-/// speed; each blow is the striking side's ram quality (0x598054) x its
-/// power over the other's (0x598024) x the smaller of 500000 and its angle
-/// factor (0x598078 for the rammer, 0x598084 for the rammed) x its hull /
-/// 100 x that percentage, over 2500.
+/// closing speed is the two headings' vectors (0x5c4f4c) times their
+/// speeds, less one from the other, x 707 / 1000; its length is 0x557440's
+/// (the smaller plus twice the larger, halved), and half of it in percent
+/// of a boat's top speed at the rammer's rigging level (0x5c750c,
+/// 0x5c753c, 0x5c756c: 60000, 69000, 78000) is the impact; each blow is
+/// the striking side's ram quality (0x598054) x its power over the
+/// other's (0x598024) x the smaller of 500000 and its angle factor
+/// (0x598078 for the rammer, 0x598084 for the rammed) x its type's full
+/// hull (0x5c76b0) / 100 x the impact, over 2500, in integers.
 pub fn ram_blows(a: Rammer, t: Rammer, angle: usize) -> (f32, f32) {
     const DIRS: [(f32, f32); 8] = [
         (1.0, 0.0),
@@ -293,18 +299,17 @@ pub fn ram_blows(a: Rammer, t: Rammer, angle: usize) -> (f32, f32) {
     // Speeds in the original's units, 1/6000 pixel a tick.
     let unit = crate::clock::TICK * 6000.0;
     let (da, dt) = (DIRS[a.heading % 8], DIRS[t.heading % 8]);
-    let (va, vt) = (a.speed * unit, t.speed * unit);
-    let rel = (
-        (da.0 * va - dt.0 * vt) * 0.707,
-        (da.1 * va - dt.1 * vt) * 0.707,
-    );
-    // A boat's top speed: its chart's 150 x 400.
-    let impact = rel.0.hypot(rel.1) / 2.0 * 100.0 / 60_000.0;
-    let power = |k: u8| RAM_POWER[k as usize % 12] as f32;
-    let hull = |k: u8| hull_strength(k) * 15.0;
+    let (va, vt) = ((a.speed * unit) as i64, (t.speed * unit) as i64);
+    let vx = ((da.0 as i64 * va - dt.0 as i64 * vt) * 707 / 1000).abs();
+    let vy = ((da.1 as i64 * va - dt.1 as i64 * vt) * 707 / 1000).abs();
+    let length = (vx.min(vy) + 2 * vx.max(vy)) / 2;
+    let divisor = [60_000, 69_000, 78_000][a.rigging.min(2) as usize];
+    let impact = (length / 2) * 100 / divisor;
+    let power = |k: u8| RAM_POWER[k as usize % 12] as i64;
+    let hull = |k: u8| (hull_strength(k) * 15.0) as i64;
     let blow = |q: usize, own: u8, other: u8, angle_factor: u32| {
-        let strike = (angle_factor as f32 * hull(own) / 100.0 * impact).min(500_000.0);
-        RAM_QUALITY[q] as f32 * power(own) / power(other) * strike / 2500.0 / 15.0
+        let strike = (angle_factor as i64 * hull(own) / 100 * impact).min(500_000);
+        (RAM_QUALITY[q] as i64 * power(own) / power(other) * strike / 2500) as f32 / 15.0
     };
     let angle = angle.min(2);
     (
@@ -313,13 +318,17 @@ pub fn ram_blows(a: Rammer, t: Rammer, angle: usize) -> (f32, f32) {
     )
 }
 
-/// The angle class between two headings (0-7): 0 side on, 1 oblique, 2
-/// head on or astern.
+/// The angle class between the rammer's and the rammed ship's headings
+/// (0x4c19b0): 1 the same way, 2 opposite (head on), 0 crossing at any
+/// other angle.
 pub fn ram_angle(attacker_heading: usize, target_heading: usize) -> usize {
-    match (attacker_heading as i32 - target_heading as i32).rem_euclid(4) {
-        2 => 0,
-        1 | 3 => 1,
-        _ => 2,
+    let (a, t) = (attacker_heading % 8, target_heading % 8);
+    if t == a {
+        1
+    } else if t == (a + 4) % 8 {
+        2
+    } else {
+        0
     }
 }
 
@@ -1531,10 +1540,13 @@ mod tests {
 
     #[test]
     fn ram_angles() {
-        assert_eq!(ram_angle(0, 2), 0, "east into a northbound ship: side on");
-        assert_eq!(ram_angle(0, 1), 1);
+        // 0x4c19b0: the same way 1, opposite 2, any other crossing 0.
+        assert_eq!(ram_angle(0, 2), 0, "east into a northbound ship");
+        assert_eq!(ram_angle(0, 1), 0);
+        assert_eq!(ram_angle(5, 2), 0);
         assert_eq!(ram_angle(0, 4), 2, "head on");
-        assert_eq!(ram_angle(3, 3), 2, "astern");
+        assert_eq!(ram_angle(7, 3), 2);
+        assert_eq!(ram_angle(3, 3), 1, "from behind");
     }
 
     #[test]
@@ -1545,6 +1557,7 @@ mod tests {
             level: 0,
             heading,
             speed,
+            rigging: 0,
         };
         // Head on between equals, both under way: alike.
         let (to_t, to_a) = ram_blows(ship(2, 0, 30.0), ship(2, 4, 30.0), 2);
@@ -1560,6 +1573,12 @@ mod tests {
         // Faster, harder; standing still, nothing.
         assert!(ram_blows(ship(2, 0, 60.0), ship(2, 2, 0.0), 0).0 > side);
         assert_eq!(ram_blows(ship(2, 0, 0.0), ship(2, 2, 0.0), 0).0, 0.0);
+        // Better rigging: the same way counts for less (60000 -> 78000).
+        let rigged = Rammer {
+            rigging: 2,
+            ..ship(2, 0, 30.0)
+        };
+        assert!(ram_blows(rigged, ship(2, 2, 0.0), 0).0 < side);
     }
 
     /// A fort's units take its blow's share (0x4184f0): load 10 against a

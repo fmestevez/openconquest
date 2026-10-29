@@ -877,11 +877,17 @@ impl Scene {
         let (a, t) = (&self.objects[i], &self.objects[ti]);
         let (sa, st) = (a.ship.as_ref().unwrap(), t.ship.as_ref().unwrap());
         let angle = combat::ram_angle(sa.heading, st.heading);
-        // The feathers of Boreas add their amount in percent to the
-        // rammer's blow (0x4c1c60).
-        let feather = 1.0 + sa.feather_percent() as f32 / 100.0;
-        // The rammer charges at no less than its cruising speed here (ours
-        // may slow as it closes).
+        // Each feather of Boreas aboard adds its amount in percent to the
+        // rammer's blow in turn (0x4c1c60: Ba += amount x Ba / 100).
+        let feather: f32 = sa
+            .treasures
+            .iter()
+            .filter(|t| t.kind == objects::FEATHER)
+            .map(|t| 1.0 + t.amount as f32 / 100.0)
+            .product();
+        // Not decoded: the two ships' way (`+0x59b`) when the blow falls,
+        // after the impact picture (0x4a3f40 over those frames); the
+        // rammer charges at no less than its cruising speed here.
         let (to_target, to_self) = combat::ram_blows(
             combat::Rammer {
                 kind: sa.kind,
@@ -889,6 +895,7 @@ impl Scene {
                 level: self.levels_of(a.owner).ram_kinds[sa.ram.min(2) as usize],
                 heading: sa.heading,
                 speed: sa.velocity.max(sa.speed),
+                rigging: self.levels_of(a.owner).speed,
             },
             combat::Rammer {
                 kind: st.kind,
@@ -896,6 +903,7 @@ impl Scene {
                 level: self.levels_of(t.owner).ram_kinds[st.ram.min(2) as usize],
                 heading: st.heading,
                 speed: st.velocity,
+                rigging: self.levels_of(t.owner).speed,
             },
             angle,
         );
@@ -914,7 +922,9 @@ impl Scene {
         let to_self = to_self * argus(a);
         let (ida, idt) = (a.id, t.id);
         self.objects[i].ship.as_mut().unwrap().task = None;
-        // A fire rammer's barrel of powder goes off in the ram.
+        // A fire rammer's barrel of powder goes off in the ram. (Not
+        // decoded: 0x4c1c60 and 0x4c1ad0 have no such term; where the
+        // barrel goes off is still to be read.)
         let c = self.objects[i].combat.as_mut().unwrap();
         let barrel = c.weapons.iter().position(|&w| w == combat::POWDER);
         let (blast, burn) = match barrel {

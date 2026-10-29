@@ -586,9 +586,12 @@ Combat tables:
   10, merchant 12, royal 100, bomber 60, boarder 30, rammer 140, ship killer
   20, men killer 40, fire ship 10, quick lime 10, fire rammer 190, ship of
   the dead 10) x an angle factor (0x598078 for the rammer: 90 55 20;
-  0x598084 for the rammed: 4 12 20; the angle class comes from 0x4c19b0)
-  x a per-type value at 0x5c76b0 (runtime, not yet known). Rammers (type 5)
-  get x1.5. The result is attacker x 100 / defender, capped at 200.
+  0x598084 for the rammed: 4 12 20, by the angle class of 0x4c19b0: 1 the
+  same heading, 2 opposite, 0 any other) x the type's full hull / 100
+  (0x5c76b0, filled by 0x4ac210 from the ship constructor as 0x5bb4b0[t] x
+  650: 18200 58500 65000 78000 42250 45500 23400 23400 42250 48750 71500
+  78000), over 2500. Rammers (type 5) get x1.5. The result is attacker x
+  100 / defender, capped at 200 (200 against nothing).
 - Effects are BOMB sequences (`BOMB%C%1d%1d`): e.g. BOMBA20 hit, BOMBA50
   splash, BOMBG10 explosion; FIRE0-2 and SMOKE0-2 for burning.
 - The random generator is the usual LCG `x * 0x41c64e6d + 0x3039`, using
@@ -2225,8 +2228,13 @@ player's rigging level (0x5c750c). Each side's blow is its ram quality
 (0x598054[ram x 3 + the player's ram level]: 100, 110, 117; 125, 135,
 145; 160, 175, 200) x its ram power over the other's (0x598024) x the
 smaller of 500000 and its angle factor (0x598078 the rammer's, 0x598084
-the rammed's, by the angle class of 0x4c19b0) x its hull / 100 x the
-impact, over 2500; a powder barrel in the cargo adds its percentage. A
+the rammed's, by the angle class of 0x4c19b0: 1 the same heading, 2
+opposite, 0 any other) x its type's full hull (0x5c76b0) / 100 x the
+impact, over 2500, in integers; each feather of Boreas aboard (kind 12,
+flag 0x10) then adds its amount in percent of the rammer's blow, in turn.
+The impact's length is 0x557440's (the smaller component plus twice the
+larger, halved), its divisor the rammer's rigging level's top speed
+(60000, 69000, 78000). A
 blow (0x4c1ad0) loses three quarters with hero 5 (Argus), the armour's
 cut on the rammed ship, and falls by the shares: the hull's x 150 / 100
 (0x598094), the crew's x 40 / 100 (0x598090), the weapons'. The odds of
