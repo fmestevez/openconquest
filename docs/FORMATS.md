@@ -1702,6 +1702,83 @@ loading screen `<theme>LOADING`, button shapes `M_BUT0`-`3` (174x40 and
 fonts `S_FNT_<size><style>` (sizes B, L, M, S; style S plain dark, H gold).
 `data/datamap.dkx` is the scenario editor's (title `ZAST`).
 
+**Front-end screens** (startsys.cpp's screens, 0x528000-0x540400; the
+dispatcher 0x53e1e0). Captions are the exe's strings; ported as the
+original:
+
+- Buttons (0x4ea2d0, _sbutton.cpp 0x54ab20, captions 0x4ea470 in BS with
+  base variant 2): normal, picture 0 and variant 2; under the pointer,
+  picture 1, a variant 0 shadow centred in the button and variant 3
+  centred in (0, 0, w - 4, h - 4); held down with the pointer inside,
+  picture 1 and variant 3 centred, no shadow. The action comes on the
+  release inside; the pointer leaving lets the button go.
+- Briefing (Starttsk.cpp 0x53f360): Start (1010) at (244, 543) and Cancel
+  (1002) at (440, 543) when game + 0x3215 (the campaign mission number,
+  set by 0x537f60 from `miss%d%02d`, by the end screen from + 0x3305) is
+  0; else Start alone at (335, 543). A difficulty's hit area is its
+  M_CHECK picture, 23 x 23.
+- Custom missions and Load game (0x52c5c0): the map viewer at (10, 30),
+  19 cells of 8; the description edit at (204, 59), 555 x 144. Load
+  game's list (0x52fe90) from (12, 248), ten rows of 27, the text in MH 4
+  across, centred in 26 (the chosen row's in 24, variant 2); a tab's
+  caption (0x4eaa70) centred in (0, 0, w, 28) when open, in (1, 1, w, 28)
+  in variant 1 when closed.
+- Connect (Startprv.cpp 0x538440): the name edit at (43, 256), its caret
+  palette colour 0xfb (0xffff00 in the front end's backdrops).
+- End screen (Startrpt.cpp 0x5390a0, 0x539350, 0x539b20): M_BKGND_03 won,
+  04 lost, and OK (1001) at (345, 540) in M_BUT2. Its OK, after a won
+  campaign mission (+ 0x32fd set, game + 0xd80 = 1), opens the next
+  mission's briefing (+ 0x3305; none, the main menu); else the main menu.
+  Only after a won campaign mission: RAM_BEST at (400, 310) with "Best
+  Conquerors" (1042) at (9, 1) in it, BH variant 2; and the twelve
+  figures of + 0x3309 to + 0x3335 (0x539a30; written by 0x478e30), labels
+  1047-1058 at (15, 85 + (h + 7) i, plus 15 from the 6th, 15 from the 8th,
+  30 from the 12th; h the tallest BH glyph, 23) in boxes 420 wide (300
+  from the 8th) and h high, BH variant 2 gaps 2, centred down; values 5
+  past the box, 80 wide, gaps 1. The total is the campaign's so far
+  (+ 0x3335 adds each mission's tenth, cleared when a campaign starts).
+- Best Conquerors (Startba.cpp 0x528210, 0x528390): the RAM_BEST
+  picture at (15, 305), OK (1001) at (345, 540).
+
+Not settled, so left out: the campaign high-score table both screens
+show (seven rows a campaign type: names at 0x5c9ed0 + 0x30 i, scores at
+0x5c9ef8 + 0x30 i; name at (410, 344 + 24 k) 286 wide and score at (696,
+...) 75 wide on the end screen, (25, 339 + 24 k) and (311, ...) on Best
+Conquerors, MH), Best Conquerors' title (the campaign's name, game +
+0x66d + type x 0x104, when game + 0xb8f has the type's bit; else string
+1038 + type) and the end screen's name entry (an edit, ids 0x174/0x175,
+when + 0x3335 qualifies, 0x5397e0): where the table is kept and loaded
+is not decoded. The port's Best Conquerors rows are its own best times.
+
+Known differences not yet ported:
+
+- Keyboard accelerators: two key bytes in each button's create record
+  (0x4ea2d0; read as scan codes Alt + the caption's initial, 1 Esc on
+  every Cancel) and extra keys bound by 0x4e9840 (Best's OK on Esc,
+  Enter, Space; the end screen's OK on Enter; the briefing's Start on
+  Enter and Space). Their consumer (_sbutton messages 8/9) is not traced.
+  The port's Esc goes back to the main menu on every screen.
+- The fade into each screen (message 0x102, 0x4ef530(game, backdrop,
+  0x32, 5); 0x4ef350(0x32, 5) in 0x53e1e0).
+- The title screen's idle demo (0x530bc0: command 0x103 after game +
+  0xa83 ms without input when + 0x329d is set).
+- The version line's number: byte 2 of game + 0xa7d into "Version
+  2.%02d" (string 1145, 0x5310a0); where + 0xa7d is filled is not
+  decoded. The port shows "Version 2.00".
+- Custom missions' per-player kind pop-up (entry + 0x184, strings
+  1146-1151, list 0x52ebe0; the port cycles one level for every computer
+  player), the players' names in LPLAY_NP and the map tick (0x1dd,
+  DAT_005ca538).
+- Start reports: the briefing's Start writes `MISSIONS\MISSION_%02d.RPM`
+  (0x53a3a0), which Load game's "Start from..." lists; the port lists
+  every campaign mission.
+- The briefing's sound: FON000 from `video\TASKS.DKD` on entry, a voice
+  after 3000 ms (0x53eef0, 0x53fba0); the port plays its menu music.
+- Custom missions' list: `CUSTOM\*.DKD` (0x52b7c0, watched with
+  FindFirstChangeNotification); the port lists the installation's
+  battle and single missions. A custom mission's Start goes straight
+  into the game, with no briefing.
+
 ## Timings
 
 Times count the game clock (+0xde of the game object, one tick per

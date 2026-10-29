@@ -55,28 +55,29 @@ impl Stats {
         (total.max(0) / 10) as u64
     }
 
-    /// The lines of the outcome screen.
-    pub fn lines(&self, amber_left: u32) -> Vec<String> {
-        let sum = |n: &[u32]| n.iter().sum::<u32>();
-        vec![
-            format!("Enemy ships destroyed: {}", sum(&self.ships_destroyed)),
-            format!("Enemy ships boarded: {}", sum(&self.ships_boarded)),
-            format!("Enemy buildings destroyed: {}", self.buildings_destroyed),
-            format!("Monsters killed: {}", sum(&self.monsters_killed)),
-            format!("Monsters' lairs destroyed: {}", self.lairs_destroyed),
-            format!("Ships lost: {}", sum(&self.ships_lost)),
-            format!("Buildings lost: {}", self.buildings_lost),
-            format!("Fish caught: {}", self.fish_caught),
-            format!("Amber earned: {}", self.amber_earned),
-            format!("Amber left: {amber_left}"),
-            format!("Treasures found: {}", self.treasures_found),
-            format!("Total score: {}", self.score()),
+    /// The twelve figures of the end screen, in the original's order
+    /// (game + 0x3309 to + 0x3335, read by 0x539a30): enemy ships
+    /// destroyed, boarded, enemy terrain objects destroyed, monsters
+    /// killed, monsters' terrain objects destroyed, ships lost, terrain
+    /// objects lost, fish caught, amber earned, amber left, treasures found
+    /// and the total score, the campaign's so far (+ 0x3335 adds each
+    /// mission's, cleared when the campaign starts, 0x537f60).
+    pub fn values(&self, amber_left: u32) -> [u64; 12] {
+        let sum = |n: &[u32]| n.iter().map(|&n| u64::from(n)).sum::<u64>();
+        [
+            sum(&self.ships_destroyed),
+            sum(&self.ships_boarded),
+            u64::from(self.buildings_destroyed),
+            sum(&self.monsters_killed),
+            u64::from(self.lairs_destroyed),
+            sum(&self.ships_lost),
+            u64::from(self.buildings_lost),
+            self.fish_caught,
+            self.amber_earned,
+            u64::from(amber_left),
+            u64::from(self.treasures_found),
+            self.earlier + self.score(),
         ]
-        .into_iter()
-        .chain(
-            (self.earlier > 0).then(|| format!("Campaign score: {}", self.earlier + self.score())),
-        )
-        .collect()
     }
 }
 

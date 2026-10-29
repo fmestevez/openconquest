@@ -93,8 +93,30 @@ impl TextRenderer {
             .unwrap_or(0)
     }
 
+    /// Height of the font's tallest glyph (mfcfnt.cpp's 0x5471f0).
+    pub fn tallest(&self) -> u32 {
+        self.glyphs
+            .values()
+            .map(|g| g.height as u32)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Draws `text` with its top-left corner at `(x, y)`, magnified by `scale`.
     pub fn draw(&self, frame: &mut Frame, x: i32, y: i32, scale: u32, text: &str) {
+        self.draw_clipped(frame, x, y, scale, text, i32::MAX);
+    }
+
+    /// `draw`, nothing at or right of window column `right`.
+    pub fn draw_clipped(
+        &self,
+        frame: &mut Frame,
+        x: i32,
+        y: i32,
+        scale: u32,
+        text: &str,
+        right: i32,
+    ) {
         let s = scale.max(1) as i32;
         let mut pen = x;
         for c in text.bytes() {
@@ -112,6 +134,7 @@ impl TextRenderer {
                         for dx in 0..s {
                             let (fx, fy) = (pen + gx * s + dx, y + gy * s + dy);
                             if fx >= 0
+                                && fx < right
                                 && fy >= 0
                                 && (fx as u32) < frame.width
                                 && (fy as u32) < frame.height

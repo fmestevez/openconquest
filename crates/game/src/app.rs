@@ -92,6 +92,26 @@ const TITLE_BUTTONS: [&str; 6] = [
     "Quit game",
 ];
 
+/// "Best Conquerors" (string 1042), the end screen's table's title.
+const STRING_BEST: &str = "Best Conquerors";
+
+/// The end screen's statistics' labels (strings 1047-1058), their dots
+/// cut off by the box they are drawn in.
+const STAT_LABELS: [&str; 12] = [
+    "Enemy ships destroyed . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .",
+    "Enemy ships boarded . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .",
+    "Enemy terrain objects destroyed . . . . . . . . . . . . . . . . . . . . . . . . . . . . .",
+    "Monsters killed . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .",
+    "Monsters terrain objects destroyed . . . . . . . . . . . . . . . . . . . . . . . . . . . .",
+    "Ships lost . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .",
+    "Terrain objects lost . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .",
+    "Fish caught . . . . . . . . . . . . . . . . . .",
+    "Money earned . . . . . . . . . . . . . . . . .",
+    "Money left . . . . . . . . . . . . . . . . . .",
+    "Treasures found . . . . . . . . . . . . . . . .",
+    "Total score . . . . . . . . . . . . . . . . . .",
+];
+
 /// A question the game asks before acting (gamesys.cpp 0x511c00,
 /// 0x512f00; the file panel's, 0x50a700), or a notice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,7 +302,6 @@ struct MenuPage {
     story_first: usize,
     labels: Vec<(String, f32, f32)>,
     checks: Vec<crate::menus::Check>,
-    panels: Vec<crate::menus::Panel>,
     list_rect: Option<crate::menus::Rect>,
     picture: Option<(Rc<crate::assets::Image>, crate::menus::Rect)>,
     boxes: Vec<(crate::menus::Rect, Vec<String>)>,
@@ -315,8 +334,10 @@ struct ListBar {
     track: crate::menus::Track,
 }
 
-/// The mission description's box and font on the mission screens.
-const STORY_BOX: crate::menus::Rect = (204.0, 58.0, 559.0, 145.0);
+/// The mission description's box and font on the mission screens: the
+/// read-only edit at (196 + 8, 27 + 0x20), 0x22b x 0x90 (Startcom.cpp,
+/// 0x52c5c0).
+const STORY_BOX: crate::menus::Rect = (204.0, 59.0, 555.0, 144.0);
 const STORY_STYLE: (crate::menus::Style, f32) = (
     crate::menus::Style {
         font: "MH",
@@ -329,7 +350,7 @@ const STORY_STYLE: (crate::menus::Style, f32) = (
 const MAP_CELLS: usize = 19;
 
 impl MenuPage {
-    fn view(&self, hover: Option<(f32, f32)>) -> MenuView<'_> {
+    fn view(&self, hover: Option<(f32, f32)>, pressed: Option<usize>) -> MenuView<'_> {
         MenuView {
             backdrop: self.backdrop,
             title: self.title.as_deref(),
@@ -339,13 +360,13 @@ impl MenuPage {
             notes: &self.notes,
             buttons: &self.buttons,
             hover,
+            pressed,
             credits: self.credits,
             story: self.story.as_ref().map(|(r, p)| (*r, p.as_slice())),
             story_style: self.story_style,
             story_first: self.story_first,
             labels: &self.labels,
             checks: &self.checks,
-            panels: &self.panels,
             list_rect: self.list_rect,
             picture: self.picture.as_ref().map(|(i, r)| (&**i, *r)),
             boxes: &self.boxes,
@@ -580,6 +601,10 @@ pub struct App {
     /// arrow held with when it next repeats.
     menu_drag: Option<crate::menus::Scroller>,
     menu_repeat: Option<(MenuHit, u64)>,
+    /// The front-end button pressed, while the left button is held with
+    /// the pointer inside it (_sbutton.cpp 0x54ab20: its action comes on
+    /// the release inside it; the pointer leaving lets it go).
+    menu_held: Option<usize>,
     battle_maps: Vec<(usize, usize)>,
     hosting: Option<crate::net::Lobby>,
     joining: Option<crate::net::Joining>,
@@ -601,10 +626,8 @@ pub struct App {
     in_game: bool,
     /// The mission clock when it was won or lost.
     outcome_at: Option<f32>,
-    /// Best winning times, and what the last win came to: its time and
-    /// whether it was a new best.
+    /// Best winning times (the port's own Best Conquerors rows).
     records: crate::records::Records,
-    last_win: Option<(f32, bool)>,
     status: Option<(String, Instant)>,
     started: Instant,
     last_frame: Instant,
@@ -749,6 +772,7 @@ impl App {
             desc_first: 0,
             map_at: None,
             menu_drag: None,
+            menu_held: None,
             menu_repeat: None,
             battle_maps: Vec::new(),
             hosting: None,
@@ -763,7 +787,6 @@ impl App {
             in_game: !start_menu,
             outcome_at: None,
             records,
-            last_win: None,
             audio: Audio::open().map(|mut a| {
                 a.muted = mute;
                 a
@@ -1232,7 +1255,6 @@ impl App {
             story_first: 0,
             labels: Vec::new(),
             checks: Vec::new(),
-            panels: Vec::new(),
             list_rect: None,
             picture: None,
             boxes: Vec::new(),
@@ -1296,10 +1318,10 @@ impl App {
                 credits: true,
                 ..empty
             },
-            // "Select custom mission" as the original's (Startcst.cpp),
-            // every widget placed where the original draws it (fitted to
-            // its screen): the map panel with its scroll bars and the tick,
-            // the description, the missions and the players.
+            // "Select custom mission" as the original's (Startspl.cpp
+            // 0x53b940, its widgets by Startcom.cpp 0x52c5c0): the map
+            // panel with its scroll bars and the tick, the description, the
+            // missions and the players, each where the original creates it.
             MenuState::Missions(category, selected) => {
                 let list = self.screen_missions(category);
                 let chosen = selected.and_then(|i| list.get(i)).copied();
@@ -1315,15 +1337,32 @@ impl App {
                     .filter(|p| chosen.and_then(|e| self.entry_mission(e)) == Some(p.index));
                 self.load_page(tab, &entries, selected, preview, empty)
             }
-            // "Your mission" (Starttsk.cpp, 0x53ed40 and 0x53f550): the
-            // briefing in a box at (20, 80, 630, 440), "Difficulty level:"
-            // (string 105) at (660, 405) over three boxes from (660, 440),
-            // 30 apart (strings 106-108), Start (1010) at (244, 543) and
-            // Cancel (164) at (440, 543).
+            // "Your mission" (Starttsk.cpp, 0x53ed40, 0x53f360 and
+            // 0x53f550): the briefing in a box at (20, 80, 630, 440),
+            // "Difficulty level:" (string 105) at (660, 405) over three
+            // boxes from (660, 440), 30 apart (strings 106-108); Start
+            // (1010) at (244, 543) and Cancel (1002) at (440, 543), or Start
+            // alone at (335, 543) in a campaign past its first mission (game
+            // + 0x3215 not 0).
             MenuState::Briefing => {
                 let mut story = self.scene.briefing_text.clone();
                 if story.is_empty() {
                     story.push(self.scene.mission.to_uppercase());
+                }
+                let on = self.campaign_number().is_some_and(|n| n != 0);
+                let mut buttons = vec![Button {
+                    caption: "Start".into(),
+                    x: if on { 335.0 } else { 244.0 },
+                    y: 543.0,
+                    shape: 2,
+                }];
+                if !on {
+                    buttons.push(Button {
+                        caption: "Cancel".into(),
+                        x: 440.0,
+                        y: 543.0,
+                        shape: 3,
+                    });
                 }
                 MenuPage {
                     backdrop: Backdrop::Mission,
@@ -1339,20 +1378,7 @@ impl App {
                             checked: self.difficulty == i,
                         })
                         .collect(),
-                    buttons: vec![
-                        Button {
-                            caption: "Start".into(),
-                            x: 244.0,
-                            y: 543.0,
-                            shape: 2,
-                        },
-                        Button {
-                            caption: "Cancel".into(),
-                            x: 440.0,
-                            y: 543.0,
-                            shape: 3,
-                        },
-                    ],
+                    buttons,
                     ..empty
                 }
             }
@@ -1367,18 +1393,21 @@ impl App {
                         ))
                     })
                     .collect();
-                // The original's screen: its framed box at (15, 305, 378,
-                // 210), empty until someone has won, and OK (string 10) at
-                // (345, 540); both checked pixel for pixel against it.
-                let panel = crate::menus::Panel {
-                    rect: (15.0, 305.0, 378.0, 210.0),
-                    title: String::new(),
-                    arrows: false,
-                };
+                // The original's screen (Startba.cpp, 0x528210 and
+                // 0x528390): the RAM_BEST picture at ((800 - 2 x 380 - 10)
+                // / 2, (600 - 2 x 212 - 10) / 2 + 212 + 10) and OK (string
+                // 1001) at (345, 540). Its title and rows are the
+                // campaign's high-score table, whose storage is not
+                // settled (0x5c9ed0, see docs/FORMATS.md): the rows here
+                // are the port's own, the best times.
                 MenuPage {
                     backdrop: Backdrop::Best,
-                    list_rect: Some(panel.inner()),
-                    panels: vec![panel],
+                    sprites: vec![crate::menus::Placed {
+                        name: "RAM_BEST".into(),
+                        x: 15.0,
+                        y: 305.0,
+                    }],
+                    list_rect: Some((20.0, 330.0, 367.0, 181.0)),
                     items,
                     buttons: vec![Button {
                         caption: "OK".into(),
@@ -1409,12 +1438,19 @@ impl App {
                     x,
                     y,
                     text: t.into(),
+                    clip: None,
                 };
                 let name_style = style("MH", 2);
                 let typed = self
                     .menus
                     .as_ref()
                     .map_or(0.0, |m| m.measure(name_style, &self.player_name));
+                // The name's edit (type 6) at (43, 256), its caret in
+                // palette colour 0xfb (0x538440, 0x563140).
+                let caret_colour = self
+                    .menus
+                    .as_ref()
+                    .and_then(|m| m.colour(Backdrop::TitleDim, 0xfb));
                 let caret = if self.player_name.is_empty() {
                     43.0
                 } else {
@@ -1440,10 +1476,12 @@ impl App {
                     texts: vec![
                         text(style("BH", 2), 43.0, 228.0, "Player's name"),
                         text(style("BH", 2), 43.0, 293.0, "Select communication channel"),
-                        text(name_style, 43.0, 255.0, &self.player_name),
+                        text(name_style, 43.0, 256.0, &self.player_name),
                         text(style("MH", 2), 43.0, 321.0, "Internet TCP/IP Connection"),
                     ],
-                    fills: vec![((caret, 256.0, 2.0, 18.0), 0xffff00)],
+                    fills: caret_colour
+                        .map(|c| vec![((caret, 256.0, 2.0, 18.0), c)])
+                        .unwrap_or_default(),
                     buttons: vec![
                         at_button("New", 60.0, 2),
                         at_button("Join", 215.0, 3),
@@ -1503,42 +1541,98 @@ impl App {
                     ..empty
                 }
             }
+            // The end screen (Startrpt.cpp, 0x5390a0, 0x539350 and
+            // 0x539b20): its backdrop by the outcome and OK (string 1001)
+            // at (345, 540). After a won campaign mission it also shows
+            // the RAM_BEST picture at (400, 310) titled "Best Conquerors"
+            // (1042) at (9, 1) in it, and the twelve statistics: labels
+            // (1047-1058) at (15, 85 + 30 i, 15 more from the 6th, the 8th,
+            // 30 from the 12th) in BH, cut at 420 wide (300 from the 8th),
+            // the values 5 right of them, 80 wide. The high-score table's
+            // rows and the edit to enter a name in it are left out: where
+            // the table is kept (0x5c9ed0) is not settled.
             MenuState::Outcome(outcome) => {
+                use crate::menus::{Placed, Style, Text};
                 let won = outcome == crate::scene::Outcome::Victory;
-                let mut buttons = Vec::new();
-                if won && self.next_mission().is_some() {
-                    buttons.push(button("Next mission", 313.0, 470.0));
-                }
-                if !won {
-                    buttons.push(button("Try again", 313.0, 470.0));
-                }
-                buttons.push(button("Main menu", 313.0, 522.0));
-                let mut text = match (won, self.last_win) {
-                    (true, Some((time, new))) => vec![format!(
-                        "Won in {}{}",
-                        crate::records::clock(time),
-                        if new { ", a new best" } else { "" }
-                    )],
-                    _ => vec![if won {
-                        "Mission accomplished"
-                    } else {
-                        "Mission failed"
+                let mut sprites = Vec::new();
+                let mut texts = Vec::new();
+                if won && self.campaign_number().is_some() {
+                    let style = |spacing| Style {
+                        font: "BH",
+                        variant: 2,
+                        spacing,
+                    };
+                    sprites.push(Placed {
+                        name: "RAM_BEST".into(),
+                        x: 400.0,
+                        y: 310.0,
+                    });
+                    texts.push(Text {
+                        style: style(1),
+                        x: 409.0,
+                        y: 311.0,
+                        text: STRING_BEST.into(),
+                        clip: None,
+                    });
+                    let values = self.scene.stats.values(self.scene.amber);
+                    for (i, (label, value)) in STAT_LABELS.iter().zip(values).enumerate() {
+                        // 7 more than BH's tallest glyph (23) apart.
+                        let pitch = self
+                            .menus
+                            .as_ref()
+                            .map_or(0.0, |m| m.tallest(style(2)) + 7.0);
+                        let y = 85.0
+                            + pitch * i as f32
+                            + if i >= 5 { 15.0 } else { 0.0 }
+                            + if i >= 7 { 15.0 } else { 0.0 }
+                            + if i >= 11 { 30.0 } else { 0.0 };
+                        let w = if i < 7 { 420.0 } else { 300.0 };
+                        // Each centred down in a box of the font's tallest
+                        // glyph's height.
+                        let mut put = |style: Style, x: f32, w: f32, t: String| {
+                            let dy = self.menus.as_ref().map_or(0.0, |m| {
+                                ((m.tallest(style) - m.height(style, &t)) / 2.0).floor()
+                            });
+                            texts.push(Text {
+                                style,
+                                x,
+                                y: y + dy,
+                                text: t,
+                                clip: Some(w),
+                            });
+                        };
+                        put(style(2), 15.0, w, (*label).into());
+                        put(style(1), 15.0 + w + 5.0, 80.0, value.to_string());
                     }
-                    .into()],
-                };
-                text.extend(self.scene.stats.lines(self.scene.amber));
+                }
                 MenuPage {
                     backdrop: if won {
                         Backdrop::Accomplished
                     } else {
                         Backdrop::Failed
                     },
-                    text,
-                    buttons,
+                    sprites,
+                    texts,
+                    buttons: vec![Button {
+                        caption: "OK".into(),
+                        x: 345.0,
+                        y: 540.0,
+                        shape: 2,
+                    }],
                     ..empty
                 }
             }
         }
+    }
+
+    /// The campaign mission number of the mission played (game + 0x3215,
+    /// set by 0x537f60 from `miss%d%02d`): none outside the campaign.
+    fn campaign_number(&self) -> Option<u32> {
+        let mission = &self.missions[self.mission_index];
+        if !crate::scene::is_campaign(mission) {
+            return None;
+        }
+        mission[5..].parse().ok()
     }
 
     /// Missions of `category`, as indices into `missions`.
@@ -1624,6 +1718,7 @@ impl App {
                 x: 16.0,
                 y: 4.0,
                 text: format!("Map ({}x{})", size.0, size.1),
+                clip: None,
             },
             // Bright whether or not a mission is chosen (the original's).
             Text {
@@ -1634,12 +1729,14 @@ impl App {
                 x: 209.0,
                 y: 28.0,
                 text: "Mission description".into(),
+                clip: None,
             },
         ];
         let mut sprites = vec![at("MP_MAP", 3.0, 3.0), at("MP_DESC", 196.0, 27.0)];
         // The map: a position a cell, as many as the cells beyond the
-        // viewer's plus one (0x54c320).
-        const VIEW: u32 = 153;
+        // viewer's plus one (0x54c320); the viewer at (3 + 7, 3 + 27),
+        // 19 cells of 8 (0x52c5c0).
+        const VIEW: u32 = MAP_CELLS as u32 * 8;
         let mut map = None;
         let (mut along, mut count) = ((0, 0), (0, 0));
         if let Some(p) = preview {
@@ -1659,7 +1756,7 @@ impl App {
                     (along.0 as u32 * 8).min(m.width.saturating_sub(VIEW)),
                     (along.1 as u32 * 8).min(m.height.saturating_sub(VIEW)),
                 );
-                map = Some((m.clone(), (9.0, 29.0, VIEW as f32, VIEW as f32), off));
+                map = Some((m.clone(), (10.0, 30.0, VIEW as f32, VIEW as f32), off));
             }
         }
         // The track pictures' lengths: MAP_TR_V0, MAP_TR_H0 and DESC_TR0
@@ -1760,6 +1857,7 @@ impl App {
             x,
             y,
             text: t.into(),
+            clip: None,
         };
         let panels = self.mission_panels(preview);
         let (mut sprites, mut texts) = (panels.sprites, panels.texts);
@@ -1768,7 +1866,11 @@ impl App {
             text(style(2), 396.0, 2.0, "Select mission to load"),
             text(style(2), 13.0, 217.0, "Missions"),
         ]);
-        const ROWS: usize = 9;
+        // The list (0x52fe90): from (3 + 9, 216 + 0x20), ten rows of the
+        // LOAD_RM0 picture's height and a pixel; the chosen row on that
+        // picture. Each text in MH at 4 across, centred down in the row's
+        // 26 (the chosen one's in 24, pale).
+        const ROWS: usize = 10;
         let bar = self.list_bar(
             entries.len(),
             selected,
@@ -1778,29 +1880,27 @@ impl App {
         );
         let first = bar.first;
         for (k, (_, label)) in entries.iter().enumerate().skip(first).take(ROWS) {
-            let y = 249.0 + 27.0 * (k - first) as f32;
+            let y = 248.0 + 27.0 * (k - first) as f32;
             if selected == Some(k) {
-                sprites.push(at("LOAD_RM0", 11.0, y - 4.0));
+                sprites.push(at("LOAD_RM0", 12.0, y));
             }
-            let (variant, dy) = if selected == Some(k) {
-                (2, -1.0)
+            let (variant, high) = if selected == Some(k) {
+                (2, 24.0)
             } else {
-                (1, 0.0)
+                (1, 26.0)
             };
-            texts.push(text(
-                Style {
-                    font: "MH",
-                    variant,
-                    spacing: 1,
-                },
-                13.0,
-                y + dy,
-                label,
-            ));
+            let style = Style {
+                font: "MH",
+                variant,
+                spacing: 1,
+            };
+            let th = self.menus.as_ref().map_or(0.0, |m| m.height(style, label));
+            texts.push(text(style, 16.0, y + ((high - th) / 2.0).floor(), label));
         }
         sprites.extend(bar.sprites);
-        // The tabs: the open one's picture and a bright caption a pixel
-        // higher.
+        // The tabs (0x4eaa70): the open one's picture and its caption pale,
+        // centred in (0, 0, w, 28); a closed one's in variant 1, centred in
+        // (1, 1, w, 28), a pixel right and down.
         let tabs = [
             ("Scenario", 322.0, LoadTab::Scenario, false),
             ("Custom", 452.0, LoadTab::Custom, false),
@@ -1820,10 +1920,11 @@ impl App {
                 .menus
                 .as_ref()
                 .map_or(0.0, |m| m.measure(style(if open { 2 } else { 1 }), caption));
+            let shift = if open { 0.0 } else { 1.0 };
             texts.push(text(
                 style(if open { 2 } else { 1 }),
-                x + ((w - tw) / 2.0).ceil(),
-                if open { 530.0 } else { 531.0 },
+                x + shift + ((w - tw) / 2.0).floor(),
+                530.0 + shift,
                 caption,
             ));
         }
@@ -1843,7 +1944,7 @@ impl App {
             selected,
             first,
             rows: ROWS,
-            list_rect: Some((8.0, 245.0, 755.0, 27.0 * ROWS as f32)),
+            list_rect: Some((12.0, 248.0, 750.0, 27.0 * ROWS as f32)),
             row_height: Some(27.0),
             story: Some((STORY_BOX, panels.story)),
             story_style: Some(STORY_STYLE),
@@ -1896,6 +1997,7 @@ impl App {
             x,
             y,
             text: t.into(),
+            clip: None,
         };
         // Arrows: picture 0 when they can scroll, 2 when they cannot.
         let arrow = |dir: &str, can: bool| format!("M_LBUT_{dir}{}", if can { 0 } else { 2 });
@@ -2163,11 +2265,14 @@ impl App {
             return;
         };
         let page = self.menu_page(state);
-        let Some(hit) = menus.hit(&page.view(None), p) else {
+        let Some(hit) = menus.hit(&page.view(None, None), p) else {
             return;
         };
-        let caption = match hit {
-            MenuHit::Button(i) => page.buttons[i].caption.clone(),
+        match hit {
+            // A button is held down; it acts when let go (`menu_release`).
+            MenuHit::Button(i) => {
+                self.menu_held = Some(i);
+            }
             MenuHit::Tab(t) => {
                 if let MenuState::Load(..) = state {
                     let tab = [LoadTab::Scenario, LoadTab::Custom, LoadTab::StartFrom][t.min(2)];
@@ -2176,7 +2281,6 @@ impl App {
                     self.desc_first = 0;
                     self.map_at = None;
                 }
-                return;
             }
             // A scroll arrow moves its bar a position, and again while
             // held: after 500 ms, then every 50 (75 for a list's), as the
@@ -2184,34 +2288,45 @@ impl App {
             MenuHit::Step(target, d) => {
                 self.menu_step(state, &page, target, d);
                 self.menu_repeat = Some((hit, self.time_ms + 500));
-                return;
             }
             // A scroll bar's track takes the position under the pointer,
             // and follows it while the button is held (_strack.cpp).
             MenuHit::Track(target, pos) => {
                 self.menu_scroll_to(state, &page, target, pos);
                 self.menu_drag = Some(target);
-                return;
             }
             // A difficulty: the mission is set up again for it.
             MenuHit::Check(i) => {
                 // A player's choice arrow on Custom missions: the computer
                 // players' level goes round Weak, Medium, Strong.
                 if let MenuState::Missions(Category::Single, _) = state {
-                    let _ = i;
                     self.custom_ai = (self.custom_ai + 1) % 3;
-                    return;
-                }
-                if state == MenuState::Briefing && self.difficulty != i {
+                } else if state == MenuState::Briefing && self.difficulty != i {
                     self.difficulty = i;
                     self.open_mission(self.mission_index);
                 }
-                return;
             }
             MenuHit::Item(i) => {
                 self.menu_select(state, i);
-                return;
             }
+        }
+    }
+
+    /// The left button let go at 800x600 point `p` of a front-end screen:
+    /// the button held down acts if the pointer is still inside it
+    /// (_sbutton.cpp 0x54ab20, message 0x62).
+    fn menu_release(&mut self, p: (f32, f32)) {
+        let (Some(held), Some(state), Some(menus)) =
+            (self.menu_held.take(), self.menu, &self.menus)
+        else {
+            return;
+        };
+        let page = self.menu_page(state);
+        if menus.hit(&page.view(None, None), p) != Some(MenuHit::Button(held)) {
+            return;
+        }
+        let Some(caption) = page.buttons.get(held).map(|b| b.caption.clone()) else {
+            return;
         };
         let was = self.menu;
         self.menu_action(state, &caption);
@@ -2219,6 +2334,20 @@ impl App {
             self.list_first = 0;
             self.desc_first = 0;
             self.map_at = None;
+        }
+    }
+
+    /// The pointer at 800x600 point `p` of a front-end screen: a button
+    /// held down is let go once the pointer leaves it (_sbutton.cpp
+    /// message 0x60), without acting.
+    fn menu_pointer_at(&mut self, p: (f32, f32)) {
+        let (Some(held), Some(state), Some(menus)) = (self.menu_held, self.menu, &self.menus)
+        else {
+            return;
+        };
+        let page = self.menu_page(state);
+        if menus.hit(&page.view(None, None), p) != Some(MenuHit::Button(held)) {
+            self.menu_held = None;
         }
     }
 
@@ -2366,7 +2495,10 @@ impl App {
         self.menu_repeat = Some((hit, self.time_ms + every));
         let page = self.menu_page(state);
         let p = Menus::to_menu(self.window_size(), c.x as f32, c.y as f32);
-        let here = self.menus.as_ref().and_then(|m| m.hit(&page.view(None), p));
+        let here = self
+            .menus
+            .as_ref()
+            .and_then(|m| m.hit(&page.view(None, None), p));
         if here == Some(hit) {
             self.menu_step(state, &page, target, d);
         }
@@ -2457,15 +2589,23 @@ impl App {
             (MenuState::Briefing, "Cancel")
             | (MenuState::Missions(..), "Cancel")
             | (MenuState::Load(..), "Cancel") => self.menu = Some(MenuState::Main),
-            (MenuState::Outcome(_), "Next mission") => {
-                if let Some(next) = self.next_mission() {
-                    // The campaign goes on with what was learned.
-                    self.carry =
-                        crate::scene::is_campaign(&self.missions[next]).then(|| self.scene.carry());
-                    self.open_mission(next);
+            // The end screen's OK (0x539b20, 0x16c): after a won campaign
+            // mission the next one's briefing, the campaign going on with
+            // what was learned; else the main menu.
+            (MenuState::Outcome(outcome), "OK") => {
+                let next = (outcome == crate::scene::Outcome::Victory
+                    && self.campaign_number().is_some())
+                .then(|| self.next_mission())
+                .flatten();
+                match next {
+                    Some(next) => {
+                        self.carry = crate::scene::is_campaign(&self.missions[next])
+                            .then(|| self.scene.carry());
+                        self.open_mission(next);
+                    }
+                    None => self.menu = Some(MenuState::Main),
                 }
             }
-            (MenuState::Outcome(_), "Try again") => self.open_mission(self.mission_index),
             (_, "Main menu") | (_, "Back") => self.menu = Some(MenuState::Main),
             _ => {}
         }
@@ -2521,12 +2661,13 @@ impl App {
         self.menu = Some(state);
         for p in presses {
             self.menu_press(p);
+            self.menu_release(p);
             self.menu_drag = None;
             self.menu_repeat = None;
         }
         let state = self.menu.unwrap_or(state);
         let menus = self.menus.as_ref().context("menus are not installed")?;
-        menus.draw(frame, &self.menu_page(state).view(hover));
+        menus.draw(frame, &self.menu_page(state).view(hover, self.menu_held));
         Ok(())
     }
 
@@ -4799,16 +4940,14 @@ impl App {
         if let (Some(outcome), None) = (self.scene.outcome, self.outcome_at) {
             self.outcome_at = Some(self.scene.clock);
             // A win goes on the best results.
-            self.last_win = (outcome == crate::scene::Outcome::Victory).then(|| {
+            if outcome == crate::scene::Outcome::Victory {
                 let mission = self.missions[self.mission_index].clone();
-                let new = self.records.record(&mission, self.scene.clock);
-                if new {
+                if self.records.record(&mission, self.scene.clock) {
                     if let Err(e) = self.records.save(&self.data.save_dir().join("best.json")) {
                         eprintln!("could not save the best results: {e}");
                     }
                 }
-                (self.scene.clock, new)
-            });
+            }
         }
         // The end screen follows a few seconds after the mission is decided.
         if let (Some(outcome), Some(at), None) = (self.scene.outcome, self.outcome_at, self.menu) {
@@ -4975,7 +5114,7 @@ impl App {
                 let hover = self
                     .cursor
                     .map(|c| Menus::to_menu(window, c.x as f32, c.y as f32));
-                menus.draw(&mut frame, &page.view(hover));
+                menus.draw(&mut frame, &page.view(hover, self.menu_held));
             } else {
                 let site = self.cursor.and_then(|c| self.site_at(c));
                 // The building as it would stand there.
@@ -5417,6 +5556,11 @@ impl ApplicationHandler for App {
                         Menus::to_menu(self.window_size(), position.x as f32, position.y as f32);
                     self.menu_drag_to(p);
                 }
+                if self.menu_held.is_some() {
+                    let p =
+                        Menus::to_menu(self.window_size(), position.x as f32, position.y as f32);
+                    self.menu_pointer_at(p);
+                }
                 if let Some(slider) = self.slider_drag {
                     if let Some(layout) = self.show_interface.then(|| {
                         self.interface
@@ -5516,6 +5660,11 @@ impl ApplicationHandler for App {
                     }
                 }
                 (MouseButton::Left, ElementState::Released) => {
+                    if let Some(c) = self.cursor.filter(|_| self.menu_held.is_some()) {
+                        let p = Menus::to_menu(self.window_size(), c.x as f32, c.y as f32);
+                        self.menu_release(p);
+                    }
+                    self.menu_held = None;
                     if let Some(c) = self.left_down.take() {
                         self.left_click(c);
                     }

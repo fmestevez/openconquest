@@ -3061,12 +3061,7 @@ fn statistics_and_score() {
     ];
     let expected = (points[ek as usize] - points[mk as usize]).max(0) / 10;
     assert_eq!(scene.stats.score() as i64, expected);
-    assert!(scene
-        .stats
-        .lines(scene.amber)
-        .last()
-        .unwrap()
-        .starts_with("Total score"));
+    assert_eq!(scene.stats.values(scene.amber)[11] as i64, expected);
 }
 
 /// Missions start with the view where the original puts it (`WIN_VIEW`):

@@ -1,9 +1,14 @@
 //! The front end: main menu, mission lists, briefing and end screens.
 //!
 //! The art is the original's (`controlm.dkx`: `M_BKGND_00`-`05`, the
-//! `M_BUT*` button shapes and the `S_FNT_*` fonts); captions and the
-//! placement of buttons are this port's own. Screens are 800x600, scaled to
-//! the window's height and centred.
+//! `M_BUT*` button shapes, the widget pictures and the `S_FNT_*` fonts), and
+//! so are the captions (the exe's string resources) and where the buttons
+//! and widgets stand on the title screen, Custom missions, Load game, the
+//! briefing, the end screen, Best Conquerors and the multiplayer connect
+//! screen (startsys.cpp's screens, 0x528000-0x540400). The port's own:
+//! the Multiplayer and Waiting screens, and the rows of Best Conquerors;
+//! the differences still open are listed in docs/FORMATS.md. Screens are
+//! 800x600, scaled to the window's height and centred.
 
 use anyhow::{Context, Result};
 use openconquest_formats::{Bitmap, ResourceKind, Sprite};
@@ -54,6 +59,9 @@ pub struct MenuView<'a> {
     pub buttons: &'a [Button],
     /// The cursor, in 800x600 coordinates.
     pub hover: Option<(f32, f32)>,
+    /// The button held down with the pointer inside it (_sbutton.cpp
+    /// state 2).
+    pub pressed: Option<usize>,
     /// The title screen's version and publisher lines.
     pub credits: bool,
     /// The briefing as the original shows it (Starttsk.cpp): paragraphs
@@ -68,8 +76,6 @@ pub struct MenuView<'a> {
     pub labels: &'a [(String, f32, f32)],
     /// Checkboxes (`M_CHECK0`/`1`) with their captions.
     pub checks: &'a [Check],
-    /// Framed boxes.
-    pub panels: &'a [Panel],
     /// Where the list goes, if not in the plain box.
     pub list_rect: Option<Rect>,
     /// A picture fitted into a box (the map of the chosen mission).
@@ -120,6 +126,9 @@ pub struct Text {
     pub x: f32,
     pub y: f32,
     pub text: String,
+    /// The width of the box it is drawn into, cut off at its right
+    /// (0x4eb430 draws into a bitmap of the box's size); none, all of it.
+    pub clip: Option<f32>,
 }
 
 /// A tab on a menu screen, at its top left.
@@ -301,9 +310,10 @@ pub fn list_rows(rect: Rect) -> usize {
     ((rect.3 - 8.0) / ROW).floor().max(0.0) as usize
 }
 
-/// How many lines of a story fit in its box `rect`, `pitch` apart.
+/// How many lines of a story fit in its box `rect`, `pitch` apart, the
+/// first a line down (see `MenuView::story`).
 pub fn story_rows(rect: Rect, pitch: f32) -> usize {
-    ((rect.3 - 19.0) / pitch).floor().max(0.0) as usize
+    ((rect.3 - pitch) / pitch).floor().max(0.0) as usize
 }
 
 // The list and text boxes.
@@ -320,6 +330,8 @@ const STORY_LINE: f32 = 19.0;
 
 pub struct Menus {
     backdrops: Vec<Option<Image>>,
+    /// Each backdrop's palette, as colours (the screen's 256 colours).
+    palettes: Vec<Option<Vec<u32>>>,
     /// The button shapes `M_BUT0_` to `M_BUT3_`, normal and lit, coloured
     /// with each backdrop's palette (the original's 256-colour screen takes
     /// the backdrop's; the global palette turns the lit buttons purple).
@@ -343,8 +355,6 @@ pub struct Menus {
     publisher_font: TextRenderer,
     /// Checkbox pictures, clear and ticked, by backdrop.
     checks: Vec<[Option<Image>; 2]>,
-    /// Up and down arrows, by backdrop.
-    arrows: Vec<[Option<Image>; 2]>,
     /// Tabs, narrow and wide, closed and open, by backdrop.
     tabs: Vec<[[Option<Image>; 2]; 2]>,
     /// Widget pictures by name, in the front end's palette.
@@ -530,16 +540,19 @@ impl Menus {
             }
         }
         Ok(Self {
+            palettes: backdrops
+                .iter()
+                .map(|b| {
+                    b.as_ref()
+                        .map(|b| b.palette.0.iter().map(|&c| rgb(c)).collect())
+                })
+                .collect(),
             pictures,
             styles,
             shapes,
             checks: backdrops
                 .iter()
                 .map(|bg| [sprite("M_CHECK0", bg), sprite("M_CHECK1", bg)])
-                .collect(),
-            arrows: backdrops
-                .iter()
-                .map(|bg| [sprite("M_LBUT_UP0", bg), sprite("M_LBUT_DN0", bg)])
                 .collect(),
             tabs: backdrops
                 .iter()
@@ -651,22 +664,6 @@ impl Menus {
                     top + i as f32 * pl,
                     l,
                 );
-            }
-        }
-        let arrows = self
-            .arrows
-            .get(view.backdrop as usize)
-            .or(self.arrows.first());
-        for p in view.panels {
-            self.draw_panel(frame, p, s, (ox, oy));
-            write(frame, &self.big, p.rect.0 + 8.0, p.rect.1 + 2.0, &p.title);
-            if p.arrows {
-                for (k, (ax, ay)) in p.arrow_spots().into_iter().enumerate() {
-                    if let Some(img) = arrows.and_then(|a| a[k].as_ref()) {
-                        let (x, y) = at(ax, ay);
-                        blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
-                    }
-                }
             }
         }
         let tabs = self.tabs.get(view.backdrop as usize).or(self.tabs.first());
@@ -798,18 +795,29 @@ impl Menus {
             }
         }
         if let Some((rect, paragraphs)) = view.story {
-            // Wrapped to the box, 19 a line from 19 down (fitted to the
-            // original), from the first line scrolled to.
+            // Wrapped to the box, a line apart, from the first line
+            // scrolled to. The original draws the wrapped lines (0x5482b0)
+            // from the box's top (0x547d20); the first shown here stands a
+            // line down, where it was measured on the original's screens
+            // (whether its wrapped text starts with an empty line is not
+            // settled).
             let (font, pitch) = self.story_font_of(view.story_style);
             let lines = self.story_lines(view.story_style, rect.2, paragraphs);
             let rows = story_rows(rect, pitch);
             for (k, l) in lines.iter().skip(view.story_first).take(rows).enumerate() {
-                write(frame, font, rect.0, rect.1 + 19.0 + k as f32 * pitch, l);
+                write(frame, font, rect.0, rect.1 + pitch + k as f32 * pitch, l);
             }
         }
         for t in view.texts {
             if let Some(f) = self.styles.get(&t.style) {
-                write(frame, f, t.x, t.y, &t.text);
+                match t.clip {
+                    Some(w) => {
+                        let (px, py) = at(t.x, t.y);
+                        let right = (ox + (t.x + w) * s).round() as i32;
+                        f.draw_clipped(frame, px as i32, py as i32, ts, &t.text, right);
+                    }
+                    None => write(frame, f, t.x, t.y, &t.text),
+                }
             }
         }
         for &((x, y, w, h), colour) in view.fills {
@@ -840,9 +848,16 @@ impl Menus {
             };
             write(frame, font, c.x + 30.0, c.y, &c.caption);
         }
-        for b in view.buttons {
+        // A button's looks by its state (_sbutton.cpp, captions by
+        // 0x4ea470): normal, picture 0 and the caption in variant 2; under
+        // the pointer, picture 1, the caption in variant 3 two up and left
+        // of its shadow in variant 0; held down inside, picture 1 and the
+        // caption in variant 3 where it stands, without a shadow.
+        for (i, b) in view.buttons.iter().enumerate() {
             let (w, h) = self.button_size(b);
-            let lit = view.hover.is_some_and(|p| inside(p, (b.x, b.y, w, h)));
+            let pressed = view.pressed == Some(i);
+            let under = view.hover.is_some_and(|p| inside(p, (b.x, b.y, w, h)));
+            let lit = pressed || under;
             let shapes = self
                 .shapes
                 .get(view.backdrop as usize)
@@ -858,7 +873,7 @@ impl Menus {
             let th = font.line_height() as f32 * ts as f32 / s;
             // Whole pixels, as the original centres (mfcfnt.cpp 0x547860).
             let (tw, th) = (tw.round(), th.round());
-            if lit {
+            if lit && !pressed {
                 write(
                     frame,
                     &self.lit_shadow,
@@ -868,7 +883,7 @@ impl Menus {
                 );
             }
             // A lit caption rises out of its shadow.
-            let lift = if lit { LIT_LIFT } else { 0.0 };
+            let lift = if lit && !pressed { LIT_LIFT } else { 0.0 };
             write(
                 frame,
                 font,
@@ -898,48 +913,6 @@ impl Menus {
         put(x0, y1 - t, x1, y1);
         put(x0, y0, x0 + t, y1);
         put(x1 - t, y0, x1, y1);
-    }
-
-    fn draw_panel(&self, frame: &mut Frame, panel: &Panel, s: f32, (ox, oy): (f32, f32)) {
-        let (x, y, w, h) = panel.rect;
-        // One game pixel, in window pixels.
-        let put = |frame: &mut Frame, gx: f32, gy: f32, colour: u32| {
-            let (x0, y0) = ((ox + gx * s).round() as i64, (oy + gy * s).round() as i64);
-            let (x1, y1) = (
-                (ox + (gx + 1.0) * s).round() as i64,
-                (oy + (gy + 1.0) * s).round() as i64,
-            );
-            for yy in y0.max(0)..y1.min(frame.height as i64) {
-                for xx in x0.max(0)..x1.min(frame.width as i64) {
-                    frame.pixels[(yy as u32 * frame.width + xx as u32) as usize] = colour;
-                }
-            }
-        };
-        let bevel = |frame: &mut Frame, (x, y, w, h): Rect, light: u32, dark: u32| {
-            for i in 0..w as i32 {
-                put(frame, x + i as f32, y, light);
-                put(frame, x + i as f32, y + h - 1.0, dark);
-            }
-            for i in 0..h as i32 {
-                put(frame, x, y + i as f32, light);
-                put(frame, x + w - 1.0, y + i as f32, dark);
-            }
-        };
-        for gy in 3..23 {
-            for gx in 1..(w as i32 - 1) {
-                let (px, py) = (x as i32 + gx, y as i32 + gy);
-                if (px + py) % 2 == 0 {
-                    put(frame, px as f32, py as f32, PANEL_STIPPLE);
-                }
-            }
-        }
-        bevel(frame, panel.rect, PANEL_GOLD, PANEL_RED);
-        bevel(
-            frame,
-            (x + 5.0, y + PANEL_BAND, w - 10.0, h - PANEL_BAND - 5.0),
-            PANEL_RED,
-            PANEL_GOLD,
-        );
     }
 
     /// The font and line pitch of a story in style `style` (the
@@ -990,6 +963,24 @@ impl Menus {
         lines
     }
 
+    /// Colour `index` of the palette of screen `backdrop`.
+    pub fn colour(&self, backdrop: Backdrop, index: u8) -> Option<u32> {
+        let palette = self.palettes.get(backdrop as usize)?.as_ref()?;
+        palette.get(usize::from(index)).copied()
+    }
+
+    /// Height of `text` in style `style` (its tallest glyph's, 0x547350).
+    pub fn height(&self, style: Style, text: &str) -> f32 {
+        self.styles
+            .get(&style)
+            .map_or(0.0, |f| f.height(text) as f32)
+    }
+
+    /// Height of style `style`'s tallest glyph (0x5471f0).
+    pub fn tallest(&self, style: Style) -> f32 {
+        self.styles.get(&style).map_or(0.0, |f| f.tallest() as f32)
+    }
+
     /// Width of `text` in style `style`, in screen pixels.
     pub fn measure(&self, style: Style, text: &str) -> f32 {
         self.styles
@@ -1009,9 +1000,10 @@ impl Menus {
                 return Some(MenuHit::Track(t.target, t.pos_at(p)));
             }
         }
+        // A choice's item is its M_CHECK picture alone, 23 x 23 (the
+        // briefing's group, 0x53f360); its caption is not.
         for (i, c) in view.checks.iter().enumerate() {
-            let w = 30.0 + self.big.measure(&c.caption) as f32;
-            if inside(p, (c.x, c.y, w, 24.0)) {
+            if inside(p, (c.x, c.y, 23.0, 23.0)) {
                 return Some(MenuHit::Check(i));
             }
         }
@@ -1025,13 +1017,6 @@ impl Menus {
             let w = if t.wide { 214.0 } else { 130.0 };
             if inside(p, (t.x, t.y, w, 28.0)) {
                 return Some(MenuHit::Tab(i));
-            }
-        }
-        for panel in view.panels.iter().filter(|q| q.arrows) {
-            for (k, (ax, ay)) in panel.arrow_spots().into_iter().enumerate() {
-                if inside(p, (ax, ay, 23.0, 23.0)) {
-                    return Some(MenuHit::Step(Scroller::List, if k == 0 { -1 } else { 1 }));
-                }
             }
         }
         let (items, _) = view.list?;
@@ -1056,49 +1041,9 @@ fn row_at(list: Rect, row: Option<f32>, p: (f32, f32)) -> Option<usize> {
     (i >= 0.0 && top + (i + 1.0) * row <= list.1 + list.3).then_some(i as usize)
 }
 
-/// The original's framed boxes, measured on its screens: a raised outer
-/// edge (gold top and left, red bottom and right), a sunken inner one 5 in
-/// and 25 down (red top and left, gold bottom and right), and between them
-/// at the top a band stippled on every other pixel; the inside is left as
-/// it is. The colours are palette entries 24, 22 and 45 of the front end's
-/// backdrops.
-const PANEL_GOLD: u32 = 0xc69439;
+/// The frame of a chosen row on the port's own lists (palette entry 22 of
+/// the front end's backdrops).
 const PANEL_RED: u32 = 0x9c4231;
-const PANEL_STIPPLE: u32 = 0x945a41;
-const PANEL_BAND: f32 = 25.0;
-
-/// A framed box on a menu screen, its title in the band.
-#[derive(Debug, Clone)]
-pub struct Panel {
-    pub rect: Rect,
-    pub title: String,
-    /// Up and down arrows at its right (`M_LBUT_UP`, `M_LBUT_DN`), which
-    /// scroll its list.
-    pub arrows: bool,
-}
-
-impl Panel {
-    /// Where a list inside it goes (clear of its arrows).
-    pub fn inner(&self) -> Rect {
-        let (x, y, w, h) = self.rect;
-        let arrows = if self.arrows { 26.0 } else { 0.0 };
-        (
-            x + 5.0,
-            y + PANEL_BAND,
-            w - 11.0 - arrows,
-            h - PANEL_BAND - 4.0,
-        )
-    }
-
-    /// Top-left corners of its up and down arrows.
-    fn arrow_spots(&self) -> [(f32, f32); 2] {
-        let (x, y, w, h) = self.rect;
-        [
-            (x + w - 30.0, y + PANEL_BAND + 2.0),
-            (x + w - 30.0, y + h - 29.0),
-        ]
-    }
-}
 
 fn inside(p: (f32, f32), (x, y, w, h): (f32, f32, f32, f32)) -> bool {
     p.0 >= x && p.1 >= y && p.0 < x + w && p.1 < y + h
@@ -1107,6 +1052,25 @@ fn inside(p: (f32, f32), (x, y, w, h): (f32, f32, f32, f32)) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The connect screen's name caret takes palette colour 0xfb
+    /// (0x538440), and its fonts' tallest glyphs are as the end screen's
+    /// rows assume (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn the_front_end_palette_and_fonts() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let menus = Menus::load(&data, '0').unwrap();
+        assert_eq!(menus.colour(Backdrop::TitleDim, 0xfb), Some(0xffff00));
+        let bh = Style {
+            font: "BH",
+            variant: 2,
+            spacing: 2,
+        };
+        assert_eq!(menus.tallest(bh), 23.0);
+    }
 
     #[test]
     fn a_bar_has_a_position_for_each_full_window() {
@@ -1145,13 +1109,13 @@ mod tests {
 
     #[test]
     fn a_click_picks_the_row_drawn_there_after_scrolling() {
-        // The Load screen's list: rows 27 high from y 245, 9 shown, the
+        // The Load screen's list: rows 27 high from y 248, 10 shown, the
         // window asked to start past its last full one (as the arrows and
         // the wheel once did): drawn and clicked from the same row.
-        let rect = (8.0, 245.0, 755.0, 27.0 * 9.0);
-        let first = list_window(13, 14, 9);
-        let row = row_at(rect, Some(27.0), (300.0, 245.0 + 27.0 * 3.5)).unwrap();
-        assert_eq!(row + first, 8);
+        let rect = (12.0, 248.0, 750.0, 27.0 * 10.0);
+        let first = list_window(13, 14, 10);
+        let row = row_at(rect, Some(27.0), (300.0, 248.0 + 27.0 * 3.5)).unwrap();
+        assert_eq!(row + first, 7);
         // The plain list's rows.
         assert_eq!(list_rows(LIST), VISIBLE_ROWS);
     }
