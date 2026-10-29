@@ -28,6 +28,9 @@ struct Config {
     /// `"Shift+M"`, `""` for none).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     hotkeys: std::collections::BTreeMap<String, String>,
+    /// The Best Conquerors table (the original's registry `Result`).
+    #[serde(default)]
+    best: crate::records::Table,
 }
 
 fn read_config() -> Config {
@@ -73,6 +76,19 @@ pub fn set_panel_config(panels: &crate::panels::Config) {
 /// The command keys: the original's defaults with the player's changes.
 pub fn hotkeys() -> crate::hotkeys::Hotkeys {
     crate::hotkeys::Hotkeys::with_overrides(&read_config().hotkeys)
+}
+
+/// The Best Conquerors table as last written.
+pub fn best_table() -> crate::records::Table {
+    read_config().best
+}
+
+/// Keeps the Best Conquerors table (when the program ends, as the
+/// original's 0x501090).
+pub fn set_best_table(best: &crate::records::Table) {
+    let mut config = read_config();
+    config.best = best.clone();
+    write_config(&config);
 }
 
 fn config_path() -> Option<PathBuf> {

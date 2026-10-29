@@ -1749,31 +1749,146 @@ original:
 - Best Conquerors (Startba.cpp 0x528210, 0x528390): the RAM_BEST
   picture at (15, 305), OK (1001) at (345, 540).
 
-Not settled, so left out: the campaign high-score table both screens
-show (seven rows a campaign type: names at 0x5c9ed0 + 0x30 i, scores at
-0x5c9ef8 + 0x30 i; name at (410, 344 + 24 k) 286 wide and score at (696,
-...) 75 wide on the end screen, (25, 339 + 24 k) and (311, ...) on Best
-Conquerors, MH), Best Conquerors' title (the campaign's name, game +
-0x66d + type x 0x104, when game + 0xb8f has the type's bit; else string
-1038 + type) and the end screen's name entry (an edit, ids 0x174/0x175,
-when + 0x3335 qualifies, 0x5397e0): where the table is kept and loaded
-is not decoded. The port's Best Conquerors rows are its own best times.
+**Best Conquerors table** (0x5c9ed0, 0x540 bytes: 4 campaign types x 7
+rows of 0x30, a name of 0x28 bytes, the score at + 0x28, the game's id at
++ 0x2c). The original keeps it in HKLM `...\Ancient conquest\Config`,
+value `Result` (packed, unpacked by 0x56e3d0, its byte sum in
+`CRCResult`, the table zeroed on a mismatch), read at start-up by
+0x500810 and written only at exit (0x4ee6c0 -> 0x501090). The port keeps
+it in its settings file (`best`), read at start-up and written when the
+program ends.
+
+- Type: game + 0x3214 is 1 << campaign, set by the campaign start
+  0x537f60 (`miss<campaign><mission>`), 0 at start-up; 0x5291b0 takes
+  its lowest bit. The end screen uses it as is (0x5397c0), Best
+  Conquerors with 1 for 0.
+- Score: game + 0x3335, the twelfth figure (the campaign's total). Game
+  id: game + 0x1a0d, set on every load (0x4ed770 -> 0x4ed3f0): the file's
+  `ID_GAME` resource (saves write it, 0x511926), else the low dword of the
+  local time as a FILETIME (mission files have none, so every mission
+  started gets a new one). The port's saves carry it as `game_id`.
+- Entering (0x5397e0, from the end screen's widgets 0x539350, only after
+  a won campaign mission, game + 0xd80 = 1 and + 0x32fd): nothing if a
+  row of the type has the same score and id; else the first row whose
+  score the new one reaches (`score >= row`, signed; empty rows have 0),
+  the rows below moved down (row 6 drops off), name (cut to 39, 0x5291e0)
+  the resources' name list (+ 0x1b9, the connect screen's) if set, else
+  Config's 0x5ca578 (default Windows' `RegisteredOwner`, which the port
+  has not: empty).
+- Rows (0x539b20, 0x528520, each through 0x4eb430): row k shown when its
+  name and score are set; the name at (410, 344 + 24 k) on the end
+  screen, (25, 339 + 24 k) on Best Conquerors, in a box 286 wide and MH's
+  tallest glyph (18) high, centred down; the score centred in the 75-wide
+  box after it. End screen: MH variant 1, the entered row's score 2; Best
+  Conquerors: variant 2 when game + 0xb8f has the type's bit, else 0.
+  Gaps (1, 0).
+- The name edit (end screen, when a row was entered): type 6 at (410, 344
+  + 24 i, 286, 19), 39 characters, starting active, text the name (MH
+  variant 2 from its top left, the 0x174 background the backdrop's, so
+  the row's name under it is not seen); a caret 2 x 18 in palette colour
+  0xfb. Characters (WM_CHAR) go in but Backspace, Enter and Esc; its keys
+  (Sinput, priority 0xff, repeating, exclusive): Esc leaves it, Enter
+  posts 0x175 (the text into the row), Backspace. OK (0x16c) also puts
+  the text into the row. The connect screen's name edit (0x538440) is the
+  same, 0x104 characters, its text the resources' name list.
+- Best Conquerors' title (0x528520): `CD<t+1>` (game + 0x66d + 0x104 t)
+  when game + 0xb8f has bit t and the name is set, else string 1038 + t
+  (" "); variant 2 or 0. The installer (setup.exe 0x404cc0) reads the
+  CD's `ID_CD.DSK`: 4 bytes, the first ORed into the registry `Version`'s
+  low byte (game + 0xb8f), then up to 0x104 of name, copied to `CD<k+1>`
+  for k the lowest set bit of that byte (0x4038b0). This CD's file is `01
+  88 f0 de` "The Golden Fleece Campaign". The port's installer copies
+  `id_cd.dsk`; without it the title is string 1038.
+
+**Keyboard** (Sinput.cpp 0x553090, polled each frame from DirectInput's
+keyboard state, so keys are scan codes). A binding has two keys, a
+priority (the table is kept in its order), a message down and one up.
+With one key it goes down with that key while no Shift, Ctrl or Alt is
+held (or the key is one of them); with two, when both are down; it comes
+up when the first key does. Made while its keys are down (0x553670), it
+waits for the first to come up. An exclusive binding turns off those
+below it with the same keys (the check for one above starts one past the
+first entry above it, 0x553807) and gives them back, waiting if held,
+when it goes (0x553930). A message that adds or removes bindings ends
+the poll.
+
+- Buttons (_sbutton 0x54ab20 message 8): their create record's key bytes
+  as a binding, down = 0x2c (held, the pressed look), up = 0x2e (acts if
+  still held; the pointer moving off lets it go). So Alt+letter shows the
+  button pressed and acts when Alt (left Alt, 0x38) is let go; Cancel (1,
+  0) acts when Esc is let go.
+- Keys a screen binds itself (0x4e9840): its command when the key goes
+  down.
+- By screen: main menu Alt+B, S, L, C, M, Q (no Esc, Enter or Space);
+  Custom missions Start Alt+S, Cancel Esc (and the tick Alt+A); Load Load
+  Alt+L, Cancel Esc; connect New Alt+N, Join Alt+J, Cancel Esc (the name
+  edit, made after, shadows Esc while active); end screen the edit's,
+  OK Alt+O, Enter -> OK (shadowed by the edit's Enter); Best Conquerors OK
+  Alt+O, Esc, Enter, Space -> OK; briefing Enter, Space -> Start, Start
+  Alt+S, Cancel Esc when it exists. The port binds them in the order the
+  screen makes its widgets (taken as the order they activate).
+
+**Fades** (Palette.cpp). On every screen change (0x53e1e0) the shown
+palette fades out (0x4ef350(50, 5) -> 0x54a460), the new screen paints
+under black, and its message 0x102 fades in to its backdrop's palette
+(0x4ef530(game, backdrop, 50, 5) -> 0x54a230). Starting a game and the
+demo fade out only. Both busy-wait on `timeGetTime()`: a step each time
+5 ms have passed since the last (so at 5, 10, ... 250 ms), step i at
+ftol(100 / 50 x i) percent lightness (fade out 100 less that), then the
+target palette exactly (fade in) or black (fade out). Each step scales
+the palette in HLS (0x549f20 with hue and saturation 100): RGB -> HLS
+(0x549ba0: bytes x 1/255 f32, L = (max + min) / 2, S = d / (max + min)
+or d / (2 - max - min) past 0.5, hue in sixths x 60, 999 for a grey),
+L x percent x 0.01 (capped 1), HLS -> RGB (0x549e30, each channel
+ftol(c x 255)); values kept as f32 where the code stores them. The
+palette is set from entry 10 to 245 (0x56c360, 0x56c230 clip in 8-bit
+mode unless flag 1 of the palette object, not identified): the 20
+Windows colours stay. The port, drawing in true colour, shades each
+pixel whose colour is one of the screen palette's entries 10-245 (or of
+none) and keeps the others; the pointer is drawn unshaded. Out of the
+game the original fades the game's display out too: not ported (the
+game palette's clip is not settled); the new screen fades in from black.
+
+**Version.** The title screen's line is `(game + 0xa7d >> 16) & 0xff`
+in string 1145 "Version 2.%02d"; + 0xa7d is the registry `Type`, which
+the CD's installer writes as 0xa21e << 16 | the install type (setup.exe
+0x404530, the word at 0x416040): "Version 2.30".
+
+**Briefing sound** (Starttsk.cpp 0x53ed40, idle 0x53fba0): it opens
+`<VideoPath>TASKS.DKD` and takes waves `VOICE<type>_<mission:02>` and
+`FON<type>_<mission:02>` (else `FON000`) and picture `BKG..` (else
+`BKG000`, else M_BKGND_05). With a FON and sound on, the FON plays looped
+on channel 0 at the effects volume (0x568b30 flags 1, DAT_005ca56c); else
+0x525370 case 8 (sound 325, `mus_menu`, looped, channel 0, the same
+volume) unless DAT_005ca55e is 1. 3000 ms after the screen was made the
+voice (if any) plays once on channels 7-8. This CD's tasks archive has
+FON000 only. The port also plays `mus_menu` at the effects volume; on
+leaving the briefing for another screen it plays `mus_menu` again (what
+the original does with the channel then, + 0x10c, is not decoded).
+
+**Idle demo** (0x530bc0): command 0x103 (the `demo` saved game, then its
+DEMON stream) once game + 0xa83 ms pass after the title screen was shown
+(+ 0x30d5) while the application is active; + 0xa83 is the registry
+`Version`'s second byte x 1000, 255000 from the CD's installer, the
+value that turns it off. Nothing to port for an installed copy.
+
+**Info pointer** (pointer mode 0x1e, `CUR_INFO_`, hotspot (-9, -37),
+0x516ea0): the only reply of mode 0x1e found is a town's (around
+0x43a026) to pointer state 0x22 with kind 9, and no code found sets that
+state with kind 9; what enters and leaves it is not decoded (0x518db0,
+0x516940, 0x518d00, writers of pointer + 0xdd / + 0xe1). Not ported.
 
 Known differences not yet ported:
 
-- Keyboard accelerators: two key bytes in each button's create record
-  (0x4ea2d0; read as scan codes Alt + the caption's initial, 1 Esc on
-  every Cancel) and extra keys bound by 0x4e9840 (Best's OK on Esc,
-  Enter, Space; the end screen's OK on Enter; the briefing's Start on
-  Enter and Space). Their consumer (_sbutton messages 8/9) is not traced.
-  The port's Esc goes back to the main menu on every screen.
-- The fade into each screen (message 0x102, 0x4ef530(game, backdrop,
-  0x32, 5); 0x4ef350(0x32, 5) in 0x53e1e0).
-- The title screen's idle demo (0x530bc0: command 0x103 after game +
-  0xa83 ms without input when + 0x329d is set).
-- The version line's number: byte 2 of game + 0xa7d into "Version
-  2.%02d" (string 1145, 0x5310a0); where + 0xa7d is filled is not
-  decoded. The port shows "Version 2.00".
+- The name edits' caret keys (Left, Right, Up, Down, Home, End, Insert,
+  Delete: _sedit messages 0x3a-0x3f, 0x37, 0x38) and the repeat
+  intervals of held keys (Sinput + 0x58, + 0x5c): the port's edits type
+  and take Backspace at the end, without repeat; how an edit left with
+  Esc is entered again (_sedit message 0x20) and where its caret goes
+  (the port: at the text's end, as on the connect screen) are not read;
+  what the connect screen does with its edit's 0x175.
+- Config's player name (0x5ca578, written back by 0x53d2f0 when
+  DAT_005d01fc is 0) is not kept between runs.
 - Custom missions' per-player kind pop-up (entry + 0x184, strings
   1146-1151, list 0x52ebe0; the port cycles one level for every computer
   player), the players' names in LPLAY_NP and the map tick (0x1dd,
@@ -1781,8 +1896,6 @@ Known differences not yet ported:
 - Start reports: the briefing's Start writes `MISSIONS\MISSION_%02d.RPM`
   (0x53a3a0), which Load game's "Start from..." lists; the port lists
   every campaign mission.
-- The briefing's sound: FON000 from `video\TASKS.DKD` on entry, a voice
-  after 3000 ms (0x53eef0, 0x53fba0); the port plays its menu music.
 - Custom missions' list: `CUSTOM\*.DKD` (0x52b7c0, watched with
   FindFirstChangeNotification); the port lists the installation's
   battle and single missions. A custom mission's Start goes straight

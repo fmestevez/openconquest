@@ -163,6 +163,11 @@ pub struct SaveGame {
     /// sea monsters' timing.
     #[serde(default)]
     pub battle: crate::scene::Battle,
+    /// The play-through's id (game + 0x1a0d, the original's `ID_GAME`
+    /// resource, written by 0x511926); the front end's, filled in by the
+    /// app.
+    #[serde(default)]
+    pub game_id: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -19,3 +19,6 @@ rustysynth.workspace = true
 rfd.workspace = true
 dirs.workspace = true
 flate2.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

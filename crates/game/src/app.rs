@@ -112,6 +112,66 @@ const STAT_LABELS: [&str; 12] = [
     "Total score . . . . . . . . . . . . . . . . . .",
 ];
 
+/// What a front-end key binding sends (Sinput.cpp's records, `sinput`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KeyMsg {
+    /// A button's accelerator down and up (its record's key bytes,
+    /// 0x4ea2d0; _sbutton.cpp messages 0x2c and 0x2e): held down, then
+    /// acting.
+    Down(&'static str),
+    Up(&'static str),
+    /// A key the screen binds itself (0x4e9840): the command of the button
+    /// it acts for, on the key's going down.
+    Command(&'static str),
+    /// A name edit's keys (_sedit.cpp 0x54f040 message 8): Esc leaves it
+    /// (0x35), Enter (0x39) posts 0x175, Backspace (0x36) takes the
+    /// character before the caret.
+    EditLeave,
+    EditEnter,
+    EditBack,
+}
+
+/// A binding a screen makes: flags, keys, priority, and its messages down
+/// and up (`sinput::Keys::add`).
+type Binding = (u8, (u8, u8), u32, KeyMsg, Option<KeyMsg>);
+
+/// The end screen's name edit, over the row a won campaign mission went
+/// into (Startrpt.cpp 0x539350: type 6, 39 characters, text list + 0x2a8).
+#[derive(Debug, Clone)]
+struct ScoreEntry {
+    /// The campaign type and the row (+ 0x2b0, + 0x2ac).
+    kind: usize,
+    row: usize,
+    text: String,
+    /// Not yet left with Esc.
+    active: bool,
+}
+
+/// A front-end fade under way (`fade`): the picture it shades, its size
+/// and the palette it is in, and whether the new screen fades in after.
+struct Fading {
+    way: crate::fade::Way,
+    since: Instant,
+    pixels: Vec<u32>,
+    size: (u32, u32),
+    palette: Vec<u32>,
+    then_in: bool,
+}
+
+/// The screen last shown: which (none, the game), and for a front-end
+/// screen its picture (without the pointer) and palette.
+struct Shown {
+    screen: Option<std::mem::Discriminant<MenuState>>,
+    pixels: Vec<u32>,
+    size: (u32, u32),
+    palette: Option<Vec<u32>>,
+}
+
+/// The longest names the edits take: the end screen's (0x539350, 0x27)
+/// and the connect screen's (0x538440, 0x104).
+const SCORE_NAME_MAX: usize = 0x27;
+const PLAYER_NAME_MAX: usize = 0x104;
+
 /// A question the game asks before acting (gamesys.cpp 0x511c00,
 /// 0x512f00; the file panel's, 0x50a700), or a notice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -511,9 +571,9 @@ pub struct App {
     audio: Option<Audio>,
     /// Music, if a SoundFont is available.
     music: Option<Music>,
-    /// The menus' own music (`mus_menu`, sound event 325, which the
-    /// original plays looped when no other is asked for: 0x525370), while
-    /// the front-end menus are up.
+    /// The menus' sample channel (`mus_menu`, sound event 325, which the
+    /// original plays looped when no other is asked for: 0x525370; the
+    /// briefing's FON), while the front-end menus are up.
     menu_music: Option<rodio::Sink>,
     /// The sea's surf under a mission (`prib3`, event 273).
     ambience: Option<rodio::Sink>,
@@ -626,8 +686,29 @@ pub struct App {
     in_game: bool,
     /// The mission clock when it was won or lost.
     outcome_at: Option<f32>,
-    /// Best winning times (the port's own Best Conquerors rows).
-    records: crate::records::Records,
+    /// The Best Conquerors table, and the campaigns the CD installed.
+    best: crate::records::Table,
+    campaigns: crate::records::Campaigns,
+    /// The play-through's id (game + 0x1a0d), and the campaigns started
+    /// (game + 0x3214, a bit each, 0x537f60).
+    game_id: u32,
+    campaign_mask: u32,
+    /// The end screen's name edit, when a row was entered.
+    score_entry: Option<ScoreEntry>,
+    /// The connect screen's name edit has not been left with Esc.
+    connect_edit: bool,
+    /// The front end's key bindings, and the screen they are for.
+    menu_keys: crate::sinput::Keys<KeyMsg>,
+    keys_screen: Option<std::mem::Discriminant<MenuState>>,
+    /// A fade between screens, and the screen last shown.
+    fade: Option<Fading>,
+    shown: Option<Shown>,
+    /// What the menus' sample channel plays (`mus_menu` or the briefing's
+    /// FON), the briefing's archive (`<video>TASKS.DKD`, none: not there)
+    /// and its voice's clock (Starttsk.cpp + 0xf8, + 0xfc).
+    menu_sample: Option<String>,
+    tasks: Option<Option<openconquest_formats::Archive>>,
+    briefing_voice: Option<(Instant, u8)>,
     status: Option<(String, Instant)>,
     started: Instant,
     last_frame: Instant,
@@ -654,7 +735,8 @@ impl App {
         let cd_audio = options.cd_audio.clone();
         let intro = options.intro;
         let data_root = data.root().to_path_buf();
-        let records = crate::records::Records::load(&data.save_dir().join("best.json"));
+        let best = crate::launch::best_table();
+        let campaigns = crate::records::Campaigns::read(data.root());
         let menus = Menus::load(&data, '0')
             .map_err(|e| eprintln!("no menus: {e:#}"))
             .ok();
@@ -672,6 +754,12 @@ impl App {
             .collect();
         let mut caches = Caches::default();
         let restored = save.is_some();
+        // The play-through's id: the save's (ID_GAME), else a new one
+        // (0x4ed3f0).
+        let game_id = save
+            .as_ref()
+            .and_then(|s| s.game_id)
+            .unwrap_or_else(crate::records::game_id);
         let scene = match &save {
             Some(save) => Scene::restore(&data, &mut caches, save)?,
             None => Scene::load_at(&data, &mut caches, &missions[mission_index], difficulty)?,
@@ -786,7 +874,19 @@ impl App {
             mission_titles,
             in_game: !start_menu,
             outcome_at: None,
-            records,
+            best,
+            campaigns,
+            game_id,
+            campaign_mask: 0,
+            score_entry: None,
+            connect_edit: false,
+            menu_keys: Default::default(),
+            keys_screen: None,
+            fade: None,
+            shown: None,
+            menu_sample: None,
+            tasks: None,
+            briefing_voice: None,
             audio: Audio::open().map(|mut a| {
                 a.muted = mute;
                 a
@@ -799,6 +899,10 @@ impl App {
             center_pending: true,
         };
         app.scene.fog = app.fog;
+        // The front end starts with no campaign (0x4ebd10: + 0x3214 = 0).
+        if !start_menu {
+            app.note_campaign();
+        }
         app.apply_volumes();
         app.start_music();
         Ok(app)
@@ -807,6 +911,9 @@ impl App {
     pub fn run(mut self) -> Result<()> {
         let event_loop = EventLoop::new()?;
         event_loop.run_app(&mut self)?;
+        // The table is written when the program ends, as the original
+        // writes its registry (0x4ee6c0 -> 0x501090).
+        crate::launch::set_best_table(&self.best);
         match self.error {
             Some(e) => Err(e),
             None => Ok(()),
@@ -1185,12 +1292,31 @@ impl App {
             .collect()
     }
 
+    /// The game to save, with the play-through's id (saves write it,
+    /// 0x511926).
+    fn saved_scene(&self) -> SaveGame {
+        let mut save = self.scene.save();
+        save.game_id = Some(self.game_id);
+        save
+    }
+
+    /// A campaign mission is being played: its campaign's bit (game +
+    /// 0x3214, set by 0x537f60 from `miss<campaign><mission>`).
+    fn note_campaign(&mut self) {
+        let mission = &self.missions[self.mission_index];
+        if let Some(c) = crate::scene::is_campaign(mission)
+            .then(|| mission[4..5].parse::<u32>().ok())
+            .flatten()
+        {
+            self.campaign_mask = 1 << c;
+        }
+    }
+
     fn save_now(&mut self) {
         let name = self.save_slot_name();
         let path = self.data.save_dir().join(format!("{name}.json"));
         match self
-            .scene
-            .save()
+            .saved_scene()
             .write(&path, self.settings.config.pack_saves)
         {
             Ok(()) => {
@@ -1233,7 +1359,7 @@ impl App {
             m.set_volume(if muted { 0.0 } else { music });
         }
         if let Some(s) = &self.menu_music {
-            s.set_volume(if muted { 0.0 } else { music });
+            s.set_volume(if muted { 0.0 } else { effects });
         }
     }
 
@@ -1382,33 +1508,39 @@ impl App {
                     ..empty
                 }
             }
+            // The original's screen (Startba.cpp, 0x528140, 0x528210,
+            // 0x528390 and 0x528520): the RAM_BEST picture at ((800 - 2 x
+            // 380 - 10) / 2, (600 - 2 x 212 - 10) / 2 + 212 + 10), its title
+            // at (9, 1) in it in BH, and the campaign type's seven rows,
+            // names at (25, 339 + 24 k) 286 wide and scores centred at
+            // (311, ...) 75 wide, in MH, a row shown when it has a name and
+            // a score; variant 2 when the CD installed the campaign, else
+            // 0. OK (string 1001) at (345, 540).
             MenuState::Best => {
-                let items: Vec<String> = (0..self.missions.len())
-                    .filter_map(|i| {
-                        let best = self.records.best(&self.missions[i])?;
-                        Some(format!(
-                            "{}  {}",
-                            crate::records::clock(best),
-                            self.mission_titles[i]
-                        ))
-                    })
-                    .collect();
-                // The original's screen (Startba.cpp, 0x528210 and
-                // 0x528390): the RAM_BEST picture at ((800 - 2 x 380 - 10)
-                // / 2, (600 - 2 x 212 - 10) / 2 + 212 + 10) and OK (string
-                // 1001) at (345, 540). Its title and rows are the
-                // campaign's high-score table, whose storage is not
-                // settled (0x5c9ed0, see docs/FORMATS.md): the rows here
-                // are the port's own, the best times.
+                use crate::menus::{Placed, Style, Text};
+                let kind = self.score_kind(true).unwrap_or(0);
+                let variant = if self.campaigns.has(kind) { 2 } else { 0 };
+                let style = |font| Style {
+                    font,
+                    variant,
+                    spacing: 1,
+                };
+                let mut texts = vec![Text {
+                    style: style("BH"),
+                    x: 15.0 + 9.0,
+                    y: 305.0 + 1.0,
+                    text: self.campaigns.title(kind, &self.data.strings),
+                    clip: None,
+                }];
+                texts.extend(self.score_rows(kind, None, (25.0, 339.0), style("MH"), |_| variant));
                 MenuPage {
                     backdrop: Backdrop::Best,
-                    sprites: vec![crate::menus::Placed {
+                    sprites: vec![Placed {
                         name: "RAM_BEST".into(),
                         x: 15.0,
                         y: 305.0,
                     }],
-                    list_rect: Some((20.0, 330.0, 367.0, 181.0)),
-                    items,
+                    texts,
                     buttons: vec![Button {
                         caption: "OK".into(),
                         x: 345.0,
@@ -1479,7 +1611,9 @@ impl App {
                         text(name_style, 43.0, 256.0, &self.player_name),
                         text(style("MH", 2), 43.0, 321.0, "Internet TCP/IP Connection"),
                     ],
+                    // While the edit is not left (Esc).
                     fills: caret_colour
+                        .filter(|_| self.connect_edit)
                         .map(|c| vec![((caret, 256.0, 2.0, 18.0), c)])
                         .unwrap_or_default(),
                     buttons: vec![
@@ -1548,14 +1682,15 @@ impl App {
             // (1042) at (9, 1) in it, and the twelve statistics: labels
             // (1047-1058) at (15, 85 + 30 i, 15 more from the 6th, the 8th,
             // 30 from the 12th) in BH, cut at 420 wide (300 from the 8th),
-            // the values 5 right of them, 80 wide. The high-score table's
-            // rows and the edit to enter a name in it are left out: where
-            // the table is kept (0x5c9ed0) is not settled.
+            // the values 5 right of them, 80 wide; and the campaign's rows of
+            // the Best Conquerors table with the name edit over the row
+            // just entered (`open_outcome`).
             MenuState::Outcome(outcome) => {
                 use crate::menus::{Placed, Style, Text};
                 let won = outcome == crate::scene::Outcome::Victory;
                 let mut sprites = Vec::new();
                 let mut texts = Vec::new();
+                let mut fills = Vec::new();
                 if won && self.campaign_number().is_some() {
                     let style = |spacing| Style {
                         font: "BH",
@@ -1604,6 +1739,52 @@ impl App {
                         put(style(2), 15.0, w, (*label).into());
                         put(style(1), 15.0 + w + 5.0, 80.0, value.to_string());
                     }
+                    // The table's rows: names in variant 1, scores in 1, the
+                    // row just entered's in 2 (0x539b20).
+                    let entry = self.score_entry.as_ref();
+                    let kind = entry.map(|e| e.kind).or(self.score_kind(false));
+                    if let Some(kind) = kind {
+                        let row = entry.map(|e| e.row);
+                        let name = Style {
+                            font: "MH",
+                            variant: 1,
+                            spacing: 1,
+                        };
+                        texts.extend(self.score_rows(kind, row, (410.0, 344.0), name, |k| {
+                            1 + usize::from(Some(k) == row)
+                        }));
+                    }
+                    // The edit over the entered row (410, 344 + 24 i, 286,
+                    // h + 1): its text from the top left in MH variant 2, one
+                    // apart, and while it is active a caret 2 wide and h high
+                    // in palette colour 0xfb (0x4eb140, as the connect
+                    // screen's).
+                    if let (Some(e), Some(menus)) = (entry, &self.menus) {
+                        let style = Style {
+                            font: "MH",
+                            variant: 2,
+                            spacing: 1,
+                        };
+                        let h = menus.tallest(style);
+                        let y = 310.0 + 34.0 + (h + 6.0) * e.row as f32;
+                        texts.push(Text {
+                            style,
+                            x: 410.0,
+                            y,
+                            text: e.text.clone(),
+                            clip: Some(286.0),
+                        });
+                        if e.active {
+                            let x = if e.text.is_empty() {
+                                410.0
+                            } else {
+                                411.0 + menus.measure(style, &e.text)
+                            };
+                            if let Some(c) = menus.colour(Backdrop::Accomplished, 0xfb) {
+                                fills.push(((x, y, 2.0, h), c));
+                            }
+                        }
+                    }
                 }
                 MenuPage {
                     backdrop: if won {
@@ -1613,6 +1794,7 @@ impl App {
                     },
                     sprites,
                     texts,
+                    fills,
                     buttons: vec![Button {
                         caption: "OK".into(),
                         x: 345.0,
@@ -1623,6 +1805,63 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Campaign type `kind`'s rows of the Best Conquerors table as both
+    /// screens draw them (0x528520, 0x539b20 through 0x4eb430): row k's
+    /// name from `origin` + (0, (h + 6) k), h MH's tallest glyph, in a box
+    /// 286 wide and h high, centred down; its score in the box 75 wide
+    /// after it, centred, in `score_variant(k)`; a row shown when it has a
+    /// name and a score. Row `skip`'s name is under the edit.
+    fn score_rows(
+        &self,
+        kind: usize,
+        skip: Option<usize>,
+        origin: (f32, f32),
+        name_style: crate::menus::Style,
+        score_variant: impl Fn(usize) -> usize,
+    ) -> Vec<crate::menus::Text> {
+        let Some(menus) = &self.menus else {
+            return Vec::new();
+        };
+        let h = menus.tallest(name_style);
+        let mut texts = Vec::new();
+        for (k, row) in self.best.rows(kind).iter().enumerate() {
+            if row.name.is_empty() || row.score == 0 {
+                continue;
+            }
+            let y = origin.1 + (h + 6.0) * k as f32;
+            // Halves as the C division takes them (toward 0).
+            let centred = |style, text: &str, w: f32| {
+                let dx = (w as i32 - menus.measure(style, text) as i32) / 2;
+                let dy = (h as i32 - menus.height(style, text) as i32) / 2;
+                (dx as f32, dy as f32)
+            };
+            if skip != Some(k) {
+                let (_, dy) = centred(name_style, &row.name, 286.0);
+                texts.push(crate::menus::Text {
+                    style: name_style,
+                    x: origin.0,
+                    y: y + dy,
+                    text: row.name.clone(),
+                    clip: Some(286.0),
+                });
+            }
+            let style = crate::menus::Style {
+                variant: score_variant(k),
+                ..name_style
+            };
+            let score = row.score.to_string();
+            let (dx, dy) = centred(style, &score, 75.0);
+            texts.push(crate::menus::Text {
+                style,
+                x: origin.0 + 286.0 + dx,
+                y: y + dy,
+                text: score,
+                clip: None,
+            });
+        }
+        texts
     }
 
     /// The campaign mission number of the mission played (game + 0x3215,
@@ -2159,6 +2398,7 @@ impl App {
         if let Some(i) = self.missions.iter().position(|m| *m == setup.mission) {
             self.mission_index = i;
         }
+        self.game_id = crate::records::game_id();
         self.scene = scene;
         self.fog = setup.fog;
         self.selected = None;
@@ -2237,6 +2477,10 @@ impl App {
                     self.scene.resume(carry);
                 }
                 self.mission_index = index;
+                // A mission file has no ID_GAME: a new play-through id
+                // (0x4ed770 -> 0x4ed3f0).
+                self.game_id = crate::records::game_id();
+                self.note_campaign();
                 self.selected = None;
                 self.group.clear();
                 self.pending = None;
@@ -2251,6 +2495,310 @@ impl App {
             }
             Err(e) => self.say(format!("Could not open the mission: {e:#}")),
         }
+    }
+
+    /// The campaign type the end screen and Best Conquerors show (game +
+    /// 0x3214 through 0x5291b0; Best Conquerors takes 1 for none).
+    fn score_kind(&self, best: bool) -> Option<usize> {
+        let mask = if best && self.campaign_mask == 0 {
+            1
+        } else {
+            self.campaign_mask
+        };
+        crate::records::lowest_bit(mask)
+    }
+
+    /// Opens the end screen (Startrpt.cpp 0x539350): after a won campaign
+    /// mission (game + 0xd80 = 1, + 0x32fd set) its total score goes into
+    /// the campaign's table (0x5397e0) under the player's name, and an
+    /// edit to type the name over the row it took.
+    fn open_outcome(&mut self, outcome: crate::scene::Outcome) {
+        self.menu = Some(MenuState::Outcome(outcome));
+        self.score_entry = None;
+        if outcome != crate::scene::Outcome::Victory || self.campaign_number().is_none() {
+            return;
+        }
+        let Some(kind) = self.score_kind(false) else {
+            return;
+        };
+        // Game + 0x3335, the twelfth figure, a dword.
+        let score = self.scene.stats.values(self.scene.amber)[11] as u32 as i32;
+        // The name: the resources' list (+ 0x1b9, the connect screen's
+        // name), else Config's (0x5ca578), which the port does not keep
+        // (its default, Windows' RegisteredOwner, is none here).
+        let name = self.player_name.clone();
+        if let Some(row) = self.best.enter(kind, score, self.game_id, &name) {
+            self.score_entry = Some(ScoreEntry {
+                kind,
+                row,
+                text: name,
+                active: true,
+            });
+        }
+    }
+
+    /// The end screen's edit's text into its row (0x539b20: messages
+    /// 0x175 and 0x16c).
+    fn store_score_name(&mut self) {
+        if let Some(e) = &self.score_entry {
+            self.best.rename(e.kind, e.row, &e.text);
+        }
+    }
+
+    /// Button `caption` of screen `state` acts.
+    fn menu_fire(&mut self, state: MenuState, caption: &str) {
+        let was = self.menu;
+        self.menu_action(state, caption);
+        if self.menu != was {
+            self.list_first = 0;
+            self.desc_first = 0;
+            self.map_at = None;
+        }
+    }
+
+    /// The bindings screen `state` makes, in the order it makes them: its
+    /// buttons' accelerators (their create records' key bytes, 0x4ea2d0;
+    /// Alt + a letter, Esc for Cancel), the keys it binds itself (0x4e9840)
+    /// and its name edit's (priority 0xff, repeating and exclusive).
+    fn screen_keys(&self, state: MenuState) -> Vec<Binding> {
+        use crate::sinput::{ENTER, ESCAPE, EXCLUSIVE, LALT, SPACE};
+        let button = |caption: &'static str, keys: (u8, u8)| {
+            (0, keys, 0, KeyMsg::Down(caption), Some(KeyMsg::Up(caption)))
+        };
+        let command =
+            |caption: &'static str, key: u8| (0, (key, 0), 0, KeyMsg::Command(caption), None);
+        let edit = |enter: bool| {
+            let mut keys = vec![(EXCLUSIVE | 1, (ESCAPE, 0), 0xff, KeyMsg::EditLeave, None)];
+            if enter {
+                keys.push((EXCLUSIVE | 1, (ENTER, 0), 0xff, KeyMsg::EditEnter, None));
+            }
+            keys.push((
+                EXCLUSIVE | 1,
+                (crate::sinput::BACKSPACE, 0),
+                0xff,
+                KeyMsg::EditBack,
+                None,
+            ));
+            keys
+        };
+        match state {
+            // Startmm.cpp 0x530cb0: no Esc, Enter or Space.
+            MenuState::Main => vec![
+                button("Best Conquerors", (LALT, 0x30)),
+                button("Start scenario", (LALT, 0x1f)),
+                button("Load game", (LALT, 0x26)),
+                button("Custom missions", (LALT, 0x2e)),
+                button("MultiPlayer game", (LALT, 0x32)),
+                button("Quit game", (LALT, 0x10)),
+            ],
+            // Startcom.cpp 0x52c5c0 (the map tick's Alt+A: the port's tick
+            // does nothing).
+            MenuState::Missions(..) => {
+                vec![button("Start", (LALT, 0x1f)), button("Cancel", (ESCAPE, 0))]
+            }
+            // Startld.cpp 0x52fe90.
+            MenuState::Load(..) => {
+                vec![button("Load", (LALT, 0x26)), button("Cancel", (ESCAPE, 0))]
+            }
+            // Starttsk.cpp: Enter and Space start (0x53f360), then Start
+            // and, for a campaign's first mission, Cancel (0x53f550).
+            MenuState::Briefing => {
+                let mut keys = vec![command("Start", ENTER), command("Start", SPACE)];
+                keys.push(button("Start", (LALT, 0x1f)));
+                if !self.campaign_number().is_some_and(|n| n != 0) {
+                    keys.push(button("Cancel", (ESCAPE, 0)));
+                }
+                keys
+            }
+            // Startrpt.cpp 0x539350: the edit (made first), OK, Enter.
+            MenuState::Outcome(_) => {
+                let mut keys = Vec::new();
+                if self.score_entry.as_ref().is_some_and(|e| e.active) {
+                    keys.extend(edit(true));
+                }
+                keys.push(button("OK", (LALT, 0x18)));
+                keys.push(command("OK", ENTER));
+                keys
+            }
+            // Startba.cpp 0x528390.
+            MenuState::Best => vec![
+                button("OK", (LALT, 0x18)),
+                command("OK", ESCAPE),
+                command("OK", ENTER),
+                command("OK", SPACE),
+            ],
+            // Startprv.cpp 0x538440: the buttons, then the name's edit.
+            MenuState::Connect => {
+                let mut keys = vec![
+                    button("New", (LALT, 0x31)),
+                    button("Join", (LALT, 0x24)),
+                    button("Cancel", (ESCAPE, 0)),
+                ];
+                if self.connect_edit {
+                    keys.extend(edit(false));
+                }
+                keys
+            }
+            // The port's own screens.
+            MenuState::Multiplayer(_) | MenuState::Waiting => Vec::new(),
+        }
+    }
+
+    /// Which scan codes are down (the poll's keyboard state).
+    fn scan_state(&self) -> [bool; 256] {
+        let mut down = [false; 256];
+        for &k in &self.keys {
+            if let Some(c) = crate::sinput::scan_code(k) {
+                down[usize::from(c)] = true;
+            }
+        }
+        down
+    }
+
+    /// The front end's keyboard poll (Sinput.cpp 0x553090), once a frame:
+    /// a screen opened binds its keys first (with the keys down then
+    /// waiting to come up), then each binding's message as its keys go.
+    fn poll_menu_keys(&mut self) {
+        let Some(state) = self
+            .menu
+            .filter(|_| self.menus.is_some() && self.video.is_none())
+        else {
+            self.keys_screen = None;
+            return;
+        };
+        let down = self.scan_state();
+        let held = |k: u8| down[usize::from(k)];
+        let screen = std::mem::discriminant(&state);
+        if self.keys_screen != Some(screen) {
+            self.keys_screen = Some(screen);
+            self.menu_keys.clear();
+            for (flags, keys, priority, press, release) in self.screen_keys(state) {
+                self.menu_keys
+                    .add(flags, keys, priority, Some(press), release, &held);
+            }
+        }
+        self.menu_keys.begin();
+        let mut at = 0;
+        while let Some(msg) = self.menu_keys.next(&held, &mut at) {
+            self.key_message(state, msg);
+            // A message that changed the bindings ends the poll (+ 0x60).
+            if self.menu_keys.changed() || self.menu != Some(state) {
+                break;
+            }
+        }
+    }
+
+    /// What a front-end binding's message does on screen `state`.
+    fn key_message(&mut self, state: MenuState, msg: KeyMsg) {
+        let index = |caption: &str| {
+            self.menu_page(state)
+                .buttons
+                .iter()
+                .position(|b| b.caption == caption)
+        };
+        match msg {
+            // Pressed look (state 2) unless already held.
+            KeyMsg::Down(caption) => {
+                if self.menu_held.is_none() {
+                    self.menu_held = index(caption);
+                }
+            }
+            // Acts if still held (the pointer leaving lets it go).
+            KeyMsg::Up(caption) => {
+                if self.menu_held.is_some() && self.menu_held == index(caption) {
+                    self.menu_held = None;
+                    self.menu_fire(state, caption);
+                }
+            }
+            KeyMsg::Command(caption) => self.menu_fire(state, caption),
+            KeyMsg::EditLeave => self.leave_edit(state),
+            // In a single-line edit Enter posts 0x175: the end screen
+            // names the row (what the connect screen does with it is not
+            // read).
+            KeyMsg::EditEnter => {
+                if let MenuState::Outcome(_) = state {
+                    self.store_score_name();
+                }
+            }
+            KeyMsg::EditBack => {
+                if let Some(text) = self.edit_text(state) {
+                    text.pop();
+                }
+            }
+        }
+    }
+
+    /// The text of screen `state`'s active name edit.
+    fn edit_text(&mut self, state: MenuState) -> Option<&mut String> {
+        match state {
+            MenuState::Outcome(_) => self
+                .score_entry
+                .as_mut()
+                .filter(|e| e.active)
+                .map(|e| &mut e.text),
+            MenuState::Connect if self.connect_edit => Some(&mut self.player_name),
+            _ => None,
+        }
+    }
+
+    /// Esc in a name edit (0x35): it is left (state 0) and its bindings go,
+    /// giving back those they shadowed.
+    fn leave_edit(&mut self, state: MenuState) {
+        let enter = match state {
+            MenuState::Outcome(_) => match self.score_entry.as_mut() {
+                Some(e) => {
+                    e.active = false;
+                    true
+                }
+                None => return,
+            },
+            MenuState::Connect => {
+                self.connect_edit = false;
+                false
+            }
+            _ => return,
+        };
+        let down = self.scan_state();
+        let held = |k: u8| down[usize::from(k)];
+        use crate::sinput::{BACKSPACE, ENTER, ESCAPE};
+        self.menu_keys
+            .remove((ESCAPE, 0), &KeyMsg::EditLeave, &held);
+        if enter {
+            self.menu_keys.remove((ENTER, 0), &KeyMsg::EditEnter, &held);
+        }
+        self.menu_keys
+            .remove((BACKSPACE, 0), &KeyMsg::EditBack, &held);
+    }
+
+    /// Characters typed (WM_CHAR, _sedit.cpp case 0x34): into the active
+    /// name edit, any but Backspace, Enter and Esc, up to its length (the
+    /// original's bytes, here characters); not with Alt held (Windows sends
+    /// those as WM_SYSCHAR).
+    fn edit_typed(&mut self, code: KeyCode, text: &str) -> bool {
+        let Some(state) = self.menu else { return false };
+        let max = match state {
+            MenuState::Outcome(_) => SCORE_NAME_MAX,
+            MenuState::Connect => PLAYER_NAME_MAX,
+            _ => return false,
+        };
+        let alt = self.modifiers.alt_key();
+        let Some(edit) = self.edit_text(state) else {
+            return false;
+        };
+        if alt
+            || matches!(
+                code,
+                KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape
+            )
+        {
+            return true;
+        }
+        for c in text.chars() {
+            if edit.chars().count() < max {
+                edit.push(c);
+            }
+        }
+        true
     }
 
     fn menu_click(&mut self, pos: PhysicalPosition<f64>) {
@@ -2328,13 +2876,7 @@ impl App {
         let Some(caption) = page.buttons.get(held).map(|b| b.caption.clone()) else {
             return;
         };
-        let was = self.menu;
-        self.menu_action(state, &caption);
-        if self.menu != was {
-            self.list_first = 0;
-            self.desc_first = 0;
-            self.map_at = None;
-        }
+        self.menu_fire(state, &caption);
     }
 
     /// The pointer at 800x600 point `p` of a front-end screen: a button
@@ -2523,7 +3065,11 @@ impl App {
             (_, "Custom missions") => self.open_list(MenuState::Missions(Category::Single, None)),
             (_, "Best Conquerors") => self.menu = Some(MenuState::Best),
             (MenuState::Best, "OK") => self.menu = Some(MenuState::Main),
-            (_, "MultiPlayer game") => self.menu = Some(MenuState::Connect),
+            // The name's edit starts active (0x538440, state 1).
+            (_, "MultiPlayer game") => {
+                self.connect_edit = true;
+                self.menu = Some(MenuState::Connect);
+            }
             (MenuState::Connect, "New") | (MenuState::Connect, "Join") => {
                 self.find_battle_maps();
                 self.menu = Some(MenuState::Multiplayer(None));
@@ -2593,6 +3139,8 @@ impl App {
             // mission the next one's briefing, the campaign going on with
             // what was learned; else the main menu.
             (MenuState::Outcome(outcome), "OK") => {
+                // The name typed goes into the row first.
+                self.store_score_name();
                 let next = (outcome == crate::scene::Outcome::Victory
                     && self.campaign_number().is_some())
                 .then(|| self.next_mission())
@@ -2646,6 +3194,7 @@ impl App {
             "best" => MenuState::Best,
             "connect" => {
                 self.player_name.clear();
+                self.connect_edit = true;
                 MenuState::Connect
             }
             "multiplayer" => {
@@ -2781,16 +3330,10 @@ impl App {
         self.menu = Some(MenuState::Main);
     }
 
-    /// Esc on the front end: back a screen, or out of the main menu.
-    fn menu_back(&mut self, event_loop: &ActiveEventLoop) {
+    /// Esc on the port's own multiplayer screens: back to the main menu.
+    fn menu_back(&mut self) {
         self.list_first = 0;
-        self.menu = match self.menu {
-            Some(MenuState::Main) => {
-                event_loop.exit();
-                return;
-            }
-            _ => Some(MenuState::Main),
-        };
+        self.menu = Some(MenuState::Main);
     }
 
     /// Re-reads the save slots and the help text shown in the panels.
@@ -3146,31 +3689,118 @@ impl App {
         }
     }
 
-    /// The menus' music in the front-end menus (not over a game, nor while
-    /// a video plays), the game's music otherwise.
+    /// The briefing's archive, `<VideoPath>TASKS.DKD` (Starttsk.cpp
+    /// 0x53ed40, string 0x5c31c4), opened once.
+    fn tasks(&mut self) -> Option<&openconquest_formats::Archive> {
+        if self.tasks.is_none() {
+            let path = crate::assets::find_ci(&self.data.root().join("video"), "tasks.dkx")
+                .ok()
+                .flatten();
+            self.tasks = Some(path.and_then(|p| openconquest_formats::Archive::open(p).ok()));
+        }
+        self.tasks.as_ref().and_then(Option::as_ref)
+    }
+
+    /// The briefing's sample names, `<what><type>_<mission:02>` (the
+    /// screen's + 0x100 and game + 0x3215).
+    fn briefing_sample(&self, what: &str) -> String {
+        let kind = self.score_kind(false).map_or(-1, |k| k as i32);
+        let mission = self.campaign_number().unwrap_or(0);
+        format!("{what}{kind}_{mission:02}")
+    }
+
+    /// The menus' sample channel (channel 0 of 0x568b30) in the front-end
+    /// menus (not over a game, nor while a video plays), the game's music
+    /// otherwise: `mus_menu` looped (0x525370 case 8: sound 325, flags 5),
+    /// but on the briefing its FON wave looped instead (Starttsk.cpp
+    /// 0x53ed40: `FON<type>_<mission>`, else `FON000`, flags 1), both at
+    /// the effects' volume (DAT_005ca56c). On leaving the briefing for
+    /// another screen `mus_menu` comes back (what the original's briefing
+    /// does with the channel when left is not decoded).
     fn choose_music(&mut self) {
-        let want =
-            self.menu.is_some() && !self.in_game && self.video.is_none() && !self.no_menu_music;
-        if want == self.menu_music.is_some() {
+        let front = self.menu.is_some() && !self.in_game && self.video.is_none();
+        let briefing = front && self.menu == Some(MenuState::Briefing);
+        self.briefing_voice_step(briefing);
+        let fon = if briefing && self.audio.is_some() {
+            let own = self.briefing_sample("FON");
+            self.tasks().and_then(|t| {
+                [own.as_str(), "FON000"]
+                    .into_iter()
+                    .find(|n| {
+                        t.find(n, openconquest_formats::ResourceKind::Sound)
+                            .is_some()
+                    })
+                    .map(str::to_string)
+            })
+        } else {
+            None
+        };
+        let want = match fon {
+            Some(n) => Some(n),
+            None if front && !self.no_menu_music => Some("mus_menu".to_string()),
+            None => None,
+        };
+        if want == self.menu_sample {
             return;
         }
-        if want {
-            if let (Some(audio), Some(sounds)) = (self.audio.as_mut(), self.data.sounds.as_ref()) {
-                self.menu_music = audio.loop_sound(sounds, "mus_menu");
-                let muted = audio.muted;
+        self.menu_music = None;
+        self.menu_sample = None;
+        if let Some(name) = want {
+            let tasks = self.tasks.as_ref().and_then(Option::as_ref);
+            let archive = if name == "mus_menu" {
+                self.data.sounds.as_ref()
+            } else {
+                tasks
+            };
+            if let (Some(audio), Some(archive)) = (self.audio.as_mut(), archive) {
+                self.menu_music = audio.loop_sound(archive, &name);
+                let volume = if audio.muted { 0.0 } else { audio.volume };
                 if let Some(s) = &self.menu_music {
-                    s.set_volume(if muted { 0.0 } else { self.music_volume });
+                    s.set_volume(volume);
                 }
             }
-            if self.menu_music.is_none() {
+            if self.menu_music.is_some() {
+                self.menu_sample = Some(name);
+            } else if name == "mus_menu" {
                 self.no_menu_music = true;
-                return;
             }
-        } else {
-            self.menu_music = None;
         }
         if let Some(m) = &self.music {
-            m.set_paused(want);
+            m.set_paused(self.menu_music.is_some());
+        }
+    }
+
+    /// The briefing's voice (Starttsk.cpp idle 0x53fba0): 3000 ms after
+    /// the screen was made its clock moves on, and at the next turn its
+    /// `VOICE<type>_<mission>` wave, if `TASKS.DKD` has one, plays once.
+    fn briefing_voice_step(&mut self, briefing: bool) {
+        if !briefing {
+            self.briefing_voice = None;
+            return;
+        }
+        match self.briefing_voice {
+            None => self.briefing_voice = Some((Instant::now(), 0)),
+            Some((since, 0)) => {
+                if since.elapsed() >= Duration::from_millis(3000) {
+                    self.briefing_voice = Some((Instant::now(), 1));
+                }
+            }
+            Some((_, 1)) => {
+                let name = self.briefing_sample("VOICE");
+                if self.tasks().is_some() {
+                    let tasks = self.tasks.as_ref().and_then(Option::as_ref);
+                    if let (Some(audio), Some(tasks)) = (self.audio.as_mut(), tasks) {
+                        if tasks
+                            .find(&name, openconquest_formats::ResourceKind::Sound)
+                            .is_some()
+                        {
+                            audio.play(tasks, &name, 1.0);
+                        }
+                    }
+                }
+                self.briefing_voice = Some((Instant::now(), 3));
+            }
+            Some(_) => {}
         }
     }
 
@@ -3738,8 +4368,7 @@ impl App {
         }
         let path = self.quick_save_path();
         match self
-            .scene
-            .save()
+            .saved_scene()
             .write(&path, self.settings.config.pack_saves)
         {
             Ok(()) => self.say("Game saved"),
@@ -3761,15 +4390,18 @@ impl App {
         let path = path.to_path_buf();
         let loaded = SaveGame::read(&path).and_then(|save| {
             let scene = Scene::restore(&self.data, &mut self.caches, &save)?;
-            Ok((save.mission, scene))
+            Ok((save.mission, scene, save.game_id))
         });
         match loaded {
-            Ok((mission, scene)) => {
+            Ok((mission, scene, id)) => {
                 self.scene = scene;
                 self.scene.fog = self.fog;
                 if let Some(i) = self.missions.iter().position(|m| *m == mission) {
                     self.mission_index = i;
                 }
+                // The save's ID_GAME, else a new id (0x4ed3f0).
+                self.game_id = id.unwrap_or_else(crate::records::game_id);
+                self.note_campaign();
                 self.selected = None;
                 self.group.clear();
                 self.pending = None;
@@ -4905,6 +5537,7 @@ impl App {
                         m.set_volume(0.0);
                     }
                     self.menu_music = None;
+                    self.menu_sample = None;
                     self.ambience = None;
                     return true;
                 }
@@ -4942,22 +5575,13 @@ impl App {
             self.restore_music();
         }
         // The game waits while the briefing is read.
-        if let (Some(outcome), None) = (self.scene.outcome, self.outcome_at) {
+        if let (Some(_), None) = (self.scene.outcome, self.outcome_at) {
             self.outcome_at = Some(self.scene.clock);
-            // A win goes on the best results.
-            if outcome == crate::scene::Outcome::Victory {
-                let mission = self.missions[self.mission_index].clone();
-                if self.records.record(&mission, self.scene.clock) {
-                    if let Err(e) = self.records.save(&self.data.save_dir().join("best.json")) {
-                        eprintln!("could not save the best results: {e}");
-                    }
-                }
-            }
         }
         // The end screen follows a few seconds after the mission is decided.
         if let (Some(outcome), Some(at), None) = (self.scene.outcome, self.outcome_at, self.menu) {
             if self.scene.clock > at + 3.0 && self.menus.is_some() {
-                self.menu = Some(MenuState::Outcome(outcome));
+                self.open_outcome(outcome);
                 self.in_game = false;
                 // The story's end after the last campaign mission is won.
                 let campaign =
@@ -5071,14 +5695,139 @@ impl App {
         self.scroll_radar();
     }
 
+    /// Draws the front end into `frame`, fading from screen to screen
+    /// (`fade`); false when the game is to be drawn instead. A front-end
+    /// screen left fades out to black (0x4ef350(50, 5)) and the new one,
+    /// drawn under the black, fades in to its backdrop's palette (message
+    /// 0x102, 0x4ef530(game, backdrop, 50, 5)); into the game only the
+    /// fade out. (Out of the game the original fades its own display out
+    /// too, in the game's palette, whose entries the 8-bit clip may not
+    /// keep (0x56c360's flag 1 is not decoded): the port starts the new
+    /// screen's fade in from black.)
+    fn draw_front_end(&mut self, frame: &mut Frame) -> bool {
+        use crate::fade::{level, Level, Shade, Way};
+        let size = (frame.width, frame.height);
+        let screen = self
+            .menu
+            .filter(|_| self.menus.is_some())
+            .map(|s| std::mem::discriminant(&s));
+        if self.fade.is_none() {
+            match self.shown.take() {
+                Some(last) if last.screen != screen => match last.palette {
+                    Some(palette) if last.size == size => {
+                        self.fade = Some(Fading {
+                            way: Way::Out,
+                            since: Instant::now(),
+                            pixels: last.pixels,
+                            size,
+                            palette,
+                            then_in: screen.is_some(),
+                        });
+                    }
+                    _ => self.fade_in(size),
+                },
+                None => self.fade_in(size),
+                last => self.shown = last,
+            }
+        }
+        if self.fade.as_ref().is_some_and(|f| f.size != size) {
+            self.fade = None;
+        }
+        if let Some(f) = &self.fade {
+            if level(f.way, f.since.elapsed().as_millis() as u64) == Level::Done {
+                if f.way == Way::Out && f.then_in {
+                    self.fade_in(size);
+                } else {
+                    self.fade = None;
+                }
+            }
+        }
+        if let Some(f) = &self.fade {
+            let percent = match (f.way, level(f.way, f.since.elapsed().as_millis() as u64)) {
+                (Way::Out, Level::Before) => {
+                    frame.pixels.copy_from_slice(&f.pixels);
+                    return true;
+                }
+                (_, Level::Percent(p)) => Some(p),
+                _ => None,
+            };
+            Shade::new(&f.palette, percent).frame(&f.pixels, frame.pixels);
+            return true;
+        }
+        let (Some(state), Some(menus)) = (self.menu, &self.menus) else {
+            self.shown = Some(Shown {
+                screen: None,
+                pixels: Vec::new(),
+                size,
+                palette: None,
+            });
+            return false;
+        };
+        let page = self.menu_page(state);
+        let hover = self
+            .cursor
+            .map(|c| Menus::to_menu(size, c.x as f32, c.y as f32));
+        menus.draw(frame, &page.view(hover, self.menu_held));
+        let palette = menus.palette(page.backdrop).map(<[u32]>::to_vec);
+        let mut pixels = self.shown.take().map(|s| s.pixels).unwrap_or_default();
+        pixels.clear();
+        pixels.extend_from_slice(frame.pixels);
+        self.shown = Some(Shown {
+            screen,
+            pixels,
+            size,
+            palette,
+        });
+        true
+    }
+
+    /// The front-end screen shown now starts fading in, drawn once (it
+    /// paints under the black palette before message 0x102).
+    fn fade_in(&mut self, size: (u32, u32)) {
+        self.fade = None;
+        let (Some(state), Some(menus)) = (self.menu, &self.menus) else {
+            return;
+        };
+        let page = self.menu_page(state);
+        let Some(palette) = menus.palette(page.backdrop).map(<[u32]>::to_vec) else {
+            return;
+        };
+        let mut pixels = vec![0u32; (size.0 * size.1) as usize];
+        let hover = self
+            .cursor
+            .map(|c| Menus::to_menu(size, c.x as f32, c.y as f32));
+        menus.draw(
+            &mut Frame {
+                pixels: &mut pixels,
+                width: size.0,
+                height: size.1,
+            },
+            &page.view(hover, self.menu_held),
+        );
+        self.fade = Some(Fading {
+            way: crate::fade::Way::In,
+            since: Instant::now(),
+            pixels,
+            size,
+            palette,
+            then_in: false,
+        });
+    }
+
     fn redraw(&mut self) -> Result<()> {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         self.time_ms = (now - self.started).as_millis() as u64;
-        self.update(dt);
-        self.menu_repeat_step();
-        self.load_due_preview();
+        // A fade holds everything up but the sound (it busy-waits).
+        if self.fade.is_none() {
+            self.update(dt);
+            self.menu_repeat_step();
+            self.load_due_preview();
+            self.poll_menu_keys();
+        } else {
+            self.choose_music();
+        }
         let (screen, _) = self.placement();
         let (vw, vh) = self.camera.view_size(&screen);
         let t = openconquest_formats::map::TILE_SIZE as f32;
@@ -5114,12 +5863,9 @@ impl App {
             };
             if let Some(v) = &self.video {
                 v.draw(&mut frame);
-            } else if let (Some(state), Some(menus)) = (self.menu, &self.menus) {
-                let page = self.menu_page(state);
-                let hover = self
-                    .cursor
-                    .map(|c| Menus::to_menu(window, c.x as f32, c.y as f32));
-                menus.draw(&mut frame, &page.view(hover, self.menu_held));
+                self.shown = None;
+                self.fade = None;
+            } else if self.draw_front_end(&mut frame) {
             } else {
                 let site = self.cursor.and_then(|c| self.site_at(c));
                 // The building as it would stand there.
@@ -5259,6 +6005,18 @@ impl ApplicationHandler for App {
                 if !self.modifiers.super_key() {
                     self.keys.insert(code);
                 }
+                // A fade waits for nothing (0x54a230 and 0x54a460 run
+                // without the message loop).
+                if self.fade.is_some() {
+                    return;
+                }
+                // A front-end name edit takes what is typed, repeats too.
+                if self.video.is_none()
+                    && self.menus.is_some()
+                    && self.edit_typed(code, event.text.as_deref().unwrap_or(""))
+                {
+                    return;
+                }
                 // A question takes Y or N, a notice Enter (its buttons'
                 // keys, scan codes 0x15, 0x31, 0x1c), and nothing else.
                 if let Some(ask) = self.ask {
@@ -5376,20 +6134,6 @@ impl ApplicationHandler for App {
                         return;
                     }
                 }
-                if let (Some(MenuState::Connect), Some(_)) = (self.menu, &self.menus) {
-                    if code == KeyCode::Backspace {
-                        self.player_name.pop();
-                        return;
-                    }
-                    let typed = event.text.as_deref().unwrap_or("");
-                    if !typed.is_empty()
-                        && !typed.chars().any(char::is_control)
-                        && self.player_name.len() < 30
-                    {
-                        self.player_name.push_str(typed);
-                        return;
-                    }
-                }
                 if let (Some(MenuState::Multiplayer(_)), Some(_)) = (self.menu, &self.menus) {
                     if code == KeyCode::Backspace {
                         self.join_address.pop();
@@ -5406,9 +6150,14 @@ impl ApplicationHandler for App {
                         return;
                     }
                 }
-                if self.menu.is_some() && self.menus.is_some() {
-                    if code == KeyCode::Escape {
-                        self.menu_back(event_loop);
+                // The front end's keys are its screens' bindings, polled
+                // each frame (`poll_menu_keys`); Esc goes back only on the
+                // port's own multiplayer screens.
+                if let (Some(state), Some(_)) = (self.menu, &self.menus) {
+                    if code == KeyCode::Escape
+                        && matches!(state, MenuState::Multiplayer(_) | MenuState::Waiting)
+                    {
+                        self.menu_back();
                     } else if code == KeyCode::F11 {
                         self.toggle_fullscreen();
                     }
@@ -5519,7 +6268,7 @@ impl ApplicationHandler for App {
                                 m.set_volume(if muted { 0.0 } else { self.music_volume });
                             }
                             if let Some(s) = &self.menu_music {
-                                s.set_volume(if muted { 0.0 } else { self.music_volume });
+                                s.set_volume(if muted { 0.0 } else { a.volume });
                             }
                             self.say(if muted { "Sound off" } else { "Sound on" });
                         }
@@ -5609,6 +6358,8 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorLeft { .. } => self.cursor = None,
             WindowEvent::MouseInput { state, button, .. } => match (button, state) {
+                // Nothing is read during a fade.
+                _ if self.fade.is_some() => {}
                 (MouseButton::Right | MouseButton::Middle, ElementState::Pressed) => {
                     self.drag_from = self.cursor;
                     if button == MouseButton::Right {

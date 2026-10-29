@@ -75,6 +75,12 @@ pub fn install(
             })?;
         }
     }
+    // The CD's identity (its campaigns and its name), which the original's
+    // installer copies into the registry (setup.exe 0x404cc0, 0x404530).
+    if let Some(id) = find_ci(cd, "id_cd.dsk")? {
+        progress("copy    id_cd.dsk");
+        fs::copy(&id, dest.join("id_cd.dsk"))?;
+    }
     let data = fs::read(&setup)?;
     let installer = Installer::parse(&data).map_err(io::Error::other)?;
     for file in installer.files() {

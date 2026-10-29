@@ -946,6 +946,7 @@ impl Scene {
                     .collect(),
                 wizards: self.wizards.iter().map(|(k, v)| (*k, v.clone())).collect(),
             },
+            game_id: None,
         }
     }
 

@@ -6,8 +6,8 @@
 //! and widgets stand on the title screen, Custom missions, Load game, the
 //! briefing, the end screen, Best Conquerors and the multiplayer connect
 //! screen (startsys.cpp's screens, 0x528000-0x540400). The port's own:
-//! the Multiplayer and Waiting screens, and the rows of Best Conquerors;
-//! the differences still open are listed in docs/FORMATS.md. Screens are
+//! the Multiplayer and Waiting screens; the differences still open are
+//! listed in docs/FORMATS.md. Screens are
 //! 800x600, scaled to the window's height and centred.
 
 use anyhow::{Context, Result};
@@ -153,8 +153,16 @@ pub struct Check {
 
 /// The title screen's lines (string resources 1145 and 1143), drawn by
 /// Startmm.cpp (0x5310a0) in boxes at (10, 0, 200, 27) and (0, 561, 799,
-/// 38), the second centred.
-const VERSION: &str = "Version 2.00";
+/// 38), the second centred. The version's number is the third byte of the
+/// registry's `Type` (game + 0xa7d, `(Type >> 16) & 0xff` into "Version
+/// 2.%02d"), which the CD's installer writes as the word 0xa21e (setup.exe
+/// 0x416040) over the install type (0x404530; 1, 2 or 4): 30.
+const INSTALLED_TYPE: u32 = 0xa21e_0000;
+
+fn version() -> String {
+    format!("Version 2.{:02}", (INSTALLED_TYPE >> 16) & 0xff)
+}
+
 const PUBLISHER: [&str; 2] = [
     "Published under license by K.E.Media for Denmark, Sweden, Finland and Norway",
     "(C) 1999, 1998 Megamedia Australia, Reaction Entertainment",
@@ -651,7 +659,7 @@ impl Menus {
             // (0, 561, 799, 38), the publisher's lines across the second.
             let vf = &self.version_font;
             let vy = ((27 - vf.line_height() as i32) / 2) as f32;
-            write(frame, vf, 10.0, vy, VERSION);
+            write(frame, vf, 10.0, vy, &version());
             let pf = &self.publisher_font;
             let pl = pf.line_height() as f32;
             let top = 561.0 + ((38.0 - pl * PUBLISHER.len() as f32) / 2.0).floor();
@@ -963,6 +971,11 @@ impl Menus {
         lines
     }
 
+    /// The palette of screen `backdrop` (its 256 colours).
+    pub fn palette(&self, backdrop: Backdrop) -> Option<&[u32]> {
+        self.palettes.get(backdrop as usize)?.as_deref()
+    }
+
     /// Colour `index` of the palette of screen `backdrop`.
     pub fn colour(&self, backdrop: Backdrop, index: u8) -> Option<u32> {
         let palette = self.palettes.get(backdrop as usize)?.as_ref()?;
@@ -1140,5 +1153,28 @@ mod tests {
         let h = Track::at(32.0, 185.0, 107.0, false, 6, 0, Scroller::MapX);
         assert_eq!(h.rect, (36.0, 189.0, 99.0, 15.0));
         assert_eq!(h.pos_at((36.0 + 7.0 + 42.0, 190.0)), 3);
+    }
+
+    /// The installed copy's version line; the front end's palettes keep
+    /// the 20 Windows colours at entries 0-9 and 246-255, which a fade
+    /// leaves (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn the_version_and_the_fades_palette() {
+        assert_eq!(version(), "Version 2.30");
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        assert_eq!(data.strings.get(&1145).unwrap(), "Version 2.%02d");
+        let menus = Menus::load(&data, '0').unwrap();
+        let palette = menus.palette(Backdrop::Best).unwrap();
+        assert_eq!(palette[7], 0xc0c0c0);
+        assert_eq!(palette[251], 0xffff00);
+        let shade = crate::fade::Shade::new(palette, Some(50));
+        assert_eq!(shade.apply(0xc0c0c0), 0xc0c0c0);
+        assert_eq!(
+            shade.apply(palette[100]),
+            crate::fade::lightness(palette[100], 50)
+        );
     }
 }
