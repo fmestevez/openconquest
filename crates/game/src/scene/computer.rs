@@ -2865,33 +2865,11 @@ impl Scene {
         }
     }
 
-    /// Where a guarding fort may go (`LAiFindPlaceGuardianFortress`,
-    /// 0x409b30): a free inland cell 3-8 cells from the town that a ship
-    /// can reach, the nearest the guards' zone.
+    /// Where task 6 founds its fort (0x4852c0: the base's town's guarding
+    /// fort place, `guard_fort_place`).
     fn fort_place(&self, ai: &Computer, f: usize) -> Option<(i32, i32)> {
-        let b = ai.flotillas[f].base;
-        let base = ai.bases.get(b)?;
-        let t = self.object_index(base.site?)?;
-        let (tx, ty) = self.cell_of(t);
-        let z = base.zones[0].1;
-        let to = (z.0 + z.2 / 2, z.1 + z.3 / 2);
-        let mut best: Option<(i32, (i32, i32))> = None;
-        for y in ty - 8..=ty + 9 {
-            for x in tx - 8..=tx + 9 {
-                let d = (x - tx).abs().max((y - ty).abs());
-                if !(3..=8).contains(&d)
-                    || self.check_ground(0x35, x, y).is_err()
-                    || !self.water_within(x, y, FOUND_REACH)
-                {
-                    continue;
-                }
-                let e = (x - to.0).abs() + (y - to.1).abs();
-                if best.is_none_or(|bb| e < bb.0) {
-                    best = Some((e, (x, y)));
-                }
-            }
-        }
-        best.map(|b| b.1)
+        let site = ai.bases.get(ai.flotillas[f].base)?.site?;
+        self.guard_fort_place(site)
     }
 
     /// Task 7 (0x47eed0): guard the waiting zone.

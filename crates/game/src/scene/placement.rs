@@ -151,38 +151,7 @@ impl Scene {
                 }
             }
         }
-        // The land's regions (0x5597b0): cells joined across edges both
-        // leave open, diagonals included.
-        let mut label = vec![0u32; (w * h) as usize];
-        let mut next = 0;
-        for y in 0..h {
-            for x in 0..w {
-                if bytes[at(x, y)] == 0xff || label[at(x, y)] != 0 {
-                    continue;
-                }
-                next += 1;
-                label[at(x, y)] = next;
-                let mut stack = vec![(x, y)];
-                while let Some((cx, cy)) = stack.pop() {
-                    let m = bytes[at(cx, cy)];
-                    for (d, &(dx, dy)) in DIR.iter().enumerate() {
-                        let (nx, ny) = (cx + dx, cy + dy);
-                        if !inside(nx, ny) {
-                            continue;
-                        }
-                        let n = at(nx, ny);
-                        if bytes[n] == 0xff || label[n] != 0 {
-                            continue;
-                        }
-                        if m & (1 << d) != 0 || bytes[n] & (1 << ((d + 4) % 8)) != 0 {
-                            continue;
-                        }
-                        label[n] = next;
-                        stack.push((nx, ny));
-                    }
-                }
-            }
-        }
+        let label = regions(&bytes, w, h);
         if !inside(tx, ty) || label[at(tx, ty)] == 0 {
             return None;
         }
@@ -302,6 +271,411 @@ impl Scene {
         }
         vc6_qsort(&mut spots, |a, b| b.score - a.score);
         spots.first().map(|s| (s.x, s.y, s.dir as u32 & 0xff))
+    }
+}
+
+/// The land's regions (0x5597b0) over edge masks (0xff impassable): cells
+/// joined across edges both leave open, diagonals included; 0 for none.
+fn regions(bytes: &[u8], w: i32, h: i32) -> Vec<u32> {
+    let at = |x: i32, y: i32| (y * w + x) as usize;
+    let mut label = vec![0u32; (w * h) as usize];
+    let mut next = 0;
+    for y in 0..h {
+        for x in 0..w {
+            if bytes[at(x, y)] == 0xff || label[at(x, y)] != 0 {
+                continue;
+            }
+            next += 1;
+            label[at(x, y)] = next;
+            let mut stack = vec![(x, y)];
+            while let Some((cx, cy)) = stack.pop() {
+                let m = bytes[at(cx, cy)];
+                for (d, &(dx, dy)) in DIR.iter().enumerate() {
+                    let (nx, ny) = (cx + dx, cy + dy);
+                    if !(0..w).contains(&nx) || !(0..h).contains(&ny) {
+                        continue;
+                    }
+                    let n = at(nx, ny);
+                    if bytes[n] == 0xff || label[n] != 0 {
+                        continue;
+                    }
+                    if m & (1 << d) != 0 || bytes[n] & (1 << ((d + 4) % 8)) != 0 {
+                        continue;
+                    }
+                    label[n] = next;
+                    stack.push((nx, ny));
+                }
+            }
+        }
+    }
+    label
+}
+
+/// Where a fort's weapons of `item` reach at range level `level`, about
+/// its cell (0x447840: the tables at 0x59819c-0x598968).
+fn reach_mask(item: u8, level: u8) -> Option<&'static [&'static str]> {
+    const A9: [&str; 9] = [
+        ".........",
+        "...###...",
+        "..#####..",
+        ".#######.",
+        ".###.###.",
+        ".#######.",
+        "..#####..",
+        "...###...",
+        ".........",
+    ];
+    const B9: [&str; 9] = [
+        "..#####..",
+        ".#######.",
+        "#########",
+        "#########",
+        "####.####",
+        "#########",
+        "#########",
+        ".#######.",
+        "..#####..",
+    ];
+    const A9H: [&str; 9] = [
+        ".........",
+        "...###...",
+        "..#####..",
+        ".##...##.",
+        ".##...##.",
+        ".##...##.",
+        "..#####..",
+        "...###...",
+        ".........",
+    ];
+    const B9H: [&str; 9] = [
+        "..#####..",
+        ".#######.",
+        "#########",
+        "###...###",
+        "###...###",
+        "###...###",
+        "#########",
+        ".#######.",
+        "..#####..",
+    ];
+    const A7: [&str; 7] = [
+        ".......", "..###..", ".#####.", ".##.##.", ".#####.", "..###..", ".......",
+    ];
+    const B7: [&str; 7] = [
+        "..###..", ".#####.", "#######", "###.###", "#######", ".#####.", "..###..",
+    ];
+    const E11: [&str; 11] = [
+        "...........",
+        "...........",
+        "....###....",
+        "...#####...",
+        "..##...##..",
+        "..##...##..",
+        "..##...##..",
+        "...#####...",
+        "....###....",
+        "...........",
+        "...........",
+    ];
+    const F11: [&str; 11] = [
+        "...........",
+        "...#####...",
+        "..#######..",
+        ".#########.",
+        ".###...###.",
+        ".###...###.",
+        ".###...###.",
+        ".#########.",
+        "..#######..",
+        "...#####...",
+        "...........",
+    ];
+    const G11: [&str; 11] = [
+        "...#####...",
+        "..#######..",
+        ".#########.",
+        "###########",
+        "####...####",
+        "####...####",
+        "####...####",
+        "###########",
+        ".#########.",
+        "..#######..",
+        "...#####...",
+    ];
+    const C13: [&str; 13] = [
+        ".............",
+        "....#####....",
+        "...#######...",
+        "..#########..",
+        ".####...####.",
+        ".###.....###.",
+        ".###.....###.",
+        ".###.....###.",
+        ".####...####.",
+        "..#########..",
+        "...#######...",
+        "....#####....",
+        ".............",
+    ];
+    const D13: [&str; 13] = [
+        "....#####....",
+        "...#######...",
+        "..#########..",
+        ".###########.",
+        "#####...#####",
+        "####.....####",
+        "####.....####",
+        "####.....####",
+        "#####...#####",
+        ".###########.",
+        "..#########..",
+        "...#######...",
+        "....#####....",
+    ];
+    let top = level >= 2;
+    Some(match item {
+        0 | 4 => {
+            if top {
+                &B9
+            } else {
+                &A9
+            }
+        }
+        1 | 2 => {
+            if top {
+                &B7
+            } else {
+                &A7
+            }
+        }
+        3 => {
+            if level >= 1 {
+                &B9
+            } else {
+                &A9
+            }
+        }
+        5 => {
+            if top {
+                &B9H
+            } else {
+                &A9H
+            }
+        }
+        6 => {
+            if top {
+                &D13
+            } else {
+                &C13
+            }
+        }
+        7 => match level {
+            0 => &E11,
+            1 => &F11,
+            _ => &G11,
+        },
+        8 => {
+            if top {
+                &G11
+            } else {
+                &F11
+            }
+        }
+        _ => return None,
+    })
+}
+
+/// A guarding fort's candidate (0x409b30's 0x24-byte record).
+#[derive(Clone, Copy)]
+struct FortSpot {
+    x: i32,
+    y: i32,
+    band: i32,
+    water: i32,
+    cover: i32,
+    town: i32,
+}
+
+impl Scene {
+    /// Where a computer player's builders found a fort guarding the town
+    /// `site` (`LAiFindPlaceGuardianFortress`, 0x409b30, over the whole
+    /// map): a free shore cell off the town's land or more than 8 from it;
+    /// the least covered by the player's forts already, then the nearest
+    /// band of 5 cells, then the most sea ships reach within 6, then some
+    /// nearness to the town, the least (0x409ad0).
+    pub(super) fn guard_fort_place(&self, site: u32) -> Option<(i32, i32)> {
+        use crate::object_info::cache;
+        let s = self.object_index(site)?;
+        let owner = self.objects[s].owner?;
+        let (tx, ty) = self.objects[s].cell?;
+        let g = &self.grid;
+        let (w, h) = (g.width as i32, g.height as i32);
+        let inside = |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y);
+        let at = |x: i32, y: i32| (y * w + x) as usize;
+        let water = |x: i32, y: i32| self.nav.is_water(x, y);
+        let buildable = |x: i32, y: i32| {
+            !water(x, y)
+                && (5..g.layers.min(8)).all(|l| {
+                    let t = g.get(l, x as u32, y as u32);
+                    t.is_empty() || !matches!(t.tileset, 0x1a | 0x30)
+                })
+        };
+        let shape = |x: i32, y: i32| {
+            SHAPE
+                .get(g.get(0, x as u32, y as u32).variant as usize)
+                .copied()
+                .unwrap_or(0)
+        };
+        let disc = |x: i32, y: i32| {
+            (y - 6..=y + 6)
+                .flat_map(move |cy| (x - 6..=x + 6).map(move |cx| (cx, cy)))
+                .filter(move |&(cx, cy)| inside(cx, cy) && distance(cx - x, cy - y) <= 6)
+        };
+        let mut standing = vec![false; (w * h) as usize];
+        for o in &self.objects {
+            if let (ObjectClass::Building(_), Some((cx, cy))) = (o.class, o.cell) {
+                let n = building_cells(o);
+                for y in cy..cy + n {
+                    for x in cx..cx + n {
+                        if inside(x, y) {
+                            standing[at(x, y)] = true;
+                        }
+                    }
+                }
+            }
+        }
+        // Free ground and the town's own cell may be passed.
+        let mut bytes = vec![0xffu8; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                if (x, y) == (tx, ty) || (buildable(x, y) && !standing[at(x, y)]) {
+                    bytes[at(x, y)] = shape(x, y);
+                }
+            }
+        }
+        // The sea ships reach: from every ship and the berth of every
+        // shipyard, dock and barbarian structure (not ports; 0x558fa0).
+        let mut sea = vec![false; (w * h) as usize];
+        let mut seeds = Vec::new();
+        for (i, o) in self.objects.iter().enumerate() {
+            if o.ship.is_some() {
+                seeds.push(self.cell_of(i));
+            } else if matches!(o.class, ObjectClass::Building(SHIPYARD | DOCK)) {
+                seeds.extend(self.front_cell(i));
+            }
+        }
+        for (sx, sy) in seeds {
+            if sx <= 0 || sy <= 0 || !inside(sx, sy) || !water(sx, sy) || sea[at(sx, sy)] {
+                continue;
+            }
+            sea[at(sx, sy)] = true;
+            let mut stack = vec![(sx, sy)];
+            while let Some((cx, cy)) = stack.pop() {
+                for &(dx, dy) in &DIR {
+                    let (nx, ny) = (cx + dx, cy + dy);
+                    if inside(nx, ny) && water(nx, ny) && !sea[at(nx, ny)] {
+                        sea[at(nx, ny)] = true;
+                        stack.push((nx, ny));
+                    }
+                }
+            }
+        }
+        // The player's forts' fire on each cell about them, the last fort
+        // scanned writing over the rest (0x446800, 0x446710).
+        let levels = self.levels_of(Some(owner));
+        let flame = self.flame_of(Some(owner)) > 0.0;
+        let mut fire = vec![0i32; (w * h) as usize];
+        let mut forts: Vec<usize> = (0..self.objects.len())
+            .filter(|&i| {
+                self.objects[i].owner == Some(owner)
+                    && matches!(self.objects[i].class, ObjectClass::Building(0x34..=0x36))
+                    && self.objects[i].cell.is_some_and(|(x, y)| inside(x, y))
+            })
+            .collect();
+        forts.sort_by_key(|&i| {
+            let (x, y) = self.objects[i].cell.unwrap();
+            (y, x)
+        });
+        for i in forts {
+            let (fx, fy) = self.objects[i].cell.unwrap();
+            let places = self.objects[i].fort_places();
+            for (cx, cy) in disc(fx, fy) {
+                let mut sum = 0i32;
+                for item in 0..9u8 {
+                    let units = &places[item as usize];
+                    let Some(mask) = reach_mask(item, levels.reach_for(item)) else {
+                        continue;
+                    };
+                    let half = mask.len() as i32 / 2;
+                    let (mx, my) = (cx - fx + half, cy - fy + half);
+                    let hit = !units.is_empty()
+                        && (0..mask.len() as i32).contains(&mx)
+                        && (0..mask.len() as i32).contains(&my)
+                        && mask[my as usize].as_bytes()[mx as usize] == b'#';
+                    if hit {
+                        let a = cache(item, levels.arms_for(item));
+                        let f: u32 = units.iter().map(|&c| c as u32 * a / 100).sum();
+                        sum += if flame { f * 150 / 100 } else { f } as i32;
+                    }
+                }
+                fire[at(cx, cy)] = sum / 100;
+            }
+        }
+        let label = regions(&bytes, w, h);
+        let home = label[at(tx, ty)];
+        if home == 0 {
+            return None;
+        }
+        // How many of the town's four cells lie within 6.
+        let mut near = vec![0i32; (w * h) as usize];
+        for (ux, uy) in [(tx, ty), (tx + 1, ty), (tx, ty + 1), (tx + 1, ty + 1)] {
+            for (cx, cy) in disc(ux, uy) {
+                near[at(cx, cy)] += 1;
+            }
+        }
+        let mut spots = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let k = at(x, y);
+                let d = distance(x - tx, y - ty);
+                if label[k] == 0 || bytes[k] == 0 || (label[k] == home && d <= 8) {
+                    continue;
+                }
+                let (mut wet, mut cover, mut town) = (0, 0, 0);
+                for (cx, cy) in disc(x, y) {
+                    let q = at(cx, cy);
+                    wet += sea[q] as i32;
+                    cover += fire[q];
+                    town += near[q];
+                }
+                spots.push(FortSpot {
+                    x,
+                    y,
+                    band: d / 5,
+                    water: wet,
+                    cover,
+                    town,
+                });
+            }
+        }
+        vc6_qsort(&mut spots, |a, b| {
+            if a.cover != b.cover {
+                return a.cover - b.cover;
+            }
+            if a.band != b.band {
+                return a.band - b.band;
+            }
+            if a.water != b.water {
+                return b.water - a.water;
+            }
+            match (a.town, b.town) {
+                (0, t) if t != 0 => 1,
+                (t, 0) if t != 0 => -1,
+                (p, q) => p - q,
+            }
+        });
+        spots.first().map(|s| (s.x, s.y))
     }
 }
 

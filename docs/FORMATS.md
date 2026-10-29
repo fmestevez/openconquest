@@ -3163,8 +3163,25 @@ flotilla found a settlement (0x484d60, 0x484f60).
 Not ported (the port's own instead): the terrain helpers of
 `artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
 simpler searches; zones weigh the lanes before nearness, since ships here
-cannot pass one another). Ported: the town's placing of buildings (below)
-and the object-kind masks (see below).
+cannot pass one another). Ported: the town's placing of buildings and the
+guarding forts' places (below), and the object-kind masks (see below).
+
+**Guarding forts' places** (`LAiFindPlaceGuardianFortress` 0x409b30, from
+task 6 through 0x4852c0 over the whole map; the first result becomes the
+flotilla's home, 1 x 1). Passable for its regions: free buildable cells
+and the town's own cell, with their edge masks. A candidate is a passable
+cell with a non-zero edge mask (a shore tile) off the town's region, or
+in it further than 8 (`max + min / 2`). Over the cells within 6 of it:
+`cover` sums the fire of the player's forts on each (its places whose
+reach mask, 0x447840, takes the cell: their units' fire 0x446710, x 1.5
+with the Flame, the sum / 100; a later fort writes over an earlier);
+`water` counts sea ships reach (flooded from every ship and the berth of
+every shipyard, dock and barbarian structure, not ports; 0x558fa0); `town`
+sums how many of the town's four cells lie within 6. Sorted (0x409ad0,
+VC6 qsort): least cover, then the nearest band `d / 5`, then most water,
+then a non-zero town before zero, the least. The ship founds it there,
+on the shore (the port lets a computer's fort go on any free land cell;
+the original's own check for it, likely message 0x4ec, is not decoded).
 
 **Placing buildings** (the town's order 0x138c with no cell asked: message
 0x4ed, 0x42dac0, `m_build.cpp` 0x42d9c0, the helper 0x40cca0 over the whole

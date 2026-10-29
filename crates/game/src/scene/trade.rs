@@ -1382,6 +1382,26 @@ impl Scene {
         self.check_ground(class, cx, cy)
     }
 
+    /// Whether cell `(cx, cy)` is land with no building on it.
+    pub(super) fn free_land(&self, cx: i32, cy: i32) -> Result<(), String> {
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        if cx < 0 || cy < 0 || cx >= w || cy >= h || self.nav.is_water(cx, cy) {
+            return Err("Buildings go on land".into());
+        }
+        let taken = self.objects.iter().any(|o| {
+            o.cell
+                .filter(|_| matches!(o.class, ObjectClass::Building(_)))
+                .is_some_and(|(ox, oy)| {
+                    let n = building_cells(o);
+                    (ox..ox + n).contains(&cx) && (oy..oy + n).contains(&cy)
+                })
+        });
+        if taken {
+            return Err("There is no room there".into());
+        }
+        Ok(())
+    }
+
     /// Whether building class `class` can stand on cell `(cx, cy)`, wherever
     /// it is ordered from; on success, the facing (see `check_site`). As
     /// probed on the original: a free land cell (trees and rocks do not
@@ -1707,7 +1727,16 @@ impl Scene {
             self.objects[i].ship.as_mut().unwrap().task = None;
             let id = self.objects[i].id;
             let own = self.is_own(&self.objects[i]);
-            if let Err(e) = self.place_building(id, class, cx, cy, data, caches) {
+            // A computer player's fort goes on the shore cell its search
+            // chose (0x409b30), not the player's inland ground.
+            let placed = if !own && class != SETTLEMENT {
+                self.free_land(cx, cy).and_then(|()| {
+                    self.place_building_facing(id, class, cx, cy, Some(0), data, caches)
+                })
+            } else {
+                self.place_building(id, class, cx, cy, data, caches)
+            };
+            if let Err(e) = placed {
                 if !own {
                     return;
                 }
@@ -2280,7 +2309,11 @@ impl Scene {
         if self.funds(owner).0 < cost {
             return Err("Not enough amber".into());
         }
-        self.check_ground(class, cx, cy)?;
+        if human || class == SETTLEMENT {
+            self.check_ground(class, cx, cy)?;
+        } else {
+            self.free_land(cx, cy)?;
+        }
         let t = TILE_SIZE as f32;
         let path = self
             .plan_route(i, cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0)
