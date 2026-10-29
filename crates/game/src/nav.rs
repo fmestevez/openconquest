@@ -116,6 +116,22 @@ impl NavGrid {
         if !self.passable(to.0, to.1, deep) || avoid(to) {
             return None;
         }
+        self.find_path_near(from, to, deep, avoid, None)
+    }
+
+    /// As `find_path_avoiding`; with a tolerance, a goal it cannot reach
+    /// gives way to the nearest cell it can (0x55ba50): rings about the
+    /// goal are searched, within the tolerance for the least flood value,
+    /// beyond it for the nearest (twice the octile distance), the least
+    /// flood value on a tie, while the ring is within half the best.
+    pub fn find_path_near(
+        &self,
+        from: (i32, i32),
+        to: (i32, i32),
+        deep: bool,
+        avoid: impl Fn((i32, i32)) -> bool,
+        tolerance: Option<i32>,
+    ) -> Option<Vec<(i32, i32)>> {
         if from == to {
             return Some(Vec::new());
         }
@@ -152,8 +168,41 @@ impl NavGrid {
                 }
             }
         }
-        if value[idx(to)] == 0 {
-            return None;
+        let inside = |(x, y): (i32, i32)| x >= 0 && y >= 0 && x < w && y < h;
+        let mut to = to;
+        if !inside(to) || value[idx(to)] == 0 {
+            let tol = tolerance?;
+            let mut best: Option<((i32, u32), (i32, i32))> = None;
+            let goal = to;
+            for r in 1..w.max(h) {
+                if r > tol {
+                    if let Some(((d, _), _)) = best {
+                        if r > d / 2 || (r == 3 && d <= 6) {
+                            break;
+                        }
+                    }
+                }
+                for dy in -r..=r {
+                    for dx in -r..=r {
+                        if dx.abs() != r && dy.abs() != r {
+                            continue;
+                        }
+                        let c = (goal.0 + dx, goal.1 + dy);
+                        if !inside(c) || value[idx(c)] == 0 {
+                            continue;
+                        }
+                        let ring = 2 * dx.abs().max(dy.abs()) + dx.abs().min(dy.abs());
+                        let key = (if r <= tol { 0 } else { ring }, value[idx(c)]);
+                        if best.is_none_or(|(b, _)| key < b) {
+                            best = Some((key, c));
+                        }
+                    }
+                }
+            }
+            to = best?.1;
+            if to == from {
+                return Some(Vec::new());
+            }
         }
         // Back downhill from the goal: the diagonals first, each counted one
         // more, then the straights; a tie keeps to the way it was going.
@@ -303,6 +352,22 @@ mod tests {
         assert!(nav.find_path((0, 0), (2, 0), false).is_none());
         assert!(nav.find_path((0, 0), (1, 2), false).is_none());
         assert_eq!(nav.nearest_water(2, 0), Some((1, 0)));
+    }
+
+    /// A goal it cannot reach gives way to the nearest cell it can
+    /// (0x55ba50 with a tolerance).
+    #[test]
+    fn unreachable_goal_gives_way_to_the_nearest() {
+        let nav = NavGrid::from_rows(&[
+            "....#..", //
+            "....#..", //
+            "....#..", //
+        ]);
+        assert!(nav.find_path((0, 1), (6, 1), false).is_none());
+        let path = nav
+            .find_path_near((0, 1), (6, 1), false, |_| false, Some(0))
+            .unwrap();
+        assert_eq!(path.last().map(|c| c.0), Some(3));
     }
 
     #[test]

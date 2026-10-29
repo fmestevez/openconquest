@@ -1020,7 +1020,9 @@ impl Scene {
         let Some(i) = self.object_index(id) else {
             return false;
         };
-        let Some(path) = self.plan_route(i, x, y) else {
+        // As near as it can get (0x55ba50).
+        let here = (self.objects[i].x, self.objects[i].y);
+        let Some(path) = self.plan_route_near(i, here, x, y, &HashSet::new()) else {
             return false;
         };
         let Some(ship) = self.objects[i].ship.as_mut() else {
@@ -1087,6 +1089,31 @@ impl Scene {
         y: f32,
         avoid: &HashSet<(i32, i32)>,
     ) -> Option<VecDeque<(f32, f32)>> {
+        self.plan_route_tolerant(i, start, x, y, avoid, None)
+    }
+
+    /// The same for a plain move: a goal it cannot reach gives way to the
+    /// nearest cell it can (0x55ba50 with a tolerance of 0).
+    fn plan_route_near(
+        &self,
+        i: usize,
+        start: (f32, f32),
+        x: f32,
+        y: f32,
+        avoid: &HashSet<(i32, i32)>,
+    ) -> Option<VecDeque<(f32, f32)>> {
+        self.plan_route_tolerant(i, start, x, y, avoid, Some(0))
+    }
+
+    fn plan_route_tolerant(
+        &self,
+        i: usize,
+        start: (f32, f32),
+        x: f32,
+        y: f32,
+        avoid: &HashSet<(i32, i32)>,
+        tolerance: Option<i32>,
+    ) -> Option<VecDeque<(f32, f32)>> {
         let t = TILE_SIZE as f32;
         let obj = &self.objects[i];
         let start_point = start;
@@ -1115,9 +1142,11 @@ impl Scene {
                 (f(5), f(6))
             })
             .collect();
-        let cells = self.nav.find_path_avoiding(start, to, deep, |c| {
-            (c != to && avoid.contains(&c)) || traps.contains(&c)
-        })?;
+        let shut = |c: (i32, i32)| (c != to && avoid.contains(&c)) || traps.contains(&c);
+        let cells = match tolerance {
+            None => self.nav.find_path_avoiding(start, to, deep, shut)?,
+            Some(_) => self.nav.find_path_near(start, to, deep, shut, tolerance)?,
+        };
         let mut points: Vec<(f32, f32)> = cells
             .into_iter()
             .map(|(cx, cy)| (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0))
@@ -1399,7 +1428,7 @@ impl Scene {
         }
         let cells = |r: &VecDeque<(f32, f32)>| r.len() as i32 + 1;
         let route = if listed.is_empty() {
-            self.plan_route_avoiding(i, start, to.0, to.1, &closed)
+            self.plan_route_near(i, start, to.0, to.1, &closed)
         } else {
             let mut round = closed.clone();
             round.extend(
@@ -1408,8 +1437,8 @@ impl Scene {
                     .filter(|&&(_, p, moving)| !moving && p >= prio)
                     .map(|l| l.0),
             );
-            let r2 = self.plan_route_avoiding(i, start, to.0, to.1, &round);
-            let r1 = self.plan_route_avoiding(i, start, to.0, to.1, &closed);
+            let r2 = self.plan_route_near(i, start, to.0, to.1, &round);
+            let r1 = self.plan_route_near(i, start, to.0, to.1, &closed);
             let go_round = match (&r1, &r2) {
                 (None, None) => true,
                 (Some(_), None) => false,
@@ -1508,7 +1537,7 @@ impl Scene {
                 .any(|&(px, py)| closed.contains(&cell_of(px, py)));
             let start = (o.x, o.y);
             let route = if blocked {
-                self.plan_route_avoiding(i, start, lx, ly, &closed)
+                self.plan_route_near(i, start, lx, ly, &closed)
             } else {
                 None
             };
