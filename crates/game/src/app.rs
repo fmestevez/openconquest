@@ -4447,9 +4447,9 @@ impl App {
 
     /// Ends a left click or drag in the world view: a click selects what
     /// is under it (with Shift, adds or removes an own ship, 0xc455; with
-    /// Ctrl, its group), a drag every own ship inside the box (with Shift,
-    /// added to the selection). The box is the port's own: the original
-    /// selects by clicks and groups only.
+    /// Ctrl, its group), as the original does. With the modern mouse only,
+    /// a drag selects every own ship inside the box (with Shift, added to
+    /// the selection): the original selects by clicks and groups only.
     fn finish_select(&mut self, from: PhysicalPosition<f64>, to: PhysicalPosition<f64>) {
         if self.pending == Some(crate::commands::CONVOY) {
             let order = match (self.world_at(from), self.world_at(to)) {
