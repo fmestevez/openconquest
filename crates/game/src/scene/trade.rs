@@ -1531,7 +1531,11 @@ impl Scene {
                     (ox..ox + n).contains(&cx) && (oy..oy + n).contains(&cy)
                 })
         });
-        if barred || (taken && occupied) {
+        // Nothing on its third place, and not a volcano's ground
+        // (0x42dae0; these whatever stands there).
+        let (third, volcano) = self.blocked_cells();
+        let blocked = third.contains(&(cx, cy)) || volcano.contains(&(cx, cy));
+        if barred || blocked || (taken && occupied) {
             return Err("There is no room there".into());
         }
         Ok(())

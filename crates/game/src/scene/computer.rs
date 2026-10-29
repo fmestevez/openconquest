@@ -2449,9 +2449,14 @@ impl Scene {
     /// 0x408bb0) holding water for them all, apart from the zones before;
     /// the fewest cells beside the base's ports and yards first, then the
     /// nearest the town, then the most open water, then the fewest cells
-    /// on the lanes from the ports to the amber (0x408bf0). The original
-    /// also weighs threats and deposits about (0x594470) before nearness;
-    /// not ported.
+    /// on the lanes from the ports to the amber (0x408bf0), the threats and
+    /// deposits about weighed (0x594470) before nearness. The first base
+    /// has four zones, the others three, their fourth left as it was
+    /// (0x484900). The squares run while their far side is short of the
+    /// rect's (0x408e7d), in one pass, apart from the zones before
+    /// (0x409210); a zone with no square keeps (0, 0, side, side), and puts
+    /// zone 0 at (0, 0) as well. (Not ported: with no town the original
+    /// looks over the whole map, measuring from where the town was.)
     fn base_zones(&self, ai: &mut Computer, b: usize) {
         let Some(t) = ai.bases[b].site.and_then(|s| self.object_index(s)) else {
             return;
@@ -2517,15 +2522,14 @@ impl Scene {
         let mw = self.grid.width as i32;
         let slots = if b == 0 { 4 } else { 3 };
         let mut taken: Vec<Cells> = Vec::new();
-        for k in 0..4 {
-            let n = if k < slots {
+        let mut placed: Vec<(usize, u32, Option<Cells>, i32)> = Vec::new();
+        for k in 0..slots {
+            let n = {
                 let role = [GUARD, DEFENCE, RAIDERS, FLEET][k];
                 ai.flotilla_of(b, role)
                     .map(|f| ai.flotillas[f].ships.len() as u32)
                     .filter(|&n| n > 5)
                     .map_or(5, |n| n.min(12))
-            } else {
-                5
             };
             let need = n as i32 + n as i32 / 4;
             let mut side = 1;
@@ -2533,14 +2537,14 @@ impl Scene {
                 side += 1;
             }
             let mut best: Option<(ZoneKey, Cells)> = None;
-            for apart in [true, false] {
-                for y in y0..=y0 + rh - side {
-                    for x in x0..=x0 + rw - side {
+            {
+                for y in y0..y0 + rh - side {
+                    for x in x0..x0 + rw - side {
                         let rect = (x, y, side, side);
                         let over = |r: &Cells| {
                             x < r.0 + r.2 && r.0 < x + side && y < r.1 + r.3 && r.1 < y + side
                         };
-                        if apart && taken.iter().any(over) {
+                        if taken.iter().any(over) {
                             continue;
                         }
                         // Its cells: closed to deep ships, beside the
@@ -2577,15 +2581,28 @@ impl Scene {
                         }
                     }
                 }
-                if best.is_some() {
-                    break;
+            }
+            let found = best.map(|b| b.1);
+            match found {
+                Some(rect) => taken.push(rect),
+                // Its mark lands on the rect's corner cells (only those
+                // when the rect starts at the map's; beyond, not decoded).
+                None if x0 == 0 && y0 == 0 => taken.push((0, 0, side, side)),
+                None => {}
+            }
+            placed.push((k, n, found, side));
+        }
+        // The records go back in order; a failed one, zeroed, writes zone
+        // 0's place (0x409210).
+        for (k, n, found, side) in placed {
+            match found {
+                Some(rect) => ai.bases[b].zones[k] = (n, rect),
+                None => {
+                    ai.bases[b].zones[k] = (n, (0, 0, side, side));
+                    let z = &mut ai.bases[b].zones[0].1;
+                    (z.0, z.1) = (0, 0);
                 }
             }
-            let rect = best.map_or((0, 0, 0, 0), |b| b.1);
-            if k < slots {
-                taken.push(rect);
-            }
-            ai.bases[b].zones[k] = (n, rect);
         }
     }
 

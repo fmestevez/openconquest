@@ -3576,8 +3576,14 @@ neighbour is water (keeping off a berth if it can): from the facing cell's
 settlement, +50 a water building; +5 each water cell nearer than 7
 (0x557440: the longer side plus half the shorter); facing as for flag 2,
 else 0. The results go through the C runtime's qsort (0x58791f, highest
-score first, ties as it leaves them). Not ported: a third object pointer
-on the cell (+0x1c) and a layer nibble of 4 also blocking it.
+score first, ties as it leaves them). A cell's third object slot (+0x1c)
+holds a treasure lying there (treas.cpp 0x406e70), a reef or whirlpool
+(record 5, 6), a sheep flock (record 4, 5) or a volcano at its own cell
+(record 6, 7, 0x445e20); a volcano also sets layer 6's type to 4 on its
+2 x 2 cells. The town's check (0x42dae0) refuses both whatever stands
+there; 0x40cca0 closes a slotted cell but keeps it passable for the
+regions, and a volcano's as unbuildable; 0x40c5f0 and 0x409b30 close
+both. The zones' influence finds a volcano at its own cell only.
 
 **Behaviour masks.** Every task gives its fleet a behaviour (0x482e80
 stores three masks at flotilla +0x14c, +0x148, +0x150; 0x482eb0 sends order

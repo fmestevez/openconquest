@@ -56,11 +56,44 @@ struct Spot {
     score: i32,
 }
 
+/// A set of cells.
+pub(super) type CellSet = HashSet<(i32, i32)>;
+
 impl Scene {
     /// The cell and facing for building `class` of settlement `site`
     /// (0x42d9c0): forts (flag 0x20), ports, shipyards and docks (flag 2) on
     /// the shore, the rest (flag 1) inland; the best scored, as the
     /// original's sort leaves it first.
+    /// The cells with something on their third place (`+0x1c`): a
+    /// treasure lying there, a reef, a whirlpool, a flock, a volcano's own
+    /// cell; and a volcano's four cells (layer-6 type 4, 0x445e20).
+    pub(super) fn blocked_cells(&self) -> (CellSet, CellSet) {
+        let t = TILE_SIZE as f32;
+        let (mut third, mut volcano) = (HashSet::new(), HashSet::new());
+        for o in &self.objects {
+            let f = |k| o.record.field(k).unwrap_or(0) as i32;
+            match o.class {
+                ObjectClass::Treasure => {
+                    third.insert(((o.x / t).floor() as i32, (o.y / t).floor() as i32));
+                }
+                ObjectClass::Reef(_) | ObjectClass::Whirlpool => {
+                    third.insert((f(5), f(6)));
+                }
+                ObjectClass::Sheep => {
+                    third.insert((f(4), f(5)));
+                }
+                ObjectClass::Lava => {
+                    third.insert((f(6), f(7)));
+                    for k in 0..4 {
+                        volcano.insert((f(6) + k % 2, f(7) + k / 2));
+                    }
+                }
+                _ => {}
+            }
+        }
+        (third, volcano)
+    }
+
     pub(super) fn town_build_place(&self, site: u32, class: u32) -> Option<(i32, i32, u32)> {
         let s = self.object_index(site)?;
         let owner = self.objects[s].owner?;
@@ -121,19 +154,27 @@ impl Scene {
                     (0x34..=0x3e).contains(&c) && self.home_settlement(i) == Some(site)
                 }
         };
-        // Classify every cell.
+        // Classify every cell: a volcano's ground as unbuildable, a cell
+        // with something on its third place closed but passable (0x40cca0).
+        let (third, volcano) = self.blocked_cells();
         let mut code = vec![0u8; (w * h) as usize];
         let mut bytes = vec![0xffu8; (w * h) as usize];
         for y in 0..h {
             for x in 0..w {
                 let k = at(x, y);
-                if !buildable(x, y) {
+                if !buildable(x, y) || volcano.contains(&(x, y)) {
                     if code[k] == 0 {
                         code[k] = BLOCKED;
                     }
                     continue;
                 }
                 bytes[k] = shape(x, y);
+                if third.contains(&(x, y)) {
+                    if code[k] == 0 {
+                        code[k] = BLOCKED;
+                    }
+                    continue;
+                }
                 match standing[k] {
                     None => code[k] = if bytes[k] == 0 { INLAND } else { SHORE },
                     Some(i) => {
@@ -545,11 +586,14 @@ impl Scene {
                 }
             }
         }
-        // Free ground and the town's own cell may be passed.
+        // Free ground and the town's own cell may be passed; not a cell
+        // with something on its third place, nor a volcano's (0x409b30).
+        let (third, volcano) = self.blocked_cells();
         let mut bytes = vec![0xffu8; (w * h) as usize];
         for y in 0..h {
             for x in 0..w {
-                if (x, y) == (tx, ty) || (buildable(x, y) && !standing[at(x, y)]) {
+                let open = !third.contains(&(x, y)) && !volcano.contains(&(x, y));
+                if (x, y) == (tx, ty) || (buildable(x, y) && !standing[at(x, y)] && open) {
                     bytes[at(x, y)] = shape(x, y);
                 }
             }
@@ -754,12 +798,21 @@ impl Scene {
                 }
             }
         }
-        let free_inland = |x: i32, y: i32| {
-            inside(x, y) && buildable(x, y) && standing[at(x, y)].is_none() && shape(x, y) == 0
-        };
+        // A cell with something on its third place, or a volcano's, is
+        // closed (0x40c5f0).
+        let (third, volcano) = self.blocked_cells();
         if let Some((kx, ky)) = keep.filter(|&(x, y)| x >= 0 && y >= 0) {
-            // 0x42e1e0: still 2 x 2 free inland, with shore about it.
-            let block = (0..4).all(|k| free_inland(kx + k % 2, ky + k / 2));
+            // 0x42e1e0: still 2 x 2 free inland, with shore about it (its
+            // third place tested on the first cell only, a volcano's
+            // ground on all four).
+            let ok = |x: i32, y: i32| {
+                inside(x, y)
+                    && buildable(x, y)
+                    && standing[at(x, y)].is_none()
+                    && shape(x, y) == 0
+                    && !volcano.contains(&(x, y))
+            };
+            let block = (0..4).all(|k| ok(kx + k % 2, ky + k / 2)) && !third.contains(&(kx, ky));
             let shore = (ky - 1..=ky + 2).any(|y| {
                 (kx - 1..=kx + 2).any(|x| {
                     let ring = x == kx - 1 || x == kx + 2 || y == ky - 1 || y == ky + 2;
@@ -773,7 +826,8 @@ impl Scene {
         let mut bytes = vec![0xffu8; (w * h) as usize];
         for y in 0..h {
             for x in 0..w {
-                if buildable(x, y) && standing[at(x, y)].is_none() {
+                let open = !third.contains(&(x, y)) && !volcano.contains(&(x, y));
+                if buildable(x, y) && standing[at(x, y)].is_none() && open {
                     bytes[at(x, y)] = shape(x, y);
                 }
             }
@@ -906,14 +960,12 @@ impl Scene {
                     }
                 }
             }
+            // A volcano is found at its own cell only, its +0x1c
+            // (0x445e20), where 0x40b050 collects it.
             if o.class == ObjectClass::Lava {
                 let f = |k| o.record.field(k).unwrap_or(0) as i32;
-                for y in f(7)..f(7) + 2 {
-                    for x in f(6)..f(6) + 2 {
-                        if inside(x, y) {
-                            lava[at(x, y)] = Some(i);
-                        }
-                    }
+                if inside(f(6), f(7)) {
+                    lava[at(f(6), f(7))] = Some(i);
                 }
             }
         }

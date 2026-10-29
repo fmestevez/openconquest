@@ -7107,3 +7107,39 @@ fn stock_repair_called_off() {
     assert_eq!(scene.stock_units(site)[0], vec![100, 50]);
     assert!(scene.stock_repair_at(site).is_none());
 }
+
+/// A cell with something on its third place (a flock here) or a volcano's
+/// ground takes no building (0x42dae0) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn flocks_and_volcanoes_take_no_building() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut flocks, mut volcanoes) = (0, 0);
+    for m in 0..14 {
+        let scene = Scene::load(&data, &mut caches, &format!("miss{m:03}")).unwrap();
+        for o in &scene.objects {
+            let f = |k| o.record.field(k).unwrap_or(0) as i32;
+            let cells: Vec<(i32, i32)> = match o.class {
+                ObjectClass::Sheep => vec![(f(4), f(5))],
+                ObjectClass::Lava => (0..4).map(|k| (f(6) + k % 2, f(7) + k / 2)).collect(),
+                _ => continue,
+            };
+            for (x, y) in cells {
+                assert!(
+                    scene.check_ground(economy::SCHOOL, x, y).is_err(),
+                    "miss{m:03} {:?} at {x},{y}",
+                    o.class
+                );
+            }
+            if o.class == ObjectClass::Sheep {
+                flocks += 1;
+            } else {
+                volcanoes += 1;
+            }
+        }
+    }
+    assert!(flocks > 0 && volcanoes > 0);
+}
