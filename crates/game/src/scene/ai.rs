@@ -26,9 +26,10 @@ impl Scene {
         })
     }
 
-    /// The mission's outcome as things stand (0x448610): defeat when the
-    /// player has no ship or building left, victory when every condition
-    /// of the mission is met.
+    /// A battle's or single mission's outcome as things stand (0x448610):
+    /// defeat when the player has no ship or building left, victory when
+    /// every condition of the mission is met. (Campaign missions have
+    /// their own judges, `judge_campaign`.)
     pub fn judge(&self) -> Option<Outcome> {
         self.human?;
         let alive = self.objects.iter().any(|o| {

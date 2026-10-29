@@ -1,10 +1,6 @@
-//! The campaign's story objectives. The original keeps them in per-mission
-//! scripts compiled into the executable (`brain\missNNN.cpp`, not yet
-//! ported; their `CONDITIONS` only ever say "kill all enemies"), so they are
-//! this port's own reading of each briefing: the heroes to win over come
-//! from the mission's `HERO_ARR`, the rest from the briefing's "Your
-//! objectives". Goals that need something the map lacks (the scripts create
-//! the Argo, Jason and the Golden Fleece as the story goes) are left out.
+//! The campaign's story: each mission's judge (the brain's vtable +8,
+//! `brain\missNNN.cpp`), what the player must do to win and must keep not
+//! to lose, and what a victory carries into the next mission.
 
 use openconquest_formats::map::TILE_SIZE;
 use openconquest_formats::ObjectClass;
@@ -17,51 +13,180 @@ use crate::objects::{self, MapObject};
 const JASON: u8 = 0;
 const ARGUS: u8 = 5;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Goal {
-    /// One of `OBJECTIVES` (kill all enemies, the Gorgon, a wizard, ...).
-    Kill(usize),
-    /// Hero `n` aboard one of the player's ships.
-    Recruit(u8),
-    /// A treasure of this kind aboard one of the player's ships.
-    Hold(u8),
-    /// A settlement founded during the mission.
-    Settle,
-    /// The mission's heroes at one of the player's settlements or towns
-    /// (one founded during the mission, if `Settle` is also asked).
-    Assemble,
-    /// The Argo built, with Jason and Argus aboard (miss002).
-    Argo,
+fn inside(c: (i32, i32), b: Cells) -> bool {
+    (b.0..=b.2).contains(&c.0) && (b.1..=b.3).contains(&c.1)
 }
 
-/// What each campaign mission asks besides its heroes, from its briefing.
-fn briefing_goals(mission: &str) -> &'static [Goal] {
+/// Cells, inclusive: x0, y0, x1, y1.
+pub type Cells = (i32, i32, i32, i32);
+
+/// Anywhere east or south of a cell.
+const FAR: i32 = i32::MAX;
+
+/// A term of a campaign mission's judge (0x4c46c0 counting the player's
+/// ships and buildings in a box, the heroes and treasures they hold).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Goal {
+    /// One of `OBJECTIVES` (the barbarians cleared).
+    Kill(usize),
+    /// Hero `n` has joined (0x5d99, once; Argus by boarding a ship).
+    Joined(u8),
+    /// Hero `n` held, aboard a ship or in a settlement.
+    Hero(u8),
+    /// Hero `n` held, if they ever joined.
+    KeptAfter(u8),
+    /// A treasure of this kind aboard one of the player's ships.
+    Aboard(u8),
+    /// A treasure of this kind stored in a settlement or town of the
+    /// player's (in the box, if any).
+    Stored(u8, Option<Cells>),
+    /// A treasure of this kind stored or aboard.
+    Kept(u8),
+    /// A settlement or town of the player's in the box.
+    TownIn(Cells),
+    /// That, and every hero the player holds in the box's towns.
+    Assemble(Cells),
+    /// The Argo afloat.
+    Argo,
+    /// The Argo afloat, if it ever was (miss002).
+    ArgoKept,
+    /// The Argo in the box.
+    ArgoIn(Cells),
+    /// The Argo with Jason and Argus aboard (miss002).
+    ArgoWith,
+    /// The Persians (3, 2) and (3, 3) without ships and settlements, or
+    /// (true) without ships and any building 0x32-0x3e.
+    PersiansGone(bool),
+    /// No castle of the wind wizard (0x42) in the box.
+    NoCastle(Cells),
+}
+
+/// A campaign mission's judge: checked every `period` ticks; won when
+/// every `win` term has held for 250 ticks, lost 250 ticks after a `keep`
+/// term first fails (0x4c4920, the brains' judges).
+pub struct Judge {
+    pub period: u32,
+    pub win: &'static [Goal],
+    pub keep: &'static [Goal],
+}
+
+/// Each campaign mission's judge (with `Goal::Joined` added for the
+/// mission's own heroes).
+pub fn judge_of(mission: &str) -> Option<Judge> {
     use Goal::*;
+    let j = |period, win, keep| Some(Judge { period, win, keep });
     match mission {
-        // "Kill all Barbarians. Find and get the parchment on board."
-        "miss000" => &[Kill(0), Hold(27)],
-        // "Defeat barbarians. Find the magic oar. Bring Jason to your town."
-        "miss001" => &[Kill(0), Assemble],
-        // "Defeat the barbarians. Find Argus's hammer and bring Argus to
-        // your town. Build the Argo ship and put Argus and Jason on board."
-        "miss002" => &[Kill(0), Argo],
-        // "... Build a settlement in the south-west and bring ... there."
-        "miss003" | "miss005" | "miss006" => &[Settle, Assemble],
-        // "Kill the Gorgon. Defeat the Persians. Bring ... to Pylos."
-        "miss004" => &[Kill(5), Kill(0), Assemble],
-        // "Overcome the wizard of wind."
-        "miss007" => &[Kill(3)],
-        // "Find the town of Propontis ..." (the town is the script's).
-        "miss008" => &[Kill(0)],
-        // "Overcome the wizard of fire. ... build a settlement ..."
-        "miss009" => &[Kill(2), Settle],
-        // "Get the Golden Fleece (guarded by a dragon). Build a settlement."
-        "miss010" => &[Kill(1), Hold(16), Settle],
-        "miss011" => &[Settle],
-        // "Destroy the Persian town on the south-west. Build a settlement."
-        "miss012" => &[Kill(0), Settle],
-        "miss013" => &[Kill(0)],
-        _ => &[],
+        "miss000" => j(125, &[Kill(0), Aboard(27)], &[TownIn((19, 0, 20, 1))]),
+        "miss001" => j(
+            75,
+            &[
+                Kill(0),
+                Assemble((0, 2, 1, 3)),
+                Stored(27, None),
+                Hero(JASON),
+            ],
+            &[Kept(27), TownIn((0, 2, 1, 3)), KeptAfter(JASON)],
+        ),
+        "miss002" => j(
+            75,
+            &[TownIn((0, 2, 1, 3)), ArgoWith],
+            &[
+                TownIn((0, 2, 1, 3)),
+                ArgoKept,
+                Hero(JASON),
+                KeptAfter(ARGUS),
+            ],
+        ),
+        "miss003" => j(
+            125,
+            &[
+                Argo,
+                Assemble((0, 40, 4, 47)),
+                TownIn((35, 20, 36, 21)),
+                Hero(JASON),
+            ],
+            &[Argo, TownIn((35, 20, 36, 21)), Hero(JASON)],
+        ),
+        "miss004" => j(
+            125,
+            &[
+                PersiansGone(false),
+                Argo,
+                Assemble((25, 5, 27, 7)),
+                Hero(JASON),
+            ],
+            &[Argo, Hero(JASON), TownIn((25, 5, 27, 7))],
+        ),
+        "miss005" => j(
+            125,
+            &[Argo, Assemble((0, 0, 2, 2)), Hero(JASON)],
+            &[Argo, Hero(JASON)],
+        ),
+        "miss006" => j(
+            125,
+            &[Argo, Assemble((0, 0, 12, 8)), Hero(JASON)],
+            &[Argo, Hero(JASON)],
+        ),
+        "miss007" => j(
+            75,
+            &[TownIn((52, 1, 53, 2)), Argo, NoCastle((10, 65, 49, 75))],
+            &[TownIn((52, 1, 53, 2)), Argo, Hero(JASON)],
+        ),
+        "miss008" => j(
+            75,
+            &[
+                TownIn((0, 30, 1, 31)),
+                ArgoIn((57, 0, FAR, 7)),
+                Assemble((55, 0, 59, 2)),
+            ],
+            &[TownIn((0, 30, 1, 31)), Argo, Hero(JASON)],
+        ),
+        "miss009" => j(
+            75,
+            &[ArgoIn((60, 0, FAR, 4)), Assemble((60, 0, 69, 6))],
+            &[Argo, Hero(JASON)],
+        ),
+        "miss010" => j(
+            75,
+            &[
+                ArgoIn((50, 0, FAR, 8)),
+                Assemble((50, 0, 64, 8)),
+                Stored(16, Some((50, 0, 64, 8))),
+            ],
+            &[Argo, Hero(JASON)],
+        ),
+        "miss011" => j(
+            125,
+            &[
+                Argo,
+                Assemble((0, 0, 5, 5)),
+                Hero(JASON),
+                Stored(16, Some((0, 0, 5, 5))),
+            ],
+            &[Argo, Hero(JASON)],
+        ),
+        "miss012" => j(
+            125,
+            &[
+                Argo,
+                Assemble((2, 48, 8, 52)),
+                Hero(JASON),
+                Stored(16, Some((2, 48, 8, 52))),
+            ],
+            &[Argo, Hero(JASON)],
+        ),
+        "miss013" => j(
+            125,
+            &[
+                Argo,
+                Assemble((0, 58, 2, 60)),
+                Stored(16, Some((0, 58, 2, 60))),
+                Hero(JASON),
+                PersiansGone(true),
+            ],
+            &[Argo, Hero(JASON), TownIn((0, 58, 2, 60))],
+        ),
+        _ => None,
     }
 }
 
@@ -89,36 +214,16 @@ pub fn carried_heroes(data: &crate::assets::GameData, mission: &str) -> Vec<u8> 
     heroes
 }
 
-/// How near (cells) heroes must be to a settlement to count as there.
-const ASSEMBLE_REACH: f32 = 3.0;
-
 impl Scene {
-    /// The goals of campaign mission `mission`: its heroes to win over and
-    /// its briefing's objectives, keeping only those the map allows.
+    /// The terms campaign mission `mission` is won by: its judge's, and
+    /// its own heroes joined.
     pub(super) fn story_goals(&self, heroes: [bool; 9]) -> Vec<Goal> {
         let mut goals: Vec<Goal> = (0..9u8)
             .filter(|&h| heroes[h as usize])
-            .map(Goal::Recruit)
+            .map(Goal::Joined)
             .collect();
-        for &g in briefing_goals(&self.mission) {
-            let possible = match g {
-                // A creature goal needs the creature on the map.
-                Goal::Kill(i) if i > 0 => self
-                    .objects
-                    .iter()
-                    .any(|o| OBJECTIVES[i].1.contains(&o.record.class_id)),
-                Goal::Hold(kind) => {
-                    self.objects
-                        .iter()
-                        .any(|o| o.treasure.is_some_and(|t| t.kind == kind))
-                        || self.held.iter().any(|h| h.1.kind == kind)
-                }
-                Goal::Assemble => !goals.is_empty() || !self.carried.is_empty(),
-                _ => true,
-            };
-            if possible {
-                goals.push(g);
-            }
+        if let Some(j) = judge_of(&self.mission) {
+            goals.extend_from_slice(j.win);
         }
         goals
     }
@@ -140,83 +245,158 @@ impl Scene {
             .filter(|o| o.ship.is_some() && self.is_own(o))
     }
 
+    /// The player's settlements and towns anchored in `b`.
+    fn towns_in(&self, b: Cells) -> impl Iterator<Item = &MapObject> {
+        self.objects.iter().filter(move |o| {
+            self.is_own(o)
+                && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
+                && o.cell.is_some_and(|c| inside(c, b))
+        })
+    }
+
+    fn argo(&self) -> Option<&MapObject> {
+        self.own_ships().find(|o| o.ship.as_ref().unwrap().argo)
+    }
+
+    /// The heroes the player holds, aboard or in a settlement.
+    fn heroes_held(&self) -> Vec<u8> {
+        let mut out: Vec<u8> = self
+            .own_ships()
+            .flat_map(|o| o.ship.as_ref().unwrap().heroes.iter().copied())
+            .collect();
+        for site in self.own_sites() {
+            out.extend(self.site_heroes.get(&site).into_iter().flatten());
+        }
+        out
+    }
+
+    fn stored_in(&self, kind: u8, b: Option<Cells>) -> bool {
+        self.held.iter().any(|(id, t)| {
+            t.kind == kind
+                && self.object_index(*id).is_some_and(|i| {
+                    let o = &self.objects[i];
+                    self.is_own(o)
+                        && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
+                        && b.is_none_or(|b| o.cell.is_some_and(|c| inside(c, b)))
+                })
+        })
+    }
+
     pub fn goal_met(&self, goal: Goal) -> bool {
+        let cell = |o: &MapObject| {
+            let t = TILE_SIZE as f32;
+            ((o.x / t) as i32, (o.y / t) as i32)
+        };
         match goal {
             Goal::Kill(i) => self.objective_met(i),
-            Goal::Recruit(h) => self
-                .own_ships()
-                .any(|o| o.ship.as_ref().unwrap().has_hero(h)),
-            // Aboard, or already handed over at a settlement.
-            Goal::Hold(kind) => {
-                self.delivered.contains(&kind)
-                    || self
-                        .own_ships()
-                        .any(|o| o.ship.as_ref().unwrap().has_treasure(kind))
+            Goal::Joined(h) => self.joined.contains(&h),
+            Goal::Hero(h) => self.heroes_held().contains(&h),
+            Goal::KeptAfter(h) => !self.joined.contains(&h) || self.heroes_held().contains(&h),
+            Goal::Aboard(kind) => self.own_ships().any(|o| {
+                let s = o.ship.as_ref().unwrap();
+                s.kind <= 9 && s.has_treasure(kind)
+            }),
+            Goal::Stored(kind, b) => self.stored_in(kind, b),
+            Goal::Kept(kind) => self.stored_in(kind, None) || self.goal_met(Goal::Aboard(kind)),
+            Goal::TownIn(b) => self.towns_in(b).next().is_some(),
+            Goal::Assemble(b) => {
+                let towns: Vec<u32> = self.towns_in(b).map(|o| o.id).collect();
+                !towns.is_empty()
+                    && self.heroes_held().iter().all(|h| {
+                        towns
+                            .iter()
+                            .any(|t| self.site_heroes.get(t).is_some_and(|w| w.contains(h)))
+                    })
             }
-            Goal::Settle => self.new_sites().next().is_some(),
-            Goal::Argo => self.own_ships().any(|o| {
+            Goal::Argo => self.argo().is_some(),
+            Goal::ArgoKept => !self.had_argo || self.argo().is_some(),
+            Goal::ArgoIn(b) => self.argo().is_some_and(|o| inside(cell(o), b)),
+            Goal::ArgoWith => self.own_ships().any(|o| {
                 let s = o.ship.as_ref().unwrap();
                 s.argo && s.has_hero(JASON) && s.has_hero(ARGUS)
             }),
-            Goal::Assemble => {
-                // This mission's heroes and those the campaign brought.
-                let mut heroes: Vec<u8> = self
-                    .story
-                    .iter()
-                    .filter_map(|g| match g {
-                        Goal::Recruit(h) => Some(*h),
-                        _ => None,
-                    })
-                    .collect();
-                heroes.extend(self.carried.iter().copied());
-                let reach = ASSEMBLE_REACH * TILE_SIZE as f32;
-                let sites: Vec<&MapObject> = if self.story.contains(&Goal::Settle) {
-                    self.new_sites().collect()
-                } else {
-                    self.own_sites()
-                        .into_iter()
-                        .filter_map(|id| self.object_index(id).map(|i| &self.objects[i]))
-                        .collect()
-                };
-                sites.iter().any(|site| {
-                    let waiting = self.site_heroes.get(&site.id);
-                    heroes.iter().all(|&h| {
-                        waiting.is_some_and(|w| w.contains(&h))
-                            || self.own_ships().any(|o| {
-                                o.ship.as_ref().unwrap().has_hero(h)
-                                    && ((o.x - site.x).powi(2) + (o.y - site.y).powi(2)).sqrt()
-                                        <= reach
-                            })
-                    })
-                })
-            }
+            Goal::PersiansGone(all) => !self.objects.iter().any(|o| {
+                matches!(o.owner, Some((3, 2 | 3)))
+                    && o.combat.as_ref().is_some_and(|c| c.hull > 0.0)
+                    && match o.class {
+                        ObjectClass::Ship => true,
+                        ObjectClass::Building(c) if all => (0x32..=0x3e).contains(&c),
+                        ObjectClass::Building(c) => c == SETTLEMENT || c == TOWN,
+                        _ => false,
+                    }
+            }),
+            Goal::NoCastle(b) => !self.objects.iter().any(|o| {
+                o.record.class_id == 0x42
+                    && o.combat.as_ref().is_none_or(|c| c.hull > 0.0)
+                    && inside(cell(o), b)
+            }),
         }
     }
 
-    /// Settlements and towns founded during the mission.
-    fn new_sites(&self) -> impl Iterator<Item = &MapObject> {
-        self.objects.iter().filter(|o| {
-            self.is_own(o)
-                && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
-                && !self.start_sites.contains(&o.id)
-        })
+    /// The campaign mission's judge, every period (0x4c4920): the terms to
+    /// keep first lose it 250 ticks after one fails, whatever follows; the
+    /// terms to win must hold at every check for 250 ticks.
+    pub(super) fn judge_campaign(&mut self, period: u32) -> Option<super::Outcome> {
+        let judge = judge_of(&self.mission)?;
+        // Heroes join once, aboard a ship.
+        let aboard: Vec<u8> = self
+            .own_ships()
+            .flat_map(|o| o.ship.as_ref().unwrap().heroes.iter().copied())
+            .collect();
+        for h in aboard {
+            if !self.joined.contains(&h) {
+                self.joined.push(h);
+            }
+        }
+        if self.argo().is_some() {
+            self.had_argo = true;
+        }
+        if let Some(left) = self.losing.as_mut() {
+            *left = left.saturating_sub(period);
+            if *left == 0 {
+                return Some(super::Outcome::Defeat);
+            }
+        }
+        if self.story.iter().all(|&g| self.goal_met(g)) {
+            self.winning += period;
+            if self.winning > 250 {
+                return Some(super::Outcome::Victory);
+            }
+        } else {
+            self.winning = 0;
+        }
+        if self.losing.is_none() && judge.keep.iter().any(|&g| !self.goal_met(g)) {
+            self.losing = Some(250);
+        }
+        None
     }
 }
 
 /// What a goal asks, for the objectives line.
 pub fn goal_name(goal: Goal) -> String {
+    let hero = |h: u8| objects::HERO_NAMES[h as usize % 9];
     match goal {
         Goal::Kill(i) => OBJECTIVES[i].0.to_string(),
-        Goal::Recruit(h) => format!("Win over {}", objects::HERO_NAMES[h as usize % 9]),
+        Goal::Joined(h) => format!("Win over {}", hero(h)),
+        Goal::Hero(h) | Goal::KeptAfter(h) => format!("Keep {}", hero(h)),
         // In the campaign the scroll is Lemnius's parchment.
-        Goal::Hold(27) => "Take the parchment aboard".into(),
-        Goal::Hold(kind) => format!(
+        Goal::Aboard(27) => "Take the parchment aboard".into(),
+        Goal::Aboard(kind) => format!(
             "Take aboard the {}",
             objects::treasure_name(kind).to_lowercase()
         ),
-        Goal::Settle => "Found a new settlement".into(),
-        Goal::Assemble => "Bring the heroes to your settlement".into(),
-        Goal::Argo => "Build the Argo; Jason and Argus aboard".into(),
+        Goal::Stored(27, _) | Goal::Kept(27) => "Bring the parchment to your town".into(),
+        Goal::Stored(kind, _) | Goal::Kept(kind) => format!(
+            "Bring the {} to your town",
+            objects::treasure_name(kind).to_lowercase()
+        ),
+        Goal::TownIn(_) => "Hold your town".into(),
+        Goal::Assemble(_) => "Bring every hero to your settlement".into(),
+        Goal::Argo | Goal::ArgoKept => "Keep the Argo".into(),
+        Goal::ArgoIn(_) => "Bring the Argo there".into(),
+        Goal::ArgoWith => "Build the Argo; Jason and Argus aboard".into(),
+        Goal::PersiansGone(_) => "Defeat the Persians".into(),
+        Goal::NoCastle(_) => "Overcome the wizard of wind".into(),
     }
 }
 
@@ -246,7 +426,9 @@ impl Scene {
             .map(|(i, _)| i);
         let i = match found {
             Some(i) => i,
-            None if !any_ship => {
+            // No royal ship: one launched for the Argo (the campaign would
+            // have brought it).
+            None if !any_ship || self.mission.as_str() > "miss003" => {
                 let t = TILE_SIZE as f32;
                 let (cx, cy) = self.nav.nearest_water((vx / t) as i32, (vy / t) as i32)?;
                 let id = self.spawn_ship(owner?, ROYAL_SHIP, cx, cy, data, caches)?;
@@ -543,6 +725,8 @@ impl Scene {
             return None;
         }
         let cell = match self.mission.as_str() {
+            // miss001's buildings stay where they stood.
+            "miss002" => (0, 2),
             "miss005" => (32, 34),
             "miss006" => (53, 67),
             "miss007" => (52, 1),
@@ -579,6 +763,55 @@ impl Scene {
         self.arrive(&carry, data, caches);
         self.carried = heroes;
         self.own_sites().first().copied()
+    }
+
+    /// A mission picked from the list gets the treasures the campaign
+    /// would have brought: miss001 the boat with Lemnius's parchment (what
+    /// miss000's victory carries to (1, 13)), miss011-miss013 the Golden
+    /// Fleece aboard the Argo.
+    pub(super) fn list_treasures(
+        &mut self,
+        argo: Option<usize>,
+        data: &crate::assets::GameData,
+        caches: &mut crate::objects::Caches,
+    ) {
+        let owner = self.human.map(|h| (h.nation, h.slot));
+        match self.mission.as_str() {
+            "miss001" => {
+                let Some(owner) = owner else {
+                    return;
+                };
+                let Some(id) = self.spawn_ship(owner, 0, 1, 13, data, caches) else {
+                    return;
+                };
+                let i = self.object_index(id).unwrap();
+                self.objects[i]
+                    .ship
+                    .as_mut()
+                    .unwrap()
+                    .treasures
+                    .push(objects::Treasure {
+                        kind: 27,
+                        param: 0,
+                        amount: 0,
+                    });
+            }
+            "miss011" | "miss012" | "miss013" => {
+                if let Some(i) = argo {
+                    self.objects[i]
+                        .ship
+                        .as_mut()
+                        .unwrap()
+                        .treasures
+                        .push(objects::Treasure {
+                            kind: 16,
+                            param: 0,
+                            amount: 0,
+                        });
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Puts what the campaign carried into this mission's map (0x522d50

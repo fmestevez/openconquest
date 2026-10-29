@@ -2317,10 +2317,15 @@ fn campaign_story() {
     let scene = Scene::load(&data, &mut caches, "miss005").unwrap();
     assert_eq!(
         scene.story,
-        vec![Goal::Recruit(7), Goal::Settle, Goal::Assemble]
+        vec![
+            Goal::Joined(7),
+            Goal::Argo,
+            Goal::Assemble((0, 0, 2, 2)),
+            Goal::Hero(0)
+        ]
     );
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
-    assert_eq!(scene.story, vec![Goal::Kill(0), Goal::Hold(27)]);
+    assert_eq!(scene.story, vec![Goal::Kill(0), Goal::Aboard(27)]);
     // No barbarian left: not yet won without the parchment.
     let human = scene.human.map(|h| (h.nation, h.slot));
     scene
@@ -2345,8 +2350,12 @@ fn campaign_story() {
             param: 0,
             amount: 0,
         });
-    // The brain judges every 125 ticks.
+    // Judged every 125 ticks, won once that has held for 250.
     for _ in 0..50 * 6 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert_eq!(scene.outcome, None, "not held long enough");
+    for _ in 0..50 * 10 {
         scene.update(0.02, &data, &mut caches);
     }
     assert_eq!(scene.outcome, Some(Outcome::Victory));
@@ -2886,7 +2895,7 @@ fn argus_builds_the_argo() {
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
     scene.brain = None;
-    assert!(scene.story.contains(&Goal::Argo));
+    assert!(scene.story.contains(&Goal::ArgoWith));
     assert!(!scene.permits.argo());
     let ship = scene
         .objects
@@ -2898,11 +2907,11 @@ fn argus_builds_the_argo() {
     scene.site_heroes.insert(ship, vec![5]);
     scene.update(0.02, &data, &mut caches);
     assert!(scene.permits.argo());
-    assert!(!scene.goal_met(Goal::Argo));
+    assert!(!scene.goal_met(Goal::ArgoWith));
     scene.christen_argo(ship);
     let i = scene.object_index(ship).unwrap();
     scene.objects[i].ship.as_mut().unwrap().heroes = vec![0, 5];
-    assert!(scene.goal_met(Goal::Argo));
+    assert!(scene.goal_met(Goal::ArgoWith));
     assert_eq!(scene.objects[i].label, "Argo");
 }
 
@@ -6591,5 +6600,27 @@ fn list_picked_missions_get_a_bare_town() {
             .unwrap_or_default();
         assert_eq!(heroes, scene.carried, "{m}'s heroes wait in it");
         assert!(!heroes.is_empty(), "{m} has heroes");
+    }
+}
+
+/// Each campaign mission picked from the list starts with what its judge
+/// wants kept (the town, the Argo, Jason, the parchment) and is not lost
+/// as it starts (needs `OPENCONQUEST_DATA`).
+#[test]
+fn campaign_missions_start_unlost() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for m in 0..14 {
+        let mut scene = Scene::load(&data, &mut caches, &format!("miss{m:03}")).unwrap();
+        let judge = story::judge_of(&scene.mission).unwrap();
+        let failing: Vec<_> = judge.keep.iter().filter(|&&g| !scene.goal_met(g)).collect();
+        assert!(failing.is_empty(), "miss{m:03} fails {failing:?}");
+        for _ in 0..600 {
+            scene.update(0.04, &data, &mut caches);
+        }
+        assert_eq!(scene.outcome, None, "miss{m:03}");
     }
 }

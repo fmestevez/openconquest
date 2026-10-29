@@ -2086,6 +2086,31 @@ it (+0x33be); heroes left aboard the Argo are lost but in miss002.
 miss005-007 and miss009-012 hold no town of the player's but the one
 carried.
 
+**Campaign judges** (each brain's vtable +8): checked when `tick % P == 0`
+(P 125 for miss000, 003-006, 011-013; 75 for 001, 002, 007-010); the win
+first, held at every check for 250 ticks; a loss fires 250 ticks after it
+is first seen, whatever follows. The generic judge 0x448610 returns at once
+in the campaign: no "nothing left" defeat. 0x4c46c0 counts the player's
+ships and buildings in a box and the heroes and treasures they hold; heroes
+join once (0x5d99). Each win needs the town anchored in the box its victory
+carries, with every hero the player holds in it (heroes aboard do not
+count), so a mission is never won without a town to carry:
+
+| Mission | Win | Loss |
+|---|---|---|
+| 000 | barbarians cleared; the parchment aboard a ship of type 0-9 | no town at (19-20, 0-1) |
+| 001 | barbarians cleared; town (0-1, 2-3) with every hero; the parchment stored; Jason | parchment neither stored nor aboard; town gone; Jason lost after joining |
+| 002 | town (0-1, 2-3); Argus boarded; the Argo with Jason and Argus | town gone; the Argo lost; Jason gone; Argus lost after boarding |
+| 003 | Argo; town (0-4, 40-47) with every hero; home (35-36, 20-21); Jason | no Argo; home gone; Jason gone |
+| 004 | Persians without ships and settlements; Argo; Pylos (25-27, 5-7) with every hero; Jason | no Argo; Jason gone; Pylos gone |
+| 005 / 006 | Argo; town (0-2, 0-2) / (0-12, 0-8) with every hero; Jason | no Argo; Jason gone |
+| 007 | town (52-53, 1-2); Argo; no castle 0x42 in (10-49, 65-75) | town gone; no Argo; Jason gone |
+| 008 | town (0-1, 30-31); Argo at x >= 57, y <= 7; town (55-59, 0-2) with every hero | as 007, its town |
+| 009 | Argo at x >= 60, y <= 4; town (60-69, 0-6) with every hero | no Argo; Jason gone; the strait blocked by lightning (not ported) |
+| 010 | Argo at x >= 50, y <= 8; town (50-64, 0-8) with every hero and the Fleece | no Argo; Jason gone |
+| 011 / 012 | Argo; town (0-5, 0-5) / (2-8, 48-52) with every hero and the Fleece; Jason | no Argo; Jason gone |
+| 013 | Argo; home (0-2, 58-60) with every hero and the Fleece; Jason; Persians without ships and buildings 0x32-0x3e | no Argo; Jason gone; home gone |
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships

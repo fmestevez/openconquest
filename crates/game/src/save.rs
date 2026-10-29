@@ -78,6 +78,14 @@ pub struct SaveGame {
     /// Treasure kinds handed over at a settlement.
     #[serde(default)]
     pub delivered: Vec<u8>,
+    #[serde(default)]
+    pub joined: Vec<u8>,
+    #[serde(default)]
+    pub had_argo: bool,
+    #[serde(default)]
+    pub winning: u32,
+    #[serde(default)]
+    pub losing: Option<u32>,
     /// Treasures held by objects (holder id, treasure).
     #[serde(default)]
     pub held: Vec<(u32, crate::objects::Treasure)>,

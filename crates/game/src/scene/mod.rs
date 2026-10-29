@@ -305,6 +305,12 @@ pub struct Scene {
     pub start_sites: Vec<u32>,
     /// Kinds of treasure the player has handed over at a settlement.
     pub delivered: Vec<u8>,
+    /// The campaign judge's record: heroes joined (0x5d99), the Argo once
+    /// afloat, ticks the win has held, ticks to a loss once seen.
+    pub joined: Vec<u8>,
+    pub had_argo: bool,
+    pub winning: u32,
+    pub losing: Option<u32>,
     /// The campaign mission's ported brain, if any, and time owed to it.
     pub brain: Option<brain::Brain>,
     brain_clock: f32,
@@ -653,6 +659,10 @@ impl Scene {
             story: Vec::new(),
             start_sites: Vec::new(),
             delivered: Vec::new(),
+            joined: Vec::new(),
+            had_argo: false,
+            winning: 0,
+            losing: None,
             held: Vec::new(),
             fittings: Default::default(),
             loads: Vec::new(),
@@ -743,6 +753,19 @@ impl Scene {
             } else {
                 None
             };
+            // The Argo moves in the list (spawn_ship sorts the objects).
+            let argo = argo
+                .and_then(|i| scene.objects.get(i).map(|o| o.id))
+                .map(|id| {
+                    if !arrived {
+                        let i = scene.object_index(id).unwrap();
+                        scene.list_treasures(Some(i), data, caches);
+                    }
+                    scene.object_index(id).unwrap()
+                });
+            if !arrived && argo.is_none() {
+                scene.list_treasures(None, data, caches);
+            }
             if !arrived && !scene.carried.is_empty() {
                 let human = scene.human.map(|h| (h.nation, h.slot));
                 let first_ship = || {
@@ -838,6 +861,10 @@ impl Scene {
                 .collect(),
             start_sites: self.start_sites.clone(),
             delivered: self.delivered.clone(),
+            joined: self.joined.clone(),
+            had_argo: self.had_argo,
+            winning: self.winning,
+            losing: self.losing,
             held: self.held.clone(),
             fittings: self.fittings.iter().map(|(k, v)| (*k, v.clone())).collect(),
             loads: self.loads.clone(),
@@ -943,6 +970,10 @@ impl Scene {
         scene.stock_conditions = save.stock_conditions.clone();
         scene.stock_repairs = save.stock_repairs.clone();
         scene.delivered = save.delivered.clone();
+        scene.joined = save.joined.clone();
+        scene.had_argo = save.had_argo;
+        scene.winning = save.winning;
+        scene.losing = save.losing;
         scene.held = save.held.clone();
         scene.fittings = save.fittings.iter().cloned().collect();
         scene.loads = save.loads.clone();
@@ -1847,12 +1878,16 @@ impl Scene {
             }
         }
         // The mission is judged every 250 ticks (0x448d40), a campaign
-        // mission by its brain every 125.
+        // mission by its own judge every 125 or 75.
         self.ai_timer -= dt;
         if self.ai_timer <= 0.0 {
-            self.ai_timer = crate::clock::ticks(if self.brain.is_some() { 125 } else { 250 });
+            let period = story::judge_of(&self.mission).map(|j| j.period);
+            self.ai_timer = crate::clock::ticks(period.unwrap_or(250));
             if self.outcome.is_none() {
-                self.outcome = self.judge();
+                self.outcome = match period {
+                    Some(p) => self.judge_campaign(p),
+                    None => self.judge(),
+                };
             }
         }
         self.wind.update(dt);
