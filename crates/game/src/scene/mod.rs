@@ -1659,6 +1659,16 @@ impl Scene {
             .collect();
         // Ships held up: the cell ahead, and whether a ship lies in it.
         let mut held = Vec::new();
+        let players: Vec<Option<(u32, u32)>> = self
+            .human
+            .iter()
+            .map(|h| Some((h.nation, h.slot)))
+            .chain(
+                self.seats
+                    .iter()
+                    .map(|s| Some((s.player.nation, s.player.slot))),
+            )
+            .collect();
         for obj in &mut self.objects {
             let Some(ship) = obj.ship.as_mut() else {
                 continue;
@@ -1670,7 +1680,13 @@ impl Scene {
                     ship.order_tag = task.tag();
                     ship.patience = objects::PATIENCE;
                     if let Some(p) = task.priority() {
-                        ship.priority = p;
+                        // The player's treasure hunts go out with 0.
+                        let player = players.contains(&obj.owner);
+                        ship.priority = if player && matches!(task, Task::Take { .. }) {
+                            0
+                        } else {
+                            p
+                        };
                     }
                 }
                 None if ship.path.is_empty() => ship.order_tag = 0,

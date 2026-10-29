@@ -692,19 +692,20 @@ fn default_patience() -> u8 {
 
 impl Task {
     /// The priority its order gives the ship (+0x5c7, a byte of the order
-    /// message the navy sends): gathering and taking a treasure 90
-    /// (0x4c89b0, 0x4d9fa0), founding 100 (0x4cb0b0), docking for repairs
-    /// 80 (0x4dbb40), attacking a target 69 (0x4d0190) and in an attack
-    /// zone 75 (0x4d74a0); `None` for those whose order is not decoded,
-    /// which leave it as it was.
+    /// the navy sends, the player's orders going through the navy too):
+    /// gathering 90 (0x4c89b0), taking a treasure 90 for a computer
+    /// (0x4d9f50; the player's 0, 0x49e0e0, see the move loop), founding
+    /// 100 (0x4cb0b0), docking for repairs 80 (0x4dbb40). Attacking,
+    /// boarding, ramming and loading reach the ship through intakes that
+    /// leave the byte unread, so 0 (0x4a9f2d stores bytes 0-6 only and
+    /// 0x4aa840 reads +0x823, never written); patrols, scouting, escorts
+    /// and zones move with plain moves and follows, 0 as well.
     pub fn priority(&self) -> Option<u8> {
         match self {
             Task::Gather { .. } | Task::Take { .. } => Some(90),
             Task::Found { .. } => Some(100),
             Task::Repair { .. } => Some(80),
-            Task::Attack { .. } => Some(69),
-            Task::Zone { attack: true, .. } => Some(75),
-            _ => None,
+            _ => Some(0),
         }
     }
 

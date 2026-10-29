@@ -1617,19 +1617,25 @@ turn when it gets there); and is sent there (message 0x80, or 0x14 with
 `param_2`) with the pusher's priority.
 
 The priority is a byte of each order message (+0x19 of a move; 0xff
-leaves it as it was), set by the navy as it hands its orders down: a
-plain move 0 (0x4cf070; a re-sent one 0xff, 0x4cc650), attacking a
-target 69 (message 0x17, 0x4d0190, 0x4cfd3f), in an attack zone 75
-(0x1f, 0x4d74a0), docking for repairs 80 (0x1e, 0x4dbb40, 0x4cd930),
-gathering and taking treasure 90 (0x1a, 0x1f; 0x4c89b0, 0x4d9fa0),
-founding 100 (0x20, 0x4cb0b0). Unloading (0x4ad9f0) rolls one between 1
-and 234 again, 91-100. Only an order's intake sets it: each kept order
-(attack at +0x81d, and the others, 0x4aa840-0x4ab594) copies its byte
-unless 0xff, with the patience 5 and the re-plan every 25 ticks; the ships'
-own behaviours (patrol, scout, convoy, ram, board, reload) move without
-touching it. What the interface puts there for the player's own orders is
-not traced. Computer zones here still avoid the amber lanes (see the computer
-players' notes).
+leaves it as it was), set by the navy as it hands its orders down; the
+player's orders go through the navy too (the click 0x5180e0, message
+0xc458 to the navy 0x49ab30, 0x49e230, a fleet made of the selection
+0x49ca60). A plain move 0 (0x4cf070; a re-sent one 0xff, 0x4cc650),
+gathering 90 (0x4c89b0; laden ones sent to unload 91: the helper's 90 and
+`inc` at 0x4aac43), unloading at a port 76 (0x4d74a0: 75 + 1), docking
+for repairs 80 (0x1e, 0x4dbb40), founding 100 (0x20, 0x4cb0b0), taking a
+treasure 90 for a computer (0x4d9f50) but 0 for the player (0x49e0e0).
+Attacking (message 0x17, 0x16 sub 7), boarding (0x17), ramming (0x18) and
+loading reach the ship through intakes that do not keep the byte (0x4a9f2d
+stores payload bytes 0-6; 0x4aa840 reads +0x823, which nothing writes,
+the ship being zeroed at 0x4dc3f0), so they set 0; the fire records the
+same (0x4aa0d4 leaves +0x12). Patrols, scouting, escorts and zones go out
+as plain moves and follows: 0. Stop (intake 8, 0x4aa540) sets 0 when the
+ship is moving (0x4a6330 with 1, 0x4a639a). Unloading (0x4ad9f0) rolls one
+between 1 and 234 again, 91-100. Only an order's intake sets it: each kept
+order copies its byte unless 0xff, with the patience 5 and the re-plan
+every 25 ticks; the ships' own behaviours move without touching it. Computer zones here still avoid the amber
+lanes (see the computer players' notes).
 
 ## Resource counters
 

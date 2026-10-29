@@ -2261,6 +2261,14 @@ impl Scene {
             deposit,
             phase: GatherPhase::ToPort(port),
         });
+        // Unloading at a port goes out with 75 and is raised by one
+        // (0x4d74a0's 0x1f, 0x4aac43).
+        ship.order_tag = Task::Gather {
+            deposit,
+            phase: GatherPhase::ToPort(port),
+        }
+        .tag();
+        ship.priority = 76;
         Ok(())
     }
 
