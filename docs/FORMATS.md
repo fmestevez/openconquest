@@ -1596,9 +1596,19 @@ When a navy gathering zone has no deposit left (0x4ca290, the search
 to the next point (0x4ce7c0 steps the list, wrapping by its last argument;
 0x4cf070); laden, goes to unload (0x4c6640, priority 90); idle in the
 zone, is sent message `*` (0x4d8b30: 1, 1, 0 and the id of a ship of the
-zone picked at random) whose handling is not decoded. When none is laden,
-listed or under way, a human's zone is marked done (+0x5d). The port sends
-idle zone gatherers to the zone's middle.
+zone picked at random): a follow order. Message `*` reaches the ship as
+event 0x280f (0x5228c0, 0x4dc630, 0x4e2ba0) and goes in by intake 0x80
+(+0x858); 0x4ab250 replaces its movement with task 1 (+0x54c): keep within
+A cells (+0x556, payload bytes 1-2) of object B (+0x55a, bytes 5-8),
+priority 0 (byte 9), patience 5, re-plan every 25 ticks. Each tick
+(0x4a5f30) its goal is the ward's cell (a building's own); within A
+(`max + min / 2`) it stops but keeps the task. It ends only when the ward
+is gone (0xc0), it gives up stuck (150) or another order replaces it; a
+new `*` retargets. The navy uses A = 1 (zones, 0x4ca290, 0x4d8920, ...)
+and 2 (escorts, 0x4c6270, 0x4c6ee0, 0x4c9270). When none is laden,
+listed or under way, a human's zone is marked done (+0x5d). The port's idle zone
+gatherers follow a zone ship so, looking out for deposits meanwhile; alone,
+they sail to the zone's middle.
 
 Pushing aside (0x4b4b50): the blocker picks at random one of the eight
 cells about it that it may enter; failing one, a cell held by another

@@ -3,6 +3,7 @@
 
 use super::Scene;
 use crate::objects::Task;
+use openconquest_formats::map::TILE_SIZE;
 
 /// A world rectangle: x0, y0, x1, y1.
 type Rect = (f32, f32, f32, f32);
@@ -126,7 +127,7 @@ impl Scene {
             .ok_or("Drag a rectangle around one of your ships")?
             .id;
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
-        s.task = Some(Task::Convoy { ward });
+        s.task = Some(Task::Convoy { ward, range: 2 });
         s.path.clear();
         Ok(())
     }
@@ -150,24 +151,30 @@ impl Scene {
     /// guards with nothing to fight return to the zone's middle, and an
     /// attack zone ends when it is clear.
     pub(super) fn run_orders(&mut self) {
-        // Escorts keep within two cells of their ward.
-        let escorts: Vec<(usize, u32)> = self
+        // Escorts keep within their range of their ward, in cells counted
+        // as the longer side and half the shorter (0x4a5f30, 0x557440).
+        let escorts: Vec<(usize, u32, u8)> = self
             .objects
             .iter()
             .enumerate()
             .filter_map(|(i, o)| match o.ship.as_ref()?.task? {
-                Task::Convoy { ward } => Some((i, ward)),
+                Task::Convoy { ward, range } => Some((i, ward, range)),
                 _ => None,
             })
             .collect();
-        for (i, ward) in escorts {
+        for (i, ward, range) in escorts {
             let Some(w) = self.object_index(ward) else {
                 self.objects[i].ship.as_mut().unwrap().task = None;
                 continue;
             };
             let (wx, wy) = (self.objects[w].x, self.objects[w].y);
             let o = &self.objects[i];
-            let far = ((o.x - wx).powi(2) + (o.y - wy).powi(2)).sqrt() > 2.0 * 64.0;
+            let t = TILE_SIZE as f32;
+            let (dx, dy) = (
+                ((o.x / t).floor() - (wx / t).floor()).abs() as i32,
+                ((o.y / t).floor() - (wy / t).floor()).abs() as i32,
+            );
+            let far = (2 * dx.max(dy) + dx.min(dy)) / 2 > range as i32;
             let stale = o
                 .ship
                 .as_ref()
@@ -189,7 +196,11 @@ impl Scene {
             .filter_map(|o| {
                 let s = o.ship.as_ref()?;
                 let (rect, resource) = s.zone?;
-                (s.task.is_none() && s.path.is_empty()).then_some((o.id, rect, resource))
+                // Following a ship of the zone, it still looks out for
+                // a deposit (0x4ca290 then gives it gathering again).
+                let following = matches!(s.task, Some(Task::Convoy { range: 1, .. }));
+                ((s.task.is_none() && s.path.is_empty()) || following)
+                    .then_some((o.id, rect, resource))
             })
             .collect();
         for (id, rect, resource) in idle {
@@ -213,10 +224,34 @@ impl Scene {
                 let _ = self.order_gather(id, d);
                 continue;
             }
-            // None left: it sails to its zone's middle (the navy's
-            // gatherers make for their places in the fleet by a plain
-            // move, priority 0: 0x4ca290, 0x4cf070), off the berth it
-            // unloaded at.
+            // None left: an idle one follows a ship of its zone picked at
+            // random, keeping within a cell of it (0x4ca290: message `*`,
+            // 0x4d8b30, priority 0); alone, it sails to the zone's middle.
+            if matches!(
+                self.objects[i].ship.as_ref().unwrap().task,
+                Some(Task::Convoy { .. })
+            ) {
+                continue;
+            }
+            let mates: Vec<u32> = self
+                .objects
+                .iter()
+                .filter(|o| {
+                    o.id != id
+                        && o.owner == self.objects[i].owner
+                        && o.ship
+                            .as_ref()
+                            .is_some_and(|s| s.zone.is_some_and(|z| z.0 == rect))
+                })
+                .map(|o| o.id)
+                .collect();
+            if !mates.is_empty() {
+                let ward = mates[self.rng.next() as usize % mates.len()];
+                let s = self.objects[i].ship.as_mut().unwrap();
+                s.task = Some(Task::Convoy { ward, range: 1 });
+                s.priority = 0;
+                continue;
+            }
             let (cx, cy) = ((rect.0 + rect.2) / 2.0, (rect.1 + rect.3) / 2.0);
             if ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() > 64.0 {
                 if let Some(path) = self.plan_route(i, cx, cy) {

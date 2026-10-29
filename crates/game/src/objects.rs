@@ -668,8 +668,14 @@ pub enum Task {
         rect: (f32, f32, f32, f32),
         attack: bool,
     },
-    /// Keep close to own ship `ward` and guard it.
-    Convoy { ward: u32 },
+    /// Keep within `range` cells of own ship `ward` and guard it (a
+    /// follow order, message `*`: the player's convoy 2, a computer's idle
+    /// zone gatherer 1; 0x4ab250, 0x4a5f30).
+    Convoy {
+        ward: u32,
+        #[serde(default = "convoy_range")]
+        range: u8,
+    },
     /// Sail to a treasure or a hero's house and take it.
     Take { target: u32 },
     /// Sail alongside own port, shipyard, dock or ship `target` and reload
@@ -720,6 +726,10 @@ impl Task {
             Task::LoadAt { .. } => 13,
         }
     }
+}
+
+fn convoy_range() -> u8 {
+    2
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
