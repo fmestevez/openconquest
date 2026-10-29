@@ -436,7 +436,7 @@ mod spells;
 mod stats;
 mod story;
 mod unload;
-mod volcano;
+pub mod volcano;
 mod walkers;
 pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use computer::Computers;
@@ -797,6 +797,7 @@ impl Scene {
             nests: self.nests.clone(),
             walkers: self.walkers.clone(),
             lair_clocks: self.lair_clocks.clone(),
+            volcanoes: self.volcanoes.clone(),
             site_heroes: self
                 .site_heroes
                 .iter()
@@ -891,6 +892,7 @@ impl Scene {
         scene.nests = save.nests.clone();
         scene.walkers = save.walkers.clone();
         scene.lair_clocks = save.lair_clocks.clone();
+        scene.volcanoes = save.volcanoes.clone();
         if let Some(p) = save.permits {
             scene.permits = p;
         }

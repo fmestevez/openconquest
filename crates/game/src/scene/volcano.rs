@@ -27,7 +27,7 @@ const CRATER: [(f32, f32); 11] = [
 const LOOP: (usize, usize) = (0x3c, 0x77);
 
 /// A volcano's state.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Volcano {
     /// Erupting.
     pub erupting: bool,
@@ -106,6 +106,9 @@ impl Scene {
             let (x, y) = (self.objects[i].x, self.objects[i].y);
             if started {
                 self.sounds.push(("shum2", x, y));
+            }
+            let erupting = self.volcanoes.get(&id).is_some_and(|v| v.erupting);
+            if erupting && !self.effects.iter().any(|fx| fx.site == Some(id)) {
                 if let Ok(frames) = objects::sequence_frames(data, caches, "VOLCANOERAPTION") {
                     self.effects.push(Effect {
                         x,

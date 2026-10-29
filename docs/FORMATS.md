@@ -1953,8 +1953,7 @@ S 23250; the crew's share by B / A). They only splash in water (305); none
 leaves a crater. The fire rammer (type 10) throws one S at its prey as its
 bow strikes (0x4c2566) and, boarded, Q and R at the boarder and two S at
 itself at each step of its sail furling (0x4c3410 state 10): it blows
-up. Letters 16-18 come from nowhere else. (The port does not save a
-volcano's clocks with a game.)
+up. Letters 16-18 come from nowhere else.
 
 ## Projectiles
 
