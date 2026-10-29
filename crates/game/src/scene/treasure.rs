@@ -277,7 +277,9 @@ impl Scene {
             }
         }
         let _ = ship_id;
-        self.sounds.push(("prote1", x, y));
+        // The treasure answers message 0x158c1 (0x4074d0) by going to
+        // state 3, 0x406c80: off its cell, sound event 272 (`trea2`).
+        self.sounds.push(("trea2", x, y));
         if let Some(g) = self.object_index(id) {
             self.objects.remove(g);
         }

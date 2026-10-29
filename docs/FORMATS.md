@@ -2759,7 +2759,8 @@ their sounds are alike. They play only for the viewing player's units:
   channel (0x49d3c0, 0x525370 channel 2): amber 156 (`am…`, `come…`), fish
   160 (`fi…`, `fish…`), a leviathan 164 (`lev…`, `levi…`).
 - **Treasures.** A ship reaching a treasure's cell plays 172 (`piw…`,
-  0x4a3f40). Taking a treasure plays 168 (`pit3`, 0x4a5bc0).
+  0x4a3f40). Taking a treasure plays 168 (`pit3`, 0x4a5bc0); the
+  treasure itself, taken by anyone, plays 272 (`trea2`, 0x406c80 state 3).
 - **Launch.** A ship launched plays 184 (`jb_d1`, 0x4b3ab0).
 - **Buildings.** They have groups 212-251 (`re_o…`, played by the town,
   shipyard, workshop, sage school and temples' handlers). The

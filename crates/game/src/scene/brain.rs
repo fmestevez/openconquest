@@ -9661,13 +9661,6 @@ mod miss011 {
         })
     }
 
-    /// `n` cells about cell `(x, y)`, within the map's top and left
-    /// (0x4796c0).
-    fn about((x, y): (i32, i32), n: i32) -> Cells {
-        let (x0, y0) = ((x - n).max(0), (y - n).max(0));
-        (x0, y0, x + n + 1 - x0, y + n + 1 - y0)
-    }
-
     fn inside((x, y): (i32, i32), (ax, ay, w, h): Cells) -> bool {
         x >= ax && x < ax + w && y >= ay && y < ay + h
     }
@@ -10371,7 +10364,7 @@ mod miss011 {
                 match first {
                     Some(cell) => {
                         cast_on_strikers(scene);
-                        scene.set_fleet_area(k, about(cell, 2));
+                        scene.set_fleet_area(k, scene.cells_about(cell, 2));
                         100
                     }
                     None => 90,
@@ -10446,7 +10439,7 @@ mod miss011 {
         else {
             return;
         };
-        let area = about(temple, 15);
+        let area = scene.cells_about(temple, 15);
         let things: Vec<(ObjectClass, (i32, i32))> = scene
             .objects
             .iter()
@@ -10470,7 +10463,7 @@ mod miss011 {
                 },
                 _ => {
                     let roll = scene.rng.next() % ([20, 15, 10][d] + 1);
-                    let near = about(cell, 3);
+                    let near = scene.cells_about(cell, 3);
                     let at = (near.0 + near.2 / 2, near.1 + near.3 / 2);
                     if human_count(scene, near) < 4 {
                         break;
@@ -10813,13 +10806,6 @@ mod miss012 {
     fn cell_of(o: &MapObject) -> (i32, i32) {
         let t = TILE_SIZE as f32;
         o.cell.unwrap_or(((o.x / t) as i32, (o.y / t) as i32))
-    }
-
-    /// `n` cells about cell `(x, y)`, within the map's top and left
-    /// (0x4796c0).
-    fn about((x, y): (i32, i32), n: i32) -> Cells {
-        let (x0, y0) = ((x - n).max(0), (y - n).max(0));
-        (x0, y0, x + n + 1 - x0, y + n + 1 - y0)
     }
 
     fn inside((x, y): (i32, i32), (ax, ay, w, h): Cells) -> bool {
@@ -11204,7 +11190,7 @@ mod miss012 {
                 }
                 match human_things(scene).first() {
                     Some(&cell) => {
-                        scene.set_fleet_area(k, about(cell, 2));
+                        scene.set_fleet_area(k, scene.cells_about(cell, 2));
                         15
                     }
                     None => 0,
@@ -11358,7 +11344,7 @@ mod miss012 {
                     .map(cell_of)
                     .last();
                 if let Some(cell) = carrier {
-                    scene.set_fleet_area(k, about(cell, 2));
+                    scene.set_fleet_area(k, scene.cells_about(cell, 2));
                     return 35;
                 }
                 const NORTH_EAST: Cells = (35, 0, 15, 9);
@@ -11591,7 +11577,7 @@ mod miss012 {
         else {
             return;
         };
-        let area = about(temple, 15);
+        let area = scene.cells_about(temple, 15);
         let things: Vec<(ObjectClass, (i32, i32))> = scene
             .objects
             .iter()
@@ -11615,7 +11601,7 @@ mod miss012 {
                 },
                 _ => {
                     let roll = scene.rng.next() % ([20, 15, 10][d] + 1);
-                    let near = about(cell, 3);
+                    let near = scene.cells_about(cell, 3);
                     let at = (near.0 + near.2 / 2, near.1 + near.3 / 2);
                     if human_count(scene, near) < 4 {
                         break;
@@ -11981,13 +11967,6 @@ mod miss013 {
         o.cell.unwrap_or(((o.x / t) as i32, (o.y / t) as i32))
     }
 
-    /// `n` cells about cell `(x, y)`, within the map's top and left
-    /// (0x4796c0).
-    fn about((x, y): (i32, i32), n: i32) -> Cells {
-        let (x0, y0) = ((x - n).max(0), (y - n).max(0));
-        (x0, y0, x + n + 1 - x0, y + n + 1 - y0)
-    }
-
     fn inside((x, y): (i32, i32), (ax, ay, w, h): Cells) -> bool {
         x >= ax && x < ax + w && y >= ay && y < ay + h
     }
@@ -12125,7 +12104,7 @@ mod miss013 {
             return;
         };
         if (38..=54).contains(&cell.1) && var(scene, SOUTH, SPOTTED) == 0 {
-            let area = about(cell, 3);
+            let area = scene.cells_about(cell, 3);
             for f in [S_RAIDERS, S_STRIKERS] {
                 scene.set_fleet_area(f, area);
                 scene.set_state(f, 55);
@@ -12595,7 +12574,7 @@ mod miss013 {
                     .map(cell_of)
                     .last();
                 if let Some(cell) = carrier {
-                    let area = about(cell, 2);
+                    let area = scene.cells_about(cell, 2);
                     set_var(scene, MIDDLE, STRIKE_AREA, pack(area));
                     if scene.rng.next() & 1 == 0 {
                         scene.set_fleet_area(k, area);
@@ -12758,7 +12737,7 @@ mod miss013 {
                     })
                     .map(cell_of);
                 if let Some(cell) = heroes {
-                    scene.set_fleet_area(k, about(cell, 2));
+                    scene.set_fleet_area(k, scene.cells_about(cell, 2));
                     if cell.1 > 44 && scene.rng.next() & 1 == 0 {
                         return 25;
                     }
@@ -12933,7 +12912,7 @@ mod miss013 {
         else {
             return;
         };
-        let area = about(temple, 15);
+        let area = scene.cells_about(temple, 15);
         let things: Vec<(ObjectClass, (i32, i32))> = scene
             .objects
             .iter()
@@ -12957,7 +12936,7 @@ mod miss013 {
                 },
                 _ => {
                     let roll = scene.rng.next() % ([20, 15, 10][d] + 1);
-                    let near = about(cell, 3);
+                    let near = scene.cells_about(cell, 3);
                     let at = (near.0 + near.2 / 2, near.1 + near.3 / 2);
                     if human_count(scene, near) < 4 {
                         break;

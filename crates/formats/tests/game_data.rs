@@ -277,6 +277,13 @@ fn sounds_decode() {
         openconquest_formats::sound_choices(&archive, 9).unwrap(),
         ["bowla1", "strel1"]
     );
+    // A treasure taken (0x406c80, event 272) and the crew's cheer by
+    // nation (0x4a5bc0, events 168-171).
+    let choices = |n| openconquest_formats::sound_choices(&archive, n).unwrap();
+    assert_eq!(choices(272), ["trea2"]);
+    assert_eq!(choices(169), ["pit3"]);
+    assert_eq!(choices(170), ["pit3"]);
+    assert!(choices(168).is_empty() && choices(171).is_empty());
 }
 
 /// The videos parse and decode (Cinepak and Microsoft Video 1), with their
