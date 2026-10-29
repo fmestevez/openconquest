@@ -307,6 +307,10 @@ pub struct Ship {
     /// cell or get under way (0x4a7290).
     #[serde(default)]
     pub remembered: Vec<(i32, i32)>,
+    /// Seconds since its route was last planned (+0x57b; re-planned every
+    /// 25 ticks, +0x57f).
+    #[serde(default)]
+    pub planned: f32,
     /// How fast it is going now, in world pixels a second: it gathers way
     /// up to its speed and loses it to stop where it is bound or to turn.
     #[serde(default)]
@@ -1451,6 +1455,7 @@ pub fn resolve(
         waited: 0.0,
         stalled: 0.0,
         remembered: Vec::new(),
+        planned: 0.0,
         velocity: 0.0,
         face: None,
         furl: 0.0,

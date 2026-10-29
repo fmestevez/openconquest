@@ -2500,6 +2500,14 @@ impl Scene {
                 }
             }
         }
+        // What lies about, by the zones' weights (0x594470).
+        let wt = self.influence_map(
+            ai.owner,
+            &super::placement::ZONE_WEIGHTS,
+            (x0, y0, rw, rh),
+            &|_, _| false,
+        );
+        let mw = self.grid.width as i32;
         let slots = if b == 0 { 4 } else { 3 };
         let mut taken: Vec<Cells> = Vec::new();
         for k in 0..4 {
@@ -2517,7 +2525,7 @@ impl Scene {
             while side * side < need {
                 side += 1;
             }
-            let mut best: Option<((i32, i32, i32, i32), Cells)> = None;
+            let mut best: Option<((i32, i32, i32, i32, i32, i32), Cells)> = None;
             for apart in [true, false] {
                 for y in y0..=y0 + rh - side {
                     for x in x0..=x0 + rw - side {
@@ -2528,28 +2536,35 @@ impl Scene {
                         if apart && taken.iter().any(over) {
                             continue;
                         }
-                        let mut water = 0;
-                        let mut near = 0;
-                        let mut lane = 0;
+                        // Its cells: closed to deep ships, beside the
+                        // ports and yards, on the lanes, or open; their
+                        // weights (0x408bf0).
+                        let (mut passable, mut near, mut lane, mut open, mut weight) =
+                            (0, 0, 0, 0, 0);
                         for cy in y..y + side {
                             for cx in x..x + side {
-                                if self.nav.is_water(cx, cy) {
-                                    water += 1;
-                                    if beside(cx, cy) {
-                                        near += 1;
-                                    }
-                                    if lanes.contains(&(cx, cy)) {
-                                        lane += 1;
-                                    }
+                                if !self.nav.passable(cx, cy, true) {
+                                    continue;
+                                }
+                                passable += 1;
+                                weight += wt[(cy * mw + cx) as usize];
+                                if beside(cx, cy) {
+                                    near += 1;
+                                } else if lanes.contains(&(cx, cy)) {
+                                    lane += 1;
+                                } else {
+                                    open += 1;
                                 }
                             }
                         }
-                        if water < n as i32 {
+                        if passable < n as i32 {
                             continue;
                         }
-                        let (mx, my) = (x * 2 + side - 2 * tx - 1, y * 2 + side - 2 * ty - 1);
-                        let d = mx * mx + my * my;
-                        let key = (near, d, -water, lane);
+                        let d = super::placement::distance(x + side / 2 - tx, y + side / 2 - ty);
+                        // Fewest beside the harbour, the heaviest, the
+                        // nearest the town, the most open, the fewest on
+                        // the lanes, the most passable.
+                        let key = (near, -weight, d, -open, lane, -passable);
                         if best.is_none_or(|bb| key < bb.0) {
                             best = Some((key, rect));
                         }

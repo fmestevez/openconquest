@@ -1584,7 +1584,8 @@ gone through, are remembered (+0x5cd, 0x4a7230) and stay closed in every
 later plan while their ship lies there (0x4a7290), until a stop under way
 clears them. Ships planned through are never swapped: the mover waits,
 pushes one of lower priority lying still, or goes round. The port does
-this when a ship is held, on its own route finder.)
+this when a ship is held, and every 25 ticks under way (only re-routing
+when its route runs into a closed cell), on its own route finder.)
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
@@ -1645,8 +1646,7 @@ as plain moves and follows: 0. Stop (intake 8, 0x4aa540) sets 0 when the
 ship is moving (0x4a6330 with 1, 0x4a639a). Unloading (0x4ad9f0) rolls one
 between 1 and 234 again, 91-100. Only an order's intake sets it: each kept
 order copies its byte unless 0xff, with the patience 5 and the re-plan
-every 25 ticks; the ships' own behaviours move without touching it. Computer zones here rank in the original's
-order but without its threat weights.
+every 25 ticks; the ships' own behaviours move without touching it. 
 
 ## Resource counters
 
@@ -3189,9 +3189,18 @@ about, 0x484aa0 with 0x4218f0) and four waiting zones (0x484900 with
 `LAiFindDispositionZones` 0x4093a0, 0x408bf0: in the 31 x 31 cells about
 the town, a square of side s, s x s >= n + n / 4, holding water for n = 5
 to 12 ships, ranked by cells beside the base's ports and yards, then
-weights from the table 0x594470 (+20 within 10 cells of its town, -20 near
-enemy towns, forts and ships, -10 near lairs, nests and monsters), then
-nearness, then open water and the lanes from the ports to the amber).
+weights: the influence map of the settlements' sites (0x40b050, 0x40bbf0)
+over the 31 x 31 cells with the table 0x594470 (the player's own towns +20
+within 10, others' towns, forts, barbarians and ships -20 within 10,
+others' buildings and deposits nothing, lairs x -10, nests -10 + d, castles
+-10, medusas and sirens -10 + d within 5, lava -1 x its strength). Each
+cell is closed to deep ships (1), beside the base's ports and yards (8), on
+a lane from the ports to the amber (9, flooded from each port's front,
+0x558fa0), taken by an earlier zone (10) or open (0). A square needs as
+many passable cells as ships (and, on the first pass, none taken); it beats
+the best (0x408bf0) with fewer cells beside the harbour, then more weight
+(over its passable cells), then nearer the town (`max + min / 2` to its
+middle), then more open cells, fewer on the lanes, more passable).
 
 **Town orders** are run by the town's land fleet (`LFleet.cpp`,
 0x42b910, every 50 ticks, by priority): the table at 0x5ac7c8 (7 dwords:
@@ -3233,7 +3242,7 @@ flotilla found a settlement (0x484d60, 0x484f60).
 
 Not ported (the port's own instead): the terrain helpers of
 `artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
-simpler searches; zones leave out the threat weights 0x594470). Ported: the town's placing of buildings and the
+simpler searches). Ported: the town's placing of buildings and the
 guarding forts' places (below), the enemy groups, and the object-kind
 masks (see below).
 

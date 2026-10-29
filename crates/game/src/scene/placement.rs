@@ -42,7 +42,7 @@ fn is_water_building(class: u32) -> bool {
 }
 
 /// Distance as 0x557440 reckons it: the longer side and half the shorter.
-fn distance(dx: i32, dy: i32) -> i32 {
+pub(super) fn distance(dx: i32, dy: i32) -> i32 {
     let (a, b) = (dx.abs(), dy.abs());
     (a.min(b) + 2 * a.max(b)) / 2
 }
@@ -783,110 +783,11 @@ impl Scene {
         let shore_cell = |x: i32, y: i32| label[at(x, y)] != 0 && bytes[at(x, y)] != 0;
         // Candidates, and the influences of the cells that are not.
         let mut sites: Vec<Spot> = Vec::new();
-        let mut wt = vec![0i32; (w * h) as usize];
-        let paint_circle = |wt: &mut Vec<i32>, x: i32, y: i32, weight: i32, r: i32, fall: i32| {
-            for cy in y - r..=y + r {
-                for cx in x - r..=x + r {
-                    let (dx, dy) = (cx - x, cy - y);
-                    if inside(cx, cy) && dx * dx + dy * dy <= r * r {
-                        let d = if fall == 0 { 0 } else { distance(dx, dy) };
-                        wt[at(cx, cy)] += weight - fall * d;
-                    }
-                }
-            }
-        };
-        // Water reached from a cell (0x558fa0 over the ships' grid).
-        let mut sea_label = vec![0u32; (w * h) as usize];
-        let mut seas = 0;
-        for y in 0..h {
-            for x in 0..w {
-                if !water(x, y) || sea_label[at(x, y)] != 0 {
-                    continue;
-                }
-                seas += 1;
-                sea_label[at(x, y)] = seas;
-                let mut stack = vec![(x, y)];
-                while let Some((cx, cy)) = stack.pop() {
-                    for &(dx, dy) in &DIR {
-                        let (nx, ny) = (cx + dx, cy + dy);
-                        if inside(nx, ny) && water(nx, ny) && sea_label[at(nx, ny)] == 0 {
-                            sea_label[at(nx, ny)] = seas;
-                            stack.push((nx, ny));
-                        }
-                    }
-                }
-            }
-        }
-        let reached_from = |x: i32, y: i32| -> Vec<u32> {
-            let mut v: Vec<u32> = DIR
-                .iter()
-                .chain(std::iter::once(&(0, 0)))
-                .map(|&(dx, dy)| (x + dx, y + dy))
-                .filter(|&(cx, cy)| inside(cx, cy))
-                .map(|(cx, cy)| sea_label[at(cx, cy)])
-                .filter(|&l| l != 0)
-                .collect();
-            if water(x, y) {
-                v = vec![sea_label[at(x, y)]];
-            }
-            v
-        };
-        // Ships and monsters by cell.
-        let mut movers: std::collections::HashMap<(i32, i32), Vec<usize>> = Default::default();
-        for (i, o) in self.objects.iter().enumerate() {
-            if matches!(o.class, ObjectClass::Ship | ObjectClass::Monster(_)) {
-                movers.entry(self.cell_of_obj(o)).or_default().push(i);
-            }
-        }
-        // Deposits by cell (amber 1 cell; fish and leviathan zones).
-        let mut deposit: Vec<Option<(i32, i32)>> = vec![None; (w * h) as usize];
-        for o in &self.objects {
-            let f = &o.record.fields;
-            let (weight, r, x0, y0, dw, dh) = match o.class {
-                ObjectClass::Amber => (5, 5, f.get(6), f.get(7), 1, 1),
-                ObjectClass::FishZone => (
-                    10,
-                    10,
-                    f.get(6),
-                    f.get(7),
-                    f.get(8).copied().unwrap_or(1) as i32,
-                    f.get(9).copied().unwrap_or(1) as i32,
-                ),
-                ObjectClass::WhaleZone => (
-                    10,
-                    10,
-                    f.get(7),
-                    f.get(8),
-                    f.get(9).copied().unwrap_or(1) as i32,
-                    f.get(10).copied().unwrap_or(1) as i32,
-                ),
-                _ => continue,
-            };
-            let (Some(&x0), Some(&y0)) = (x0, y0) else {
-                continue;
-            };
-            for y in y0 as i32..y0 as i32 + dh.max(1) {
-                for x in x0 as i32..x0 as i32 + dw.max(1) {
-                    if inside(x, y) {
-                        deposit[at(x, y)] = Some((weight, r));
-                    }
-                }
-            }
-        }
-        // The cells of each lair's island and its spread (0x40b5a0).
-        let land_bytes: Vec<u8> = (0..h)
-            .flat_map(|y| (0..w).map(move |x| (x, y)))
-            .map(|(x, y)| if water(x, y) { 0xff } else { shape(x, y) })
-            .collect();
-        let islands = regions(&land_bytes, w, h);
         for y in 0..h - 1 {
             for x in 0..w - 1 {
-                let k = at(x, y);
-                let site = (0..4).all(|q| {
-                    let (cx, cy) = (x + q % 2, y + q / 2);
-                    interior(cx, cy)
-                }) && (y - 1..=y + 2)
-                    .any(|ry| (x - 1..=x + 2).any(|rx| inside(rx, ry) && shore_cell(rx, ry)));
+                let site = (0..4).all(|q| interior(x + q % 2, y + q / 2))
+                    && (y - 1..=y + 2)
+                        .any(|ry| (x - 1..=x + 2).any(|rx| inside(rx, ry) && shore_cell(rx, ry)));
                 if site {
                     sites.push(Spot {
                         x,
@@ -894,98 +795,13 @@ impl Scene {
                         dir: 0,
                         score: 0,
                     });
-                    continue;
-                }
-                // Its influences (0x40b050).
-                if let Some(i) = standing[k] {
-                    let o = &self.objects[i];
-                    let anchor = o.cell == Some((x, y));
-                    match (o.class, o.owner) {
-                        (ObjectClass::Building(c), Some(ow)) if ow != owner => {
-                            if matches!(c, SETTLEMENT | TOWN) {
-                                if anchor {
-                                    paint_circle(&mut wt, x, y, -10, 10, 0);
-                                }
-                            } else {
-                                paint_circle(&mut wt, x, y, -10, 10, 0);
-                            }
-                        }
-                        (ObjectClass::Barbarian(_), _) => paint_circle(&mut wt, x, y, -10, 10, 0),
-                        (ObjectClass::Building(_), Some(_)) if anchor => {
-                            paint_circle(&mut wt, x, y, -5, 5, -1)
-                        }
-                        (ObjectClass::Castle(_), _) => paint_circle(&mut wt, x, y, -20, 0, -1),
-                        (ObjectClass::HarpyNest, _) => {
-                            for cy in y - 2..=y + 2 {
-                                for cx in x - 2..=x + 2 {
-                                    if inside(cx, cy) && cx > 0 {
-                                        wt[at(cx, cy)] += -20 + distance(cx - x, cy - y);
-                                    }
-                                }
-                            }
-                        }
-                        (ObjectClass::CreatureSpawn, _) => {
-                            let isle = islands[k];
-                            if isle == 0 {
-                                continue;
-                            }
-                            let mut f = vec![0i32; (w * h) as usize];
-                            for cy in 0..h {
-                                for cx in 0..w {
-                                    if islands[at(cx, cy)] != isle || (cx, cy) == (x, y) {
-                                        continue;
-                                    }
-                                    f[at(cx, cy)] += 1;
-                                    for (dy, row) in DISK13.iter().enumerate() {
-                                        for (dx, c) in row.bytes().enumerate() {
-                                            let (px, py) = (cx + dx as i32 - 6, cy + dy as i32 - 6);
-                                            if c == b'#' && inside(px, py) {
-                                                f[at(px, py)] += 1;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            for (v, fv) in wt.iter_mut().zip(&f) {
-                                *v -= 30 * fv;
-                            }
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-                if let Some((weight, r)) = deposit[k] {
-                    let reach = reached_from(x, y);
-                    for cy in y - r..=y + r {
-                        for cx in x - r..=x + r {
-                            if !inside(cx, cy) {
-                                continue;
-                            }
-                            let d = distance(cx - x, cy - y);
-                            let wet = (cx, cy) == (x, y) || reach.contains(&sea_label[at(cx, cy)]);
-                            if d <= r && wet && (water(cx, cy) || (cx, cy) == (x, y)) {
-                                wt[at(cx, cy)] += weight - d;
-                            }
-                        }
-                    }
-                    continue;
-                }
-                // Others' ships, and the monsters on the cell.
-                for &i in movers.get(&(x, y)).into_iter().flatten() {
-                    let o = &self.objects[i];
-                    match (o.class, o.owner) {
-                        (ObjectClass::Ship, Some(ow)) if ow != owner => {
-                            paint_circle(&mut wt, x, y, -5, 5, 0)
-                        }
-                        (ObjectClass::Monster(0x1fa | 0x1fd), _) => {
-                            paint_circle(&mut wt, x, y, -20, 5, -1)
-                        }
-                        (ObjectClass::Monster(0x1fb), _) => wt[k] -= 20,
-                        _ => {}
-                    }
                 }
             }
         }
+        let is_site: HashSet<(i32, i32)> = sites.iter().map(|s| (s.x, s.y)).collect();
+        let wt = self.influence_map(owner, &SITE_WEIGHTS, (0, 0, w - 1, h - 1), &|x, y| {
+            is_site.contains(&(x, y))
+        });
         // Regions big enough: 9 inland and 2 shore cells.
         let mut counts: std::collections::HashMap<u32, (i32, i32)> = Default::default();
         for y in 0..h {
@@ -1031,12 +847,331 @@ impl Scene {
         sites.first().map(|s| (s.x, s.y))
     }
 
+    /// The weight map of what lies about (0x40b050 collecting over the
+    /// cells of `scan` but those `skip`ped, 0x40bbf0 painting) by `table`
+    /// (0x5945c0 for settlements' sites, 0x594470 for waiting zones): a
+    /// (weight, radius, falloff) for each kind, a weight of 0 left out.
+    pub(super) fn influence_map(
+        &self,
+        owner: (u32, u32),
+        table: &Influence,
+        scan: (i32, i32, i32, i32),
+        skip: &dyn Fn(i32, i32) -> bool,
+    ) -> Vec<i32> {
+        let g = &self.grid;
+        let (w, h) = (g.width as i32, g.height as i32);
+        let inside = |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y);
+        let at = |x: i32, y: i32| (y * w + x) as usize;
+        let water = |x: i32, y: i32| self.nav.is_water(x, y);
+        let shape = |x: i32, y: i32| {
+            SHAPE
+                .get(g.get(0, x as u32, y as u32).variant as usize)
+                .copied()
+                .unwrap_or(0)
+        };
+        let mut wt = vec![0i32; (w * h) as usize];
+        let paint = |wt: &mut Vec<i32>, x: i32, y: i32, (weight, r, fall): (i32, i32, i32)| {
+            if weight == 0 {
+                return;
+            }
+            for cy in y - r..=y + r {
+                for cx in x - r..=x + r {
+                    let (dx, dy) = (cx - x, cy - y);
+                    if inside(cx, cy) && dx * dx + dy * dy <= r * r {
+                        let d = if fall == 0 { 0 } else { distance(dx, dy) };
+                        wt[at(cx, cy)] += weight - fall * d;
+                    }
+                }
+            }
+        };
+        let mut standing: Vec<Option<usize>> = vec![None; (w * h) as usize];
+        let mut lava: Vec<Option<usize>> = vec![None; (w * h) as usize];
+        for (i, o) in self.objects.iter().enumerate() {
+            let fixed = matches!(
+                o.class,
+                ObjectClass::Building(_)
+                    | ObjectClass::Barbarian(_)
+                    | ObjectClass::Castle(_)
+                    | ObjectClass::HarpyNest
+                    | ObjectClass::CreatureSpawn
+                    | ObjectClass::HeroHouse
+            );
+            if let (true, Some((cx, cy))) = (fixed, o.cell) {
+                let n = building_cells(o);
+                for y in cy..cy + n {
+                    for x in cx..cx + n {
+                        if inside(x, y) {
+                            standing[at(x, y)] = Some(i);
+                        }
+                    }
+                }
+            }
+            if o.class == ObjectClass::Lava {
+                let f = |k| o.record.field(k).unwrap_or(0) as i32;
+                for y in f(7)..f(7) + 2 {
+                    for x in f(6)..f(6) + 2 {
+                        if inside(x, y) {
+                            lava[at(x, y)] = Some(i);
+                        }
+                    }
+                }
+            }
+        }
+        // Water reached from a cell (0x558fa0 over the ships' grid).
+        let mut sea_label = vec![0u32; (w * h) as usize];
+        let mut seas = 0;
+        for y in 0..h {
+            for x in 0..w {
+                if !water(x, y) || sea_label[at(x, y)] != 0 {
+                    continue;
+                }
+                seas += 1;
+                sea_label[at(x, y)] = seas;
+                let mut stack = vec![(x, y)];
+                while let Some((cx, cy)) = stack.pop() {
+                    for &(dx, dy) in &DIR {
+                        let (nx, ny) = (cx + dx, cy + dy);
+                        if inside(nx, ny) && water(nx, ny) && sea_label[at(nx, ny)] == 0 {
+                            sea_label[at(nx, ny)] = seas;
+                            stack.push((nx, ny));
+                        }
+                    }
+                }
+            }
+        }
+        let reached_from = |x: i32, y: i32| -> Vec<u32> {
+            if water(x, y) {
+                return vec![sea_label[at(x, y)]];
+            }
+            DIR.iter()
+                .map(|&(dx, dy)| (x + dx, y + dy))
+                .filter(|&(cx, cy)| inside(cx, cy))
+                .map(|(cx, cy)| sea_label[at(cx, cy)])
+                .filter(|&l| l != 0)
+                .collect()
+        };
+        let mut movers: std::collections::HashMap<(i32, i32), Vec<usize>> = Default::default();
+        for (i, o) in self.objects.iter().enumerate() {
+            if matches!(o.class, ObjectClass::Ship | ObjectClass::Monster(_)) {
+                movers.entry(self.cell_of_obj(o)).or_default().push(i);
+            }
+        }
+        // Deposits by cell (amber 1 cell; fish and leviathan zones).
+        let mut deposit: Vec<Option<(i32, i32, i32)>> = vec![None; (w * h) as usize];
+        for o in &self.objects {
+            let f = &o.record.fields;
+            let (wrf, x0, y0, dw, dh) = match o.class {
+                ObjectClass::Amber => (table.amber, f.get(6), f.get(7), 1, 1),
+                ObjectClass::FishZone => (
+                    table.fish,
+                    f.get(6),
+                    f.get(7),
+                    f.get(8).copied().unwrap_or(1) as i32,
+                    f.get(9).copied().unwrap_or(1) as i32,
+                ),
+                ObjectClass::WhaleZone => (
+                    table.whale,
+                    f.get(7),
+                    f.get(8),
+                    f.get(9).copied().unwrap_or(1) as i32,
+                    f.get(10).copied().unwrap_or(1) as i32,
+                ),
+                _ => continue,
+            };
+            let (Some(&x0), Some(&y0)) = (x0, y0) else {
+                continue;
+            };
+            for y in y0 as i32..y0 as i32 + dh.max(1) {
+                for x in x0 as i32..x0 as i32 + dw.max(1) {
+                    if inside(x, y) {
+                        deposit[at(x, y)] = Some(wrf);
+                    }
+                }
+            }
+        }
+        // The cells of each lair's island and its spread (0x40b5a0).
+        let land_bytes: Vec<u8> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| if water(x, y) { 0xff } else { shape(x, y) })
+            .collect();
+        let islands = regions(&land_bytes, w, h);
+        let (sx, sy, sw, sh) = scan;
+        for y in sy.max(0)..(sy + sh).min(h) {
+            for x in sx.max(0)..(sx + sw).min(w) {
+                if skip(x, y) {
+                    continue;
+                }
+                let k = at(x, y);
+                if let Some(i) = standing[k] {
+                    let o = &self.objects[i];
+                    let anchor = o.cell == Some((x, y));
+                    match (o.class, o.owner) {
+                        (ObjectClass::Building(c), Some(ow)) if ow != owner => {
+                            if matches!(c, SETTLEMENT | TOWN) {
+                                if anchor {
+                                    paint(&mut wt, x, y, table.foe_town);
+                                }
+                            } else if (0x34..=0x36).contains(&c) {
+                                paint(&mut wt, x, y, table.foe_fort);
+                            } else {
+                                paint(&mut wt, x, y, table.foe_building);
+                            }
+                        }
+                        (ObjectClass::Barbarian(_), _) => paint(&mut wt, x, y, table.foe_fort),
+                        (ObjectClass::Building(_), Some(_)) if anchor => {
+                            paint(&mut wt, x, y, table.own)
+                        }
+                        (ObjectClass::Castle(_), _) => paint(&mut wt, x, y, table.castle),
+                        (ObjectClass::HarpyNest, _) if table.nest.0 != 0 => {
+                            for cy in y - 2..=y + 2 {
+                                for cx in x - 2..=x + 2 {
+                                    if inside(cx, cy) && cx > 0 {
+                                        wt[at(cx, cy)] +=
+                                            table.nest.0 - table.nest.2 * distance(cx - x, cy - y);
+                                    }
+                                }
+                            }
+                        }
+                        (ObjectClass::CreatureSpawn, _) if table.lair != 0 => {
+                            let isle = islands[k];
+                            if isle == 0 {
+                                continue;
+                            }
+                            let mut f = vec![0i32; (w * h) as usize];
+                            for cy in 0..h {
+                                for cx in 0..w {
+                                    if islands[at(cx, cy)] != isle || (cx, cy) == (x, y) {
+                                        continue;
+                                    }
+                                    f[at(cx, cy)] += 1;
+                                    for (dy, row) in DISK13.iter().enumerate() {
+                                        for (dx, c) in row.bytes().enumerate() {
+                                            let (px, py) = (cx + dx as i32 - 6, cy + dy as i32 - 6);
+                                            if c == b'#' && inside(px, py) {
+                                                f[at(px, py)] += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            for (v, fv) in wt.iter_mut().zip(&f) {
+                                *v += table.lair * fv;
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                if let Some((weight, r, fall)) = deposit[k] {
+                    if weight != 0 {
+                        let reach = reached_from(x, y);
+                        for cy in y - r..=y + r {
+                            for cx in x - r..=x + r {
+                                if !inside(cx, cy) {
+                                    continue;
+                                }
+                                let d = distance(cx - x, cy - y);
+                                let wet =
+                                    (cx, cy) == (x, y) || reach.contains(&sea_label[at(cx, cy)]);
+                                if d <= r && wet && (water(cx, cy) || (cx, cy) == (x, y)) {
+                                    wt[at(cx, cy)] += weight - fall * d;
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+                // Others' ships, the monsters, and a volcano's lava: its
+                // strength times the weight over the square of its radius.
+                for &i in movers.get(&(x, y)).into_iter().flatten() {
+                    let o = &self.objects[i];
+                    match (o.class, o.owner) {
+                        (ObjectClass::Ship, Some(ow)) if ow != owner => {
+                            paint(&mut wt, x, y, table.foe_ship)
+                        }
+                        (ObjectClass::Monster(0x1fa | 0x1fd), _) => {
+                            paint(&mut wt, x, y, table.medusa)
+                        }
+                        (ObjectClass::Monster(0x1fb), _) => wt[k] += table.medusa.0,
+                        _ => {}
+                    }
+                }
+                if let Some(i) = lava[k] {
+                    let f = |n| self.objects[i].record.field(n).unwrap_or(0) as i32;
+                    let (cx, cy, strength, r) = (f(6), f(7), f(8), f(9));
+                    if strength != 0 && table.lava != 0 {
+                        for yy in cy - r..=cy + r {
+                            for xx in cx - r..=cx + r {
+                                if inside(xx, yy) {
+                                    wt[at(xx, yy)] += strength * table.lava;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        wt
+    }
+
     fn cell_of_obj(&self, o: &MapObject) -> (i32, i32) {
         let t = TILE_SIZE as f32;
         o.cell
             .unwrap_or(((o.x / t).floor() as i32, (o.y / t).floor() as i32))
     }
 }
+
+/// The weights of what lies about, each (weight, radius, falloff) but
+/// the lair's, the nest's (weight and falloff) and the lava's weights.
+pub(super) struct Influence {
+    pub own: (i32, i32, i32),
+    pub foe_town: (i32, i32, i32),
+    pub foe_fort: (i32, i32, i32),
+    pub foe_building: (i32, i32, i32),
+    pub foe_ship: (i32, i32, i32),
+    pub amber: (i32, i32, i32),
+    pub fish: (i32, i32, i32),
+    pub whale: (i32, i32, i32),
+    pub lair: i32,
+    pub nest: (i32, i32, i32),
+    pub castle: (i32, i32, i32),
+    pub medusa: (i32, i32, i32),
+    pub lava: i32,
+}
+
+/// For settlements' sites (0x5945c0).
+pub(super) const SITE_WEIGHTS: Influence = Influence {
+    own: (-5, 5, -1),
+    foe_town: (-10, 10, 0),
+    foe_fort: (-10, 10, 0),
+    foe_building: (-10, 10, 0),
+    foe_ship: (-5, 5, 0),
+    amber: (5, 5, 1),
+    fish: (10, 10, 1),
+    whale: (10, 10, 1),
+    lair: -30,
+    nest: (-20, 0, -1),
+    castle: (-20, 0, -1),
+    medusa: (-20, 5, -1),
+    lava: -10,
+};
+
+/// For waiting zones (0x594470).
+pub(super) const ZONE_WEIGHTS: Influence = Influence {
+    own: (20, 10, 0),
+    foe_town: (-20, 10, 0),
+    foe_fort: (-20, 10, 0),
+    foe_building: (0, 10, 0),
+    foe_ship: (-20, 10, 0),
+    amber: (0, 1, 1),
+    fish: (0, 1, 1),
+    whale: (0, 1, 1),
+    lair: -10,
+    nest: (-10, 0, -1),
+    castle: (-10, 0, -1),
+    medusa: (-10, 5, -1),
+    lava: -1,
+};
 
 /// The C runtime's `qsort` (0x58791f, Visual C++ 6): not stable, so ties
 /// fall where it leaves them.

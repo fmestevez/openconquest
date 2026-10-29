@@ -1418,6 +1418,86 @@ impl Scene {
         route
     }
 
+    /// Ships under way plan their route again every 25 ticks (0x4a6150
+    /// with 0x4a5740, not waited): the ships lying still within 3 cells
+    /// and those it remembers are closed (and remembered), and a route
+    /// round them taken when the present one runs into one.
+    fn refresh_routes(&mut self, dt: f32) {
+        let t = TILE_SIZE as f32;
+        let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
+        let every = crate::clock::ticks(25);
+        let due: Vec<usize> = (0..self.objects.len())
+            .filter(|&i| {
+                let Some(s) = self.objects[i].ship.as_mut() else {
+                    return false;
+                };
+                s.planned += dt;
+                let moving = !s.path.is_empty() && s.blocked <= 0.0 && s.grapple.is_none();
+                if moving && s.planned >= every {
+                    s.planned = 0.0;
+                    return true;
+                }
+                false
+            })
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        // Ships lying still or held, and those not under way.
+        let still: HashMap<(i32, i32), bool> = self
+            .objects
+            .iter()
+            .filter_map(|o| {
+                let s = o.ship.as_ref()?;
+                let lying = s.path.is_empty() || s.stalled >= crate::clock::ticks(50);
+                let under_way = !s.path.is_empty() && s.stalled <= 0.0;
+                Some((
+                    cell_of(o.x, o.y),
+                    lying || s.grapple.is_some() || !under_way,
+                ))
+            })
+            .collect();
+        for i in due {
+            let o = &self.objects[i];
+            let here = cell_of(o.x, o.y);
+            let s = o.ship.as_ref().unwrap();
+            if s.ram_run.is_some() || s.face.is_some() {
+                continue;
+            }
+            let mut memory = s.remembered.clone();
+            memory.retain(|c| still.get(c).copied().unwrap_or(false));
+            let mut closed: HashSet<(i32, i32)> = memory.iter().copied().collect();
+            for (&c, &lying) in &still {
+                if lying && c != here && (c.0 - here.0).abs() <= 3 && (c.1 - here.1).abs() <= 3 {
+                    closed.insert(c);
+                    if !memory.contains(&c) {
+                        memory.push(c);
+                    }
+                }
+            }
+            let Some(&(lx, ly)) = s.path.back() else {
+                continue;
+            };
+            // Its goal stays open (0x4a5740 reopens it).
+            closed.remove(&cell_of(lx, ly));
+            let blocked = s
+                .path
+                .iter()
+                .any(|&(px, py)| closed.contains(&cell_of(px, py)));
+            let start = (o.x, o.y);
+            let route = if blocked {
+                self.plan_route_avoiding(i, start, lx, ly, &closed)
+            } else {
+                None
+            };
+            let s = self.objects[i].ship.as_mut().unwrap();
+            s.remembered = memory;
+            if let Some(path) = route.filter(|p| !p.is_empty()) {
+                s.path = path;
+            }
+        }
+    }
+
     /// Cancels a ship's route.
     pub fn stop(&mut self, id: u32) {
         if let Some(i) = self.object_index(id) {
@@ -1976,6 +2056,7 @@ impl Scene {
             }
         }
         self.go_round(held);
+        self.refresh_routes(dt);
         if moved {
             // Keep painter's order as ships move.
             self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
