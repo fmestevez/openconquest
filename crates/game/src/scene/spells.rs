@@ -8,8 +8,24 @@ impl Scene {
         self.owned_buildings() & 1 << (temple.class() - SETTLEMENT) != 0
     }
 
-    /// Starts learning the next spell of `temple`.
-    pub fn learn_spell(&mut self, temple: Temple) -> Result<(), String> {
+    /// The temple building a temple's work goes on at: `site`, the one
+    /// whose command it was, else the player's first standing temple of
+    /// the kind.
+    fn temple_site(&self, temple: Temple, site: Option<u32>) -> Option<u32> {
+        site.or_else(|| {
+            self.objects
+                .iter()
+                .find(|o| {
+                    o.class == ObjectClass::Building(temple.class())
+                        && self.is_own(o)
+                        && self.construction_at(o.id).is_none()
+                })
+                .map(|o| o.id)
+        })
+    }
+
+    /// Starts learning the next spell of `temple`, at the temple `site`.
+    pub fn learn_spell(&mut self, temple: Temple, site: Option<u32>) -> Result<(), String> {
         if !self.has_temple(temple) {
             return Err("You need a temple for that".into());
         }
@@ -23,7 +39,8 @@ impl Scene {
             return Err("Not enough amber".into());
         }
         self.amber -= magic::LEARN_COST;
-        self.magic.start_learning(temple);
+        let site = self.temple_site(temple, site);
+        self.magic.start_learning(temple, site);
         Ok(())
     }
 
@@ -170,9 +187,11 @@ impl Scene {
     }
 
     /// Makes the player's weapons stronger for a while.
-    pub fn cast_flame(&mut self) -> Result<(), String> {
+    /// It brews at the Temple of War `site`.
+    pub fn cast_flame(&mut self, site: Option<u32>) -> Result<(), String> {
         self.pay_spell(Spell::Flame)?;
-        self.magic.brew_flame();
+        let site = self.temple_site(Temple::War, site);
+        self.magic.brew_flame(site);
         self.sounds.push(("fireball", f32::NAN, f32::NAN));
         Ok(())
     }

@@ -1628,7 +1628,16 @@ stop (0x4a38f0, then 4), 2 turning on the spot (0x4a3320), 3 at a cell
 choosing the next (0x4a3560: the step checked by 0x4a3a70; refused, it
 waits; free, under way as 5, or turning as 2 for more than 45 degrees), 4
 slowing to a stop (0x4a2f60), 5 under way between cells, 6 held by a
-boarding, ram or dock (0x4b5fbf, 0x4b7452, 0x4c3410, 0x4ae470). The tick
+boarding (the boarded ship once hooked, 0x4c3410; a boarder lying by a
+fort it boards, 0x4b5df0 / 0x4b73a0; task step 0x11 with a contact,
+0x4adef0). A rammer from its contact on and a boarder at its hook cell go
+to 0 (0x4c2425, 0x4c29aa, 0x4a3560: their contact `+0x6a9` = 6). The
+port keeps the state at its moves' events: 2 while the hull turns, 5 once
+the next cell is reserved, 4 once in the route's last cell, 3 at a route
+point and while a refused step holds it (0 after 50 ticks), 0 with no
+route or at its end; 1 is never set (the port's stop is at once). Not
+settled: whether a ship mended in a dock is in 6 (the port passes it over
+as before) and which state the prey of a ram ends in. The tick
 stamps +0x58d every frame but in state 3, so a ship waiting there 50 ticks
 (0x4a374a) falls to state 0 with its route kept, where the push rule
 applies to it.
@@ -2272,8 +2281,22 @@ way is `min(v + accel, top) / 2` (0x4a3f40); it boards at half strength
 smithy, studio or town's work stands still and its menu's buttons are off
 (0x423a00); when the lime is out the work starts again from when it struck
 (`+0x124` = `+0x14c`). Limed pictures are drawn through 0x5c1758 (0x4df510).
-Not ported: the temples' learning standing still (ours is a player's, not
-a temple's), and what LandObj vtable +0x70 (skipped while limed) does.
+
+LandObj's tick 0x425990 calls vtable +0x70 only while the building is
+busy (+0x10c), idle (+0xa4 1), not limed (+0x144 0) and on job 0xff
+(mending): +0x70 is the mending step, 0x425100 for every class but the
+fortress (0x419ba0) and the barbarian structure (0x40eba0), which call it
+and then mend their units. So a limed building's mending stands still, no
+step and nothing paid; on expiry `+0x124` is the lime's start and steps go
+on. The temples (0x438300, 0x439260) run 0x427f50 first, which ends with
+0x425990, then their own work, returning while limed: the learning (100 /
+200 ticks) and the Flame (250) belong to the temple building, stand still
+while it is limed, and on expiry count from when the lime struck, so they
+may end on the expiry tick. After a spell is learnt, while fewer than six
+are known, the spell at 0x596da4 (0x596ea4) + known x 4 is tested, which is
+one entry before the order at 0x596da8 (0x596ea8): the spell just learnt,
+then each one passed over; while its permission bit (player +0x45, through
+0x42fd70) is clear, known goes up by one more.
 
 ## Projectiles
 
@@ -2532,9 +2555,11 @@ hundredth of its maximum, dying at none; its mode falls to 1 below 51 %
 and 0 below 11 %; it chooses (0x4911f0): the ship that last struck it,
 else over its scan an enemy monster under water weaker than it (eaten at
 once: it loses 80 % of the other's strength), else the enemy ships on
-their own cells not held by a boarding, ram or dock (a phantom seen one
-time in ten), weighted 100 lying still, 80 turning, 50 under way (and 70,
-90, 60 for the original's other move states), the most still kept and
+their own cells not in move state 6 (a phantom seen one time in ten),
+weighted by their move state `+0x58c`: 0 lying still 100, 1 told to stop
+70, 2 turning 80, 3 at a cell 90, 4 braking 60, 5 under way 50 (see Ships
+in each other's way; a rammer at its contact and a boarder at its hook lie
+in 0, the boarded ship in 6), the most still kept and
 one picked by how near a bite brings it to sinking (`(100000 - v) / 100`
 if it would sink, else `/ 300`; the pick indexes the whole list, so it
 may fall on a less still one, and then it swims instead); it then jumps
@@ -2553,9 +2578,24 @@ event 96 `apse`), swimming (`UMON<t>1<h>`, 2-3 ticks a frame) and diving
 (`UMON<t>2<h>`). Struck while up it hurries (a frame a tick). Lightning
 on its cell: under water half its maximum and a new wait, up its death;
 on a cell about, only up, half. Dying (state 6) shows `UMON040` frames
-3-35, 2 ticks each, event 107 `deamons`. Not ported: the treasure it
-takes up as it swims (0x491a40), and the test of the cell's +8 object
-(vfunc +0x30) in 0x402ee0.
+3-35, 2 ticks each, event 107 `deamons`.
+
+Its treasures (`+0xb9` count, `+0xbd` two entries of five dwords: the
+treasure record's fields 4-8). Each time it enters state 2 (swimming,
+0x491a40-0x491ab0), with fewer than `[0x5c1136]` = 2 carried, it takes the
+treasure (class 0x2bc, state not 5) on its cell's third place: message
+0x158c1 to it hands over the five dwords, and the treasure (0x4074d0,
+0x406c80(3)) leaves its cell with sound event 272 (`trea2`); no player is
+told. Message 0x158c1 to the monster adds one the same way, 0x158c2 asks
+whether it has room. A map record gives it field 17 as its count, raw, and
+fields 18-27 as the two entries (message 2; the port keeps at most two).
+Gone (0x491ed0, after dying or when its dying cell is refused) it lays each
+back at its cell (0x520c70: world message 0x16e3 with a treasure record,
+the entry at fields 4-8, the cell at 9 and 10). Not decoded: the treasure's
+state 5 and the callers of 0x493620 (a carried entry's kind); the handler
+of world message 0x16e3, so whether a message is shown (the port says "...
+lies in the wreckage", which nothing in 0x491ed0 or 0x520c70 sends). Not
+ported: the test of the cell's +8 object (vfunc +0x30) in 0x402ee0.
 
 The Gorgon (MedusaClassTy, `gorgona.cpp`) rests 200-500 ticks (0x4019d0),
 rises (`GORG1`, 30 frames), stares 1-3 times (`GORG2`, 28 frames, at
@@ -3558,8 +3598,8 @@ the best (0x408bf0) with fewer cells beside the harbour, then more weight
 (over its passable cells), then nearer the town (`max + min / 2` to its
 middle), then more open cells, fewer on the lanes, more passable).
 
-**Town orders** are run by the town's land fleet (`LFleet.cpp`,
-0x42b910, every 50 ticks, by priority): the table at 0x5ac7c8 (7 dwords:
+**Town orders** are run by the town's land fleet (`LFleet.cpp`, see
+The land fleet's pass below): the table at 0x5ac7c8 (7 dwords:
 order, flags, ..., parts, part list) splits each into parts of 0xcc bytes
 (operation, flags (1, 2, 4 wait for the price; 0x20 done if it is there
 already), class or number, field 20 what it waits for: 0 nothing, 1 the
@@ -3575,7 +3615,58 @@ small, big fort; 96 repairs; 97 a port; 98 a shipyard and dock;
 117 the temples' spells; 118-120 arming, ram, armour; 128-130 the
 workshop; 131 the smithy's armour kinds, 132 its ram kinds; 133 rigging; 134 the nation's unique ships (0x73 Greek, 0x74
 Persian). A part waits for its price as long as it takes and gives up
-after 10-25 passes otherwise.
+after 10-25 counting passes otherwise. A flotilla's ship request is order
+0x51-0x5b by type, and 0x5c for type 0 (0x47fe60, table 0x47ff64), whose
+part has field 8 = 1: the price tests are skipped (0x428f20 passes it to
+0x43da20 as param_7; -2/-3 become 0) and the yard command 0x20 carries
+byte 0xf = 0xff, which 0x416a40 takes as "do not pay": the boat is built
+free, without the "ship built" sound (0xe4-0xe7). (The yard's queued
+branch, a berth taken, would charge, but the town only forwards to a yard
+whose berth is free.) A ship part refused with -1 (the yard idle but its
+berth taken, or the town busy) waits without counting down (part flag 4)
+and every 25 counting passes sends the town command 0x28 (0x428f20 at
+0x429348): not ported (the port has no berths), nor decoded what 0x28 does.
+
+**The land fleet's pass** (0x42b910, the fleet's message 0 every tick;
+constructor 0x42b370). Fields: +0x14 the last pass started a part, +0x18
+"the previous pass started nothing", +0x1c the last pass's tick, +0x20 the
+next order id, +0x24 the priority threshold (0x7fff, changed only by a
+queued op-0x3f0 message, which no code builds), +0x28 woken, +0x30 the
+queue (0xe4-byte entries by priority, highest first, after their equals,
+compared unsigned: 0x42c430), +0x34 the orders. A pass runs 50 ticks after
+one that started nothing; after one that started a part, only once woken
+and 3 ticks after it (0x42b94c-0x42b98d). Wakers: the walk itself for every
+entry it finds done or failed, 0x42c050 (an order put or refused), and the
+town at the end of each command it handles (0x441ba0 at 0x44393d; the port
+wakes at a part's start, its commands taking effect at once). A town order
+is asked as an op-1000 entry (0x482f50 -> 0x4a09d0): dwords op, flags
+(request +0x20, 0), priority (the key), code, order flags (+0x24: 0x88 the
+base scripts', 0xd8 their order 0x60, 0x488 the ship requests; 0x47d2e0,
+0x47fe60), the key again, the base's town, request +0x14. The pass:
+(A) each order in state 0 or 2 queues the parts it is ready for (field 20:
+0 and 3 at once, 1 once the part of field 21 is done (failed: the order
+fails), 2 once all before are done; a part of field 20 = 3 under way is
+queued again whenever no entry of its op waits; a failed part is queued
+again with order flag 0x10, else the order fails); an order all done with
+flag 0x40 starts over; one ended marks its op-1000 entry done or failed and
+is forgotten (its parts still queued run on). (B) +0x18 = !+0x14, +0x14 =
++0x28 = 0, then each entry in turn: waiting ones are started (op 1000 by
+0x42c050: code 0x86 to 0x73 / 0x74 / 0 by nation, 0 refused; the order put
+before the first of no higher priority, with flag 0x80 every part of the
+order's priority, its entry under way), under-way ones checked (0x428e10,
+0x4297d0, 0x429e10, 0x42a2f0, 0x42b080); +0x14 is set when a start leaves
+its entry under way or done, and **the walk stops there**: one start a pass;
+done or failed parts write back to their order and leave the queue; a
+waiting entry at or above +0x24 stops it too. Waiting tries (0x595170: 20,
+25, 10 by op) and under-way waits (0x595198) count down only when +0x18 is
+set. A build done (0x428e10) has every other build of the class under way
+at the town count one more before it and wait afresh. The asker reads its
+entry by its 20 dwords (0x482ff0 -> 0x42c870): its state, done or failed
+taking it off the queue, 5 if none (a request then fails, 0x480270; the
+base script waits on, 0x47d2e0). Order 0x60 (flags 0xd8) never ends: it
+repeats and restarts its failed part; the base script does not wait for it.
+Not settled: the tick the town's command reaches it (0x520cc0); which towns
+have +0x1bc (the waker's test); a brain's data lowering +0x24.
 
 **Fights.** Message 0x5d9c (an object of the player hit): at most every
 50-100 ticks. A fleet weaker than the enemies about the shooter

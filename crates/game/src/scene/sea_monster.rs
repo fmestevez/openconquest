@@ -225,16 +225,23 @@ impl Scene {
     /// a reef, a whirlpool, a flock, a volcano's crater; true if a
     /// treasure.
     fn third_place(&self, cell: (i32, i32)) -> Option<bool> {
-        self.objects.iter().find_map(|o| {
+        self.third_place_object(cell)
+            .map(|k| self.objects[k].class == ObjectClass::Treasure)
+    }
+
+    /// The object on a cell's third place (+0x1c), by index.
+    fn third_place_object(&self, cell: (i32, i32)) -> Option<usize> {
+        (0..self.objects.len()).find(|&k| {
+            let o = &self.objects[k];
             let f = |k| o.record.field(k).unwrap_or(0) as i32;
             let at = match o.class {
                 ObjectClass::Treasure => Self::cell_at(o),
                 ObjectClass::Reef(_) | ObjectClass::Whirlpool => (f(5), f(6)),
                 ObjectClass::Sheep => (f(4), f(5)),
                 ObjectClass::Lava => (f(6), f(7)),
-                _ => return None,
+                _ => return false,
             };
-            (at == cell).then_some(o.class == ObjectClass::Treasure)
+            at == cell
         })
     }
 
@@ -372,22 +379,26 @@ impl Scene {
                 let Some(k) = self.ship_at(c) else { continue };
                 let o = &self.objects[k];
                 let s = o.ship.as_ref().unwrap();
-                // Held by a boarding, a ram or a dock (move state 6).
-                let held = s.grapple.is_some() || s.ram_run.is_some() || self.in_dock(k);
+                // Held (move state 6) are passed over. (Not settled: whether
+                // a ship mended in a dock is held, 0x4adef0 task step 0x11;
+                // it is kept passed over.)
+                let held = s.move_state == 6 || self.in_dock(k);
                 if !Self::are_enemies(me, o) || held || !self.monster_sees(k, &mut m.rng) {
                     continue;
                 }
                 let Some(from) = self.strike_cell(id, m, here, c) else {
                     continue;
                 };
-                // By what it is about (+0x58c): lying still 100, turning 80,
-                // under way 50 (the port keeps no other move states).
-                let weight = if s.rotation.is_some() {
-                    80
-                } else if s.path.is_empty() && s.velocity == 0.0 {
-                    100
-                } else {
-                    50
+                // By its move state (+0x58c): lying still 100, told to stop
+                // 70, turning 80, at a cell 90, braking 60, under way 50.
+                let weight = match s.move_state {
+                    0 => 100,
+                    1 => 70,
+                    2 => 80,
+                    3 => 90,
+                    4 => 60,
+                    5 => 50,
+                    _ => 0,
                 };
                 // What a bite leaves of its hull (0x4e4bc0).
                 let cb = o.combat.as_ref().unwrap();
@@ -513,8 +524,28 @@ impl Scene {
                     m.rng.next();
                     m.wanted = 1;
                 }
-                // (Not ported: the treasure it takes up on its cell,
-                // 0x491a40-0x491ab0, not decoded.)
+                // With room (fewer than [0x5c1136] = 2 carried) it takes the
+                // treasure on its cell's third place (0x491a40-0x491ab0):
+                // message 0x158c1 hands over the treasure's five dwords
+                // and the treasure goes (0x4074d0, 0x406c80(3): off its
+                // cell, sound event 272). Nothing else is told. (Not
+                // ported: the treasure's state 5, refused, has no
+                // counterpart here; its meaning was not traced.)
+                let id = self.objects[i].id;
+                if self.held.iter().filter(|h| h.0 == id).count() < 2 {
+                    let here = Self::cell_at(&self.objects[i]);
+                    if let Some(g) = self
+                        .third_place_object(here)
+                        .filter(|&g| self.objects[g].class == ObjectClass::Treasure)
+                    {
+                        if let Some(tr) = self.objects[g].treasure {
+                            let (gx, gy) = (self.objects[g].x, self.objects[g].y);
+                            self.objects.remove(g);
+                            self.held.push((id, tr));
+                            self.sounds.push(("trea2", gx, gy));
+                        }
+                    }
+                }
             }
             DIVING => {
                 m.delay = 2;
@@ -838,5 +869,85 @@ impl Scene {
             self.note_destroyed(i);
         }
         self.sea_monster_states.insert(id, m);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each time it comes up to swim, a monster with room (fewer than two
+    /// carried) takes the treasure on its cell (0x491a40): the treasure
+    /// leaves the map with sound event 272 (`trea2`); gone, it lays what
+    /// it carried back at its cell (0x491ed0) (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn sea_monster_takes_treasures_on_its_cell() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let human = scene.human.unwrap();
+        let ship = scene.objects.iter().find(|o| o.ship.is_some()).unwrap();
+        let cell = Scene::cell_at(ship);
+        scene.objects.retain(|o| o.ship.is_none());
+        let me = Some((human.nation, human.slot));
+        scene
+            .spawn_hazard(Spell::Monster, cell.0, cell.1, me, &data, &mut caches)
+            .unwrap();
+        let id = scene.summons[0].0;
+        let i = scene.object_index(id).unwrap();
+        let here = Scene::cell_at(&scene.objects[i]);
+        let (x, y) = (
+            (here.0 as f32 + 0.5) * TILE_SIZE as f32,
+            (here.1 as f32 + 0.5) * TILE_SIZE as f32,
+        );
+        let treasure = |kind: u8| crate::objects::Treasure {
+            kind,
+            param: 0,
+            amount: 700,
+        };
+        let lying = |s: &Scene| {
+            s.objects
+                .iter()
+                .filter(|o| o.class == ObjectClass::Treasure && Scene::cell_at(o) == here)
+                .filter_map(|o| o.treasure.map(|t| t.kind))
+                .collect::<Vec<u8>>()
+        };
+        let mut m = scene.new_sea_monster(i);
+        for (k, kind) in [0u8, 3, 1].into_iter().enumerate() {
+            scene.place_treasure(treasure(kind), x, y, &data, &mut caches);
+            assert_eq!(lying(&scene), [kind]);
+            scene.sounds.clear();
+            let i = scene.object_index(id).unwrap();
+            scene.monster_enter(i, &mut m, SWIMMING, &data, &mut caches);
+            let carried: Vec<u8> = scene
+                .held
+                .iter()
+                .filter(|h| h.0 == id)
+                .map(|h| h.1.kind)
+                .collect();
+            if k < 2 {
+                assert!(lying(&scene).is_empty(), "taken");
+                assert_eq!(carried.len(), k + 1);
+                assert_eq!(scene.sounds.iter().filter(|s| s.0 == "trea2").count(), 1);
+            } else {
+                // Full: the third stays where it lies.
+                assert_eq!(lying(&scene), [kind]);
+                assert_eq!(carried, [0, 3]);
+                assert!(!scene.sounds.iter().any(|s| s.0 == "trea2"));
+            }
+        }
+        // Gone, it lays the two back on its cell.
+        scene.objects.retain(|o| o.class != ObjectClass::Treasure);
+        m.state = GONE;
+        scene.sea_monster_states.insert(id, m);
+        scene.run_sea_monsters(0.04, &data, &mut caches);
+        let mut back = lying(&scene);
+        back.sort();
+        assert_eq!(back, [0, 3]);
+        assert!(!scene.held.iter().any(|h| h.0 == id));
     }
 }

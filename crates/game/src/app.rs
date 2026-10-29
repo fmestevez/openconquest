@@ -3583,17 +3583,22 @@ impl App {
                             _ => None,
                         })
                         .unwrap_or(Temple::Sea);
-                    match self.issue(Order::LearnSpell { temple }) {
+                    match self.issue(Order::LearnSpell {
+                        temple,
+                        site: Some(id),
+                    }) {
                         Ok(_) => self.say("The priests study a new spell"),
                         Err(e) => self.say(e),
                     }
                 }
             }
             c if Spell::of_command(c) == Some(Spell::Wind) => self.page = Page::Wind,
-            c if Spell::of_command(c) == Some(Spell::Flame) => match self.issue(Order::CastFlame) {
-                Ok(_) => self.say("Your weapons burn hotter"),
-                Err(e) => self.say(e),
-            },
+            c if Spell::of_command(c) == Some(Spell::Flame) => {
+                match self.issue(Order::CastFlame { site: Some(id) }) {
+                    Ok(_) => self.say("Your weapons burn hotter"),
+                    Err(e) => self.say(e),
+                }
+            }
             Command(0x57) => self.page = Page::Main,
             c if (magic::WIND_EAST.0..magic::WIND_EAST.0 + 8).contains(&c.0) => {
                 match self.issue(Order::CastWind {

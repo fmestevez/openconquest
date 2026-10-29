@@ -190,10 +190,16 @@ pub enum Order {
         cx: i32,
         cy: i32,
     },
+    /// At the temple `site` (its work, standing still while it is limed).
     LearnSpell {
         temple: Temple,
+        #[serde(default)]
+        site: Option<u32>,
     },
-    CastFlame,
+    CastFlame {
+        #[serde(default)]
+        site: Option<u32>,
+    },
     CastWind {
         direction: u32,
     },
@@ -314,8 +320,8 @@ impl Scene {
                 cx,
                 cy,
             } => done(self.place_building(site, class, cx, cy, data, caches)),
-            LearnSpell { temple } => done(self.learn_spell(temple)),
-            CastFlame => done(self.cast_flame()),
+            LearnSpell { temple, site } => done(self.learn_spell(temple, site)),
+            CastFlame { site } => done(self.cast_flame(site)),
             CastWind { direction } => done(self.cast_wind(direction)),
             CastOn { spell, target } => done(self.cast_on(spell, target, data, caches)),
             CastArea { spell, cx, cy } => done(self.cast_area(spell, cx, cy, data, caches)),

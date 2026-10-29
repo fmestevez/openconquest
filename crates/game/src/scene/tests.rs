@@ -373,8 +373,14 @@ fn temple_magic() {
     let ship = scene.objects.iter().find(|o| o.ship.is_some()).unwrap().id;
     scene.objects.retain(|o| o.ship.is_none() || o.id == ship);
     scene.amber = 50_000;
+    // Every spell allowed (the campaign withholds them: they would be passed
+    // over).
+    scene.permits = crate::permits::Permits::ALL;
     scene.fish = 50_000;
-    assert!(scene.learn_spell(Temple::Sea).is_err(), "no temple yet");
+    assert!(
+        scene.learn_spell(Temple::Sea, None).is_err(),
+        "no temple yet"
+    );
     let home = scene
         .objects
         .iter()
@@ -399,13 +405,16 @@ fn temple_magic() {
             &mut caches,
         )
         .unwrap();
-    assert!(scene.learn_spell(Temple::Sea).is_err(), "still being built");
+    assert!(
+        scene.learn_spell(Temple::Sea, None).is_err(),
+        "still being built"
+    );
     for _ in 0..50 * (economy::BUILDING_SECONDS as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     // Learn the first four: wind, view map, tornado, whirlpool.
     for _ in 0..4 {
-        scene.learn_spell(Temple::Sea).unwrap();
+        scene.learn_spell(Temple::Sea, None).unwrap();
         for _ in 0..50 * (magic::LEARN_SECONDS as usize + 1) {
             scene.update(0.02, &data, &mut caches);
         }
@@ -469,6 +478,7 @@ fn war_magic() {
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
     scene.amber = 200_000;
+    scene.permits = crate::permits::Permits::ALL;
     scene.fish = 200_000;
     let home = scene
         .objects
@@ -488,9 +498,9 @@ fn war_magic() {
         scene.update(0.02, &data, &mut caches);
     }
     for _ in 0..6 {
-        scene.learn_spell(Temple::War).unwrap();
+        scene.learn_spell(Temple::War, None).unwrap();
         for _ in 0..50 * (magic::LEARN_SECONDS as usize + 1) {
-            scene.magic.update(0.02);
+            scene.magic.update(0.02, &[], scene.permits);
         }
     }
     assert!(scene.magic.all_known(Temple::War));
@@ -603,7 +613,7 @@ fn war_magic() {
     }
     assert!(scene.object_index(enemy).is_none(), "struck down");
     // Flame makes our weapons stronger for a while.
-    scene.cast_flame().unwrap();
+    scene.cast_flame(None).unwrap();
     // It brews at the temple first, 250 ticks.
     assert_eq!(scene.flame, 0.0);
     for _ in 0..50 * 11 {
@@ -760,6 +770,9 @@ fn tornado_and_sea_monster() {
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
     let human = scene.human.unwrap();
     scene.amber = 100_000;
+    // Every spell allowed (the campaign withholds them: they would be passed
+    // over).
+    scene.permits = crate::permits::Permits::ALL;
     scene.fish = 100_000;
     let home = scene
         .objects
@@ -779,9 +792,9 @@ fn tornado_and_sea_monster() {
         scene.update(0.02, &data, &mut caches);
     }
     for _ in 0..6 {
-        scene.learn_spell(Temple::Sea).unwrap();
+        scene.learn_spell(Temple::Sea, None).unwrap();
         for _ in 0..50 * (magic::LEARN_SECONDS as usize + 1) {
-            scene.magic.update(0.02);
+            scene.magic.update(0.02, &[], scene.permits);
         }
     }
     // An enemy ship alone at sea.
@@ -6956,6 +6969,134 @@ fn quick_lime_stops_a_towns_work() {
         "from the lime's start: {}",
         t.elapsed
     );
+}
+
+/// A limed building's mending stands still, nothing paid (0x425990 calls
+/// the step 0x425100 only while not limed) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn quick_lime_stops_mending() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let site = scene.own_sites()[0];
+    scene.amber += 100_000;
+    let i = scene.object_index(site).unwrap();
+    let c = scene.objects[i].combat.as_mut().unwrap();
+    c.hull = c.max_hull / 2.0;
+    scene.mend_by(site, site).unwrap();
+    let i = scene.object_index(site).unwrap();
+    scene.lime(i, combat::LIME_BUILDING_TICKS);
+    let hull = |s: &Scene| {
+        s.objects[s.object_index(site).unwrap()]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hull
+    };
+    let (before, amber) = (hull(&scene), scene.amber);
+    for _ in 0..100 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    assert_eq!((hull(&scene), scene.amber), (before, amber), "stands still");
+    for _ in 0..150 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    assert!(hull(&scene) > before, "mended again once the lime is out");
+}
+
+/// A temple's learning and the Flame stand still while the temple is
+/// limed; when the lime wears off they count from when it struck (the
+/// temples' message 0, after 0x425990 set `+0x124` to the lime's start),
+/// and may end at once (0x438300, 0x439260).
+#[test]
+fn quick_lime_stops_a_temples_work() {
+    let mut m = Magic::default();
+    let (sea, war) = (7, 8);
+    m.start_learning(Temple::Sea, Some(sea));
+    m.brew_flame(Some(war));
+    let all = crate::permits::Permits::ALL;
+    m.update(crate::clock::ticks(50), &[], all);
+    m.update(crate::clock::ticks(500), &[sea, war], all);
+    assert_eq!(m.learning(Temple::Sea), Some(crate::clock::ticks(50)));
+    assert!(m.flame_brewing().unwrap() < 1.0);
+    // Limed 199 ticks: the learning (200) is not done, and goes on from 199.
+    m.lime_cleared(sea, crate::clock::ticks(199), all);
+    assert_eq!(m.learning(Temple::Sea), Some(crate::clock::ticks(199)));
+    assert!(!m.knows(Spell::Wind));
+    // Another temple's lime does not touch it; 200 ticks end it at once.
+    m.lime_cleared(war, crate::clock::ticks(100), all);
+    assert_eq!(m.flame_brewing(), Some(0.4));
+    m.lime_cleared(sea, crate::clock::ticks(200), all);
+    assert!(m.knows(Spell::Wind) && m.learning(Temple::Sea).is_none());
+}
+
+/// After a spell is learnt, while fewer than six are known, the spell at
+/// 0x596da4 + known x 4 (one before the order's own entry at 0x596da8,
+/// so the one just learnt) is tested and passed over with the next one
+/// while its permission bit is clear (0x438300, 0x42fd70).
+#[test]
+fn learning_passes_over_withheld_spells() {
+    let mut m = Magic::default();
+    let mut p = crate::permits::Permits::ALL;
+    // Wind (bit 59) withheld: learning it passes over View as well, and
+    // stops at Waterspout's test (View, bit 60, allowed).
+    p.set(59, false);
+    m.start_learning(Temple::Sea, None);
+    m.update(magic::LEARN_SECONDS, &[], p);
+    assert_eq!(m.known(Temple::Sea).len(), 2);
+    // All allowed: one at a time.
+    let mut m = Magic::default();
+    m.start_learning(Temple::Sea, None);
+    m.update(magic::LEARN_SECONDS, &[], crate::permits::Permits::ALL);
+    assert_eq!(m.known(Temple::Sea), [Spell::Wind]);
+}
+
+/// A ship's move state (+0x58c): under way 5 between cells, braking 4 in
+/// its route's last cell, lying still 0 there; a sea monster weighs it
+/// 50, 60 and 100 (0x4911f0) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ship_move_states() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let i = scene.object_index(ship).unwrap();
+    let (x, y) = (scene.objects[i].x, scene.objects[i].y);
+    let t = 64.0;
+    // Some water cell a few cells off, reachable.
+    let to = [(4.0, 0.0), (-4.0, 0.0), (0.0, 4.0), (0.0, -4.0)]
+        .into_iter()
+        .find(|&(dx, dy)| scene.order_move(ship, x + dx * t, y + dy * t))
+        .expect("a move");
+    let _ = to;
+    let mut seen = Vec::new();
+    for _ in 0..2000 {
+        scene.update(0.04, &data, &mut caches);
+        let i = scene.object_index(ship).unwrap();
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        if seen.last() != Some(&s.move_state) {
+            seen.push(s.move_state);
+        }
+        if s.path.is_empty() && s.move_state == 0 {
+            break;
+        }
+    }
+    assert!(seen.contains(&5), "under way: {seen:?}");
+    let at = seen.iter().position(|&s| s == 4).expect("braking");
+    assert_eq!(&seen[at..], [4, 0], "brakes then lies still: {seen:?}");
 }
 
 /// A sea monster (umonster.cpp) starts under water, unseen; it comes up

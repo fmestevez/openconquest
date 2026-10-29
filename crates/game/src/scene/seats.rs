@@ -97,11 +97,21 @@ impl Scene {
         std::mem::swap(&mut self.stats, &mut s.stats);
     }
 
-    /// The inactive seats' temples learn and their flame burns down.
-    pub(super) fn seat_upkeep(&mut self, dt: f32) {
+    /// The lime on building `site` wore off, `since` after it struck: the
+    /// inactive seats' temple work there goes on from then.
+    pub(super) fn seat_lime_cleared(&mut self, site: u32, since: f32) {
         for (k, s) in self.seats.iter_mut().enumerate() {
             if k != self.active {
-                s.magic.update(dt);
+                s.magic.lime_cleared(site, since, s.permits);
+            }
+        }
+    }
+
+    /// The inactive seats' temples learn and their flame burns down.
+    pub(super) fn seat_upkeep(&mut self, dt: f32, limed: &[u32]) {
+        for (k, s) in self.seats.iter_mut().enumerate() {
+            if k != self.active {
+                s.magic.update(dt, limed, s.permits);
                 s.flame = (s.flame - dt).max(0.0);
                 s.flame += s.magic.take_flames() as f32 * crate::magic::FLAME_SECONDS;
             }

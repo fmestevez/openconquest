@@ -724,6 +724,15 @@ impl Scene {
             }
         }
         for (site, since) in cleared {
+            // The temples' learning and the Flame likewise (0x438300,
+            // 0x439260 run 0x427f50, ending with 0x425990, first); the
+            // computers' clocks run twice as fast.
+            self.magic.lime_cleared(site, since, self.permits);
+            for c in &mut self.computers.players {
+                c.magic
+                    .lime_cleared(site, since * 2.0, crate::permits::Permits::ALL);
+            }
+            self.seat_lime_cleared(site, since);
             if let Some(r) = self.research.iter_mut().find(|r| r.0 == site) {
                 r.3 = since;
             }

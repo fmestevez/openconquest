@@ -4,6 +4,7 @@
 
 use crate::commands::Command;
 use crate::economy::{TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR};
+use crate::permits::Permits;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Temple {
@@ -266,6 +267,13 @@ pub struct Magic {
     flame_brew: Option<f32>,
     #[serde(default)]
     flames: u32,
+    /// The temple (object id) each learning goes on at, and the Flame's:
+    /// the work is the building's (+0x10c, +0x110, +0x124), standing still
+    /// while it is limed (0x438300, 0x439260).
+    #[serde(default)]
+    at: [Option<u32>; 2],
+    #[serde(default)]
+    flame_at: Option<u32>,
 }
 
 impl Magic {
@@ -290,16 +298,34 @@ impl Magic {
         self.learning = [None; 2];
     }
 
-    pub fn start_learning(&mut self, temple: Temple) {
+    /// Starts learning the next spell of `temple` at the temple `site`.
+    pub fn start_learning(&mut self, temple: Temple, site: Option<u32>) {
         self.learning[temple.slot()] = Some(0.0);
+        self.at[temple.slot()] = site;
     }
 
-    /// Starts brewing a Flame (the Temple of War's work 1, 0x439260: 250
-    /// ticks).
-    pub fn brew_flame(&mut self) {
+    /// Starts brewing a Flame at the Temple of War `site` (its work 1,
+    /// 0x439260: 250 ticks).
+    pub fn brew_flame(&mut self, site: Option<u32>) {
         if self.flame_brew.is_none() {
             self.flame_brew = Some(0.0);
+            self.flame_at = site;
         }
+    }
+
+    /// The lime on building `site` wore off (0x425990, before the temple's
+    /// own tick in the same message): its work counts from when the lime
+    /// struck, `since` ago (`+0x124` = `+0x14c`), and may end at once.
+    pub fn lime_cleared(&mut self, site: u32, since: f32, permits: Permits) {
+        for k in 0..2 {
+            if self.at[k] == Some(site) && self.learning[k].is_some() {
+                self.learning[k] = Some(since);
+            }
+        }
+        if self.flame_at == Some(site) && self.flame_brew.is_some() {
+            self.flame_brew = Some(since);
+        }
+        self.update(0.0, &[], permits);
     }
 
     /// Whether a Flame is brewing, and how far along (0-1).
@@ -313,15 +339,35 @@ impl Magic {
         std::mem::take(&mut self.flames)
     }
 
-    pub fn update(&mut self, dt: f32) {
-        for (learning, known) in self.learning.iter_mut().zip(&mut self.known) {
-            if let Some(t) = learning.as_mut() {
-                *t += dt;
-                if *t >= LEARN_SECONDS {
-                    *learning = None;
-                    *known += 1;
+    /// The temples' work, `dt` on; nothing goes on at a temple in
+    /// `limed` (0x438300, 0x439260: `+0x144` set, they return).
+    pub fn update(&mut self, dt: f32, limed: &[u32], permits: Permits) {
+        for temple in [Temple::Sea, Temple::War] {
+            let k = temple.slot();
+            if self.at[k].is_some_and(|s| limed.contains(&s)) {
+                continue;
+            }
+            let Some(t) = self.learning[k].as_mut() else {
+                continue;
+            };
+            *t += dt;
+            if *t >= LEARN_SECONDS {
+                self.learning[k] = None;
+                self.known[k] += 1;
+                // Then the spells whose permission is withheld are passed
+                // over: while fewer than six, the spell at 0x596da4 (0x596ea4)
+                // + known x 4, one before the order's own entry (0x596da8),
+                // is tested; so the spell just learned, then each one
+                // passed over (0x438300, 0x439260 by the bits at player
+                // +0x45, 0x42fd70).
+                let order = temple.order();
+                while self.known[k] < 6 && !permits.spell(order[self.known[k] - 1]) {
+                    self.known[k] += 1;
                 }
             }
+        }
+        if self.flame_at.is_some_and(|s| limed.contains(&s)) {
+            return;
         }
         if let Some(t) = self.flame_brew.as_mut() {
             *t += dt;

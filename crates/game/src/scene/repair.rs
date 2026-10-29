@@ -496,6 +496,12 @@ impl Scene {
                 done.push(id);
                 continue;
             };
+            // A limed building's mending stands still: no step, nothing
+            // paid (0x425990 calls the step, vtable +0x70 = 0x425100, only
+            // while +0x144 is 0).
+            if !is_ship && c.lime > 0.0 {
+                continue;
+            }
             // Never below what it has (a hull above full is left alone).
             let (rate, price) = match self.objects[i].ship.as_ref().filter(|_| is_ship) {
                 Some(ship) => (

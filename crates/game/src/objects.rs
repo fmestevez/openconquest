@@ -235,9 +235,14 @@ pub fn inventory(rec: &ObjectRecord) -> Vec<Treasure> {
         _ => return Vec::new(),
     };
     let f = |i: usize| rec.field(i);
-    let Some(n) = f(count_at).filter(|&n| n <= 8) else {
+    let Some(mut n) = f(count_at).filter(|&n| n <= 8) else {
         return Vec::new();
     };
+    // A sea monster has two places (+0xbd, ten dwords from fields 18-27,
+    // message 2 of 0x492360); it takes field 17 as its count unchecked.
+    if rec.class_id == 0x1fb {
+        n = n.min(2);
+    }
     (0..n as usize)
         .map_while(|k| {
             let at = count_at + 1 + 5 * k;
@@ -320,6 +325,13 @@ pub struct Ship {
     /// up to its speed and loses it to stop where it is bound or to turn.
     #[serde(default)]
     pub velocity: f32,
+    /// Its move state (+0x58c, 0x4a3f40): 0 lying still, 1 told to stop,
+    /// 2 turning, 3 at a route point about to step, 4 braking to a stop in
+    /// its cell, 5 under way between cells, 6 held by a boarding. Kept at
+    /// the moves' events (the ship moves in `Scene::update`, the boarding
+    /// and the ram); a sea monster weighs its prey by it.
+    #[serde(default)]
+    pub move_state: u8,
     /// The heading it turns to while closing in on a shore or pier, to lie
     /// side-on (0x4afe50).
     #[serde(default)]
@@ -1501,6 +1513,7 @@ pub fn resolve(
         remembered: Vec::new(),
         planned: 0.0,
         velocity: 0.0,
+        move_state: 0,
         face: None,
         furl: 0.0,
         rock: 0,

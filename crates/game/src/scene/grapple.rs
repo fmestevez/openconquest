@@ -490,6 +490,10 @@ impl Scene {
             s.path.clear();
             s.velocity = 0.0;
             s.face = None;
+            // The boarded ship is held (move state 6, 0x4c3410 after the
+            // hook); the boarder at its hook cell lies still (0, 0x4a3560
+            // with its contact +0x6a9 = 6).
+            s.move_state = if k == i { 0 } else { 6 };
             s.grapple = Some(Grapple {
                 with,
                 boarder: k == i,
@@ -963,6 +967,8 @@ impl Scene {
         let s = self.objects[i].ship.as_mut().unwrap();
         s.path.clear();
         s.rotation = None;
+        // Its contact (+0x6a9 = 6): the move state lies still (0x4c2425).
+        s.move_state = 0;
         s.ram_run = Some(RamRun {
             stage: RamStage::Impact,
             ticks: 0,

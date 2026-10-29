@@ -1962,13 +1962,18 @@ impl Scene {
         self.run_training(dt);
         self.run_research(dt);
         self.run_refits(dt);
-        self.magic.update(dt);
+        // A limed temple's learning and Flame stand still (0x438300,
+        // 0x439260).
+        let limed = self.limed();
+        self.magic.update(dt, &limed, self.permits);
         // Computer players learn spells in 100 ticks, not 200 (0x439260).
+        // (The port keeps no permission bits for them: all allowed.)
         for c in &mut self.computers.players {
-            c.magic.update(dt * 2.0);
+            c.magic
+                .update(dt * 2.0, &limed, crate::permits::Permits::ALL);
             c.flame = (c.flame - dt).max(0.0);
         }
-        self.seat_upkeep(dt);
+        self.seat_upkeep(dt, &limed);
         self.run_statuses(dt, data, caches);
         self.run_fires(dt, data, caches);
         self.run_fireballs(dt, data, caches);
@@ -2127,7 +2132,14 @@ impl Scene {
             // rotations, then sails it.
             if !turn_ship(ship, obj.x, obj.y, dt) {
                 ship.velocity = 0.0;
+                // Turning (move state 2, 0x4a3320).
+                ship.move_state = 2;
                 continue;
+            }
+            // No route (dropped, 0x4a5b70, or run to its end): it lies
+            // still (0).
+            if ship.path.is_empty() {
+                ship.move_state = 0;
             }
             // It gathers way up to its speed, and loses it in time to stop
             // where it is bound or before a turn of more than 45 degrees
@@ -2227,6 +2239,13 @@ impl Scene {
                                 ship.waited += dt;
                             }
                             ship.velocity = 0.0;
+                            // Held at its cell (3) until 50 ticks without
+                            // a step lay it still (0, 0x4a3560).
+                            ship.move_state = if ship.stalled >= crate::clock::ticks(50) {
+                                0
+                            } else {
+                                3
+                            };
                             held.push((
                                 obj.id,
                                 next,
@@ -2241,6 +2260,9 @@ impl Scene {
                             ship.blocked = 0.0;
                             ship.stalled = 0.0;
                             ship.waited = 0.0;
+                            // The next cell reserved: under way (5,
+                            // 0x4a3560).
+                            ship.move_state = 5;
                         }
                     }
                 }
@@ -2252,6 +2274,9 @@ impl Scene {
                     budget -= dist;
                     ship.path.pop_front();
                     moved = true;
+                    // At a route point: the last lays it still (0), any
+                    // other has it about to step (3, 0x4a3f40).
+                    ship.move_state = if ship.path.is_empty() { 0 } else { 3 };
                     // A new course: under way, a ship bears off 45 degrees at
                     // once; more, it stops and turns to it first (0x4a3560).
                     if let Some(&(nx, ny)) = ship.path.front() {
@@ -2272,6 +2297,12 @@ impl Scene {
                     budget = 0.0;
                 }
                 moved = true;
+            }
+            // Come into its route's last cell, it brakes to a stop there
+            // (4, 0x4a2f60 from 0x4a3f40).
+            let last = ship.path.back().map(|&(lx, ly)| cell_of(lx, ly));
+            if ship.move_state == 5 && last == Some(cell_of(obj.x, obj.y)) {
+                ship.move_state = 4;
             }
         }
         self.go_round(held);

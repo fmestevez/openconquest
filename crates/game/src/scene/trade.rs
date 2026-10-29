@@ -83,8 +83,10 @@ impl Scene {
         self.can_build_ship_for((human.nation, human.slot), kind)
     }
 
-    /// Whether player `owner` can order a ship of type `kind` now.
-    pub fn can_build_ship_for(&self, owner: (u32, u32), kind: u8) -> Result<(), String> {
+    /// Whether player `owner` may have a ship of type `kind`, its price
+    /// aside (0x43da20 case 4 with param_7 set: the permission, the unique
+    /// ships' study and the buildings it needs).
+    pub fn may_build_ship_for(&self, owner: (u32, u32), kind: u8) -> Result<(), String> {
         if Some(owner) == self.human.map(|h| (h.nation, h.slot)) && !self.permits.ship(kind) {
             return Err(format!("{} cannot be built yet", SHIP_NAMES[kind as usize]));
         }
@@ -107,6 +109,12 @@ impl Scene {
                 SHIP_NAMES[kind as usize]
             ));
         }
+        Ok(())
+    }
+
+    /// Whether player `owner` can order a ship of type `kind` now.
+    pub fn can_build_ship_for(&self, owner: (u32, u32), kind: u8) -> Result<(), String> {
+        self.may_build_ship_for(owner, kind)?;
         let (amber, fish) = economy::ship_cost(kind);
         let (have_amber, have_fish) = self.funds(owner);
         if have_amber < amber || have_fish < fish {
@@ -150,17 +158,33 @@ impl Scene {
 
     /// Starts building a ship of type `kind` at shipyard `site`.
     pub fn start_ship(&mut self, site: u32, kind: u8) -> Result<(), String> {
+        self.start_ship_with(site, kind, true)
+    }
+
+    /// Starts building a ship of type `kind` at shipyard `site`; without
+    /// `pay` it is built free (0x416a40 with param_2 = 0: the yard command
+    /// 0x20 whose byte 0xf is 0xff, order 0x5c's; no price test, nothing
+    /// taken, nothing to pay back).
+    pub fn start_ship_with(&mut self, site: u32, kind: u8, pay: bool) -> Result<(), String> {
         let owner = self
             .object_index(site)
             .and_then(|i| self.objects[i].owner)
             .ok_or("No such shipyard")?;
-        self.can_build_ship_for(owner, kind)?;
+        if pay {
+            self.can_build_ship_for(owner, kind)?;
+        } else {
+            self.may_build_ship_for(owner, kind)?;
+        }
         // The player's ships come armed as the Building page says; the
         // computer players' with their standard load.
         let human = Some(owner) == self.human.map(|h| (h.nation, h.slot));
         let (amber, fish, arming) = if human {
             let price = self.ship_price(site, kind);
-            let (amber, fish) = (price.amber, price.fish);
+            let (amber, fish) = if pay {
+                (price.amber, price.fish)
+            } else {
+                (0, 0)
+            };
             let (have_amber, have_fish) = self.funds(owner);
             if have_amber < amber || have_fish < fish {
                 return Err(format!(
@@ -171,9 +195,11 @@ impl Scene {
                 self.garrisons.insert(home, price.stock_left);
             }
             (amber, fish, Some(price.arming))
-        } else {
+        } else if pay {
             let (amber, fish) = economy::ship_cost(kind);
             (amber, fish, None)
+        } else {
+            (0, 0, None)
         };
         self.earn(owner, -(amber as i64), -(fish as i64));
         self.productions.push(Production {
