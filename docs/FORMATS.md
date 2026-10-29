@@ -608,7 +608,8 @@ ships drop some slots (0x4e42e0).
 | Offset | Field |
 |--------|-------|
 | 0 | id referenced by map cells (u8; objects use a u16 here) |
-| 2-4 | unknown (category / layer / passability?) |
+| 2-3 | unknown |
+| 4 | the tile type (u32; 7 sea, 1 shelf, 8 land, 3 sandbank, 4 mountain or object marker, 5 reef), each map layer's a nibble of the landscape cell's dword at +8 (0x5456c0) |
 | 8 | tile name prefix, NUL-terminated, e.g. `b_isl_bkg00_` |
 | ~42 | object/terrain class name, e.g. `o_shoal_`, `o_forest1_` |
 
@@ -3276,9 +3277,7 @@ ticks; and every 7500-12000 ticks, below `map cells / 500` bases (at most 1,
 +0x7e easy, +0x76 or +0x86 otherwise) and has ships, it has the nearest
 flotilla found a settlement (0x484d60, 0x484f60).
 
-Not ported (the port's own instead): the terrain helpers of
-`artem\_L_Ai_*.cpp` (places for towns, forts and zones, enemy groups:
-simpler searches). Ported: the town's placing of buildings and the
+The terrain helpers of `artem\_L_Ai_*.cpp` are ported: the town's placing of buildings and the
 guarding forts' places (below), the enemy groups, and the object-kind
 masks (see below).
 
@@ -3309,8 +3308,8 @@ every shipyard, dock and barbarian structure, not ports; 0x558fa0); `town`
 sums how many of the town's four cells lie within 6. Sorted (0x409ad0,
 VC6 qsort): least cover, then the nearest band `d / 5`, then most water,
 then a non-zero town before zero, the least. The ship founds it there,
-on the shore (the port lets a computer's fort go on any free land cell;
-the original's own check for it, likely message 0x4ec, is not decoded).
+on the shore tile it chose (a ship's founding check, 0x4e4420, wants a
+shore tile for a fort: see Building sites).
 
 **Placing buildings** (the town's order 0x138c with no cell asked: message
 0x4ed, 0x42dac0, `m_build.cpp` 0x42d9c0, the helper 0x40cca0 over the whole
