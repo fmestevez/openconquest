@@ -183,6 +183,9 @@ pub struct Brain {
     /// miss006's watch for waterspouts: armed, checks made, since when.
     #[serde(default)]
     pub watch: [u32; 3],
+    /// miss006: squadron (2, 6) has joined (2, 7) (`+0x1b4`).
+    #[serde(default)]
+    pub joined: bool,
 }
 
 /// A town order a brain member gave (0x47b130 through the land fleet,
@@ -335,6 +338,7 @@ impl Scene {
             difficulty,
             jobs: Vec::new(),
             watch: [1, 0, 0],
+            joined: false,
         };
         for def in m.fleets {
             // The ships (or buildings) standing in the given cells (0x479200).
@@ -387,6 +391,33 @@ impl Scene {
         {
             let (_, _, fleet) = brain.building.remove(k);
             brain.fleets[fleet].ships.push(id);
+        }
+    }
+
+    /// A brain hears its player's object `target` was struck (message
+    /// 0x5d9c): miss006's brain, the first time one of squadron (2, 6)'s
+    /// ships is, sends its ships to squadron (2, 7) (0x45b280, 0x479370).
+    /// (Not decoded: the ship's `+0x691` gate on the report.)
+    pub(super) fn brain_hit(&mut self, target: u32) {
+        let Some(b) = self.brain.as_ref() else {
+            return;
+        };
+        if b.mission != "miss006" || b.joined {
+            return;
+        }
+        let (Some(from), Some(into)) = (self.member_fleet(2, 6), self.member_fleet(2, 7)) else {
+            return;
+        };
+        let theirs = self
+            .object_index(target)
+            .is_some_and(|i| self.objects[i].owner == Some((3, 2)));
+        if theirs
+            && self.brain.as_ref().unwrap().fleets[from]
+                .ships
+                .contains(&target)
+        {
+            self.fleet_merge(into, from);
+            self.brain.as_mut().unwrap().joined = true;
         }
     }
 
@@ -4521,6 +4552,27 @@ mod miss006 {
             program: south_raiders,
             wants: &[(BOARDER, [2, 2, 3]), (ROYAL, [2; 3])],
         },
+        // Mends what it is handed (0x459f60; the prizes: `brain_prize`).
+        FleetDef {
+            group: 1,
+            cells: &[],
+            program: repair,
+            wants: &[],
+        },
+        // Members (1, 6), none, and (1, 7), the waterspouts' watch
+        // (0x459fe0, run as `turn`): no ships.
+        FleetDef {
+            group: 1,
+            cells: &[],
+            program: idle,
+            wants: &[],
+        },
+        FleetDef {
+            group: 1,
+            cells: &[],
+            program: idle,
+            wants: &[],
+        },
         // The northern Persians (player 14; 0x45a270-0x45af50).
         FleetDef {
             group: 2,
@@ -4552,14 +4604,21 @@ mod miss006 {
             program: north_raiders,
             wants: &[(BOARDER, [2, 2, 3]), (ROYAL, [2, 3, 2]), (RAMMER, [2; 3])],
         },
-        // Two squadrons placed in the east (0x45ae70, 0x45af50; not decoded:
-        // they guard their waters here).
+        // Mends what it is handed (0x477190; the prizes: `brain_prize`).
+        FleetDef {
+            group: 2,
+            cells: &[],
+            program: repair,
+            wants: &[],
+        },
+        // Member (2, 6) (0x45ae70).
         FleetDef {
             group: 2,
             cells: &[(49, 15, 1, 1), (50, 14, 1, 1), (51, 16, 1, 1)],
-            program: east_guard,
+            program: squadron_patrol,
             wants: &[],
         },
+        // Member (2, 7) (0x45af50).
         FleetDef {
             group: 2,
             cells: &[
@@ -4568,7 +4627,7 @@ mod miss006 {
                 (52, 18, 1, 1),
                 (50, 19, 1, 1),
             ],
-            program: east_guard,
+            program: squadron_watch,
             wants: &[],
         },
     ];
@@ -4850,7 +4909,7 @@ mod miss006 {
 
     /// Fleet indices of the casting members.
     const SOUTH_RAIDERS: usize = 8;
-    const NORTH_RAIDERS: usize = 13;
+    const NORTH_RAIDERS: usize = 16;
     const SPELL: usize = 2;
     const FAR: Cells = (36, 60, 17, 10);
 
@@ -5237,31 +5296,83 @@ mod miss006 {
         scene.brain.as_mut().unwrap().watch = [armed as u32, checks, since];
     }
 
-    fn east_guard(state: u32) -> Op {
-        const W: &[Event] = &[Event::Zone {
-            state: 20,
-            area: (43, 10, 14, 14),
-        }];
+    /// Member (2, 6) (0x45ae70): patrols (25, 32)-(46, 31), 4500 ticks a
+    /// round, fighting the player seen in its three zones 1500 ticks.
+    fn squadron_patrol(state: u32) -> Op {
+        const ROUND: &[(i32, i32, u32)] =
+            &[(25, 32, 500), (37, 34, 750), (46, 31, 750), (37, 34, 750)];
+        const W: &[Event] = &[
+            Event::Zone {
+                state: 20,
+                area: (8, 13, 14, 15),
+            },
+            Event::Zone {
+                state: 20,
+                area: (21, 9, 29, 20),
+            },
+            Event::Zone {
+                state: 20,
+                area: (23, 30, 27, 8),
+            },
+        ];
         match state {
             0 => Op::Behave { next: 5 },
-            5 => Op::Wait {
-                next: 6,
-                ticks: 250,
+            5 => Op::Patrol {
+                timeout: 0,
+                points: ROUND,
+                ticks: 4500,
+                events: W,
             },
-            6 => Op::Custom(|scene, _| {
-                if scene.human_in((43, 10, 14, 14)) {
-                    20
-                } else {
-                    5
-                }
-            }),
             _ => Op::Attack {
                 next: 0,
-                target: Target::Area((43, 10, 14, 14)),
+                target: Target::Seen,
+                ticks: 1500,
+                events: &[],
+            },
+        }
+    }
+
+    /// Member (2, 7) (0x45af50): lies at its cells 3000 ticks at a time,
+    /// fighting the player seen in (8, 13, 14, 15) or (48, 11, 7, 14).
+    fn squadron_watch(state: u32) -> Op {
+        const W: &[Event] = &[
+            Event::Zone {
+                state: 20,
+                area: (8, 13, 14, 15),
+            },
+            Event::Zone {
+                state: 20,
+                area: (48, 11, 7, 14),
+            },
+        ];
+        match state {
+            0 => Op::Behave { next: 5 },
+            5 => Op::Watch {
+                next: 5,
                 ticks: 3000,
                 events: W,
             },
+            _ => Op::Attack {
+                next: 0,
+                target: Target::Seen,
+                ticks: 1500,
+                events: &[],
+            },
         }
+    }
+
+    /// The prize members (1, 5) and (2, 5) (0x459f60, 0x477190): their
+    /// ships to the docks to be mended (0x47a7e0).
+    fn repair(_: u32) -> Op {
+        Op::Custom(|scene, k| {
+            scene.fleet_to_docks(k);
+            0
+        })
+    }
+
+    /// A member with no ships of its own.
+    fn idle(_: u32) -> Op {
+        Op::Custom(|_, _| 0)
     }
 }
 
@@ -6128,9 +6239,9 @@ mod miss007 {
 /// members 6 and 10 hand their ships to, which then hands them to member
 /// 13 to be mended (0x462fb0).
 /// (Not ported: the spells the Persians cast on their patrols when they
-/// attack (0x47acf0, kinds 9, 12 and 15, paid by member 2); the builders'
-/// own orders of class 0x60 and the Persian yards' order of class 1
-/// (0x47b130, also skipped in miss007);. An attack's "failed" exit is taken as its "ok" one,
+/// attack (0x47acf0, kinds 9, 12 and 15): with no war temple none takes
+/// effect, each call only crediting player 15 one cast's price (see
+/// `campaign_spells_spec`). An attack's "failed" exit is taken as its "ok" one,
 /// the runtime telling them apart only by time. 0x479ed0's test with
 /// buildings (mask 0xffffff) is taken as `human_in`, without as
 /// `human_ships_in`.)
@@ -7038,9 +7149,7 @@ mod miss008 {
 /// member 3 kind 9, the Flame, up to difficulty + 3 times when it attacks;
 /// members 3 and 4 kind 15, the weapon shield, each turn they fight in
 /// their home waters; member 4 kinds 12 and 9 when it strikes, never in
-/// fact as `+0x12f` is never counted down); the builders' own orders of class
-/// 0x60 and the Persian yard's one-off order of class 1 (0x47b130, as in
-/// miss008);. The
+/// fact as `+0x12f` is never counted down). The
 /// brain's tick runs at a random tick of each 50 in the original, here
 /// on member 0's turn. A temple is "in" (10, 0, 40, 20) by its cell.)
 mod miss009 {
@@ -7944,9 +8053,7 @@ mod miss009 {
 /// Member 9's request is checked in its own slot (`+0x11c`, which nothing
 /// sets) but written into member 8's (`+0x11a`), so member 9 never gets a
 /// ship and member 8 gets the Persians' own ships too; ported as is.
-/// (Not ported: the builders' own orders of class 0x60
-/// and Persian yard 2's one-off order of class 1 (0x47b130, as in
-/// miss008 and miss009);. The brain's tick runs at a random tick of each 50 in the
+/// (The brain's tick runs at a random tick of each 50 in the
 /// original, here on member 0's turn. The Golden Fleece is delivered by
 /// storing it in one of the player's buildings through the load panel
 /// (0x5d94; automatic unloading never hands it over). An
@@ -8914,8 +9021,8 @@ mod miss010 {
 /// things within 15 cells of the Persians' temple. Member 3 casts
 /// lightning at (38, 14) and (30, 23) when the player comes into the
 /// middle sea's western zones.
-/// (Not ported: the Persian yard's one-off order of class 1 and its code
-/// 0x34 (class 0x30, never asked for) (0x47b130, as in miss008-miss010); member 5's states 30 and 40 (0x1e, 0x28), which no event
+/// (Not ported: the yard's code 0x34 (class 0x30, never asked for, no
+/// effect); member 5's states 30 and 40 (0x1e, 0x28), which no event
 /// reaches. Member 7 looks through the player's things in the scene's
 /// order, not the player's list's; a building is "in" an area by its
 /// cell. A waterspout or sea monster asked for on land is not cast. An
@@ -10029,9 +10136,8 @@ mod miss011 {
 /// patrol, 5 (0x472550) gathers strength, patrols wider waters and casts a
 /// spell on its ships when it fights, 6 (0x477190) mends and 7 (0x472890)
 /// casts at the player near player 14's temple (as player 15).
-/// (Not ported: the Persian yards' order of class 1 at each round
-/// (0x47b130 with code 1) and code 0x34 (class 0x30, never asked for), as
-/// in miss011; prizes of either Persian player handed to
+/// (Not ported: the yards' code 0x34 (class 0x30, never asked for, no
+/// effect); prizes of either Persian player handed to
 /// group 1's repair member (0x5d97): here each player's prizes sail to its
 /// own docks (`brain_prize`); the unreachable
 /// states of members (1, 4) and (1, 7) (0x19, 0x28: nothing sends them
@@ -11152,9 +11258,8 @@ mod miss012 {
 /// the south-west and strikes there under a spell, 6 (0x477190) mends and
 /// 7 (0x477210) casts at the player near player 14's temple (as player
 /// 15).
-/// (Not ported: the Persian yards' order of class 1 at each round
-/// (0x47b130 with code 1) and code 0x34 (class 0x30, never asked for), as
-/// in miss012; prizes handed to member (1, 5) (player
+/// (Not ported: the yards' code 0x34 (class 0x30, never asked for, no
+/// effect); prizes handed to member (1, 5) (player
 /// 15's) or (1, 6) (player 14's: the caster, which never moves them)
 /// (0x5d97): here each player's prizes sail to its own docks
 /// (`brain_prize`); member (1, 4)'s state 0x19

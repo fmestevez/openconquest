@@ -229,6 +229,7 @@ impl Scene {
             self.scout_attacked(target);
             self.wizard_attacked(target, shooter);
             self.computer_attacked(target, shooter);
+            self.brain_hit(target);
             // A brain's fleet notes who fired on it.
             if owner == self.human.map(|h| (h.nation, h.slot)) {
                 if let Some(s) = self.object_index(shooter) {

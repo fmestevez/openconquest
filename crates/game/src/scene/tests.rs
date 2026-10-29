@@ -7031,3 +7031,28 @@ fn sea_monster_strikes_in_turns() {
         bites.len()
     );
 }
+
+/// miss006's northern squadrons (members (2, 6) and (2, 7), 0x45ae70 and
+/// 0x45af50) start with their ships; the first time one of (2, 6)'s is
+/// struck, its ships join (2, 7) (0x45b280, message 0x5d9c) (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn miss006_squadrons_join_when_struck() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss006").unwrap();
+    let six = scene.member_fleet(2, 6).unwrap();
+    let seven = scene.member_fleet(2, 7).unwrap();
+    let ships = |s: &Scene, k: usize| s.brain.as_ref().unwrap().fleets[k].ships.clone();
+    let (a, b) = (ships(&scene, six), ships(&scene, seven));
+    assert_eq!((a.len(), b.len()), (3, 4), "their ships");
+    scene.brain_hit(a[0]);
+    assert!(ships(&scene, six).is_empty());
+    assert_eq!(ships(&scene, seven).len(), 7);
+    // Once only.
+    scene.brain_hit(b[0]);
+    assert_eq!(ships(&scene, seven).len(), 7);
+}
