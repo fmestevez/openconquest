@@ -2157,6 +2157,35 @@ nothing. The ships' ways are rebuilt (0x49a950) and the caster's brain told
 y 3-8. Its north-east sea is shut off by land at y = 4; only strikes at
 (58, 3), (59, 3), (57-61, 4), (60, 5) or (61, 5) open it.
 
+**Quick lime** (item 10 of the quick lime ship, type 9; shot kind 13,
+letter N, never flaming). Its power is not a weapon's: 0x4bc360 sets it to
+row 13's B x 15 by the heavy weapons' damage level (200, 240, 280 x 15) x
+the ship's hull / its full hull (48750), no unit condition; the blow is
+power x accuracy / 100 (power / 50 if none), x 1.5 with the Flame, x 1.5
+with Theseus (0x4c0230). It reloads 6000 / 55 ticks + rand % 30: items
+9-11 always take rate column 2 (0x4c06e0; 0x597a3c: Greek fire 50/70/80,
+quick lime 45/50/55, powder 60/80/80). It strikes the one object it lands
+on. On a ship (0x4bf170): a ship in a dock (state 2) is untouched; else,
+before anything, it is limed (0x4c4120: `+0x258`, start `+0x89`, 120 ticks
+added to `+0x8d`, 24 under its weapon shield, no cap), then the blow (a
+fifth under the shield, cut by the armour and the Armour of Ares) is
+shared out: the hull none (0x597fd8[13] = 0), the crew its share as is
+(0x4ac1b0: row 13 has no A), the weapons theirs. On a building, fort or
+stronghold (0x138e): the units their share as for any shot, the structure
+the rest whole (a fifth under its weapon shield `+0x17c`), and if it
+stands it is limed (`+0x144`, 200 ticks added, 40 shielded). A limed ship
+(0x4df2d0 clears it when the time is out) takes no fire order (0x4e6700
+0x15/0x16) and does not fire, unless its ram or board switch is on and it
+is type 2, 5 or 6 (0x597a30) or carries a hero who fights (0x4e66c0,
+0x4b4dd0: 0x5991e0 gives each hero an item, Orpheus none); each tick its
+way is `min(v + accel, top) / 2` (0x4a3f40); it boards at half strength
+(0x4b5b00). A limed fort or stronghold does not fire; a limed school,
+smithy, studio or town's work stands still and its menu's buttons are off
+(0x423a00); when the lime is out the work starts again from when it struck
+(`+0x124` = `+0x14c`). Limed pictures are drawn through 0x5c1758 (0x4df510).
+Not ported: the temples' learning standing still (ours is a player's, not
+a temple's), and what LandObj vtable +0x70 (skipped while limed) does.
+
 ## Projectiles
 
 Each weapon fired sends a projectile off (BombClassTy, `bomb.cpp`; ships

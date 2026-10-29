@@ -458,7 +458,7 @@ pub enum Page {
 
 /// The command menu of an object on `page`.
 pub fn menu(scene: &Scene, obj: &MapObject, page: Page) -> Menu {
-    match page {
+    let mut menu = match page {
         Page::Main => main_menu(scene, obj),
         Page::Structures => structures_menu(scene, obj),
         Page::Wind => wind_menu(scene, obj),
@@ -466,7 +466,21 @@ pub fn menu(scene: &Scene, obj: &MapObject, page: Page) -> Menu {
         Page::Behaviour => behaviour_menu(scene, obj),
         Page::Zones => zones_menu(scene, obj),
         Page::Ground => ground_menu(scene, obj),
+    };
+    // Limed, the smithy's, workshop's and settlement's buttons are all
+    // shown off (0x433e60, 0x4361c0, 0x43c740 through 0x423a00).
+    let limed = obj.combat.as_ref().is_some_and(|c| c.lime > 0.0);
+    if limed
+        && matches!(
+            obj.class,
+            ObjectClass::Building(SMITHY | WORKSHOP | SETTLEMENT | TOWN)
+        )
+    {
+        for b in menu.iter_mut().flatten() {
+            b.enabled = false;
+        }
     }
+    menu
 }
 
 /// A ship's building page (0x4e6980, page 2): a settlement, then the forts

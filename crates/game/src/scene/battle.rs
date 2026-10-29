@@ -20,6 +20,14 @@ impl Scene {
         if self.objects[i].ship.is_none() || !self.objects[i].is_armed() {
             return Err("This ship has no weapons".into());
         }
+        // Limed, its fire command is not to be had (0x4e6700, 0x15).
+        if self.objects[i]
+            .combat
+            .as_ref()
+            .is_some_and(|c| c.lime > 0.0)
+        {
+            return Err(String::new());
+        }
         if self.objects[t].combat.is_none()
             || !Self::are_enemies(&self.objects[i], &self.objects[t])
         {
@@ -51,6 +59,21 @@ impl Scene {
             let c = self.objects[i].combat.as_mut().unwrap();
             if c.stone > 0.0 {
                 continue;
+            }
+            // Limed, a fort or stronghold does not fire (0x419e00,
+            // 0x40ef70), nor a ship (0x4e6700 shuts 0x4ab930's gate) unless
+            // its ram or board switch is on and it is a royal ship, rammer
+            // or ship killer (0x597a30) or carries a hero who fights
+            // (0x4e66c0: 0x4b4dd0 over 0x5991e0, every hero but Orpheus).
+            if c.lime > 0.0 {
+                let fights_on = self.objects[i].ship.as_ref().is_some_and(|s| {
+                    (s.behaviour.ram || s.behaviour.board)
+                        && (matches!(s.kind, 2 | 5 | 6)
+                            || s.heroes.iter().any(|&h| h != objects::ORPHEUS))
+                });
+                if !fights_on {
+                    continue;
+                }
             }
             let shooters = self.objects[i].shooters();
             let c = self.objects[i].combat.as_mut().unwrap();
@@ -234,7 +257,6 @@ impl Scene {
             // Ares and the armour cut it, and it is shared out on arrival
             // (0x4bf170, `combat::Shares`).
             let mut factor = 1.0;
-            let mut lime_factor = 1.0;
             // A fort shares its blow out first and cuts each part under the
             // shield on its own (`fort_blow`).
             let holder = self
@@ -242,10 +264,8 @@ impl Scene {
                 .is_some_and(|t| self.objects[t].holds_units());
             if warded && !holder {
                 factor *= magic::SHIELD_FACTOR;
-                lime_factor *= magic::SHIELD_FACTOR;
             }
             if theseus {
-                lime_factor *= objects::THESEUS_DAMAGE;
                 factor *= objects::THESEUS_DAMAGE;
             }
             let flaming = self.flame_of(owner) > 0.0;
@@ -339,10 +359,14 @@ impl Scene {
                         )
                     }
                 };
-                // A ship's weapons of a kind fire by their mean condition
-                // (0x4bc360, 0x4bfc20).
-                let worn = self.objects[s].mean_condition(w) as f32 / 100.0;
-                let blow = combat::hull_damage_at(w, level) * factor * weaken * worn;
+                // A ship's weapons of a kind fire by their mean condition;
+                // quick lime by the ship's hull instead (0x4bc360, 0x4bfc20).
+                let blow = if w == combat::QUICKLIME {
+                    combat::lime_power(level) * health * factor * weaken
+                } else {
+                    let worn = self.objects[s].mean_condition(w) as f32 / 100.0;
+                    combat::hull_damage_at(w, level) * factor * weaken * worn
+                };
                 // The hull's share, the crew's (by the item's B over its
                 // A, 0x4ac1b0) and the weapons', these in the units'
                 // points (blows here are a fifteenth of the original's).
@@ -353,13 +377,6 @@ impl Scene {
                         sh.weapons_part(blow) * 15.0,
                     ),
                     None => (blow, 0.0, 0.0),
-                };
-                // Quick lime, which spares hulls, burns crews by its own
-                // figure.
-                let wounds = if combat::hull_damage_at(w, level) > 0.0 {
-                    wounds
-                } else {
-                    combat::crew_damage_at(w, level) * 15.0 * lime_factor
                 };
                 self.fire_shot(
                     super::shot::Firing {
@@ -958,6 +975,20 @@ impl Scene {
         }
     }
 
+    /// A side's strength in a boarding (0x4b5b00): halved while limed.
+    pub(super) fn fighting_strength(&self, i: usize) -> u32 {
+        let s = self.boarding_strength(i);
+        if self.objects[i]
+            .combat
+            .as_ref()
+            .is_some_and(|c| c.lime > 0.0)
+        {
+            s / 2
+        } else {
+            s
+        }
+    }
+
     /// Decides the fight for ship `ti` boarded from `i` (0x4b5b00): with
     /// strengths a and d (each + 1), the boarders win with chance
     /// (2a - d) / (a + d); Hercules and the ship of the dead always win
@@ -973,8 +1004,8 @@ impl Scene {
         if sure(attacker) {
             return !sure(defender);
         }
-        let a = self.boarding_strength(i) + 1;
-        let d = self.boarding_strength(ti) + 1;
+        let a = self.fighting_strength(i) + 1;
+        let d = self.fighting_strength(ti) + 1;
         let roll = self.rng.next() % (a + d);
         let line = 2 * a as i64 - d as i64;
         line >= (a + d) as i64 || (roll as i64) < line
@@ -1005,8 +1036,8 @@ impl Scene {
         };
         let hull_t = self.objects[ti].combat.as_ref().map_or(0.0, |c| c.hull);
         // In the original's units: hulls here are a fifteenth.
-        let blow = self.boarding_strength(ti) + 1 + (hull_t * 15.0 / 100.0) as u32;
-        let foe = self.boarding_strength(i) + 1;
+        let blow = self.fighting_strength(ti) + 1 + (hull_t * 15.0 / 100.0) as u32;
+        let foe = self.fighting_strength(i) + 1;
         let sure = |o: &MapObject| {
             o.ship
                 .as_ref()

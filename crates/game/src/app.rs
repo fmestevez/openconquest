@@ -3175,7 +3175,13 @@ impl App {
     }
 
     fn say(&mut self, msg: impl Into<String>) {
-        self.status = Some((msg.into(), Instant::now()));
+        // A refusal with nothing to say (a command not to be had) says
+        // nothing.
+        let msg = msg.into();
+        if msg.is_empty() {
+            return;
+        }
+        self.status = Some((msg, Instant::now()));
     }
 
     /// A right click on command button `slot` (0x4f46c0): on a ship,

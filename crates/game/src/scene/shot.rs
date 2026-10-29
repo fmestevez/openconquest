@@ -618,16 +618,108 @@ impl Scene {
         if let Some(i) = target {
             // Fire first, judged on the hull before the blow (0x4bf1a0).
             let holder = self.objects[i].holds_units();
+            let ship = self.objects[i].ship.is_some();
+            // Quick lime limes a ship before anything else, but one being
+            // mended in a dock, which it leaves untouched (0x4bf170: state 2
+            // goes to 0x4b4000).
+            if s.item == combat::QUICKLIME && ship {
+                if self.in_dock(i) {
+                    return;
+                }
+                self.lime(i, combat::LIME_TICKS);
+            }
             self.ignite(i, s.item, s.flaming, s.damage, data, caches);
             if holder {
                 self.fort_blow(
                     s.target, s.damage, s.wounds, s.item, s.flaming, data, caches,
                 );
-                return;
+            } else {
+                self.strike(s.target, s.damage, false, data, caches);
+                self.wound(s.target, s.wounds);
+                self.wear(s.target, s.wear);
             }
-            self.strike(s.target, s.damage, false, data, caches);
-            self.wound(s.target, s.wounds);
-            self.wear(s.target, s.wear);
+            // A building it does not bring down is limed (0x42405d).
+            if s.item == combat::QUICKLIME && !ship {
+                if let Some(i) = self.object_index(s.target) {
+                    if matches!(
+                        self.objects[i].class,
+                        ObjectClass::Building(_) | ObjectClass::Barbarian(_)
+                    ) {
+                        self.lime(i, combat::LIME_BUILDING_TICKS);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Limes object `i` for `ticks` (`[unshielded, under its weapon
+    /// shield]`), added to what it has (0x4c4120, 0x42405d).
+    pub(super) fn lime(&mut self, i: usize, ticks: [u32; 2]) {
+        if let Some(c) = self.objects[i].combat.as_mut() {
+            let add = crate::clock::ticks(ticks[usize::from(c.protect_weapons > 0.0)]);
+            if c.lime <= 0.0 {
+                c.lime_total = 0.0;
+            }
+            c.lime += add;
+            c.lime_total += add;
+        }
+    }
+
+    /// Whether ship `i` lies in a dock being mended (state 2).
+    pub(super) fn in_dock(&self, i: usize) -> bool {
+        match self.objects[i].ship.as_ref().and_then(|s| s.task) {
+            Some(Task::Repair { dock }) => self
+                .object_index(dock)
+                .is_some_and(|d| self.alongside(i, d)),
+            _ => false,
+        }
+    }
+
+    /// Buildings limed now: their work stands still (school 0x432210,
+    /// smithy 0x434ed0, studio 0x436ee0, the town's training 0x441ba0 skip
+    /// their "done?" step).
+    pub(super) fn limed(&self) -> Vec<u32> {
+        self.objects
+            .iter()
+            .filter(|o| o.ship.is_none() && o.combat.as_ref().is_some_and(|c| c.lime > 0.0))
+            .map(|o| o.id)
+            .collect()
+    }
+
+    /// Lime wears off (a ship 0x4df2d0, a building 0x425990). A building's
+    /// work then starts again from when the lime struck (`+0x124` set to
+    /// its start): what it had done before is lost and the limed time
+    /// counts.
+    pub(super) fn run_lime(&mut self, dt: f32) {
+        let mut cleared = Vec::new();
+        for o in &mut self.objects {
+            let Some(c) = o.combat.as_mut() else { continue };
+            if c.lime <= 0.0 {
+                continue;
+            }
+            c.lime -= dt;
+            if c.lime <= 0.0 {
+                c.lime = 0.0;
+                if o.ship.is_none() {
+                    cleared.push((o.id, c.lime_total));
+                }
+                c.lime_total = 0.0;
+            }
+        }
+        for (site, since) in cleared {
+            if let Some(r) = self.research.iter_mut().find(|r| r.0 == site) {
+                r.3 = since;
+            }
+            if let Some(r) = self.refits.iter_mut().find(|r| r.0 == site) {
+                r.3 = since;
+            }
+            if let Some(t) = self.trainings.iter_mut().find(|t| t.site == site) {
+                let before: f32 = t.queue[..t.head.min(t.queue.len())]
+                    .iter()
+                    .map(|&k| combat::train_seconds(k))
+                    .sum();
+                t.elapsed = before + since;
+            }
         }
     }
 }

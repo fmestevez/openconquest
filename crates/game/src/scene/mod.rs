@@ -311,6 +311,9 @@ pub struct Scene {
     pub had_argo: bool,
     /// One of the player's buildings has woken (0x5d9a).
     pub woken: bool,
+    /// The lime's whitening as colour to colour (`render::LIME` through
+    /// the palette, its first entry for each colour).
+    pub lime_remap: std::collections::HashMap<u32, u32>,
     /// Map cells lightning has dug (layer, x, y, the tile now), laid again
     /// on a saved game's load.
     pub dug: Vec<(u32, u32, u32, openconquest_formats::map::TileRef)>,
@@ -661,6 +664,21 @@ impl Scene {
             joined: Vec::new(),
             had_argo: false,
             woken: false,
+            lime_remap: {
+                let mut map = std::collections::HashMap::new();
+                for (i, &to) in crate::render::LIME.iter().enumerate() {
+                    if data.animated[i] {
+                        map.insert(
+                            crate::assets::ANIMATED | i as u32,
+                            crate::assets::ANIMATED | to as u32,
+                        );
+                    } else {
+                        map.entry(crate::assets::rgb(data.palette.0[i]))
+                            .or_insert(crate::assets::rgb(data.palette.0[to as usize]));
+                    }
+                }
+                map
+            },
             dug: Vec::new(),
             strait_struck: false,
             strait_checked: false,
@@ -1947,6 +1965,7 @@ impl Scene {
         self.run_orders();
         self.run_treasures(dt, data, caches);
         self.run_creatures(dt, data, caches);
+        self.run_lime(dt);
         self.run_wizards(dt, data, caches);
         self.run_fetches();
         self.run_loads();
@@ -2127,7 +2146,19 @@ impl Scene {
             let resting = ship.velocity == 0.0;
             let stopping = (2.0 * accel * ahead).sqrt().max(MIN_WAY);
             let target = top.min(stopping);
-            ship.velocity = if ship.velocity < target {
+            let limed = obj.combat.as_ref().is_some_and(|c| c.lime > 0.0);
+            ship.velocity = if limed {
+                // Limed, each tick its way is halved after the cap
+                // (0x4a3f40): it crawls at about a tick's gain.
+                let tick = crate::clock::TICK;
+                ship.lime_clock += dt;
+                let mut v = ship.velocity;
+                while ship.lime_clock >= tick {
+                    ship.lime_clock -= tick;
+                    v = (v + accel * tick).min(target) / 2.0;
+                }
+                v.min(target)
+            } else if ship.velocity < target {
                 (ship.velocity + accel * dt).min(target)
             } else {
                 target

@@ -32,6 +32,13 @@ pub struct Combatant {
     /// Seconds left invisible to other players (Phantom object).
     #[serde(default)]
     pub phantom: f32,
+    /// Seconds left limed by quick lime (a ship's `+0x258`, 0x4c4120; a
+    /// building's `+0x144`), and the seconds added since it began (`+0x8d`,
+    /// `+0x150`).
+    #[serde(default)]
+    pub lime: f32,
+    #[serde(default)]
+    pub lime_total: f32,
     /// Seconds left of protection from weapons and from magic.
     pub protect_weapons: f32,
     pub protect_magic: f32,
@@ -103,6 +110,8 @@ impl Combatant {
             reloads: Vec::new(),
             burning: 0.0,
             phantom: 0.0,
+            lime: 0.0,
+            lime_total: 0.0,
             stone: 0.0,
             wounds: 0.0,
             protect_weapons: 0.0,
@@ -663,7 +672,7 @@ pub fn hull_damage_at(weapon: u8, level: u8) -> f32 {
 }
 
 /// Damage to crews of an item at weapons level 0-2 (0x597d2c, B values;
-/// the unique ships' weapons from the manual).
+/// quick lime its row 13; Greek fire and powder from the manual).
 pub fn crew_damage_at(weapon: u8, level: u8) -> f32 {
     const B: [[u32; 3]; 12] = [
         [45, 56, 68],
@@ -676,7 +685,7 @@ pub fn crew_damage_at(weapon: u8, level: u8) -> f32 {
         [100, 120, 140],
         [80, 96, 112],
         [100, 100, 100],
-        [300, 300, 300],
+        [200, 240, 280],
         [150, 150, 150],
     ];
     B.get(weapon as usize)
@@ -815,17 +824,29 @@ pub const UNIT_POINTS: [u32; 9] = [2860, 2990, 3120, 5450, 5590, 5720, 8840, 936
 /// What a shot's blow does to the hull, in percent, by item (0x597fd8 by
 /// the shot's kind): marines' shots spare it.
 pub fn hull_percent(item: u8) -> u32 {
-    if item < 3 {
+    if item < 3 || item == QUICKLIME {
         0
     } else {
         100
     }
 }
 
+/// Quick lime's blow at the heavy weapons' damage level (0x4bc360, type 9
+/// only: the cache of row 13's B, by the shooter's hull over its full
+/// hull, in place of the units' condition; here a fifteenth).
+pub fn lime_power(level: u8) -> f32 {
+    crew_damage_at(QUICKLIME, level)
+}
+
+/// How long a quick lime hit limes a ship (0x4c4120: 120 ticks, 24 under
+/// its weapon shield) and a building (0x42405d: 200, 40), added up.
+pub const LIME_TICKS: [u32; 2] = [120, 24];
+pub const LIME_BUILDING_TICKS: [u32; 2] = [200, 40];
+
 /// The crew's part of a shot's blow (0x4ac1b0 at level 0): by the B over
 /// the A of the shot's row of 0x597d2c, as is for a row without A. The
 /// unique ships' shots have rows of their own: Greek fire row 12 (650,
-/// 300), quick lime row 13 (no A).
+/// 300), quick lime row 13 (no A: its blow is the crew's as is).
 pub fn crew_scale(item: u8) -> f32 {
     match item {
         GREEK_FIRE => 300.0 / 650.0,
@@ -955,7 +976,7 @@ pub fn unit_blow(
 
 /// Rate of fire per item and level (0x597a3c, item x 3 + level; the
 /// manual's chart lists the same figures).
-const RATE: [[u32; 3]; 11] = [
+const RATE: [[u32; 3]; 12] = [
     [120, 150, 150],
     [120, 150, 150],
     [120, 150, 150],
@@ -966,16 +987,17 @@ const RATE: [[u32; 3]; 11] = [
     [60, 80, 80],
     [70, 90, 90],
     [50, 70, 80],
+    [45, 50, 55],
     [60, 80, 80],
 ];
 
 /// Seconds between shots of item `item` at rate of fire level `level`:
 /// 6000 / rate ticks (0x4ac0e0); the ship adds 0-29 ticks at random each
-/// time (0x4c0230, `RELOAD_JITTER`).
+/// time (0x4c0230, `RELOAD_JITTER`). The unique ships' items 9-11 always
+/// take the third column (0x4c06e0).
 pub fn reload_seconds(item: u8, level: u8) -> f32 {
-    let rate = RATE
-        .get(item as usize)
-        .map_or(100, |r| r[level.min(2) as usize]);
+    let level = if item >= GREEK_FIRE { 2 } else { level.min(2) };
+    let rate = RATE.get(item as usize).map_or(100, |r| r[level as usize]);
     crate::clock::ticks(6000 / rate.max(1))
 }
 

@@ -340,6 +340,9 @@ pub struct Ship {
     pub rock_ticks: u32,
     #[serde(default)]
     pub rock_clock: f32,
+    /// Seconds owed to the next tick of a limed ship's crawl.
+    #[serde(default)]
+    pub lime_clock: f32,
     /// Goods on board.
     pub cargo: f32,
     pub cargo_kind: Option<Resource>,
@@ -1504,6 +1507,7 @@ pub fn resolve(
         rock_back: false,
         rock_ticks: 0,
         rock_clock: 0.0,
+        lime_clock: 0.0,
         grapple: None,
         ram_run: None,
         cargo: 0.0,

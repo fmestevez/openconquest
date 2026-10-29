@@ -879,11 +879,15 @@ impl Scene {
         self.refits.retain(|r| alive.contains(&r.0));
         let mut seen = Vec::new();
         let mut done = Vec::new();
+        let limed = self.limed();
         for (k, r) in self.refits.iter_mut().enumerate() {
             if seen.contains(&r.0) {
                 continue;
             }
             seen.push(r.0);
+            if limed.contains(&r.0) {
+                continue;
+            }
             r.3 += dt;
             if r.3 >= combat::refit_seconds(r.2) {
                 done.push(k);
@@ -918,7 +922,11 @@ impl Scene {
         let alive: Vec<u32> = self.objects.iter().map(|o| o.id).collect();
         self.research.retain(|r| alive.contains(&r.0));
         let mut done = Vec::new();
+        let limed = self.limed();
         for r in &mut self.research {
+            if limed.contains(&r.0) {
+                continue;
+            }
             r.3 += dt;
             if r.3 >= r.1.seconds(r.2.saturating_sub(1)) {
                 done.push((r.0, r.1, r.2));
@@ -1308,7 +1316,11 @@ impl Scene {
 
     /// Advances marine training and weapon building.
     pub(super) fn run_training(&mut self, dt: f32) {
+        let limed = self.limed();
         for t in &mut self.trainings {
+            if limed.contains(&t.site) {
+                continue;
+            }
             t.elapsed += dt;
             // Each item is ready once the run has lasted to its end
             // (0x441ba0: 0x248c for the one before the item now in hand).

@@ -209,11 +209,37 @@ pub fn draw_objects(
             }
             continue;
         }
-        draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y);
+        // Limed, its pictures and flames are whitened (0x4df510).
+        let limed = obj
+            .combat
+            .as_ref()
+            .is_some_and(|c| c.lime > 0.0)
+            .then_some(&scene.lime_remap);
+        match limed {
+            Some(remap) => {
+                for layer in scene.frame_of(obj, time_ms) {
+                    let img = &layer.image;
+                    let left = (obj.x + layer.dx as f32 - img.width as f32 / 2.0).round() as i32;
+                    let top = (obj.y + layer.dy as f32 - img.height as f32 / 2.0).round() as i32;
+                    draw_image_remapped(
+                        frame,
+                        screen,
+                        camera,
+                        lut,
+                        img,
+                        left,
+                        top,
+                        false,
+                        Some(remap),
+                    );
+                }
+            }
+            None => draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y),
+        }
         // Flames on a burning ship.
         if let Some((layers, left, top)) = scene.fire_on(obj, time_ms) {
             if let Some(l) = layers.first() {
-                draw_image(
+                draw_image_remapped(
                     frame,
                     screen,
                     camera,
@@ -221,6 +247,8 @@ pub fn draw_objects(
                     &l.image,
                     left.round() as i32,
                     top.round() as i32,
+                    false,
+                    limed,
                 );
             }
         }
@@ -363,6 +391,44 @@ fn draw_image_as(
     top: i32,
     as_shadow: bool,
 ) {
+    draw_image_remapped(frame, screen, camera, lut, img, left, top, as_shadow, None);
+}
+
+/// The quick lime's whitening (0x5c1758, put on a limed ship's or
+/// building's pictures by 0x4df510 / 0x425990): palette index to index.
+#[rustfmt::skip]
+pub const LIME: [u8; 256] = [
+    0, 38, 38, 38, 38, 38, 38, 38, 37, 36, 35, 34, 120, 31, 30, 144,
+    27, 36, 35, 34, 33, 33, 32, 31, 30, 29, 144, 33, 35, 38, 38, 38,
+    38, 38, 38, 38, 38, 38, 38, 34, 33, 32, 31, 29, 38, 38, 38, 38,
+    37, 34, 32, 33, 32, 31, 30, 144, 27, 14, 38, 37, 35, 36, 34, 33,
+    33, 34, 34, 33, 33, 120, 31, 31, 38, 38, 38, 30, 144, 27, 34, 120,
+    120, 29, 38, 36, 34, 120, 31, 30, 28, 141, 120, 31, 30, 30, 144, 30,
+    30, 30, 30, 29, 28, 31, 33, 34, 36, 38, 38, 38, 38, 38, 38, 38,
+    38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38,
+    38, 38, 37, 35, 33, 32, 31, 30, 28, 13, 14, 141, 13, 28, 29, 35,
+    36, 37, 37, 38, 37, 36, 35, 35, 35, 34, 35, 38, 38, 38, 38, 37,
+    35, 34, 30, 28, 142, 33, 37, 38, 38, 38, 38, 38, 38, 38, 38, 38,
+    38, 38, 36, 38, 38, 38, 38, 35, 33, 34, 34, 34, 34, 34, 35, 38,
+    37, 38, 35, 33, 144, 28, 29, 30, 31, 31, 38, 38, 38, 141, 14, 13,
+    29, 32, 30, 31, 33, 30, 34, 33, 35, 36, 37, 37, 36, 35, 37, 38,
+    38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 236, 237, 238, 239,
+    240, 241, 242, 243, 244, 245, 38, 247, 248, 38, 38, 38, 38, 38, 38, 38,
+];
+
+/// `draw_image_as`, its colours put through `remap` (colour to colour).
+#[allow(clippy::too_many_arguments)]
+fn draw_image_remapped(
+    frame: &mut Frame,
+    screen: &Screen,
+    camera: &Camera,
+    lut: &[u32; 256],
+    img: &Image,
+    left: i32,
+    top: i32,
+    as_shadow: bool,
+    remap: Option<&std::collections::HashMap<u32, u32>>,
+) {
     let scale = camera.scale(screen);
     let (vw, vh) = camera.view_size(screen);
     let w = screen.w.min(frame.width.saturating_sub(screen.x));
@@ -408,7 +474,10 @@ fn draw_image_as(
                         *d = darken(*d);
                     }
                 }
-                Some(px) => *d = resolve(px, lut),
+                Some(px) => {
+                    let px = remap.and_then(|m| m.get(&px).copied()).unwrap_or(px);
+                    *d = resolve(px, lut)
+                }
                 None => {}
             }
         }

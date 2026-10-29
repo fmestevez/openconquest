@@ -208,14 +208,21 @@ fn ship(scene: &Scene, obj: &MapObject, info: &mut ObjectInfo) {
             hulls += power * combat::hull_percent(item) / 100 * n;
             crews += n * against_crews(item, level, power);
         }
-        info.fire = Some((scaled(hulls), scaled(crews)));
         // Boarding strength (`+0x53c`, 0x4bee60) x 1000 / 1500, and the
         // crew's experience (`+0x544` / 100 percent; none in a dock,
-        // state 2). Quick lime (`+600`) would zero the fire, halve the
-        // boarding and hide the experience: not modelled.
+        // state 2). Limed (`+600`), the fire shows nothing, the boarding
+        // x 1000 / 3000 and the experience not at all (0x4e51c0).
+        let limed = obj.combat.as_ref().is_some_and(|c| c.lime > 0.0);
         let i = scene.object_index(obj.id).unwrap_or(0);
-        info.board = Some((scene.boarding_strength(i) * 1000 / 1500) as u16);
-        info.experience = Some((0, 100));
+        let board = scene.boarding_strength(i);
+        if limed {
+            info.fire = Some((0, 0));
+            info.board = Some((board * 1000 / 3000) as u16);
+        } else {
+            info.fire = Some((scaled(hulls), scaled(crews)));
+            info.board = Some((board * 1000 / 1500) as u16);
+            info.experience = Some((0, 100));
+        }
     }
     info.treasure = !s.treasures.is_empty();
     info.hero = hero_icon(&s.heroes);

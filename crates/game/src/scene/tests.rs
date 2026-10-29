@@ -2115,22 +2115,33 @@ fn crews_under_fire() {
     scene.objects[e].owner = Some((1, (human.slot + 1) % 4));
     scene.objects[e].x = mx + 100.0;
     scene.objects[e].y = my;
-    scene.objects[e].combat.as_mut().unwrap().weapons.clear();
+    scene.objects[e].combat.as_mut().unwrap().weapons = vec![4, 4];
     scene.objects[e].ship.as_mut().unwrap().crew.squads = [0, 0, 4];
+    // Its own guns would not fire limed; keep it from firing at all.
+    scene.objects[e].ship.as_mut().unwrap().behaviour.guard = false;
     let hull = scene.objects[e].combat.as_ref().unwrap().hull;
+    let mut limed = 0.0f32;
     for _ in 0..50 * 20 {
         scene.update(0.02, &data, &mut caches);
+        let e = scene.object_index(enemy).unwrap();
+        limed = limed.max(scene.objects[e].combat.as_ref().unwrap().lime);
     }
     let e = scene.object_index(enemy).unwrap();
+    let units = scene.objects[e].unit_conditions();
     assert!(
-        scene.objects[e].ship.as_ref().unwrap().crew.count() < 4,
+        units[2].iter().map(|&c| c as u32).sum::<u32>() < 400,
         "crews burnt"
+    );
+    assert!(
+        units[4].iter().map(|&c| c as u32).sum::<u32>() < 200,
+        "weapons worn"
     );
     assert_eq!(
         scene.objects[e].combat.as_ref().unwrap().hull,
         hull,
         "hull untouched"
     );
+    assert!(limed > 0.0, "limed (0x4c4120)");
     // A barrel of powder adds its blast to a ram, once.
     let m = scene.object_index(mine).unwrap();
     scene.objects[m].combat.as_mut().unwrap().weapons = vec![combat::POWDER];
@@ -6807,4 +6818,139 @@ fn lightning_on_a_towns_buildings() {
     scene.dig(at.0, at.1, &data, &mut caches);
     let i = scene.object_index(id).unwrap();
     assert!(!scene.site_holds(i));
+}
+
+/// Quick lime's figures from the exe: its power by the heavy weapons'
+/// damage level (row 13's B), no hull share, the crew's taken as is, and
+/// the unique ships' reload at the third rate column (0x4c06e0).
+#[test]
+fn quick_lime_figures() {
+    assert_eq!([0, 1, 2].map(combat::lime_power), [200.0, 240.0, 280.0]);
+    assert_eq!(combat::hull_percent(combat::QUICKLIME), 0);
+    assert_eq!(combat::crew_scale(combat::QUICKLIME), 1.0);
+    for level in 0..3 {
+        assert_eq!(
+            combat::reload_seconds(combat::QUICKLIME, level),
+            crate::clock::ticks(6000 / 55)
+        );
+        assert_eq!(
+            combat::reload_seconds(combat::GREEK_FIRE, level),
+            crate::clock::ticks(6000 / 80)
+        );
+    }
+}
+
+/// A limed ship: a hit limes it 120 ticks (24 under its weapon shield),
+/// added up; it crawls, boards at half strength, will not take a fire
+/// order, shows no fire power, and comes clear when the time is out; a
+/// ship mended in a dock is untouched (needs `OPENCONQUEST_DATA`).
+#[test]
+fn quick_lime_blinds() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind >= 2))
+        .unwrap();
+    scene.objects[i].combat.as_mut().unwrap().weapons = vec![4];
+    scene.objects[i].ship.as_mut().unwrap().crew.squads = [0, 0, 4];
+    let id = scene.objects[i].id;
+    let strength = scene.boarding_strength(i);
+    scene.lime(i, combat::LIME_TICKS);
+    scene.lime(i, combat::LIME_TICKS);
+    let c = scene.objects[i].combat.as_ref().unwrap();
+    assert!((c.lime - crate::clock::ticks(240)).abs() < 1e-3);
+    let enemy = scene
+        .objects
+        .iter()
+        .find(|o| o.ship.is_some() && !scene.is_own(o) && o.owner.is_some())
+        .unwrap()
+        .id;
+    assert!(scene.order_attack(id, enemy).is_err(), "no fire order");
+    assert_eq!(scene.fighting_strength(i), strength / 2);
+    let info = crate::object_info::of(&scene, &scene.objects[i]).unwrap();
+    assert_eq!(info.fire, Some((0, 0)));
+    assert_eq!(info.experience, None);
+    // It crawls: its way settles at a tick's gain.
+    let accel = objects::ship_accel(scene.objects[i].ship.as_ref().unwrap().kind);
+    let to = scene.nav.nearest_water(
+        (scene.objects[i].x / 64.0) as i32 + 6,
+        (scene.objects[i].y / 64.0) as i32,
+    );
+    let (x, y) = to.unwrap();
+    let ok = scene.order_move(id, x as f32 * 64.0 + 32.0, y as f32 * 64.0 + 32.0);
+    assert!(ok);
+    let mut v = 0.0f32;
+    for _ in 0..50 * 4 {
+        scene.update(0.02, &data, &mut caches);
+        let i = scene.object_index(id).unwrap();
+        v = v.max(scene.objects[i].ship.as_ref().unwrap().velocity);
+    }
+    assert!(
+        v > 0.0 && v <= accel * crate::clock::TICK + 1e-3,
+        "crawls: {v}"
+    );
+    for _ in 0..50 * 10 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    let i = scene.object_index(id).unwrap();
+    assert_eq!(scene.objects[i].combat.as_ref().unwrap().lime, 0.0);
+    // Under its weapon shield, a fifth as long.
+    scene.objects[i].combat.as_mut().unwrap().protect_weapons = 10.0;
+    scene.lime(i, combat::LIME_TICKS);
+    let c = scene.objects[i].combat.as_ref().unwrap();
+    assert!((c.lime - crate::clock::ticks(24)).abs() < 1e-3);
+}
+
+/// A limed town's training stands still; when the lime wears off the job
+/// runs again from when the lime struck (0x425990: `+0x124` set to the
+/// lime's start), the limed time counted (needs `OPENCONQUEST_DATA`).
+#[test]
+fn quick_lime_stops_a_towns_work() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let site = scene.own_sites()[0];
+    scene.amber += 100_000;
+    scene.fish += 100_000;
+    for _ in 0..6 {
+        scene.train(site, 2).unwrap();
+    }
+    for _ in 0..25 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    let before = scene.trainings[0].elapsed;
+    assert!(before > 0.0);
+    let i = scene.object_index(site).unwrap();
+    scene.lime(i, combat::LIME_BUILDING_TICKS);
+    for _ in 0..100 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    assert_eq!(scene.trainings[0].elapsed, before, "stands still");
+    // Run till the lime is out.
+    while scene.objects[scene.object_index(site).unwrap()]
+        .combat
+        .as_ref()
+        .unwrap()
+        .lime
+        > 0.0
+    {
+        scene.update(0.04, &data, &mut caches);
+    }
+    let t = &scene.trainings[0];
+    assert!(
+        (t.elapsed - crate::clock::ticks(200)).abs() <= 0.04 + 1e-3,
+        "from the lime's start: {}",
+        t.elapsed
+    );
 }
