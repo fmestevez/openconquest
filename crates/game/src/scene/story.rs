@@ -64,6 +64,9 @@ pub enum Goal {
     /// A settlement or town of the player's in the box, once one of
     /// theirs has woken (miss004's Pylos).
     TownOnceWoken(Cells),
+    /// The sea way from (55, 10) to (60, 0), looked for once after the
+    /// player's lightning struck the strait (miss009).
+    StraitOpen,
 }
 
 /// A campaign mission's judge: checked every `period` ticks; won when
@@ -154,7 +157,7 @@ pub fn judge_of(mission: &str) -> Option<Judge> {
         "miss009" => j(
             75,
             &[ArgoIn((60, 0, FAR, 4)), Assemble((60, 0, 69, 6))],
-            &[Argo, Hero(JASON)],
+            &[Argo, Hero(JASON), StraitOpen],
         ),
         "miss010" => j(
             75,
@@ -335,6 +338,7 @@ impl Scene {
                         _ => false,
                     }
             }),
+            Goal::StraitOpen => !self.strait_struck || self.strait_checked || self.strait_open(),
             Goal::ShipOrWoken => self.woken || self.own_ships().next().is_some(),
             Goal::TownOnceWoken(b) => !self.woken || self.goal_met(Goal::TownIn(b)),
             Goal::NoCastle(b) => !self.objects.iter().any(|o| {
@@ -343,6 +347,18 @@ impl Scene {
                     && inside(cell(o), b)
             }),
         }
+    }
+
+    /// The sea way from (55, 10) to (60, 0) (0x464340: 0x55ca10 on the
+    /// shallow-draught ways, 0x5c93bc; the map's raised reefs, none on
+    /// that way, left out).
+    pub(super) fn strait_open(&self) -> bool {
+        let (from, to) = ((55, 10), (60, 0));
+        self.nav.passable(from.0, from.1, false)
+            && self
+                .nav
+                .find_path_avoiding(from, to, false, |_| false)
+                .is_some()
     }
 
     /// The campaign mission's judge, every period (0x4c4920): the terms to
@@ -369,7 +385,8 @@ impl Scene {
                 return Some(super::Outcome::Defeat);
             }
         }
-        if self.story.iter().all(|&g| self.goal_met(g)) {
+        let win = self.story.iter().all(|&g| self.goal_met(g));
+        if win {
             self.winning += period;
             if self.winning > 250 {
                 return Some(super::Outcome::Victory);
@@ -377,8 +394,22 @@ impl Scene {
         } else {
             self.winning = 0;
         }
-        if self.losing.is_none() && judge.keep.iter().any(|&g| !self.goal_met(g)) {
+        // The strait is looked at only when the win does not hold.
+        let failing = judge
+            .keep
+            .iter()
+            .any(|&g| !(g == Goal::StraitOpen && win) && !self.goal_met(g));
+        if self.losing.is_none() && failing {
             self.losing = Some(250);
+        }
+        // Found open, it is not looked at again.
+        if judge.keep.contains(&Goal::StraitOpen)
+            && self.strait_struck
+            && !self.strait_checked
+            && !win
+            && self.strait_open()
+        {
+            self.strait_checked = true;
         }
         None
     }
@@ -410,6 +441,7 @@ pub fn goal_name(goal: Goal) -> String {
         Goal::PersiansGone(_) => "Defeat the Persians".into(),
         Goal::NoCastle(_) => "Overcome the wizard of wind".into(),
         Goal::ShipOrWoken => "Keep a ship till your settlement wakes".into(),
+        Goal::StraitOpen => "Keep the strait open".into(),
         Goal::TownOnceWoken(_) => "Hold Pylos".into(),
     }
 }

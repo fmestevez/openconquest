@@ -148,7 +148,8 @@ impl Scene {
                 // It strikes at frame 11 of its picture over water, 40 over
                 // land, a frame a tick (0x42cfa0).
                 let at = if water { 11 } else { 40 };
-                self.lightning.push((x, y, crate::clock::ticks(at)));
+                let caster = self.human.map(|h| (h.nation, h.slot));
+                self.lightning.push((x, y, crate::clock::ticks(at), caster));
             }
             Spell::Fireball => {
                 self.pay_spell(spell)?;
@@ -181,27 +182,72 @@ impl Scene {
         for l in &mut self.lightning {
             l.2 -= dt;
         }
-        let due: Vec<(f32, f32)> = self
+        let due: Vec<(f32, f32, Option<super::Owner>)> = self
             .lightning
             .iter()
             .filter(|l| l.2 <= 0.0)
-            .map(|l| (l.0, l.1))
+            .map(|l| (l.0, l.1, l.3))
             .collect();
         self.lightning.retain(|l| l.2 > 0.0);
-        for (x, y) in due {
-            self.lightning_strike(x, y, data, caches);
+        for (x, y, caster) in due {
+            self.lightning_strike(x, y, caster, data, caches);
         }
     }
 
-    fn lightning_strike(&mut self, x: f32, y: f32, data: &GameData, caches: &mut Caches) {
-        // It strikes the 3 x 3 cells about its cell, whoever's
-        // (LightningObjClassTy 0x42cfa0, message 0xda93): ships go
-        // down unless shielded from magic; a settlement or town
-        // (unshielded), lair, nest or castle, or a harpy or dragon,
-        // only when struck on its own cell; sea monsters lose half
-        // their strength, land creatures and the gorgon a quarter.
+    /// Lightning strikes cell `(x, y)`'s 3 x 3 (LightningObjClassTy
+    /// 0x42cfa0): each cell's occupant, row by row, is asked whether it is
+    /// shielded (0xda94), a ship going down at the asking, shielded or
+    /// not, till a building shielded from magic answers; unless one did,
+    /// the cell's ground is dug into sea (0x5030c0);
+    /// then the blow (0xda93): unshielded ships go down; a fort, port,
+    /// dock, workshop, temple, school, castle or nest (WorkLandObj
+    /// 0x427f50, asleep or not) struck on its own cell unshielded, or whose
+    /// ground is gone, falls, else loses a quarter of its condition (a
+    /// twentieth shielded); settlements and towns take nothing; a lair, a
+    /// barbarian structure, a harpy or dragon fall struck on their own
+    /// cell; sea monsters lose half their strength, land creatures and the
+    /// gorgon a quarter. The caster's brain hears of it (0x5d9d).
+    fn lightning_strike(
+        &mut self,
+        x: f32,
+        y: f32,
+        caster: Option<(u32, u32)>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         let t = TILE_SIZE as f32;
         let (cx, cy) = ((x / t).floor() as i32, (y / t).floor() as i32);
+        let near = |p: (i32, i32)| (p.0 - cx).abs() <= 1 && (p.1 - cy).abs() <= 1;
+        // The query, cell by cell, row by row: a ship there is wrecked; a
+        // building shielded from magic stops it, and the dig.
+        let mut wrecked = Vec::new();
+        let mut absorbed = false;
+        'query: for dy in -1..=1 {
+            for dx in -1..=1 {
+                let c = (cx + dx, cy + dy);
+                for o in &self.objects {
+                    let Some(cb) = o.combat.as_ref() else {
+                        continue;
+                    };
+                    if o.ship.is_some() {
+                        if ((o.x / t).floor() as i32, (o.y / t).floor() as i32) == c {
+                            wrecked.push(o.id);
+                        }
+                    } else if cb.protect_magic > 0.0
+                        && o.cell.is_some_and(|(bx, by)| {
+                            let n = super::trade::building_cells(o);
+                            (bx..bx + n).contains(&c.0) && (by..by + n).contains(&c.1)
+                        })
+                    {
+                        absorbed = true;
+                        break 'query;
+                    }
+                }
+            }
+        }
+        if !absorbed {
+            self.dig(cx, cy, data, caches);
+        }
         let mut blows: Vec<(u32, f32)> = Vec::new();
         for o in &self.objects {
             let Some(c) = o.combat.as_ref() else { continue };
@@ -214,23 +260,37 @@ impl Scene {
                 ObjectClass::HarpyNest | ObjectClass::CreatureSpawn => (f(4), f(5)),
                 _ => (ox, oy),
             };
-            let near = (home.0 - cx).abs() <= 1 && (home.1 - cy).abs() <= 1;
             let centre = home == (cx, cy);
             let shielded = c.protect_magic > 0.0;
+            let work = matches!(
+                o.class,
+                ObjectClass::Building(0x34..=0x3e)
+                    | ObjectClass::Castle(_)
+                    | ObjectClass::HarpyNest
+            );
             let blow = match o.class {
-                ObjectClass::Ship if near && !shielded => c.hull,
-                ObjectClass::Building(SETTLEMENT | TOWN) if centre && !shielded => c.hull,
+                // The query wrecks the ship on the cell (0x4dc630, 0xda94);
+                // the blow, an unshielded one.
+                ObjectClass::Ship if wrecked.contains(&o.id) => c.hull,
+                ObjectClass::Ship if near(home) && !shielded => c.hull,
+                _ if work && near(home) => {
+                    let gone = (centre && !shielded)
+                        || o.cell.is_some_and(|(bx, by)| !self.nav_land(bx, by));
+                    if gone {
+                        c.hull
+                    } else {
+                        c.max_hull * if shielded { 0.05 } else { 0.25 }
+                    }
+                }
                 ObjectClass::Barbarian(_)
-                | ObjectClass::Castle(_)
-                | ObjectClass::HarpyNest
                 | ObjectClass::CreatureSpawn
                 | ObjectClass::Monster(0x1f8 | 0x1f9)
                     if centre =>
                 {
                     c.hull
                 }
-                ObjectClass::Monster(0x1fb) if near => c.max_hull / 2.0,
-                ObjectClass::Monster(0x1f4..=0x1f6 | 0x1fa) if near => c.max_hull / 4.0,
+                ObjectClass::Monster(0x1fb) if near(home) => c.max_hull / 2.0,
+                ObjectClass::Monster(0x1f4..=0x1f6 | 0x1fa) if near(home) => c.max_hull / 4.0,
                 _ => 0.0,
             };
             if blow > 0.0 {
@@ -238,8 +298,23 @@ impl Scene {
             }
         }
         for (id, blow) in blows {
-            self.hit(id, blow, data, caches);
+            // 0xda93 heeds no sleep: struck straight (not through the
+            // fort's units either).
+            self.strike(id, blow, true, data, caches);
         }
+        // miss009's brain (0x4663d0): the player's lightning in the strait.
+        if caster.is_some()
+            && caster == self.human.map(|h| (h.nation, h.slot))
+            && (55..=62).contains(&cx)
+            && (3..=8).contains(&cy)
+        {
+            self.strait_struck = true;
+        }
+    }
+
+    /// Whether a building's cell is still ground (not dug into sea).
+    fn nav_land(&self, x: i32, y: i32) -> bool {
+        !self.nav.is_water(x, y)
     }
 
     /// The Flame wears off; a brewed one lights.

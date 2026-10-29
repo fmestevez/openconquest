@@ -1253,7 +1253,7 @@ impl Scene {
                 self.spawn_effect(data, caches, crate::magic::fx_lightning(water), x, y);
                 self.sounds.push(("molniya2", x, y));
                 let at = if water { 11 } else { 40 };
-                self.lightning.push((x, y, crate::clock::ticks(at)));
+                self.lightning.push((x, y, crate::clock::ticks(at), None));
             }
             Spell::Fireball => self.spawn_fireball(cx, cy, owner, data, caches),
             Spell::Waterspout | Spell::Whirlpool | Spell::Reef | Spell::Monster if water => {

@@ -121,6 +121,12 @@ impl MapGrid {
         self.cells[((layer * self.height + y) * self.width + x) as usize]
     }
 
+    /// Changes a cell's tile (the map editor's erase and reshape, as
+    /// lightning digs land into sea).
+    pub fn set(&mut self, layer: u32, x: u32, y: u32, tile: TileRef) {
+        self.cells[((layer * self.height + y) * self.width + x) as usize] = tile;
+    }
+
     /// Size of the map in pixels at full tile size.
     pub fn pixel_size(&self) -> (u32, u32) {
         (self.width * TILE_SIZE, self.height * TILE_SIZE)

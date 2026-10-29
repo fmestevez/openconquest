@@ -570,19 +570,9 @@ fn war_magic() {
     assert!(lost > 0.0 && lost < 600.0, "shielded loss {lost}");
     let e = scene.object_index(enemy).unwrap();
     scene.objects[e].combat.as_mut().unwrap().weapons.clear();
-    // The magic shield stops lightning and blunts a fireball.
+    // The magic shield blunts a fireball.
     scene.objects[e].combat.as_mut().unwrap().protect_magic = 60.0;
     let (ex, ey) = cell(&scene, enemy);
-    scene
-        .cast_area(Spell::Lightning, ex, ey, &data, &mut caches)
-        .unwrap();
-    for _ in 0..50 * 2 {
-        scene.update(0.02, &data, &mut caches);
-    }
-    assert!(
-        scene.object_index(enemy).is_some(),
-        "shielded from lightning"
-    );
     let before = hull(&scene, enemy);
     scene
         .cast_area(Spell::Fireball, ex, ey, &data, &mut caches)
@@ -600,9 +590,8 @@ fn war_magic() {
         hull(&scene, mine) > 10_000.0 - 600.0,
         "the fireball spares our own"
     );
-    // Unshielded, lightning destroys it.
-    let e = scene.object_index(enemy).unwrap();
-    scene.objects[e].combat.as_mut().unwrap().protect_magic = 0.0;
+    // Lightning sinks it, shielded or not: asked whether it is shielded,
+    // a ship goes down (0xda94).
     let (ex, ey) = cell(&scene, enemy);
     scene
         .cast_area(Spell::Lightning, ex, ey, &data, &mut caches)
@@ -4121,7 +4110,7 @@ fn battles_survive_a_save() {
         }
     }
     assert!(!scene.shots.is_empty(), "a volley flies");
-    scene.lightning.push((x, y, 1.0));
+    scene.lightning.push((x, y, 1.0, None));
     let path =
         std::env::temp_dir().join(format!("openconquest-battle-{}.json", std::process::id()));
     scene.save().write(&path, false).unwrap();
@@ -6670,4 +6659,58 @@ fn sleeping_buildings_wake_together() {
         let i = scene.object_index(id).unwrap();
         scene.objects[i].asleep.is_none() && scene.objects[i].record.fields[4] == 0
     }));
+}
+
+/// miss009's north-east sea is shut off by land: the player's lightning
+/// digs a way through (0x5030c0), and a strike in the strait that opens
+/// none loses the mission (0x464340) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn lightning_digs_miss009_strait() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let t = TILE_SIZE as f32;
+    let at = |c: i32| c as f32 * t + t / 2.0;
+    let strike = |scene: &mut Scene, c: (i32, i32), human: bool, caches: &mut Caches| {
+        let caster = human
+            .then(|| scene.human.map(|h| (h.nation, h.slot)))
+            .flatten();
+        scene.lightning.push((at(c.0), at(c.1), 0.0, caster));
+        scene.update(0.02, &data, caches);
+    };
+    // The way through, dug.
+    let mut scene = Scene::load(&data, &mut caches, "miss009").unwrap();
+    assert!(!scene.strait_open(), "shut at first");
+    assert!(!scene.nav.is_water(59, 4));
+    strike(&mut scene, (59, 4), true, &mut caches);
+    assert!(scene.nav.is_water(59, 4), "dug into sea");
+    assert!(scene.strait_struck && scene.strait_open());
+    assert!(scene
+        .dug
+        .iter()
+        .any(|&(l, x, y, _)| (l, x, y) == (0, 59, 4)));
+    for _ in 0..50 * 5 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert!(scene.strait_checked);
+    assert_eq!(scene.losing, None);
+    // A saved game keeps the dig.
+    let saved = scene.save();
+    let back = Scene::restore(&data, &mut caches, &saved).unwrap();
+    assert!(back.nav.is_water(59, 4) && back.strait_checked);
+    // A strike that opens nothing loses it.
+    let mut scene = Scene::load(&data, &mut caches, "miss009").unwrap();
+    strike(&mut scene, (56, 6), true, &mut caches);
+    assert!(scene.strait_struck && !scene.strait_open());
+    for _ in 0..50 * 5 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert!(scene.losing.is_some(), "the strait is shut");
+    // Outside the strait, or the game's own: not heeded.
+    let mut scene = Scene::load(&data, &mut caches, "miss009").unwrap();
+    strike(&mut scene, (63, 4), true, &mut caches);
+    strike(&mut scene, (57, 5), false, &mut caches);
+    assert!(!scene.strait_struck);
 }

@@ -311,6 +311,13 @@ pub struct Scene {
     pub had_argo: bool,
     /// One of the player's buildings has woken (0x5d9a).
     pub woken: bool,
+    /// Map cells lightning has dug (layer, x, y, the tile now), laid again
+    /// on a saved game's load.
+    pub dug: Vec<(u32, u32, u32, openconquest_formats::map::TileRef)>,
+    /// miss009's strait (0x4663d0, 0x464340): the player's lightning has
+    /// struck in it, and the way through was found open after.
+    pub strait_struck: bool,
+    pub strait_checked: bool,
     pub winning: u32,
     pub losing: Option<u32>,
     /// The campaign mission's ported brain, if any, and time owed to it.
@@ -391,8 +398,9 @@ pub struct Scene {
     /// Places seen for a while by spells: cell, radius, seconds left (not
     /// saved).
     pub sight_points: Vec<(i32, i32, i32, f32)>,
-    /// Lightning cast: where, and seconds until it strikes (not saved).
-    pub lightning: Vec<(f32, f32, f32)>,
+    /// Lightning cast: where, seconds until it strikes, and its caster
+    /// (a player's spell; None the game's, as a brain casts).
+    pub lightning: Vec<(f32, f32, f32, Option<Owner>)>,
     /// Fireballs over the map (not saved).
     pub fireballs: Vec<fireball::Fireball>,
     /// Seconds left of the player's Flame (stronger weapons).
@@ -427,6 +435,7 @@ mod battle;
 mod brain;
 mod computer;
 mod creatures;
+mod dig;
 pub mod fire;
 mod gulls;
 pub mod load;
@@ -501,20 +510,7 @@ impl Scene {
         let terrain = Terrain::compose(data, &grid, &mut caches.tiles)?;
         let cell_types: Vec<u32> = (0..grid.height)
             .flat_map(|y| (0..grid.width).map(move |x| (x, y)))
-            .map(|(x, y)| {
-                (0..grid.layers.min(8)).fold(0u32, |acc, l| {
-                    let t = grid.get(l, x, y);
-                    let kind = if t.variant == 0 {
-                        0
-                    } else {
-                        data.tilesets
-                            .by_id(t.tileset)
-                            .and_then(|s| s.raw.get(4))
-                            .map_or(0, |&b| b as u32 & 0xf)
-                    };
-                    acc | kind << (4 * l)
-                })
-            })
+            .map(|(x, y)| cell_type(data, &grid, x, y))
             .collect();
         if !terrain.missing_tiles.is_empty() {
             eprintln!(
@@ -665,6 +661,9 @@ impl Scene {
             joined: Vec::new(),
             had_argo: false,
             woken: false,
+            dug: Vec::new(),
+            strait_struck: false,
+            strait_checked: false,
             winning: 0,
             losing: None,
             held: Vec::new(),
@@ -868,6 +867,13 @@ impl Scene {
             joined: self.joined.clone(),
             had_argo: self.had_argo,
             woken: self.woken,
+            dug: self
+                .dug
+                .iter()
+                .map(|&(l, x, y, t)| (l, x, y, t.variant, t.tileset))
+                .collect(),
+            strait_struck: self.strait_struck,
+            strait_checked: self.strait_checked,
             winning: self.winning,
             losing: self.losing,
             held: self.held.clone(),
@@ -901,7 +907,8 @@ impl Scene {
             battle: Battle {
                 shots: self.shots.iter().map(|s| s.saved()).collect(),
                 fireballs: self.fireballs.iter().map(|f| f.saved()).collect(),
-                lightning: self.lightning.clone(),
+                lightning: self.lightning.iter().map(|l| (l.0, l.1, l.2)).collect(),
+                lightning_by: self.lightning.iter().map(|l| l.3).collect(),
                 sight_points: self.sight_points.clone(),
                 charmed: self.charmed.iter().map(|(k, v)| (*k, v.clone())).collect(),
                 siren_songs: self.siren_songs.iter().map(|(k, v)| (*k, *v)).collect(),
@@ -978,6 +985,19 @@ impl Scene {
         scene.joined = save.joined.clone();
         scene.had_argo = save.had_argo;
         scene.woken = save.woken;
+        scene.strait_struck = save.strait_struck;
+        scene.strait_checked = save.strait_checked;
+        let dug: Vec<_> = save
+            .dug
+            .iter()
+            .map(|&(l, x, y, variant, tileset)| {
+                let t = openconquest_formats::map::TileRef { variant, tileset };
+                scene.grid.set(l, x, y, t);
+                (l, x, y, t)
+            })
+            .collect();
+        scene.after_dig(&dug, data, caches);
+        scene.dug = dug;
         scene.winning = save.winning;
         scene.losing = save.losing;
         scene.held = save.held.clone();
@@ -1025,7 +1045,12 @@ impl Scene {
             .iter()
             .map(|f| fireball::Fireball::restored(f, data, caches))
             .collect();
-        scene.lightning = b.lightning.clone();
+        scene.lightning = b
+            .lightning
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.0, l.1, l.2, b.lightning_by.get(i).copied().flatten()))
+            .collect();
         scene.sight_points = b.sight_points.clone();
         scene.charmed = b.charmed.iter().cloned().collect();
         scene.siren_songs = b.siren_songs.iter().copied().collect();
@@ -2330,6 +2355,8 @@ pub struct Battle {
     #[serde(default)]
     pub lightning: Vec<(f32, f32, f32)>,
     #[serde(default)]
+    pub lightning_by: Vec<Option<(u32, u32)>>,
+    #[serde(default)]
     pub sight_points: Vec<(i32, i32, i32, f32)>,
     #[serde(default)]
     pub charmed: Vec<(u32, creatures::Charm)>,
@@ -2387,6 +2414,25 @@ fn turn_ship(ship: &mut objects::Ship, x: f32, y: f32, dt: f32) -> bool {
 
 /// Turns a ship's hull a rotation of 24 at a time towards `want`; true
 /// once it lies so.
+/// A player: nation and slot.
+pub type Owner = (u32, u32);
+
+/// A cell's types, a nibble a layer (the tile sets' record byte 4).
+fn cell_type(data: &GameData, grid: &MapGrid, x: u32, y: u32) -> u32 {
+    (0..grid.layers.min(8)).fold(0u32, |acc, l| {
+        let t = grid.get(l, x, y);
+        let kind = if t.variant == 0 {
+            0
+        } else {
+            data.tilesets
+                .by_id(t.tileset)
+                .and_then(|s| s.raw.get(4))
+                .map_or(0, |&b| b as u32 & 0xf)
+        };
+        acc | kind << (4 * l)
+    })
+}
+
 fn rotate_ship(ship: &mut objects::Ship, want: i32, dt: f32) -> bool {
     let mut at = ship.rotation.map_or(ship.heading as i32 * 3, i32::from);
     if at == want {

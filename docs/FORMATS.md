@@ -2106,7 +2106,7 @@ count), so a mission is never won without a town to carry:
 | 005 / 006 | Argo; town (0-2, 0-2) / (0-12, 0-8) with every hero; Jason | no Argo; Jason gone |
 | 007 | town (52-53, 1-2); Argo; no castle 0x42 in (10-49, 65-75) | town gone; no Argo; Jason gone |
 | 008 | town (0-1, 30-31); Argo at x >= 57, y <= 7; town (55-59, 0-2) with every hero | as 007, its town |
-| 009 | Argo at x >= 60, y <= 4; town (60-69, 0-6) with every hero | no Argo; Jason gone; the strait blocked by lightning (not ported) |
+| 009 | Argo at x >= 60, y <= 4; town (60-69, 0-6) with every hero | no Argo; Jason gone; no sea way from (55, 10) to (60, 0) once the player's lightning struck x 55-62, y 3-8 |
 | 010 | Argo at x >= 50, y <= 8; town (50-64, 0-8) with every hero and the Fleece | no Argo; Jason gone |
 | 011 / 012 | Argo; town (0-5, 0-5) / (2-8, 48-52) with every hero and the Fleece; Jason | no Argo; Jason gone |
 | 013 | Argo; home (0-2, 58-60) with every hero and the Fleece; Jason; Persians without ships and buildings 0x32-0x3e | no Argo; Jason gone; home gone |
@@ -2125,6 +2125,28 @@ and 500 fish and starts members 2 and 9 over. Asleep: miss001 settlement,
 port and dock at (0, 2); miss002 three forts; miss003 the town (35, 20) and
 its four buildings; miss004 Pylos; miss008 Propontis and its port; single05
 and single13 a cluster each.
+
+**Lightning** (LightningObjClassTy 0x42cfa0) strikes at frame 11 of its
+picture over water, 40 over land. It asks each of the 3 x 3 cells'
+occupants, row by row, whether it is shielded (0xda94): a ship there is
+wrecked at the asking, shielded or not (0x4dc630); a building shielded from
+magic (`+0x15c`) stops the asking. Unless one did, the struck cell is dug
+(0x5030c0 with layer 0: the map editor's erase on layers 0 and 2-7, then
+0x502fb0 clears loose things of layers 5-7 within two): its ground goes to
+sea (0x502350), the same ground about it whose edges it held goes too, the
+coast about it is re-tiled to fit (0x5028b0, 0x5027e0, the tables 0x5bdeb8
+shapes, 0x5bdef8 and 0x5bdfe8 edges, 0x5be0d6 / 0x5be150 ground and
+0x5be35e / 0x5be3ac shelf variants), and for ground (cell type 8) the shelf
+within two goes deep and is laid again about the coast (0x502a80,
+0x5029d0); a dig never shuts water. Then the blow (0xda93) to every object
+of the 9 cells: unshielded ships go down; forts, ports, docks, workshops,
+temples, schools, castles and harpy nests (WorkLandObj 0x427f50, asleep or
+not) fall struck on their own cell unshielded or with their ground gone,
+else lose 25 points of condition (5 shielded); settlements and towns take
+nothing. The ships' ways are rebuilt (0x49a950) and the caster's brain told
+(0x5d9d, cell and caster): miss009's notes the player's strike in x 55-62,
+y 3-8. Its north-east sea is shut off by land at y = 4; only strikes at
+(58, 3), (59, 3), (57-61, 4), (60, 5) or (61, 5) open it.
 
 ## Projectiles
 

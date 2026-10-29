@@ -26,26 +26,40 @@ pub struct Terrain {
 
 impl Terrain {
     pub fn compose(data: &GameData, grid: &MapGrid, cache: &mut ImageCache) -> Result<Self> {
-        let (width, height) = grid.pixel_size();
+        let mut t = Self::paint(data, grid, cache, (0, 0, grid.width - 1, grid.height - 1))?;
+        t.missing_tiles.sort();
+        t.missing_tiles.dedup();
+        Ok(t)
+    }
+
+    /// The cells `x0..=x1`, `y0..=y1` painted from the grid.
+    fn paint(
+        data: &GameData,
+        grid: &MapGrid,
+        cache: &mut ImageCache,
+        (x0, y0, x1, y1): (u32, u32, u32, u32),
+    ) -> Result<Self> {
+        let (width, height) = ((x1 - x0 + 1) * TILE_SIZE, (y1 - y0 + 1) * TILE_SIZE);
         let mut t = Terrain {
             width,
             height,
             pixels: vec![0; (width * height) as usize],
             missing_tiles: Vec::new(),
         };
-
-        for cy in 0..grid.height {
-            for cx in 0..grid.width {
+        let at = |cx: u32, cy: u32| ((cx - x0) * TILE_SIZE, (cy - y0) * TILE_SIZE);
+        for cy in y0..=y1 {
+            for cx in x0..=x1 {
                 // Layer 0 is sea (tile set 0), shelf (1) or island ground.
                 let island = grid.get(0, cx, cy).tileset > 1;
                 if let Some(water) = cache.get(data, if island { SHELF_TILE } else { SEA_TILE })? {
-                    t.blit(&water, cx * TILE_SIZE, cy * TILE_SIZE);
+                    let (px, py) = at(cx, cy);
+                    t.blit(&water, px, py);
                 }
             }
         }
         for layer in 0..grid.layers {
-            for cy in 0..grid.height {
-                for cx in 0..grid.width {
+            for cy in y0..=y1 {
+                for cx in x0..=x1 {
                     let cell = grid.get(layer, cx, cy);
                     if cell.is_empty() {
                         continue;
@@ -57,15 +71,38 @@ impl Terrain {
                     };
                     let name = set.tile_name(cell.variant);
                     match cache.get(data, &name)? {
-                        Some(tile) => t.blit(&tile, cx * TILE_SIZE, cy * TILE_SIZE),
+                        Some(tile) => {
+                            let (px, py) = at(cx, cy);
+                            t.blit(&tile, px, py)
+                        }
                         None => t.missing_tiles.push(name),
                     }
                 }
             }
         }
-        t.missing_tiles.sort();
-        t.missing_tiles.dedup();
         Ok(t)
+    }
+
+    /// Paints cells `x0..=x1`, `y0..=y1` again (a dig changed them), with
+    /// what the tiles of the cells above and left of them draw into them.
+    pub fn repaint(
+        &mut self,
+        data: &GameData,
+        grid: &MapGrid,
+        cache: &mut ImageCache,
+        (x0, y0, x1, y1): (u32, u32, u32, u32),
+    ) -> Result<()> {
+        const MARGIN: u32 = 2;
+        let (bx, by) = (x0.saturating_sub(MARGIN), y0.saturating_sub(MARGIN));
+        let part = Self::paint(data, grid, cache, (bx, by, x1, y1))?;
+        let t = TILE_SIZE;
+        for py in y0 * t..(y1 + 1) * t {
+            let src = ((py - by * t) * part.width + (x0 - bx) * t) as usize;
+            let dst = (py * self.width + x0 * t) as usize;
+            let n = ((x1 - x0 + 1) * t) as usize;
+            self.pixels[dst..dst + n].copy_from_slice(&part.pixels[src..src + n]);
+        }
+        Ok(())
     }
 
     /// The map at 8 pixels a cell from the tiles' small versions (`s_`
