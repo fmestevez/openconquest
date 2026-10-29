@@ -1611,7 +1611,12 @@ nearer east first, then the other order); else a flood from the start (1,
 a straight step 2 more, a diagonal 3, through open cells, a diagonal free
 to pass between closed ones) traced back from the goal downhill, the
 diagonals (one more) before the straights, a tie keeping the way it went;
-past the goal the nearest reached cell within the tolerance.
+past the goal the nearest reached cell within the tolerance. The ships' behaviours move through
+0x4a6270 (11 callers, 0x4ac8d0 ... 0x4c26fa), all with a tolerance of 0:
+the first plan, not waited, takes the exact finder (0x55ca10, none for a
+goal it cannot reach, a tick of wait), and the next, waited, 0x55ba50, so
+a ship heads for the nearest cell it can reach. The port does so for plain
+moves and re-plans; its other orders refuse an unreachable goal outright.
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
