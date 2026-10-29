@@ -3647,8 +3647,15 @@ ships in a dock (state 2) are left alone.
 **Repairs** (order 96, part 0x3ec, 0x429f60): of the town's buildings
 (0x43fcb0) and forts (types 0x1a6b, 0x1494: worn, vtable +0x6c; affordable,
 +0x9c) the first worn is mended: command 0x1e sent to the town (0x520cc0).
-With none worn the part waits out its passes. Ours mends the first worn
-building of the player the town may mend (`mend_by`), and with none is done.
+With none worn the part waits out its passes and fails. Ours mends the first
+worn building of the player the town may mend (`mend_by`). A part's count
+of passes is set by its op when it is queued (0x595170 + op x 4: build 20,
+ship 25, upgrade 20, the rest 10) and when it goes under way (0x595198:
+build 20, ship 25, upgrade 20, repairs 10, studies 25). Order 117 is six
+studies at each temple, each after the one before. (Not ported: a boat's
+request is order 0x5c, whose part skips the price test (field 8 = 1) and
+sends the yard byte 3 = 0xff; what the yard does with it unpaid is not
+decoded, so ours asks with order 0x50 and waits for the price.)
 
 **Strength** (0x50ea70): ships boarding strength (`+0x53c`) / 10 + armour
 (`+0x534`: 40, 70; the ram's `+0x538` tests the armour level for 4 or 5,

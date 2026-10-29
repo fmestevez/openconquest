@@ -2127,7 +2127,12 @@ impl Scene {
                     PartStep::Started(before) => {
                         x.state = 2;
                         x.before = before;
-                        x.tries = 20;
+                        // Its count under way, by op (0x595198 + op x 4).
+                        x.tries = match x.op {
+                            Op::Ship(_) | Op::Study(_) => 25,
+                            Op::Repair | Op::Other => 10,
+                            _ => 20,
+                        };
                     }
                     PartStep::Wait => {
                         x.tries = x.tries.saturating_sub(1);
@@ -2333,8 +2338,10 @@ impl Scene {
                     })
                     .map(|o| o.id)
                     .collect();
+                // Nothing worn: it waits, failing when its tries run out
+                // (0x429f60).
                 if worn.is_empty() {
-                    return PartStep::Done;
+                    return PartStep::Wait;
                 }
                 for target in worn {
                     if self.mend_by(site, target).is_ok() {
@@ -4331,7 +4338,14 @@ fn order_parts(code: u32) -> Vec<(Op, bool, After)> {
         ],
         0x73 => vec![(Study(35), true, Nothing), (Study(36), true, All)],
         0x74 => vec![(Study(37), true, Nothing), (Study(38), true, All)],
-        117 => vec![(Study(33), true, Nothing), (Study(34), true, Nothing)],
+        // Six studies at each temple, each after the one before (0x5ac7c8).
+        117 => (0..12)
+            .map(|k| {
+                let n = if k < 6 { 33 } else { 34 };
+                let after = if k % 6 == 0 { Nothing } else { Part(k - 1) };
+                (Study(n), true, after)
+            })
+            .collect(),
         118 => vec![(Study(1), true, Nothing)],
         119 => vec![(Study(2), true, Nothing), (Study(2), true, All)],
         120 => vec![(Study(3), true, Nothing), (Study(3), true, All)],
