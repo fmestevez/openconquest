@@ -183,6 +183,11 @@ impl Scene {
         if let Some(c) = self.computers.players.iter().find(|c| c.owner == owner) {
             return c.flame;
         }
+        if let Some(&(_, flame)) = self.brain_flames.get(&owner) {
+            if flame > 0.0 {
+                return flame;
+            }
+        }
         self.seat_of(owner).map_or(0.0, |k| self.seats[k].flame)
     }
 }

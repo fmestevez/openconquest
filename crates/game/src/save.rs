@@ -134,6 +134,9 @@ pub struct SaveGame {
     pub gull_rng: Option<Rng>,
     #[serde(default)]
     pub last_attack: Option<(f32, f32)>,
+    /// The brains' players' Flame (brewing, burning).
+    #[serde(default)]
+    pub brain_flames: Vec<((u32, u32), (f32, f32))>,
     /// Volcanoes' sleep and eruptions.
     #[serde(default)]
     pub volcanoes: std::collections::HashMap<u32, crate::scene::volcano::Volcano>,

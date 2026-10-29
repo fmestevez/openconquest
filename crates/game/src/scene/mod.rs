@@ -355,6 +355,8 @@ pub struct Scene {
     /// Spells a brain casts this tick on a ship for nothing (0x47acf0):
     /// the spell and the ship (not saved: cast at once).
     pending_ship_casts: Vec<(Spell, u32)>,
+    /// The brains' players' Flame: (seconds left brewing, seconds of it).
+    pub brain_flames: std::collections::BTreeMap<(u32, u32), (f32, f32)>,
     /// Spells the player may cast once for nothing (disposable magic).
     pub free_casts: std::collections::BTreeMap<Spell, u32>,
     /// Buildings being repaired by a settlement or town.
@@ -635,6 +637,7 @@ impl Scene {
             pending_reefs: Vec::new(),
             pending_casts: Vec::new(),
             pending_ship_casts: Vec::new(),
+            brain_flames: Default::default(),
             story: Vec::new(),
             start_sites: Vec::new(),
             delivered: Vec::new(),
@@ -820,6 +823,7 @@ impl Scene {
             walkers: self.walkers.clone(),
             lair_clocks: self.lair_clocks.clone(),
             volcanoes: self.volcanoes.clone(),
+            brain_flames: self.brain_flames.iter().map(|(&k, &v)| (k, v)).collect(),
             planks: self.saved_planks().0,
             porters: self.saved_planks().1,
             unloaded: self.unloaded.clone(),
@@ -926,6 +930,7 @@ impl Scene {
         scene.walkers = save.walkers.clone();
         scene.lair_clocks = save.lair_clocks.clone();
         scene.volcanoes = save.volcanoes.clone();
+        scene.brain_flames = save.brain_flames.iter().copied().collect();
         scene.unloaded = save.unloaded.clone();
         scene.refits = save.refits.clone();
         scene.flame = save.flame;
@@ -1810,6 +1815,7 @@ impl Scene {
             for (spell, x, y, owner) in std::mem::take(&mut self.pending_casts) {
                 self.brain_cast(spell, x, y, owner, data, caches);
             }
+            self.run_brain_flames(dt);
             for (spell, id) in std::mem::take(&mut self.pending_ship_casts) {
                 self.brain_cast_on(spell, id, data, caches);
             }

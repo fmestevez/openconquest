@@ -1133,6 +1133,96 @@ impl Scene {
         }
     }
 
+    /// The Persians' levels at the start (each campaign main's message
+    /// 0x8d1, whatever the difficulty): arming 2, ram 5 and armour 2
+    /// (`+0xa3`, `+0x5e`, `+0x5f`); with `workshop`, the workshop's rate of
+    /// fire 1 and 2 for groups 2 and 3 and range and damage 2 for all
+    /// (`+0x8e`, `+0x95`, `+0x9c`); and the unique ships of `special`
+    /// studied. Players by id (nation x 4 + slot).
+    pub(super) fn persian_bonus(&mut self, players: &[u32], workshop: bool, special: &[usize]) {
+        for &p in players {
+            let l = self.levels.entry((p / 4, p % 4)).or_default();
+            l.weapons = l.weapons.max(1);
+            l.ram = 2;
+            l.armour = 2;
+            if workshop {
+                l.rate = [0, 1, 2];
+                l.reach = [2; 3];
+                l.arms = [2; 3];
+            }
+            for &k in special {
+                l.special[k] = 1;
+            }
+        }
+    }
+
+    /// A brain's fleet-wide cast on `ships` (0x47acf0 through 0x479c20:
+    /// an order to the casting group's war temple for each ship, 0x42a500,
+    /// 0x43fee0): only with a war temple standing; each cast paid in full
+    /// (0x42f470), with one cast's price credited first when `pay`
+    /// (0x4a8eb0, 0x4a8f40). The Flame is the player's: brewed 250 ticks,
+    /// then 1500 more of it (the temple's code 5).
+    pub(super) fn brain_cast_fleet(
+        &mut self,
+        ships: Vec<u32>,
+        spell: crate::magic::Spell,
+        pay: bool,
+    ) {
+        use crate::magic::Spell;
+        let Some(owner) = ships
+            .iter()
+            .find_map(|&id| self.object_index(id).and_then(|i| self.objects[i].owner))
+        else {
+            return;
+        };
+        let temple = self.objects.iter().any(|o| {
+            o.owner == Some(owner)
+                && o.class == openconquest_formats::ObjectClass::Building(0x3e)
+                && self.construction_at(o.id).is_none()
+        });
+        if !temple {
+            return;
+        }
+        let (amber, fish) = spell.cost();
+        if pay {
+            self.earn(owner, amber as i64, fish as i64);
+        }
+        let afford = |s: &Scene| {
+            let (a, f) = s.funds(owner);
+            a >= amber && f >= fish
+        };
+        if spell == Spell::Flame {
+            let brewing = self.brain_flames.get(&owner).is_some_and(|f| f.0 > 0.0);
+            if !brewing && afford(self) {
+                self.earn(owner, -(amber as i64), -(fish as i64));
+                self.brain_flames.entry(owner).or_default().0 = crate::clock::ticks(250);
+            }
+            return;
+        }
+        for id in ships {
+            if !afford(self) {
+                break;
+            }
+            self.earn(owner, -(amber as i64), -(fish as i64));
+            self.pending_ship_casts.push((spell, id));
+        }
+    }
+
+    /// The brains' players' Flame: brewing, then burning.
+    pub(super) fn run_brain_flames(&mut self, dt: f32) {
+        for (brew, flame) in self.brain_flames.values_mut() {
+            if *brew > 0.0 {
+                *brew -= dt;
+                if *brew <= 0.0 {
+                    *brew = 0.0;
+                    *flame += crate::magic::FLAME_SECONDS;
+                }
+            } else {
+                *flame = (*flame - dt).max(0.0);
+            }
+        }
+    }
+
     /// Casts a shield or the phantom on ship `id` for nothing (0x47acf0,
     /// each ship of a fleet through 0x479c20), as the player's `cast_on`
     /// does. The Flame is the player's in the port, not a ship's: not
@@ -4310,6 +4400,8 @@ mod miss007 {
     /// deposits by difficulty (0x48b180 amber, 0x48ebc0 fish: easy all,
     /// normal the last three, hard none), and the fleets' numbers.
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // The Persians' studies at the start (the main's 0x8d1).
+        scene.persian_bonus(&[15], false, &[]);
         let (x, y) = if scene.rng.next() & 1 == 0 {
             (41, 69)
         } else {
@@ -5197,6 +5289,8 @@ mod miss008 {
     /// purse (normal 5000 amber and fish, hard 10000: 0x4a8de0, 0x4a8c30),
     /// and the fleets' numbers.
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // The Persians' studies at the start (the main's 0x8d1).
+        scene.persian_bonus(&[15], false, &[3]);
         let level = difficulty();
         if level == NORMAL {
             for (x, y) in [(12, 34), (13, 36)] {
@@ -6075,6 +6169,8 @@ mod miss009 {
     /// a wild sea monster comes up at (33, 14) on normal and hard
     /// (0x493780), a siren sings at (31, 14) on hard (0x404a20).
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // The Persians' studies at the start (the main's 0x8d1).
+        scene.persian_bonus(&[14], false, &[2, 3]);
         let level = difficulty();
         let t = TILE_SIZE as f32;
         let barrel = |scene: &mut Scene, (x, y), amount, caches: &mut Caches| {
@@ -7004,6 +7100,8 @@ mod miss010 {
     /// hard (0x4a8de0 and 0x4a8c30 add). The dragon's nest is laid by
     /// `place_scripted`.
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // The Persians' studies at the start (the main's 0x8d1).
+        scene.persian_bonus(&[15], false, &[2, 3]);
         let level = difficulty();
         let t = TILE_SIZE as f32;
         let at = |scene: &Scene, cell: (i32, i32)| {
@@ -7952,6 +8050,8 @@ mod miss011 {
     /// Persians get 12000, 17000 or 25000 amber and 8000, 10000 or 15000
     /// fish by difficulty (0x4a8de0 and 0x4a8c30 add).
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // The Persians' studies at the start (the main's 0x8d1).
+        scene.persian_bonus(&[14], true, &[2, 3]);
         let level = difficulty();
         for (x, y) in [(57, 26), (57, 35), (51, 34)] {
             scene.add_deposit(0x190, (x, y, 1, 1), data, caches);
@@ -8629,9 +8729,8 @@ mod miss011 {
             _ => None,
         };
         if let Some(spell) = spell {
-            for id in scene.fleet_ships(STRIKERS) {
-                scene.pending_ship_casts.push((spell, id));
-            }
+            let ships = scene.fleet_ships(STRIKERS);
+            scene.brain_cast_fleet(ships, spell, false);
         }
         set_var(scene, CASTER, SPELL, NONE);
     }
@@ -9075,6 +9174,8 @@ mod miss012 {
     /// fish by difficulty, player 14 15000, 15000 or 25000 and 10000,
     /// 10000 or 15000 (0x4a8de0 and 0x4a8c30 add).
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // The Persians' studies at the start (the main's 0x8d1).
+        scene.persian_bonus(&[15, 14], true, &[2, 3]);
         let level = difficulty();
         for x in [40, 45, 53] {
             scene.add_deposit(0x190, (x, 0, 1, 1), data, caches);
@@ -9828,15 +9929,17 @@ mod miss012 {
                 events: W,
             },
             20 => Op::Custom(|scene, k| {
+                // Through the war temple (0x47acf0, 0x42f470): the Flame
+                // credited one cast (pay 1), the shields not.
                 let spell = match var(scene, k, SPELL) {
-                    12 => Some(Spell::Phantom),
-                    15 => Some(Spell::ProtectWeapons),
+                    9 => Some((Spell::Flame, true)),
+                    12 => Some((Spell::Phantom, false)),
+                    15 => Some((Spell::ProtectWeapons, false)),
                     _ => None,
                 };
-                if let Some(spell) = spell {
-                    for id in scene.fleet_ships(k) {
-                        scene.pending_ship_casts.push((spell, id));
-                    }
+                if let Some((spell, pay)) = spell {
+                    let ships = scene.fleet_ships(k);
+                    scene.brain_cast_fleet(ships, spell, pay);
                 }
                 25
             }),
@@ -10197,6 +10300,8 @@ mod miss013 {
     /// fish by difficulty, player 14 15000, 15000 or 25000 and 10000,
     /// 10000 or 15000 (0x4a8de0 and 0x4a8c30 add).
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
+        // The Persians' studies at the start (the main's 0x8d1).
+        scene.persian_bonus(&[15, 14], true, &[2, 3]);
         let level = difficulty();
         for (x, y) in [(47, 0), (49, 1), (38, 0)] {
             scene.add_deposit(0x190, (x, y, 1, 1), data, caches);
@@ -11130,15 +11235,17 @@ mod miss013 {
                 events: W,
             },
             10 => Op::Custom(|scene, k| {
+                // Through the war temple (0x47acf0, 0x42f470): the Flame
+                // credited one cast (pay 1), the shields not.
                 let spell = match var(scene, k, SPELL) {
-                    12 => Some(Spell::Phantom),
-                    15 => Some(Spell::ProtectWeapons),
+                    9 => Some((Spell::Flame, true)),
+                    12 => Some((Spell::Phantom, false)),
+                    15 => Some((Spell::ProtectWeapons, false)),
                     _ => None,
                 };
-                if let Some(spell) = spell {
-                    for id in scene.fleet_ships(k) {
-                        scene.pending_ship_casts.push((spell, id));
-                    }
+                if let Some((spell, pay)) = spell {
+                    let ships = scene.fleet_ships(k);
+                    scene.brain_cast_fleet(ships, spell, pay);
                 }
                 25
             }),

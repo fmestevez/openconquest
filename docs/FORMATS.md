@@ -2580,15 +2580,15 @@ miss008 (0x463240):
   6 and 12's and restarts member 7. On attacking, members 5, 6 and 11
   have member 2 cast spell 15, 9 or 12 on their ships, and member 10
   spell 9 on member 7's (0x47acf0: kinds 9, 12, 15, 16, cast by 0x479c20
-  on each ship, paid by member 2's player; not ported).
+  on each ship, paid by member 2's player). These go to member (1, 2)'s
+  war temple, and miss008 has none, so none is cast.
 - **The start.** Easy and normal lay amber at (12, 41) and (17, 35), fish
   at (4, 34) and a leviathan zone at (25, 33, 5, 5) (0x4960b0: message
   0x167d with class 0x192, fields 7 and 8 the corner, 10 and 11 the
   size); normal adds amber at (12, 34) and (13, 36) and fish at (2, 42);
   hard lays amber at (54, 31), (49, 31) and fish at (55, 33) in the
   Persians' waters. The Persians get 5000 amber and fish on normal, 10000
-  on hard (0x4a8de0, 0x4a8c30), technology bit 79 and workshop levels
-  (not ported).
+  on hard (0x4a8de0, 0x4a8c30), technology bit 79 and workshop levels (the port: arming 2, ram, armour 2; from miss011 the workshop's rates 1 and 2, ranges and damages 2; the unique ships studied; bits 78, 79 every player has anyway).
 
 miss009 (0x4663d0):
 
@@ -2629,7 +2629,8 @@ miss009 (0x4663d0):
   player's ships carrying heroes (ship `+0x259`) for 500 ticks while the
   player is in those waters. Member 6 mends prizes (message 0x5d97).
   Members 3 and 4 cast kinds 9 and 15 on their own ships when they fight
-  (0x47acf0; not ported).
+  (0x47acf0); a ship group cannot cast (0x4a09d0 drops it) and the Flame
+  needs a spell the Persians never learn, so none is.
 - **The tick.** About once every 50 ticks: lightning (0x42f580 kind 6, a
   free cast) at (10 or 12, 9) the first time the player comes into (0, 9,
   18, 5); on normal and hard, while the wizard lives, lightning on each of
@@ -2705,7 +2706,7 @@ miss010 (0x46a0f0; constructor 0x469d90):
   (39, 40) and 2500 amber in the Persian yard at (26, 30); normal adds
   amber at (29, 12) and (39, 22), fish at (56, 23) and a barrel of 2000 at
   (27, 19). The Persians get 10000 amber and 8000 fish on normal, twice
-  that on hard, technology bits 78, 79 and workshop levels (not ported).
+  that on hard, technology bits 78, 79 and workshop levels (the port: arming 2, ram, armour 2; from miss011 the workshop's rates 1 and 2, ranges and damages 2; the unique ships studied; bits 78, 79 every player has anyway).
 
 miss011 (0x46e8e0; members 0x46b8d0-0x46e110):
 
@@ -2774,7 +2775,7 @@ miss011 (0x46e8e0; members 0x46b8d0-0x46e110):
 - **The start.** Amber at (57, 26), (57, 35) and (51, 34) and fish at
   (53, 31) on every difficulty; the Persians get 12000, 17000 or 25000
   amber and 8000, 10000 or 15000 fish (added) and technology and workshop
-  levels (not ported).
+  levels (the port: arming 2, ram, armour 2; from miss011 the workshop's rates 1 and 2, ranges and damages 2; the unique ships studied; bits 78, 79 every player has anyway).
 
 miss012 (0x472fa0; members 0x46fb80-0x472890, repair 0x475a70, 0x477190):
 
@@ -2843,8 +2844,7 @@ miss012 (0x472fa0; members 0x46fb80-0x472890, repair 0x475a70, 0x477190):
 - **The start.** Amber at (40, 0), (45, 0) and (53, 0) and fish at
   (52, 5) on every difficulty; player 15 gets 10000, 15000 or 25000 amber
   and 8000, 10000 or 15000 fish, player 14 15000, 15000 or 25000 and
-  10000, 10000 or 15000 (added), and both technology and workshop levels
-  (not ported).
+  10000, 10000 or 15000 (added), and both technology and workshop levels (the port: arming 2, ram, armour 2; from miss011 the workshop's rates 1 and 2, ranges and damages 2; the unique ships studied; bits 78, 79 every player has anyway).
 
 miss013 (0x477930; members 0x4741b0-0x477210, judge 0x473f40):
 
@@ -2922,7 +2922,7 @@ miss013 (0x477930; members 0x4741b0-0x477210, judge 0x473f40):
   (36, 1) on every difficulty; the purses are miss012's (player 15:
   10000, 15000 or 25000 amber and 8000, 10000 or 15000 fish; player 14:
   15000, 15000 or 25000 and 10000, 10000 or 15000; added), with
-  technology and workshop levels (not ported).
+  technology and workshop levels (the port: arming 2, ram, armour 2; from miss011 the workshop's rates 1 and 2, ranges and damages 2; the unique ships studied; bits 78, 79 every player has anyway).
 
 Primitives not yet ported (the later brains use them):
 
@@ -3526,3 +3526,14 @@ the share of the hull lost. Armour fitted (`+0x27a`) takes 5% (medium) or
 also slows. Each active feather of Boreas (item kind 12, flag 0x10) adds its
 amount in percent to the top speed and, in a ram (0x4c1c60), to the
 rammer's blow.
+
+**Brains' casts on their ships** (0x47acf0 through 0x479c20): an order
+(message 0x3ee) to the casting member for each ship; a ship group drops it
+(0x4a09d0), a building group queues it (0x42c430) and its war temple
+carries one out a pass (every 50 ticks, 0x42b910, 0x42a500) when the town
+check 0x43fee0 passes (a war temple standing and idle, the permit, the
+spell learnt, the money). Each cast is paid in full (0x42f470); `pay`
+credits one cast's price first (0x4a8eb0, 0x4a8f40). A shield or the
+phantom lasts 3000 ticks more (0xda9a, 0xda97); the Flame is the player's:
+brewed 250 ticks, then 1500 more of it (+0xa8, +0xb0). The port casts at
+once, each ship paid, the Flame brewed once a call.
