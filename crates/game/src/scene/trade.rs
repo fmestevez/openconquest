@@ -1336,78 +1336,73 @@ impl Scene {
     }
 
     /// Whether building class `class` can go up on cell `(cx, cy)` for the
-    /// settlement `settlement`; on success, the facing (for ports and
-    /// shipyards, towards the water).
+    /// settlement `origin` (the town's check, message 0x4eb, 0x42dae0); on
+    /// success, the facing (ports, shipyards and docks towards the water).
+    /// A town builds next to one of its own cells: the settlement's, or
+    /// one of its buildings' or forts' (any of the 8 about); its forts
+    /// with no rule for the tile (flags 0x20), the rest as `check_ground`
+    /// says (0x15 inland, 0x1e on the shore). A ship founding (`origin` a
+    /// ship) must lie near the site.
     pub fn check_site(&self, origin: u32, class: u32, cx: i32, cy: i32) -> Result<u32, String> {
         let t = TILE_SIZE as f32;
         let i = self.object_index(origin).ok_or("No settlement")?;
         let home = &self.objects[i];
-        // Settlements build around their own cells; ships found settlements
-        // on the shore they lie at.
-        let (x0, y0, x1, y1, reach, too_far) = match (&home.ship, home.cell) {
-            (None, Some((hx, hy))) => {
-                let size = building_cells(home);
-                // Moorages and shipyards a cell further than the rest.
-                let reach = if matches!(class, PORT | SHIPYARD | DOCK) {
-                    BUILD_RADIUS
-                } else {
-                    BUILD_RADIUS - 1
-                };
-                (
-                    hx,
-                    hy,
-                    hx + size - 1,
-                    hy + size - 1,
-                    reach,
-                    "Too far from the settlement",
-                )
+        if home.ship.is_some() {
+            let (hx, hy) = ((home.x / t).floor() as i32, (home.y / t).floor() as i32);
+            if (hx - cx).abs().max((hy - cy).abs()) > FOUND_REACH {
+                return Err("The ship must lie next to the site".into());
             }
-            _ => {
-                let (hx, hy) = ((home.x / t).floor() as i32, (home.y / t).floor() as i32);
-                (
-                    hx,
-                    hy,
-                    hx,
-                    hy,
-                    FOUND_REACH,
-                    "The ship must lie next to the site",
-                )
-            }
+            return self.check_ground(class, cx, cy);
+        }
+        let owner = home.owner;
+        let own_cell = |x: i32, y: i32| {
+            self.objects.iter().enumerate().any(|(k, o)| {
+                let Some((ox, oy)) = o.cell else { return false };
+                let n = building_cells(o);
+                let on = (ox..ox + n).contains(&x) && (oy..oy + n).contains(&y);
+                on && o.owner == owner
+                    && match o.class {
+                        ObjectClass::Building(SETTLEMENT | TOWN) => o.id == origin,
+                        ObjectClass::Building(0x34..=0x3e) => {
+                            self.home_settlement(k) == Some(origin)
+                        }
+                        _ => false,
+                    }
+            })
         };
-        let dx = (x0 - cx).max(cx - x1).max(0);
-        let dy = (y0 - cy).max(cy - y1).max(0);
-        if dx.max(dy) > reach {
-            return Err(too_far.into());
+        let beside = (-1..=1)
+            .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+            .any(|(dx, dy)| (dx, dy) != (0, 0) && own_cell(cx + dx, cy + dy));
+        if !beside {
+            return Err("Too far from the settlement".into());
+        }
+        if (0x34..=0x36).contains(&class) {
+            self.free_ground(cx, cy)?;
+            return Ok(0);
         }
         self.check_ground(class, cx, cy)
     }
 
-    /// Whether cell `(cx, cy)` is land with no building on it.
-    pub(super) fn free_land(&self, cx: i32, cy: i32) -> Result<(), String> {
-        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
-        if cx < 0 || cy < 0 || cx >= w || cy >= h || self.nav.is_water(cx, cy) {
-            return Err("Buildings go on land".into());
+    /// The edges of the land tile on cell `(x, y)` that meet the water, a
+    /// bit each: 1 north, 2 east, 4 south, 8 west (0x5acf13 by the tile's
+    /// variant); none for inland tiles.
+    fn tile_edges(&self, x: i32, y: i32) -> u8 {
+        const EDGES: [u8; 45] = [
+            0, 0, 9, 9, 9, 9, 9, 3, 3, 3, 3, 3, 12, 12, 12, 12, 12, 6, 6, 6, 6, 6, 0, 0, 0, 0, 0,
+            0, 0, 0, 8, 8, 2, 2, 1, 1, 1, 4, 4, 4, 4, 4, 0, 0, 0,
+        ];
+        if x < 0 || y < 0 || x as u32 >= self.grid.width || y as u32 >= self.grid.height {
+            return 0;
         }
-        let taken = self.objects.iter().any(|o| {
-            o.cell
-                .filter(|_| matches!(o.class, ObjectClass::Building(_)))
-                .is_some_and(|(ox, oy)| {
-                    let n = building_cells(o);
-                    (ox..ox + n).contains(&cx) && (oy..oy + n).contains(&cy)
-                })
-        });
-        if taken {
-            return Err("There is no room there".into());
-        }
-        Ok(())
+        let v = self.grid.get(0, x as u32, y as u32).variant as usize;
+        EDGES.get(v).copied().unwrap_or(0)
     }
 
-    /// Whether building class `class` can stand on cell `(cx, cy)`, wherever
-    /// it is ordered from; on success, the facing (see `check_site`). As
-    /// probed on the original: a free land cell (trees and rocks do not
-    /// matter); moorages and shipyards on the shore, water beside them;
-    /// other buildings inland, land on all four sides.
-    pub fn check_ground(&self, class: u32, cx: i32, cy: i32) -> Result<u32, String> {
+    /// Whether a building may stand on cell `(cx, cy)` at all (0x42dae0's
+    /// first tests): land, nothing standing there, and none of tile sets
+    /// 0x1a and 0x30 on layers 5-7 (0x503150; trees and rocks do not
+    /// matter).
+    pub(super) fn free_ground(&self, cx: i32, cy: i32) -> Result<(), String> {
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
         if cx < 0 || cy < 0 || cx >= w || cy >= h {
             return Err("Off the map".into());
@@ -1415,38 +1410,99 @@ impl Scene {
         if self.nav.is_water(cx, cy) {
             return Err("Buildings go on land".into());
         }
-        let taken = self.objects.iter().any(|o| {
-            let Some((ox, oy)) = o
-                .cell
-                .filter(|_| matches!(o.class, ObjectClass::Building(_)))
-            else {
-                return false;
-            };
-            let size = building_cells(o);
-            (ox..ox + size).contains(&cx) && (oy..oy + size).contains(&cy)
+        let g = &self.grid;
+        let barred = (5..g.layers.min(8)).any(|l| {
+            let t = g.get(l, cx as u32, cy as u32);
+            !t.is_empty() && matches!(t.tileset, 0x1a | 0x30)
         });
-        if taken {
+        let taken = self.objects.iter().any(|o| {
+            o.cell
+                .filter(|_| {
+                    matches!(
+                        o.class,
+                        ObjectClass::Building(_)
+                            | ObjectClass::Barbarian(_)
+                            | ObjectClass::Castle(_)
+                            | ObjectClass::HarpyNest
+                            | ObjectClass::CreatureSpawn
+                            | ObjectClass::HeroHouse
+                    )
+                })
+                .is_some_and(|(ox, oy)| {
+                    let n = building_cells(o);
+                    (ox..ox + n).contains(&cx) && (oy..oy + n).contains(&cy)
+                })
+        });
+        if barred || taken {
             return Err("There is no room there".into());
         }
-        let sides = [(0, (1, 0)), (2, (0, -1)), (4, (-1, 0)), (6, (0, 1))];
-        let inside = |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y);
-        if !matches!(class, PORT | SHIPYARD | DOCK) {
-            // Beyond the map's edge counts as land.
-            let inland = sides.iter().all(|&(_, (dx, dy))| {
-                !inside(cx + dx, cy + dy) || !self.nav.is_water(cx + dx, cy + dy)
+        Ok(())
+    }
+
+    /// Whether building class `class` can stand on cell `(cx, cy)`, wherever
+    /// it is ordered from; on success, the facing. Inland buildings on an
+    /// inland tile; ports, shipyards and docks on a shore tile facing
+    /// water south, north, west or (whatever the tile) east (0x42dae0
+    /// flags 2 and 8); forts founded by ship on a shore tile (0x4e4420,
+    /// flags 0x20); a settlement on 2 x 2 free inland cells with a shore
+    /// tile in the ring about them (0x42e1e0).
+    pub fn check_ground(&self, class: u32, cx: i32, cy: i32) -> Result<u32, String> {
+        if class == SETTLEMENT {
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                self.free_ground(cx + dx, cy + dy)?;
+                if self.tile_edges(cx + dx, cy + dy) != 0 {
+                    return Err("This must be built inland, away from the shore".into());
+                }
+            }
+            let shore = (cy - 1..=cy + 2).any(|y| {
+                (cx - 1..=cx + 2).any(|x| {
+                    let ring = x == cx - 1 || x == cx + 2 || y == cy - 1 || y == cy + 2;
+                    ring && !self.nav.is_water(x, y)
+                        && x >= 0
+                        && y >= 0
+                        && (x as u32) < self.grid.width
+                        && (y as u32) < self.grid.height
+                        && self.tile_edges(x, y) != 0
+                })
             });
-            return if inland {
+            return if shore {
+                Ok(0)
+            } else {
+                Err("A settlement goes near the shore".into())
+            };
+        }
+        self.free_ground(cx, cy)?;
+        let edges = self.tile_edges(cx, cy);
+        if (0x34..=0x36).contains(&class) {
+            return if edges != 0 {
+                Ok(0)
+            } else {
+                Err("Forts are founded on the shore".into())
+            };
+        }
+        if !matches!(class, PORT | SHIPYARD | DOCK) {
+            return if edges == 0 {
                 Ok(0)
             } else {
                 Err("This must be built inland, away from the shore".into())
             };
         }
-        // Facing 0 = water to the east, 2 north, 4 west, 6 south.
-        sides
-            .into_iter()
-            .find(|&(_, (dx, dy))| self.nav.is_water(cx + dx, cy + dy))
-            .map(|(facing, _)| facing)
-            .ok_or_else(|| "Moorages and shipyards must be built on the shore".into())
+        if edges == 0 {
+            return Err("Moorages and shipyards must be built on the shore".into());
+        }
+        // Facing 6 south, 2 north, 4 west on the tile's water edges, then
+        // 0 east whatever the tile.
+        let water = |x: i32, y: i32| self.nav.is_water(x, y);
+        [
+            (6, 4, (0, 1)),
+            (2, 1, (0, -1)),
+            (4, 8, (-1, 0)),
+            (0, 0, (1, 0)),
+        ]
+        .into_iter()
+        .find(|&(_, bit, (dx, dy))| (bit == 0 || edges & bit != 0) && water(cx + dx, cy + dy))
+        .map(|(facing, ..)| facing)
+        .ok_or_else(|| "Moorages and shipyards must face the water".into())
     }
 
     /// Starts putting up building `class` on cell `(cx, cy)` near settlement
@@ -1727,16 +1783,7 @@ impl Scene {
             self.objects[i].ship.as_mut().unwrap().task = None;
             let id = self.objects[i].id;
             let own = self.is_own(&self.objects[i]);
-            // A computer player's fort goes on the shore cell its search
-            // chose (0x409b30), not the player's inland ground.
-            let placed = if !own && class != SETTLEMENT {
-                self.free_land(cx, cy).and_then(|()| {
-                    self.place_building_facing(id, class, cx, cy, Some(0), data, caches)
-                })
-            } else {
-                self.place_building(id, class, cx, cy, data, caches)
-            };
-            if let Err(e) = placed {
+            if let Err(e) = self.place_building(id, class, cx, cy, data, caches) {
                 if !own {
                     return;
                 }
@@ -2317,11 +2364,7 @@ impl Scene {
         if self.funds(owner).0 < cost {
             return Err("Not enough amber".into());
         }
-        if human || class == SETTLEMENT {
-            self.check_ground(class, cx, cy)?;
-        } else {
-            self.free_land(cx, cy)?;
-        }
+        self.check_ground(class, cx, cy)?;
         let t = TILE_SIZE as f32;
         let path = self
             .plan_route(i, cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0)

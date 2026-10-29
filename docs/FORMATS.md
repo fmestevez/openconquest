@@ -1440,11 +1440,28 @@ rectangle w - 2, h + 2 when pressed. The button's help line (0x505e70) ends
 The landscape grid (`[0x5c74fc]`: width, height, cell width and height as
 shorts, then 24 bytes a cell) holds each cell's tile types, a nibble a map
 layer from the tileset records' type byte (+4: sea 7, shelf 1, land 8, ...;
-0x5456c0), and the object standing there (+12). Probed on the original in
-miss000: a building goes on a free land cell, trees and rocks no matter; a
-moorage or shipyard on the shore, water beside it, up to two cells from its
-settlement's own cells; other buildings inland (land on all four sides, the
-map's edge counting as land), up to one cell away. A moorage's front is the
+0x5456c0), and the object standing there (+12). The town's check (message 0x4eb to
+0x42dae0: {x, y, nation, slot, flags, id}, answering ok and the facing):
+nothing standing on the cell (unless flag 0x40), ground a building may
+stand on (0x503150: tile sets 0x1a, 0x30 on layers 5-7 bar it; trees and
+rocks do not, 0x4ec and 0x4ea clear them), its third object slot empty, no
+nibble 6 or 7 of 4, land on layer 0; with flag 2 a shore tile, with 1 an
+inland one (the 4-way edges 0x5acf13 by the layer-0 variant: 9 for 2-6, 3
+for 7-11, 12 for 12-16, 6 for 17-21, 8 for 30-31, 2 for 32-33, 1 for
+34-36, 4 for 37-41, none else; 1 north, 2 east, 4 south, 8 west); with
+flag 4 one of the 8 cells about holding the settlement `id` or one of its
+buildings or forts (+0x1c8 = id); with flag 8 a facing, the first of south,
+north and west whose edge is set and whose cell is not land, then east
+whatever the edge. The interface asks it as the pointer moves (0xc451):
+forts 0x20, ports and shipyards 0x1e, the rest 0x15; a refused cell shows
+the ban cursor and takes no click. (An earlier probe here saw a moorage
+two cells from a settlement; by the code one goes beside a cell of the
+town's, which a building of it there would explain.) A ship founds
+(0x4aa990, 0x4b3370, checking with 0x4e4420 on arrival and after landing)
+a fort on a shore tile (the nation's permission, then 0x4eb with flags
+0x20 and no id) and a settlement on 2 x 2 free inland cells with a shore
+tile in the 12 about them (0x42e1e0); it berths beside it from anywhere
+(0x4b2710: for a fort the nearest side cell, east, west, south, north). A moorage's front is the
 cell its record field 10 faces (0 east, 2 north, 4 west, 6 south), where
 ships berth.
 
