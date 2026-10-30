@@ -36,6 +36,9 @@ pub struct SaveGame {
     #[serde(default)]
     pub rnd_init: Option<u32>,
     pub constructions: Vec<Construction>,
+    /// Standing settlements' and shipyards' own frames (`+0x7c->+0x45`).
+    #[serde(default)]
+    pub standing_frames: Vec<(u32, Construction)>,
     pub trainings: Vec<Training>,
     pub garrisons: BTreeMap<u32, [u32; 9]>,
     pub purses: Vec<((u32, u32), (u32, u32))>,

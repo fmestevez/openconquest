@@ -249,9 +249,8 @@ impl Scene {
     /// pictures by vt+0x38), keeping the condition the construction had
     /// reached (`+0xa8` is not written): vt+0x54 (0x424910) sets the
     /// class's maximum `+0xb0` and the hit points `+0xb0 x +0xa8 / 100`,
-    /// rescaled, not reset. (The frame an upgrade starts from is the
-    /// standing picture's own, 0x422e30 zeroing it only when `>= n`: the
-    /// port starts it at 0, see `upgrade`.)
+    /// rescaled, not reset; the picture keeps the construction's frame
+    /// unless `>= n` (0x422e30, `standing_picture`).
     fn upgrade_halt(
         &mut self,
         id: u32,
@@ -299,6 +298,9 @@ impl Scene {
                 self.objects[i].frames = frames;
             }
         }
+        // Standing again (vt+0x38): the construction's frame kept unless
+        // `>= n`.
+        self.standing_picture(id, c.frame);
         true
     }
 

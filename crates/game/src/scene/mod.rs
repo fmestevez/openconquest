@@ -256,6 +256,10 @@ pub struct Scene {
     rnd_init: Option<u32>,
     /// Buildings going up.
     pub constructions: Vec<Construction>,
+    /// The frame a standing settlement or shipyard's picture is at
+    /// (`+0x7c->+0x45`, stepped by 0x4230f0 in state 1; its `frame`,
+    /// `started` (`+0xbc`) and `wait`), which an upgrade starts from.
+    pub standing_frames: BTreeMap<u32, Construction>,
     /// Amber and fish of the computer players.
     pub purses: std::collections::BTreeMap<(u32, u32), (u32, u32)>,
     /// Research levels per player (missing: all 0).
@@ -705,6 +709,7 @@ impl Scene {
             new_ships: Vec::new(),
             rnd_init: None,
             constructions: Vec::new(),
+            standing_frames: BTreeMap::new(),
             messages: Vec::new(),
             sounds: Vec::new(),
             trainings: Vec::new(),
@@ -1034,6 +1039,11 @@ impl Scene {
             yard_clocks: self.yard_clocks.iter().map(|(&k, &v)| (k, v)).collect(),
             rnd_init: self.rnd_init,
             constructions: self.constructions.clone(),
+            standing_frames: self
+                .standing_frames
+                .iter()
+                .map(|(&k, v)| (k, v.clone()))
+                .collect(),
             trainings: self.trainings.clone(),
             garrisons: self.garrisons.clone(),
             purses: self.purses.iter().map(|(k, v)| (*k, *v)).collect(),
@@ -1175,6 +1185,7 @@ impl Scene {
                 .map_or(0, |i| scene.objects[i].frames.len() as u32);
             scene.constructions[k].upgrade_save(n);
         }
+        scene.standing_frames = save.standing_frames.iter().cloned().collect();
         scene.trainings = save.trainings.clone();
         scene.trainings.iter_mut().for_each(Training::upgrade_save);
         scene.garrisons = save.garrisons.clone();
@@ -2220,6 +2231,9 @@ impl Scene {
             self.run_brain_jobs();
             self.run_town_links();
             self.run_yards(data, caches);
+            // Standing pictures before construction, so one finished this
+            // tick takes its first standing step on the next (+0xbc).
+            self.step_standing_frames();
             self.step_constructions(data, caches);
             for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {
                 self.big_reef(x, y, kind, data, caches);

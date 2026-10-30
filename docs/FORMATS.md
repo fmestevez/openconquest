@@ -2696,11 +2696,25 @@ at 0x43c80e, the button off) refuse a fort when `(stone standing + going
 up) x 3 + (middle ...) x 2 + wooden ... + the new one's weight (1, 2, 3)
 > 15`, standing being the counters `+0x21c`, `+0x214`, `+0x218` kept by
 0x2873 / 0x2874. The port: `Towns::going_up`, `Scene::forts_full`,
-`fort_down`. Not ported: the frame an
-upgrade starts from (the port's standing buildings keep no frame of their
-own: it starts at 0; porting it needs each standing building's frame
-stepped by 0x4230f0 and reset in step by every vt+0x38 call, 41 indirect
-call sites not traced); nor the pointer's own pause test.
+`fort_down`. The frame an upgrade starts from: 0x4230f0 runs for every
+state each tick: with `+0xbc` 0 or `now >= +0x7c->+0x81 + +0x7d` (the
+delay, `cycle[state] / n` from 0x422e30), `+0xbc = 1`, the time kept, the
+frame `+0x45` drawn and one added (vt+0x40); under `n`, the state's
+per-frame work (vt+0x44); else by state: 0 stands it (state 1, vt+0x38,
+the finished call), 1 and 0x10 back to 0, 2 the ruins' end, 3 0x424740.
+The port keeps each standing settlement's and shipyard's frame
+(`Scene::standing_frames`, saved; `step_standing_frames` before the
+constructions in the tick) and resets it at the vt+0x38 calls it knows:
+the end of a construction (the frame reached, zeroed if `>= n`), an
+upgrade's cancel (the construction's frame, the same), and the creation
+or load (no entry: frame 0, a step at once); the upgrade takes it
+(`upgrade`, 0 if `>= n` of the construction picture), its first step on
+the next tick. The game's standing settlement and shipyard pictures are
+one frame (miss000), so the frame there is always 0. Not traced: the
+other indirect vt+0x38 calls (41 sites in all; a picture changing with
+the condition among them), which would only set `+0xbc` 0 (a step on the
+next tick) and zero a frame `>= n`. Not ported: the pointer's own pause
+test.
 
 **Forts' fire.** A fort's or barbarian structure's 12 groups (group k
 the units of item k) shoot by mode `+0x3a` (0x4469c0): 0 not at all; bit

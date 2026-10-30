@@ -692,16 +692,10 @@ impl Scene {
         // condition `+0xa8` is not written: vt+0x54 (0x424910) sets the
         // new class's maximum and the hit points to it times the
         // condition it had, until the first step (the first tick) writes
-        // the frame's share. (Not ported: the frame it starts from, the
-        // standing picture's own, `+0x7c->+0x45`, kept by 0x422e30 unless
-        // it is `>= n`. A standing building steps that frame in 0x4230f0
-        // as a building going up does (a step every `75 / n` ticks, the
-        // first on the first tick after its picture was set; state 1 back
-        // to 0 on reaching n), and every vt+0x38 call (0x422e30: standing,
-        // and each picture change, the damage digit among them) clears
-        // `+0xbc`, so the next tick steps at once: which calls those are
-        // (41 indirect vt+0x38 sites) is not traced. The port's standing
-        // buildings keep no frame of their own; it starts from 0.)
+        // the frame's share. It starts from the standing picture's own
+        // frame, `+0x7c->+0x45` (`standing_frames`), which the sprite load
+        // and 0x422e30 keep unless it is `>= n`; vt+0x38 clears `+0xbc`,
+        // so the first step is on the next tick.
         if let Ok(frames) =
             objects::building_frames(data, caches, &rec, BuildingState::Construction)
         {
@@ -715,8 +709,13 @@ impl Scene {
         }
         obj.progress = Some(0.0);
         self.earn(owner, -(cost as i64), 0);
+        let n = obj.frames.len() as u32;
+        let frame = self.standing_frames.remove(&id).map_or(0, |s| s.frame);
         self.objects[i] = obj;
-        self.constructions.push(Construction::new(id, true));
+        let mut c = Construction::new(id, true);
+        c.frame = if frame >= n { 0 } else { frame };
+        c.frames = n;
+        self.constructions.push(c);
         // A shipyard made a dock leaves its town's list, to join it again
         // once it stands (Dock 0x416340: 0x2874, `+0x1d4 = 0`).
         if to == DOCK {
@@ -1890,6 +1889,68 @@ impl Scene {
     /// call plays (events 188-191 by nation, for the viewing player).
     /// (The original leaves `+0xac` at the last step's share while `+0xa8`
     /// is 100; the port keeps one figure and makes it whole.)
+    /// A tick of the standing settlements' and shipyards' own frames
+    /// (0x4230f0 in state 1, the loop all states share): with `+0xbc` 0
+    /// (after a picture is set, vt+0x38 = 0x422e30) or `now >= last +
+    /// BUILDING_CYCLE[1] / n`, a step: `+0xbc = 1`, the frame drawn and
+    /// one added, back to 0 on reaching `n`. The frame is what an upgrade
+    /// starts from (`upgrade`).
+    pub(super) fn step_standing_frames(&mut self) {
+        for i in 0..self.objects.len() {
+            let o = &self.objects[i];
+            if !matches!(o.class, ObjectClass::Building(SETTLEMENT | SHIPYARD))
+                || o.owner.is_none()
+                || self.constructions.iter().any(|c| c.site == o.id)
+            {
+                continue;
+            }
+            let n = (o.frames.len() as u32).max(1);
+            let s = self.standing_frames.entry(o.id).or_default();
+            s.frames = n;
+            let delay = objects::BUILDING_CYCLE[1] / n;
+            if s.started {
+                s.wait += 1;
+                if s.wait < delay {
+                    continue;
+                }
+            }
+            s.started = true;
+            s.wait = 0;
+            s.frame += 1;
+            if s.frame >= n {
+                s.frame = 0;
+            }
+        }
+        let alive: Vec<u32> = self.objects.iter().map(|o| o.id).collect();
+        self.standing_frames.retain(|id, _| alive.contains(id));
+    }
+
+    /// A standing settlement's or shipyard's picture set (vt+0x38 =
+    /// 0x422e30): its frame kept unless `>= n`, then 0; `+0xbc` cleared,
+    /// so the next tick steps. From `frame` (the picture's frame at the
+    /// moment).
+    pub(super) fn standing_picture(&mut self, id: u32, frame: u32) {
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        if !matches!(
+            self.objects[i].class,
+            ObjectClass::Building(SETTLEMENT | SHIPYARD)
+        ) {
+            return;
+        }
+        let n = self.objects[i].frames.len() as u32;
+        self.standing_frames.insert(
+            id,
+            Construction {
+                site: id,
+                frame: if frame >= n { 0 } else { frame },
+                frames: n,
+                ..Construction::default()
+            },
+        );
+    }
+
     pub(super) fn step_constructions(&mut self, data: &GameData, caches: &mut Caches) {
         let mut done = Vec::new();
         for k in 0..self.constructions.len() {
@@ -1911,7 +1972,7 @@ impl Scene {
             c.frame += 1;
             let f = c.frame;
             if f >= n {
-                done.push(c.site);
+                done.push((c.site, f));
                 continue;
             }
             self.objects[i].progress = Some((f as f32 + 0.5) / n as f32);
@@ -1924,7 +1985,7 @@ impl Scene {
         let alive: Vec<u32> = self.objects.iter().map(|o| o.id).collect();
         self.constructions
             .retain(|c| c.frame < c.frames.max(1) && alive.contains(&c.site));
-        for id in done {
+        for (id, last) in done {
             if let Some(h) = self
                 .object_index(id)
                 .and_then(|i| self.objects[i].combat.as_mut())
@@ -1932,6 +1993,9 @@ impl Scene {
                 h.hull = h.max_hull;
             }
             self.refresh_building(id, data, caches);
+            // Standing (0x4230f0 case 0: state 1, vt+0x38), the frame the
+            // construction reached kept unless `>= n`.
+            self.standing_picture(id, last);
             if let Some(i) = self.object_index(id) {
                 let o = &self.objects[i];
                 if self.is_own(o) {

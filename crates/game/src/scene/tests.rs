@@ -11296,3 +11296,55 @@ fn ambient_channel_sounds() {
         assert_eq!(sound_kind(n), SoundKind::Ambient, "{n}");
     }
 }
+
+/// A standing settlement's picture steps its own frame (0x4230f0 state
+/// 1: at once on the first tick, then every 75 / n ticks, back to 0 at
+/// n), and its upgrade starts the construction from that frame (0x422e30
+/// keeps it unless `>= n`; needs `OPENCONQUEST_DATA`).
+#[test]
+fn upgrade_starts_from_the_standing_frame() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let id = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.class == ObjectClass::Building(SHIPYARD))
+        .unwrap()
+        .id;
+    let i = scene.object_index(id).unwrap();
+    // The game's standing shipyard is one frame (always 0); the loop is
+    // shown over the picture made three frames long.
+    assert_eq!(scene.objects[i].frames.len(), 1);
+    let one = scene.objects[i].frames[0].clone();
+    scene.objects[i].frames = vec![one.clone(), one.clone(), one];
+    let n = 3;
+    let delay = crate::objects::BUILDING_CYCLE[1] / n;
+    assert_eq!(delay, 25);
+    for ticks in 1..=(2 * delay + 2) {
+        scene.step_standing_frames();
+        // Steps on ticks 1, 1 + delay, 1 + 2 delay, ...
+        let steps = 1 + (ticks - 1) / delay;
+        assert_eq!(scene.standing_frames[&id].frame, steps % n);
+    }
+    let frame = scene.standing_frames[&id].frame;
+    assert_eq!(frame, 0);
+    scene.step_standing_frames();
+    let frame = scene.standing_frames[&id].frame;
+    assert_eq!(frame, 0);
+    for _ in 0..delay {
+        scene.step_standing_frames();
+    }
+    let frame = scene.standing_frames[&id].frame;
+    assert_eq!(frame, 1);
+    scene.amber = 5000;
+    scene.upgrade(id, &data, &mut caches).unwrap();
+    let c = scene.construction_at(id).unwrap();
+    let nc = c.frames;
+    assert_eq!(c.frame, if frame >= nc { 0 } else { frame });
+    assert!(!c.started);
+    assert!(!scene.standing_frames.contains_key(&id));
+}
