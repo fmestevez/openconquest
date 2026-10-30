@@ -1908,23 +1908,31 @@ impl Scene {
     }
 
     /// Player `owner`'s building nearest to `(x, y)` where cargo can be
-    /// unloaded: a port, or failing that a settlement or town.
+    /// unloaded (0x4c5910 over the player's building list): a port (class
+    /// 0x39) not asleep (vt+0x2c, 0x40dfc0: `+0xa4 != 0x10`); for player 16
+    /// a barbarian structure of class 0x40. Settlements and towns take no
+    /// cargo (0x4aab00 drops an unloading order at one). (Not decoded: the
+    /// original measures by the wavefront 0x4a1e90 from the ship, the
+    /// first in the list winning ties; here the straight line.)
     pub(super) fn unloading_site(&self, owner: Option<(u32, u32)>, x: f32, y: f32) -> Option<u32> {
         let dist = |o: &MapObject| (o.x - x).powi(2) + (o.y - y).powi(2);
-        let nearest = |classes: &[u32]| {
-            self.objects
-                .iter()
-                .filter(|o| {
-                    matches!(o.class, ObjectClass::Building(c) if classes.contains(&c))
-                        && owner.is_some()
-                        && o.owner == owner
-                        // Asleep, it takes no cargo (0x4aab00).
-                        && o.asleep.is_none()
-                })
-                .min_by(|a, b| dist(a).total_cmp(&dist(b)))
-                .map(|o| o.id)
-        };
-        nearest(&[PORT]).or_else(|| nearest(&[SETTLEMENT, TOWN]))
+        owner?;
+        self.objects
+            .iter()
+            .filter(|o| o.owner == owner && self.takes_cargo(o))
+            .min_by(|a, b| dist(a).total_cmp(&dist(b)))
+            .map(|o| o.id)
+    }
+
+    /// Whether building `o` takes an unloading order from a ship of its own
+    /// player (0x4aab00 with code 0xc, 0x4ac050): a port not asleep; for
+    /// player 16 a barbarian structure of class 0x40.
+    pub(super) fn takes_cargo(&self, o: &MapObject) -> bool {
+        match o.class {
+            ObjectClass::Building(PORT) => o.owner != Some((4, 0)) && o.asleep.is_none(),
+            ObjectClass::Barbarian(0x40) => o.owner == Some((4, 0)),
+            _ => false,
+        }
     }
 
     /// How far from building `p` (in cells) a ship can come: from its
@@ -2160,8 +2168,9 @@ impl Scene {
                 let Some(p) = self.object_index(port) else {
                     return self.send_to_port(i, deposit);
                 };
-                // At a moorage's front; at a town as close as the water
-                // lets it come (it may stand a few cells inland).
+                // At a moorage's front; at player 16's barbarian structure
+                // as close as the water lets it come (not decoded: its own
+                // cell vt+0x28, which 0x4c5910 reads for it).
                 let arrived = match self.front_cell(p) {
                     Some(_) => {
                         let (bx, by) = self.berth(p);
@@ -2206,8 +2215,8 @@ impl Scene {
                 // work, it is held: move state 6, written each tick
                 // (0x4adef0 step 0x11 at 0x4ae486). Only ports take that
                 // path (the unloading order 0xc, 0x4aab00: class 0x39, for
-                // player 16 class 0x40); not decoded: whether unloading at
-                // a town has another (0x4b0590).
+                // player 16 class 0x40); 0x4b0590 is the amber collecting
+                // (sub-codes 10 / 11), and towns take no cargo.
                 let at_port = self.unloads_at_port(i, p);
                 if at_port {
                     self.objects[i].ship.as_mut().unwrap().move_state = 6;
@@ -2498,21 +2507,21 @@ impl Scene {
         Some(((mx + ux * dist as f32, my + uy * dist as f32), face))
     }
 
-    /// Sends merchant `ship` to unload its goods at own port, settlement
-    /// or town `port` (the original's unload pointer, mode 13), then back
-    /// to what it was gathering.
+    /// Sends merchant `ship` to unload its goods at own port `port` (the
+    /// original's unload pointer, mode 13: message 0x1f kind 1, event 0x40
+    /// code 0xc), then back to what it was gathering. 0x4aab00 takes it
+    /// only for a port of the ship's player (0x4ac050) not asleep; any
+    /// other target drops it, the old task kept.
     pub fn order_unload(&mut self, ship: u32, port: u32) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
-        let p = self
-            .object_index(port)
-            .ok_or("Choose one of your ports or settlements")?;
+        let p = self.object_index(port).ok_or("Choose one of your ports")?;
         let o = &self.objects[i];
         if !self.is_own(o) || o.ship.as_ref().is_none_or(|s| s.cargo < 1.0) {
             return Err("The ship has nothing to unload".into());
         }
         let b = &self.objects[p];
-        if !self.is_own(b) || !matches!(b.class, ObjectClass::Building(PORT | SETTLEMENT | TOWN)) {
-            return Err("Choose one of your ports or settlements".into());
+        if b.owner != o.owner || !self.takes_cargo(b) {
+            return Err("Choose one of your ports".into());
         }
         let deposit = match o.ship.as_ref().and_then(|s| s.task) {
             Some(Task::Gather { deposit, .. }) => deposit,

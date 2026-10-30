@@ -1761,8 +1761,35 @@ aside itself (0x4b4b50 with 0x5a) and gives up after 349. A ship can be
 sold (message 0x248f, task 5) only in state 6 with a building contact.
 Not ported: selling ships (the port has none); the wait by a taken
 port berth (300 ticks, 0x4b4b50 with 0x5a; 349, giving up: the port's
-ships queue at the pier its own way); whether unloading at a town has another path (0x4b0590, sub-codes 10/11); how the gathering's
-next leg and the move aside combine (the port moves aside first). The
+ships queue at the pier its own way); how the gathering's
+next leg and the move aside combine (the port moves aside first).
+
+**Where cargo comes ashore.** 0x4ac2d0 routes the gathering task by its
+record class `+0x76e` and sub-code `+0x772` (jump tables 0x4ac594 /
+0x4ac5a4): codes 9 (0x4ad680), 10 and 11 (amber: 0x4b0590, the
+collecting machine, which never unloads: full or done it posts notice
+0x138 to its group, 0x4a1430, and ends its task with event 8 0xc0; fish
+0x4ae760 / 0x4aeb80; leviathan 0x4aeef0 / 0x4af640), and 0xc (0x4adef0,
+the only unloading). Code 0xc is entered only by event 0x40 code 0xc in
+0x4aab00: `p = 0x4ac050(ship's player, +0x83e)` from that player's
+building list; dropped without one; player 16 needs class 0x40, any
+other a class 0x39 with vt+0x2c true (0x40dfc0: not asleep, `+0xa4 !=
+0x10`); else dropped, the old task kept. Its senders: the player's
+unload order (message 0x1f kind 1, 0x4d74a0 / 0x4e2ba0: cargo aboard ->
+event 0x40 {400, 0xc, id}), the leviathan's 0x4ad510 (its own port
+`+0x7ad`, or 0x4c5910) and 0x4adef0 step 1 when its port is gone
+(0x4c5910). 0x4c5910(ship, &dist, mode) walks the ship's player's
+building list (`[0x5c7508] + player x 0xba0 + 3000`): player 16's class
+0x40 (cell vt+0x28), others' class 0x39 with vt+0x2c (mode 1: class
+0x3b; berth cell vt+0xb8), the smallest wavefront distance (0x4a1e90,
+the draught `+0x592`, 5000). So **only a port of the ship's own player,
+not asleep, takes cargo** (player 16: its class 0x40); settlements and
+towns never do. The port follows this (`unloading_site`, `order_unload`).
+Not decoded: 0x4a1e90 (the port measures the straight line); what a
+group does with the notices 0x138 / 0x4a1520 (the port still sends a
+full amber or fish ship to its nearest port itself, which only the
+leviathan's 0x4ad510 does in the original); whether the unload pointer
+is offered over a town (0x5175b0 / 0x5180e0). The
 prey of a ram keeps its move state: the ram (0x4c2230) sends it event 2
 with code 1 (`+0x811` 0x14 when the rammer is alongside, 3 at the blow,
 0x4c2544-0x4c2563), never code 3; code 1 (0x4aa2c0: `+0x713 = 1`, `+0x71e

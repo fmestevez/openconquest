@@ -70,7 +70,7 @@ pub enum Order {
         a: (f32, f32),
         b: (f32, f32),
     },
-    /// Merchant `ship` unloads its goods at own port or settlement `port`.
+    /// Merchant `ship` unloads its goods at own port `port`.
     Unload {
         ship: u32,
         port: u32,

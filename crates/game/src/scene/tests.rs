@@ -9148,3 +9148,42 @@ fn barbarian_structures_build_on_their_berth() {
     }
     assert!(found, "a barbarian structure with a free berth");
 }
+
+/// Cargo comes ashore only at a port of the ship's own player not asleep
+/// (0x4aab00 code 0xc, 0x4c5910): an order to unload at a settlement is
+/// refused, the old task kept, and a laden ship with no port has none to
+/// go to. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn only_ports_take_cargo() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let home = scene.own_sites()[0];
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let ship = scene.objects[i].id;
+    {
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.cargo = 50.0;
+        s.cargo_kind = Some(Resource::Amber);
+        s.task = None;
+    }
+    assert!(scene.order_unload(ship, home).is_err());
+    assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
+    scene
+        .objects
+        .retain(|o| o.class != ObjectClass::Building(economy::PORT));
+    let i = scene.object_index(ship).unwrap();
+    let owner = scene.objects[i].owner;
+    let (x, y) = (scene.objects[i].x, scene.objects[i].y);
+    assert_eq!(scene.unloading_site(owner, x, y), None);
+    scene.send_to_port(i, 0);
+    assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
+}
