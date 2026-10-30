@@ -446,6 +446,9 @@ pub struct Scene {
     /// (`+0x2e`, 0x520cc0), delivered in order at the next tick
     /// (`Scene::deliver`).
     pub outbox: Vec<Order>,
+    /// Notices 0x138 (0x4a1430) posted by ships whose gathering ended, by
+    /// ship id, oldest first, until their zone's next pass.
+    pub zone_notices: Vec<u32>,
     /// Game ticks played (`Players +0xde`), for the outbox's first hold.
     pub ticks: u32,
     /// What a cancelled training's fish share leaves in a settlement or
@@ -775,6 +778,7 @@ impl Scene {
             refit_batches: BTreeMap::new(),
             tick_orders: BTreeMap::new(),
             outbox: Vec::new(),
+            zone_notices: Vec::new(),
             ticks: 0,
             town_fish: BTreeMap::new(),
             free_casts: Default::default(),
@@ -1036,6 +1040,7 @@ impl Scene {
             refit_batches: self.refit_batches.clone(),
             tick_orders: self.tick_orders.clone(),
             outbox: self.outbox.clone(),
+            zone_notices: self.zone_notices.clone(),
             ticks: self.ticks,
             town_fish: self.town_fish.clone(),
             free_casts: self
@@ -1194,6 +1199,7 @@ impl Scene {
         scene.refit_batches = save.refit_batches.clone();
         scene.tick_orders = save.tick_orders.clone();
         scene.outbox = save.outbox.clone();
+        scene.zone_notices = save.zone_notices.clone();
         scene.ticks = save.ticks;
         scene.town_fish = save.town_fish.clone();
         scene.delivered = save.delivered.clone();
@@ -2117,6 +2123,10 @@ impl Scene {
         while self.brain_clock >= crate::clock::TICK {
             self.brain_clock -= crate::clock::TICK;
             self.ticks += 1;
+            // The navy's tick (message 0, 0x49ab30 -> 0x4c4f40): the gather
+            // zones hear their ships' notices. (Not settled: whether
+            // before or after the ships' own ticks.)
+            self.run_zone_notices();
             self.run_brain();
             for (class, cell) in std::mem::take(&mut self.pending_walkers) {
                 self.put_walker(walkers::NO_LAIR, class, cell, data, caches);

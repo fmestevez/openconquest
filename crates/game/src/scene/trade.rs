@@ -1956,6 +1956,10 @@ impl Scene {
             deposit,
             phase: GatherPhase::ToDeposit,
         });
+        // The gather command's port (0x4aab00): 0 on the port's paths.
+        ship.home_port = 0;
+        ship.last_deposit = deposit;
+        ship.zone_ports = None;
         Ok(())
     }
 
@@ -2141,7 +2145,7 @@ impl Scene {
             }
             GatherPhase::Collecting => {
                 let Some(d) = deposit_at else {
-                    return self.send_to_port(i, deposit);
+                    return self.gathering_done(i, deposit);
                 };
                 // A shoal that has gone below or moved on: follow it.
                 if self.objects[d].class == ObjectClass::FishZone
@@ -2236,12 +2240,12 @@ impl Scene {
                         return;
                     };
                     if cargo > 0.0 {
-                        self.send_to_port(i, deposit);
+                        self.gathering_done(i, deposit);
                     } else if let Some(ship) = self.objects[i].ship.as_mut() {
                         ship.task = None;
                     }
                 } else if full {
-                    self.send_to_port(i, deposit);
+                    self.gathering_done(i, deposit);
                 }
             }
             GatherPhase::ToPort(port) => {
@@ -2605,7 +2609,8 @@ impl Scene {
         }
         let deposit = match o.ship.as_ref().and_then(|s| s.task) {
             Some(Task::Gather { deposit, .. }) => deposit,
-            _ => 0,
+            // Its gathering ended for the zone to send it here.
+            _ => o.ship.as_ref().map_or(0, |s| s.last_deposit),
         };
         let (bx, by) = self.berth(p);
         let path = self
@@ -2625,15 +2630,29 @@ impl Scene {
         }
         .tag();
         ship.priority = 76;
+        ship.home_port = port;
         Ok(())
     }
 
-    /// (In the original a full or done amber or fish ship ends its task
-    /// and posts notice 0x138 to its group, whose gather zone (0x4c9e30
-    /// -> 0x4c9ae0) sends it to another deposit or, by command 0x1f, to
-    /// its own port or the zone's pick 0x4c6640. Not ported: that pick
-    /// and the zone's deposit choice; the port sends the ship to the
-    /// nearest port here, as only the leviathan's 0x4ad510 does.)
+    /// A full or done amber or fish ship ends its task (event 8, mask
+    /// 0xc0) and posts notice 0x138 to its group (0x4a1430), whose gather
+    /// zone sends it on (`run_zone_notices`); a leviathan hunter sends
+    /// itself to its port, or the nearest (0x4ad510).
+    pub(super) fn gathering_done(&mut self, i: usize, deposit: u32) {
+        let ship = self.objects[i].ship.as_mut().unwrap();
+        if ship.cargo_kind == Some(Resource::Leviathan) {
+            return self.send_to_port(i, deposit);
+        }
+        ship.task = None;
+        ship.path.clear();
+        ship.last_deposit = deposit;
+        let id = self.objects[i].id;
+        self.zone_notices.push(id);
+    }
+
+    /// Sends ship `i` to the nearest port (0x4c5910), as the leviathan's
+    /// 0x4ad510 does and a ship whose port is gone on the way (0x4adef0
+    /// step 1).
     pub(super) fn send_to_port(&mut self, i: usize, deposit: u32) {
         let route = self.unloading_site(i).and_then(|port| {
             let p = self.object_index(port)?;

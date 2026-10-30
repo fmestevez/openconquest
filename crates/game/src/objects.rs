@@ -374,6 +374,19 @@ pub struct Ship {
     /// x1, y1) and what it gathers.
     #[serde(default)]
     pub zone: Option<((f32, f32, f32, f32), Resource)>,
+    /// `+0x7ad`: the port it was sent to unload at (0x4aab00: the unload
+    /// command's port; a gather command's, 0 from the port's paths).
+    #[serde(default)]
+    pub home_port: u32,
+    /// The deposit it last gathered from (`+0x797`, its cell), kept when
+    /// its gathering ends and the zone sends it to unload.
+    #[serde(default)]
+    pub last_deposit: u32,
+    /// Its gather zone's port list (block `+0x28`, filled by 0x4c6c30 at
+    /// the zone's first port pick): the ports by id. (Not ported: zones
+    /// as groups of ships; the list is the ship's own.)
+    #[serde(default)]
+    pub zone_ports: Option<Vec<u32>>,
     /// Treasures aboard.
     #[serde(default)]
     pub treasures: Vec<Treasure>,
@@ -1553,6 +1566,9 @@ pub fn resolve(
         planned: 0.0,
         velocity: 0.0,
         move_state: 0,
+        home_port: 0,
+        last_deposit: 0,
+        zone_ports: None,
         face: None,
         furl: 0.0,
         rock: 0,

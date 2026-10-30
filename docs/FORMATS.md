@@ -1902,11 +1902,44 @@ the zone's port pick 0x4c6640 (none: nothing sent); then command 0x1f
 zone's next deposit for it. So the human's and the computers' gather
 zones send a laden amber or fish ship to unload, a tick later at the
 earliest (the notice is read at the zone's turn, the command delivered
-at the next tick). Not ported: the port still sends a full amber or
-fish ship to the nearest port itself in its task (0x4ad280, 0x4c9930's
-0x4c96e0 / 0x4c5b90 / 0x4c8f20, 0x4c64b0, the zone's port list and
-0x4c6640's weighted pick, 0x4cab20 and 0x4c9c60 not read); whether the
-unload pointer is offered over a town (0x5175b0 / 0x5180e0). The
+at the next tick). The zone's port list (block `+0x28`) is filled when
+empty by 0x4c6c30 (the map's cells in order, the player's ports not
+asleep by the first cell found; player 16 its class-0x40 structures) and
+pruned at each pick by 0x4c65c0 (last to first: not a port, so player
+16's go and its ships are never sent; or vt+0xb4 0x40e020 false: facing
+`+0x1dc < 0`, state `+0xa4 != 1` (0 built, 2 mended, 0x10 asleep), or
+`+0x1d8 & 0x10` with `+0x1c8 == 0`). **0x4c6640(group, ship)**: no port,
+0; one, it (no reach test); more: the wavefront 0x4a1e90 from the ship;
+`min` = its value at the first port's berth; each port whose berth
+(0x4c6520: a class 0x39 of the player at the entry's cell, vt+0xb8) has
+a value `w >= 1` lowers `min` and is inserted, score `w + 1`, before the
+first ranked one whose score is below `w` (at most 9 kept); each score
+then `s - min` (or 1); `k` = the ranked with `s * 100 / (s0 + 1) >= 70`;
+of the first `k` the least load (0x4c7ea0: the player's ships of type
+0/1 in fleets running 0x78/0x3d with `+0x7ad` the port; the comparison
+starts from the first's and then reads the loads by rank position in the
+unranked array), the first on a tie; if its berth is crowded (0x49a330:
+`a > 0`, `b > 0`, `a - b < 2`) the next ranked with a value and a lower
+load. None ranked: the list's first. `+0x7ad` is written by 0x4aab00 (an
+unload command's port; a gather command's port, 0 on the paths the port
+has) and zeroed by 0x4adef0 after its 350-tick wait. Port: a full or done
+amber or fish ship ends its task and posts the notice
+(`Scene::gathering_done`, `zone_notices`, saved), heard newest first at
+the navy's tick before the brain (`run_zone_notices`: own `+0x7ad` if
+listed and its player's port, else `zone_port_pick`), the command 0x1f
+posted (`Order::Unload`, delivered at the tick's end; the ship's last
+deposit kept for its way back, `last_deposit`); the leviathan alone
+still sends itself (0x4ad510, `send_to_port`). Not ported: zones as
+groups (each ship keeps its own port list, `zone_ports`; the loads are
+the player's merchants with that `+0x7ad`); the deposit picks (0x4c9930
+-> 0x4c96e0 / 0x4c5b90 / 0x4c8f20 / 0x4c9270: a ship with room left goes
+to unload here), notice 0x139 (the ship goes back to its deposit on its
+own after unloading), the zone's re-plan 0x4ca290 and the 300/350-tick
+wait at a crowded berth (all in the workspace's `gather_zone_spec.md`);
+not decoded: 0x49a330's neighbour table (0x49a1d0) and cell test
+(0x4999e0), so the crowded-berth step is left out; whether the navy's
+tick runs before or after the ships'. Whether the unload pointer is
+offered over a town (0x5175b0 / 0x5180e0) is not read either. The
 prey of a ram keeps its move state: the ram (0x4c2230) sends it event 2
 with code 1 (`+0x811` 0x14 when the rammer is alongside, 3 at the blow,
 0x4c2544-0x4c2563), never code 3; code 1 (0x4aa2c0: `+0x713 = 1`, `+0x71e

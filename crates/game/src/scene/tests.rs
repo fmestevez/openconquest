@@ -10524,3 +10524,66 @@ fn brain_fleet_moves_in_formation() {
         ]
     );
 }
+
+/// A full amber boat ends its gathering and posts notice 0x138; its zone
+/// hears it at the navy's tick (0x4c9e30 -> 0x4c9ae0) and sends it to its
+/// port, picked by 0x4c6640, by command 0x1f, delivered at the end of the
+/// tick: the boat does not choose a port itself.
+#[test]
+fn zone_sends_a_full_boat_to_unload() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
+    let boat = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+        .unwrap()
+        .id;
+    let deposit = scene
+        .objects
+        .iter()
+        .find(|o| o.deposit.is_some_and(|d| d.resource == Resource::Amber))
+        .unwrap()
+        .id;
+    let ports: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| scene.is_own(o) && o.class == ObjectClass::Building(PORT))
+        .map(|o| o.id)
+        .collect();
+    assert_eq!(ports.len(), 1);
+    let i = scene.object_index(boat).unwrap();
+    {
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.cargo = crate::objects::cargo_capacity(s.kind);
+        s.cargo_kind = Some(Resource::Amber);
+        s.task = Some(Task::Gather {
+            deposit,
+            phase: GatherPhase::Collecting,
+        });
+    }
+    scene.gathering_done(i, deposit);
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert!(s.task.is_none());
+    assert_eq!(scene.zone_notices, [boat]);
+    // The zone's list is the player's one port; the boat goes there.
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    assert!(scene.zone_notices.is_empty());
+    let i = scene.object_index(boat).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert_eq!(s.home_port, ports[0]);
+    assert_eq!(s.zone_ports.as_deref(), Some(&ports[..]));
+    assert!(matches!(
+        s.task,
+        Some(Task::Gather {
+            deposit: d,
+            phase: GatherPhase::ToPort(p),
+        }) if d == deposit && p == ports[0]
+    ));
+    assert_eq!(s.priority, 76);
+}
