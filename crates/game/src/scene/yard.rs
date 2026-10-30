@@ -571,13 +571,13 @@ impl Scene {
         let stock = self.garrison(town);
         let (armour, rams) = self.fittings.get(&town).cloned().unwrap_or_default();
         let levels = self.levels_of(Some(owner));
-        let smithy = self.buildings_of(owner) & (1 << (economy::SMITHY - SETTLEMENT)) != 0;
+        let smithy = !self.town_workshops(town, economy::SMITHY).is_empty();
         let fit = |u: combat::Upgrade, l: u8, store: &[u8]| {
             l == 0 || store.contains(&l) || (self.permits.fit(u, l) && levels.get(u) >= l && smithy)
         };
         combat::FALLBACK_WEAPONS[k]
             .iter()
-            .all(|&f| stock[f as usize] > 0 || self.can_make_by(owner, f))
+            .all(|&f| stock[f as usize] > 0 || self.can_make_by(town, owner, f))
             && fit(
                 combat::Upgrade::Armour,
                 combat::DEFAULT_ARMOUR[k].1,

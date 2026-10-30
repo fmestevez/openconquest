@@ -977,7 +977,10 @@ fn school_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
 fn workshop_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     let making = scene.training_at(obj.id);
     // Only what the player may make (0x4361c0 asks 0x43da20 first).
-    for item in (3u8..9).filter(|&k| scene.can_make(k)) {
+    let town = scene
+        .object_index(obj.id)
+        .and_then(|i| scene.home_settlement(i));
+    for item in (3u8..9).filter(|&k| scene.can_make_at(town, k)) {
         let slot = (item % 3) as usize + (item as usize / 3) * 4 - 4;
         let (amber, fish) = crate::combat::item_cost(item);
         menu[slot] = Some(Slot {
@@ -1160,7 +1163,7 @@ fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     let training = scene.training_at(obj.id);
     // Only those the player may train (0x43c740 asks 0x43da20: the
     // settlement's workshops and smithies, +0x1fc and +0x200).
-    let trainable = |k: u8| scene.can_make(k);
+    let trainable = |k: u8| scene.can_make_at(Some(obj.id), k);
     for kind in (0..3u8).filter(|&k| trainable(k)) {
         let command = Command(Command::TRAIN_BOWMEN.0 + kind);
         let (amber, fish) = crate::combat::CREW_COST[kind as usize];

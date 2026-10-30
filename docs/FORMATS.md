@@ -1653,6 +1653,27 @@ type's minimum (0x597ae4). Armour (0x596268, fallback 0x596238) costs 30/60
 and a ram (0x5962c8, 0x596298, counted from 3) 25/50. A fort is offered only
 if every fallback item can be had (0x43d430), the stone fort only at a town.
 
+For a ship, "if it may be had" is 0x43da20's full test (`town, case, 1,
+1, x, 0, 1, 0, 1`, case 1 an item, 2 armour, 3 a ram), asked of the yard's
+town and its player for each piece alone: the permission, the arming /
+armour / ram level studied, the town's own workshops (`+0x1fc`, for items)
+and smithies (`+0x200`, for items 2 and 5, armour and rams), else -5; the
+town not standing (`+0xa4 != 1`) -1; the player's amber for that piece
+now -2, its fish in hundreds (player `+0x2c / 100` against 0x597170[item])
+-3; then an idle maker: marines the town itself (0x43b100: busy with
+anything but its training, job 1, -1), weapons one of the town's first
+five workshops (`+0x1d4[]`, 0x435e10: not standing -5, busy with anything
+but its weapons batch -1), armour and rams one of its first five smithies
+(`+0x1e8[]`, 0x433c40, anything but its refits); the first idle answers
+0, else -1 if one was busy, else -5. Only 0 buys; anything else takes the
+fallback (bought untested). The test "may be made" of the menus and of
+0x43da20 case 4's arming test 5 (`param_3` 0) stops before the town's
+state, so it reads only the permission, the level and the town's counts.
+The port: `Scene::may_buy` (not ported: a workshop busy with its town's
+stock repair, job 5, which the port keeps on the town alone), `can_make_by`
+with the town's counts; a fort's arming (0x43e990) keeps "may be made"
+(its test not read here).
+
 ## Wakes and the move tick
 
 A ship under way faster than its type's threshold (0x5bb1f4) throws off two
@@ -3119,13 +3140,7 @@ slots). `Scene::barbarian_order` builds a barbarian structure's ship on
 its berth. Not ported: the port's other moves have no event queue (see
 "One event a tick"); 0x4bd920 at the launch; the smithy's finished
 pieces go to its town's store (0x434ed0 job 1, messages 0x248d / 0x248e,
-0x4353c5 / 0x4354e8: the port's `run_refits` still fits them); the price
-tests of 0x43e5c0 / 0x43ead0 are 0x43da20's full ones (`param_3` 1: the
-owner can pay for that one piece now, the town idle for marines, one of
-its workshops idle for weapons, a smithy for armour and rams; the port
-keeps "may it be made"); the town's own workshop and smithy counts
-(`+0x1fc` / `+0x200`, attached by message 0x2873 at a building's first
-standing tick, detached by 0x2874; the port counts the owner's); the
+0x4353c5 / 0x4354e8: the port's `run_refits` still fits them); the
 items' conditions on the ship (0x4dfe00 -> 0x4bd920, `+0x299`; taken best
 first, bought 100); the computers' ships armed by 0x43ead0 too (the port
 gives them their default load); a record ram of 0 (a barbarian order

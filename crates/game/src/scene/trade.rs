@@ -25,6 +25,15 @@ pub struct Price {
     pub fittings_left: super::load::Fittings,
 }
 
+/// A piece of a default arming that may be bought (0x43da20 cases 1-3):
+/// an item, or armour or a ram of a level (the port's 1, 2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum Piece {
+    Item(u8),
+    Armour(u8),
+    Ram(u8),
+}
+
 /// Seconds a frame of a building collapsing into ruins: the ruins' cycle
 /// (`objects::BUILDING_CYCLE`, 75 ticks) over its frames, in whole ticks.
 fn ruins_frame_seconds(frames: usize) -> f32 {
@@ -245,10 +254,18 @@ impl Scene {
             .and_then(|h| self.fittings.get(&h).cloned())
             .unwrap_or_default();
         let k = kind as usize % 12;
+        let owner = self.object_index(site).and_then(|i| self.objects[i].owner);
+        // Each piece bought only if its town may have it now (0x43da20 with
+        // `param_3` 1: `may_buy`).
+        let buy = |p: Piece| match (home, owner) {
+            (Some(h), Some(o)) => self.may_buy(h, o, p) == 0,
+            _ => false,
+        };
         let mut price = if arm {
             self.plan_arming(
                 stock,
                 fittings,
+                &buy,
                 combat::DEFAULT_WEAPONS[k],
                 combat::FALLBACK_WEAPONS[k],
                 combat::MIN_POWER[k],
@@ -281,13 +298,18 @@ impl Scene {
         if self.default_arming {
             if fallbacks
                 .iter()
-                .any(|&w| stock[w as usize] == 0 && !self.can_make(w))
+                .any(|&w| stock[w as usize] == 0 && !self.can_make_at(settlement, w))
             {
                 return None;
             }
+            let buy = |p: Piece| match p {
+                Piece::Item(w) => self.can_make_at(settlement, w),
+                _ => false,
+            };
             price = self.plan_arming(
                 stock,
                 Default::default(),
+                &buy,
                 items,
                 fallbacks,
                 0,
@@ -300,24 +322,101 @@ impl Scene {
         Some(price)
     }
 
-    /// Whether the player may have `item` made (0x43da20 case 1, without
-    /// the price): it is permitted, the sage school's arming has reached
-    /// its group (player +0xa3, from 1, >= item / 3), and they have a workshop, and
-    /// for swordsmen or item 5 a smithy.
-    pub fn can_make(&self, item: u8) -> bool {
-        self.human
-            .is_some_and(|h| self.can_make_by((h.nation, h.slot), item))
+    /// Whether the player may have `item` made at town `town` (0x43da20
+    /// case 1, without the price): it is permitted, the sage school's
+    /// arming has reached its group (player +0xa3, from 1, >= item / 3),
+    /// and the town has a workshop (`+0x1fc`), and for swordsmen or item 5
+    /// a smithy (`+0x200`).
+    pub fn can_make_at(&self, town: Option<u32>, item: u8) -> bool {
+        match (self.human, town) {
+            (Some(h), Some(t)) => self.can_make_by(t, (h.nation, h.slot), item),
+            _ => false,
+        }
     }
 
-    /// Whether player `owner` may have `item` made (see `can_make`).
-    pub(super) fn can_make_by(&self, owner: (u32, u32), item: u8) -> bool {
-        let have = self.buildings_of(owner);
-        let owns = |class: u32| have & (1 << (class - SETTLEMENT)) != 0;
+    /// Whether player `owner` may have `item` made at town `town` (see
+    /// `can_make_at`).
+    pub(super) fn can_make_by(&self, town: u32, owner: (u32, u32), item: u8) -> bool {
         self.permits.item(item)
             // The original's arming (+0xa3) starts at 1: ours one less.
             && self.levels_of(Some(owner)).weapons + 1 >= item / 3
-            && owns(WORKSHOP)
-            && (!matches!(item, 2 | 5) || owns(economy::SMITHY))
+            && !self.town_workshops(town, WORKSHOP).is_empty()
+            && (!matches!(item, 2 | 5) || !self.town_workshops(town, economy::SMITHY).is_empty())
+    }
+
+    /// 0x43da20 with `param_3` 1 and the price tested (0x43ead0 and
+    /// 0x43e5c0 ask it so of each piece they would buy): 0 when town
+    /// `town` of `owner` may have `piece` now. Items (case 1, group `g =
+    /// item / 3`): the permission, the arming level, a workshop, a smithy
+    /// for items 2 and 5, else -5; the town not standing -1; the owner's
+    /// amber for that one item (0x597164[g]) -2, its fish in hundreds
+    /// (0x597170[item], player `+0x2c / 100`) -3; then marines need the
+    /// town idle (0x43b100: busy with anything but its training, job 1,
+    /// -1), weapons one of its first five workshops idle (0x435e10: not
+    /// standing -5, busy with anything but its weapons batch -1; the first
+    /// idle 0, else -1 if any was busy, else -5). Armour and rams (cases
+    /// 2, 3; level 0 is 0 at once): the permission and the level studied,
+    /// a smithy, else -5; the town not standing -1; the amber for it (30 /
+    /// 60, 25 / 50) -2; then one of its first five smithies idle as above
+    /// (0x433c40, busy with anything but its refits). (Not ported: a
+    /// workshop busy with its town's stock repair, job 5: the port keeps
+    /// that job on the town alone.)
+    pub(super) fn may_buy(&self, town: u32, owner: (u32, u32), piece: Piece) -> i32 {
+        let levels = self.levels_of(Some(owner));
+        let (amber, fish) = self.funds(owner);
+        let (have, class, price, fish_hundreds) = match piece {
+            Piece::Item(item) => {
+                if !self.can_make_by(town, owner, item) {
+                    return -5;
+                }
+                let (a, f) = combat::item_cost(item);
+                (true, WORKSHOP, a, f / 100)
+            }
+            Piece::Armour(0) | Piece::Ram(0) => return 0,
+            Piece::Armour(l) | Piece::Ram(l) => {
+                let upgrade = match piece {
+                    Piece::Armour(_) => combat::Upgrade::Armour,
+                    _ => combat::Upgrade::Ram,
+                };
+                let may = self.permits.fit(upgrade, l)
+                    && levels.get(upgrade) >= l
+                    && !self.town_workshops(town, economy::SMITHY).is_empty();
+                let price = match piece {
+                    Piece::Armour(_) => [0, 30, 60][l.min(2) as usize],
+                    _ => [0, 25, 50][l.min(2) as usize],
+                };
+                (may, economy::SMITHY, price, 0)
+            }
+        };
+        if !have {
+            return -5;
+        }
+        if self.construction_at(town).is_some() {
+            return -1;
+        }
+        if amber < price {
+            return -2;
+        }
+        if fish / 100 < fish_hundreds {
+            return -3;
+        }
+        if let Piece::Item(0..=2) = piece {
+            let busy = self.mending.contains(&town) || self.stock_repair_at(town).is_some();
+            return if busy { -1 } else { 0 };
+        }
+        let mut answer = -5;
+        for k in self.town_workshops(town, class).into_iter().take(5) {
+            let id = self.objects[k].id;
+            if self.construction_at(id).is_some() {
+                continue;
+            }
+            let busy = self.mending.contains(&id) || self.research.iter().any(|r| r.0 == id);
+            if !busy {
+                return 0;
+            }
+            answer = -1;
+        }
+        answer
     }
 
     /// Whether settlement `site` may put up a fort of `class` (0x43d430
@@ -337,7 +436,7 @@ impl Scene {
             && (class != 0x36 || self.objects[i].class == ObjectClass::Building(TOWN))
             && fallbacks
                 .iter()
-                .all(|&w| stock[w as usize] > 0 || self.can_make_by(owner, w))
+                .all(|&w| stock[w as usize] > 0 || self.can_make_by(site, owner, w))
     }
 
     /// Whether the player has ship type `kind` unlocked (0x43da20 case 4,
@@ -373,6 +472,7 @@ impl Scene {
         &self,
         mut stock: [u32; 9],
         mut fittings: super::load::Fittings,
+        buy: &dyn Fn(Piece) -> bool,
         items: &[u8],
         fallbacks: &[u8],
         min_power: u32,
@@ -392,7 +492,7 @@ impl Scene {
             price.arming.items.push(item);
         };
         for (j, &w) in items.iter().enumerate() {
-            let item = if stock[w as usize] > 0 || self.can_make(w) {
+            let item = if stock[w as usize] > 0 || buy(Piece::Item(w)) {
                 w
             } else {
                 fallbacks.get(j).copied().unwrap_or(w)
@@ -406,16 +506,21 @@ impl Scene {
             take(fallbacks[k], &mut price, &mut stock);
             power += combat::item_power(fallbacks[k]);
         }
-        let levels = self.levels_of(self.human.map(|h| (h.nation, h.slot)));
         // Armour and ram (0x43ead0 steps 4, 5): the level from the
         // settlement's store (`+0x248` / `+0x24c`, 0x4410f0 / 0x441140)
-        // free, else bought if it may be fitted (0x43da20 case 2 / 3);
+        // free, else bought if it may be had now (0x43da20 case 2 / 3);
         // else a level 2 with no fallback tries level 1 the same way;
         // else the fallback from the store, or bought with no test at
         // all; none without one. The levels taken leave the store.
         let fitted =
             |upgrade: combat::Upgrade, (level, fallback): (u8, u8), store: &mut Vec<u8>| {
-                let can = |l: u8| l > 0 && levels.get(upgrade) >= l && self.permits.fit(upgrade, l);
+                let can = |l: u8| {
+                    l > 0
+                        && buy(match upgrade {
+                            combat::Upgrade::Armour => Piece::Armour(l),
+                            _ => Piece::Ram(l),
+                        })
+                };
                 let mut stored = |l: u8| {
                     let p = store.iter().position(|&x| x == l);
                     p.map(|p| store.remove(p)).is_some()

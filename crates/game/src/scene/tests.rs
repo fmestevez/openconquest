@@ -2462,8 +2462,12 @@ fn arming_opens_weapons_and_forts() {
     scene.objects[own[0]].class = ObjectClass::Building(economy::SETTLEMENT);
     scene.objects[own[1]].class = ObjectClass::Building(WORKSHOP);
     let site = scene.objects[own[0]].id;
+    // The workshop is the settlement's (its list, `+0x1d0`).
+    let shop = scene.objects[own[1]].id;
+    scene.towns.lists.insert(site, vec![shop]);
+    scene.towns.of.insert(shop, site);
     assert_eq!(scene.levels_of(Some(owner)).weapons, 0);
-    assert!(scene.can_make(4) && !scene.can_make(6));
+    assert!(scene.can_make_at(Some(site), 4) && !scene.can_make_at(Some(site), 6));
     assert!(scene.fort_allowed(site, 0x34) && scene.fort_allowed(site, 0x35));
     assert!(!scene.fort_allowed(site, 0x36), "stone forts at towns only");
     scene.objects[own[0]].class = ObjectClass::Building(TOWN);
@@ -2472,7 +2476,7 @@ fn arming_opens_weapons_and_forts() {
     let mut levels = scene.levels_of(Some(owner));
     levels.weapons = 1;
     scene.levels.insert(owner, levels);
-    assert!(scene.can_make(6) && scene.fort_allowed(site, 0x36));
+    assert!(scene.can_make_at(Some(site), 6) && scene.fort_allowed(site, 0x36));
 }
 
 /// The smithy studies each armour and ram kind to level 2, the silver and
@@ -9562,8 +9566,32 @@ fn default_arming_takes_its_fallbacks_untested() {
     let p = scene.ship_price(yard, 3);
     assert_eq!(p.arming.armour, 1);
     // A royal ship (armour 2, no fallback) with armour 1 studied: level 1
-    // by the test (+30); none studied: none.
+    // by the test (+30) only with a smithy of the yard's town idle and the
+    // amber in hand (0x43da20 case 2 with `param_3` 1); none studied: none.
     scene.levels.get_mut(&owner).unwrap().armour = 1;
+    assert_eq!(scene.ship_price(yard, 2).arming.armour, 0);
+    let town = scene
+        .home_settlement(scene.object_index(yard).unwrap())
+        .unwrap();
+    let k = scene
+        .objects
+        .iter()
+        .position(|o| {
+            scene.is_own(o) && o.id != yard && o.id != town && o.class != ObjectClass::Ship
+        })
+        .unwrap();
+    scene.objects[k].class = ObjectClass::Building(economy::SMITHY);
+    let smithy = scene.objects[k].id;
+    scene.towns.lists.entry(town).or_default().push(smithy);
+    scene.amber = 29;
+    assert_eq!(scene.ship_price(yard, 2).arming.armour, 0);
+    scene.amber = 30;
+    assert_eq!(scene.ship_price(yard, 2).arming.armour, 1);
+    scene
+        .research
+        .push((smithy, combat::Upgrade::Armour, 2, 0.0));
+    assert_eq!(scene.ship_price(yard, 2).arming.armour, 0);
+    scene.research.clear();
     assert_eq!(scene.ship_price(yard, 2).arming.armour, 1);
     scene.levels.get_mut(&owner).unwrap().armour = 0;
     assert_eq!(scene.ship_price(yard, 2).arming.armour, 0);
@@ -10282,4 +10310,52 @@ fn a_town_lists_its_buildings() {
     // Gone, it leaves the list.
     scene.leave_town(id, false);
     assert!(!scene.towns.lists[&2].contains(&id));
+}
+
+/// 0x43ead0 / 0x43e5c0 buy a piece only when the yard's town may have it
+/// now (0x43da20 with `param_3` 1, `Scene::may_buy`): miss005's town 2
+/// (workshop 35, smithy 34, dock 36). A royal ship with everything
+/// allowed and idle: items 0, 2, 4, 8, armour 2, ram 2, 1390 amber and 9
+/// fish-hundreds. With its only workshop busy on a study, the weapons
+/// fall back untested: 4 -> 4, 8 -> 5, then strength 4 < 5 adds the
+/// fallback 5: items [0, 2, 4, 5, 5], 1420 amber, 9 fish-hundreds. Its
+/// town being made a town buys nothing (-1): the items' fallbacks come
+/// untested, armour and ram (no untested fallback for this kind) none.
+#[test]
+fn default_arming_buys_what_the_town_may_have_now() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.permits = crate::permits::Permits::ALL;
+    let owner = scene.objects[scene.object_index(36).unwrap()]
+        .owner
+        .unwrap();
+    let mut levels = scene.levels_of(Some(owner));
+    levels.weapons = 1;
+    levels.armour = 2;
+    levels.ram = 2;
+    scene.levels.insert(owner, levels);
+    scene.garrisons.remove(&2);
+    scene.fittings.remove(&2);
+    scene.earn(owner, 100_000, 100_000);
+    assert_eq!(
+        scene.town_workshops(2, WORKSHOP),
+        vec![scene.object_index(35).unwrap()]
+    );
+    let p = scene.ship_price_with(36, 2, true);
+    assert_eq!(p.arming.items, vec![0, 2, 4, 8]);
+    assert_eq!((p.arming.armour, p.arming.ram), (2, 2));
+    assert_eq!((p.amber, p.fish), (1390, 900));
+    scene.research.push((35, combat::Upgrade::Weapons, 2, 0.0));
+    let p = scene.ship_price_with(36, 2, true);
+    assert_eq!(p.arming.items, vec![0, 2, 4, 5, 5]);
+    assert_eq!((p.amber, p.fish), (1420, 900));
+    scene.research.clear();
+    scene.constructions.push(super::Construction::new(2, true));
+    let p = scene.ship_price_with(36, 2, true);
+    assert_eq!(p.arming.items, vec![0, 2, 4, 5, 5]);
+    assert_eq!((p.arming.armour, p.arming.ram), (0, 0));
 }

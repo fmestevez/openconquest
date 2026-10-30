@@ -23,7 +23,7 @@
 use openconquest_formats::ObjectClass;
 
 use super::Scene;
-use crate::economy::{DOCK, SETTLEMENT, SHIPYARD, TOWN};
+use crate::economy::{DOCK, SETTLEMENT, SHIPYARD, SMITHY, TOWN, WORKSHOP};
 
 /// The towns' building links, as the original keeps them.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -287,6 +287,17 @@ impl Scene {
             .get(&town)
             .map(|l| l.iter().filter_map(|&id| self.object_index(id)).collect())
             .unwrap_or_default()
+    }
+
+    /// Town `town`'s workshops (`+0x1fc`, the first five also kept by
+    /// pointer, `+0x1d4[]`) or smithies (`+0x200`, `+0x1e8[]`): those of
+    /// its list, in order.
+    pub(super) fn town_workshops(&self, town: u32, class: u32) -> Vec<usize> {
+        debug_assert!(class == WORKSHOP || class == SMITHY);
+        self.town_buildings(town)
+            .into_iter()
+            .filter(|&k| self.objects[k].class == ObjectClass::Building(class))
+            .collect()
     }
 
     /// The yards of town `town` (its list's shipyards and docks, in
