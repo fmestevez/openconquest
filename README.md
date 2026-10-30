@@ -224,7 +224,7 @@ On Windows, use the CD's drive letter, e.g. `install D:\ gamedata`.
 | Esc | Cancel, close a panel, deselect |
 | Click/drag on the minimap | Jump |
 | Tab (with the control bar) | Radar map in place of the view, the view in the bar's map window following the pointer over the radar map; clicks on the radar map act on the map there; Tab again goes back |
-| Space | Hide or show the control bar (full-window view) |
+| Space | Hide or show the control bar (the original's full-width field, the view 12 x 8 cells) |
 | Backspace | Go to where you were last attacked |
 | Bar tabs (wheel, disk, wrench, clef, scroll) | Object panel; save slots, restart and quit; game and scroll speed and the mouse controls (original or modern, remembered); sound volume; objectives and briefing |
 | Alt+P, Pause | Pause |
