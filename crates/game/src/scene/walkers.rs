@@ -53,10 +53,14 @@ pub enum Walk {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Walker {
     pub id: u32,
+    /// The lair it came out of (`NO_LAIR` for one a brain put down).
     pub lair: u32,
     pub walk: Walk,
     pub shown: (u8, usize),
 }
+
+/// The `lair` of a creature no lair sent out.
+pub const NO_LAIR: u32 = u32::MAX;
 
 /// The creature class of a lair class.
 fn creature_of(lair: u32) -> u32 {
@@ -148,7 +152,23 @@ impl Scene {
             return;
         }
         let (cx, cy) = cells[self.rng.next() as usize % cells.len()];
-        let class = creature_of(lair_class);
+        self.put_walker(lair, creature_of(lair_class), (cx, cy), data, caches);
+    }
+
+    /// A land creature of `class` (CyclopClassTy, 0x1497) appears on cell
+    /// `(cx, cy)`, sent out by `lair`. In the original each is an object
+    /// of its own; those on one cell are held by its jam (0x1f7,
+    /// CyclopsJamClassTy 0x415ee0: up to 100, joined by message 0x1879f,
+    /// left by 0x187a0, gone with the last, and passing lightning and
+    /// tornadoes on to each), which commands nothing.
+    pub(super) fn put_walker(
+        &mut self,
+        lair: u32,
+        class: u32,
+        (cx, cy): (i32, i32),
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
         let mut fields = vec![0u32; 8];
         fields[0] = class;
@@ -171,6 +191,18 @@ impl Scene {
                 shown: (0, 0),
             });
         }
+    }
+
+    /// Whether a land creature stands on cell `(cx, cy)` (its jam fills
+    /// the cell's object slot, 0x499800).
+    pub(super) fn walker_at(&self, (cx, cy): (i32, i32)) -> bool {
+        let t = TILE_SIZE as f32;
+        self.walkers.iter().any(|w| {
+            self.object_index(w.id).is_some_and(|i| {
+                let o = &self.objects[i];
+                (o.x / t) as i32 == cx && (o.y / t) as i32 == cy
+            })
+        })
     }
 
     fn is_land(&self, cx: i32, cy: i32) -> bool {

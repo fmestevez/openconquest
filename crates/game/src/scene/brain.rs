@@ -212,6 +212,10 @@ pub struct Brain {
     /// (`+0x184`, `+0x18c` cleared by the brain's pass).
     #[serde(default)]
     pub gone: [bool; 2],
+    /// miss003: the creatures put down at (49, 26, 4, 3) and (48, 12, 3,
+    /// 2) (`+0x114`, `+0x120`).
+    #[serde(default)]
+    pub landed: [bool; 2],
 }
 
 /// A town order a brain member gave (0x47b130 through the land fleet,
@@ -316,7 +320,7 @@ fn mission(name: &str) -> Option<Mission> {
             silent: &[],
             gate: None,
             before: None,
-            after: None,
+            after: Some(miss003::after),
         }),
         "miss004" => Some(Mission {
             fleets: miss004::FLEETS,
@@ -444,6 +448,7 @@ impl Scene {
             watch: [1, 0, 0],
             joined: false,
             gone: [false; 2],
+            landed: [false; 2],
         };
         for def in m.fleets {
             // The ships (or buildings) standing in the given cells (0x479200).
@@ -1104,6 +1109,32 @@ impl Scene {
                 cx >= x && cx < x + w && cy >= y && cy < y + h
             }
         })
+    }
+
+    /// Whether cell `cell`'s object slot (`+0xc` of its landscape entry,
+    /// 0x499900) holds something: a building, nest, castle or lair standing
+    /// on it, a ship or a jam of land creatures.
+    pub(super) fn cell_slot_taken(&self, cell: (i32, i32)) -> bool {
+        let t = TILE_SIZE as f32;
+        self.standing_at(cell)
+            || self.walker_at(cell)
+            || self
+                .objects
+                .iter()
+                .any(|o| o.ship.is_some() && ((o.x / t) as i32, (o.y / t) as i32) == cell)
+    }
+
+    /// Whether creatures may be put down on cell `(x, y)` (0x42ebf0 gives
+    /// 0xf): its landscape dword's low nibble is 8 (land), its tile is no
+    /// north or west shore (`0x5acf13[t] & 9 == 0`), nibble 5 is not 1 and
+    /// nibbles 6 and 7 are 0.
+    pub(super) fn landing_ground(&self, (x, y): (i32, i32)) -> bool {
+        let (w, h) = (self.grid.width as i32, self.grid.height as i32);
+        if x < 0 || y < 0 || x >= w || y >= h {
+            return false;
+        }
+        let c = self.cell_types[(y * w + x) as usize];
+        c & 0xf == 8 && self.tile_edges(x, y) & 9 == 0 && (c >> 20) & 0xf != 1 && c >> 24 == 0
     }
 
     /// Puts up a big reef (class 0x259, 0x430ec0) of kind `kind` (1-3) on
@@ -2824,14 +2855,48 @@ mod miss002 {
 
 /// miss003's brain (0x44fd90): the Persians hold the north-east and the
 /// south-east and raid towards Chios; the barbarians in the south-west
-/// gather and guard, and raid the player.
-/// (Not ported: the brain's pass after the members, every 5 ticks: the
-/// player's things in (49, 26, 4, 3) or (48, 12, 3, 2) (0x4c46c0, once
-/// each, `+0x114` and `+0x120`) set off calls of 0x414db0 with classes
-/// 0x1f5 and 0x1f6 at given cells (each gated by 0x42ebf0 and an empty
-/// cell, more on normal and hard); not decoded.)
+/// gather and guard, and raid the player. After the members, the player's
+/// ships coming near the creatures' shores put minotaurs and amazons down
+/// there (`after`).
 mod miss003 {
     use super::*;
+
+    /// The brain's pass after the members, every 5 ticks: the first time
+    /// the player has a ship in (49, 26, 4, 3) (0x4c46c0, ship mask 0xfff,
+    /// no buildings; `+0x114`), minotaurs at (53, 24) and amazons at (48,
+    /// 26) and (55, 30); the first time in (48, 12, 3, 2) (`+0x120`),
+    /// amazons at (46, 14) and (52, 14). Each group (0x414db0 a creature
+    /// at a time, owner nation 4 slot 1) only on a cell with nothing in
+    /// its object slot and landing ground (0x42ebf0), more of them on
+    /// normal and hard; the flag is set whether or not any came.
+    pub fn after(scene: &mut Scene) {
+        // Class, cell, how many, and how many more on normal and hard.
+        type Group = (u32, (i32, i32), u32, u32);
+        const GROUPS: [&[Group]; 2] = [
+            &[
+                (0x1f5, (53, 24), 4, 2),
+                (0x1f6, (48, 26), 3, 1),
+                (0x1f6, (55, 30), 3, 1),
+            ],
+            &[(0x1f6, (46, 14), 3, 2), (0x1f6, (52, 14), 3, 2)],
+        ];
+        const AREAS: [Cells; 2] = [(49, 26, 4, 3), (48, 12, 3, 2)];
+        for k in 0..2 {
+            if !scene.human_ships_in(AREAS[k]) || scene.brain.as_ref().unwrap().landed[k] {
+                continue;
+            }
+            for &(class, cell, n, more) in GROUPS[k] {
+                if scene.cell_slot_taken(cell) || !scene.landing_ground(cell) {
+                    continue;
+                }
+                let n = n + if difficulty() != EASY { more } else { 0 };
+                for _ in 0..n {
+                    scene.pending_walkers.push((class, cell));
+                }
+            }
+            scene.brain.as_mut().unwrap().landed[k] = true;
+        }
+    }
 
     const MERCHANT: u8 = 1;
     const ROYAL: u8 = 2;

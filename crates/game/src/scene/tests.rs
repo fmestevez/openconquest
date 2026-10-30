@@ -3078,6 +3078,74 @@ fn statistics_and_score() {
     assert_eq!(scene.stats.values(scene.amber)[11] as i64, expected);
 }
 
+/// miss003's brain puts creatures down after its members (0x44fd90): the
+/// player's ship in (49, 26, 4, 3) brings 4 minotaurs (6 on normal and
+/// hard) to (53, 24) and 3 amazons (4) to each of (48, 26) and (55, 30),
+/// once; in (48, 12, 3, 2), 3 amazons (5) to each of (46, 14) and (52,
+/// 14), where the cell is free landing ground (0x42ebf0; needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn miss003_puts_creatures_down_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    let t = TILE_SIZE as f32;
+    let at = |s: &Scene, cell: (i32, i32)| {
+        s.walkers
+            .iter()
+            .filter(|w| {
+                let o = &s.objects[s.object_index(w.id).unwrap()];
+                ((o.x / t) as i32, (o.y / t) as i32) == cell
+            })
+            .count()
+    };
+    let cells = [(53, 24), (48, 26), (55, 30), (46, 14), (52, 14)];
+    let ground: Vec<bool> = cells.iter().map(|&c| scene.landing_ground(c)).collect();
+    assert_eq!(ground, [true; 5], "all five are landing ground");
+    let mine = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let put = |s: &mut Scene, (x, y): (i32, i32)| {
+        let i = s.object_index(mine).unwrap();
+        s.objects[i].x = x as f32 * t + t / 2.0;
+        s.objects[i].y = y as f32 * t + t / 2.0;
+    };
+    // Normal: 4 + 2 minotaurs, 3 + 1 amazons on each cell.
+    put(&mut scene, (50, 27));
+    for _ in 0..10 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    let first: Vec<usize> = cells.iter().map(|&c| at(&scene, c)).collect();
+    assert_eq!(first, [6, 4, 4, 0, 0]);
+    assert_eq!(scene.brain.as_ref().unwrap().landed, [true, false]);
+    // Once only.
+    put(&mut scene, (50, 27));
+    for _ in 0..10 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    assert_eq!(
+        scene
+            .walkers
+            .iter()
+            .filter(|w| w.lair == walkers::NO_LAIR)
+            .count(),
+        14
+    );
+    put(&mut scene, (49, 13));
+    for _ in 0..10 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    assert_eq!(at(&scene, (46, 14)), 5);
+    assert_eq!(at(&scene, (52, 14)), 5);
+    assert_eq!(scene.brain.as_ref().unwrap().landed, [true, true]);
+}
+
 /// A member with no ships is given its orders as any other: at its next
 /// turn the order reports done, result 1, and the step goes to its p4
 /// (0x4a0f60, 0x4d63d0): miss010's north-western raiders (member 4,

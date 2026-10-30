@@ -726,7 +726,7 @@ game's own, from its error strings.
 | 0x191 | `FishClassTy` | fishing zone | 6, 7 | 8, 9: width, height |
 | 0x192 | `WhaleClassTy` | leviathan zone | 7, 8 | 9, 10: width, height |
 | 0x1f4-0x1f6 | `CyclopClassTy` | cyclops, minotaur, amazon | | |
-| 0x1f7 | `CyclopsJamClassTy` | | | |
+| 0x1f7 | `CyclopsJamClassTy` | the land creatures on one cell (factory 0x416230, ctor 0x415c10, handler 0x415ee0: up to 100, joined by message 0x1879f, left by 0x187a0 and gone with the last; lightning, tornadoes and 0x187a2 passed on to each; it fills the cell's object slot, 0x499800, and commands nothing) | | |
 | 0x1f8, 0x1f9 | `HarpyClassTy` | harpy, dragon (sent out by their nests) | 4, 5 | 6: the nest, 7: 1 (new), 8-10: the nest's fields 7, 8 (range), 11 (rest) |
 | 0x1fa | `MedusaClassTy` | medusa (`GORG%1d`) | 5, 6 | 7, 8: area |
 | 0x1fb | `UMonsterClassTy` | sea monster | 7, 8 | 4: type |
@@ -3196,11 +3196,19 @@ group, members in order, member (g, m) when the tick is 5 x (g + m) modulo
 the switches written `(m % 10) x 5` or `((m + 1) % 10) x 5` are the same
 value (0x4634b9). The brain's own work comes before the members in
 miss007 (the reef, `+0x107`), miss009 and miss010 (the random tick,
-below) and after them in miss003 (once each, `+0x114`, `+0x120`, when
-the player has things in (49, 26, 4, 3) or (48, 12, 3, 2) (0x4c46c0),
-calls of 0x414db0 with classes 0x1f5 and 0x1f6 at (53, 24) and other
-cells, each gated by 0x42ebf0 and an empty cell; not decoded further, not
-ported), miss005 (`+0x184` cleared once
+below) and after them in miss003 (the first time the player has a ship
+in (49, 26, 4, 3) (0x4c46c0, ship mask 0xfff, buildings 0; flag
+`+0x114`), 4 minotaurs (0x1f5) at (53, 24) and 3 amazons (0x1f6) at each
+of (48, 26) and (55, 30), 2, 1 and 1 more on normal and hard; the first
+time in (48, 12, 3, 2) (`+0x120`), 3 amazons (2 more on normal and hard)
+at each of (46, 14) and (52, 14); each group only if the cell's object
+slot is empty and 0x42ebf0 gives 0xf: the landscape dword's low nibble
+8, `0x5acf13[t] & 9 == 0` for the cell's first layer's shape t, nibble
+5 not 1, nibbles 6 and 7 0. The flag is set whether or not any came; no
+draw, no message, no cost. 0x414db0(class, x, y) makes a CyclopClassTy
+(0x1497) with the record {class, 1, 0, 0, 0, x, y}, owner nation 4 slot
+1, like a lair's; the first on a cell makes its jam (0x1f7), the others
+join it), miss005 (`+0x184` cleared once
 the cells of both harpy nests (23, 20) and (26, 19) are empty, `+0x18c`
 once the stronghold's (3, 29) is), miss006 (the raids' event-record
 times rerolled while the yards at (21, 68) and (1, 50) stand,

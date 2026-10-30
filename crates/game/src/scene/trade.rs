@@ -1504,7 +1504,7 @@ impl Scene {
     /// The edges of the land tile on cell `(x, y)` that meet the water, a
     /// bit each: 1 north, 2 east, 4 south, 8 west (0x5acf13 by the tile's
     /// variant); none for inland tiles.
-    fn tile_edges(&self, x: i32, y: i32) -> u8 {
+    pub(super) fn tile_edges(&self, x: i32, y: i32) -> u8 {
         const EDGES: [u8; 45] = [
             0, 0, 9, 9, 9, 9, 9, 3, 3, 3, 3, 3, 12, 12, 12, 12, 12, 6, 6, 6, 6, 6, 0, 0, 0, 0, 0,
             0, 0, 0, 8, 8, 2, 2, 1, 1, 1, 4, 4, 4, 4, 4, 0, 0, 0,

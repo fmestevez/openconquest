@@ -369,6 +369,9 @@ pub struct Scene {
     /// Big reefs a brain raises this tick: cell and kind (not saved: raised
     /// at once).
     pending_reefs: Vec<(i32, i32, u32)>,
+    /// Land creatures a brain puts down this tick (0x414db0): class and
+    /// cell (not saved: put down at once).
+    pending_walkers: Vec<(u32, (i32, i32))>,
     /// Spells a brain casts this tick for nothing (0x42f580): the spell,
     /// its cell and the caster (not saved: cast at once).
     pending_casts: Vec<BrainCast>,
@@ -659,6 +662,7 @@ impl Scene {
             creature_clock: 0.0,
             wizards: BTreeMap::new(),
             pending_reefs: Vec::new(),
+            pending_walkers: Vec::new(),
             pending_casts: Vec::new(),
             pending_ship_casts: Vec::new(),
             brain_flames: Default::default(),
@@ -1939,6 +1943,9 @@ impl Scene {
         while self.brain_clock >= crate::clock::TICK {
             self.brain_clock -= crate::clock::TICK;
             self.run_brain();
+            for (class, cell) in std::mem::take(&mut self.pending_walkers) {
+                self.put_walker(walkers::NO_LAIR, class, cell, data, caches);
+            }
             self.run_computers(data, caches);
             self.run_brain_jobs(data, caches);
             for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {
