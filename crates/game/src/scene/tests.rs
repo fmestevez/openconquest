@@ -7521,9 +7521,11 @@ fn lightning_on_towns_and_nature() {
     assert!((hull - max * 0.75).abs() < 1e-3, "{hull} of {max}");
     let (x, y) = at(anchor);
     scene.lightning_strike(x, y, None, &data, &mut caches);
-    assert!(scene
-        .object_index(id)
-        .is_none_or(|i| scene.objects[i].combat.as_ref().unwrap().hull <= 0.0));
+    // Fallen: gone, or its ruins (no combat left).
+    assert!(scene.object_index(id).is_none_or(|i| scene.objects[i]
+        .combat
+        .as_ref()
+        .is_none_or(|c| c.hull <= 0.0)));
     // Nature about a strike on the water.
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
     scene.brain = None;
