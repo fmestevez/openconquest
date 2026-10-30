@@ -64,3 +64,24 @@ way when touched. Search for "estimate", "approximat", "not decoded",
   `./scripts/bundle-macos.sh` (`dist/OpenConquest.app`).
 - Code reads like the code around it: its comment density, naming and
   idioms. Comments say what the original does and where (addresses).
+
+## Working cheaply (agents)
+
+Every tool call re-sends everything read so far, so what you read once is
+paid for on every later call. Keep the context small:
+
+- Never read a big file whole: `docs/FORMATS.md`, `scene/brain.rs`,
+  `scene/tests.rs`, `app.rs`, `scene/mod.rs` and most specs run to
+  hundreds of kilobytes. `grep -n` for the place, then read a window
+  (`sed -n A,Bp`, at most about 150 lines). Read a spec's section, not the
+  spec.
+- One decompiled function: `tools/re/fn.py 0xADDR...` prints it from the
+  workspace's cache. Run `dc.sh` only for what it reports missing.
+- Batch: put several greps and reads in one shell call; plan a step before
+  taking it rather than probing line by line.
+- Build and test narrowly while working: `cargo check`, then
+  `cargo test --release -q NAME` for the tests you touch. Run the full
+  checks (fmt, clippy, the whole suite) once, before the commit.
+- Do not start sub-agents of your own.
+- Keep notes and the final report short: what the original does (with
+  addresses), what changed, what was left out.

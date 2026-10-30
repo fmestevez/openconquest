@@ -29,6 +29,9 @@ Needs Ghidra (`brew install ghidra`) and `openjdk@21`.
   addresses). `callers:ADDR` lists the callers instead. `SCRIPT=VTable.java`
   with `label=0xVTABLE` decompiles a vtable's slots; `SCRIPT=DecompRange.java`
   with `START END` decompiles every function in a range.
+- `tools/re/fn.py 0xADDR...` prints functions already decompiled into
+  `decomp/`, one each, without reading whole files or running Ghidra;
+  it lists the addresses it does not have.
 - `tools/re/xr.py` reads the listing and the exe's bytes: `show ADDR [N]`,
   `dis START END`, `refs VALUE`, `func ADDR`, `str TEXT`, `data VALUE`,
   `words ADDR N`, `dwords ADDR N`. Also importable from Python.
