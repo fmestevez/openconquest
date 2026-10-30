@@ -1030,9 +1030,16 @@ impl Scene {
                 movers.entry(self.cell_of_obj(o)).or_default().push(i);
             }
         }
-        // Deposits by cell (amber 1 cell; fish and leviathan zones).
+        // Deposits by cell (amber 1 cell; fish zones; a leviathan the
+        // cell whose slot `+0x10` holds it, 0x40b710's res slot).
         let mut deposit: Vec<Option<(i32, i32, i32)>> = vec![None; (w * h) as usize];
         for o in &self.objects {
+            if o.class == ObjectClass::WhaleZone {
+                if let Some((x, y)) = self.leviathan_cell(o.id).filter(|&(x, y)| inside(x, y)) {
+                    deposit[at(x, y)] = Some(table.whale);
+                }
+                continue;
+            }
             let f = &o.record.fields;
             let (wrf, x0, y0, dw, dh) = match o.class {
                 ObjectClass::Amber => (table.amber, f.get(6), f.get(7), 1, 1),
@@ -1042,13 +1049,6 @@ impl Scene {
                     f.get(7),
                     f.get(8).copied().unwrap_or(1) as i32,
                     f.get(9).copied().unwrap_or(1) as i32,
-                ),
-                ObjectClass::WhaleZone => (
-                    table.whale,
-                    f.get(7),
-                    f.get(8),
-                    f.get(9).copied().unwrap_or(1) as i32,
-                    f.get(10).copied().unwrap_or(1) as i32,
                 ),
                 _ => continue,
             };

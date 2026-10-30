@@ -523,24 +523,21 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
     if let Some(o) = visible().find(|o| o.combat.is_some() && solid(o)) {
         return Some(o.id);
     }
-    // Deposits are areas: anywhere in a fishing or leviathan ground (its
-    // cells, record fields 6-9), near an amber deposit.
+    // Deposits are areas: anywhere in a fishing ground (its cells, record
+    // fields 6-9), near an amber deposit; a leviathan where its picture is
+    // (0x495a60: the picture's rect, then its `WHALEM_` mask, not read:
+    // its pixels here).
     let t = openconquest_formats::map::TILE_SIZE as f32;
     let (cx, cy) = ((wx / t).floor() as i32, (wy / t).floor() as i32);
     if let Some(o) = visible().find(|o| {
         o.deposit.is_some() && {
             let f = |i| o.record.field(i).unwrap_or(0) as i32;
             match o.class {
-                openconquest_formats::ObjectClass::FishZone
-                | openconquest_formats::ObjectClass::WhaleZone => {
-                    let (x, y, w, h) = if o.class == openconquest_formats::ObjectClass::FishZone {
-                        (f(6), f(7), f(8), f(9))
-                    } else {
-                        // A leviathan's zone: fields 10 and 11 its size.
-                        (f(7), f(8), f(10), f(11))
-                    };
+                openconquest_formats::ObjectClass::FishZone => {
+                    let (x, y, w, h) = (f(6), f(7), f(8), f(9));
                     cx >= x && cy >= y && cx < x + w.max(1) && cy < y + h.max(1)
                 }
+                openconquest_formats::ObjectClass::WhaleZone => solid(o),
                 _ => (o.x - wx).powi(2) + (o.y - wy).powi(2) <= (t * 0.6).powi(2) || solid(o),
             }
         }

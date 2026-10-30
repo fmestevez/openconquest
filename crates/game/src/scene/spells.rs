@@ -501,24 +501,17 @@ impl Scene {
             }
             self.dive_shoal(id);
         }
-        // A leviathan not waiting below after its catch (states 5 and 6,
-        // the port's dormant one; 0x495856): its life (`+0x80`) to 0, or
-        // if it has none, what is left of it (`+0x78`), as one caught.
-        // (Not ported: on its own cell it also goes down, 0x494400(0);
-        // the port has not its states.)
-        let leviathans: Vec<(u32, i32)> = self
-            .objects
+        // A leviathan in a cell's slot (`+0x10`; not caught, states 5 and
+        // 6, 0x495856): its life (`+0x80`) to 0, or if it has none its
+        // amount (`+0x78`); on the struck cell it goes down (0x494400(0)).
+        let leviathans: Vec<u32> = self
+            .leviathans
             .iter()
-            .filter(|o| o.class == ObjectClass::WhaleZone && o.deposit.is_some())
-            .filter(|o| near(((o.x / t).floor() as i32, (o.y / t).floor() as i32)))
-            .map(|o| (o.id, self.leviathan_life(o)))
+            .filter(|(_, l)| l.in_slot && near(l.cell))
+            .map(|(&id, _)| id)
             .collect();
-        for (id, life) in leviathans {
-            if life > 0 {
-                self.leviathan_life.insert(id, 0);
-            } else {
-                self.exhaust_deposit(id, data, caches);
-            }
+        for id in leviathans {
+            self.leviathan_lightning(id, (cx, cy), data, caches);
         }
         let monsters: Vec<(u32, bool)> = self
             .objects
@@ -694,6 +687,11 @@ impl Scene {
     /// Ships caught in whirlpools or on reefs take damage.
     pub(super) fn run_hazards(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         let struck = self.run_tornadoes(dt);
+        // The leviathan in a struck cell's slot takes the blow too
+        // (0x43a6c0, 0xda96 to `+0x10`).
+        for &(cell, _) in &struck {
+            self.leviathan_blow(cell, super::leviathan::TORNADO_BLOW);
+        }
         // Summoned monsters go back to the deep, cast whirlpools and reefs
         // fade.
         for s in &mut self.summons {

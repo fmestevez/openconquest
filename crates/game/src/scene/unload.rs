@@ -686,20 +686,13 @@ impl Scene {
     /// Exhausted amber grows back to what it held, as often as it may.
     pub(super) fn run_regrowth(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         for i in 0..self.objects.len() {
-            let f40 = self.objects[i].record.field(40).unwrap_or(0).min(9);
             let Some((dep, empty_for)) = self.objects[i].dormant.as_mut() else {
                 continue;
             };
             *empty_for += dt;
-            let leviathan = dep.resource == objects::Resource::Leviathan;
-            // A leviathan caught comes up again 27750 - 3000 x field 40
-            // ticks later (0x494400 state 5), on a water cell of its zone.
-            let wait = if leviathan {
-                crate::clock::ticks(27_750 - 3000 * f40)
-            } else {
-                objects::REGROW_SECONDS
-            };
-            if *empty_for < wait || dep.regrows == 0 {
+            // (A leviathan is never dormant: its catch and resurfacing are
+            // its own states, `leviathan.rs`.)
+            if *empty_for < objects::REGROW_SECONDS || dep.regrows == 0 {
                 continue;
             }
             let mut dep = *dep;
@@ -707,24 +700,6 @@ impl Scene {
             dep.remaining = Some(dep.refill);
             self.objects[i].dormant = None;
             self.objects[i].deposit = Some(dep);
-            if leviathan {
-                // Whole again: its life back to the record's (`+0x90`,
-                // 0x494b90 state 6).
-                let id = self.objects[i].id;
-                self.leviathan_life.remove(&id);
-                let f = |k: usize| self.objects[i].record.field(k).unwrap_or(0) as i32;
-                let (zx, zy, zw, zh) = (f(7), f(8), f(10).max(1), f(11).max(1));
-                let t = openconquest_formats::map::TILE_SIZE as f32;
-                for _ in 0..100 {
-                    let cx = zx + (self.rng.next() % zw as u32) as i32;
-                    let cy = zy + (self.rng.next() % zh as u32) as i32;
-                    if self.nav.is_water(cx, cy) {
-                        self.objects[i].x = cx as f32 * t + t / 2.0;
-                        self.objects[i].y = cy as f32 * t + t / 2.0;
-                        break;
-                    }
-                }
-            }
             self.refresh_amber(i, data, caches);
         }
     }

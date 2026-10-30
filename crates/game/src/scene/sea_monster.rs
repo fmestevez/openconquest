@@ -247,8 +247,8 @@ impl Scene {
 
     /// Whether monster `id` may be on cell `c` (0x402ee0): water; with
     /// `free` no ship there and nothing on its third place but, with
-    /// `room`, a treasure; no other monster there. (Not ported: the test
-    /// of the object at the cell's +8, vfunc +0x30, not decoded.)
+    /// `room`, a treasure, and no leviathan showing a picture in the
+    /// cell's `+0x10` (its vt +0x30, 0x496040); no other monster there.
     fn monster_may_be(&self, id: u32, c: (i32, i32), free: bool, room: bool) -> bool {
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
         if c.0 < 0 || c.1 < 0 || c.0 >= w || c.1 >= h {
@@ -266,6 +266,13 @@ impl Scene {
                 Some(true) if room => {}
                 Some(_) => return false,
                 None => {}
+            }
+            if self
+                .leviathans
+                .values()
+                .any(|l| l.in_slot && l.cell == c && l.picture)
+            {
+                return false;
             }
         }
         self.sea_monster_at(c, id).is_none()

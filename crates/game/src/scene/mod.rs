@@ -299,9 +299,8 @@ pub struct Scene {
     pub shoals_gone: std::collections::BTreeMap<u32, f32>,
     /// Reefs' and whirlpools' cycles (0x4306d0, 0x447ee0), by object.
     pub hazards: std::collections::BTreeMap<u32, hazards::Hazard>,
-    /// Leviathans' life (`+0x80`) where it is no longer the record's
-    /// field 6 (struck by lightning, 0x494f90).
-    pub leviathan_life: std::collections::BTreeMap<u32, i32>,
+    /// Leviathans' states (WhaleClassTy 0x494f90), by object id.
+    pub leviathans: std::collections::BTreeMap<u32, leviathan::Leviathan>,
     shoals_shown: std::collections::BTreeMap<u32, f32>,
     /// Seconds since a shoal surfaced (it rises with `FISH_11`).
     shoals_up: std::collections::BTreeMap<u32, f32>,
@@ -524,6 +523,7 @@ pub mod fire;
 mod gulls;
 mod halt;
 mod hazards;
+mod leviathan;
 pub mod load;
 mod orders;
 pub mod repair;
@@ -558,6 +558,7 @@ pub use computer::Computers;
 pub use flyers::{Flyer, Nest};
 pub use halt::Batch;
 pub use hazards::Hazard;
+pub use leviathan::Leviathan;
 pub use load::{Cargo, Entry, LoadLink};
 pub use order::{Order, TickOrder};
 pub use repair::{StockRepair, UnitMend};
@@ -735,7 +736,7 @@ impl Scene {
             rng: Rng(0x1234_5678),
             shoals_gone: Default::default(),
             hazards: Default::default(),
-            leviathan_life: Default::default(),
+            leviathans: Default::default(),
             shoals_shown: Default::default(),
             shoals_up: Default::default(),
             fish_art: std::rc::Rc::new([1, 2, 3].map(|size| {
@@ -1045,7 +1046,7 @@ impl Scene {
             rng: self.rng.clone(),
             shoals_gone: self.shoals_gone.clone(),
             hazards: self.hazards.clone(),
-            leviathan_life: self.leviathan_life.clone(),
+            leviathans: self.leviathans.clone(),
             shoals_shown: self.shoals_shown.clone(),
             shoals_up: self.shoals_up.clone(),
             default_arming: self.default_arming,
@@ -1196,7 +1197,7 @@ impl Scene {
         scene.rng = save.rng.clone();
         scene.shoals_gone = save.shoals_gone.clone();
         scene.hazards = save.hazards.clone();
-        scene.leviathan_life = save.leviathan_life.clone();
+        scene.leviathans = save.leviathans.clone();
         scene.shoals_shown = save.shoals_shown.clone();
         scene.shoals_up = save.shoals_up.clone();
         scene.default_arming = save.default_arming;
@@ -2111,8 +2112,12 @@ impl Scene {
                 return &live[(time_ms / unit) as usize % live.len()];
             }
         }
-        // A reef or whirlpool: the frame its cycle is at (0x4301f0).
-        if let Some(f) = self.hazard_frame(obj.id) {
+        // A reef or whirlpool: the frame its cycle is at (0x4301f0); a
+        // leviathan the frame it last drew (0x493f10).
+        if let Some(f) = self
+            .hazard_frame(obj.id)
+            .or_else(|| self.leviathan_frame(obj.id))
+        {
             if let Some(layers) = obj.frames.get(f as usize).or(obj.frames.last()) {
                 return layers;
             }
@@ -2224,6 +2229,7 @@ impl Scene {
             }
             self.run_brain_flames(dt);
             self.run_hazard_cycles(data, caches);
+            self.run_leviathans(data, caches);
             for (spell, id) in std::mem::take(&mut self.pending_ship_casts) {
                 self.brain_cast_on(spell, id, data, caches);
             }

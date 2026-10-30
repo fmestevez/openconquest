@@ -4218,8 +4218,9 @@ back at its cell (0x520c70: world message 0x16e3 with a treasure record,
 the entry at fields 4-8, the cell at 9 and 10). Not decoded: the treasure's
 state 5 and the callers of 0x493620 (a carried entry's kind); the handler
 of world message 0x16e3, so whether a message is shown (the port says "...
-lies in the wreckage", which nothing in 0x491ed0 or 0x520c70 sends). Not
-ported: the test of the cell's +8 object (vfunc +0x30) in 0x402ee0.
+lies in the wreckage", which nothing in 0x491ed0 or 0x520c70 sends). With
+`free`, 0x402ee0 refuses a cell whose leviathan slot (`+0x10`) holds one
+showing a picture (its vt +0x30, 0x496040: `+0x189`).
 
 The Gorgon (MedusaClassTy, `gorgona.cpp`) rests 200-500 ticks (0x4019d0),
 rises (`GORG1`, 30 frames), stares 1-3 times (`GORG2`, 28 frames, at
@@ -4500,44 +4501,84 @@ Unloading ends with 0x4add10 calling 0x4ad9f0, which credits the whole load
 - **A leviathan** (`+0x480`, class 0x192): `amount x 125 x 40 / 100`, so 50
   amber a unit, plus 2500 fish however much there was.
 
-A leviathan (`WhaleClassTy`, record 0x494f90; life 0x494b90) holds 100 x
-field 4: 100 in every mission, so the manual's 5000 amber and 2500 fish. A
-ship takes 50 of it a cast of the net (0x4ad0e0), whatever its type. Caught,
-it waits below `27750 - 3000 x field 40` ticks (state 5; field 40 is 2 in
-most missions, about 14.5 minutes), then comes up whole on a random water
-cell of its zone (fields 7 and 8 its corner, 10 and 11 its size; state 6).
-It does this until it has shown itself field 39 times (2 in most missions).
-Between dives while not caught it waits 25-75 ticks, as fish do.
+A leviathan (`WhaleClassTy`, Grig\whale.cpp: messages 0x494f90, tick
+0x494b90, states set by 0x494400; `scene/leviathan.rs`) holds 100 x field 4
+(`+0x78`): 100 in every mission, so the manual's 5000 amber and 2500 fish.
+A net takes 50 of it a cast (0x4ad0e0, through its vt +4 mode 1,
+0x494090, which takes only in state 3).
 
-Its states (0x494b90 by `+0x74`, 0x494400 sets them; message 2 of
-0x494f90): `+0x78` amount f4 x 100, `+0x7c` max life f5, `+0x80` life f6,
-refills `+0x8c` / `+0x90`; its cell starts at f7, f8 (not a corner) and it
-keeps to the cell -/+ f10 / f11 (clamped to the map; either below 1: the
-whole map); `+0x84` shows f39, `+0x88` f40; 25 move weights `+0x121` from
-table 0x5ba958 + f13 x 100 (f13 < 9) or fields 14-38. State 0 (below,
-25-75 ticks, `r % 51 + 25` of its LCG seeded `game +0x2ee5 x id`): with
-life it moves to a cell of the 5 x 5 about it (0x4941f0: within its
-bounds, 0x48ed40 free, weighted) and shows itself (1: picture sequence 8,
-sound 99 `kit4` when `+0x98` is odd) for a loop of its picture, then
-below again. With no life it comes up to be hunted only once `+0x119` is
-set (by state 6): 2 (`prote1`, event 110), 3 up for `r % 41 + 40` loops
-(none once `+0x11d`, set by a blow while up), 4 down; a merchant or boat
-on its cell nets it only in state 3 (0x4aeef0 case 1); its amount gone,
-`+0x119` is cleared. No life and no `+0x119`: off its cell's slot, gone
-(message 10) once it has shown `+0x84` times, else state 5 (27750 - 3000 x
-f40 ticks), then 6: one draw of x and one of y in its bounds a tick, up
-to 100 ticks, for a cell 0x48ed40 lets (landscape low nibble up to 7,
-nibble 1 up to 3, `+0x10` free): amount and life whole, `+0x119` 1, shown
-+ 1, state 0; after 100 tries, 5 again. Its life falls only to lightning
-(0xda93: life to 0 if any, else the amount; on its cell 0x494400(0)), a
-tornado's blows while up (0xda96: life less the blow, else the amount
-0) and a reef's or whirlpool's 0xda94 / 0xda95 while up (no life: the
-amount 0). So a leviathan of life 100 must be struck before it can be
-hunted. The port keeps it a deposit taken whenever up, its zone read as
-corner and size (fields 7, 8, 10, 11): not ported, the states above and
-their hunt (trade.rs), its swim, pictures and bounds. Not decoded:
-0x493a20 / 0x493ac0 (its sequence names), 0x495e80 (the weighted pick),
-0x494140, 0x499900, 0x403010, 0x50e600, 0x493960.
+Its record (message 2, mode field 12 = 0 in every mission): field 5 full
+life (`+0x7c`), 6 life (`+0x80`, and `+0x90` the life it comes up with
+again), 7 and 8 **its start cell** (`+0xa9`, `+0xad`), 10 and 11 the reach of
+its bounds about that cell (`+0xb1`-`+0xbd`: the cell -/+ them, clamped to
+the map; either below 1: the whole map), 13 its move weights (below 9: row
+f13 of the 9 x 25 table 0x5ba958, else fields 14-38, each at least 1), 39
+the times it comes up again after a catch (`+0x84`), 40 how soon (`+0x88`),
+41 the treasures it carries and 42-51 their five dwords each (two places,
+`+0xc1` / `+0xc5`). Its generator `+0x18` is seeded `game +0x2ee5 x id`.
+A start cell 0x48ed40 refuses: it goes (message 10). It lies in its cell's
+leviathan slot (`+0x10`, the slot the placement map 0x40b710 and the hunt
+read). 0x48ed40(self, x, y, free, room): landscape low nibble up to 7 and
+nibble 1 up to 3; with `free` no ship in the occupant slot (0x499900), the
+`+0x1c` object empty (or, with `room`, one whose class is its family's,
+0x50e600: a treasure, 700), the `+0x18` object without a picture (0x403010,
+vt +0x30: a sea monster's `+0x139`); the slot empty or itself.
+
+States (`+0x74`), each start resetting the loops `+0x111` and the start
+tick `+0xf9`:
+- 0 under water, picture gone, a wait of `r % 51 + 25` ticks. Then, with
+  life, a move (0x4941f0: the 5 x 5 cells about it, dx outer and dy inner,
+  within its bounds and 0x48ed40 with room while it carries fewer than
+  [0x5c112c] = 2, weight `[dy x 5 + dx]`, x 10 onto a treasure; picked by
+  0x495e80: one choice no draw, else `r % (sum + 1)` against the running
+  sums; the heading `+0x98` by 0x494140, east 0 counter-clockwise, kept
+  for the same cell) and state 1, or 0 again; with no life and `+0x119`
+  (set on coming up again) a move and 2; with neither, off its slot: gone
+  once it has come up again `+0x84` times, else 5.
+- 1 shows itself a loop of `WHALE_0<heading>` (a composite: layer 0 the
+  body, 1-3 its wounds below 76, 51, 26 percent of its life, 0x493ac0), a
+  frame every 2 ticks (1 with an odd heading), sound event 99 (`kit4`)
+  with an odd heading; it takes the treasure on its cell's `+0x1c` while
+  carrying fewer than [0x5c1140] = 2 (0x158c1). Then 0.
+- 2 comes up (`WHALE_10`, a frame every 2 ticks, sound 110 `prote1`), then
+  3 up (`WHALE_20`, every 3 ticks, `r % 41 + 40` loops; what it carries
+  falls at its cell, 0x520c70); struck while coming up (`+0x11d`) no loops:
+  4 at once. Up, its amount below 1 ends it at the end of the loop, `+0x119`
+  cleared. 4 goes down (`WHALE_10` backwards, every 2 ticks), then 0.
+- 5 caught: a wait of `27750 - 3000 x field 40` ticks (field 40 clamped to
+  0-9; 2 in most missions, about 14.5 minutes), then 6: a tick at a time,
+  up to 100, one draw of x and one of y in its bounds, its cell taken
+  before the test, 0x48ed40 with no `free` and an empty slot: amount and
+  life whole, `+0x119` set, shown + 1, in the slot, state 0; after 100
+  tries 5 again.
+Pictures (0x493b00, 0x493a20 `WHALE_%1d%1d` of (state 1: 0, 2 and 4: 1,
+3: 2) and the heading, zeroed in 2-4) lie at the cell's corner, 5 lower
+but in state 1; 0x493f10 draws the frame when `now >= last + delay` (every
+tick while `+0x11d`), then steps it, past the loop's end back to its first
+and a loop more.
+
+Blows (only while it shows a picture, states 1-4, but lightning): lightning
+(0xda93, not in 5 and 6) takes its life to 0, or with none its amount; on
+the struck cell it goes down (0x494400(0)), elsewhere it hurries. A
+tornado's blow (0xda96, 30000 to each slot of the cell, 0x43a6c0) takes
+that from its life, or with none its amount; a reef's or whirlpool's not
+under water (0xda94 / 0xda95, each of their ticks) its amount when it has
+no life; each hurries it (`+0x11d`). A shot's blow (vt +4 mode 0) in state
+1 only: life less the blow, sound 121, a kill report below 1.
+
+So a leviathan of life 100 must be struck down twice before it can be
+netted: with no life and no `+0x119` it is caught (5) and comes up whole
+with `+0x119`; struck down again it comes up to be hunted (2, 3). A ship of
+type 0 or 1 nets it only lying on its cell while it is up (0x4aeef0 case 1,
+0x4aee40 each round); a warship finding it there moves off (0x4b49a0) and
+ends its task. Not ported: the hunter's own search and approach (0x4ac8d0,
+0x4ad680; 0x4ac5d0 / 0x4af6a0 when it sees one showing itself, the
+warships' part of the hunt), 0x4b49a0, the boat's steps of 0x4aeef0, the
+shot's blow (the port's ships cannot aim at it), the `WHALEM_` masks of its
+hit test 0x495a60 (kind 11, not read: its picture's pixels), the gorgon's
+and siren's vt +0x30 in 0x403010, the order of a hazard's 0xda94 and its
+own tick. Not decoded: `+0xa1` (0x523d80(200, it) as it moves; never
+written by whale.cpp).
 
 ## Sounds
 

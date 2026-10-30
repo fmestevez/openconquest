@@ -6015,6 +6015,12 @@ mod tests {
         let mut defeat_at = None;
         // 25 minutes of game time.
         for k in 0..25 * 60 * 10 {
+            // The leviathans struck down whenever they have life, as the
+            // warships' part of the hunt would (0x4ac8d0 / 0x4af6a0, not
+            // ported): a merchant nets one only once it is (0x4aeef0).
+            for l in scene.leviathans.values_mut() {
+                l.life = l.life.min(0);
+            }
             scene.update(0.1, &data, &mut caches);
             let ai = &scene.computers.players[0];
             if k % 5 == 0 {

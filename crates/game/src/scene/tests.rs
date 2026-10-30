@@ -10644,7 +10644,8 @@ fn hazards_rise_and_sink() {
 
 /// Lightning on a leviathan (0x494f90 0xda93): its life (field 6, 100)
 /// first goes to 0, the info then showing what is left; struck again,
-/// what is left goes, as one caught (needs `OPENCONQUEST_DATA`).
+/// what is left goes; struck on its cell it goes down (0x494400(0)) (needs
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn lightning_on_a_leviathan() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -10660,6 +10661,8 @@ fn lightning_on_a_leviathan() {
         .position(|o| o.class == ObjectClass::WhaleZone)
         .unwrap();
     let id = scene.objects[k].id;
+    scene.run_leviathans(&data, &mut caches);
+    let k = scene.object_index(id).unwrap();
     assert_eq!(scene.leviathan_life(&scene.objects[k]), 100);
     let info = crate::object_info::of(&scene, &scene.objects[k]).unwrap();
     assert_eq!((info.life, info.volume), (Some(100), None));
@@ -10675,7 +10678,11 @@ fn lightning_on_a_leviathan() {
     assert_eq!((info.life, info.volume), (None, Some((100, 100))));
     scene.lightning_strike(x, y, None, &data, &mut caches);
     let k = scene.object_index(id).unwrap();
-    assert!(scene.objects[k].deposit.is_none() && scene.objects[k].dormant.is_some());
+    assert_eq!(
+        scene.objects[k].deposit.and_then(|d| d.remaining),
+        Some(0.0)
+    );
+    assert_eq!(scene.leviathans[&id].state, super::leviathan::UNDER);
 }
 
 /// A town's buildings (0x427de0, 0x441190 / 0x427e40 at the start,

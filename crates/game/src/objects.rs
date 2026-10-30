@@ -224,13 +224,15 @@ pub fn treasure_name(kind: u8) -> String {
 /// The treasures an object's record says it holds (its inventory: a count,
 /// then entries of five dwords like a treasure record's fields 4-8: kind,
 /// holder -1, 0, parameter, amount). Lairs, nests, barbarian structures,
-/// fortresses, towns and sea monsters keep theirs at different fields.
+/// fortresses, towns, sea monsters and leviathans keep theirs at different
+/// fields.
 pub fn inventory(rec: &ObjectRecord) -> Vec<Treasure> {
     let count_at = match rec.class_id {
         0x46..=0x48 => 10,
         0x34..=0x36 | 0x3f..=0x41 => 11,
         0x44 | 0x45 => 12,
         0x1fb => 17,
+        0x192 => 41,
         0x32 | 0x33 => 60,
         _ => return Vec::new(),
     };
@@ -239,8 +241,9 @@ pub fn inventory(rec: &ObjectRecord) -> Vec<Treasure> {
         return Vec::new();
     };
     // A sea monster has two places (+0xbd, ten dwords from fields 18-27,
-    // message 2 of 0x492360); it takes field 17 as its count unchecked.
-    if rec.class_id == 0x1fb {
+    // message 2 of 0x492360); it takes field 17 as its count unchecked. A
+    // leviathan likewise (+0xc5 from fields 42-51, count field 41, 0x494f90).
+    if rec.class_id == 0x1fb || rec.class_id == 0x192 {
         n = n.min(2);
     }
     (0..n as usize)
@@ -1442,22 +1445,25 @@ pub fn resolve(
                 },
             )
         }
-        ObjectClass::FishZone | ObjectClass::WhaleZone => {
+        ObjectClass::FishZone => {
             // Zones are areas the creatures roam; show one in the middle.
-            // A leviathan's zone has its corner in fields 7 and 8, its
-            // size in 10 and 11 (0x494f90).
-            let (x, y) = if class == ObjectClass::FishZone {
-                (f(6) + f(8) / 2, f(7) + f(9) / 2)
-            } else {
-                (f(7) + f(10) / 2, f(8) + f(11) / 2)
-            };
-            let frames = if class == ObjectClass::FishZone {
-                sequence_frames(data, caches, "FISH_12")?
-            } else {
-                composite_frames(data, caches, "WHALE_00", 0..usize::MAX)?
-            };
+            let (x, y) = (f(6) + f(8) / 2, f(7) + f(9) / 2);
+            let frames = sequence_frames(data, caches, "FISH_12")?;
             (
                 CellCorner(x, y, 0, 0),
+                Visual {
+                    frames,
+                    frame_ms: DEFAULT_FRAME_MS,
+                },
+            )
+        }
+        ObjectClass::WhaleZone => {
+            // A leviathan starts at the cell of fields 7 and 8 (0x494f90
+            // message 2; fields 10 and 11 are the reach of its bounds about
+            // it); its pictures are its states' (`scene::leviathan`).
+            let frames = composite_frames(data, caches, "WHALE_00", 0..usize::MAX)?;
+            (
+                CellCentre(f(7), f(8)),
                 Visual {
                     frames,
                     frame_ms: DEFAULT_FRAME_MS,
@@ -1636,14 +1642,14 @@ pub fn resolve(
                 refill: 0.0,
             })
         }
-        // A leviathan (WhaleClassTy 0x494f90): 100 x field 4 to take; once
-        // caught it comes up again, whole, until it has shown itself field
-        // 39 times (0x494b90).
+        // A leviathan (WhaleClassTy 0x494f90): 100 x field 4 to take
+        // (`+0x78`), and as much again each time it comes up after a catch
+        // (`+0x8c`, 0x494b90 state 6).
         ObjectClass::WhaleZone => Some(Deposit {
             resource: Resource::Leviathan,
-            remaining: Some(f(4) as f32 * 100.0),
-            regrows: f(39).saturating_sub(1),
-            refill: f(4) as f32 * 100.0,
+            remaining: Some((f(4) as i32 * 100) as f32),
+            regrows: 0,
+            refill: (f(4) as i32 * 100) as f32,
         }),
         _ => None,
     };
@@ -2076,6 +2082,19 @@ pub fn ship_build_frames(
         0..usize::MAX,
         |k, _| k < 32 && mask & (1 << k) != 0,
     )
+}
+
+/// Composite `name`'s frames with the layers of `mask` (bit k layer k;
+/// a picture of kind 8, 0x50d080).
+pub fn composite_masked_frames(
+    data: &GameData,
+    caches: &mut Caches,
+    name: &str,
+    mask: u32,
+) -> Result<Vec<Vec<Layer>>> {
+    composite_frames_with(data, caches, name, 0..usize::MAX, |k, _| {
+        k < 32 && mask & (1 << k) != 0
+    })
 }
 
 /// The frames of one layer of composite `name`, e.g. one facing of the

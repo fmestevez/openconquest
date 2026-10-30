@@ -2158,6 +2158,25 @@ impl Scene {
                     });
                     return;
                 }
+                // A leviathan is netted only up (state 3, reached only once
+                // struck down to no life) in the slot of the ship's own
+                // cell, by a ship of type 0 or 1 (0x4aeef0 case 1, 0x4aee40);
+                // the ship waits for it, onto its cell while it lies in a
+                // slot. (Not ported: the hunter's search and approach
+                // 0x4ac8d0, a warship's 0x4b49a0.)
+                if self.objects[d].class == ObjectClass::WhaleZone {
+                    let lev = self.objects[d].id;
+                    if !self.leviathan_nets(lev, i) {
+                        let here = ((sx / t).floor() as i32, (sy / t).floor() as i32);
+                        if let Some(c) = self.leviathan_cell(lev).filter(|&c| c != here) {
+                            let (x, y) = (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+                            if let Some(path) = self.plan_route(i, x, y) {
+                                self.objects[i].ship.as_mut().unwrap().path = path;
+                            }
+                        }
+                        return;
+                    }
+                }
                 let dep = self.objects[d].deposit.unwrap();
                 // A walkway to the amber, or the net out.
                 let activity = match dep.resource {
@@ -2227,7 +2246,10 @@ impl Scene {
                 if exhausted {
                     let ship_id = self.objects[i].id;
                     let dep = self.objects[d].deposit.unwrap();
-                    if dep.regrows > 0 {
+                    if dep.resource == Resource::Leviathan {
+                        // Hunted out it stays: its own states take it down
+                        // (0x494b90 state 3, amount below 1).
+                    } else if dep.regrows > 0 {
                         // Amber grows back after a while.
                         self.objects[d].deposit = None;
                         self.objects[d].dormant = Some((dep, 0.0));

@@ -49,9 +49,9 @@ pub struct SaveGame {
     /// Reefs' and whirlpools' cycles (0x4306d0, 0x447ee0).
     #[serde(default)]
     pub hazards: std::collections::BTreeMap<u32, crate::scene::Hazard>,
-    /// Leviathans' life where struck (0x494f90).
+    /// Leviathans' states (0x494f90).
     #[serde(default)]
-    pub leviathan_life: std::collections::BTreeMap<u32, i32>,
+    pub leviathans: std::collections::BTreeMap<u32, crate::scene::Leviathan>,
     /// Fish shoals below and in sight: zone and seconds left.
     #[serde(default)]
     pub shoals_gone: std::collections::BTreeMap<u32, f32>,

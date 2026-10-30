@@ -319,8 +319,8 @@ impl Scene {
         if self.shoal_gone(o.id) || self.creature_hidden(o.id) || self.hazard_hidden(o.id) {
             return false;
         }
-        // A leviathan caught is below until it comes up again.
-        if o.class == ObjectClass::WhaleZone && o.deposit.is_none() {
+        // A leviathan is seen only while it shows a picture (states 1-4).
+        if o.class == ObjectClass::WhaleZone && self.leviathan_hidden(o.id) {
             return false;
         }
         if !self.fogged() || self.is_own(o) {
