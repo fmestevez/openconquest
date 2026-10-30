@@ -1684,13 +1684,14 @@ impl Scene {
         docks[r % docks.len()]
     }
 
-    /// Ship command 0x1e `{0, dock, 0x50}` (0x4cd930), the human's "go to
-    /// dock": the ship sails to `dock` to be mended. (Not decoded: what a
-    /// ship does with dock 0, and with a dock when it is not hurt; the
-    /// port's order refuses both.)
+    /// Ship command 0x1e `{0, dock, 0x50}` (0x4cd930, through 0x520cc0:
+    /// delivered at the next tick), the human's "go to dock": the ship
+    /// sails to `dock` to be mended. (Not decoded: what a ship does with
+    /// dock 0, and with a dock when it is not hurt; the port's order
+    /// refuses both.)
     fn repair_send(&mut self, id: u32, dock: u32) {
         if dock != 0 {
-            let _ = self.order_repair(id, dock);
+            self.post(super::Order::Repair { ship: id, dock });
         }
     }
 
@@ -1865,12 +1866,18 @@ impl Scene {
         self.brain.as_ref().unwrap().fleets[k].ships.clone()
     }
 
+    /// The fleet's ships sail to cell `(cx, cy)`: move commands (0x14,
+    /// 0x520cc0), delivered at the next tick.
     fn fleet_move(&mut self, k: usize, (cx, cy): (i32, i32)) {
         let t = TILE_SIZE as f32;
         for (n, id) in self.fleet_ships(k).into_iter().enumerate() {
             // Side by side, not on top of each other.
             let dx = (n as f32 - 0.5) * 24.0;
-            self.order_move(id, cx as f32 * t + t / 2.0 + dx, cy as f32 * t + t / 2.0);
+            self.post(super::Order::Move {
+                ship: id,
+                x: cx as f32 * t + t / 2.0 + dx,
+                y: cy as f32 * t + t / 2.0,
+            });
         }
     }
 
@@ -7143,7 +7150,9 @@ mod miss007 {
             }),
             // 0x47aed0 (order 0xbe): a ship takes the sword (kind 22) where
             // it lies anywhere on the map (0x4d9920; the whole map written
-            // into `+0x40` by 0x479c90); 5 if there is none.
+            // into `+0x40` by 0x479c90); 5 if there is none. (Not ported:
+            // the treasure command goes through 0x520cc0 to the next tick;
+            // here it is given at once, its answer picking the ship.)
             15 => Op::Custom(|scene, k| {
                 let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
                 scene.brain.as_mut().unwrap().fleets[k].last_area = (0, 0, w, h);

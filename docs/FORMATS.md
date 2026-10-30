@@ -2825,21 +2825,68 @@ code kept in `+0x265`) goes on and the tasks 0x10-0x80 are cleared from
 in `+0x265`, 0x4abc60 winds the current task down and the pending group
 is dropped (`+0x265` zeroed again if anything else is pending).
 
-The port applies the player's orders at once (`Scene::apply`) and,
-within a tick, keeps the ship as it was before its first order of the
-group, running a later one over it only when the original's would win
-(a higher code, or the same code overwriting), a refusal leaving the
-old task; an attack ranks after the group and goes with any order of it
-in the tick; a stop drops the tick's. Not ported: the tick's delay
-itself; 0x4abe50's deferral of a busy task (the port has no busy marks);
-0x4abe00, 0x4aa290 / 0x4aa2a0 not read; `+0x251 == 1` not identified;
-a fire at a target (0x15, kind 1: the port's forts only); the computer players' and brains' calls, which set tasks at
-once (so a member's move and a repair order to one ship in one tick do
-not resolve to the dock as the original's would); the end of unloading
-(0x4adef0 step 0x13: event 8 mask 0x40 and the move aside 0x80, the way
-back from the group's gather task later: the port goes back to its
-deposit at once after the move aside); lightning's, reefs' and
-whirlpools' wrecks, a tick early in the port.
+**When a command arrives** (Players.cpp; decompiles of 0x520cc0,
+0x51fe20, 0x521570, 0x5228c0, 0x542390, 0x51f250, 0x541f70). 0x520cc0
+(players, id, 0, code, payload) builds `{+4 the tick, +8 id, +0xc code,
++0xd the payload copied, sized by code}` and appends it to the Players
+object's outbox `+0x2e`; nothing is delivered there (a network client's
+code 5 goes out at once by 0x520f10; with `game +0x30d9 == 2`, the
+replay, commands are dropped). Every path comes through it: the
+interface (0x518db0 -> 0xc458 -> the navy 0x49e230 -> its fleet tasks'
+helpers), the computer players' navy and land fleets, the brains. The
+frame (Players vt+0x1c = 0x51fe20; vtable 0x59b828) in single player
+(the host path: `game +0xd7c = 1`, set by 0x4ebe75 / 0x4ec657; `+0xd80`
+1 or 2; `+0x30d9 = 0`, 0x4ebec3), not paused and no network wait: when
+a tick's time is up (`(now - +0xe6) / period`, 40 ms at speed 5) `+0xe2
+= 1`, `+0xde += 1`, then 0x521570 (the outbox to the tick buffer
+`+0x36`), 0x5228c0 (delivery), 0x542390 (the tick). 0x521570 holds the
+outbox while the byte `+0x3e` is below the speed row's `+0x14` (table
+0x5bed7c, stride 0x18; rows period/+8/+0x14: 13/15/5, 17/12/5, 20/10/5,
+33/7/3, **40/5/2**, 50/4/2, 60/3/1, 70/2/1, 80/1/0) and the game is not
+paused, counting it up; else it moves every record, in order, to the
+buffer. `+0x3e` is zeroed only by the constructor (0x51fa69), the network
+branch (0x520315) and the network / recording tail of 0x521570, so in
+single player at speed 5 the first two ticks deliver nothing and every
+later tick delivers all. 0x5228c0 hands each record in order to Players
+vt+0x18 = 0x51f250 as `{[2] id, [3] 4, [4] 0x280f, [5] record}`: class 4
+finds the object (0x51f1f0) and calls its handler at once (a ship's
+0x4dc630 -> 0x4e2ba0 records its pending event; a town's 0x441ba0 acts
+there and then). 0x542390 then drains the Sapp queue `+8`, sends the
+tick (0x542270, message 0 to every object) and drains the posted queue
+`+4` (0x541e10 appends there). 0x542630 is a direct send (`[0]` the
+sender, `[1] = 2`, through `[this+0xc]` vt+0x18), not a post. So a
+command given in tick T reaches its object at the start of T+1, before
+anything runs, after the earlier ones; one the interface gives between T
+and T+1 comes after tick T's; nobody in tick T sees it.
+
+The port applies the player's orders at once (`Scene::apply`), the same
+moment as the original's delivery, and keeps the brains' and computer
+players' ship commands in an outbox (`Scene::post`: the brains' fleet
+moves and repair docks, the flotillas' moves and docks, the move of a
+founding ship) delivered in order at the end of the tick that gave them
+(`Scene::deliver`), before the player can add his; in the first two
+ticks (`order::HOLD`) the player's are held with them (but the Building
+page's switch, the interface's own). Within a batch it keeps the ship as
+it was before its first order of the group, running a later one over it
+only when the original's would win (a higher code, or the same code
+overwriting), a refusal leaving the old task; an attack ranks after the
+group and goes with any order of it in the batch; a stop drops the
+batch's. Not ported: the hold after loading a save (`+0x3e` is the
+Players object's; whether a load rebuilds it was not read) and after a
+change of speed; the ship's pending events are run at delivery, not at
+its own turn in the tick; 0x4abe50's deferral of a busy task (the port
+has no busy marks); 0x4abe00, 0x4aa290 / 0x4aa2a0 not read; `+0x251 ==
+1` not identified; a fire at a target (0x15, kind 1: the port's forts
+only); the commands still given at once: the computers' founding (its
+answer decides their move), treasure hunts (a refused one tries the
+next), zones (the navy's own task in the original, its commands not
+modelled), the brains' sword hunt, fleet stops and town commands (the
+land fleets' builds, upgrades, mendings, the brains' and computers'
+yard orders and spells); the end of unloading (0x4adef0 step 0x13:
+event 8 mask 0x40 and the move aside 0x80, the way back from the
+group's gather task later: the port goes back to its deposit at once
+after the move aside); lightning's, reefs' and whirlpools' wrecks, a
+tick early in the port.
 
 The port: `scene::yard`. The port's slot is the cell a ship is in (a ship
 mended at a dock aside); ships just built hold their berth until made the
@@ -5059,8 +5106,9 @@ the direction 0x59791d[dx*4+dy] and its draught `+0x592`) drawn with the
 ship's LCG, else one held by a lower-priority (`+0x5c7 < 100`) own ship
 (0x499990), and the move event 0x80 to it (see "Shipyards' berths").
 The port holds the part (`PartStep::Berth`), counts `+0xe0` and clears
-the berths at once (not decoded: the tick a 0x520cc0 command reaches the
-town); the town busy is, here, only its going up or being made a town.
+the berths at once (the original's command reaches the town at the
+next tick, "When a command arrives": not ported for the town commands);
+the town busy is, here, only its going up or being made a town.
 
 **The land fleet's pass** (0x42b910, the fleet's message 0 every tick;
 constructor 0x42b370). Fields: +0x14 the last pass started a part, +0x18
@@ -5100,7 +5148,8 @@ entry by its 20 dwords (0x482ff0 -> 0x42c870): its state, done or failed
 taking it off the queue, 5 if none (a request then fails, 0x480270; the
 base script waits on, 0x47d2e0). Order 0x60 (flags 0xd8) never ends: it
 repeats and restarts its failed part; the base script does not wait for it.
-Not settled: the tick the town's command reaches it (0x520cc0); which towns
+The town's command reaches it at the next tick ("When a command
+arrives"; the port's are given at once). Not settled: which towns
 have +0x1bc (the waker's test); a brain's data lowering +0x24.
 
 **Fights.** Message 0x5d9c (an object of the player hit): at most every

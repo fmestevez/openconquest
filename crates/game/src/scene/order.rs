@@ -229,10 +229,59 @@ pub enum Order {
     },
 }
 
+/// Ticks at the start of a game whose commands are held (0x521570: while
+/// the Players object's `+0x3e` is below the speed's `+0x14`, 2 at the
+/// default speed 5, it counts up and delivers nothing; single player never
+/// zeroes it again).
+pub const HOLD: u32 = 2;
+
 impl Scene {
     /// Carries out `order` for the active player. `Ok` holds a count where
-    /// the order has one (marines loaded).
+    /// the order has one (marines loaded). The interface's commands reach
+    /// their objects at the start of the next tick (0x520cc0's outbox,
+    /// delivered by 0x5228c0 before the tick runs), after the commands
+    /// the brains and computer players gave in the last one: the port
+    /// carries them out at once, the last tick's having been delivered at
+    /// its end (`Scene::deliver`). In the first ticks of a game they are
+    /// held with the rest (`HOLD`). (The Building page's switch is the
+    /// interface's own: read into the yard command's byte 0xd at the
+    /// click, never held.)
     pub fn apply(
+        &mut self,
+        order: &Order,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Result<u32, String> {
+        if self.ticks < HOLD && !matches!(order, Order::DefaultArming { .. }) {
+            self.outbox.push(order.clone());
+            return Ok(0);
+        }
+        self.carry_out(order, data, caches)
+    }
+
+    /// Gives `order` as a brain or computer player does (0x520cc0): it
+    /// goes into the outbox and reaches the ship or building at the next
+    /// tick, in the order given, after nobody in this tick has seen it.
+    pub(super) fn post(&mut self, order: Order) {
+        self.outbox.push(order);
+    }
+
+    /// Delivers the outbox at a tick's turn (0x521570, 0x5228c0): each
+    /// command in order to its object's handler, refusals dropped
+    /// silently; a ship's 0x1f0 group resolves from here
+    /// (`one_event_a_tick`). Nothing in the first `HOLD` ticks.
+    pub(super) fn deliver(&mut self, data: &GameData, caches: &mut Caches) {
+        if self.ticks < HOLD {
+            return;
+        }
+        self.tick_orders.clear();
+        for order in std::mem::take(&mut self.outbox) {
+            let _ = self.carry_out(&order, data, caches);
+        }
+    }
+
+    /// Hands `order` to its object, as the command's handler does.
+    fn carry_out(
         &mut self,
         order: &Order,
         data: &GameData,
@@ -286,14 +335,14 @@ impl Scene {
     /// (`+0x289 + 3k`) of kind 3: always so for an attack on a ship
     /// (0x16 sub 7, every position kind 3), so an attack goes with any
     /// order of the group in its tick, whichever came first. The port
-    /// applies orders at once, so the ship's state before its first such
-    /// order of the tick is kept and an order is run over it only if the
+    /// applies orders as they are delivered, so the ship's state before
+    /// its first such order of the batch (the last tick's outbox, then
+    /// the player's) is kept and an order is run over it only if the
     /// original's would win. `None` for an order outside the group. (Not
-    /// ported: the original runs them at the ship's next tick, a tick
-    /// late; a busy task's deferral (0x4abe50: one code kept in `+0x265`,
-    /// 0x20, 0x40, 0x10, 0x100, 0x80 first, the current task wound down
-    /// by 0x4abc60); the computer players' and brains' own calls, which
-    /// do not come through here.)
+    /// ported: a busy task's deferral (0x4abe50: one code kept in
+    /// `+0x265`, 0x20, 0x40, 0x10, 0x100, 0x80 first, the current task
+    /// wound down by 0x4abc60); the events wait in the original until the
+    /// ship's own turn in the tick, the port runs them at delivery.)
     fn one_event_a_tick(
         &mut self,
         order: &Order,

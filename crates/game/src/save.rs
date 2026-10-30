@@ -85,6 +85,11 @@ pub struct SaveGame {
     /// The ships' orders of the 0x1f0 group since the last tick.
     #[serde(default)]
     pub tick_orders: BTreeMap<u32, crate::scene::TickOrder>,
+    /// Commands given and not yet delivered, and the ticks played.
+    #[serde(default)]
+    pub outbox: Vec<crate::scene::Order>,
+    #[serde(default)]
+    pub ticks: u32,
     /// Free casts from treasures, by spell index.
     #[serde(default)]
     pub free_casts: Vec<(u32, u32)>,

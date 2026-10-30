@@ -3,6 +3,12 @@
 use super::*;
 use crate::objects::Caches;
 
+/// Plays as if past the first ticks of the game, whose commands are held
+/// (`order::HOLD`), so the player's orders are carried out at once.
+fn past_hold(scene: &mut Scene) {
+    scene.ticks = order::HOLD;
+}
+
 /// Builds a boat and upgrades the settlement in the first campaign
 /// mission (needs `OPENCONQUEST_DATA`).
 #[test]
@@ -13,6 +19,7 @@ fn shipyard_builds_and_settlement_upgrades() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
     let own = |scene: &Scene, cls| {
         scene
             .objects
@@ -99,6 +106,7 @@ fn shipyard_berth_and_queue_follow_the_original() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
     let yard = scene
         .objects
         .iter()
@@ -224,6 +232,7 @@ fn stopping_a_ship_being_built_calls_it_off() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
     let yard = scene
         .objects
         .iter()
@@ -4922,6 +4931,7 @@ fn merchants_answer_gather_orders() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
     let ship = scene
         .objects
         .iter()
@@ -5609,6 +5619,7 @@ fn load_panel_moves_items_both_ways() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
     scene.brain = None;
     let own = |scene: &Scene, cls| {
         scene
@@ -6446,6 +6457,7 @@ fn boarding_called_off_before_the_fight() {
 /// fort and its settlement.
 fn own_fort(data: &GameData, caches: &mut Caches) -> (Scene, u32, u32) {
     let mut scene = Scene::load(data, caches, "miss012").unwrap();
+    past_hold(&mut scene);
     scene.brain = None;
     let human = scene.human.unwrap();
     let me = Some((human.nation, human.slot));
@@ -8744,6 +8756,7 @@ fn order_10_on_buildings_and_studies() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
     scene.brain = None;
     scene.permits = crate::permits::Permits::ALL;
     scene.amber = 10_000;
@@ -9332,6 +9345,7 @@ fn one_ship_order_a_tick() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
     scene.brain = None;
     let t = TILE_SIZE as f32;
     let i = scene
@@ -9548,6 +9562,7 @@ fn an_attack_goes_with_the_group() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    past_hold(&mut scene);
     scene.brain = None;
     let t = TILE_SIZE as f32;
     let i = scene
@@ -9592,4 +9607,85 @@ fn an_attack_goes_with_the_group() {
     tick(&mut scene, &mut caches);
     scene.apply(&attack, &data, &mut caches).unwrap();
     assert_eq!(task(&scene), Some(Task::Attack { target }));
+}
+
+/// The commands of 0x520cc0 reach their objects at the next tick, in
+/// order (0x521570, 0x5228c0 before the tick 0x542390): a command given
+/// in the first two ticks of a game waits for the third (the hold of
+/// `+0x3e`, 2 at speed 5); later ones are delivered at the turn of the
+/// tick, nobody in the tick seeing them; a move and a dock order to one
+/// ship in a tick leave it docking whichever came first (0x20 before
+/// 0x80, 0x4ab720). Needs `OPENCONQUEST_DATA`.
+#[test]
+fn commands_reach_ships_at_the_next_tick() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let t = TILE_SIZE as f32;
+    // A mission with a dock and a ship of its player that can reach it.
+    let (mut scene, ship, dock) = (0..14)
+        .find_map(|n| {
+            let mut scene = Scene::load(&data, &mut caches, &format!("miss{n:03}")).ok()?;
+            scene.brain = None;
+            scene.computers.players.clear();
+            let d = scene.objects.iter().position(|o| {
+                o.class == ObjectClass::Building(economy::DOCK) && o.owner.is_some()
+            })?;
+            let i = scene.objects.iter().position(|o| {
+                o.ship.is_some() && o.owner == scene.objects[d].owner && o.combat.is_some()
+            })?;
+            scene.route_beside(i, d)?;
+            let (ship, dock) = (scene.objects[i].id, scene.objects[d].id);
+            Some((scene, ship, dock))
+        })
+        .expect("a dock and a ship of its player");
+    let i = scene.object_index(ship).unwrap();
+    let c = scene.objects[i].combat.as_mut().unwrap();
+    c.hull = c.max_hull / 2.0;
+    let (sx, sy) = (scene.objects[i].x, scene.objects[i].y);
+    let water = (1..20)
+        .flat_map(|d| [(d, 0), (-d, 0), (0, d), (0, -d)])
+        .map(|(dx, dy)| ((sx / t) as i32 + dx, (sy / t) as i32 + dy))
+        .find(|&(x, y)| scene.nav.is_water(x, y))
+        .unwrap();
+    let go = Order::Move {
+        ship,
+        x: water.0 as f32 * t + t / 2.0,
+        y: water.1 as f32 * t + t / 2.0,
+    };
+    let state = |s: &Scene| {
+        let o = &s.objects[s.object_index(ship).unwrap()];
+        let sh = o.ship.as_ref().unwrap();
+        (sh.task, sh.path.is_empty())
+    };
+    let tick = |s: &mut Scene, caches: &mut Caches| s.update(crate::clock::TICK, &data, caches);
+    // The first two ticks hold even the player's.
+    assert_eq!(scene.ticks, 0);
+    scene.apply(&go, &data, &mut caches).unwrap();
+    assert_eq!(state(&scene), (None, true));
+    tick(&mut scene, &mut caches);
+    assert_eq!(state(&scene), (None, true));
+    tick(&mut scene, &mut caches);
+    assert_eq!(state(&scene), (None, false));
+    // A command given now is not seen until the tick's turn.
+    scene.post(Order::Repair { ship, dock });
+    assert_eq!(state(&scene).0, None);
+    tick(&mut scene, &mut caches);
+    assert_eq!(state(&scene).0, Some(Task::Repair { dock }));
+    // A move and a dock order in one tick: the dock, either way.
+    for orders in [
+        [go.clone(), Order::Repair { ship, dock }],
+        [Order::Repair { ship, dock }, go.clone()],
+    ] {
+        scene.post(Order::Stop { id: ship });
+        tick(&mut scene, &mut caches);
+        assert_eq!(state(&scene).0, None);
+        for o in orders {
+            scene.post(o);
+        }
+        tick(&mut scene, &mut caches);
+        assert_eq!(state(&scene).0, Some(Task::Repair { dock }));
+    }
 }

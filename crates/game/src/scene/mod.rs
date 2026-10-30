@@ -435,6 +435,12 @@ pub struct Scene {
     /// The ships' orders of the 0x1f0 group given since the last tick
     /// (one a tick, `Scene::one_event_a_tick`).
     pub tick_orders: BTreeMap<u32, order::TickOrder>,
+    /// Commands given and not yet delivered: the Players object's outbox
+    /// (`+0x2e`, 0x520cc0), delivered in order at the next tick
+    /// (`Scene::deliver`).
+    pub outbox: Vec<Order>,
+    /// Game ticks played (`Players +0xde`), for the outbox's first hold.
+    pub ticks: u32,
     /// What a cancelled training's fish share leaves in a settlement or
     /// town: its bytes `+0x252` (count) and `+0x253` (last part), 0x44316a.
     /// (Not decoded: what they mean; 0x43c650 reads `+0x252` into its info
@@ -754,6 +760,8 @@ impl Scene {
             stock_repairs: Vec::new(),
             refit_batches: BTreeMap::new(),
             tick_orders: BTreeMap::new(),
+            outbox: Vec::new(),
+            ticks: 0,
             town_fish: BTreeMap::new(),
             free_casts: Default::default(),
             creature_clock: 0.0,
@@ -989,6 +997,8 @@ impl Scene {
             stock_repairs: self.stock_repairs.clone(),
             refit_batches: self.refit_batches.clone(),
             tick_orders: self.tick_orders.clone(),
+            outbox: self.outbox.clone(),
+            ticks: self.ticks,
             town_fish: self.town_fish.clone(),
             free_casts: self
                 .free_casts
@@ -1142,6 +1152,8 @@ impl Scene {
         scene.stock_repairs = save.stock_repairs.clone();
         scene.refit_batches = save.refit_batches.clone();
         scene.tick_orders = save.tick_orders.clone();
+        scene.outbox = save.outbox.clone();
+        scene.ticks = save.ticks;
         scene.town_fish = save.town_fish.clone();
         scene.delivered = save.delivered.clone();
         scene.joined = save.joined.clone();
@@ -2029,7 +2041,7 @@ impl Scene {
         self.brain_clock += dt;
         while self.brain_clock >= crate::clock::TICK {
             self.brain_clock -= crate::clock::TICK;
-            self.tick_orders.clear();
+            self.ticks += 1;
             self.run_brain();
             for (class, cell) in std::mem::take(&mut self.pending_walkers) {
                 self.put_walker(walkers::NO_LAIR, class, cell, data, caches);
@@ -2048,6 +2060,11 @@ impl Scene {
             for (spell, id) in std::mem::take(&mut self.pending_ship_casts) {
                 self.brain_cast_on(spell, id, data, caches);
             }
+            // The commands of this tick reach their objects at the start
+            // of the next, before anything runs (0x51fe20: 0x521570,
+            // 0x5228c0, then the tick 0x542390): delivered here, before
+            // the player can add his own after them.
+            self.deliver(data, caches);
         }
         // The mission is judged every 250 ticks (0x448d40), a campaign
         // mission by its own judge every 125 or 75.

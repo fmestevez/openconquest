@@ -29,7 +29,7 @@ use openconquest_formats::map::TILE_SIZE;
 use openconquest_formats::ObjectClass;
 use serde::{Deserialize, Serialize};
 
-use super::{Scene, BUILD_RADIUS, FOUND_REACH};
+use super::{Order, Scene, BUILD_RADIUS, FOUND_REACH};
 use crate::assets::GameData;
 use crate::combat::{Rng, Upgrade};
 use crate::economy::{
@@ -3801,7 +3801,9 @@ impl Scene {
 
     /// Ship `ship` founds `class` at `cell`; while the price cannot be
     /// paid it sails there and waits (the order stands until the step's
-    /// time is up).
+    /// time is up). The move is a command, delivered at the next tick.
+    /// (Not ported: the founding command 0x20 is given at once here, its
+    /// answer deciding the move; the original's 0x4cbcf0 cannot see it.)
     pub(super) fn found_by(&mut self, ship: u32, cell: (i32, i32), class: u32) {
         if self.order_found(ship, cell.0, cell.1, class).is_ok() {
             return;
@@ -3813,7 +3815,7 @@ impl Scene {
         let (x, y) = (cell.0 as f32 * t + t / 2.0, cell.1 as f32 * t + t / 2.0);
         let o = &self.objects[i];
         if (o.x - x).hypot(o.y - y) > (FOUND_REACH as f32 + 0.5) * t {
-            self.order_move(ship, x, y);
+            self.post(Order::Move { ship, x, y });
         }
     }
 
@@ -4196,6 +4198,10 @@ impl Scene {
         }
     }
 
+    /// The flotilla's order to ship `id`: moves and the dock are commands
+    /// through the outbox (0x520cc0, the navy's helpers 0x4cf070 and
+    /// 0x4cd930), delivered at the next tick; the zones are the navy's
+    /// own tasks, set at once.
     fn order_ship(&mut self, ai: &Computer, id: u32, order: FleetOrder) {
         let t = TILE_SIZE as f32;
         let world = |(x, y, w, h): Cells| {
@@ -4223,11 +4229,19 @@ impl Scene {
                 let attack = matches!(order, FleetOrder::Attack(_));
                 if self.order_zone(id, a, b, attack).is_err() {
                     let (cx, cy) = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
-                    self.order_move(id, cx, cy);
+                    self.post(Order::Move {
+                        ship: id,
+                        x: cx,
+                        y: cy,
+                    });
                 }
             }
             FleetOrder::Move((x, y)) => {
-                self.order_move(id, x as f32 * t + t / 2.0, y as f32 * t + t / 2.0);
+                self.post(Order::Move {
+                    ship: id,
+                    x: x as f32 * t + t / 2.0,
+                    y: y as f32 * t + t / 2.0,
+                });
             }
             FleetOrder::Dock => {
                 let dock = self
@@ -4240,7 +4254,7 @@ impl Scene {
                     })
                     .map(|o| o.id);
                 if let Some(d) = dock {
-                    let _ = self.order_repair(id, d);
+                    self.post(Order::Repair { ship: id, dock: d });
                 }
             }
             FleetOrder::Treasure(area) => {
@@ -4254,7 +4268,9 @@ impl Scene {
     /// One ship of a treasure hunt (0x4da3e0): carrying treasures for the
     /// settlement it brings them home (0x4d9f50; here alongside the base's
     /// town), else it sails for the nearest treasure in the area no other
-    /// ship of the flotilla is after (0x4cf070).
+    /// ship of the flotilla is after (0x4cf070). (Not ported: the hunt's
+    /// treasure command is given at once here, a refused one trying the
+    /// next; the home move is a command, delivered at the next tick.)
     fn hunt_treasure(&mut self, ai: &Computer, f: Option<usize>, i: usize, area: Cells) {
         let id = self.objects[i].id;
         let carrying = self.objects[i]
@@ -4268,7 +4284,7 @@ impl Scene {
                 .and_then(|s| self.object_index(s));
             if let Some(t) = home {
                 let (x, y) = (self.objects[t].x, self.objects[t].y);
-                self.order_move(id, x, y);
+                self.post(Order::Move { ship: id, x, y });
             }
             return;
         }
