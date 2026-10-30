@@ -314,6 +314,60 @@ message 0x4e1) uses the same message with `+0x18` 1 to hide or show the
 bar: the bar by 208 (right) or 800 (left), the field by 0 (right) or 208
 (left), so with the bar hidden the field is at 0 either side.
 
+### Bar hidden (Space)
+
+The game screen's constructor (0x50eee0, 0x50f0c4..0x50f0e1) binds Space
+(scan code 0x39, exclusive, no repeat) to its message 0x4e1; the handler
+(0x50f910) has no guard of its own. The flag is `[game+0x328d]` (1 =
+hidden), written only by the game's constructor (0x4ebd10), every game
+build (0x4ebf50, 0x4ebf9f), the ways out of the game (0x4ec1a0 commands
+0x100, 0x10b, 0x10c, 0x4ec2c4) and the toggle (0x5103e8): every game
+starts with the bar shown and the flag is not saved. Message 0x4e1, in
+order:
+
+1. 0x4ee970: the cursor clip back to the whole screen and broadcast 0x14a
+   (the mapas end any drag, 0x51cdd0) (and message 0xc45e, not read).
+2. If the view's mapa is in mode 2 (the radar map), 0xcbc to the field
+   (Tab) puts the view back.
+3. The flag flipped.
+4. The bar's tab group set to 1000 (message 0x22): the object panel,
+   whether hiding or showing.
+5. The message line control (made by 0x5036d0 at (0x504ef0(0x70), 571),
+   365 x 17) set 365 wide, 573 hidden; the chat edit 208 wider or
+   narrower.
+6. Broadcast 0xcc3 to the mapas, message 0x24 with `+0x18` 1 (the windows
+   moved: the bar by 208 with it on the right, 800 on the left, the field
+   by 0 or 208, so the bar is at 800 and the field at 0 either side while
+   hidden), and a redraw.
+
+While hidden: the field draws `GAME_FIELD_FS` (800x600, its see-through
+part exactly (16, 8, 768, 512)) at (0, 0), `GAME_MEDIT_FS` (584x26) at
+(107, 568), the money panel at (694, 527), the wind rose at (3, 527), the
+object info strip on `CHT_BKFINFO` (585x20) at (107, 527) (0x504620
+messages 5 and 0x24, 0x504fa0, 0x505530, 0x503d60); the view's mapa is 12
+x 8 cells at (16, 8) (0x511170(0x67, 16); 0xcc3 sets its width `+0x3c` 12
+hidden, 9 shown, 0x51e041..0x51e051, and clamps its scroll to the map less
+the width, keeping the top-left cell); the chat lines at 0x504ef0(16), y 8
++ 20 per line, on bitmaps 12 x 64 wide (9 x 64 and x 8 shown; chat.cpp
+0x4ff390, 0x4ff4c0). The bar and its minimap are at x >= 800: nothing of
+them shows (the minimap's 0xcc3 step is skipped while hidden) and no mouse
+reaches them. Tab is refused (0x504620 0xcbc acts only when the flag is
+0). With the bar hidden the side setting makes no difference.
+
+The bar's Ctrl+S / Ctrl+O (0x511c00 0x500 / 0x501): when the current save
+name `[game+0x18dd]` is empty (equal to the empty `[0x5c9e6c]` that
+commands 0x101 / 0x103 copy into it) they send 0x4e1 first if the bar is
+hidden, then open the file panel (tab 0x3e9) in save or load mode; with a
+name, Ctrl+O loads that save at once (command 0x102) and Ctrl+S calls
+0x511580 (not read). The port's Ctrl+S / Ctrl+O are its own quick save to
+`quick.json` and never open the file panel: the original's two branches are
+not ported.
+
+Not decoded: message 0xc45e (0x4ee970); whether Sinput ignores the bar's
+key bindings while it is off screen (no unbinding is done by 0x4e1 or
+0x24, Sinput's dispatch not read for a rect test): the port keeps the
+command buttons' keys off while the bar is hidden, as before.
+
 ### Object info (the strip's middle)
 
 While "Help string on/off" (string 0x5b; `[0x5ca542]`, on by default,

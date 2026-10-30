@@ -56,6 +56,7 @@ pub struct Screen {
 
 impl Screen {
     /// A viewport covering the whole window.
+    #[cfg(test)]
     pub fn full(w: u32, h: u32) -> Self {
         Self {
             x: 0,

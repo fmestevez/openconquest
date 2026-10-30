@@ -5,7 +5,9 @@
 use openconquest_formats::map::TILE_SIZE;
 use openconquest_formats::ObjectClass;
 
-use super::{Scene, OBJECTIVES};
+use super::Scene;
+#[cfg(test)]
+use super::OBJECTIVES;
 use crate::economy::{SETTLEMENT, TOWN};
 use crate::objects::{self, MapObject};
 
@@ -415,7 +417,8 @@ impl Scene {
     }
 }
 
-/// What a goal asks, for the objectives line.
+/// What a goal asks, in words.
+#[cfg(test)]
 pub fn goal_name(goal: Goal) -> String {
     let hero = |h: u8| objects::HERO_NAMES[h as usize % 9];
     match goal {

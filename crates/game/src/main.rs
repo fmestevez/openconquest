@@ -117,9 +117,9 @@ struct Args {
     /// Render one frame of the given size (e.g. 1920x1080) to a PNG and exit.
     #[arg(long, value_name = "PNG")]
     screenshot: Option<PathBuf>,
-    /// Hide the original interface in the screenshot.
+    /// The control bar hidden in the screenshot (Space).
     #[arg(long)]
-    no_interface: bool,
+    bar_hidden: bool,
     /// Map cell to centre the screenshot on, e.g. 12,30 (default: map centre).
     #[arg(long, value_parser = parse_size, value_name = "X,Y")]
     focus: Option<(u32, u32)>,
@@ -592,7 +592,13 @@ fn screenshot(
     let since = std::collections::HashMap::new();
     let hotkeys = hotkeys::Hotkeys::default();
     let radar = args.radar.then(|| {
-        let layout = interface.layout(size, &initial.policy, &scene, config.bar_left);
+        let layout = interface.layout(
+            size,
+            &initial.policy,
+            &scene,
+            config.bar_left,
+            args.bar_hidden,
+        );
         crate::ui::Radar {
             origin: crate::ui::radar_origin(&layout, &scene, &initial, (0, 0)),
             view: initial,
@@ -608,7 +614,8 @@ fn screenshot(
         data,
         scene: &scene,
         camera: &initial,
-        interface: (!args.no_interface).then_some(&interface),
+        interface: &interface,
+        bar_hidden: args.bar_hidden,
         text: &text,
         selected: None,
         group: group_sel.get(1..).unwrap_or(&[]),

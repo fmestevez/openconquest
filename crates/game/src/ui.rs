@@ -11,6 +11,11 @@
 //! (0x4f5800). Names are prefixed with a theme digit, `0` (Greek) or `3`
 //! (Persian).
 //!
+//! With the bar hidden (Space, `[game+0x328d]`) the bar is moved off the
+//! screen and the field takes the whole width: `GAME_FIELD_FS` (800x600) at
+//! 0 whatever the bar's side, the view 12 x 8 cells at (16, 8) (0x50f910
+//! message 0x4e1, Mapa.cpp 0x51cdd0 0xcc3).
+//!
 //! Widescreen: everything is scaled by the window height, the control bar
 //! stays at its side and the frame is widened by tiling its middle part.
 
@@ -34,6 +39,19 @@ use crate::text::TextRenderer;
 use crate::view::{ScalePolicy, Screen};
 
 const ORIGINAL_FIELD_W: u32 = 592;
+/// `GAME_FIELD_FS`, the field with the bar hidden: the whole screen.
+const ORIGINAL_FIELD_FS_W: u32 = 800;
+/// The view's place with the bar hidden: 0x511170(0x67, 16), y 8, 12
+/// cells across (Mapa.cpp 0x51cdd0 0xcc3: `+0x3c` 12 hidden, 9 shown,
+/// 0x51e041..0x51e051; the height, screen `+0x17c2`, 8 always).
+const VIEW_HIDDEN: (u32, u32) = (16, 8);
+const VIEW_CELLS_HIDDEN: u32 = 12;
+/// The chat lines' x (chat.cpp 0x4ff390, 0x4ff4c0: 0x504ef0(8), 16 with
+/// the bar hidden), their first y and their step, and their bitmaps'
+/// widths in cells (9, 12 hidden) of 64 pixels.
+const CHAT_X: [u32; 2] = [8, 16];
+const CHAT_Y: (u32, u32) = (8, 20);
+const CHAT_CELLS: [u32; 2] = [9, 12];
 pub const BAR_W: u32 = 208;
 const UI_H: u32 = 600;
 const MINIMAP_POS: (u32, u32) = (4, 4);
@@ -71,6 +89,8 @@ type Rect = (u32, u32, u32, u32);
 
 pub struct Interface {
     field: Image,
+    /// `GAME_FIELD_FS`, drawn instead with the bar hidden.
+    field_fs: Image,
     bar: Image,
     minimap_frame: Image,
     object_panel: Image,
@@ -95,6 +115,8 @@ pub struct Interface {
     pictures: RefCell<HashMap<String, Option<Rc<Image>>>>,
     money_panel: Image,
     message_line: Image,
+    /// `GAME_MEDIT_FS` (584x26), the message line with the bar hidden.
+    message_line_fs: Image,
     /// Number slots of the money panel (amber, fish).
     message_area: Rect,
     money_icon: Vec<Rc<Image>>,
@@ -154,6 +176,8 @@ pub struct Layout {
     /// with the bar on the left (0x504ef0, 0x511170 id 0x67: + 208).
     field_x: u32,
     pub bar_x: f32,
+    /// The bar hidden (Space, `[game+0x328d]`): the bar off the screen.
+    pub bar_hidden: bool,
 }
 
 /// The radar map (Tab): its first cell, and the view the bar's map
@@ -228,6 +252,7 @@ impl Interface {
             Ok(Image::new(b.width, b.height, pixels))
         };
         let field = load("GAME_FIELD", true)?;
+        let field_fs = load("GAME_FIELD_FS", true)?;
         let minimap_frame = load("BKGND_LMAPA", false)?;
         let object_panel = load("COBJ_BKMAIN", false)?;
         let field_view = black_rect(&field, field.width / 2, field.height / 2);
@@ -263,6 +288,8 @@ impl Interface {
         };
         Ok(Self {
             field,
+            field_fs,
+            message_line_fs: load("GAME_MEDIT_FS", false)?,
             bar: load("GAME_CTRLBAR", false)?,
             minimap_frame,
             object_panel,
@@ -360,30 +387,45 @@ impl Interface {
     /// The interface's placement, the control bar on the left with
     /// `bar_left` ([0x5ca54a]): the bar at x 0 and the field after it
     /// (0x512ab0, 0x504ef0, 0x511170), else the field at 0 and the bar
-    /// after it.
+    /// after it. With `bar_hidden` the field at 0 the whole width and the
+    /// bar past the screen's right edge either side (0x50f910 message 0x24
+    /// with `+0x18` 1: 0x512ab0(x) = 800 + x, 0x504ef0(x) = x).
     pub fn layout(
         &self,
         window: (u32, u32),
         policy: &ScalePolicy,
         scene: &Scene,
         bar_left: bool,
+        bar_hidden: bool,
     ) -> Layout {
         let scale = policy.base_scale(window.1);
         let ui_w = (window.0 as f32 / scale) as u32;
-        let field_w = ui_w.saturating_sub(BAR_W).max(2 * FRAME_EDGE);
-        let (field_x, bar_x) = if bar_left {
-            (BAR_W, 0.0)
+        let (field_w, field_x, bar_x) = if bar_hidden {
+            (ui_w.max(2 * FRAME_EDGE), 0, ui_w as f32 * scale)
         } else {
-            (0, field_w as f32 * scale)
+            let field_w = ui_w.saturating_sub(BAR_W).max(2 * FRAME_EDGE);
+            if bar_left {
+                (field_w, BAR_W, 0.0)
+            } else {
+                (field_w, 0, field_w as f32 * scale)
+            }
         };
         let to_px = |v: u32| (v as f32 * scale).round() as u32;
         let (vx, vy, vw, vh) = self.field_view;
         // The view at the field's (8, 8) (Mapa.cpp 0x51cdd0, mode 1:
-        // 0x511170(0x67, 8)).
+        // 0x511170(0x67, 8)), 9 cells across; with the bar hidden at
+        // (16, 8), 12 across.
+        let (vx, vy, vw, frame_w) = if bar_hidden {
+            let cell = openconquest_formats::map::TILE_SIZE;
+            let (x, y) = VIEW_HIDDEN;
+            (x, y, VIEW_CELLS_HIDDEN * cell, ORIGINAL_FIELD_FS_W)
+        } else {
+            (vx, vy, vw, ORIGINAL_FIELD_W)
+        };
         let view = Screen {
             x: to_px(field_x + vx),
             y: to_px(vy),
-            w: to_px((vw as i32 + field_w as i32 - ORIGINAL_FIELD_W as i32).max(16) as u32),
+            w: to_px((vw as i32 + field_w as i32 - frame_w as i32).max(16) as u32),
             h: to_px(vh),
             window_h: window.1,
         };
@@ -402,6 +444,7 @@ impl Interface {
             field_w,
             field_x,
             bar_x,
+            bar_hidden,
         }
     }
 
@@ -409,12 +452,17 @@ impl Interface {
     /// object panel's background as `back` says.
     pub fn draw(&self, frame: &mut Frame, layout: &Layout, back: PanelBack) {
         let s = layout.scale;
-        let f = &self.field;
-        // Frame (`GAME_FIELD` at the field's x, 0x504620 message 5): left
-        // and right edges as they are, the middle tiled.
+        // Frame (`GAME_FIELD` at the field's x, `GAME_FIELD_FS` at 0 with
+        // the bar hidden, 0x504620 message 5): left and right edges as
+        // they are, the middle tiled.
+        let (f, fw) = if layout.bar_hidden {
+            (&self.field_fs, ORIGINAL_FIELD_FS_W)
+        } else {
+            (&self.field, ORIGINAL_FIELD_W)
+        };
         let fx = layout.field_x;
         blit_scaled(frame, f, (0, 0, FRAME_EDGE, UI_H), fx as f32 * s, 0.0, s);
-        let mid = (FRAME_EDGE, 0, ORIGINAL_FIELD_W - 2 * FRAME_EDGE, UI_H);
+        let mid = (FRAME_EDGE, 0, fw - 2 * FRAME_EDGE, UI_H);
         let right_at = layout.field_w - FRAME_EDGE;
         let mut x = FRAME_EDGE;
         while x < right_at {
@@ -425,13 +473,37 @@ impl Interface {
         blit_scaled(
             frame,
             f,
-            (ORIGINAL_FIELD_W - FRAME_EDGE, 0, FRAME_EDGE, UI_H),
+            (fw - FRAME_EDGE, 0, FRAME_EDGE, UI_H),
             (fx + right_at) as f32 * s,
             0.0,
             s,
         );
-        // Control bar and its panels.
         let full = |img: &Image| (0, 0, img.width, img.height);
+        // The strip below the view: the money panel at the field's right
+        // end less 106 (694 with the bar hidden), the wind rose at 3, the
+        // message line `GAME_MEDIT` (`GAME_MEDIT_FS` hidden) at 107.
+        let (mx, my) = self.money_panel_origin(layout);
+        blit_scaled(frame, &self.money_panel, full(&self.money_panel), mx, my, s);
+        blit_scaled(
+            frame,
+            &self.wind_rose,
+            full(&self.wind_rose),
+            (fx + WIND_ROSE.0) as f32 * s,
+            WIND_ROSE.1 as f32 * s,
+            s,
+        );
+        let line = if layout.bar_hidden {
+            &self.message_line_fs
+        } else {
+            &self.message_line
+        };
+        let (lx, ly) = ((fx + MESSAGE_LINE.0) as f32 * s, MESSAGE_LINE.1 as f32 * s);
+        blit_scaled(frame, line, full(line), lx, ly, s);
+        // The bar (at 800 with it hidden: nothing of it on the screen).
+        if layout.bar_hidden {
+            return;
+        }
+        // Control bar and its panels.
         blit_scaled(frame, &self.bar, full(&self.bar), layout.bar_x, 0.0, s);
         let at = |(x, y): (u32, u32)| (layout.bar_x + x as f32 * s, y as f32 * s);
         let (mx, my) = at(MINIMAP_POS);
@@ -460,25 +532,6 @@ impl Interface {
             PanelBack::Group(n) => self.panel_art.draw_group_back(frame, layout.bar_x, s, n),
             PanelBack::Clear => self.panel_art.draw_clear(frame, layout.bar_x, s),
         }
-        let (mx, my) = self.money_panel_origin(layout);
-        blit_scaled(frame, &self.money_panel, full(&self.money_panel), mx, my, s);
-        blit_scaled(
-            frame,
-            &self.wind_rose,
-            full(&self.wind_rose),
-            (fx + WIND_ROSE.0) as f32 * s,
-            WIND_ROSE.1 as f32 * s,
-            s,
-        );
-        let (lx, ly) = ((fx + MESSAGE_LINE.0) as f32 * s, MESSAGE_LINE.1 as f32 * s);
-        blit_scaled(
-            frame,
-            &self.message_line,
-            full(&self.message_line),
-            lx,
-            ly,
-            s,
-        );
     }
 
     fn money_panel_origin(&self, layout: &Layout) -> (f32, f32) {
@@ -1175,8 +1228,9 @@ pub struct GameView<'a> {
     pub data: &'a GameData,
     pub scene: &'a Scene,
     pub camera: &'a crate::view::Camera,
-    /// `None` hides the interface (full-window view with an overlay minimap).
-    pub interface: Option<&'a Interface>,
+    pub interface: &'a Interface,
+    /// The bar hidden (Space, `[game+0x328d]`).
+    pub bar_hidden: bool,
     pub text: &'a TextRenderer,
     pub selected: Option<u32>,
     /// Other ships selected with it.
@@ -1238,41 +1292,6 @@ pub struct GameView<'a> {
 }
 
 impl GameView<'_> {
-    /// The mission name and its objectives, ticked off as they are met.
-    fn headline(&self) -> String {
-        let done = |name: String, met: bool| if met { format!("{name} (done)") } else { name };
-        if !self.scene.story.is_empty() {
-            let goals: Vec<String> = self
-                .scene
-                .story
-                .iter()
-                .map(|&g| done(crate::scene::goal_name(g), self.scene.goal_met(g)))
-                .collect();
-            return format!(
-                "{}: {}",
-                self.scene.mission.to_uppercase(),
-                goals.join(", ")
-            );
-        }
-        let goals: Vec<String> = (0..crate::scene::OBJECTIVES.len())
-            .filter(|&i| self.scene.conditions[i])
-            .map(|i| {
-                let name = crate::scene::OBJECTIVES[i].0;
-                if self.scene.objective_met(i) {
-                    format!("{name} (done)")
-                } else {
-                    name.to_string()
-                }
-            })
-            .collect();
-        let name = self.scene.mission.to_uppercase();
-        if goals.is_empty() {
-            name
-        } else {
-            format!("{name}: {}", goals.join(", "))
-        }
-    }
-
     /// The mission briefing in a box over the view; the first paragraph
     /// is the title.
     fn draw_briefing(&self, frame: &mut Frame, screen: &Screen, scale: u32) {
@@ -1311,10 +1330,7 @@ impl GameView<'_> {
     /// The pause sign in the middle of the view (text without the
     /// interface's art).
     fn draw_pause(&self, frame: &mut Frame, screen: &Screen, scale: f32) {
-        let sign = self
-            .interface
-            .map(|ui| &ui.pause_sign)
-            .filter(|s| !s.is_empty());
+        let sign = Some(&self.interface.pause_sign).filter(|s| !s.is_empty());
         match sign {
             Some(frames) => {
                 let img = &frames[(self.time_ms / 60) as usize % frames.len()];
@@ -1363,32 +1379,26 @@ impl GameView<'_> {
     }
 
     /// The world viewport and minimap placement for a window size.
-    pub fn placement(&self, window: (u32, u32)) -> (Screen, MinimapRect, Option<Layout>) {
-        match self.interface {
-            Some(ui) => {
-                let layout = ui.layout(window, &self.camera.policy, self.scene, self.bar_left);
-                let (view, minimap) = match self.radar {
-                    Some(r) => radar_placement(&layout, self.scene, r.origin),
-                    None => (layout.view, layout.minimap),
-                };
-                (view, minimap, Some(layout))
-            }
-            None => (
-                Screen::full(window.0, window.1),
-                MinimapRect::overlay(self.scene, window),
-                None,
-            ),
-        }
+    pub fn placement(&self, window: (u32, u32)) -> (Screen, MinimapRect, Layout) {
+        let layout = self.interface.layout(
+            window,
+            &self.camera.policy,
+            self.scene,
+            self.bar_left,
+            self.bar_hidden,
+        );
+        let (view, minimap) = match self.radar {
+            Some(r) => radar_placement(&layout, self.scene, r.origin),
+            None => (layout.view, layout.minimap),
+        };
+        (view, minimap, layout)
     }
 
     pub fn draw(&self, frame: &mut Frame) {
         let window = (frame.width, frame.height);
         let (screen, minimap, layout) = self.placement(window);
         let lut = palette_lut(self.data, self.time_ms);
-        let radar = layout
-            .as_ref()
-            .filter(|_| self.radar.is_some())
-            .map(|l| l.view);
+        let radar = self.radar.map(|_| layout.view);
         match radar {
             // Tab: the radar map in the view's place (Mapa.cpp mode 2), its
             // frame the view's size; the view goes to the bar's window.
@@ -1472,7 +1482,8 @@ impl GameView<'_> {
         // The green tick where ships were sent (gcursor.cpp 0x515e60): its
         // top-left 11 and 24 pixels up-left of the click, a frame each 250
         // ms, gone as it reaches its last (0x5166f8).
-        if let (Some((x, y, age)), Some(ui)) = (self.sent, self.interface) {
+        let ui = self.interface;
+        if let Some((x, y, age)) = self.sent {
             const TICK_MS: u64 = 250;
             let n = ui.take_cmd.len() as u64;
             if n > 1 && age < (n - 1) * TICK_MS {
@@ -1490,11 +1501,10 @@ impl GameView<'_> {
         // Where it may go, the building as it will stand; where not, the
         // hatched `VETOBUILD` at the site's top-left cell (0x516010:
         // frame 1 for a settlement, else 0).
-        let veto = self.interface.and_then(|ui| {
-            ui.veto
-                .get(usize::from(self.site_cells >= 2))
-                .or(ui.veto.first())
-        });
+        let veto = ui
+            .veto
+            .get(usize::from(self.site_cells >= 2))
+            .or(ui.veto.first());
         match (self.site, self.site_preview) {
             (Some((_, true)), Some(b)) => {
                 crate::render::draw_object(frame, &screen, camera, &lut, b, self.time_ms)
@@ -1519,7 +1529,7 @@ impl GameView<'_> {
         frame: &mut Frame,
         screen: &Screen,
         minimap: &MinimapRect,
-        layout: &Option<Layout>,
+        layout: &Layout,
         lut: &[u32; 256],
         radar: bool,
         selected: Option<&crate::objects::MapObject>,
@@ -1528,92 +1538,83 @@ impl GameView<'_> {
         text_scale: u32,
     ) {
         let (screen, minimap, lut) = (*screen, *minimap, *lut);
-        if let (Some(ui), Some(layout)) = (self.interface, layout) {
-            let selection: Vec<u32> = self.selected.iter().chain(self.group).copied().collect();
-            let shown = crate::info_panel::shown(self.scene, &selection, &self.info);
-            let reloading_now =
-                selected.is_some_and(|o| reloading_shown(self.load, self.scene, o.id));
-            let back = match &shown {
-                crate::info_panel::Shown::Group(ids) if !reloading_now => {
-                    PanelBack::Group(ids.len())
-                }
-                crate::info_panel::Shown::Clear => PanelBack::Clear,
-                _ => PanelBack::Object,
-            };
-            ui.draw(frame, layout, back);
-            if let (Some(obj), false) = (selected, panel_open) {
-                let group = matches!(back, PanelBack::Group(_));
-                if !group {
-                    ui.draw_portrait(frame, self.data, layout, obj);
-                }
-                // Reloading: the load panel takes the slots' and the
-                // buttons' place (0x4fffe0).
-                let reloading = self.load.and_then(|(view, pressed)| {
-                    let panel = load_panel::lists(self.scene, obj.id, &view)?;
-                    Some((panel, view, pressed))
-                });
-                if let Some((panel, view, pressed)) = reloading {
-                    ui.draw_load_panel(
-                        frame, self.data, layout, self.scene, &panel, &view, pressed,
+        let ui = self.interface;
+        let selection: Vec<u32> = self.selected.iter().chain(self.group).copied().collect();
+        let shown = crate::info_panel::shown(self.scene, &selection, &self.info);
+        let reloading_now = selected.is_some_and(|o| reloading_shown(self.load, self.scene, o.id));
+        let back = match &shown {
+            crate::info_panel::Shown::Group(ids) if !reloading_now => PanelBack::Group(ids.len()),
+            crate::info_panel::Shown::Clear => PanelBack::Clear,
+            _ => PanelBack::Object,
+        };
+        ui.draw(frame, layout, back);
+        // With the bar hidden nothing of it, its panels or its minimap is
+        // on the screen (0x512ab0 = 800 + x; the minimap's mapa at
+        // 0x511170(0x66, 8) = 808 and its 0xcc3 skipped, 0x51cdd0).
+        if let (Some(obj), false, false) = (selected, panel_open, layout.bar_hidden) {
+            let group = matches!(back, PanelBack::Group(_));
+            if !group {
+                ui.draw_portrait(frame, self.data, layout, obj);
+            }
+            // Reloading: the load panel takes the slots' and the
+            // buttons' place (0x4fffe0).
+            let reloading = self.load.and_then(|(view, pressed)| {
+                let panel = load_panel::lists(self.scene, obj.id, &view)?;
+                Some((panel, view, pressed))
+            });
+            if let Some((panel, view, pressed)) = reloading {
+                ui.draw_load_panel(frame, self.data, layout, self.scene, &panel, &view, pressed);
+            }
+            if reloading_now {
+                // Nothing else of the object panel.
+            } else {
+                // Also over a shipyard's or dock's ships (c_ctrl 0x4f4cc0:
+                // panel kind 0x13), in place of the strip's relief.
+                let yard = self.page == Page::Main
+                    && matches!(
+                        obj.class,
+                        openconquest_formats::ObjectClass::Building(
+                            crate::economy::SHIPYARD | crate::economy::DOCK
+                        )
                     );
+                if !group && (self.page != Page::Main || yard && self.scene.is_own(obj)) {
+                    ui.draw_strip(frame, layout, false);
                 }
-                if reloading_now {
-                    // Nothing else of the object panel.
-                } else {
-                    // Also over a shipyard's or dock's ships (c_ctrl 0x4f4cc0:
-                    // panel kind 0x13), in place of the strip's relief.
-                    let yard = self.page == Page::Main
-                        && matches!(
-                            obj.class,
-                            openconquest_formats::ObjectClass::Building(
-                                crate::economy::SHIPYARD | crate::economy::DOCK
-                            )
-                        );
-                    if !group && (self.page != Page::Main || yard && self.scene.is_own(obj)) {
-                        ui.draw_strip(frame, layout, false);
-                    }
-                    if (matches!(self.page, Page::Structures | Page::Ground) || yard)
-                        && self.scene.is_own(obj)
-                    {
-                        let caption = self
-                            .data
-                            .strings
-                            .get(&501)
-                            .map_or("default arming", |s| s.as_str());
-                        ui.draw_arming(
-                            frame,
-                            layout,
-                            self.text,
-                            caption,
-                            self.scene.default_arming,
-                        );
-                    }
-                    let nation = self.scene.human.map_or(1, |h| h.nation);
-                    ui.draw_menu(
-                        frame,
-                        self.data,
-                        layout,
-                        &menu(self.scene, obj, self.page),
-                        nation,
-                        self.hover_button.filter(|_| self.button_animation),
-                        self.time_ms,
-                    );
-                    // Only the portrait and the slots, or the group's
-                    // buttons: the original writes nothing more about the
-                    // selection (c_info.cpp: a slot held down tells what
-                    // it holds).
-                    ui.draw_info(frame, self.data, layout, self.scene, &shown, &self.info);
+                if (matches!(self.page, Page::Structures | Page::Ground) || yard)
+                    && self.scene.is_own(obj)
+                {
+                    let caption = self
+                        .data
+                        .strings
+                        .get(&501)
+                        .map_or("default arming", |s| s.as_str());
+                    ui.draw_arming(frame, layout, self.text, caption, self.scene.default_arming);
                 }
+                let nation = self.scene.human.map_or(1, |h| h.nation);
+                ui.draw_menu(
+                    frame,
+                    self.data,
+                    layout,
+                    &menu(self.scene, obj, self.page),
+                    nation,
+                    self.hover_button.filter(|_| self.button_animation),
+                    self.time_ms,
+                );
+                // Only the portrait and the slots, or the group's
+                // buttons: the original writes nothing more about the
+                // selection (c_info.cpp: a slot held down tells what
+                // it holds).
+                ui.draw_info(frame, self.data, layout, self.scene, &shown, &self.info);
             }
         }
-        if self.interface.is_none() || !panel_open {
+        if !layout.bar_hidden && !panel_open {
             if let Some(r) = self.radar.filter(|_| radar) {
                 self.draw_view(frame, &screen, &r.view, &lut);
             } else {
                 draw_minimap(frame, &minimap, self.scene, self.camera, &screen, &lut);
             }
         }
-        if let (Some(ui), Some(layout), Some(view)) = (self.interface, &layout, &self.panel) {
+        if let (false, Some(view)) = (layout.bar_hidden, &self.panel) {
             let origin = (layout.bar_x, 0.0);
             ui.panels.draw(
                 frame,
@@ -1625,20 +1626,23 @@ impl GameView<'_> {
             );
         }
         // The messages (chat.cpp 0x4ff390, 0x4ff4c0): a line every 20
-        // pixels from (8, 8) of the view, in `MESS_FONT`.
-        if let Some(font) = self.interface.and_then(|ui| ui.mess_font.as_ref()) {
+        // pixels from the field's (8, 8) ((16, 8) with the bar hidden), in
+        // `MESS_FONT`, each on a bitmap of 9 (12) cells' width.
+        if let Some(font) = ui.mess_font.as_ref() {
+            let hidden = usize::from(layout.bar_hidden);
+            let s = layout.scale;
+            let x = (layout.field_x + CHAT_X[hidden]) as f32 * s;
+            let cell = openconquest_formats::map::TILE_SIZE;
+            let right = x + (CHAT_CELLS[hidden] * cell) as f32 * s;
             for (k, line) in self.chat.iter().enumerate() {
-                let x = screen.x as i32 + 8 * text_scale as i32;
-                let y = screen.y as i32 + (8 + 20 * k as i32) * text_scale as i32;
-                font.draw(frame, x, y, text_scale, line);
+                let y = (CHAT_Y.0 + CHAT_Y.1 * k as u32) as f32 * s;
+                font.draw_clipped(frame, x as i32, y as i32, text_scale, line, right as i32);
             }
         }
         if let Some(outcome) = self.scene.outcome {
             self.draw_outcome(frame, &screen, outcome, text_scale);
         }
-        if let (Some(ui), Some(layout), Some((text, yes_no, pressed))) =
-            (self.interface, &layout, &self.ask)
-        {
+        if let Some((text, yes_no, pressed)) = &self.ask {
             let ask = crate::panels::AskView {
                 text,
                 yes_no: *yes_no,
@@ -1658,7 +1662,7 @@ impl GameView<'_> {
         if self.paused {
             self.draw_pause(frame, &screen, ui_scale);
         }
-        if let (Some(ui), Some(layout)) = (self.interface, &layout) {
+        {
             ui.draw_resources(
                 frame,
                 layout,
@@ -1671,7 +1675,8 @@ impl GameView<'_> {
                 let (x, y) = crate::object_info::ORIGIN;
                 let s = layout.scale;
                 let x = (layout.field_x + x) as f32 * s;
-                ui.info_art.draw(frame, x, y as f32 * s, s, info);
+                ui.info_art
+                    .draw(frame, (x, y as f32 * s), s, info, layout.bar_hidden);
             }
             // The button under the cursor says what it does and costs, and
             // its key (0x505e70).
@@ -1698,41 +1703,6 @@ impl GameView<'_> {
                 (None, None) => named().unwrap_or_default(),
             };
             ui.draw_message(frame, layout, self.text, &msg);
-            return;
-        }
-        // Without the interface: mission name, selection and status messages
-        // in the top-left corner of the view.
-        let mut lines = vec![self.headline()];
-        if let Some(obj) = selected {
-            lines.push(obj.label.clone());
-        }
-        if let Some(msg) = self.status {
-            lines.push(msg.to_string());
-        }
-        let line = (self.text.line_height() + 2) * text_scale;
-        let pad = 4 * text_scale;
-        let width = lines
-            .iter()
-            .map(|l| self.text.measure(l))
-            .max()
-            .unwrap_or(0)
-            * text_scale;
-        let (x0, y0) = (screen.x + pad, screen.y + pad);
-        shade_rect(
-            frame,
-            x0,
-            y0,
-            width + 2 * pad,
-            lines.len() as u32 * line + 2 * pad,
-        );
-        for (i, l) in lines.iter().enumerate() {
-            self.text.draw(
-                frame,
-                (x0 + pad) as i32,
-                (y0 + pad + i as u32 * line) as i32,
-                text_scale,
-                l,
-            );
         }
     }
 }
@@ -1816,8 +1786,8 @@ mod tests {
             fixed: None,
             integer: false,
         };
-        let right = ui.layout((800, 600), &policy, &scene, false);
-        let left = ui.layout((800, 600), &policy, &scene, true);
+        let right = ui.layout((800, 600), &policy, &scene, false, false);
+        let left = ui.layout((800, 600), &policy, &scene, true, false);
         let view = |l: &Layout| (l.view.x, l.view.y, l.view.w, l.view.h);
         assert_eq!(view(&right), (8, 8, 576, 512));
         assert_eq!(view(&left), (216, 8, 576, 512));
@@ -1844,5 +1814,48 @@ mod tests {
             assert_eq!(r[row + 592..row + 800], l[row..row + 208], "bar row {y}");
             assert_eq!(r[row..row + 592], l[row + 208..row + 800], "field row {y}");
         }
+    }
+
+    /// The bar hidden (Space, 0x50f910 message 0x4e1): the view 12 x 8
+    /// cells at (16, 8) and the field at 0 whatever the bar's side, the bar
+    /// off the screen (0x512ab0: 800 + x), the field drawn as
+    /// `GAME_FIELD_FS`, the money panel at (694, 527). Needs
+    /// `OPENCONQUEST_DATA`.
+    #[test]
+    fn the_bar_hidden() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        let ui = Interface::load(&data, '0').unwrap();
+        let policy = ScalePolicy {
+            fixed: None,
+            integer: false,
+        };
+        let right = ui.layout((800, 600), &policy, &scene, false, true);
+        let left = ui.layout((800, 600), &policy, &scene, true, true);
+        for l in [&right, &left] {
+            assert_eq!((l.view.x, l.view.y, l.view.w, l.view.h), (16, 8, 768, 512));
+            assert_eq!((l.field_x, l.field_w, l.bar_x), (0, 800, 800.0));
+            assert_eq!(ui.money_panel_origin(l), (694.0, 527.0));
+        }
+        // `GAME_FIELD_FS`'s see-through part holds the view.
+        let (x, y, w, h) = black_rect(&ui.field_fs, 400, 300);
+        println!("GAME_FIELD_FS hole {:?}", (x, y, w, h));
+        assert!(x <= 16 && y <= 8 && x + w >= 16 + 768 && y + h >= 8 + 512);
+        // The two sides draw alike.
+        let draw = |l: &Layout| {
+            let mut pixels = vec![0u32; 800 * 600];
+            let mut frame = Frame {
+                pixels: &mut pixels,
+                width: 800,
+                height: 600,
+            };
+            ui.draw(&mut frame, l, PanelBack::Clear);
+            pixels
+        };
+        assert!(draw(&right) == draw(&left));
     }
 }

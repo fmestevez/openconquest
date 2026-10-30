@@ -747,7 +747,10 @@ pub struct App {
     gfx: Option<Gfx>,
     error: Option<anyhow::Error>,
     interface: Interface,
-    show_interface: bool,
+    /// The bar hidden (Space, `[game+0x328d]`): false at every game build
+    /// (0x4ebf50) and on leaving the game (0x4ec1a0 0x100/0x10b/0x10c), not
+    /// saved.
+    bar_hidden: bool,
     text: TextRenderer,
 
     keys: HashSet<KeyCode>,
@@ -1044,7 +1047,7 @@ impl App {
             gfx: None,
             error: None,
             interface,
-            show_interface: true,
+            bar_hidden: false,
             text,
             keys: HashSet::new(),
             modifiers: ModifiersState::empty(),
@@ -1254,7 +1257,8 @@ impl App {
             data: &self.data,
             scene: &self.scene,
             camera: &self.camera,
-            interface: self.show_interface.then_some(&self.interface),
+            interface: &self.interface,
+            bar_hidden: self.bar_hidden,
             text: &self.text,
             selected: self.selected,
             group: &self.group,
@@ -1332,7 +1336,7 @@ impl App {
     /// The load panel's lists while the selected object reloads and the
     /// object panel shows.
     fn reloading(&self) -> Option<crate::load_panel::Lists> {
-        if !self.show_interface || Panels::covers_bar(self.tab) {
+        if self.bar_hidden || Panels::covers_bar(self.tab) {
             return None;
         }
         crate::load_panel::lists(&self.scene, self.selected?, &self.load_state())
@@ -1341,12 +1345,7 @@ impl App {
     /// What of the load panel lies under window position `pos`.
     fn load_hit(&self, pos: PhysicalPosition<f64>) -> Option<crate::load_panel::Hit> {
         let panel = self.reloading()?;
-        let layout = self.interface.layout(
-            self.window_size(),
-            &self.camera.policy,
-            &self.scene,
-            self.settings.config.bar_left,
-        );
+        let layout = self.layout();
         let x = (pos.x as f32 - layout.bar_x) / layout.scale;
         let y = pos.y as f32 / layout.scale;
         crate::load_panel::hit(&panel, &self.load_state(), x, y)
@@ -1418,15 +1417,10 @@ impl App {
 
     /// A window position as a point on the control bar, in original pixels.
     fn bar_point(&self, pos: PhysicalPosition<f64>) -> Option<(u32, u32)> {
-        if !self.show_interface {
+        if self.bar_hidden {
             return None;
         }
-        let layout = self.interface.layout(
-            self.window_size(),
-            &self.camera.policy,
-            &self.scene,
-            self.settings.config.bar_left,
-        );
+        let layout = self.layout();
         let x = (pos.x as f32 - layout.bar_x) / layout.scale;
         let y = pos.y as f32 / layout.scale;
         // The bar is 208 wide, at either side.
@@ -2731,6 +2725,8 @@ impl App {
         }
         self.game_id = crate::records::game_id();
         self.scene = scene;
+        // Every game build shows the bar (0x4ebf50: [game+0x328d] = 0).
+        self.bar_hidden = false;
         self.fog = setup.fog;
         self.selected = None;
         self.group.clear();
@@ -2803,6 +2799,8 @@ impl App {
         ) {
             Ok(scene) => {
                 self.scene = scene;
+                // Every game build shows the bar (0x4ebf50: [game+0x328d] = 0).
+                self.bar_hidden = false;
                 self.scene.fog = self.fog;
                 if let Some(carry) = &self.carry {
                     self.scene.resume(carry);
@@ -4148,6 +4146,9 @@ impl App {
     /// message 0x4fc).
     fn leave_game(&mut self) {
         self.in_game = false;
+        // As every way out of the game (0x4ec1a0 0x100, 0x10b, 0x10c:
+        // [game+0x328d] = 0).
+        self.bar_hidden = false;
         self.net = None;
         self.hosting = None;
         self.joining = None;
@@ -4269,15 +4270,10 @@ impl App {
     fn info_press(&mut self, pos: PhysicalPosition<f64>) -> bool {
         use crate::info_panel::{self as ip, Hit, Shown};
         use crate::scene::load::{ARMOUR, PRESENT, RAM, UNIT};
-        if !self.show_interface || Panels::covers_bar(self.tab) || self.reloading().is_some() {
+        if self.bar_hidden || Panels::covers_bar(self.tab) || self.reloading().is_some() {
             return false;
         }
-        let layout = self.interface.layout(
-            self.window_size(),
-            &self.camera.policy,
-            &self.scene,
-            self.settings.config.bar_left,
-        );
+        let layout = self.layout();
         let (x, y) = (
             (pos.x as f32 - layout.bar_x) / layout.scale,
             pos.y as f32 / layout.scale,
@@ -4374,19 +4370,14 @@ impl App {
     }
 
     fn on_arming_box(&self, pos: PhysicalPosition<f64>) -> bool {
-        if !self.show_interface
+        if self.bar_hidden
             || Panels::covers_bar(self.tab)
             || !(matches!(self.page, Page::Structures | Page::Ground) || self.yard_selected())
             || self.selection().is_empty()
         {
             return false;
         }
-        let layout = self.interface.layout(
-            self.window_size(),
-            &self.camera.policy,
-            &self.scene,
-            self.settings.config.bar_left,
-        );
+        let layout = self.layout();
         let (x, y, w, h) = self.interface.arming_rect(&layout);
         let (px, py) = (pos.x as f32, pos.y as f32);
         px >= x && py >= y && px < x + w && py < y + h
@@ -4395,7 +4386,7 @@ impl App {
     /// The command slots whose key `code` is (0x4f2140): the buttons'
     /// accelerators live while the command panel shows them.
     fn hotkey_slots(&self, code: KeyCode) -> Vec<(usize, Command)> {
-        if !self.show_interface || Panels::covers_bar(self.tab) || self.reloading().is_some() {
+        if self.bar_hidden || Panels::covers_bar(self.tab) || self.reloading().is_some() {
             return Vec::new();
         }
         let Some(obj) = self
@@ -4432,15 +4423,10 @@ impl App {
 
     /// The command slot under a window position, if the interface is shown.
     fn button_at(&self, pos: PhysicalPosition<f64>) -> Option<usize> {
-        if !self.show_interface || Panels::covers_bar(self.tab) || self.reloading().is_some() {
+        if self.bar_hidden || Panels::covers_bar(self.tab) || self.reloading().is_some() {
             return None;
         }
-        let layout = self.interface.layout(
-            self.window_size(),
-            &self.camera.policy,
-            &self.scene,
-            self.settings.config.bar_left,
-        );
+        let layout = self.layout();
         self.interface
             .button_at(&layout, pos.x as f32, pos.y as f32)
     }
@@ -4835,18 +4821,7 @@ impl App {
     /// The answer under the pointer, if a question is asked.
     fn ask_answer_at(&self) -> Option<bool> {
         let c = self.cursor?;
-        if !self.show_interface {
-            return None;
-        }
-        let scale = self
-            .interface
-            .layout(
-                self.window_size(),
-                &self.camera.policy,
-                &self.scene,
-                self.settings.config.bar_left,
-            )
-            .scale;
+        let scale = self.layout().scale;
         let (screen, _) = self.placement();
         let (w, h) = self.interface.panels.ask_size();
         let x0 = screen.x as f32 + (screen.w as f32 - w as f32 * scale) / 2.0;
@@ -5285,21 +5260,20 @@ impl App {
     /// The view and minimap rectangles (as `GameView::placement`, without
     /// building the whole view, which asks for the hovered object).
     fn placement(&self) -> (Screen, MinimapRect) {
-        let window = self.window_size();
-        if self.show_interface {
-            let layout = self.interface.layout(
-                window,
-                &self.camera.policy,
-                &self.scene,
-                self.settings.config.bar_left,
-            );
-            (layout.view, layout.minimap)
-        } else {
-            (
-                Screen::full(window.0, window.1),
-                MinimapRect::overlay(&self.scene, window),
-            )
-        }
+        let layout = self.layout();
+        (layout.view, layout.minimap)
+    }
+
+    /// The interface's placement for the current window, bar side and
+    /// whether the bar is hidden.
+    fn layout(&self) -> crate::ui::Layout {
+        self.interface.layout(
+            self.window_size(),
+            &self.camera.policy,
+            &self.scene,
+            self.settings.config.bar_left,
+            self.bar_hidden,
+        )
     }
 
     fn update_title(&self) {
@@ -5327,6 +5301,8 @@ impl App {
         ) {
             Ok(scene) => {
                 self.scene = scene;
+                // Every game build shows the bar (0x4ebf50: [game+0x328d] = 0).
+                self.bar_hidden = false;
                 self.scene.fog = self.fog;
                 self.selected = None;
                 self.group.clear();
@@ -5380,6 +5356,8 @@ impl App {
         match loaded {
             Ok((mission, scene, id)) => {
                 self.scene = scene;
+                // Every game build shows the bar (0x4ebf50: [game+0x328d] = 0).
+                self.bar_hidden = false;
                 self.scene.fog = self.fog;
                 if let Some(i) = self.missions.iter().position(|m| *m == mission) {
                     self.mission_index = i;
@@ -5417,7 +5395,7 @@ impl App {
     /// Moves the camera to the world point under a minimap position.
     /// Returns false if the position is outside the minimap.
     fn minimap_jump(&mut self, pos: PhysicalPosition<f64>) -> bool {
-        if self.show_interface && Panels::covers_bar(self.tab) || self.radar_shown() {
+        if self.bar_hidden || Panels::covers_bar(self.tab) || self.radar_shown() {
             return false;
         }
         let (screen, minimap) = self.placement();
@@ -5433,7 +5411,7 @@ impl App {
 
     /// Whether the radar map is shown (Tab, with the control bar).
     fn radar_shown(&self) -> bool {
-        self.radar && self.show_interface
+        self.radar && !self.bar_hidden
     }
 
     /// The world point under a window position on the map: in the view,
@@ -5466,12 +5444,7 @@ impl App {
         if !self.radar_shown() {
             return None;
         }
-        let layout = self.interface.layout(
-            self.window_size(),
-            &self.camera.policy,
-            &self.scene,
-            self.settings.config.bar_left,
-        );
+        let layout = self.layout();
         Some(crate::ui::radar_placement(
             &layout,
             &self.scene,
@@ -5479,12 +5452,32 @@ impl App {
         ))
     }
 
+    /// Space (0x50f910 message 0x4e1, no guard of its own): any drag on
+    /// the maps ended (0x4ee970: broadcast 0x14a), a radar map put back
+    /// (0xcbc), the bar hidden or shown ([game+0x328d] flipped), the bar's
+    /// tab the object panel either way (message 0x22 with 1000), and the
+    /// windows moved (message 0x24): with the bar hidden the view is 12
+    /// cells wide at (16, 8), its scroll clamped to the map (0xcc3: the
+    /// top-left cell kept).
+    fn toggle_bar(&mut self) {
+        self.drag_from = None;
+        self.box_from = None;
+        self.minimap_drag = false;
+        if self.radar {
+            self.toggle_radar();
+        }
+        self.bar_hidden = !self.bar_hidden;
+        self.tab = Tab::Object;
+        let (screen, _) = self.placement();
+        self.camera.clamp(&screen, self.scene.map_size());
+    }
+
     /// Tab: the radar map in the view's place and the view in the bar's
     /// map window, or back (0x504620 message 0xcbc: the view's mapa
     /// between modes 1 and 2, the bar's between 3 and 4). Not with the bar
     /// hidden.
     fn toggle_radar(&mut self) {
-        if !self.show_interface {
+        if self.bar_hidden {
             return;
         }
         self.radar = !self.radar;
@@ -5506,12 +5499,7 @@ impl App {
         if !self.radar_shown() {
             return;
         }
-        let layout = self.interface.layout(
-            self.window_size(),
-            &self.camera.policy,
-            &self.scene,
-            self.settings.config.bar_left,
-        );
+        let layout = self.layout();
         self.radar_origin =
             crate::ui::radar_origin(&layout, &self.scene, &self.camera, self.radar_origin);
     }
@@ -6574,6 +6562,7 @@ impl App {
             if self.scene.clock > at + 3.0 && self.menus.is_some() {
                 self.open_outcome(outcome);
                 self.in_game = false;
+                self.bar_hidden = false;
             }
         }
         if self.menu == Some(MenuState::Waiting) {
@@ -7150,7 +7139,7 @@ impl ApplicationHandler for App {
                 // SAVE bookmark is open; Enter saves.
                 let command = self.modifiers.control_key() || self.modifiers.super_key();
                 if self.menu.is_none()
-                    && self.show_interface
+                    && !self.bar_hidden
                     && self.tab == Tab::File
                     && self.file_mode == FileMode::Save
                     && !command
@@ -7328,16 +7317,7 @@ impl ApplicationHandler for App {
                     KeyCode::Tab => self.toggle_radar(),
                     // Space hides or shows the control bar (the manual's
                     // Game Hot Keys).
-                    KeyCode::Space => {
-                        // The radar map goes first (0x50f910, message
-                        // 0x4e1).
-                        if self.radar {
-                            self.toggle_radar();
-                        }
-                        self.show_interface = !self.show_interface;
-                        let (screen, _) = self.placement();
-                        self.camera.clamp(&screen, map);
-                    }
+                    KeyCode::Space => self.toggle_bar(),
                     KeyCode::Equal | KeyCode::NumpadAdd => self
                         .camera
                         .zoom_at(ZOOM_STEP, center.0, center.1, &screen, map),
@@ -7365,14 +7345,7 @@ impl ApplicationHandler for App {
                     self.menu_pointer_at(p);
                 }
                 if let Some(slider) = self.slider_drag {
-                    if let Some(layout) = self.show_interface.then(|| {
-                        self.interface.layout(
-                            self.window_size(),
-                            &self.camera.policy,
-                            &self.scene,
-                            self.settings.config.bar_left,
-                        )
-                    }) {
+                    if let Some(layout) = (!self.bar_hidden).then(|| self.layout()) {
                         let x = (position.x as f32 - layout.bar_x) / layout.scale;
                         let v =
                             self.interface

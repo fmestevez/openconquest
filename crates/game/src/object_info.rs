@@ -258,8 +258,10 @@ fn garrison(scene: &Scene, obj: &MapObject, class: u32, info: &mut ObjectInfo) {
 
 /// The strip's pictures (Fieldsys.cpp 0x5032c0).
 pub struct InfoArt {
-    /// `CHT_BKINFO` (`+0x10e`; `CHT_BKFINFO` with the bar hidden).
-    background: Option<Image>,
+    /// `CHT_BKINFO` (380x20) and `CHT_BKFINFO` (585x20), the one with the
+    /// bar hidden (`+0x10e`, rebuilt on Fieldsys message 0x24 with `+0x18`
+    /// set, 0x504620).
+    backgrounds: [Option<Image>; 2],
     /// A cell's background, `GAME_INDOBJ` (`+0x116`).
     cell: Option<Rc<Image>>,
     /// `CIND_HTR_00`-`10` (`+0x11e`): the treasure, then a hero each and
@@ -279,7 +281,7 @@ impl InfoArt {
         let image = |name: &str| data.load_image(&data.controls, name, false).ok().flatten();
         let pal = |i: usize| rgb(data.palette.0[i]);
         Self {
-            background: image(&format!("{theme}CHT_BKINFO")),
+            backgrounds: ["CHT_BKINFO", "CHT_BKFINFO"].map(|n| image(&format!("{theme}{n}"))),
             cell: image(&format!("{theme}GAME_INDOBJ")).map(Rc::new),
             icons: (0..11)
                 .map(|i| image(&format!("CIND_HTR_{i:02}")))
@@ -301,9 +303,10 @@ impl InfoArt {
         }
     }
 
-    /// The strip as 0x503d60 draws it, at its native size.
-    pub fn render(&self, info: &ObjectInfo) -> Option<Image> {
-        let bg = self.background.as_ref()?;
+    /// The strip as 0x503d60 draws it, at its native size, on the wide
+    /// background with the bar hidden.
+    pub fn render(&self, info: &ObjectInfo, bar_hidden: bool) -> Option<Image> {
+        let bg = self.backgrounds[usize::from(bar_hidden)].as_ref()?;
         let (w, h) = (bg.width, bg.height);
         let mut pixels: Vec<u32> = bg.pixels.iter().map(|p| p.unwrap_or(0)).collect();
         let mut frame = Frame {
@@ -426,8 +429,15 @@ impl InfoArt {
 
     /// Draws the strip for `info` with its top-left at `(x, y)` (window
     /// pixels), magnified by `scale`.
-    pub fn draw(&self, frame: &mut Frame, x: f32, y: f32, scale: f32, info: &ObjectInfo) {
-        if let Some(img) = self.render(info) {
+    pub fn draw(
+        &self,
+        frame: &mut Frame,
+        (x, y): (f32, f32),
+        scale: f32,
+        info: &ObjectInfo,
+        bar_hidden: bool,
+    ) {
+        if let Some(img) = self.render(info, bar_hidden) {
             blit_scaled(frame, &img, (0, 0, img.width, img.height), x, y, scale);
         }
     }
@@ -499,8 +509,8 @@ mod tests {
         // Drawn: the cell, the hero at the right end less 67, the treasure
         // less 40; nothing shown leaves the background.
         let art = InfoArt::load(&data, '0');
-        let img = art.render(&info).unwrap();
-        let bg = art.render(&ObjectInfo::default()).unwrap();
+        let img = art.render(&info, false).unwrap();
+        let bg = art.render(&ObjectInfo::default(), false).unwrap();
         assert_eq!((img.width, img.height), (380, 20));
         let differs = |x0: u32, x1: u32| {
             (0..20u32).any(|y| {

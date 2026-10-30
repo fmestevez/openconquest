@@ -479,7 +479,9 @@ pub use load::{Cargo, Entry, LoadLink};
 pub use order::Order;
 pub use repair::{StockRepair, UnitMend};
 pub use stats::Stats;
-pub use story::{goal_name, Carry, Goal};
+#[cfg(test)]
+pub use story::goal_name;
+pub use story::{Carry, Goal};
 pub use walkers::{walker_frame_ms, walker_sequence, Walker};
 #[cfg(test)]
 mod tests;

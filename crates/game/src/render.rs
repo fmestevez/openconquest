@@ -1028,21 +1028,6 @@ pub struct MinimapRect {
 }
 
 impl MinimapRect {
-    /// The largest minimap that fits in the box `(x, y, w, h)`, centred.
-    pub fn fit(scene: &Scene, x: u32, y: u32, w: u32, h: u32) -> Self {
-        let (mw, mh) = (scene.minimap_size.0.max(1), scene.minimap_size.1.max(1));
-        let zoom = (w as f32 / mw as f32).min(h as f32 / mh as f32);
-        let (mw, mh) = ((mw as f32 * zoom) as u32, (mh as f32 * zoom) as u32);
-        Self {
-            x: x + (w - mw.min(w)) / 2,
-            y: y + (h - mh.min(h)) / 2,
-            w: mw,
-            h: mh,
-            zoom,
-            origin: (0, 0),
-        }
-    }
-
     /// The bar's minimap, as the original's: 24 x 24 cells at 8 pixels a
     /// cell in the box `(x, y, w, h)` (192 x 192 at 800x600), from the top
     /// left, a smaller map not stretched, from the scene's minimap origin.
@@ -1085,19 +1070,6 @@ impl MinimapRect {
             zoom,
             origin: (origin.0.max(0) as u32 * cell, origin.1.max(0) as u32 * cell),
         }
-    }
-
-    /// An overlay in the bottom-right corner (used when the interface is hidden).
-    pub fn overlay(scene: &Scene, window: (u32, u32)) -> Self {
-        let size = window.1 / 4;
-        let margin = (window.1 / 100).max(4);
-        Self::fit(
-            scene,
-            window.0.saturating_sub(size * 3 / 2 + margin),
-            window.1.saturating_sub(size + margin),
-            size * 3 / 2,
-            size,
-        )
     }
 
     pub fn contains(&self, sx: f32, sy: f32) -> bool {
