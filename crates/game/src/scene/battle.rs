@@ -17,6 +17,32 @@ impl Scene {
     pub fn order_attack(&mut self, ship: u32, target: u32) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let t = self.object_index(target).ok_or("No such target")?;
+        // A fort's attack: its Fire button's pointer (0x4f34c0 command 3:
+        // state 0x15, kind 7) or a plain click with the attack pointer
+        // (0x5180e0 pointer 9) sends order 0x15 / 0x16 {target, 7}, every
+        // group at it, once the fort's answer (0x419f80 message 0xc452) let
+        // the pointer through: standing, not limed, an enemy some group
+        // reaches.
+        if self.objects[i].holds_units() {
+            if self.construction_at(ship).is_some()
+                || self.objects[i]
+                    .combat
+                    .as_ref()
+                    .is_some_and(|c| c.lime > 0.0)
+            {
+                return Err(String::new());
+            }
+            if self.objects[t].combat.is_none()
+                || !Self::are_enemies(&self.objects[i], &self.objects[t])
+            {
+                return Err("Choose an enemy ship or building".into());
+            }
+            if !self.fort_reaches(i, t) {
+                return Err("Out of the fort's reach".into());
+            }
+            self.fort_attack(ship, target, 7);
+            return Ok(());
+        }
         if self.objects[i].ship.is_none() || !self.objects[i].is_armed() {
             return Err("This ship has no weapons".into());
         }
@@ -37,6 +63,102 @@ impl Scene {
         ship.path.clear();
         ship.task = Some(Task::Attack { target });
         Ok(())
+    }
+
+    /// Whether some unit of fort `i` reaches object `t` (the answer to the
+    /// pointer, 0x419f80 message 0xc452: 0x446800 over the groups with
+    /// units).
+    pub fn fort_reaches(&self, i: usize, t: usize) -> bool {
+        let (me, it) = (&self.objects[i], &self.objects[t]);
+        let d = ((me.x - it.x).powi(2) + (me.y - it.y).powi(2)).sqrt();
+        let levels = self.levels_of(me.owner);
+        me.shooters().iter().any(|&w| {
+            let (near, far) = combat::reach(w, levels.reach_for(w));
+            d >= near && d <= far
+        })
+    }
+
+    /// Order 0x15 / 0x16 {target, groups} to fort or barbarian structure
+    /// `site` (0x419f80 / 0x40ef70): the groups named (`order_groups`)
+    /// fire at `target` (0x446960: only if it is found, 0x51f1f0; mode bit
+    /// 2 added, the at-will bit kept). (Not ported: the fort's masks
+    /// `+0x48c` players, `+0x490` classes, `+0x494` the payload's bytes,
+    /// which its groups' shot test 0x41c4e0 reads: every order of the
+    /// player's sets them to all but its own player, which the port's
+    /// enemies are already; and a cyclops' jam, class 0x1f7, which the
+    /// fort turns into one of its creatures, 0x415df0: the port has none.)
+    pub fn fort_attack(&mut self, site: u32, target: u32, groups: u8) {
+        if self.object_index(target).is_none() {
+            return;
+        }
+        if let Some(c) = self
+            .object_index(site)
+            .filter(|&i| self.objects[i].holds_units())
+            .and_then(|i| self.objects[i].combat.as_mut())
+        {
+            for k in combat::order_groups(groups) {
+                c.fire.targets[k] = target;
+            }
+        }
+    }
+
+    /// Order 0x23 sub `sub` to fort or barbarian structure `site`: the
+    /// fort's Guard button (0x4f34c0 command 0x70: sub 1 when it is not
+    /// ticked, 2 when it is) and Fire on aggressor (command 0x73: sub 3,
+    /// or 4 ticked). A fort (0x419f80 case 0x23): 1 every group at will
+    /// (0x4469a0), `+0x498 = 0`; 2 and 4 every group ceases fire
+    /// (0x4469b0), `+0x498 = 0`; 3 every group ceases fire, `+0x498 = 1`
+    /// (it answers blows, `fort_aggressed`). A barbarian structure
+    /// (0x40ef70) takes sub 1 only. (The masks stored with subs 1 and 3
+    /// are not ported, as `fort_attack`'s.)
+    pub fn fort_order(&mut self, site: u32, sub: u8) -> Result<(), String> {
+        let i = self
+            .object_index(site)
+            .filter(|&i| self.objects[i].holds_units())
+            .ok_or("Not a fort")?;
+        let fort = matches!(self.objects[i].class, ObjectClass::Building(0x34..=0x36));
+        let c = self.objects[i].combat.as_mut().unwrap();
+        match sub {
+            1 => {
+                c.fire.fire_at_will();
+                c.fire.aggressor = false;
+            }
+            2 | 4 if fort => {
+                c.fire.cease();
+                c.fire.aggressor = false;
+            }
+            3 if fort => {
+                c.fire.cease();
+                c.fire.aggressor = true;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// A blow of bomb kind `kind` from `shooter` reaches fort `t` firing on
+    /// aggressors (0x4184f0 at 0x418bdd, after the units' share: message
+    /// 0x138e `+4` the kind, `+0x16` the shooter, the bomb's `+0xbe`): the
+    /// groups `aggressor_groups(kind)` names fire at it (0x446960).
+    pub(super) fn fort_aggressed(&mut self, t: usize, kind: u8, shooter: Option<u32>) {
+        let Some(shooter) = shooter.filter(|&s| self.object_index(s).is_some()) else {
+            return;
+        };
+        if !matches!(self.objects[t].class, ObjectClass::Building(0x34..=0x36)) {
+            return;
+        }
+        let Some(c) = self.objects[t].combat.as_mut() else {
+            return;
+        };
+        if !c.fire.aggressor {
+            return;
+        }
+        let mask = combat::aggressor_groups(kind as u32);
+        for k in 0..12 {
+            if mask >> k & 1 != 0 {
+                c.fire.targets[k] = shooter;
+            }
+        }
     }
 
     /// Armed ships and forts pick targets, ships close in, and everything in
@@ -126,17 +248,18 @@ impl Scene {
                                 Some(Task::Patrol { .. } | Task::Convoy { .. })
                             )),
                 ),
-                // Forts and barbarian structures fire at will unless their
-                // groups were told to cease fire (order 10, 0x4469b0): then
-                // not at all (0x4469c0 with mode 0). (The port has no order
-                // that sets them firing again: 0x15 / 0x16 targets and 0x23
-                // sub 1 are not given to forts here.)
-                None => {
-                    if self.objects[i].combat.as_ref().is_some_and(|c| c.hold_fire) {
-                        continue;
+                // Forts and barbarian structures scan only while their
+                // groups fire at will, and with no mode set on any group
+                // (order 10, 0x4469b0) do not fire at all (0x4469c0).
+                None => match self.objects[i].combat.as_ref().map(|c| c.fire) {
+                    Some(fire) if self.objects[i].holds_units() => {
+                        if !fire.fires() {
+                            continue;
+                        }
+                        (None, fire.at_will)
                     }
-                    (None, true)
-                }
+                    _ => (None, true),
+                },
             };
             let me = &self.objects[i];
             let target = match ordered {
@@ -176,6 +299,55 @@ impl Scene {
                     .map(|(ti, _)| ti),
                 None => None,
             };
+            // A fort's or barbarian structure's groups (item k's units are
+            // group k) each fire at their target while it is in their
+            // reach (0x447400; out of reach it is kept), else, at will, at
+            // what the scan found (0x4469c0).
+            if self.objects[i].holds_units() {
+                let fire = self.objects[i].combat.as_ref().unwrap().fire;
+                let tracked = fire.targets.map(|t| {
+                    (t != 0)
+                        .then(|| self.object_index(t))
+                        .flatten()
+                        .filter(|&ti| {
+                            self.objects[ti].combat.is_some()
+                                && Self::are_enemies(&self.objects[i], &self.objects[ti])
+                        })
+                });
+                let picks: Vec<Option<usize>> = shooters
+                    .iter()
+                    .map(|&w| {
+                        let (near, far) = combat::reach(w, reach_level(w));
+                        let reaches = |ti: usize| {
+                            let d = dist(&self.objects[i], &self.objects[ti]);
+                            d >= near && d <= far
+                        };
+                        match tracked.get(w as usize).copied().flatten() {
+                            Some(ti) if reaches(ti) => Some(ti),
+                            _ => target.filter(|&ti| reaches(ti)),
+                        }
+                    })
+                    .collect();
+                let c = self.objects[i].combat.as_mut().unwrap();
+                let mut fired: Vec<(usize, Vec<u8>)> = Vec::new();
+                for (k, (&w, pick)) in shooters.iter().zip(&picks).enumerate() {
+                    let Some(ti) = *pick else { continue };
+                    if c.reloads[k] > 0.0 {
+                        continue;
+                    }
+                    let jitter = crate::clock::ticks(self.rng.next() % combat::RELOAD_JITTER);
+                    c.reloads[k] = combat::reload_seconds(w, rate_level(w)) + jitter;
+                    match fired.iter_mut().find(|f| f.0 == ti) {
+                        Some(f) => f.1.push(w),
+                        None => fired.push((ti, vec![w])),
+                    }
+                }
+                for (ti, weapons) in fired {
+                    let owner = self.objects[i].owner;
+                    volleys.push((self.objects[ti].id, weapons, owner, id, theseus));
+                }
+                continue;
+            }
             let Some(ti) = target else { continue };
             // A guard set to ram or board goes in rather than firing.
             if ordered.is_none() {
@@ -452,7 +624,8 @@ impl Scene {
     /// lime's, which spares structures, in the units' points. Under a magic
     /// shield (`+0x15c`) the structure takes a fifth and a fort's units a
     /// fifth of a fireball's share and two thirds of a flaming shot's.
-    /// `by`: the player who dealt it (see `strike`).
+    /// `by`: the player who dealt it (see `strike`); `shooter`: who fired
+    /// it (message 0x138e `+0x16`), for a fort firing on aggressors.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn fort_blow(
         &mut self,
@@ -462,6 +635,7 @@ impl Scene {
         item: u8,
         flaming: bool,
         by: Option<Owner>,
+        shooter: Option<u32>,
         data: &GameData,
         caches: &mut Caches,
     ) {
@@ -530,6 +704,10 @@ impl Scene {
             // A unit gone from a fort being mended leaves its mending
             // (0x418430).
             self.forget_gone_units(target);
+        }
+        // Firing on aggressors, it turns on the shooter.
+        if let Some(t) = self.object_index(target) {
+            self.fort_aggressed(t, item, shooter);
         }
         self.strike(target, hull, false, by, true, data, caches);
     }
@@ -601,12 +779,24 @@ impl Scene {
         }
         // A fort's or barbarian structure's every blow comes through
         // message 0x138e, its units taking their share: spells, tornadoes
-        // and the like too, not only shots.
+        // and the like too, not only shots. (No shooter for a fort firing
+        // on aggressors: the stare's 0x158bf has `+0x16` 0, 0x41a041; the
+        // other senders' `+0x16` not decoded.)
         if self
             .object_index(target)
             .is_some_and(|t| self.objects[t].holds_units())
         {
-            self.fort_blow(target, damage, 0.0, NOT_A_WEAPON, false, by, data, caches);
+            self.fort_blow(
+                target,
+                damage,
+                0.0,
+                NOT_A_WEAPON,
+                false,
+                by,
+                None,
+                data,
+                caches,
+            );
             return;
         }
         self.strike(target, damage, true, by, true, data, caches);

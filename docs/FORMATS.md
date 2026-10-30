@@ -2375,8 +2375,8 @@ it.
   does not shoot at all (0x4469c0, 0x446a57); modes are set again by
   0x4469a0 (fire at will: creation, order 0x23 sub 1, the fort's message
   10000 0x418f60, a unit added 0x4193d0 while any group fires at will) and
-  0x446960 (orders 0x15 / 0x16, a target). (Not decoded: who sends a fort
-  10000; which interface buttons send 0x23 to a fort.)
+  0x446960 (orders 0x15 / 0x16, a target; and a fort firing on aggressors
+  when struck). See **Forts' fire** below for who sends them.
 - A ship: 0x4e2ba0 case 10 is `vt+4(8, NULL)`, the stop event (0x4aa540),
   with no permission test; a ship being built has its build called off.
   ShipService 0x4e7640 takes order 0x32 only, GameObj 0x50c9e0 order 0x29
@@ -2399,8 +2399,8 @@ handlers in this chain (`Scene::halt`): its construction steps frames as
 0x4230f0; research entries refund at `p = elapsed ticks x 100 / study
 ticks`; a smithy's refits keep their batch (paid, ticks, elapsed); a
 cancelled training's fish share is kept per town (`town_fish`); forts and
-barbarian structures keep a cease-fire flag, which nothing in the port
-lifts (it has no fort target or fire-at-will orders). The voices are
+barbarian structures keep their groups' fire (`combat::FortFire`, below).
+The voices are
 picked from the dumped lists with the port's own generator, for the
 viewing player. Not ported: the 19-cell cut-off (the front end fades
 sounds by distance; the unit of 0x525370's distance and the writer of
@@ -2410,6 +2410,88 @@ frame an upgrade's picture starts at (the port starts it at 0; whether
 vt+0x54 / 0x50d080 load a fresh sprite not traced), whether vt+0x54
 resets the hit points on an upgrade's cancel (the port keeps the
 condition reached); nor the pointer's own pause test.
+
+**Forts' fire.** A fort's or barbarian structure's 12 groups (group k
+the units of item k) shoot by mode `+0x3a` (0x4469c0): 0 not at all; bit
+2 at target `+0x20` while it is in the group's reach (0x447400; out of
+reach the target is kept and, with bit 2 alone, nothing is shot); then
+bit 1 the scan (0x446d60). 0x4469a0 (at will) sets bit 1 and clears the
+target, keeping bit 2; 0x4469b0 clears both; 0x446960(id) adds bit 2 with
+the target if the object is found (0x51f1f0). Bit 1 is only ever set or
+cleared on all 12 together. Who sets them:
+- The player, through the fort's menu (0x417ff0, vtable +0x68), shown
+  standing (`+0xa4` 1) on page 0 without a reload contact (`+0x104`):
+  slot 0 Fire (command 3) with permission 64 (player `+0x4d` bit 0);
+  slot 1 Guard (0x70, `CBUT_BEHFGUARD`, flag 0x20 while any group has
+  bit 1) and slot 2 Fire on aggressor (0x73, `CBUT_BEHFAGR`, flag 0x20
+  while `+0x498`) with permission 79 (`+0x4e` bit 7); each enabled while
+  `+0x10c` (busy: mending) and `+0x1e4` (set only from a saved record,
+  0x41a617; cleared by a reload, 0x4198c5) are 0 and some group has
+  units; slot 3 the spell of a magic item it stores (0x42fd70 over
+  `+0x1b4`); slot 4 Repair 0x14 with player `+0x46` bit 4 while worn
+  (vt+0x6c) or mended (showing its progress), its right click sending
+  order 10; limed, every button off, and under construction slot 0 Break
+  (0x423a00). The left press (0x4f34c0): command 3 sets the pointer
+  state 0x15, kind 7; 0x70 sends order 0x23 {sub 1 unticked or 2 ticked,
+  0xffffffff, 0xffffffff, 0xff..}, 0x73 the same with sub 3 or 4; commands
+  1 and 2 (Stop, Break) send order 10. The fort answers the pointer
+  (message 0xc452, 0x41bec0): over itself 6, an own object 5, else, if
+  standing, not limed (`+0x144`), `+0x1e4` 0 and the cell seen
+  (0x50e870), an enemy (diplomacy 0x4efe20 < 0, or a creature class) some
+  group with units reaches (0x446800): in state 0 the mask's bit 4
+  (pointer 9, attack), in state 0x15 / 0x16 kind 7 pointer 9 (refused,
+  bit 0x4000, when none reaches). The click (0x5180e0, pointer 9): state
+  0x15 sends order 0x15 {target, kind (7), 0xff, -1, -1}, else 0x16
+  {target, 7, ...}; the navy hands a selection that is not a fleet each
+  order raw (0x49e230 -> 0x520cc0).
+- Orders to the fort (0x419f80) / stronghold (0x40ef70): 0x15 / 0x16
+  {target, groups}: byte `+4` 1 groups 0-2, 2 groups 3-5, 4 groups 6-8, 7
+  all, 0x446960(target) (a cyclops' jam, 0x1f7, becomes one of its
+  creatures, 0x415df0; fort only); the payload's `+5`, `+6`, `+10` go to
+  `+0x494`, `+0x48c` (less the fort's own player bit) and `+0x490`, the
+  players, classes and kinds its groups' shot test 0x41c4e0 lets through
+  (0x50ed20, 0x447800; all ones from the constructor and the player's
+  orders). 0x23 sub 1 every group at will, `+0x498 = 0` (the masks
+  stored); 2 and 4 every group ceases fire, `+0x498 = 0`; 3 the masks
+  stored, `+0x498 = 1`, every group ceases fire; the stronghold takes
+  sub 1 only. Order 10: every group ceases fire, `+0x498 = 0`.
+- Firing on aggressors (`+0x498`): each blow 0x138e but kind 9 (0x4184f0
+  at 0x418bdd, after the units' share) with a shooter (`+0x16`, the
+  bomb's `+0xbe`) sets the groups of the mask its bomb kind `+4` gives
+  (jump tables 0x418e40, 0x418e74: 1 none, 2 group 0, 4 group 1, 8
+  groups 0-1, 0x10 group 2, 0x20 groups 0 and 2, 0x40 groups 1-2, 0x80
+  groups 0-2, 0x100 group 3, any other groups 0-8) at the shooter. The
+  stare (0x158bf, 0x41a041) has no shooter. The stronghold has none.
+- Message 10000 to the fort's vtable +4 (0x418f60): standing, every group
+  at will. Nothing sends it: no instruction of the exe builds 0x2710 as a
+  message (every immediate 0x2710 is a clamp, a price, a timeout or a
+  divisor; 0x2700-0x270f and 0x2711-0x271f occur nowhere), so it is dead.
+- Order 10 also comes from the land fleet's repairs (order 96, part
+  0x3ec; the brains' builders and the computer players' towns): under
+  way (0x42a2f0) it waits until the building mended has life `+0xa8`
+  100, then sends it order 10 (0x42a384 for a town's building `+0xdc`,
+  0x42a3dd for a fort 0x1494 or stronghold 0x1a6b mended itself), so a
+  fort or stronghold so mended ceases fire for good; and from 0x427f50
+  on message 0x2874 (its settlement gone, sent by the town 0x43bc30 to
+  its buildings `+0x1d0`) while it is busy. Nothing in the land fleet
+  sends 0x23, 0x15 or 0x16 (its 0x520cc0 codes: 0x1e, 0x20, 0x21, 0x22,
+  0x28, 0x2d and 10). The navy's 0x4c5b30 (0x4a1150, a new group of a
+  computer player, side 3 or 4) sends 0x23 sub 1 with the fleet's masks
+  to every member of the group; 0x4c4180 sends 10 to ships only.
+
+The port keeps the fire in `combat::FortFire` (at will, a target per
+group, the aggressor flag): `Scene::fort_attack` (0x15 / 0x16),
+`fort_order` (0x23), `fort_aggressed` (0x4184f0), order 10 in `halt`; its
+fort menu has slots 0-2 and its pointer the fort's answer (`fort_reaches`:
+a unit's reach). The computer's repairs part and the brains' (`Job::
+Mended`) wait for the building whole and halt it. Not ported: slots 3 and
+4 (so a player's fort is never sent order 10 in the port), the masks
+(every order of the player's sets all but its own player), the jam, the
+0x2874 path, whether a navy group of a computer ever holds a fort (the
+port's flotillas hold ships), 0x43d300's test that the building is still
+the town's, the other 0x138e senders' `+0x16`; the brains' under-way
+passes are counted every pass (the original counts those after a pass
+that started nothing).
 
 Known differences not yet ported:
 
@@ -5097,10 +5179,14 @@ when its crew condition (0x4bc590: the mean of its items' mean conditions,
 ships in a dock (state 2) are left alone.
 
 **Repairs** (order 96, part 0x3ec, 0x429f60): of the town's buildings
-(0x43fcb0) and forts (types 0x1a6b, 0x1494: worn, vtable +0x6c; affordable,
-+0x9c) the first worn is mended: command 0x1e sent to the town (0x520cc0).
-With none worn the part waits out its passes and fails. Ours mends the first
-worn building of the player the town may mend (`mend_by`). A part's count
+(0x43fcb0) and forts and strongholds (types 0x1494, 0x1a6b: worn, vtable
++0x6c; affordable, +0x9c) the first worn is mended: command 0x1e sent to
+the town or the fort (0x520cc0). With none worn the part waits out its
+passes and fails. Under way (0x42a2f0) it waits for the building's life
+`+0xa8` to reach 100, then sends it order 10 and is done (see Forts' fire);
+the building gone, it fails. Ours mends the first worn building of the
+player the town may mend (`mend_by`), keeps it as the part's `+0xdc`, and
+halts it when whole. A part's count
 of passes is set by its op when it is queued (0x595170 + op x 4: build 20,
 ship 25, upgrade 20, the rest 10) and when it goes under way (0x595198:
 build 20, ship 25, upgrade 20, repairs 10, studies 25). Order 117 is six

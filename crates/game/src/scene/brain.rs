@@ -320,6 +320,7 @@ impl Brain {
                 for j in &mut self.jobs {
                     match j {
                         Job::FullTown { fleet, .. } | Job::Repair { fleet, .. } => up(fleet),
+                        Job::Mended { .. } => {}
                     }
                 }
             }
@@ -371,6 +372,11 @@ pub enum Job {
     /// Code 0x60 (order 96): the first worn building of the member's is
     /// mended, once; after 10 passes with none, the order fails.
     Repair { fleet: usize, idle: u32 },
+    /// Order 96's part under way (0x42a2f0): building `target` is waited
+    /// for until it is whole, then sent order 10 (0x42a3dd), which leaves
+    /// a fort's or barbarian structure's groups ceasing fire; gone, or its
+    /// passes (0x595198: 10) out, the order fails.
+    Mended { target: u32, tries: u32 },
 }
 
 /// The difficulty levels (+0x32a1).
@@ -2234,12 +2240,36 @@ impl Scene {
                             if !self.mending.contains(&id) {
                                 self.mending.push(id);
                             }
+                            keep.push(Job::Mended {
+                                target: id,
+                                tries: 10,
+                            });
                         }
                         None if idle > 1 => keep.push(Job::Repair {
                             fleet,
                             idle: idle - 1,
                         }),
                         None => {}
+                    }
+                }
+                Job::Mended { target, tries } => {
+                    let Some(t) = self.object_index(target) else {
+                        continue;
+                    };
+                    let whole = self.objects[t]
+                        .combat
+                        .as_ref()
+                        .is_none_or(|c| c.hull >= c.max_hull);
+                    if whole {
+                        let _ = self.halt(target, data, caches);
+                    } else if tries > 1 {
+                        // (Counted every pass, as the idle passes above;
+                        // the original counts those after a pass that
+                        // started nothing, `+0x18`.)
+                        keep.push(Job::Mended {
+                            target,
+                            tries: tries - 1,
+                        });
                     }
                 }
             }

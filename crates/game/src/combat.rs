@@ -52,12 +52,9 @@ pub struct Combatant {
     /// Golden Fleece it stores (every 1000 heals a point).
     #[serde(default)]
     pub healing: f32,
-    /// A fort's or barbarian structure's unit groups cease fire (0x4469b0:
-    /// mode `+0x3a` and target `+0x20` cleared, so 0x4469c0 shoots not at
-    /// all), as order 10 leaves all twelve (0x419f80 0x41af74, 0x40ef70);
-    /// created firing at will (message 2).
+    /// A fort's or barbarian structure's unit groups' fire (`FortFire`).
     #[serde(default)]
-    pub hold_fire: bool,
+    pub fire: FortFire,
 }
 
 impl Combatant {
@@ -122,8 +119,91 @@ impl Combatant {
             wounds: 0.0,
             protect_weapons: 0.0,
             protect_magic: 0.0,
-            hold_fire: false,
+            fire: FortFire::default(),
         })
+    }
+}
+
+/// How a fort's or barbarian structure's twelve unit groups fire (group
+/// `k` holds the units of item `k`, `[+0x4d0] + 0x23 + 4k`; Barb
+/// `[+0x20c]`): mode `+0x3a` bit 1 at will, bit 2 at the target `+0x20`.
+/// Their shooting (0x4469c0): with mode 0 not at all; with bit 2 at the
+/// target while it is in the group's reach (0x447400), else, bit 1 also
+/// set, at what the scan finds (0x446d60); bit 1 alone the scan. The
+/// target is kept when out of reach. Bit 1 is only ever set or cleared on
+/// all twelve together, so it is one flag here.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FortFire {
+    /// Mode bit 1 on every group (0x4469a0 sets it and clears the target;
+    /// 0x4469b0 clears both): created so (message 2, fort_h / Barb).
+    pub at_will: bool,
+    /// Each group's target `+0x20` with mode bit 2 (0x446960); 0 none.
+    pub targets: [u32; 12],
+    /// The fort's "fire on aggressor" `+0x498` (order 0x23 sub 3): a
+    /// blow's shooter becomes some groups' target (0x4184f0). Barbarian
+    /// structures have none.
+    pub aggressor: bool,
+}
+
+impl Default for FortFire {
+    fn default() -> Self {
+        FortFire {
+            at_will: true,
+            targets: [0; 12],
+            aggressor: false,
+        }
+    }
+}
+
+impl FortFire {
+    /// Every group ceases fire (0x4469b0: `+0x3a = 0`, `+0x20 = 0`).
+    pub fn cease(&mut self) {
+        self.at_will = false;
+        self.targets = [0; 12];
+    }
+
+    /// Every group fires at will (0x4469a0: `+0x3a |= 1`, `+0x20 = 0`).
+    pub fn fire_at_will(&mut self) {
+        self.at_will = true;
+        self.targets = [0; 12];
+    }
+
+    /// Whether any group has a mode set (0x4469c0 returns at once on 0).
+    pub fn fires(&self) -> bool {
+        self.at_will || self.targets.iter().any(|&t| t != 0)
+    }
+}
+
+/// The groups an attack order's byte `+4` names (0x419f80 at 0x41b2xx,
+/// 0x40ef70 cases 0x15 / 0x16): 1 groups 0-2, 2 groups 3-5, 4 groups 6-8,
+/// 7 all twelve; any other value none.
+pub fn order_groups(groups: u8) -> std::ops::Range<usize> {
+    match groups {
+        1 => 0..3,
+        2 => 3..6,
+        4 => 6..9,
+        7 => 0..12,
+        _ => 0..0,
+    }
+}
+
+/// The group bits a fort firing on aggressors turns on a blow's shooter,
+/// by the blow's bomb kind (0x4184f0 at 0x418bfa, jump tables 0x418e40 and
+/// 0x418e74 dumped): kind 1 none, 2 group 0, 4 group 1, 8 groups 0-1,
+/// 0x10 group 2, 0x20 groups 0 and 2, 0x40 groups 1-2, 0x80 groups 0-2,
+/// 0x100 group 3, any other kind groups 0-8.
+pub fn aggressor_groups(kind: u32) -> u32 {
+    match kind {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        8 => 3,
+        0x10 => 4,
+        0x20 => 5,
+        0x40 => 6,
+        0x80 => 7,
+        0x100 => 8,
+        _ => 0x1ff,
     }
 }
 

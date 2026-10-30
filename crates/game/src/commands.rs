@@ -674,9 +674,45 @@ pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
         ObjectClass::Building(c @ (TEMPLE_OF_THE_SEA | TEMPLE_OF_WAR)) => {
             temple_menu(scene, Temple::of_class(c).unwrap(), &mut menu)
         }
+        ObjectClass::Building(0x34..=0x36) => fort_menu(scene, obj, &mut menu),
         _ => {}
     }
     menu
+}
+
+/// A fort's menu (0x417ff0), standing and awake (`+0xa4` 1): Fire
+/// (command 3, slot 0, with permission 64: player `+0x4d` bit 0), Guard
+/// (0x70, slot 1, ticked while its groups fire at will) and Fire on
+/// aggressor (0x73, slot 2, ticked while `+0x498`), both with permission
+/// 79 (`+0x4e` bit 7); each enabled while it is not being mended
+/// (`+0x10c`) and some group has units; limed, every button off
+/// (0x423a00). (`+0x1e4`, also needed clear, is set only from a saved
+/// record, 0x41a617, which the port's maps do not have. Not ported: slot
+/// 3, the spell of a magic item it stores, 0x42fd70 over `+0x1b4`; slot
+/// 4, Repair 0x14, with player `+0x46` bit 4 while worn or mended, whose
+/// right click sends it order 10.)
+fn fort_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
+    let Some(c) = obj.combat.as_ref().filter(|_| obj.asleep.is_none()) else {
+        return;
+    };
+    let on = !scene.mending.contains(&obj.id) && !c.weapons.is_empty() && c.lime <= 0.0;
+    let mut toggle = |slot: usize, command: Command, checked: bool| {
+        menu[slot] = Some(Slot {
+            command,
+            enabled: on,
+            progress: None,
+            count: 0,
+            checked,
+            closes: false,
+        });
+    };
+    if scene.permits.allows(64) {
+        toggle(0, Command::FIRE, false);
+    }
+    if scene.permits.allows(79) {
+        toggle(1, FORT_GUARD, c.fire.at_will);
+        toggle(2, FORT_AGGRESSOR, c.fire.aggressor);
+    }
 }
 
 fn set(menu: &mut Menu, slot: usize, command: Command, enabled: bool) {
@@ -968,6 +1004,9 @@ pub const SCOUT: Command = Command(0x76);
 pub const PATROL: Command = Command(0x6e);
 pub const GUARD_ZONE: Command = Command(0x74);
 pub const CONVOY: Command = Command(0x6d);
+/// A fort's guard and fire on aggressor switches (0x417ff0 slots 1, 2).
+pub const FORT_GUARD: Command = Command(0x70);
+pub const FORT_AGGRESSOR: Command = Command(0x73);
 /// A merchant's gathering zones: amber, fish, leviathans.
 pub const GATHER_ZONES: [Command; 3] = [Command(0x7a), Command(0x7b), Command(0x7c)];
 pub const ATTACK_ZONE: Command = Command(0x75);

@@ -686,7 +686,7 @@ impl Scene {
             self.ignite(i, s.item, s.flaming, s.damage, data, caches);
             if holder {
                 self.fort_blow(
-                    s.target, s.damage, s.wounds, s.item, s.flaming, by, data, caches,
+                    s.target, s.damage, s.wounds, s.item, s.flaming, by, s.shooter, data, caches,
                 );
             } else {
                 self.strike(s.target, s.damage, false, by, report, data, caches);

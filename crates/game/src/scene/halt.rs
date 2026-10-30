@@ -430,13 +430,14 @@ impl Scene {
 
     /// A fort's or barbarian structure's twelve unit groups cease fire
     /// (0x4469b0; the fort also `+0x498 = 0`): it stays silent until set
-    /// firing again.
+    /// firing again (`Scene::fort_order`, `fort_aggressed`).
     fn cease_fire(&mut self, id: u32) {
         if let Some(c) = self
             .object_index(id)
             .and_then(|i| self.objects[i].combat.as_mut())
         {
-            c.hold_fire = true;
+            c.fire.cease();
+            c.fire.aggressor = false;
         }
     }
 

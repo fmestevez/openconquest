@@ -152,6 +152,12 @@ pub enum Order {
     Halt {
         id: u32,
     },
+    /// Order 0x23 sub `sub` to fort `site` (its Guard and Fire on
+    /// aggressor buttons, `Scene::fort_order`).
+    FortBehaviour {
+        site: u32,
+        sub: u8,
+    },
     BuildShip {
         site: u32,
         kind: u8,
@@ -407,6 +413,7 @@ impl Scene {
             SellTown { site } => done(self.sell_town(site, data, caches)),
             RepairStock { workshop } => done(self.order_repair_stock(workshop)),
             Halt { id } => done(self.halt(id, data, caches)),
+            FortBehaviour { site, sub } => done(self.fort_order(site, sub)),
             BuildShip { site, kind } => {
                 let r = self.start_ship(site, kind);
                 self.make_new_ships(data, caches);

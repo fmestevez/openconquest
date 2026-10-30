@@ -5276,6 +5276,9 @@ impl App {
                 }
                 None => match entry.command {
                     Command::UNLOAD => "Nothing aboard to unload".to_string(),
+                    Command::FIRE if !obj_is_ship => {
+                        "The fort is being mended, limed or has no units".to_string()
+                    }
                     Command::FIRE => "This ship has no weapons".to_string(),
                     Command::BOARD => "No marines aboard to board with".to_string(),
                     Command::REPAIR_SHIP => "The ship needs no repair".to_string(),
@@ -5338,6 +5341,19 @@ impl App {
                 } else {
                     "Choose the far end of the patrol"
                 });
+            }
+            // A fort's switches send order 0x23 by their tick (0x4f34c0:
+            // 0x70 sub 1 / 2, 0x73 sub 3 / 4).
+            c @ (crate::commands::FORT_GUARD | crate::commands::FORT_AGGRESSOR) => {
+                let base = if c == crate::commands::FORT_GUARD {
+                    1
+                } else {
+                    3
+                };
+                let sub = base + entry.checked as u8;
+                if let Err(e) = self.issue(Order::FortBehaviour { site: id, sub }) {
+                    self.say(e);
+                }
             }
             c @ (crate::commands::GUARD
             | crate::commands::RAM_ATTACK
@@ -6143,6 +6159,19 @@ impl App {
         let enemy = |o: &crate::objects::MapObject| {
             o.combat.is_some() && selected.is_some_and(|s| Scene::are_enemies(s, o)) && !own(o)
         };
+        // A fort fires only as far as its units reach (its answer to the
+        // pointer, 0x419f80 message 0xc452); a ship sails up.
+        let fort = self
+            .selected
+            .and_then(|id| self.scene.object_index(id))
+            .filter(|&i| self.scene.objects[i].holds_units() && own(&self.scene.objects[i]));
+        let fort_reaches = |o: &crate::objects::MapObject| match fort {
+            Some(f) => self
+                .scene
+                .object_index(o.id)
+                .is_some_and(|t| self.scene.fort_reaches(f, t)),
+            None => true,
+        };
         let resource = |o: &crate::objects::MapObject| o.deposit.map(|d| d.resource);
         let water = self
             .cell_at(pos)
@@ -6152,7 +6181,13 @@ impl App {
             let deposit = |r: Resource| target.and_then(resource) == Some(r);
             return match cmd {
                 Command::MOVE => (P::Sea, !water),
-                Command::FIRE => (P::Attack, !target.is_some_and(enemy)),
+                // A fort's answer (0x419f80 message 0xc452, state 0x15
+                // kind 7): the attack pointer, refused unless some group
+                // reaches the enemy.
+                Command::FIRE => (
+                    P::Attack,
+                    !target.is_some_and(|o| enemy(o) && fort_reaches(o)),
+                ),
                 Command::RAM => (
                     P::Ram,
                     !target.is_some_and(|o| enemy(o) && o.ship.is_some()),
@@ -6227,6 +6262,22 @@ impl App {
                 _ if water => (P::Sea, false),
                 _ => (P::Ban, false),
             };
+        }
+        // An own fort standing and not limed offers its attack (0xc452
+        // with state 0: bit 4 of the answer's mask, pointer 9) over an
+        // enemy some group reaches.
+        if let Some(f) = fort {
+            let ready = self
+                .scene
+                .construction_at(self.scene.objects[f].id)
+                .is_none()
+                && self.scene.objects[f]
+                    .combat
+                    .as_ref()
+                    .is_some_and(|c| c.lime <= 0.0);
+            if ready && target.is_some_and(|o| enemy(o) && fort_reaches(o)) {
+                return (P::Attack, false);
+            }
         }
         match target {
             Some(o) if own(o) => (P::Own, false),

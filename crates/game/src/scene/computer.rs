@@ -2552,6 +2552,26 @@ impl Scene {
                 let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
                     return PartStep::Failed;
                 };
+                // Under way (0x42a2f0): the building mended (`+0xdc`) gone
+                // fails it; whole (life `+0xa8` 100), it is sent order 10
+                // (0x42a384), which, besides ending its mending, calls off
+                // its work and leaves a fort's groups ceasing fire. (Not
+                // ported: 0x43d300's test that it is still the town's.)
+                if part.state == 2 {
+                    let target = part.before as u32;
+                    let Some(t) = self.object_index(target) else {
+                        return PartStep::Failed;
+                    };
+                    let whole = self.objects[t]
+                        .combat
+                        .as_ref()
+                        .is_none_or(|c| c.hull >= c.max_hull);
+                    if !whole {
+                        return PartStep::Wait;
+                    }
+                    let _ = self.halt(target, data, caches);
+                    return PartStep::Done;
+                }
                 let worn: Vec<u32> = self
                     .objects
                     .iter()
@@ -2568,9 +2588,11 @@ impl Scene {
                 if worn.is_empty() {
                     return PartStep::Wait;
                 }
+                // Started, it is under way with the building kept
+                // (`+0xdc`, here `before`).
                 for target in worn {
                     if self.mend_by(site, target).is_ok() {
-                        return PartStep::Done;
+                        return PartStep::Started(target as usize);
                     }
                 }
                 PartStep::Wait
@@ -5687,7 +5709,9 @@ mod tests {
     /// sails against the human player, who (doing nothing) loses.
     /// The builders hunt treasures about their base (task 5 state 2, order
     /// 0xbe): a treasure lying by a computer's town is taken.
-    /// The repairs order (96, part 0x3ec): the town mends a worn building.
+    /// The repairs order (96, part 0x3ec): the town mends a worn building;
+    /// under way, the part waits until it is whole, then sends it order 10
+    /// (0x42a2f0).
     #[test]
     fn computer_repairs_worn_buildings() {
         let Some(data) = data() else {
@@ -5714,8 +5738,28 @@ mod tests {
             ..Default::default()
         };
         let step = scene.order_part(&mut ai, 0, None, part, &data, &mut caches);
-        assert!(matches!(step, PartStep::Done));
+        assert!(matches!(step, PartStep::Started(t) if t == id as usize));
         assert!(scene.mending.contains(&id));
+        let under_way = Part {
+            state: 2,
+            before: id as usize,
+            ..part
+        };
+        let step = scene.order_part(&mut ai, 0, None, under_way, &data, &mut caches);
+        assert!(matches!(step, PartStep::Wait));
+        // Whole: order 10, its mending ended (LandObj 0x425990).
+        let c = scene.objects[worn].combat.as_mut().unwrap();
+        c.hull = c.max_hull;
+        let step = scene.order_part(&mut ai, 0, None, under_way, &data, &mut caches);
+        assert!(matches!(step, PartStep::Done));
+        assert!(!scene.mending.contains(&id));
+        // A building gone fails the part.
+        let gone = Part {
+            before: u32::MAX as usize,
+            ..under_way
+        };
+        let step = scene.order_part(&mut ai, 0, None, gone, &data, &mut caches);
+        assert!(matches!(step, PartStep::Failed));
     }
 
     /// A warship whose crew is worn goes to the reserve for repairs, its

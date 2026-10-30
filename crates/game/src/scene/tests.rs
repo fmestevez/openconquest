@@ -5139,6 +5139,55 @@ fn miss007_brain_builds_its_fleets() {
     assert!(persians > 0, "the Persians built ships");
 }
 
+/// miss007's builder repairs (order 96): a barbarian structure worn in
+/// its cells is mended and, once whole, sent order 10 (0x42a2f0 at
+/// 0x42a3dd), its groups then ceasing fire (0x40ef70). Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn miss007_mended_structure_ceases_fire() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| {
+            matches!(o.class, ObjectClass::Barbarian(_))
+                && o.cell == Some((36, 26))
+                && o.combat.is_some()
+        })
+        .expect("the structure at (36, 26)");
+    let id = scene.objects[i].id;
+    let c = scene.objects[i].combat.as_mut().unwrap();
+    c.hull = c.max_hull * 0.9;
+    let mut mended = false;
+    for _ in 0..3000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let i = scene.object_index(id).unwrap();
+        let c = scene.objects[i].combat.as_ref().unwrap();
+        let jobs = &scene.brain.as_ref().unwrap().jobs;
+        if jobs.contains(&super::brain::Job::Mended {
+            target: id,
+            tries: 10,
+        }) {
+            mended = true;
+        }
+        if mended
+            && !jobs
+                .iter()
+                .any(|j| matches!(j, super::brain::Job::Mended { .. }))
+        {
+            assert!(c.hull >= c.max_hull);
+            assert!(!c.fire.fires(), "the mended structure still fires at will");
+            return;
+        }
+    }
+    panic!("not mended and sent order 10 (mended: {mended})");
+}
+
 /// miss008's brain: the barbarian yards build for the raiders, home guard
 /// and fishers, and the Persians' two yards for their members (needs
 /// `OPENCONQUEST_DATA`).
@@ -6628,7 +6677,17 @@ fn forts_units_take_their_share_of_blows() {
     };
     let (p0, h0) = (points(&scene), hull(&scene));
     // A ballista's shot of 3500 (the original's); load 10 of 45.
-    scene.fort_blow(fort, 3500.0 / 15.0, 0.0, 6, false, None, &data, &mut caches);
+    scene.fort_blow(
+        fort,
+        3500.0 / 15.0,
+        0.0,
+        6,
+        false,
+        None,
+        None,
+        &data,
+        &mut caches,
+    );
     let share = 3500 * 10 / 45;
     assert!((h0 - hull(&scene) - (3500 - share) as f32 / 15.0).abs() < 0.05);
     // The weapons take the share, the marines it by the ballista's B over
@@ -6638,7 +6697,17 @@ fn forts_units_take_their_share_of_blows() {
     assert!(lost >= share && lost <= share + crew + 200, "{lost}");
     // Blow on blow, units break and go; each place fires by its mean.
     for _ in 0..40 {
-        scene.fort_blow(fort, 3500.0 / 15.0, 0.0, 6, false, None, &data, &mut caches);
+        scene.fort_blow(
+            fort,
+            3500.0 / 15.0,
+            0.0,
+            6,
+            false,
+            None,
+            None,
+            &data,
+            &mut caches,
+        );
     }
     let o = &scene.objects[scene.object_index(fort).unwrap()];
     assert!(o.combat.as_ref().unwrap().weapons.len() < 7);
@@ -8832,7 +8901,11 @@ fn order_10_on_temples() {
 }
 
 /// Order 10 to a fort: its twelve unit groups cease fire (0x4469b0) and
-/// it shoots no more (0x4469c0 with mode 0). Needs `OPENCONQUEST_DATA`.
+/// it shoots no more (0x4469c0 with mode 0), until order 0x23 sub 1 sets
+/// them at will (0x4469a0), an attack order 0x15 / 0x16 at a target
+/// (0x446960), or, firing on aggressors (sub 3), a blow turns the groups
+/// its bomb kind names on the shooter (0x4184f0). Needs
+/// `OPENCONQUEST_DATA`.
 #[test]
 fn order_10_silences_a_fort() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -8847,6 +8920,7 @@ fn order_10_silences_a_fort() {
         .position(|o| matches!(o.class, ObjectClass::Building(0x34..=0x36)) && o.is_armed())
         .expect("a fort");
     let (fx, fy) = (scene.objects[fort].x, scene.objects[fort].y);
+    let fort_id = scene.objects[fort].id;
     let owner = scene.objects[fort].owner.unwrap();
     let forts: Vec<u32> = scene
         .objects
@@ -8854,10 +8928,11 @@ fn order_10_silences_a_fort() {
         .filter(|o| matches!(o.class, ObjectClass::Building(0x34..=0x36)))
         .map(|o| o.id)
         .collect();
-    for id in forts {
+    for &id in &forts {
         scene.halt(id, &data, &mut caches).unwrap();
         let i = scene.object_index(id).unwrap();
-        assert!(scene.objects[i].combat.as_ref().unwrap().hold_fire);
+        let fire = scene.objects[i].combat.as_ref().unwrap().fire;
+        assert!(!fire.fires() && !fire.aggressor);
     }
     let ship = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
     let ship_id = scene.objects[ship].id;
@@ -8872,10 +8947,74 @@ fn order_10_silences_a_fort() {
         .unwrap();
     scene.objects[i].x = water.0 as f32 * 64.0 + 32.0;
     scene.objects[i].y = water.1 as f32 * 64.0 + 32.0;
-    for _ in 0..50 * 5 {
-        scene.update(0.02, &data, &mut caches);
-        assert!(scene.shots.is_empty(), "a fort fired");
+    // The ship's own weapons are taken, so every shot is a fort's.
+    scene.objects[i].combat.as_mut().unwrap().weapons.clear();
+    // The ship is kept where it is, by the fort.
+    let at = (water.0 as f32 * 64.0 + 32.0, water.1 as f32 * 64.0 + 32.0);
+    let quiet = |scene: &mut Scene, caches: &mut Caches| {
+        for _ in 0..50 * 5 {
+            if let Some(i) = scene.object_index(ship_id) {
+                let o = &mut scene.objects[i];
+                (o.x, o.y) = at;
+                let s = o.ship.as_mut().unwrap();
+                s.task = None;
+                s.path.clear();
+            }
+            scene.update(0.02, &data, caches);
+            if !scene.shots.is_empty() {
+                return false;
+            }
+        }
+        true
+    };
+    assert!(quiet(&mut scene, &mut caches), "a fort fired");
+    let fire_of = |scene: &Scene| {
+        let i = scene.object_index(fort_id).unwrap();
+        scene.objects[i].combat.as_ref().unwrap().fire
+    };
+    // Fire on aggressor (0x23 sub 3): still silent, until struck.
+    scene.fort_order(fort_id, 3).unwrap();
+    let fire = fire_of(&scene);
+    assert!(!fire.fires() && fire.aggressor);
+    assert!(quiet(&mut scene, &mut caches), "a fort fired");
+    // A blow of bomb kind 4 from the ship: group 1 turns on it
+    // (0x4184f0), the others stay silent.
+    scene.fort_blow(
+        fort_id,
+        1.0,
+        0.0,
+        4,
+        false,
+        None,
+        Some(ship_id),
+        &data,
+        &mut caches,
+    );
+    let fire = fire_of(&scene);
+    let mut want = [0; 12];
+    want[1] = ship_id;
+    assert_eq!(fire.targets, want);
+    assert!(!fire.at_will);
+    // Guard off (sub 2) ceases fire and clears the aggressor; guard on
+    // (sub 1) fires at will, and the fort fires again.
+    scene.fort_order(fort_id, 2).unwrap();
+    let fire = fire_of(&scene);
+    assert!(!fire.fires() && !fire.aggressor);
+    scene.fort_order(fort_id, 1).unwrap();
+    assert!(fire_of(&scene).at_will);
+    assert!(!quiet(&mut scene, &mut caches), "the fort did not fire");
+    // Silenced again, an attack order (0x15 / 0x16 {target, 7}) sets
+    // every group at the ship, and it fires.
+    for &id in &forts {
+        scene.halt(id, &data, &mut caches).unwrap();
     }
+    scene.shots.clear();
+    assert!(quiet(&mut scene, &mut caches), "a fort fired");
+    scene.order_attack(fort_id, ship_id).unwrap();
+    let fire = fire_of(&scene);
+    assert_eq!(fire.targets, [ship_id; 12]);
+    assert!(!fire.at_will);
+    assert!(!quiet(&mut scene, &mut caches), "the fort did not fire");
 }
 
 /// Lightning on creatures (0xda93): a harpy or dragon one cell off loses a
