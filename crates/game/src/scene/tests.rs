@@ -8536,3 +8536,50 @@ fn miss009_patrol_flames_as_the_original() {
         ]
     );
 }
+
+/// The brains' pick of one of the player's settlements or towns
+/// (0x45599a): settlements then towns, each row by row in the rect, one
+/// brain draw; the area 0x421740's rect (the anchor, 2 x 2, grown to take
+/// in its buildings' anchors) grown by 2. From seed 0 the draw is
+/// 0x3039 >> 16 = 0: the first settlement. Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn brain_picks_a_site_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain.as_mut().unwrap().rng.0 = 0;
+    let rect = (0, 0, 35, 35);
+    let inside = |(x, y): (i32, i32)| x < 35 && y < 35;
+    let first = scene
+        .objects
+        .iter()
+        .filter(|o| {
+            scene.is_own(o) && o.combat.is_some() && o.class == ObjectClass::Building(SETTLEMENT)
+        })
+        .filter_map(|o| o.cell.filter(|&c| inside(c)).map(|c| (o.id, c)))
+        .min_by_key(|&(_, (x, y))| (y, x))
+        .or_else(|| {
+            scene
+                .objects
+                .iter()
+                .filter(|o| {
+                    scene.is_own(o) && o.combat.is_some() && o.class == ObjectClass::Building(TOWN)
+                })
+                .filter_map(|o| o.cell.filter(|&c| inside(c)).map(|c| (o.id, c)))
+                .min_by_key(|&(_, (x, y))| (y, x))
+        })
+        .expect("a site of the player's in the west");
+    let (sx, sy, sw, sh) = scene.site_rect(first.0).unwrap();
+    assert!((sx, sy) <= first.1 && sw >= 2 && sh >= 2);
+    let area = scene.human_site_area(Some(rect)).unwrap();
+    assert_eq!(area, scene.area_about((sx, sy, sw, sh), 2));
+    assert_eq!(
+        scene.brain.as_ref().unwrap().rng.0,
+        0x3039,
+        "one brain draw"
+    );
+}

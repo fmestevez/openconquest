@@ -1258,30 +1258,71 @@ impl Scene {
     }
 
     /// An area around one of the human player's settlements or towns
-    /// (classes 0x32, 0x33) standing in `rect`, or anywhere when `None`,
-    /// picked at random (0x421490, 0x421740).
+    /// standing in `rect` (anywhere when `None`), as the brains pick one
+    /// (0x45599a): the sites by 0x421490, settlements (0x32) then towns
+    /// (0x33), each row by row with its anchor in the rect; one brain draw,
+    /// `(s >> 16) % n`; the site's rect by 0x421740, grown by 2 (0x4796c0).
+    /// (Not read per mission: where the brain's pick, `+0x15c`, is set back
+    /// to -1; here every call picks.)
     pub(super) fn human_site_area(&mut self, rect: Option<Cells>) -> Option<Cells> {
-        let spots: Vec<(i32, i32)> = self
-            .objects
-            .iter()
-            .filter(|o| {
-                self.is_own(o)
-                    && o.combat.is_some()
-                    && matches!(
-                        o.class,
-                        openconquest_formats::ObjectClass::Building(0x32 | 0x33)
-                    )
-            })
-            .filter_map(|o| o.cell)
-            .filter(|&(x, y)| {
-                rect.is_none_or(|(rx, ry, w, h)| x >= rx && x < rx + w && y >= ry && y < ry + h)
-            })
-            .collect();
-        if spots.is_empty() {
+        let inside = |(x, y): (i32, i32)| {
+            rect.is_none_or(|(rx, ry, w, h)| x >= rx && x < rx + w && y >= ry && y < ry + h)
+        };
+        let mut sites: Vec<(u32, (i32, i32))> = Vec::new();
+        for class in [0x32, 0x33] {
+            let mut found: Vec<(u32, (i32, i32))> = self
+                .objects
+                .iter()
+                .filter(|o| {
+                    self.is_own(o)
+                        && o.combat.is_some()
+                        && o.class == openconquest_formats::ObjectClass::Building(class)
+                })
+                .filter_map(|o| o.cell.filter(|&c| inside(c)).map(|c| (o.id, c)))
+                .collect();
+            found.sort_by_key(|&(_, (x, y))| (y, x));
+            sites.extend(found);
+        }
+        if sites.is_empty() {
             return None;
         }
-        let (x, y) = spots[self.rng.next() as usize % spots.len()];
-        Some((x - 3, y - 3, 7, 7))
+        let pick = self.brain_draw() as usize % sites.len();
+        let area = self.site_rect(sites[pick].0)?;
+        Some(self.area_about(area, 2))
+    }
+
+    /// The rect of settlement or town `site` (0x421740): its anchor, 2 x 2,
+    /// grown to take in the anchor of each of its buildings (`+0x1d0`;
+    /// the port's are those it is the nearest settlement of, as
+    /// `town_yards`).
+    pub(super) fn site_rect(&self, site: u32) -> Option<Cells> {
+        let (mut x, mut y) = self.objects[self.object_index(site)?].cell?;
+        let (mut w, mut h) = (2, 2);
+        for k in 0..self.objects.len() {
+            let o = &self.objects[k];
+            if o.id == site
+                || !matches!(o.class, openconquest_formats::ObjectClass::Building(_))
+                || self.home_settlement(k) != Some(site)
+            {
+                continue;
+            }
+            let Some((bx, by)) = o.cell else {
+                continue;
+            };
+            if bx < x {
+                w += x - bx;
+                x = bx;
+            } else if x + w <= bx {
+                w = bx - x + 1;
+            }
+            if by < y {
+                h += y - by;
+                y = by;
+            } else if y + h <= by {
+                h = by - y + 1;
+            }
+        }
+        Some((x, y, w, h))
     }
 
     /// The first of `zones` where the human player has a ship or building
@@ -1381,14 +1422,19 @@ impl Scene {
             .map(|o| ((o.x / t) as i32, (o.y / t) as i32))
     }
 
-    /// `n` cells about the `w` x `h` cells at `(x, y)` (0x4796c0, here
-    /// with a 1 x 1 area): the corner moved `n` up and left but not past
-    /// 0, the size grown by `2 n`, then cut to end at the map's edge.
+    /// `n` cells about cell `(x, y)` (0x4796c0 with a 1 x 1 area).
     pub(super) fn cells_about(&self, (x, y): (i32, i32), n: i32) -> Cells {
+        self.area_about((x, y, 1, 1), n)
+    }
+
+    /// `n` cells about the `w` x `h` cells at `(x, y)` (0x4796c0): the
+    /// corner moved `n` up and left but not past 0, the size grown by
+    /// `2 n`, then cut to end at the map's edge.
+    pub(super) fn area_about(&self, (x, y, w, h): Cells, n: i32) -> Cells {
         let (mw, mh) = (self.nav.width as i32, self.nav.height as i32);
         let x0 = if x - n < 1 { 0 } else { x - n };
         let y0 = if y - n < 1 { 0 } else { y - n };
-        let (w, h) = (1 + 2 * n, 1 + 2 * n);
+        let (w, h) = (w + 2 * n, h + 2 * n);
         let w = if x0 + w > mw { mw - x0 } else { w };
         let h = if y0 + h > mh { mh - y0 } else { h };
         (x0, y0, w, h)

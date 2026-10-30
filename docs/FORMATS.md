@@ -3499,10 +3499,17 @@ less than half of `+0x34` (not decoded: `+0x34` of this object, the
 brain's `+0x10`, not its `+0xc` game); the other mains leave 0, so their draws are the
 same game after game (the first is 0x3039 >> 16 = 0). The port:
 `Brain::rng`, saved with the brain, seeded 0 or, for miss007-010, the wall clock's
-milliseconds; every brain step's draw comes from it (the helpers
-0x421490 / 0x421740 keep the scene's generator: theirs was not read; the
-repair order's dock pick draws the fleet manager's, `Brain::fleet_rng`,
-below).
+milliseconds; every brain step's draw comes from it, the pick of one of
+the player's sites too: 0x421490 and 0x421740 draw nothing; the brain
+lists the sites (0x421490 twice, settlements 0x32 then towns 0x33, each
+row by row with its anchor in the rect), draws once, `(s >> 16) % n`
+(0x45599a), takes the site's rect from 0x421740 (its anchor, 2 x 2, grown
+to take in each of its buildings' anchors: one before the rect moves the
+corner to it, one at or past the far edge makes the size reach it) and
+grows that by 2 (0x4796c0). (Not read per mission: where the pick, brain
+`+0x15c`, is set back to -1; the port picks on each call.) The repair
+order's dock pick draws the fleet manager's generator, `Brain::fleet_rng`,
+below.
 
 In the executable each brain's per-fleet handlers come first and its main
 function (the message handler that creates the fleets, lays deposits and
