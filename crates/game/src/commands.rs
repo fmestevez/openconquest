@@ -685,17 +685,22 @@ pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
 /// (0x70, slot 1, ticked while its groups fire at will) and Fire on
 /// aggressor (0x73, slot 2, ticked while `+0x498`), both with permission
 /// 79 (`+0x4e` bit 7); each enabled while it is not being mended
-/// (`+0x10c`) and some group has units; limed, every button off
-/// (0x423a00). (`+0x1e4`, also needed clear, is set only from a saved
-/// record, 0x41a617, which the port's maps do not have. Not ported: slot
-/// 3, the spell of a magic item it stores, 0x42fd70 over `+0x1b4`; slot
-/// 4, Repair 0x14, with player `+0x46` bit 4 while worn or mended, whose
-/// right click sends it order 10.)
+/// (`+0x10c`) and some group has units. Slot 3: the spell of the first
+/// count of its Magic object (`Scene::fort_spell`, 0x42fd70 over
+/// `+0x1b4`), with no permission test, enabled while it is not mended.
+/// Slot 4: Repair (0x14) with permission 11 (player `+0x46` bit 4) while
+/// it is worn and idle (vt+0x6c = 0x423be0: `+0xa8 < 100`) or mends
+/// itself (job 0xff, showing how far; enabled either way), its right
+/// click sending order 10. Limed, every button off (0x423a00), but not
+/// while it mends: the menu skips 0x423a00 then. (`+0x1e4`, also needed
+/// clear, is set only from a saved record, 0x41a617, which the port's
+/// maps do not have.)
 fn fort_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     let Some(c) = obj.combat.as_ref().filter(|_| obj.asleep.is_none()) else {
         return;
     };
-    let on = !scene.mending.contains(&obj.id) && !c.weapons.is_empty() && c.lime <= 0.0;
+    let mending = scene.mending.contains(&obj.id);
+    let on = !mending && !c.weapons.is_empty();
     let mut toggle = |slot: usize, command: Command, checked: bool| {
         menu[slot] = Some(Slot {
             command,
@@ -712,6 +717,24 @@ fn fort_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     if scene.permits.allows(79) {
         toggle(1, FORT_GUARD, c.fire.at_will);
         toggle(2, FORT_AGGRESSOR, c.fire.aggressor);
+    }
+    if let Some(spell) = scene.fort_spell(obj.id) {
+        set(menu, 3, spell.command(), !mending);
+    }
+    if scene.permits.allows(11) && (mending || c.hull < c.max_hull) {
+        menu[4] = Some(Slot {
+            command: REPAIR_FORT,
+            enabled: true,
+            progress: scene.fort_mend_progress(obj.id).map(|p| p as f32 / 100.0),
+            count: 0,
+            checked: false,
+            closes: false,
+        });
+    }
+    if !mending && c.lime > 0.0 {
+        for s in menu.iter_mut().flatten() {
+            s.enabled = false;
+        }
     }
 }
 
@@ -1007,6 +1030,8 @@ pub const CONVOY: Command = Command(0x6d);
 /// A fort's guard and fire on aggressor switches (0x417ff0 slots 1, 2).
 pub const FORT_GUARD: Command = Command(0x70);
 pub const FORT_AGGRESSOR: Command = Command(0x73);
+/// A fort's Repair (0x417ff0 slot 4): it mends itself.
+pub const REPAIR_FORT: Command = Command(0x14);
 /// A merchant's gathering zones: amber, fish, leviathans.
 pub const GATHER_ZONES: [Command; 3] = [Command(0x7a), Command(0x7b), Command(0x7c)];
 pub const ATTACK_ZONE: Command = Command(0x75);

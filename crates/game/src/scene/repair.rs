@@ -93,7 +93,7 @@ pub fn stock_repair_cost(units: &[Vec<u8>; 9]) -> (u32, u32) {
 }
 
 /// A building's strength in whole percent (`+0xa8`).
-fn structure_percent(c: &crate::combat::Combatant) -> u32 {
+pub(super) fn structure_percent(c: &crate::combat::Combatant) -> u32 {
     ((c.hull / c.max_hull.max(1.0)) * 100.0).clamp(0.0, 100.0) as u32
 }
 
@@ -178,7 +178,7 @@ impl Scene {
     /// A fort or barbarian structure begins being mended: its units are
     /// noted with their conditions (0x418300) and the structure's
     /// percentage (`+0x114`).
-    fn begin_unit_mend(&mut self, t: usize) {
+    pub(super) fn begin_unit_mend(&mut self, t: usize) {
         let o = &self.objects[t];
         let Some(c) = o.combat.as_ref().filter(|_| o.holds_units()) else {
             return;

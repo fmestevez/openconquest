@@ -2457,11 +2457,45 @@ cleared on all 12 together. Who sets them:
   while `+0x498`) with permission 79 (`+0x4e` bit 7); each enabled while
   `+0x10c` (busy: mending) and `+0x1e4` (set only from a saved record,
   0x41a617; cleared by a reload, 0x4198c5) are 0 and some group has
-  units; slot 3 the spell of a magic item it stores (0x42fd70 over
-  `+0x1b4`); slot 4 Repair 0x14 with player `+0x46` bit 4 while worn
-  (vt+0x6c) or mended (showing its progress), its right click sending
-  order 10; limed, every button off, and under construction slot 0 Break
-  (0x423a00). The left press (0x4f34c0): command 3 sets the pointer
+  units; slot 3 the spell its store holds, enabled while `+0x10c` is 0
+  with no permission test: the fort's Magic object (`+0x1b4`, made on
+  message 2 when `+0x1b8`: `+0/+4` the fort's cell, `+8/+0xc` its nation
+  and slot) keeps a count per spell index 0-13 at `+0x10`, rebuilt by
+  0x419e00 from the store (each treasure of kind 9 adds one to its
+  parameter's spell, but the Flame, index 8, which sets `+0x4a8`), and
+  the button is the first index with a count through 0x42fd70 (12 and 13
+  have no command there: the button is then the low byte of a pointer);
+  slot 4 Repair 0x14 with permission 11 (player `+0x46` bit 4) while
+  worn (vt+0x6c = 0x423be0: standing, `+0x10c` 0, `+0xa8 < 100`; enabled
+  while `+0x1e4` is 0) or mending itself (job 0xff: enabled, its byte
+  `100 - +0x120`, the share left), its right click sending order 10;
+  then, but not while it mends (job 0xff skips it), 0x423a00: limed,
+  every button off, and under construction slot 0 Break. Repair sends
+  the fort order 0x1e {1, 0, 0} (0x4f34c0), which it turns into message
+  0x1389 to itself (0x419f80): standing and idle it mends itself
+  (0x423d60: job 0xff, `+0x114` its `+0xa8`, the start; the units noted,
+  0x418300), paying as a settlement's mending does (0x425100); no worn
+  test there. A spell button sets the pointer state 0x22 with its kind
+  (0x55 0x11, 0x60 2, 0x61 1, 0x62 3, 0x63 0xd, 0x65 0xe, 0x66 8, 0x68 0xf,
+  0x69 6, 0x6a 7; 0x56 opens page 4, empty for a fort, whose wind
+  buttons would send kind 0xc), and the click sends order 0x22 {kind,
+  cell, object}. The fort (0x419f80 case 0x22) takes kinds 1, 2, 3, 4, 6,
+  7, 0xd and 0x11, and 8, 0xe, 0xf with a cell: while `+0x10c` is 0 and
+  some count is not 0, a draw of its generator `+0x18`, then
+  0x42fa90 -> Magic.cpp 0x42f580 with the spell 0x42fc80 gives (0x42ed40:
+  a count of it, else its permission bit, the one 0x42fd70 gives, and
+  the price at hand; 0x42f470 takes a count, else the price), and the
+  first treasure of kind 9 for that spell leaves the store (0x424cf0),
+  cast or not. The pointer first asks 0x42ef90 (jump table 0x42f418;
+  distances from the fort's cell by 0x5576d8, the integer root of 0x557670,
+  a Newton walk that rounds to the nearest): lightning (6) within 12,
+  the phantom and shields (8, 0xe, 0xf) on an object of the fort's own
+  player (`+0x57` 1, nation and slot) within 15, the view (0x11)
+  anywhere; the fireball (7) within 12 with one of the cell's slots
+  empty; reef (3) the cell's tile layers and occupants within 12;
+  whirlpool (1) also asks 0x42ed40 for the big reef (12) and the reef;
+  tornado (2) within 15 and 0x406830; monster (0xd) within 12 and the
+  cell's tiles. The left press (0x4f34c0): command 3 sets the pointer
   state 0x15, kind 7; 0x70 sends order 0x23 {sub 1 unticked or 2 ticked,
   0xffffffff, 0xffffffff, 0xff..}, 0x73 the same with sub 3 or 4; commands
   1 and 2 (Stop, Break) send order 10. The fort answers the pointer
@@ -2512,10 +2546,15 @@ cleared on all 12 together. Who sets them:
 The port keeps the fire in `combat::FortFire` (at will, a target per
 group, the aggressor flag): `Scene::fort_attack` (0x15 / 0x16),
 `fort_order` (0x23), `fort_aggressed` (0x4184f0), order 10 in `halt`; its
-fort menu has slots 0-2 and its pointer the fort's answer (`fort_reaches`:
-a unit's reach). The computer's repairs part and the brains' (`Job::
-Mended`) wait for the building whole and halt it. Not ported: slots 3 and
-4 (so a player's fort is never sent order 10 in the port), the masks
+fort menu has slots 0-4 and its pointer the fort's answer (`fort_reaches`:
+a unit's reach); `scene/fort.rs` has its Repair (`fort_repair`, the
+progress `fort_mend_progress`) and its stored spell (`fort_spells`,
+`fort_spell`, `fort_cast`). The computer's repairs part and the brains'
+(`Job::Mended`) wait for the building whole and halt it. Not ported: a
+fort's casts of the sea's spells and the fireball (their checks read the
+cell's tile layers and slots, not decoded here: the button is offered,
+the click refused), the draw of the fort's generator `+0x18` with a cast,
+the masks
 (every order of the player's sets all but its own player), the jam, the
 0x2874 path, whether a navy group of a computer ever holds a fort (the
 port's flotillas hold ships), 0x43d300's test that the building is still

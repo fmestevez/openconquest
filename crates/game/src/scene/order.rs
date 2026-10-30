@@ -158,6 +158,20 @@ pub enum Order {
         site: u32,
         sub: u8,
     },
+    /// Fort `site` mends itself (its Repair, command 0x14,
+    /// `Scene::fort_repair`).
+    FortRepair {
+        site: u32,
+    },
+    /// Fort `site` casts the spell it stores at cell `(cx, cy)` over
+    /// `target` (order 0x22, `Scene::fort_cast`).
+    FortCast {
+        site: u32,
+        spell: Spell,
+        cx: i32,
+        cy: i32,
+        target: Option<u32>,
+    },
     BuildShip {
         site: u32,
         kind: u8,
@@ -471,6 +485,14 @@ impl Scene {
             RepairStock { workshop } => done(self.order_repair_stock(workshop)),
             Halt { id } => done(self.halt(id, data, caches)),
             FortBehaviour { site, sub } => done(self.fort_order(site, sub)),
+            FortRepair { site } => done(self.fort_repair(site)),
+            FortCast {
+                site,
+                spell,
+                cx,
+                cy,
+                target,
+            } => done(self.fort_cast(site, spell, (cx, cy), target, data, caches)),
             BuildShip { site, kind } => {
                 let r = self.start_ship(site, kind);
                 self.make_new_ships(data, caches);

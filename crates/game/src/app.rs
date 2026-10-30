@@ -5269,6 +5269,9 @@ impl App {
                 {
                     "Not enough amber, or the building is busy".to_string()
                 }
+                None if Spell::of_command(entry.command).is_some() && obj.holds_units() => {
+                    "The fort is being mended or limed".to_string()
+                }
                 None if Spell::of_command(entry.command).is_some_and(|s| s.implemented())
                     || (magic::WIND_EAST.0..magic::WIND_EAST.0 + 8).contains(&entry.command.0) =>
                 {
@@ -5341,6 +5344,13 @@ impl App {
                 } else {
                     "Choose the far end of the patrol"
                 });
+            }
+            // A fort's Repair sends it order 0x1e {1} (0x4f34c0 command
+            // 0x14): it mends itself.
+            crate::commands::REPAIR_FORT => {
+                if let Err(e) = self.issue(Order::FortRepair { site: id }) {
+                    self.say(e);
+                }
             }
             // A fort's switches send order 0x23 by their tick (0x4f34c0:
             // 0x70 sub 1 / 2, 0x73 sub 3 / 4).
@@ -5877,6 +5887,39 @@ impl App {
                         "Building a {}",
                         crate::objects::building_label(class)
                     ));
+                }
+                Err(e) => self.say(e),
+            }
+            return;
+        }
+        // A fort's stored spell goes to the fort as order 0x22 with the
+        // pointer's cell and object (0x419f80).
+        let fort = self
+            .selected
+            .and_then(|id| self.scene.object_index(id))
+            .filter(|&i| {
+                matches!(
+                    self.scene.objects[i].class,
+                    openconquest_formats::ObjectClass::Building(0x34..=0x36)
+                )
+            })
+            .map(|i| self.scene.objects[i].id);
+        if let (Some(site), Some(spell), Some((cx, cy))) = (
+            fort,
+            self.pending.and_then(Spell::of_command),
+            self.cell_at(pos),
+        ) {
+            let target = self.object_at(pos);
+            match self.issue(Order::FortCast {
+                site,
+                spell,
+                cx,
+                cy,
+                target,
+            }) {
+                Ok(_) => {
+                    self.pending = None;
+                    self.status = None;
                 }
                 Err(e) => self.say(e),
             }

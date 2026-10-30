@@ -6460,7 +6460,7 @@ fn boarding_called_off_before_the_fight() {
 /// A big fort of miss012 with water beside it, handed to the human with
 /// the settlement whose ground it stands in and a warship: the scene, the
 /// fort and its settlement.
-fn own_fort(data: &GameData, caches: &mut Caches) -> (Scene, u32, u32) {
+pub(super) fn own_fort(data: &GameData, caches: &mut Caches) -> (Scene, u32, u32) {
     let mut scene = Scene::load(data, caches, "miss012").unwrap();
     past_hold(&mut scene);
     scene.brain = None;
