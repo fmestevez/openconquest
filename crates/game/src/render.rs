@@ -557,8 +557,7 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
     }
     // Deposits are areas: anywhere in a fishing ground (its cells, record
     // fields 6-9), near an amber deposit; a leviathan where its picture is
-    // (0x495a60: the picture's rect, then its `WHALEM_` mask, not read:
-    // its pixels here).
+    // (0x495a60: the picture's rect, then its `WHALEM_` mask).
     let t = openconquest_formats::map::TILE_SIZE as f32;
     let (cx, cy) = ((wx / t).floor() as i32, (wy / t).floor() as i32);
     if let Some(o) = visible().find(|o| {
@@ -569,7 +568,7 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
                     let (x, y, w, h) = (f(6), f(7), f(8), f(9));
                     cx >= x && cy >= y && cx < x + w.max(1) && cy < y + h.max(1)
                 }
-                openconquest_formats::ObjectClass::WhaleZone => solid(o),
+                openconquest_formats::ObjectClass::WhaleZone => scene.leviathan_hit(o.id, (px, py)),
                 _ => (o.x - wx).powi(2) + (o.y - wy).powi(2) <= (t * 0.6).powi(2) || solid(o),
             }
         }

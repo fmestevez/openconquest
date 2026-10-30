@@ -24,7 +24,7 @@ const DIR: [(i32, i32); 9] = [
 /// The direction from a ship to a cell of its window (0x59791d, indexed
 /// `dx * 4 + dy`, here from `dx * 4 + dy = -5`); 0xff for none (the
 /// window's third column or row at the map's edge).
-const TOWARD: [u8; 16] = [
+pub(super) const TOWARD: [u8; 16] = [
     3, 4, 5, 0xff, 2, 0xff, 6, 0xff, 1, 0, 7, 0xff, 0xff, 0xff, 0xff, 0xff,
 ];
 

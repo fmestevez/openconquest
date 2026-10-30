@@ -113,7 +113,83 @@ pub struct Leviathan {
     /// The picture its object holds (not saved: loaded again).
     #[serde(skip)]
     pub art: Option<u8>,
+    /// Its picture's masks (`+0x18d`, `+0x191`: `WHALEM_<row><heading>`,
+    /// 0x493a20 mode 1), loaded with it.
+    #[serde(skip)]
+    pub masks: Masks,
 }
+
+/// A leviathan picture's hit masks (kind 18), a frame each.
+#[derive(Clone, Default)]
+pub struct Masks(pub(super) Option<std::rc::Rc<Vec<openconquest_formats::Mask>>>);
+
+impl PartialEq for Masks {
+    /// Loaded again with the picture: not part of its state.
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Masks {}
+
+impl std::fmt::Debug for Masks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Masks({})", self.0.as_ref().map_or(0, |m| m.len()))
+    }
+}
+
+/// The masks of `WHALEM_<row><heading>` (kind 11: the masks' name prefix,
+/// `WHALE_MSK_<heading>`, `WHALE_M1_MSK` or `WHALE_M2_MSK`, and their
+/// count, the entry's width; each kind 18 named by the prefix and two
+/// digits).
+fn load_masks(data: &GameData, name: &str) -> Masks {
+    use openconquest_formats::ResourceKind;
+    let lib = &data.objects;
+    let Some(e) = lib.find(name, ResourceKind::Other(11)) else {
+        return Masks(None);
+    };
+    let Ok(raw) = lib.read_entry(e) else {
+        return Masks(None);
+    };
+    let prefix: String = raw
+        .iter()
+        .take_while(|&&b| b != 0)
+        .map(|&b| b as char)
+        .collect();
+    let mut masks = Vec::new();
+    for k in 0..e.width {
+        let Some(m) = lib.find(&format!("{prefix}{k:02}"), ResourceKind::Mask) else {
+            break;
+        };
+        let Ok(bits) = lib.read_entry(m) else {
+            break;
+        };
+        let Ok(mask) = openconquest_formats::Mask::parse(&bits, m.width.into(), m.height.into())
+        else {
+            break;
+        };
+        masks.push(mask);
+    }
+    Masks(Some(std::rc::Rc::new(masks)))
+}
+
+/// Where a shot that hits it is aimed while it shows itself (0x495b40
+/// with an accuracy, state 1: 0x5bace0 by heading, from its cell's
+/// corner).
+const AIM: [(i32, i32); 8] = [
+    (42, 52),
+    (40, 23),
+    (31, 15),
+    (22, 20),
+    (23, 52),
+    (25, 30),
+    (33, 43),
+    (35, 29),
+];
+
+/// A shot's blow on it in percent of the shot's power, by its letter
+/// (0x598100, read by 0x4967b0 and 0x498240).
+const SHOT_SHARE: [i32; 12] = [60, 0, 60, 60, 60, 40, 40, 44, 45, 0, 0, 0];
 
 impl Leviathan {
     fn draw(&mut self) -> u32 {
@@ -188,7 +264,7 @@ impl Scene {
     }
 
     /// The leviathan in the slot of cell `c`, if any.
-    fn leviathan_in(&self, c: (i32, i32)) -> Option<u32> {
+    pub(super) fn leviathan_in(&self, c: (i32, i32)) -> Option<u32> {
         self.leviathans
             .iter()
             .find(|(_, l)| l.in_slot && l.cell == c)
@@ -306,6 +382,7 @@ impl Scene {
             hurried: false,
             lcg,
             art: None,
+            masks: Masks::default(),
         };
         let (x, y) = Self::cell_centre(cell);
         self.objects[i].x = x;
@@ -431,6 +508,7 @@ impl Scene {
         let n = frames.len() as i32;
         self.objects[i].frames = frames;
         l.art = Some(l.state);
+        l.masks = load_masks(data, &Self::mask_name(l));
         let last = (n - 1).max(0);
         let zero = if n < 1 { n - 1 } else { 0 };
         (l.first, l.end) = if l.forward {
@@ -480,7 +558,20 @@ impl Scene {
         if l.picture && l.art != Some(l.state) {
             self.objects[i].frames = Self::leviathan_frames(l, data, caches);
             l.art = Some(l.state);
+            l.masks = load_masks(data, &Self::mask_name(l));
         }
+    }
+
+    /// The name of its masks (0x493a20 mode 1): `WHALEM_<row><heading>`,
+    /// the row as its picture's.
+    fn mask_name(l: &Leviathan) -> String {
+        let row = match l.state {
+            SHOWING => 0,
+            RISING | SINKING => 1,
+            UP => 2,
+            _ => 9,
+        };
+        format!("WHALEM_{row}{}", l.heading)
     }
 
     /// 0x493f10: a frame when its time has come (every tick while
@@ -778,21 +869,6 @@ impl Scene {
         }
     }
 
-    /// Whether ship `ship` nets leviathan `id` now (0x4aeef0 case 1,
-    /// 0x4aee40): the leviathan in the slot of the ship's cell, up (state
-    /// 3, which only one struck down to no life reaches), the ship a type
-    /// 0 or 1.
-    pub(super) fn leviathan_nets(&self, id: u32, ship: usize) -> bool {
-        let t = TILE_SIZE as f32;
-        let o = &self.objects[ship];
-        let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
-        let kind = o.ship.as_ref().map_or(u8::MAX, |s| s.kind);
-        self.leviathans
-            .get(&id)
-            .is_some_and(|l| l.in_slot && l.cell == here && l.state == UP)
-            && kind <= 1
-    }
-
     /// Whether leviathan `id` shows no picture: under water, caught, not
     /// yet created.
     pub fn leviathan_hidden(&self, id: u32) -> bool {
@@ -805,6 +881,127 @@ impl Scene {
             .get(&id)
             .filter(|l| l.picture)
             .map(|l| l.drawn.max(0) as u32)
+    }
+
+    /// Leviathan `id`'s state (`+0x74`), once created.
+    pub fn leviathan_state(&self, id: u32) -> Option<u8> {
+        self.leviathans.get(&id).map(|l| l.state)
+    }
+
+    /// Leviathan `id`'s cell as its vt+0x28 gives it (0x495ff0): in states
+    /// 0 to 4; none caught, coming up again elsewhere or gone.
+    pub(super) fn leviathan_where(&self, id: u32) -> Option<(i32, i32)> {
+        self.leviathans
+            .get(&id)
+            .filter(|l| !matches!(l.state, CAUGHT | RESURFACING | GONE))
+            .map(|l| l.cell)
+    }
+
+    /// The leviathan in the slot of cell `c` with its picture shown, if
+    /// any: what a hunter's look over the cells about it sees (0x4ac8d0:
+    /// the slot `+0x10`, `+0x189`).
+    pub(super) fn leviathan_seen(&self, c: (i32, i32)) -> Option<u32> {
+        self.leviathan_in(c)
+            .filter(|id| self.leviathans.get(id).is_some_and(|l| l.picture))
+    }
+
+    /// The leviathan in the slot of cell `c` up (state 3), if any.
+    pub(super) fn leviathan_up_in(&self, c: (i32, i32)) -> Option<u32> {
+        self.leviathan_in(c)
+            .filter(|id| self.leviathans.get(id).is_some_and(|l| l.state == UP))
+    }
+
+    /// Whether a leviathan lies in the slot of cell `c` (`+0x10`).
+    pub(super) fn leviathan_slot(&self, c: (i32, i32)) -> bool {
+        self.leviathan_in(c).is_some()
+    }
+
+    /// Its amount (`+0x78`).
+    pub(super) fn leviathan_left(&self, id: u32) -> i32 {
+        self.object_index(id)
+            .map_or(0, |i| self.leviathan_amount(i) as i32)
+    }
+
+    /// vt+4 mode 1 (0x494090): a net takes `n` of its amount, only while
+    /// it is up (state 3).
+    pub(super) fn leviathan_netted(&mut self, id: u32, n: i32) {
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        if self.leviathans.get(&id).is_some_and(|l| l.state == UP) {
+            let left = self.leviathan_amount(i) - n as f32;
+            self.set_leviathan_amount(i, left);
+        }
+    }
+
+    /// The point a shot that hits it is aimed at (0x495b40 with an
+    /// accuracy): showing itself, its heading's point of 0x5bace0 from
+    /// its cell's corner. (Ships shoot at it only then, 0x4af6a0.)
+    pub(super) fn leviathan_aim(&self, id: u32) -> Option<(i32, i32)> {
+        let l = self.leviathans.get(&id).filter(|l| l.state == SHOWING)?;
+        let t = TILE_SIZE as i32;
+        let (ax, ay) = AIM[l.heading as usize % 8];
+        Some((l.cell.0 * t + ax, l.cell.1 * t + ay))
+    }
+
+    /// Its hit test at the world point `(x, y)` (vt+8, 0x495a60): its
+    /// picture shown and the point in its rect (the cell's corner, 5
+    /// lower but showing itself; the picture's size), then the bit of its
+    /// mask for the frame (`+0x45`, the last mask past their count) at
+    /// that point, rows `(width + 7) & !7` bits long, the first bit the
+    /// highest (0x557640).
+    pub fn leviathan_hit(&self, id: u32, (x, y): (i32, i32)) -> bool {
+        let Some(l) = self.leviathans.get(&id).filter(|l| l.picture) else {
+            return false;
+        };
+        let Some(i) = self.object_index(id) else {
+            return false;
+        };
+        let t = TILE_SIZE as i32;
+        let (w, h) = self.objects[i]
+            .frames
+            .first()
+            .and_then(|f| f.first())
+            .map_or((t, t), |l| (l.image.width as i32, l.image.height as i32));
+        let left = l.cell.0 * t;
+        let top = l.cell.1 * t + if l.state == SHOWING { 0 } else { 5 };
+        if x < left || x > left + w - 1 || y < top || y > top + h - 1 {
+            return false;
+        }
+        let Some(masks) = l.masks.0.as_ref().filter(|m| !m.is_empty()) else {
+            return false;
+        };
+        let k = (l.frame.max(0) as usize).min(masks.len() - 1);
+        let bit = ((w + 7) & !7) as usize * (y - top) as usize + (x - left) as usize;
+        masks[k].bit(bit)
+    }
+
+    /// A shot's blow landing on it (0x4967b0 / 0x498240, then vt+4 mode 0,
+    /// 0x494090): `(0x598100[letter] x power / 100) x 100 / 10000` off its
+    /// life while it shows itself (with sound event 121, which lists no
+    /// sound); with no life left, its death put down to the shot's player
+    /// (0x50e750), on every such blow.
+    pub(super) fn leviathan_shot(
+        &mut self,
+        id: u32,
+        letter: u8,
+        power: i32,
+        by: Option<(u32, u32)>,
+    ) {
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        let Some(l) = self.leviathans.get_mut(&id) else {
+            return;
+        };
+        let share = SHOT_SHARE.get(letter as usize).copied().unwrap_or(0);
+        let blow = share * power / 100 * 100 / 10000;
+        if l.state == SHOWING {
+            l.life -= blow;
+        }
+        if l.life < 1 {
+            self.note_destroyed(i, by);
+        }
     }
 
     /// Leviathan `o`'s life (`+0x80`): the record's field 6 until created.
@@ -971,17 +1168,10 @@ mod tests {
             }
         }
         assert!(rose && up);
+        // Up in its cell's slot: what a net takes (0x4aee40).
         let cell = scene.leviathans[&id].cell;
-        let t = TILE_SIZE as f32;
-        let k = scene.object_index(id_ship).unwrap();
-        scene.objects[k].x = cell.0 as f32 * t + t / 2.0;
-        scene.objects[k].y = cell.1 as f32 * t + t / 2.0;
-        scene.objects[k].ship.as_mut().unwrap().kind = 0;
-        assert!(scene.leviathan_nets(id, k));
-        scene.objects[k].ship.as_mut().unwrap().kind = 2;
-        assert!(!scene.leviathan_nets(id, k));
-        scene.objects[k].ship.as_mut().unwrap().kind = 1;
-        assert!(scene.leviathan_nets(id, k));
+        assert_eq!(scene.leviathan_up_in(cell), Some(id));
+        let _ = id_ship;
         // Hunted out: down at the end of this loop, then below.
         let i = scene.object_index(id).unwrap();
         scene.set_leviathan_amount(i, 0.0);
@@ -996,8 +1186,7 @@ mod tests {
             }
         }
         assert_eq!(scene.leviathans[&id].state, SINKING);
-        let k = scene.object_index(id_ship).unwrap();
-        assert!(!scene.leviathan_nets(id, k));
+        assert_eq!(scene.leviathan_up_in(cell), None);
     }
 
     /// A tornado's blow on its cell while it shows a picture takes its
@@ -1069,6 +1258,7 @@ mod tests {
             hurried: false,
             lcg: 0,
             art: None,
+            masks: Masks::default(),
         }
     }
 }

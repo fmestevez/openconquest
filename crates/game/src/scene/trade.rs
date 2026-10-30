@@ -2080,11 +2080,13 @@ impl Scene {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let mut d = self.object_index(deposit).ok_or("No such deposit")?;
         let kind = self.objects[i].ship.as_ref().ok_or("Not a ship")?.kind;
-        if cargo_capacity(kind) <= 0.0 {
-            return Err("Only merchant ships can gather".into());
-        }
         let class =
             super::gather::deposit_class(&self.objects[d]).ok_or("Nothing to gather there")?;
+        // Any ship hunts a leviathan (capability bit 0x40, which every
+        // finished ship has: 0x4e6700, 0x4e6930).
+        if cargo_capacity(kind) <= 0.0 && class != Resource::Leviathan {
+            return Err("Only merchant ships can gather".into());
+        }
         let cell = |sc: &Scene, d: usize| -> (i32, i32) {
             let o = &sc.objects[d];
             match (o.class, o.record.fields.get(6..8)) {
@@ -2113,6 +2115,9 @@ impl Scene {
         }
         let deposit = self.objects[d].id;
         let resource = class;
+        if class == Resource::Leviathan {
+            return self.order_hunt(i, deposit, at, rect, port);
+        }
         let (x, y) = self.deposit_goal(i, d);
         let path = self
             .plan_route(i, x, y)
@@ -2248,6 +2253,11 @@ impl Scene {
         let Some(Task::Gather { deposit, phase }) = ship.task else {
             return;
         };
+        // A leviathan hunt goes a game tick at a time (`Scene::run_hunts`).
+        if ship.hunt.is_some() && matches!(phase, GatherPhase::ToDeposit | GatherPhase::Collecting)
+        {
+            return;
+        }
         if !ship.path.is_empty() {
             return;
         }
@@ -2344,25 +2354,6 @@ impl Scene {
                         phase: GatherPhase::ToDeposit,
                     });
                     return;
-                }
-                // A leviathan is netted only up (state 3, reached only once
-                // struck down to no life) in the slot of the ship's own
-                // cell, by a ship of type 0 or 1 (0x4aeef0 case 1, 0x4aee40);
-                // the ship waits for it, onto its cell while it lies in a
-                // slot. (Not ported: the hunter's search and approach
-                // 0x4ac8d0, a warship's 0x4b49a0.)
-                if self.objects[d].class == ObjectClass::WhaleZone {
-                    let lev = self.objects[d].id;
-                    if !self.leviathan_nets(lev, i) {
-                        let here = ((sx / t).floor() as i32, (sy / t).floor() as i32);
-                        if let Some(c) = self.leviathan_cell(lev).filter(|&c| c != here) {
-                            let (x, y) = (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
-                            if let Some(path) = self.plan_route(i, x, y) {
-                                self.objects[i].ship.as_mut().unwrap().path = path;
-                            }
-                        }
-                        return;
-                    }
                 }
                 let dep = self.objects[d].deposit.unwrap();
                 // A walkway to the amber, or the net out.
@@ -2805,6 +2796,17 @@ impl Scene {
         if o.ship.as_ref().is_none_or(|s| s.cargo < 1.0) {
             return Err("The ship has nothing to unload".into());
         }
+        // Unloading at a port goes out with 75 and is raised by one
+        // (0x4d74a0's 0x1f, 0x4aac43).
+        self.unload_event(i, p, 75)
+    }
+
+    /// Event 0x40 code 0xc with priority `prio` reaching ship `i` (0x4aab00):
+    /// to port `p`, its player's and taking cargo, else dropped; the
+    /// priority one more.
+    pub(super) fn unload_event(&mut self, i: usize, p: usize, prio: u8) -> Result<(), String> {
+        let port = self.objects[p].id;
+        let o = &self.objects[i];
         let b = &self.objects[p];
         if b.owner != o.owner || !self.takes_cargo(b) {
             return Err("Choose one of your ports".into());
@@ -2824,14 +2826,12 @@ impl Scene {
             deposit,
             phase: GatherPhase::ToPort(port),
         });
-        // Unloading at a port goes out with 75 and is raised by one
-        // (0x4d74a0's 0x1f, 0x4aac43).
         ship.order_tag = Task::Gather {
             deposit,
             phase: GatherPhase::ToPort(port),
         }
         .tag();
-        ship.priority = 76;
+        ship.priority = prio.wrapping_add(1);
         ship.home_port = port;
         ship.berth_wait = 0;
         Ok(())

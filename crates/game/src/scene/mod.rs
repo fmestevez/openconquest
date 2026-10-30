@@ -531,6 +531,7 @@ pub mod fire;
 mod gulls;
 mod halt;
 mod hazards;
+mod hunt;
 mod leviathan;
 pub mod load;
 mod orders;
@@ -2365,6 +2366,7 @@ impl Scene {
             self.run_brain_flames(dt);
             self.run_hazard_cycles(data, caches);
             self.run_leviathans(data, caches);
+            self.run_hunts(data, caches);
             for (spell, id) in std::mem::take(&mut self.pending_ship_casts) {
                 self.brain_cast_on(spell, id, data, caches);
             }

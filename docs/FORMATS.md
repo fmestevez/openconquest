@@ -4946,17 +4946,111 @@ no life; each hurries it (`+0x11d`). A shot's blow (vt +4 mode 0) in state
 
 So a leviathan of life 100 must be struck down twice before it can be
 netted: with no life and no `+0x119` it is caught (5) and comes up whole
-with `+0x119`; struck down again it comes up to be hunted (2, 3). A ship of
-type 0 or 1 nets it only lying on its cell while it is up (0x4aeef0 case 1,
-0x4aee40 each round); a warship finding it there moves off (0x4b49a0) and
-ends its task. Not ported: the hunter's own search and approach (0x4ac8d0,
-0x4ad680; 0x4ac5d0 / 0x4af6a0 when it sees one showing itself, the
-warships' part of the hunt), 0x4b49a0, the boat's steps of 0x4aeef0, the
-shot's blow (the port's ships cannot aim at it), the `WHALEM_` masks of its
-hit test 0x495a60 (kind 11, not read: its picture's pixels), the gorgon's
-and siren's vt +0x30 in 0x403010, the order of a hazard's 0xda94 and its
-own tick. Not decoded: `+0xa1` (0x523d80(200, it) as it moves; never
-written by whale.cpp).
+with `+0x119`; struck down again it comes up to be hunted (2, 3).
+
+Its hit test (vt+8, 0x495a60), for shots and the pointer: its picture
+shown, the point in the picture's rect (the cell's corner, 5 lower but in
+state 1; the picture's size, 64 x 64), then the bit of the frame's mask
+(`+0x45`, the last mask past their count) at it, rows `(width + 7) & ~7`
+bits, the first bit the highest (0x557640). The masks `WHALEM_<row><heading>`
+(kind 11, the masks' name prefix and their count as the entry's width:
+`WHALE_MSK_<h>` 22 on even headings, 27 on odd; `WHALE_M1_MSK`,
+`WHALE_M2_MSK` one) name kind 18 masks by the prefix and two digits, 64 x
+64. A shot landing on it (0x4983d0, the cell's `+0x10`; 0x4967b0 the same
+in flight) gives vt+4 mode 0 `{player, (0x598100[letter] x power / 100) x
+100 / 10000, shooter}` (0x498240, family 400: 0x598100 = 60, 0, 60, 60,
+60, 40, 40, 44, 45, 0, 0, 0 by letter): in state 1 its life less that,
+sound event 121 (`SND_121` lists none); below 1 life a kill report
+(0x50e750) on every such blow.
+
+### The hunt
+
+Commands 0x1c / 0x1d pass 0x4e6700 with capability bit 0x40, which every
+finished ship has (0x4e6930: all but 0x800 for types 0 and 1, all but
+0x100 for the rest): any ship hunts, warships too. 0x4aab00 (class 0x192):
+the leviathan `+0x78a` / `+0x77e`, step `+0x77d` 1, the box `+0x7c2..`
+its cell -/+ 2 clipped to the map's last cell, the first plan at once
+(`+0x593`, `+0x57b` 0, `+0x57f` 25); sub-code 9 when the box's first
+corner lies more than 0x59af48[type] / 2 = 2 cells off (0x557440), else
+10. A game tick at a time (0x4ac2d0; `scene/hunt.rs`):
+
+- **Sub-code 9** (0x4ad680, step 1): its cell (vt+0x28, 0x495ff0: none in
+  states 5, 6, 0xff, nor the leviathan gone: notice 0x138 with class 0,
+  0x4a1430, every tick); within 2 cells (0x557440) sub-code 10; a move to
+  its cell (0x4a6270 mode 5, tolerance 1). Behaviour moves (0x4a6150):
+  the first after the order at once, then once 25 ticks have passed since
+  the last plan if the ship changed cells, the goal changed or it lies
+  still, not while turning; on the goal the move ends (event 8 0x80).
+- **Sub-code 10** (0x4aeef0), step 1: 0x4ac8d0 over the 5 x 5 cells
+  (0x59af48) about the ship (the cell it is going into while between
+  cells: `+0x596` and move state 4 or 5), clipped to the map, row by row:
+  the hunted leviathan in a cell's slot `+0x10` with its picture shown.
+  Showing itself (state 1) it counts at the ship's own cell, distance 0,
+  and the ship's guns turn on it (0x4ac5d0 sets groups 0 and 1's targets,
+  `+0x5d1` 1, 0x4bf9b0, 0x4af6a0); in states 2-4 at its cell, and a ship of
+  the hunter's player lying there not hunting a leviathan is asked to make
+  way (0x4b4b50 with 0x5a; another player's not, 0x4efe20). Not seen
+  (under water, caught): sub-code 9. Seen further than the reach (0 for
+  types 0 and 1, 2 for the rest): a move there (0x4a6270 mode 6). Within
+  reach and lying at a cell: if it is up (3) and the ship a warship, the
+  ship moves off when the leviathan is in its own cell's slot (0x4b49a0:
+  a cell of the three by three about it, clipped to the map's last cell,
+  0x499aa0 with the direction 0x59791d and no leviathan in its slot, one
+  draw of the ship's generator; event 0x80 priority 0x32) and its task
+  ends (event 8 0x40; none in the slot, 0xc0); else a boat or merchant
+  lying still (move state 0, no contact `+0x8e6`) on the cell of a
+  leviathan up begins: 0x4aed30, its commands held (0x4b37d0: `+0x25d`
+  kept and 0, `+0x261 &= 0x2000`), step 10.
+- **The netting**: 10, the turn (0x4aed30: on heading 0 or 4 none; else
+  the nearer of 0 and 4 by 0x4b5390, the headings' difference wrapped to
+  -4..4, 0 only if strictly nearer), a turning frame (0x20-0x37 of the
+  hull picture, wrapping) a tick, the heading `(frame - 0x20) / 3`, till on
+  0 or 4 at a heading's frame; 0xc, the line `WMOST_` (picture slot 1,
+  activity `+0x75` 4; 9 frames) down a frame a tick; 2, 0x4aee40: the
+  hunted leviathan up in its cell's slot: the cast takes `min(50, amount)`
+  (0x4ad0e0: vt+4 mode 1, its amount less that only in state 3; notice
+  0x12f to the group, 0x4a13b0), else the line comes up (0x12); 6, the haul
+  `WNOSIL_` (slot 3, activity `+0x76` 10; 25 frames) a frame a tick, at its
+  end the catch stored (0x4ad300: up to the room left, `(100 - P) + room x
+  100`; full when the room was no more than the catch): not full another
+  cast (2), full the line up; 0x12, the line up a frame a tick, in below 1;
+  0x13 (the hull picture back at its height `+0x797`, where it was); 5,
+  0x4b3850 (commands, flags back, the route cleared 0x4a5b70), step 1 and
+  0x4ad510: with room left and a leviathan in the box (0x4ac610 mode 0)
+  event 0x40 {0x192, 10, it, 0x5a}, else to its port `+0x7ad` (0x4ac050)
+  or the nearest (0x4c5910) event 0x40 {0x192, 0xc, port, 0x5a}; neither,
+  event 8 0xc0. So a boat nets 50 in 26 ticks after a 10-tick start.
+- **The guns** (0x4af6a0, state 1 only): items 3 and 4 only (a boat's 3
+  and a merchant's 4 too), each aboard and loaded (`+0x5e3`), reaching the
+  leviathan's cell from the ship's (0x4bf5f0: half of 0x598130's 9, tables
+  0x598324 / 0x598418 by range level, 2 with Theseus); the hit roll
+  0x4bf7f0 (one draw, `43 + 25 - 33 d / (9 x 64)` at the distance 0
+  0x4ac8d0 passes) whose miss is its chance, above 0, so always a hit
+  (0x4af6a0 takes a non-zero byte as 100); experience +50 or +10
+  (0x4b4680); aimed at the point 0x495b40 gives in state 1 (0x5bace0 by
+  heading from the cell's corner: (42, 52), (40, 23), (31, 15), (22, 20),
+  (23, 52), (25, 30), (33, 43), (35, 29)) from the hull picture's middle,
+  more than half the picture's width away: message 0x14ba with the item's
+  fire power (0x4bc360 at 100, 0x4bfc20), never flaming; its reload
+  `0x5c76e0[level + item x 3]` + a draw `% 60` ticks (level 2 with Atalanta,
+  else the rate level). The points lie in the masks but for a loop's first
+  four to six frames and, on even headings, its last one or two: shots
+  landing then miss.
+
+Not ported: the line's and haul's pictures (their place `(hull w - slot
+w) / 2 + hull x`, `hull y + hull h / 2 + 5`, is taken with the width of
+the picture id 0x3e6 that 0x50cbf0 loads before 0x4e1bb0 puts `WMOST_` in;
+0x545ef0 -> 0x55dbc0 not read: not decoded), sub-code 11 (0x4af640: any
+leviathan in 0x59af78 = 11 cells; not traced who sends it), the call-off
+`+0x77c < 0` during the netting and a stop then (0x4aa540: the port's
+stop ends the hunt), the crew's experience, notice 0x12f (the port's zones
+drop it), 0x4967b0's hit in flight (the port's shots land at their aim),
+the gorgon's and siren's vt +0x30 in 0x403010, the order of a hazard's
+0xda94 and the leviathan's own tick, and of the ships' and its ticks. Not
+settled: whether a warship's own fire (0x4ab930 with `+0x25d & 0x100` or
+`+0x684`: 0x4bf9b0, 0x4c1240, 0x4c0230) also shoots at it once 0x4ac5d0
+has set its targets. Not decoded: `+0xa1` (0x523d80(200, it) as it moves;
+never written by whale.cpp).
 
 ## Sounds
 

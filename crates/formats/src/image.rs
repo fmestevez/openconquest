@@ -193,6 +193,14 @@ impl Mask {
         let byte = self.bits[y as usize * stride + x as usize / 8];
         byte >> (7 - (x % 8)) & 1 != 0
     }
+
+    /// Bit `n` of the mask's bytes, the first bit of each byte the
+    /// highest; false past its end.
+    pub fn bit(&self, n: usize) -> bool {
+        self.bits
+            .get(n / 8)
+            .is_some_and(|&byte| byte >> (7 - (n % 8)) & 1 != 0)
+    }
 }
 
 /// A palettized sprite with transparency (resource kind 6).

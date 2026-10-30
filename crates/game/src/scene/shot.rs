@@ -136,6 +136,12 @@ pub struct Shot {
 }
 
 impl Shot {
+    /// Where it is bound, what at and the blow it carries.
+    #[cfg(test)]
+    pub(super) fn bound(&self) -> ((f32, f32), u32, f32) {
+        (self.to, self.target, self.damage)
+    }
+
     /// Its picture now.
     pub fn layer(&self) -> Option<&Layer> {
         if self.frames.is_empty() {
@@ -456,6 +462,17 @@ impl Scene {
             tx += off(r);
             ty += off(r);
         }
+        self.fire_shot_to(f, (tx, ty), data, caches);
+    }
+
+    /// Sends shot `f` off to the world point `to`.
+    pub(super) fn fire_shot_to(
+        &mut self,
+        f: Firing,
+        (tx, ty): (f32, f32),
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         let (letter, variant) = match f.letter {
             Some(l) => (l, 0),
             None => letter_of(f.item, f.flaming),
@@ -638,6 +655,13 @@ impl Scene {
         let target = self
             .object_index(s.target)
             .filter(|_| s.strikes && self.sea_monster_hittable(s.target));
+        // A leviathan is struck where its picture's mask is solid at the
+        // shot's point (0x4983d0: vt+8, 0x495a60): one gone under or
+        // moved off is missed.
+        let whale = target.is_some_and(|i| self.objects[i].class == ObjectClass::WhaleZone);
+        let target = target.filter(|_| {
+            !whale || self.leviathan_hit(s.target, (s.to.0.floor() as i32, s.to.1.floor() as i32))
+        });
         if target.is_some() && self.sea_monster_states.contains_key(&s.target) {
             self.sea_monster_struck(s.target, s.shooter);
         }
@@ -693,6 +717,14 @@ impl Scene {
         if s.item == HOOK {
             if let Some(from) = s.rope {
                 self.hook_landed(from, s.target, target.is_some());
+            }
+            return;
+        }
+        // A leviathan takes the shot's power (in the original's points)
+        // by its letter (0x498240 class family 400: vt+4 mode 0).
+        if whale {
+            if target.is_some() {
+                self.leviathan_shot(s.target, s.letter, s.damage as i32, s.by);
             }
             return;
         }

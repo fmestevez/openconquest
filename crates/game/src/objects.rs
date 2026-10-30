@@ -438,6 +438,60 @@ pub struct Ship {
     /// draw (`Scene::ship_draw`).
     #[serde(default)]
     pub lcg: Option<u32>,
+    /// Hunting a leviathan (the gather task of class 0x192: 0x4ad680,
+    /// 0x4aeef0; `scene::hunt`).
+    #[serde(default)]
+    pub hunt: Option<Hunt>,
+}
+
+/// A ship's leviathan hunt, a game tick at a time (see `Ship::hunt`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Hunt {
+    /// The step of 0x4aeef0 (`+0x77d`): 1 watching, 10 turning, 0xc the
+    /// line going down, 2 a cast, 6 hauling, 0x12 the line coming up,
+    /// 0x13 and 5 done.
+    pub step: u8,
+    /// The route's last plan (0x4a6150, 0x4a6100): its tick (`+0x57b`),
+    /// the ship's cell and the goal then (`+0x573`, `+0x56b`); the first
+    /// is made at once (`+0x593`).
+    pub planned: u32,
+    pub plan_from: (i32, i32),
+    pub plan_goal: (i32, i32),
+    pub first_plan: bool,
+    /// What the cast took (`+0x782`).
+    pub catch: i32,
+    /// The heading it turns to and the way, -1, 0 or 1 (`+0x79b`,
+    /// `+0x79d`), and the hull picture's frame (`+0x8be +0x45`, 0x20 to
+    /// 0x37 while it turns).
+    pub turn_to: u8,
+    pub turn: i8,
+    pub frame: i32,
+    /// The line's frame (picture slot 1, `WMOST_`) and the haul's (slot
+    /// 3, `WNOSIL_`), while they are out.
+    pub line: Option<i32>,
+    pub haul: Option<i32>,
+    /// Its commands held (0x4b37d0: `+0x261 &= 0x2000`) until 0x4b3850.
+    pub held: bool,
+}
+
+impl Default for Hunt {
+    /// As 0x4aab00 leaves it: step 1, the first plan at once.
+    fn default() -> Self {
+        Hunt {
+            step: 1,
+            planned: 0,
+            plan_from: (-1, -1),
+            plan_goal: (-1, -1),
+            first_plan: true,
+            catch: 0,
+            turn_to: 0,
+            turn: 0,
+            frame: 0,
+            line: None,
+            haul: None,
+            held: false,
+        }
+    }
 }
 
 /// A ship being built on its yard's berth (see `Ship::build`).
@@ -1609,6 +1663,7 @@ pub fn resolve(
         ram_run: None,
         build: None,
         lcg: None,
+        hunt: None,
         cargo: 0.0,
         cargo_kind: None,
         task: None,

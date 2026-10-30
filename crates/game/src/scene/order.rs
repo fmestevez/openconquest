@@ -436,6 +436,12 @@ impl Scene {
         if ship.is_some_and(|id| self.being_built(id)) {
             return Err("The ship is still being built".into());
         }
+        // So one netting a leviathan (0x4b37d0 leaves `+0x261` 0x2000 till
+        // 0x4b3850). (Not decoded: a stop meanwhile, 0x4aa540 with the
+        // gather task; the port's ends the hunt.)
+        if ship.is_some_and(|id| self.hunt_holds(id)) {
+            return Err("The ship is hunting".into());
+        }
         if let Some(r) = self.one_event_a_tick(order, data, caches) {
             return r;
         }
