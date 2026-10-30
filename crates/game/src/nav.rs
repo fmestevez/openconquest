@@ -168,7 +168,7 @@ impl NavGrid {
 
 /// A route's cells after its first (where the ship plans from), as
 /// 0x4a6330 takes it: none when it holds one cell, or two the same.
-fn cells_after(route: &[(i32, i32, u8)]) -> Vec<(i32, i32)> {
+pub(crate) fn cells_after(route: &[(i32, i32, u8)]) -> Vec<(i32, i32)> {
     let same = route.len() == 2 && (route[0].0, route[0].1) == (route[1].0, route[1].1);
     if route.len() < 2 || same {
         return Vec::new();

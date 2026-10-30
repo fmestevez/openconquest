@@ -589,6 +589,18 @@ pub use trade::Arming;
 /// still (state 0) and whether it lies idle without a route, and its id.
 type Held = (u32, (i32, i32), bool, bool, u32);
 
+/// A region of 0x4a5a10 (built on its caller's stack): the box's corner
+/// cell, the goal relative to it, its size, and its grid row by row (0
+/// open, -1 closed).
+pub(super) struct Region {
+    pub x0: i32,
+    pub y0: i32,
+    pub goal: (i32, i32),
+    pub w: i32,
+    pub h: i32,
+    pub grid: Vec<i16>,
+}
+
 /// Which of 0x4a6330's planners a ship's route comes from: not waited
 /// with a tolerance of 0 (0x4a5740), a plain move's first plan
 /// (0x4a5f30), or waited (0x4a51b0). `ToWater` is the port's own: an
@@ -1772,6 +1784,66 @@ impl Scene {
         // diagonal, the first leg to the centre of the cell they are in.
         let here = (start.0 as f32 * t + t / 2.0, start.1 as f32 * t + t / 2.0);
         if (here.0 - start_point.0).hypot(here.1 - start_point.1) > 0.5 {
+            points.insert(0, here);
+        }
+        Some(points.into())
+    }
+
+    /// 0x4a6330 with a region (0x4a5a10, ShipClassTy::GetWayNew): ship
+    /// `i`'s plan to `goal` inside `region` only. 0x4a6330's checks first:
+    /// no plan to its own cell, nor to one 0x499990(cell, 0) refuses (not
+    /// waited). From the cell 0x4a6330 plans from (the one it is entering
+    /// while between cells), relative to the box with no bounds test: on
+    /// a closed cell no route; the region's goal open, the exact route
+    /// 0x55ca10, else 0x55ba50 with a tolerance of 1, both with the
+    /// heading 0 and none for an end off the box; the entries moved back
+    /// by the box's corner (`x0`, `y0`). The route then as any other.
+    pub(super) fn plan_region(
+        &self,
+        i: usize,
+        goal: (i32, i32),
+        region: &Region,
+    ) -> Option<VecDeque<(f32, f32)>> {
+        let t = TILE_SIZE as f32;
+        let obj = &self.objects[i];
+        let own = ((obj.x / t).floor() as i32, (obj.y / t).floor() as i32);
+        if goal == own || !self.nav.is_sea(goal.0, goal.1) {
+            return None;
+        }
+        let entering = obj
+            .ship
+            .as_ref()
+            .and_then(|s| (!s.plans_from_own_cell()).then_some(s.entering));
+        let start = entering.unwrap_or(own);
+        let (w, h) = (region.w, region.h);
+        let (rx, ry) = (start.0 - region.x0, start.1 - region.y0);
+        let (gx, gy) = region.goal;
+        let inside = |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y);
+        // Off the box the original reads past its grid; the finders give
+        // no route for such a start, taken here at once.
+        if !inside(rx, ry) || region.grid[(ry * w + rx) as usize] == -1 {
+            return None;
+        }
+        let mut m = region.grid.clone();
+        let route = if inside(gx, gy) && m[(gy * w + gx) as usize] != -1 {
+            walk_path::route_exact(&mut m, w, h, (rx, ry), (gx, gy), 0)?
+        } else {
+            walk_path::route(&mut m, w, h, (rx, ry), (gx, gy), 0, 1)?.0
+        };
+        let route: Vec<(i32, i32, u8)> = route
+            .into_iter()
+            .map(|(x, y, d)| (x + region.x0, y + region.y0, d))
+            .collect();
+        let cells = crate::nav::cells_after(&route);
+        if entering.is_some() && cells.is_empty() {
+            return None;
+        }
+        let mut points: Vec<(f32, f32)> = cells
+            .into_iter()
+            .map(|(cx, cy)| (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0))
+            .collect();
+        let here = (start.0 as f32 * t + t / 2.0, start.1 as f32 * t + t / 2.0);
+        if (here.0 - obj.x).hypot(here.1 - obj.y) > 0.5 {
             points.insert(0, here);
         }
         Some(points.into())

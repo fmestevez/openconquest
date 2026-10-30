@@ -1973,11 +1973,34 @@ and 0x4abc60 (state 4, 5 or the boarding's step 1), and by 0x4c2230 and
 0x4c26fa. The port keeps it
 (`Ship::between`, `Ship::entering`) at those points of its moves; the
 hunt's look box takes it. Not ported: the route's direction bytes
-(the port's ships turn by the cells); and the region
-plan 0x4a5a10 (not decoded: 0x4a6330 runs it when its last argument, a
-region, is given and active; 0x4a6270 passes its own on, non-zero from
-0x4ad0ba, 0x4b8493, 0x4c2666 and 0x4c272e, the region structures not
-read).
+(the port's ships turn by the cells).
+
+**Region plans (0x4a5a10, ShipClassTy::GetWayNew).** 0x4a6330 runs it in
+place of 0x4a5740 / 0x4a51b0 when its last argument, a region, is given
+with its byte `+0x18` set (after its own checks: the goal its own cell,
+or 0x499990 refusing it, not waited, no plan). The region, on the
+caller's stack: `+0` x0, `+4` y0 (the box's corner cell), `+8` / `+0xc`
+the goal relative to it, `+0x10` W, `+0x14` H, `+0x18` active, `+0x19`
+W x H shorts row by row (0 open, -1 closed). From the cell 0x4a6330
+plans from, relative to the box (no bounds test): closed, no route; the
+region's goal open, 0x55ca10, else 0x55ba50 with a tolerance of 1, both
+with the heading 0 and none for an end off the box; the entries moved
+back by (x0, y0) (16-bit adds); the route then as any other; the wait's
+tolerance and `+0x5c9` are not used. 0x4a6270 passes the region on in
+mode 6 only (mode 5 forces 0). The callers: 0x4ad0ba in the gathering
+look 0x4ac8d0 (box `size` about its centre, clipped to the map; grid
+0x499990(cell, 0), closed for a ship (0x50e600 200) in the slot not this
+one, not on this one's `+0x5ab`, not the target; goal the found cell;
+wait 0), 0x4b8493 in the boarder's closing-in 0x4b7f10 and 0x4c2666 /
+0x4c272e in the rammer 0x4c2230 (region filled by 0x4b8d80). The port
+plans the leviathan hunt's look (sub-code 10, size 5) so
+(`Scene::plan_region`, hunt.rs). Not ported: the sub-code 11 looks
+(0x4aeb80, 0x4af640) and the boarder's search mode (0x4b7eb0) call with
+a size of 11, writing 121 shorts into a 25-short stack buffer (undefined;
+who sets sub-code 11 and `+0x6a1 = 2` not traced); the boarder's and
+rammer's closing-in (0x4b7f10, 0x4b8d80, 0x4c1f60: the port's own chase
+stands until they are ported together; 0x4c1f60's 0x4c13b0 / 0x4a68b0
+not read).
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
@@ -5043,7 +5066,8 @@ corner lies more than 0x59af48[type] / 2 = 2 cells off (0x557440), else
   the hunter's player lying there not hunting a leviathan is asked to make
   way (0x4b4b50 with 0x5a; another player's not, 0x4efe20). Not seen
   (under water, caught): sub-code 9. Seen further than the reach (0 for
-  types 0 and 1, 2 for the rest): a move there (0x4a6270 mode 6). Within
+  types 0 and 1, 2 for the rest): a move there (0x4a6270 mode 6, inside
+  the look's box: "Region plans"). Within
   reach and lying at a cell: if it is up (3) and the ship a warship, the
   ship moves off when the leviathan is in its own cell's slot (0x4b49a0:
   a cell of the three by three about it, clipped to the map's last cell,

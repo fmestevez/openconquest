@@ -10,7 +10,7 @@
 use openconquest_formats::map::TILE_SIZE;
 
 use super::leviathan::{SHOWING, UP};
-use super::{walk_path, Caches, GameData, Scene};
+use super::{walk_path, Caches, GameData, Region, Scene};
 use crate::objects::{self, GatherPhase, Hunt, Resource, Task};
 
 /// The square of cells a hunter looks over and sails within half of
@@ -247,8 +247,9 @@ impl Scene {
     /// changed cells or the goal changed or it lies still, and it is not
     /// turning (move state 2); a goal it is on ends the move (event 8
     /// 0x80). The route as the port's behaviours plan theirs. (The wait
-    /// counter's 150 of 0x4a6150 is the port's own mover's.)
-    fn hunt_plan(&mut self, i: usize, goal: (i32, i32)) {
+    /// counter's 150 of 0x4a6150 is the port's own mover's.) With a
+    /// `region` (mode 6), 0x4a5a10 plans inside it (`Scene::plan_region`).
+    fn hunt_plan(&mut self, i: usize, goal: (i32, i32), region: Option<&Region>) {
         let now = self.ticks;
         let here = self.hunt_cell(i);
         let s = self.objects[i].ship.as_ref().unwrap();
@@ -265,7 +266,10 @@ impl Scene {
         }
         let t = TILE_SIZE as f32;
         let (x, y) = (goal.0 as f32 * t + t / 2.0, goal.1 as f32 * t + t / 2.0);
-        let route = self.plan_route(i, x, y);
+        let route = match region {
+            Some(r) => self.plan_region(i, goal, r),
+            None => self.plan_route(i, x, y),
+        };
         let s = self.objects[i].ship.as_mut().unwrap();
         if let Some(path) = route {
             s.path = path;
@@ -305,7 +309,7 @@ impl Scene {
                 });
             }
         }
-        self.hunt_plan(i, cell);
+        self.hunt_plan(i, cell, None);
     }
 
     /// Whether ship `i` is between two cells (0x4ac8d0: `+0x596` and move
@@ -324,8 +328,12 @@ impl Scene {
     /// is not hunting a leviathan is asked to make way (0x4b4b50 with
     /// 0x5a; another player's not, 0x4efe20: the port's players are all at
     /// war). Seen further off than `reach`, the ship moves to it (0x4a6270
-    /// mode 6; the box's grid of 0x4a5a10 not ported); else, not under
-    /// way, it is near.
+    /// mode 6, not waited) inside the box (0x4a5a10): its grid open where
+    /// 0x499990(cell, 0) takes the cell (the draught not minded), closed
+    /// where another ship holds the slot but on this ship's reserved next
+    /// cell (`+0x5ab`); else, not under way, it is near. (0x4aeb80 and
+    /// 0x4af640, sub-code 11, call it with a box of 11 that overflows its
+    /// 25-short grid: not ported.)
     fn hunt_look(
         &mut self,
         i: usize,
@@ -372,7 +380,30 @@ impl Scene {
         }
         if dist >= 0 {
             if dist > reach {
-                self.hunt_plan(i, to);
+                let t = TILE_SIZE as f32;
+                let s = self.objects[i].ship.as_ref().unwrap();
+                let next = s
+                    .path
+                    .front()
+                    .map(|&(x, y)| ((x / t).floor() as i32, (y / t).floor() as i32));
+                let mut grid = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let c = (x, y);
+                        let other = self.slot_ship(c).is_some_and(|k| k != i);
+                        let open = self.sea_cell(c, false) && !(other && Some(c) != next);
+                        grid.push(if open { 0 } else { -1 });
+                    }
+                }
+                let region = Region {
+                    x0,
+                    y0,
+                    goal: (to.0 - x0, to.1 - y0),
+                    w: x1 - x0,
+                    h: y1 - y0,
+                    grid,
+                };
+                self.hunt_plan(i, to, Some(&region));
             } else if under.is_none() {
                 return Look::Near;
             }
@@ -1191,6 +1222,65 @@ mod tests {
         let &(x, y) = s.path.front().unwrap();
         let to = ((x / 64.0).floor() as i32, (y / 64.0).floor() as i32);
         assert!((to.0 - lc.0).abs() <= 1 && (to.1 - lc.1).abs() <= 1 && to != lc);
+    }
+
+    /// 0x4a5a10 plans inside its region only: across a wall of the box's
+    /// grid it finds no route though the sea is open about it, and through
+    /// a gap in the wall it keeps to the box; a goal off the box, none.
+    #[test]
+    fn a_region_plan_keeps_to_its_box() {
+        let Some((_data, _caches, mut scene)) = miss005() else {
+            return;
+        };
+        let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+        let open = |s: &Scene, x0: i32, y0: i32| {
+            (y0 - 1..y0 + 6).all(|y| (x0 - 1..x0 + 7).all(|x| s.nav.is_sea(x, y)))
+        };
+        let (x0, y0) = (1..h - 6)
+            .flat_map(|y| (1..w - 7).map(move |x| (x, y)))
+            .find(|&(x, y)| open(&scene, x, y))
+            .unwrap();
+        place(&mut scene, BOAT, (x0, y0 + 2), 0);
+        let i = scene.object_index(BOAT).unwrap();
+        let wall = |gap: bool| -> Vec<i16> {
+            (0..5)
+                .flat_map(|y| (0..5).map(move |x| (x, y)))
+                .map(|(x, y)| if x == 2 && !(gap && y == 4) { -1 } else { 0 })
+                .collect()
+        };
+        let region = |grid: Vec<i16>, goal: (i32, i32)| Region {
+            x0,
+            y0,
+            goal: (goal.0 - x0, goal.1 - y0),
+            w: 5,
+            h: 5,
+            grid,
+        };
+        let goal = (x0 + 4, y0 + 2);
+        let t = TILE_SIZE as f32;
+        let centre = |c: (i32, i32)| (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+        assert!(scene
+            .plan_route(i, centre(goal).0, centre(goal).1)
+            .is_some());
+        assert!(scene
+            .plan_region(i, goal, &region(wall(false), goal))
+            .is_none());
+        let route = scene
+            .plan_region(i, goal, &region(wall(true), goal))
+            .unwrap();
+        let cells: Vec<(i32, i32)> = route
+            .iter()
+            .map(|&(x, y)| ((x / t).floor() as i32, (y / t).floor() as i32))
+            .collect();
+        assert_eq!(cells.last(), Some(&goal));
+        assert!(cells.contains(&(x0 + 2, y0 + 4)), "{cells:?}");
+        assert!(cells
+            .iter()
+            .all(|&(x, y)| (x0..x0 + 5).contains(&x) && (y0..y0 + 5).contains(&y)));
+        let off = (x0 + 6, y0 + 2);
+        assert!(scene
+            .plan_region(i, off, &region(wall(true), off))
+            .is_none());
     }
 
     /// A leviathan under water is not seen (0x4ac8d0 gives 0xff): the
