@@ -9144,6 +9144,73 @@ fn order_10_silences_a_fort() {
     assert!(!quiet(&mut scene, &mut caches), "the fort did not fire");
 }
 
+/// Lightning on the Gorgon (0x402ab8) and a siren (0x404505): resting under
+/// water (no picture) they are left whole; up, struck one cell off they
+/// are killed, put down to the caster once; the Gorgon's sound event 116
+/// (`hitmed`), the siren's 117 has none. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn lightning_on_gorgon_and_siren() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let t = TILE_SIZE as f32;
+    let at = |c: (i32, i32)| (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+    for (mission, class, sound) in [("battle17", 0x1fa, true), ("battle08", 0x1fd, false)] {
+        let mut scene = Scene::load(&data, &mut caches, mission).unwrap();
+        scene.brain = None;
+        let human = scene.human.map(|h| (h.nation, h.slot));
+        assert!(human.is_some());
+        // Nothing near her fights or is fought.
+        scene.objects.retain(|o| o.ship.is_none());
+        for o in scene.objects.iter_mut() {
+            if let Some(c) = o.combat.as_mut() {
+                c.weapons.clear();
+            }
+        }
+        let id = scene
+            .objects
+            .iter()
+            .find(|o| o.class == ObjectClass::Monster(class))
+            .map(|o| o.id)
+            .unwrap();
+        let cell = |s: &Scene| {
+            let o = &s.objects[s.object_index(id).unwrap()];
+            ((o.x / t).floor() as i32, (o.y / t).floor() as i32)
+        };
+        let life = |s: &Scene| {
+            s.object_index(id)
+                .and_then(|k| s.objects[k].combat.as_ref())
+                .map(|c| c.hull)
+        };
+        let killed = |s: &Scene| s.stats.monsters_killed[(class - 0x1f4) as usize];
+        // Her first turn: resting under water.
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        assert!(scene.creature_hidden(id));
+        let full = life(&scene).unwrap();
+        let (cx, cy) = cell(&scene);
+        let (x, y) = at((cx + 1, cy));
+        scene.lightning_strike(x, y, human, &data, &mut caches);
+        assert_eq!(life(&scene), Some(full));
+        assert_eq!(killed(&scene), 0);
+        // Up: one cell off kills her, put down to the caster.
+        let mut n = 0;
+        while scene.creature_hidden(id) {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            n += 1;
+            assert!(n < 2000, "she never came up");
+        }
+        scene.sounds.clear();
+        scene.lightning_strike(x, y, human, &data, &mut caches);
+        assert!(life(&scene).is_none_or(|h| h <= 0.0));
+        assert_eq!(killed(&scene), 1);
+        assert_eq!(scene.sounds.iter().any(|s| s.0 == "hitmed"), sound);
+        scene.lightning_strike(x, y, human, &data, &mut caches);
+        assert_eq!(killed(&scene), 1);
+    }
+}
+
 /// Lightning on creatures (0xda93): a harpy or dragon one cell off loses a
 /// quarter of the life it has (0x420cd8), on its cell it is removed; a land
 /// creature one cell off loses 25 percentage points (0x414b0f); a gorgon up
