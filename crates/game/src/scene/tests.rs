@@ -3382,6 +3382,81 @@ fn statistics_and_score() {
     assert_eq!(scene.stats.values(scene.amber)[11] as i64, expected);
 }
 
+/// A ship between cells (`+0x596`, set as it leaves a cell's middle and
+/// cleared as it crosses into the cell it is entering, `+0x5b6`) plans
+/// from the cell it is entering and sails on into it (0x4a6330 with
+/// 0x4e0b50, 0x4a3560, 0x4a3f40; needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_ship_between_cells_plans_from_the_cell_it_enters() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let t = TILE_SIZE as f32;
+    let cell = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
+    let centre = |(cx, cy): (i32, i32)| (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
+    let id = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let ship = |s: &Scene| {
+        let o = &s.objects[s.object_index(id).unwrap()];
+        let sh = o.ship.as_ref().unwrap();
+        (
+            cell(o.x, o.y),
+            sh.move_state,
+            sh.between.get(),
+            sh.entering,
+            sh.path.front().copied(),
+        )
+    };
+    let (home, ..) = ship(&scene);
+    let goals: Vec<(i32, i32)> = [(8, 0), (-8, 0), (0, 8), (0, -8), (6, 6), (-6, -6)]
+        .into_iter()
+        .map(|(dx, dy)| (home.0 + dx, home.1 + dy))
+        .collect();
+    let first = goals
+        .iter()
+        .position(|&g| scene.order_move(id, centre(g).0, centre(g).1))
+        .expect("a move");
+    // Under way and not yet in the cell it is entering.
+    let mut seen = None;
+    for _ in 0..2000 {
+        scene.update(0.04, &data, &mut caches);
+        let (here, state, between, entering, _) = ship(&scene);
+        if state == 5 && between {
+            assert_ne!(here, entering);
+            seen = Some(entering);
+            break;
+        }
+    }
+    let entering = seen.expect("between cells");
+    // A new move plans from there: its first point is that cell's middle.
+    assert!(goals
+        .iter()
+        .enumerate()
+        .any(|(k, &g)| k != first && scene.order_move(id, centre(g).0, centre(g).1)));
+    let (_, _, between, _, front) = ship(&scene);
+    assert!(between);
+    assert_eq!(front.map(|(x, y)| cell(x, y)), Some(entering));
+    // Crossing into it the flag goes.
+    let mut crossed = false;
+    for _ in 0..500 {
+        scene.update(0.04, &data, &mut caches);
+        let (here, _, between, _, _) = ship(&scene);
+        if here == entering {
+            crossed = !between;
+            break;
+        }
+    }
+    assert!(crossed);
+}
+
 /// A ship told to stop under way is told to stop (move state 1) and goes
 /// on into the cell it is going into, braking (4) to lie still (0) in its
 /// middle (0x4a6330 with the stop flag, 0x4a38f0; needs

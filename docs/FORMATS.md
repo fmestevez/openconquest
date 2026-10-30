@@ -1937,11 +1937,26 @@ port's own: the original makes no plan to them with a tolerance of 0,
 port's 29 callers of `plan_route` pass land cells where the original
 computes its own water cell, e.g. 0x4b2710 for a founding ship, so this
 is kept), and the ship's own cell is never closed to its plan (0x4a4e20
-and 0x4a7290 pass over it). Not ported: the route's direction bytes
-(the port's ships turn by the cells); planning from the cell being
-entered while between cells (`+0x5b6`; the port's move states do not
-keep the original's between-cells flag `+0x596`, set leaving state 3
-for 5 and cleared by 0x4e0b50 in states 0, 2 and 3); and the region
+and 0x4a7290 pass over it). Every plan starts from the ship's own cell
+(`+0x5a3`, `+0x5a7`) unless 0x4e0b50 says it is between cells: then from
+the cell it is entering (`+0x5b6`, set by 0x4a3a70 as a step is taken),
+and in states 1, 4 and 5 the new route is that cell's after the ship's
+own (`+0x5be` 1, state 5), so it sails on into it; its goal its own
+cell, 0x4a6330 makes no plan (returns 1), and a route of one cell is
+none. The between-cells flag `+0x596`: set leaving a cell's middle
+(0x4a3560 for state 5, the end of a turn 0x4a3320, a plan lying still
+or at a cell with no turn 0x4a6330), and on reaching a cell's middle
+(0x4a3f40 at 0x4a4a8e and 0x4a4d3b); cleared as the picture's centre
+crosses into `+0x5b6` (0x4a47bf) and by 0x4e0b50 for a plan made in
+states 0, 2 or 3. It is read by the stop (0x4a38f0: not yet in the
+next cell, it stops there), the brake 0x4a2f60, 0x4a3a70's boarding
+branch, as "under way into `+0x5b6`" by the look box 0x4ac8d0 and
+0x4c2bb8 (flag and state above 3), 0x4b7f10 (state 4 or 5), 0x4aa5c2
+and 0x4abc60 (state 4, 5 or the boarding's step 1), and by 0x4c2230 and
+0x4c26fa. The port keeps it
+(`Ship::between`, `Ship::entering`) at those points of its moves; the
+hunt's look box takes it. Not ported: the route's direction bytes
+(the port's ships turn by the cells); and the region
 plan 0x4a5a10 (not decoded: 0x4a6330 runs it when its last argument, a
 region, is given and active; 0x4a6270 passes its own on, non-zero from
 0x4ad0ba, 0x4b8493, 0x4c2666 and 0x4c272e, the region structures not
@@ -5003,7 +5018,7 @@ corner lies more than 0x59af48[type] / 2 = 2 cells off (0x557440), else
   still, not while turning; on the goal the move ends (event 8 0x80).
 - **Sub-code 10** (0x4aeef0), step 1: 0x4ac8d0 over the 5 x 5 cells
   (0x59af48) about the ship (the cell it is going into while between
-  cells: `+0x596` and move state 4 or 5), clipped to the map, row by row:
+  cells: `+0x596` and move state above 3, `Ship::under_way_into`), clipped to the map, row by row:
   the hunted leviathan in a cell's slot `+0x10` with its picture shown.
   Showing itself (state 1) it counts at the ship's own cell, distance 0,
   and the ship's guns turn on it (0x4ac5d0 sets groups 0 and 1's targets,

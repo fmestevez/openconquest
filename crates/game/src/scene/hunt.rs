@@ -311,14 +311,7 @@ impl Scene {
     /// Whether ship `i` is between two cells (0x4ac8d0: `+0x596` and move
     /// state 4 or more), and the cell it is going into (`+0x5b6`).
     fn hunt_under_way(&self, i: usize) -> Option<(i32, i32)> {
-        let s = self.objects[i].ship.as_ref()?;
-        if s.move_state < 4 {
-            return None;
-        }
-        let t = TILE_SIZE as f32;
-        let &(fx, fy) = s.path.front()?;
-        let next = ((fx / t).floor() as i32, (fy / t).floor() as i32);
-        (next != self.hunt_cell(i)).then_some(next)
+        self.objects[i].ship.as_ref()?.under_way_into()
     }
 
     /// 0x4ac8d0 for a leviathan (sub-code 10): over the box of 0x59af48

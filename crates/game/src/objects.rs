@@ -340,6 +340,19 @@ pub struct Ship {
     /// and the ram); a sea monster weighs its prey by it.
     #[serde(default)]
     pub move_state: u8,
+    /// Between two cells (+0x596): set as it sets out from a cell's
+    /// middle for the next (0x4a3560, the end of a turn 0x4a3320, a plan
+    /// lying still 0x4a6330) and on reaching a cell's middle (0x4a3f40);
+    /// cleared as its picture's centre crosses into the cell it is
+    /// entering (0x4a3f40) and by a plan made lying still, turning or at
+    /// a cell (0x4e0b50, from a plan's `&self`, hence the `Cell`).
+    #[serde(default)]
+    pub between: std::cell::Cell<bool>,
+    /// The cell it is going into (+0x5b6, set as the step is taken,
+    /// 0x4a3a70): under way between cells (`between`, move state 1, 4,
+    /// 5 or 6) its plans start from it (0x4a6330 with 0x4e0b50).
+    #[serde(default)]
+    pub entering: (i32, i32),
     /// The heading it turns to while closing in on a shore or pier, to lie
     /// side-on (0x4afe50).
     #[serde(default)]
@@ -702,6 +715,23 @@ impl Default for Behaviour {
 }
 
 impl Ship {
+    /// 0x4e0b50, asked by every plan (0x4a6330): lying still, turning or
+    /// at a cell (move states 0, 2, 3) it is no longer between cells;
+    /// whether it plans from its own cell, not the one it is entering.
+    pub fn plans_from_own_cell(&self) -> bool {
+        if matches!(self.move_state, 0 | 2 | 3) {
+            self.between.set(false);
+        }
+        !self.between.get()
+    }
+
+    /// The cell it is going into while under way between cells, as the
+    /// behaviours' look boxes take it (0x4ac8d0 and others: `+0x596` and
+    /// move state 4 or more, `+0x5b6`).
+    pub fn under_way_into(&self) -> Option<(i32, i32)> {
+        (self.between.get() && self.move_state > 3).then_some(self.entering)
+    }
+
     /// Whether a treasure of `kind` is aboard.
     pub fn has_treasure(&self, kind: u8) -> bool {
         self.treasures.iter().any(|t| t.kind == kind)
@@ -1647,6 +1677,8 @@ pub fn resolve(
         pending: None,
         velocity: 0.0,
         move_state: 0,
+        between: std::cell::Cell::new(false),
+        entering: (0, 0),
         home_port: 0,
         last_deposit: 0,
         gathered: None,

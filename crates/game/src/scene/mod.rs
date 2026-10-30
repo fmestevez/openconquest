@@ -1674,6 +1674,20 @@ impl Scene {
         if plan == Plan::Order && !sea {
             return self.plan_route_tolerant(i, start, x, y, avoid, Plan::Waited);
         }
+        // Setting out from where it is, a ship between cells plans from
+        // the cell it is entering (0x4a6330: 0x4e0b50 false, `+0x5b6`),
+        // sailing on into it; else from its own cell (`+0x5a3`, `+0x5a7`).
+        // Its goal its own cell, 0x4a6330 makes no plan, and a route of
+        // one cell is none: the ship sails on as it was.
+        let entering = obj
+            .ship
+            .as_ref()
+            .filter(|_| start == (obj.x, obj.y))
+            .and_then(|s| (!s.plans_from_own_cell()).then_some(s.entering));
+        if entering.is_some() && to == from {
+            return None;
+        }
+        let from = entering.unwrap_or(from);
         // A ship left on a non-water cell (e.g. placed at a dock) starts from
         // the nearest water.
         let start = if self.nav.is_water(from.0, from.1) {
@@ -1713,6 +1727,9 @@ impl Scene {
                 self.nav.find_path_near(start, to, deep, shut, 1)?
             }
         };
+        if entering.is_some() && cells.is_empty() {
+            return None;
+        }
         let mut points: Vec<(f32, f32)> = cells
             .into_iter()
             .map(|(cx, cy)| (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0))
@@ -2576,6 +2593,12 @@ impl Scene {
                 ship.move_state = 2;
                 continue;
             }
+            // Turned, it is at its cell for the next step (3), or lying
+            // still with no route (0), set to leave it (0x4a3320: `+0x596`).
+            if ship.move_state == 2 {
+                ship.move_state = if ship.path.is_empty() { 0 } else { 3 };
+                ship.between.set(true);
+            }
             // No route (dropped, 0x4a5b70, or run to its end): it lies
             // still (0); but held (6) where it lies, as at a port's berth
             // unloading, until it leaves.
@@ -2734,9 +2757,14 @@ impl Scene {
                             ship.blocked = 0.0;
                             ship.stalled = 0.0;
                             ship.waited = 0.0;
-                            // The next cell reserved: under way (5,
-                            // 0x4a3560); told to stop it stays 1 till
-                            // it crosses into it.
+                            // The next cell reserved (`+0x5b6`,
+                            // 0x4a3a70): under way (5, 0x4a3560), between
+                            // cells as it leaves its cell's middle; told
+                            // to stop it stays 1 till it crosses into it.
+                            ship.entering = next;
+                            if matches!(ship.move_state, 0 | 2 | 3) {
+                                ship.between.set(true);
+                            }
                             if ship.move_state != 1 {
                                 ship.move_state = 5;
                             }
@@ -2751,6 +2779,15 @@ impl Scene {
                     budget -= dist;
                     ship.path.pop_front();
                     moved = true;
+                    // Into the cell it was entering, it is in it
+                    // (0x4a3f40: `+0x596` cleared); at a cell's middle
+                    // it is set to leave it (`+0x596` set again).
+                    if ship.between.get() && cell_of(tx, ty) == ship.entering {
+                        ship.between.set(false);
+                    }
+                    if centre(tx) && centre(ty) {
+                        ship.between.set(true);
+                    }
                     // At a route point: the last lays it still (0), any
                     // other has it about to step (3, 0x4a3f40).
                     ship.move_state = if ship.path.is_empty() { 0 } else { 3 };
@@ -2772,6 +2809,9 @@ impl Scene {
                     obj.x += dx / dist * budget;
                     obj.y += dy / dist * budget;
                     budget = 0.0;
+                    if ship.between.get() && cell_of(obj.x, obj.y) == ship.entering {
+                        ship.between.set(false);
+                    }
                 }
                 moved = true;
             }
