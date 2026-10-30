@@ -3078,6 +3078,42 @@ fn statistics_and_score() {
     assert_eq!(scene.stats.values(scene.amber)[11] as i64, expected);
 }
 
+/// A member with no ships is given its orders as any other: at its next
+/// turn the order reports done, result 1, and the step goes to its p4
+/// (0x4a0f60, 0x4d63d0): miss010's north-western raiders (member 4,
+/// 0x468240) fighting in their wider waters (state 0x14, p3 0x28, p4 0)
+/// go back to 0, not on to their strike (needs `OPENCONQUEST_DATA`).
+#[test]
+fn an_empty_fleet_takes_its_orders_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss010").unwrap();
+    let k = 4;
+    {
+        let f = &mut scene.brain.as_mut().unwrap().fleets[k];
+        f.ships.clear();
+        f.state = 20;
+        f.started = false;
+        f.area = Some((0, 10, 10, 20));
+    }
+    let mut states = Vec::new();
+    for _ in 0..100 {
+        scene.run_brain();
+        let f = &scene.brain.as_ref().unwrap().fleets[k];
+        if states.last() != Some(&(f.state, f.started)) {
+            states.push((f.state, f.started));
+        }
+    }
+    assert_eq!(
+        states[..3],
+        [(20, false), (20, true), (0, false)],
+        "{states:?}"
+    );
+}
+
 /// The killer each death is put down to (0x50e750's callers): none (0xff)
 /// counts the owner's loss and nobody's gain; each rammed ship goes to
 /// the other's player (0x4c1c60); a prize taken counts as the taker's ship

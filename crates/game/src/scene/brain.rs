@@ -113,16 +113,21 @@ pub enum Op {
         events: &'static [Event],
     },
     /// Sail a round of points, pausing at each (0x47a900), until `ticks`
-    /// (0: forever) or an event.
+    /// (0: forever: `timeout`) or an event; `failed` when a leg ends short
+    /// (the move query 0x65 done but not "arrived").
     Patrol {
         timeout: u32,
+        failed: u32,
         points: &'static [(i32, i32, u32)],
         ticks: u32,
         events: &'static [Event],
     },
-    /// Attack (0x47a6a0): `next` once the area is clear or after `ticks`.
+    /// Attack (0x47a6a0): `next` once the area is clear or after `ticks`;
+    /// `failed` (its p4) when the order reports done otherwise (no ship
+    /// able, or none at all).
     Attack {
         next: u32,
+        failed: u32,
         target: Target,
         ticks: u32,
         events: &'static [Event],
@@ -162,7 +167,7 @@ pub struct Fleet {
     pub(super) started: bool,
     pub(super) since: u32,
     /// The area an event chose to attack.
-    area: Option<Cells>,
+    pub(super) area: Option<Cells>,
     /// Patrol: the point sailed to, and when the pause there began.
     point: usize,
     paused_at: Option<u32>,
@@ -261,6 +266,9 @@ struct Mission {
     /// Members made at the start (0x8d1) that the main's switch has no
     /// case for: they never run.
     silent: &'static [(u8, u8)],
+    /// Whether member `k` runs its step this turn, for members whose own
+    /// code tests their ships before their switch.
+    gate: Option<fn(&Scene, usize) -> bool>,
     /// The brain's own work on its 5-tick pass, before the members and
     /// after them.
     before: Option<fn(&mut Scene)>,
@@ -279,6 +287,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss000::start,
             turn: None,
             silent: &[],
+            gate: None,
             before: None,
             after: None,
         }),
@@ -287,6 +296,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss001::start,
             turn: None,
             silent: &[],
+            gate: None,
             before: None,
             after: None,
         }),
@@ -295,6 +305,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss002::start,
             turn: None,
             silent: &[],
+            gate: None,
             before: None,
             after: None,
         }),
@@ -303,6 +314,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss003::start,
             turn: None,
             silent: &[],
+            gate: None,
             before: None,
             after: None,
         }),
@@ -311,6 +323,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss004::start,
             turn: None,
             silent: &[(0, 7), (2, 5)],
+            gate: None,
             before: None,
             after: None,
         }),
@@ -319,6 +332,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss005::start,
             turn: Some(miss005::turn),
             silent: &[],
+            gate: None,
             before: None,
             after: Some(miss005::after),
         }),
@@ -327,6 +341,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss006::start,
             turn: Some(miss006::turn),
             silent: &[(1, 6)],
+            gate: None,
             before: None,
             after: None,
         }),
@@ -335,6 +350,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss007::start,
             turn: Some(miss007::turn),
             silent: &[],
+            gate: None,
             before: Some(miss007::before),
             after: None,
         }),
@@ -343,6 +359,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss008::start,
             turn: Some(miss008::turn),
             silent: &[(0, 0), (1, 0)],
+            gate: Some(miss008::gate),
             before: None,
             after: None,
         }),
@@ -351,6 +368,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss009::start,
             turn: Some(miss009::turn),
             silent: &[(0, 0)],
+            gate: None,
             before: Some(miss009::before),
             after: None,
         }),
@@ -359,6 +377,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss010::start,
             turn: Some(miss010::turn),
             silent: &[(0, 0), (1, 0)],
+            gate: None,
             before: Some(miss010::before),
             after: None,
         }),
@@ -367,6 +386,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss011::start,
             turn: Some(miss011::turn),
             silent: &[],
+            gate: None,
             before: None,
             after: Some(miss011::after),
         }),
@@ -375,6 +395,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss012::start,
             turn: Some(miss012::turn),
             silent: &[],
+            gate: None,
             before: None,
             after: None,
         }),
@@ -383,6 +404,7 @@ fn mission(name: &str) -> Option<Mission> {
             start: miss013::start,
             turn: Some(miss013::turn),
             silent: &[],
+            gate: None,
             before: None,
             after: None,
         }),
@@ -569,15 +591,9 @@ impl Scene {
                 turn(self, k);
             }
             self.ask_for_ships(k, &m.fleets[k]);
-            // Not decoded: what the fleet reports (0x4a0f60) for an order
-            // given to a fleet with no ships; the port holds a step that
-            // orders the fleet about until it has some.
-            let f = &self.brain.as_ref().unwrap().fleets[k];
-            let orders = matches!(
-                (m.fleets[k].program)(f.state),
-                Op::Move { .. } | Op::Gather { .. } | Op::Patrol { .. } | Op::Attack { .. }
-            );
-            if orders && f.ships.is_empty() {
+            // A member with no ships runs its steps as any other (see
+            // `fleet_step`), but for one whose own code holds it.
+            if m.gate.is_some_and(|gate| !gate(self, k)) {
                 continue;
             }
             let groups: Vec<u8> = m.fleets.iter().map(|f| f.group).collect();
@@ -706,6 +722,12 @@ impl Scene {
         } else {
             0
         };
+        // An order given to a fleet with no ships is taken like any other
+        // (0x4a09d0 allocates its block, 0x4cc500 / 0x4d6540) and left as
+        // it was by the fleet tick; every status routine (0x4ccf60,
+        // 0x4d63d0, 0x4d70d0, 0x4c8da0) then reports it done, result 1, at
+        // the member's next turn.
+        let empty = started && self.brain.as_ref().unwrap().fleets[k].ships.is_empty();
         match op {
             Op::Behave { next } => self.set_state(k, next),
             Op::Wait { next, ticks } => {
@@ -748,6 +770,11 @@ impl Scene {
                 }
                 if !started {
                     self.fleet_move(k, to);
+                } else if empty {
+                    // Done but not arrived: `failed`, unless the time is up
+                    // too (0x47a450 tests it after the query).
+                    let up = ticks > 0 && elapsed >= ticks;
+                    self.set_state(k, if up { ok } else { failed });
                 } else if self.fleet_idle(k) {
                     let arrived = self.fleet_near(k, to, 2.0);
                     self.set_state(k, if arrived { ok } else { failed });
@@ -778,13 +805,16 @@ impl Scene {
                     // Order 0x78 (0x479970) writes the area into `+0x40`.
                     self.brain.as_mut().unwrap().fleets[k].last_area = area;
                     self.fleet_gather(k, area, resource);
-                } else if ticks > 0 && elapsed >= ticks {
+                } else if empty || (ticks > 0 && elapsed >= ticks) {
+                    // With no ships, result 1 sends 0x47a570 to its p4,
+                    // which every mission passes equal to its p3.
                     self.fleet_stop(k);
                     self.set_state(k, next);
                 }
             }
             Op::Patrol {
                 timeout,
+                failed,
                 points,
                 ticks,
                 events,
@@ -810,6 +840,12 @@ impl Scene {
                 }
                 let f = &self.brain.as_ref().unwrap().fleets[k];
                 let (point, paused) = (f.point.min(points.len() - 1), f.paused_at);
+                // On its way to a point (`+0x60 == 1`) a fleet with no ships
+                // is done but not arrived: `failed` (0x47a900).
+                if empty && paused.is_none() {
+                    self.set_state(k, failed);
+                    return;
+                }
                 match paused {
                     None if self.fleet_idle(k) => {
                         self.brain.as_mut().unwrap().fleets[k].paused_at = Some(tick);
@@ -827,6 +863,7 @@ impl Scene {
             }
             Op::Attack {
                 next,
+                failed,
                 target,
                 ticks,
                 events,
@@ -855,6 +892,10 @@ impl Scene {
                         }
                         None => self.set_state(k, next),
                     }
+                } else if empty {
+                    // Done, result 1: p4, unless the time is up too.
+                    let up = ticks > 0 && elapsed >= ticks;
+                    self.set_state(k, if up { next } else { failed });
                 } else if self.fleet_idle(k) || (ticks > 0 && elapsed >= ticks) {
                     self.fleet_stop(k);
                     self.set_state(k, next);
@@ -1917,12 +1958,14 @@ mod miss000 {
             0 => Op::Behave { next: 5 },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 3000,
                 events: &[],
             },
             _ => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: &BAYS,
@@ -1995,6 +2038,7 @@ mod miss000 {
             0 => Op::Behave { next: 5 },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -2024,12 +2068,16 @@ mod miss000 {
             },
             55 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((15, 0, 9, 6)),
                 ticks: 4500,
                 events: &[],
             },
+            // A leg that ends short starts the round again (0x47a900 at
+            // 0x449810 state 5: p3 0x28, p4 5).
             _ => Op::Patrol {
                 timeout: 40,
+                failed: 5,
                 points: ROUND,
                 ticks: ROUND_TICKS[difficulty()],
                 events: WATCH,
@@ -2173,18 +2221,21 @@ mod miss001 {
             0 => Op::Behave { next: 5 },
             20 => Op::Attack {
                 next: PREVIOUS,
+                failed: PREVIOUS,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
             },
             _ => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: EVENTS,
@@ -2243,12 +2294,14 @@ mod miss001 {
             0 => Op::Behave { next: 5 },
             20 => Op::Attack {
                 next: PREVIOUS,
+                failed: PREVIOUS,
                 target: Target::Seen,
                 ticks: 4500,
                 events: &[],
             },
             _ => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: &SEA,
@@ -2289,18 +2342,21 @@ mod miss001 {
             0 => Op::Behave { next: 5 },
             10 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((1, 1, 9, 6)),
                 ticks: 6000,
                 events: RAIDING,
             },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: &[],
             },
             _ => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 0,
                 events: WAITING,
@@ -2455,12 +2511,14 @@ mod miss002 {
             0 => Op::Behave { next: 5 },
             20 => Op::Attack {
                 next: PREVIOUS,
+                failed: PREVIOUS,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             _ => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: BARBARIAN_COAST,
@@ -2504,6 +2562,7 @@ mod miss002 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -2523,6 +2582,7 @@ mod miss002 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -2551,6 +2611,7 @@ mod miss002 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: WATCH,
@@ -2628,18 +2689,21 @@ mod miss002 {
             }),
             40 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 3000,
                 events: SWEEP,
             },
             50 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: FIGHTING,
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: APPROACH,
@@ -2689,18 +2753,21 @@ mod miss002 {
             },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: POST,
             },
             30 => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: WEST,
             },
             _ => Op::Attack {
                 next: 30,
+                failed: 30,
                 target: Target::Seen,
                 ticks: 1500,
                 events: WEST,
@@ -2732,18 +2799,21 @@ mod miss002 {
             },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: POST,
             },
             30 => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: WEST,
             },
             _ => Op::Attack {
                 next: 30,
+                failed: 30,
                 target: Target::Seen,
                 ticks: 1500,
                 events: WEST,
@@ -2911,6 +2981,7 @@ mod miss003 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -2934,6 +3005,7 @@ mod miss003 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: W,
@@ -3002,6 +3074,7 @@ mod miss003 {
             },
             6 => Op::Patrol {
                 timeout: 40,
+                failed: 40,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
@@ -3015,18 +3088,21 @@ mod miss003 {
             }),
             45 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((3, 3, 21, 12)),
                 ticks: 3000,
                 events: FIGHT,
             },
             46 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((32, 16, 7, 7)),
                 ticks: 3000,
                 events: FIGHT,
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: W,
@@ -3050,12 +3126,14 @@ mod miss003 {
             0 => Op::Behave { next: 5 },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: W,
             },
             _ => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 4500,
                 events: W,
@@ -3146,12 +3224,14 @@ mod miss003 {
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 250,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -3211,24 +3291,28 @@ mod miss003 {
             },
             6 => Op::Patrol {
                 timeout: 10,
+                failed: 10,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
             },
             10 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::HumanBuilding,
                 ticks: 3000,
                 events: &[],
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 250,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -3494,6 +3578,7 @@ mod miss004 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: W,
@@ -3531,6 +3616,7 @@ mod miss004 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: W,
@@ -3592,18 +3678,21 @@ mod miss004 {
             7 => Op::WaitVar { next: 40, var: 0 },
             40 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 4500,
                 events: SWEEP,
             },
             50 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: FIGHT,
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: HOME,
@@ -3665,6 +3754,7 @@ mod miss004 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -3688,6 +3778,7 @@ mod miss004 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -3726,24 +3817,28 @@ mod miss004 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: HOME_ROUND,
                 ticks: 0,
                 events: W,
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 250,
                 events: &[],
             },
             40 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: NORTH_ROUND,
                 ticks: 4500,
                 events: NORTH,
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 3000,
                 events: BARBARIAN_COAST,
@@ -3838,18 +3933,21 @@ mod miss004 {
             7 => Op::WaitVar { next: 40, var: 0 },
             40 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 4500,
                 events: SWEEP,
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: FIGHT,
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: HOME,
@@ -4020,6 +4118,7 @@ mod miss005 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -4099,24 +4198,28 @@ mod miss005 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: W,
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
             },
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::HumanBuilding,
                 ticks: 3000,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -4194,24 +4297,28 @@ mod miss005 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 4500,
                 events: PERSIAN_HOME,
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((0, 0, 8, 9)),
                 ticks: 1500,
                 events: &[],
             },
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: PERSIAN_HOME,
@@ -4225,24 +4332,28 @@ mod miss005 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 4500,
                 events: PERSIAN_HOME,
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((0, 0, 8, 9)),
                 ticks: 1500,
                 events: &[],
             },
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: PERSIAN_HOME,
@@ -4560,6 +4671,7 @@ mod miss005 {
             1 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: round,
                 ticks: 0,
                 events: watch,
@@ -4571,6 +4683,7 @@ mod miss005 {
             }),
             20 | 21 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 3000,
                 events: &[],
@@ -4602,6 +4715,7 @@ mod miss005 {
             }),
             31 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area(held),
                 ticks: 3000,
                 events: zones,
@@ -4612,6 +4726,7 @@ mod miss005 {
             }),
             38 => Op::Attack {
                 next: 50,
+                failed: 50,
                 target: Target::Seen,
                 ticks: 6000,
                 events: zones,
@@ -4622,6 +4737,7 @@ mod miss005 {
             }),
             40 => Op::Attack {
                 next: 50,
+                failed: 50,
                 target: Target::Area(FAR),
                 ticks: 6000,
                 events: zones,
@@ -4664,6 +4780,7 @@ mod miss005 {
             51 => Op::Behave { next: 60 },
             60 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: round2,
                 ticks: 0,
                 events: watch2,
@@ -4675,6 +4792,7 @@ mod miss005 {
             }),
             70 | 71 => Op::Attack {
                 next: 50,
+                failed: 50,
                 target: Target::Seen,
                 ticks: 3000,
                 events: &[],
@@ -4688,6 +4806,7 @@ mod miss005 {
             }),
             86 => Op::Attack {
                 next: 50,
+                failed: 50,
                 target: Target::Seen,
                 ticks: 6000,
                 events: raid,
@@ -4699,6 +4818,7 @@ mod miss005 {
             }),
             91 => Op::Attack {
                 next: 50,
+                failed: 50,
                 target: Target::Area(FAR),
                 ticks: 6000,
                 events: raid,
@@ -4965,12 +5085,14 @@ mod miss006 {
             0 => Op::Behave { next: 5 },
             20 => Op::Attack {
                 next: PREVIOUS,
+                failed: PREVIOUS,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             _ => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: &[BARBARIAN_HOME],
@@ -5055,24 +5177,28 @@ mod miss006 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: W,
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 3000,
                 events: &[],
             },
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::HumanBuilding,
                 ticks: 3000,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -5145,18 +5271,21 @@ mod miss006 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 4500,
                 events: W,
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: W,
@@ -5259,6 +5388,7 @@ mod miss006 {
             },
             6 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 0,
                 events: W,
@@ -5278,6 +5408,7 @@ mod miss006 {
             }),
             38 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 6000,
                 events: RAID,
@@ -5288,12 +5419,14 @@ mod miss006 {
             }),
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area(FAR),
                 ticks: 6000,
                 events: RAID,
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -5366,6 +5499,7 @@ mod miss006 {
             1 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 4500,
                 events: &[NORTH_HOME],
@@ -5376,6 +5510,7 @@ mod miss006 {
             }),
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[NORTH_HOME],
@@ -5443,6 +5578,7 @@ mod miss006 {
             },
             6 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 0,
                 events: W,
@@ -5464,6 +5600,7 @@ mod miss006 {
             }),
             38 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: &[NORTH_HOME],
@@ -5474,12 +5611,14 @@ mod miss006 {
             }),
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area(FAR),
                 ticks: 4500,
                 events: &[NORTH_HOME],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -5576,12 +5715,14 @@ mod miss006 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 4500,
                 events: W,
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -5611,6 +5752,7 @@ mod miss006 {
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -6084,6 +6226,7 @@ mod miss007 {
             1 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: round,
                 ticks: 0,
                 events: watch,
@@ -6091,12 +6234,14 @@ mod miss007 {
             10 => Op::Custom(pick),
             15 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             20 | 25 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: raid_ticks,
                 events: raiding,
@@ -6117,6 +6262,7 @@ mod miss007 {
             }),
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -6240,6 +6386,7 @@ mod miss007 {
             0 => Op::Behave { next: 5 },
             5 => Op::Attack {
                 next: 10,
+                failed: 10,
                 target: Target::Area((13, 23, 5, 5)),
                 ticks: 1500,
                 events: &[],
@@ -6294,12 +6441,14 @@ mod miss007 {
             // The player holds the sword: around its holder, 6000 ticks.
             25 => Op::Attack {
                 next: 15,
+                failed: 15,
                 target: Target::Seen,
                 ticks: 6000,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((13, 23, 5, 5)),
                 ticks: 1500,
                 events: &[],
@@ -6370,24 +6519,28 @@ mod miss007 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: PERSIAN_ROUND,
                 ticks: 4500,
                 events: watch,
             },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 6000,
                 events: watch,
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -6479,6 +6632,7 @@ mod miss007 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: PERSIAN_ROUND,
                 ticks: 0,
                 events: W,
@@ -6494,18 +6648,21 @@ mod miss007 {
             ),
             20 | 30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 6000,
                 events: RAIDING,
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -6987,24 +7144,28 @@ mod miss008 {
             0 => Op::Custom(start),
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: round,
                 ticks: 0,
                 events: watch,
             },
             10 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: round,
                 ticks: 0,
                 events: wide,
             },
             15 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 6000,
                 events: wide,
@@ -7109,6 +7270,7 @@ mod miss008 {
         match state {
             25 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((0, 30, 10, 10)),
                 ticks: 6000,
                 events: WIDE,
@@ -7240,24 +7402,30 @@ mod miss008 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: round,
                 ticks: 4500,
                 events: watch,
             },
+            // The fight's p4 is 0 for every member (0x4629b0 passes 0x28,
+            // 0).
             20 => Op::Attack {
                 next: done,
+                failed: 0,
                 target: Target::Seen,
                 ticks: fight,
                 events: watch,
             },
             30 => Op::Attack {
                 next: done,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -7335,18 +7503,35 @@ mod miss008 {
         match state {
             10 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: SOUTH_ROUND,
                 ticks: 4500,
                 events: WIDE,
             },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: WIDE,
             },
             _ => patrol(state, SOUTH_ROUND, W, 4500, 0),
         }
+    }
+
+    /// Member 7 (0x4628d0) runs only while it has royal ships, bombers,
+    /// boarders or rammers (the byte sum of their counts, 0x479dc0, is
+    /// not 0); the other members always.
+    pub fn gate(scene: &Scene, k: usize) -> bool {
+        if k != STRIKE {
+            return true;
+        }
+        let n = scene.fleet_types(k);
+        [ROYAL, BOMBER, BOARDER, RAMMER]
+            .iter()
+            .map(|&t| n[t as usize])
+            .sum::<usize>() as u8
+            != 0
     }
 
     /// Member 7 (0x4628d0): with the ships handed to it, attacks
@@ -7357,6 +7542,7 @@ mod miss008 {
             0 => Op::Behave { next: 5 },
             5 => Op::Attack {
                 next: 10,
+                failed: 0,
                 target: Target::Area((0, 30, 10, 10)),
                 ticks: 0,
                 events: &[],
@@ -8072,30 +8258,35 @@ mod miss009 {
             }),
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: RAIDER_ROUND,
                 ticks: 0,
                 events: WATCH,
             },
             10 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: RAIDER_ROUND,
                 ticks: 0,
                 events: WIDE,
             },
             15 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 6000,
                 events: &WIDE[..5],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -8125,24 +8316,28 @@ mod miss009 {
             0 => Op::Behave { next: 10 },
             10 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 0,
                 events: W,
             },
             15 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             25 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((0, 30, 10, 15)),
                 ticks: 2250,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -8159,6 +8354,7 @@ mod miss009 {
         match state {
             10 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: (difficulty() as u32 + 1) * 1500,
                 events: &[Event::Attacked {
@@ -8168,6 +8364,7 @@ mod miss009 {
             },
             50 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -8294,24 +8491,28 @@ mod miss009 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: PERSIAN_ROUND,
                 ticks: 4500,
                 events: PERSIAN_WATCH,
             },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: fight,
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -8332,6 +8533,7 @@ mod miss009 {
         match state {
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((20, 0, 20, 15)),
                 ticks: (difficulty() as u32 + 5) * 1500,
                 events: &[],
@@ -8346,6 +8548,7 @@ mod miss009 {
         match state {
             10 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 500,
                 events: &[],
@@ -9016,36 +9219,43 @@ mod miss010 {
             0 => choose(),
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: round,
                 ticks: 0,
                 events: home,
             },
             10 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: round,
                 ticks: 0,
                 events: wide,
             },
             15 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
+            // p4 is 0 (0x468240, 0x469a80 pass 0x28, 0).
             20 => Op::Attack {
                 next: if strike.is_some() { 40 } else { 0 },
+                failed: 0,
                 target: Target::Seen,
                 ticks: 6000,
                 events: &wide[..n],
             },
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area(strike.unwrap_or((0, 0, 0, 0))),
                 ticks: 6000,
                 events: &wide[..n],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -9113,6 +9323,7 @@ mod miss010 {
         match state {
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area(NEST_WATERS),
                 ticks: 1500,
                 events: &W[..3],
@@ -9142,12 +9353,14 @@ mod miss010 {
             0 => Op::Behave { next: 10 },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 500,
                 events: &[],
             },
             40 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area(NEST_WATERS),
                 ticks: 1500,
                 events: &[],
@@ -9332,11 +9545,13 @@ mod miss010 {
         match strait_patrol(state) {
             Op::Patrol {
                 timeout,
+                failed,
                 ticks,
                 events,
                 ..
             } => Op::Patrol {
                 timeout,
+                failed,
                 points: ROUND9,
                 ticks,
                 events,
@@ -9883,12 +10098,14 @@ mod miss011 {
         match state {
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: answer,
                 events: &[],
@@ -9914,6 +10131,7 @@ mod miss011 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: W,
@@ -10003,6 +10221,7 @@ mod miss011 {
             },
             10 => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: W,
@@ -10023,6 +10242,7 @@ mod miss011 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 5,
+                failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: W,
@@ -10064,6 +10284,7 @@ mod miss011 {
             },
             6 => Op::Patrol {
                 timeout: 10,
+                failed: 10,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
@@ -10079,6 +10300,7 @@ mod miss011 {
             ),
             15 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 6000,
                 events: &[],
@@ -10106,18 +10328,21 @@ mod miss011 {
             },
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((0, 0, 17, 20)),
                 ticks: 1500,
                 events: &[],
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::LastArea,
                 ticks: 1500,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -10309,6 +10534,7 @@ mod miss011 {
         const ROUND: &[(i32, i32, u32)] = &[(38, 24, 500), (40, 19, 750)];
         let strike = Op::Attack {
             next: 0,
+            failed: 0,
             target: Target::Seen,
             ticks: 6000,
             events: STRIKING,
@@ -10334,6 +10560,7 @@ mod miss011 {
             }),
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 0,
                 events: W,
@@ -11068,12 +11295,14 @@ mod miss012 {
         match state {
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: answer,
                 events: &[],
@@ -11174,6 +11403,7 @@ mod miss012 {
             },
             6 => Op::Patrol {
                 timeout: 10,
+                failed: 10,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
@@ -11198,6 +11428,7 @@ mod miss012 {
             }),
             15 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 3000,
                 events: STRIKING,
@@ -11274,6 +11505,7 @@ mod miss012 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 0,
                 events: W,
@@ -11282,6 +11514,7 @@ mod miss012 {
             25 => Op::Custom(|scene, _| if rich(scene) { 26 } else { 0 }),
             26 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: STRIKING,
@@ -11325,6 +11558,7 @@ mod miss012 {
             0 => Op::Custom(|scene, k| roll_length(scene, k, [10, 8, 6])),
             5 => Op::Patrol {
                 timeout: 10,
+                failed: 10,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
@@ -11360,12 +11594,14 @@ mod miss012 {
             20 => fight(20, 375),
             35 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: HUNTING,
             },
             _ => Op::Attack {
                 next: PREVIOUS,
+                failed: PREVIOUS,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -11385,6 +11621,7 @@ mod miss012 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: 0,
                 events: W,
@@ -11416,6 +11653,7 @@ mod miss012 {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
                 timeout: 10,
+                failed: 10,
                 points: round,
                 ticks: 0,
                 events: W,
@@ -11487,6 +11725,7 @@ mod miss012 {
             },
             6 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
@@ -11509,6 +11748,7 @@ mod miss012 {
             25 => fight(20, 375),
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::LastArea,
                 ticks: 375,
                 events: &[],
@@ -12265,12 +12505,14 @@ mod miss013 {
         match state {
             20 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
             _ => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Attacker,
                 ticks: answer,
                 events: &[],
@@ -12372,6 +12614,7 @@ mod miss013 {
             },
             6 => Op::Patrol {
                 timeout: 10,
+                failed: 10,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
@@ -12392,6 +12635,7 @@ mod miss013 {
             }),
             15 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 6000,
                 events: STRIKING,
@@ -12505,6 +12749,7 @@ mod miss013 {
             }),
             36 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: STRIKING,
@@ -12555,6 +12800,7 @@ mod miss013 {
             0 => Op::Custom(|scene, k| roll_length(scene, k, [11, 8, 7])),
             5 => Op::Patrol {
                 timeout: 10,
+                failed: 10,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
@@ -12596,18 +12842,21 @@ mod miss013 {
             21 => Op::Custom(|_, _| 0),
             22 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((20, 7, 18, 6)),
                 ticks: 1500,
                 events: &[],
             },
             35 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: HUNTING,
             },
             _ => Op::Attack {
                 next: PREVIOUS,
+                failed: PREVIOUS,
                 target: Target::Attacker,
                 ticks: 375,
                 events: &[],
@@ -12662,6 +12911,7 @@ mod miss013 {
             }),
             5 => Op::Patrol {
                 timeout: 0,
+                failed: 0,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
@@ -12721,6 +12971,7 @@ mod miss013 {
             },
             6 => Op::Patrol {
                 timeout: 10,
+                failed: 10,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
@@ -12752,18 +13003,21 @@ mod miss013 {
             }),
             25 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 4500,
                 events: STRIKING,
             },
             30 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::LastArea,
                 ticks: 375,
                 events: &[],
             },
             55 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
@@ -12817,6 +13071,7 @@ mod miss013 {
             },
             8 => Op::Patrol {
                 timeout: 10,
+                failed: 10,
                 points: ROUND,
                 ticks: VAR0,
                 events: W,
@@ -12838,12 +13093,14 @@ mod miss013 {
             }),
             25 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Area((0, 55, 8, 8)),
                 ticks: 4500,
                 events: STRIKING,
             },
             55 => Op::Attack {
                 next: 0,
+                failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],

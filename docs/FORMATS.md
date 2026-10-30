@@ -3162,7 +3162,32 @@ timeout before switching state with 0x479750:
 resource class e.g. 0x191 fish); 0x47a6a0 attack a zone (order 0x71,
 0x479a40: rectangle from a per-mission table, strength by difficulty); 0x47a900
 patrol a list of (x, y, pause) points (order 100 for each in turn); 0x4797e0
-set the fleet's behaviour (order 0x72). The brain's tick (message 0) is
+set the fleet's behaviour (order 0x72). On each later call a step queries,
+then tests its timeout, then its events, each switch overriding the one
+before: move 0x47a450 goes to p3 on result 0xb, else to p4; gather
+0x47a570 to p4 on result 1, p3 on 10; attack 0x47a6a0 to p3 on 10, else
+(1 included) to p4; 0x47a7e0 (order 0x82) to p3 on 1, p4 on 10; patrol
+0x47a900 tests its timeout (p3) and events first and returns, then, on
+its way to a point (`+0x60 == 1`), starts the pause on 0xb and goes to p4
+on any other result. p3 and p4 are equal at every gather site and at
+every attack and patrol site but five: miss000 0x449810 state 5 patrol
+(0x28, 5), miss008 0x4628d0 state 5 attack (10, 0) and 0x4629b0 states
+0x14 / 0x1e (0x28, 0), miss010 0x468240 and 0x469a80 state 0x14 (0x28,
+0). **A fleet with no ships** takes its orders as any other: 0x4a09d0
+ends the old block and allocates the new (0x4cc500 / 0x4d6540) whatever
+the ship count, the fleet tick (0x4c4f40: 0x4ccd80, 0x4d6cd0, 0x4ca8d0)
+leaves it as it is, and every status routine (0x4ccf60 move, 0x4d63d0 /
+0x4d70d0 attack, 0x4c8da0 order 0x78) starts with the ship count and,
+at 0, reports done with result 1. So an empty member's move, gather,
+attack or patrol reaches p4 at its next turn, 50 ticks after it started
+(move: p3 if its time is up too; an event wins over both). 0x4ce2d0
+(order 0x82) reports done but leaves result `out[5]` unwritten, so
+0x47a7e0 reads a stack word: not decoded. The Size events count the
+fleet (0x479d60): 0 for an empty one. The one member found holding
+itself (the members' 0x479dc0 calls searched for a test of their own
+count around the switch) is miss008's 0x4628d0: while it has no royal
+ship, bomber, boarder or rammer (the byte sum of their counts is 0) its
+switch is not run. The brain's tick (message 0) is
 the game clock (0x47b2e0 copies `[game +0xde]` into `+0xfc`, and on
 message 0 counts `+0xf8` down, setting game `+0x3239` at 0). Every 5
 ticks each main does the brain's own work, then runs its members group by

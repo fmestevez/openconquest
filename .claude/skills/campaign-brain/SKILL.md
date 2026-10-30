@@ -27,8 +27,11 @@ are in `story.rs`.
   program, and the ship types it asks its builder for, by difficulty.
 - The cadence (`run_brain`): the brain's tick is the game clock; every 5
   ticks `before`, then each member (g, m) when the tick is 5 x (g + m)
-  modulo 50, then `after`. Members run with or without ships (a step that
-  orders the fleet about is held while it has none: not decoded).
+  modulo 50, then `after`. Members run with or without ships: an empty
+  fleet's order is taken and reported done, result 1, at its next turn, so
+  Move goes to `failed`, Attack and Patrol to their `failed` (the
+  original's p4), Gather on (`empty` in `fleet_step`); `gate` holds a
+  member whose own code tests its ships first (miss008's strike).
 - A program is `fn(state: u32) -> Op`. `Op` is one of the original's
   primitives: `Behave`, `Wait`, `WaitVar`, `Watch`, `Move`, `Gather`,
   `Patrol`, `Attack`, `Build`, or `Custom(fn(&mut Scene, usize) -> u32)` for
