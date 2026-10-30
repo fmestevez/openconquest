@@ -148,6 +148,11 @@ pub enum Order {
     RepairStock {
         workshop: u32,
     },
+    /// Order 10 to workshop `workshop` (a right click on its command 0x15):
+    /// its settlement's stock repair called off (0x4430f0).
+    CancelStockRepair {
+        workshop: u32,
+    },
     BuildShip {
         site: u32,
         kind: u8,
@@ -297,6 +302,12 @@ impl Scene {
             SellFitting { site, ram, level } => done(self.sell_fitting(site, ram, level)),
             SellTown { site } => done(self.sell_town(site, data, caches)),
             RepairStock { workshop } => done(self.order_repair_stock(workshop)),
+            CancelStockRepair { workshop } => done(
+                self.object_index(workshop)
+                    .and_then(|w| self.home_settlement(w))
+                    .ok_or_else(|| "The workshop belongs to no settlement".to_string())
+                    .and_then(|home| self.cancel_stock_repair(home)),
+            ),
             BuildShip { site, kind } => done(self.start_ship(site, kind)),
             BuildArgo { site } => done(self.start_argo(site)),
             CancelShip { site, kind } => done(self.cancel_ship(site, kind)),

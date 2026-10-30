@@ -317,10 +317,8 @@ impl Scene {
     /// part of the price not done comes back (`(100 - progress) x paid /
     /// 100`), and the worn units are made whole in their order, kinds in
     /// turn and least worn first, as long as each one's time still fits in
-    /// the time spent, the first that does not ending it. (Not wired: the
-    /// original gives it with the info pointer, mode 0x1e, whose use is not
-    /// decoded.)
-    #[allow(dead_code)]
+    /// the time spent, the first that does not ending it. Given by a right
+    /// click on the workshop's command 0x15 (0x4f46c0).
     pub fn cancel_stock_repair(&mut self, site: u32) -> Result<(), String> {
         let k = self
             .stock_repairs

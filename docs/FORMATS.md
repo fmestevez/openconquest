@@ -2012,10 +2012,32 @@ DEMON stream) once game + 0xa83 ms pass after the title screen was shown
 value that turns it off. Nothing to port for an installed copy.
 
 **Info pointer** (pointer mode 0x1e, `CUR_INFO_`, hotspot (-9, -37),
-0x516ea0): the only reply of mode 0x1e found is a town's (around
-0x43a026) to pointer state 0x22 with kind 9, and no code found sets that
-state with kind 9; what enters and leaves it is not decoded (0x518db0,
-0x516940, 0x518d00, writers of pointer + 0xdd / + 0xe1). Not ported.
+0x516ea0) is unreachable in this build: the only reply of mode 0x1e is
+the war temple's (TempleWarClassTy 0x439260, 0x43a0a9) to pointer state
+0x22 with kind 9 (bit 0x4000, the "cannot" look, over an object owned by
+a nation below 4 or of class 0x45, 0x46, 0x190-0x192, 0x1fa, 0x1fb, or
+over nothing), and every writer of the pointer's state (+ 0xdd) and kind
+(+ 0xe1) was read: kind 9 is stored only with state 0x23 (command 't',
+0x4f41db), which the temple does not answer. No button, key or panel
+enters it; the port has no path to it either.
+
+**Command buttons' right click** (_sbutton, second message 0x1d83 + i,
+taken when its id is set; the button looks pressed while the right
+button is held and acts on the release inside; 0x4f46c0, when the
+button exists and is not the back button): by its command code, 0x14,
+0x15, 0x3a-0x3c, 0x3e-0x54 and 0x67 reset the pointer (+ 0xef, + 0xdd,
++ 0xe1, + 0xe6) and send order 10 with no data to the selection
+(0x518db0); 0x21-0x39 and 0x7d reset it and send order 0x3c {group,
+item} (ships 0x21-0x2c and 0x7d group 1, training 0x2d-0x35 group 2,
+armour 0x36/0x37 group 3, rams 0x38/0x39 group 4); others nothing. What
+order 10 calls off is the object's: the settlement's stock repair
+(0x4430f0, command 0x15), the war temple's flame (0x439260: when busy,
++ 0x110 = 1 gives back + 0x120 x the amber of 0x596864 / 100 and the fish
+of 0x59689c, + 0x110 = 2 + 0x120 x 1000 / 100 and clears the player's
++ 0xc0). The port sends the stock repair's (and the cancels of 0x3c)
+and resets its waiting command; the war temple's order 10 and the
+other order-10 codes' objects are not ported, nor the conditions game
++ 0x15b5 + 0x17e6 / + 0x17ea (not identified).
 
 Known differences not yet ported:
 

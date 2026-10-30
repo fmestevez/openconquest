@@ -3,7 +3,10 @@
 //! be done where the pointer is and `G` (greyed) for one that cannot. The
 //! game picks one by what the selected units would do to what is under the
 //! pointer (0x5175b0) and draws it at the mouse position plus an offset per
-//! pointer (0x516ea0).
+//! pointer (0x516ea0). Mode 0x1e (`CUR_INFO_`) has no entry: only the
+//! war temple answers with it (0x439260, to state 0x22 kind 9), and no
+//! button, key or panel sets that state (0x4f34c0 stores kind 9 with state
+//! 0x23 only), so the original never shows it.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

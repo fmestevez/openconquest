@@ -4723,6 +4723,27 @@ impl App {
         let Some(entry) = menu(&self.scene, obj, self.page)[slot] else {
             return;
         };
+        // The button's second message (0x1d83 + i, 0x4f46c0): for the
+        // codes that send order 10 or 0x3c the pointer is reset first.
+        let code = entry.command.0;
+        if matches!(code, 0x14 | 0x15 | 0x21..=0x3c | 0x3e..=0x54 | 0x67 | 0x7d) {
+            self.pending = None;
+        }
+        // Order 10 (no data) to the selection for 0x14, 0x15, 0x3a-0x3c,
+        // 0x3e-0x54 and 0x67; what it calls off is the object's: the
+        // settlement's stock repair (0x4430f0) is the one ported.
+        if code == Command::REPAIR_STOCK.0 {
+            let (id, i) = (obj.id, self.scene.object_index(obj.id));
+            let repairing = i
+                .and_then(|i| self.scene.home_settlement(i))
+                .is_some_and(|home| self.scene.stock_repair_at(home).is_some());
+            if repairing {
+                if let Err(e) = self.issue(Order::CancelStockRepair { workshop: id }) {
+                    self.say(e);
+                }
+            }
+            return;
+        }
         if let Some(kind) = economy::ship_of_command(entry.command) {
             if entry.count > 0 {
                 let order = Order::CancelShip { site: obj.id, kind };
