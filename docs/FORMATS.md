@@ -2705,7 +2705,51 @@ cleared on all 12 together. Who sets them:
   0x4472d0, `(reach + 1) x 10 - d x 10`. The target track 0x447400
   shoots only when it passes (else the scan, at will); the scan 0x446d60
   keeps only candidates that pass and takes the best score, ties by its
-  argument modulo their count. The player's orders pass everything: 0x15
+  argument modulo their count. A barbarian structure's groups (vtable
+  0x5949e0, slot 0 0x40fd30, the structure at `+0x46`) test only side 1
+  (a player's object) with its player's bit in `+0x1f8`, then the class
+  in `+0x1fc` (0x50ed20), the kind in `+0x200` (0x447800) and the same
+  score; the masks are all ones from the constructor (0x40de60), and
+  orders 0x15 / 0x16 (0x40f75b: `+0x200` the byte `+5`, `+0x1f8` the dword
+  `+6`, `+0x1fc` the dword `+10`) and 0x23 sub 1 (0x40f8e9: `+1`, `+5`,
+  `+9`) store them as they come, its own player's bit kept.
+  **The scan** (0x446d60, `this` the group, `param_1` the draw): the
+  object held (`+0x20`) is looked for (0x51f1f0) and scored by slot 0 at
+  the cell where it was found (`+0x28` / `+0x2c`), else cleared. Then the
+  cells of the box `group cell ± reach` (the reach 0x4466c0: 0x598154 at
+  `[level x 12 + item]`, the level the player's reach level `+0x95` for
+  item / 3, `+0x39`; the group's cell `+0x14` / `+0x18` is the
+  structure's `+0x74` / `+0x78`), row by row, on the map, where the reach
+  mask is set (0x447840 by item `+0x38`, size 0x598130 by level and
+  item); with the fog on (`[0x5ca546]` and DarkTy `+0x18c` 0) a cell
+  whose explored layer of the structure's player (`[0x5c74a0] + 0x24 + 16
+  p`, allocated for each player present, 0x48bbd0) is 0 is skipped. A
+  cell gives at most one candidate: the occupant slot (`+4`) if there
+  (vt+0x2c) and of another side (`+0x57`) or an enemy (0x4efe20 < 0);
+  else the slot `+0x10` if there and the medusa (0x1fa), the siren
+  (0x1fd) or an enemy; else the slot `+0xc` if there and a harpy or dragon
+  (0x1f8, 0x1f9); then it is dropped if a ship (type 0x1488) whose
+  reserved cell `+0x5ab` this is, a medusa with `+0x110` 0, or a building
+  0x32-0x3e in state `+0xa4` 2. The object held keeps its score; any
+  other needs a non-zero slot 0. Up to 150 (0x5c6a48-0x5c73ac, 16 bytes
+  each). The best score wins, compared unsigned; if the object held is
+  among them and the best is not above its score, it stays (cell not
+  updated). Several at the best: those below are removed, the order
+  kept, and entry `param_1 % count` wins; one: the first at the best.
+  Nothing: target and object cleared. 0x4469c0 (per group, while its mode
+  is not 0 and `now > +0x1c + reload + param_3 % (reload x 20 / 100 +
+  1)`, reload `0x5c76e0[item x 3 + rate level]`): bit 2 and the track
+  passing, the target; bit 2 failing with bit 1, a scan into locals (not
+  kept); bit 1 alone, a scan into `+0x20`..`+0x2c` (kept); a jam found is
+  shot through its first member (0x415df0). The callers (0x41a96f fort,
+  0x40f61d stronghold), each tick in state `+0xa4` 1 unlimed (`+0x144`
+  0; the fort also `+0x1e4` 0), draw for each of the twelve groups from
+  the unit list's dword 0 (0 when made, 0x41a204 / 0x40f100): `s =
+  0xa70427df - s x 0x7f82434b`, passing `s >> 16` as `param_1`,
+  `param_2` and `param_3` (the fort `+0x4a8` as `param_4`, the
+  stronghold 0). The track 0x447400 walks the same cells and stops at
+  the first holding the target in any slot (or a jam holding it,
+  0x415e00), returning slot 0's verdict there. The player's orders pass everything: 0x15
   / 0x16 from 0x5180e0 {.., 0xff, -1, -1}, 0x23 from 0x4f34c0 players -1,
   classes -1, kinds 0xffff; only the navy's 0x4c5b30 (fleet `+0x19`,
   `+0x1d`, `+0x21`) sends others.
@@ -2745,7 +2789,15 @@ cleared on all 12 together. Who sets them:
 The port keeps the fire in `combat::FortFire` (at will, a target per
 group, the aggressor flag): `Scene::fort_attack` (0x15 / 0x16),
 `fort_order` (0x23), `fort_aggressed` (0x4184f0), order 10 in `halt`, the
-masks in `combat::FortMasks` (tested by `fort_may_shoot`), the 0x2874
+masks in `combat::FortMasks` (a fort's and a stronghold's), the groups'
+shot test and score in `group_score`, the scan in `group_scan` (the
+cells `group_cells`: ships, buildings on each cell of their footprint
+and the land creatures as their jam, class 0x1f7 and side 2, in the
+occupant slot; medusa, siren and sea monster in `+0x10`; harpies and
+dragons in `+0xc`), the track in `group_track`, the generator's draws
+(`FortFire::seed`, `draws`, `step_fort_draws` in the tick) and the kept
+scan result (`picks`, `pick_cells`); a group scans when one of its units
+is loaded (the port reloads unit by unit), the 0x2874
 path in `Scene::town_gone` (the buildings of its list, see "A town's
 buildings"; busy, `Scene::busy`, they are halted; their reload contacts
 end); its
@@ -2757,9 +2809,18 @@ progress `fort_mend_progress`) and its stored spell (`fort_spells`,
 fort's casts of the sea's spells and the fireball (their checks read the
 cell's tile layers and slots, not decoded here: the button is offered,
 the click refused), the draw of the fort's generator `+0x18` with a cast,
-the jam (the port has none: a click gives the creature itself), the
-scan's score and its creatures (the port's forts scan enemy ships, the
-nearest), the barbarian structures' shot test, a port's 0xcb9 on 0x2874
+the jam (the port has none: a click gives the creature itself; the scan
+takes the port's first creature on the cell, not the first to join),
+0x4469c0's reload test with the draw (the port keeps its own reload per
+unit), the fog test of computer players' structures (the port keeps the
+human's explored layer only: theirs scan every cell), the side `+0x57`
+of the ships a barbarian structure builds (0x4e2117 copies it from the
+creation record's `+0x1f`; not decoded, so the scan keeps the
+structure's own player's objects out), which slot the sea monster
+(0x1fb) takes (the port puts it with the medusa and the siren), the
+state 2 of buildings 0x34-0x3e (a settlement's is its stock mending,
+0x441ba0, which the scan skips), a ship's reserved cell (the port's ships
+hold only the cell they are in), a port's 0xcb9 on 0x2874
 (`+0x1e0` not decoded), whether a navy group of a computer ever holds a fort (the
 port's flotillas hold ships), 0x43d300's test that the building is still
 the town's, the other 0x138e senders' `+0x16`. The brains' under-way

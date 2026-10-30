@@ -547,7 +547,7 @@ mod data_tests {
                     s.path.clear();
                 }
                 scene.update(0.02, &data, caches);
-                if !scene.shots.is_empty() {
+                if scene.shots.iter().any(|s| s.shooter == Some(fort_id)) {
                     return false;
                 }
             }
@@ -562,9 +562,9 @@ mod data_tests {
         scene.fort_order(fort_id, 1).unwrap();
         let m = masks(&scene);
         assert_eq!((m.players, m.classes, m.kinds), (!own, u32::MAX, 0xffff));
-        // Its ship type's class bit cleared: nothing to shoot.
+        // Only the other ship types' class bits: nothing to shoot.
         let f = scene.object_index(fort_id).unwrap();
-        scene.objects[f].combat.as_mut().unwrap().fire.masks.classes = !(1u32 << kind);
+        scene.objects[f].combat.as_mut().unwrap().fire.masks.classes = 0xfff & !(1u32 << kind);
         assert!(quiet(&mut scene, &mut caches), "the fort fired");
         // An attack (0x15 {target, 7, 0xff, -1, -1}) stores the player's
         // masks again: the ship is shot.

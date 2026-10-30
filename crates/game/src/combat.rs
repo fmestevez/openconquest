@@ -143,10 +143,27 @@ pub struct FortFire {
     /// blow's shooter becomes some groups' target (0x4184f0). Barbarian
     /// structures have none.
     pub aggressor: bool,
-    /// What the fort's groups may shoot (`FortMasks`; barbarian
-    /// structures keep none).
+    /// What the groups may shoot (`FortMasks`: the fort's `+0x48c`,
+    /// `+0x490`, `+0x494`; a barbarian structure's `+0x1f8`, `+0x1fc`,
+    /// `+0x200`).
     #[serde(default)]
     pub masks: FortMasks,
+    /// The unit list's generator (`[+0x4d0]` / `[+0x20c]` dword 0: 0 when
+    /// the list is made, 0x41a204 / 0x40f100), stepped once a tick for
+    /// each of the twelve groups while the structure stands, unlimed
+    /// (0x41a97c / 0x40f62c: `s = 0xa70427df - s x 0x7f82434b`).
+    #[serde(default)]
+    pub seed: u32,
+    /// Each group's latest draw (`s >> 16`), 0x4469c0's first three
+    /// arguments: the scan's tie (0x446d60 `param_1`).
+    #[serde(default)]
+    pub draws: [u32; 12],
+    /// What each group's scan found and kept while its mode is bit 1
+    /// alone (`+0x20`, its cell `+0x28` / `+0x2c`): 0 none.
+    #[serde(default)]
+    pub picks: [u32; 12],
+    #[serde(default)]
+    pub pick_cells: [(i32, i32); 12],
 }
 
 impl Default for FortFire {
@@ -156,6 +173,10 @@ impl Default for FortFire {
             targets: [0; 12],
             aggressor: false,
             masks: FortMasks::default(),
+            seed: 0,
+            draws: [0; 12],
+            picks: [0; 12],
+            pick_cells: [(0, 0); 12],
         }
     }
 }
@@ -213,14 +234,23 @@ impl FortMasks {
         }
     }
 
-    /// The shot test's masks (0x41c4e0, before the score 0x4472d0) for
-    /// group `item` (the item its units carry) at an object of side
-    /// `side` (`+0x57`: 1 a player's, 2 the monsters') owned by `owner`,
-    /// whose class bit is `class`.
-    pub fn pass(&self, item: u8, side: u8, owner: Option<(u32, u32)>, class: u32) -> bool {
+    /// The shot test's masks (a fort's group 0x41c4e0, a barbarian
+    /// structure's 0x40fd30, before the score 0x4472d0) for group `item`
+    /// (the item its units carry) at an object of side `side` (`+0x57`: 1
+    /// a player's, 2 the monsters') owned by `owner`, whose class bit is
+    /// `class`. The monsters' side passes a fort's test only: the
+    /// barbarian structure's wants side 1 (0x40fd44).
+    pub fn pass(
+        &self,
+        fort: bool,
+        item: u8,
+        side: u8,
+        owner: Option<(u32, u32)>,
+        class: u32,
+    ) -> bool {
         let player = match (side, owner) {
             (1, Some((n, s))) => self.players & 1 << ((s + n * 4) & 0x1f) != 0,
-            (2, _) => true,
+            (2, _) => fort,
             _ => false,
         };
         let kind = match item / 3 {
@@ -273,12 +303,22 @@ impl FortFire {
     pub fn cease(&mut self) {
         self.at_will = false;
         self.targets = [0; 12];
+        self.picks = [0; 12];
     }
 
     /// Every group fires at will (0x4469a0: `+0x3a |= 1`, `+0x20 = 0`).
     pub fn fire_at_will(&mut self) {
         self.at_will = true;
         self.targets = [0; 12];
+        self.picks = [0; 12];
+    }
+
+    /// One tick's draws, a group at a time (0x41a96f / 0x40f61d).
+    pub fn step_draws(&mut self) {
+        for d in &mut self.draws {
+            self.seed = 0xa704_27df_u32.wrapping_sub(self.seed.wrapping_mul(0x7f82_434b));
+            *d = self.seed >> 16;
+        }
     }
 
     /// Whether any group has a mode set (0x4469c0 returns at once on 0).

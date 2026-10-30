@@ -9076,6 +9076,102 @@ fn order_10_on_temples() {
     assert!(scene.magic.flame_brewing().is_none());
 }
 
+/// A fort's group scan (0x446d60): two enemy ships at the same cell
+/// distance score alike, `(reach + 1) x 10 - d x 10` (0x4472d0); the draw
+/// modulo their count picks among them in row order; the one held stays
+/// on a tie. The unit list's generator starts at 0 and steps `0xa70427df
+/// - s x 0x7f82434b` (0x41a97c), a draw its high half. Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn fort_scan_scores_and_ties() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let mut fire = crate::combat::FortFire::default();
+    fire.step_draws();
+    assert_eq!(fire.draws[..3], [0xa704, 0xc21f, 0xaf5a]);
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+    scene.brain = None;
+    let fort = scene
+        .objects
+        .iter()
+        .position(|o| matches!(o.class, ObjectClass::Building(0x34..=0x36)) && o.is_armed())
+        .expect("a fort");
+    let fort_id = scene.objects[fort].id;
+    let owner = scene.objects[fort].owner.unwrap();
+    let (fx, fy) = scene.objects[fort].cell.unwrap();
+    let item = scene.objects[fort].shooters()[0];
+    let level = scene.levels_of(Some(owner)).reach_for(item);
+    let reach = crate::combat::range_cells(item, level).1 as i32;
+    let mask = super::placement::reach_mask(item, level).unwrap();
+    let half = mask.len() as i32 / 2;
+    // Water cells the group sees, by distance, in row order.
+    let d = |x: i32, y: i32| {
+        super::fort::root(((x - fx) * (x - fx) + (y - fy) * (y - fy)) as u64) as i32
+    };
+    let mut cells = Vec::new();
+    for y in fy - reach..=fy + reach {
+        for x in fx - reach..=fx + reach {
+            let (mx, my) = (x - fx + half, y - fy + half);
+            if scene.nav.is_water(x, y)
+                && (0..mask.len() as i32).contains(&mx)
+                && (0..mask.len() as i32).contains(&my)
+                && mask[my as usize].as_bytes()[mx as usize] == b'#'
+            {
+                cells.push((x, y));
+            }
+        }
+    }
+    let far = (1..=reach)
+        .rev()
+        .find(|&k| cells.iter().filter(|c| d(c.0, c.1) == k).count() >= 2)
+        .expect("two water cells alike");
+    let pair: Vec<(i32, i32)> = cells
+        .iter()
+        .copied()
+        .filter(|c| d(c.0, c.1) == far)
+        .take(2)
+        .collect();
+    let ships: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| o.ship.is_some())
+        .take(2)
+        .map(|o| o.id)
+        .collect();
+    scene
+        .objects
+        .retain(|o| o.id == fort_id || ships.contains(&o.id));
+    for (&id, &(x, y)) in ships.iter().zip(&pair) {
+        let k = scene.object_index(id).unwrap();
+        scene.objects[k].owner = Some((owner.0, owner.1 + 1));
+        (scene.objects[k].x, scene.objects[k].y) = (x as f32 * 64.0 + 32.0, y as f32 * 64.0 + 32.0);
+    }
+    let f = scene.object_index(fort_id).unwrap();
+    let k = scene.object_index(ships[0]).unwrap();
+    assert_eq!(
+        scene.group_score(f, item, pair[0], k),
+        ((reach + 1) * 10 - far * 10) as u32
+    );
+    assert_eq!(
+        scene.group_scan(f, item, 0, None),
+        Some((ships[0], pair[0]))
+    );
+    assert_eq!(
+        scene.group_scan(f, item, 1, None),
+        Some((ships[1], pair[1]))
+    );
+    assert_eq!(
+        scene.group_scan(f, item, 0xa704, None),
+        Some((ships[0], pair[0]))
+    );
+    // Held, the second stays on the tie.
+    let held = Some((ships[1], pair[1]));
+    assert_eq!(scene.group_scan(f, item, 0, held), held);
+}
+
 /// Order 10 to a fort: its twelve unit groups cease fire (0x4469b0) and
 /// it shoots no more (0x4469c0 with mode 0), until order 0x23 sub 1 sets
 /// them at will (0x4469a0), an attack order 0x15 / 0x16 at a target
@@ -9137,7 +9233,13 @@ fn order_10_silences_a_fort() {
                 s.path.clear();
             }
             scene.update(0.02, &data, caches);
-            if !scene.shots.is_empty() {
+            // The forts' shots (a stronghold of miss002's fires at the
+            // player's buildings in its reach, 0x40fd30).
+            if scene
+                .shots
+                .iter()
+                .any(|s| s.shooter.is_some_and(|id| forts.contains(&id)))
+            {
                 return false;
             }
         }

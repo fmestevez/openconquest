@@ -376,7 +376,7 @@ fn regions(bytes: &[u8], w: i32, h: i32) -> Vec<u32> {
 
 /// Where a fort's weapons of `item` reach at range level `level`, about
 /// its cell (0x447840: the tables at 0x59819c-0x598968).
-fn reach_mask(item: u8, level: u8) -> Option<&'static [&'static str]> {
+pub(super) fn reach_mask(item: u8, level: u8) -> Option<&'static [&'static str]> {
     const A9: [&str; 9] = [
         ".........",
         "...###...",

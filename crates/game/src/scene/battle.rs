@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// A cell a fort's group looks at, with its slots' objects (slot: 0 the
+/// occupant, 1 `+0x10`, 2 `+0xc`; object index).
+type GroupCell = ((i32, i32), Vec<(u8, usize)>);
+
 impl Scene {
     /// Whether two objects belong to different players. All players are
     /// treated as enemies of each other until diplomacy is implemented.
@@ -84,7 +88,8 @@ impl Scene {
     /// found, 0x51f1f0; mode bit 2 added, the at-will bit kept); a fort
     /// stores the masks (`+0x494` the byte `+5`, `+0x48c` the dword `+6`
     /// less its own player's bit, `+0x490` the dword `+10`), whatever is
-    /// found. (Not ported: a cyclops' jam, class 0x1f7, which the fort
+    /// found; a barbarian structure the same as they come (`+0x200`,
+    /// `+0x1f8`, `+0x1fc`, 0x40f75b). (Not ported: a cyclops' jam, class 0x1f7, which the fort
     /// turns into the jam's first member, 0x415df0, the earliest of the
     /// creatures on that cell still there: the port has no jams, a click
     /// gives the creature itself.)
@@ -101,10 +106,9 @@ impl Scene {
         let Some(c) = self.objects[i].combat.as_mut() else {
             return;
         };
-        if fort {
-            if let Some(owner) = owner {
-                c.fire.masks = masks.stored(owner);
-            }
+        match owner {
+            Some(owner) if fort => c.fire.masks = masks.stored(owner),
+            _ => c.fire.masks = masks,
         }
         if found {
             for k in combat::order_groups(groups) {
@@ -122,7 +126,8 @@ impl Scene {
     /// group ceases fire (0x4469b0), `+0x498 = 0`; 3 the masks stored,
     /// `+0x498 = 1`, every group ceases fire (it answers blows,
     /// `fort_aggressed`). A barbarian structure (0x40ef70) takes sub 1
-    /// only, and keeps no masks.
+    /// only, storing the masks as they come (`+0x1f8`, `+0x1fc`, `+0x200`
+    /// from `+1`, `+5`, `+9`, 0x40f8e9).
     pub fn fort_order(&mut self, site: u32, sub: u8) -> Result<(), String> {
         let i = self
             .object_index(site)
@@ -131,12 +136,14 @@ impl Scene {
         let fort = matches!(self.objects[i].class, ObjectClass::Building(0x34..=0x36));
         let owner = self.objects[i].owner;
         let c = self.objects[i].combat.as_mut().unwrap();
-        let masks = owner.map(|o| combat::FortMasks::PLAYER_BEHAVIOUR.stored(o));
+        let behaviour = combat::FortMasks::PLAYER_BEHAVIOUR;
+        let masks = owner.map(|o| behaviour.stored(o));
         match sub {
             1 => {
-                if let (true, Some(m)) = (fort, masks) {
-                    c.fire.masks = m;
-                }
+                c.fire.masks = match masks {
+                    Some(m) if fort => m,
+                    _ => behaviour,
+                };
                 c.fire.fire_at_will();
                 c.fire.aggressor = false;
             }
@@ -156,34 +163,249 @@ impl Scene {
         Ok(())
     }
 
-    /// Whether a group of fort `i` carrying `item` may shoot object `t`
-    /// by the fort's masks (0x41c4e0 before its score): `t`'s side
-    /// (`+0x57`: 2 for barbarian structures, 0x410150, lairs, 0x414e20,
-    /// and the port's other monsters, whose constructors were not all
-    /// read: with every mask the player's orders store, sides 1 and 2
-    /// both pass; 1 another player's object; none else), its
-    /// player's bit, its class bit and the group's kind. Barbarian
-    /// structures' groups have another shot test (not decoded) and shoot
-    /// as before.
-    pub(super) fn fort_may_shoot(&self, i: usize, item: u8, t: usize) -> bool {
-        let (me, it) = (&self.objects[i], &self.objects[t]);
-        if !matches!(me.class, ObjectClass::Building(0x34..=0x36)) {
-            return true;
-        }
-        let Some(c) = me.combat.as_ref() else {
-            return false;
-        };
-        let side = if matches!(it.class, ObjectClass::Barbarian(_))
-            || it.owner == Some(combat::MONSTERS)
-        {
+    /// An object's side (`+0x57`): 2 the monsters' (barbarian structures,
+    /// 0x410150; lairs, 0x414e20; the jam, 0x415c10; the port's other
+    /// monsters, whose constructors were not all read), 1 a player's, 0
+    /// none.
+    fn side_of(o: &MapObject) -> u8 {
+        if matches!(o.class, ObjectClass::Barbarian(_)) || o.owner == Some(combat::MONSTERS) {
             2
-        } else if it.owner.is_some() {
+        } else if o.owner.is_some() {
             1
         } else {
             0
+        }
+    }
+
+    /// The shot test of fort or barbarian structure `i`'s group `item` at
+    /// object `t` on cell `cell` (group vtable slot 0: a fort's 0x41c4e0,
+    /// a barbarian structure's 0x40fd30): the masks (`FortMasks::pass`;
+    /// a land creature by its jam's class, 0x1f7, and side 2), then the
+    /// score 0x4472d0, `(reach + 1) x 10 - d x 10`, the reach the group's
+    /// range in cells (0x4466c0: 0x598154 by its item and the player's
+    /// reach level for item / 3, `+0x39`) and `d` the cell distance from
+    /// the structure's cell (the group's `+0x14` / `+0x18`, the list's
+    /// `+4` / `+8`: its `+0x74` / `+0x78`) by 0x5576d8. 0 is no.
+    pub(super) fn group_score(&self, i: usize, item: u8, cell: (i32, i32), t: usize) -> u32 {
+        let (me, it) = (&self.objects[i], &self.objects[t]);
+        let Some(c) = me.combat.as_ref() else {
+            return 0;
         };
-        let class = combat::class_bit(it.record.class_id, it.ship.as_ref().map(|s| s.kind));
-        c.fire.masks.pass(item, side, it.owner, class)
+        let fort = matches!(me.class, ObjectClass::Building(0x34..=0x36));
+        let walker = self.walkers.iter().any(|w| w.id == it.id);
+        let class = if walker {
+            combat::class_bit(0x1f7, None)
+        } else {
+            combat::class_bit(it.record.class_id, it.ship.as_ref().map(|s| s.kind))
+        };
+        let side = if walker { 2 } else { Self::side_of(it) };
+        if !c.fire.masks.pass(fort, item, side, it.owner, class) {
+            return 0;
+        }
+        let reach = combat::range_cells(item, self.levels_of(me.owner).reach_for(item)).1 as i32;
+        let (fx, fy) = self.cell_of(i);
+        let (dx, dy) = ((cell.0 - fx) as i64, (cell.1 - fy) as i64);
+        let d = super::fort::root((dx * dx + dy * dy) as u64) as i32;
+        ((reach + 1) * 10 - d * 10) as u32
+    }
+
+    /// The cells group `item` of structure `i` looks at, row by row, each
+    /// with what it may aim at there (0x446d60 / 0x447400): the box of
+    /// its range (0x4466c0) about the structure's cell, on the map, where
+    /// its reach mask (0x447840, `reach_mask`) is set; with the fog on,
+    /// only cells the structure's player has explored (DarkTy `+0x24`
+    /// layer 0 not 0, while `[0x5ca546]` and not `+0x18c`; the port keeps
+    /// the human's layer only). In a cell, the slots in order: the
+    /// occupant (`+4`: a ship, a building on any cell of its footprint,
+    /// the land creatures' jam), the sea creatures (`+0x10`), the flyers
+    /// (`+0xc`: harpy, dragon); each object that is there (vt+0x2c; the
+    /// port: life left, not hidden).
+    fn group_cells(&self, i: usize, item: u8) -> Vec<GroupCell> {
+        let me = &self.objects[i];
+        let level = self.levels_of(me.owner).reach_for(item);
+        let Some(mask) = super::placement::reach_mask(item, level) else {
+            return Vec::new();
+        };
+        let r = combat::range_cells(item, level).1 as i32;
+        let (fx, fy) = self.cell_of(i);
+        let (w, h) = self.map_size();
+        let half = mask.len() as i32 / 2;
+        let fog = self.fogged() && self.is_own(me);
+        let t = TILE_SIZE as f32;
+        let at = |o: &MapObject| ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let mut cells: Vec<GroupCell> = Vec::new();
+        for y in fy - r..=fy + r {
+            for x in fx - r..=fx + r {
+                if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+                    continue;
+                }
+                if fog && self.seen(x, y) == sight::Seen::Unexplored {
+                    continue;
+                }
+                let (mx, my) = ((x - fx + half) as usize, (y - fy + half) as usize);
+                if mask[my].as_bytes()[mx] != b'#' {
+                    continue;
+                }
+                cells.push(((x, y), Vec::new()));
+            }
+        }
+        if cells.is_empty() {
+            return cells;
+        }
+        for (k, o) in self.objects.iter().enumerate() {
+            if !o.combat.as_ref().is_some_and(|c| c.hull > 0.0)
+                || self.creature_hidden(o.id)
+                || self.shoal_gone(o.id)
+            {
+                continue;
+            }
+            let mut put = |cell: (i32, i32), slot: u8| {
+                if let Some(c) = cells.iter_mut().find(|c| c.0 == cell) {
+                    c.1.push((slot, k));
+                }
+            };
+            match o.class {
+                ObjectClass::Ship => {
+                    if !self.in_dock(k) {
+                        put(at(o), 0);
+                    }
+                }
+                ObjectClass::Building(_)
+                | ObjectClass::Barbarian(_)
+                | ObjectClass::Castle(_)
+                | ObjectClass::HarpyNest
+                | ObjectClass::CreatureSpawn
+                | ObjectClass::HeroHouse => {
+                    if let Some((bx, by)) = o.cell {
+                        let n = super::trade::building_cells(o);
+                        for y in by..by + n {
+                            for x in bx..bx + n {
+                                put((x, y), 0);
+                            }
+                        }
+                    }
+                }
+                ObjectClass::Monster(0x1f4..=0x1f6) => put(at(o), 0),
+                ObjectClass::Monster(0x1fa | 0x1fb | 0x1fd) => put(at(o), 1),
+                ObjectClass::Monster(0x1f8 | 0x1f9) => put(at(o), 2),
+                _ => {}
+            }
+        }
+        for c in &mut cells {
+            c.1.sort_by_key(|&(slot, _)| slot);
+        }
+        cells
+    }
+
+    /// The scan of structure `i`'s group `item` (0x446d60) with the tie
+    /// draw `draw` and what it holds (`current`: `+0x20` and the cell it
+    /// was found on, `+0x28` / `+0x2c`). Each cell gives at most one
+    /// candidate, the first of its slots that is: the occupant, of
+    /// another side (`+0x57`) or an enemy (0x4efe20 < 0), but a building
+    /// of classes 0x32-0x3e in state 2 (a settlement mending its stock,
+    /// 0x441ba0); a sea creature, the medusa (0x1fa) or the siren (0x1fd)
+    /// whoever's, else an enemy; a flyer (0x1f8, 0x1f9). It is kept with
+    /// a non-zero shot test (`group_score`), but the object held, kept
+    /// with the score it had where it was found, whatever (up to 150 in
+    /// all, 0x5c6a48). The best score wins (unsigned); when several share
+    /// it, those below it are dropped, the order kept, and the one at
+    /// `draw % count` wins; one alone, the first. The object held stays
+    /// when it is among them and nothing scores above it. Nothing found
+    /// clears it.
+    pub(super) fn group_scan(
+        &self,
+        i: usize,
+        item: u8,
+        draw: u32,
+        current: Option<(u32, (i32, i32))>,
+    ) -> Option<(u32, (i32, i32))> {
+        let me = &self.objects[i];
+        let current = current
+            .and_then(|(id, cell)| self.object_index(id).map(|t| (id, cell, t)))
+            .map(|(id, cell, t)| (id, cell, self.group_score(i, item, cell, t)));
+        let mut held = false;
+        let mut list: Vec<(u32, (i32, i32), u32)> = Vec::new();
+        for (cell, slots) in self.group_cells(i, item) {
+            let pick = slots.iter().find(|&&(slot, k)| {
+                let o = &self.objects[k];
+                match slot {
+                    // (Not decoded: the side of the ships a barbarian
+                    // structure builds, which 0x4e2117 copies from their
+                    // creation record's `+0x1f`; the port keeps the
+                    // structure's own player's objects out, as before.)
+                    0 => {
+                        o.owner != me.owner
+                            && (Self::side_of(o) != Self::side_of(me) || Self::are_enemies(me, o))
+                            && !(matches!(o.class, ObjectClass::Building(0x32..=0x3e))
+                                && self.stock_repair_at(o.id).is_some())
+                    }
+                    1 => {
+                        matches!(o.class, ObjectClass::Monster(0x1fa | 0x1fd))
+                            || Self::are_enemies(me, o)
+                    }
+                    _ => true,
+                }
+            });
+            let Some(&(_, k)) = pick else { continue };
+            // The land creatures on a cell answer as their jam, whose
+            // first member is shot (0x4469c0 -> 0x415df0): the port's
+            // first on the cell.
+            let id = self.objects[k].id;
+            let score = match current {
+                Some((cur, _, s)) if cur == id => {
+                    held = true;
+                    s
+                }
+                _ => match self.group_score(i, item, cell, k) {
+                    0 => continue,
+                    s => s,
+                },
+            };
+            list.push((id, cell, score));
+            if list.len() == 150 {
+                break;
+            }
+        }
+        let best = list.iter().map(|c| c.2).max()?;
+        if let Some((cur, cell, s)) = current {
+            if held && best <= s {
+                return Some((cur, cell));
+            }
+        }
+        let tied: Vec<_> = list.iter().filter(|c| c.2 == best).collect();
+        let c = if tied.len() > 1 {
+            tied[draw as usize % tied.len()]
+        } else {
+            tied[0]
+        };
+        Some((c.0, c.1))
+    }
+
+    /// Whether structure `i`'s group `item` reaches its target `target`
+    /// (0x447400): the first of `group_cells` holding it, in any slot,
+    /// then the shot test there.
+    pub(super) fn group_track(&self, i: usize, item: u8, target: u32) -> Option<usize> {
+        let t = self.object_index(target)?;
+        let (cell, _) = self
+            .group_cells(i, item)
+            .into_iter()
+            .find(|(_, slots)| slots.iter().any(|&(_, k)| k == t))?;
+        (self.group_score(i, item, cell, t) != 0).then_some(t)
+    }
+
+    /// Each standing, unlimed fort and barbarian structure steps its unit
+    /// list's generator once for each of its twelve groups, every tick
+    /// (0x41a96f, 0x40f61d: state `+0xa4` 1, `+0x144` 0; the fort also
+    /// `+0x1e4` 0, which only a saved record sets).
+    pub(super) fn step_fort_draws(&mut self) {
+        for o in &mut self.objects {
+            if !o.holds_units() || o.progress.is_some() {
+                continue;
+            }
+            if let Some(c) = o.combat.as_mut().filter(|c| c.lime <= 0.0) {
+                c.fire.step_draws();
+            }
+        }
     }
 
     /// A blow of bomb kind `kind` from `shooter` reaches fort `t` firing on
@@ -298,15 +520,15 @@ impl Scene {
                                 Some(Task::Patrol { .. } | Task::Convoy { .. })
                             )),
                 ),
-                // Forts and barbarian structures scan only while their
-                // groups fire at will, and with no mode set on any group
-                // (order 10, 0x4469b0) do not fire at all (0x4469c0).
+                // Forts and barbarian structures with no mode set on any
+                // group (order 10, 0x4469b0) do not fire at all (0x4469c0);
+                // the others pick by group below.
                 None => match self.objects[i].combat.as_ref().map(|c| c.fire) {
                     Some(fire) if self.objects[i].holds_units() => {
                         if !fire.fires() {
                             continue;
                         }
-                        (None, fire.at_will)
+                        (None, false)
                     }
                     _ => (None, true),
                 },
@@ -350,42 +572,51 @@ impl Scene {
                 None => None,
             };
             // A fort's or barbarian structure's groups (item k's units are
-            // group k) each fire at their target while it is in their
-            // reach (0x447400; out of reach it is kept), else, at will, at
-            // what the scan found (0x4469c0).
+            // group k) shoot when loaded (0x4469c0): with mode bit 2 at
+            // their target while it is in their reach (0x447400; out of
+            // reach it is kept), else, bit 1 also set, at what a scan
+            // finds, not kept; with bit 1 alone at what the scan finds,
+            // kept (`+0x20`) for the next.
             if self.objects[i].holds_units() {
                 let fire = self.objects[i].combat.as_ref().unwrap().fire;
-                let tracked = fire.targets.map(|t| {
-                    (t != 0)
-                        .then(|| self.object_index(t))
-                        .flatten()
-                        .filter(|&ti| {
-                            self.objects[ti].combat.is_some()
-                                && Self::are_enemies(&self.objects[i], &self.objects[ti])
-                        })
-                });
-                let picks: Vec<Option<usize>> = shooters
-                    .iter()
-                    .map(|&w| {
-                        let (near, far) = combat::reach(w, reach_level(w));
-                        let reaches = |ti: usize| {
-                            let d = dist(&self.objects[i], &self.objects[ti]);
-                            d >= near && d <= far
-                        };
-                        // A fort's group shoots only what its masks let
-                        // through (0x41c4e0, called by 0x447400 and the
-                        // scan 0x446d60).
-                        let may = |ti: usize| self.fort_may_shoot(i, w, ti);
-                        match tracked.get(w as usize).copied().flatten() {
-                            Some(ti) if reaches(ti) && may(ti) => Some(ti),
-                            _ => target.filter(|&ti| reaches(ti) && may(ti)),
+                let reloads = self.objects[i].combat.as_ref().unwrap().reloads.clone();
+                let mut picks = [None; 12];
+                let mut kept = (fire.picks, fire.pick_cells);
+                for g in 0..12u8 {
+                    let loaded = shooters
+                        .iter()
+                        .zip(&reloads)
+                        .any(|(&w, &r)| w == g && r <= 0.0);
+                    if !loaded {
+                        continue;
+                    }
+                    let k = g as usize;
+                    let draw = fire.draws[k];
+                    picks[k] = if fire.targets[k] != 0 {
+                        match self.group_track(i, g, fire.targets[k]) {
+                            Some(t) => Some(t),
+                            None if fire.at_will => self
+                                .group_scan(i, g, draw, None)
+                                .and_then(|(id, _)| self.object_index(id)),
+                            None => None,
                         }
-                    })
-                    .collect();
+                    } else if fire.at_will {
+                        let held = (kept.0[k] != 0).then_some((kept.0[k], kept.1[k]));
+                        let found = self.group_scan(i, g, draw, held);
+                        kept.0[k] = found.map_or(0, |f| f.0);
+                        kept.1[k] = found.map_or(kept.1[k], |f| f.1);
+                        found.and_then(|(id, _)| self.object_index(id))
+                    } else {
+                        None
+                    };
+                }
                 let c = self.objects[i].combat.as_mut().unwrap();
+                (c.fire.picks, c.fire.pick_cells) = kept;
                 let mut fired: Vec<(usize, Vec<u8>)> = Vec::new();
-                for (k, (&w, pick)) in shooters.iter().zip(&picks).enumerate() {
-                    let Some(ti) = *pick else { continue };
+                for (k, &w) in shooters.iter().enumerate() {
+                    let Some(ti) = picks.get(w as usize).copied().flatten() else {
+                        continue;
+                    };
                     if c.reloads[k] > 0.0 {
                         continue;
                     }

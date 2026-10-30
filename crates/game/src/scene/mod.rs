@@ -2128,6 +2128,7 @@ impl Scene {
             // before or after the ships' own ticks.)
             self.run_zone_notices();
             self.run_brain();
+            self.step_fort_draws();
             for (class, cell) in std::mem::take(&mut self.pending_walkers) {
                 self.put_walker(walkers::NO_LAIR, class, cell, data, caches);
             }
