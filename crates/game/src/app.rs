@@ -246,24 +246,35 @@ const EDIT_STYLE: crate::menus::Style = crate::menus::Style {
 const CONNECT_EDIT: crate::menus::Rect = (43.0, 256.0, 420.0, 24.0);
 const SCORE_EDIT_WIDTH: f32 = 286.0;
 
-/// A front-end fade under way (`fade`): the picture it shades, its size
-/// and the palette it is in, and whether the new screen fades in after.
+/// A front-end fade under way (`fade`): the picture it shades, its size,
+/// and what comes after it.
 struct Fading {
     way: crate::fade::Way,
     since: Instant,
     pixels: Vec<u32>,
     size: (u32, u32),
-    palette: Vec<u32>,
-    then_in: bool,
+    then: AfterFade,
 }
 
-/// The screen last shown: which (none, the game), and for a front-end
-/// screen its picture (without the pointer) and palette.
+/// What follows a fade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterFade {
+    Nothing,
+    /// The new front-end screen fades in (message 0x102).
+    ScreenIn,
+    /// A game starting (0x50f910): `LOADING` fades in, then out, then the
+    /// game's palette fades in from its idle.
+    LoadingIn,
+    LoadingOut,
+    GameIn,
+}
+
+/// The screen last shown: which (none, the game) and its picture (without
+/// the pointer).
 struct Shown {
     screen: Option<std::mem::Discriminant<MenuState>>,
     pixels: Vec<u32>,
     size: (u32, u32),
-    palette: Option<Vec<u32>>,
 }
 
 /// The longest names the edits take: the end screen's (0x539350, 0x27)
@@ -922,6 +933,11 @@ pub struct App {
     /// A fade between screens, and the screen last shown.
     fade: Option<Fading>,
     shown: Option<Shown>,
+    /// The game being started by the briefing's or Custom missions' Start
+    /// (command 0x101): the fade into it shows `LOADING`.
+    entering: bool,
+    /// The game's fade in (0x50f740): steps taken and when the last was.
+    game_fade: Option<(u32, Instant)>,
     /// What the menus' sample channel plays (`mus_menu` or the briefing's
     /// FON), the briefing's archive (`<video>TASKS.DKD`, none: not there)
     /// and its voice's clock (Starttsk.cpp + 0xf8, + 0xfc).
@@ -1118,6 +1134,8 @@ impl App {
             keys_screen: None,
             fade: None,
             shown: None,
+            entering: false,
+            game_fade: None,
             menu_sample: None,
             tasks: None,
             briefing_voice: None,
@@ -3268,6 +3286,7 @@ impl App {
         self.refresh_panels();
         self.menu = None;
         self.in_game = true;
+        self.entering = true;
     }
 
     /// Runs `op` on screen `state`'s name edit with its text, the band of
@@ -3867,6 +3886,7 @@ impl App {
             (MenuState::Briefing, "Start") => {
                 self.menu = None;
                 self.in_game = true;
+                self.entering = true;
             }
             (MenuState::Briefing, "Cancel")
             | (MenuState::Missions(..), "Cancel")
@@ -6480,14 +6500,13 @@ impl App {
     }
 
     /// Draws the front end into `frame`, fading from screen to screen
-    /// (`fade`); false when the game is to be drawn instead. A front-end
-    /// screen left fades out to black (0x4ef350(50, 5)) and the new one,
-    /// drawn under the black, fades in to its backdrop's palette (message
-    /// 0x102, 0x4ef530(game, backdrop, 50, 5)); into the game only the
-    /// fade out. (Out of the game the original fades its own display out
-    /// too, in the game's palette, whose entries the 8-bit clip may not
-    /// keep (0x56c360's flag 1 is not decoded): the port starts the new
-    /// screen's fade in from black.)
+    /// (`fade`); false when the game is to be drawn instead. The screen or
+    /// game left fades out to black (0x4ef350(50, 5), over the game's last
+    /// frame too) and a new screen, drawn under the black, fades in to its
+    /// backdrop's palette (message 0x102, 0x4ef530(game, backdrop, 50,
+    /// 5)). Into the game started by Start (0x101, 0x50f910) `LOADING`
+    /// fades in (0x4ef420) and out, then the game fades in from its idle
+    /// (`keep_game_frame`); into it otherwise only the fade out.
     fn draw_front_end(&mut self, frame: &mut Frame) -> bool {
         use crate::fade::{level, Level, Shade, Way};
         let size = (frame.width, frame.height);
@@ -6497,19 +6516,26 @@ impl App {
             .map(|s| std::mem::discriminant(&s));
         if self.fade.is_none() {
             match self.shown.take() {
-                Some(last) if last.screen != screen => match last.palette {
-                    Some(palette) if last.size == size => {
+                Some(last) if last.screen != screen => {
+                    if last.size == size && last.pixels.len() == (size.0 * size.1) as usize {
+                        let then = if screen.is_some() {
+                            AfterFade::ScreenIn
+                        } else if std::mem::take(&mut self.entering) {
+                            AfterFade::LoadingIn
+                        } else {
+                            AfterFade::Nothing
+                        };
                         self.fade = Some(Fading {
                             way: Way::Out,
                             since: Instant::now(),
                             pixels: last.pixels,
                             size,
-                            palette,
-                            then_in: screen.is_some(),
+                            then,
                         });
+                    } else {
+                        self.fade_in(size);
                     }
-                    _ => self.fade_in(size),
-                },
+                }
                 None => self.fade_in(size),
                 last => self.shown = last,
             }
@@ -6519,10 +6545,15 @@ impl App {
         }
         if let Some(f) = &self.fade {
             if level(f.way, f.since.elapsed().as_millis() as u64) == Level::Done {
-                if f.way == Way::Out && f.then_in {
-                    self.fade_in(size);
-                } else {
-                    self.fade = None;
+                match f.then {
+                    AfterFade::ScreenIn => self.fade_in(size),
+                    AfterFade::LoadingIn => self.loading_fade(Way::In, size, AfterFade::LoadingOut),
+                    AfterFade::LoadingOut => self.loading_fade(Way::Out, size, AfterFade::GameIn),
+                    AfterFade::GameIn => {
+                        self.fade = None;
+                        self.game_fade = Some((0, Instant::now()));
+                    }
+                    AfterFade::Nothing => self.fade = None,
                 }
             }
         }
@@ -6535,15 +6566,16 @@ impl App {
                 (_, Level::Percent(p)) => Some(p),
                 _ => None,
             };
-            Shade::new(&f.palette, percent).frame(&f.pixels, frame.pixels);
+            Shade::new(percent).frame(&f.pixels, frame.pixels);
             return true;
         }
         let (Some(state), Some(menus)) = (self.menu, &self.menus) else {
+            // The game: its frame is kept once drawn (`keep_game_frame`).
+            let pixels = self.shown.take().map(|s| s.pixels).unwrap_or_default();
             self.shown = Some(Shown {
                 screen: None,
-                pixels: Vec::new(),
+                pixels,
                 size,
-                palette: None,
             });
             return false;
         };
@@ -6555,7 +6587,6 @@ impl App {
             .filter(|_| self.kind_popup.is_none())
             .map(|c| Menus::to_menu(size, c.x as f32, c.y as f32));
         menus.draw(frame, &page.view(hover, self.menu_held));
-        let palette = menus.palette(page.backdrop).map(<[u32]>::to_vec);
         let mut pixels = self.shown.take().map(|s| s.pixels).unwrap_or_default();
         pixels.clear();
         pixels.extend_from_slice(frame.pixels);
@@ -6563,9 +6594,54 @@ impl App {
             screen,
             pixels,
             size,
-            palette,
         });
         true
+    }
+
+    /// `LOADING` fading `way`, drawn into a picture of `size`, then `then`.
+    fn loading_fade(&mut self, way: crate::fade::Way, size: (u32, u32), then: AfterFade) {
+        let mut pixels = vec![0u32; (size.0 * size.1) as usize];
+        if let Some(img) = self.menus.as_ref().and_then(|m| m.loading.as_ref()) {
+            let (s, ox, oy) = Menus::placement(size);
+            let mut frame = Frame {
+                pixels: &mut pixels,
+                width: size.0,
+                height: size.1,
+            };
+            crate::render::blit_scaled(&mut frame, img, (0, 0, img.width, img.height), ox, oy, s);
+        }
+        self.fade = Some(Fading {
+            way,
+            since: Instant::now(),
+            pixels,
+            size,
+            then,
+        });
+    }
+
+    /// The game drawn into `frame`: while it fades in (0x50f740), a step
+    /// each frame at least 1 ms after the last, step i at 4i percent, then
+    /// as it is; and the frame kept, for the fade out of it into the front
+    /// end (the dispatcher's 0x4ef350 over the game's last frame).
+    fn keep_game_frame(&mut self, frame: &mut Frame) {
+        use crate::fade::{game_percent, Shade, GAME_STEPS, GAME_STEP_MS};
+        if let Some((steps, last)) = self.game_fade {
+            let now = Instant::now();
+            let due = steps == 0 || now.duration_since(last).as_millis() as u64 >= GAME_STEP_MS;
+            let steps = if due { steps + 1 } else { steps };
+            if steps > GAME_STEPS {
+                self.game_fade = None;
+            } else {
+                self.game_fade = Some((steps, if due { now } else { last }));
+                let from = frame.pixels.to_vec();
+                Shade::new(Some(game_percent(steps - 1))).frame(&from, frame.pixels);
+            }
+        }
+        if let Some(s) = self.shown.as_mut().filter(|s| s.screen.is_none()) {
+            s.pixels.clear();
+            s.pixels.extend_from_slice(frame.pixels);
+            s.size = (frame.width, frame.height);
+        }
     }
 
     /// The front-end screen shown now starts fading in, drawn once (it
@@ -6576,9 +6652,6 @@ impl App {
             return;
         };
         let page = self.menu_page(state);
-        let Some(palette) = menus.palette(page.backdrop).map(<[u32]>::to_vec) else {
-            return;
-        };
         let mut pixels = vec![0u32; (size.0 * size.1) as usize];
         let hover = self
             .cursor
@@ -6596,8 +6669,7 @@ impl App {
             since: Instant::now(),
             pixels,
             size,
-            palette,
-            then_in: false,
+            then: AfterFade::Nothing,
         });
     }
 
@@ -6693,8 +6765,13 @@ impl App {
                     ..self.view()
                 }
                 .draw(&mut frame);
+                self.keep_game_frame(&mut frame);
             }
-            if let Some(c) = self.cursor {
+            // The pointer is hidden while the palette fades (0x55ed40
+            // before a fade out; 0x516980 shows it again after the fade
+            // in).
+            let fading = self.fade.is_some() || self.game_fade.is_some();
+            if let Some(c) = self.cursor.filter(|_| !fading) {
                 let (pointer, greyed) = self.pointer(c);
                 let scale = self.camera.policy.base_scale(window.1);
                 self.pointers.draw(
@@ -7491,6 +7568,9 @@ mod custom_tests {
         let Some(mut app) = app() else {
             return;
         };
+        for (k, name) in KIND_NAMES.iter().enumerate() {
+            assert_eq!(app.data.strings.get(&(1146 + k as u32)).unwrap(), name);
+        }
         app.player_name = "Jason".into();
         // battle01: HEAD_CUST (1, 1, 5): player 5 (nation 1, slot 1) human.
         show(&mut app, "battle01");

@@ -344,6 +344,9 @@ const STORY_LINE: f32 = 19.0;
 
 pub struct Menus {
     backdrops: Vec<Option<Image>>,
+    /// The loading screen (`<theme>LOADING`, 800 x 600, its own palette),
+    /// shown while a game starts (0x50f910).
+    pub loading: Option<Image>,
     /// Each backdrop's palette, as colours (the screen's 256 colours).
     palettes: Vec<Option<Vec<u32>>>,
     /// The button shapes `M_BUT0_` to `M_BUT3_`, normal and lit, coloured
@@ -555,7 +558,20 @@ impl Menus {
                 }
             }
         }
+        let loading = archive
+            .read(&format!("{theme}LOADING"), ResourceKind::Bitmap)
+            .ok()
+            .and_then(|d| Bitmap::parse(&d).ok())
+            .map(|b| {
+                let pixels = b
+                    .pixels
+                    .iter()
+                    .map(|&i| Some(rgb(b.palette.0[i as usize])))
+                    .collect();
+                Image::new(b.width, b.height, pixels)
+            });
         Ok(Self {
+            loading,
             palettes: backdrops
                 .iter()
                 .map(|b| {
@@ -993,11 +1009,6 @@ impl Menus {
         lines
     }
 
-    /// The palette of screen `backdrop` (its 256 colours).
-    pub fn palette(&self, backdrop: Backdrop) -> Option<&[u32]> {
-        self.palettes.get(backdrop as usize)?.as_deref()
-    }
-
     /// Colour `index` of the palette of screen `backdrop`.
     pub fn colour(&self, backdrop: Backdrop, index: u8) -> Option<u32> {
         let palette = self.palettes.get(backdrop as usize)?.as_ref()?;
@@ -1177,9 +1188,9 @@ mod tests {
         assert_eq!(h.pos_at((36.0 + 7.0 + 42.0, 190.0)), 3);
     }
 
-    /// The installed copy's version line; the front end's palettes keep
-    /// the 20 Windows colours at entries 0-9 and 246-255, which a fade
-    /// leaves (needs `OPENCONQUEST_DATA`).
+    /// The installed copy's version line; a fade changes every entry of the
+    /// front end's palettes, the Windows colours at 0-9 and 246-255 too
+    /// (needs `OPENCONQUEST_DATA`).
     #[test]
     fn the_version_and_the_fades_palette() {
         assert_eq!(version(), "Version 2.30");
@@ -1189,14 +1200,15 @@ mod tests {
         let data = GameData::open(std::path::Path::new(&root)).unwrap();
         assert_eq!(data.strings.get(&1145).unwrap(), "Version 2.%02d");
         let menus = Menus::load(&data, '0').unwrap();
-        let palette = menus.palette(Backdrop::Best).unwrap();
-        assert_eq!(palette[7], 0xc0c0c0);
-        assert_eq!(palette[251], 0xffff00);
-        let shade = crate::fade::Shade::new(palette, Some(50));
-        assert_eq!(shade.apply(0xc0c0c0), 0xc0c0c0);
+        let colour = |i| menus.colour(Backdrop::Best, i).unwrap();
+        assert_eq!(colour(7), 0xc0c0c0);
+        assert_eq!(colour(251), 0xffff00);
+        let shade = crate::fade::Shade::new(Some(50));
+        assert_eq!(shade.apply(0xc0c0c0), crate::fade::lightness(0xc0c0c0, 50));
+        assert!(menus.loading.is_some());
         assert_eq!(
-            shade.apply(palette[100]),
-            crate::fade::lightness(palette[100], 50)
+            shade.apply(colour(100)),
+            crate::fade::lightness(colour(100), 50)
         );
     }
 }

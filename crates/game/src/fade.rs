@@ -8,19 +8,34 @@
 //! 0x4ef530(game, backdrop, 50, 5) (0x54a230). Each fade busy-waits on
 //! `timeGetTime()`: a step whenever 5 ms have passed since the last, 50
 //! steps, then the target palette exactly (fade in) or black (fade out).
-//! The palette is set from entry 10 to 245 only (0x56c360, 0x56c230 clip
-//! the range in 8-bit mode): the 20 Windows colours keep theirs. The port
-//! draws in true colour, so the scaling is applied to each pixel whose
-//! colour is one of the palette's entries 10-245 (or none of its entries).
+//! Every entry of the palette is set: 0x56c360 and 0x56c230 would keep the
+//! 20 Windows colours (entries 0-9, 246-255) in 8-bit mode unless the
+//! DirectDraw object's cooperative flags (+ 8) have bit 1, and 0x566e60
+//! always sets them to FULLSCREEN | EXCLUSIVE (0x11: every caller passes
+//! 1). The port draws in true colour, so the scaling is applied to every
+//! pixel.
+//!
+//! Entering the game (gamesys message 0x101, 0x50f910) fades out, shows
+//! `LOADING` fading in (0x4ef420, 50 x 5 ms), loads, fades out again and
+//! sets the game's palette fading in from the game's idle (message 0x102,
+//! 0x50f740 -> 0x54a100): 25 steps, one an idle pass at least 1 ms after
+//! the last, step i at ftol(100 / 25 x i) percent, then the palette
+//! exactly.
 
 /// Steps of a fade and the milliseconds each waits at least (0x4ef350,
 /// 0x4ef530: 0x32, 5).
 pub const STEPS: u32 = 50;
 pub const STEP_MS: u64 = 5;
 
-/// The first and one past the last palette entry a fade sets (0x56c360).
-const FIRST: usize = 10;
-const END: usize = 246;
+/// The game's fade in (0x50f740): its steps, and the milliseconds each
+/// waits at least.
+pub const GAME_STEPS: u32 = 25;
+pub const GAME_STEP_MS: u64 = 1;
+
+/// Game fade-in step `i`'s lightness: ftol(100 / 25 x i) percent.
+pub fn game_percent(i: u32) -> u8 {
+    (100.0 / f64::from(GAME_STEPS) * f64::from(i)) as u8
+}
 
 /// 1/255 (f32 at 0x59bb44), 1/60 (f32 at 0x59bb50).
 fn byte() -> f32 {
@@ -193,33 +208,17 @@ pub enum Level {
     Done,
 }
 
-/// The colours of a screen's palette a fade changes and how, for one
-/// step: each of its entries 10-245 at `percent` (black for none); colours
-/// that are only among the other entries stay. A colour in none of them
-/// (drawn in another screen's palette) is scaled as the first.
+/// How a fade step changes colours: each at `percent` lightness (black for
+/// none), as every palette entry is.
 pub struct Shade {
-    keep: std::collections::HashSet<u32>,
     percent: Option<u8>,
     cache: std::cell::RefCell<std::collections::HashMap<u32, u32>>,
 }
 
 impl Shade {
-    /// The step of `percent` (none: black) over `palette` (256 colours).
-    pub fn new(palette: &[u32], percent: Option<u8>) -> Self {
-        let inner: std::collections::HashSet<u32> = palette
-            .get(FIRST..END)
-            .unwrap_or(&[])
-            .iter()
-            .copied()
-            .collect();
-        let keep = palette
-            .iter()
-            .enumerate()
-            .filter(|&(i, c)| !(FIRST..END).contains(&i) && !inner.contains(c))
-            .map(|(_, &c)| c)
-            .collect();
+    /// The step of `percent` (none: black).
+    pub fn new(percent: Option<u8>) -> Self {
         Self {
-            keep,
             percent,
             cache: Default::default(),
         }
@@ -228,9 +227,6 @@ impl Shade {
     /// Colour `c` at this step.
     pub fn apply(&self, c: u32) -> u32 {
         let c = c & 0xff_ffff;
-        if self.keep.contains(&c) {
-            return c;
-        }
         let Some(p) = self.percent else { return 0 };
         *self
             .cache
@@ -286,18 +282,20 @@ mod tests {
         assert_eq!(lightness(0xff0000, 50), 0x7f0000);
     }
 
+    /// Every colour fades, the Windows colours' entries too.
     #[test]
-    fn the_windows_colours_stay() {
-        let mut palette = vec![0u32; 256];
-        palette[7] = 0xc0c0c0;
-        palette[100] = 0x808080;
-        palette[255] = 0xffffff;
-        palette[175] = 0xffffff;
-        let shade = Shade::new(&palette, Some(50));
-        assert_eq!(shade.apply(0xc0c0c0), 0xc0c0c0);
-        assert_eq!(shade.apply(0x808080), lightness(0x808080, 50));
-        // White is also entry 175: it fades.
+    fn every_colour_fades() {
+        let shade = Shade::new(Some(50));
+        assert_eq!(shade.apply(0xc0c0c0), lightness(0xc0c0c0, 50));
         assert_eq!(shade.apply(0xffffff), 0x7f7f7f);
-        assert_eq!(Shade::new(&palette, None).apply(0x808080), 0);
+        assert_eq!(Shade::new(None).apply(0x808080), 0);
+    }
+
+    #[test]
+    fn the_game_fades_in_four_percent_a_step() {
+        let steps: Vec<u8> = (0..GAME_STEPS).map(game_percent).collect();
+        assert_eq!(steps[0], 0);
+        assert_eq!(steps[1], 4);
+        assert_eq!(steps[24], 96);
     }
 }

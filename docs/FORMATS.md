@@ -1967,26 +1967,38 @@ same).
   Alt+S, Cancel Esc when it exists. The port binds them in the order the
   screen makes its widgets (taken as the order they activate).
 
-**Fades** (Palette.cpp). On every screen change (0x53e1e0) the shown
-palette fades out (0x4ef350(50, 5) -> 0x54a460), the new screen paints
-under black, and its message 0x102 fades in to its backdrop's palette
-(0x4ef530(game, backdrop, 50, 5) -> 0x54a230). Starting a game and the
-demo fade out only. Both busy-wait on `timeGetTime()`: a step each time
-5 ms have passed since the last (so at 5, 10, ... 250 ms), step i at
-ftol(100 / 50 x i) percent lightness (fade out 100 less that), then the
-target palette exactly (fade in) or black (fade out). Each step scales
-the palette in HLS (0x549f20 with hue and saturation 100): RGB -> HLS
-(0x549ba0: bytes x 1/255 f32, L = (max + min) / 2, S = d / (max + min)
-or d / (2 - max - min) past 0.5, hue in sixths x 60, 999 for a grey),
-L x percent x 0.01 (capped 1), HLS -> RGB (0x549e30, each channel
-ftol(c x 255)); values kept as f32 where the code stores them. The
-palette is set from entry 10 to 245 (0x56c360, 0x56c230 clip in 8-bit
-mode unless flag 1 of the palette object, not identified): the 20
-Windows colours stay. The port, drawing in true colour, shades each
-pixel whose colour is one of the screen palette's entries 10-245 (or of
-none) and keeps the others; the pointer is drawn unshaded. Out of the
-game the original fades the game's display out too: not ported (the
-game palette's clip is not settled); the new screen fades in from black.
+**Fades** (Palette.cpp). On every screen change (0x53e1e0) the pointer
+sprite is hidden (0x55ed40), the shown palette fades out (0x4ef350(50,
+5) -> 0x54a460; over the game's last frame when leaving the game,
+commands 0x100, 0x10b, 0x10c of 0x4ec1a0), the new screen paints under
+black, and its message 0x102 fades in to its backdrop's palette
+(0x4ef530(game, backdrop, 50, 5) -> 0x54a230); then 0x516980 resets the
+pointer (mode 0, CUR_STD) and shows it. Both busy-wait on
+`timeGetTime()`: a step each time 5 ms have passed since the last (so
+at 5, 10, ... 250 ms), step i at ftol(100 / 50 x i) percent lightness
+(fade out 100 less that), then the target palette exactly (fade in) or
+black (fade out). Each step scales the palette in HLS (0x549f20 with hue
+and saturation 100): RGB -> HLS (0x549ba0: bytes x 1/255 f32, L = (max +
+min) / 2, S = d / (max + min) or d / (2 - max - min) past 0.5, hue in
+sixths x 60, 999 for a grey), L x percent x 0.01 (capped 1), HLS -> RGB
+(0x549e30, each channel ftol(c x 255)); values kept as f32 where the
+code stores them. All 256 entries are set: 0x56c360 and 0x56c230 would
+keep the 20 Windows colours in 8-bit mode only when the DirectDraw
+object's cooperative flags (+ 8, stored by 0x566e60) lack bit 1, and
+every caller (0x4ed98e, 0x4ec795, 0x4ec956, 0x4ef222) passes 1, which
+0x566e60 turns into FULLSCREEN | EXCLUSIVE (0x11). Starting a game
+(gamesys message 0x101, 0x50f910): pointer hidden, fade out, `LOADING`
+painted and faded in to its own palette (0x4ef420, 50 x 5 ms), the game
+loaded, fade out again (50, 5), resource `PALETTE` taken, and message
+0x102 fades the game in from its idle (0x50f740 -> 0x54a100): each idle
+pass, while i < 25 and at least 1 ms after the last step, step i at
+ftol(100 / 25 x i) = 4i percent; at 25 the palette exactly and message
+0x4e8. The port, drawing in true colour, shades every pixel; the
+pointer is not drawn while a fade runs. The briefing's and Custom
+missions' Start take the 0x101 way; the port's other ways into a game
+(a saved game loaded, the multiplayer start) fade out only (their
+commands are not followed). Quit (0x131) also fades out (50, 5): not
+ported.
 
 **Version.** The title screen's line is `(game + 0xa7d >> 16) & 0xff`
 in string 1145 "Version 2.%02d"; + 0xa7d is the registry `Type`, which
