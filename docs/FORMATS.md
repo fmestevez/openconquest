@@ -2510,15 +2510,39 @@ cleared on all 12 together. Who sets them:
   order raw (0x49e230 -> 0x520cc0).
 - Orders to the fort (0x419f80) / stronghold (0x40ef70): 0x15 / 0x16
   {target, groups}: byte `+4` 1 groups 0-2, 2 groups 3-5, 4 groups 6-8, 7
-  all, 0x446960(target) (a cyclops' jam, 0x1f7, becomes one of its
-  creatures, 0x415df0; fort only); the payload's `+5`, `+6`, `+10` go to
-  `+0x494`, `+0x48c` (less the fort's own player bit) and `+0x490`, the
-  players, classes and kinds its groups' shot test 0x41c4e0 lets through
-  (0x50ed20, 0x447800; all ones from the constructor and the player's
-  orders). 0x23 sub 1 every group at will, `+0x498 = 0` (the masks
-  stored); 2 and 4 every group ceases fire, `+0x498 = 0`; 3 the masks
-  stored, `+0x498 = 1`, every group ceases fire; the stronghold takes
-  sub 1 only. Order 10: every group ceases fire, `+0x498 = 0`.
+  all, 0x446960(target) (a cyclops' jam, 0x1f7, becomes its first
+  member, 0x415df0: `+0x78`, the creatures being appended as they join,
+  0x1879f, and closed up as they leave, 0x187a0, so the earliest still
+  on the cell; fort only); the payload's `+5` (byte), `+6`, `+10` go to
+  `+0x494`, `+0x48c` (less the fort's own player bit, `1 << (nation x 4
+  + slot)`) and `+0x490`, whatever is found. 0x23 sub 1 every group at
+  will, `+0x498 = 0`, the masks stored from `+1`, `+5`, `+9`; 2 and 4
+  every group ceases fire, `+0x498 = 0`; 3 the masks stored, `+0x498 =
+  1`, every group ceases fire; the stronghold takes sub 1 only. Order
+  10: every group ceases fire, `+0x498 = 0`. The masks are read by the
+  groups' shot test (group vtable 0x5959ec slot 0, 0x41c4e0, the fort at
+  group `+0x46`): the target's `+0x57` 1 (a player's object: ships,
+  players' buildings) with its player's bit in `+0x48c`, or 2 (the
+  monsters' side, set by the constructors of the barbarian structures
+  0x410150, the lairs 0x414e20, the jam 0x415c10, the medusa 0x401000,
+  0x420fd0, 0x4056b0 and 0x447900), else nothing; its class bit in `+0x490`
+  (0x50ed20 by 0x50e600's family: ship types bits 0-11, `1 << (class +
+  0x38)` of classes 200-211; settlements and towns 0x1000, forts and
+  barbarian structures 0x2000, ports, shipyards, docks 0x4000, workshops
+  and smithies 0x8000, schools 0x10000, temples 0x20000, the cyclops' lair
+  and creature (and the jam) 0x40000, the minotaur's 0x80000, the
+  amazon's 0x100000, the sea monster 0x200000, the medusa 0x400000, the
+  siren 0x800000, harpy and harpy nest 0x1000000, dragon and dragon nest
+  0x2000000, the sea and war castles 0x4000000 / 0x8000000, anything else
+  0); the group's kind in `+0x494` (0x447800 by its `+0x39`, item / 3: bit
+  1 the marines, 2 the medium, 4 the strong weapons); then the score
+  0x4472d0, `(reach + 1) x 10 - d x 10`. The target track 0x447400
+  shoots only when it passes (else the scan, at will); the scan 0x446d60
+  keeps only candidates that pass and takes the best score, ties by its
+  argument modulo their count. The player's orders pass everything: 0x15
+  / 0x16 from 0x5180e0 {.., 0xff, -1, -1}, 0x23 from 0x4f34c0 players -1,
+  classes -1, kinds 0xffff; only the navy's 0x4c5b30 (fleet `+0x19`,
+  `+0x1d`, `+0x21`) sends others.
 - Firing on aggressors (`+0x498`): each blow 0x138e but kind 9 (0x4184f0
   at 0x418bdd, after the units' share) with a shooter (`+0x16`, the
   bomb's `+0xbe`) sets the groups of the mask its bomb kind `+4` gives
@@ -2545,7 +2569,8 @@ cleared on all 12 together. Who sets them:
 
 The port keeps the fire in `combat::FortFire` (at will, a target per
 group, the aggressor flag): `Scene::fort_attack` (0x15 / 0x16),
-`fort_order` (0x23), `fort_aggressed` (0x4184f0), order 10 in `halt`; its
+`fort_order` (0x23), `fort_aggressed` (0x4184f0), order 10 in `halt`, the
+masks in `combat::FortMasks` (tested by `fort_may_shoot`); its
 fort menu has slots 0-4 and its pointer the fort's answer (`fort_reaches`:
 a unit's reach); `scene/fort.rs` has its Repair (`fort_repair`, the
 progress `fort_mend_progress`) and its stored spell (`fort_spells`,
@@ -2554,8 +2579,9 @@ progress `fort_mend_progress`) and its stored spell (`fort_spells`,
 fort's casts of the sea's spells and the fireball (their checks read the
 cell's tile layers and slots, not decoded here: the button is offered,
 the click refused), the draw of the fort's generator `+0x18` with a cast,
-the masks
-(every order of the player's sets all but its own player), the jam, the
+the jam (the port has none: a click gives the creature itself), the
+scan's score and its creatures (the port's forts scan enemy ships, the
+nearest), the barbarian structures' shot test, the
 0x2874 path, whether a navy group of a computer ever holds a fort (the
 port's flotillas hold ships), 0x43d300's test that the building is still
 the town's, the other 0x138e senders' `+0x16`. The brains' under-way

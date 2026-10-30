@@ -143,6 +143,10 @@ pub struct FortFire {
     /// blow's shooter becomes some groups' target (0x4184f0). Barbarian
     /// structures have none.
     pub aggressor: bool,
+    /// What the fort's groups may shoot (`FortMasks`; barbarian
+    /// structures keep none).
+    #[serde(default)]
+    pub masks: FortMasks,
 }
 
 impl Default for FortFire {
@@ -151,7 +155,116 @@ impl Default for FortFire {
             at_will: true,
             targets: [0; 12],
             aggressor: false,
+            masks: FortMasks::default(),
         }
+    }
+}
+
+/// A fort's masks of what its groups may shoot, read by their shot test
+/// (group vtable 0x5959ec slot 0, 0x41c4e0): `+0x48c` players (bit
+/// `nation x 4 + slot` of a player's object, `+0x57` 1; the monsters'
+/// side, `+0x57` 2, always passes), `+0x490` classes (`class_bit`,
+/// 0x50ed20) and `+0x494` kinds (0x447800: bit 1 for the marines' groups,
+/// 2 the medium weapons', 4 the strong weapons', by the group's `+0x39`,
+/// its item / 3). All ones from the constructor; orders 0x15 / 0x16 and
+/// 0x23 subs 1 and 3 store the payload's (the fort's own player's bit
+/// cleared).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FortMasks {
+    pub players: u32,
+    pub classes: u32,
+    pub kinds: u32,
+}
+
+impl Default for FortMasks {
+    fn default() -> Self {
+        FortMasks {
+            players: u32::MAX,
+            classes: u32::MAX,
+            kinds: u32::MAX,
+        }
+    }
+}
+
+impl FortMasks {
+    /// The human's attack (0x5180e0: order 0x15 / 0x16 {target, 7, 0xff,
+    /// -1, -1}): kinds byte `+5` 0xff, players `+6` and classes `+10` all
+    /// ones.
+    pub const PLAYER_ATTACK: FortMasks = FortMasks {
+        players: u32::MAX,
+        classes: u32::MAX,
+        kinds: 0xff,
+    };
+    /// The human's Guard and Fire on aggressor (0x4f34c0: order 0x23
+    /// {sub, 0xffffff.., 0xffffffff, 0x00ffffff, 0}: players `+1` and
+    /// classes `+5` all ones, kinds `+9` 0xffff).
+    pub const PLAYER_BEHAVIOUR: FortMasks = FortMasks {
+        players: u32::MAX,
+        classes: u32::MAX,
+        kinds: 0xffff,
+    };
+
+    /// The masks stored from an order's payload by fort of player
+    /// `(nation, slot)` (`+0x48c` without its own bit).
+    pub fn stored(self, (nation, slot): (u32, u32)) -> FortMasks {
+        FortMasks {
+            players: self.players & !(1 << ((slot + nation * 4) & 0x1f)),
+            ..self
+        }
+    }
+
+    /// The shot test's masks (0x41c4e0, before the score 0x4472d0) for
+    /// group `item` (the item its units carry) at an object of side
+    /// `side` (`+0x57`: 1 a player's, 2 the monsters') owned by `owner`,
+    /// whose class bit is `class`.
+    pub fn pass(&self, item: u8, side: u8, owner: Option<(u32, u32)>, class: u32) -> bool {
+        let player = match (side, owner) {
+            (1, Some((n, s))) => self.players & 1 << ((s + n * 4) & 0x1f) != 0,
+            (2, _) => true,
+            _ => false,
+        };
+        let kind = match item / 3 {
+            0 => self.kinds & 1,
+            1 => self.kinds & 2,
+            2 => self.kinds & 4,
+            _ => 0,
+        };
+        player && self.classes & class != 0 && kind != 0
+    }
+}
+
+/// An object's bit in a fort's or fleet's class mask (0x50ed20 over its
+/// class `+0x50`, by 0x50e600's family): ship types 0-11 bits 0-11
+/// (`1 << (class + 0x38)` of classes 200-211); settlements and towns
+/// 0x1000, forts and barbarian structures 0x2000, ports, shipyards and
+/// docks 0x4000, workshops and smithies 0x8000, schools 0x10000, temples
+/// 0x20000, lairs 0x40000 / 0x80000 / 0x100000 (cyclops, minotaur,
+/// amazon; the creatures the same, the jam 0x1f7 the cyclops'), the sea
+/// monster 0x200000, the medusa 0x400000, the siren 0x800000, the harpy
+/// and its nest 0x1000000, the dragon and its nest 0x2000000, the sea and
+/// war castles 0x4000000 / 0x8000000; anything else none.
+pub fn class_bit(class: u32, ship_kind: Option<u8>) -> u32 {
+    if let Some(k) = ship_kind {
+        return 1 << ((200 + k as u32 + 0x38) & 0x1f);
+    }
+    match class {
+        0x32 | 0x33 => 0x1000,
+        0x34..=0x36 | 0x3f..=0x41 => 0x2000,
+        0x37 | 0x38 => 0x8000,
+        0x39..=0x3b => 0x4000,
+        0x3c => 0x10000,
+        0x3d | 0x3e => 0x20000,
+        0x42 => 0x4000000,
+        0x43 => 0x8000000,
+        0x44 | 0x1f9 => 0x2000000,
+        0x45 | 0x1f8 => 0x1000000,
+        0x46 | 500 | 0x1f7 => 0x40000,
+        0x47 | 0x1f5 => 0x80000,
+        0x48 | 0x1f6 => 0x100000,
+        0x1fa => 0x400000,
+        0x1fb => 0x200000,
+        0x1fd => 0x800000,
+        _ => 0,
     }
 }
 

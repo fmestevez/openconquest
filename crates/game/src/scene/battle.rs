@@ -40,7 +40,7 @@ impl Scene {
             if !self.fort_reaches(i, t) {
                 return Err("Out of the fort's reach".into());
             }
-            self.fort_attack(ship, target, 7);
+            self.fort_attack(ship, target, 7, combat::FortMasks::PLAYER_ATTACK);
             return Ok(());
         }
         if self.objects[i].ship.is_none() || !self.objects[i].is_armed() {
@@ -78,24 +78,35 @@ impl Scene {
         })
     }
 
-    /// Order 0x15 / 0x16 {target, groups} to fort or barbarian structure
-    /// `site` (0x419f80 / 0x40ef70): the groups named (`order_groups`)
-    /// fire at `target` (0x446960: only if it is found, 0x51f1f0; mode bit
-    /// 2 added, the at-will bit kept). (Not ported: the fort's masks
-    /// `+0x48c` players, `+0x490` classes, `+0x494` the payload's bytes,
-    /// which its groups' shot test 0x41c4e0 reads: every order of the
-    /// player's sets them to all but its own player, which the port's
-    /// enemies are already; and a cyclops' jam, class 0x1f7, which the
-    /// fort turns into one of its creatures, 0x415df0: the port has none.)
-    pub fn fort_attack(&mut self, site: u32, target: u32, groups: u8) {
-        if self.object_index(target).is_none() {
-            return;
-        }
-        if let Some(c) = self
+    /// Order 0x15 / 0x16 {target, groups, kinds, players, classes} to fort
+    /// or barbarian structure `site` (0x419f80 / 0x40ef70): the groups
+    /// named (`order_groups`) fire at `target` (0x446960: only if it is
+    /// found, 0x51f1f0; mode bit 2 added, the at-will bit kept); a fort
+    /// stores the masks (`+0x494` the byte `+5`, `+0x48c` the dword `+6`
+    /// less its own player's bit, `+0x490` the dword `+10`), whatever is
+    /// found. (Not ported: a cyclops' jam, class 0x1f7, which the fort
+    /// turns into the jam's first member, 0x415df0, the earliest of the
+    /// creatures on that cell still there: the port has no jams, a click
+    /// gives the creature itself.)
+    pub fn fort_attack(&mut self, site: u32, target: u32, groups: u8, masks: combat::FortMasks) {
+        let Some(i) = self
             .object_index(site)
             .filter(|&i| self.objects[i].holds_units())
-            .and_then(|i| self.objects[i].combat.as_mut())
-        {
+        else {
+            return;
+        };
+        let fort = matches!(self.objects[i].class, ObjectClass::Building(0x34..=0x36));
+        let owner = self.objects[i].owner;
+        let found = self.object_index(target).is_some();
+        let Some(c) = self.objects[i].combat.as_mut() else {
+            return;
+        };
+        if fort {
+            if let Some(owner) = owner {
+                c.fire.masks = masks.stored(owner);
+            }
+        }
+        if found {
             for k in combat::order_groups(groups) {
                 c.fire.targets[k] = target;
             }
@@ -105,21 +116,27 @@ impl Scene {
     /// Order 0x23 sub `sub` to fort or barbarian structure `site`: the
     /// fort's Guard button (0x4f34c0 command 0x70: sub 1 when it is not
     /// ticked, 2 when it is) and Fire on aggressor (command 0x73: sub 3,
-    /// or 4 ticked). A fort (0x419f80 case 0x23): 1 every group at will
-    /// (0x4469a0), `+0x498 = 0`; 2 and 4 every group ceases fire
-    /// (0x4469b0), `+0x498 = 0`; 3 every group ceases fire, `+0x498 = 1`
-    /// (it answers blows, `fort_aggressed`). A barbarian structure
-    /// (0x40ef70) takes sub 1 only. (The masks stored with subs 1 and 3
-    /// are not ported, as `fort_attack`'s.)
+    /// or 4 ticked), with the player's masks (`FortMasks::
+    /// PLAYER_BEHAVIOUR`). A fort (0x419f80 case 0x23): 1 the masks
+    /// stored, every group at will (0x4469a0), `+0x498 = 0`; 2 and 4 every
+    /// group ceases fire (0x4469b0), `+0x498 = 0`; 3 the masks stored,
+    /// `+0x498 = 1`, every group ceases fire (it answers blows,
+    /// `fort_aggressed`). A barbarian structure (0x40ef70) takes sub 1
+    /// only, and keeps no masks.
     pub fn fort_order(&mut self, site: u32, sub: u8) -> Result<(), String> {
         let i = self
             .object_index(site)
             .filter(|&i| self.objects[i].holds_units())
             .ok_or("Not a fort")?;
         let fort = matches!(self.objects[i].class, ObjectClass::Building(0x34..=0x36));
+        let owner = self.objects[i].owner;
         let c = self.objects[i].combat.as_mut().unwrap();
+        let masks = owner.map(|o| combat::FortMasks::PLAYER_BEHAVIOUR.stored(o));
         match sub {
             1 => {
+                if let (true, Some(m)) = (fort, masks) {
+                    c.fire.masks = m;
+                }
                 c.fire.fire_at_will();
                 c.fire.aggressor = false;
             }
@@ -128,12 +145,45 @@ impl Scene {
                 c.fire.aggressor = false;
             }
             3 if fort => {
+                if let Some(m) = masks {
+                    c.fire.masks = m;
+                }
                 c.fire.cease();
                 c.fire.aggressor = true;
             }
             _ => {}
         }
         Ok(())
+    }
+
+    /// Whether a group of fort `i` carrying `item` may shoot object `t`
+    /// by the fort's masks (0x41c4e0 before its score): `t`'s side
+    /// (`+0x57`: 2 for barbarian structures, 0x410150, lairs, 0x414e20,
+    /// and the port's other monsters, whose constructors were not all
+    /// read: with every mask the player's orders store, sides 1 and 2
+    /// both pass; 1 another player's object; none else), its
+    /// player's bit, its class bit and the group's kind. Barbarian
+    /// structures' groups have another shot test (not decoded) and shoot
+    /// as before.
+    pub(super) fn fort_may_shoot(&self, i: usize, item: u8, t: usize) -> bool {
+        let (me, it) = (&self.objects[i], &self.objects[t]);
+        if !matches!(me.class, ObjectClass::Building(0x34..=0x36)) {
+            return true;
+        }
+        let Some(c) = me.combat.as_ref() else {
+            return false;
+        };
+        let side = if matches!(it.class, ObjectClass::Barbarian(_))
+            || it.owner == Some(combat::MONSTERS)
+        {
+            2
+        } else if it.owner.is_some() {
+            1
+        } else {
+            0
+        };
+        let class = combat::class_bit(it.record.class_id, it.ship.as_ref().map(|s| s.kind));
+        c.fire.masks.pass(item, side, it.owner, class)
     }
 
     /// A blow of bomb kind `kind` from `shooter` reaches fort `t` firing on
@@ -322,9 +372,13 @@ impl Scene {
                             let d = dist(&self.objects[i], &self.objects[ti]);
                             d >= near && d <= far
                         };
+                        // A fort's group shoots only what its masks let
+                        // through (0x41c4e0, called by 0x447400 and the
+                        // scan 0x446d60).
+                        let may = |ti: usize| self.fort_may_shoot(i, w, ti);
                         match tracked.get(w as usize).copied().flatten() {
-                            Some(ti) if reaches(ti) => Some(ti),
-                            _ => target.filter(|&ti| reaches(ti)),
+                            Some(ti) if reaches(ti) && may(ti) => Some(ti),
+                            _ => target.filter(|&ti| reaches(ti) && may(ti)),
                         }
                     })
                     .collect();

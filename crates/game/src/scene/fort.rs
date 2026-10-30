@@ -366,4 +366,87 @@ mod data_tests {
         let again = scene.fort_cast(fort, lightning, (fx, fy), None, &data, &mut caches);
         assert!(again.is_err());
     }
+
+    /// A fort's masks (0x419f80 cases 0x15 / 0x16 / 0x23, 0x41c4e0): the
+    /// player's orders store all ones but the fort's own player (kinds
+    /// 0xff for an attack, 0xffff for Guard); a group shoots only what
+    /// its masks let through: with the ship's class bit cleared the fort
+    /// stays silent at will, and fires once it is back (needs
+    /// `OPENCONQUEST_DATA`).
+    #[test]
+    fn fort_masks_choose_what_it_shoots() {
+        use openconquest_formats::ObjectClass;
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = crate::assets::GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = crate::scene::Scene::load(&data, &mut caches, "miss002").unwrap();
+        let forts: Vec<u32> = scene
+            .objects
+            .iter()
+            .filter(|o| matches!(o.class, ObjectClass::Building(0x34..=0x36)))
+            .map(|o| o.id)
+            .collect();
+        let fort = scene
+            .objects
+            .iter()
+            .position(|o| matches!(o.class, ObjectClass::Building(0x34..=0x36)) && o.is_armed())
+            .unwrap();
+        let (fx, fy) = (scene.objects[fort].x, scene.objects[fort].y);
+        let fort_id = scene.objects[fort].id;
+        let owner = scene.objects[fort].owner.unwrap();
+        for &id in &forts {
+            scene.halt(id, &data, &mut caches).unwrap();
+        }
+        let ship = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+        let ship_id = scene.objects[ship].id;
+        scene
+            .objects
+            .retain(|o| o.ship.is_none() || o.id == ship_id);
+        let i = scene.object_index(ship_id).unwrap();
+        scene.objects[i].owner = Some((owner.0, owner.1 + 1));
+        let kind = scene.objects[i].ship.as_ref().unwrap().kind;
+        let water = scene
+            .nav
+            .nearest_water((fx / 64.0) as i32, (fy / 64.0) as i32)
+            .unwrap();
+        let at = (water.0 as f32 * 64.0 + 32.0, water.1 as f32 * 64.0 + 32.0);
+        scene.objects[i].combat.as_mut().unwrap().weapons.clear();
+        let quiet = |scene: &mut crate::scene::Scene, caches: &mut Caches| {
+            for _ in 0..50 * 5 {
+                if let Some(i) = scene.object_index(ship_id) {
+                    let o = &mut scene.objects[i];
+                    (o.x, o.y) = at;
+                    let s = o.ship.as_mut().unwrap();
+                    s.task = None;
+                    s.path.clear();
+                }
+                scene.update(0.02, &data, caches);
+                if !scene.shots.is_empty() {
+                    return false;
+                }
+            }
+            true
+        };
+        let masks = |scene: &crate::scene::Scene| {
+            let f = scene.object_index(fort_id).unwrap();
+            scene.objects[f].combat.as_ref().unwrap().fire.masks
+        };
+        let own = 1 << ((owner.1 + owner.0 * 4) & 0x1f);
+        // Guard (0x23 sub 1): players all but its own, kinds 0xffff.
+        scene.fort_order(fort_id, 1).unwrap();
+        let m = masks(&scene);
+        assert_eq!((m.players, m.classes, m.kinds), (!own, u32::MAX, 0xffff));
+        // Its ship type's class bit cleared: nothing to shoot.
+        let f = scene.object_index(fort_id).unwrap();
+        scene.objects[f].combat.as_mut().unwrap().fire.masks.classes = !(1u32 << kind);
+        assert!(quiet(&mut scene, &mut caches), "the fort fired");
+        // An attack (0x15 {target, 7, 0xff, -1, -1}) stores the player's
+        // masks again: the ship is shot.
+        scene.order_attack(fort_id, ship_id).unwrap();
+        let m = masks(&scene);
+        assert_eq!((m.players, m.classes, m.kinds), (!own, u32::MAX, 0xff));
+        assert!(!quiet(&mut scene, &mut caches), "the fort did not fire");
+    }
 }
