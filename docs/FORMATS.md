@@ -131,7 +131,7 @@ length (stored size plus a few bytes); it is not needed for reading.
 | 16 | Tile set library | partially decoded |
 | 17 | Map grid | verified |
 | 18 | 1-bit mask | verified |
-| 20 | Mission lists (`LIST_OBJ`, `TRACKS_*`) | not decoded |
+| 20 | Mission lists (`LIST_OBJ`, `TRACKS_*`) | `LIST_OBJ` decoded |
 | 23 | Text/script (`DISCRIPTION`, `SOUNDLIST`, `SND_*`) | not decoded |
 | 24 | Quick help page (`SPHELP_nnn`) | verified |
 
@@ -1920,8 +1920,39 @@ original:
   what the money panel shows with no viewer (0x505530 takes its amounts
   from message 0x10aa, sender not traced) and what a left click does in
   pointer mode 0 with no viewer (0x5180e0 not followed): the port leaves
-  both as they are. The port does not draw the map's player marks
-  (LMAP8X8, 0x52f470). Not
+  both as they are.
+- The map preview (Startcom.cpp 0x52f470, after the terrain): the marks
+  of the mission's `LIST_OBJ` (kind 20, 0x54a8b0 in 0x52a990, rebuilt as
+  a list by 0x55f350: element size +8, count +0xc, elements from +0x1c),
+  23-byte entries: +0 type (1 a player's object, 2 anything else), +1
+  size (4 big), +2 a player's object's nation and slot bytes or anything
+  else's kind (dword), +6..+9 not read, +10 colour key (-1 none), +14 x
+  and +18 y (map pixels), +22 shown. 0x528de0 keeps an entry when its
+  type is 2, or there is no players list (Load game, type 5, has none),
+  or its owner's row kind is not Disable (a 20-byte table nation * 4 +
+  slot; the lobby with +0x110 == 4 also drops the barbarian slot +0x114).
+  Two passes, type 2 then type 1. Frame: a player's object nation * 4 +
+  slot, 0x10 for nation 4, | 0x80 with size 4; anything else by kind (1
+  0x12, 2 0x13, 3 0x11, 4-8 0x14-0x18, 9/0x13/0x15 0x19, 10-0xd
+  0x1a-0x1d, 0x10-0x12 0x1e-0x20, 0x14 0x21, 0x16 0x22, 0x17 0x23, 0x18
+  0x91, others 0). With bit 0x80 the 16 x 16 frame (index & 0x7f) of
+  `LMAP16X16`, else the 8 x 8 one of `LMAP8X8` (controlm), its top left at
+  (x / 8, y / 8) (toward zero, each at least 0); the key's pixels left out
+  (0x56dd90), or all copied with -1 (0x562770). Drawn when +22 is set
+  and: screen type 7 everything; Custom missions (type 6) with
+  `HEAD_CUST` a != 0 and b == 0 players' objects of the Human row only
+  (0x528a70; every player's without one); otherwise (types 5, 6) players'
+  objects only. Rebuilt (0x528de0, 0x52f470) on a kind changed from or to
+  Disable or to Human. Then the fog of the mission's visibility data
+  (`[game+0x19f9]`) over it (not ported; which screen is type 7 not
+  identified).
+- The map tick (`[0x5ca538]`, Config + 0x10, 1 by default at 0x501710,
+  saved with Config): made by 0x52c5c0 on the Custom missions and Load
+  game screens after their own part, `M_CHECK` ticked when set at (165,
+  185), message 0x1dd (click, or Alt+A, 0x38 0x1e); 0x52e450 flips it,
+  makes the map picture again (0x52f470 makes none when it is 0; the "Map
+  (%dx%d)" title stays) and recentres the viewer (0x52a250). No other
+  screen or panel touches it. Not
   decoded: how the pop-up's list and its two buttons, made by 0x52ebe0
   while the screen is up, get message 8 (their pointer receiver 0x13 and
   their Enter, Up and Down bindings; 0x541c10, 0x541b40 and 0x540030 send
@@ -2201,8 +2232,6 @@ other order-10 codes' objects are not ported, nor the conditions game
 
 Known differences not yet ported:
 
-- Custom missions' map tick (0x1dd, DAT_005ca538, Config + 0x10): the
-  port always shows the map.
 - Start reports: the port writes its own record after "RP" and the
   difficulty (see Start reports), not the original's 0x151 bytes.
 - Custom missions' list: `<MainPath>CUSTOM\*.DKD` (0x52b7c0, watched
@@ -4509,7 +4538,7 @@ A mission archive (`missNNN`, `singleNN`, `battleNN`) contains:
 | `CONDITIONS` | 12 | victory conditions |
 | `WIN_VIEW` | 12 | initial view |
 | `ADD_TIK`, `OLD_TIME`, `TIK_TIME` | 12 | timing |
-| `LIST_OBJ` | 20 | object list |
+| `LIST_OBJ` | 20 | the map preview's marks (below) |
 | `TRACKS_CD/FX/MID` | 20 | music and sound selection |
 | `DISCRIPTION` | 23 | briefing text |
 | `DESCRIPTOR`, `ORIGINAL`, `HEAD_CUST`, `HERO_ARR`, `MISS_UNIC_ID` | 0 | headers |

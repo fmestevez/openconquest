@@ -137,6 +137,9 @@ pub struct Config {
     pub fx_volume: u16,
     #[serde(rename = "master_volume")]
     pub main_volume: u16,
+    /// The mission screens' map tick (`[0x5ca538]`, Config + 0x10; on by
+    /// default, 0x501710): off, no map picture (0x52f470).
+    pub map_tick: bool,
 }
 
 impl Default for Config {
@@ -164,6 +167,7 @@ impl Default for Config {
             effects_volume: 4000,
             fx_volume: 4000,
             main_volume: 4000,
+            map_tick: true,
         }
     }
 }

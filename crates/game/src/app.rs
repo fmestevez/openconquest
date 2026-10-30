@@ -134,6 +134,10 @@ enum KeyMsg {
     PopupChoose,
     PopupStep(i32),
     PopupStepEnd,
+    /// The map tick's Alt+A down and up (0x52c5c0: its accelerator, as a
+    /// button's).
+    TickDown,
+    TickUp,
 }
 
 /// A binding a screen makes: flags, keys, priority, and its messages down
@@ -409,7 +413,14 @@ const REPORT_MAGIC: u16 = 0x5052;
 struct Preview {
     index: usize,
     size: (u32, u32),
+    /// The map picture as shown (`marks`): none with the map tick off.
     map: Option<Rc<crate::assets::Image>>,
+    /// The terrain, 8 pixels a cell, as palette colours (`screen`).
+    terrain: (u32, u32, Vec<u32>),
+    /// Palette index to the menu screen's colour.
+    screen: [u32; 256],
+    /// The mission's `LIST_OBJ` (+0x7f4).
+    list: Vec<openconquest_formats::ListObj>,
     /// The cell at the top left of the human player's starting view.
     start: (u32, u32),
     /// The briefing as the original lays it out.
@@ -447,8 +458,7 @@ impl Preview {
                 }
             }
         }
-        let (w, h, pixels) =
-            crate::terrain::Terrain::small(data, &grid, &mut caches.tiles, &screen)?;
+        let terrain = crate::terrain::Terrain::small(data, &grid, &mut caches.tiles, &screen)?;
         let infos = openconquest_formats::players(&archive).unwrap_or_default();
         let start = infos
             .iter()
@@ -458,16 +468,161 @@ impl Preview {
         Ok(Self {
             index,
             size: (grid.width, grid.height),
-            map: Some(Rc::new(crate::assets::Image::new(
-                w,
-                h,
-                pixels.into_iter().map(Some).collect(),
-            ))),
+            map: None,
+            terrain,
+            screen,
+            list: openconquest_formats::list_obj(&archive),
             start,
             text: openconquest_formats::briefing_text(&archive).unwrap_or_default(),
         })
     }
+
+    /// Makes the map picture again (Startcom.cpp 0x52f470): none with the
+    /// map tick off (`[0x5ca538]`); else the terrain, then the marks of
+    /// `LIST_OBJ` kept by 0x528de0 for the players list `players` (Custom
+    /// missions'; `None` on the Load screen, which has none): a player's
+    /// object only while its owner's row is not Disable, anything else
+    /// always. Two passes, the other objects then the players'. A
+    /// player's object's frame is nation x 4 + slot (0x10 for the
+    /// barbarians), anything else's by its kind (`MARK_FRAMES`); with bit
+    /// 0x80 (a player's object of size 4, or kind 0x18) a 16 x 16 frame of
+    /// `LMAP16X16`, else an 8 x 8 one of `LMAP8X8`, its top left at the
+    /// entry's map pixel / 8 (toward zero, at least 0), skipping the
+    /// entry's key colour (0x56dd90) or copied whole (key -1, 0x562770).
+    /// On Custom missions (type 6) only players' objects are drawn, and
+    /// with `HEAD_CUST` a != 0 and b == 0 and a Human row, only that
+    /// player's; on Load game (type 5) players' objects only. Shown only
+    /// with byte +22 set. (The fog of the mission's visibility data over
+    /// it is not ported.)
+    fn make_map(
+        &mut self,
+        data: &GameData,
+        tick: bool,
+        players: Option<(&[CustomPlayer], [u32; 3])>,
+    ) {
+        self.map = None;
+        if !tick {
+            return;
+        }
+        let (w, h, terrain) = &self.terrain;
+        let mut pixels = terrain.clone();
+        let sheet = |name: &str| {
+            let raw = data
+                .menus
+                .as_ref()?
+                .read(name, openconquest_formats::ResourceKind::Bitmap)
+                .ok()?;
+            openconquest_formats::Bitmap::parse(&raw).ok()
+        };
+        let sheets = [sheet("LMAP8X8"), sheet("LMAP16X16")];
+        // 0x528de0: the sides of the rows not disabled.
+        let mut sides = [false; 20];
+        if let Some((rows, _)) = players {
+            for r in rows.iter().filter(|r| r.kind != 0) {
+                if let Some(s) = sides.get_mut((r.info.nation * 4 + r.info.slot) as usize) {
+                    *s = true;
+                }
+            }
+        }
+        let kept = |e: &&openconquest_formats::ListObj| {
+            e.kind == 2
+                || players.is_none()
+                || sides
+                    .get(usize::from(e.owner.0) * 4 + usize::from(e.owner.1))
+                    .copied()
+                    .unwrap_or(false)
+        };
+        // The Human row (0x528a70) when `HEAD_CUST` a != 0 and b == 0.
+        let only = players.and_then(|(rows, head)| {
+            (head[0] != 0 && head[1] == 0).then(|| {
+                rows.iter()
+                    .find(|r| r.kind == 2)
+                    .map(|r| (r.info.nation, r.info.slot))
+            })
+        });
+        for pass in [2u8, 1] {
+            for e in self.list.iter().filter(kept).filter(|e| e.kind == pass) {
+                let frame = if e.kind == 1 {
+                    let f = if e.owner.0 == 4 {
+                        0x10
+                    } else {
+                        u32::from(e.owner.0) * 4 + u32::from(e.owner.1)
+                    };
+                    if e.size == 4 {
+                        f | 0x80
+                    } else {
+                        f
+                    }
+                } else {
+                    MARK_FRAMES
+                        .iter()
+                        .find(|m| m.0.contains(&e.class))
+                        .map_or(0, |m| m.1)
+                };
+                let drawn = match only {
+                    Some(Some((nation, slot))) => {
+                        e.kind == 1
+                            && (u32::from(e.owner.0), u32::from(e.owner.1)) == (nation, slot)
+                    }
+                    _ => e.kind == 1,
+                };
+                if !e.shown || !drawn {
+                    continue;
+                }
+                let (big, side) = if frame & 0x80 != 0 { (1, 16) } else { (0, 8) };
+                let Some(src) = &sheets[big] else {
+                    continue;
+                };
+                let (x0, y0) = ((e.x / 8).max(0) as u32, (e.y / 8).max(0) as u32);
+                let top = (frame & 0x7f) * side;
+                for sy in 0..side {
+                    for sx in 0..side {
+                        let (dx, dy) = (x0 + sx, y0 + sy);
+                        if dx >= *w || dy >= *h || sx >= src.width || top + sy >= src.height {
+                            continue;
+                        }
+                        let i = src.pixels[((top + sy) * src.width + sx) as usize];
+                        if e.key != -1 && i == e.key as u8 {
+                            continue;
+                        }
+                        pixels[(dy * w + dx) as usize] = self.screen[usize::from(i)];
+                    }
+                }
+            }
+        }
+        self.map = Some(Rc::new(crate::assets::Image::new(
+            *w,
+            *h,
+            pixels.into_iter().map(Some).collect(),
+        )));
+    }
 }
+
+/// The map preview's frame for anything but a player's object, by its
+/// kind (0x52f470's switch): `LMAP8X8` frames, 0x91 a `LMAP16X16` one;
+/// other kinds 0.
+const MARK_FRAMES: [(&[u32], u32); 20] = [
+    (&[1], 0x12),
+    (&[2], 0x13),
+    (&[3], 0x11),
+    (&[4], 0x14),
+    (&[5], 0x15),
+    (&[6], 0x16),
+    (&[7], 0x17),
+    (&[8], 0x18),
+    (&[9, 0x13, 0x15], 0x19),
+    (&[10], 0x1a),
+    (&[0xb], 0x1b),
+    (&[0xc], 0x1c),
+    (&[0xd], 0x1d),
+    (&[0x10], 0x1e),
+    (&[0x11], 0x1f),
+    (&[0x12], 0x20),
+    (&[0x14], 0x21),
+    (&[0x16], 0x22),
+    (&[0x17], 0x23),
+    (&[0x18], 0x91),
+];
 
 /// A player of Custom missions' players list (Startcom.cpp: the screen's
 /// list + 0x7e8, an entry of 0x174 bytes, made by 0x52a990): every player
@@ -919,6 +1074,8 @@ pub struct App {
     /// the pointer inside it (_sbutton.cpp 0x54ab20: its action comes on
     /// the release inside it; the pointer leaving lets it go).
     menu_held: Option<usize>,
+    /// The map tick held down (it acts when let go on it, _sbutton).
+    tick_held: bool,
     battle_maps: Vec<(usize, usize)>,
     hosting: Option<crate::net::Lobby>,
     joining: Option<crate::net::Joining>,
@@ -1138,6 +1295,7 @@ impl App {
             map_at: None,
             menu_drag: None,
             menu_held: None,
+            tick_held: false,
             menu_repeat: None,
             battle_maps: Vec::new(),
             hosting: None,
@@ -2322,7 +2480,17 @@ impl App {
             at(&arrow("RT", &across, false), 140.0, 185.0),
             at("MAP_TR_H0", 32.0, 185.0),
             thumb("MAP_TR_H1", &across),
-            at("M_CHECK1", 165.0, 185.0),
+            // The map tick (0x52c5c0: `M_CHECK`, ticked with
+            // [0x5ca538] set).
+            at(
+                if self.settings.config.map_tick {
+                    "M_CHECK1"
+                } else {
+                    "M_CHECK0"
+                },
+                165.0,
+                185.0,
+            ),
             at(&arrow("UP", &about, true), 766.0, 52.0),
             at(&arrow("DN", &about, false), 766.0, 184.0),
             at("DESC_TR0", 766.0, 76.0),
@@ -2344,6 +2512,7 @@ impl App {
                 arrow_spot(140.0, 185.0, Scroller::MapX, 1),
                 arrow_spot(766.0, 52.0, Scroller::Story, -1),
                 arrow_spot(766.0, 184.0, Scroller::Story, 1),
+                ((165.0, 185.0, 23.0, 23.0), MenuHit::MapTick),
             ],
         }
     }
@@ -2934,15 +3103,19 @@ impl App {
                 button("MultiPlayer game", (LALT, 0x32)),
                 button("Quit game", (LALT, 0x10)),
             ],
-            // Startcom.cpp 0x52c5c0 (the map tick's Alt+A: the port's tick
-            // does nothing).
-            MenuState::Missions(..) => {
-                vec![button("Start", (LALT, 0x1f)), button("Cancel", (ESCAPE, 0))]
-            }
-            // Startld.cpp 0x52fe90.
-            MenuState::Load(..) => {
-                vec![button("Load", (LALT, 0x26)), button("Cancel", (ESCAPE, 0))]
-            }
+            // Startspl.cpp 0x53b940, then the map tick's Alt+A (made by
+            // Startcom.cpp 0x52c5c0 after the screen's own part).
+            MenuState::Missions(..) => vec![
+                button("Start", (LALT, 0x1f)),
+                button("Cancel", (ESCAPE, 0)),
+                (0, (LALT, 0x1e), 0, KeyMsg::TickDown, Some(KeyMsg::TickUp)),
+            ],
+            // Startld.cpp 0x52fe90, then the map tick's.
+            MenuState::Load(..) => vec![
+                button("Load", (LALT, 0x26)),
+                button("Cancel", (ESCAPE, 0)),
+                (0, (LALT, 0x1e), 0, KeyMsg::TickDown, Some(KeyMsg::TickUp)),
+            ],
             // Starttsk.cpp: Enter and Space start (0x53f360), then Start
             // and, for a campaign's first mission, Cancel (0x53f550).
             MenuState::Briefing => {
@@ -3056,6 +3229,12 @@ impl App {
                 }
             }
             KeyMsg::Command(caption) => self.menu_fire(state, caption),
+            KeyMsg::TickDown => self.tick_held = true,
+            KeyMsg::TickUp => {
+                if std::mem::take(&mut self.tick_held) {
+                    self.toggle_map_tick();
+                }
+            }
             KeyMsg::Edit(msg) => self.edit_key(state, msg),
             KeyMsg::PopupClose => self.close_kind_popup(),
             KeyMsg::PopupChoose => {
@@ -3276,6 +3455,7 @@ impl App {
             cp.kind = v;
             cp.name = name;
             if old == 0 || v == 0 || v == 2 {
+                self.make_preview_map();
                 self.recentre_custom_map();
             }
         }
@@ -3611,6 +3791,7 @@ impl App {
             // A players row's kind field or arrow is held down; it acts
             // when let go inside (_sbutton).
             MenuHit::Kind(k, arrow) => self.kind_held = Some((k, arrow)),
+            MenuHit::MapTick => self.tick_held = true,
             MenuHit::Item(i) => {
                 self.menu_select(state, i);
             }
@@ -3639,6 +3820,14 @@ impl App {
             let page = self.menu_page(state);
             if menus.hit(&page.view(None, None), p) == Some(MenuHit::Kind(held.0, held.1)) {
                 self.open_kind_popup(held.0);
+            }
+        }
+        if std::mem::take(&mut self.tick_held) {
+            if let (Some(state), Some(menus)) = (self.menu, &self.menus) {
+                let page = self.menu_page(state);
+                if menus.hit(&page.view(None, None), p) == Some(MenuHit::MapTick) {
+                    self.toggle_map_tick();
+                }
             }
         }
         let (Some(held), Some(state), Some(menus)) =
@@ -3677,6 +3866,12 @@ impl App {
             let page = self.menu_page(state);
             if menus.hit(&page.view(None, None), p) != Some(MenuHit::Kind(held.0, held.1)) {
                 self.kind_held = None;
+            }
+        }
+        if let (true, Some(state), Some(menus)) = (self.tick_held, self.menu, &self.menus) {
+            let page = self.menu_page(state);
+            if menus.hit(&page.view(None, None), p) != Some(MenuHit::MapTick) {
+                self.tick_held = false;
             }
         }
         let (Some(held), Some(state), Some(menus)) = (self.menu_held, self.menu, &self.menus)
@@ -3758,6 +3953,33 @@ impl App {
         }
         if let Some(MenuState::Missions(Category::Single, _)) = self.menu {
             self.make_custom_players(index);
+        }
+        self.make_preview_map();
+    }
+
+    /// The map picture made again for the screen shown (0x52f470): on
+    /// Custom missions with its players list (0x528de0).
+    fn make_preview_map(&mut self) {
+        let players = match self.menu {
+            Some(MenuState::Missions(..)) => Some((&self.custom_players[..], self.custom_head)),
+            _ => None,
+        };
+        let tick = self.settings.config.map_tick;
+        if let Some(p) = self.preview.as_mut() {
+            p.make_map(&self.data, tick, players);
+        }
+    }
+
+    /// The map tick (0x52c5c0: message 0x1dd, click or Alt+A; 0x52e450):
+    /// `[0x5ca538]` flipped, the map picture made again (none when off,
+    /// 0x52f470) and the viewer recentred (0x52a250; on the Load screen,
+    /// which has no players list, not decoded: the viewer is left).
+    fn toggle_map_tick(&mut self) {
+        let c = &mut self.settings.config;
+        c.map_tick = !c.map_tick;
+        self.make_preview_map();
+        if let Some(MenuState::Missions(..)) = self.menu {
+            self.recentre_custom_map();
         }
     }
 
@@ -7381,7 +7603,10 @@ impl ApplicationHandler for App {
                         Menus::to_menu(self.window_size(), position.x as f32, position.y as f32);
                     self.menu_drag_to(p);
                 }
-                if self.menu_held.is_some() || self.kind_held.is_some() || self.kind_popup.is_some()
+                if self.menu_held.is_some()
+                    || self.kind_held.is_some()
+                    || self.tick_held
+                    || self.kind_popup.is_some()
                 {
                     let p =
                         Menus::to_menu(self.window_size(), position.x as f32, position.y as f32);
@@ -7496,6 +7721,7 @@ impl ApplicationHandler for App {
                 (MouseButton::Left, ElementState::Released) => {
                     let menu_hold = self.menu_held.is_some()
                         || self.kind_held.is_some()
+                        || self.tick_held
                         || self.kind_popup.is_some();
                     if let Some(c) = self.cursor.filter(|_| menu_hold) {
                         let p = Menus::to_menu(self.window_size(), c.x as f32, c.y as f32);
@@ -7503,6 +7729,7 @@ impl ApplicationHandler for App {
                     }
                     self.menu_held = None;
                     self.kind_held = None;
+                    self.tick_held = false;
                     if let Some(c) = self.left_down.take() {
                         self.left_click(c);
                     }
@@ -7842,6 +8069,86 @@ mod custom_tests {
         assert_eq!(app.scene.computers.off, vec![(1, 1)]);
         // The disabled player's objects were never made (0x51e810).
         assert!(!app.scene.objects.iter().any(|o| o.owner == Some((1, 1))));
+    }
+
+    /// The map preview's marks (0x52f470): `LIST_OBJ`'s entries, a
+    /// player's object in its player's frame, kept while its row is not
+    /// disabled (0x528de0); with `HEAD_CUST` a set and b clear only the
+    /// Human's; none with the map tick off.
+    #[test]
+    fn the_map_preview_marks_as_the_original() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        show(&mut app, "battle01");
+        let p = app.preview.as_ref().unwrap();
+        assert_eq!(p.list.len(), 50);
+        let town = openconquest_formats::ListObj {
+            kind: 1,
+            size: 4,
+            owner: (1, 1),
+            class: 0x0101,
+            key: -1,
+            x: 64,
+            y: 1152,
+            shown: true,
+        };
+        assert!(p.list.contains(&town));
+        // Whether any pixel of entry `e`'s mark differs from the terrain.
+        let marked = |app: &App, e: &openconquest_formats::ListObj| {
+            let p = app.preview.as_ref().unwrap();
+            let m = p.map.as_ref().unwrap();
+            let side = if e.kind == 1 && e.size == 4 { 16 } else { 8 };
+            let (x0, y0) = ((e.x / 8).max(0) as u32, (e.y / 8).max(0) as u32);
+            (0..side).any(|dy| {
+                (0..side).any(|dx| {
+                    let k = ((y0 + dy) * m.width + x0 + dx) as usize;
+                    m.pixels[k] != Some(p.terrain.2[k])
+                })
+            })
+        };
+        let theirs: Vec<_> = p
+            .list
+            .iter()
+            .filter(|e| e.kind == 1 && e.owner == (3, 3) && e.shown)
+            .copied()
+            .collect();
+        let others: Vec<_> = p.list.iter().filter(|e| e.kind == 2).copied().collect();
+        assert!(!theirs.is_empty() && !others.is_empty());
+        assert!(marked(&app, &town));
+        assert!(theirs.iter().all(|e| marked(&app, e)));
+        // Custom missions draw players' objects only.
+        assert!(!others.iter().any(|e| marked(&app, e)));
+        // The second player disabled: its marks go.
+        app.custom_players[1].kind = 0;
+        app.make_preview_map();
+        assert!(!theirs.iter().any(|e| marked(&app, e)));
+        assert!(marked(&app, &town));
+        // The map tick off: no picture; on again, the marks back.
+        app.toggle_map_tick();
+        assert!(app.preview.as_ref().unwrap().map.is_none());
+        app.toggle_map_tick();
+        assert!(marked(&app, &town));
+        // single01: HEAD_CUST a = 1, b = 0: the Human's marks only.
+        show(&mut app, "single01");
+        assert_eq!(app.custom_head[..2], [1, 0]);
+        let p = app.preview.as_ref().unwrap();
+        let human = app
+            .custom_players
+            .iter()
+            .find(|c| c.kind == 2)
+            .unwrap()
+            .info;
+        let (mine, rest): (Vec<_>, Vec<_>) = p
+            .list
+            .iter()
+            .filter(|e| e.kind == 1 && e.shown)
+            .partition(|e| {
+                (u32::from(e.owner.0), u32::from(e.owner.1)) == (human.nation, human.slot)
+            });
+        assert!(!mine.is_empty() && !rest.is_empty());
+        assert!(mine.iter().all(|e| marked(&app, e)));
+        assert!(!rest.iter().any(|e| marked(&app, e)));
     }
 
     /// Custom missions' Start with no Human row (0x53b940: no viewing

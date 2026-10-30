@@ -251,6 +251,68 @@ pub fn head_cust(archive: &Archive) -> [u32; 3] {
     [at(0), at(4), at(8)]
 }
 
+/// An entry of a mission's `LIST_OBJ` (resource type 20, read by
+/// 0x54a8b0 into the mission screens' + 0x7f4): a mark on the map preview,
+/// 23 bytes as 0x52f470 reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListObj {
+    /// +0: 1 a player's object, 2 anything else.
+    pub kind: u8,
+    /// +1: 4 for a big mark.
+    pub size: u8,
+    /// +2, +3: a player's object's owner (nation, slot).
+    pub owner: (u8, u8),
+    /// +2: what anything else is (a dword).
+    pub class: u32,
+    /// +10: the palette index left out of the mark, -1 for none.
+    pub key: i32,
+    /// +14, +18: where, in map pixels (64 a cell).
+    pub x: i32,
+    pub y: i32,
+    /// +22: shown.
+    pub shown: bool,
+}
+
+/// The mission's `LIST_OBJ`: a list as 0x55f350 rebuilds it (its element
+/// size at +8, its count at +0xc, the elements from +0x1c), of 23-byte
+/// entries. Empty without one. (Bytes +6..+9 of an entry are not read by
+/// 0x52f470.)
+pub fn list_obj(archive: &Archive) -> Vec<ListObj> {
+    let Some(data) = archive
+        .find("LIST_OBJ", ResourceKind::Other(20))
+        .and_then(|e| archive.read_entry(e).ok())
+    else {
+        return Vec::new();
+    };
+    let dword = |o: usize| {
+        data.get(o..o + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
+    let (Some(size), Some(count)) = (dword(8), dword(0xc)) else {
+        return Vec::new();
+    };
+    let size = size as usize;
+    if size < 23 {
+        return Vec::new();
+    }
+    (0..count as usize)
+        .map_while(|i| {
+            let e = data.get(0x1c + i * size..0x1c + i * size + 23)?;
+            let d = |o: usize| u32::from_le_bytes(e[o..o + 4].try_into().unwrap());
+            Some(ListObj {
+                kind: e[0],
+                size: e[1],
+                owner: (e[2], e[3]),
+                class: d(2),
+                key: d(10) as i32,
+                x: d(14) as i32,
+                y: d(18) as i32,
+                shown: e[22] != 0,
+            })
+        })
+        .collect()
+}
+
 /// Where each player's view starts (`WIN_VIEW`, a record of 20 dwords, one
 /// per player id `nation * 4 + slot`: the cell at the view's top left, x in
 /// the low word, y in the high one; read by 0x4ed5a0 into game + 0x2ef5,

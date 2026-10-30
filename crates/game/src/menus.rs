@@ -185,6 +185,8 @@ pub enum MenuHit {
     /// Custom missions' kind field of a players row (_sbutton 0x197 + k),
     /// or its arrow (M_CBUT, 0x1af + k) when the flag is set.
     Kind(usize, bool),
+    /// The mission screens' map tick (0x52c5c0, message 0x1dd).
+    MapTick,
 }
 
 /// What a scroll bar scrolls.

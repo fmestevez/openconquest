@@ -26,8 +26,8 @@ pub use help::{parse_help_page, HelpItem};
 pub use image::{parse_palette_animation, Bitmap, Mask, Palette, PaletteCycle, Rgb, Sprite};
 pub use map::{MapGrid, TileRef, TileSet, TileSetLibrary};
 pub use mission::{
-    briefing, briefing_lines, briefing_text, conditions, head_cust, object_records, players,
-    ObjectClass, ObjectRecord, PlayerInfo, StartLevels,
+    briefing, briefing_lines, briefing_text, conditions, head_cust, list_obj, object_records,
+    players, ListObj, ObjectClass, ObjectRecord, PlayerInfo, StartLevels,
 };
 pub use pe::string_table;
 pub use sound::{load_sound, sound_choices, Sound};
