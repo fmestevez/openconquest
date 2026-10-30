@@ -8,13 +8,24 @@ and any screen.
 OpenConquest does not include any game assets. You need an original copy of the
 game CD.
 
+<p align="center">
+  <img src="https://github.com/fmestevez/openconquest/releases/download/screenshots/campaign-miss000.png" alt="The first campaign mission: Greek ships in the bay below their town" width="49%">
+  <img src="https://github.com/fmestevez/openconquest/releases/download/screenshots/campaign-miss006.png" alt="A later campaign mission: a war galley off a Greek town, the unexplored sea under cloud" width="49%">
+</p>
+<p align="center">
+  <img src="https://github.com/fmestevez/openconquest/releases/download/screenshots/title-screen.png" alt="The original title screen" width="60%">
+</p>
+<p align="center"><sub>Screenshots taken with OpenConquest from the original game's data.</sub></p>
+
 ## Status
 
-Playable: the campaign, single missions and battles run with the original's
-graphics, sounds, music and videos, and most of the game's rules. Values
-and behaviour are recovered from the original executable with Ghidra and
-documented in [docs/FORMATS.md](docs/FORMATS.md); anything still estimated is
-marked as a placeholder in the code.
+Playable: the campaign, single missions, battles and
+custom games run with the original's graphics, sounds, music and videos and
+the original's rules. Every value and behaviour is recovered from the
+original executable with Ghidra and documented, with its addresses, in
+[docs/FORMATS.md](docs/FORMATS.md). Nothing is estimated: the few details
+not decoded yet are left out and marked "not decoded" in the code and the
+documentation.
 
 ### Data and tools
 
@@ -76,11 +87,15 @@ marked as a placeholder in the code.
 ### Missions
 
 - The campaign's mission scripts are ported: their fleets patrol, gather,
-  guard and raid as in the original, at its three difficulty levels
-  (`--difficulty easy|normal|hard`).
+  guard, raid and answer attacks on the original's schedule, at its three
+  difficulty levels (`--difficulty easy|normal|hard`), and the computer
+  players gather, build ships and grow their towns as the original's do.
 - Missions are won by their objectives or victory conditions, and the
   campaign reveals technology mission by mission as the original does.
-- The original's statistics and score at a mission's end.
+- The original's end screen: its statistics, the score (counting only
+  your own kills) and the Best Conquerors table, where you enter your
+  name; a won campaign mission goes on to the next one's video and
+  briefing.
 - As in the original, battles and single missions have no computer AI:
   their computer players' ships and forts guard and answer fire.
 
@@ -90,7 +105,8 @@ marked as a placeholder in the code.
 - The menu music, the CD's audio tracks if ripped to `<data>/cdaudio` (or
   `--cd-audio DIR`), or else the original MIDI music through a General MIDI
   SoundFont (`--soundfont FILE.sf2` or `OPENCONQUEST_SOUNDFONT`).
-- The original's intro and story videos, decoded from the CD.
+- The original's intro and story videos, decoded from the CD, and the
+  briefing's own music.
 
 ### Settings
 
@@ -104,17 +120,19 @@ are kept in `config.json`.
 
 ### Not yet done
 
-- The campaign scripts' story events (partly decoded).
 - The original's multiplayer screens and network play with the original game
   (OpenConquest has its own lobby).
-- A few values are still estimates (marked in the code), such as the
-  leviathan hunt and the boarding pace.
+- A few parts of the campaign scripts: the repair members of missions 3
+  and 5 and the spells the Persians cast on their patrols.
+- Small details still being decoded, each marked "not decoded" in the code
+  with the original's addresses to read (see
+  [docs/FORMATS.md](docs/FORMATS.md)).
 
 ### Modern improvements
 
 - The original interface (framed view, control bar with minimap and object
-  panel) adapted to any aspect ratio: the bar keeps its place on the right
-  and the view widens.
+  panel) adapted to any aspect ratio: the bar keeps its side (right, or left
+  as the configuration panel sets it) and the view widens.
 - Any window size and aspect ratio. The view is scaled to match the original
   600-line screen height, so widescreen and ultrawide monitors see more of the
   map instead of a stretched image.
@@ -126,12 +144,13 @@ are kept in `config.json`.
   Conquerors, Start scenario's "Your mission" briefing with its difficulty
   boxes, Custom missions (the battles and single missions, the chosen one's
   map from the small tiles, its description and players with their flags
-  and computer level), Load game (saved games of the campaign and of other
-  missions, or a campaign mission to start from) and the multiplayer
-  screen (OpenConquest's own network game behind it, so its one way to connect is
-  TCP/IP). The screens are drawn from the original's own widget pictures
-  and fonts. The mission accomplished and failed screens are OpenConquest's own
-  so far.
+  and the original's pop-up to choose each one's kind or computer level),
+  Load game (saved games of the campaign and of other missions, or a start
+  report to begin a campaign mission from), the mission accomplished and
+  failed screens, and the multiplayer screen (OpenConquest's own network
+  game behind it, so its one way to connect is TCP/IP). The screens are
+  drawn from the original's own widget pictures and fonts, fade in and out
+  as the original's do, and answer the original's keyboard shortcuts.
 - Quick save and load at any moment (Ctrl+S / Ctrl+O), plus eight save slots.
 - Adjustable game speed (half to double) and scroll speed.
 - Minimap markers coloured by side: yours, enemies, creatures.
