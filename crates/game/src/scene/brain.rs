@@ -996,9 +996,10 @@ impl Scene {
                 ticks,
                 events,
             } => {
+                // An event or the time switches the state only (0x479750):
+                // the fleet keeps its order until another replaces it.
                 if started {
                     if let Some(s) = self.event_fired(k, events, elapsed) {
-                        self.fleet_stop(k);
                         self.set_state(k, s);
                         return;
                     }
@@ -1026,7 +1027,6 @@ impl Scene {
             } => {
                 if started {
                     if let Some(s) = self.event_fired(k, events, elapsed) {
-                        self.fleet_stop(k);
                         self.set_state(k, s);
                         return;
                     }
@@ -1042,8 +1042,8 @@ impl Scene {
                     self.fleet_gather(k, area, resource);
                 } else if empty || (ticks > 0 && elapsed >= ticks) {
                     // With no ships, result 1 sends 0x47a570 to its p4,
-                    // which every mission passes equal to its p3.
-                    self.fleet_stop(k);
+                    // which every mission passes equal to its p3. The
+                    // gathering goes on (0x47a570 switches the state only).
                     self.set_state(k, next);
                 }
             }
@@ -1105,7 +1105,6 @@ impl Scene {
             } => {
                 if started {
                     if let Some(s) = self.event_fired(k, events, elapsed) {
-                        self.fleet_stop(k);
                         self.set_state(k, s);
                         return;
                     }
@@ -1132,7 +1131,6 @@ impl Scene {
                     let up = ticks > 0 && elapsed >= ticks;
                     self.set_state(k, if up { next } else { failed });
                 } else if self.fleet_idle(k) || (ticks > 0 && elapsed >= ticks) {
-                    self.fleet_stop(k);
                     self.set_state(k, next);
                 }
             }
@@ -1990,18 +1988,6 @@ impl Scene {
         }
     }
 
-    fn fleet_stop(&mut self, k: usize) {
-        for id in self.fleet_ships(k) {
-            if let Some(i) = self.object_index(id) {
-                if let Some(s) = self.objects[i].ship.as_mut() {
-                    s.task = None;
-                    s.zone = None;
-                    s.path.clear();
-                }
-            }
-        }
-    }
-
     fn fleet_gather(&mut self, k: usize, (x, y, w, h): Cells, resource: Resource) {
         self.brain.as_mut().unwrap().fleets[k].move_order = None;
         let t = TILE_SIZE as f32;
@@ -2361,7 +2347,7 @@ impl Scene {
     }
 
     /// Carries the brain's town orders on, a pass every 50 ticks.
-    pub(super) fn run_brain_jobs(&mut self, data: &GameData, caches: &mut Caches) {
+    pub(super) fn run_brain_jobs(&mut self) {
         let Some(brain) = self.brain.as_ref() else {
             return;
         };
@@ -2381,21 +2367,18 @@ impl Scene {
                         None => continue,
                         Some(Ok(0)) => {}
                         Some(Ok(class)) => {
+                            // The town's command (0x520cc0): at the next tick.
                             if let Some((x, y, facing)) = self.town_build_place(site, class) {
-                                let _ = self.place_building_facing(
+                                self.post(super::Order::PlaceBuilding {
                                     site,
                                     class,
-                                    x,
-                                    y,
-                                    Some(facing),
-                                    data,
-                                    caches,
-                                );
+                                    cx: x,
+                                    cy: y,
+                                    facing: Some(facing),
+                                });
                             }
                         }
-                        Some(Err(id)) => {
-                            let _ = self.upgrade(id, data, caches);
-                        }
+                        Some(Err(id)) => self.post(super::Order::Upgrade { id }),
                     }
                     keep.push(job);
                 }
@@ -2444,7 +2427,8 @@ impl Scene {
                         .as_ref()
                         .is_none_or(|c| c.hull >= c.max_hull);
                     if whole {
-                        let _ = self.halt(target, data, caches);
+                        // Order 10 (0x520cc0): at the next tick.
+                        self.post(super::Order::Halt { id: target });
                     } else if fresh {
                         keep.push(Job::Mended {
                             target,

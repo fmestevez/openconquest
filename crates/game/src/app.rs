@@ -5879,6 +5879,7 @@ impl App {
                 class,
                 cx: cell.0,
                 cy: cell.1,
+                facing: None,
             }) {
                 Ok(_) => {
                     self.pending = None;

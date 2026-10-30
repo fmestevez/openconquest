@@ -213,6 +213,10 @@ pub enum Order {
         class: u32,
         cx: i32,
         cy: i32,
+        /// The facing a town's own placing chose (the land fleet's
+        /// building part, 0x428a70): the cell is not looked over again.
+        #[serde(default)]
+        facing: Option<u32>,
     },
     /// At the temple `site` (its work, standing still while it is limed).
     LearnSpell {
@@ -523,7 +527,8 @@ impl Scene {
                 class,
                 cx,
                 cy,
-            } => done(self.place_building(site, class, cx, cy, data, caches)),
+                facing,
+            } => done(self.place_building_facing(site, class, cx, cy, facing, data, caches)),
             LearnSpell { temple, site } => done(self.learn_spell(temple, site)),
             CastFlame { site } => done(self.cast_flame(site)),
             CastWind { direction } => done(self.cast_wind(direction)),

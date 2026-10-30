@@ -3090,10 +3090,16 @@ has no busy marks); 0x4abe00, 0x4aa290 / 0x4aa2a0 not read; `+0x251 ==
 1` not identified; a fire at a target (0x15, kind 1: the port's forts
 only); the commands still given at once: the computers' founding (its
 answer decides their move), treasure hunts (a refused one tries the
-next), zones (the navy's own task in the original, its commands not
-modelled), the brains' sword hunt, fleet stops and town commands (the
-land fleets' builds, upgrades, mendings, the brains' and computers'
-yard orders and spells); the end of unloading (0x4adef0 step 0x13:
+next), zones (the navy's own task in the original, set at once there
+too by 0x4a09d0; the attack zone's ship commands not modelled), the
+brains' sword hunt and the land fleets' town commands whose answer the
+port's part reads at once (the computers' builds, upgrades, mendings and
+yard orders; the brains' and computers' spells). Through the outbox now:
+the brains' full-town placings and upgrades and both players' order 10
+ending a mending (`Order::Halt`). The brains never stop a fleet: no
+brain code gives fleet order 0xdc (0x4c45f0 -> 0x4c4180, command 10 to
+each ship), and the primitives only switch state on an event or a
+timeout (0x479750); the end of unloading (0x4adef0 step 0x13:
 event 8 mask 0x40 and the move aside 0x80, the way back from the
 group's gather task later: the port goes back to its deposit at once
 after the move aside); lightning's, reefs' and whirlpools' wrecks, a

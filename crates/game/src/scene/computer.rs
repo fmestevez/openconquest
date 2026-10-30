@@ -2569,7 +2569,8 @@ impl Scene {
                     if !whole {
                         return PartStep::Wait;
                     }
-                    let _ = self.halt(target, data, caches);
+                    // Order 10 (0x520cc0): at the next tick.
+                    self.post(Order::Halt { id: target });
                     return PartStep::Done;
                 }
                 let worn: Vec<u32> = self
@@ -5768,6 +5769,10 @@ mod tests {
         c.hull = c.max_hull;
         let step = scene.order_part(&mut ai, 0, None, under_way, &data, &mut caches);
         assert!(matches!(step, PartStep::Done));
+        // The order reaches the building at the next tick (0x520cc0).
+        assert!(scene.mending.contains(&id));
+        scene.ticks = scene.ticks.max(crate::scene::order::HOLD);
+        scene.deliver(&data, &mut caches);
         assert!(!scene.mending.contains(&id));
         // A building gone fails the part.
         let gone = Part {
