@@ -10200,8 +10200,8 @@ mod miss010 {
 /// things within 15 cells of the Persians' temple. Member 3 casts
 /// lightning at (38, 14) and (30, 23) when the player comes into the
 /// middle sea's western zones.
-/// (Not ported: the yard's code 0x34 (class 0x30, never asked for, no
-/// effect); member 5's states 30 and 40 (0x1e, 0x28), which no event
+/// (Not ported: the yard's code 0x34 (town order 48, 0x47b130 code 0x30:
+/// a medium fort, class 0x35; no member ever asks for it); member 5's states 30 and 40 (0x1e, 0x28), which no event
 /// reaches. Member 7 looks through the player's things in the scene's
 /// order, not the player's list's; a building is "in" an area by its
 /// cell. A waterspout or sea monster asked for on land is not cast. An
@@ -11334,8 +11334,8 @@ mod miss011 {
 /// patrol, 5 (0x472550) gathers strength, patrols wider waters and casts a
 /// spell on its ships when it fights, 6 (0x477190) mends and 7 (0x472890)
 /// casts at the player near player 14's temple (as player 15).
-/// (Not ported: the yards' code 0x34 (class 0x30, never asked for, no
-/// effect); prizes of either Persian player handed to
+/// (Not ported: the yards' code 0x34 (town order 48, 0x47b130 code 0x30:
+/// a medium fort, class 0x35; no member ever asks for it); prizes of either Persian player handed to
 /// group 1's repair member (0x5d97): here each player's prizes sail to its
 /// own docks (`brain_prize`); the unreachable
 /// states of members (1, 4) and (1, 7) (0x19, 0x28: nothing sends them
@@ -12479,8 +12479,8 @@ mod miss012 {
 /// the south-west and strikes there under a spell, 6 (0x477190) mends and
 /// 7 (0x477210) casts at the player near player 14's temple (as player
 /// 15).
-/// (Not ported: the yards' code 0x34 (class 0x30, never asked for, no
-/// effect); prizes handed to member (1, 5) (player
+/// (Not ported: the yards' code 0x34 (town order 48, 0x47b130 code 0x30:
+/// a medium fort, class 0x35; no member ever asks for it); prizes handed to member (1, 5) (player
 /// 15's) or (1, 6) (player 14's: the caster, which never moves them)
 /// (0x5d97): here each player's prizes sail to its own docks
 /// (`brain_prize`); member (1, 4)'s state 0x19

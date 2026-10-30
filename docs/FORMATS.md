@@ -3896,7 +3896,12 @@ miss011 (0x46e8e0; members 0x46b8d0-0x46e110):
   ticks, answering fire 375 (member 6: 250).
 - **The Persians.** The yard (0x46cf80, at (32, 17)) gives a one-off order
   of class 1, then serves its slots (boats to ship killers, 0xd2, 0xd3;
-  0x34 builds class 0x30), resting 500 ticks. Members 1 and 2 (0x46d320,
+  0x34 gives town order 48, 0x47b130 code 0x30: one part, 0x3e9 class
+  0x35, a medium fort, flags 7; no member ever asks for it: the request
+  arrays are written only with -1 and the members' immediates 0xc9-0xcd,
+  0xd2, 0xd3, in miss011-miss013; the yards of miss002-miss010 have the
+  case too, no brain storing 0x34 as an immediate),
+  resting 500 ticks. Members 1 and 2 (0x46d320,
   0x46d470) ask for a merchant while they have none and gather amber in
   (31, 23, 11, 7) and fish in (32, 18, 11, 12) 4500 ticks, sail home to
   (37, 24) and rest 1500. Members 3 and 4 (0x46d5c0, 0x46d830; the ships
