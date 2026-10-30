@@ -1784,14 +1784,25 @@ fn behaviours() {
     let m = scene.object_index(mine).unwrap();
     scene.objects[m].x -= 64.0 * 6.0; // out of our own range
     let e = scene.object_index(enemy).unwrap();
-    scene.objects[e].ship.as_mut().unwrap().task = Some(Task::Attack { target: mine });
+    scene.objects[e].ship.as_mut().unwrap().task = Some(Task::Attack {
+        target: mine,
+        jam: None,
+        count: 0,
+    });
     for _ in 0..50 * 10 {
         scene.update(0.02, &data, &mut caches);
         if task(&scene, mine).is_some() {
             break;
         }
     }
-    assert_eq!(task(&scene, mine), Some(Task::Attack { target: enemy }));
+    assert_eq!(
+        task(&scene, mine),
+        Some(Task::Attack {
+            target: enemy,
+            jam: None,
+            count: 0
+        })
+    );
     // Set to ram, an idle guard rams instead of firing.
     let m = scene.object_index(mine).unwrap();
     scene.objects[m].ship.as_mut().unwrap().task = None;
@@ -9176,6 +9187,81 @@ fn land_creatures_look_alert_and_throw() {
     assert_eq!(throw.to, None);
 }
 
+/// An armed ship ordered at a jam keeps the jam (0x4d04a0 `+0xc`) and
+/// fires at its first member (0x4ab3f0); its member gone, the fleet task
+/// sends it, lying still, at the jam's next first member once its counter
+/// is past 0x50 (0x4d0650); the jam gone, the task stays with nothing
+/// given (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_ship_ordered_at_a_jam_takes_its_first_member() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some() && o.is_armed())
+        .unwrap()
+        .id;
+    let (w, h) = (scene.grid.width as i32, scene.grid.height as i32);
+    let cell = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .find(|&c| scene.landing_ground(c) && !scene.cell_slot_taken(c))
+        .unwrap();
+    scene.put_walker(super::walkers::NO_LAIR, 0x1f4, cell, &data, &mut caches);
+    scene.put_walker(super::walkers::NO_LAIR, 0x1f4, cell, &data, &mut caches);
+    let (a, b) = (scene.walkers[0].id, scene.walkers[1].id);
+    let jam = scene.jams[0].id;
+    assert_eq!(scene.jams[0].members, vec![a, b]);
+    scene.ticks = 1000;
+    scene.order_attack(ship, jam).unwrap();
+    let i = scene.object_index(ship).unwrap();
+    let task = |s: &Scene| {
+        let i = s.object_index(ship).unwrap();
+        s.objects[i].ship.as_ref().unwrap().task
+    };
+    assert_eq!(
+        task(&scene),
+        Some(Task::Attack {
+            target: a,
+            jam: Some(jam),
+            count: 1000
+        })
+    );
+    scene.objects[i].ship.as_mut().unwrap().move_state = 0;
+    // The first tick of the task: past 0x50, back to 0, then 1.
+    scene.run_jam_attacks();
+    assert!(matches!(task(&scene), Some(Task::Attack { target, count: 1, .. }) if target == a));
+    // The first member leaves the jam (dies): the ship keeps its order
+    // and, 81 ticks of the task on, is given the next.
+    scene.jams[0].members.remove(0);
+    scene.objects.retain(|o| o.id != a);
+    for k in 2..=81 {
+        scene.run_jam_attacks();
+        assert!(
+            matches!(task(&scene), Some(Task::Attack { target, count, .. }) if target == a && count == k),
+            "{k}: {:?}",
+            task(&scene)
+        );
+    }
+    scene.run_jam_attacks();
+    assert!(matches!(task(&scene), Some(Task::Attack { target, count: 1, .. }) if target == b));
+    // The jam gone: nothing to give; the task stays (0x4d0650 never ends
+    // it).
+    scene.jams.clear();
+    scene.objects.retain(|o| o.id != b);
+    for _ in 0..200 {
+        scene.run_jam_attacks();
+    }
+    assert!(
+        matches!(task(&scene), Some(Task::Attack { target, jam: Some(j), .. }) if target == b && j == jam)
+    );
+}
+
 /// A shot at a ship aims where its vt+0xc (0x4e07c0) says, drawing from
 /// the ship's own generator: a hit at its hull's spot for its type and
 /// heading (0x598ad8) moved `r % 20 - 9` along its heading, led by its
@@ -10680,7 +10766,14 @@ fn an_attack_goes_with_the_group() {
     // The attack alone.
     tick(&mut scene, &mut caches);
     scene.apply(&attack, &data, &mut caches).unwrap();
-    assert_eq!(task(&scene), Some(Task::Attack { target }));
+    assert_eq!(
+        task(&scene),
+        Some(Task::Attack {
+            target,
+            jam: None,
+            count: 0
+        })
+    );
 }
 
 /// The commands of 0x520cc0 reach their objects at the next tick, in

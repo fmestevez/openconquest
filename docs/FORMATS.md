@@ -4880,9 +4880,32 @@ names the jam (a fort's turns it into its first member, 0x415df0). The
 port draws them so, picks a jam over its members' picture rectangles in
 that order of cells (`Scene::pick_cells`, `Scene::jam_at`; the other
 occupants there by their pixels, as the port's other picks), giving the
-jam as its first member, and shows nothing for it. Not ported: message
-0xda96 (life off by the message's amount); what a ship does with an
-order naming a jam (the port's names its first member); several sounds to pick from are picked by the port's
+jam as its first member, and shows nothing for it.
+
+**A ship's order at a jam.** Over a jam the plain pointer offers an
+armed ship the attack only (0x4dd549 -> 0x4e46c0: capability `+0x261 &
+0x800` and a weapon, mode 8; no range, fog, side or alive test; never
+board, ram or fire mode 9), and the click sends 0x16 {jam id, 0, 0xff,
+-1, -1, 0} (0x51884c), the navy (0x49e230 -> 0x49dda0 -> 0x4d04a0)
+making the fleet attack task {0x74, 0x15}: `+0xc` the jam's id, `+8` the
+game's tick `+0xde`, `+0x18` 7, `+0x10` 0 (0x50ebf0 has no cell for
+0x1f7), and 0x4cfc90 sends each armed ship 0x16 {jam id, 7}. The ship's
+tick (0x4ab3f0, 0x4ab5a4) turns the jam's id into its first member's
+(0x415df0) and attacks that. The task's tick (0x4d0650, from 0x4c4f40)
+while `+8 > 0x50` (unsigned): `+8 = 0` and every ship of the group lying
+still (`+0x58c` 0) without `+0x25d & 0x100` or `& 0x10` is sent at the
+jam again (0x4cfe40); then `+8 += +0xe2`. So with its member dead the
+ship is sent at the jam's new first member within 81 ticks; with the jam
+gone nothing is given and the task stays (nothing in 0x4d0650 ends it).
+Shots hit only a jam's first member (0x4983d0). The port: the pick
+names the jam (`App::attack_target`), `Task::Attack` keeps it (`jam`,
+`count` the task's `+8`, per ship), `Scene::run_jam_attacks` is
+0x4d0650 (the member given at once, not through the next tick's
+command), and the ship waits while its member is gone. Not decoded: who
+removes the task (0x4d0210's notices, 0x4a1c60's callers); a fleet task
+with a route `+0x61` (0x4ceab0 with the cell 0); the at-will pick of a
+jam (0x4c0cd0, 0x4c0bc0). Not ported: message
+0xda96 (life off by the message's amount); several sounds to pick from are picked by the port's
 stand-in for the C library's `rand()` (`gull_rng`). Not decoded:
 0x55b560's back-trace when its first step finds no cell (it
 writes its uninitialised best cell, `[esp+0x28]` / `[esp+0x38]` read at

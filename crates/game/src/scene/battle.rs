@@ -20,6 +20,9 @@ impl Scene {
     /// Orders armed ship `ship` to attack the enemy ship or building `target`.
     pub fn order_attack(&mut self, ship: u32, target: u32) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
+        if let Some(jam) = self.jams.iter().find(|j| j.id == target) {
+            return self.order_attack_jam(i, jam.id);
+        }
         let t = self.object_index(target).ok_or("No such target")?;
         // A fort's attack: its Fire button's pointer (0x4f34c0 command 3:
         // state 0x15, kind 7) or a plain click with the attack pointer
@@ -65,8 +68,99 @@ impl Scene {
         }
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path.clear();
-        ship.task = Some(Task::Attack { target });
+        ship.task = Some(Task::Attack {
+            target,
+            jam: None,
+            count: 0,
+        });
         Ok(())
+    }
+
+    /// Armed ship `i`'s attack on land creatures' jam `jam` (order 0x16
+    /// {jam id, 7}: the navy's fleet attack task 0x4d04a0 keeps the jam's
+    /// id, `+8` the game's tick `+0xde`): the jam is side 2, so no
+    /// diplomacy test (0x4e46c0 asks only for weapons); the ship's tick
+    /// (0x4ab3f0, 0x4ab5a4) takes the jam's first member (0x415df0) as
+    /// its target. A fort's attack at a jam gets the member from the pick
+    /// (`Scene::jam_at`).
+    fn order_attack_jam(&mut self, i: usize, jam: u32) -> Result<(), String> {
+        if self.objects[i].holds_units() {
+            let member = self.jam_first(jam).ok_or("No such target")?;
+            let ship = self.objects[i].id;
+            return self.order_attack(ship, member);
+        }
+        if self.objects[i].ship.is_none() || !self.objects[i].is_armed() {
+            return Err("This ship has no weapons".into());
+        }
+        if self.objects[i]
+            .combat
+            .as_ref()
+            .is_some_and(|c| c.lime > 0.0)
+        {
+            return Err(String::new());
+        }
+        let target = self.jam_first(jam).ok_or("No such target")?;
+        let count = self.ticks;
+        let ship = self.objects[i].ship.as_mut().unwrap();
+        ship.path.clear();
+        ship.task = Some(Task::Attack {
+            target,
+            jam: Some(jam),
+            count,
+        });
+        Ok(())
+    }
+
+    /// The first member of jam `jam` (0x415df0), if the jam is there.
+    fn jam_first(&self, jam: u32) -> Option<u32> {
+        self.jams
+            .iter()
+            .find(|j| j.id == jam)?
+            .members
+            .first()
+            .copied()
+    }
+
+    /// The fleet attack task's tick at a jam (0x4d0650, from the navy's
+    /// 0x4c4f40): once its `+8` is past 0x50 it goes back to 0, and each
+    /// of the group's ships lying still (`+0x58c` 0) is sent at the jam
+    /// again (0x4cfe40, 0x16 sub 7 {jam id}), taking its first member now
+    /// (0x4ab3f0); then `+8` grows by the tick's `+0xe2` (1). Nothing ends
+    /// the task when the jam is gone (0x4d0650 tests no target): the
+    /// ship's records then find nothing. The port keeps the counter with
+    /// each ship (one task for the ships ordered together) and gives the
+    /// member at once, not through the next tick's command. (Not decoded:
+    /// 0x4d0210's notices and who removes the task, 0x4a1c60's callers.)
+    pub(super) fn run_jam_attacks(&mut self) {
+        for i in 0..self.objects.len() {
+            let Some(ship) = self.objects[i].ship.as_ref() else {
+                continue;
+            };
+            let Some(Task::Attack {
+                target,
+                jam: Some(jam),
+                count,
+            }) = ship.task
+            else {
+                continue;
+            };
+            let still = ship.move_state == 0;
+            let (mut target, mut count) = (target, count);
+            if count > 0x50 {
+                count = 0;
+                if still {
+                    if let Some(m) = self.jam_first(jam) {
+                        target = m;
+                    }
+                }
+            }
+            count = count.wrapping_add(1);
+            self.objects[i].ship.as_mut().unwrap().task = Some(Task::Attack {
+                target,
+                jam: Some(jam),
+                count,
+            });
+        }
     }
 
     /// Whether some unit of fort `i` reaches object `t` (the answer to the
@@ -524,7 +618,7 @@ impl Scene {
             let (ordered, idle) = match &self.objects[i].ship {
                 Some(ship) => (
                     match ship.task {
-                        Some(Task::Attack { target }) => Some(target),
+                        Some(Task::Attack { target, .. }) => Some(target),
                         Some(Task::Zone { rect, attack }) => self.zone_target(i, rect, attack),
                         _ => None,
                     },
@@ -548,15 +642,23 @@ impl Scene {
                     _ => (None, true),
                 },
             };
+            let at_jam = matches!(
+                self.objects[i].ship.as_ref().and_then(|s| s.task),
+                Some(Task::Attack { jam: Some(_), .. })
+            );
             let me = &self.objects[i];
             let target = match ordered {
                 // A target gone, or no longer to be fought (a building
                 // fallen to ruins, a ship captured), ends the attack.
+                // Ordered at a jam, the member is side 2 (no diplomacy
+                // test); gone, the ship waits for the task to send it at
+                // the jam's next member (`run_jam_attacks`).
                 Some(t) => match self.object_index(t).filter(|&ti| {
                     self.objects[ti].combat.is_some()
-                        && Self::are_enemies(&self.objects[i], &self.objects[ti])
+                        && (at_jam || Self::are_enemies(&self.objects[i], &self.objects[ti]))
                 }) {
                     Some(ti) => Some(ti),
+                    None if at_jam => continue,
                     None => {
                         let ship = self.objects[i].ship.as_mut().unwrap();
                         if matches!(ship.task, Some(Task::Attack { .. })) {
@@ -737,7 +839,11 @@ impl Scene {
                 let b = ship.behaviour;
                 if b.guard && b.aggressor && ship.task.is_none() {
                     ship.path.clear();
-                    ship.task = Some(Task::Attack { target: shooter });
+                    ship.task = Some(Task::Attack {
+                        target: shooter,
+                        jam: None,
+                        count: 0,
+                    });
                 }
             }
             let levels = self.levels_of(owner);

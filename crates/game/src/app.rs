@@ -6120,7 +6120,10 @@ impl App {
         }
         if self.pending == Some(Command::FIRE) {
             let order = match self.object_at(pos) {
-                Some(target) => self.order_each(|ship| Order::Attack { ship, target }),
+                Some(target) => {
+                    let target = self.attack_target(target);
+                    self.order_each(|ship| Order::Attack { ship, target })
+                }
                 None => Err("Choose an enemy ship or building".into()),
             };
             match order {
@@ -6506,7 +6509,10 @@ impl App {
         use crate::cursor::Pointer as P;
         let target = self.object_at(pos);
         let result = match (pointer, target) {
-            (P::Attack, Some(target)) => self.order_each(|ship| Order::Attack { ship, target }),
+            (P::Attack, Some(target)) => {
+                let target = self.attack_target(target);
+                self.order_each(|ship| Order::Attack { ship, target })
+            }
             (P::Board | P::Ram, Some(target)) => self.order_each(|ship| Order::Close {
                 ship,
                 target,
@@ -6801,6 +6807,15 @@ impl App {
         self.scene.walkers.iter().any(|w| w.id == id)
     }
 
+    /// What an attack order names for the pick `id`: the jam itself for a
+    /// land creature (0x51884c: order 0x16 {jam id `+0x4c`}), else `id`.
+    fn attack_target(&self, id: u32) -> u32 {
+        match self.scene.walkers.iter().find(|w| w.id == id) {
+            Some(w) if self.scene.jams.iter().any(|j| j.id == w.jam) => w.jam,
+            _ => id,
+        }
+    }
+
     fn object_at(&self, pos: PhysicalPosition<f64>) -> Option<u32> {
         let (wx, wy) = self.view_world(pos)?;
         hit_test(&self.scene, wx, wy, self.time_ms)
@@ -6870,6 +6885,7 @@ impl App {
                 _ => false,
             };
             if own_warship && enemy_ship {
+                let target = self.attack_target(target);
                 if let Err(e) = self.issue(Order::Attack { ship: id, target }) {
                     self.say(e);
                 }

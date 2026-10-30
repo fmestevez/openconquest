@@ -2466,6 +2466,7 @@ impl Scene {
             // zones hear their ships' notices and plan again. (Not settled:
             // whether before or after the ships' own ticks.)
             self.run_gather_zones();
+            self.run_jam_attacks();
             self.run_brain();
             self.step_fort_draws();
             for (class, cell) in std::mem::take(&mut self.pending_walkers) {

@@ -828,8 +828,17 @@ pub struct Gathered {
 pub enum Task {
     /// Shuttle between a deposit and the nearest port.
     Gather { deposit: u32, phase: GatherPhase },
-    /// Chase and fire at an enemy ship or building.
-    Attack { target: u32 },
+    /// Chase and fire at an enemy ship or building. Ordered at a land
+    /// creatures' jam (class 0x1f7), `jam` keeps its id, as the fleet
+    /// attack task does (0x4d04a0 `+0xc`), and `count` that task's `+8`
+    /// (`Scene::run_jam_attacks`); `target` is the member it was given.
+    Attack {
+        target: u32,
+        #[serde(default)]
+        jam: Option<u32>,
+        #[serde(default)]
+        count: u32,
+    },
     /// Sail to a land cell and put up a building there: a settlement or a
     /// fort (the ships' building page, 0x4e6980 page 2).
     Found {
