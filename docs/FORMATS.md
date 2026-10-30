@@ -1821,7 +1821,14 @@ original:
   (AI Weak 0, Medium 1, Strong 2); 0x522d50 makes a computer player for
   side 3 only. The port keeps the mission's human player when no row is
   Human (what the original's game does then is not decoded, 0x50f910),
-  and does not draw the map's player marks (LMAP8X8, 0x52f470).
+  and does not draw the map's player marks (LMAP8X8, 0x52f470). Not
+  decoded: how the pop-up's list and its two buttons, made by 0x52ebe0
+  while the screen is up, get message 8 (their pointer receiver 0x13 and
+  their Enter, Up and Down bindings; 0x541c10, 0x541b40 and 0x540030 send
+  message 2 only; to read: 0x55d6e0, Sapp 0x5402b0/0x5405b0); the port
+  takes them as made when the pop-up opens. It changes nothing seen:
+  bound at priority 0 next to the suspended bindings, those keys start
+  suspended either way.
 - Connect (Startprv.cpp 0x538440): the name edit at (43, 256), its caret
   palette colour 0xfb (0xffff00 in the front end's backdrops).
 - End screen (Startrpt.cpp 0x5390a0, 0x539350, 0x539b20): M_BKGND_03 won,

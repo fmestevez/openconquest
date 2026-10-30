@@ -3122,7 +3122,9 @@ impl App {
     /// turned off (0x1a); its own Esc (exclusive, 0x1d5), the list's
     /// Enter and its buttons' Up and Down are bound at the screen's
     /// priority, next to the suspended ones, and so start suspended
-    /// themselves (see `sinput`).
+    /// themselves (see `sinput`). (Not decoded: how the list and its
+    /// buttons get their activation, message 8; they are taken as active
+    /// from here.)
     fn open_kind_popup(&mut self, k: usize) {
         if self.kind_popup.is_some() || k >= self.custom_rows().len() {
             return;
