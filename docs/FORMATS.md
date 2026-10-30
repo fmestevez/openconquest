@@ -643,13 +643,21 @@ Combat tables:
   2000/3000 at 0x42d980); Greek schools add the special-ship upgrades
   (0x50-0x53, 2000 amber, after arming level 2). The damage level is the
   workshop's, not this "arming". The smithy (0x433e60) then
-  refits ships to armour M/S (0x36, 0x37) and ram M/S (0x38, 0x39; slots
-  0-3) up to the researched level, offered while a ship lies alongside
-  (+0x1c8). Each order (message 0x138c, 0x434a00; its count byte +0xe, 1
+  makes armour M/S (0x36, 0x37) and rams M/S (0x38, 0x39; slots 0-3) up to
+  the researched level (permission bits `(level + 0x1c) ^ 7`, player
+  `+0x5f` / `+0x5e`), for its town's store: the buttons are on while the
+  smithy has a town (`+0x1c8`) and is idle or busy with these pieces
+  (vt+0x9c), and, idle, the amber for one is in hand; the menu shows at
+  all only while it stands, is idle or on jobs 1-3, and has no reload
+  contact (`+0x104`). No ship alongside is asked. Each order (message 0x138c, 0x434a00; its count byte +0xe, 1
   when 0, which the command panel leaves it for refits, 0x4f3a61) pays 30/60 (0x42d960) or 25/50 (0x42d940) amber a unit and
   queues one byte a unit (+0x1ec; slot 1, 2, 4, 5), done in turn, 150 or
-  200 ticks each (0x43542a); when one is done the smithy sends the ship
-  alongside message 0x248d (armour) or 0x248e (ram) with the level. The
+  200 ticks each (0x43542a); when one is done the smithy sends its town
+  (`+0x1c8`) message 0x248d (armour, codes 1, 2) or 0x248e (ram, 4, 5)
+  `{code, 100}`, which TownObj 0x441ba0 appends to its armour list
+  `+0x248` or ram list `+0x24c` with no state test (0x441c0c): the store
+  the load panel and the default arming take from. A smithy without a
+  town sends it to nobody. The
   buttons show the count left and the progress (0x433d10). A right click
   (message 0x3c, sub 3 or 4) takes the last unit of that kind off the
   queue, even the one under way, its price paid back; a stop (message 10)
@@ -3137,12 +3145,13 @@ clearing's move pending, sets a human's ship's behaviours at the
 launch (its own and the seats'), and looks for the yard among the berth's neighbours (a cell
 holds the building whose footprint covers it: the port has no building
 slots). `Scene::barbarian_order` builds a barbarian structure's ship on
-its berth. Not ported: the port's other moves have no event queue (see
-"One event a tick"); 0x4bd920 at the launch; the smithy's finished
-pieces go to its town's store (0x434ed0 job 1, messages 0x248d / 0x248e,
-0x4353c5 / 0x4354e8: the port's `run_refits` still fits them); the
-items' conditions on the ship (0x4dfe00 -> 0x4bd920, `+0x299`; taken best
-first, bought 100); the computers' ships armed by 0x43ead0 too (the port
+its berth. A ship built now takes its stock items best first (0x43ead0
+sorts each item's units by condition, qsort 0x58791f with 0x4478e0) and
+carries each one's condition, a bought one whole, in the order taken
+(0x4dfe00 -> 0x4bd920, `+0x299 + 4 x (8u + count)`, kinds 2 and up;
+`Arming::conditions`); armour and rams keep no condition on a ship. The
+smithy's finished pieces go to its town's store (`run_refits`). Not ported: the port's other moves have no event queue (see
+"One event a tick"); 0x4bd920 at the launch; the computers' ships armed by 0x43ead0 too (the port
 gives them their default load); a record ram of 0 (a barbarian order
 without arming: `+0x27b = 0 - 3 = 0xfd`, no ram drawn, the ram tables
 read past 0x598054; the brains always set the byte, 0x42957a); whether reefs and whirlpools mark the landscape nibbles the

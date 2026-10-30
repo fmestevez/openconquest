@@ -1179,8 +1179,9 @@ fn school_research() {
     assert_eq!(combat::hull_damage_at(6, 1), 240.0);
 }
 
-/// A smithy fits armour to a ship alongside, once the school has
-/// studied it (needs `OPENCONQUEST_DATA`).
+/// A smithy makes armour for its town's store once the school has
+/// studied it (0x434ed0 job 1: message 0x248d {level, 100} to `+0x1c8`);
+/// no ship alongside is fitted (needs `OPENCONQUEST_DATA`).
 #[test]
 fn smithy_refits() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -1210,7 +1211,7 @@ fn smithy_refits() {
         .find(|o| o.class == ObjectClass::Building(smithy))
         .unwrap()
         .id;
-    // A ship of ours alongside.
+    // A ship of ours alongside, which keeps what it has.
     let ship = scene
         .objects
         .iter()
@@ -1236,15 +1237,17 @@ fn smithy_refits() {
             .unwrap()
             .armour
     };
-    // Fitted once its 150 ticks are up, the button showing the work.
-    assert_eq!(armour_of(&scene), 0);
+    let stored = |scene: &Scene| scene.fittings.get(&home).cloned().unwrap_or_default();
+    let before = stored(&scene);
+    // Made once its 150 ticks are up, the button showing the work.
     assert_eq!(scene.refits_at(id, armour, 1), (1, Some(0.0)));
     scene.run_refits(combat::refit_seconds(1) / 2.0);
-    assert_eq!(armour_of(&scene), 0);
+    assert_eq!(stored(&scene), before);
     scene.run_refits(combat::refit_seconds(1) / 2.0 + 0.01);
-    assert_eq!(armour_of(&scene), 1);
+    assert_eq!(stored(&scene).0, [before.0.clone(), vec![1]].concat());
+    assert_eq!(armour_of(&scene), 0);
     assert_eq!(scene.refits_at(id, armour, 1), (0, None));
-    // A right click takes a queued refit back, its price returned.
+    // A right click takes a queued piece back, its price returned.
     scene.levels.entry(human).or_default().set(armour, 2);
     let amber = scene.amber;
     scene.refit(id, armour, 2).unwrap();
@@ -1252,8 +1255,10 @@ fn smithy_refits() {
     assert_eq!(scene.amber, amber);
     assert!(scene.cancel_refit(id, armour, 2).is_err());
     scene.levels.entry(human).or_default().armour = 1;
-    assert!(scene.refit(id, armour, 1).is_err(), "already fitted");
     assert!(scene.refit(id, armour, 2).is_err(), "level 2 not studied");
+    // Without a town the smithy takes no order.
+    scene.towns.of.remove(&id);
+    assert!(scene.refit(id, armour, 1).is_err());
 }
 
 /// A settlement puts up a smithy next to it (needs `OPENCONQUEST_DATA`).
@@ -10358,4 +10363,55 @@ fn default_arming_buys_what_the_town_may_have_now() {
     let p = scene.ship_price_with(36, 2, true);
     assert_eq!(p.arming.items, vec![0, 2, 4, 5, 5]);
     assert_eq!((p.arming.armour, p.arming.ram), (0, 0));
+}
+
+/// 0x43ead0 takes a stock item best first (qsort by condition) and the
+/// ship built gets its condition (0x4dfe00 -> 0x4bd920, `+0x299`); one
+/// bought is whole: miss005's town 2 with item 0 at 90 and 40, a royal
+/// ship built now at its dock 36 carries item 0 at 90, the stock keeps
+/// the one at 40.
+#[test]
+fn a_ship_built_takes_the_best_stock_unit() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    scene.permits = crate::permits::Permits::ALL;
+    scene.default_arming = true;
+    let owner = scene.objects[scene.object_index(36).unwrap()]
+        .owner
+        .unwrap();
+    // The town's player plays.
+    let h = scene.human.as_mut().unwrap();
+    (h.nation, h.slot) = owner;
+    scene.earn(owner, 100_000, 100_000);
+    let mut units: [Vec<u8>; 9] = Default::default();
+    units[0] = vec![40, 90];
+    scene.set_stock_units(2, units);
+    scene.fittings.remove(&2);
+    let p = scene.ship_price_with(36, 2, true);
+    assert_eq!(p.arming.items[0], 0);
+    assert_eq!(p.arming.conditions[0], 90);
+    assert_eq!(p.units_left[0], vec![40]);
+    assert!(p.arming.conditions[1..].iter().all(|&c| c == 100));
+    while let Some(k) = scene.ship_orders.iter().position(|o| o.site == 36) {
+        scene.ship_orders.remove(k);
+    }
+    assert_eq!(scene.yard_answer(scene.object_index(36).unwrap(), None), 0);
+    scene.yard_order(36, 2, false, true, None).unwrap();
+    assert_eq!(scene.stock_units(2)[0], vec![40]);
+    scene.make_new_ships(&data, &mut caches);
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| {
+            o.ship
+                .as_ref()
+                .is_some_and(|s| s.build.as_ref().is_some_and(|b| b.yard == 36))
+        })
+        .unwrap();
+    assert_eq!(ship.ship.as_ref().unwrap().conditions[0], vec![90]);
 }

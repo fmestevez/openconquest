@@ -9,6 +9,11 @@ pub struct Arming {
     pub items: Vec<u8>,
     pub armour: u8,
     pub ram: u8,
+    /// Each item's condition, beside `items` (0x43ead0: a unit from the
+    /// stock its own, a bought one 100; record `+0x74`); missing ones are
+    /// whole.
+    #[serde(default)]
+    pub conditions: Vec<u8>,
 }
 
 /// The price of a ship or fort with its arming, and the stock of its
@@ -20,6 +25,8 @@ pub struct Price {
     pub arming: Arming,
     pub home: Option<u32>,
     pub stock_left: [u32; 9],
+    /// The stock's units (their conditions by item) once those taken are.
+    pub units_left: [Vec<u8>; 9],
     /// The armour and rams `home` stores (`+0x248`, `+0x24c`) once those
     /// fitted are taken.
     pub fittings_left: super::load::Fittings,
@@ -249,7 +256,7 @@ impl Scene {
         let home = self
             .object_index(site)
             .and_then(|i| self.home_settlement(i));
-        let stock = home.map(|h| self.garrison(h)).unwrap_or_default();
+        let units = home.map(|h| self.stock_units(h)).unwrap_or_default();
         let fittings = home
             .and_then(|h| self.fittings.get(&h).cloned())
             .unwrap_or_default();
@@ -263,7 +270,7 @@ impl Scene {
         };
         let mut price = if arm {
             self.plan_arming(
-                stock,
+                units,
                 fittings,
                 &buy,
                 combat::DEFAULT_WEAPONS[k],
@@ -274,7 +281,8 @@ impl Scene {
             )
         } else {
             Price {
-                stock_left: stock,
+                stock_left: std::array::from_fn(|u| units[u].len() as u32),
+                units_left: units,
                 fittings_left: fittings,
                 ..Price::default()
             }
@@ -306,8 +314,9 @@ impl Scene {
                 Piece::Item(w) => self.can_make_at(settlement, w),
                 _ => false,
             };
+            let units = settlement.map(|h| self.stock_units(h)).unwrap_or_default();
             price = self.plan_arming(
-                stock,
+                units,
                 Default::default(),
                 &buy,
                 items,
@@ -470,7 +479,7 @@ impl Scene {
     #[allow(clippy::too_many_arguments)]
     fn plan_arming(
         &self,
-        mut stock: [u32; 9],
+        mut stock: [Vec<u8>; 9],
         mut fittings: super::load::Fittings,
         buy: &dyn Fn(Piece) -> bool,
         items: &[u8],
@@ -481,18 +490,26 @@ impl Scene {
     ) -> Price {
         let mut price = Price::default();
         let mut power = 0;
-        let take = |item: u8, price: &mut Price, stock: &mut [u32; 9]| {
-            if stock[item as usize] > 0 {
-                stock[item as usize] -= 1;
-            } else {
+        // 0x43ead0 first sorts each item's units best first (qsort
+        // 0x58791f with 0x4478e0) and takes the first: its condition goes
+        // with it; a bought one is whole.
+        for u in &mut stock {
+            u.sort_by(|a, b| b.cmp(a));
+        }
+        let take = |item: u8, price: &mut Price, stock: &mut [Vec<u8>; 9]| {
+            let condition = if stock[item as usize].is_empty() {
                 let (amber, fish) = combat::item_cost(item);
                 price.amber += amber;
                 price.fish += fish;
-            }
+                100
+            } else {
+                stock[item as usize].remove(0)
+            };
             price.arming.items.push(item);
+            price.arming.conditions.push(condition);
         };
         for (j, &w) in items.iter().enumerate() {
-            let item = if stock[w as usize] > 0 || buy(Piece::Item(w)) {
+            let item = if !stock[w as usize].is_empty() || buy(Piece::Item(w)) {
                 w
             } else {
                 fallbacks.get(j).copied().unwrap_or(w)
@@ -557,7 +574,8 @@ impl Scene {
                 price.amber += [0, 25, 50][l as usize];
             }
         }
-        price.stock_left = stock;
+        price.stock_left = std::array::from_fn(|u| stock[u].len() as u32);
+        price.units_left = stock;
         price.fittings_left = fittings;
         price
     }
@@ -793,39 +811,14 @@ impl Scene {
         Ok(())
     }
 
-    /// The own ship near smithy `smithy` that a refit of `upgrade` to
-    /// `level` would go to: one with less, the nearest first.
-    pub fn refit_candidate(
-        &self,
-        smithy: u32,
-        upgrade: combat::Upgrade,
-        level: u8,
-    ) -> Option<usize> {
-        let s = self.object_index(smithy)?;
-        let (sx, sy) = (self.objects[s].x, self.objects[s].y);
-        self.objects
-            .iter()
-            .enumerate()
-            .filter(|(i, o)| o.owner == self.objects[s].owner && self.alongside(*i, s))
-            .filter_map(|(i, o)| {
-                let ship = o.ship.as_ref()?;
-                let has = if upgrade == combat::Upgrade::Armour {
-                    ship.armour
-                } else {
-                    ship.ram
-                };
-                let d = ((o.x - sx).powi(2) + (o.y - sy).powi(2)).sqrt();
-                (has < level).then_some((i, d))
-            })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| i)
-    }
-
-    /// Orders a refit of armour or ram of `level` at smithy `smithy`, up
-    /// to what the sage school has studied, for a ship of ours alongside
-    /// (0x433e60 offers it only then). It is paid now and queued (message
-    /// 0x138c, 0x434a00); when its time is up the ship then alongside gets
-    /// it (0x43542a, messages 0x248d and 0x248e).
+    /// Orders a piece of armour or a ram of `level` at smithy `smithy`, up
+    /// to what the sage school has studied, for its town's store (0x433e60
+    /// enables the button only while the smithy has a town, `+0x1c8`). It
+    /// is paid now and queued (message 0x138c, 0x434a00); when its time is
+    /// up the smithy sends it to its town (0x434ed0, messages 0x248d and
+    /// 0x248e {piece, 100}), which adds it to its armour or ram list
+    /// (`+0x248`, `+0x24c`; TownObj 0x441ba0): ships are fitted from there
+    /// (the load panel, default arming).
     pub fn refit(
         &mut self,
         smithy: u32,
@@ -847,8 +840,9 @@ impl Scene {
         if self.research_at(smithy).is_some() {
             return Err("The smithy is busy".into());
         }
-        self.refit_candidate(smithy, upgrade, level)
-            .ok_or("No ship of yours lies next to the smithy needing it")?;
+        if self.home_settlement(s).is_none() {
+            return Err("The smithy belongs to no settlement".into());
+        }
         let cost = combat::refit_cost(upgrade, level);
         if self.amber < cost {
             return Err(format!("Not enough amber: {cost} needed"));
@@ -907,8 +901,9 @@ impl Scene {
         (count, head)
     }
 
-    /// Each smithy works on its first refit; when done, the ship of its
-    /// owner alongside that needs it most nearly gets it.
+    /// Each smithy works on its first piece; when done it goes to the
+    /// smithy's town then (`+0x1c8`, message 0x248d / 0x248e: appended to
+    /// its store with no state test; without a town it is lost).
     pub(super) fn run_refits(&mut self, dt: f32) {
         let alive: Vec<u32> = self.objects.iter().map(|o| o.id).collect();
         self.refits.retain(|r| alive.contains(&r.0));
@@ -936,17 +931,18 @@ impl Scene {
         }
         for k in done.into_iter().rev() {
             let (smithy, upgrade, level, _) = self.refits.remove(k);
-            let Some(i) = self.refit_candidate(smithy, upgrade, level) else {
+            let Some(town) = self
+                .object_index(smithy)
+                .and_then(|i| self.home_settlement(i))
+            else {
                 continue;
             };
-            let ship = self.objects[i].ship.as_mut().unwrap();
+            let store = self.fittings.entry(town).or_default();
             if upgrade == combat::Upgrade::Armour {
-                ship.armour = level;
+                store.0.push(level);
             } else {
-                ship.ram = level;
+                store.1.push(level);
             }
-            self.sounds
-                .push(("bild6", self.objects[i].x, self.objects[i].y));
         }
     }
 

@@ -233,7 +233,7 @@ impl Scene {
         let human = Some(owner) == self.human.map(|h| (h.nation, h.slot));
         let (amber, fish, arming, stock) = if human {
             let p = self.ship_price_with(site, kind, arm);
-            let stock = p.home.map(|h| (h, p.stock_left, p.fittings_left));
+            let stock = p.home.map(|h| (h, p.units_left, p.fittings_left));
             (p.amber, p.fish, Some(p.arming), stock)
         } else {
             let (amber, fish) = economy::ship_cost(kind);
@@ -264,7 +264,7 @@ impl Scene {
             return Ok(());
         }
         if let Some((home, left, fittings)) = stock {
-            self.garrisons.insert(home, left);
+            self.set_stock_units(home, left);
             if fittings.0.is_empty() && fittings.1.is_empty() {
                 self.fittings.remove(&home);
             } else {
@@ -331,6 +331,7 @@ impl Scene {
             items: combat::DEFAULT_WEAPONS[k].to_vec(),
             armour: combat::DEFAULT_ARMOUR[k].0,
             ram: combat::DEFAULT_RAM[k].0,
+            conditions: Vec::new(),
         });
         self.new_ships.push(NewShip {
             site,
@@ -454,6 +455,19 @@ impl Scene {
             ship.crew.squads = squads;
             if combat::carries_weapons(kind) && kind > 1 {
                 fight.weapons = a.items.iter().copied().filter(|&w| w >= 3).collect();
+            }
+            // Each item's condition in the order taken (0x4dfe00 ->
+            // 0x4bd920: `+0x299 + 4 x (8u + count)`), for kinds 2 and up.
+            if kind > 1 {
+                for (k, c) in ship.conditions.iter_mut().enumerate() {
+                    *c = a
+                        .items
+                        .iter()
+                        .zip(a.conditions.iter().chain(std::iter::repeat(&100)))
+                        .filter(|(&w, _)| w as usize == k)
+                        .map(|(_, &c)| c)
+                        .collect();
+                }
             }
             ship.armour = a.armour;
             ship.ram = a.ram;

@@ -866,8 +866,8 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     }
 }
 
-/// The smithy (0x433e60): refits a ship lying next to it with armour M/S
-/// or ram M/S (slots 0-3), up to the studied level; studies the ram kinds
+/// The smithy (0x433e60): makes armour M/S or rams M/S for its town's
+/// store (slots 0-3), up to the studied level; studies the ram kinds
 /// (slots 4-6) and armour kinds (slots 8-10), each to level 2.
 fn smithy_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     use crate::combat::Upgrade;
@@ -879,14 +879,19 @@ fn smithy_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             continue;
         }
         let (count, progress) = scene.refits_at(obj.id, upgrade, level);
-        let alongside = scene.refit_candidate(obj.id, upgrade, level).is_some();
+        // On while it has a town (`+0x1c8`) and is idle or busy with its
+        // pieces (vt+0x9c), and, idle, the amber for one is in hand.
+        let town = scene
+            .object_index(obj.id)
+            .and_then(|i| scene.home_settlement(i));
+        let refitting = scene.refits.iter().any(|r| r.0 == obj.id);
         menu[slot] = Some(Slot {
             checked: false,
             closes: false,
             command: Command(command),
-            enabled: alongside
+            enabled: town.is_some()
                 && scene.research_at(obj.id).is_none()
-                && scene.amber >= crate::combat::refit_cost(upgrade, level),
+                && (refitting || scene.amber >= crate::combat::refit_cost(upgrade, level)),
             progress,
             count,
         });
