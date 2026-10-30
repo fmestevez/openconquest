@@ -14,9 +14,20 @@ use crate::render::Frame;
 
 /// The logos and title sequence shown at start-up, in order.
 pub const INTRO: [&str; 4] = ["logo1.avi", "logo2.avi", "logo3.avi", "title.avi"];
-/// The story's opening, before the first campaign mission, and its end.
+/// The story's opening, before the first campaign mission.
 pub const OPENING: &str = "mis000.avi";
-pub const ENDING: &str = "outro0.avi";
+
+/// The video before campaign mission `n` (command 0x128 case 5,
+/// `MIS%03d.AVI` with the mission + campaign x 100).
+pub fn mission(n: u32) -> String {
+    format!("MIS{n:03}.AVI")
+}
+
+/// The campaign's end (command 0x128 case 6, `OUTRO%d.AVI` with the
+/// campaign).
+pub fn outro(campaign: u32) -> String {
+    format!("OUTRO{campaign}.AVI")
+}
 
 /// The video `name` in the data's video folder, if installed.
 pub fn find(root: &Path, name: &str) -> Option<PathBuf> {

@@ -2681,11 +2681,19 @@ impl App {
             .collect()
     }
 
-    /// The mission after the current one in its group.
+    /// The campaign mission a won one goes on to: the number its brain
+    /// hands the judge's end (0x478e30, game + 0x3305), NN + 1 for
+    /// `miss<c>NN` up to miss012 and -1 (the campaign's end) for miss013
+    /// (miss000 gives -1 only with the edition word + 0xa81 = 0xd0dd,
+    /// which the retail install never has); found by name, `miss<c><NN>`
+    /// (0x539b20).
     fn next_mission(&self) -> Option<usize> {
-        let list = self.category_missions(Category::of(&self.missions[self.mission_index])?);
-        let at = list.iter().position(|&i| i == self.mission_index)?;
-        list.get(at + 1).copied()
+        let n = self.campaign_number()?;
+        if n >= 13 {
+            return None;
+        }
+        let name = format!("{}{:02}", &self.missions[self.mission_index][..5], n + 1);
+        self.missions.iter().position(|m| *m == name)
     }
 
     /// Opens mission `index` on its briefing screen.
@@ -3939,20 +3947,34 @@ impl App {
             }
             // The end screen's OK (0x539b20, 0x16c): after a won campaign
             // mission the next one's briefing, the campaign going on with
-            // what was learned; else the main menu.
+            // what was learned; after the last, the main menu; else the
+            // main menu. With the options word's bit 2 ([0x5ca53c], 3 as
+            // the installer writes it, setup.exe 0x404530) a video comes
+            // first: command 0x128 case 5 `MIS%03d.AVI` (next + campaign x
+            // 100) then the briefing, case 6 `OUTRO%d.AVI` (campaign) then
+            // the main menu; a missing file goes straight on (0x4ecc05,
+            // FindFirstFileA).
             (MenuState::Outcome(outcome), "OK") => {
                 // The name typed goes into the row first.
                 self.store_score_name();
-                let next = (outcome == crate::scene::Outcome::Victory
-                    && self.campaign_number().is_some())
-                .then(|| self.next_mission())
-                .flatten();
-                match next {
-                    Some(next) => {
-                        self.carry = crate::scene::is_campaign(&self.missions[next])
-                            .then(|| self.scene.carry());
-                        self.open_mission(next);
-                    }
+                let won = outcome == crate::scene::Outcome::Victory;
+                let campaign = won
+                    .then(|| self.campaign_number())
+                    .flatten()
+                    .and_then(|_| self.missions[self.mission_index][4..5].parse::<u32>().ok());
+                match campaign {
+                    Some(c) => match self.next_mission() {
+                        Some(next) => {
+                            let n = self.missions[next][5..].parse::<u32>().unwrap_or(0);
+                            self.queue_video(&crate::video::mission(n + c * 100));
+                            self.carry = Some(self.scene.carry());
+                            self.open_mission(next);
+                        }
+                        None => {
+                            self.queue_video(&crate::video::outro(c));
+                            self.menu = Some(MenuState::Main);
+                        }
+                    },
                     None => self.menu = Some(MenuState::Main),
                 }
             }
@@ -6552,15 +6574,6 @@ impl App {
             if self.scene.clock > at + 3.0 && self.menus.is_some() {
                 self.open_outcome(outcome);
                 self.in_game = false;
-                // The story's end after the last campaign mission is won.
-                let campaign =
-                    Category::of(&self.missions[self.mission_index]) == Some(Category::Campaign);
-                if outcome == crate::scene::Outcome::Victory
-                    && campaign
-                    && self.next_mission().is_none()
-                {
-                    self.queue_video(crate::video::ENDING);
-                }
             }
         }
         if self.menu == Some(MenuState::Waiting) {

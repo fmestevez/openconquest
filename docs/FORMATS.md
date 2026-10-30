@@ -1833,8 +1833,16 @@ original:
   palette colour 0xfb (0xffff00 in the front end's backdrops).
 - End screen (Startrpt.cpp 0x5390a0, 0x539350, 0x539b20): M_BKGND_03 won,
   04 lost, and OK (1001) at (345, 540) in M_BUT2. Its OK, after a won
-  campaign mission (+ 0x32fd set, game + 0xd80 = 1), opens the next
-  mission's briefing (+ 0x3305; none, the main menu); else the main menu.
+  campaign mission (+ 0x32fd set, game + 0xd80 = 1), opens the briefing
+  of `miss<campaign><NN>`, NN = + 0x3305 (the number the mission's brain
+  hands 0x478e30: NN + 1 for miss000-miss012, -1 for miss013, then the
+  main menu); else the main menu. With bit 2 of the options word
+  [0x5ca53c] (the installer writes 3, setup.exe 0x404530 after the
+  defaults' 1 at 0x4053d0) a video comes first, command 0x128: case 5
+  `MIS%03d.AVI` (next + campaign x 100) then the briefing (0x10c), case 6
+  `OUTRO%d.AVI` (campaign) then the main menu (0x100); a missing file
+  (FindFirstFileA, 0x4ecc05) goes straight to the next command. This CD
+  has MIS000 and OUTRO0 only.
   Only after a won campaign mission: RAM_BEST at (400, 310) with "Best
   Conquerors" (1042) at (9, 1) in it, BH variant 2; and the twelve
   figures of + 0x3309 to + 0x3335 (0x539a30; written by 0x478e30), labels
@@ -1863,8 +1871,8 @@ this CD's), else the day, and string 106 + difficulty; with no time, the
 name alone. Loading one (0x530480): reset (0x4ede60), 0x53a670 reads it
 (the magic checked; the difficulty into DAT_005ca78d, the block into
 game + 0x32fd, the objects into new lists), then 0x537f60(game, 0,
-+ 0x3305) opens that mission's briefing (or first MIS_000.AVI for
-mission 0 when DAT_005ca53c bit 1 is set). The block's layout beyond
++ 0x3305) opens that mission's briefing (or first MIS000.AVI for
+mission 0 when DAT_005ca53c bit 2 is set). The block's layout beyond
 + 0x3305 (the mission's number) and + 0x40 is not decoded: the port
 writes its own record after the two words, as JSON (the mission's
 number and the campaign record it carries in), in `MISSIONS` of its
