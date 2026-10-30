@@ -137,6 +137,13 @@ pub enum Op {
     Build { next: u32 },
     /// A step of the mission's own.
     Custom(fn(&mut Scene, usize) -> u32),
+    /// A member's own test before a primitive in the same state: `yes`
+    /// if it holds, else `no`, the test made anew each turn.
+    Branch {
+        test: fn(&mut Scene, usize) -> bool,
+        yes: &'static Op,
+        no: &'static Op,
+    },
 }
 
 /// A program: the step for each state.
@@ -216,6 +223,15 @@ pub struct Brain {
     /// 2) (`+0x114`, `+0x120`).
     #[serde(default)]
     pub landed: [bool; 2],
+    /// miss006: the southern Persians' yard (21, 68) and the barbarians'
+    /// (1, 50) still found standing (`+0x1ac`, `+0x1b0`; 1 at the start,
+    /// cleared by the brain's pass, never set again).
+    #[serde(default = "standing")]
+    pub yards: [bool; 2],
+}
+
+fn standing() -> [bool; 2] {
+    [true; 2]
 }
 
 /// A town order a brain member gave (0x47b130 through the land fleet,
@@ -347,7 +363,7 @@ fn mission(name: &str) -> Option<Mission> {
             silent: &[(1, 6)],
             gate: None,
             before: None,
-            after: None,
+            after: Some(miss006::after),
         }),
         "miss007" => Some(Mission {
             fleets: miss007::FLEETS,
@@ -449,6 +465,7 @@ impl Scene {
             joined: false,
             gone: [false; 2],
             landed: [false; 2],
+            yards: [true; 2],
         };
         for def in m.fleets {
             // The ships (or buildings) standing in the given cells (0x479200).
@@ -716,7 +733,10 @@ impl Scene {
     fn fleet_step(&mut self, k: usize, program: Program, groups: &[u8], tick: u32) {
         let f = &self.brain.as_ref().unwrap().fleets[k];
         let (state, started, since) = (f.state, f.started, f.since);
-        let op = program(state);
+        let mut op = program(state);
+        while let Op::Branch { test, yes, no } = op {
+            op = if test(self, k) { *yes } else { *no };
+        }
         if !started {
             let f = &mut self.brain.as_mut().unwrap().fleets[k];
             f.started = true;
@@ -924,6 +944,7 @@ impl Scene {
                     self.set_state(k, next);
                 }
             }
+            Op::Branch { .. } => {}
             Op::Custom(step) => {
                 let next = step(self, k);
                 if next != self.brain.as_ref().unwrap().fleets[k].state {
@@ -4898,14 +4919,67 @@ mod miss005 {
 
 /// miss006's brain (0x45b280): barbarians in the south-west, and two Persian
 /// players, one in the south and one in the north, each gathering,
-/// guarding and raiding.
-/// (Not ported: the brain's pass after the members, every 5 ticks
-/// (0x45b863-0x45b993), rerolls the times of the event records 0x5b06cc
-/// and 0x5b0c5c while the yards at (21, 68) and (1, 50) stand; which
-/// members read those records was not traced: the port rolls the raids'
-/// waits only at their state 0.)
+/// guarding and raiding. After the members, the raids' waits are rolled
+/// anew while the yards stand (`after`).
 mod miss006 {
     use super::*;
+
+    /// The barbarian raiders' (member (0, 3)) variables: the raid's wait
+    /// ([0x5b06d8], the Size record 0x5b06c8's `after`), its size (6),
+    /// the size below which a raid is called off (fewer than 3: at most
+    /// 2, record 0x5b0728) and the way it goes (`+0x110`).
+    const RAID_WAIT: usize = 0;
+    const RAID_SIZE: usize = 1;
+    const CALL_OFF: usize = 2;
+    const WAY: usize = 3;
+
+    /// The brain's pass after the members, every 5 ticks
+    /// (0x45b863-0x45b993): while the southern Persians' yard is found at
+    /// (21, 68) (`+0x1ac`, cleared once its cell's object slot is empty),
+    /// the barbarian raiders' wait is drawn anew each pass, (8, 6, 4) +
+    /// rand % 6, x 1500 (overwriting their own roll); the pass on which
+    /// the second of the two yards (the barbarians' at (1, 50), `+0x1b0`)
+    /// is found gone draws the northern raiders' wait once more, (8, 6, 4)
+    /// + rand & 3, x 1500. Once both are gone nothing is drawn.
+    pub fn after(scene: &mut Scene) {
+        let d = difficulty();
+        let roll = |scene: &mut Scene, k: usize, n: u32| {
+            let draw = scene.rng.next();
+            let r = if n == 6 { draw % 6 } else { draw & 3 };
+            set(scene, k, RAID_WAIT, ([8, 6, 4][d] + r) * 1500);
+        };
+        let [south, barbarian] = scene.brain.as_ref().unwrap().yards;
+        if south {
+            if !scene.cell_slot_taken((21, 68)) {
+                scene.brain.as_mut().unwrap().yards[0] = false;
+            }
+            roll(scene, 3, 6);
+            if scene.brain.as_ref().unwrap().yards[0] {
+                if barbarian {
+                    test_barbarian(scene);
+                }
+                return;
+            }
+            if !barbarian {
+                roll(scene, NORTH_RAIDERS, 4);
+                return;
+            }
+        } else if !barbarian {
+            return;
+        }
+        test_barbarian(scene);
+        let yards = scene.brain.as_ref().unwrap().yards;
+        if yards == [false; 2] {
+            roll(scene, NORTH_RAIDERS, 4);
+        }
+    }
+
+    /// Clears the barbarians' yard latch once its cell is empty.
+    fn test_barbarian(scene: &mut Scene) {
+        if !scene.cell_slot_taken((1, 50)) {
+            scene.brain.as_mut().unwrap().yards[1] = false;
+        }
+    }
 
     const MERCHANT: u8 = 1;
     const ROYAL: u8 = 2;
@@ -5081,11 +5155,12 @@ mod miss006 {
         scene.add_deposit(0x191, (45, 65, 2, 2), data, caches);
         // The Persians' levels and spells (the main's 0x8d1).
         scene.persian_bonus(&[15, 14], true, &[]);
-        // The barbarians' raid: after 10500 ticks, once 6 strong; the
-        // Persians' raids roll their waits at their state 0, striking 4
-        // (south) and 6 (north) strong, giving up below 3.
+        // The raids roll their waits at their state 0 (the barbarians'
+        // and the northern Persians' also in the brain's pass, `after`),
+        // striking 6 (barbarians), 4 (south) and 6 (north) strong, giving
+        // up below 3.
         if let Some(br) = scene.brain.as_mut() {
-            br.fleets[3].vars = [10500, 6, 0, 0];
+            br.fleets[3].vars = [0, 6, 2, 0];
             br.fleets[SOUTH_RAIDERS].vars = [0, 4, 0, 2];
             br.fleets[NORTH_RAIDERS].vars = [0, 6, 0, 0];
         }
@@ -5207,7 +5282,17 @@ mod miss006 {
         }
     }
 
-    /// Patrols the southern sea; when six strong, raids the player (0x458f20).
+    /// Member (0, 3) (0x458f20): rolls its raid wait (`RAID_WAIT`, the
+    /// Size record 0x5b06c8's `after`, [0x5b06d8]: (8, 6, 4), or (15, 10,
+    /// 10) while the southern Persians' yard stands, + rand & 3, x 1500)
+    /// and which way it goes round (`WAY`, `+0x110`: rand & 1); not at its
+    /// full strength (its royal ships, bombers and rammers other than the
+    /// 3|3|4, 1 and 2|3|3 it asks for) it sails to (2, 47), else patrols
+    /// (6); the player in its home waters is fought 1500 ticks
+    /// (20), in its patrol's other zones too (30); 6 strong once its wait
+    /// is over (40), it raids one of the player's settlements or towns in
+    /// (0, 0, 56, 70) (60, 70), else sails by (42, 59) or (54, 47) (80) to
+    /// (40, 57, 16, 13) (90), 6000 ticks, called off below 3.
     fn barbarian_raiders(state: u32) -> Op {
         const ROUND: &[(i32, i32, u32)] = &[
             (22, 44, 500),
@@ -5217,6 +5302,7 @@ mod miss006 {
             (36, 47, 500),
             (25, 50, 750),
         ];
+        // Events 0x5b0700: the zones 0x5b0580 and the Size record 0x5b06c8.
         const W: &[Event] = &[
             BARBARIAN_HOME,
             Event::Zone {
@@ -5233,41 +5319,107 @@ mod miss006 {
             },
             Event::Size {
                 state: 40,
-                after: Some(0),
+                after: Some(RAID_WAIT),
                 cmp: Cmp::AtLeast,
-                n: 1,
+                n: RAID_SIZE,
+            },
+        ];
+        // Events 0x5b0758: the zone 0x5b0638 and the Size record 0x5b0728
+        // (fewer than 3, back to 0).
+        const RAID: &[Event] = &[
+            BARBARIAN_HOME,
+            Event::Size {
+                state: 0,
+                after: None,
+                cmp: Cmp::AtMost,
+                n: CALL_OFF,
             },
         ];
         match state {
-            0 => Op::Behave { next: 5 },
-            5 => Op::Patrol {
+            0 => Op::Custom(|scene, k| {
+                let yard = scene.brain.as_ref().unwrap().yards[0];
+                let base = if yard { [15, 10, 10] } else { [8, 6, 4] }[difficulty()];
+                let wait = (base + (scene.rng.next() & 3)) * 1500;
+                set(scene, k, RAID_WAIT, wait);
+                let way = scene.rng.next() & 1;
+                set(scene, k, WAY, way);
+                5
+            }),
+            // Short of its strength, the move (0x47a450) in this state,
+            // the test made anew each turn; else on to its patrol.
+            5 => Op::Branch {
+                test: |scene, k| {
+                    let n = scene.fleet_types(k);
+                    let d = difficulty();
+                    let have = n[BOMBER as usize] + n[ROYAL as usize] + n[RAMMER as usize];
+                    have != [1; 3][d] + [3, 3, 4][d] + [2, 3, 3][d]
+                },
+                yes: &Op::Move {
+                    ok: 0,
+                    failed: 0,
+                    to: (2, 47),
+                    ticks: 0,
+                    events: &[BARBARIAN_HOME],
+                },
+                no: &Op::Behave { next: 6 },
+            },
+            6 => Op::Patrol {
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: W,
             },
-            30 => Op::Attack {
-                next: 0,
-                failed: 0,
-                target: Target::Seen,
-                ticks: 3000,
-                events: &[],
-            },
-            40 => Op::Attack {
-                next: 0,
-                failed: 0,
-                target: Target::HumanBuilding,
-                ticks: 3000,
-                events: &[],
-            },
-            _ => Op::Attack {
+            20 | 30 => Op::Attack {
                 next: 0,
                 failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
+            40 => Op::Custom(|_, _| 60),
+            60 => Op::Custom(
+                |scene, k| match scene.human_site_area(Some((0, 0, 56, 70))) {
+                    Some(area) => {
+                        scene.set_fleet_area(k, area);
+                        70
+                    }
+                    None => 80,
+                },
+            ),
+            70 => Op::Attack {
+                next: 0,
+                failed: 0,
+                target: Target::Seen,
+                ticks: 6000,
+                events: RAID,
+            },
+            80 => Op::Branch {
+                test: |scene, k| scene.brain.as_ref().unwrap().fleets[k].vars[WAY] != 0,
+                yes: &Op::Move {
+                    ok: 90,
+                    failed: 90,
+                    to: (42, 59),
+                    ticks: 750,
+                    events: &[],
+                },
+                no: &Op::Move {
+                    ok: 90,
+                    failed: 90,
+                    to: (54, 47),
+                    ticks: 750,
+                    events: &[],
+                },
+            },
+            90 => Op::Attack {
+                next: 0,
+                failed: 0,
+                target: Target::Area((40, 57, 16, 13)),
+                ticks: 6000,
+                events: RAID,
+            },
+            // The original's other states do nothing.
+            _ => Op::Custom(|scene, k| scene.brain.as_ref().unwrap().fleets[k].state),
         }
     }
 
@@ -5584,8 +5736,9 @@ mod miss006 {
     }
 
     /// Member (2, 4) (0x45a9f0): rolls its wait (base (20, 15, 15) while
-    /// the southern Persians' town (21, 68) or the barbarians' stronghold
-    /// (1, 50) stands, else (8, 6, 4), + rand & 3, x 1500); short of
+    /// the southern Persians' yard (21, 68) or the barbarians' (1, 50) is
+    /// still held to stand (the brain's latches), else (8, 6, 4), + rand &
+    /// 3, x 1500); short of
     /// ships it waits at (11, 24), else patrols; a raid rolls the phantom
     /// or the Flame and strikes one of the player's settlements or towns,
     /// else (36, 60, 17, 10), casting first, 4500 ticks.
@@ -5617,14 +5770,15 @@ mod miss006 {
             },
         ];
         match state {
+            // Its behaviour, then the roll, both in state 0 (0x45ab40,
+            // 0x45ab67).
             0 => Op::Custom(|scene, k| {
-                let held = scene.standing_at((21, 68)) || scene.standing_at((1, 50));
+                let draw = scene.rng.next() & 3;
+                let held = scene.brain.as_ref().unwrap().yards != [false; 2];
                 let base = if held { [20, 15, 15] } else { [8, 6, 4] }[difficulty()];
-                let wait = (base + (scene.rng.next() & 3)) * 1500;
-                set(scene, k, 0, wait);
-                1
+                set(scene, k, 0, (base + draw) * 1500);
+                5
             }),
-            1 => Op::Behave { next: 5 },
             5 => Op::Custom(|scene, k| {
                 let n = scene.fleet_types(k);
                 let have = n[ROYAL as usize] + n[BOARDER as usize] + n[RAMMER as usize];

@@ -3078,6 +3078,64 @@ fn statistics_and_score() {
     assert_eq!(scene.stats.values(scene.amber)[11] as i64, expected);
 }
 
+/// miss006's brain draws the barbarian raiders' wait anew every 5 ticks
+/// while the southern Persians' yard (21, 68) is found standing ((8, 6,
+/// 4) + rand % 6, x 1500), and the northern raiders' once more when the
+/// second of the yards is found gone; then nothing (0x45b863-0x45b993;
+/// needs `OPENCONQUEST_DATA`).
+#[test]
+fn miss006_rerolls_the_raid_waits_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss006").unwrap();
+    const NORTH: usize = 16;
+    let wait = |s: &Scene, k: usize| s.brain.as_ref().unwrap().fleets[k].vars[0];
+    assert_eq!(scene.brain.as_ref().unwrap().yards, [true, true]);
+    assert!(scene.cell_slot_taken((21, 68)) && scene.cell_slot_taken((1, 50)));
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..500 {
+        scene.run_brain();
+        if scene.brain.as_ref().unwrap().tick % 5 == 0 {
+            seen.insert(wait(&scene, 3));
+        }
+    }
+    // Normal: (6 + 0..5) x 1500, every one of them drawn.
+    let all: std::collections::BTreeSet<u32> = (6..12).map(|b| b * 1500).collect();
+    assert_eq!(seen, all);
+    // The yards gone: the latches clear, the northern wait is drawn once,
+    // (6 + 0..3) x 1500, and nothing changes after.
+    let gone = |s: &mut Scene, cell: (i32, i32)| {
+        s.objects.retain(|o| {
+            o.cell.is_none_or(|(x, y)| {
+                let n = super::trade::building_cells(o);
+                !((x..x + n).contains(&cell.0) && (y..y + n).contains(&cell.1))
+            })
+        });
+    };
+    // Between the members' own turns (tick % 50: 15 for (0, 3), 30 for
+    // (2, 4)), two passes of the brain: the first finds both gone.
+    while scene.brain.as_ref().unwrap().tick % 50 != 0 {
+        scene.run_brain();
+    }
+    gone(&mut scene, (21, 68));
+    gone(&mut scene, (1, 50));
+    scene.brain.as_mut().unwrap().fleets[NORTH].vars[0] = 0;
+    for _ in 0..5 {
+        scene.run_brain();
+    }
+    assert_eq!(scene.brain.as_ref().unwrap().yards, [false, false]);
+    let north = wait(&scene, NORTH);
+    assert!((6..10).map(|b| b * 1500).any(|w| w == north), "{north}");
+    let barbarians = wait(&scene, 3);
+    for _ in 0..5 {
+        scene.run_brain();
+    }
+    assert_eq!((wait(&scene, NORTH), wait(&scene, 3)), (north, barbarians));
+}
+
 /// miss003's brain puts creatures down after its members (0x44fd90): the
 /// player's ship in (49, 26, 4, 3) brings 4 minotaurs (6 on normal and
 /// hard) to (53, 24) and 3 amazons (4) to each of (48, 26) and (55, 30),

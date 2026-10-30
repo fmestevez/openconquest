@@ -3210,9 +3210,33 @@ draw, no message, no cost. 0x414db0(class, x, y) makes a CyclopClassTy
 1, like a lair's; the first on a cell makes its jam (0x1f7), the others
 join it), miss005 (`+0x184` cleared once
 the cells of both harpy nests (23, 20) and (26, 19) are empty, `+0x18c`
-once the stronghold's (3, 29) is), miss006 (the raids' event-record
-times rerolled while the yards at (21, 68) and (1, 50) stand,
-0x45b863-0x45b993; not ported) and miss011 (`+0x19c`). Members made at
+once the stronghold's (3, 29) is), miss006 (0x45b863-0x45b993: the
+latches `+0x1ac` (the southern Persians' yard (21, 68)) and `+0x1b0`
+(the barbarians' (1, 50)), 1 at the start, cleared when the cell's
+object slot is found empty, never set again; while `+0x1ac` was set at
+the pass, [0x5b06d8] = (0x5b0444[d] (8, 6, 4) + rand % 6) x 1500, every
+pass; on the pass where the second latch clears, [0x5b0c68] =
+(0x5b0474[d] (8, 6, 4) + rand & 3) x 1500; each draw the brain LCG's
+own. [0x5b06d8] is the `after` of the Size record 0x5b06c8 {g 0, m 3,
+state 0x28, after, n 6, cmp 1} in table 0x5b0700, which only member
+(0, 3) 0x458f20 passes, in its state-6 patrol; [0x5b0c68] that of
+0x5b0c58 {g 2, m 4, state 0x19, n 6, cmp 1}, table 0x5b0cd0, member
+(2, 4) 0x45a9f0's state-6 patrol. Both members also write their word in
+their state 0, with the behaviour order: (0, 3) `(+0x1ac ? 0x5b0450
+(15, 10, 10) : 0x5b0444 (8, 6, 4))[d] + rand & 3`, x 1500, then `+0x110
+= rand & 1`; (2, 4) `(+0x1b0 || +0x1ac ? 0x5b0468 (20, 15, 15) :
+0x5b0474 (8, 6, 4))[d] + rand & 3`, x 1500, drawn first. The static
+10500 is never used. Member (0, 3)'s states: 0 that; 5 the move to (2,
+47) (0x47a450, events 0x5b0718: the zone (0, 45, 11, 10) to 0x14) while
+its royal ships, bombers and rammers are not the 3|3|4, 1 and 2|3|3 it
+asks for (0x5b03b4, 0x5b03a8, 0x5b03c0), else 6, tested each turn; 6
+the patrol 0x5b0680 (5, 5); 0x14 and 0x1e attack the zone seen, 1500
+ticks; 0x28 -> 0x3c; 0x3c a settlement or town of the player's in (0,
+0, 56, 70) (0x421490, 0x421740) -> 0x46, else 0x50; 0x46 attack it 6000
+ticks, events 0x5b0758 (the zone, and fewer than 3 ships, 0x5b0728, to
+0); 0x50 sail to (42, 59) if `+0x110`, else (54, 47), 750 ticks, to
+0x5a; 0x5a attack (40, 57, 16, 13) 6000 ticks, events 0x5b0758) and
+miss011 (`+0x19c`). Members made at
 the start (0x8d1) that the switch has no case for never run: miss004
 (0, 7), (2, 5); miss006 (1, 6); miss008 (0, 0), (1, 0); miss009 (0, 0);
 miss010 (0, 0), (1, 0). A member's index is not always its place among

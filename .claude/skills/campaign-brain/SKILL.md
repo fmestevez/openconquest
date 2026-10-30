@@ -19,7 +19,8 @@ are in `story.rs`.
   made at 0x8d1 that the main's switch has no case for: they never run)
   and `before` / `after` (the brain's own work on its 5-tick pass, before
   or after the members: miss007's reef, miss009/miss010's random tick,
-  miss005's and miss011's flags).
+  miss005's and miss011's flags, miss003's landings, miss006's raid-wait
+  rerolls).
 - `FleetDef { group, member, cells, program, wants }`: the member's group
   (computer player) and its original member index (not always its place
   in `FLEETS`: miss002's yard is (1, 7), miss003's southern guard (0, 5),
@@ -35,7 +36,9 @@ are in `story.rs`.
 - A program is `fn(state: u32) -> Op`. `Op` is one of the original's
   primitives: `Behave`, `Wait`, `WaitVar`, `Watch`, `Move`, `Gather`,
   `Patrol`, `Attack`, `Build`, or `Custom(fn(&mut Scene, usize) -> u32)` for
-  the member-specific code between primitives (returns the next state).
+  the member-specific code between primitives (returns the next state);
+  `Branch { test, yes, no }` for a member's own test before a primitive
+  in the same state (made anew each turn).
 - `Event` (`Zone`, `Attacked`, `Size`, `Cell`) are the primitives' event
   lists: conditions that jump to a state. `Zone` remembers the zone
   (`Target::Seen`); `Attacked` takes the fleet's pending report of a blow
