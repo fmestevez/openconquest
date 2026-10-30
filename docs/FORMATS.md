@@ -4276,22 +4276,43 @@ The killer each caller of 0x50e750 passes:
   player is 16 the prize is sunk instead, `+0x7f` the taker, 0x4b7169.)
 - A building sold by its owner: its own player (0x427472), counting
   nothing.
-- Ships in a dock: 0x4b3ab0 (`+0x73a < 0`, the dock's count down) pays
-  the owner the ship's cost and reports -1, a loss; 0x4b4380 (task 5)
-  reports the ship's own player; a ship created on a cell that fails
-  0x499a40 is removed with -1 (0x4dc787).
+- 0x4b3ab0 with `+0x73a < 0` is a **ship being built called off** (task
+  4 on a yard's berth, see "Shipyards' berths"): its price given back, then
+  -1, its owner's loss, nobody's gain. 0x4b4380 (task 5) is a **ship being
+  sold** (message 0x248f, accepted only in move state 6 with a building
+  contact): its owner paid 0x4e4ce0 amber and 0x4e4c80 fish (not read),
+  then its own player: nothing counted. A mission's ship (message 2 with
+  record +0x10 == 0) whose cell fails 0x499a40 with its draught, or whose
+  slot an earlier one holds, is removed with -1 (0x4dc787): its owner's
+  ship lost.
+- The gorgon (0x401f70) and siren (0x403ba0) report at their tick (state
+  0, gated `+0x90 >= +0xa0 + +0x9c`, the siren's `+0x74 >= +0x124 +
+  +0x120`) once, when their life is below 1 and their killer field
+  (`+0xb4` / `+0x138`, -1 from the constructor) is set, then are removed.
+  Only their lightning (0xda93, life 0) and tornado (0xda96, each blow
+  leaving the life at 0) handlers write that field, with the caster; the
+  shot path reports on every blow leaving it below 1 and writes none.
 - Sea creatures, gorgons, sirens and the leviathan report on **every**
   blow that leaves the life at or below 0 (0x490c70, 0x4014d0, 0x403480,
   0x494090 test the life after the blow, not before): a dead sea creature
   struck again before its tick removes it is counted again. The port
   removes gorgons and sirens at once, so only the sea creature repeats.
 
-Not ported: the dock cases (0x4b3ab0, 0x4b4380) and 0x4dc787, which the
-port has no ship object for; the gorgon's and siren's second report from
-their tick (0x401f70 / 0x403ba0, with `+0xb4` / `+0x138` written by their
-lightning and tornado handlers) beside the first; the stale `+0x1ac` a
-building keeps for a later killer that does not write it; the prize sunk
-for player 16.
+A building's `+0x1ac` is never stale: each writer (0x4246b2, 0x426f37,
+0x428633 / 0x428740, 0x4158d9 / 0x4159d0 / 0x4159aa, 0x427472) is followed
+in the same handler by the building's fall; fire (0x158bf) writes none, so
+a building it fells is put down to no one. The prize of player 16 (either
+side) is not taken (0x4b6f20 at 0x4b7169): `+0x251 = 4`, `+0x7f` the
+taker's `+0x24f`, reported at its sinking; "boarded" is counted when the
+fight is won (0x4a91a0 at 0x4b6559), in both cases.
+
+The port: a build called off reports -1 (`scene::yard`), the misplaced
+mission ships are removed at load, player 16's prize sinks at once put down
+to its taker. Not ported: ship sales (the port has none); the gorgon's and
+siren's removal waiting for their tick (the port removes them at the
+killing blow, reported once with its giver, the caster for lightning and
+tornadoes; so a shot on one already dead is never reported again); the
+order in which mission records reach message 2 (the port's list order).
 
 Some objects are created by the scripts at the start: 0x411010 (world,
 class, x, y, level, a, b) makes a castle record (class, 2, 4, 1, 0, x, y,

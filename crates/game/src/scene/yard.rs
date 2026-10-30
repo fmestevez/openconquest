@@ -396,6 +396,37 @@ impl Scene {
         Ok(Some(id))
     }
 
+    /// The mission's ships, as each is made (0x4dc630 message 2 with
+    /// record +0x10 == 0, 0x4dc787): one whose cell does not suit its
+    /// draught (0x499a40 with 0x597ce4[kind]) or whose slot an earlier one
+    /// took is removed, its owner's ship counted lost (0x50e750 with -1).
+    /// (Not traced: the order records reach message 2; here the list's.)
+    /// The ids removed.
+    pub(super) fn drop_misplaced_ships(&mut self) -> Vec<u32> {
+        let t = TILE_SIZE as f32;
+        let mut taken: Vec<(i32, i32)> = Vec::new();
+        let mut gone = Vec::new();
+        for k in 0..self.objects.len() {
+            let o = &self.objects[k];
+            let Some(s) = o.ship.as_ref() else {
+                continue;
+            };
+            let cell = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+            if self.sea_cell(cell, objects::deep_draught(s.kind)) && !taken.contains(&cell) {
+                taken.push(cell);
+            } else {
+                gone.push(o.id);
+            }
+        }
+        for &id in &gone {
+            if let Some(k) = self.object_index(id) {
+                self.note_destroyed(k, None);
+                self.objects.remove(k);
+            }
+        }
+        gone
+    }
+
     /// Whether ship `id` is being built on a berth.
     pub fn being_built(&self, id: u32) -> bool {
         self.object_index(id)

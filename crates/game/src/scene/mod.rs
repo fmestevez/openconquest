@@ -791,6 +791,9 @@ impl Scene {
             briefing_lines: openconquest_formats::briefing_lines(&archive).unwrap_or_default(),
             magic: Magic::default(),
         };
+        // The mission's ships that cannot lie where they are put are
+        // removed as they are made (0x4dc787).
+        scene.drop_misplaced_ships();
         // What buildings, lairs and monsters hold, dropped when they fall.
         scene.held = scene
             .objects

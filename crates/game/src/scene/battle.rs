@@ -1209,15 +1209,27 @@ impl Scene {
         let Some((nation, player)) = owner else {
             return;
         };
-        // The prize is reported destroyed by its taker before it changes
-        // hands (0x4b6f20: 0x50e750 with the boarder's `+0x24f`, then
-        // 0x4b9700): the taker's ship destroyed, the loser's ship lost.
-        self.note_destroyed(i, owner);
+        // Boarded is counted as the fight is won (0x4a91a0 at 0x4b6559),
+        // taken or not.
         if Some((nation, player)) == self.human.map(|h| (h.nation, h.slot)) {
             if let Some(s) = self.objects[i].ship.as_ref() {
                 self.stats.ships_boarded[s.kind.min(11) as usize] += 1;
             }
         }
+        // Player 16's ships are not taken, nor do they take: the prize
+        // sinks, put down to its taker (0x4b6f20 at 0x4b7169: `+0x251 =
+        // 4`, `+0x7f` the taker's `+0x24f`; its sinking, 0x4dec40, reports
+        // it), no 0x5d97.
+        const PLAYER_16: (u32, u32) = (4, 0);
+        if owner == Some(PLAYER_16) || self.objects[i].owner == Some(PLAYER_16) {
+            let hull = self.objects[i].combat.as_ref().map_or(0.0, |c| c.hull);
+            self.strike(id, hull.max(0.0) + 1.0, false, owner, true, data, caches);
+            return;
+        }
+        // The prize is reported destroyed by its taker before it changes
+        // hands (0x4b6f20: 0x50e750 with the boarder's `+0x24f`, then
+        // 0x4b9700): the taker's ship destroyed, the loser's ship lost.
+        self.note_destroyed(i, owner);
         let mut rec = self.objects[i].record.clone();
         if rec.fields.len() < 7 {
             rec.fields.resize(7, 0);

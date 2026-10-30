@@ -3564,6 +3564,22 @@ fn kills_are_put_down_as_the_original() {
     assert_eq!(sum(&scene.stats.ships_boarded), 1);
     scene.capture(m, enemy, 0, Default::default(), &data, &mut caches);
     assert_eq!(sum(&scene.stats.ships_lost), 1);
+    // Player 16's prize is not taken: it sinks, put down to its taker
+    // (0x4b7169), boarded counted all the same.
+    let mut scene = fresh(&mut caches);
+    let e = ships(&scene, false)[0];
+    let ei = scene.object_index(e).unwrap();
+    scene.objects[ei].owner = Some((4, 0));
+    scene.capture(e, human, 0, Default::default(), &data, &mut caches);
+    assert!(scene
+        .object_index(e)
+        .is_none_or(|i| scene.objects[i].owner == Some((4, 0))));
+    assert!(scene.object_index(e).is_none_or(|i| scene.objects[i]
+        .combat
+        .as_ref()
+        .is_none_or(|c| c.hull <= 0.0)));
+    assert_eq!(sum(&scene.stats.ships_destroyed), 1);
+    assert_eq!(sum(&scene.stats.ships_boarded), 1);
     // A harpy (or dragon) shot down by the human counts nothing.
     let mut scene = fresh(&mut caches);
     let dragon = scene
@@ -8163,4 +8179,29 @@ fn merchant_unloading_at_a_port_is_held() {
     let goal = s.path.back().copied().expect("a cell off the berth");
     let goal = ((goal.0 / t) as i32, (goal.1 / t) as i32);
     assert!(goal != berth && (goal.0 - berth.0).abs() <= 2 && (goal.1 - berth.1).abs() <= 2);
+}
+
+/// A mission's ship made on a cell an earlier one holds, or one not fit
+/// for its draught, is removed and counted lost to its owner (0x4dc787;
+/// needs `OPENCONQUEST_DATA`).
+#[test]
+fn misplaced_mission_ships_are_removed() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let own: Vec<usize> = (0..scene.objects.len())
+        .filter(|&i| scene.is_own(&scene.objects[i]) && scene.objects[i].ship.is_some())
+        .take(2)
+        .collect();
+    let (first, second) = (scene.objects[own[0]].id, scene.objects[own[1]].id);
+    let kind = scene.objects[own[1]].ship.as_ref().unwrap().kind as usize;
+    (scene.objects[own[1]].x, scene.objects[own[1]].y) =
+        (scene.objects[own[0]].x, scene.objects[own[0]].y);
+    let lost = scene.stats.ships_lost[kind];
+    assert_eq!(scene.drop_misplaced_ships(), vec![second]);
+    assert!(scene.object_index(first).is_some());
+    assert_eq!(scene.stats.ships_lost[kind], lost + 1);
 }
