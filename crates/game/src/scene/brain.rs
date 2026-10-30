@@ -130,6 +130,9 @@ pub enum Op {
     /// (0: forever: `timeout`) or an event; `failed` when a leg ends short
     /// (the move query 0x65 done but not "arrived").
     Patrol {
+        /// Its p7: each leg's move tolerance (0x479870 payload `+0xc`),
+        /// which the move's state judges arrival by (0x4ccf60).
+        tol: i32,
         timeout: u32,
         failed: u32,
         points: &'static [(i32, i32, u32)],
@@ -1108,16 +1111,16 @@ impl Scene {
                 }
             }
             Op::Patrol {
+                tol,
                 timeout,
                 failed,
                 points,
                 ticks,
                 events,
             } => {
-                if let Some(s) = self.event_fired(k, events, elapsed) {
-                    self.set_state(k, s);
-                    return;
-                }
+                // 0x47a900: the time first (`timeout`, nothing more this
+                // turn), then the events; the first turn's leg is sailed
+                // only when no event fired.
                 let ticks = if ticks == VAR0 {
                     self.brain.as_ref().unwrap().fleets[k].vars[0]
                 } else {
@@ -1128,32 +1131,43 @@ impl Scene {
                     return;
                 }
                 if !started {
-                    self.brain.as_mut().unwrap().fleets[k].point = 0;
+                    // The step begins at point 0, on the way (`+0x58`,
+                    // `+0x60`).
+                    let f = &mut self.brain.as_mut().unwrap().fleets[k];
+                    f.point = 0;
+                    f.paused_at = None;
+                }
+                if let Some(s) = self.event_fired(k, events, elapsed) {
+                    self.set_state(k, s);
+                    return;
+                }
+                if !started {
                     let (x, y, _) = points[0];
-                    // (0x47a900's own tolerance, its p7, is not carried:
-                    // the patrol's arrival is the port's own test.)
-                    self.fleet_move(k, (x, y), 0);
+                    self.fleet_move(k, (x, y), tol);
                     return;
                 }
                 let f = &self.brain.as_ref().unwrap().fleets[k];
                 let (point, paused) = (f.point.min(points.len() - 1), f.paused_at);
-                // On its way to a point (`+0x60 == 1`) a fleet with no ships
-                // is done but not arrived: `failed` (0x47a900).
-                if empty && paused.is_none() {
-                    self.set_state(k, failed);
-                    return;
-                }
                 match paused {
-                    None if self.fleet_idle(k) => {
-                        self.brain.as_mut().unwrap().fleets[k].paused_at = Some(tick);
-                    }
+                    // On the way (`+0x60 == 1`): the move's state (query
+                    // 0x65, 0x4ccf60, by the leg's tolerance): arrived
+                    // (0xb), it pauses from now (`+0x5c`); done otherwise
+                    // (as a fleet with no ships is), `failed`; no answer,
+                    // nothing.
+                    None => match self.move_status(k) {
+                        Some((0x1f5, 0xb)) => {
+                            self.brain.as_mut().unwrap().fleets[k].paused_at = Some(tick);
+                        }
+                        Some((0x1f5, _)) => self.set_state(k, failed),
+                        _ => {}
+                    },
                     Some(at) if tick >= at + points[point].2 => {
                         let next = (point + 1) % points.len();
                         let f = &mut self.brain.as_mut().unwrap().fleets[k];
                         f.point = next;
                         f.paused_at = None;
                         let (x, y, _) = points[next];
-                        self.fleet_move(k, (x, y), 0);
+                        self.fleet_move(k, (x, y), tol);
                     }
                     _ => {}
                 }
@@ -2776,6 +2790,7 @@ mod miss000 {
                 events: &[],
             },
             _ => Op::Patrol {
+                tol: 2,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -2892,6 +2907,7 @@ mod miss000 {
             // A leg that ends short starts the round again (0x47a900 at
             // 0x449810 state 5: p3 0x28, p4 5).
             _ => Op::Patrol {
+                tol: 2,
                 timeout: 40,
                 failed: 5,
                 points: ROUND,
@@ -3050,6 +3066,7 @@ mod miss001 {
                 events: &[],
             },
             _ => Op::Patrol {
+                tol: 1,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -3118,6 +3135,7 @@ mod miss001 {
                 events: &[],
             },
             _ => Op::Patrol {
+                tol: 2,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -3173,6 +3191,7 @@ mod miss001 {
                 events: &[],
             },
             _ => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -3344,6 +3363,7 @@ mod miss002 {
                 events: &[],
             },
             _ => Op::Patrol {
+                tol: 1,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -3519,6 +3539,7 @@ mod miss002 {
                 40
             }),
             40 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -3591,6 +3612,7 @@ mod miss002 {
                 events: POST,
             },
             30 => Op::Patrol {
+                tol: 2,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -3638,6 +3660,7 @@ mod miss002 {
                 events: POST,
             },
             30 => Op::Patrol {
+                tol: 2,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -3952,6 +3975,7 @@ mod miss003 {
                 events: W,
             },
             6 => Op::Patrol {
+                tol: 2,
                 timeout: 40,
                 failed: 40,
                 points: ROUND,
@@ -4011,6 +4035,7 @@ mod miss003 {
                 events: W,
             },
             _ => Op::Patrol {
+                tol: 3,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -4173,6 +4198,7 @@ mod miss003 {
                 events: &[HOME],
             },
             6 => Op::Patrol {
+                tol: 3,
                 timeout: 10,
                 failed: 10,
                 points: ROUND,
@@ -4780,6 +4806,7 @@ mod miss004 {
             40 => Op::Branch {
                 test: |scene, _| field(scene, SWEEP) == 0,
                 yes: &Op::Patrol {
+                    tol: 2,
                     timeout: 80,
                     failed: 80,
                     points: ROUND,
@@ -4789,6 +4816,7 @@ mod miss004 {
                 no: &Op::Branch {
                     test: |scene, _| (1..=2).contains(&field(scene, SWEEP)),
                     yes: &Op::Patrol {
+                        tol: 2,
                         timeout: 80,
                         failed: 80,
                         points: ROUND,
@@ -4942,6 +4970,7 @@ mod miss004 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 3,
                 timeout: 0,
                 failed: 0,
                 points: HOME_ROUND,
@@ -4956,6 +4985,7 @@ mod miss004 {
                 events: &[],
             },
             40 => Op::Patrol {
+                tol: 3,
                 timeout: 0,
                 failed: 0,
                 points: NORTH_ROUND,
@@ -5116,6 +5146,7 @@ mod miss004 {
                 events: FIGHT,
             },
             40 => Op::Patrol {
+                tol: 2,
                 timeout: 80,
                 failed: 80,
                 points: ROUND,
@@ -5561,6 +5592,7 @@ mod miss005 {
                 no: &Op::Behave { next: 6 },
             },
             6 => Op::Patrol {
+                tol: 2,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -5725,6 +5757,7 @@ mod miss005 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -5760,6 +5793,7 @@ mod miss005 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -6103,6 +6137,7 @@ mod miss005 {
             }),
             1 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 3,
                 timeout: 0,
                 failed: 0,
                 points: round,
@@ -6212,6 +6247,7 @@ mod miss005 {
             }),
             51 => Op::Behave { next: 60 },
             60 => Op::Patrol {
+                tol: 3,
                 timeout: 0,
                 failed: 0,
                 points: round2,
@@ -6578,6 +6614,7 @@ mod miss006 {
                 events: &[],
             },
             _ => Op::Patrol {
+                tol: 2,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -6714,6 +6751,7 @@ mod miss006 {
                 no: &Op::Behave { next: 6 },
             },
             6 => Op::Patrol {
+                tol: 2,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -6841,6 +6879,7 @@ mod miss006 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -6961,6 +7000,7 @@ mod miss006 {
                 events: &[HOME],
             },
             6 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -7074,6 +7114,7 @@ mod miss006 {
             }),
             1 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -7156,6 +7197,7 @@ mod miss006 {
                 events: &[NORTH_HOME],
             },
             6 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -7293,6 +7335,7 @@ mod miss006 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -7796,6 +7839,7 @@ mod miss007 {
             }),
             1 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: round,
@@ -8093,6 +8137,7 @@ mod miss007 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: PERSIAN_ROUND,
@@ -8206,6 +8251,7 @@ mod miss007 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: PERSIAN_ROUND,
@@ -8745,6 +8791,7 @@ mod miss008 {
             // Behave (a no-op here), then choose.
             0 => Op::Custom(start),
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: round,
@@ -8752,6 +8799,7 @@ mod miss008 {
                 events: watch,
             },
             10 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: round,
@@ -9005,6 +9053,7 @@ mod miss008 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: round,
@@ -9106,6 +9155,7 @@ mod miss008 {
         ];
         match state {
             10 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: SOUTH_ROUND,
@@ -9874,6 +9924,7 @@ mod miss009 {
                 }
             }),
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: RAIDER_ROUND,
@@ -9881,6 +9932,7 @@ mod miss009 {
                 events: WATCH,
             },
             10 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: RAIDER_ROUND,
@@ -9932,6 +9984,7 @@ mod miss009 {
         match state {
             0 => Op::Behave { next: 10 },
             10 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -10110,6 +10163,7 @@ mod miss009 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: PERSIAN_ROUND,
@@ -10830,6 +10884,7 @@ mod miss010 {
         match state {
             0 => choose(),
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: round,
@@ -10837,6 +10892,7 @@ mod miss010 {
                 events: home,
             },
             10 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: round,
@@ -11157,12 +11213,14 @@ mod miss010 {
         const ROUND9: &[(i32, i32, u32)] = &[(22, 5, 750), (22, 21, 1000), (13, 23, 750)];
         match strait_patrol(state) {
             Op::Patrol {
+                tol,
                 timeout,
                 failed,
                 ticks,
                 events,
                 ..
             } => Op::Patrol {
+                tol,
                 timeout,
                 failed,
                 points: ROUND9,
@@ -11735,6 +11793,7 @@ mod miss011 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -11827,6 +11886,7 @@ mod miss011 {
                 events: MARCHING,
             },
             10 => Op::Patrol {
+                tol: 2,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -11848,6 +11908,7 @@ mod miss011 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
@@ -11891,6 +11952,7 @@ mod miss011 {
                 events: MARCHING,
             },
             6 => Op::Patrol {
+                tol: 2,
                 timeout: 10,
                 failed: 10,
                 points: ROUND,
@@ -12170,6 +12232,7 @@ mod miss011 {
                 5
             }),
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -13008,6 +13071,7 @@ mod miss012 {
                 events: MARCHING,
             },
             6 => Op::Patrol {
+                tol: 2,
                 timeout: 10,
                 failed: 10,
                 points: ROUND,
@@ -13111,6 +13175,7 @@ mod miss012 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -13164,6 +13229,7 @@ mod miss012 {
         match state {
             0 => Op::Custom(|scene, k| roll_length(scene, k, [10, 8, 6])),
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 10,
                 failed: 10,
                 points: ROUND,
@@ -13227,6 +13293,7 @@ mod miss012 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -13259,6 +13326,7 @@ mod miss012 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 10,
                 failed: 10,
                 points: round,
@@ -13332,6 +13400,7 @@ mod miss012 {
                 events: W,
             },
             6 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -14216,6 +14285,7 @@ mod miss013 {
                 events: MARCHING,
             },
             6 => Op::Patrol {
+                tol: 2,
                 timeout: 10,
                 failed: 10,
                 points: ROUND,
@@ -14405,6 +14475,7 @@ mod miss013 {
         match state {
             0 => Op::Custom(|scene, k| roll_length(scene, k, [11, 8, 7])),
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 10,
                 failed: 10,
                 points: ROUND,
@@ -14516,6 +14587,7 @@ mod miss013 {
                 roll_length(scene, k, [12, 10, 10])
             }),
             5 => Op::Patrol {
+                tol: 2,
                 timeout: 0,
                 failed: 0,
                 points: ROUND,
@@ -14577,6 +14649,7 @@ mod miss013 {
                 events: W,
             },
             6 => Op::Patrol {
+                tol: 2,
                 timeout: 10,
                 failed: 10,
                 points: ROUND,
@@ -14678,6 +14751,7 @@ mod miss013 {
                 events: W,
             },
             8 => Op::Patrol {
+                tol: 2,
                 timeout: 10,
                 failed: 10,
                 points: ROUND,

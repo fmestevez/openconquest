@@ -5967,8 +5967,21 @@ taken as none). miss006's raiders (0x459b90, 0x45a9f0 case 5) move with
 no time limit (p10 0). Not ported: 0x4c42f0, the behaviour command sent
 with each join and by the pass to a ship whose `+0x689 / +0x68d` differ
 from the group's `+0x19 / +0x1d` when group `+0x14` is set (the port's
-fleets have no behaviour bytes); the patrol's own tolerance (0x47a900's
-p7: 2, 1, 2, ...), whose arrival is the port's own test.
+fleets have no behaviour bytes).
+
+The patrol (0x47a900): its first turn sets point 0 and "on the way"
+(`+0x58`, `+0x60`), then tests the time (never true yet) and the events:
+one firing switches the state and no leg is sent; else the leg to point
+0 (0x479870 with its p7 as the tolerance). Later turns: the time first
+(`ticks` up: p3, nothing more), then the events, then, on the way, the
+move's state (query 0x65, 0x4ccf60 by that tolerance): 0x1f5 / 0xb pauses
+from now (`+0x5c`), any other 0x1f5 goes to p4, no answer nothing; paused
+past the point's pause, the next point (wrapping) with p7 again. p7 is 1
+at 0x44a7e4 (miss001 0x44a6f0) and 0x44bea7 (miss002 0x44bd80); 3 at
+0x44f1a5, 0x44fa29 (miss003 0x44f050, 0x44f880), 0x453804, 0x4538cb
+(miss004 0x4536c0), 0x45671f, 0x456b6c, 0x456fe2, 0x457417 (miss005
+0x456580, 0x456e80); 2 at every other call. The port: `Op::Patrol`'s
+`tol`.
 
 **miss004's and miss005's members that move on a ship count.** Each
 counts its ships by type (0x479dc0: query 7, 0x4c4e40, an int per type

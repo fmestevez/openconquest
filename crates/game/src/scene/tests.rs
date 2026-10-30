@@ -12796,3 +12796,52 @@ fn a_computers_town_arms_its_forts() {
         economy::building_cost(0x34) + amber
     );
 }
+
+/// A patrol's legs are moves with its own tolerance (0x47a900's p7):
+/// miss004's barbarian raiders (0x4536c0) sail to (36, 30) with 3, the
+/// northern raiders' sweep (0x451c60) to (8, 9) with 2; an event firing
+/// on the step's first turn sends no leg (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_patrol_moves_with_its_own_tolerance() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss004").unwrap();
+    // (1, 3) runs at 20, (0, 4) at 20 too.
+    {
+        let b = scene.brain.as_mut().unwrap();
+        b.fleets[10].state = 5;
+        b.fleets[4].state = 40;
+        b.fields[1] = 0;
+    }
+    for _ in 0..20 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    let order = |k: usize| b.fleets[k].move_order.as_ref().map(|m| (m.to, m.tol));
+    assert_eq!(order(10), Some(((36, 30), 3)));
+    assert_eq!(order(4), Some(((8, 9), 2)));
+    // The player in the home zone: the event, and no leg.
+    let mut scene = Scene::load(&data, &mut caches, "miss004").unwrap();
+    let t = TILE_SIZE as f32;
+    let mine = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    scene.objects[mine].x = 3.0 * t + t / 2.0;
+    scene.objects[mine].y = 5.0 * t + t / 2.0;
+    {
+        let b = scene.brain.as_mut().unwrap();
+        b.fleets[4].state = 40;
+        b.fields[1] = 0;
+    }
+    for _ in 0..20 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!(b.fleets[4].state, 20);
+    assert!(b.fleets[4].move_order.is_none());
+}
