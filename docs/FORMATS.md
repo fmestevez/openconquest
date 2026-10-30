@@ -3716,11 +3716,15 @@ miss008 (0x463240):
   mends them. Member 6 hands its ships to member 7 (at most three times)
   while it is `difficulty + 2` strong and the player is near the
   barbarians; member 10, having won a fight, hands its own and members 5,
-  6 and 12's and restarts member 7. On attacking, members 5, 6 and 11
-  have member 2 cast spell 15, 9 or 12 on their ships, and member 10
-  spell 9 on member 7's (0x47acf0: kinds 9, 12, 15, 16, cast by 0x479c20
-  on each ship, paid by member 2's player). These go to member (1, 2)'s
-  war temple, and miss008 has none, so none is cast.
+  6 and 12's and restarts member 7. On the first call (`+0x10 == 0`) of
+  a fight, members 5 (state 0x1e, 0x4625a7), 6 (0x14, 0x4627f1) and 11
+  (0x14, 0x462d83) have member 2 cast spell 15, 9 or 12 on their ships,
+  and member 10 (0x28, 0x462b59, before its four 0x479370 hand-ons)
+  spell 9 on member 7's (0x47acf0 with pay 1: kinds 9, 12, 15, 16, cast
+  by 0x479c20 on each ship). These go to member (1, 2)'s war temple, and
+  miss008 has none, so none is cast; but each call with ships in the
+  target credits player 15 a cast's price (1000 amber and 100 fish; the
+  Flame 6000 and 1500) first. The port: `patrol_cast`, from `turn`.
 - **The start.** Easy and normal lay amber at (12, 41) and (17, 35), fish
   at (4, 34) and a leviathan zone at (25, 33, 5, 5) (0x4960b0: message
   0x167d with class 0x192, fields 7 and 8 the corner, 10 and 11 the
@@ -3767,9 +3771,17 @@ miss009 (0x4663d0):
   the ships in (55, 0, 15, 5)) attacks the cells about one of the
   player's ships carrying heroes (ship `+0x259`) for 500 ticks while the
   player is in those waters. Member 6 mends prizes (message 0x5d97).
-  Members 3 and 4 cast kinds 9 and 15 on their own ships when they fight
-  (0x47acf0); a ship group cannot cast (0x4a09d0 drops it) and the Flame
-  needs a spell the Persians never learn, so none is.
+  Member 3 (0x465b20), on the first call of its state 0x14 while the
+  brain's byte `+0x12e` (difficulty + 3 from the constructor, 0x46655b)
+  is not 0, casts kind 9 (the Flame) on its ships by the land fleet (1,
+  0) (town (58, 43), war temple (57, 44)), paid, and counts `+0x12e`
+  down. Its state 0x1e and member 4's (0x465da0) cast kind 15 by (1, 2),
+  a ship fleet, unpaid: dropped (0x4a09d0). Member 4's state 0x28 casts
+  kinds 12 and 9 by (1, 0) when its short `+0x12f` is 0, which the
+  constructor sets to 750 and only those casts write (3000): never. Not
+  decoded: whether the temple has learnt the three war spells the Flame
+  needs (`+0xbc`, which the brain never sets); the port keeps no spells
+  for a computer's temple and brews it at a standing temple.
 - **The tick.** Every 5 ticks (0x4665b2, before the members) the brain
   draws a number and drops it, draws `x` and runs this when the tick is
   `((x % 10 + x % 10) % 10) x 5` modulo 50: both terms read the seed
@@ -4929,7 +4941,12 @@ rammer's blow.
 carries one out a pass (every 50 ticks, 0x42b910, 0x42a500) when the town
 check 0x43fee0 passes (a war temple standing and idle, the permit, the
 spell learnt, the money). Each cast is paid in full (0x42f470); `pay`
-credits one cast's price first (0x4a8eb0, 0x4a8f40). A shield or the
+credits the caster member's player one cast's price (0x47abb0 amber,
+0x47ac50 x 100 fish; 0x4a8eb0, 0x4a8f40) as soon as the target fleet has
+ships (0x479e50), before and whatever comes of the orders (none at all
+with no ships). Not decoded: how the credit, to the computer's spending
+fields `+0x24` and `+0x1c`, maps onto the port's purse; the port credits
+the caster's player's purse. A shield or the
 phantom lasts 3000 ticks more (0xda9a, 0xda97); the Flame is the player's:
 brewed 250 ticks, then 1500 more of it (+0xa8, +0xb0). The port casts at
 once, each ship paid, the Flame brewed once a call.

@@ -8394,3 +8394,145 @@ fn repair_orders_as_the_original() {
         .expect("the repair order");
     assert_eq!((order.dock, order.yard), (town_dock(&scene, (8, 11)), 0));
 }
+
+/// miss008's Persian patrols cast on the first call of their fights
+/// (0x47acf0 by the land fleet (1, 2), paid): with no war temple nothing is
+/// cast, but each call with ships in the target credits player 15 a
+/// cast's price before the temple is looked for: member 5 the weapon
+/// shield at 30 (1000 amber, 100 fish), member 6 the Flame at 20 (6000,
+/// 1500), member 10 the Flame on the strike's ships at 40, member 11 the
+/// phantom at 20 (1000, 100); a later call of the same state, or a target
+/// without ships, credits nothing (needs `OPENCONQUEST_DATA`).
+#[test]
+fn miss008_patrol_casts_credit_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss008").unwrap();
+    let persians = (3, 3);
+    assert!(
+        !scene
+            .objects
+            .iter()
+            .any(|o| o.class == ObjectClass::Building(economy::TEMPLE_OF_WAR)),
+        "no war temple"
+    );
+    // The caster, the land fleet (1, 2) at (58, 23), is player 15's.
+    let caster = scene.brain.as_ref().unwrap().fleets[9].ships[0];
+    let i = scene.object_index(caster).unwrap();
+    assert_eq!(scene.objects[i].owner, Some(persians));
+    // The Persians start with no ships: one of the player's, made theirs,
+    // stands in each target fleet.
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    scene.objects[i].owner = Some(persians);
+    let ship = scene.objects[i].id;
+    // (fleet, state, target, its turn's tick modulo 50, credit).
+    for (k, state, target, phase, credit) in [
+        (12, 30, 12, 30, (1000, 100)),
+        (13, 20, 13, 35, (6000, 1500)),
+        (17, 40, 14, 5, (6000, 1500)),
+        (18, 20, 18, 10, (1000, 100)),
+    ] {
+        let tick = scene.brain.as_ref().unwrap().tick;
+        let next = tick + (phase + 50 - tick % 50) % 50;
+        while scene.brain.as_ref().unwrap().tick + 1 < next {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        let brain = scene.brain.as_mut().unwrap();
+        for f in &mut brain.fleets {
+            f.ships.retain(|&s| s != ship);
+        }
+        brain.fleets[target].ships.push(ship);
+        brain.fleets[k].state = state;
+        brain.fleets[k].started = false;
+        let (a, f) = scene.funds(persians);
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        assert_eq!(scene.brain.as_ref().unwrap().tick % 50, phase);
+        let (a2, f2) = scene.funds(persians);
+        assert_eq!(
+            (a2 as i64 - a as i64, f2 as i64 - f as i64),
+            (credit.0, credit.1),
+            "fleet {k} at {state}"
+        );
+    }
+    // Member 5 again at 30, its step begun: no cast.
+    let tick = scene.brain.as_ref().unwrap().tick;
+    let next = tick + 1 + (30 + 50 - (tick + 1) % 50) % 50;
+    let brain = scene.brain.as_mut().unwrap();
+    for f in &mut brain.fleets {
+        f.ships.retain(|&s| s != ship);
+    }
+    brain.fleets[12].ships.push(ship);
+    brain.fleets[12].state = 30;
+    brain.fleets[12].started = true;
+    brain.fleets[12].since = brain.tick;
+    while scene.brain.as_ref().unwrap().tick + 1 < next {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let (a, f) = scene.funds(persians);
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    assert_eq!(scene.brain.as_ref().unwrap().tick % 50, 30);
+    assert_eq!(scene.funds(persians), (a, f));
+}
+
+/// miss009's Persian patrol (member 3) casts the Flame on its ships by the
+/// land fleet (1, 0) on the first call of its fight in the north, paid,
+/// difficulty + 3 times (`+0x12e`, 0x465b20); then no more (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn miss009_patrol_flames_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss009").unwrap();
+    let persians = (3, 2);
+    // Member (1, 3), fleet 11, runs at 20 modulo 50; normal: 4 Flames.
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[11].vars[0], 4);
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| o.owner == Some(persians) && o.ship.is_some())
+        .map(|o| o.id)
+        .expect("a Persian ship");
+    // The war temple at (57, 44) brews each Flame, paid by the credit.
+    let mut brewed = Vec::new();
+    for _ in 0..5 {
+        let tick = scene.brain.as_ref().unwrap().tick;
+        let next = tick + 1 + (20 + 50 - (tick + 1) % 50) % 50;
+        while scene.brain.as_ref().unwrap().tick + 1 < next {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        let brain = scene.brain.as_mut().unwrap();
+        for f in &mut brain.fleets {
+            f.ships.retain(|&s| s != ship);
+        }
+        brain.fleets[11].ships.push(ship);
+        brain.fleets[11].state = 20;
+        brain.fleets[11].started = false;
+        scene.brain_flames.clear();
+        let funds = scene.funds(persians);
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        assert_eq!(scene.brain.as_ref().unwrap().tick % 50, 20);
+        let brewing = scene.brain_flames.get(&persians).is_some_and(|f| f.0 > 0.0);
+        brewed.push((brewing, scene.funds(persians) == funds));
+    }
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[11].vars[0], 0);
+    assert_eq!(
+        brewed,
+        [
+            (true, true),
+            (true, true),
+            (true, true),
+            (true, true),
+            (false, true)
+        ]
+    );
+}

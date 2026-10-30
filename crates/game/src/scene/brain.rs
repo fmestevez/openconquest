@@ -1732,6 +1732,11 @@ impl Scene {
         })
     }
 
+    /// Whether fleet `k`'s step in its state has begun (member `+0x10`).
+    pub(super) fn fleet_started(&self, k: usize) -> bool {
+        self.brain.as_ref().unwrap().fleets[k].started
+    }
+
     fn fleet_ships(&self, k: usize) -> Vec<u32> {
         self.brain.as_ref().unwrap().fleets[k].ships.clone()
     }
@@ -1899,25 +1904,36 @@ impl Scene {
         }
     }
 
-    /// A brain's fleet-wide cast on `ships` (0x47acf0 through 0x479c20:
-    /// an order to the casting group's war temple for each ship, 0x42a500,
-    /// 0x43fee0): only with a war temple standing; each cast paid in full
-    /// (0x42f470), with one cast's price credited first when `pay`
-    /// (0x4a8eb0, 0x4a8f40). The Flame is the player's: brewed 250 ticks,
-    /// then 1500 more of it (the temple's code 5).
+    /// A brain's fleet-wide cast on `ships` by a member of player
+    /// `caster` (0x47acf0): with none of the ships about, nothing; else,
+    /// when `pay`, the caster's player is credited one cast's price
+    /// (0x47abb0 amber, 0x47ac50 x 100 fish; 0x4a8eb0, 0x4a8f40) whatever
+    /// comes of the cast, then each ship is an order to the caster (0x479c20,
+    /// message 0x3ee), which a land fleet queues for its war temple
+    /// (0x42c430, 0x42a500, 0x43fee0; a ship fleet's 0x4a09d0 drops it, and
+    /// no caller here casts by one): only with a war temple standing; each
+    /// cast paid in full (0x42f470). The Flame is the player's: brewed 250
+    /// ticks, then 1500 more of it (the temple's code 5). (Not decoded: how
+    /// the credit, to the computer's spending fields `+0x24` and `+0x1c`,
+    /// maps onto a purse; here the caster's player's. The temple's spells
+    /// learnt, `+0xbc`, which 0x42a500 tests, are not kept: a standing
+    /// temple casts.)
     pub(super) fn brain_cast_fleet(
         &mut self,
+        caster: (u32, u32),
         ships: Vec<u32>,
         spell: crate::magic::Spell,
         pay: bool,
     ) {
         use crate::magic::Spell;
-        let Some(owner) = ships
-            .iter()
-            .find_map(|&id| self.object_index(id).and_then(|i| self.objects[i].owner))
-        else {
+        if !ships.iter().any(|&id| self.object_index(id).is_some()) {
             return;
-        };
+        }
+        let owner = caster;
+        let (amber, fish) = spell.cost();
+        if pay {
+            self.earn(owner, amber as i64, fish as i64);
+        }
         let temple = self.objects.iter().any(|o| {
             o.owner == Some(owner)
                 && o.class == openconquest_formats::ObjectClass::Building(0x3e)
@@ -1925,10 +1941,6 @@ impl Scene {
         });
         if !temple {
             return;
-        }
-        let (amber, fish) = spell.cost();
-        if pay {
-            self.earn(owner, amber as i64, fish as i64);
         }
         let afford = |s: &Scene| {
             let (a, f) = s.funds(owner);
@@ -4830,7 +4842,7 @@ mod miss005 {
         };
         if let Some(spell) = spell {
             let ships = scene.fleet_ships(k);
-            scene.brain_cast_fleet(ships, spell, false);
+            scene.brain_cast_fleet((3, 3), ships, spell, false);
         }
         scene.brain.as_mut().unwrap().fleets[clear].vars[SPELL] = 0;
     }
@@ -5885,8 +5897,10 @@ mod miss006 {
             _ => None,
         };
         if let Some(spell) = spell {
+            // Member 0 of the southern (player 15) or northern (14) group.
+            let caster = if k == SOUTH_RAIDERS { (3, 3) } else { (3, 2) };
             let ships = scene.fleet_ships(k);
-            scene.brain_cast_fleet(ships, spell, false);
+            scene.brain_cast_fleet(caster, ships, spell, false);
         }
         scene.brain.as_mut().unwrap().fleets[k].vars[SPELL] = 0;
     }
@@ -7252,10 +7266,10 @@ mod miss007 {
 /// 0x462e30), member 7 (0x4628d0), the strike on (0, 30, 10, 10) that
 /// members 6 and 10 hand their ships to, which then hands them to member
 /// 13 to be mended (0x462fb0).
-/// (Not ported: the spells the Persians cast on their patrols when they
-/// attack (0x47acf0, kinds 9, 12 and 15): with no war temple none takes
-/// effect, each call only crediting player 15 one cast's price (see
-/// `campaign_spells_spec`). An attack's "failed" exit is taken as its "ok" one,
+/// The patrols cast on their ships as they fight (0x47acf0, kinds 9, 12
+/// and 15, `patrol_cast`): with no war temple none takes effect, each call
+/// only crediting player 15 one cast's price.
+/// (Not ported: an attack's "failed" exit is taken as its "ok" one,
 /// the runtime telling them apart only by time. 0x479ed0's test with
 /// buildings (mask 0xffffff) is taken as `human_in`, without as
 /// `human_ships_in`.)
@@ -7618,6 +7632,33 @@ mod miss008 {
             19 if count(&[BOMBER]) < d + 3 => ask(scene, k, BOMBER),
             _ => {}
         }
+        patrol_cast(scene, k);
+    }
+
+    /// The patrols' casts, on the first call of a state (`+0x10 == 0`),
+    /// before its step (0x47acf0 by the land fleet (1, 2), player 15's,
+    /// paid): member 5 the weapon shield on its ships at 30 (0x4625a7),
+    /// member 6 the Flame on its ships at 20 (0x4627f1), member 10 the
+    /// Flame on the strike's ships at 40, before it hands its own and the
+    /// others' to it (0x462b59), member 11 the phantom on its ships at 20
+    /// (0x462d83). With no war temple in the mission none takes effect;
+    /// each call with ships in the target credits player 15 a cast's
+    /// price (1000 amber and 100 fish, the Flame 6000 and 1500).
+    fn patrol_cast(scene: &mut Scene, k: usize) {
+        use crate::magic::Spell;
+        let state = scene.brain.as_ref().unwrap().fleets[k].state;
+        let (spell, target) = match (k, state) {
+            (12, 30) => (Spell::ProtectWeapons, k),
+            (13, 20) => (Spell::Flame, k),
+            (17, 40) => (Spell::Flame, STRIKE),
+            (18, 20) => (Spell::Phantom, k),
+            _ => return,
+        };
+        if scene.fleet_started(k) {
+            return;
+        }
+        let ships = scene.fleet_ships(target);
+        scene.brain_cast_fleet((3, 3), ships, spell, true);
     }
 
     fn idle(_: u32) -> Op {
@@ -8201,12 +8242,15 @@ mod miss008 {
 /// which also wakes the north-western raiders; and, on normal and hard,
 /// on each of the player's temples in (10, 0, 40, 20) while the fire
 /// wizard lives.
-/// (Not ported: the spells the Persians cast on their own ships (0x47acf0:
-/// member 3 kind 9, the Flame, up to difficulty + 3 times when it attacks;
-/// members 3 and 4 kind 15, the weapon shield, each turn they fight in
-/// their home waters; member 4 kinds 12 and 9 when it strikes, never in
-/// fact as `+0x12f` is never counted down). A temple is "in" (10, 0,
-/// 40, 20) by its cell.)
+/// Member 3 casts the Flame on its ships as its fight in the north
+/// starts, difficulty + 3 times (0x47acf0 by the land fleet (1, 0), paid);
+/// its and member 4's weapon shields go through (1, 2), a ship fleet, and
+/// are dropped, member 4's phantom and Flame are never reached (`+0x12f`
+/// never counted down).
+/// (Not ported: whether the war temple at (57, 44) has learnt the three
+/// war spells the Flame needs (`+0xbc`, not kept for a computer's temple:
+/// here a standing temple brews it). A temple is "in" (10, 0, 40, 20) by
+/// its cell.)
 mod miss009 {
     use super::*;
     use crate::magic::Spell;
@@ -8247,7 +8291,8 @@ mod miss009 {
     /// rest, 3 the member it serves (Persians). Member 0: 0 the player has
     /// come into (0, 9, 18, 5) (`+0x104`). Member 5: 0 it has struck
     /// (`+0x105`). The Persian guard: 0 the fire wizard is gone
-    /// (`+0x131`). The Persian merchants: 0 their gathering's length.
+    /// (`+0x131`). The Persian merchants: 0 their gathering's length. The
+    /// Persian patrol: 0 the Flames it has yet to cast (`+0x12e`).
     const N: usize = 0;
     const AFTER: usize = 1;
     const ASKED: usize = 2;
@@ -8257,6 +8302,7 @@ mod miss009 {
     const WOKEN: usize = 0;
     const STRUCK: usize = 0;
     const GONE: usize = 0;
+    const FLAMES: usize = 0;
 
     pub const FLEETS: &[FleetDef] = &[
         // The barbarians.
@@ -8432,6 +8478,8 @@ mod miss009 {
         }
         let d = level as u32;
         scene.brain.as_mut().unwrap().fleets[RAIDERS].vars = [d + 3, 4500, 0, 2];
+        // The patrol's Flames (the constructor 0x46655b: difficulty + 3).
+        set_var(scene, PATROL, FLAMES, d + 3);
     }
 
     /// Asks for ship `kind` in `holder`'s request if it is free.
@@ -8550,6 +8598,20 @@ mod miss009 {
                 {
                     let kind = [ROYAL, BOMBER, BOARDER][scene.brain_draw() as usize % 3];
                     ask(scene, k, kind);
+                }
+                // Its fight in the north (20), on its first call while it
+                // has Flames left: the Flame on its ships by the land
+                // fleet (1, 0), paid, one fewer left whatever comes of it
+                // (0x465b20). Its weapon shield at 30 and the guard's at 30
+                // (0x47acf0 by (1, 2), a ship fleet, unpaid) are dropped;
+                // the guard's phantom and Flame at 40 wait on `+0x12f`,
+                // 750 from the constructor and never counted down.
+                let f = &scene.brain.as_ref().unwrap().fleets[k];
+                let flames = f.vars[FLAMES];
+                if f.state == 20 && !scene.fleet_started(k) && flames != 0 {
+                    let ships = scene.fleet_ships(k);
+                    scene.brain_cast_fleet((3, 2), ships, crate::magic::Spell::Flame, true);
+                    set_var(scene, k, FLAMES, flames - 1);
                 }
             }
             GUARD => {
@@ -11050,7 +11112,7 @@ mod miss011 {
         };
         if let Some(spell) = spell {
             let ships = scene.fleet_ships(STRIKERS);
-            scene.brain_cast_fleet(ships, spell, false);
+            scene.brain_cast_fleet((3, 2), ships, spell, false);
         }
         set_var(scene, CASTER, SPELL, NONE);
     }
@@ -12278,8 +12340,9 @@ mod miss012 {
                     _ => None,
                 };
                 if let Some((spell, pay)) = spell {
+                    // By member (2, 0), player 14's.
                     let ships = scene.fleet_ships(k);
-                    scene.brain_cast_fleet(ships, spell, pay);
+                    scene.brain_cast_fleet((3, 2), ships, spell, pay);
                 }
                 25
             }),
@@ -13615,8 +13678,9 @@ mod miss013 {
                     _ => None,
                 };
                 if let Some((spell, pay)) = spell {
+                    // By member (2, 0), player 14's.
                     let ships = scene.fleet_ships(k);
-                    scene.brain_cast_fleet(ships, spell, pay);
+                    scene.brain_cast_fleet((3, 2), ships, spell, pay);
                 }
                 25
             }),
