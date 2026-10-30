@@ -220,12 +220,12 @@ impl Scene {
     /// the cell's ground is dug into sea (0x5030c0);
     /// then the blow (0xda93): unshielded ships go down; a fort, port,
     /// dock, workshop, temple, school, castle or nest (WorkLandObj
-    /// 0x427f50, asleep or not) struck on its own cell unshielded, or whose
-    /// ground is gone, falls, else loses a quarter of its condition (a
-    /// twentieth shielded); settlements and towns take nothing; a lair, a
-    /// barbarian structure, a harpy or dragon fall struck on their own
-    /// cell; sea monsters lose half their strength, land creatures and the
-    /// gorgon a quarter. The caster's brain hears of it (0x5d9d).
+    /// 0x427f50, asleep or not; barbarian structures too) struck on its own
+    /// cell unshielded, or whose ground is gone, falls, else loses a
+    /// quarter of its condition (a twentieth shielded); settlements and
+    /// towns take nothing; each creature takes its own rule (below; sea
+    /// monsters `sea_monster_lightning`). The caster's brain hears of it
+    /// (0x5d9d).
     pub(super) fn lightning_strike(
         &mut self,
         x: f32,
@@ -248,8 +248,19 @@ impl Scene {
                     let Some(cb) = o.combat.as_ref() else {
                         continue;
                     };
-                    if o.ship.is_some() {
-                        if ((o.x / t).floor() as i32, (o.y / t).floor() as i32) == c {
+                    if let Some(ship) = o.ship.as_ref() {
+                        // The occupant slot holds a ship on its cell and on
+                        // the next cell it has reserved (`+0x5ab`, taken
+                        // once it leaves its cell's middle); the query
+                        // asks both (only the blow skips the reserved one).
+                        let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+                        let centre = (here.0 as f32 * t + t / 2.0, here.1 as f32 * t + t / 2.0);
+                        let reserved = ship
+                            .path
+                            .front()
+                            .filter(|_| (o.x - centre.0).hypot(o.y - centre.1) > 0.5)
+                            .map(|&(nx, ny)| ((nx / t).floor() as i32, (ny / t).floor() as i32));
+                        if (here == c || reserved == Some(c)) && !wrecked.contains(&o.id) {
                             wrecked.push(o.id);
                         }
                     } else if cb.protect_magic > 0.0
@@ -267,7 +278,20 @@ impl Scene {
         if !absorbed {
             self.dig(cx, cy, data, caches);
         }
+        // The blow (0xda93) to every object in a slot of the 9 cells; each
+        // handler decides by its own cell against the struck one. Life in
+        // the original's points is the port's hull x 15.
+        let points = |hull: f32| (hull * 15.0).round() as i64;
+        let w = self.grid.width as i32;
+        let land = |x: i32, y: i32| {
+            x >= 0
+                && y >= 0
+                && x < w
+                && (y as u32) < self.grid.height
+                && self.cell_types[(y * w + x) as usize] & 0xf == 8
+        };
         let mut blows: Vec<(u32, f32)> = Vec::new();
+        let mut gorgons = Vec::new();
         for o in &self.objects {
             let Some(c) = o.combat.as_ref() else { continue };
             let (ox, oy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
@@ -279,42 +303,103 @@ impl Scene {
                 ObjectClass::HarpyNest | ObjectClass::CreatureSpawn => (f(4), f(5)),
                 _ => (ox, oy),
             };
+            if !near(home) && !wrecked.contains(&o.id) {
+                continue;
+            }
             let centre = home == (cx, cy);
             let shielded = c.protect_magic > 0.0;
+            // WorkLandObj 0x427f50 (0x428600), the barbarian structures
+            // through 0x40ef70 -> 0x4e8660 -> 0x4e7640 too. (Their site
+            // check's flags `+0x1d8 | 0x40` and `+0x1c8` are not decoded:
+            // their site is taken to hold.)
             let work = matches!(
                 o.class,
                 ObjectClass::Building(0x34..=0x3e)
                     | ObjectClass::Castle(_)
                     | ObjectClass::HarpyNest
+                    | ObjectClass::Barbarian(_)
             );
             let k = self.object_index(o.id).unwrap_or(0);
             let blow = match o.class {
                 // The query wrecks the ship on the cell (0x4dc630, 0xda94);
-                // the blow, an unshielded one.
+                // the blow, an unshielded one (0x4de2ac, `+0x255 == 0`).
                 ObjectClass::Ship if wrecked.contains(&o.id) => c.hull,
-                ObjectClass::Ship if near(home) && !shielded => c.hull,
-                _ if work && near(home) => {
-                    let gone = (centre && !shielded) || !self.site_holds(k);
-                    if gone {
+                ObjectClass::Ship if !shielded => c.hull,
+                _ if work => {
+                    let holds = matches!(o.class, ObjectClass::Barbarian(_)) || self.site_holds(k);
+                    if (centre && !shielded) || !holds {
                         c.hull
                     } else {
                         c.max_hull * if shielded { 0.05 } else { 0.25 }
                     }
                 }
-                ObjectClass::Barbarian(_)
-                | ObjectClass::CreatureSpawn
-                | ObjectClass::Monster(0x1f8 | 0x1f9)
-                    if centre =>
-                {
-                    c.hull
+                // A lair (CreaturesFlatClassTy 0x4158b7): on its anchor, or
+                // its site no longer holding (0x4eb with flags 0x41: free
+                // ground, what stands there aside, an inland tile), it
+                // falls; else 25 points of condition, no shield variant.
+                ObjectClass::CreatureSpawn => {
+                    let (hx, hy) = home;
+                    let holds = self.free_ground_but(hx, hy, false).is_ok()
+                        && land(hx, hy)
+                        && self.tile_edges(hx, hy) == 0;
+                    let condition = points(c.hull) * 100 / points(c.max_hull).max(1);
+                    if centre || !holds || condition <= 25 {
+                        c.hull
+                    } else {
+                        let max = points(c.max_hull);
+                        c.hull - (max * (condition - 25) / 100) as f32 / 15.0
+                    }
                 }
-                // A sea monster takes its own rule (below).
-                ObjectClass::Monster(0x1f4..=0x1f6 | 0x1fa) if near(home) => c.max_hull / 4.0,
+                // Harpy and dragon (0x420cd8): on their own cell removed;
+                // else a quarter of the life they have (signed / 100).
+                ObjectClass::Monster(0x1f8 | 0x1f9) => {
+                    if centre {
+                        c.hull
+                    } else {
+                        (points(c.hull) * 25 / 100) as f32 / 15.0
+                    }
+                }
+                // Land creatures (0x414b0f, through their jam): killed on
+                // the struck cell or when their spot is no longer walkable
+                // after the dig (0x411ef0; only the cell's layer 0 being no
+                // longer land is tested here: the half-cell rule is not
+                // decoded); else 25 percentage points off, the life the
+                // percentage of the full one, killed at 0.
+                ObjectClass::Monster(0x1f4..=0x1f6) => {
+                    let max = points(c.max_hull);
+                    let pct = points(c.hull) * 100 / max.max(1) - 25;
+                    if centre || !land(ox, oy) || pct <= 0 {
+                        c.hull
+                    } else {
+                        c.hull - (max * pct / 100) as f32 / 15.0
+                    }
+                }
+                // The gorgon (0x402ab8) and the siren (0x404505): anywhere
+                // in the 3 x 3, whatever their shield, life to 0 with the
+                // caster as killer, unless resting under water (no
+                // picture). The gorgon's own sound, event 116 (`hitmed`);
+                // the siren's 117 has no entry.
+                ObjectClass::Monster(0x1fa | 0x1fd) => {
+                    if self.creature_hidden(o.id) {
+                        0.0
+                    } else {
+                        if o.class == ObjectClass::Monster(0x1fa) {
+                            gorgons.push((o.x, o.y));
+                        }
+                        c.hull
+                    }
+                }
+                // A landing party (0x4227c5): removed, reported to the
+                // caster.
+                ObjectClass::Monster(0x1fc) => c.hull,
                 _ => 0.0,
             };
             if blow > 0.0 {
                 blows.push((o.id, blow));
             }
+        }
+        for (x, y) in gorgons {
+            self.sounds.push(("hitmed", x, y));
         }
         for (id, blow) in blows {
             // 0xda93 heeds no sleep: struck straight (not through the
@@ -322,11 +407,27 @@ impl Scene {
             // `+0x18`, the bolt's `+0x75`: buildings' `+0x1ac` 0x428633,
             // creatures 0x414ce0, harpies 0x420cce), but a ship's wreck to
             // no one (0x4de2cd stores -1, and 0x4aa280's wreck event 0xff).
+            // No handler shows a hit or plays `hitmed` for it.
             let ship = self
                 .object_index(id)
                 .is_some_and(|k| self.objects[k].ship.is_some());
             let by = if ship { None } else { caster };
-            self.strike(id, blow, true, by, true, data, caches);
+            self.strike(id, blow, false, by, true, data, caches);
+        }
+        // A sheep flock in the 3 x 3 is removed (0x433a77), not reported.
+        let sheep: Vec<u32> = self
+            .objects
+            .iter()
+            .filter(|o| o.class == ObjectClass::Sheep)
+            .filter(|o| {
+                let f = |i| o.record.field(i).unwrap_or(0) as i32;
+                near((f(4), f(5)))
+            })
+            .map(|o| o.id)
+            .collect();
+        for id in sheep {
+            self.objects.retain(|o| o.id != id);
+            self.flocks.remove(&id);
         }
         let monsters: Vec<(u32, bool)> = self
             .objects

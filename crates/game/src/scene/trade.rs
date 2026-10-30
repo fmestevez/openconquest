@@ -1499,7 +1499,7 @@ impl Scene {
 
     /// The same, minding what stands there only if `occupied` (0x42dae0
     /// flag 0x40 leaves it out).
-    fn free_ground_but(&self, cx: i32, cy: i32, occupied: bool) -> Result<(), String> {
+    pub(super) fn free_ground_but(&self, cx: i32, cy: i32, occupied: bool) -> Result<(), String> {
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
         if cx < 0 || cy < 0 || cx >= w || cy >= h {
             return Err("Off the map".into());

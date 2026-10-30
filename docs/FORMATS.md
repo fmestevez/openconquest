@@ -3013,14 +3013,54 @@ coast about it is re-tiled to fit (0x5028b0, 0x5027e0, the tables 0x5bdeb8
 shapes, 0x5bdef8 and 0x5bdfe8 edges, 0x5be0d6 / 0x5be150 ground and
 0x5be35e / 0x5be3ac shelf variants), and for ground (cell type 8) the shelf
 within two goes deep and is laid again about the coast (0x502a80,
-0x5029d0); a dig never shuts water. Then the blow (0xda93) to every object
-of the 9 cells: unshielded ships go down; forts, ports, docks, workshops,
-temples, schools, castles and harpy nests (WorkLandObj 0x427f50, asleep or
-not) fall struck on their own cell unshielded or when their site no longer
-holds (the town's check 0x4eb on their cell with their flags and 0x40,
-what stands there aside, and their town's id),
+0x5029d0); a dig never shuts water. Then the blow (0xda93, `+0x14/+0x16`
+the struck cell, `+0x18` the caster) to the 5 object slots of each of the
+9 cells (cell order row by row; in a cell `+12, +16, +28, +24, +20`;
+0x42d287-0x42d361), so every object there once; only the occupant slot
+is filtered: a ship there is skipped when the cell is its reserved next
+cell (`+0x5ab`, 0x42d28f; the query above has no such filter, so a ship
+reserving a cell of the 3 x 3 is wrecked by it). No handler tests the
+caster's nation, and none shows a hit or plays `hitmed` but the gorgon.
+Unshielded ships go down; forts, ports, docks, workshops,
+temples, schools, castles, harpy nests and barbarian structures
+(WorkLandObj 0x427f50, asleep or not; the barbarians through 0x40ef70 ->
+0x4e8660 -> 0x4e7640) fall struck on their own cell unshielded or when
+their site no longer holds (the town's check 0x4eb on their cell with
+their flags and 0x40, what stands there aside, and their town's id;
+barbarians `+0x1d8` 0x20 for 0x3f / 0x41, 0xa for 0x40),
 else lose 25 points of condition (5 shielded); settlements and towns take
-nothing. The ships' ways are rebuilt (0x49a950) and the caster's brain told
+nothing. Creatures, each by its own rule:
+- the gorgon (0x402ab8) and the siren (0x404505), anywhere in the 3 x 3,
+  shield or not: with a picture (not resting under water) life 0, the
+  current picture cut short (`+0xac` / `+0x12c`), killer the caster; the
+  gorgon's sound event 116 (`hitmed`), the siren's 117 (no entry). They
+  are reported and removed at their next state-0 tick (the port removes
+  them at the blow);
+- harpy and dragon (0x420cd8): on their own cell removed and reported to
+  the caster; else `life -= life x 25 / 100` (the current life, signed),
+  reported only at 0;
+- land creatures (0x414b0f, each through its jam 0x415ee0): 0x411ef0
+  rebuilds its half-cell walk grid; on the struck cell, or its own
+  half-cell no longer walkable, killed; else percentage `+0x78 -= 25`,
+  `> 0`: life `= max x pct / 100`, else killed (the cry only with
+  `+0x144`); reported to the caster;
+- lairs (0x4158b7): on the anchor, or the site check 0x4eb {anchor,
+  flags 0x41} failing (free ground, what stands there aside, an inland
+  tile), they fall; else condition `-= 25` (no shield variant), hit
+  points `max x cond / 100`, at 0 they fall; killer the caster;
+- the hero's house (0x421150) passes 0xda93 nowhere: nothing; a landing
+  party (0x4227c5): removed, reported to the caster; sheep (0x433a77),
+  reefs and whirlpools unless `+0x74 == 3` (0x430dae, 0x4484ef): removed;
+  amber (`+0xd5`: amount 0), fish (`+0x111`: amount 0, 0x48d910(0)),
+  the leviathan (not in states 5/6: `+0x80` 0 if above 0 else `+0x78` 0;
+  0x494400(0) on its cell, else `+0x11d` with `+0x189`); the sea monster
+  as ported (`sea_monster_lightning`).
+The port follows these, the walk test as "the cell's layer 0 is no longer
+land" (the half-cell rule of 0x411ef0 not decoded), the barbarians' site
+taken to hold (their flag 0x20 and `+0x1c8` not decoded), the creatures'
+percentages derived from their life (`life x 100 / max`, as 0x414c8f).
+Not ported: reefs and whirlpools (their state 3 not decoded), amber,
+fish and leviathan amounts (their fields not decoded). The ships' ways are rebuilt (0x49a950) and the caster's brain told
 (0x5d9d, cell and caster): miss009's notes the player's strike in x 55-62,
 y 3-8. Its north-east sea is shut off by land at y = 4; only strikes at
 (58, 3), (59, 3), (57-61, 4), (60, 5) or (61, 5) open it.

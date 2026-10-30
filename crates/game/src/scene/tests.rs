@@ -8877,3 +8877,86 @@ fn order_10_silences_a_fort() {
         assert!(scene.shots.is_empty(), "a fort fired");
     }
 }
+
+/// Lightning on creatures (0xda93): a harpy or dragon one cell off loses a
+/// quarter of the life it has (0x420cd8), on its cell it is removed; a land
+/// creature one cell off loses 25 percentage points (0x414b0f); a gorgon up
+/// anywhere in the 3 x 3 is killed with the caster as killer (0x402ab8);
+/// none shows a hit. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn lightning_on_creatures() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let t = TILE_SIZE as f32;
+    let points = |s: &Scene, id: u32| {
+        let i = s.object_index(id).unwrap();
+        (s.objects[i].combat.as_ref().unwrap().hull * 15.0).round() as i64
+    };
+    let at = |c: (i32, i32)| (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+    let human = Some((1, 0));
+    // A harpy (200000), put beside a water cell: 150000 struck one cell
+    // off, then removed on its cell.
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let beside = scene.nav.nearest_water(10, 10).unwrap();
+    let cell = (beside.0 + 1, beside.1);
+    let harpy = scene.objects.iter().map(|o| o.id).max().unwrap() + 1;
+    let mut fields = vec![0u32; 11];
+    fields[0] = 0x1f8;
+    fields[4] = cell.0 as u32;
+    fields[5] = cell.1 as u32;
+    fields[7] = 1;
+    let rec = openconquest_formats::ObjectRecord {
+        id: harpy,
+        class_id: 0x1f8,
+        fields,
+    };
+    let mut obj = crate::objects::resolve(&data, &mut caches, &rec)
+        .unwrap()
+        .unwrap();
+    (obj.x, obj.y) = at(cell);
+    scene.objects.push(obj);
+    let full = points(&scene, harpy);
+    assert_eq!(full, 200_000);
+    let (x, y) = at(beside);
+    scene.lightning_strike(x, y, human, &data, &mut caches);
+    assert_eq!(points(&scene, harpy), full - full * 25 / 100);
+    assert!(!scene.sounds.iter().any(|s| s.0 == "hitmed"));
+    let (x, y) = at(cell);
+    scene.lightning_strike(x, y, human, &data, &mut caches);
+    assert!(scene.object_index(harpy).is_none());
+    // A cyclops (30000) on land beside the sea, struck on the water: 22500,
+    // then 15000, then 7500, then killed.
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let w = scene.grid.width as i32;
+    let (land, beside) = (1..scene.grid.height as i32 - 1)
+        .flat_map(|y| (1..w - 1).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            scene.cell_types[(y * w + x) as usize] & 0xf == 8
+                && scene.nav.is_water(x - 1, y)
+                && scene.objects.iter().all(|o| {
+                    ((o.x / t).floor() as i32 - x).abs() > 2
+                        || ((o.y / t).floor() as i32 - y).abs() > 2
+                })
+        })
+        .map(|(x, y)| ((x, y), (x - 1, y)))
+        .unwrap();
+    scene.put_walker(super::walkers::NO_LAIR, 0x1f4, land, &data, &mut caches);
+    let cyclops = scene.objects.iter().map(|o| o.id).max().unwrap();
+    let full = points(&scene, cyclops);
+    assert_eq!(full, 30_000);
+    let (x, y) = at(beside);
+    for pct in [75, 50, 25] {
+        scene.lightning_strike(x, y, human, &data, &mut caches);
+        assert_eq!(points(&scene, cyclops), full * pct / 100);
+    }
+    scene.lightning_strike(x, y, human, &data, &mut caches);
+    assert!(scene.object_index(cyclops).is_none_or(|i| scene.objects[i]
+        .combat
+        .as_ref()
+        .is_none_or(|c| c.hull <= 0.0)));
+}
