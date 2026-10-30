@@ -476,6 +476,7 @@ impl Scene {
                 rope: None,
                 shooter: Some(o.id),
                 by: o.owner,
+                to: Some((aim.0 as f32, aim.1 as f32)),
             };
             self.fire_shot_to(shot, (aim.0 as f32, aim.1 as f32), data, caches);
             let rate = if atalanta {
