@@ -57,6 +57,10 @@ pub struct Walker {
     pub lair: u32,
     pub walk: Walk,
     pub shown: (u8, usize),
+    /// Its walk grid's box in cells (`+0xac` [0], [1], and [2], [3] over
+    /// 2): origin and size, made once where it appeared (0x411ce0).
+    #[serde(default)]
+    pub grid: Option<(i32, i32, i32, i32)>,
 }
 
 /// The `lair` of a creature no lair sent out.
@@ -179,9 +183,14 @@ impl Scene {
             class_id: class,
             fields,
         };
-        if let Ok(Some(obj)) = objects::resolve(data, caches, &rec) {
+        if let Ok(Some(mut obj)) = objects::resolve(data, caches, &rec) {
             // It comes out over its appearing picture, a frame a tick.
             let appear = obj.frames.len() as f32 * walker_frame_ms(0) as f32 / 1000.0;
+            // On its cell's north-west half: `+0x90 = 2 (x - origin)`
+            // (0x411e7f), drawn at `origin x 64 + half x 32 + 16` (0x414359).
+            let t = TILE_SIZE as f32;
+            (obj.x, obj.y) = (cx as f32 * t + t / 4.0, cy as f32 * t + t / 4.0);
+            let grid = Some(self.walk_grid_box((cx, cy)));
             self.objects.push(obj);
             self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
             self.walkers.push(Walker {
@@ -189,8 +198,147 @@ impl Scene {
                 lair,
                 walk: Walk::Appear(appear),
                 shown: (0, 0),
+                grid,
             });
         }
+    }
+
+    /// A land creature's walk grid's box (0x411ce0): the bounding box of
+    /// the cells of the land region (0x42e590, `[0x5c74f4]`) of cell
+    /// `(x, y)`, 6 more each way, kept on the map (origin at least 0,
+    /// origin + size at most the map's size). Origin and size, in cells.
+    pub(super) fn walk_grid_box(&self, (x, y): (i32, i32)) -> (i32, i32, i32, i32) {
+        let (w, h) = (self.grid.width as i32, self.grid.height as i32);
+        let regions = self.land_regions();
+        let (mut ox, mut oy, mut bw, mut bh) = (x, y, 1, 1);
+        if (0..w).contains(&x) && (0..h).contains(&y) {
+            let id = regions[(y * w + x) as usize];
+            for row in 0..h {
+                for col in 0..w {
+                    if regions[(row * w + col) as usize] != id {
+                        continue;
+                    }
+                    if col < ox {
+                        bw += ox - col;
+                        ox = col;
+                    } else if bw + ox <= col {
+                        bw = col - ox + 1;
+                    }
+                    if row < oy {
+                        bh += oy - row;
+                        oy = row;
+                    } else if oy + bh <= row {
+                        bh = row - oy + 1;
+                    }
+                }
+            }
+        }
+        let (ox, oy) = ((ox - 6).max(0), (oy - 6).max(0));
+        let (bw, bh) = ((bw + 13).min(w - ox), (bh + 13).min(h - oy));
+        (ox, oy, bw, bh)
+    }
+
+    /// Whether the half cell land creature `id` stands on is shut in the
+    /// walk grid 0x411ef0 rebuilds (lightning kills it then, 0x414b0f):
+    /// its half by its position (`+0xb4 = half x 32 + 16`); on its cell, an
+    /// object other than a jam in the cell's slot shuts all four, as does
+    /// ground that is not land (low nibble 8), nibble 5 at 1, or nibbles 6
+    /// or 7; else the halves along the tile's shores (0x5acf13: 1 the
+    /// north two, 2 the east, 4 the south, 8 the west). A lair (0x46-0x48)
+    /// or castle (0x42, 0x43) in a cell's slot also shuts, unless the cell
+    /// is on the grid's last row, the south-west half of the cell east of
+    /// it (when its column, from the grid's origin, is below the origin's
+    /// x plus the grid's width less 1), the south-east half of the cell
+    /// west of it (its column above the origin's x) and the north halves of
+    /// the cell south of it (as written: grid-relative against absolute).
+    /// (The port's creatures walk from cell middle to cell middle, the
+    /// original's from half to half (0x412740, 0x413240): one that has
+    /// walked stands on the south-east half here.)
+    pub(super) fn walker_half_shut(&self, id: u32) -> bool {
+        let Some(w) = self.walkers.iter().find(|w| w.id == id) else {
+            return false;
+        };
+        let Some(i) = self.object_index(id) else {
+            return false;
+        };
+        let half = TILE_SIZE as f32 / 2.0;
+        let hx = (self.objects[i].x / half).floor() as i32;
+        let hy = (self.objects[i].y / half).floor() as i32;
+        let (cx, cy) = (hx.div_euclid(2), hy.div_euclid(2));
+        let (ox, oy, gw, gh) = w.grid.unwrap_or_else(|| self.walk_grid_box((cx, cy)));
+        let (rx, ry) = (cx - ox, cy - oy);
+        let inside = |x: i32, y: i32| (0..gw).contains(&x) && (0..gh).contains(&y);
+        if !inside(rx, ry) {
+            return false;
+        }
+        // Quarter: 0 north-west, 1 north-east, 2 south-west, 3 south-east.
+        let q = hx.rem_euclid(2) + 2 * hy.rem_euclid(2);
+        if self.walk_cell_quarters((cx, cy))[q as usize] {
+            return true;
+        }
+        let fortress = |x: i32, y: i32| {
+            self.slot_class((x, y))
+                .is_some_and(|c| matches!(c, 0x42 | 0x43 | 0x46..=0x48))
+        };
+        match q {
+            2 => inside(rx - 1, ry) && ry < gh - 1 && rx - 1 < ox + gw - 1 && fortress(cx - 1, cy),
+            3 => inside(rx + 1, ry) && ry < gh - 1 && rx + 1 > ox && fortress(cx + 1, cy),
+            _ => inside(rx, ry - 1) && fortress(cx, cy - 1),
+        }
+    }
+
+    /// The four halves of cell `(x, y)` in a land creature's walk grid
+    /// (0x411ef0), shut or not: north-west, north-east, south-west,
+    /// south-east.
+    fn walk_cell_quarters(&self, (x, y): (i32, i32)) -> [bool; 4] {
+        let (w, h) = (self.grid.width as i32, self.grid.height as i32);
+        if x < 0 || y < 0 || x >= w || y >= h {
+            return [true; 4];
+        }
+        if self.slot_class((x, y)).is_some() {
+            return [true; 4];
+        }
+        let l = self.cell_types[(y * w + x) as usize];
+        if l & 0xf != 8 || (l >> 20) & 0xf == 1 || l >> 24 != 0 {
+            return [true; 4];
+        }
+        let e = self.tile_edges(x, y);
+        [
+            e & (1 | 8) != 0,
+            e & (1 | 2) != 0,
+            e & (4 | 8) != 0,
+            e & (2 | 4) != 0,
+        ]
+    }
+
+    /// The class of what holds cell `(x, y)`'s object slot (`grid + 0xc`),
+    /// but for a land creature's jam (0x1f7), which the walk grid passes
+    /// over: a building whose footprint covers the cell, or a ship (class
+    /// 200 + its type).
+    fn slot_class(&self, (x, y): (i32, i32)) -> Option<u32> {
+        if let Some(k) = self.slot_ship((x, y)) {
+            return self.objects[k].ship.as_ref().map(|s| 200 + s.kind as u32);
+        }
+        self.objects
+            .iter()
+            .filter(|o| {
+                matches!(
+                    o.class,
+                    ObjectClass::Building(_)
+                        | ObjectClass::Barbarian(_)
+                        | ObjectClass::Castle(_)
+                        | ObjectClass::HarpyNest
+                        | ObjectClass::CreatureSpawn
+                        | ObjectClass::HeroHouse
+                )
+            })
+            .find(|o| {
+                o.cell.is_some_and(|(bx, by)| {
+                    let n = super::trade::building_cells(o);
+                    (bx..bx + n).contains(&x) && (by..by + n).contains(&y)
+                })
+            })
+            .map(|o| o.record.class_id)
     }
 
     /// Whether a land creature stands on cell `(cx, cy)` (its jam fills

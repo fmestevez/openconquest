@@ -360,15 +360,14 @@ impl Scene {
                     }
                 }
                 // Land creatures (0x414b0f, through their jam): killed on
-                // the struck cell or when their spot is no longer walkable
-                // after the dig (0x411ef0; only the cell's layer 0 being no
-                // longer land is tested here: the half-cell rule is not
-                // decoded); else 25 percentage points off, the life the
-                // percentage of the full one, killed at 0.
+                // the struck cell or when the half cell they stand on is
+                // shut in the walk grid rebuilt after the dig (0x411ef0,
+                // `walker_half_shut`); else 25 percentage points off, the
+                // life the percentage of the full one, killed at 0.
                 ObjectClass::Monster(0x1f4..=0x1f6) => {
                     let max = points(c.max_hull);
                     let pct = points(c.hull) * 100 / max.max(1) - 25;
-                    if centre || !land(ox, oy) || pct <= 0 {
+                    if centre || self.walker_half_shut(o.id) || pct <= 0 {
                         c.hull
                     } else {
                         c.hull - (max * pct / 100) as f32 / 15.0

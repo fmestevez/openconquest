@@ -315,6 +315,28 @@ impl Scene {
     }
 }
 
+impl Scene {
+    /// The map's land regions (`[0x5c74f4]`, made by 0x49a950): over each
+    /// cell's shape byte (0x5acf3f by its layer-0 variant) where its
+    /// landscape's low nibble is 8, 0xff elsewhere, joined by 0x5597b0.
+    pub(super) fn land_regions(&self) -> Vec<u32> {
+        let g = &self.grid;
+        let (w, h) = (g.width as i32, g.height as i32);
+        let bytes: Vec<u8> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                if self.cell_types[(y * w + x) as usize] & 0xf == 8 {
+                    let v = g.get(0, x as u32, y as u32).variant as usize;
+                    SHAPE.get(v).copied().unwrap_or(0)
+                } else {
+                    0xff
+                }
+            })
+            .collect();
+        regions(&bytes, w, h)
+    }
+}
+
 /// The land's regions (0x5597b0) over edge masks (0xff impassable): cells
 /// joined across edges both leave open, diagonals included; 0 for none.
 fn regions(bytes: &[u8], w: i32, h: i32) -> Vec<u32> {

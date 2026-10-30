@@ -3383,9 +3383,27 @@ nothing. Creatures, each by its own rule:
   reported only at 0;
 - land creatures (0x414b0f, each through its jam 0x415ee0): 0x411ef0
   rebuilds its half-cell walk grid; on the struck cell, or its own
-  half-cell no longer walkable, killed; else percentage `+0x78 -= 25`,
+  half-cell shut, killed; else percentage `+0x78 -= 25`,
   `> 0`: life `= max x pct / 100`, else killed (the cry only with
-  `+0x144`); reported to the caster;
+  `+0x144`); reported to the caster. The grid (`+0xac`: origin x, y in
+  cells, width, height in half cells, the shorts) is made once where the
+  creature appears (0x411ce0): the bounding box of its cell's land region
+  (0x42e590 over `[0x5c74f4]`, 0x49a950's regions), 6 cells more each
+  way, kept on the map. It starts on the cell's north-west half (`+0x90 =
+  2 (x - origin)`, 0x411e7f; drawn at `origin x 64 + half x 32 + 16`,
+  0x414359), which is why the brains' 0x42ebf0 wants no north or west
+  shore. 0x411ef0 walks the 13 x 13 cells about it (masks 0x594ba0,
+  0x594e44, 0x5950e8) in the grid, each cell's four halves from open:
+  an object other than a jam (0x1f7) in the cell's slot, ground not land
+  (low nibble 8), nibble 5 at 1, or nibbles 6 or 7: all four shut; else
+  the shores of its tile (0x5acf13 by the layer-0 variant: 1 the north
+  halves, 2 the east, 4 the south, 8 the west). A lair (0x46-0x48) or
+  castle (0x42, 0x43) in a slot, unless on the grid's last row, also
+  shuts the south-west half of the cell east of it (if its grid column is
+  below the origin's x + width - 1), the south-east half of the cell west
+  (if its grid column is above the origin's x: grid-relative against
+  absolute, as written) and the north halves of the cell south of it
+  (0xfffe marks, 0xffff once the cell itself is written);
 - lairs (0x4158b7): on the anchor, or the site check 0x4eb {anchor,
   flags 0x41} failing (free ground, what stands there aside, an inland
   tile), they fall; else condition `-= 25` (no shield variant), hit
@@ -3397,8 +3415,10 @@ nothing. Creatures, each by its own rule:
   the leviathan (not in states 5/6: `+0x80` 0 if above 0 else `+0x78` 0;
   0x494400(0) on its cell, else `+0x11d` with `+0x189`); the sea monster
   as ported (`sea_monster_lightning`).
-The port follows these, the walk test as "the cell's layer 0 is no longer
-land" (the half-cell rule of 0x411ef0 not decoded), the barbarians' site
+The port follows these, the walk test with the creature's half by its
+position (its creatures appear on the north-west half but walk from cell
+middle to cell middle, not half to half as 0x412740 / 0x413240: one that
+has walked counts on its south-east half), the barbarians' site
 taken to hold (their flag 0x20 and `+0x1c8` not decoded), the creatures'
 percentages derived from their life (`life x 100 / max`, as 0x414c8f).
 Not ported: reefs and whirlpools (their state 3 not decoded), amber,

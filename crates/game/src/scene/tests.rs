@@ -4716,11 +4716,14 @@ fn fleece_and_argus_mend() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
-    let i = scene
+    // By id: the objects are sorted again as creatures come out.
+    let id = scene
         .objects
         .iter()
-        .position(|o| scene.is_own(o) && o.ship.is_some())
-        .unwrap();
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let i = scene.object_index(id).unwrap();
     let max = scene.objects[i].combat.as_ref().unwrap().max_hull;
     scene.objects[i].combat.as_mut().unwrap().hull = max / 2.0;
     scene.objects[i]
@@ -4739,6 +4742,7 @@ fn fleece_and_argus_mend() {
         scene.update(0.02, &data, &mut caches);
         t += 0.02;
     }
+    let i = scene.object_index(id).unwrap();
     let hull = scene.objects[i].combat.as_ref().unwrap().hull;
     assert!(
         ((hull - max / 2.0) / max - 0.01).abs() < 0.002,
@@ -4752,6 +4756,7 @@ fn fleece_and_argus_mend() {
         scene.update(0.02, &data, &mut caches);
         t += 0.02;
     }
+    let i = scene.object_index(id).unwrap();
     let hull = scene.objects[i].combat.as_ref().unwrap().hull;
     assert!(
         ((hull - before) / max - 0.03).abs() < 0.003,
@@ -9075,25 +9080,38 @@ fn lightning_on_creatures() {
     let (x, y) = at(cell);
     scene.lightning_strike(x, y, human, &data, &mut caches);
     assert!(scene.object_index(harpy).is_none());
-    // A cyclops (30000) on land beside the sea, struck on the water: 22500,
-    // then 15000, then 7500, then killed.
+    // A cyclops (30000) on land beside the sea to its east, on the north-
+    // west half of its cell (0x411e7f, 0x414359), struck on the water:
+    // 22500, then 15000, then 7500, then killed.
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
     scene.brain = None;
     let w = scene.grid.width as i32;
+    let clear = |s: &Scene, x: i32, y: i32| {
+        s.objects.iter().all(|o| {
+            ((o.x / t).floor() as i32 - x).abs() > 2 || ((o.y / t).floor() as i32 - y).abs() > 2
+        })
+    };
+    let ground = |s: &Scene, x: i32, y: i32| {
+        let l = s.cell_types[(y * w + x) as usize];
+        l & 0xf == 8 && (l >> 20) & 0xf != 1 && l >> 24 == 0
+    };
     let (land, beside) = (1..scene.grid.height as i32 - 1)
         .flat_map(|y| (1..w - 1).map(move |x| (x, y)))
         .find(|&(x, y)| {
-            scene.cell_types[(y * w + x) as usize] & 0xf == 8
-                && scene.nav.is_water(x - 1, y)
-                && scene.objects.iter().all(|o| {
-                    ((o.x / t).floor() as i32 - x).abs() > 2
-                        || ((o.y / t).floor() as i32 - y).abs() > 2
-                })
+            ground(&scene, x, y)
+                && scene.tile_edges(x, y) & 9 == 0
+                && scene.nav.is_water(x + 1, y)
+                && clear(&scene, x, y)
         })
-        .map(|(x, y)| ((x, y), (x - 1, y)))
+        .map(|(x, y)| ((x, y), (x + 1, y)))
         .unwrap();
     scene.put_walker(super::walkers::NO_LAIR, 0x1f4, land, &data, &mut caches);
     let cyclops = scene.objects.iter().map(|o| o.id).max().unwrap();
+    let k = scene.object_index(cyclops).unwrap();
+    assert_eq!(
+        (scene.objects[k].x, scene.objects[k].y),
+        (land.0 as f32 * t + 16.0, land.1 as f32 * t + 16.0)
+    );
     let full = points(&scene, cyclops);
     assert_eq!(full, 30_000);
     let (x, y) = at(beside);
@@ -9101,6 +9119,29 @@ fn lightning_on_creatures() {
         scene.lightning_strike(x, y, human, &data, &mut caches);
         assert_eq!(points(&scene, cyclops), full * pct / 100);
     }
+    scene.lightning_strike(x, y, human, &data, &mut caches);
+    assert!(scene.object_index(cyclops).is_none_or(|i| scene.objects[i]
+        .combat
+        .as_ref()
+        .is_none_or(|c| c.hull <= 0.0)));
+    // One on a tile whose west side is shore stands on a shut half (its
+    // north-west, 0x5acf13 bit 8): the first strike about it kills it.
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let (land, beside) = (1..scene.grid.height as i32 - 1)
+        .flat_map(|y| (1..w - 1).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            ground(&scene, x, y)
+                && scene.tile_edges(x, y) & 8 != 0
+                && scene.nav.is_water(x - 1, y)
+                && clear(&scene, x, y)
+        })
+        .map(|(x, y)| ((x, y), (x - 1, y)))
+        .unwrap();
+    scene.put_walker(super::walkers::NO_LAIR, 0x1f4, land, &data, &mut caches);
+    let cyclops = scene.objects.iter().map(|o| o.id).max().unwrap();
+    assert!(scene.walker_half_shut(cyclops));
+    let (x, y) = at(beside);
     scene.lightning_strike(x, y, human, &data, &mut caches);
     assert!(scene.object_index(cyclops).is_none_or(|i| scene.objects[i]
         .combat
