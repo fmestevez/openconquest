@@ -2010,7 +2010,7 @@ bindings and then binds its exclusive Esc (0x1d5) at priority 0 next to
 Start's and Cancel's, has that Esc suspended too, and turns Cancel's Esc
 off: Esc does nothing while the pop-up is open (its list's Enter and its
 Up and Down buttons, bound at priority 0 when the list activates, the
-same).
+same). Checked by hand on the original: Esc leaves the pop-up open.
 
 - Buttons (_sbutton 0x54ab20 message 8): their create record's key bytes
   as a binding, down = 0x2c (held, the pressed look), up = 0x2e (acts if
