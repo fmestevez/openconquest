@@ -4929,8 +4929,10 @@ impl App {
         let (vw, vh) = self.camera.view_size(&screen);
         let (cx, cy) = (self.camera.x + vw / 2.0, self.camera.y + vh / 2.0);
         let reach = (vw * vw + vh * vh).sqrt() / 2.0;
+        let ear = crate::audio::listener(self.camera.x, self.camera.y, vw, vh);
         let mut played: Vec<&str> = Vec::new();
         let c = &self.settings.config;
+        let master = c.effects_volume as i32 - 4000;
         for (name, x, y) in sounds {
             // One of each sound per frame, and not too many at once.
             if played.contains(&name) || played.len() >= 8 {
@@ -4944,6 +4946,28 @@ impl App {
                 crate::scene::SoundKind::Always => true,
             };
             if !on {
+                continue;
+            }
+            // Voices (channel 2) and battle sounds (1, 4) by the
+            // original's cut-off, volume and pan, from the object's cell
+            // (0x525370, `audio::placed`); a sound with no place at the
+            // master volume, in the middle.
+            if matches!(
+                crate::scene::sound_kind(name),
+                crate::scene::SoundKind::Voice | crate::scene::SoundKind::Battle
+            ) {
+                let t = openconquest_formats::map::TILE_SIZE as f32;
+                let cell = if x.is_nan() {
+                    (-1, -1)
+                } else {
+                    ((x / t).floor() as i32, (y / t).floor() as i32)
+                };
+                if let Some((attenuation, pan)) = crate::audio::placed(master, ear, cell) {
+                    // Relative to the effects volume the sink already has.
+                    let gain = 10f32.powf((attenuation - master) as f32 / 2000.0);
+                    audio.play_panned(archive, name, gain, pan);
+                    played.push(name);
+                }
                 continue;
             }
             let gain = if x.is_nan() {

@@ -2578,14 +2578,28 @@ frame the standing settlement or shipyard showed (its loop, 0x4230f0
 state 1: a step every `75 / n` ticks, drawing the frame then adding one,
 back to 0 on reaching n; the first step on the first tick after the
 picture was set, since every vt+0x38 call, 0x422e30, clears `+0xbc`).
-Not ported: the 19-cell cut-off and its volume and pan (the front end
-fades sounds its own way; the cells across of the port's zoomable view
-are not the original's), the town's count of forts going up (0x2491),
-which the port does not keep; the frame an upgrade starts from (the
-port's standing buildings keep no frame of their own: it starts at 0;
-porting it needs each standing building's frame stepped by 0x4230f0 and
-reset in step by every vt+0x38 call, 41 indirect call sites not traced);
-nor the pointer's own pause test.
+The front end plays the voices and the battle sounds (channels
+2, 1 and 4) by the cut-off, volume and pan above (`audio::placed`), from
+the cell of the place the scene reports, and in stereo with DirectSound's
+pan (the far side's channel attenuated by it). Its listener
+(`audio::listener`) is the original's rule on the port's view: the cell
+under the view's top-left corner plus half the whole cells its width and
+height hold, rounded up; the zoom changes those counts (at the original's
+scale the 592 x 512 field holds 9 x 8 cells, the 800-wide one 12, as the
+original's `+0x17be` / `+0x17c2`), so zoomed out the listener stays in the
+view's middle and the 19-cell cut-off stays 19 map cells. Modes 5 and 6
+(bit 4, cut-off at 12: `d > 11` silent, the same volume and pan) and 3
+(bit 4, no place) are not told apart in the port's ambient sounds (which
+of their events go through which mode is not decoded: the callers of
+0x50e570 with modes 3, 5, 6), so those keep the port's fall-off; the
+priority byte 0x525370 passes 0x568b30 for modes 1, 4, 5, 6 (255 within 5
+cells, `(20 - d) x 255 / 20` beyond; 0 for mode 2) is not used (the port
+mixes without the original's channels). Not ported: the town's count of
+forts going up (0x2491), which the port does not keep; the frame an
+upgrade starts from (the port's standing buildings keep no frame of their
+own: it starts at 0; porting it needs each standing building's frame
+stepped by 0x4230f0 and reset in step by every vt+0x38 call, 41 indirect
+call sites not traced); nor the pointer's own pause test.
 
 **Forts' fire.** A fort's or barbarian structure's 12 groups (group k
 the units of item k) shoot by mode `+0x3a` (0x4469c0): 0 not at all; bit

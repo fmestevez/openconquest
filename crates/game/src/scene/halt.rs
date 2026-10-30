@@ -491,15 +491,9 @@ impl Scene {
     /// player (0x50e570 mode 2): one of the event's sounds, the first when
     /// it has fewer than two, else `rand() % count` (0x554820, the C
     /// library's generator, seeded from the clock: the port's own).
-    /// (Not ported here: 0x525370's cut-off, in cells: `(byte)
-    /// ftol(sqrt(dx^2 + dy^2))` from the building's cell to the listener's
-    /// `+0xd08/+0xd0c`, the view's left / top cell plus half its cells
-    /// across rounded up (0x51a040-0x51a0b8, 0x524d90), 20 and more
-    /// silent; its volume, the master within 5 cells, then `master -
-    /// (master + 2000) x d / 12` hundredths of a dB to 12, -2000 to 19;
-    /// its pan `min(|dx|, 20) x sign x 50`; the cells across, screen
-    /// `+0x17be` / `+0x17c2`, are not the port's zoomable view's, which
-    /// keeps its own fall-off. The unit report switch is the front end's.)
+    /// The front end places it as 0x525370 does, from the cell of the
+    /// position given (`audio::placed`, `audio::listener`); the unit
+    /// report switch is the front end's.
     pub(super) fn building_voice(
         &mut self,
         owner: Option<(u32, u32)>,
