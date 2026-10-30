@@ -1574,6 +1574,33 @@ tile in the 12 about them (0x42e1e0); it berths beside it from anywhere
 cell its record field 10 faces (0 east, 2 north, 4 west, 6 south), where
 ships berth.
 
+**A ship's fort.** The founding command (code 0x20 group, 0x4aa990: kind
+`+0x824` 2 found, class `+0x826` -> `+0x73b`, cell `+0x82c` -> `+0x73c`,
+`+0x830` -> `+0x744`) runs the landing states 0x4b3370; on landing (state
+6) 0x4b2d60 sends 0x1a67 to the world: a landing party (LandingClassTy,
+class 0x1fc, 0x4221c0) with the record (disassembly 0x4b2e0b-0x4b2e71)
+{class, 1, nation, slot, type 1, x, y, 100, town cell 0xff, 0, ...,
+field 66 = `+0x744`}, the unit counts all 0. The party walks to the site
+(0x421d00, 0x422140) and there (0x421f00, its kind 2): the site's slot
+empty (0x499900) and the player holding 0x42d8b0(class) amber (0x4a8d00),
+that price is taken (0x4a8d40) and the fort is created (0x1494); else
+nothing; the party then removes itself (message 10). So the fort costs
+the building alone, comes with no units whatever the default arming,
+takes nothing from any town's stock, and never has a town (0x427f50
+message 2 skips 0x427de0 for the cell 0xff; 0x2490 ignores it; the fort's
+own 0x419530 runs only for the cell (0xff, 0xff)). FortressClassTy
+0x419f80 message 2 (0x41a760): a fort of a side 3 or 4 player (a
+computer) holding no units takes each item of 0x5966b8 for its class
+(0x419390 at 100, room 0x417ef0) and pays the whole list, amber
+0x597164[item / 3] and fish 0x597170[item] x 100; then, record type 1,
+`+0x1bc` = field 66 (a tag carried in the building's reports to its
+player's `+0x34` object, 0x424c3c, 0x424f63, 0x4250bc, 0x426a29,
+0x427cc7; not kept by the port). The port: `place_building` with a ship
+founder. Not decoded: the settlement's kind 1 (a computer founds it even
+without the amber, 0x421f00), kept as the port had it; the computer's
+town orders of forts (0x43b290 with the order's arming byte +0xd ->
+0x43f440), which the port leaves unarmed.
+
 ## Fish shoals and gulls
 
 A fishing zone (record: x, y, w, h) keeps a shoal on one of its cells
@@ -1641,9 +1668,9 @@ The port: `scene::towns` (`Towns`: each building's town, those yet to
 tell it, each town's list; saved, and made again as at the start for a
 save without them). Its `home_settlement` is the building's `+0x1c8`
 (a settlement its own). The port's falls that do not go through the
-strike leave the list at the next tick. Not decoded: the record of a fort
-a ship founds (0x4aa990 / 0x4b3370; the port gives it no town); whether
-0x2873's post is handled the tick it is sent (the port lists the building
+strike leave the list at the next tick. A fort a ship founds never has a
+town (its record's town cell is (0xff, 0): see **A ship's fort** below).
+Not decoded: whether 0x2873's post is handled the tick it is sent (the port lists the building
 the tick after it stands); 0x427b30 (a building going up whose town cell
 no longer holds its town loses frames) is not ported.
 

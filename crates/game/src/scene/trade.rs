@@ -1744,10 +1744,18 @@ impl Scene {
             .and_then(|i| self.objects[i].owner)
             .ok_or("No settlement")?;
         let human = self.human.is_some_and(|h| (h.nation, h.slot) == owner);
-        // A fort comes armed (default arming), its weapons paid for or
-        // taken from the ordering town's stock; a computer player's
-        // with its standard weapons.
-        let fort = if human && (0x34..=0x36).contains(&class) {
+        // Founded by a ship: its landing party (LandingClassTy, class
+        // 0x1fc, made by 0x4b2d60 as the ship lands, message 0x1a67)
+        // walks to the site and there (0x421f00, record type 2) pays the
+        // building's price 0x42d8b0(class) if the player has it (0x4a8d00)
+        // and creates the fort (0x1494) from a record with no units: no
+        // default arming, no town's stock.
+        let founded = self
+            .object_index(settlement)
+            .is_some_and(|i| self.objects[i].ship.is_some());
+        // A fort a town orders comes armed (default arming), its weapons
+        // paid for or taken from the ordering town's stock.
+        let fort = if human && !founded && (0x34..=0x36).contains(&class) {
             let home = self
                 .object_index(settlement)
                 .and_then(|i| self.home_settlement(i));
@@ -1779,6 +1787,13 @@ impl Scene {
         fields[6] = cy as u32;
         fields[7] = 100;
         fields[10] = facing;
+        if founded && (0x34..=0x36).contains(&class) {
+            // The landing party's fort record (0x4b2d60, disassembly
+            // 0x4b2e4e-0x4b2e58): town cell (0xff, 0), so 0x427f50 looks
+            // no town up and the towns' offers (0x2490) pass it by: it
+            // never has a town.
+            fields[8] = 0xff;
+        }
         let rec = ObjectRecord {
             id,
             class_id: class,
@@ -1813,13 +1828,37 @@ impl Scene {
                     .collect();
             }
         }
+        if founded && (0x34..=0x36).contains(&class) && !human && self.seat_of(owner).is_none() {
+            // Its creation (FortressClassTy 0x419f80 message 2, 0x41a760):
+            // a computer player's (side 3 or 4) fort holding no units
+            // takes each item of its class's default arming (0x5966b8)
+            // whole, as room allows (0x419390 -> 0x417ef0), and pays for
+            // every item of the list, amber 0x597164[item / 3] and fish
+            // 0x597170[item] x 100 (0x4a8d40, 0x4a8be0).
+            let room = combat::fort_room(class);
+            let mut held: Vec<u8> = Vec::new();
+            let (mut amber, mut fish) = (0i64, 0i64);
+            for &item in combat::fort_arming(class).0 {
+                let (a, f) = combat::item_cost(item);
+                amber += a as i64;
+                fish += f as i64;
+                if combat::fort_load(&held) + combat::item_power(item) <= room {
+                    held.push(item);
+                }
+            }
+            let mut places: [Vec<u8>; 9] = Default::default();
+            for &item in &held {
+                places[item as usize].push(100);
+            }
+            obj.set_fort_places(places);
+            self.earn(owner, -amber, -fish);
+        }
         self.objects.push(obj);
         self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
         self.constructions.push(Construction::new(id, false));
         // Ordered by a settlement or town, it is that town's from its
-        // creation (0x43b290's record: its anchor, type 1). (Not decoded:
-        // the record of a fort a ship founds, 0x4aa990 / 0x4b3370; the
-        // port gives it no town.)
+        // creation (0x43b290's record: its anchor, type 1); a fort a ship
+        // founds has none (above).
         if self.object_index(settlement).is_some_and(|k| {
             matches!(
                 self.objects[k].class,
@@ -2707,14 +2746,9 @@ impl Scene {
             return Err("Ships found settlements and forts".into());
         }
         let owner = self.objects[i].owner.ok_or("No owner")?;
-        let human = self.human.is_some_and(|h| (h.nation, h.slot) == owner);
-        let cost = if human && (0x34..=0x36).contains(&class) {
-            self.fort_price(self.home_settlement(i), class)
-                .ok_or("Its weapons cannot be had yet")?
-                .amber
-        } else {
-            economy::building_cost(class)
-        };
+        // What its landing party pays on the site (0x421f00: 0x42d8b0,
+        // the building alone; a ship's fort comes with no units).
+        let cost = economy::building_cost(class);
         if self.funds(owner).0 < cost {
             return Err("Not enough amber".into());
         }

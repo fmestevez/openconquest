@@ -11159,3 +11159,48 @@ fn ship_routes_as_the_original() {
         ]
     );
 }
+
+/// A fort a ship founds (its landing party, 0x4b2d60 -> 0x421f00) costs
+/// the building alone, holds no units and has no town (record town cell
+/// 0xff), default arming or not (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ship_founded_fort_bare() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    assert!(scene.default_arming);
+    let boat = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+        .unwrap()
+        .id;
+    scene.objects.retain(|o| o.ship.is_none() || o.id == boat);
+    scene.amber = 5000;
+    scene.fish = 5000;
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let site = (0..h)
+        .rev()
+        .flat_map(|y| (0..w).rev().map(move |x| (x, y)))
+        .find(|&(x, y)| scene.check_ground(0x34, x, y).is_ok())
+        .unwrap();
+    scene.order_found(boat, site.0, site.1, 0x34).unwrap();
+    for _ in 0..50 * 600 {
+        scene.update(0.02, &data, &mut caches);
+        if !scene.constructions.is_empty() {
+            break;
+        }
+    }
+    assert!(scene.messages.is_empty(), "{:?}", scene.messages);
+    assert_eq!(scene.amber, 5000 - economy::building_cost(0x34));
+    assert_eq!(scene.fish, 5000);
+    let fort = scene.constructions[0].site;
+    let i = scene.object_index(fort).unwrap();
+    assert_eq!(scene.objects[i].class, ObjectClass::Building(0x34));
+    assert!(scene.objects[i].fort_places().iter().all(|p| p.is_empty()));
+    assert_eq!(scene.objects[i].record.fields[8], 0xff);
+    assert_eq!(scene.home_settlement(i), None);
+}
