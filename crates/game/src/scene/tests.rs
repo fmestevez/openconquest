@@ -3717,6 +3717,7 @@ fn kills_are_put_down_as_the_original() {
             rope: None,
             shooter: None,
             by: human,
+            to: None,
         },
         &data,
         &mut caches,
@@ -7235,6 +7236,7 @@ fn greek_fire_leaves_a_trail() {
                 rope: None,
                 shooter: None,
                 by: None,
+                to: None,
             },
             &data,
             caches,
@@ -9068,6 +9070,89 @@ fn land_creatures_look_alert_and_throw() {
         .rposition(|&(x, y)| x.signum() == dx && y.signum() == dy)
         .unwrap();
     assert_eq!(scene.walkers[0].heading as usize, heading);
+    // It leaves from its picture's top left as 0x412a8d takes it (`+0xb4
+    // - w / 2`, `+0xb8 - h`, the sequence's first frame's size) and the
+    // cyclops' spot for its heading (0x594ae0); at a building it aims as
+    // the port's other shots (0x423520 not ported).
+    let names = caches
+        .sequence(&data, &format!("CLPSPR_3{heading}"))
+        .unwrap();
+    let raw = data
+        .objects
+        .read(
+            &names[0],
+            openconquest_formats::archive::ResourceKind::Sprite,
+        )
+        .unwrap();
+    let dword = |o: usize| u32::from_le_bytes(raw[o..o + 4].try_into().unwrap()) as i32;
+    let (w, h) = (dword(4), dword(8));
+    let spot = [
+        (30, 14),
+        (44, 11),
+        (51, 6),
+        (44, 0),
+        (31, 0),
+        (18, 0),
+        (11, 4),
+        (16, 11),
+    ][heading];
+    let pos = scene.walkers[0].pos;
+    assert_eq!(throw.from, (pos.0 - w / 2 + spot.0, spot.1 - h + pos.1));
+    assert_eq!(throw.to, None);
+}
+
+/// A shot at a ship aims where its vt+0xc (0x4e07c0) says, drawing from
+/// the ship's own generator: a hit at its hull's spot for its type and
+/// heading (0x598ad8) moved `r % 20 - 9` along its heading, led by its
+/// way under way; a miss by its picture's edge (`r % 6` fifths, the side
+/// by a second draw). Needs `OPENCONQUEST_DATA`.
+#[test]
+fn shots_aim_at_ships_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let k = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+    let (left, top, w) = {
+        let o = &scene.objects[k];
+        let l = &o.frames[0][0];
+        let (x, y) = crate::render::layer_origin(o, l);
+        (x, y, l.image.width as i32)
+    };
+    let seed = 0x1234_5678;
+    let draws = |n: usize| {
+        let mut r = crate::combat::Rng(seed);
+        (0..n).map(|_| r.next()).collect::<Vec<u32>>()
+    };
+    let set = |scene: &mut Scene, heading: usize, state: u8, velocity: f32| {
+        let s = scene.objects[k].ship.as_mut().unwrap();
+        (s.heading, s.move_state, s.velocity, s.lcg) = (heading, state, velocity, Some(seed));
+    };
+    // A hit lying still, heading 2 (north) on a type-0 hull.
+    scene.objects[k].ship.as_mut().unwrap().kind = 0;
+    set(&mut scene, 2, 0, 0.0);
+    let r = draws(1)[0];
+    let k9 = (r % 20) as i32 - 9;
+    assert_eq!(scene.ship_aim(k, true), (26 + left, -k9 + 21 + top));
+    // Under way (state 5) the hit leads by its way (`+0x59b`, here 20000
+    // in 1/6000 pixel a tick) x the heading x 15 / 100000: 3 pixels east.
+    let velocity = 20000.0 / (crate::clock::TICK * 6000.0);
+    set(&mut scene, 0, 5, velocity);
+    let way = (velocity * crate::clock::TICK * 6000.0) as i32;
+    assert_eq!(
+        scene.ship_aim(k, true),
+        (k9 + 40 + left + way * 15 / 100000, 26 + top)
+    );
+    assert_eq!(way * 15 / 100000, 3);
+    // A miss heading 2: three quarters of the width or an eighth across,
+    // `u` fifths of the width down.
+    set(&mut scene, 2, 0, 0.0);
+    let d = draws(2);
+    let u = (d[0] % 6) as i32;
+    let x = if d[1] & 1 == 0 { w - w / 8 } else { w / 8 };
+    assert_eq!(scene.ship_aim(k, false), (left + x, top + w * u / 5));
 }
 
 /// A blow to a land creature waits for its tick (0x4139e0, 0x413ad0): one

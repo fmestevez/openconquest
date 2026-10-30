@@ -74,6 +74,41 @@ const FULL_LIFE: [i32; 3] = [30000, 16000, 12000];
 /// The throwing picture's frame the throw leaves on (0x412900): cyclops
 /// 0xb, minotaur 10, amazon 0x12.
 const THROW_FRAME: [i32; 3] = [0xb, 10, 0x12];
+/// Where a throw leaves from, by heading, from the picture's top left as
+/// the throw takes it (0x412a8d: `+0xb4 - w / 2`, `+0xb8 - h`): cyclops
+/// 0x594ae0, minotaur 0x594b20, amazon 0x594b60.
+const THROW_FROM: [[(i32, i32); 8]; 3] = [
+    [
+        (30, 14),
+        (44, 11),
+        (51, 6),
+        (44, 0),
+        (31, 0),
+        (18, 0),
+        (11, 4),
+        (16, 11),
+    ],
+    [
+        (44, 15),
+        (48, 8),
+        (40, 3),
+        (27, 0),
+        (27, 0),
+        (14, 13),
+        (20, 18),
+        (31, 16),
+    ],
+    [
+        (45, 19),
+        (41, 14),
+        (31, 10),
+        (20, 11),
+        (16, 17),
+        (19, 23),
+        (29, 24),
+        (39, 24),
+    ],
+];
 /// Their sounds (0x50e570 kind 5 at their cell), by class, each event's
 /// `SND_n` list: appearing (events 0x59-0x5b, 0x413d70), dying when struck
 /// (100-102, 0x413ad0), hit (0x6f-0x71, one time in ten, 0x411520),
@@ -257,7 +292,9 @@ pub struct Jam {
 
 /// A throw made this tick (message 0x14ba from 0x412740 state 3): at
 /// `target` with the creature's weapon, hitting (`+0x3c` 100) or not
-/// (0), by a creature at `pct` of its life.
+/// (0), by a creature at `pct` of its life, from `from` (`+0x25` /
+/// `+0x29`) to `to` (`+0x1d` / `+0x21`, the target's vt+0xc; `None` where
+/// the port does not have it).
 #[derive(Debug, Clone, Copy)]
 pub struct Throw {
     pub target: u32,
@@ -265,6 +302,8 @@ pub struct Throw {
     pub shooter: u32,
     pub strikes: bool,
     pub pct: i32,
+    pub from: (i32, i32),
+    pub to: Option<(i32, i32)>,
 }
 
 /// The `lair` of a creature no lair sent out.
@@ -1142,15 +1181,18 @@ impl Scene {
     /// draw, its cry one time in ten (events 0x7a-0x7c); at `d` cells
     /// (0x5576d8) above 1 a draw, missing (`+0x3c` 0) when it is a
     /// multiple of `8 - d`, else hitting (100); the throw (message 0x14ba:
-    /// its player 0xff, its weapon's level-1 blow by `throw_blow`).
-    /// (Not ported: where the throw leaves from, `+0xb4 - w / 2 +
-    /// T[heading].x`, `+0xb8 - h + T[heading].y` with T 0x594ae0 /
-    /// 0x594b20 / 0x594b60, as the picture's size `+0x61` / `+0x65`, set
-    /// at load from the sequence's `+0x29` / `+0x2b` by 0x5463bf after
-    /// 0x542940, is not decoded; nor where it aims, the target's vt+0xc
-    /// with the hit byte (a ship's 0x4e07c0 draws from the ship's own
-    /// generator; a jam's 0x415ce0 gives its cell's corner on a miss). The
-    /// port's shot leaves from the creature and aims as its other shots.)
+    /// its player 0xff, its weapon's level-1 blow by `throw_blow`). It
+    /// aims where the target's vt+0xc gives with the hit byte (a ship's
+    /// 0x4e07c0, `Scene::ship_aim`) and leaves from `+0xb4 - w / 2 +
+    /// T[heading].x`, `+0xb8 - h + T[heading].y` (`THROW_FROM`), `w` and
+    /// `h` its picture's size (`+0x61` / `+0x65`, from the sequence's
+    /// `+0x29` / `+0x2b`, 0x5463bf: its first frame's width and height,
+    /// 0x554bf0). (Not ported: a building's aim, 0x423520, draws from the
+    /// building's own generator (`+0x18`, seeded `[game +0x2ee5] x id` at
+    /// 0x4281a2), which the port does not keep, nor its other draws
+    /// (0x4281de, 0x424185, 0x4244a4, the forts' 0x41a895 / 0x41bc61, the
+    /// towns' 0x430449 / 0x441e9c / 0x4422ad); a throw at one aims as the
+    /// port's other shots.)
     fn throw_step(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
         let Some(i) = self.object_index(self.walkers[k].id) else {
@@ -1201,13 +1243,25 @@ impl Scene {
         // (`d` is at most 5 within the masks, so `8 - d` is not 0.)
         let strikes = !(d > 1 && w.draw() % (8 - d) == 0);
         w.thrown = true;
-        let (shooter, pct) = (w.id, w.pct);
+        let (shooter, pct, (x, y), heading) = (w.id, w.pct, w.pos, w.heading as usize);
+        let to = self
+            .object_index(target)
+            .filter(|&t| self.objects[t].ship.is_some())
+            .map(|t| self.ship_aim(t, strikes));
+        let (pw, ph) = self.objects[i]
+            .frames
+            .first()
+            .and_then(|f| f.first())
+            .map_or((0, 0), |l| (l.image.width as i32, l.image.height as i32));
+        let (tx, ty) = THROW_FROM[kind_of(class)][heading.min(7)];
         self.throws.push(Throw {
             target,
             weapon: crate::combat::creature_weapons(class)[0],
             shooter,
             strikes,
             pct,
+            from: (x - pw / 2 + tx, ty - ph + y),
+            to,
         });
     }
 

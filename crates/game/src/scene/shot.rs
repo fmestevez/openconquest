@@ -347,6 +347,65 @@ impl Scene {
     }
 }
 
+impl Scene {
+    /// Where a shot at ship `t` aims (its vt+0xc, 0x4e07c0), by the hit
+    /// byte: drawing from the ship's own generator, from its picture's top
+    /// left (`+0x8be` `+0x59` / `+0x5d`, size `+0x61` / `+0x65`; here as the
+    /// port places it, `render::layer_origin`). A hit goes to its type's and
+    /// heading's spot on the hull (0x598ad8) moved `r % 20 - 9` along its
+    /// heading (0x5c4f4c), led by its way (`+0x59b` x the heading x 15 /
+    /// 100000) under way, braking or told to stop (`+0x58c` 5, 4, 1); a
+    /// miss to a point by the picture's edge: `u = r % 6` and a second
+    /// draw's bit 16 picking the side, by heading (0 / 4: `x = w u / 5`, `y
+    /// = h / 4` or `h - h / 6`; 1 / 5: `(w / 2) u / 5 + w / 2` and `h - (h /
+    /// 2) u / 5`, or `(w / 2) u / 5` and `h / 2 - (h / 2) u / 5`; 2 / 6: `w
+    /// - w / 8` or `w / 8`, and `w u / 5`, the width, as written; 3 / 7:
+    /// `(w / 2) u / 5 + w / 2` and `(h / 2) u / 5`, or `(w / 2) u / 5` and
+    /// `(h / 2) u / 5 + h / 2`).
+    pub(super) fn ship_aim(&mut self, t: usize, hit: bool) -> (i32, i32) {
+        let o = &self.objects[t];
+        let Some(ship) = o.ship.as_ref() else {
+            return (o.x as i32, o.y as i32);
+        };
+        let (left, top, w, h) = match o.frames.first().and_then(|f| f.first()) {
+            Some(l) => {
+                let (x, y) = crate::render::layer_origin(o, l);
+                (x, y, l.image.width as i32, l.image.height as i32)
+            }
+            None => (o.x as i32, o.y as i32, 0, 0),
+        };
+        let d = ship.heading % 8;
+        let (kind, state) = (ship.kind as usize, ship.move_state);
+        // `+0x59b`, in 1/6000 pixel a tick (see `slipping`).
+        let way = (ship.velocity * crate::clock::TICK * 6000.0) as i64;
+        let r = self.ship_draw(t);
+        if hit {
+            let (vx, vy) = super::walk_path::DIRS[d];
+            let k = (r % 20) as i32 - 9;
+            let (sx, sy) = super::fire::SPOT[kind.min(11)][d];
+            let (mut x, mut y) = (vx * k + sx + left, vy * k + sy + top);
+            if way != 0 && matches!(state, 5 | 4 | 1) {
+                x += (way * vx as i64 * 15 / 100000) as i32;
+                y += (way * vy as i64 * 15 / 100000) as i32;
+            }
+            return (x, y);
+        }
+        let u = (r % 6) as i32;
+        let side = self.ship_draw(t) & 1 != 0;
+        let (x, y) = match (d % 4, side) {
+            (0, false) => (w * u / 5, h / 4),
+            (0, true) => (w * u / 5, h - h / 6),
+            (1, false) => ((w / 2) * u / 5 + w / 2, h - (h / 2) * u / 5),
+            (1, true) => ((w / 2) * u / 5, h / 2 - (h / 2) * u / 5),
+            (2, false) => (w - w / 8, w * u / 5),
+            (2, true) => (w / 8, w * u / 5),
+            (_, true) => ((w / 2) * u / 5 + w / 2, (h / 2) * u / 5),
+            (_, false) => ((w / 2) * u / 5, (h / 2) * u / 5 + h / 2),
+        };
+        (left + x, top + y)
+    }
+}
+
 /// The 16 directions (0x497e50): 0 east, counter-clockwise.
 fn direction(dx: f32, dy: f32) -> usize {
     let a = (-dy).atan2(dx).rem_euclid(std::f32::consts::TAU);
@@ -371,17 +430,20 @@ pub(super) struct Firing {
     pub shooter: Option<u32>,
     /// The player the shot is put down to (see `Shot::by`).
     pub by: Option<Owner>,
+    /// The point it aims at, when the original's is known (the target's
+    /// vt+0xc: a land creature's throw at a ship, `Scene::ship_aim`).
+    pub to: Option<(f32, f32)>,
 }
 
 impl Scene {
     /// Sends shot `f` off at its target, landing on it if it strikes and
-    /// beside it if not.
+    /// beside it if not, or at the point it aims at.
     pub(super) fn fire_shot(&mut self, f: Firing, data: &GameData, caches: &mut Caches) {
         let Some(t) = self.object_index(f.target) else {
             return;
         };
-        let (mut tx, mut ty) = (self.objects[t].x, self.objects[t].y);
-        if !f.strikes {
+        let (mut tx, mut ty) = f.to.unwrap_or((self.objects[t].x, self.objects[t].y));
+        if !f.strikes && f.to.is_none() {
             let r = &mut self.gull_rng;
             let off = |r: &mut Rng| {
                 let v = (r.next() % 33) as f32 + 16.0;

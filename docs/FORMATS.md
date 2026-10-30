@@ -202,7 +202,9 @@ Frame `i` is the sprite `prefix + i` zero-padded, almost always to 2 digits
 
 A layered animation: ships (wake, hull halves, sails, crew), buildings and
 large monsters. Entry width = layer count, height = frame count, parameter A
-= `frame_width << 16 | frame_height`. The payload is `frames x layers` cells
+= `frame_height << 16 | frame_width` (0x5552a0 / 0x555200 read the
+high and low halves into the picture's `+0x65` / `+0x61`; the bombs'
+and flags' first sprites are that size). The payload is `frames x layers` cells
 of 44 bytes:
 
 | Offset | Type | Field |
@@ -4704,18 +4706,39 @@ disassembly: a cell not land, nibble 5 at 1 or nibbles 6-7 not 0 all
 as ported. `[game +0x2ee5]` is the saved `RND_INIT`, else the time stamp
 0x541840 at the game's creation (0x4ec433, 0x4ed18c, 0x53c04e): not
 reproducible, the port draws it once from the scene's generator, as for
-the ships'. Not ported: where a throw leaves from (`+0xb4 - w / 2 +
-T[h].x`, `+0xb8 - h + T[h].y`, T 0x594ae0 / 0x594b20 / 0x594b60 by
-heading) and where it aims (the target's vt+0xc with the hit byte: a
-ship's 0x4e07c0 draws from the ship's own generator, a jam's 0x415ce0
-gives its cell's corner on a miss): the port's shot leaves from the
-creature and aims as its other shots; message 0xda96 (life off by the
-message's amount); the original's order on a jam (a click gives the
+the ships'. A throw (0x412a79-0x412ac6) leaves from `+0xb4 - w / 2 +
+T[h].x`, `+0xb8 - h + T[h].y` (T by heading: 0x594ae0 the cyclops',
+0x594b20 the minotaur's, 0x594b60 the amazon's), `w` and `h` the
+picture's `+0x61` / `+0x65`: for a sequence (type 7, 0x5461d0 at
+0x5463bf) its `+0x29` / `+0x2b`, which 0x554bf0 (0x542940's type 7)
+takes from its first frame's sprite header (`+4` width, `+8` height).
+It aims where the target's vt+0xc gives with the hit byte; the distance
+`+0x2d` is from the start to that point (0x5576d8). A ship's (0x4e07c0,
+its own generator `+0x18`): a hit goes to the hull spot of its type and
+heading (0x598ad8, as the flames') from its picture's top left, moved
+`(r % 20 - 9)` times its heading's vector (0x5c4f4c), plus, with way
+on (`+0x59b` not 0) and the move state 5, 4 or 1, `way x vector x 15 /
+100000`; a miss draws `u = r % 6` and a second draw's bit 16 picks
+the side, by heading (0 / 4: `x = w u / 5`, `y = h / 4` or `h - h /
+6`; 1 / 5: `(w / 2) u / 5 + w / 2`, `h - (h / 2) u / 5`, or `(w / 2) u
+/ 5`, `h / 2 - (h / 2) u / 5`; 2 / 6: `w - w / 8` or `w / 8`, and `w u
+/ 5` down, the width as written; 3 / 7: `(w / 2) u / 5 + w / 2`, `(h /
+2) u / 5`, or `(w / 2) u / 5`, `(h / 2) u / 5 + h / 2`). A building's
+(0x423520; harpy nests' 0x41cef0): with its own generator, a hit `w / 3
++ (r % w) / 3`, `h / 3 + (r % h) / 3`, a miss a corner (`(r & 1) w`,
+`(r & 1) h`), clamped to the map. A jam's (0x415ce0): a hit its cell's
+centre with two members or more, else its member's; a miss its cell's
+corner. The port ports the start and a ship's aim (`Scene::ship_aim`);
+a building's is not ported, as its generator (`+0x18`, seeded
+`[game +0x2ee5] x id` at 0x4281a2, a save's own at type 2) is drawn
+elsewhere too (0x4281de, 0x424185, 0x4244a4, the forts' 0x41a895 /
+0x41bc61, the towns' 0x430449 / 0x441e9c / 0x4422ad), none of which
+the port has: a throw at a building aims as the port's other shots.
+Not ported: message 0xda96 (life off by the message's amount); the
+original's order on a jam (a click gives the
 creature); several sounds to pick from are picked by the port's
-stand-in for the C library's `rand()` (`gull_rng`). Not decoded: the
-picture's size `+0x61` / `+0x65` the throw's start needs (0x5463bf sets
-it from the sequence's `+0x29` / `+0x2b` as loaded by 0x542940, which was
-not read); 0x55b560's back-trace when its first step finds no cell (it
+stand-in for the C library's `rand()` (`gull_rng`). Not decoded:
+0x55b560's back-trace when its first step finds no cell (it
 writes its uninitialised best cell, `[esp+0x28]` / `[esp+0x38]` read at
 0x55b809 and 0x55b9c1: the port takes it as no route); a destination
 list whose weights are all 0 (0x413622 divides by zero; the port's walk

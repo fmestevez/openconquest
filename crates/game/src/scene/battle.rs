@@ -720,14 +720,7 @@ impl Scene {
             let owner = self
                 .object_index(t.shooter)
                 .and_then(|s| self.objects[s].owner);
-            volleys.push((
-                t.target,
-                vec![t.weapon],
-                owner,
-                t.shooter,
-                false,
-                Some((t.strikes, t.pct)),
-            ));
+            volleys.push((t.target, vec![t.weapon], owner, t.shooter, false, Some(t)));
         }
         for (target, weapons, owner, shooter, theseus, throw) in volleys {
             self.scout_attacked(target);
@@ -798,7 +791,11 @@ impl Scene {
             let Some(s) = self.object_index(shooter) else {
                 continue;
             };
-            let from = (self.objects[s].x, self.objects[s].y);
+            // A land creature's throw leaves from its picture (0x412a8d).
+            let from = match throw {
+                Some(t) => (t.from.0 as f32, t.from.1 as f32),
+                None => (self.objects[s].x, self.objects[s].y),
+            };
             let Some(t) = self.object_index(target) else {
                 continue;
             };
@@ -835,7 +832,7 @@ impl Scene {
                     _ => combat::Aim::Other,
                 };
                 let (strikes, level, letter, weaken) = match thrower {
-                    Some((class, (hits, _))) => (hits, 1, Some(combat::throw_letter(class)), 1.0),
+                    Some((class, t)) => (t.strikes, 1, Some(combat::throw_letter(class)), 1.0),
                     None => {
                         // A sure hit strikes whole; a miss strikes the hull
                         // anyway for its chance in percent of the blow,
@@ -859,8 +856,8 @@ impl Scene {
                 };
                 // A ship's weapons of a kind fire by their mean condition;
                 // quick lime by the ship's hull instead (0x4bc360, 0x4bfc20).
-                let blow = if let Some((_, (_, pct))) = thrower {
-                    combat::throw_blow(w, pct) * factor
+                let blow = if let Some((_, t)) = thrower {
+                    combat::throw_blow(w, t.pct) * factor
                 } else if w == combat::QUICKLIME {
                     combat::lime_power(level) * health * factor * weaken
                 } else {
@@ -892,6 +889,7 @@ impl Scene {
                         rope: None,
                         shooter: Some(shooter),
                         by,
+                        to: throw.and_then(|t| t.to).map(|(x, y)| (x as f32, y as f32)),
                     },
                     data,
                     caches,

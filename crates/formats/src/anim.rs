@@ -72,7 +72,9 @@ pub struct CompositeCell {
 /// ```
 ///
 /// The entry's width is the layer count, its height the frame count, and
-/// parameter A packs the frame size as `width << 16 | height`.
+/// parameter A packs the frame size as `height << 16 | width` (0x5552a0
+/// and 0x555200, the picture's `+0x65` / `+0x61`; the bombs' and flags'
+/// first sprites are that size).
 #[derive(Debug, Clone)]
 pub struct Composite {
     pub frame_width: u32,
@@ -114,8 +116,8 @@ impl Composite {
             });
         }
         Ok(Self {
-            frame_width: entry.param_a >> 16,
-            frame_height: entry.param_a & 0xffff,
+            frame_width: entry.param_a & 0xffff,
+            frame_height: entry.param_a >> 16,
             layers,
             frames,
             cells,

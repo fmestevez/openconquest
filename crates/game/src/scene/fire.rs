@@ -6,7 +6,7 @@ use super::*;
 /// Where the flames stand on a ship, by type and heading (0x598ad8), from
 /// its picture's top left: the flames' bottom middle, 23 pixels lower
 /// (0x4e04d0).
-const SPOT: [[(i32, i32); 8]; 12] = {
+pub(super) const SPOT: [[(i32, i32); 8]; 12] = {
     const A: [(i32, i32); 8] = [
         (40, 26),
         (30, 20),

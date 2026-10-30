@@ -212,6 +212,7 @@ impl Scene {
                     rope: None,
                     shooter: None,
                     by,
+                    to: None,
                 },
                 data,
                 caches,

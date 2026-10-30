@@ -92,7 +92,7 @@ impl Caches {
         Ok(frames)
     }
 
-    fn sequence(&mut self, data: &GameData, name: &str) -> Result<Rc<Vec<String>>> {
+    pub(crate) fn sequence(&mut self, data: &GameData, name: &str) -> Result<Rc<Vec<String>>> {
         if let Some(s) = self.sequences.get(name) {
             return Ok(s.clone());
         }
