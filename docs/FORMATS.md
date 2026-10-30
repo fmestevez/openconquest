@@ -6129,9 +6129,20 @@ first short type is asked and nothing while it is taken. miss004's yard
 (states 5-0xc) serves the first slot set in member order, orders the ship,
 waits 750 ticks and then clears it (-1). The port holds the slot while the
 request waits or its ship is being built (not ported: the 750-tick wait).
-Not decoded: 0x4a8620 adds an object other than a ship or building only
-after a first match, leaving a hole in the list 0x4795f0 reads; what
-else a player's list holds is not read.
+0x4a8620(player, &n, ship mask, building mask) walks the player's list
+(`+0xbb8`): 0x50e600 sorts each by class (200-211 ship 200, 0x32-0x4a
+building 0x32, 500-510 500, 400-403 400, 700-706 700, else 0); a ship
+whose bit `class - 200` is in the mask, or a building whose `class - 0x32`
+is, matches and latches; from then on every object is kept, matching or
+not. Each kept one goes at its own index in the out array (malloc'd, not
+cleared) and counts in n, so an object before the first match leaves an
+uninitialised hole that the reader (0x4795f0, masks all ones: any ship or
+building matches, reading the first n slots) takes for an object. The
+port's fort search reads the player's ships and buildings in order, which
+is the original's while the list starts with a ship or building. Not
+decoded: what joins a player's list besides ships and buildings (the
+adders of `+0xbb8`), so whether a hole can occur; were one read, the
+original would read uninitialised memory.
 
 Campaign state carries over between missions: at the start (message
 0x8d1) a brain restores the human's technology bits (+0x45, 12 bytes),
