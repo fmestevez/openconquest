@@ -6,6 +6,8 @@ members = ["crates/formats", "crates/extract", "crates/game"]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/fmestevez/openconquest"
 
 [workspace.dependencies]
 openconquest-formats = { path = "crates/formats" }

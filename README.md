@@ -141,9 +141,14 @@ are kept in `config.json`.
 
 ## Getting started
 
-Requires Rust 1.82 or newer. On Linux, sound needs the ALSA development
-package (`libasound2-dev` or `alsa-lib-devel`) and the folder dialogs GTK 3
-(`libgtk-3-dev`).
+Ready-made builds for Windows, Linux and macOS are on the
+[releases page](https://github.com/fmestevez/openconquest/releases); they
+include no game data, so you still need the CD.
+
+To build it yourself you need Rust 1.82 or newer. On Linux, sound needs the
+ALSA development package (`libasound2-dev` or `alsa-lib-devel`) and
+`pkg-config`; the folder dialogs go through the desktop portal
+(`xdg-desktop-portal`), which desktops install.
 
 The simplest way: build and start the game; the first time, it asks for
 your Ancient Conquest CD (or a mounted image of it) or the folder the game
@@ -256,11 +261,28 @@ cargo test
 OPENCONQUEST_DATA=$PWD/gamedata cargo test --release
 ```
 
+Continuous integration (`.github/workflows/ci.yml`) checks formatting,
+runs clippy and the tests on Linux, Windows and macOS for every push and
+pull request; with no game data in CI, the tests that read it are skipped,
+so run them locally before sending a change. Pushing a tag `v*` builds the
+release (`.github/workflows/release.yml`). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how changes are made.
+
 The workspace has three crates:
 
 - `crates/formats`: the data format library, with no platform dependencies.
 - `crates/extract`: the `openconquest-extract` tool.
 - `crates/game`: the `openconquest` game (winit + softbuffer software renderer).
+
+## License
+
+OpenConquest is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version. See [LICENSE](LICENSE).
+
+Taking part in the project means following the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Legal
 

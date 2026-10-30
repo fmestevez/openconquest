@@ -4,12 +4,17 @@
 # install folder, and remembers it.
 set -e
 cd "$(dirname "$0")/.."
-cargo build --release -p openconquest
+# OPENCONQUEST_BIN: a game binary built already (the release's universal
+# one); else it is built here for this Mac.
+bin=${OPENCONQUEST_BIN:-target/release/openconquest}
+if [ -z "${OPENCONQUEST_BIN:-}" ]; then
+    cargo build --release -p openconquest
+fi
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 app=dist/OpenConquest.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/release/openconquest "$app/Contents/MacOS/openconquest"
+cp "$bin" "$app/Contents/MacOS/openconquest"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

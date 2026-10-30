@@ -4,6 +4,8 @@ description = "Open source reimplementation of Ancient Conquest"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 openconquest-formats.workspace = true

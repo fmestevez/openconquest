@@ -1,0 +1,109 @@
+# Builds OpenConquest for Windows, Linux and macOS when a tag `v*` is pushed
+# and publishes them as a GitHub release. The packages hold only
+# OpenConquest's own programs and documents, never game data: players use
+# their own CD. Run by hand (workflow_dispatch), it builds the packages as
+# workflow artifacts without publishing a release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+          - name: windows-x86_64
+            os: windows-latest
+          - name: macos-universal
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      PACKAGE: openconquest-${{ github.ref_name }}-${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - name: Linux packages (ALSA for sound)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build and package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo build --release --locked -p openconquest -p openconquest-extract
+          mkdir "$PACKAGE"
+          cp target/release/openconquest target/release/openconquest-extract \
+            README.md LICENSE "$PACKAGE/"
+          tar czf "$PACKAGE.tar.gz" "$PACKAGE"
+
+      - name: Build and package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release --locked -p openconquest -p openconquest-extract
+          New-Item -ItemType Directory $env:PACKAGE | Out-Null
+          Copy-Item target/release/openconquest.exe, target/release/openconquest-extract.exe, README.md, LICENSE $env:PACKAGE
+          Compress-Archive -Path $env:PACKAGE -DestinationPath "$env:PACKAGE.zip"
+
+      - name: Build and package (macOS, Apple silicon and Intel)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked --target "$target" -p openconquest -p openconquest-extract
+          done
+          mkdir -p target/universal
+          for bin in openconquest openconquest-extract; do
+            lipo -create -output "target/universal/$bin" \
+              "target/aarch64-apple-darwin/release/$bin" "target/x86_64-apple-darwin/release/$bin"
+          done
+          OPENCONQUEST_BIN=target/universal/openconquest ./scripts/bundle-macos.sh
+          mkdir "$PACKAGE"
+          cp -R dist/OpenConquest.app "$PACKAGE/"
+          cp target/universal/openconquest-extract README.md LICENSE "$PACKAGE/"
+          ditto -c -k --keepParent "$PACKAGE" "$PACKAGE.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: |
+            ${{ env.PACKAGE }}.tar.gz
+            ${{ env.PACKAGE }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" packages/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "OpenConquest $GITHUB_REF_NAME" \
+            --generate-notes
