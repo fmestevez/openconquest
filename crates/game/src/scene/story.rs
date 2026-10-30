@@ -492,7 +492,7 @@ impl Scene {
 /// What the campaign carries from one mission to the next (the original's
 /// record at game + 0x3361, restored by 0x4a9740): the player's research,
 /// the spells learned and the technology revealed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Carry {
     levels: crate::combat::Levels,
     magic: crate::magic::Magic,
@@ -508,7 +508,7 @@ pub struct Carry {
 /// A ship or building carried on (the ship's blob 0x4e5ab0: type, the
 /// Argo, its hull, levels, units and treasures; a town's 0x4416c0 cut by
 /// 0x4451f0: its class, condition and treasures, its stock emptied).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Carried {
     class: u32,
     cell: (i32, i32),
@@ -519,7 +519,7 @@ struct Carried {
 }
 
 /// Where a carried hero arrives: the building on a cell, or the Argo.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 enum HeroSpot {
     Cell((i32, i32)),
     Argo,

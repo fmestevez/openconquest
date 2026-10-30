@@ -378,9 +378,31 @@ enum LoadTab {
 enum LoadEntry {
     /// A saved game (its index in `App::saves`).
     Save(usize),
-    /// A mission to start.
-    Mission(usize),
+    /// A start report (its index in `App::reports`).
+    Report(usize),
 }
+
+/// A start report (`MISSIONS\SAVE_MISSION_<NN>.RPM`, written by the
+/// briefing's Start, 0x53a3a0): the difficulty chosen and the campaign's
+/// record at the mission's start.
+struct StartReport {
+    path: std::path::PathBuf,
+    label: String,
+    mission: u32,
+}
+
+/// What the port keeps of a start report after its "RP" and difficulty
+/// word, in place of the original's 0x151 bytes of game + 0x32fd and its
+/// carried objects (0x53a3a0), whose layout is not decoded: the campaign
+/// mission's number (game + 0x3305) and the port's record carried into it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ReportBody {
+    mission: u32,
+    carry: Option<crate::scene::Carry>,
+}
+
+/// The first word of a start report (0x53a3a0, 0x53a5a0): "RP".
+const REPORT_MAGIC: u16 = 0x5052;
 
 /// What the mission screens show of the chosen mission: its map, size,
 /// players and briefing.
@@ -803,6 +825,8 @@ pub struct App {
     tab: Tab,
     /// The saved games, and their names as the file panel lists them.
     saves: Vec<SaveEntry>,
+    /// The start reports Load game's "Start from..." lists.
+    reports: Vec<StartReport>,
     save_names: Vec<String>,
     /// The file panel: the first row shown, the row chosen, the bookmark
     /// and the name field.
@@ -1066,6 +1090,7 @@ impl App {
             },
             tab: Tab::Object,
             saves: Vec::new(),
+            reports: Vec::new(),
             save_names: Vec::new(),
             save_first: 0,
             selected_save: None,
@@ -3861,11 +3886,24 @@ impl App {
                 };
                 let i = match entry {
                     LoadEntry::Save(i) => i,
-                    LoadEntry::Mission(index) => {
+                    // A start report (0x530480, 0x53a670): its difficulty
+                    // and record restored, its mission's briefing opened
+                    // (0x537f60).
+                    LoadEntry::Report(k) => {
+                        let Some(index) = self.entry_mission(entry) else {
+                            return;
+                        };
+                        let Some((difficulty, body)) =
+                            self.reports.get(k).and_then(|r| read_report(&r.path))
+                        else {
+                            self.say("Not a start report");
+                            return;
+                        };
                         if self.category_missions(Category::Campaign).first() == Some(&index) {
                             self.queue_video(crate::video::OPENING);
                         }
-                        self.carry = None;
+                        self.difficulty = usize::from(difficulty);
+                        self.carry = body.carry;
                         self.open_mission(index);
                         return;
                     }
@@ -3884,6 +3922,7 @@ impl App {
                 }
             }
             (MenuState::Briefing, "Start") => {
+                self.write_start_report();
                 self.leave_briefing_sounds();
                 self.menu = None;
                 self.in_game = true;
@@ -4122,6 +4161,7 @@ impl App {
             })
             .unwrap_or_default();
         saves.sort_by_key(|e| e.label.to_lowercase());
+        self.reports = self.read_reports();
         let chosen = self
             .selected_save
             .and_then(|i| self.saves.get(i))
@@ -4653,9 +4693,10 @@ impl App {
     fn load_entries(&self, tab: LoadTab) -> Vec<(LoadEntry, String)> {
         if tab == LoadTab::StartFrom {
             return self
-                .category_missions(Category::Campaign)
-                .into_iter()
-                .map(|i| (LoadEntry::Mission(i), self.mission_titles[i].clone()))
+                .reports
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (LoadEntry::Report(i), r.label.clone()))
                 .collect();
         }
         self.saves
@@ -4666,10 +4707,100 @@ impl App {
             .collect()
     }
 
+    /// Where start reports go: the original's `<MainPath>MISSIONS\`, here
+    /// in the port's saves folder.
+    fn reports_dir(&self) -> std::path::PathBuf {
+        self.data.save_dir().join("MISSIONS")
+    }
+
+    /// The briefing's Start writes a start report (0x53f550 case 0x178,
+    /// 0x53a3a0) for a campaign mission when it is the first or it was
+    /// continued (game + 0x32fd set): `SAVE_` + string 100 `MISSION_` +
+    /// the mission's number + 1 in two digits + `.RPM`; the word "RP" and
+    /// the difficulty word (DAT_005ca78d), then the campaign's record.
+    fn write_start_report(&mut self) {
+        let Some(n) = self.campaign_number() else {
+            return;
+        };
+        if n != 0 && self.carry.is_none() {
+            return;
+        }
+        let body = ReportBody {
+            mission: n,
+            carry: self.carry.clone(),
+        };
+        let dir = self.reports_dir();
+        let path = dir.join(format!("SAVE_MISSION_{:02}.RPM", n + 1));
+        let written = report_bytes(self.difficulty as u16, &body).and_then(|bytes| {
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(&path, &bytes)?;
+            Ok(())
+        });
+        if let Err(e) = written {
+            self.say(format!("Could not write {}: {e:#}", path.display()));
+        }
+    }
+
+    /// The start reports (0x52b7c0, Load's tab 4): the files of the
+    /// reports' folder whose first word is "RP" (0x53a5a0), by name, each
+    /// shown as `"%s  [%02u/%02u/%04u, %02u:%02u, %s]"` (0x5c26c4): the
+    /// name without its extension and `SAVE_`, the local date of its last
+    /// write (month first when string 10000 starts with '0', as this
+    /// CD's does, else the day) and time, and string 106 + difficulty.
+    fn read_reports(&self) -> Vec<StartReport> {
+        let Ok(dir) = std::fs::read_dir(self.reports_dir()) else {
+            return Vec::new();
+        };
+        let mut paths: Vec<std::path::PathBuf> = dir
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_file())
+            .collect();
+        paths.sort();
+        let month_first = self
+            .data
+            .strings
+            .get(&10000)
+            .and_then(|s| s.chars().next())
+            .is_none_or(|c| c == '0');
+        paths
+            .into_iter()
+            .filter_map(|path| {
+                let (difficulty, body) = read_report(&path)?;
+                let stem = path.file_stem()?.to_string_lossy().into_owned();
+                let name = stem.strip_prefix("SAVE_").unwrap_or(&stem).to_string();
+                let label = match std::fs::metadata(&path).and_then(|m| m.modified()) {
+                    Ok(t) => {
+                        let secs = t
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_secs() as i64);
+                        let (y, mo, d, h, mi) = crate::records::local_date(secs);
+                        let (a, b) = if month_first { (mo, d) } else { (d, mo) };
+                        let level = self
+                            .data
+                            .strings
+                            .get(&(106 + u32::from(difficulty)))
+                            .cloned()
+                            .unwrap_or_default();
+                        format!("{name}  [{a:02}/{b:02}/{y:04}, {h:02}:{mi:02}, {level}]")
+                    }
+                    Err(_) => name,
+                };
+                Some(StartReport {
+                    path,
+                    label,
+                    mission: body.mission,
+                })
+            })
+            .collect()
+    }
+
     /// The mission of a load screen entry.
     fn entry_mission(&self, entry: LoadEntry) -> Option<usize> {
         match entry {
-            LoadEntry::Mission(i) => Some(i),
+            LoadEntry::Report(i) => {
+                let name = format!("miss0{:02}", self.reports.get(i)?.mission);
+                self.missions.iter().position(|m| *m == name)
+            }
             LoadEntry::Save(i) => {
                 let name = self.saves.get(i)?.mission.to_lowercase();
                 self.missions.iter().position(|m| *m == name)
@@ -7537,6 +7668,28 @@ fn function_index(code: KeyCode) -> Option<usize> {
         .position(|&k| k == code)
 }
 
+/// A start report's bytes: the word "RP", the difficulty word, the body.
+fn report_bytes(difficulty: u16, body: &ReportBody) -> Result<Vec<u8>> {
+    let mut bytes = (u32::from(REPORT_MAGIC) | u32::from(difficulty) << 16)
+        .to_le_bytes()
+        .to_vec();
+    bytes.extend_from_slice(&serde_json::to_vec(body)?);
+    Ok(bytes)
+}
+
+/// A start report's difficulty and body, when `path` begins with "RP"
+/// (0x53a670 checks the magic).
+fn read_report(path: &std::path::Path) -> Option<(u16, ReportBody)> {
+    let bytes = std::fs::read(path).ok()?;
+    let head = bytes.get(..4)?;
+    if u16::from_le_bytes([head[0], head[1]]) != REPORT_MAGIC {
+        return None;
+    }
+    let difficulty = u16::from_le_bytes([head[2], head[3]]);
+    let body = serde_json::from_slice(&bytes[4..]).ok()?;
+    Some((difficulty, body))
+}
+
 /// A building site shown: its cell, the class and its facing.
 type SiteKey = ((i32, i32), u32, u32);
 
@@ -7728,6 +7881,34 @@ mod custom_tests {
         app.player_name = "Jason".into();
         app.menu_action(MenuState::Main, "Load game");
         assert_eq!(app.player_name, "Jason");
+    }
+
+    /// A start report (0x53a3a0): "RP", the difficulty word, then the
+    /// port's body; read back, the magic checked (0x53a670). Its name and
+    /// row use strings 100, 106-108 and 10000 (month first).
+    #[test]
+    fn start_reports_go_and_come_back() {
+        let Some(app) = app() else {
+            return;
+        };
+        let strings = &app.data.strings;
+        assert_eq!(strings.get(&100).unwrap(), "MISSION_");
+        assert_eq!(strings.get(&107).unwrap(), "Normal");
+        assert!(strings.get(&10000).unwrap().starts_with('0'));
+        let body = ReportBody {
+            mission: 1,
+            carry: Some(app.scene.carry()),
+        };
+        let bytes = report_bytes(2, &body).unwrap();
+        assert_eq!(&bytes[..4], &[b'R', b'P', 2, 0]);
+        let path = std::env::temp_dir().join(format!("oc-report-{}.RPM", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let (difficulty, back) = read_report(&path).unwrap();
+        assert_eq!((difficulty, back.mission), (2, 1));
+        assert!(back.carry.is_some());
+        std::fs::write(&path, b"SAVE").unwrap();
+        assert!(read_report(&path).is_none());
+        std::fs::remove_file(&path).unwrap();
     }
 
     /// single02's HEAD_CUST (1, 0, 15): the human's row does not open, a

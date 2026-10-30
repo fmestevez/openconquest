@@ -1839,6 +1839,30 @@ original:
 - Best Conquerors (Startba.cpp 0x528210, 0x528390): the RAM_BEST
   picture at (15, 305), OK (1001) at (345, 540).
 
+**Start reports** (`.RPM`). The briefing's Start (0x53f550 case 0x178)
+writes one when game + 0x32fd is set and + 0x3305 > 0, or + 0x3305 is
+0: `<MainPath>MISSIONS\` + `SAVE_` + string 100 `MISSION_` +
+%02d(+ 0x3305 + 1) + `.RPM` (format 0x5be97c), e.g.
+`SAVE_MISSION_01.RPM` for the first mission. 0x53a3a0 writes the dword
+0x5052 | difficulty << 16 ("RP", then DAT_005ca78d: 0 Easy, 1 Normal,
+2 Hard), 0x151 bytes of game + 0x32fd (its + 0x40 the count of carried
+objects from list + 0xbd, or 0), then each carried object as a dword
+size (list + 0x3c) and its bytes. Load game's "Start from..." (resource
++ 0x1a0 = 4, 0x52b7c0) lists the files of `<MainPath>MISSIONS\` whose
+first word is 0x5052 (0x53a5a0), each as `"%s  [%02u/%02u/%04u, %02u:%02u,
+%s]"` (0x5c26c4): the name without its extension and `SAVE_`, its last
+write in local time, month first when string 10000 starts with '0' (as
+this CD's), else the day, and string 106 + difficulty; with no time, the
+name alone. Loading one (0x530480): reset (0x4ede60), 0x53a670 reads it
+(the magic checked; the difficulty into DAT_005ca78d, the block into
+game + 0x32fd, the objects into new lists), then 0x537f60(game, 0,
++ 0x3305) opens that mission's briefing (or first MIS_000.AVI for
+mission 0 when DAT_005ca53c bit 1 is set). The block's layout beyond
++ 0x3305 (the mission's number) and + 0x40 is not decoded: the port
+writes its own record after the two words, as JSON (the mission's
+number and the campaign record it carries in), in `MISSIONS` of its
+saves folder, and reads its own back.
+
 **Player's name** (Config 0x5ca528, 0x26c bytes, the name at + 0x50 =
 0x5ca578, 0x104 bytes; HKLM `...\Ancient conquest\Config` value
 `Config`, its byte sum at + 0). Read at start-up (0x500810); on a bad sum
@@ -2064,9 +2088,8 @@ Known differences not yet ported:
 
 - Custom missions' map tick (0x1dd, DAT_005ca538, Config + 0x10): the
   port always shows the map.
-- Start reports: the briefing's Start writes `MISSIONS\MISSION_%02d.RPM`
-  (0x53a3a0), which Load game's "Start from..." lists; the port lists
-  every campaign mission.
+- Start reports: the port writes its own record after "RP" and the
+  difficulty (see Start reports), not the original's 0x151 bytes.
 - Custom missions' list: `<MainPath>CUSTOM\*.DKD` (0x52b7c0, watched
   with FindFirstChangeNotification), a file kept when its `HEAD_CUST` a
   is set; the port lists the installation's battle and single missions
