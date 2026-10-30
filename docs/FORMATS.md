@@ -2013,9 +2013,18 @@ on channel 0 at the effects volume (0x568b30 flags 1, DAT_005ca56c); else
 0x525370 case 8 (sound 325, `mus_menu`, looped, channel 0, the same
 volume) unless DAT_005ca55e is 1. 3000 ms after the screen was made the
 voice (if any) plays once on channels 7-8. This CD's tasks archive has
-FON000 only. The port also plays `mus_menu` at the effects volume; on
-leaving the briefing for another screen it plays `mus_menu` again (what
-the original does with the channel then, + 0x10c, is not decoded).
+FON000 only. Start (0x178) and Cancel (0x16e) first call 0x53ee30: when
+the FON (+ 0x10c) or the voice (+ 0x110) was started and sound is on
+(game + 0xd20), every DirectSound buffer stops (0x569070) and the channel
+table (game + 0xba0, 0x60 dwords) is cleared; the waves, picture and
+archive are freed. Start then posts 0x101 (the game, no menu music);
+Cancel posts 0x100, whose handler plays `mus_menu` (0x525370 case 8)
+unless DAT_005ca55e is 1. DAT_005ca55e (Config) is the music device
+(0x524600: 2 CD audio, 4 and 8 the other two devices, 1 none; 0x500810
+turns 2 into 1 when `CDAudioDrive` is "NONE" or the paths are not fixed
+drives; default 2): `mus_menu`, a DirectSound sample, plays in every
+mode but 1. The port's sound panel's None is 1; it plays `mus_menu` at
+the effects volume.
 
 **Idle demo** (0x530bc0): command 0x103 (the `demo` saved game, then its
 DEMON stream) once game + 0xa83 ms pass after the title screen was shown

@@ -15,6 +15,8 @@ pub struct Audio {
     _stream: OutputStream,
     pub handle: OutputStreamHandle,
     cache: HashMap<String, Option<Arc<Sound>>>,
+    /// The sounds playing once, so they can all be stopped.
+    playing: Vec<rodio::Sink>,
     pub muted: bool,
     pub volume: f32,
 }
@@ -29,6 +31,7 @@ impl Audio {
             _stream: stream,
             handle,
             cache: HashMap::new(),
+            playing: Vec::new(),
             muted: false,
             volume: 0.6,
         })
@@ -72,8 +75,21 @@ impl Audio {
         let source = SamplesBuffer::new(sound.channels, sound.sample_rate, sound.samples.clone())
             .amplify(gain * self.volume)
             .convert_samples::<f32>();
-        if let Err(e) = self.handle.play_raw(source) {
-            eprintln!("could not play {name}: {e}");
+        self.playing.retain(|s| !s.empty());
+        match rodio::Sink::try_new(&self.handle) {
+            Ok(sink) => {
+                sink.append(source);
+                self.playing.push(sink);
+            }
+            Err(e) => eprintln!("could not play {name}: {e}"),
+        }
+    }
+
+    /// Stops every sound playing once (as 0x569070 stops every DirectSound
+    /// buffer).
+    pub fn stop_all(&mut self) {
+        for s in self.playing.drain(..) {
+            s.stop();
         }
     }
 }

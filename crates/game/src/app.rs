@@ -3884,13 +3884,18 @@ impl App {
                 }
             }
             (MenuState::Briefing, "Start") => {
+                self.leave_briefing_sounds();
                 self.menu = None;
                 self.in_game = true;
                 self.entering = true;
             }
-            (MenuState::Briefing, "Cancel")
-            | (MenuState::Missions(..), "Cancel")
-            | (MenuState::Load(..), "Cancel") => self.menu = Some(MenuState::Main),
+            (MenuState::Briefing, "Cancel") => {
+                self.leave_briefing_sounds();
+                self.menu = Some(MenuState::Main);
+            }
+            (MenuState::Missions(..), "Cancel") | (MenuState::Load(..), "Cancel") => {
+                self.menu = Some(MenuState::Main)
+            }
             // The end screen's OK (0x539b20, 0x16c): after a won campaign
             // mission the next one's briefing, the campaign going on with
             // what was learned; else the main menu.
@@ -4506,7 +4511,14 @@ impl App {
         };
         let want = match fon {
             Some(n) => Some(n),
-            None if front && !self.no_menu_music => Some("mus_menu".to_string()),
+            // `mus_menu` (0x525370 case 8) unless the music device is none
+            // (DAT_005ca55e = 1, the sound panel's None).
+            None if front
+                && !self.no_menu_music
+                && self.settings.config.music != crate::panels::Music::None =>
+            {
+                Some("mus_menu".to_string())
+            }
             None => None,
         };
         if want == self.menu_sample {
@@ -4536,6 +4548,26 @@ impl App {
         }
         if let Some(m) = &self.music {
             m.set_paused(self.menu_music.is_some());
+        }
+    }
+
+    /// The briefing's Start and Cancel (0x53ee30): when its FON or its
+    /// voice was started and sound is on, every sound stops (0x569070) and
+    /// the channels are freed. Start then goes into the game with no menu
+    /// music; Cancel to the main menu (0x100), which plays `mus_menu`
+    /// again (`choose_music`).
+    fn leave_briefing_sounds(&mut self) {
+        let fon = self.menu_sample.as_deref().is_some_and(|n| n != "mus_menu");
+        let voice = self.briefing_voice.is_some_and(|(_, k)| k >= 3);
+        if !(fon || voice) {
+            return;
+        }
+        if let Some(audio) = self.audio.as_mut() {
+            audio.stop_all();
+            // The channel's sample stops too; `choose_music` notes it.
+            if let Some(m) = self.menu_music.take() {
+                m.stop();
+            }
         }
     }
 
