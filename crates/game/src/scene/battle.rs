@@ -89,10 +89,10 @@ impl Scene {
     /// stores the masks (`+0x494` the byte `+5`, `+0x48c` the dword `+6`
     /// less its own player's bit, `+0x490` the dword `+10`), whatever is
     /// found; a barbarian structure the same as they come (`+0x200`,
-    /// `+0x1f8`, `+0x1fc`, 0x40f75b). (Not ported: a cyclops' jam, class 0x1f7, which the fort
-    /// turns into the jam's first member, 0x415df0, the earliest of the
-    /// creatures on that cell still there: the port has no jams, a click
-    /// gives the creature itself.)
+    /// `+0x1f8`, `+0x1fc`, 0x40f75b). (A click on a land creature gives
+    /// the creature itself; the original's order names its jam, class
+    /// 0x1f7, which the fort turns into the jam's first member, 0x415df0:
+    /// not ported.)
     pub fn fort_attack(&mut self, site: u32, target: u32, groups: u8, masks: combat::FortMasks) {
         let Some(i) = self
             .object_index(site)
@@ -285,10 +285,18 @@ impl Scene {
                         }
                     }
                 }
-                ObjectClass::Monster(0x1f4..=0x1f6) => put(at(o), 0),
                 ObjectClass::Monster(0x1fa | 0x1fb | 0x1fd) => put(at(o), 1),
                 ObjectClass::Monster(0x1f8 | 0x1f9) => put(at(o), 2),
                 _ => {}
+            }
+        }
+        // The land creatures' jams hold their cells' occupant slots, there
+        // whatever (vt+0x2c 0x411160 gives 1), each answering as its first
+        // member (0x415df0).
+        for jam in &self.jams {
+            let first = jam.members.first().and_then(|&m| self.object_index(m));
+            if let (Some(k), Some(c)) = (first, cells.iter_mut().find(|c| c.0 == jam.cell)) {
+                c.1.push((0, k));
             }
         }
         for c in &mut cells {
@@ -348,8 +356,7 @@ impl Scene {
             });
             let Some(&(_, k)) = pick else { continue };
             // The land creatures on a cell answer as their jam, whose
-            // first member is shot (0x4469c0 -> 0x415df0): the port's
-            // first on the cell.
+            // first member is shot (0x4469c0 -> 0x415df0).
             let id = self.objects[k].id;
             let score = match current {
                 Some((cur, _, s)) if cur == id => {
@@ -386,10 +393,15 @@ impl Scene {
     /// then the shot test there.
     pub(super) fn group_track(&self, i: usize, item: u8, target: u32) -> Option<usize> {
         let t = self.object_index(target)?;
+        let jam = self
+            .jams
+            .iter()
+            .find(|j| j.members.contains(&target))
+            .map(|j| j.cell);
         let (cell, _) = self
             .group_cells(i, item)
             .into_iter()
-            .find(|(_, slots)| slots.iter().any(|&(_, k)| k == t))?;
+            .find(|(c, slots)| Some(*c) == jam || slots.iter().any(|&(_, k)| k == t))?;
         (self.group_score(i, item, cell, t) != 0).then_some(t)
     }
 
@@ -442,6 +454,9 @@ impl Scene {
             .objects
             .iter()
             .filter(|o| o.is_armed())
+            // Land creatures throw from their own state step (0x412740
+            // state 3, `Scene::tick_walkers`), handed over in `throws`.
+            .filter(|o| !self.walkers.iter().any(|w| w.id == o.id))
             .map(|o| o.id)
             .collect();
         let mut volleys = Vec::new();
@@ -629,7 +644,7 @@ impl Scene {
                 }
                 for (ti, weapons) in fired {
                     let owner = self.objects[i].owner;
-                    volleys.push((self.objects[ti].id, weapons, owner, id, theseus));
+                    volleys.push((self.objects[ti].id, weapons, owner, id, theseus, None));
                 }
                 continue;
             }
@@ -697,10 +712,23 @@ impl Scene {
                 }
             }
             if !fired.is_empty() {
-                volleys.push((target_id, fired, self.objects[i].owner, id, theseus));
+                volleys.push((target_id, fired, self.objects[i].owner, id, theseus, None));
             }
         }
-        for (target, weapons, owner, shooter, theseus) in volleys {
+        for t in std::mem::take(&mut self.throws) {
+            let owner = self
+                .object_index(t.shooter)
+                .and_then(|s| self.objects[s].owner);
+            volleys.push((
+                t.target,
+                vec![t.weapon],
+                owner,
+                t.shooter,
+                false,
+                Some((t.strikes, t.pct)),
+            ));
+        }
+        for (target, weapons, owner, shooter, theseus, throw) in volleys {
             self.scout_attacked(target);
             self.wizard_attacked(target, shooter);
             self.computer_attacked(target, shooter);
@@ -774,11 +802,11 @@ impl Scene {
                 continue;
             };
             // Land creatures throw as the original's (CyclopClassTy
-            // 0x412740, 0x4126f0): their own picture, a level-1 weapon's
-            // blow less as they weaken (0x594ab8), sure to hit but for a
-            // 1 in (8 - cells) miss from 2 cells off.
-            let thrower = match self.objects[s].class {
-                ObjectClass::Monster(c @ 0x1f4..=0x1f6) => Some(c),
+            // 0x412740 state 3, 0x4126f0): their own picture, a level-1
+            // weapon's blow less as they weaken (0x594ab8 by their
+            // percentage), hitting or not as their own draw said.
+            let thrower = match (self.objects[s].class, throw) {
+                (ObjectClass::Monster(c @ 0x1f4..=0x1f6), Some(t)) => Some((c, t)),
                 _ => None,
             };
             // The player each shot is put down to (message 0x14ba's `+4`):
@@ -806,16 +834,7 @@ impl Scene {
                     _ => combat::Aim::Other,
                 };
                 let (strikes, level, letter, weaken) = match thrower {
-                    Some(class) => {
-                        let cells = (dist / TILE_SIZE as f32) as u32;
-                        let missed = (2..8).contains(&cells) && self.rng.next() % (8 - cells) == 0;
-                        (
-                            !missed,
-                            1,
-                            Some(combat::throw_letter(class)),
-                            combat::throw_weakness(health),
-                        )
-                    }
+                    Some((class, (hits, _))) => (hits, 1, Some(combat::throw_letter(class)), 1.0),
                     None => {
                         // A sure hit strikes whole; a miss strikes the hull
                         // anyway for its chance in percent of the blow,
@@ -839,7 +858,9 @@ impl Scene {
                 };
                 // A ship's weapons of a kind fire by their mean condition;
                 // quick lime by the ship's hull instead (0x4bc360, 0x4bfc20).
-                let blow = if w == combat::QUICKLIME {
+                let blow = if let Some((_, (_, pct))) = thrower {
+                    combat::throw_blow(w, pct) * factor
+                } else if w == combat::QUICKLIME {
                     combat::lime_power(level) * health * factor * weaken
                 } else {
                     let worn = self.objects[s].mean_condition(w) as f32 / 100.0;
@@ -1136,6 +1157,22 @@ impl Scene {
         let (tx, ty) = (self.objects[ti].x, self.objects[ti].y);
         let jitter = |rng: &mut Rng| (rng.next() % 33) as f32 - 16.0;
         let (fx, fy) = (tx + jitter(&mut self.rng), ty + jitter(&mut self.rng));
+        // A land creature takes its blows at its next tick (0x4139e0
+        // queues message 0x138e; 0x413ad0).
+        if self.walkers.iter().any(|w| w.id == target) {
+            self.walker_struck(target, damage, by);
+            if show {
+                let name = if damage > 0.0 {
+                    combat::FX_HIT
+                } else {
+                    combat::FX_SPLASH
+                };
+                self.spawn_effect(data, caches, name, fx, fy);
+                self.sounds
+                    .push((if damage > 0.0 { "hitmed" } else { "splash1" }, fx, fy));
+            }
+            return;
+        }
         let Some(c) = self.objects[ti].combat.as_mut() else {
             return;
         };
@@ -1188,8 +1225,6 @@ impl Scene {
             // events 100-102 by class; the harpy 0x41fb02 event 103; the
             // sea's creatures events 105-107), buildings fall, ships wreck.
             let sound = match self.objects[ti].class {
-                ObjectClass::Monster(0x1f4 | 0x1f5) => "deac1d",
-                ObjectClass::Monster(0x1f6) => "destr1",
                 ObjectClass::Monster(0x1f8) => "deadga1",
                 ObjectClass::Monster(0x1f9) => "dedr2",
                 ObjectClass::Monster(_) => "deamons",

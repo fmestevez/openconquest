@@ -392,6 +392,12 @@ pub struct Scene {
     /// since each lair last sent one.
     pub walkers: Vec<walkers::Walker>,
     pub lair_clocks: std::collections::BTreeMap<u32, f32>,
+    /// The land creatures' jams (CyclopsJamClassTy 0x1f7), one a cell
+    /// they stand on.
+    pub jams: Vec<walkers::Jam>,
+    /// Throws land creatures made this tick, for `run_combat` (not saved:
+    /// fired in the same update).
+    throws: Vec<walkers::Throw>,
     /// The human players of a multiplayer game (empty otherwise), and the
     /// one whose state is in the fields above now.
     pub seats: Vec<seats::Seat>,
@@ -560,7 +566,7 @@ pub use stats::Stats;
 pub use story::goal_name;
 pub use story::{Carry, Goal};
 pub use towns::Towns;
-pub use walkers::{walker_frame_ms, walker_sequence, Walker};
+pub use walkers::{walker_frame_ms, walker_sequence, Jam, Walker};
 pub use yard::ShipOrder;
 #[cfg(test)]
 mod tests;
@@ -843,6 +849,8 @@ impl Scene {
             flyers: Vec::new(),
             nests: Vec::new(),
             walkers: Vec::new(),
+            jams: Vec::new(),
+            throws: Vec::new(),
             lair_clocks: Default::default(),
             carried: Vec::new(),
             site_heroes: Default::default(),
@@ -1083,6 +1091,7 @@ impl Scene {
             flyers: self.flyers.clone(),
             nests: self.nests.clone(),
             walkers: self.walkers.clone(),
+            jams: self.jams.clone(),
             lair_clocks: self.lair_clocks.clone(),
             volcanoes: self.volcanoes.clone(),
             brain_flames: self.brain_flames.iter().map(|(&k, &v)| (k, v)).collect(),
@@ -1254,6 +1263,7 @@ impl Scene {
         }
         scene.nests = save.nests.clone();
         scene.walkers = save.walkers.clone();
+        scene.jams = save.jams.clone();
         scene.lair_clocks = save.lair_clocks.clone();
         scene.volcanoes = save.volcanoes.clone();
         scene.brain_flames = save.brain_flames.iter().copied().collect();

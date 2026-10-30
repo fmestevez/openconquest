@@ -8869,6 +8869,227 @@ fn building_calls_are_the_sound_entries() {
     }
 }
 
+/// Land creatures look about, keep jams and throw as the original's: two
+/// cyclopes put on one cell share its jam (0x1498, 0x1879f), in the order
+/// they came; the first's look about (0x412290) takes the nearest cell of
+/// a building in its mask (priority `10 - d`) and tells the jam, whose
+/// other member pursues that cell (0x187a2, the absolute cell as a half);
+/// standing, it goes to throw (0x412740), turns by the signs to the
+/// target, starts at once (`+0x138` 0) and throws at its picture's frame
+/// 0xb, once, hitting as its own draws say. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn land_creatures_look_alert_and_throw() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let t = TILE_SIZE as f32;
+    let foot = |o: &crate::objects::MapObject| {
+        let (bx, by) = o.cell.unwrap();
+        let n = super::trade::building_cells(o);
+        (by..by + n).flat_map(move |y| (bx..bx + n).map(move |x| (x, y)))
+    };
+    // A building with a free land cell 3 off it and nothing else that
+    // stands within 7 cells of that one.
+    let pick = |scene: &Scene| {
+        let w = scene.grid.width as i32;
+        let h = scene.grid.height as i32;
+        let land = |x: i32, y: i32| {
+            x >= 0 && y >= 0 && x < w && y < h && scene.cell_types[(y * w + x) as usize] & 0xf == 8
+        };
+        scene
+            .objects
+            .iter()
+            .filter(|o| matches!(o.class, ObjectClass::Building(0x32..=0x3e)) && o.cell.is_some())
+            .filter(|o| {
+                o.combat
+                    .as_ref()
+                    .is_some_and(|c| c.hull > 0.0 && c.phantom <= 0.0)
+            })
+            .find_map(|b| {
+                let (bx, by) = b.cell.unwrap();
+                let n = super::trade::building_cells(b);
+                [
+                    (bx - 3, by),
+                    (bx + n + 2, by),
+                    (bx, by - 3),
+                    (bx, by + n + 2),
+                ]
+                .into_iter()
+                .find(|&cell| {
+                    let near =
+                        |c: (i32, i32)| (c.0 - cell.0).abs() <= 7 && (c.1 - cell.1).abs() <= 7;
+                    land(cell.0, cell.1)
+                        && scene.objects.iter().all(|o| {
+                            o.id == b.id
+                                || match (o.cell, &o.ship) {
+                                    (_, Some(_)) => !near(((o.x / t) as i32, (o.y / t) as i32)),
+                                    (Some(_), None) => !foot(o).any(near),
+                                    _ => true,
+                                }
+                        })
+                })
+                .map(|cell| (b.id, cell))
+            })
+    };
+    let (mut scene, (bid, cell)) = (0..14)
+        .find_map(|m| {
+            let mut scene = Scene::load(&data, &mut caches, &format!("miss{m:03}")).ok()?;
+            scene.brain = None;
+            let found = pick(&scene)?;
+            Some((scene, found))
+        })
+        .expect("a building with room beside it");
+    scene.put_walker(super::walkers::NO_LAIR, 0x1f4, cell, &data, &mut caches);
+    scene.put_walker(super::walkers::NO_LAIR, 0x1f4, cell, &data, &mut caches);
+    let (a, b) = (scene.walkers[0].id, scene.walkers[1].id);
+    assert_eq!(scene.jams.len(), 1);
+    assert_eq!(scene.jams[0].cell, cell);
+    assert_eq!(scene.jams[0].members, vec![a, b]);
+    assert_eq!((scene.jams[0].id, b), (a + 1, a + 2));
+    // The expected target: the building's cell of the highest priority,
+    // the first in row order among equals.
+    let bi = scene.object_index(bid).unwrap();
+    let mut best: Option<((i32, i32), u32)> = None;
+    for c in foot(&scene.objects[bi]) {
+        let (dx, dy) = ((c.0 - cell.0) as i64, (c.1 - cell.1) as i64);
+        let p = 10 - super::fort::root((dx * dx + dy * dy) as u64);
+        if best.is_none_or(|(_, q)| p > q) {
+            best = Some((c, p));
+        }
+    }
+    let (target_cell, prio) = best.unwrap();
+    scene.ticks = 100;
+    for w in &mut scene.walkers {
+        (w.state, w.scan, w.wake) = (super::walkers::STAND, 0, 0);
+        w.frame = w.first;
+    }
+    // The second stands by, to be seen as told.
+    (scene.walkers[1].scan, scene.walkers[1].wake) = (u32::MAX, u32::MAX);
+    scene.ticks += 1;
+    scene.tick_walkers(&data, &mut caches);
+    let (wa, wb) = (&scene.walkers[0], &scene.walkers[1]);
+    assert!(wa.target);
+    assert_eq!(
+        (wa.target_cell, wa.prio, wa.target_id),
+        (target_cell, prio, bid)
+    );
+    assert!(!wb.target);
+    assert!(wb.pursue && wb.crowded);
+    assert_eq!((wb.pursue_to, wb.prio), (target_cell, prio));
+    // It went to throw on its step this tick; it starts on the next and
+    // throws at frame 0xb, twelve ticks on, or thirteen when it turned
+    // (its picture set again is first drawn without a step, `+0xa8`).
+    assert_eq!(scene.walkers[0].state, super::walkers::THROW);
+    let entered = scene.ticks;
+    let before = scene.walkers[0].heading;
+    let mut thrown_at = None;
+    let mut expect = None;
+    for _ in 0..30 {
+        let w = &scene.walkers[0];
+        if w.throwing && w.frame == 0xb && !w.thrown {
+            // The step's draw, the cry's, then the miss draw beyond 1 cell.
+            let mut r = crate::combat::Rng(w.rng);
+            r.next();
+            r.next();
+            let (dx, dy) = (
+                (target_cell.0 - cell.0) as i64,
+                (target_cell.1 - cell.1) as i64,
+            );
+            let d = super::fort::root((dx * dx + dy * dy) as u64);
+            expect = Some(!(d > 1 && r.next() % (8 - d) == 0));
+        }
+        scene.walkers[1].scan = u32::MAX;
+        scene.ticks += 1;
+        scene.tick_walkers(&data, &mut caches);
+        if !scene.throws.is_empty() && thrown_at.is_none() {
+            thrown_at = Some(scene.ticks);
+        }
+    }
+    let turned = u32::from(scene.walkers[0].heading != before);
+    assert_eq!(thrown_at, Some(entered + 12 + turned));
+    assert_eq!(scene.throws.len(), 1, "once a throw");
+    let throw = scene.throws[0];
+    assert_eq!((throw.target, throw.shooter, throw.weapon), (bid, a, 6));
+    assert_eq!(Some(throw.strikes), expect);
+    let dx = (target_cell.0 - cell.0).signum();
+    let dy = (target_cell.1 - cell.1).signum();
+    let heading = super::walk_path::DIRS
+        .iter()
+        .rposition(|&(x, y)| x.signum() == dx && y.signum() == dy)
+        .unwrap();
+    assert_eq!(scene.walkers[0].heading as usize, heading);
+}
+
+/// A blow to a land creature waits for its tick (0x4139e0, 0x413ad0): one
+/// that leaves it life takes it off (30000 - 10000, 66 percent) and shows
+/// the hit when its picture next ends (state 4, its 10 frames, then back);
+/// one that does not leaves it dying at life 1 (state 5) with its cry,
+/// removed at the dying picture's end (a cyclops' 16 frames at 2 ticks, a
+/// minotaur's 20 at 2 then 4 past frame 0xb), leaving its jam. Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn land_creatures_hit_and_die() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    use super::walkers::{DYING, HIT, STAND};
+    let run = |scene: &mut Scene, n: u32, data: &GameData, caches: &mut Caches| {
+        let mut states = Vec::new();
+        for _ in 0..n {
+            scene.ticks += 1;
+            scene.tick_walkers(data, caches);
+            states.push(scene.walkers[0].state);
+        }
+        states
+    };
+    for (class, last) in [(0x1f4, 32), (0x1f5, 56)] {
+        let mut scene = Scene::load(&data, &mut caches, "miss006").unwrap();
+        scene.brain = None;
+        let w = scene.grid.width as i32;
+        let land = |s: &Scene, x: i32, y: i32| s.cell_types[(y * w + x) as usize] & 0xf == 8;
+        let start = (2..scene.grid.height as i32 - 2)
+            .flat_map(|y| (2..w - 4).map(move |x| (x, y)))
+            .find(|&(x, y)| land(&scene, x, y))
+            .unwrap();
+        scene.put_walker(super::walkers::NO_LAIR, class, start, &data, &mut caches);
+        let id = scene.walkers[0].id;
+        (scene.walkers[0].scan, scene.walkers[0].wake) = (u32::MAX, u32::MAX);
+        if class == 0x1f4 {
+            scene.walker_struck(id, 10_000.0 / 15.0, None);
+            let states = run(&mut scene, 30, &data, &mut caches);
+            assert_eq!((scene.walkers[0].life, scene.walkers[0].pct), (20_000, 66));
+            // It appears for 16 ticks, then shows the hit for 10.
+            let hit: Vec<usize> = (0..30).filter(|&i| states[i] == HIT).collect();
+            assert_eq!(hit, (15..25).collect::<Vec<_>>());
+            assert_eq!(states[25], STAND);
+        }
+        scene.sounds.clear();
+        scene.walker_struck(id, 40_000.0 / 15.0, Some((1, 0)));
+        let states = run(&mut scene, 1, &data, &mut caches);
+        let dying_from = scene.ticks;
+        assert_eq!(states, vec![DYING]);
+        assert_eq!((scene.walkers[0].life, scene.walkers[0].pct), (1, 1));
+        assert!(scene.sounds.iter().any(|s| s.0 == "deac1d"));
+        let mut gone_at = None;
+        for _ in 0..80 {
+            scene.ticks += 1;
+            scene.tick_walkers(&data, &mut caches);
+            if scene.walkers[0].gone {
+                gone_at = Some(scene.ticks - dying_from);
+                break;
+            }
+        }
+        assert_eq!(gone_at, Some(last), "class {class:#x}");
+        scene.run_walkers(0.0, &data, &mut caches);
+        assert!(scene.walkers.is_empty() && scene.jams.is_empty());
+        assert!(scene.object_index(id).is_none());
+    }
+}
+
 /// A settlement being made a town, called off at frame f of n: `500 x (n
 /// - f) / n` back, a settlement again (TownObj 0x441ba0 case 10); its
 /// training called off: `(100 - p) x amber / 100` back, the fish share
@@ -9530,10 +9751,12 @@ fn lightning_on_creatures() {
         assert_eq!(points(&scene, cyclops), full * pct / 100);
     }
     scene.lightning_strike(x, y, human, &data, &mut caches);
-    assert!(scene.object_index(cyclops).is_none_or(|i| scene.objects[i]
-        .combat
-        .as_ref()
-        .is_none_or(|c| c.hull <= 0.0)));
+    // Killed: removed at once (message 10), not left dying.
+    assert!(scene
+        .walkers
+        .iter()
+        .find(|w| w.id == cyclops)
+        .is_none_or(|w| w.gone));
     // One on a tile whose west side is shore stands on a shut half (its
     // north-west, 0x5acf13 bit 8): the first strike about it kills it.
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
@@ -9550,14 +9773,15 @@ fn lightning_on_creatures() {
         .unwrap();
     scene.put_walker(super::walkers::NO_LAIR, 0x1f4, land, &data, &mut caches);
     let cyclops = scene.objects.iter().map(|o| o.id).max().unwrap();
-    assert!(scene.walker_half_shut(cyclops));
     let (x, y) = at(beside);
     scene.sounds.clear();
     scene.lightning_strike(x, y, human, &data, &mut caches);
-    assert!(scene.object_index(cyclops).is_none_or(|i| scene.objects[i]
-        .combat
-        .as_ref()
-        .is_none_or(|c| c.hull <= 0.0)));
+    // Killed: removed at once (message 10), not left dying.
+    assert!(scene
+        .walkers
+        .iter()
+        .find(|w| w.id == cyclops)
+        .is_none_or(|w| w.gone));
     // No cry: no shot struck it (0x413ad0's `+0x144`).
     assert!(!scene.sounds.iter().any(|s| s.0 == "deac1d"));
 }

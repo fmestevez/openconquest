@@ -4326,30 +4326,117 @@ and 47 / 28 (46). At the route's end, with a target, a pursuit or the
 route shut it stops: another creature of its jam on its half (0x415e40)
 makes it choose again at once, without turning; else it throws or
 stands. Every 5 ticks, after the grid's refresh, a half of the route
-ahead that is -1 shuts it. A creature
-throws (0x412740) a shot (`BOMB<letter>`, 0x4126f0: cyclopes G with a
-ballista's level-1 blow, minotaurs O with a small catapult's, amazons A
-with item 3's; the A x 15 cache's copy at 0x5c73a8), its blow kept by
-health (0x594ab8: 1000, 947, 894, 837, 775, 740, 532, 548, 447, 376, 30
-thousandths by tenths lost); it hits but from 2 cells off, where 1 in
-(8 - cells) misses.
+ahead that is -1 shuts it.
+
+**Jams.** The creatures on a cell are held by its jam
+(`CyclopsJamClassTy`, class 0x1f7, side 2, made by 0x416230 for message
+0x1498 `{x, y, 1}` when a creature enters an empty cell; its id from the
+objects' count, after the creature's), the cell's occupant: up to 100
+members `{id, object}` in the order they joined (message 0x1879f), a
+leaver's followers closing up (0x187a0), the jam gone with its last
+(0x499860, message 10). A creature joins its cell's jam when made, and
+on the tick it takes a half of another cell leaves the old and joins the
+new (0x412cf5-0x412e9e); removed (message 3) it leaves. The jam passes
+lightning (0xda93), message 0xda96 and the alerts (0x187a2) on to each
+member (0x4161a0); is always there (vt+0x2c 0x411160); takes no blows
+itself (vt+4 0x406330 ignores them); and answers a fort's or
+stronghold's scan as its first member (0x415df0), their track taking a
+jam holding the target (0x415e00). 0x415e40 (another member on a given
+half) is the walk's crowding test.
+
+**Looking about** (0x412290, every 5 ticks, not appearing nor crowded
+`+0x124`). Throwing, it drops its target (`+0x120`) if the occupant of
+the target cell (`+0x128`, `+0x12c`, absolute) is gone or is not the
+object it took (`+0x13c`), or is a ship with the phantom (`+0x253`, set
+by 0xda97 at 0x4de378) or Orpheus (0x4ba790 hero 2), or a building
+0x32-0x3e with the phantom (vt+0xa4 0x40dfd0: `+0x134`, set by 0xda97 at
+0x426f7b). Then over its mask's cells (value 1, row by row; on the map;
+the occupant slot only) it takes an occupant that is there (vt+0x2c) and
+not a jam, a castle (0x42, 0x43), a harpy nest (0x44, 0x45) or a lair
+(0x46-0x48), nor a ship on its reserved cell (`+0x5ab`), with the
+phantom or Orpheus, nor a building 0x32-0x3e with the phantom: no side
+or player test, so it throws at anyone's ships and buildings. The first
+found, or one whose `10 - d` (0x5576d8 from its cell) is above the
+priority it holds (`+0x130`, unsigned), becomes its target, its throw
+started afresh (`+0x134 = +0x138 = +0x124 = 0`). Having seen one, it
+sends 0x187a2 `{priority, target cell}` to the jam of its own cell (the
+mask's centre, inside its walk grid); each other member with no target
+and not crowded, or a lower priority, pursues that cell (`+0xd0`; the
+absolute cell read as a half of its grid, as written), takes the
+priority and is crowded. Nothing found while throwing, it stands.
+
+**Throwing** (state 3, 0x412740; standing on its next step after
+`+0xf0`, or at a walk's end, with a target). Each tick a draw; not yet
+throwing (`+0x134`), it starts when `+0x138 + 40 +- 4` (+ with bit 16 of
+the draw) is below the tick (`+0x138` the tick), and turns to the last
+heading of 0x5c4f4c whose signs match the target cell less its own (its
+picture again at the same frame; a picture set again is drawn once
+before it steps, so a turn delays the throw a tick). Its picture holds
+frame 0 until then (0x411520). Throwing, at frame 0xb / 10 / 0x12
+(cyclops / minotaur / amazon) once (`+0x140`), with the target object
+still there (0x51f1f0): a draw, its cry one time in ten (events 0x7a-
+0x7c: `c1`-`c4`, `c5`, `aas031`); at `d` cells above 1 another draw,
+missing (byte `+0x3c` 0) when it is a multiple of `8 - d`, else hitting
+(100); message 0x14ba `{player 0xff, target, its id, its class, letter
+(0x4126f0: G, O, A), blow}`, the blow 0x594ab8[(100 - pct) / 10] (1000,
+947, 894, 837, 775, 740, 532, 548, 447, 376, 30) x the level-1 blow of a
+ballista / small catapult / item 3 (the A x 15 cache, 0x5c73f4 /
+0x5c73e8 / 0x5c73d0) / 1000. The picture's end (16 frames; the amazon's
+25) ends the throw (`+0x134 = 0`); the next starts 40 +- 4 ticks after
+this one did.
+
+**Life, blows and death.** Life `+0x7c` of 30000 / 16000 / 12000, its
+percentage `+0x78`. A blow (0x138e) or death (0x138b, not while dying)
+is queued (vt+4 0x4139e0, list `+0x84`) and read at its next tick before
+its step (0x413ad0): a blow, unless dying, marks it struck (`+0x144`) and
+takes its points off while the percentage left is above 0, else reports
+the death to the blow's player (0x50e750), leaves life and percentage 1
+and queues its death; its death sets it dying (state 5, percentage 1),
+crying (events 100-102: `deac1d`, `deac1d`, `destr1`) only if struck.
+Struck and not dying, when its picture next ends it shows the hit
+(state 4, 10 frames a tick each, then back to the state it was in),
+crying one time in ten (a draw; event 0x6f `hc1`-`hc6` for the cyclops,
+0x70 / 0x71 empty); throwing but not yet started it shows it at once,
+without the draw. Dying, 2 ticks a frame (the minotaur's and amazon's 4
+past frame 0xb); at the end it is removed (message 10: its jam left,
+0x187a1 to its lair). Lightning (0xda93 through the jam, 0x414b0f): its
+grid rebuilt; on the struck cell or with its half shut it dies (its queue
+dropped first), else 25 points off the percentage and life that
+percentage of the full, dying at 0; a death there is queued, read at
+once, reported to the caster and the creature removed at once, without
+its dying picture. Its sounds (0x50e570 kind 5 at its cell): appearing
+0x59-0x5b (`app3`), walking 0x85-0x87 (`lc1`-`lc3`, `limon1`-`limon4`,
+none for the amazon) when due, `((draw % 41 + 60) x 375) / 100` ticks
+apart.
 
 The port walks its creatures so (`scene/walkers.rs`, the route finding in
 `scene/walk_path.rs`, checked against the original's routes on a fixture
-grid). Not ported: the look about 0x412290 (the port's creature takes a
-ship in its first weapon's reach as its target and turns to it to
-throw), the alerts it sends its jam (0x187a2, which start the others'
-pursuits), the throw's aim and draws but the first a tick (0x412740 state
-3), the hit reaction (state 4) and the dying picture (the port's
-creatures go when killed), the jams (a creature's cell's fellows are the
-creatures on it), the walking and hit sounds (0x85-0x87, 0x6f-0x71: the
-port has no samples for those events; the walking sound's draws are
-kept). Not decoded: 0x55b560's back-trace when its first step finds no
-cell (it writes its uninitialised best cell, `[esp+0x28]` / `[esp+0x38]`
-read at 0x55b809 and 0x55b9c1: the port takes it as no route); a
-destination list whose weights are all 0 (0x413622 divides by zero: the
-port stands); `[game +0x2ee5]` (the port's draw of it, as for the
-ships').
+grid), with their jams, looks about, throws, blows and deaths. The walk
+grid at creation (0x42e720 with `param_4` 2, re-read in the
+disassembly: a cell not land, nibble 5 at 1 or nibbles 6-7 not 0 all
+-1, at 0x42e91a-0x42e92b and 0x42e9c2; else its shore sides by
+0x5acf13; the 4 x 4 reopening at 0x42ea5e is for `param_4` 4 only) is
+as ported. `[game +0x2ee5]` is the saved `RND_INIT`, else the time stamp
+0x541840 at the game's creation (0x4ec433, 0x4ed18c, 0x53c04e): not
+reproducible, the port draws it once from the scene's generator, as for
+the ships'. Not ported: where a throw leaves from (`+0xb4 - w / 2 +
+T[h].x`, `+0xb8 - h + T[h].y`, T 0x594ae0 / 0x594b20 / 0x594b60 by
+heading) and where it aims (the target's vt+0xc with the hit byte: a
+ship's 0x4e07c0 draws from the ship's own generator, a jam's 0x415ce0
+gives its cell's corner on a miss): the port's shot leaves from the
+creature and aims as its other shots; message 0xda96 (life off by the
+message's amount); the original's order on a jam (a click gives the
+creature); several sounds to pick from are picked by the port's
+stand-in for the C library's `rand()` (`gull_rng`). Not decoded: the
+picture's size `+0x61` / `+0x65` the throw's start needs (0x5463bf sets
+it from the sequence's `+0x29` / `+0x2b` as loaded by 0x542940, which was
+not read); 0x55b560's back-trace when its first step finds no cell (it
+writes its uninitialised best cell, `[esp+0x28]` / `[esp+0x38]` read at
+0x55b809 and 0x55b9c1: the port takes it as no route); a destination
+list whose weights are all 0 (0x413622 divides by zero; the port's walk
+grid opens only halves of land cells, low nibble 8, which 0x42eb20
+weighs 10 if its tile type 8 is that nibble: not proven, the port
+stands).
 
 ## Sheep
 
@@ -5398,8 +5485,9 @@ creatures about, field 9 their speed) send a cyclops, minotaur or amazon
 (CyclopClassTy 0x1f4-0x1f6) onto a free land cell beside them every (10 -
 field 9) x 20-25 time units while fewer are out, to roam the island about
 the lair. Their sprites are `CLPSPR_`/`MNTSPR_`/`AMZSPR_` + state +
-heading: 0 appearing (out of smoke), 1 walking, 2 standing, 3 throwing (the
-amazons' in two parts, `AMZSPR_3<heading><part>`), 4 turning, 5 vanishing.
+heading: 0 appearing (out of smoke), 1 standing, 2 walking, 3 throwing
+(the amazons' in two parts, `AMZSPR_3<heading><part>`), 4 hit, 5 dying, 6
+turning (`<..>SPR_6`, no heading); see Land creatures.
 
 Command buttons (`CBUT_<name>_00`-`_30`, 49x49; the last frame greyed for
 a disabled command) are animated sprites: the command panel (0x4f31b0)

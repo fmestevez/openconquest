@@ -8,8 +8,8 @@
 use openconquest_formats::map::TILE_SIZE;
 use openconquest_formats::{ObjectClass, ObjectRecord};
 
-use super::walk_path::{half_path, near_last, wave};
-use super::{heading_towards, Scene};
+use super::walk_path::{half_path, near_last, wave, DIRS};
+use super::Scene;
 use crate::assets::GameData;
 use crate::combat::Rng;
 use crate::objects::{self, Caches};
@@ -66,6 +66,41 @@ const TURN: [[i32; 8]; 8] = [
 const WAKE_TICKS: u32 = 0x28;
 /// Ticks between the creature's looks about (0x413d70, `+0xf4 = now + 5`).
 const SCAN_TICKS: u32 = 5;
+/// The most creatures a jam holds (0x415ee0, message 0x1879f).
+const JAM_MEMBERS: usize = 100;
+/// Their full life by class (0x413d70 message 2): cyclops, minotaur,
+/// amazon.
+const FULL_LIFE: [i32; 3] = [30000, 16000, 12000];
+/// The throwing picture's frame the throw leaves on (0x412900): cyclops
+/// 0xb, minotaur 10, amazon 0x12.
+const THROW_FRAME: [i32; 3] = [0xb, 10, 0x12];
+/// Their sounds (0x50e570 kind 5 at their cell), by class, each event's
+/// `SND_n` list: appearing (events 0x59-0x5b, 0x413d70), dying when struck
+/// (100-102, 0x413ad0), hit (0x6f-0x71, one time in ten, 0x411520),
+/// throwing (0x7a-0x7c, one time in ten, 0x412740), walking (0x85-0x87,
+/// 0x412740).
+const APPEAR_SOUND: [&[&str]; 3] = [&["app3"], &["app3"], &["app3"]];
+const DEATH_SOUND: [&[&str]; 3] = [&["deac1d"], &["deac1d"], &["destr1"]];
+const HIT_SOUND: [&[&str]; 3] = [&["hc1", "hc2", "hc3", "hc4", "hc5", "hc6"], &[], &[]];
+const THROW_SOUND: [&[&str]; 3] = [
+    &["c1", "c2", "c3", "c4"],
+    &["c5", "c5", "c5", "c5", "c5"],
+    &["aas031"],
+];
+const WALK_SOUND: [&[&str]; 3] = [
+    &["lc1", "lc2", "lc3"],
+    &["limon2", "limon4", "limon1", "limon3"],
+    &[],
+];
+
+/// The index of a land creature class in the tables above.
+fn kind_of(class: u32) -> usize {
+    match class {
+        0x1f4 => 0,
+        0x1f5 => 1,
+        _ => 2,
+    }
+}
 
 /// What a creature is doing (`+0x154`, which is also its picture's state
 /// digit): 0 appearing, 1 standing, 2 walking, 3 throwing, 4 hit, 5 dying,
@@ -165,9 +200,71 @@ pub struct Walker {
     pub scan: u32,
     #[serde(default)]
     pub sound_at: u32,
-    /// The ship it last saw in reach (the port's throw).
+    /// Its cell's jam (`+0x8c`).
     #[serde(default)]
-    pub prey: Option<(f32, f32)>,
+    pub jam: u32,
+    /// Life in the original's points (`+0x7c`, of 30000 / 16000 / 12000)
+    /// and its percentage (`+0x78`); 0 not yet set (an older save).
+    #[serde(default)]
+    pub life: i32,
+    #[serde(default)]
+    pub pct: i32,
+    /// Struck since its picture last ended (`+0x144`), and the messages
+    /// waiting for its tick (`+0x84`: 0x138e blows, 0x138b its death).
+    #[serde(default)]
+    pub hit: bool,
+    #[serde(default)]
+    pub queue: Vec<Struck>,
+    /// What it throws at: the cell (absolute, `+0x128`, `+0x12c`), its
+    /// priority `10 - d` (`+0x130`) and the object's id (`+0x13c`).
+    #[serde(default)]
+    pub target_cell: (i32, i32),
+    #[serde(default)]
+    pub prio: u32,
+    #[serde(default)]
+    pub target_id: u32,
+    /// Throwing (`+0x134`), since tick `throw_at` (`+0x138`), thrown this
+    /// time (`+0x140`).
+    #[serde(default)]
+    pub throwing: bool,
+    #[serde(default)]
+    pub throw_at: u32,
+    #[serde(default)]
+    pub thrown: bool,
+    /// Removed (message 10) at the end of its dying picture.
+    #[serde(default)]
+    pub gone: bool,
+}
+
+/// A message waiting in a land creature's list (`+0x84`): a blow
+/// (0x138e, `points` and the player it is put down to, the message's
+/// `+0x15`) or its death (0x138b).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum Struck {
+    Blow { points: i32, by: Option<(u32, u32)> },
+    Death,
+}
+
+/// A land creatures' jam (CyclopsJamClassTy 0x1f7, made by 0x416230 for
+/// message 0x1498): the occupant of a cell they stand on, holding their
+/// ids in the order they joined (`+0x74` of them, `+0x78` pairs).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Jam {
+    pub id: u32,
+    pub cell: (i32, i32),
+    pub members: Vec<u32>,
+}
+
+/// A throw made this tick (message 0x14ba from 0x412740 state 3): at
+/// `target` with the creature's weapon, hitting (`+0x3c` 100) or not
+/// (0), by a creature at `pct` of its life.
+#[derive(Debug, Clone, Copy)]
+pub struct Throw {
+    pub target: u32,
+    pub weapon: u8,
+    pub shooter: u32,
+    pub strikes: bool,
+    pub pct: i32,
 }
 
 /// The `lair` of a creature no lair sent out.
@@ -221,6 +318,12 @@ impl Walker {
     fn pixel(&self, (x, y): (i32, i32)) -> (i32, i32) {
         let (ox, oy, _, _) = self.grid.unwrap_or_default();
         ((x * 64) / 2 + 16 + ox * 64, (y * 64) / 2 + 16 + oy * 64)
+    }
+
+    /// Its cell (0x411ca0): its half over 2 from the grid's origin.
+    fn cell(&self) -> (i32, i32) {
+        let (ox, oy, _, _) = self.grid.unwrap_or_default();
+        (ox + self.half.0 / 2, oy + self.half.1 / 2)
     }
 
     /// The grid's short at half `(x, y)`.
@@ -281,14 +384,7 @@ impl Scene {
         let t = TILE_SIZE as f32;
         let (lx, ly) = ((x / t) as i32, (y / t) as i32);
         // A free land cell beside the lair (0x414f00 looks at the eight).
-        let taken = |s: &Scene, cx: i32, cy: i32| {
-            s.walkers.iter().any(|w| {
-                s.object_index(w.id).is_some_and(|i| {
-                    let o = &s.objects[i];
-                    (o.x / t) as i32 == cx && (o.y / t) as i32 == cy
-                })
-            })
-        };
+        let taken = |s: &Scene, cx: i32, cy: i32| s.walker_at((cx, cy));
         let cells: Vec<(i32, i32)> = (-1..=1)
             .flat_map(|dy| (-1..=1).map(move |dx| (lx + dx, ly + dy)))
             .filter(|&(cx, cy)| {
@@ -317,15 +413,14 @@ impl Scene {
     }
 
     /// A land creature of `class` (CyclopClassTy, 0x1497) appears on cell
-    /// `(cx, cy)`, sent out by `lair`. In the original each is an object
-    /// of its own; those on one cell are held by its jam (0x1f7,
-    /// CyclopsJamClassTy 0x415ee0: up to 100, joined by message 0x1879f,
-    /// left by 0x187a0, gone with the last, and passing lightning and
-    /// tornadoes on to each), which commands nothing. Message 2 (0x413d70):
-    /// its generator seeded `[game +0x2ee5] x id`, state 0, heading 0, one
-    /// draw (`+0x150`), on its cell's north-west half (`+0x90 = 2 (x -
-    /// origin)`, 0x411e7f), its walk grid made (0x411ce0, 0x42e720), its
-    /// picture set and drawn (0x4111b0, 0x411520).
+    /// `(cx, cy)`, sent out by `lair`. Message 2 (0x413d70): its life full
+    /// (30000 / 16000 / 12000), on its cell's north-west half (`+0x90 = 2
+    /// (x - origin)`, 0x411e7f) of its walk grid (0x411ce0, 0x42e720); the
+    /// cell's jam its own, a new one made there if the cell has none
+    /// (message 0x1498, 0x416230), joined (0x1879f); its generator seeded
+    /// `[game +0x2ee5] x id`, state 0, heading 0, its appearing sound
+    /// (events 0x59-0x5b) at its cell, one draw (`+0x150`); its picture
+    /// set and drawn (0x4111b0, 0x411520).
     pub(super) fn put_walker(
         &mut self,
         lair: u32,
@@ -334,7 +429,7 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) {
-        let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
+        let id = self.next_walker_id();
         let mut fields = vec![0u32; 8];
         fields[0] = class;
         fields[4] = cx as u32;
@@ -347,25 +442,95 @@ impl Scene {
         if let Ok(Some(mut obj)) = objects::resolve(data, caches, &rec) {
             let grid = self.walk_grid_box((cx, cy));
             let (ox, oy, _, _) = grid;
+            let life = FULL_LIFE[kind_of(class)];
             let mut w = Walker {
                 id,
                 lair,
                 grid: Some(grid),
-                rng: self.objects_seed().wrapping_mul(id),
                 half: (2 * (cx - ox), 2 * (cy - oy)),
+                life,
+                pct: 100,
                 ..Walker::default()
             };
             w.halves = self.terrain_halves(grid);
-            w.draw();
             w.pos = w.pixel(w.half);
             (obj.x, obj.y) = (w.pos.0 as f32, w.pos.1 as f32);
             self.objects.push(obj);
             self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
+            let cell = w.cell();
             self.walkers.push(w);
             let k = self.walkers.len() - 1;
+            let jam = self.jam_for(cell);
+            self.walkers[k].jam = jam;
+            self.jam_join(jam, id);
+            self.walkers[k].rng = self.objects_seed().wrapping_mul(id);
+            self.walker_sound(k, class, &APPEAR_SOUND);
+            self.walkers[k].draw();
             self.walker_picture_set(k, data, caches);
             self.walker_picture(k, data, caches);
         }
+    }
+
+    /// The next object id, past the jams' too (each jam is an object of
+    /// the original's, its id taken from the same count).
+    fn next_walker_id(&self) -> u32 {
+        let objects = self.objects.iter().map(|o| o.id).max().unwrap_or(0);
+        let jams = self.jams.iter().map(|j| j.id).max().unwrap_or(0);
+        objects.max(jams) + 1
+    }
+
+    /// The jam on `cell`, a new one made there when it has none (message
+    /// 0x1498 through Players vt+8 with `{x, y, 1}`, 0x416230: class
+    /// 0x1f7, side 2, empty).
+    fn jam_for(&mut self, cell: (i32, i32)) -> u32 {
+        if let Some(j) = self.jams.iter().find(|j| j.cell == cell) {
+            return j.id;
+        }
+        let id = self.next_walker_id();
+        self.jams.push(Jam {
+            id,
+            cell,
+            members: Vec::new(),
+        });
+        id
+    }
+
+    /// Creature `id` joins jam `jam` (message 0x1879f, 0x415ee0): at the
+    /// end of its members unless already there, while it holds fewer than
+    /// 100.
+    fn jam_join(&mut self, jam: u32, id: u32) {
+        if let Some(j) = self.jams.iter_mut().find(|j| j.id == jam) {
+            if j.members.len() < JAM_MEMBERS && !j.members.contains(&id) {
+                j.members.push(id);
+            }
+        }
+    }
+
+    /// Creature `id` leaves jam `jam` (message 0x187a0): the members after
+    /// it close up; the last gone, the jam leaves its cell and is removed
+    /// (0x499860, message 10).
+    fn jam_leave(&mut self, jam: u32, id: u32) {
+        if let Some(j) = self.jams.iter_mut().find(|j| j.id == jam) {
+            j.members.retain(|&m| m != id);
+        }
+        self.jams.retain(|j| j.id != jam || !j.members.is_empty());
+    }
+
+    /// Walker `k` plays one of `sounds` for its class at its cell
+    /// (0x50e570 kind 5). (Several to pick from: the original's player
+    /// takes `rand() % count`, the C library's generator; the port's
+    /// stand-in for it is `gull_rng`, as for the buildings' calls.)
+    fn walker_sound(&mut self, k: usize, class: u32, sounds: &[&[&'static str]; 3]) {
+        let list = sounds[kind_of(class)];
+        let pick = match list.len() {
+            0 => return,
+            1 => list[0],
+            n => list[self.gull_rng.next() as usize % n],
+        };
+        let t = TILE_SIZE as f32;
+        let (cx, cy) = self.walkers[k].cell();
+        self.sounds
+            .push((pick, cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0));
     }
 
     /// A land creature's walk grid's box (0x411ce0): the bounding box of
@@ -501,55 +666,6 @@ impl Scene {
         }
     }
 
-    /// Whether the half cell land creature `id` stands on is shut in the
-    /// walk grid 0x411ef0 rebuilds (lightning kills it then, 0x414b0f):
-    /// its half (`+0x90`, `+0x94`); on its cell, an object other than a
-    /// jam in the cell's slot shuts all four, as does ground that is not
-    /// land (low nibble 8), nibble 5 at 1, or nibbles 6 or 7; else the
-    /// halves along the tile's shores (0x5acf13: 1 the north two, 2 the
-    /// east, 4 the south, 8 the west). A lair (0x46-0x48) or castle (0x42,
-    /// 0x43) in a cell's slot also shuts, unless the cell is on the grid's
-    /// last row, the south-west half of the cell east of it (when its
-    /// column, from the grid's origin, is below the origin's x plus the
-    /// grid's width less 1), the south-east half of the cell west of it
-    /// (its column above the origin's x) and the north halves of the cell
-    /// south of it (as written: grid-relative against absolute).
-    pub(super) fn walker_half_shut(&self, id: u32) -> bool {
-        let Some(w) = self.walkers.iter().find(|w| w.id == id) else {
-            return false;
-        };
-        if self.object_index(id).is_none() {
-            return false;
-        }
-        let (ox, oy, gw, gh) = w.grid.unwrap_or_else(|| {
-            let t = TILE_SIZE as f32;
-            let i = self.object_index(id).unwrap();
-            let o = &self.objects[i];
-            self.walk_grid_box(((o.x / t) as i32, (o.y / t) as i32))
-        });
-        let (hx, hy) = w.half;
-        let (rx, ry) = (hx.div_euclid(2), hy.div_euclid(2));
-        let (cx, cy) = (ox + rx, oy + ry);
-        let inside = |x: i32, y: i32| (0..gw).contains(&x) && (0..gh).contains(&y);
-        if !inside(rx, ry) {
-            return false;
-        }
-        // Quarter: 0 north-west, 1 north-east, 2 south-west, 3 south-east.
-        let q = hx.rem_euclid(2) + 2 * hy.rem_euclid(2);
-        if self.walk_cell_quarters((cx, cy))[q as usize] {
-            return true;
-        }
-        let fortress = |x: i32, y: i32| {
-            self.slot_class((x, y))
-                .is_some_and(|c| matches!(c, 0x42 | 0x43 | 0x46..=0x48))
-        };
-        match q {
-            2 => inside(rx - 1, ry) && ry < gh - 1 && rx - 1 < ox + gw - 1 && fortress(cx - 1, cy),
-            3 => inside(rx + 1, ry) && ry < gh - 1 && rx + 1 > ox && fortress(cx + 1, cy),
-            _ => inside(rx, ry - 1) && fortress(cx, cy - 1),
-        }
-    }
-
     /// The four halves of cell `(x, y)` in a land creature's walk grid
     /// (0x411ef0), shut or not: north-west, north-east, south-west,
     /// south-east.
@@ -611,16 +727,35 @@ impl Scene {
             .map(|o| o.record.class_id)
     }
 
-    /// Whether a land creature stands on cell `(cx, cy)` (its jam fills
-    /// the cell's object slot, 0x499800).
-    pub(super) fn walker_at(&self, (cx, cy): (i32, i32)) -> bool {
-        let t = TILE_SIZE as f32;
-        self.walkers.iter().any(|w| {
-            self.object_index(w.id).is_some_and(|i| {
-                let o = &self.objects[i];
-                (o.x / t) as i32 == cx && (o.y / t) as i32 == cy
-            })
+    /// The object holding cell `(x, y)`'s occupant slot (`map + 8 +
+    /// 24 n + 4`), but for a land creatures' jam: a ship (the port's ships hold
+    /// only the cell they are in) or a building whose footprint covers
+    /// the cell, while it stands (not ruins).
+    fn slot_object(&self, (x, y): (i32, i32)) -> Option<usize> {
+        if let Some(k) = self.slot_ship((x, y)) {
+            return Some(k);
+        }
+        self.objects.iter().position(|o| {
+            matches!(
+                o.class,
+                ObjectClass::Building(_)
+                    | ObjectClass::Barbarian(_)
+                    | ObjectClass::Castle(_)
+                    | ObjectClass::HarpyNest
+                    | ObjectClass::CreatureSpawn
+                    | ObjectClass::HeroHouse
+            ) && o.combat.is_some()
+                && o.cell.is_some_and(|(bx, by)| {
+                    let n = super::trade::building_cells(o);
+                    (bx..bx + n).contains(&x) && (by..by + n).contains(&y)
+                })
         })
+    }
+
+    /// Whether a land creature stands on cell `cell`: its jam fills the
+    /// cell's object slot (0x499800).
+    pub(super) fn walker_at(&self, cell: (i32, i32)) -> bool {
+        self.jams.iter().any(|j| j.cell == cell)
     }
 
     fn is_land(&self, cx: i32, cy: i32) -> bool {
@@ -628,34 +763,48 @@ impl Scene {
         cx >= 0 && cy >= 0 && (cx as u32) < w && (cy as u32) < h && !self.nav.is_water(cx, cy)
     }
 
-    /// Lairs send out creatures; those killed are gone.
+    /// Lairs send out creatures; those removed (message 10 at the end of
+    /// their dying picture or at lightning's kill, or gone otherwise) leave
+    /// their jams (message 3: 0x187a0) and the map.
     pub(super) fn run_walkers(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         self.run_lairs(dt, data, caches);
-        let alive = |s: &Scene, id: u32| {
-            s.object_index(id)
-                .is_some_and(|i| s.objects[i].combat.as_ref().is_some_and(|c| c.hull > 0.0))
-        };
         let walkers = std::mem::take(&mut self.walkers);
-        self.walkers = walkers.into_iter().filter(|w| alive(self, w.id)).collect();
+        let (gone, kept): (Vec<Walker>, Vec<Walker>) = walkers.into_iter().partition(|w| {
+            w.gone
+                || !self.object_index(w.id).is_some_and(|i| {
+                    self.objects[i]
+                        .combat
+                        .as_ref()
+                        .is_some_and(|c| c.hull > 0.0)
+                })
+        });
+        self.walkers = kept;
+        for w in gone {
+            self.jam_leave(w.jam, w.id);
+            self.objects.retain(|o| o.id != w.id);
+        }
     }
 
     /// Each land creature's tick (message 0, 0x413d70): every 5 ticks,
     /// unless hit or dying, its walk grid refreshed about it (0x411ef0)
-    /// and a look about (the port's: a ship in its reach to throw at; the
-    /// original's 0x412290 not ported), the throw given up when nothing is
-    /// there; then its state's step (0x412740) and its picture's
-    /// (0x411520).
+    /// and a look about (0x412290), the throw given up when nothing is
+    /// found; then its waiting messages (0x413ad0), its state's step
+    /// (0x412740) and its picture's (0x411520).
     pub(super) fn tick_walkers(&mut self, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
         for k in 0..self.walkers.len() {
+            if self.walkers[k].gone {
+                continue;
+            }
             let Some(i) = self.object_index(self.walkers[k].id) else {
                 continue;
             };
+            self.walker_life_init(k, i);
             if now >= self.walkers[k].scan {
                 self.walkers[k].scan = now + SCAN_TICKS;
                 if !matches!(self.walkers[k].state, DYING | HIT) {
                     self.refresh_halves(k);
-                    let found = self.walker_look(k, i);
+                    let found = self.walker_look(k);
                     let w = &mut self.walkers[k];
                     if !found && w.state == THROW {
                         w.target = false;
@@ -664,44 +813,293 @@ impl Scene {
                     }
                 }
             }
+            self.walker_messages(k, data, caches);
             self.walker_step(k, data, caches);
             self.walker_picture(k, data, caches);
+            let Some(i) = self.object_index(self.walkers[k].id) else {
+                continue;
+            };
             let (x, y) = self.walkers[k].pos;
             let o = &mut self.objects[i];
             (o.x, o.y) = (x as f32, y as f32);
         }
     }
 
-    /// The port's look about (in place of 0x412290, not ported): the
-    /// nearest ship of a player in its first weapon's reach becomes its
-    /// target (`+0x120`), which it turns to when it throws. Not while
-    /// appearing or crowded (`+0x124`), as 0x412290.
-    fn walker_look(&mut self, k: usize, i: usize) -> bool {
+    /// A walker of an older save takes its life and percentage from its
+    /// hull.
+    fn walker_life_init(&mut self, k: usize, i: usize) {
+        if self.walkers[k].life > 0 {
+            return;
+        }
+        let max = FULL_LIFE[kind_of(self.objects[i].record.class_id)];
+        let hull = self.objects[i].combat.as_ref().map_or(1.0, |c| c.hull);
+        let w = &mut self.walkers[k];
+        w.life = ((hull * 15.0).round() as i32).clamp(1, max);
+        w.pct = (w.life * 100 / max).max(1);
+    }
+
+    /// Walker `k`'s life to its object's hull (the port's points, a
+    /// fifteenth of the original's).
+    fn walker_hull(&mut self, k: usize) {
+        let (id, life) = (self.walkers[k].id, self.walkers[k].life);
+        if let Some(i) = self.object_index(id) {
+            if let Some(c) = self.objects[i].combat.as_mut() {
+                c.hull = life as f32 / 15.0;
+            }
+        }
+    }
+
+    /// A blow of `damage` (the port's points) reaches land creature `id`
+    /// (vt+4 0x4139e0 with 0x138e): kept for its tick.
+    pub(super) fn walker_struck(&mut self, id: u32, damage: f32, by: Option<(u32, u32)>) {
+        if let Some(w) = self.walkers.iter_mut().find(|w| w.id == id) {
+            let points = (damage * 15.0).round() as i32;
+            w.queue.push(Struck::Blow { points, by });
+        }
+    }
+
+    /// Walker `k`'s waiting messages (0x413ad0), in order, each taken off
+    /// as read: its death (0x138b), unless dying, sets it dying (state 5,
+    /// percentage 1, the dying picture from its first frame), crying out
+    /// (events 100-102) if a blow struck it since its picture last ended
+    /// (`+0x144`); a blow (0x138e), unless dying, marks it struck and takes
+    /// the points off its life while that leaves it a percentage above 0,
+    /// else puts the death down to the blow's player (0x50e750), leaves it
+    /// at life and percentage 1 and adds its death to the list.
+    fn walker_messages(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
+        let Some(i) = self.object_index(self.walkers[k].id) else {
+            return;
+        };
+        let class = self.objects[i].record.class_id;
+        let max = FULL_LIFE[kind_of(class)];
+        while !self.walkers[k].queue.is_empty() {
+            match self.walkers[k].queue.remove(0) {
+                Struck::Death => {
+                    if self.walkers[k].state == DYING {
+                        continue;
+                    }
+                    let w = &mut self.walkers[k];
+                    w.state = DYING;
+                    w.pct = 1;
+                    self.walker_picture_set(k, data, caches);
+                    let w = &mut self.walkers[k];
+                    w.frame = w.first;
+                    if w.hit {
+                        self.walker_sound(k, class, &DEATH_SOUND);
+                    }
+                }
+                Struck::Blow { points, by } => {
+                    let w = &mut self.walkers[k];
+                    if w.state == DYING {
+                        continue;
+                    }
+                    w.hit = true;
+                    if points < w.life && (w.life - points) * 100 / max != 0 {
+                        w.life -= points;
+                        w.pct = w.life * 100 / max;
+                    } else {
+                        w.pct = 1;
+                        w.life = 1;
+                        w.queue.push(Struck::Death);
+                        self.note_destroyed(i, by);
+                    }
+                }
+            }
+        }
+        self.walker_hull(k);
+    }
+
+    /// Lightning struck at `struck` reaches land creature `id` through its
+    /// jam (0x413d70 message 0xda93, 0x414b0f): its walk grid rebuilt about
+    /// it (0x411ef0); on the struck cell, or its half shut now, its waiting
+    /// messages dropped and it dies; else 25 points off its percentage,
+    /// its life that percentage of the full (and its picture again,
+    /// 0x4111b0), dying at 0 or less with life and percentage 1. Dying, its
+    /// death is added and the messages read (0x413ad0), the death put down
+    /// to the caster (0x50e750) and it is removed at once (message 10).
+    pub(super) fn walker_lightning(
+        &mut self,
+        id: u32,
+        struck: (i32, i32),
+        caster: Option<(u32, u32)>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        let Some(k) = self.walkers.iter().position(|w| w.id == id && !w.gone) else {
+            return;
+        };
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        let max = FULL_LIFE[kind_of(self.objects[i].record.class_id)];
+        self.refresh_halves(k);
+        let w = &mut self.walkers[k];
+        if struck == w.cell() || w.at(w.half) != 0 {
+            w.queue.clear();
+        } else {
+            w.pct -= 25;
+            if w.pct > 0 {
+                w.life = max * w.pct / 100;
+                self.walker_hull(k);
+                self.walker_picture_set(k, data, caches);
+                return;
+            }
+            w.life = 1;
+            w.pct = 1;
+        }
+        let w = &mut self.walkers[k];
+        if w.state != DYING {
+            w.queue.push(Struck::Death);
+        }
+        self.walker_messages(k, data, caches);
+        if let Some(i) = self.object_index(id) {
+            self.note_destroyed(i, caster);
+        }
+        self.walkers[k].gone = true;
+    }
+
+    /// Walker `k` looks about (0x412290; not while appearing or crowded,
+    /// `+0x124`). Throwing, it first drops its target if the object on the
+    /// target's cell is not it any more, or is a ship with the phantom
+    /// (`+0x253`) or Orpheus aboard (0x4ba790 hero 2), or a building
+    /// 0x32-0x3e with the phantom (vt+0xa4, 0x40dfd0: `+0x134`). Then the
+    /// cells of its mask about its cell (value 1, row by row; on the map),
+    /// each's occupant if there (vt+0x2c; the port: standing, life left)
+    /// and none of a jam, a castle (0x42, 0x43), a harpy nest (0x44,
+    /// 0x45) or a lair (0x46-0x48), nor a ship on its reserved cell, with
+    /// the phantom or Orpheus, nor a building 0x32-0x3e with the phantom:
+    /// whoever's it is. The first found, or one whose `10 - d` (`d` by
+    /// 0x5576d8 from its cell) is above what it holds, unsigned, becomes
+    /// its target, its throw started afresh. Something found, it tells its
+    /// cell's jam (the mask's centre, inside its walk grid), which tells
+    /// the others there (message 0x187a2 with the priority and the target
+    /// cell).
+    fn walker_look(&mut self, k: usize) -> bool {
+        let Some(class) = self
+            .object_index(self.walkers[k].id)
+            .map(|i| self.objects[i].record.class_id)
+        else {
+            return false;
+        };
         let w = &self.walkers[k];
         if w.state == APPEAR || w.crowded {
             return false;
         }
-        let (x, y) = (self.objects[i].x, self.objects[i].y);
-        let reach = self.objects[i]
-            .combat
-            .as_ref()
-            .and_then(|c| c.weapons.first())
-            .map_or(0.0, |&w| crate::combat::reach(w, 0).1);
-        let prey = self
-            .objects
-            .iter()
-            .filter(|o| {
-                o.ship.is_some() && o.owner.is_some() && o.owner != Some(crate::combat::MONSTERS)
-            })
-            .map(|o| (o.x - x, o.y - y))
-            .filter(|d| d.0.hypot(d.1) <= reach)
-            .min_by(|a, b| a.0.hypot(a.1).total_cmp(&b.0.hypot(b.1)));
-        let w = &mut self.walkers[k];
-        w.prey = prey;
-        if prey.is_some() {
-            w.target = true;
+        if w.state == THROW && self.target_lost(k) {
+            self.walkers[k].target = false;
         }
-        prey.is_some()
+        let mask = if class == 0x1f4 {
+            &CYCLOPS_MASK
+        } else {
+            &OTHER_MASK
+        };
+        let w = &self.walkers[k];
+        let (ox, oy, gw, gh) = w.grid.unwrap_or_default();
+        let (hx, hy) = (w.half.0 / 2, w.half.1 / 2);
+        let own = (ox + hx, oy + hy);
+        let (mw, mh) = (self.grid.width as i32, self.grid.height as i32);
+        let mut found = false;
+        for (j, row) in mask.iter().enumerate() {
+            for (i, &on) in row.iter().enumerate() {
+                if on != 1 {
+                    continue;
+                }
+                let cell = (ox + hx - 6 + i as i32, oy + hy - 6 + j as i32);
+                if cell.0 < 0 || cell.0 >= mw || cell.1 < 0 || cell.1 >= mh {
+                    continue;
+                }
+                let Some(t) = self.slot_object(cell) else {
+                    continue;
+                };
+                if !self.walker_prey(t) {
+                    continue;
+                }
+                found = true;
+                let (dx, dy) = ((cell.0 - own.0) as i64, (cell.1 - own.1) as i64);
+                let d = super::fort::root((dx * dx + dy * dy) as u64);
+                let prio = 10u32.wrapping_sub(d);
+                let id = self.objects[t].id;
+                let w = &mut self.walkers[k];
+                if !w.target || prio > w.prio {
+                    w.throwing = false;
+                    w.throw_at = 0;
+                    w.crowded = false;
+                    w.target = true;
+                    w.prio = prio;
+                    w.target_cell = cell;
+                    w.target_id = id;
+                }
+            }
+        }
+        if found && (0..gw).contains(&hx) && (0..gh).contains(&hy) {
+            let w = &self.walkers[k];
+            let (me, prio, cell) = (w.id, w.prio, w.target_cell);
+            let members = self
+                .jams
+                .iter()
+                .find(|j| j.cell == own)
+                .map(|j| j.members.clone())
+                .unwrap_or_default();
+            for m in members {
+                self.walker_alerted(m, me, prio, cell);
+            }
+        }
+        found
+    }
+
+    /// Whether the object `t` in a cell's slot is one a land creature
+    /// throws at (0x412290; see `walker_look`).
+    fn walker_prey(&self, t: usize) -> bool {
+        let o = &self.objects[t];
+        if !o.combat.as_ref().is_some_and(|c| c.hull > 0.0) {
+            return false;
+        }
+        if matches!(o.record.class_id, 0x42..=0x48) {
+            return false;
+        }
+        !self.prey_veiled(t)
+    }
+
+    /// A ship with the phantom or Orpheus aboard, or a building 0x32-0x3e
+    /// with the phantom (0x412290).
+    fn prey_veiled(&self, t: usize) -> bool {
+        let o = &self.objects[t];
+        let phantom = o.combat.as_ref().is_some_and(|c| c.phantom > 0.0);
+        match &o.ship {
+            Some(s) => phantom || s.has_hero(objects::ORPHEUS),
+            None => matches!(o.record.class_id, 0x32..=0x3e) && phantom,
+        }
+    }
+
+    /// Whether walker `k`'s target is no longer on its cell (0x412290 in
+    /// state 3: the cell's occupant gone or another, or veiled).
+    fn target_lost(&self, k: usize) -> bool {
+        let w = &self.walkers[k];
+        match self.slot_object(w.target_cell) {
+            None => true,
+            Some(t) => self.objects[t].id != w.target_id || self.prey_veiled(t),
+        }
+    }
+
+    /// Land creature `id` hears from `from`, of its jam, of a target at
+    /// `cell` of priority `prio` (message 0x187a2, 0x413d70): unless it is
+    /// the sender, with no target and not crowded, or holding a lower
+    /// priority (unsigned), it pursues the cell (`+0xd0`, `+0xd4`,
+    /// `+0xd8`; an absolute cell, read as a half of its grid, as written),
+    /// takes the priority and is crowded (`+0x124`).
+    fn walker_alerted(&mut self, id: u32, from: u32, prio: u32, cell: (i32, i32)) {
+        if id == from {
+            return;
+        }
+        let Some(w) = self.walkers.iter_mut().find(|w| w.id == id) else {
+            return;
+        };
+        if (!w.target && !w.crowded) || w.prio < prio {
+            w.pursue = true;
+            w.crowded = true;
+            w.prio = prio;
+            w.pursue_to = (cell.0 as u16 as i32, cell.1 as u16 as i32);
+        }
     }
 
     /// Walker `k`'s state step (0x412740).
@@ -714,7 +1112,8 @@ impl Scene {
                     return;
                 }
                 if w.target {
-                    self.walker_throw(k, data, caches);
+                    w.state = THROW;
+                    self.walker_picture_set(k, data, caches);
                     return;
                 }
                 // It goes on from its standing loop's first frame.
@@ -728,55 +1127,127 @@ impl Scene {
                 }
             }
             WALK => self.walk_step(k, data, caches),
-            // Its aim and throw are the port's (in `run_combat`); the
-            // step's first draw a tick is kept. (Not decoded:
-            // the rest of the throw's draws and timers in 0x412740 state 3.)
-            THROW => {
-                self.walkers[k].draw();
-            }
+            THROW => self.throw_step(k, data, caches),
             _ => {}
         }
     }
 
-    /// Goes to throwing (0x412740: state 3), turned to its prey (the
-    /// port's: the original's aim is not decoded).
-    fn walker_throw(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
+    /// Throwing, each tick (0x412740 state 3), a draw first. Not yet
+    /// throwing (`+0x134`), it starts once `throw_at + 40 +- 4` (+ with
+    /// bit 16 of the draw) is below the tick, and turns to its target: the
+    /// last of the eight headings (0x5c4f4c) whose signs match those of
+    /// the target cell less its own, its picture again if it changed, at
+    /// the same frame. Throwing, at the picture's frame 0xb / 10 / 0x12
+    /// and once (`+0x140`), with its target still there (0x51f1f0): a
+    /// draw, its cry one time in ten (events 0x7a-0x7c); at `d` cells
+    /// (0x5576d8) above 1 a draw, missing (`+0x3c` 0) when it is a
+    /// multiple of `8 - d`, else hitting (100); the throw (message 0x14ba:
+    /// its player 0xff, its weapon's level-1 blow by `throw_blow`).
+    /// (Not ported: where the throw leaves from, `+0xb4 - w / 2 +
+    /// T[heading].x`, `+0xb8 - h + T[heading].y` with T 0x594ae0 /
+    /// 0x594b20 / 0x594b60, as the picture's size `+0x61` / `+0x65`, set
+    /// at load from the sequence's `+0x29` / `+0x2b` by 0x5463bf after
+    /// 0x542940, is not decoded; nor where it aims, the target's vt+0xc
+    /// with the hit byte (a ship's 0x4e07c0 draws from the ship's own
+    /// generator; a jam's 0x415ce0 gives its cell's corner on a miss). The
+    /// port's shot leaves from the creature and aims as its other shots.)
+    fn throw_step(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
+        let now = self.ticks;
+        let Some(i) = self.object_index(self.walkers[k].id) else {
+            return;
+        };
+        let class = self.objects[i].record.class_id;
         let w = &mut self.walkers[k];
-        w.state = THROW;
-        if let Some((dx, dy)) = w.prey {
-            w.heading = heading_towards(dx, dy) as u8;
+        let r = w.draw();
+        if !w.throwing {
+            let late: i32 = if r & 1 != 0 { 4 } else { -4 };
+            if w.throw_at.wrapping_add(40).wrapping_add_signed(late) < now {
+                w.throwing = true;
+                w.thrown = false;
+                w.throw_at = now;
+            }
+            let (ox, oy, _, _) = w.grid.unwrap_or_default();
+            let dx = w.target_cell.0 - w.half.0 / 2 - ox;
+            let dy = w.target_cell.1 - w.half.1 / 2 - oy;
+            let (old, frame) = (w.heading, w.frame);
+            for (d, &(x, y)) in DIRS.iter().enumerate() {
+                if dx.signum() == x.signum() && dy.signum() == y.signum() {
+                    w.heading = d as u8;
+                }
+            }
+            if w.heading != old {
+                self.walker_picture_set(k, data, caches);
+                self.walkers[k].frame = frame;
+            }
+            return;
         }
-        self.walker_picture_set(k, data, caches);
+        if w.frame != THROW_FRAME[kind_of(class)] || w.thrown {
+            return;
+        }
+        let target = w.target_id;
+        if self.object_index(target).is_none() {
+            return;
+        }
+        if self.walkers[k].draw() % 10 == 0 {
+            self.walker_sound(k, class, &THROW_SOUND);
+        }
+        let w = &mut self.walkers[k];
+        let own = w.cell();
+        let (dx, dy) = (
+            (w.target_cell.0 - own.0) as i64,
+            (w.target_cell.1 - own.1) as i64,
+        );
+        let d = super::fort::root((dx * dx + dy * dy) as u64);
+        // (`d` is at most 5 within the masks, so `8 - d` is not 0.)
+        let strikes = !(d > 1 && w.draw() % (8 - d) == 0);
+        w.thrown = true;
+        let (shooter, pct) = (w.id, w.pct);
+        self.throws.push(Throw {
+            target,
+            weapon: crate::combat::creature_weapons(class)[0],
+            shooter,
+            strikes,
+            pct,
+        });
     }
 
-    /// Walking, each tick (0x412740 state 2): on the tick after a half
-    /// step ends it takes the route's next half (if it is still open,
-    /// else the route is shut), changing jams when the cell changes, and
-    /// its picture again; then, at the route's end, shut, or with a target
-    /// or a pursuit, it stops (`walk_end`); else it starts the half step
-    /// towards the entry after, turning its picture to that entry's
-    /// direction.
+    /// Walking, each tick (0x412740 state 2): its walking sound when due
+    /// (events 0x85-0x87), its next time a draw on; on the tick after a
+    /// half step ends it takes the route's next half (if it is still open,
+    /// else the route is shut), leaving its jam for the new cell's when
+    /// the cell changes (0x412cf5), and its picture again; then, at the
+    /// route's end, shut, or with a target or a pursuit, it stops
+    /// (`walk_end`); else it starts the half step towards the entry
+    /// after, turning its picture to that entry's direction.
     fn walk_step(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
-        let w = &mut self.walkers[k];
-        // The walking sound (0x85 / 0x86 / 0x87 by 0x50e570 kind 5; not
-        // played: the port has no list of their samples), its next time a
-        // draw on.
-        if now >= w.sound_at {
+        if now >= self.walkers[k].sound_at {
+            if let Some(i) = self.object_index(self.walkers[k].id) {
+                let class = self.objects[i].record.class_id;
+                self.walker_sound(k, class, &WALK_SOUND);
+            }
+            let w = &mut self.walkers[k];
             let r = w.draw();
             w.sound_at = now + ((r % 41 + 60) * 375) / 100;
         }
+        let w = &mut self.walkers[k];
         if w.moving {
             return;
         }
         if w.step < w.path.len() {
             let (x, y, _) = w.path[w.step];
             if w.at((x, y)) == 0 {
+                let changed = (w.half.0 / 2, w.half.1 / 2) != (x / 2, y / 2);
                 w.half = (x, y);
                 w.pos = w.pixel(w.half);
-                // (A new cell: the jam left and joined, 0x412cf5; the
-                // port keeps no jams.)
-                w.step += 1;
+                if changed {
+                    let (id, old, cell) = (w.id, w.jam, w.cell());
+                    self.jam_leave(old, id);
+                    let jam = self.jam_for(cell);
+                    self.walkers[k].jam = jam;
+                    self.jam_join(jam, id);
+                }
+                self.walkers[k].step += 1;
                 self.walker_picture_set(k, data, caches);
             } else {
                 w.pos = w.pixel(w.half);
@@ -805,26 +1276,19 @@ impl Scene {
         }
     }
 
-    /// The end of a walk (0x412740): another creature of its
-    /// cell on its half (0x415e40), it chooses a route at once, without
-    /// turning, and is crowded (`+0x124`); else it throws if it has a
-    /// target, or stands, choosing again in 40 ticks.
+    /// The end of a walk (0x412740): another member of its jam on its half
+    /// (0x415e40), it chooses a route at once, without turning, and is
+    /// crowded (`+0x124`); else it throws if it has a target, or stands,
+    /// choosing again in 40 ticks.
     fn walk_end(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
         self.walkers[k].blocked = false;
         let me = &self.walkers[k];
-        let t = TILE_SIZE as f32;
-        let cell = |s: &Scene, id: u32| {
-            s.object_index(id).map(|i| {
-                let o = &s.objects[i];
-                ((o.x / t) as i32, (o.y / t) as i32)
-            })
-        };
-        let mine = cell(self, me.id);
-        let crowded = self
-            .walkers
-            .iter()
-            .any(|o| o.id != me.id && o.half == me.half && cell(self, o.id) == mine);
+        let crowded = self.jams.iter().find(|j| j.id == me.jam).is_some_and(|j| {
+            j.members
+                .iter()
+                .any(|&m| m != me.id && self.walkers.iter().any(|o| o.id == m && o.half == me.half))
+        });
         if crowded {
             let w = &mut self.walkers[k];
             w.pursue = false;
@@ -840,7 +1304,8 @@ impl Scene {
         let w = &mut self.walkers[k];
         w.crowded = false;
         if w.target {
-            self.walker_throw(k, data, caches);
+            w.state = THROW;
+            self.walker_picture_set(k, data, caches);
             return;
         }
         w.state = STAND;
@@ -990,8 +1455,8 @@ impl Scene {
     /// Walker `k`'s picture for its state and heading (0x4111b0): its
     /// frames, ticks a frame, the whole sequence, but walking (cyclops
     /// frames 0-0x26 on the first steps, 0x16-0x36 after; minotaur and
-    /// amazon from 0, or 0x14 / 0x13 after, to the end) and turning (9 or,
-    /// for the amazon, 12 frames a heading, from the heading's to the
+    /// amazon from 0, or 0x14 / 0x13 after, to the end) and turning (12
+    /// or, for the amazon, 9 frames a heading, from the heading's to the
     /// one turned to, the nearer end of the sequence for heading 0); the
     /// frame at the first.
     fn walker_picture_set(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
@@ -1041,22 +1506,27 @@ impl Scene {
 
     /// Walker `k`'s picture's tick (0x411520): once its frame's ticks have
     /// passed it steps a frame towards the end, and at the end: appearing,
-    /// it stands; walking, the half step is over (the frame back to the
-    /// first, or to 0x16 / 0x14 / 0x13 after the first steps); turning,
-    /// it stands with the new heading; else it loops. Standing, after its
-    /// first frame each frame takes 5 ticks, not 25. Walking, its place
-    /// goes from the half step's start to its end with the frame (`(to -
-    /// from) x (frame - f0) / (end - f0)`, the first frames holding it:
-    /// cyclops below 7, f0 6 on the first steps; minotaur 9 / 8; amazon 10
-    /// / 9). (Not ported: the hit reaction, state 4, and the dying
-    /// picture: the port's creatures are gone when killed.)
+    /// it stands, its walking sound's time a draw on; walking, the half
+    /// step is over (the frame back to the first, or to 0x16 / 0x14 / 0x13
+    /// after the first steps); throwing, the throw is over (`+0x134`);
+    /// hit, it goes back to the state it was in; dying, it is removed
+    /// (message 10); turning, it stands with the new heading; else it
+    /// loops. Then, struck since (`+0x144`) and not dying, it shows the
+    /// hit (state 4, back to this state after), crying one time in ten
+    /// (a draw; events 0x6f-0x71). Standing, after its first frame each
+    /// frame takes 5 ticks, not 25. Throwing but not yet started, it holds
+    /// its first frame and shows a hit at once (no draw). Walking, its
+    /// place goes from the half step's start to its end with the frame
+    /// (`(to - from) x (frame - f0) / (end - f0)`, the first frames holding
+    /// it: cyclops below 7, f0 6 on the first steps; minotaur 9 / 8; amazon
+    /// 10 / 9). Dying, a minotaur's or amazon's frames past 0xb take twice
+    /// as long.
     fn walker_picture(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
         let Some(i) = self.object_index(self.walkers[k].id) else {
             return;
         };
         let class = self.objects[i].record.class_id;
-        let (mut stand, mut appeared) = (false, false);
         let w = &mut self.walkers[k];
         if (class == 0x1f5 || class == 0x1f6)
             && w.state == DYING
@@ -1078,8 +1548,10 @@ impl Scene {
                     APPEAR => {
                         w.frame = w.first;
                         w.state = STAND;
-                        stand = true;
-                        appeared = true;
+                        self.walker_picture_set(k, data, caches);
+                        let w = &mut self.walkers[k];
+                        let r = w.draw();
+                        w.sound_at = ((r % 41 + 60) * 375) / 100 + now;
                     }
                     WALK => {
                         w.moving = false;
@@ -1093,23 +1565,32 @@ impl Scene {
                             w.first
                         };
                     }
+                    THROW => {
+                        w.frame = w.first;
+                        w.throwing = false;
+                    }
+                    HIT => {
+                        w.state = w.back;
+                        self.walker_picture_set(k, data, caches);
+                    }
+                    DYING => w.gone = true,
                     TURN_ROUND => {
                         w.state = STAND;
                         w.heading = w.turn_to;
-                        stand = true;
+                        self.walker_picture_set(k, data, caches);
                     }
                     _ => w.frame = w.first,
                 }
-            }
-        }
-        if stand {
-            // Standing now: its picture (0x4111b0); having appeared, the
-            // walking sound's time a draw on (0x411520).
-            self.walker_picture_set(k, data, caches);
-            if appeared {
                 let w = &mut self.walkers[k];
-                let r = w.draw();
-                w.sound_at = ((r % 41 + 60) * 375) / 100 + now;
+                if w.hit && w.state != DYING {
+                    w.hit = false;
+                    w.back = w.state;
+                    w.state = HIT;
+                    self.walker_picture_set(k, data, caches);
+                    if self.walkers[k].draw() % 10 == 0 {
+                        self.walker_sound(k, class, &HIT_SOUND);
+                    }
+                }
             }
         }
         let w = &mut self.walkers[k];
@@ -1127,8 +1608,20 @@ impl Scene {
                     }
                 }
             }
+            THROW if !w.throwing => {
+                w.frame = w.first;
+                if w.hit {
+                    w.hit = false;
+                    w.back = THROW;
+                    w.state = HIT;
+                    self.walker_picture_set(k, data, caches);
+                    let w = &mut self.walkers[k];
+                    w.frame = w.first;
+                }
+            }
             _ => {}
         }
+        let w = &mut self.walkers[k];
         w.last = now;
         w.drawn = true;
         let (frame, count) = (w.frame, w.count.max(1));

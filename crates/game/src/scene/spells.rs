@@ -378,20 +378,8 @@ impl Scene {
                         (points(c.hull) * 25 / 100) as f32 / 15.0
                     }
                 }
-                // Land creatures (0x414b0f, through their jam): killed on
-                // the struck cell or when the half cell they stand on is
-                // shut in the walk grid rebuilt after the dig (0x411ef0,
-                // `walker_half_shut`); else 25 percentage points off, the
-                // life the percentage of the full one, killed at 0.
-                ObjectClass::Monster(0x1f4..=0x1f6) => {
-                    let max = points(c.max_hull);
-                    let pct = points(c.hull) * 100 / max.max(1) - 25;
-                    if centre || self.walker_half_shut(o.id) || pct <= 0 {
-                        c.hull
-                    } else {
-                        c.hull - (max * pct / 100) as f32 / 15.0
-                    }
-                }
+                // Land creatures take it through their jams, below.
+                ObjectClass::Monster(0x1f4..=0x1f6) => 0.0,
                 // The gorgon (0x402ab8) and the siren (0x404505): anywhere
                 // in the 3 x 3, whatever their shield, life to 0 with the
                 // caster as killer, unless resting under water (no
@@ -428,23 +416,20 @@ impl Scene {
             // No handler shows a hit or plays `hitmed` for it.
             let k = self.object_index(id);
             let ship = k.is_some_and(|k| self.objects[k].ship.is_some());
-            let walker = k.is_some_and(|k| {
-                matches!(self.objects[k].class, ObjectClass::Monster(0x1f4..=0x1f6))
-            });
             let by = if ship { None } else { caster };
-            let heard = self.sounds.len();
             self.strike(id, blow, false, by, true, data, caches);
-            // A land creature cries out at its death (0x413ad0, 0x138b)
-            // only when a shot has struck it since its last turn (`+0x144`,
-            // set by 0x138e at 0x413b69, cleared at 0x411698 / 0x411879);
-            // lightning's kill brings no 0x138e: no cry.
-            if walker {
-                let tail = self.sounds.split_off(heard);
-                self.sounds.extend(
-                    tail.into_iter()
-                        .filter(|s| !matches!(s.0, "deac1d" | "destr1")),
-                );
-            }
+        }
+        // A land creatures' jam in the 3 x 3 passes the blow on to each of
+        // its members (CyclopsJamClassTy 0x415ee0, 0x4161a0), each judging
+        // by its own cell (0x414b0f, `walker_lightning`).
+        let members: Vec<u32> = self
+            .jams
+            .iter()
+            .filter(|j| near(j.cell))
+            .flat_map(|j| j.members.clone())
+            .collect();
+        for id in members {
+            self.walker_lightning(id, (cx, cy), caster, data, caches);
         }
         // A sheep flock in the 3 x 3 is removed (0x433a77), not reported.
         let sheep: Vec<u32> = self

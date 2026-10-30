@@ -165,6 +165,9 @@ pub struct SaveGame {
     /// Cyclops, minotaurs and amazons out.
     #[serde(default)]
     pub walkers: Vec<crate::scene::Walker>,
+    /// Their jams, a cell each (0x1f7).
+    #[serde(default)]
+    pub jams: Vec<crate::scene::Jam>,
     #[serde(default)]
     pub lair_clocks: std::collections::BTreeMap<u32, f32>,
     /// What was going on that the scene keeps besides: walkways and

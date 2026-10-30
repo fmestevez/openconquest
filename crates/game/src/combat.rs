@@ -984,14 +984,16 @@ pub fn throw_letter(class: u32) -> u8 {
     }
 }
 
-/// What a land creature's throw keeps of its blow by the creature's health
-/// (0x594ab8, by tenths lost).
-pub fn throw_weakness(health: f32) -> f32 {
-    const LEFT: [f32; 11] = [
-        1000.0, 947.0, 894.0, 837.0, 775.0, 740.0, 532.0, 548.0, 447.0, 376.0, 30.0,
-    ];
-    let lost = ((1.0 - health.clamp(0.0, 1.0)) * 10.0) as usize;
-    LEFT[lost.min(10)] / 1000.0
+/// A land creature's throw's blow (0x412ae6): the level-1 blow of its
+/// weapon (the A x 15 cache, 0x5c73f4 / 0x5c73e8 / 0x5c73d0) times what
+/// it keeps by the creature's percentage of life `pct` (0x594ab8 by
+/// tenths lost, `(100 - pct) / 10`), over 1000, in the original's
+/// integers; returned in the port's points (a fifteenth).
+pub fn throw_blow(weapon: u8, pct: i32) -> f32 {
+    const LEFT: [i64; 11] = [1000, 947, 894, 837, 775, 740, 532, 548, 447, 376, 30];
+    let blow = (hull_damage_at(weapon, 1) * 15.0).round() as i64;
+    let lost = ((100 - pct) / 10).clamp(0, 10) as usize;
+    (LEFT[lost] * blow / 1000) as f32 / 15.0
 }
 
 /// Hull points of a ship type: its chart value (0x5bb4b0) x 650 (0x4ac210),
