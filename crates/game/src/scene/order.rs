@@ -18,6 +18,13 @@ pub enum Order {
         x: f32,
         y: f32,
     },
+    /// Command 0x14 with priority byte 0xff (0x4cc650): a move that
+    /// leaves the ship's priority as it was.
+    MoveKeep {
+        ship: u32,
+        x: f32,
+        y: f32,
+    },
     Waypoint {
         ship: u32,
         x: f32,
@@ -277,6 +284,7 @@ impl Order {
         use Order::*;
         match *self {
             Move { ship, .. }
+            | MoveKeep { ship, .. }
             | Waypoint { ship, .. }
             | Attack { ship, .. }
             | Close { ship, .. }
@@ -416,7 +424,7 @@ impl Scene {
             Found { ship, .. } | Repair { ship, .. } => (ship, 0),
             Gather { ship, .. } | Take { ship, .. } | Unload { ship, .. } => (ship, 1),
             Close { ship, .. } => (ship, 2),
-            Move { ship, .. } => (ship, 3),
+            Move { ship, .. } | MoveKeep { ship, .. } => (ship, 3),
             Attack { ship, .. } => (ship, 4),
             Stop { id } => {
                 let i = self.object_index(id)?;
@@ -467,6 +475,20 @@ impl Scene {
         match *order {
             Move { ship, x, y } => {
                 if self.order_move(ship, x, y) {
+                    Ok(0)
+                } else {
+                    Err("The ship cannot go there".into())
+                }
+            }
+            MoveKeep { ship, x, y } => {
+                let kept = self
+                    .object_index(ship)
+                    .and_then(|i| self.objects[i].ship.as_ref())
+                    .map(|s| s.priority);
+                if self.order_move(ship, x, y) {
+                    if let (Some(p), Some(i)) = (kept, self.object_index(ship)) {
+                        self.objects[i].ship.as_mut().unwrap().priority = p;
+                    }
                     Ok(0)
                 } else {
                     Err("The ship cannot go there".into())

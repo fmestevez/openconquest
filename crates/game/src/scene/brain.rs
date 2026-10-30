@@ -100,6 +100,9 @@ pub enum Op {
         ok: u32,
         failed: u32,
         to: (i32, i32),
+        /// Payload `+0xc` (0x479870, 0x47a450's p7): how near each ship's
+        /// cell (0x557440) counts as arrived (0x4ccf60).
+        tol: i32,
         ticks: u32,
         events: &'static [Event],
     },
@@ -215,6 +218,9 @@ pub struct MoveOrder {
     /// Block `+0x24`: each ship's cell in the formation (0x4cc7d0), by
     /// ship id; kept, and rewritten, while the block lasts.
     pub slots: Vec<(u32, (i32, i32))>,
+    /// Block `+0x18`: the tolerance (cells) its state judges arrival by.
+    #[serde(default)]
+    pub tol: i32,
 }
 
 /// A fleet's repair order (0x82, its block 0x4cd840 `{0x82, 0x51, now}`).
@@ -993,6 +999,7 @@ impl Scene {
                 ok,
                 failed,
                 to,
+                tol,
                 ticks,
                 events,
             } => {
@@ -1005,17 +1012,24 @@ impl Scene {
                     }
                 }
                 if !started {
-                    self.fleet_move(k, to);
-                } else if empty {
-                    // Done but not arrived: `failed`, unless the time is up
-                    // too (0x47a450 tests it after the query).
-                    let up = ticks > 0 && elapsed >= ticks;
-                    self.set_state(k, if up { ok } else { failed });
-                } else if self.fleet_idle(k) {
-                    let arrived = self.fleet_near(k, to, 2.0);
-                    self.set_state(k, if arrived { ok } else { failed });
-                } else if ticks > 0 && elapsed >= ticks {
-                    self.set_state(k, ok);
+                    self.fleet_move(k, to, tol);
+                } else {
+                    // The move's state (query 0x65, 0x4a0f20 -> 0x4ccf60):
+                    // done, `ok` with result 0xb, else `failed`; then the
+                    // time, `ok` (0x47a450, each switching the state, the
+                    // later winning). A fleet whose task is no longer the
+                    // move gets no answer (the original's result is then
+                    // its stack's leftover: taken as none).
+                    let mut next = match self.move_status(k) {
+                        Some((0x1f5, r)) => Some(if r == 0xb { ok } else { failed }),
+                        _ => None,
+                    };
+                    if ticks > 0 && elapsed >= ticks {
+                        next = Some(ok);
+                    }
+                    if let Some(s) = next {
+                        self.set_state(k, s);
+                    }
                 }
             }
             Op::Gather {
@@ -1076,7 +1090,9 @@ impl Scene {
                 if !started {
                     self.brain.as_mut().unwrap().fleets[k].point = 0;
                     let (x, y, _) = points[0];
-                    self.fleet_move(k, (x, y));
+                    // (0x47a900's own tolerance, its p7, is not carried:
+                    // the patrol's arrival is the port's own test.)
+                    self.fleet_move(k, (x, y), 0);
                     return;
                 }
                 let f = &self.brain.as_ref().unwrap().fleets[k];
@@ -1097,7 +1113,7 @@ impl Scene {
                         f.point = next;
                         f.paused_at = None;
                         let (x, y, _) = points[next];
-                        self.fleet_move(k, (x, y));
+                        self.fleet_move(k, (x, y), 0);
                     }
                     _ => {}
                 }
@@ -1903,11 +1919,42 @@ impl Scene {
     /// `to` itself, more the planner `formation::plan` over the ships'
     /// grids by draught), noted in the block (0x4cc7d0) and sent there by
     /// command 0x14 (0x4cf070, 0x520cc0: delivered at the next tick). If
-    /// the planner gives no cells, each ship is sent to `to` (0x4cc650).
-    /// (Not ported: 0x4cc650's priority byte 0xff, which leaves the ship's
-    /// priority as it was; the port's move sets 0.)
-    fn fleet_move(&mut self, k: usize, to: (i32, i32)) {
+    /// the planner gives no cells, each ship is sent to `to` by 0x4cc650,
+    /// whose priority byte 0xff leaves the ship's priority as it was.
+    /// `tol` is the order's tolerance (payload `+0xc`, block `+0x18`),
+    /// read by its state (0x4ccf60).
+    pub(super) fn fleet_move(&mut self, k: usize, to: (i32, i32), tol: i32) {
+        self.end_zone(super::gather::ZoneGroup::Brain(k));
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        f.repair = None;
+        let order = f.move_order.get_or_insert_with(MoveOrder::default);
+        order.to = to;
+        order.tol = tol;
+        if self.plan_formation(k) == 0 {
+            let t = TILE_SIZE as f32;
+            let (x, y) = (to.0 as f32 * t + t / 2.0, to.1 as f32 * t + t / 2.0);
+            for id in self.fleet_ships(k) {
+                if self.object_index(id).is_some() {
+                    self.post(super::Order::MoveKeep { ship: id, x, y });
+                }
+            }
+        }
+    }
+
+    /// 0x4cc970: the fleet's ships each given its cell of the formation
+    /// about the block's cell (one ship, the cell itself; more, the
+    /// planner `formation::plan`), noted (0x4cc7d0) and sent there
+    /// (0x4cc8c0 -> 0x4cf070, command 0x14 priority 0). Returns the ships
+    /// sent: 0 with none, or when the planner gives no cells.
+    fn plan_formation(&mut self, k: usize) -> usize {
         let t = TILE_SIZE as f32;
+        let Some(to) = self.brain.as_ref().unwrap().fleets[k]
+            .move_order
+            .as_ref()
+            .map(|o| o.to)
+        else {
+            return 0;
+        };
         let ships: Vec<(u32, crate::formation::Ship)> = self
             .fleet_ships(k)
             .into_iter()
@@ -1925,8 +1972,8 @@ impl Scene {
             })
             .collect();
         let cells = match ships.len() {
-            0 => Some(Vec::new()),
-            1 => Some(vec![to]),
+            0 => return 0,
+            1 => vec![to],
             _ => {
                 let (w, h) = (self.nav.width as i32, self.nav.height as i32);
                 let grid = |deep: bool| -> Vec<i16> {
@@ -1936,53 +1983,128 @@ impl Scene {
                         .collect()
                 };
                 let list: Vec<_> = ships.iter().map(|s| s.1).collect();
-                crate::formation::plan(&grid(true), &grid(false), (w, h), to, &list).ok()
+                match crate::formation::plan(&grid(true), &grid(false), (w, h), to, &list) {
+                    Ok(c) => c,
+                    Err(_) => return 0,
+                }
             }
         };
-        self.end_zone(super::gather::ZoneGroup::Brain(k));
-        let f = &mut self.brain.as_mut().unwrap().fleets[k];
-        f.repair = None;
-        let order = f.move_order.get_or_insert_with(MoveOrder::default);
-        order.to = to;
-        let goal = |(x, y): (i32, i32)| (x as f32 * t + t / 2.0, y as f32 * t + t / 2.0);
-        match cells {
-            Some(cells) => {
-                for (&(id, _), &cell) in ships.iter().zip(&cells) {
-                    match order.slots.iter_mut().find(|s| s.0 == id) {
-                        Some(s) => s.1 = cell,
-                        None => order.slots.push((id, cell)),
-                    }
-                }
-                for ((id, _), cell) in ships.into_iter().zip(cells) {
-                    let (x, y) = goal(cell);
-                    self.post(super::Order::Move { ship: id, x, y });
-                }
-            }
-            None => {
-                let (x, y) = goal(to);
-                for (id, _) in ships {
-                    self.post(super::Order::Move { ship: id, x, y });
-                }
+        let order = self.brain.as_mut().unwrap().fleets[k]
+            .move_order
+            .as_mut()
+            .unwrap();
+        for (&(id, _), &cell) in ships.iter().zip(&cells) {
+            match order.slots.iter_mut().find(|s| s.0 == id) {
+                Some(s) => s.1 = cell,
+                None => order.slots.push((id, cell)),
             }
         }
+        let mut sent = 0;
+        for ((id, _), cell) in ships.into_iter().zip(cells) {
+            let (x, y) = (cell.0 as f32 * t + t / 2.0, cell.1 as f32 * t + t / 2.0);
+            self.post(super::Order::Move { ship: id, x, y });
+            sent += 1;
+        }
+        sent
+    }
+
+    /// The move's state (0x4ccf60, query 0x65 through 0x4a0f20, answered
+    /// only while the fleet's task is the move): no ships, 0x1f5 / 1;
+    /// else each ship of the list still there counts, and is in when
+    /// within the order's tolerance (0x557440) of its cell in the block
+    /// (0x4cc760; the order's cell without one), else off and moving (a
+    /// route, `+0x25d & 0x80`) or off and still. All in: 0x1f5 / 0xb; none
+    /// in and none moving: 0x1f5 / 1; some in and none moving: 0x1f5 /
+    /// 0xb; else 500 (under way).
+    pub(super) fn move_status(&self, k: usize) -> Option<(u32, u32)> {
+        let f = &self.brain.as_ref()?.fleets[k];
+        let order = f.move_order.as_ref()?;
+        if f.ships.is_empty() {
+            return Some((0x1f5, 1));
+        }
+        let t = TILE_SIZE as f32;
+        let (mut n, mut moving, mut inside, mut still) = (0, 0, 0, 0);
+        for &id in &f.ships {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            n += 1;
+            let o = &self.objects[i];
+            let Some(s) = o.ship.as_ref() else {
+                still += 1;
+                continue;
+            };
+            let cell = order
+                .slots
+                .iter()
+                .find(|s| s.0 == id)
+                .map_or(order.to, |s| s.1);
+            let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+            if super::walk_path::dist(here.0, here.1, cell.0, cell.1) > order.tol {
+                if s.path.is_empty() {
+                    still += 1;
+                } else {
+                    moving += 1;
+                }
+            } else {
+                inside += 1;
+            }
+        }
+        if inside == n {
+            return Some((0x1f5, 0xb));
+        }
+        let mut r = match (inside, moving) {
+            (0, 0) => (0x1f5, 1),
+            (_, 0) => (0x1f5, 0xb),
+            _ => (500, 0),
+        };
+        if still == n {
+            r.1 = 1;
+        }
+        Some(r)
     }
 
     /// The move orders' pass (0x4ccd80, from the fleets' tick 0x4c4f40,
-    /// each game tick): when fleet `+8` is over 100 it goes back to 0 and
+    /// each game tick): first the fleet's list, newest first (0x4cc6a0):
+    /// each ship that joined (300) and is in the fleet has the whole
+    /// formation planned anew (0x4cc970), or, when that sends none, is
+    /// sent to the order's cell itself (0x4cc650, priority kept); when
+    /// none was heard, and fleet `+8` is over 100, `+8` goes back to 0 and
     /// every ship lying still (`+0x58c` 0) more than a cell off its cell in
     /// the block (in x or y; the order's cell without one) is sent there
-    /// again (0x4cf070); then `+8` grows by the tick. (Not ported here: the
-    /// pass's ships that joined (message 300, 0x4cc6a0, planned in anew),
-    /// its behaviour orders 0x4c42f0 and its reports of blows, 0x4a21c0,
-    /// which the port makes at once.)
-    fn run_move_orders(&mut self) {
+    /// again (0x4cf070); then `+8` grows by the tick. (Not ported: the
+    /// behaviour command 0x4c42f0 sent with each join and to a ship whose
+    /// behaviour `+0x689 / +0x68d` is not the group's `+0x19 / +0x1d` when
+    /// group `+0x14` is set: the port's fleets have no behaviour bytes;
+    /// and the reports of blows, 0x4a21c0, which the port makes at once.)
+    pub(super) fn run_move_orders(&mut self) {
         let t = TILE_SIZE as f32;
         for k in 0..self.brain.as_ref().unwrap().fleets.len() {
             let f = &self.brain.as_ref().unwrap().fleets[k];
             let Some(order) = f.move_order.clone() else {
                 continue;
             };
-            if f.elapsed > 100 {
+            let joined = std::mem::take(&mut self.brain.as_mut().unwrap().fleets[k].joined);
+            let mut heard = 0;
+            for id in joined.into_iter().rev() {
+                if !self.fleet_ships(k).contains(&id) || self.object_index(id).is_none() {
+                    continue;
+                }
+                heard = self.plan_formation(k);
+                if heard == 0 {
+                    let (x, y) = (
+                        order.to.0 as f32 * t + t / 2.0,
+                        order.to.1 as f32 * t + t / 2.0,
+                    );
+                    self.post(super::Order::MoveKeep { ship: id, x, y });
+                    heard += 1;
+                }
+            }
+            let order = self.brain.as_ref().unwrap().fleets[k]
+                .move_order
+                .clone()
+                .unwrap();
+            if heard == 0 && self.brain.as_ref().unwrap().fleets[k].elapsed > 100 {
                 self.brain.as_mut().unwrap().fleets[k].elapsed = 0;
                 for id in self.fleet_ships(k) {
                     let Some(i) = self.object_index(id) else {
@@ -2048,18 +2170,6 @@ impl Scene {
                     .ship
                     .as_ref()
                     .is_none_or(|s| s.path.is_empty() && s.task.is_none())
-            })
-        })
-    }
-
-    /// Some ship of fleet `k` lies within `cells` of cell `to`.
-    fn fleet_near(&self, k: usize, (cx, cy): (i32, i32), cells: f32) -> bool {
-        let t = TILE_SIZE as f32;
-        let (x, y) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
-        self.fleet_ships(k).into_iter().any(|id| {
-            self.object_index(id).is_some_and(|i| {
-                let o = &self.objects[i];
-                ((o.x - x).powi(2) + (o.y - y).powi(2)).sqrt() <= cells * t
             })
         })
     }
@@ -2646,6 +2756,7 @@ mod miss000 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 1,
                 ok: 17,
                 failed: 17,
                 to: (13, 23),
@@ -2664,6 +2775,7 @@ mod miss000 {
                 events: &[],
             },
             19 => Op::Move {
+                tol: 1,
                 ok: 20,
                 failed: 20,
                 to: (23, 14),
@@ -2714,6 +2826,7 @@ mod miss000 {
             // Two ways to the player's harbour, picked at random.
             50 => Op::Custom(|scene, _| if scene.brain_draw() % 2 == 0 { 51 } else { 52 }),
             51 => Op::Move {
+                tol: 2,
                 ok: 55,
                 failed: 55,
                 to: (6, 13),
@@ -2721,6 +2834,7 @@ mod miss000 {
                 events: &[],
             },
             52 => Op::Move {
+                tol: 2,
                 ok: 55,
                 failed: 55,
                 to: (20, 16),
@@ -2916,6 +3030,7 @@ mod miss001 {
                 events: &[],
             },
             7 => Op::Move {
+                tol: 1,
                 ok: 9,
                 failed: 9,
                 to: (29, 5),
@@ -2934,6 +3049,7 @@ mod miss001 {
                 events: &[],
             },
             13 => Op::Move {
+                tol: 1,
                 ok: 15,
                 failed: 15,
                 to: (29, 5),
@@ -3220,6 +3336,7 @@ mod miss002 {
                 events: &[HARBOUR],
             },
             15 => Op::Move {
+                tol: 1,
                 ok: 17,
                 failed: 17,
                 to: (24, 39),
@@ -3273,6 +3390,7 @@ mod miss002 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (33, 24),
@@ -3335,6 +3453,7 @@ mod miss002 {
                 }
             }),
             6 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (34, 19),
@@ -3342,6 +3461,7 @@ mod miss002 {
                 events: APPROACH,
             },
             8 => Op::Move {
+                tol: 2,
                 ok: 7,
                 failed: 7,
                 to: (34, 19),
@@ -3415,6 +3535,7 @@ mod miss002 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (25, 28),
@@ -3461,6 +3582,7 @@ mod miss002 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (23, 35),
@@ -3663,6 +3785,7 @@ mod miss003 {
                 events: W,
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (54, 0),
@@ -3681,6 +3804,7 @@ mod miss003 {
                 events: W,
             },
             30 => Op::Move {
+                tol: 2,
                 ok: 35,
                 failed: 35,
                 to: (54, 0),
@@ -3709,6 +3833,7 @@ mod miss003 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (54, 4),
@@ -3778,6 +3903,7 @@ mod miss003 {
                 }
             }),
             4 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (51, 0),
@@ -3871,6 +3997,7 @@ mod miss003 {
                 events: &[],
             },
             7 => Op::Move {
+                tol: 2,
                 ok: 9,
                 failed: 9,
                 to: (7, 21),
@@ -3895,6 +4022,7 @@ mod miss003 {
                 events: &[],
             },
             7 => Op::Move {
+                tol: 2,
                 ok: 9,
                 failed: 9,
                 to: (7, 21),
@@ -3924,6 +4052,7 @@ mod miss003 {
         match state {
             0 => Op::Behave { next: 3 },
             3 => Op::Move {
+                tol: 2,
                 ok: 5,
                 failed: 5,
                 to: (21, 29),
@@ -3995,6 +4124,7 @@ mod miss003 {
                 }
             }),
             4 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (18, 22),
@@ -4240,6 +4370,7 @@ mod miss004 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (1, 18),
@@ -4264,6 +4395,7 @@ mod miss004 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (1, 18),
@@ -4296,6 +4428,7 @@ mod miss004 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 2,
                 ok: 7,
                 failed: 7,
                 to: (5, 3),
@@ -4334,6 +4467,7 @@ mod miss004 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 2,
                 ok: 7,
                 failed: 7,
                 to: (7, 10),
@@ -4399,6 +4533,7 @@ mod miss004 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 3,
                 ok: 7,
                 failed: 7,
                 to: (8, 9),
@@ -4454,6 +4589,7 @@ mod miss004 {
                 events: W,
             },
             7 => Op::Move {
+                tol: 2,
                 ok: 9,
                 failed: 9,
                 to: (23, 26),
@@ -4472,6 +4608,7 @@ mod miss004 {
                 events: W,
             },
             13 => Op::Move {
+                tol: 2,
                 ok: 15,
                 failed: 15,
                 to: (23, 26),
@@ -4496,6 +4633,7 @@ mod miss004 {
         match state {
             0 => Op::Behave { next: 3 },
             3 => Op::Move {
+                tol: 2,
                 ok: 5,
                 failed: 5,
                 to: (31, 30),
@@ -4587,6 +4725,7 @@ mod miss004 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (1, 34),
@@ -4611,6 +4750,7 @@ mod miss004 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (1, 34),
@@ -4654,6 +4794,7 @@ mod miss004 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 2,
                 ok: 7,
                 failed: 7,
                 to: (7, 24),
@@ -4844,6 +4985,7 @@ mod miss005 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 1,
                 ok: 7,
                 failed: 7,
                 to: (7, 29),
@@ -4875,6 +5017,7 @@ mod miss005 {
                 events: &[],
             },
             7 => Op::Move {
+                tol: 1,
                 ok: 9,
                 failed: 9,
                 to: (5, 23),
@@ -4893,6 +5036,7 @@ mod miss005 {
                 events: &[],
             },
             13 => Op::Move {
+                tol: 1,
                 ok: 15,
                 failed: 15,
                 to: (5, 23),
@@ -4976,6 +5120,7 @@ mod miss005 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (1, 9),
@@ -5000,6 +5145,7 @@ mod miss005 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (1, 8),
@@ -5903,6 +6049,7 @@ mod miss006 {
                 events: &[],
             },
             7 => Op::Move {
+                tol: 1,
                 ok: 9,
                 failed: 9,
                 to: (0, 55),
@@ -5921,6 +6068,7 @@ mod miss006 {
                 events: &[],
             },
             13 => Op::Move {
+                tol: 1,
                 ok: 15,
                 failed: 15,
                 to: (0, 55),
@@ -6007,6 +6155,7 @@ mod miss006 {
                     have != [1; 3][d] + [3, 3, 4][d] + [2, 3, 3][d]
                 },
                 yes: &Op::Move {
+                    tol: 2,
                     ok: 0,
                     failed: 0,
                     to: (2, 47),
@@ -6049,6 +6198,7 @@ mod miss006 {
             80 => Op::Branch {
                 test: |scene, k| scene.brain.as_ref().unwrap().fleets[k].vars[WAY] != 0,
                 yes: &Op::Move {
+                    tol: 2,
                     ok: 90,
                     failed: 90,
                     to: (42, 59),
@@ -6056,6 +6206,7 @@ mod miss006 {
                     events: &[],
                 },
                 no: &Op::Move {
+                    tol: 2,
                     ok: 90,
                     failed: 90,
                     to: (54, 47),
@@ -6086,6 +6237,7 @@ mod miss006 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (21, 60),
@@ -6110,6 +6262,7 @@ mod miss006 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (21, 60),
@@ -6251,10 +6404,11 @@ mod miss006 {
                 }
             }),
             2 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (17, 63),
-                ticks: 1500,
+                ticks: 0,
                 events: &[HOME],
             },
             6 => Op::Patrol {
@@ -6316,6 +6470,7 @@ mod miss006 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (14, 24),
@@ -6340,6 +6495,7 @@ mod miss006 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (14, 24),
@@ -6443,10 +6599,11 @@ mod miss006 {
                 }
             }),
             2 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (11, 24),
-                ticks: 1500,
+                ticks: 0,
                 events: &[NORTH_HOME],
             },
             6 => Op::Patrol {
@@ -7338,6 +7495,7 @@ mod miss007 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 20,
                 failed: 20,
                 to: (5, 0),
@@ -7362,6 +7520,7 @@ mod miss007 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 20,
                 failed: 20,
                 to: (3, 8),
@@ -8225,6 +8384,7 @@ mod miss008 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 20,
                 failed: 20,
                 to,
@@ -8259,6 +8419,7 @@ mod miss008 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 20,
                 failed: 20,
                 to,
@@ -9277,6 +9438,7 @@ mod miss009 {
                 events: &[],
             },
             _ => Op::Move {
+                tol: 2,
                 ok: 20,
                 failed: 20,
                 to: (45, 41),
@@ -9332,6 +9494,7 @@ mod miss009 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 20,
                 failed: 20,
                 to: (62, 36),
@@ -9358,6 +9521,7 @@ mod miss009 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 20,
                 failed: 20,
                 to: (62, 36),
@@ -10309,6 +10473,7 @@ mod miss010 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 20,
                 failed: 20,
                 to: home,
@@ -11037,6 +11202,7 @@ mod miss011 {
     fn coast_gatherers(state: u32) -> Op {
         const AREA: Cells = (0, 21, 17, 15);
         let home = |next| Op::Move {
+            tol: 1,
             ok: next,
             failed: next,
             to: (2, 33),
@@ -11099,6 +11265,7 @@ mod miss011 {
             0 => Op::Behave { next: 5 },
             5 => Op::Custom(|scene, k| if strong(scene, k) { 10 } else { MARCH }),
             MARCH => Op::Move {
+                tol: 2,
                 ok: 7,
                 failed: 7,
                 to: (50, 15),
@@ -11167,6 +11334,7 @@ mod miss011 {
             }),
             5 => Op::Custom(|scene, k| if strong(scene, k) { 6 } else { MARCH }),
             MARCH => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (3, 32),
@@ -11211,6 +11379,7 @@ mod miss011 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: post,
@@ -11271,6 +11440,7 @@ mod miss011 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: (37, 24),
@@ -11318,6 +11488,7 @@ mod miss011 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 2,
                 ok: 7,
                 failed: 7,
                 to: post,
@@ -12205,6 +12376,7 @@ mod miss012 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 1,
                 ok: 0,
                 failed: 0,
                 to: (50, 28),
@@ -12221,6 +12393,7 @@ mod miss012 {
     fn east_gatherers(state: u32) -> Op {
         const AREA: Cells = (45, 18, 11, 19);
         let home = |next| Op::Move {
+            tol: 1,
             ok: next,
             failed: next,
             to: (47, 33),
@@ -12278,6 +12451,7 @@ mod miss012 {
             0 => Op::Custom(|scene, k| roll_length(scene, k, [10, 8, 6])),
             5 => Op::Custom(|scene, k| if strong(scene, k) { 6 } else { MARCH }),
             MARCH => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (54, 26),
@@ -12340,6 +12514,7 @@ mod miss012 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: home,
@@ -12600,6 +12775,7 @@ mod miss012 {
             }),
             5 => Op::Custom(|scene, k| if strong(scene, k) { 6 } else { MARCH }),
             MARCH => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (8, 46),
@@ -13414,6 +13590,7 @@ mod miss013 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 1,
                 ok: 0,
                 failed: 0,
                 to: (8, 5),
@@ -13429,6 +13606,7 @@ mod miss013 {
     /// rest 3000; then amber in (9, 11, 9, 8) the same.
     fn corner_gatherers(state: u32) -> Op {
         let home = |next| Op::Move {
+            tol: 1,
             ok: next,
             failed: next,
             to: (5, 1),
@@ -13481,6 +13659,7 @@ mod miss013 {
             0 => Op::Custom(|scene, k| roll_length(scene, k, [9, 7, 5])),
             5 => Op::Custom(|scene, k| if strong(scene, k) { 6 } else { MARCH }),
             MARCH => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (6, 1),
@@ -13539,6 +13718,7 @@ mod miss013 {
                 events: &[],
             },
             15 => Op::Move {
+                tol: 2,
                 ok: 17,
                 failed: 17,
                 to: home,
@@ -13601,6 +13781,7 @@ mod miss013 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (22, 25),
@@ -13608,6 +13789,7 @@ mod miss013 {
                 events: W,
             },
             25 => Op::Move {
+                tol: 2,
                 ok: 35,
                 failed: 35,
                 to: (42, 21),
@@ -13838,6 +14020,7 @@ mod miss013 {
             }),
             5 => Op::Custom(|scene, k| if strong(scene, k) { 6 } else { MARCH }),
             MARCH => Op::Move {
+                tol: 2,
                 ok: 0,
                 failed: 0,
                 to: (46, 53),
@@ -13933,6 +14116,7 @@ mod miss013 {
             }),
             5 => Op::Custom(|scene, k| if strong(scene, k) { 8 } else { MARCH }),
             MARCH => Op::Move {
+                tol: 2,
                 ok: 6,
                 failed: 6,
                 to: (47, 67),

@@ -5655,12 +5655,39 @@ there again (0x4cf070). The brain's primitives never stop a fleet: on an
 event or timeout they only switch state (0x479750); the fleet keeps its
 task until another replaces it. Port: `formation.rs` (checked against
 0x5614e0 run on 600 random layouts and on the first formation move of each
-campaign mission), `Scene::fleet_move`, `run_move_orders`. Not ported: the
-pass's handling of ships that join (message 300, 0x4cc6a0: the whole fleet
-planned anew), its behaviour orders (0x4c42f0) and the move's status
-0x4ccf60 (done when every ship is within the order's tolerance, octile
-0x557440, of its slot; the port still asks whether the fleet is idle and
-any ship within two cells of the cell).
+campaign mission), `Scene::fleet_move`, `run_move_orders`. Before the
+pass, the fleet's list (0x4cc6a0, newest first, every record removed): a
+ship that joined (300) and is in the fleet has the whole formation
+planned anew (0x4cc970: one ship, the cell; more, the planner; each ship
+noted and sent by 0x4cc8c0; it returns the ships sent), or when that
+sends none it alone goes to the order's cell (0x4cc650: command 0x14
+with priority byte 0xff, the ship's priority kept; `Order::MoveKeep`),
+then 0x4c42f0; any join heard skips the pass. The planner's failure in
+0x4ccc30 sends every ship so too.
+
+The move order's payload (0x479870 from 0x47a450) is `{x, y, p8, tol}`:
+p8 is 0 at every brain call, the tolerance p7 1, 2 or 3 (only 0x451c60,
+miss004's northern raiders, passes 3), each `Op::Move`'s `tol` as its
+call has it. The brain's query 0x65 (0x4a0f20) is answered only while
+the fleet's task is a move block (100, sub 1 or 2), by 0x4ccf60: no
+ships 0x1f5 / 1; else each ship of the list still there counts, in when
+within `tol` (0x557440) of its slot (0x4cc760; the order's cell without
+one), else off and under way (`+0x25d & 0x80`; the port: a route) or
+off and still; all in 0x1f5 / 0xb; none in and none under way 0x1f5 / 1
+(and result 1 whenever all are off and still); some in and none under
+way 0x1f5 / 0xb; else 500. 0x47a450 then goes to its p3 on 0xb, its p4
+on any other 0x1f5, to p3 when its time is up (ticks > 0), and to an
+event's state, the later winning. A fleet whose task is no longer the
+move gets no answer (0x47a450's result is then its stack's leftover:
+taken as none). miss006's raiders (0x459b90, 0x45a9f0 case 5) move with
+no time limit (p10 0). Not ported: 0x4c42f0, the behaviour command sent
+with each join and by the pass to a ship whose `+0x689 / +0x68d` differ
+from the group's `+0x19 / +0x1d` when group `+0x14` is set (the port's
+fleets have no behaviour bytes); the patrol's own tolerance (0x47a900's
+p7: 2, 1, 2, ...), whose arrival is the port's own test; miss004's and
+miss005's members that move only on a ship count (0x451890, 0x451a60,
+0x451c60, 0x4528a0, 0x4551e0 case 5, else their case 6) and miss005's
+raiders 0x455620 (cases 5 and 0x32), still simplified.
 
 Campaign state carries over between missions: at the start (message
 0x8d1) a brain restores the human's technology bits (+0x45, 12 bytes),

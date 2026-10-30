@@ -11609,3 +11609,82 @@ fn zone_replans_its_idle_ships() {
         .unwrap();
     assert!(matches!(s.task, Some(Task::Gather { deposit: d, .. }) if d == deposit));
 }
+
+/// A brain fleet's move is judged by 0x4ccf60: each ship within the
+/// order's tolerance (0x557440) of its cell in the formation is in; all
+/// in, done (0x1f5 / 0xb); none in and none under way, failed (0x1f5 /
+/// 1); else under way (500). A ship that joins is planned in anew
+/// (0x4cc6a0 -> 0x4cc970) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn fleet_move_status() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
+    // miss000's guards (fleet 0), two ships.
+    let ships = scene.brain.as_ref().unwrap().fleets[0].ships.clone();
+    assert_eq!(ships.len(), 2);
+    let t = TILE_SIZE as f32;
+    let at = |s: &Scene, id: u32| {
+        let o = &s.objects[s.object_index(id).unwrap()];
+        ((o.x / t).floor() as i32, (o.y / t).floor() as i32)
+    };
+    let here = at(&scene, ships[0]);
+    scene.fleet_move(0, here, 1);
+    let slots = scene.brain.as_ref().unwrap().fleets[0]
+        .move_order
+        .clone()
+        .unwrap()
+        .slots;
+    let slot = |id: u32| slots.iter().find(|s| s.0 == id).unwrap().1;
+    let put = |s: &mut Scene, id: u32, c: (i32, i32)| {
+        let i = s.object_index(id).unwrap();
+        s.objects[i].x = c.0 as f32 * t + t / 2.0;
+        s.objects[i].y = c.1 as f32 * t + t / 2.0;
+        s.objects[i].ship.as_mut().unwrap().path.clear();
+    };
+    // Both on their cells: done.
+    for &id in &ships {
+        put(&mut scene, id, slot(id));
+    }
+    assert_eq!(scene.move_status(0), Some((0x1f5, 0xb)));
+    // One two cells off and lying still: some in, none under way: done
+    // too.
+    let c = slot(ships[1]);
+    put(&mut scene, ships[1], (c.0 + 2, c.1));
+    assert_eq!(scene.move_status(0), Some((0x1f5, 0xb)));
+    // Both off and still: failed.
+    let c0 = slot(ships[0]);
+    put(&mut scene, ships[0], (c0.0 + 2, c0.1 + 2));
+    assert_eq!(scene.move_status(0), Some((0x1f5, 1)));
+    // One under way: going.
+    let i = scene.object_index(ships[0]).unwrap();
+    scene.objects[i]
+        .ship
+        .as_mut()
+        .unwrap()
+        .path
+        .push_back((0.0, 0.0));
+    assert_eq!(scene.move_status(0), Some((500, 0)));
+    // The tolerance: 2 counts the ship two cells off in.
+    scene.brain.as_mut().unwrap().fleets[0]
+        .move_order
+        .as_mut()
+        .unwrap()
+        .tol = 2;
+    scene.objects[i].ship.as_mut().unwrap().path.clear();
+    put(&mut scene, ships[1], (c.0 + 2, c.1));
+    put(&mut scene, ships[0], (c0.0 + 2, c0.1));
+    assert_eq!(scene.move_status(0), Some((0x1f5, 0xb)));
+    // A ship that joins has the formation planned anew: every ship sent.
+    scene.outbox.clear();
+    scene.brain.as_mut().unwrap().fleets[0]
+        .joined
+        .push(ships[1]);
+    scene.run_move_orders();
+    let sent: Vec<u32> = scene.outbox.iter().filter_map(|o| o.ship()).collect();
+    assert_eq!(sent.len(), 2);
+}
