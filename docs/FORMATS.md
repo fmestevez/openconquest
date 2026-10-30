@@ -3490,8 +3490,13 @@ restores everything and `+0x18 = r[0x139]`, `+0x1c = 0`; a new game sets
 `+0x1c = 1` and runs the mission's set-up, where only miss007 (0x45f84c),
 miss008 (0x463370), miss009 (0x4664a9) and miss010 (0x46a21f) seed it,
 with 0x541840(game) = the game's `+0x18`, written by 0x53fde8 and each
-frame by 0x541745 with `timeGetTime()` (import 0x5942d8) plus a pacing
-adjustment (not decoded); the other mains leave 0, so their draws are the
+frame by 0x541701-0x541745: `late = +0x18 + +0x34 - timeGetTime()`
+(import 0x5942d8); above 0 it is waited out (vtable +0x10, when
+`[+0x2c]+0xc` is 0); then `+0x18 = timeGetTime() + late` if `late < 0`
+and `late > -(+0x34 / 2)` (cdq, sub, sar: halved toward 0), else
+`timeGetTime()`: the stamp set back by the lateness of a frame late by
+less than half of `+0x34` (not decoded: `+0x34` of this object, the
+brain's `+0x10`, not its `+0xc` game); the other mains leave 0, so their draws are the
 same game after game (the first is 0x3039 >> 16 = 0). The port:
 `Brain::rng`, saved with the brain, seeded 0 or, for miss007-010, the wall clock's
 milliseconds; every brain step's draw comes from it (the helpers
@@ -4167,7 +4172,14 @@ More `missCOM` pieces: a blow landing on a ship (0x4bf170, per projectile)
 sets its `+0x691` and `+0x692` (the shooter's id), whoever shot; the AI
 module's fleet order handlers (0x4ca290 and nine more) report such a ship
 with message 0x5d9c (0x4a21c0: fleet number `+0x16`, shooter `+0x1a`) and
-clear it (ship message 0x28). The brain (0x47b2e0) keeps the report in its
+clear it (ship message 0x28, 0x4cf760), only in their periodic pass: when
+the fleet's queue sent nothing and fleet `+8`, to which each call adds
+`game +0xe2`, is over 100 (0x4ccd80 move, 0x4cbe70, 0x4cf550), 0x5a
+(0x4d6cd0 attack, 0x3c on a branch not read; 0x4da6a0), 0x4b (0x4d7b50),
+0x1e (0x4d8330) or 0x5f (0x4dbd90; 0x4ce140 repair), `+8` then set to 0
+(0x4ca290: another structure, not read). Not decoded: the orders of
+0x4cbe70, 0x4cf550, 0x4d7b50, 0x4d8330, 0x4da6a0, 0x4dbd90. The port
+reports at once (it has no tick for the orders but the repair). The brain (0x47b2e0) keeps the report in its
 list `+0x100` unless one for the same fleet and player is there: the first
 waits, later ones are dropped. The event 0x47a060 `{brain, g, m, state,
 mask, after, stamp}` takes the member's report: younger than `after` into

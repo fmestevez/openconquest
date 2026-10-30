@@ -565,9 +565,13 @@ pub(super) fn random_tick(scene: &mut Scene) -> bool {
 /// The seed a new game's brain starts from (message 2 of each mission's
 /// main): 0 from the base constructor 0x4788a0, which miss007 (0x45f84c),
 /// miss008 (0x463370), miss009 (0x4664a9) and miss010 (0x46a21f) replace
-/// with the game's `+0x18` (0x541840), the `timeGetTime()` milliseconds of
-/// the frame (0x53fde8, 0x541745; not decoded: the frame pacing's
-/// adjustment added at 0x541745). Here the wall clock's milliseconds.
+/// with the game's `+0x18` (0x541840), the frame's stamp (0x53fde8, and
+/// each frame 0x541701-0x541745): `late = +0x18 + +0x34 - timeGetTime()`
+/// (waited out when above 0), then `+0x18 = timeGetTime() + late` when the
+/// frame is late by less than half of `+0x34` (`late < 0` and `late >
+/// -(+0x34 / 2)`, halved toward 0), else `timeGetTime()`. Here the wall
+/// clock's milliseconds, without the setting back: the port keeps no frame
+/// stamp, and `+0x34` of that object (the brain's `+0x10`) is not decoded.
 fn brain_seed(mission: &str) -> u32 {
     match mission {
         "miss007" | "miss008" | "miss009" | "miss010" => std::time::SystemTime::now()
@@ -675,7 +679,7 @@ impl Scene {
     /// A brain hears its player's object `target` was struck (message
     /// 0x5d9c): miss006's brain, the first time one of squadron (2, 6)'s
     /// ships is, sends its ships to squadron (2, 7) (0x45b280, 0x479370).
-    /// (Not decoded: the ship's `+0x691` gate on the report.)
+    /// (Not ported: the report's timing; see `fleet_attacked`.)
     pub(super) fn brain_hit(&mut self, target: u32) {
         let Some(b) = self.brain.as_ref() else {
             return;
@@ -703,8 +707,16 @@ impl Scene {
     /// (0x4bf170 marks the ship `+0x691`, `+0x692` the shooter's id; the
     /// fleet's order handlers report it with message 0x5d9c, 0x4a21c0):
     /// the brain keeps the report unless one for the same fleet is pending
-    /// (0x47b2e0). (Not decoded: which fleet orders report, and how often,
-    /// 0x4ca290 and the others; the port reports at once.)
+    /// (0x47b2e0). The original reports only from the fleet order ticks'
+    /// passes, for each ship with `+0x691` set (0x4a21c0, then ship command
+    /// 0x28, 0x4cf760), a pass when the fleet's queue sent nothing and
+    /// fleet `+8` (the update's ticks added each call) is over: 100 for
+    /// 0x4ccd80 (order 100, move), 0x4cbe70 and 0x4cf550; 0x5a for 0x4d6cd0
+    /// (0x70, attack; 0x3c on a branch not read) and 0x4da6a0; 0x4b for
+    /// 0x4d7b50; 0x1e for 0x4d8330; 0x5f for 0x4dbd90 and 0x4ce140 (0x82,
+    /// repair). Not ported: the port has no tick for the other orders
+    /// (nor the map of 0x4cbe70, 0x4cf550, 0x4d7b50, 0x4d8330, 0x4da6a0,
+    /// 0x4dbd90 and 0x4ca290 to their orders), so it reports at once.
     pub(super) fn fleet_attacked(&mut self, target: u32, shooter: u32) {
         if let Some(b) = self.brain.as_mut() {
             for f in &mut b.fleets {
