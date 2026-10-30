@@ -280,13 +280,20 @@ impl Scene {
     /// same code overwrites the record) and at its tick the first pending
     /// of 0x20, 0x40, 0x10, 0x80 runs, the others dropped with it (`+0x7d6
     /// &= ~m`), even when it refuses; a stop (event 8) runs before the
-    /// group and drops what is pending. The port applies orders at once,
-    /// so the ship's state before its first such order of the tick is
-    /// kept and an order is run over it only if the original's would win.
-    /// `None` for an order outside the group. (Not ported: the original
-    /// runs them at the ship's next tick, a tick late; the fire records
-    /// 0x100, which 0x4ab350 may or may not drop with them; the computer
-    /// players' and brains' own calls, which do not come through here.)
+    /// group and drops what is pending. The fire records (0x100: commands
+    /// 0x15 / 0x16) run after the group, and are dropped with it (`m =
+    /// 0x1f0`) when 0x4ab350 finds the last record of an armed position
+    /// (`+0x289 + 3k`) of kind 3: always so for an attack on a ship
+    /// (0x16 sub 7, every position kind 3), so an attack goes with any
+    /// order of the group in its tick, whichever came first. The port
+    /// applies orders at once, so the ship's state before its first such
+    /// order of the tick is kept and an order is run over it only if the
+    /// original's would win. `None` for an order outside the group. (Not
+    /// ported: the original runs them at the ship's next tick, a tick
+    /// late; a busy task's deferral (0x4abe50: one code kept in `+0x265`,
+    /// 0x20, 0x40, 0x10, 0x100, 0x80 first, the current task wound down
+    /// by 0x4abc60); the computer players' and brains' own calls, which
+    /// do not come through here.)
     fn one_event_a_tick(
         &mut self,
         order: &Order,
@@ -299,6 +306,7 @@ impl Scene {
             Gather { ship, .. } | Take { ship, .. } | Unload { ship, .. } => (ship, 1),
             Close { ship, .. } => (ship, 2),
             Move { ship, .. } => (ship, 3),
+            Attack { ship, .. } => (ship, 4),
             Stop { id } => {
                 let i = self.object_index(id)?;
                 self.objects[i].ship.as_ref()?;
@@ -491,7 +499,8 @@ impl Scene {
 }
 
 /// A ship's order of the 0x1f0 group this tick (`Scene::one_event_a_tick`):
-/// one ran, of its rank (0 for 0x20 .. 3 for 0x80), over the ship as it was
+/// one ran, of its rank (0 for 0x20 .. 3 for 0x80, 4 for an attack's fire
+/// records 0x100), over the ship as it was
 /// before; or a stop came, which drops the rest of the tick's.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TickOrder {

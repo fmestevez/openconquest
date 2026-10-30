@@ -2796,15 +2796,44 @@ behaviours 4-11 are applied at once by 0x4a9e30) if still pending. Each
 code has one record (0x10 `+0x81c`, 0x20 `+0x824`, 0x40 `+0x839`, 0x80
 `+0x858`, 0x100 `+0x872 + 0x13k`): a second event of a code before the
 tick overwrites the first. Events run at the ship's next tick, not when
-sent; a stop and an order in one tick leave the ship stopped. The port
-applies the player's orders at once (`Scene::apply`) and, within a tick,
-keeps the ship as it was before its first order of the group, running a
-later one over it only when the original's would win (a higher code, or
-the same code overwriting), a refusal leaving the old task; a stop drops
-the tick's. Not ported: the tick's delay itself; the fire records (0x100:
-whether 0x4ab350 drops them with the group, 0x4ab350 / 0x4abe50 /
-0x4abe00 / 0x4aa290 / 0x4aa2a0 not read in full; `+0x251 == 1` not
-identified); the computer players' and brains' calls, which set tasks at
+sent; a stop and an order in one tick leave the ship stopped.
+
+The fire records (0x4e2ba0 case 0x15 / 0x16: kind 1 for 0x15, 3 for
+0x16, the target `+0`, sub 1 / 2 / 4 a record for position 0 / 3 / 6,
+sub 7 all three and, for ship types 8 and 9, 9 or 10; byte `+0x11` the
+position, `+0x12` the priority) are kept by position, `+0x872 + 0x13k`
+for k = position / 3. 0x4ab350 (disassembly 0x4ab350-0x4ab3ee) walks k
+from the last (2, or 3 for types 8 and 9) down to 0 and answers, for the
+first record of a kind with a weapon at its position (`+0x289 + 3k`,
+`+0x28a + 3k`, `+0x28b + 3k` not all 0), whether that kind is 3; none:
+no. So 0x100 is dropped with the group's order of the tick when that
+record is an attack (0x16), and runs after it (0x4ab3f0) when it is a
+fire at a target (0x15, kind 1); an attack on a ship from the interface
+or a fleet (0x16 sub 7, 0x4cfc90) is kind 3 at every position, so it
+goes with any order of the group in its tick. 0x4ab3f0 then, per
+record: kind 5 clears `+0x684..`; else with a weapon at the position (or
+k = 3): kind 2 sets the point target, kind 1 the position's target
+(0x4ac050, not an ally: 0x4efe20) and its fire state 1, kind 3 the attack
+(0x4abf60 >= 0: the position's state 3, `+0x638` the target, a re-plan,
+the priority `+0x5c7` from `+0x12` unless 0xff); a record so used is
+zeroed, one whose target is gone, allied or out of 0x4abf60 is kept;
+`+0x7d6 &= ~0x100`, `+0x25d |= 0x100`. 0x4abe50, before the group: if no
+running task is busy (0x20 with `+0x739`, 0x40 `+0x77b`, 0x10 `+0x6a0`,
+0x80 `+0x58b`, 0x100 `+0x5e2`), the pending group (or, with none, the
+code kept in `+0x265`) goes on and the tasks 0x10-0x80 are cleared from
+`+0x25d`; else the first pending of 0x20, 0x40, 0x10, 0x100, 0x80 is kept
+in `+0x265`, 0x4abc60 winds the current task down and the pending group
+is dropped (`+0x265` zeroed again if anything else is pending).
+
+The port applies the player's orders at once (`Scene::apply`) and,
+within a tick, keeps the ship as it was before its first order of the
+group, running a later one over it only when the original's would win
+(a higher code, or the same code overwriting), a refusal leaving the
+old task; an attack ranks after the group and goes with any order of it
+in the tick; a stop drops the tick's. Not ported: the tick's delay
+itself; 0x4abe50's deferral of a busy task (the port has no busy marks);
+0x4abe00, 0x4aa290 / 0x4aa2a0 not read; `+0x251 == 1` not identified;
+a fire at a target (0x15, kind 1: the port's forts only); the computer players' and brains' calls, which set tasks at
 once (so a member's move and a repair order to one ship in one tick do
 not resolve to the dock as the original's would); the end of unloading
 (0x4adef0 step 0x13: event 8 mask 0x40 and the move aside 0x80, the way

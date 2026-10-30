@@ -9535,3 +9535,61 @@ fn mended_wait_skips_the_pass_after_the_start() {
     passes(&mut scene, 1);
     assert_eq!(waiting(&scene), None);
 }
+
+/// An attack's fire records (0x100) run after the 0x1f0 group and go with
+/// it (0x4ab350: the last armed position's record is of kind 3): an
+/// attack and a move in one tick leave the move, whichever came first;
+/// alone the attack is taken. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn an_attack_goes_with_the_group() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    scene.brain = None;
+    let t = TILE_SIZE as f32;
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some() && o.is_armed())
+        .unwrap();
+    let ship = scene.objects[i].id;
+    let target = scene
+        .objects
+        .iter()
+        .find(|o| o.combat.is_some() && Scene::are_enemies(&scene.objects[i], o))
+        .unwrap()
+        .id;
+    let (sx, sy) = (scene.objects[i].x, scene.objects[i].y);
+    let water = (1..20)
+        .flat_map(|d| [(d, 0), (-d, 0), (0, d), (0, -d)])
+        .map(|(dx, dy)| ((sx / t) as i32 + dx, (sy / t) as i32 + dy))
+        .find(|&(x, y)| scene.nav.is_water(x, y))
+        .unwrap();
+    let (mx, my) = (water.0 as f32 * t + t / 2.0, water.1 as f32 * t + t / 2.0);
+    let task = |s: &Scene| {
+        s.objects[s.object_index(ship).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap()
+            .task
+    };
+    let attack = Order::Attack { ship, target };
+    let go = Order::Move { ship, x: mx, y: my };
+    let tick = |s: &mut Scene, caches: &mut Caches| s.update(crate::clock::TICK, &data, caches);
+    // Attack, then move: the move.
+    scene.apply(&attack, &data, &mut caches).unwrap();
+    scene.apply(&go, &data, &mut caches).unwrap();
+    assert!(task(&scene).is_none());
+    // Move, then attack: the move.
+    tick(&mut scene, &mut caches);
+    scene.apply(&go, &data, &mut caches).unwrap();
+    scene.apply(&attack, &data, &mut caches).unwrap();
+    assert!(task(&scene).is_none());
+    // The attack alone.
+    tick(&mut scene, &mut caches);
+    scene.apply(&attack, &data, &mut caches).unwrap();
+    assert_eq!(task(&scene), Some(Task::Attack { target }));
+}
