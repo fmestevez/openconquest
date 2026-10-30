@@ -2191,16 +2191,35 @@ list and escorts).
   86 calls; `+8` grows each call): deposits not known or still to be had
   (0x4c5b90 mode 1): each ship without `+0x25d & 0x40`: a merchant
   0x4c96e0, else 0x4c8f20 with port argument 1; another ship found among
-  the escorts (0x4c61d0) to 0x4c6270 (lying still, `+0x58c` 0, its ward in
-  the group: follows it again, state 10; a ward with a pending blow
-  `+0x691` -> 0x4d0140, not decoded); 0x4c6270 never returns below 0, so
-  such ships never reach 0x4c8f20. None: ships unloading this class count
+  the escorts (0x4c61d0) to 0x4c6270, which returns 0 or 1 only (so such
+  ships never reach 0x4c8f20): the escort not among the group's ships
+  (0x4a0370): its entry goes; a merchant: nothing; the ward not among
+  them: nothing, the entry kept; state 0xb and more than 2 cells
+  (0x557440) from the ward: state 10, target 0, follow it (0x4d8b30 with
+  2); else the ward's blow marked (`+0x691`): state 0xb, target its
+  giver `+0x692`, 0x4d0140 (command 0x16 `{target, 7, 7, -1}`: the attack
+  on a ship, priority 0); else moving (`+0x58c`): nothing; else state 10
+  and follow. Escort entries are 0xd bytes `{escort, ward, target,
+  state}`. Before that, each ship with a blow is reported (0x4a21c0:
+  message 0x5d9c to the brain, its header `[0]`, `[1]` unwritten stack;
+  the port reports blows as they land instead) and sent command 0x28 sub
+  4 (0x4cf760), which clears `+0x691`, `+0x692`, `+0x634` at the next
+  tick, so the escorts of this pass still see it. The blow is marked by
+  0x4bf3aa for every shot landing on a ship (not one in a dock, state
+  `+0x251` 2, nor a hook of class 9 with `+0xed` 100): `+0x691` 1,
+  `+0x692` the shot's `+0xbe`, `+0x634` its cell (not decoded: `+0xbe`
+  of a shot with no shooter; the port marks only shots with one). Not
+  ported: 0x4c6100's behaviour command for a new escort (0x4c42f0 with
+  -1s, when group `+0x14` is 0) and notice 300's (the group's masks):
+  case 0x23 sub 1 turns guard, ram and board on with the masks `+0x685`,
+  `+0x689`, `+0x68d` and fire state `+0x5d1` 4, which the port does not
+  keep. None: ships unloading this class count
   working; laden ones (`+0x47f/+0x480/+0x481/+0x782`) count and, not
   unloading and with flag bit 0, go to 0x4c6640's port (0x1f); its idle
   list is never filled (no follows); none laden, working or on a route:
   `+0x5d = 1` for sides 1 / 2 when `+0x24 >> 16 != 1`. Not ported: the
-  route `+0x61` (0x4cea20, 0x4ce7c0, 0x4cf070, 0x4ce8a0), `+0x691`'s
-  reports (0x4a21c0, 0x4cf760), `+0x35`'s command 0x29.
+  route `+0x61` (0x4cea20, 0x4ce7c0, 0x4cf070, 0x4ce8a0), `+0x35`'s
+  command 0x29.
 - **Query 0x79** (0x4a0d00 -> 0x4c8da0, only for a 0x78 block): no ships
   or no merchants (and not a leviathan zone with ships): 0x1f5 / 1;
   deposits left (0x4c5b90 mode 1, which also forgets the gone ones): 500,

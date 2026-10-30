@@ -650,6 +650,17 @@ impl Scene {
             }
             return;
         }
+        // A ship not mended in a dock marks the blow and its giver
+        // (0x4bf3aa: `+0x691` 1, `+0x692` the shot's `+0xbe`). (Not
+        // decoded: `+0xbe` of a shot with no shooter, a volcano's or a
+        // fire ship's: left unmarked.)
+        if let (Some(i), Some(by)) = (target, s.shooter) {
+            if !self.in_dock(i) {
+                if let Some(sh) = self.objects[i].ship.as_mut() {
+                    sh.blow = Some(by);
+                }
+            }
+        }
         // The hull's share first, then the crew's and the weapons'
         // (0x4bf170).
         if let Some(i) = target.filter(|_| s.volcanic) {

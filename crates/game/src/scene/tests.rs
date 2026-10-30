@@ -11886,3 +11886,99 @@ fn zone_rating_over_two_ports_with_one_failed() {
     assert_eq!(scene.zone_rate(0, &mut recs), 0);
     assert_eq!((recs[1].port, recs[1].pscore), (7, 0));
 }
+
+/// A zone's escort at the re-plan (0x4ca290 -> 0x4c6270): its ward marked
+/// with a blow (0x4bf3aa, `+0x691` / `+0x692`) sends it after the giver
+/// (0x4d0140, the attack on a ship; state 0xb) and the ward forgets the
+/// blow at the next tick (0x4cf760, command 0x28 sub 4); after the
+/// attacker and more than 2 cells away it follows its ward again (state
+/// 10); its entry goes when it leaves the group, and stays when the ward
+/// does (needs `OPENCONQUEST_DATA`).
+#[test]
+fn zone_escort_turns_on_its_wards_attacker() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, _deposit, _ports) = amber_boat_in_zone(&data, &mut caches);
+    let i = scene.object_index(boat).unwrap();
+    let owner = scene.objects[i].owner.unwrap();
+    let t = TILE_SIZE as f32;
+    let (bx, by) = (
+        (scene.objects[i].x / t).floor() as i32,
+        (scene.objects[i].y / t).floor() as i32,
+    );
+    let near = (-2..=2)
+        .flat_map(|dy| (-2..=2).map(move |dx| (bx + dx, by + dy)))
+        .find(|&c| c != (bx, by) && scene.sea_cell(c, false) && scene.slot_ship(c).is_none())
+        .unwrap();
+    let escort = scene
+        .spawn_ship(owner, 2, near.0, near.1, &data, &mut caches)
+        .unwrap();
+    let entry = gather::Escort {
+        ship: escort,
+        ward: boat,
+        state: 10,
+        target: 0,
+    };
+    scene.gather_zones[0].ships.push(escort);
+    scene.gather_zones[0].escorts = vec![entry];
+    let i = scene.object_index(boat).unwrap();
+    scene.objects[i].ship.as_mut().unwrap().blow = Some(0x777);
+    scene.outbox.clear();
+    scene.gather_zones[0].elapsed = 0x56;
+    scene.run_gather_zones();
+    let e = scene.gather_zones[0].escorts[0];
+    assert_eq!((e.state, e.target), (0xb, 0x777));
+    assert!(scene.outbox.contains(&Order::ClearBlow { ship: boat }));
+    assert!(scene.outbox.contains(&Order::Attack {
+        ship: escort,
+        target: 0x777
+    }));
+    // The clear lands at the tick's turn.
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let i = scene.object_index(boat).unwrap();
+    assert_eq!(scene.objects[i].ship.as_ref().unwrap().blow, None);
+    // After the attacker, far from its ward: following again.
+    let k = scene.object_index(escort).unwrap();
+    let far = (0..scene.nav.height as i32)
+        .flat_map(|y| (0..scene.nav.width as i32).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            (x - bx).abs().max((y - by).abs()) > 3
+                && scene.sea_cell((x, y), false)
+                && scene.slot_ship((x, y)).is_none()
+        })
+        .unwrap();
+    scene.objects[k].x = far.0 as f32 * t + t / 2.0;
+    scene.objects[k].y = far.1 as f32 * t + t / 2.0;
+    scene.gather_zones[0].escorts[0].state = 0xb;
+    scene.outbox.clear();
+    scene.gather_zones[0].elapsed = 0x56;
+    scene.run_gather_zones();
+    let e = scene.gather_zones[0].escorts[0];
+    assert_eq!((e.state, e.target), (10, 0));
+    assert!(scene.outbox.contains(&Order::Follow {
+        ship: escort,
+        ward: boat,
+        range: 2
+    }));
+    // The ward out of the group: the entry is kept, nothing sent.
+    scene.gather_zones[0].ships.retain(|&s| s != boat);
+    scene.outbox.clear();
+    scene.gather_zones[0].elapsed = 0x56;
+    scene.run_gather_zones();
+    assert_eq!(scene.gather_zones[0].escorts.len(), 1);
+    assert!(scene.outbox.iter().all(|o| o.ship() != Some(escort)));
+    // An old save's entry, `[escort, ward, state]`, reads with no target.
+    let old: gather::Escort = serde_json::from_str("[5, 6, 10]").unwrap();
+    assert_eq!(
+        old,
+        gather::Escort {
+            ship: 5,
+            ward: 6,
+            state: 10,
+            target: 0
+        }
+    );
+}

@@ -391,6 +391,10 @@ pub struct Ship {
     /// 0 for none.
     #[serde(default)]
     pub berth_wait: u32,
+    /// `+0x691` / `+0x692`: the last blow taken, by whom (0x4bf170 at
+    /// each shot landing; command 0x28 sub 4 clears it).
+    #[serde(default)]
+    pub blow: Option<u32>,
     /// Treasures aboard.
     #[serde(default)]
     pub treasures: Vec<Treasure>,
@@ -1586,6 +1590,7 @@ pub fn resolve(
         last_deposit: 0,
         gathered: None,
         berth_wait: 0,
+        blow: None,
         face: None,
         furl: 0.0,
         rock: 0,

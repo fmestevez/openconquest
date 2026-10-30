@@ -110,6 +110,11 @@ pub enum Order {
         ward: u32,
         range: u8,
     },
+    /// Command 0x28 sub 4 (0x4cf760): the ship forgets its last blow
+    /// (`+0x691`, `+0x692`, `+0x634`).
+    ClearBlow {
+        ship: u32,
+    },
     Take {
         ship: u32,
         target: u32,
@@ -575,6 +580,15 @@ impl Scene {
                 done(r)
             }
             Follow { ship, ward, range } => done(self.order_follow(ship, ward, range)),
+            ClearBlow { ship } => {
+                if let Some(s) = self
+                    .object_index(ship)
+                    .and_then(|i| self.objects[i].ship.as_mut())
+                {
+                    s.blow = None;
+                }
+                Ok(0)
+            }
             Convoy { ship, a, b } => done(self.order_convoy(ship, a, b)),
             Gather {
                 ship,

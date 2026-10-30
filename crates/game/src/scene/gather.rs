@@ -64,13 +64,26 @@ pub struct GatherZone {
     pub ships: Vec<u32>,
     /// Group `+0x2d`: the notices not yet read, oldest first.
     pub notices: Vec<Notice>,
-    /// Block `+0x41`: the escorts (0x4c6100): escort, ward, state.
+    /// Block `+0x41`: the escorts (0x4c6100).
     #[serde(default)]
-    pub escorts: Vec<(u32, u32, u8)>,
+    pub escorts: Vec<Escort>,
     /// Group `+8`: calls since the last re-plan.
     pub elapsed: u32,
     /// Block `+0x5d`: nothing left to do (0x4ca290).
     pub done: bool,
+}
+
+/// An entry of block `+0x41` (0xd bytes: `{escort, ward, target,
+/// state}`; 0x4c6100 appends `{escort, ward, 0, 0}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Escort {
+    pub ship: u32,
+    pub ward: u32,
+    /// `+0xc`: 10 following, 0xb after the ward's attacker.
+    pub state: u8,
+    /// `+8`: the ward's attacker it was sent after.
+    #[serde(default)]
+    pub target: u32,
 }
 
 /// The class word of a resource (the deposits' classes 400, 0x191, 0x192).
@@ -354,9 +367,14 @@ impl Scene {
             range: 2,
         });
         let e = &mut self.gather_zones[z].escorts;
-        match e.iter_mut().find(|e| e.0 == o) {
-            Some(x) => x.1 = ward,
-            None => e.push((o, ward, 0)),
+        match e.iter_mut().find(|e| e.ship == o) {
+            Some(x) => x.ward = ward,
+            None => e.push(Escort {
+                ship: o,
+                ward,
+                state: 0,
+                target: 0,
+            }),
         }
     }
 
@@ -1507,17 +1525,20 @@ impl Scene {
     /// still to be had (0x4c5b90 mode 1): each ship without a gathering
     /// task (`+0x25d & 0x40`): a merchant to the same deposit (0x4c96e0),
     /// else the weighted pick (0x4c8f20 with port argument 1); another
-    /// ship found among the escorts (0x4c61d0) is sent after its ward
-    /// again when lying still (0x4c6270; it never reaches 0x4c8f20, its
-    /// result never below 0). None: each ship not unloading this zone's
+    /// ship found among the escorts (0x4c61d0) to 0x4c6270 (it never
+    /// reaches 0x4c8f20, 0x4c6270's result never below 0). Before that,
+    /// a ship with a blow marked (`+0x691`) forgets it at the next tick
+    /// (command 0x28 sub 4, 0x4cf760), so its escorts in this pass still
+    /// see it. None: each ship not unloading this zone's
     /// class with cargo aboard counts laden and, with the zone's flag bit
     /// 0 and a port for it, is sent to unload (0x1f); ships unloading
     /// count working; with none laden or working the zone is done
     /// (`+0x5d`) for a human's (side 1 or 2) when `+0x24 >> 16 != 1`.
-    /// (Not ported: the route `+0x61`, and the reports of blows `+0x691`
-    /// (0x4a21c0, 0x4cf760) and the escorts' attack on a ward's attacker
-    /// (0x4d0140): not decoded. The command 0x29 of notice 0x133's ids
-    /// is not sent: their poster is not traced.)
+    /// (Not ported: the route `+0x61`; the blow's report to the brain,
+    /// message 0x5d9c (0x4a21c0, whose header words `[0]`, `[1]` are left
+    /// unwritten on the stack): the port reports blows as they land
+    /// (`fleet_attacked`). The command 0x29 of notice 0x133's ids is not
+    /// sent: their poster is not traced.)
     fn zone_replan(&mut self, z: usize) -> i32 {
         let cands = self.zone_deposits(z, 1);
         let ships = self.gather_zones[z].ships.clone();
@@ -1527,6 +1548,9 @@ impl Scene {
                 let Some(i) = self.object_index(id) else {
                     continue;
                 };
+                if self.objects[i].ship.as_ref().unwrap().blow.is_some() {
+                    self.post(Order::ClearBlow { ship: id });
+                }
                 let s = self.objects[i].ship.as_ref().unwrap();
                 if matches!(s.task, Some(Task::Gather { .. })) {
                     continue;
@@ -1536,7 +1560,10 @@ impl Scene {
                     if sent < 1 && self.zone_weighted(z, i, &cands, true) != 0 {
                         sent += 1;
                     }
-                } else if let Some(e) = self.gather_zones[z].escorts.iter().position(|e| e.0 == id)
+                } else if let Some(e) = self.gather_zones[z]
+                    .escorts
+                    .iter()
+                    .position(|e| e.ship == id)
                 {
                     self.escort_again(z, e);
                 }
@@ -1583,30 +1610,75 @@ impl Scene {
         0
     }
 
-    /// 0x4c6270: an escort lying still (`+0x58c` 0) whose ward is still
-    /// in the group follows it again (state 10, 0x4d8b30 with 2).
-    fn escort_again(&mut self, z: usize, e: usize) {
-        let (o, ward, _) = self.gather_zones[z].escorts[e];
-        let (Some(i), true) = (
-            self.object_index(o),
-            self.gather_zones[z].ships.contains(&ward) && self.object_index(ward).is_some(),
-        ) else {
-            self.gather_zones[z].escorts.remove(e);
-            return;
-        };
-        if self.objects[i]
-            .ship
-            .as_ref()
-            .is_none_or(|s| s.move_state != 0)
-        {
-            return;
-        }
-        self.gather_zones[z].escorts[e].2 = 10;
-        self.post(Order::Follow {
+    /// 0x4c6270(escort entry): the escort not among the group's ships
+    /// (0x4a0370): the entry goes, 0; a merchant, 0; the ward not among
+    /// them: 0, the entry kept. After the ward's attacker (state 0xb) and
+    /// more than 2 cells (0x557440) from the ward: back to following it
+    /// (state 10, target 0, 0x4d8b30 with 2), 1. Else the ward with a blow
+    /// marked (`+0x691`): after its giver `+0x692` (state 0xb, 0x4d0140:
+    /// command 0x16 `{target, 7, 7, -1}`, the attack on a ship), 1. Else
+    /// moving (`+0x58c`): 0; else following again (state 10), 1.
+    fn escort_again(&mut self, z: usize, e: usize) -> i32 {
+        let Escort {
             ship: o,
             ward,
-            range: 2,
-        });
+            state,
+            ..
+        } = self.gather_zones[z].escorts[e];
+        let in_group = |sc: &Scene, id: u32| {
+            sc.gather_zones[z]
+                .ships
+                .contains(&id)
+                .then(|| sc.object_index(id))
+                .flatten()
+                .filter(|&i| sc.objects[i].ship.is_some())
+        };
+        let Some(i) = in_group(self, o) else {
+            self.gather_zones[z].escorts.remove(e);
+            return 0;
+        };
+        if self.objects[i].ship.as_ref().unwrap().kind < 2 {
+            return 0;
+        }
+        let Some(w) = in_group(self, ward) else {
+            return 0;
+        };
+        let t = TILE_SIZE as f32;
+        let cell = |sc: &Scene, k: usize| {
+            (
+                (sc.objects[k].x / t).floor() as i32,
+                (sc.objects[k].y / t).floor() as i32,
+            )
+        };
+        let (a, b) = (cell(self, i), cell(self, w));
+        let follow = |sc: &mut Scene| {
+            let x = &mut sc.gather_zones[z].escorts[e];
+            x.state = 10;
+            x.target = 0;
+            sc.post(Order::Follow {
+                ship: o,
+                ward,
+                range: 2,
+            });
+            1
+        };
+        if state == 0xb && walk_path::dist(a.0, a.1, b.0, b.1) > 2 {
+            return follow(self);
+        }
+        if let Some(by) = self.objects[w].ship.as_ref().unwrap().blow {
+            let x = &mut self.gather_zones[z].escorts[e];
+            x.state = 0xb;
+            x.target = by;
+            self.post(Order::Attack {
+                ship: o,
+                target: by,
+            });
+            return 1;
+        }
+        if self.objects[i].ship.as_ref().unwrap().move_state != 0 {
+            return 0;
+        }
+        follow(self)
     }
 
     /// The gather zone's state for 0x47a570's query 0x79 (0x4c8da0): no
