@@ -546,6 +546,15 @@ impl Scene {
             .collect()
     }
 
+    /// Leviathan `o`'s life (`+0x80`): the record's field 6 (0x494f90
+    /// message 2, field 6 x 100 / 100) till lightning takes it.
+    pub fn leviathan_life(&self, o: &objects::MapObject) -> i32 {
+        self.leviathan_life
+            .get(&o.id)
+            .copied()
+            .unwrap_or(o.record.field(6).unwrap_or(0) as i32)
+    }
+
     /// The frame hazard `id` shows.
     pub(super) fn hazard_frame(&self, id: u32) -> Option<u32> {
         self.hazards.get(&id).map(|h| h.frame)

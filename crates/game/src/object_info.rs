@@ -158,8 +158,9 @@ pub fn of(scene: &Scene, obj: &MapObject) -> Option<ObjectInfo> {
         // WhaleClassTy 0x495f40: a leviathan with life (`+0x80`, field 6,
         // of `+0x7c`, field 5; 0x4935d0) shows that, else what is left.
         ObjectClass::WhaleZone => {
-            if f(6) > 0 {
-                info.life = Some((f(6) * 100 / f(5).max(1)).min(100) as u8);
+            let life = scene.leviathan_life(obj);
+            if life > 0 {
+                info.life = Some((life * 100 / f(5).max(1)).min(100) as u8);
             } else {
                 let left = obj
                     .deposit

@@ -3583,8 +3583,10 @@ percentages derived from their life (`life x 100 / max`, as 0x414c8f),
 the settlements' condition as their hull (`max / 4` off, `max / 20`
 shielded), amber emptied at once (the original's two ticks of states 0
 and 1 skipped), the land creatures' kills without a cry (the port has no
-shot-then-turn order for them). Not ported: the leviathan's life and
-states (the port's is a deposit only). The ships' ways are rebuilt (0x49a950) and the caster's brain told
+shot-then-turn order for them). The leviathan's life (`+0x80`, record
+field 6) is kept: struck, it goes to 0, then what is left goes as one
+caught. Not ported: its going down when struck on its own cell, and its
+states (below). The ships' ways are rebuilt (0x49a950) and the caster's brain told
 (0x5d9d, cell and caster): miss009's notes the player's strike in x 55-62,
 y 3-8. Its north-east sea is shut off by land at y = 4; only strikes at
 (58, 3), (59, 3), (57-61, 4), (60, 5) or (61, 5) open it.
@@ -4109,6 +4111,36 @@ most missions, about 14.5 minutes), then comes up whole on a random water
 cell of its zone (fields 7 and 8 its corner, 10 and 11 its size; state 6).
 It does this until it has shown itself field 39 times (2 in most missions).
 Between dives while not caught it waits 25-75 ticks, as fish do.
+
+Its states (0x494b90 by `+0x74`, 0x494400 sets them; message 2 of
+0x494f90): `+0x78` amount f4 x 100, `+0x7c` max life f5, `+0x80` life f6,
+refills `+0x8c` / `+0x90`; its cell starts at f7, f8 (not a corner) and it
+keeps to the cell -/+ f10 / f11 (clamped to the map; either below 1: the
+whole map); `+0x84` shows f39, `+0x88` f40; 25 move weights `+0x121` from
+table 0x5ba958 + f13 x 100 (f13 < 9) or fields 14-38. State 0 (below,
+25-75 ticks, `r % 51 + 25` of its LCG seeded `game +0x2ee5 x id`): with
+life it moves to a cell of the 5 x 5 about it (0x4941f0: within its
+bounds, 0x48ed40 free, weighted) and shows itself (1: picture sequence 8,
+sound 99 `kit4` when `+0x98` is odd) for a loop of its picture, then
+below again. With no life it comes up to be hunted only once `+0x119` is
+set (by state 6): 2 (`prote1`, event 110), 3 up for `r % 41 + 40` loops
+(none once `+0x11d`, set by a blow while up), 4 down; a merchant or boat
+on its cell nets it only in state 3 (0x4aeef0 case 1); its amount gone,
+`+0x119` is cleared. No life and no `+0x119`: off its cell's slot, gone
+(message 10) once it has shown `+0x84` times, else state 5 (27750 - 3000 x
+f40 ticks), then 6: one draw of x and one of y in its bounds a tick, up
+to 100 ticks, for a cell 0x48ed40 lets (landscape low nibble up to 7,
+nibble 1 up to 3, `+0x10` free): amount and life whole, `+0x119` 1, shown
++ 1, state 0; after 100 tries, 5 again. Its life falls only to lightning
+(0xda93: life to 0 if any, else the amount; on its cell 0x494400(0)), a
+tornado's blows while up (0xda96: life less the blow, else the amount
+0) and a reef's or whirlpool's 0xda94 / 0xda95 while up (no life: the
+amount 0). So a leviathan of life 100 must be struck before it can be
+hunted. The port keeps it a deposit taken whenever up, its zone read as
+corner and size (fields 7, 8, 10, 11): not ported, the states above and
+their hunt (trade.rs), its swim, pictures and bounds. Not decoded:
+0x493a20 / 0x493ac0 (its sequence names), 0x495e80 (the weighted pick),
+0x494140, 0x499900, 0x403010, 0x50e600, 0x493960.
 
 ## Sounds
 

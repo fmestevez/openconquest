@@ -299,6 +299,9 @@ pub struct Scene {
     pub shoals_gone: std::collections::BTreeMap<u32, f32>,
     /// Reefs' and whirlpools' cycles (0x4306d0, 0x447ee0), by object.
     pub hazards: std::collections::BTreeMap<u32, hazards::Hazard>,
+    /// Leviathans' life (`+0x80`) where it is no longer the record's
+    /// field 6 (struck by lightning, 0x494f90).
+    pub leviathan_life: std::collections::BTreeMap<u32, i32>,
     shoals_shown: std::collections::BTreeMap<u32, f32>,
     /// Seconds since a shoal surfaced (it rises with `FISH_11`).
     shoals_up: std::collections::BTreeMap<u32, f32>,
@@ -708,6 +711,7 @@ impl Scene {
             rng: Rng(0x1234_5678),
             shoals_gone: Default::default(),
             hazards: Default::default(),
+            leviathan_life: Default::default(),
             shoals_shown: Default::default(),
             shoals_up: Default::default(),
             fish_art: std::rc::Rc::new([1, 2, 3].map(|size| {
@@ -1007,6 +1011,7 @@ impl Scene {
             rng: self.rng.clone(),
             shoals_gone: self.shoals_gone.clone(),
             hazards: self.hazards.clone(),
+            leviathan_life: self.leviathan_life.clone(),
             shoals_shown: self.shoals_shown.clone(),
             shoals_up: self.shoals_up.clone(),
             default_arming: self.default_arming,
@@ -1154,6 +1159,7 @@ impl Scene {
         scene.rng = save.rng.clone();
         scene.shoals_gone = save.shoals_gone.clone();
         scene.hazards = save.hazards.clone();
+        scene.leviathan_life = save.leviathan_life.clone();
         scene.shoals_shown = save.shoals_shown.clone();
         scene.shoals_up = save.shoals_up.clone();
         scene.default_arming = save.default_arming;

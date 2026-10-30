@@ -516,6 +516,25 @@ impl Scene {
             }
             self.dive_shoal(id);
         }
+        // A leviathan not waiting below after its catch (states 5 and 6,
+        // the port's dormant one; 0x495856): its life (`+0x80`) to 0, or
+        // if it has none, what is left of it (`+0x78`), as one caught.
+        // (Not ported: on its own cell it also goes down, 0x494400(0);
+        // the port has not its states.)
+        let leviathans: Vec<(u32, i32)> = self
+            .objects
+            .iter()
+            .filter(|o| o.class == ObjectClass::WhaleZone && o.deposit.is_some())
+            .filter(|o| near(((o.x / t).floor() as i32, (o.y / t).floor() as i32)))
+            .map(|o| (o.id, self.leviathan_life(o)))
+            .collect();
+        for (id, life) in leviathans {
+            if life > 0 {
+                self.leviathan_life.insert(id, 0);
+            } else {
+                self.exhaust_deposit(id, data, caches);
+            }
+        }
         let monsters: Vec<(u32, bool)> = self
             .objects
             .iter()

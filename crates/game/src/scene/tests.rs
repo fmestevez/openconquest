@@ -10191,3 +10191,39 @@ fn hazards_rise_and_sink() {
     assert_eq!(back.hazards[&reef].state, 0);
     assert_eq!(back.hazard_cells().get(&reef_at), Some(&true));
 }
+
+/// Lightning on a leviathan (0x494f90 0xda93): its life (field 6, 100)
+/// first goes to 0, the info then showing what is left; struck again,
+/// what is left goes, as one caught (needs `OPENCONQUEST_DATA`).
+#[test]
+fn lightning_on_a_leviathan() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    let k = scene
+        .objects
+        .iter()
+        .position(|o| o.class == ObjectClass::WhaleZone)
+        .unwrap();
+    let id = scene.objects[k].id;
+    assert_eq!(scene.leviathan_life(&scene.objects[k]), 100);
+    let info = crate::object_info::of(&scene, &scene.objects[k]).unwrap();
+    assert_eq!((info.life, info.volume), (Some(100), None));
+    let (x, y) = (scene.objects[k].x, scene.objects[k].y);
+    scene.lightning_strike(x, y, None, &data, &mut caches);
+    let k = scene.object_index(id).unwrap();
+    assert_eq!(scene.leviathan_life(&scene.objects[k]), 0);
+    assert_eq!(
+        scene.objects[k].deposit.and_then(|d| d.remaining),
+        Some(100.0)
+    );
+    let info = crate::object_info::of(&scene, &scene.objects[k]).unwrap();
+    assert_eq!((info.life, info.volume), (None, Some((100, 100))));
+    scene.lightning_strike(x, y, None, &data, &mut caches);
+    let k = scene.object_index(id).unwrap();
+    assert!(scene.objects[k].deposit.is_none() && scene.objects[k].dormant.is_some());
+}

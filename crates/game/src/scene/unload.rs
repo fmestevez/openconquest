@@ -708,6 +708,10 @@ impl Scene {
             self.objects[i].dormant = None;
             self.objects[i].deposit = Some(dep);
             if leviathan {
+                // Whole again: its life back to the record's (`+0x90`,
+                // 0x494b90 state 6).
+                let id = self.objects[i].id;
+                self.leviathan_life.remove(&id);
                 let f = |k: usize| self.objects[i].record.field(k).unwrap_or(0) as i32;
                 let (zx, zy, zw, zh) = (f(7), f(8), f(10).max(1), f(11).max(1));
                 let t = openconquest_formats::map::TILE_SIZE as f32;
