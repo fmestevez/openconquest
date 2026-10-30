@@ -401,6 +401,7 @@ impl Scene {
                 wear: 0.0,
                 rope: Some(id),
                 shooter: None,
+                by: None,
             },
             data,
             caches,

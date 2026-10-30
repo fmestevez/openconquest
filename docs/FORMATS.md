@@ -3814,10 +3814,69 @@ player's loss (ships; buildings but classes 0x44-0x49) and the killer's
 gain, when the killer is a player (0 < killer < 20); class 0x4a is counted
 in neither sum, monster class 0x1fe (`+0x7c8`) in none. A ship's killer
 is the giver of its sinking blow (`+0x7f` from the blow's `+0x80b`,
-0x4befc0, 0x4be0c0; set by ship message 4, 0x4a9e30). Not decoded: the
-killer each of the 25 callers of 0x50e750 passes; the port takes the
-shooter's, rammer's or boarder's player, and where it has none (spells,
-fire, creatures) counts the thing the human's kill unless it was theirs.
+0x4befc0, 0x4be0c0; set by ship message 4, 0x4a9e30). 0x50e750 posts a
+killer of -1 as 0xff: the owner's loss is counted, nobody's gain.
+
+The killer each caller of 0x50e750 passes:
+- **Shots** carry the player put in the projectile's `+0xb5` when fired
+  (message 0x14ba `+4`): a ship's `+0x24f` (weapons 0x4c026b, items
+  0x4af6a0, the hook 0x4b84b0), a fort's player (0x4469c0), the fireball's
+  caster (0x405d2d; 0xff for nation 4 slot 1, 0x405fa0-0x405fbb); 0xff for
+  the land creatures' and harpies' throws (0x4129f3, 0x42031b, 0x420550),
+  the volcanoes and every 0x499410 shot. A ship is credited to it through
+  0x4bf170 -> 0x4be0c0 (`+0x7f`), but a ship being mended in a dock gets
+  0xff (0x4b4000); a building through `+0x1ac`, written only by the
+  killing shot (0x4246b2); a gorgon, siren, sea creature and the
+  leviathan through the record (0x4014d0, 0x403480, 0x490c70, 0x494090;
+  the leviathan, category 400, counts nothing). Harpies and dragons shot
+  down are reported to no one: 0x420670 takes their life to 0 and
+  reports nothing. Not decoded: a land creature struck by a shot
+  following it (0x4967b0, 0x496ca5-0x496cef) gets message 0x138e with
+  `+0x15` unwritten, a stack leftover; one struck by a projectile landing
+  on its cell (0x498240) gets the shooter's (the port gives the shot's
+  player in both).
+- **Lightning** (0xda93, the message's `+0x18` = the bolt's `+0x75`, the
+  caster): buildings (`+0x1ac`, 0x428633 / 0x415102), land creatures
+  (0x414ce0), harpies (0x420cce, 0x420d23), landing parties (0x4227fb), a
+  sea creature struck on its own cell (0x492c2a, each time it is left at
+  nothing; struck from a cell about, it is never reported). A ship
+  wrecked by it is put down to no one (0x4de2cd stores -1, and the wreck
+  event 0x200, 0x4aa280, gives `+0x7f` 0xff), as are reefs' and
+  whirlpools' wrecks (0xda94, 0xda95).
+- **Tornadoes** (0xda96, `+0x18` = the tornado's `+0x75` = the caster
+  from the spell record's `+0x14`): ships as a code-4 blow of class 0x25c
+  (0x4de3ce), buildings (0x426f37), creatures and harpies alike.
+- **No one**: the siren's song (code 4, class 0x1fd, player 0xff,
+  0x4a74c0), the gorgon's stare and the fire spell (0x158bf: class 0x1fa
+  code 4 on ships; a building fallen by it keeps `+0x1ac` as it was),
+  fire on board and every hull test (0x4be030), the boarding-state ends
+  that sink a ship (0x4b5df0, 0x4b73a0, 0x4b93f0, 0x4c3410 sites).
+- **Rams** (0x4c1c60): the prey's blow is put down to the rammer's
+  `+0x24f` (0x4c1d63) and the rammer's own to its prey's (0x4c1f2a).
+- A sea creature's bite: the monster's player (0xf166, 0x49098d); one
+  eaten by another: the eater's (0x490c70 code 1).
+- **A prize taken by boarding** is reported with its taker's `+0x24f`
+  before it changes hands (0x4b7007, then 0x4b9700): the taker's ship
+  destroyed (besides boarded) and the loser's ship lost. (If either
+  player is 16 the prize is sunk instead, `+0x7f` the taker, 0x4b7169.)
+- A building sold by its owner: its own player (0x427472), counting
+  nothing.
+- Ships in a dock: 0x4b3ab0 (`+0x73a < 0`, the dock's count down) pays
+  the owner the ship's cost and reports -1, a loss; 0x4b4380 (task 5)
+  reports the ship's own player; a ship created on a cell that fails
+  0x499a40 is removed with -1 (0x4dc787).
+- Sea creatures, gorgons, sirens and the leviathan report on **every**
+  blow that leaves the life at or below 0 (0x490c70, 0x4014d0, 0x403480,
+  0x494090 test the life after the blow, not before): a dead sea creature
+  struck again before its tick removes it is counted again. The port
+  removes gorgons and sirens at once, so only the sea creature repeats.
+
+Not ported: the dock cases (0x4b3ab0, 0x4b4380) and 0x4dc787, which the
+port has no ship object for; the gorgon's and siren's second report from
+their tick (0x401f70 / 0x403ba0, with `+0xb4` / `+0x138` written by their
+lightning and tornado handlers) beside the first; the stale `+0x1ac` a
+building keeps for a later killer that does not write it; the prize sunk
+for player 16.
 
 Some objects are created by the scripts at the start: 0x411010 (world,
 class, x, y, level, a, b) makes a castle record (class, 2, 4, 1, 0, x, y,

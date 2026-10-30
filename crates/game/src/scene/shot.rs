@@ -124,6 +124,9 @@ pub struct Shot {
     pub rope: Option<u32>,
     /// Who fired it.
     pub shooter: Option<u32>,
+    /// The player it is put down to (`+0xb5`, from message 0x14ba's `+4`
+    /// when it is fired): the shooter's, or none (0xff).
+    pub by: Option<Owner>,
     /// Thrown by a volcano or a fire ship (0x499410): no shooter, it
     /// strikes whatever is where it lands, its pictures played once.
     pub volcanic: bool,
@@ -238,6 +241,8 @@ pub struct SavedShot {
     #[serde(default)]
     shooter: Option<u32>,
     #[serde(default)]
+    by: Option<Owner>,
+    #[serde(default)]
     volcanic: bool,
     #[serde(default = "yes")]
     trail: bool,
@@ -266,6 +271,7 @@ impl Shot {
             apex: self.apex,
             rope: self.rope,
             shooter: self.shooter,
+            by: self.by,
             volcanic: self.volcanic,
             trail: self.trail,
         }
@@ -293,6 +299,7 @@ impl Shot {
             y: s.from.1,
             rope: s.rope,
             shooter: s.shooter,
+            by: s.by,
             volcanic: s.volcanic,
             trail: s.trail,
         }
@@ -362,6 +369,8 @@ pub(super) struct Firing {
     pub rope: Option<u32>,
     /// Who fired it (a sea monster remembers the ship that struck it).
     pub shooter: Option<u32>,
+    /// The player the shot is put down to (see `Shot::by`).
+    pub by: Option<Owner>,
 }
 
 impl Scene {
@@ -430,6 +439,7 @@ impl Scene {
             y: f.from.1,
             rope: f.rope,
             shooter: f.shooter,
+            by: f.by,
             volcanic: false,
             trail: true,
         });
@@ -483,6 +493,7 @@ impl Scene {
             y: from.1,
             rope: None,
             shooter: None,
+            by: None,
             volcanic: true,
             trail,
         });
@@ -626,18 +637,24 @@ impl Scene {
         // The hull's share first, then the crew's and the weapons'
         // (0x4bf170).
         if let Some(i) = target.filter(|_| s.volcanic) {
+            let report = !matches!(self.objects[i].class, ObjectClass::Monster(0x1f8 | 0x1f9));
             self.ignite(i, s.item, s.flaming, s.damage, data, caches);
-            self.strike(s.target, s.damage, false, None, data, caches);
+            self.strike(s.target, s.damage, false, None, report, data, caches);
             self.wound(s.target, s.wounds);
             self.wear(s.target, s.wear);
             return;
         }
-        // The blow's giver: the shooter's player, if it is still there.
-        let by = s
-            .shooter
-            .and_then(|id| self.object_index(id))
-            .and_then(|k| self.objects[k].owner);
         if let Some(i) = target {
+            // The blow's giver: the player in the shot (`+0xb5`); none on
+            // a ship being mended in a dock (0x4bf170 hands it to 0x4b4000,
+            // whose wreck gives `+0x7f` 0xff). (Not decoded: a land
+            // creature struck by a shot following it gets 0x138e with
+            // `+0x15` unwritten, 0x496ca5-0x496cef, a byte left on the
+            // stack; the port keeps the shot's player.)
+            let by = s.by.filter(|_| !self.in_dock(i));
+            // A harpy or dragon shot down is reported to no one (0x420670
+            // takes its life down to 0 and calls nothing that reports).
+            let report = !matches!(self.objects[i].class, ObjectClass::Monster(0x1f8 | 0x1f9));
             // Fire first, judged on the hull before the blow (0x4bf1a0).
             let holder = self.objects[i].holds_units();
             let ship = self.objects[i].ship.is_some();
@@ -656,7 +673,7 @@ impl Scene {
                     s.target, s.damage, s.wounds, s.item, s.flaming, by, data, caches,
                 );
             } else {
-                self.strike(s.target, s.damage, false, by, data, caches);
+                self.strike(s.target, s.damage, false, by, report, data, caches);
                 self.wound(s.target, s.wounds);
                 self.wear(s.target, s.wear);
             }

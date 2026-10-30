@@ -839,12 +839,15 @@ impl Scene {
     }
 
     /// Lightning on sea monster `id` (0xda93): struck on its own cell, under
-    /// water it loses half its full strength and waits anew, up it dies;
-    /// on a cell about, only up, it loses half and hurries.
+    /// water it loses half its full strength and waits anew, up it dies,
+    /// and left at nothing it is reported killed by `caster` (0x492c2a,
+    /// each time); on a cell about, only up, it loses half and hurries, no
+    /// death reported.
     pub(super) fn sea_monster_lightning(
         &mut self,
         id: u32,
         centre: bool,
+        caster: Option<super::Owner>,
         data: &GameData,
         caches: &mut Caches,
     ) {
@@ -862,12 +865,12 @@ impl Scene {
                 self.set_strength(i, 0);
             }
             self.monster_enter(i, &mut m, UNDER, data, caches);
+            if self.monster_strength(i).0 == 0 {
+                self.note_destroyed(i, caster);
+            }
         } else if m.state != UNDER {
             self.set_strength(i, now.saturating_sub(max * 50 / 100));
             m.hurried = true;
-        }
-        if self.monster_strength(i).0 == 0 {
-            self.note_destroyed(i, None);
         }
         self.sea_monster_states.insert(id, m);
     }

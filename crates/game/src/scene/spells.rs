@@ -226,7 +226,7 @@ impl Scene {
     /// barbarian structure, a harpy or dragon fall struck on their own
     /// cell; sea monsters lose half their strength, land creatures and the
     /// gorgon a quarter. The caster's brain hears of it (0x5d9d).
-    fn lightning_strike(
+    pub(super) fn lightning_strike(
         &mut self,
         x: f32,
         y: f32,
@@ -318,8 +318,15 @@ impl Scene {
         }
         for (id, blow) in blows {
             // 0xda93 heeds no sleep: struck straight (not through the
-            // fort's units either).
-            self.strike(id, blow, true, None, data, caches);
+            // fort's units either). Put down to the caster (message
+            // `+0x18`, the bolt's `+0x75`: buildings' `+0x1ac` 0x428633,
+            // creatures 0x414ce0, harpies 0x420cce), but a ship's wreck to
+            // no one (0x4de2cd stores -1, and 0x4aa280's wreck event 0xff).
+            let ship = self
+                .object_index(id)
+                .is_some_and(|k| self.objects[k].ship.is_some());
+            let by = if ship { None } else { caster };
+            self.strike(id, blow, true, by, true, data, caches);
         }
         let monsters: Vec<(u32, bool)> = self
             .objects
@@ -330,7 +337,7 @@ impl Scene {
             .map(|(x, y, id)| (id, (x, y) == (cx, cy)))
             .collect();
         for (id, centre) in monsters {
-            self.sea_monster_lightning(id, centre, data, caches);
+            self.sea_monster_lightning(id, centre, caster, data, caches);
         }
         // miss009's brain (0x4663d0): the player's lightning in the strait.
         if caster.is_some()
@@ -423,6 +430,7 @@ impl Scene {
                     hop: 0,
                     from: (x, y),
                     to: (x, y),
+                    caster: master,
                 }),
                 site: None,
             });
@@ -535,27 +543,37 @@ impl Scene {
                 wrecked.push(o.id);
                 continue;
             }
-            let blows = struck.iter().filter(|&&c| c == cell).count();
-            if let (true, false, Some(c)) = (blows > 0, zetes, o.combat.as_ref()) {
-                let blow = if c.protect_magic > 0.0 {
-                    magic::WATERSPOUT_STRIKE * magic::SHIELD_FACTOR
-                } else {
-                    magic::WATERSPOUT_STRIKE
-                };
-                spouts.push((o.id, blow * blows as f32));
+            if zetes {
+                continue;
+            }
+            let Some(c) = o.combat.as_ref() else {
+                continue;
+            };
+            let blow = if c.protect_magic > 0.0 {
+                magic::WATERSPOUT_STRIKE * magic::SHIELD_FACTOR
+            } else {
+                magic::WATERSPOUT_STRIKE
+            };
+            for &(_, caster) in struck.iter().filter(|s| s.0 == cell) {
+                spouts.push((o.id, blow, caster));
             }
         }
+        // A reef's or whirlpool's wreck is put down to no one (0x4aa280,
+        // the wreck event, gives `+0x7f` 0xff).
         for id in wrecked {
             self.hit(id, 0.0, None, data, caches);
         }
-        // Shared out as any blow (hull, crew, weapons).
-        for (id, blow) in spouts {
-            self.share_blow(id, blow, None, data, caches);
+        // Shared out as any blow (hull, crew, weapons), put down to the
+        // caster (0xda96: the code-4 blow of class 0x25c, player = the
+        // message's `+0x18`, the tornado's `+0x75`, 0x4de3ce).
+        for (id, blow, caster) in spouts {
+            self.share_blow(id, blow, caster, data, caches);
         }
     }
 
-    /// Moves the tornadoes on (0x43a380); the cells they strike.
-    fn run_tornadoes(&mut self, dt: f32) -> Vec<(i32, i32)> {
+    /// Moves the tornadoes on (0x43a380); the cells they strike, with
+    /// their casters.
+    fn run_tornadoes(&mut self, dt: f32) -> Vec<((i32, i32), Option<super::Owner>)> {
         const FRAME: f32 = 2.0 * crate::clock::TICK;
         let mut struck = Vec::new();
         for k in 0..self.effects.len() {
@@ -578,7 +596,7 @@ impl Scene {
                             tw.frame = 42;
                             tw.moving = 0.0;
                             tw.hop = 0;
-                            struck.push(self.tornado_hop(&mut tw));
+                            struck.push((self.tornado_hop(&mut tw), tw.caster));
                         }
                         2 => tw.frame = 42,
                         _ => tw.phase = 0,
@@ -595,7 +613,7 @@ impl Scene {
                             tw.phase = 3;
                             tw.frame = 84.min(last);
                         } else {
-                            struck.push(self.tornado_hop(&mut tw));
+                            struck.push((self.tornado_hop(&mut tw), tw.caster));
                             tw.hop = 0;
                         }
                     }

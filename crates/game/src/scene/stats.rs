@@ -87,11 +87,10 @@ impl Scene {
     /// classes 0x32-0x43), and the killer's gain (ships by type, buildings
     /// 0x32-0x41 as enemy terrain objects, 0x42-0x49, the wizards and the
     /// lairs, as monsters' terrain objects, monsters 0x1f4-0x1fd by
-    /// class); only the human player's own are kept here. (Not decoded:
-    /// the killer each of the 25 callers of 0x50e750 passes; the port
-    /// gives the shooter's, rammer's or boarder's player, and where it has
-    /// none (`None`: spells, fire, creatures, volcanoes) counts the thing
-    /// as the human player's kill unless it was theirs.)
+    /// class); only the human player's own are kept here. `None` is the
+    /// original's killer -1 (0x50e750 posts it as 0xff): the loss is
+    /// counted, the gain nobody's; player 0 (`0 < k < 20`) gains nothing
+    /// either. Each caller passes the killer its original does.
     pub(super) fn note_destroyed(&mut self, i: usize, killer: Option<Owner>) {
         let o = &self.objects[i];
         let human = self.human.map(|h| (h.nation, h.slot));
@@ -99,10 +98,8 @@ impl Scene {
         if killer.is_some() && killer == o.owner {
             return;
         }
-        let by_human = match killer {
-            Some(k) => Some(k) == human,
-            None => !own,
-        };
+        let by_human =
+            killer.is_some_and(|k| Some(k) == human && (1..20).contains(&(k.0 * 4 + k.1)));
         let class = o.record.class_id;
         let ship = o.ship.as_ref().map(|s| s.kind.min(11) as usize);
         let s = &mut self.stats;

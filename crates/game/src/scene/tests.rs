@@ -3065,7 +3065,8 @@ fn statistics_and_score() {
     };
     let (enemy, ek) = ship_of(&scene, false);
     let (mine, mk) = ship_of(&scene, true);
-    scene.hit(enemy, f32::MAX, None, &data, &mut caches);
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    scene.hit(enemy, f32::MAX, human, &data, &mut caches);
     scene.hit(mine, f32::MAX, None, &data, &mut caches);
     assert_eq!(scene.stats.ships_destroyed[ek as usize], 1);
     assert_eq!(scene.stats.ships_lost[mk as usize], 1);
@@ -3075,6 +3076,111 @@ fn statistics_and_score() {
     let expected = (points[ek as usize] - points[mk as usize]).max(0) / 10;
     assert_eq!(scene.stats.score() as i64, expected);
     assert_eq!(scene.stats.values(scene.amber)[11] as i64, expected);
+}
+
+/// The killer each death is put down to (0x50e750's callers): none (0xff)
+/// counts the owner's loss and nobody's gain; each rammed ship goes to
+/// the other's player (0x4c1c60); a prize taken counts as the taker's ship
+/// destroyed (0x4b6f20); a harpy shot down is reported to no one
+/// (0x420670); lightning wrecks a ship for no one (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn kills_are_put_down_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let fresh = |caches: &mut Caches| {
+        let mut s = Scene::load(&data, caches, "miss010").unwrap();
+        s.brain = None;
+        s
+    };
+    let ships = |s: &Scene, own: bool| -> Vec<u32> {
+        s.objects
+            .iter()
+            .filter(|o| {
+                o.ship.is_some()
+                    && s.is_own(o) == own
+                    && o.owner.is_some_and(|w| w != crate::combat::MONSTERS)
+            })
+            .map(|o| o.id)
+            .collect()
+    };
+    let sum = |n: &[u32; 12]| n.iter().sum::<u32>();
+    // No killer: an enemy ship sunk counts nothing, the human's is lost.
+    let mut scene = fresh(&mut caches);
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    scene.hit(ships(&scene, false)[0], f32::MAX, None, &data, &mut caches);
+    assert_eq!(sum(&scene.stats.ships_destroyed), 0);
+    scene.hit(ships(&scene, true)[0], f32::MAX, None, &data, &mut caches);
+    assert_eq!(sum(&scene.stats.ships_lost), 1);
+    // A rammer that sinks itself on the human's ship is the human's kill.
+    let mut scene = fresh(&mut caches);
+    let (e, m) = (ships(&scene, false)[0], ships(&scene, true)[0]);
+    let (ei, mi) = (
+        scene.object_index(e).unwrap(),
+        scene.object_index(m).unwrap(),
+    );
+    scene.objects[ei].combat.as_mut().unwrap().hull = 0.01;
+    scene.objects[mi].combat.as_mut().unwrap().hull = 1.0e9;
+    scene.objects[mi].combat.as_mut().unwrap().max_hull = 1.0e9;
+    scene.ram(ei, mi, &data, &mut caches);
+    assert!(scene.object_index(e).is_none(), "the rammer sank");
+    assert_eq!(sum(&scene.stats.ships_destroyed), 1);
+    assert_eq!(sum(&scene.stats.ships_lost), 0);
+    // A prize: destroyed and boarded for the taker, lost for the loser.
+    let mut scene = fresh(&mut caches);
+    let (e, m) = (ships(&scene, false)[0], ships(&scene, true)[0]);
+    let enemy = scene.objects[scene.object_index(e).unwrap()].owner;
+    scene.capture(e, human, 0, Default::default(), &data, &mut caches);
+    assert_eq!(sum(&scene.stats.ships_destroyed), 1);
+    assert_eq!(sum(&scene.stats.ships_boarded), 1);
+    scene.capture(m, enemy, 0, Default::default(), &data, &mut caches);
+    assert_eq!(sum(&scene.stats.ships_lost), 1);
+    // A harpy (or dragon) shot down by the human counts nothing.
+    let mut scene = fresh(&mut caches);
+    let dragon = scene
+        .objects
+        .iter()
+        .find(|o| matches!(o.class, ObjectClass::Monster(0x1f8 | 0x1f9)) && o.combat.is_some())
+        .map(|o| o.id)
+        .unwrap();
+    let from = {
+        let k = scene.object_index(ships(&scene, true)[0]).unwrap();
+        (scene.objects[k].x, scene.objects[k].y)
+    };
+    scene.fire_shot(
+        super::shot::Firing {
+            item: combat::GREEK_FIRE,
+            letter: None,
+            flaming: false,
+            from,
+            target: dragon,
+            strikes: true,
+            damage: f32::MAX,
+            wounds: 0.0,
+            wear: 0.0,
+            rope: None,
+            shooter: None,
+            by: human,
+        },
+        &data,
+        &mut caches,
+    );
+    for _ in 0..200 {
+        scene.run_shots(0.04, &data, &mut caches);
+    }
+    assert!(scene.object_index(dragon).is_none(), "the dragon fell");
+    assert_eq!(scene.stats.monsters_killed.iter().sum::<u32>(), 0);
+    // The human's lightning: an enemy ship wrecked counts nothing.
+    let mut scene = fresh(&mut caches);
+    let e = ships(&scene, false)[0];
+    let k = scene.object_index(e).unwrap();
+    let (x, y) = (scene.objects[k].x, scene.objects[k].y);
+    scene.lightning_strike(x, y, human, &data, &mut caches);
+    assert!(scene.object_index(e).is_none(), "the ship was wrecked");
+    assert_eq!(sum(&scene.stats.ships_destroyed), 0);
 }
 
 /// Missions start with the view where the original puts it (`WIN_VIEW`):
@@ -6501,6 +6607,7 @@ fn greek_fire_leaves_a_trail() {
                 wear: 0.0,
                 rope: None,
                 shooter: None,
+                by: None,
             },
             &data,
             caches,

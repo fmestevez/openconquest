@@ -306,6 +306,13 @@ impl Scene {
                 ObjectClass::Monster(c @ 0x1f4..=0x1f6) => Some(c),
                 _ => None,
             };
+            // The player each shot is put down to (message 0x14ba's `+4`):
+            // a ship's `+0x24f` (0x4c026b), a fort's player (0x4469c0); a
+            // land creature's throw none (0x412900 gives 0xff, 0x4129f3).
+            let by = match thrower {
+                Some(_) => None,
+                None => self.objects[s].owner,
+            };
             let health = self.objects[s]
                 .combat
                 .as_ref()
@@ -387,6 +394,7 @@ impl Scene {
                         wear,
                         rope: None,
                         shooter: Some(shooter),
+                        by,
                     },
                     data,
                     caches,
@@ -505,7 +513,7 @@ impl Scene {
             // (0x418430).
             self.forget_gone_units(target);
         }
-        self.strike(target, hull, false, by, data, caches);
+        self.strike(target, hull, false, by, true, data, caches);
     }
 
     /// Takes `points` off the weapons of ship `target` (0x4be110); those
@@ -583,20 +591,23 @@ impl Scene {
             self.fort_blow(target, damage, 0.0, NOT_A_WEAPON, false, by, data, caches);
             return;
         }
-        self.strike(target, damage, true, by, data, caches);
+        self.strike(target, damage, true, by, true, data, caches);
     }
 
     /// The same, showing the hit or splash only if `show` (a shot shows
-    /// its own). `by` is the player who dealt the blow, if the port knows
-    /// it: the one the statistics take for the killer (a ship's sinking
-    /// blow keeps its giver, `+0x80b` to `+0x7f`, 0x4befc0, 0x4be0c0, and
-    /// the death reports it to 0x50e750).
+    /// its own). `by` is the player who dealt the blow: the one the
+    /// statistics take for the killer (a ship's sinking blow keeps its
+    /// giver, `+0x80b` to `+0x7f`, 0x4befc0, 0x4be0c0, and the death
+    /// reports it to 0x50e750); `None` for none (0xff). Unless `report`,
+    /// a death is not reported at all (a harpy or dragon shot down).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn strike(
         &mut self,
         target: u32,
         damage: f32,
         show: bool,
         by: Option<Owner>,
+        report: bool,
         data: &GameData,
         caches: &mut Caches,
     ) {
@@ -615,13 +626,16 @@ impl Scene {
         };
         c.hull -= damage;
         // A sea monster struck to nothing dies at its next turn under water
-        // (0x491fa0), its kill reported now (0x50e750).
-        let (hull, was) = (c.hull, c.hull + damage);
+        // (0x491fa0), its kill reported now (0x50e750): on every blow that
+        // leaves it at nothing, not only the one that takes it there
+        // (0x490c70 code 0 tests the life after the blow, not before), each
+        // a full count.
+        let hull = c.hull;
         let monster = self.objects[ti].class == ObjectClass::Monster(0x1fb)
             && self.sea_monster_states.contains_key(&target);
         if monster && hull <= 0.0 {
             self.objects[ti].combat.as_mut().unwrap().hull = 0.0;
-            if was > 0.0 {
+            if report {
                 self.note_destroyed(ti, by);
             }
         }
@@ -639,7 +653,9 @@ impl Scene {
         }
         let is_building = self.objects[ti].ship.is_none();
         if destroyed {
-            self.note_destroyed(ti, by);
+            if report {
+                self.note_destroyed(ti, by);
+            }
             self.drop_held(target, data, caches);
             // Creatures die with their own cry (land creatures 0x413ad0:
             // events 100-102 by class; the harpy 0x41fb02 event 103; the
@@ -937,7 +953,7 @@ impl Scene {
             * argus(t);
         let to_self = to_self * argus(a);
         let (ida, idt) = (a.id, t.id);
-        let by = a.owner;
+        let (by, recoil) = (a.owner, t.owner);
         self.objects[i].ship.as_mut().unwrap().task = None;
         // A fire rammer's barrel of powder goes off in the ram. (Not
         // decoded: 0x4c1c60 and 0x4c1ad0 have no such term; where the
@@ -955,9 +971,11 @@ impl Scene {
             None => (0.0, 0.0),
         };
         self.wound(idt, burn);
-        // (Not decoded: whom the rammer's own blow is put down to.)
+        // Each ship's blow is put down to the other's player (0x4c1c60:
+        // the prey's 0x4c1ad0 gets the rammer's `+0x24f`, 0x4c1d63, the
+        // rammer's its prey's, 0x4c1f2a).
         self.ram_blow(idt, to_target, blast, by, data, caches);
-        self.ram_blow(ida, to_self, 0.0, None, data, caches);
+        self.ram_blow(ida, to_self, 0.0, recoil, data, caches);
     }
 
     /// A ram's blow `blow` to ship `id` (0x4c1ad0): the hull takes its
@@ -1180,6 +1198,10 @@ impl Scene {
         let Some((nation, player)) = owner else {
             return;
         };
+        // The prize is reported destroyed by its taker before it changes
+        // hands (0x4b6f20: 0x50e750 with the boarder's `+0x24f`, then
+        // 0x4b9700): the taker's ship destroyed, the loser's ship lost.
+        self.note_destroyed(i, owner);
         if Some((nation, player)) == self.human.map(|h| (h.nation, h.slot)) {
             if let Some(s) = self.objects[i].ship.as_ref() {
                 self.stats.ships_boarded[s.kind.min(11) as usize] += 1;

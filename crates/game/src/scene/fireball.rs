@@ -164,6 +164,9 @@ impl Scene {
             .and_then(|(l, ..)| l.first())
             .map_or(t, |l| l.image.width as f32);
         let from = (left + w / 2.0, top + 22.0);
+        // Its shots are put down to the caster, but for nation 4 slot 1's,
+        // the creatures' (0x405fa0-0x405fbb give 0xff).
+        let by = owner.filter(|&o| o != crate::combat::MONSTERS);
         let targets: Vec<(u32, bool)> = self
             .objects
             .iter()
@@ -208,6 +211,7 @@ impl Scene {
                     wear: 0.0,
                     rope: None,
                     shooter: None,
+                    by,
                 },
                 data,
                 caches,

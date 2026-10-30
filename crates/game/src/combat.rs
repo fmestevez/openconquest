@@ -1441,6 +1441,9 @@ pub struct Tornado {
     pub hop: u32,
     pub from: (f32, f32),
     pub to: (f32, f32),
+    /// Who cast it (`+0x75`, from the spell record's `+0x14`): its blows
+    /// are put down to that player.
+    pub caster: Option<(u32, u32)>,
 }
 
 impl Effect {
