@@ -2944,18 +2944,17 @@ pub enum SoundKind {
 /// 5: events 85-87, 89, 92-94, 96, 99, 103, 105, 107, 110, 111, 114-116,
 /// 122, 125-127, 129, 133, 136, 149-155, 169, 170, 174, 274, event 1 (a
 /// ship, 0x4e00bc) and a building's fall `+0x1a8` (event 4 by default,
-/// 0x422dec; 0x424492); mode 6: events 88, 95, 106, 128, 146-148, 271,
-/// 272. Mode 3 is only the map's ambient loop (event 273, 0x51028c,
-/// 0x524ffb, the front end's channel 9). (Not decoded: the mode of the
-/// land creatures' death, events 100 / 101 at 0x413c66, passed in a
-/// register; `deac1d` keeps the port's fall-off.)
+/// 0x422dec; 0x424492) and the land creatures' death (events 100-102,
+/// 0x413c66: the mode in `edi`, 5 from 0x413be7); mode 6: events 88, 95,
+/// 106, 128, 146-148, 271, 272. Mode 3 is only the map's ambient loop
+/// (event 273, 0x51028c, 0x524ffb, the front end's channel 9).
 pub const AMBIENT_PLACED: &[&str] = &[
     "hitmed", "apmed3", "deamons", "atmed1c", "hc1", "hc2", "hc3", "hc4", "hc5", "hc6", "c1", "c2",
     "c3", "c4", "lc1", "lc2", "lc3", "app3", "deadga1", "harpy2", "dr1", "dr3", "atgarp1", "hdr2",
     "hgar4", "hgar5", "prote3", "spider", "riff1wav", "wind8", "shum2", "eject", "eject1", "apse",
     "atmons3", "kit4", "prote1", "piw1a", "piw3a", "piw4a", "pit3", "crw1a", "crw2a", "crw3a",
     "crw4a", "weter1a", "bildsh3", "razru2", "sir1", "wreck1", "bf1", "deafir1", "fireball",
-    "trea2", "whirl3",
+    "trea2", "whirl3", "deac1d", "destr1",
 ];
 
 /// The kind of scene sound `name`.

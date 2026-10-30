@@ -11353,11 +11353,12 @@ fn ambient_channel_sounds() {
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let a = data.sounds.as_ref().unwrap();
-    // Mode 5 (event 4: a building's fall by default) and mode 6.
+    // Mode 5 (event 4: a building's fall by default; 100-102 the land
+    // creatures' death, 0x413c66) and mode 6.
     let events = [
         85, 86, 87, 89, 92, 93, 94, 96, 99, 103, 105, 107, 110, 111, 114, 115, 116, 122, 125, 126,
-        127, 129, 133, 136, 149, 150, 151, 152, 153, 154, 155, 169, 170, 174, 274, 1, 4, 88, 95,
-        106, 128, 146, 147, 148, 271, 272,
+        127, 129, 133, 136, 149, 150, 151, 152, 153, 154, 155, 169, 170, 174, 274, 1, 4, 100, 101,
+        102, 88, 95, 106, 128, 146, 147, 148, 271, 272,
     ];
     let mut names: Vec<String> = events
         .iter()

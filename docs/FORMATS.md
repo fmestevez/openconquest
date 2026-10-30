@@ -2877,7 +2877,9 @@ x, y, event)`, the mode pushed last; event < 0 plays nothing) and the 29
 of 0x525370, read in the disassembly: mode 5 events 85-87, 89, 92-94,
 96, 99, 103, 105, 107, 110, 111, 114-116, 122, 125-127, 129, 133, 136,
 149-155, 169-171, 174, 141, 168, 274 (0x407a59, direct), event 1 (a
-ship, 0x4e00bc), event 5 (`firee1`, the drain 0x424214) and a
+ship, 0x4e00bc), events 100-102 (a land creature's death, 0x413c66:
+the mode in `edi`, 5 from 0x413be7), event 5 (`firee1`, the drain
+0x424214) and a
 building's sound events `+0x1a8` (its fall, 0x424492; 4 `razru2` by
 default, 0x422dec) and `+0x1a4` (0x425c1a); mode 6 events 88, 95, 106,
 117, 128, 146-148, 271, 272; mode 4 events 144, 145; mode 1 events 83,
@@ -2886,9 +2888,7 @@ default, 0x422dec) and `+0x1a4` (0x425c1a); mode 6 events 88, 95, 106,
 0x51028c, 0x524ffb: the map's ambient loop, the front end's channel 9),
 mode 8 the interface's. The port places the names of the mode 5 / 6
 events' lists (`scene::AMBIENT_PLACED`, checked against the data) by
-`audio::placed_ambient`. Not decoded: the mode of the land creatures'
-death (events 100, 101 at 0x413c66, in a register: `deac1d` keeps the
-port's fall-off); the 176-178 / 180-182 events (`se8`, `wa6`) are mode 2
+`audio::placed_ambient`. The 176-178 / 180-182 events (`se8`, `wa6`) are mode 2
 (temples) but the port plays neither. The
 priority byte 0x525370 passes 0x568b30 for modes 1, 4, 5, 6 (255 within 5
 cells, `(20 - d) x 255 / 20` beyond; 0 for mode 2) is not used (the port
@@ -4676,7 +4676,8 @@ its step (0x413ad0): a blow, unless dying, marks it struck (`+0x144`) and
 takes its points off while the percentage left is above 0, else reports
 the death to the blow's player (0x50e750), leaves life and percentage 1
 and queues its death; its death sets it dying (state 5, percentage 1),
-crying (events 100-102: `deac1d`, `deac1d`, `destr1`) only if struck.
+crying (events 100-102: `deac1d`, `deac1d`, `destr1`; mode 5, 0x413c66)
+only if struck.
 Struck and not dying, when its picture next ends it shows the hit
 (state 4, 10 frames a tick each, then back to the state it was in),
 crying one time in ten (a draw; event 0x6f `hc1`-`hc6` for the cyclops,
