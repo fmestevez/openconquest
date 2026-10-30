@@ -86,6 +86,17 @@ impl Scene {
         self.refresh_sight();
     }
 
+    /// No human player (a Custom start with no Human row, 0x53b940:
+    /// `[game+0x3212]` = `[game+0x3213]` = 0xff, `JUSTDEMO` +0x3225 = 1):
+    /// the mission's human becomes one more computer player with its own
+    /// purse, and nothing is fogged (`fogged`).
+    pub fn spectate(&mut self) {
+        if let Some(h) = self.human.take() {
+            self.purses
+                .insert((h.nation, h.slot), (self.amber, self.fish));
+        }
+    }
+
     /// The seat of player `owner`.
     pub fn seat_of(&self, owner: (u32, u32)) -> Option<usize> {
         self.seats

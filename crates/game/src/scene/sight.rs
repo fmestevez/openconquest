@@ -302,7 +302,7 @@ impl Scene {
     /// What the player knows of cell `(cx, cy)`; everything is in sight
     /// when fog of war is off.
     pub fn seen(&self, cx: i32, cy: i32) -> Seen {
-        if !self.fog {
+        if !self.fogged() {
             return Seen::InSight;
         }
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
@@ -323,7 +323,7 @@ impl Scene {
         if o.class == ObjectClass::WhaleZone && o.deposit.is_none() {
             return false;
         }
-        if !self.fog || self.is_own(o) {
+        if !self.fogged() || self.is_own(o) {
             return true;
         }
         let t = TILE_SIZE as f32;
@@ -334,6 +334,14 @@ impl Scene {
         } else {
             self.seen(cx, cy) >= Seen::Explored
         }
+    }
+
+    /// Whether the fog is drawn: fog of war on and a viewing player
+    /// (DarkTy, Grig\dark.cpp 0x48bbd0: the overlay is attached to the
+    /// screen, its clouds redrawn and the minimap's fog made only when
+    /// `[game+0x3212]` != 0xff; with no viewer the whole map shows).
+    pub fn fogged(&self) -> bool {
+        self.fog && self.human.is_some()
     }
 
     /// Recomputes what is in sight from the player's ships and buildings.
@@ -366,7 +374,7 @@ impl Scene {
 
     /// Recomputes what the active player sees.
     pub fn refresh_sight(&mut self) {
-        if !self.fog || self.sight.is_empty() {
+        if !self.fogged() || self.sight.is_empty() {
             return;
         }
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);

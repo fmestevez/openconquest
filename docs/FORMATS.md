@@ -1895,9 +1895,33 @@ original:
   game (0x101, no briefing): side + 0x1a1d by player = 0 for Disable, 1
   for the Human row, 3 for a computer row with + 0x1a31 = 0x528a20(kind)
   (AI Weak 0, Medium 1, Strong 2); 0x522d50 makes a computer player for
-  side 3 only. The port keeps the mission's human player when no row is
-  Human (what the original's game does then is not decoded, 0x50f910),
-  and does not draw the map's player marks (LMAP8X8, 0x52f470). Not
+  side 3 only. A disabled player's objects are never made:
+  PlaySystemClassTy::CreateSystemObjects (0x51e810, the callback of
+  0x549850 over the `OBJ_` records, 0x522e65) returns at once for a record
+  whose dword 1 is 1 (player-owned) and whose owner's side (dwords 2 and 3,
+  nation * 4 + slot) is 0 (0x51e82b..0x51e845); no computer player, no
+  fleet list (0x49b840: sides 1 and 3 only), not counted by the judge.
+  With no Human row (0x528a70 < 0) `[game+0x3212]` = `[game+0x3213]` =
+  0xff (no viewing player) and `[game+0x3225]` (the mission's `JUSTDEMO`
+  flag, 0x4ed520; its only reader, the navy 0x49ab30, skips the fleets'
+  tick when there is no viewer and it is 0) = 1 (0x53bfe6..0x53bff7); else
+  the Human row's nation and slot and 0. With no viewer: no fog or clouds
+  are drawn (DarkTy 0x48bbd0 attaches its overlay, 0xcc4 and the minimap's
+  `OBL_SM` only when 0x3212 != 0xff); the view is not centred (0x50f910
+  message 0x101, 0x510148) and stays at scroll (0, 0); the pointer
+  (0x5175b0) only moves its sprite (0x517635 -> 0x517a16 -> 0x5166b0): no
+  mode, no object info; the bar's minimap ignores the selection
+  (0x4fffe0 0xc453, 0x5002ce). The judge (Boss_kib 0x448610, game type 2)
+  with no side-1 player counts the players whose side is not 0 owning
+  anything (0x4c46c0 with ship mask 0xfff and building mask 0x1fff: ships
+  of kinds 0-11 and buildings 0x32-0x3e); more than one, nothing; else
+  `[game+0x3291]` = 0, `[game+0x3301]` = 0x100 and, unless the screen's
+  +0xee is set, command 0x100: the main menu, no end screen. Not decoded:
+  what the money panel shows with no viewer (0x505530 takes its amounts
+  from message 0x10aa, sender not traced) and what a left click does in
+  pointer mode 0 with no viewer (0x5180e0 not followed): the port leaves
+  both as they are. The port does not draw the map's player marks
+  (LMAP8X8, 0x52f470). Not
   decoded: how the pop-up's list and its two buttons, made by 0x52ebe0
   while the screen is up, get message 8 (their pointer receiver 0x13 and
   their Enter, Up and Down bindings; 0x541c10, 0x541b40 and 0x540030 send

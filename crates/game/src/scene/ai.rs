@@ -26,6 +26,33 @@ impl Scene {
         })
     }
 
+    /// A Custom game with no human player (`[game+0x3212]` 0xff) is over
+    /// (0x448610, game type 2, no side-1 player): each player whose side
+    /// is not 0 (every row of the Custom screen but the disabled ones; the
+    /// barbarians have none) counted by 0x4c46c0 with ship mask 0xfff and
+    /// building mask 0x1fff (its ships and its buildings 0x32-0x3e still
+    /// standing); over when at most one of them has any.
+    pub fn spectators_done(&self) -> bool {
+        let players: std::collections::BTreeSet<(u32, u32)> = self
+            .purses
+            .keys()
+            .copied()
+            .chain(self.seats.iter().map(|s| (s.player.nation, s.player.slot)))
+            .filter(|&(nation, slot)| nation != 4 && !self.computers.off.contains(&(nation, slot)))
+            .collect();
+        let owning = players
+            .iter()
+            .filter(|&&p| {
+                self.objects.iter().any(|o| {
+                    o.owner == Some(p)
+                        && o.combat.is_some()
+                        && matches!(o.class, ObjectClass::Ship | ObjectClass::Building(_))
+                })
+            })
+            .count();
+        owning <= 1
+    }
+
     /// A battle's or single mission's outcome as things stand (0x448610):
     /// defeat when the player has no ship or building left, victory when
     /// every condition of the mission is met. (Campaign missions have

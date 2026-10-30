@@ -912,7 +912,7 @@ pub fn draw_fog(
     camera: &Camera,
     lut: &[u32; 256],
 ) {
-    if !scene.fog {
+    if !scene.fogged() {
         return;
     }
     let Some(art) = scene.fog_art.as_deref() else {
@@ -1199,7 +1199,7 @@ pub fn draw_minimap(
             let (px, py) = ((x0 + x) as i64, (y0 + y) as i64);
             let mut c = frame.pixels[(py as u32 * frame.width + px as u32) as usize];
             let before = c;
-            if let (true, Some(art)) = (scene.fog, art) {
+            if let (true, Some(art)) = (scene.fogged(), art) {
                 let (cx, cy) = (mx as i32 / cell, my as i32 / cell);
                 let (ix, iy) = ((mx as i32 % cell) as u32, (my as i32 % cell) as u32);
                 let (dark, fog) = scene.fog_codes(cx, cy);

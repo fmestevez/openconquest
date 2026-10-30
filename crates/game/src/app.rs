@@ -1303,8 +1303,10 @@ impl App {
     /// 0x516c10): the object under the pointer fills it; off objects it is
     /// blank; one that shows none (type 0x1f7) leaves the last.
     fn hovered_info(&self) -> Option<crate::object_info::ObjectInfo> {
-        // Only with "help string" on (0x5175b0 asks [0x5ca542]).
-        if !self.settings.config.help_string {
+        // Only with "help string" on (0x5175b0 asks [0x5ca542]), and with
+        // a viewing player (with none 0x5175b0 only moves the pointer's
+        // sprite, 0x517635).
+        if !self.settings.config.help_string || self.scene.human.is_none() {
             return None;
         }
         let obj = self
@@ -2786,17 +2788,33 @@ impl App {
     }
 
     fn open_mission(&mut self, index: usize) {
+        self.open_mission_for(index, None);
+    }
+
+    /// Opens mission `index`; a Custom start passes its players' sides
+    /// (`Scene::load_custom`).
+    fn open_mission_for(&mut self, index: usize, sides: Option<&[(u32, u32)]>) {
         if self.net.is_some() {
             self.say("Not in a multiplayer game");
             return;
         }
-        match Scene::load_carried(
-            &self.data,
-            &mut self.caches,
-            &self.missions[index],
-            self.difficulty,
-            self.carry.as_ref(),
-        ) {
+        let loaded = match sides {
+            Some(sides) => Scene::load_custom(
+                &self.data,
+                &mut self.caches,
+                &self.missions[index],
+                self.difficulty,
+                sides,
+            ),
+            None => Scene::load_carried(
+                &self.data,
+                &mut self.caches,
+                &self.missions[index],
+                self.difficulty,
+                self.carry.as_ref(),
+            ),
+        };
+        match loaded {
             Ok(scene) => {
                 self.scene = scene;
                 // Every game build shows the bar (0x4ebf50: [game+0x328d] = 0).
@@ -3288,21 +3306,28 @@ impl App {
     /// the game started at once (0x101), with no briefing: the Human row
     /// the human player (side + 0x1a1d = 1), each computer row a computer
     /// player at its level (side 3, + 0x1a31 through 0x528a20), each
-    /// disabled row none (side 0).
+    /// disabled row none (side 0): its objects are not made (0x51e810).
+    /// With no Human row (0x528a70 < 0) there is no viewing player
+    /// (`[game+0x3212]` 0xff, 0x53bfe6..0x53bff7): a game of computers
+    /// only, nothing fogged, the view at the map's top-left.
     fn start_custom(&mut self, index: usize) {
         if self.custom_for != Some(index) {
             self.make_custom_players(index);
         }
         let players = self.custom_players.clone();
         self.carry = None;
-        self.open_mission(index);
+        let sides: Vec<(u32, u32)> = players
+            .iter()
+            .filter(|p| p.kind != 0)
+            .map(|p| (p.info.nation, p.info.slot))
+            .collect();
+        self.open_mission_for(index, Some(&sides));
         if self.menu != Some(MenuState::Briefing) {
             return;
         }
-        // With no Human row the mission's own human player is kept: what
-        // the original's game does with none is not decoded (0x50f910).
-        if let Some(h) = players.iter().find(|c| c.kind == 2) {
-            self.scene.play_as(h.info);
+        match players.iter().find(|c| c.kind == 2) {
+            Some(h) => self.scene.play_as(h.info),
+            None => self.scene.spectate(),
         }
         let c = &mut self.scene.computers;
         c.levels = players
@@ -5835,6 +5860,11 @@ impl App {
         if self.video.is_some() || self.menu.is_some() || self.button_at(pos).is_some() {
             return (P::Standard, false);
         }
+        // No viewing player: the pointer keeps mode 0 (0x5175b0 skips all
+        // but the sprite's move, 0x517635 -> 0x517a16).
+        if self.in_game && self.scene.human.is_none() {
+            return (P::Standard, false);
+        }
         // Selling, the sell pointer (0x441ba0 answers the sell mode 0x34
         // with gcursor mode 0x28, CUR_SELL_).
         if self.pending == Some(Command::SELL_ITEM) {
@@ -6565,6 +6595,11 @@ impl App {
                 self.bar_hidden = false;
             }
         }
+        // A Custom game with no human player over: command 0x100, the
+        // main menu with no end screen (0x448610).
+        if self.scene.over && self.in_game {
+            self.leave_game();
+        }
         if self.menu == Some(MenuState::Waiting) {
             self.run_lobby();
         }
@@ -6614,6 +6649,14 @@ impl App {
                 Some((x, y)) => {
                     self.camera.x = x;
                     self.camera.y = y;
+                    self.camera.clamp(&screen, map);
+                }
+                // No viewing player: the view stays at scroll (0, 0)
+                // (0x50f910 message 0x101 centres it, 0xcba, only when
+                // [game+0x3212] != 0xff, 0x510148).
+                None if self.scene.human.is_none() => {
+                    self.camera.x = 0.0;
+                    self.camera.y = 0.0;
                     self.camera.clamp(&screen, map);
                 }
                 None => {
@@ -7797,6 +7840,47 @@ mod custom_tests {
         let h = app.scene.human.unwrap();
         assert_eq!((h.nation, h.slot), (3, 3));
         assert_eq!(app.scene.computers.off, vec![(1, 1)]);
+        // The disabled player's objects were never made (0x51e810).
+        assert!(!app.scene.objects.iter().any(|o| o.owner == Some((1, 1))));
+    }
+
+    /// Custom missions' Start with no Human row (0x53b940: no viewing
+    /// player): every row a computer player, nothing fogged, the view at
+    /// (0, 0), no pointer mode, and the game over into the main menu once
+    /// at most one player owns anything (0x448610).
+    #[test]
+    fn a_custom_game_without_a_human() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        show(&mut app, "battle01");
+        assert_eq!(kinds(&app), vec![2, 3]);
+        app.custom_players[0].kind = 4;
+        let state = app.menu.unwrap();
+        app.menu_action(state, "Start");
+        assert_eq!(app.menu, None);
+        assert!(app.scene.human.is_none());
+        assert!(!app.scene.fogged());
+        assert!(app.scene.purses.contains_key(&(1, 1)));
+        assert!(app.scene.computers.levels.contains(&((1, 1), 1)));
+        assert!(app.scene.objects.iter().any(|o| o.owner == Some((1, 1))));
+        app.cursor = Some(PhysicalPosition::new(300.0, 300.0));
+        assert!(app.hovered_info().is_none());
+        // Both still own something: not over.
+        assert!(!app.scene.spectators_done());
+        for o in app.scene.objects.iter_mut() {
+            if o.owner == Some((3, 3)) {
+                o.combat = None;
+            }
+        }
+        assert!(app.scene.spectators_done());
+        app.camera.x = 500.0;
+        app.update(0.0);
+        assert_eq!((app.camera.x, app.camera.y), (0.0, 0.0));
+        assert!(app.scene.over);
+        app.update(0.0);
+        assert_eq!(app.menu, Some(MenuState::Main));
+        assert!(app.scene.outcome.is_none());
     }
 
     /// The connect screen's name edit (_sedit.cpp): the caret starts at

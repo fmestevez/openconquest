@@ -428,6 +428,10 @@ pub struct Scene {
     pub conditions: [bool; 11],
     /// Set once the mission is won or lost.
     pub outcome: Option<Outcome>,
+    /// A Custom game with no human player is over (0x448610: command
+    /// 0x100, the main menu with no end screen); the front end leaves it
+    /// at once.
+    pub over: bool,
     /// The mission briefing, as paragraphs.
     pub briefing: Vec<String>,
     /// The briefing as the original's "Your mission" screen lays it out
@@ -517,6 +521,32 @@ impl Scene {
         difficulty: usize,
         carry: Option<&Carry>,
     ) -> Result<Self> {
+        Self::load_with(data, caches, mission, difficulty, carry, None)
+    }
+
+    /// Loads a Custom mission whose players are `sides` (the side table
+    /// [game+0x1a1d] the Custom screen's Start fills, 0x53b940: every row
+    /// but the disabled ones): a player-owned record (dword 1 == 1) of an
+    /// owner (dwords 2, 3) not among them is never created
+    /// (PlaySystemClassTy::CreateSystemObjects 0x51e810, 0x51e82b..0x51e845).
+    pub fn load_custom(
+        data: &GameData,
+        caches: &mut Caches,
+        mission: &str,
+        difficulty: usize,
+        sides: &[(u32, u32)],
+    ) -> Result<Self> {
+        Self::load_with(data, caches, mission, difficulty, None, Some(sides))
+    }
+
+    fn load_with(
+        data: &GameData,
+        caches: &mut Caches,
+        mission: &str,
+        difficulty: usize,
+        carry: Option<&Carry>,
+        sides: Option<&[(u32, u32)]>,
+    ) -> Result<Self> {
         let archive = data.open_mission(mission)?;
         let grid = data.load_map(&archive, mission)?;
         let terrain = Terrain::compose(data, &grid, &mut caches.tiles)?;
@@ -530,7 +560,13 @@ impl Scene {
                 terrain.missing_tiles.join(", ")
             );
         }
-        let objs = objects::load(data, caches, &archive)?;
+        let mut objs = objects::load(data, caches, &archive)?;
+        if let Some(sides) = sides {
+            objs.drawn.retain(|o| {
+                let f = |i: usize| o.record.field(i).unwrap_or(0);
+                f(1) != 1 || sides.contains(&(f(2), f(3)))
+            });
+        }
         // The particles' keeper (0x2bf) has nothing of its own to draw.
         if objs.unresolved.keys().any(|&c| c != 0x2bf) {
             let mut classes: Vec<_> = objs
@@ -732,6 +768,7 @@ impl Scene {
             wind: Wind::new(0x5eed_0001),
             conditions,
             outcome: None,
+            over: false,
             briefing: openconquest_formats::briefing(&archive).unwrap_or_default(),
             briefing_text: openconquest_formats::briefing_text(&archive).unwrap_or_default(),
             briefing_lines: openconquest_formats::briefing_lines(&archive).unwrap_or_default(),
@@ -1987,6 +2024,9 @@ impl Scene {
                     Some(p) => self.judge_campaign(p),
                     None => self.judge(),
                 };
+                if period.is_none() && self.human.is_none() && is_custom(&self.mission) {
+                    self.over |= self.spectators_done();
+                }
             }
         }
         self.wind.update(dt);
