@@ -12107,3 +12107,84 @@ fn zone_takes_the_orders_ports() {
     // (Null, then filled by the start's dispatch, 0x4c6c30.)
     assert_eq!(scene.gather_zones[0].ports, Some(ports.clone()));
 }
+
+/// The zone's other notices (0x4c9e30): 0x133, a ship wrecked, keeps its
+/// cell (`+0x35`), sent to every ship at each re-plan as command 0x29 sub
+/// 2 (its path memory, 0x4a7230); 0x137, a ship leaving the group, drops
+/// its escort entry (0x4c61d0); 0x145, a new port of the player's, lists
+/// it (0x4c6400) and sends a human's unloading merchants to the zone's
+/// pick at once (0x4c7b80) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn zone_hears_wrecks_leavers_and_new_ports() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, deposit, ports) = amber_boat_in_zone(&data, &mut caches);
+    let i = scene.object_index(boat).unwrap();
+    let owner = scene.objects[i].owner.unwrap();
+    let t = TILE_SIZE as f32;
+    let at = (
+        (scene.objects[i].x / t).floor() as i32,
+        (scene.objects[i].y / t).floor() as i32,
+    );
+    let near = (-2..=2)
+        .flat_map(|dy| (-2..=2).map(move |dx| (at.0 + dx, at.1 + dy)))
+        .find(|&c| c != at && scene.sea_cell(c, false) && scene.slot_ship(c).is_none())
+        .unwrap();
+    let escort = scene
+        .spawn_ship(owner, 2, near.0, near.1, &data, &mut caches)
+        .unwrap();
+    scene.gather_zones[0].ships.push(escort);
+    scene.gather_zones[0].escorts = vec![gather::Escort {
+        ship: escort,
+        ward: boat,
+        state: 10,
+        target: 0,
+    }];
+    // The boat wrecked on its cell.
+    scene.post_wreck(boat);
+    scene.run_gather_zones();
+    let w = scene.nav.width as i32;
+    assert_eq!(scene.gather_zones[0].wrecks, [(at.1 * w + at.0) as u32]);
+    scene.outbox.clear();
+    scene.gather_zones[0].elapsed = 0x56;
+    scene.run_gather_zones();
+    for ship in [boat, escort] {
+        assert!(scene.outbox.contains(&Order::Remember { ship, cell: at }));
+    }
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let i = scene.object_index(escort).unwrap();
+    assert!(scene.objects[i]
+        .ship
+        .as_ref()
+        .unwrap()
+        .remembered
+        .contains(&at));
+    // A new port, the boat sailing in to unload: re-sent.
+    {
+        let i = scene.object_index(boat).unwrap();
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.cargo = 100.0;
+        s.cargo_kind = Some(Resource::Amber);
+        s.task = Some(Task::Gather {
+            deposit,
+            phase: GatherPhase::ToPort(ports[0]),
+        });
+    }
+    scene.gather_zones[0].ports = None;
+    scene.outbox.clear();
+    scene.post_new_port(ports[0]);
+    scene.run_gather_zones();
+    assert_eq!(scene.gather_zones[0].ports, Some(vec![ports[0]]));
+    assert!(scene.outbox.contains(&Order::Unload {
+        ship: boat,
+        port: ports[0]
+    }));
+    // The escort leaves for a group of its own: its entry goes.
+    scene.leave_zones(&[escort]);
+    assert_eq!(scene.gather_zones[0].escorts.len(), 1);
+    scene.run_gather_zones();
+    assert!(scene.gather_zones[0].escorts.is_empty());
+}

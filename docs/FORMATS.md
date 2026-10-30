@@ -2117,11 +2117,32 @@ list and escorts).
   (message `*` 0x4d8b30 with 2, priority 0; 0x4c6100 lists it as an
   escort `+0x41` and sends 0x4c42f0 with -1s, not ported).
 - **Notices** (0x4ca8d0 -> 0x4c9e30, newest first, each removed after its
-  case; a notice of a ship no longer in the group dropped): 300 (a ship
-  joined, 0x4a1340) and 0x139 (unloaded, 0x4a1520) -> 0x4c9930; 0x138
-  (gathering ended, or a berth given up) -> 0x4c9ae0. The value the last
-  case wrote, when non-zero, skips the re-plan. Not ported (posters not
-  traced): 0x12f, 0x133, 0x136, 0x137, 0x13e, 0x145-0x148.
+  case; records `{code, tick, ship +0x60, ship id, rec[4..]}` from the
+  posters 0x4a1240-0x4a1bf0). The ship's cases, a notice of a ship no
+  longer in the group dropped: 300 (a ship joined, 0x4a1340, after
+  0x49bd60) and 0x139 (unloaded, 0x4a1520) -> 0x4c9930; 0x138 (gathering
+  ended, or a berth given up) -> 0x4c9ae0; 0x136 (a ship at its move
+  goal, 0x4a3f40 at 0x4a49af / 0x4a4a67, or 0x4ce8a0) acts only with a
+  route. The others whoever the ship: 0x133 (0x4a1620: a ship wrecked by
+  a reef or by lightning, 0x4dc630 on 0xda94; the whirlpool's 0xda95
+  posts nothing) appends its cell to `+0x35`, duplicates kept; 0x137
+  (0x4a1770: a ship leaving a group with a block, 0x49bef0, before the
+  removal) removes its escort entry (0x4c61d0); 0x145 (0x4a12d0 from the
+  port's vt+0x94 0x42ff90 when it first stands, to every zone of its
+  player; rec[5] its cell): the port still the building of that cell is
+  listed (0x4c6400, the list made if null), then 0x4c7b80: for a human's
+  zone (side 1 or 2), or when another listed port of class 0x39 within 10
+  cells (0x557440) has more than 2 merchants bound, each merchant
+  unloading (sub-code 0xc) is sent at once to 0x4c6640's port (0x1f).
+  The value the last case wrote, when non-zero, skips the re-plan. Not
+  ported: 0x12f (0x4a13b0 at each take, 0x4ad0e0: `+0x30` += the amount
+  for the zone's class; nothing reads `+0x30`); 0x13e (the human's unload
+  click on an own port with Shift on a zone group, 0x49dfb0, toggles the
+  port in `+0x28` and posts it; its case 0x4c6ad0 only drops home ports
+  gone from the list and never sends: its send branch needs sub-code 0xc,
+  which its entry test excludes); 0x137 for ships leaving a brain's or
+  computer's fleet (the port's fleets are not groups). No code posts
+  0x146, 0x147 or 0x148 (their cases are dead).
 - **0x4c9930**: 0x4c96e0 (the same deposit), else the deposits not known
   yet (0x4c5b90 mode 1), else the known ones still to be had (0x4c95f0:
   amber state below 2, fish below 4, a leviathan below 5; the original's
@@ -2234,8 +2255,10 @@ list and escorts).
   unloading and with flag bit 0, go to 0x4c6640's port (0x1f); its idle
   list is never filled (no follows); none laden, working or on a route:
   `+0x5d = 1` for sides 1 / 2 when `+0x24 >> 16 != 1`. Not ported: the
-  route `+0x61` (0x4cea20, 0x4ce7c0, 0x4cf070, 0x4ce8a0), `+0x35`'s
-  command 0x29.
+  route `+0x61` (0x4cea20, 0x4ce7c0, 0x4cf070, 0x4ce8a0). In the branch
+  with deposits, after the ships, each `+0x35` cell in order goes to every
+  ship as command 0x29 `{2, cell, 0xff}` (0x4a7230: kept once in the
+  path memory `+0x5cd`), at every re-plan.
 - **Query 0x79** (0x4a0d00 -> 0x4c8da0, only for a 0x78 block): no ships
   or no merchants (and not a leviathan zone with ships): 0x1f5 / 1;
   deposits left (0x4c5b90 mode 1, which also forgets the gone ones): 500,

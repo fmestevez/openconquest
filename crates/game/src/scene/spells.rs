@@ -278,6 +278,10 @@ impl Scene {
                 }
             }
         }
+        // Each wrecked ship tells its gather zone (0x4de32e, notice 0x133).
+        for &id in &wrecked {
+            self.post_wreck(id);
+        }
         if !absorbed {
             self.dig(cx, cy, data, caches);
         }
@@ -712,14 +716,15 @@ impl Scene {
         // Not while under the water (state 3); a ship stepping into the
         // cell (its reserved next cell, `+0x5ab`) is spared till it lies
         // there.
-        let traps: Vec<(i32, i32)> = self
+        // (cell, a reef's)
+        let traps: Vec<((i32, i32), bool)> = self
             .objects
             .iter()
             .filter(|o| matches!(o.class, ObjectClass::Whirlpool | ObjectClass::Reef(_)))
             .filter(|o| self.hazard_wrecks(o.id))
             .map(|o| {
                 let f = |i| o.record.field(i).unwrap_or(0) as i32;
-                (f(5), f(6))
+                ((f(5), f(6)), matches!(o.class, ObjectClass::Reef(_)))
             })
             .collect();
         if traps.is_empty() && struck.is_empty() {
@@ -736,11 +741,15 @@ impl Scene {
                 .path
                 .front()
                 .is_some_and(|&(x, y)| ((x / t).floor() as i32, (y / t).floor() as i32) == cell);
-            if !jason && !reserved && traps.contains(&cell) {
+            if let Some(&(_, reef)) = traps
+                .iter()
+                .find(|t| t.0 == cell)
+                .filter(|_| !jason && !reserved)
+            {
                 if let Some(c) = o.combat.as_mut() {
                     c.hull = 0.0;
                 }
-                wrecked.push(o.id);
+                wrecked.push((o.id, reef));
                 continue;
             }
             if zetes {
@@ -760,7 +769,12 @@ impl Scene {
         }
         // A reef's or whirlpool's wreck is put down to no one (0x4aa280,
         // the wreck event, gives `+0x7f` 0xff).
-        for id in wrecked {
+        // A reef's (0xda94, not a whirlpool's 0xda95) tells the ship's
+        // gather zone (0x4de32e, notice 0x133).
+        for (id, reef) in wrecked {
+            if reef {
+                self.post_wreck(id);
+            }
             self.hit(id, 0.0, None, data, caches);
         }
         // Shared out as any blow (hull, crew, weapons), put down to the

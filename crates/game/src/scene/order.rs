@@ -119,6 +119,12 @@ pub enum Order {
     ClearBlow {
         ship: u32,
     },
+    /// Command 0x29 sub 2 (0x4a7230): the ship keeps `cell` in its path
+    /// memory (`+0x5cd`), once.
+    Remember {
+        ship: u32,
+        cell: (i32, i32),
+    },
     Take {
         ship: u32,
         target: u32,
@@ -588,6 +594,17 @@ impl Scene {
                 done(r)
             }
             Follow { ship, ward, range } => done(self.order_follow(ship, ward, range)),
+            Remember { ship, cell } => {
+                if let Some(s) = self
+                    .object_index(ship)
+                    .and_then(|i| self.objects[i].ship.as_mut())
+                {
+                    if !s.remembered.contains(&cell) {
+                        s.remembered.push(cell);
+                    }
+                }
+                Ok(0)
+            }
             ClearBlow { ship } => {
                 if let Some(s) = self
                     .object_index(ship)

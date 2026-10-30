@@ -29,8 +29,10 @@ pub enum ZoneGroup {
     Computer(u32, usize),
 }
 
-/// A notice in a group's list (0x4a1430 / 0x4a1520 / 0x4a1340: `{code,
-/// tick, ship +0x60, ship id, class}`).
+/// A notice in a group's list (the posters 0x4a1240-0x4a1bf0: `{code,
+/// tick, ship +0x60, ship id, rec[4]}`): `ship` the ship's (0x145: the
+/// port's) id, `class` rec[4]: the class (0x138), a cell `y * W + x`
+/// (0x133, and 0x145's rec[5]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notice {
     pub code: u32,
@@ -67,6 +69,10 @@ pub struct GatherZone {
     /// Block `+0x41`: the escorts (0x4c6100).
     #[serde(default)]
     pub escorts: Vec<Escort>,
+    /// Block `+0x35`: the cells its ships were wrecked in (notice 0x133),
+    /// duplicates kept.
+    #[serde(default)]
+    pub wrecks: Vec<u32>,
     /// Group `+8`: calls since the last re-plan.
     pub elapsed: u32,
     /// Block `+0x5d`: nothing left to do (0x4ca290).
@@ -153,10 +159,23 @@ impl Scene {
     }
 
     /// Takes ships out of their groups' zones (a new group made of them,
-    /// 0x49ca60); a human's zone left with none goes.
+    /// 0x49ca60); each posts notice 0x137 to the group it leaves
+    /// (0x49bef0 -> 0x4a1770, before the removal); a human's zone left
+    /// with none goes.
     pub(super) fn leave_zones(&mut self, ids: &[u32]) {
+        let tick = self.ticks;
         for z in &mut self.gather_zones {
             if matches!(z.group, ZoneGroup::Human(_)) {
+                for &s in &z.ships {
+                    if ids.contains(&s) {
+                        z.notices.push(Notice {
+                            code: 0x137,
+                            tick,
+                            ship: s,
+                            class: 0,
+                        });
+                    }
+                }
                 z.ships.retain(|s| !ids.contains(s));
             }
         }
@@ -180,6 +199,45 @@ impl Scene {
                 ship: id,
                 class,
             });
+        }
+    }
+
+    /// A ship wrecked by a reef or by lightning (0x4dc630 on 0xda94, after
+    /// the wreck event) posts notice 0x133 with its cell (0x4a1620).
+    pub(super) fn post_wreck(&mut self, id: u32) {
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        let t = TILE_SIZE as f32;
+        let (x, y) = (
+            (self.objects[i].x / t).floor() as i32,
+            (self.objects[i].y / t).floor() as i32,
+        );
+        let cell = (y * self.nav.width as i32 + x) as u32;
+        self.post_notice(id, 0x133, cell);
+    }
+
+    /// A port of the player's first standing (its vt+0x94, 0x42ff90 ->
+    /// 0x4a12d0) posts notice 0x145 with its cell to every zone of its
+    /// player.
+    pub(super) fn post_new_port(&mut self, id: u32) {
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        let (owner, Some((x, y))) = (self.objects[i].owner, self.objects[i].cell) else {
+            return;
+        };
+        let cell = (y * self.nav.width as i32 + x) as u32;
+        let tick = self.ticks;
+        for z in &mut self.gather_zones {
+            if owner.is_some() && z.owner == owner {
+                z.notices.push(Notice {
+                    code: 0x145,
+                    tick,
+                    ship: id,
+                    class: cell,
+                });
+            }
         }
     }
 
@@ -329,6 +387,7 @@ impl Scene {
                 zone.deposits.clear();
                 zone.ports = ports;
                 zone.escorts.clear();
+                zone.wrecks.clear();
                 zone.rect = rect;
                 zone.class = class;
                 zone.flags = flags;
@@ -352,6 +411,7 @@ impl Scene {
                     ships,
                     notices: Vec::new(),
                     escorts: Vec::new(),
+                    wrecks: Vec::new(),
                     elapsed: 0,
                     done: false,
                 });
@@ -672,16 +732,40 @@ impl Scene {
     }
 
     /// 0x4c9e30: the notices newest first, each removed after its case;
-    /// returns the last value a case wrote. 300 (a ship joined): its next
-    /// deposit (0x4c9930); 0x138: 0x4c9ae0; 0x139: 0x4c9930; a notice of
-    /// a ship no longer in the group is dropped. (Not ported: the
-    /// deferred orders of a route, `+0x3d` with 0x4cabd0 / 0x4cac30, and
-    /// 300's behaviour command 0x4c42f0; the codes 0x12f, 0x133, 0x136,
-    /// 0x137, 0x13e and 0x145-0x148, whose posters are not traced, are
-    /// dropped as unknown codes are.)
+    /// returns the last value a case wrote. The ship's cases, a notice of
+    /// a ship no longer in the group dropped: 300 (a ship joined): its
+    /// next deposit (0x4c9930); 0x138: 0x4c9ae0; 0x139: 0x4c9930; 0x136
+    /// (arrived): only with a route. The others: 0x133 (wrecked) its cell
+    /// kept (`+0x35`); 0x137 (a ship left) its escort entry removed
+    /// (0x4c61d0); 0x145 (a new port) still standing at its cell: listed
+    /// (0x4c6400) and 0x4c7b80. (Not ported: the deferred orders of a
+    /// route, `+0x3d` with 0x4cabd0 / 0x4cac30, and 300's behaviour
+    /// command 0x4c42f0; 0x12f, the takes, adds to `+0x30`, which nothing
+    /// reads; 0x13e, the human's Shift unload click on a port, toggling
+    /// it in the list (0x49dfb0), whose case 0x4c6ad0 sends nothing; no
+    /// code posts 0x146-0x148.)
     fn zone_notices(&mut self, z: usize) -> i32 {
         let mut r = 0;
         while let Some(n) = self.gather_zones.get_mut(z).and_then(|zz| zz.notices.pop()) {
+            match n.code {
+                0x133 => {
+                    self.gather_zones[z].wrecks.push(n.class);
+                    continue;
+                }
+                0x137 => {
+                    let e = &mut self.gather_zones[z].escorts;
+                    if let Some(k) = e.iter().position(|e| e.ship == n.ship) {
+                        e.remove(k);
+                    }
+                    continue;
+                }
+                0x145 => {
+                    self.zone_new_port(z, n.ship, n.class);
+                    continue;
+                }
+                300 | 0x138 | 0x139 => {}
+                _ => continue,
+            }
             if !self.gather_zones[z].ships.contains(&n.ship) {
                 continue;
             }
@@ -690,11 +774,75 @@ impl Scene {
             };
             r = match n.code {
                 300 | 0x139 => self.zone_next_deposit(z, i, false),
-                0x138 => self.zone_heard_full(z, i),
-                _ => r,
+                _ => self.zone_heard_full(z, i),
             };
         }
         r
+    }
+
+    /// Notice 0x145: the port still the building of its cell: added to
+    /// the list (made if null, once by id: 0x4c6400), then 0x4c7b80: for a
+    /// human's zone (side 1 or 2), or when a listed port of class 0x39
+    /// within 10 cells (0x557440) of the new one has more than 2 merchants
+    /// bound (0x4c7ea0), each merchant unloading (sub-code 0xc) is sent at
+    /// once to the zone's pick (0x4c6640, command 0x1f).
+    fn zone_new_port(&mut self, z: usize, id: u32, cell: u32) {
+        use crate::economy::PORT;
+        let w = self.nav.width as i32;
+        let at = ((cell as i32) % w, (cell as i32) / w);
+        let Some(p) = self.object_index(id) else {
+            return;
+        };
+        if self.objects[p].cell != Some(at)
+            || !matches!(self.objects[p].class, ObjectClass::Building(_))
+        {
+            return;
+        }
+        let list = self.gather_zones[z].ports.get_or_insert_with(Vec::new);
+        if !list.contains(&id) {
+            list.push(id);
+        }
+        let list = self.gather_zones[z].ports.clone().unwrap_or_default();
+        let owner = self.gather_zones[z].owner;
+        let mut send = !self.side_computer(owner) && owner != Some((4, 0));
+        for &e in &list {
+            if e == id {
+                continue;
+            }
+            let Some(k) = self.object_index(e) else {
+                continue;
+            };
+            if self.objects[k].class != ObjectClass::Building(PORT) {
+                continue;
+            }
+            let Some(c) = self.objects[k].cell else {
+                continue;
+            };
+            if walk_path::dist(c.0, c.1, at.0, at.1) < 11 && self.port_load(z, e) > 2 {
+                send = true;
+            }
+        }
+        if !send {
+            return;
+        }
+        for sid in self.gather_zones[z].ships.clone() {
+            let Some(i) = self.object_index(sid) else {
+                continue;
+            };
+            let s = self.objects[i].ship.as_ref().unwrap();
+            let unloading = matches!(
+                s.task,
+                Some(Task::Gather {
+                    phase: GatherPhase::ToPort(_) | GatherPhase::Unloading(_),
+                    ..
+                })
+            );
+            if s.kind < 2 && unloading {
+                if let Some(port) = self.zone_port_pick(z, Some(i)) {
+                    self.zone_send_port(sid, port);
+                }
+            }
+        }
     }
 
     /// 0x4c9ae0 (notice 0x138): with room for more (0x4ad280 not 0, and
@@ -1598,8 +1746,9 @@ impl Scene {
     /// (Not ported: the route `+0x61`; the blow's report to the brain,
     /// message 0x5d9c (0x4a21c0, whose header words `[0]`, `[1]` are left
     /// unwritten on the stack): the port reports blows as they land
-    /// (`fleet_attacked`). The command 0x29 of notice 0x133's ids is not
-    /// sent: their poster is not traced.)
+    /// (`fleet_attacked`).) After the ships, each wreck's cell (`+0x35`)
+    /// goes to every ship as command 0x29 sub 2 (its path memory), every
+    /// re-plan.
     fn zone_replan(&mut self, z: usize) -> i32 {
         let cands = self.zone_deposits(z, 1);
         let ships = self.gather_zones[z].ships.clone();
@@ -1627,6 +1776,17 @@ impl Scene {
                     .position(|e| e.ship == id)
                 {
                     self.escort_again(z, e);
+                }
+            }
+            // Each wreck's cell to every ship (command 0x29 `{2, cell,
+            // 0xff}`), every re-plan.
+            let w = self.nav.width as i32;
+            for c in self.gather_zones[z].wrecks.clone() {
+                for &ship in &self.gather_zones[z].ships.clone() {
+                    self.post(Order::Remember {
+                        ship,
+                        cell: ((c as i32) % w, (c as i32) / w),
+                    });
                 }
             }
             return sent;

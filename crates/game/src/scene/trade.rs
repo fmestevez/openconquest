@@ -1996,6 +1996,13 @@ impl Scene {
             // Standing (0x4230f0 case 0: state 1, vt+0x38), the frame the
             // construction reached kept unless `>= n`.
             self.standing_picture(id, last);
+            // A port's vt+0x94 tells its player's zones (0x42ff90).
+            if self
+                .object_index(id)
+                .is_some_and(|i| self.objects[i].class == ObjectClass::Building(economy::PORT))
+            {
+                self.post_new_port(id);
+            }
             if let Some(i) = self.object_index(id) {
                 let o = &self.objects[i];
                 if self.is_own(o) {
