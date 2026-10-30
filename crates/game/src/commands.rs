@@ -483,33 +483,25 @@ pub fn menu(scene: &Scene, obj: &MapObject, page: Page) -> Menu {
     menu
 }
 
-/// A ship's building page (0x4e6980, page 2): a settlement, then the forts
-/// the player may build, packed in that order.
+/// A ship's building page (0x4e6980, page 2): a settlement in the first
+/// slot, then each fort in its own (0x34, 0x35, 0x36 in slots 1-3) if the
+/// player's technology allows it (player `+0x4e` bit 6, `+0x45` bit 6,
+/// `+0x4e` bit 5), the empty slots kept. No price is tested: each is
+/// enabled by the ship's capability bit 0 (`+0x261`, which every finished
+/// ship has), its price (0x42d8b0) only carried for the help line; the
+/// landing party pays at the site, or builds nothing (0x421f00).
 fn ground_menu(scene: &Scene, obj: &MapObject) -> Menu {
     let mut menu: Menu = [None; SLOTS];
     if !scene.is_own(obj) || obj.ship.is_none() {
         return menu;
     }
-    let mut slot = 0;
-    for id in [0x16, 0x17, 0x18, 0x19] {
+    for (slot, id) in [0x16, 0x17, 0x18, 0x19].into_iter().enumerate() {
         let command = Command(id);
         let class = economy::building_of_command(command).unwrap();
         if id != 0x16 && !scene.permits.building(class) {
             continue;
         }
-        let cost = if id == 0x16 {
-            economy::building_cost(class)
-        } else {
-            let home = scene
-                .object_index(obj.id)
-                .and_then(|i| scene.home_settlement(i));
-            match scene.fort_price(home, class) {
-                Some(p) => p.amber,
-                None => continue,
-            }
-        };
-        set(&mut menu, slot, command, scene.amber >= cost);
-        slot += 1;
+        set(&mut menu, slot, command, true);
     }
     menu
 }

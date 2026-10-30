@@ -1110,9 +1110,13 @@ the command's string (0x4f21b0, e.g. 0x1a2 ` \nMOVE`) in `BUT_FONT` (atlas
 Ships' main page (0x4e6980): move, stop, two spell slots, fire, board,
 ram, behaviour, reload, repair, building, hero/treasure; enabled by a
 capability mask (+0x261, all set but bit 11 for boats and merchants, bit 8
-for the rest; 0x4e6930). Building opens page 2: a settlement (0x16) and
-the forts (0x17-0x19) the player's technology allows; any ship may build
-them. A settlement's building page (0x43c740, page 2) packs what may be
+for the rest; 0x4e6930). Building opens page 2: a settlement (0x16) in
+slot 0 and the forts 0x17-0x19 in slots 1-3, each only if the player's
+technology allows it (player `+0x4e` bit 6, `+0x45` bit 6, `+0x4e` bit 5:
+permissions 73, 1, 74), an empty slot left where not; any ship may build
+them. No price is tested: each is enabled by the capability bit 0, the
+price (0x42d8b0) only stored for the help line (`+0x32` on); nor does the
+founding command (0x4aa990: kind 2 needs bit 0, kind 1 bit 1). A settlement's building page (0x43c740, page 2) packs what may be
 built in this order: port, the three forts, workshop, shipyard, smithy,
 school, Temple of the Sea, Temple of War.
 
@@ -1597,10 +1601,31 @@ computer) holding no units takes each item of 0x5966b8 for its class
 0x597164[item / 3] and fish 0x597170[item] x 100; then, record type 1,
 `+0x1bc` = field 66 (a tag carried in the building's reports to its
 player's `+0x34` object, 0x424c3c, 0x424f63, 0x4250bc, 0x426a29,
-0x427cc7; not kept by the port). The port: `place_building` with a ship
-founder. Not decoded: the settlement's kind 1 (a computer founds it even
-without the amber, 0x421f00), kept as the port had it; the computer's
-town orders of forts (0x43b290 with the order's arming byte +0xd ->
+0x427cc7; not kept by the port). A settlement (kind 1): the slot empty
+(0x499900 on the record's cell) and the amber held or the player of side
+3 or 4 (`[game +0x1a1d + nation x 4 + slot]`, a computer), the price is
+taken (0x4a8d60: amber less the price, 0 if below) and message 0x1491
+creates it: a computer founds it without the amber, its amber left at 0.
+
+The landing party (0x4221c0 message 2, record type 1): its generator
+seeded `[game +0x2ee5] x id`; it starts at the point the ship passes
+(0x4b35c3: the gangway picture's (`+0x8c6`) top left plus 0x59a188[dir
+`+0x76b`]), its goal cell the record's (`+0x89`, `+0x8d`; kind 3 `+0x75`,
+`+0x79`), the goal point the 2 x 2's middle (`(x + 1) x 64`) for a
+settlement, else the cell's centre. On the goal cell already (0x421ea0)
+it acts at once (0x421f00); else a quarter-cell grid of the goal's land
+region (0x42e590, `x 4`; 0x42e720 with `param_4` 4), the 4 x 4 quarters
+of its own cell and of the goal cell opened, and a route 0x55ca10 from
+its quarter to the goal's (heading -1); none, it removes itself; else each
+entry becomes the quarter's centre (`q x 16 + 8` from the region's
+corner). Each leg (0x422140, 0x421d00) runs the picture `LNDSPR_<dir>`
+(0x421bb0, the entry's direction byte; `+0x7d` 0, so a frame a tick,
+from the leg's start to its end by `frame / frames`), drawn at its point
+less (`w / 2`, `h`); at a leg's end it is on the goal cell or at the last
+entry: 0x421f00, then message 10. The port founds as the ship arrives:
+the gangway (0x4b3370 states 2-7: 0x4b2a40, 0x4b1d40, 0x4b2d50, 0x4b2f00,
+0x4e04a0 / 0x4e0470, its picture `+0x8c6`), the party and its walk are
+not ported. Not decoded: the computer's town orders of forts (0x43b290 with the order's arming byte +0xd ->
 0x43f440), which the port leaves unarmed.
 
 ## Fish shoals and gulls

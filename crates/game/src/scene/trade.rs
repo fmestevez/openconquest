@@ -1748,7 +1748,10 @@ impl Scene {
         // walks to the site and there (0x421f00, record type 2) pays the
         // building's price 0x42d8b0(class) if the player has it (0x4a8d00)
         // and creates the fort (0x1494) from a record with no units: no
-        // default arming, no town's stock.
+        // default arming, no town's stock. (Not ported: the ship's gangway
+        // (0x4b3370 states 2-7) and the party's walk (0x4221c0, 0x421d00,
+        // 0x422140: a quarter-cell route 0x55ca10, a leg a `LNDSPR_<dir>`
+        // run): here it is done as the ship arrives.)
         let founded = self
             .object_index(settlement)
             .is_some_and(|i| self.objects[i].ship.is_some());
@@ -1769,7 +1772,12 @@ impl Scene {
             .as_ref()
             .map_or((economy::building_cost(class), 0), |p| (p.amber, p.fish));
         let (have_amber, have_fish) = self.funds(owner);
-        if have_amber < cost || have_fish < fish {
+        // A computer's (side 3 or 4) landing party founds a settlement even
+        // without the amber (0x421f00 kind 1), paying what it has: 0x4a8d60
+        // leaves 0 for a price above it.
+        let computer = !human && self.seat_of(owner).is_none();
+        let unpaid = founded && class == SETTLEMENT && computer;
+        if (have_amber < cost || have_fish < fish) && !unpaid {
             return Err("Not enough resources".into());
         }
         // A town orders no fort past its weighted count (0x43b290, after
@@ -2880,13 +2888,9 @@ impl Scene {
         if !(class == SETTLEMENT || (0x34..=0x36).contains(&class)) {
             return Err("Ships found settlements and forts".into());
         }
-        let owner = self.objects[i].owner.ok_or("No owner")?;
-        // What its landing party pays on the site (0x421f00: 0x42d8b0,
-        // the building alone; a ship's fort comes with no units).
-        let cost = economy::building_cost(class);
-        if self.funds(owner).0 < cost {
-            return Err("Not enough amber".into());
-        }
+        // No price is tested here (0x4aa990 tests only the ship's
+        // capability, `+0x261`): the landing party pays on the site, or
+        // builds nothing (0x421f00).
         self.check_ground(class, cx, cy)?;
         let t = TILE_SIZE as f32;
         let path = self

@@ -11366,6 +11366,104 @@ fn ship_founded_fort_bare() {
     assert_eq!(scene.home_settlement(i), None);
 }
 
+/// A ship's building page (0x4e6980 page 2) keeps each button in its own
+/// slot (settlement 0, forts 0x34-0x36 in 1-3, by the technology) and
+/// tests no price; the founding order takes no amber either (0x4aa990):
+/// the landing party pays on the site (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ship_building_page_tests_no_price() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.amber = 0;
+    let boat = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+        .unwrap()
+        .id;
+    // Only the fort 0x35 allowed: the others' slots stay empty.
+    scene.permits.set(1, true);
+    scene.permits.set(73, false);
+    scene.permits.set(74, false);
+    let i = scene.object_index(boat).unwrap();
+    let ground = crate::commands::menu(&scene, &scene.objects[i], crate::commands::Page::Ground);
+    let at = |k: usize| ground[k].map(|s| (s.command, s.enabled));
+    use crate::commands::Command;
+    assert_eq!(at(0), Some((Command(0x16), true)));
+    assert_eq!(at(1), None);
+    assert_eq!(at(2), Some((Command(0x18), true)));
+    assert_eq!(at(3), None);
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let site = (0..h)
+        .rev()
+        .flat_map(|y| (0..w).rev().map(move |x| (x, y)))
+        .find(|&(x, y)| scene.check_ground(0x35, x, y).is_ok())
+        .unwrap();
+    assert!(scene.order_found(boat, site.0, site.1, 0x35).is_ok());
+}
+
+/// A computer's landing party founds a settlement without the amber
+/// (0x421f00 kind 1, side 3 or 4), its amber left at 0 (0x4a8d60); the
+/// player's builds nothing without it (needs `OPENCONQUEST_DATA`).
+#[test]
+fn computer_founds_a_settlement_without_amber() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let found = (0..14).find_map(|m| {
+        let scene = Scene::load(&data, &mut caches, &format!("miss{m:03}")).ok()?;
+        let ship = scene.objects.iter().find(|o| {
+            o.ship.is_some()
+                && o.owner.is_some_and(|w| {
+                    scene.human.is_none_or(|h| (h.nation, h.slot) != w)
+                        && scene.seat_of(w).is_none()
+                        && scene.purses.contains_key(&w)
+                })
+        })?;
+        let (id, owner) = (ship.id, ship.owner.unwrap());
+        let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+        let site = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .find(|&(x, y)| scene.check_site(id, SETTLEMENT, x, y).is_ok())?;
+        Some((scene, id, owner, site))
+    });
+    let (mut scene, ship, owner, site) = found.expect("a computer's ship and a site");
+    let cost = economy::building_cost(SETTLEMENT);
+    scene.purses.insert(owner, (cost - 1, 0));
+    scene
+        .place_building(ship, SETTLEMENT, site.0, site.1, &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.purses[&owner].0, 0);
+    // The player's own ship: refused.
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let boat = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    scene.amber = cost - 1;
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let site = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .find(|&(x, y)| scene.check_ground(SETTLEMENT, x, y).is_ok())
+        .unwrap();
+    let t = TILE_SIZE as f32;
+    let i = scene.object_index(boat).unwrap();
+    (scene.objects[i].x, scene.objects[i].y) = (site.0 as f32 * t, site.1 as f32 * t);
+    assert!(scene.check_site(boat, SETTLEMENT, site.0, site.1).is_ok());
+    assert!(scene
+        .place_building(boat, SETTLEMENT, site.0, site.1, &data, &mut caches)
+        .is_err());
+    assert_eq!(scene.amber, cost - 1);
+}
+
 /// A town counts the forts it orders going up (0x43b290 `+0x22c..`), one
 /// fewer as one is called off (0x2491) or stands (0x2873), and orders no
 /// fort past a weighted count of 15 (needs `OPENCONQUEST_DATA`).
