@@ -615,11 +615,15 @@ fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
         } else {
             (economy::building_cost(class), 0)
         };
+        // A fort's button is off past the town's weighted count of forts
+        // (0x43c740 at 0x43c80e: standing and going up, with the new one,
+        // above 15).
+        let full = (0x34..=0x36).contains(&class) && scene.forts_full(obj.id, class);
         set(
             &mut menu,
             slot,
             command,
-            scene.amber >= cost.0 && scene.fish >= cost.1,
+            !full && scene.amber >= cost.0 && scene.fish >= cost.1,
         );
         slot += 1;
     }

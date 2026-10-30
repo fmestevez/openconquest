@@ -1773,6 +1773,12 @@ impl Scene {
         if have_amber < cost || have_fish < fish {
             return Err("Not enough resources".into());
         }
+        // A town orders no fort past its weighted count (0x43b290, after
+        // the price test).
+        let town_fort = !founded && (0x34..=0x36).contains(&class);
+        if town_fort && self.forts_full(settlement, class) {
+            return Err("This settlement has too many forts".into());
+        }
         let facing = match facing {
             Some(f) => f,
             None => self.check_site(settlement, class, cx, cy)?,
@@ -1866,6 +1872,11 @@ impl Scene {
             )
         }) {
             self.ordered_by(id, settlement);
+            // The town counts one more fort going up (0x43b290: `+0x22c`
+            // + class - 0x34).
+            if town_fort {
+                self.forts_going_up(settlement, class, 1);
+            }
         }
         Ok(())
     }

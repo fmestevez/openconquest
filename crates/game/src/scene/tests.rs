@@ -11204,3 +11204,65 @@ fn ship_founded_fort_bare() {
     assert_eq!(scene.objects[i].record.fields[8], 0xff);
     assert_eq!(scene.home_settlement(i), None);
 }
+
+/// A town counts the forts it orders going up (0x43b290 `+0x22c..`), one
+/// fewer as one is called off (0x2491) or stands (0x2873), and orders no
+/// fort past a weighted count of 15 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn town_counts_forts_going_up() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.default_arming = false;
+    scene.amber = 50_000;
+    let home = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN)))
+        .unwrap();
+    let (hx, hy, home) = ((home.x / 64.0) as i32, (home.y / 64.0) as i32, home.id);
+    let mut forts = Vec::new();
+    for _ in 0..2 {
+        let site = (-BUILD_RADIUS..=BUILD_RADIUS)
+            .flat_map(|dy| (-BUILD_RADIUS..=BUILD_RADIUS).map(move |dx| (hx + dx, hy + dy)))
+            .find(|&(x, y)| scene.check_site(home, 0x34, x, y).is_ok())
+            .expect("room for a fort");
+        scene
+            .place_building(home, 0x34, site.0, site.1, &data, &mut caches)
+            .unwrap();
+        forts.push(scene.constructions.last().unwrap().site);
+    }
+    let up = |s: &Scene| s.towns.going_up.get(&home).copied().unwrap_or_default();
+    assert_eq!(up(&scene), [2, 0, 0]);
+    // Called off while going up: one fewer.
+    scene.halt(forts[0], &data, &mut caches).unwrap();
+    assert_eq!(up(&scene), [1, 0, 0]);
+    // Standing, it tells its town: none going up, one standing.
+    for _ in 0..50 * (crate::clock::ticks(crate::objects::BUILDING_CYCLE[0]) as usize + 2) {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert_eq!(up(&scene), [0, 0, 0]);
+    let standing = scene
+        .town_buildings(home)
+        .into_iter()
+        .filter(|&i| matches!(scene.objects[i].class, ObjectClass::Building(0x34..=0x36)))
+        .map(|i| scene.objects[i].record.class_id - 0x33)
+        .sum::<u32>();
+    assert!(standing >= 1);
+    // The weighted count: wooden 1, middle 2, stone 3, the new one too.
+    scene.towns.going_up.insert(home, [15 - standing - 1, 0, 0]);
+    assert!(!scene.forts_full(home, 0x34));
+    assert!(scene.forts_full(home, 0x35));
+    scene.towns.going_up.insert(home, [15 - standing, 0, 0]);
+    assert!(scene.forts_full(home, 0x34));
+    let site = (-BUILD_RADIUS..=BUILD_RADIUS)
+        .flat_map(|dy| (-BUILD_RADIUS..=BUILD_RADIUS).map(move |dx| (hx + dx, hy + dy)))
+        .find(|&(x, y)| scene.check_site(home, 0x34, x, y).is_ok())
+        .unwrap();
+    assert!(scene
+        .place_building(home, 0x34, site.0, site.1, &data, &mut caches)
+        .is_err());
+}

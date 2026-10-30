@@ -2669,8 +2669,19 @@ of their events go through which mode is not decoded: the callers of
 0x50e570 with modes 3, 5, 6), so those keep the port's fall-off; the
 priority byte 0x525370 passes 0x568b30 for modes 1, 4, 5, 6 (255 within 5
 cells, `(20 - d) x 255 / 20` beyond; 0 for mode 2) is not used (the port
-mixes without the original's channels). Not ported: the town's count of
-forts going up (0x2491), which the port does not keep; the frame an
+mixes without the original's channels). The town's count of forts going
+up (`+0x22c`, `+0x230`, `+0x234` by class 0x34-0x36; saved in the
+town's record at +0x800, loaded for record type 2 only) is one more on
+each fort its order 0x138c makes (0x43b290 at 0x43b939..0x43b95b), one
+fewer (only while not 0) on 0x2873 from such a fort standing (brep3.c
+0x2873) and on 0x2491 {class - 0x34} (0x4184f0 on 0x138b, `+0xa4` 0 and
+`+0x1c8` set: a fort called off or falling while going up). Both the
+order (0x43b290, after the price test) and the structures page (0x43c740
+at 0x43c80e, the button off) refuse a fort when `(stone standing + going
+up) x 3 + (middle ...) x 2 + wooden ... + the new one's weight (1, 2, 3)
+> 15`, standing being the counters `+0x21c`, `+0x214`, `+0x218` kept by
+0x2873 / 0x2874. The port: `Towns::going_up`, `Scene::forts_full`,
+`fort_down`. Not ported: the frame an
 upgrade starts from (the port's standing buildings keep no frame of their
 own: it starts at 0; porting it needs each standing building's frame
 stepped by 0x4230f0 and reset in step by every vt+0x38 call, 41 indirect
@@ -2826,8 +2837,13 @@ cleared on all 12 together. Who sets them:
   updated). Several at the best: those below are removed, the order
   kept, and entry `param_1 % count` wins; one: the first at the best.
   Nothing: target and object cleared. 0x4469c0 (per group, while its mode
-  is not 0 and `now > +0x1c + reload + param_3 % (reload x 20 / 100 +
-  1)`, reload `0x5c76e0[item x 3 + rate level]`): bit 2 and the track
+  is not 0, its unit count `+0x3b` is not 0 and `now > +0x1c + reload +
+  (±param_3) % (reload x 20 / 100 + 1)` compared unsigned, the draw
+  positive when odd and negated when even (C's remainder: 0 or below),
+  reload `0x5c76e0[item x 3 + rate level]` = 6000 / 0x597a3c's rate
+  (0x4ac0e0), the rate level the player's byte `+0x8e + item / 3`;
+  passing, `+0x1c = now` before any target is sought, and the group's
+  units fire as one blow, 0x14ba with 0x446710's strength): bit 2 and the track
   passing, the target; bit 2 failing with bit 1, a scan into locals (not
   kept); bit 1 alone, a scan into `+0x20`..`+0x2c` (kept); a jam found is
   shot through its first member (0x415df0). The callers (0x41a96f fort,
@@ -2885,8 +2901,9 @@ and the land creatures as their jam, class 0x1f7 and side 2, in the
 occupant slot; medusa, siren and sea monster in `+0x10`; harpies and
 dragons in `+0xc`), the track in `group_track`, the generator's draws
 (`FortFire::seed`, `draws`, `step_fort_draws` in the tick) and the kept
-scan result (`picks`, `pick_cells`); a group scans when one of its units
-is loaded (the port reloads unit by unit), the 0x2874
+scan result (`picks`, `pick_cells`); the gate per group
+(`combat::group_loaded`, `FortFire::last` its `+0x1c`, saved), all its
+units firing together when it finds a target; the 0x2874
 path in `Scene::town_gone` (the buildings of its list, see "A town's
 buildings"; busy, `Scene::busy`, they are halted; their reload contacts
 end); its

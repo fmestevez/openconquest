@@ -176,10 +176,9 @@ impl Scene {
     /// cost is not) and the building removed at once (0x424740: `+0x158`
     /// cleared first, so no fall sound and no rubble; the drain 0x423d60
     /// reports it with killer 0xff, its owner's building lost, nobody's
-    /// kill, and removes it, no ruins). (Its settlement's lists, message
-    /// 0x2874, and a fort's count of forts going up, 0x2491, have no
-    /// counterpart here: the port finds a building's settlement by its
-    /// place.)
+    /// kill, and removes it, no ruins). A fort tells its town one fewer
+    /// fort going up (0x2491, `fort_down`); the town's list (0x2874) is
+    /// left at the next tick (`run_town_links`).
     fn land_halt(&mut self, id: u32) -> Land {
         if self.mending.contains(&id) {
             self.mending.retain(|&m| m != id);
@@ -195,6 +194,7 @@ impl Scene {
         if let Some(owner) = self.objects[i].owner {
             self.earn(owner, economy::building_cost(class) as i64, 0);
         }
+        self.fort_down(id);
         self.note_destroyed(i, None);
         self.constructions.retain(|c| c.site != id);
         self.objects.remove(i);

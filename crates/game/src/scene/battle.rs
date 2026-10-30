@@ -591,22 +591,27 @@ impl Scene {
             // their target while it is in their reach (0x447400; out of
             // reach it is kept), else, bit 1 also set, at what a scan
             // finds, not kept; with bit 1 alone at what the scan finds,
-            // kept (`+0x20`) for the next.
+            // kept (`+0x20`) for the next. A group reloads as one: a group
+            // with units and a mode passes its gate (`combat::group_loaded`,
+            // its own draw as `param_3`), stamps the time `+0x1c` whether
+            // it finds a target or not, and all its units fire together
+            // (one blow of 0x446710's strength).
             if self.objects[i].holds_units() {
+                let now = self.ticks;
                 let fire = self.objects[i].combat.as_ref().unwrap().fire;
-                let reloads = self.objects[i].combat.as_ref().unwrap().reloads.clone();
+                let mut last = fire.last;
                 let mut picks = [None; 12];
                 let mut kept = (fire.picks, fire.pick_cells);
                 for g in 0..12u8 {
-                    let loaded = shooters
-                        .iter()
-                        .zip(&reloads)
-                        .any(|(&w, &r)| w == g && r <= 0.0);
-                    if !loaded {
-                        continue;
-                    }
                     let k = g as usize;
                     let draw = fire.draws[k];
+                    if !shooters.contains(&g)
+                        || !(fire.at_will || fire.targets[k] != 0)
+                        || !combat::group_loaded(g, rate_level(g), draw, last[k], now)
+                    {
+                        continue;
+                    }
+                    last[k] = now;
                     picks[k] = if fire.targets[k] != 0 {
                         match self.group_track(i, g, fire.targets[k]) {
                             Some(t) => Some(t),
@@ -627,16 +632,12 @@ impl Scene {
                 }
                 let c = self.objects[i].combat.as_mut().unwrap();
                 (c.fire.picks, c.fire.pick_cells) = kept;
+                c.fire.last = last;
                 let mut fired: Vec<(usize, Vec<u8>)> = Vec::new();
-                for (k, &w) in shooters.iter().enumerate() {
+                for &w in &shooters {
                     let Some(ti) = picks.get(w as usize).copied().flatten() else {
                         continue;
                     };
-                    if c.reloads[k] > 0.0 {
-                        continue;
-                    }
-                    let jitter = crate::clock::ticks(self.rng.next() % combat::RELOAD_JITTER);
-                    c.reloads[k] = combat::reload_seconds(w, rate_level(w)) + jitter;
                     match fired.iter_mut().find(|f| f.0 == ti) {
                         Some(f) => f.1.push(w),
                         None => fired.push((ti, vec![w])),
@@ -1209,8 +1210,10 @@ impl Scene {
                 self.note_destroyed(ti, by);
             }
             self.drop_held(target, data, caches);
-            // A building gone leaves its town's list (the drain 0x427bb0,
+            // A fort going up tells its town (0x4184f0, 0x2491); a
+            // building gone leaves its town's list (the drain 0x427bb0,
             // 0x2874); a settlement or town gone tells its buildings.
+            self.fort_down(target);
             self.leave_town(target, false);
             if matches!(
                 self.objects[ti].class,

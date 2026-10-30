@@ -164,6 +164,11 @@ pub struct FortFire {
     pub picks: [u32; 12],
     #[serde(default)]
     pub pick_cells: [(i32, i32); 12],
+    /// Each group's last loaded tick `+0x1c` (0 from the constructor
+    /// 0x446490; set to now by 0x4469c0 whenever the gate passes, target
+    /// or not).
+    #[serde(default)]
+    pub last: [u32; 12],
 }
 
 impl Default for FortFire {
@@ -177,6 +182,7 @@ impl Default for FortFire {
             draws: [0; 12],
             picks: [0; 12],
             pick_cells: [(0, 0); 12],
+            last: [0; 12],
         }
     }
 }
@@ -1253,9 +1259,28 @@ const RATE: [[u32; 3]; 12] = [
 /// time (0x4c0230, `RELOAD_JITTER`). The unique ships' items 9-11 always
 /// take the third column (0x4c06e0).
 pub fn reload_seconds(item: u8, level: u8) -> f32 {
+    crate::clock::ticks(reload_ticks(item, level))
+}
+
+/// The reload table 0x5c76e0[item x 3 + level] in ticks: 6000 / the rate
+/// of fire (0x4ac0e0, integer division).
+pub fn reload_ticks(item: u8, level: u8) -> u32 {
     let level = if item >= GREEK_FIRE { 2 } else { level.min(2) };
     let rate = RATE.get(item as usize).map_or(100, |r| r[level as usize]);
-    crate::clock::ticks(6000 / rate.max(1))
+    6000 / rate.max(1)
+}
+
+/// A fort's or stronghold's group of item `item` at rate level `level`
+/// is loaded (0x4469c0): `now > last + reload + j` (unsigned), reload
+/// 0x5c76e0[item x 3 + level] and `j = (±draw) % (reload x 20 / 100 +
+/// 1)`, the draw taken positive when odd and negated when even (C's
+/// remainder, so 0 or below), `last` its `+0x1c`.
+pub fn group_loaded(item: u8, level: u8, draw: u32, last: u32, now: u32) -> bool {
+    let reload = reload_ticks(item, level);
+    let m = (reload * 20 / 100 + 1) as i64;
+    let d = draw as i32 as i64;
+    let j = if d % 2 != 0 { d % m } else { (-d) % m };
+    ((last as i64 + j + reload as i64) as u32) < now
 }
 
 /// The random ticks added to each reload (0x4c0230: rand % 30).
@@ -1835,6 +1860,26 @@ mod tests {
     /// A fort's units take its blow's share (0x4184f0): load 10 against a
     /// big fort's 35; a blow a unit holds comes off it, one larger takes
     /// units away until it is spent.
+    /// 0x4469c0's gate: item 4 at level 0 reloads 6000 / 120 = 50 ticks,
+    /// the spread 50 x 20 / 100 + 1 = 11; an odd draw adds its remainder,
+    /// an even one takes it off.
+    #[test]
+    fn fort_group_gate() {
+        use super::*;
+        assert_eq!(reload_ticks(4, 0), 50);
+        // Odd 7: last + 50 + 7 < now.
+        assert!(!group_loaded(4, 0, 7, 100, 157));
+        assert!(group_loaded(4, 0, 7, 100, 158));
+        // Even 8: -(8 % 11) = -8, last + 42 < now.
+        assert!(!group_loaded(4, 0, 8, 100, 142));
+        assert!(group_loaded(4, 0, 8, 100, 143));
+        // Even 22: 0.
+        assert!(group_loaded(4, 0, 22, 100, 151));
+        assert!(!group_loaded(4, 0, 22, 100, 150));
+        // From the constructor's 0 a group fires as soon as the time is past.
+        assert!(group_loaded(6, 1, 0xffff, 0, 101));
+    }
+
     #[test]
     fn forts_units_take_blows() {
         use super::*;

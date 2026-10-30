@@ -35,6 +35,13 @@ pub struct Towns {
     pub pending: std::collections::BTreeSet<u32>,
     /// Each town's buildings in the order they joined (`+0x1d0`).
     pub lists: std::collections::BTreeMap<u32, Vec<u32>>,
+    /// Each town's forts going up, by class 0x34-0x36 (`+0x22c`,
+    /// `+0x230`, `+0x234`): one more on each fort its order 0x138c makes
+    /// (0x43b290), one fewer (never below 0) as one tells it it stands
+    /// (0x2873) or falls while going up (0x2491, 0x4184f0); saved
+    /// (0x4416c0 record +0x800).
+    #[serde(default)]
+    pub going_up: std::collections::BTreeMap<u32, [u32; 3]>,
 }
 
 /// The town cell field for none (record fields 8, 9).
@@ -208,6 +215,57 @@ impl Scene {
             if !list.contains(&id) {
                 list.push(id);
             }
+            // A fort counts as standing, one fewer going up.
+            if let Some(i) = self.object_index(id) {
+                if let ObjectClass::Building(c @ 0x34..=0x36) = self.objects[i].class {
+                    self.forts_going_up(town, c, -1);
+                }
+            }
+        }
+    }
+
+    /// Town `town`'s count of forts of class `class` going up changed by
+    /// `d` (0x43b290 `+1`; 0x2873, 0x2491 `-1`, only while not 0).
+    pub(super) fn forts_going_up(&mut self, town: u32, class: u32, d: i32) {
+        let k = (class - 0x34) as usize;
+        let n = &mut self.towns.going_up.entry(town).or_default()[k];
+        if d > 0 {
+            *n += 1;
+        } else if *n != 0 {
+            *n -= 1;
+        }
+    }
+
+    /// Whether town `town` may order no more forts of class `class`
+    /// (0x43b290 for order 0x138c, the menu 0x43c740 at 0x43c80e for its
+    /// buttons): the weighted count of its forts, standing (`+0x218`
+    /// wooden, `+0x214` middle, `+0x21c` stone: those of its list) and
+    /// going up (`going_up`), wooden 1, middle 2, stone 3, with the new
+    /// one's weight, above 15.
+    pub fn forts_full(&self, town: u32, class: u32) -> bool {
+        let mut n = [0u32; 3];
+        for i in self.town_buildings(town) {
+            if let ObjectClass::Building(c @ 0x34..=0x36) = self.objects[i].class {
+                n[(c - 0x34) as usize] += 1;
+            }
+        }
+        let up = self.towns.going_up.get(&town).copied().unwrap_or_default();
+        let sum: u32 = (0..3).map(|k| (n[k] + up[k]) * (k as u32 + 1)).sum();
+        sum + (class - 0x33) > 15
+    }
+
+    /// Fort `id` falls or is called off while going up (0x4184f0 on
+    /// 0x138b with `+0xa4` 0 and a town): 0x2491 {class - 0x34} to its
+    /// town.
+    pub(super) fn fort_down(&mut self, id: u32) {
+        let (Some(i), Some(&town)) = (self.object_index(id), self.towns.of.get(&id)) else {
+            return;
+        };
+        if self.construction_at(id).is_none_or(|c| c.upgrade) {
+            return;
+        }
+        if let ObjectClass::Building(c @ 0x34..=0x36) = self.objects[i].class {
+            self.forts_going_up(town, c, -1);
         }
     }
 
