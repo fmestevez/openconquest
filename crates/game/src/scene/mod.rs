@@ -928,6 +928,7 @@ impl Scene {
                 .collect(),
             brain: self.brain.clone(),
             computers: Some(self.computers.clone()),
+            human: self.human.map(|h| (h.nation, h.slot)),
             battle: Battle {
                 shots: self.shots.iter().map(|s| s.saved()).collect(),
                 fireballs: self.fireballs.iter().map(|f| f.saved()).collect(),
@@ -984,6 +985,15 @@ impl Scene {
         scene.trainings.iter_mut().for_each(Training::upgrade_save);
         scene.garrisons = save.garrisons.clone();
         scene.purses = save.purses.iter().copied().collect();
+        if let Some(owner) = save.human {
+            let players = openconquest_formats::players(&data.open_mission(&save.mission)?)?;
+            if let Some(p) = players.iter().find(|p| (p.nation, p.slot) == owner) {
+                scene.human = Some(PlayerInfo {
+                    computer: false,
+                    ..*p
+                });
+            }
+        }
         scene.summons = save.summons.clone();
         scene.magic = save.magic.clone();
         scene.wind = save.wind.clone();

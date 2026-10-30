@@ -62,6 +62,30 @@ impl Scene {
         }
     }
 
+    /// Makes `player` the one human player of a single-player game (Custom
+    /// missions' players, 0x53b940 on Start: side + 0x1a1d = 1 for the
+    /// Human row): the mission's human takes a purse like a computer
+    /// player's, `player` its own.
+    pub fn play_as(&mut self, player: PlayerInfo) {
+        let owner = (player.nation, player.slot);
+        if let Some(h) = self.human {
+            if (h.nation, h.slot) == owner {
+                return;
+            }
+            self.purses
+                .insert((h.nation, h.slot), (self.amber, self.fish));
+        }
+        (self.amber, self.fish) = self
+            .purses
+            .remove(&owner)
+            .unwrap_or((player.amber, player.fish));
+        self.human = Some(PlayerInfo {
+            computer: false,
+            ..player
+        });
+        self.refresh_sight();
+    }
+
     /// The seat of player `owner`.
     pub fn seat_of(&self, owner: (u32, u32)) -> Option<usize> {
         self.seats

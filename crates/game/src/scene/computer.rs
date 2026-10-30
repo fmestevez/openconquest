@@ -74,6 +74,16 @@ pub struct Computers {
     pub on: bool,
     /// The difficulty chosen for them (+0x1a31 by player, 0-2).
     pub level: usize,
+    /// Each player's own, as Custom missions' players set them (0x53b940
+    /// on Start, 0x178: AI Weak, Medium and Strong to +0x1a31 = 0, 1, 2
+    /// through 0x528a20); players not listed take `level`.
+    #[serde(default)]
+    pub levels: Vec<((u32, u32), usize)>,
+    /// The players Custom missions disabled (side +0x1a1d = 0): no
+    /// computer player is made for them (0x522d50 makes one for side 3
+    /// only).
+    #[serde(default)]
+    pub off: Vec<(u32, u32)>,
     /// Game ticks since the start (game +0xde).
     pub tick: u32,
     pub started: bool,
@@ -678,10 +688,16 @@ impl Scene {
             .purses
             .keys()
             .copied()
-            .filter(|o| !humans.contains(o))
+            .filter(|o| !humans.contains(o) && !self.computers.off.contains(o))
             .collect();
-        let level = self.computers.level.min(2);
         for owner in owners {
+            let level = self
+                .computers
+                .levels
+                .iter()
+                .find(|l| l.0 == owner)
+                .map_or(self.computers.level, |l| l.1)
+                .min(2);
             // The original seeds from the clock (timeGetTime, message 2).
             let seed = self.rng.next() << 16 | self.rng.next();
             let mut ai = Computer {

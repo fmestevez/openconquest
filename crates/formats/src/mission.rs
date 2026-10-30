@@ -231,6 +231,26 @@ pub fn heroes(archive: &Archive) -> Result<[bool; 9]> {
     Ok(out)
 }
 
+/// A custom mission's `HEAD_CUST` (three dwords a, b, c; read by
+/// 0x52a990 into the mission screen's + 0x808, + 0x80c, + 0x810): Custom
+/// missions lists a file when a != 0, the multiplayer lobby when b != 0;
+/// with a != 0 the player whose id `nation * 4 + slot` is c starts as the
+/// human, and with b == 0 the players' kind pop-up offers the computer
+/// levels only (0x52ebe0). Without one, (1, 1, 0).
+pub fn head_cust(archive: &Archive) -> [u32; 3] {
+    let Some(data) = archive
+        .find("HEAD_CUST", ResourceKind::Raw)
+        .and_then(|e| archive.read_entry(e).ok())
+    else {
+        return [1, 1, 0];
+    };
+    let at = |o: usize| {
+        data.get(o..o + 4)
+            .map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
+    [at(0), at(4), at(8)]
+}
+
 /// Where each player's view starts (`WIN_VIEW`, a record of 20 dwords, one
 /// per player id `nation * 4 + slot`: the cell at the view's top left, x in
 /// the low word, y in the high one; read by 0x4ed5a0 into game + 0x2ef5,
@@ -289,6 +309,10 @@ pub struct PlayerInfo {
     pub fish: u32,
     /// Levels the player starts the mission with.
     pub levels: StartLevels,
+    /// The computer level the Custom missions screen starts the player
+    /// at (block byte +0x02, 0x52a990 through 0x528a40: 1 AI Medium, 2 AI
+    /// Strong, else AI Weak).
+    pub level: u8,
 }
 
 /// A player's starting levels (copied to the player state by the navy's
@@ -354,6 +378,7 @@ pub fn players(archive: &Archive) -> Result<Vec<PlayerInfo>> {
                 nation: u32_at(b + 8)?,
                 slot: u32_at(b + 0xc)?,
                 fish: u32_at(b + 4)?,
+                level: data.get(b + 2).copied().unwrap_or(0),
                 levels: {
                     let byte = |o: usize| u32_at(b + o).map_or(0, |v| v.min(255) as u8);
                     let three = |o: usize| [byte(o), byte(o + 4), byte(o + 8)];

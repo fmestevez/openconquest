@@ -129,6 +129,12 @@ enum KeyMsg {
     EditLeave,
     EditEnter,
     EditBack,
+    /// Custom missions' kind pop-up (0x52ebe0): its Esc (0x1d5), its
+    /// list's Enter, and its Up and Down buttons down and up.
+    PopupClose,
+    PopupChoose,
+    PopupStep(i32),
+    PopupStepEnd,
 }
 
 /// A binding a screen makes: flags, keys, priority, and its messages down
@@ -278,8 +284,6 @@ struct Preview {
     index: usize,
     size: (u32, u32),
     map: Option<Rc<crate::assets::Image>>,
-    /// Each player's nation, slot and whether the computer plays it.
-    seats: Vec<(u32, u32, bool)>,
     /// The cell at the top left of the human player's starting view.
     start: (u32, u32),
     /// The briefing as the original lays it out.
@@ -320,10 +324,6 @@ impl Preview {
         let (w, h, pixels) =
             crate::terrain::Terrain::small(data, &grid, &mut caches.tiles, &screen)?;
         let infos = openconquest_formats::players(&archive).unwrap_or_default();
-        let seats = infos
-            .iter()
-            .map(|p| (p.nation, p.slot, p.computer))
-            .collect();
         let start = infos
             .iter()
             .find(|p| !p.computer)
@@ -337,10 +337,114 @@ impl Preview {
                 h,
                 pixels.into_iter().map(Some).collect(),
             ))),
-            seats,
             start,
             text: openconquest_formats::briefing_text(&archive).unwrap_or_default(),
         })
+    }
+}
+
+/// A player of Custom missions' players list (Startcom.cpp: the screen's
+/// list + 0x7e8, an entry of 0x174 bytes, made by 0x52a990): every player
+/// of the mission's `DESCRIPTOR` but the barbarians (nation 4).
+#[derive(Debug, Clone)]
+struct CustomPlayer {
+    info: openconquest_formats::PlayerInfo,
+    /// Its kind (+ 0x184): 0 Disable, 1 Available, 2 Human, 3-5 AI Weak,
+    /// Medium and Strong (strings 1146 + kind).
+    kind: u8,
+    /// Its name (+ 0x188): the session's for the human, else empty.
+    name: String,
+}
+
+/// The players kinds' captions, strings 1146-1151.
+const KIND_NAMES: [&str; 6] = [
+    "Disable",
+    "Available",
+    "Human",
+    "AI Weak",
+    "AI Medium",
+    "AI Strong",
+];
+
+/// The font variant a players row draws its kind and name in (0x53b940
+/// message 0x195): 0 for Disable and Available, 2 for Human, 1 for the
+/// computer.
+fn kind_variant(kind: u8) -> usize {
+    match kind {
+        0 | 1 => 0,
+        2 => 2,
+        _ => 1,
+    }
+}
+
+/// Custom missions' players rows: 11 (screen + 0x650), 27 apart (the
+/// SP_LPLAY row frame's 26 and a pixel, + 0x658), the first's kind box at
+/// (230, 249), its arrow at (342, 249) and its name at (375, 249)
+/// (0x52c5c0, 0x529de0).
+const PLAYER_ROWS: usize = 11;
+
+/// Custom missions' kind pop-up (0x52ebe0), while it is open.
+#[derive(Debug, Clone)]
+struct KindPopup {
+    /// The player it is for (+ 0x590) and where it stands (+ 0x584,
+    /// + 0x588).
+    player: usize,
+    x: f32,
+    y: f32,
+    /// The kinds it offers (+ 0x598).
+    entries: Vec<u8>,
+    /// The list's current entry (_slist + 0x136).
+    current: usize,
+    /// The entry the left button went down on, while it is held (+ 0x1f2,
+    /// + 0x1ee), and whether a drag moved the current one since (+ 0x1f6).
+    pressed: Option<usize>,
+    dragged: bool,
+    /// Up or Down held (the list's two buttons, 0xc8 and 0xd0) and when
+    /// it next repeats.
+    step: Option<(i32, u64)>,
+}
+
+impl KindPopup {
+    /// Its picture, `T_PLAYER5` (146 x 131) or `T_PLAYER3` (146 x 87),
+    /// by how many entries it offers.
+    fn picture(&self) -> (&'static str, f32, f32) {
+        if self.entries.len() == 3 {
+            ("T_PLAYER3", 146.0, 87.0)
+        } else {
+            ("T_PLAYER5", 146.0, 131.0)
+        }
+    }
+
+    /// The list (_slist, made by 0x52ebe0): at (x + 16, y + 12), LPLAY_TP's
+    /// 110 wide and 21 an entry.
+    fn list(&self) -> crate::menus::Rect {
+        (
+            self.x + 16.0,
+            self.y + 12.0,
+            110.0,
+            21.0 * self.entries.len() as f32,
+        )
+    }
+
+    /// The entry at `p` (0x54cd00 messages 0x60-0x62): inside the list,
+    /// the first whose band from its top to its top + 21 (both included)
+    /// holds it.
+    fn entry_at(&self, p: (f32, f32)) -> Option<usize> {
+        let (x, y, w, h) = self.list();
+        if p.0 < x || p.0 >= x + w || p.1 < y || p.1 >= y + h {
+            return None;
+        }
+        (0..self.entries.len()).find(|&i| {
+            let top = y + 21.0 * i as f32;
+            top <= p.1 && p.1 <= top + 21.0
+        })
+    }
+
+    /// Whether `p` is outside the picture (StartMouseClassTy 0x52fbb0: on
+    /// its left or top edge counts as outside).
+    fn outside(&self, p: (f32, f32)) -> bool {
+        let (_, w, h) = self.picture();
+        p.0 <= self.x || p.1 <= self.y || p.0 >= self.x + w || p.1 >= self.y + h
     }
 }
 
@@ -373,6 +477,9 @@ struct MenuPage {
     spots: Vec<(crate::menus::Rect, MenuHit)>,
     tracks: Vec<crate::menus::Track>,
     fills: Vec<(crate::menus::Rect, u32)>,
+    /// Over everything (see `MenuView::top`).
+    top_sprites: Vec<crate::menus::Placed>,
+    top_texts: Vec<crate::menus::Text>,
 }
 
 /// The parts the mission screens share (see `App::mission_panels`).
@@ -438,6 +545,7 @@ impl MenuPage {
             spots: &self.spots,
             tracks: &self.tracks,
             fills: &self.fills,
+            top: (&self.top_sprites, &self.top_texts),
         }
     }
 }
@@ -641,9 +749,18 @@ pub struct App {
     /// and how many players each takes, and a game being hosted or joined.
     lobby_players: usize,
     join_address: String,
-    /// The computer players' level on the custom missions screen (0 weak,
-    /// as the original starts it).
-    custom_ai: usize,
+    /// Custom missions' players (see `CustomPlayer`), for the mission
+    /// shown (its index), and its `HEAD_CUST`.
+    custom_players: Vec<CustomPlayer>,
+    custom_for: Option<usize>,
+    custom_head: [u32; 3],
+    /// A players row's kind field or arrow held down with the pointer
+    /// inside it (its row; the arrow's when set).
+    kind_held: Option<(usize, bool)>,
+    /// The kind pop-up, while it is open.
+    kind_popup: Option<KindPopup>,
+    /// The scan codes the system repeated since the keyboard's last poll.
+    key_repeats: Vec<u8>,
     /// The name typed on the multiplayer screen.
     player_name: String,
     /// A chat line being typed in a multiplayer game.
@@ -682,6 +799,9 @@ pub struct App {
     preview_due: Option<(usize, Instant)>,
     /// Mission titles from their briefings, by mission index.
     mission_titles: Vec<String>,
+    /// Whether Custom missions lists each mission: `HEAD_CUST`'s a set
+    /// (0x52b7c0).
+    custom_listed: Vec<bool>,
     /// A game is under way (the main menu offers to resume it).
     in_game: bool,
     /// The mission clock when it was won or lost.
@@ -750,6 +870,13 @@ impl App {
                     .and_then(|b| b.first().map(|t| t.trim_matches('"').to_string()))
                     .filter(|t| !t.is_empty())
                     .unwrap_or_else(|| m.to_uppercase())
+            })
+            .collect();
+        let custom_listed = missions
+            .iter()
+            .map(|m| {
+                data.open_mission(m)
+                    .is_ok_and(|a| openconquest_formats::head_cust(&a)[0] != 0)
             })
             .collect();
         let mut caches = Caches::default();
@@ -853,7 +980,12 @@ impl App {
             lobby_players: 2,
             join_address: String::new(),
             player_name: String::new(),
-            custom_ai: 0,
+            custom_players: Vec::new(),
+            custom_for: None,
+            custom_head: [1, 1, 0],
+            kind_held: None,
+            kind_popup: None,
+            key_repeats: Vec::new(),
             chat_line: None,
             list_first: 0,
             wheel_rest: 0.0,
@@ -872,6 +1004,7 @@ impl App {
             preview: None,
             preview_due: None,
             mission_titles,
+            custom_listed,
             in_game: !start_menu,
             outcome_at: None,
             best,
@@ -1400,6 +1533,8 @@ impl App {
             spots: Vec::new(),
             tracks: Vec::new(),
             fills: Vec::new(),
+            top_sprites: Vec::new(),
+            top_texts: Vec::new(),
         };
         let mut page = self.menu_page_of(state, empty);
         // What is drawn and what is clicked start at the same row.
@@ -1882,9 +2017,10 @@ impl App {
         mission[5..].parse().ok()
     }
 
-    /// Missions of `category`, as indices into `missions`.
     /// The missions a mission screen lists: for Custom missions, as the
-    /// original, the battles and single missions by file name.
+    /// original (0x52b7c0: `<MainPath>CUSTOM\*.DKD`, a file kept when its
+    /// `HEAD_CUST` a is set), the battles and single missions (the
+    /// installation's custom missions, every one with a = 1) by file name.
     fn screen_missions(&self, category: Category) -> Vec<usize> {
         if category != Category::Single {
             return self.category_missions(category);
@@ -1894,7 +2030,7 @@ impl App {
                 matches!(
                     Category::of(&self.missions[i]),
                     Some(Category::Single | Category::Battle)
-                )
+                ) && self.custom_listed.get(i) == Some(&true)
             })
             .collect();
         list.sort_by(|&a, &b| self.missions[a].cmp(&self.missions[b]));
@@ -2280,28 +2416,67 @@ impl App {
             texts.push(text(style("MH", variant), 13.0, y + dy, &self.missions[i]));
         }
         sprites.extend(bar.sprites);
-        // The players: flag, who plays, the choice arrow, the name.
-        if let Some(p) = preview {
-            let frame = (self.time_ms / 100 % 10) as u32;
-            for (k, &(nation, slot, computer)) in p.seats.iter().enumerate().take(10) {
-                let y = 249.0 + 27.0 * k as f32;
-                let start = FLAG_STARTS[((nation * 4 + slot) as usize).min(15)];
-                sprites.extend([
-                    at("LPLAY_FL", 206.0, y),
-                    at(&format!("M_FLAGS{:03}", start + frame), 209.0, y),
-                    at("LPLAY_TP", 230.0, y),
-                    at("M_CBUT0", 342.0, y),
-                    at("LPLAY_NP", 375.0, y),
-                ]);
-                let (who, variant) = if computer {
-                    (
-                        ["AI Weak", "AI Medium", "AI Strong"][self.custom_ai.min(2)],
-                        1,
-                    )
-                } else {
-                    ("Human", 2)
-                };
-                texts.push(text(style("MH", variant), 234.0, y + 1.0, who));
+        // The players (0x53b940 message 0x195, row k from (204, 247 + 27k)):
+        // the flag, LPLAY_TP at (26, 2) with the kind's caption and
+        // LPLAY_NP at (171, 2) with the name, each in MH 4 across and
+        // centred down, in the kind's variant; over them the kind field,
+        // the arrow M_CBUT (pressed M_CBUT1, else M_CBUT0: 0x4ea6e0) and
+        // the name field (0x529de0), the fields drawing nothing.
+        let players = if preview.is_some() {
+            self.custom_rows()
+        } else {
+            &[]
+        };
+        let frame = (self.time_ms / 100 % 10) as u32;
+        let centred = |style, t: &str| {
+            let h = self.menus.as_ref().map_or(0.0, |m| m.height(style, t));
+            ((21 - h as i32) / 2) as f32
+        };
+        for (k, cp) in players.iter().enumerate() {
+            let y = 249.0 + 27.0 * k as f32;
+            let start = FLAG_STARTS[((cp.info.nation * 4 + cp.info.slot) as usize).min(15)];
+            let arrow = if self.kind_held == Some((k, true)) {
+                "M_CBUT1"
+            } else {
+                "M_CBUT0"
+            };
+            sprites.extend([
+                at("LPLAY_FL", 206.0, y),
+                at(&format!("M_FLAGS{:03}", start + frame), 209.0, y),
+                at("LPLAY_TP", 230.0, y),
+                at(arrow, 342.0, y),
+                at("LPLAY_NP", 375.0, y),
+            ]);
+            let st = style("MH", kind_variant(cp.kind));
+            let who = KIND_NAMES[usize::from(cp.kind.min(5))];
+            texts.push(Text {
+                clip: Some(106.0),
+                ..text(st, 234.0, y + centred(st, who), who)
+            });
+            if !cp.name.is_empty() {
+                texts.push(Text {
+                    clip: Some(382.0),
+                    ..text(st, 379.0, y + centred(st, &cp.name), &cp.name)
+                });
+            }
+        }
+        // The kind pop-up (0x52f270): its picture, the current entry's row
+        // on LPLAY_TP, each entry's caption in MH variant 0, 4 across and
+        // centred down in its row at (16, 12 + 21i), 110 x 21.
+        let (mut top_sprites, mut top_texts) = (Vec::new(), Vec::new());
+        if let Some(pop) = &self.kind_popup {
+            top_sprites.push(at(pop.picture().0, pop.x, pop.y));
+            let st = style("MH", 0);
+            for (i, &v) in pop.entries.iter().enumerate() {
+                let (rx, ry) = (pop.x + 16.0, pop.y + 12.0 + 21.0 * i as f32);
+                if i == pop.current {
+                    top_sprites.push(at("LPLAY_TP", rx, ry));
+                }
+                let t = KIND_NAMES[usize::from(v)];
+                top_texts.push(Text {
+                    clip: Some(106.0),
+                    ..text(st, rx + 4.0, ry + centred(st, t), t)
+                });
             }
         }
         sprites.extend([
@@ -2332,16 +2507,15 @@ impl App {
             spots: {
                 let mut spots = panels.spots;
                 spots.extend(bar.spots);
-                if let Some(p) = preview {
-                    for (k, s) in p.seats.iter().enumerate().take(10) {
-                        if s.2 {
-                            let y = 249.0 + 27.0 * k as f32;
-                            spots.push(((342.0, y, 29.0, 21.0), MenuHit::Check(k)));
-                        }
-                    }
+                for k in 0..players.len() {
+                    let y = 249.0 + 27.0 * k as f32;
+                    spots.push(((230.0, y, 110.0, 21.0), MenuHit::Kind(k, false)));
+                    spots.push(((342.0, y, 29.0, 21.0), MenuHit::Kind(k, true)));
                 }
                 spots
             },
+            top_sprites,
+            top_texts,
             buttons: vec![
                 Button {
                     caption: "Start".into(),
@@ -2360,6 +2534,7 @@ impl App {
         }
     }
 
+    /// Missions of `category`, as indices into `missions`.
     fn category_missions(&self, category: Category) -> Vec<usize> {
         (0..self.missions.len())
             .filter(|&i| Category::of(&self.missions[i]) == Some(category))
@@ -2685,9 +2860,11 @@ impl App {
                     .add(flags, keys, priority, Some(press), release, &held);
             }
         }
+        let repeats = std::mem::take(&mut self.key_repeats);
+        let repeated = |k: u8| repeats.contains(&k);
         self.menu_keys.begin();
         let mut at = 0;
-        while let Some(msg) = self.menu_keys.next(&held, &mut at) {
+        while let Some(msg) = self.menu_keys.next(&held, &repeated, &mut at) {
             self.key_message(state, msg);
             // A message that changed the bindings ends the poll (+ 0x60).
             if self.menu_keys.changed() || self.menu != Some(state) {
@@ -2733,7 +2910,284 @@ impl App {
                     text.pop();
                 }
             }
+            KeyMsg::PopupClose => self.close_kind_popup(),
+            KeyMsg::PopupChoose => {
+                if let Some(i) = self.kind_popup.as_ref().map(|p| p.current) {
+                    self.choose_kind(i);
+                }
+            }
+            // The list's buttons step its current entry at once, then
+            // after 500 ms and every 50 while held (0x52ebe0: + 0x1a2,
+            // + 0x1a6 of their records).
+            KeyMsg::PopupStep(d) => {
+                self.step_kind_popup(d);
+                if let Some(p) = self.kind_popup.as_mut() {
+                    p.step = Some((d, self.time_ms + 500));
+                }
+            }
+            KeyMsg::PopupStepEnd => {
+                if let Some(p) = self.kind_popup.as_mut() {
+                    p.step = None;
+                }
+            }
         }
+    }
+
+    /// Custom missions' players rows shown (screen + 0x57c: the players, at
+    /// most 11), for the mission shown.
+    fn custom_rows(&self) -> &[CustomPlayer] {
+        let shown = self.preview.as_ref().map(|p| p.index);
+        if shown.is_none() || self.custom_for != shown {
+            return &[];
+        }
+        &self.custom_players[..self.custom_players.len().min(PLAYER_ROWS)]
+    }
+
+    /// Custom missions' players list for mission `index` (0x52a990, type
+    /// 6): every player but the barbarians; the human (kind 2, the
+    /// session's name) is the one whose id `nation * 4 + slot` is
+    /// `HEAD_CUST`'s c when its a is set, else the first; each other one
+    /// at its `DESCRIPTOR` level (0x528a40: 1 AI Medium, 2 AI Strong, else
+    /// AI Weak).
+    fn make_custom_players(&mut self, index: usize) {
+        let archive = self.data.open_mission(&self.missions[index]).ok();
+        let head = archive
+            .as_ref()
+            .map_or([1, 1, 0], openconquest_formats::head_cust);
+        let players = archive
+            .as_ref()
+            .and_then(|a| openconquest_formats::players(a).ok())
+            .unwrap_or_default();
+        let mut list: Vec<CustomPlayer> = Vec::new();
+        for p in players.into_iter().filter(|p| p.nation != 4) {
+            let human = if head[0] != 0 {
+                head[2] == p.nation * 4 + p.slot
+            } else {
+                list.is_empty()
+            };
+            let (kind, name) = if human {
+                (2, self.player_name.clone())
+            } else {
+                (
+                    match p.level {
+                        1 => 4,
+                        2 => 5,
+                        _ => 3,
+                    },
+                    String::new(),
+                )
+            };
+            list.push(CustomPlayer {
+                info: p,
+                kind,
+                name,
+            });
+        }
+        self.custom_players = list;
+        self.custom_head = head;
+        self.custom_for = Some(index);
+    }
+
+    /// The kind field or arrow of players row `k` acts (0x53b940, ids
+    /// 0x197 + k and 0x1af + k): unless a pop-up is open, the row's
+    /// player's pop-up opens at (196 + 19, 216 + 42 + 27k), on the last
+    /// row its picture's height higher (0x52ebe0). With `HEAD_CUST` a set
+    /// and b clear it offers the computer's levels only (`T_PLAYER3`) and
+    /// does not open for the human; else Disable, Human and the levels
+    /// (`T_PLAYER5`). Its list starts at its first entry. The screen's
+    /// key bindings are suspended (Sinput 0x18) and its pointer receivers
+    /// turned off (0x1a); its own Esc (exclusive, 0x1d5), the list's
+    /// Enter and its buttons' Up and Down are bound at the screen's
+    /// priority, next to the suspended ones, and so start suspended
+    /// themselves (see `sinput`).
+    fn open_kind_popup(&mut self, k: usize) {
+        if self.kind_popup.is_some() || k >= self.custom_rows().len() {
+            return;
+        }
+        // The list's top is row 0: its 11 rows hold every player.
+        let player = k;
+        let [a, b, _] = self.custom_head;
+        if a != 0 && b == 0 && self.custom_players[player].kind == 2 {
+            return;
+        }
+        let entries = if a == 0 || b != 0 {
+            vec![0, 2, 3, 4, 5]
+        } else {
+            vec![3, 4, 5]
+        };
+        let mut pop = KindPopup {
+            player,
+            x: 196.0 + 19.0,
+            y: 216.0 + 42.0 + 27.0 * k as f32,
+            entries,
+            current: 0,
+            pressed: None,
+            dragged: false,
+            step: None,
+        };
+        if k == PLAYER_ROWS - 1 {
+            pop.y -= pop.picture().2;
+        }
+        let down = self.scan_state();
+        let held = |k: u8| down[usize::from(k)];
+        use crate::sinput::{ENTER, ESCAPE, EXCLUSIVE};
+        self.menu_keys.suspend();
+        let keys = &mut self.menu_keys;
+        keys.add(
+            EXCLUSIVE,
+            (ESCAPE, 0),
+            0,
+            Some(KeyMsg::PopupClose),
+            None,
+            &held,
+        );
+        keys.add(0, (ENTER, 0), 0, Some(KeyMsg::PopupChoose), None, &held);
+        for (key, d) in [(0xc8, -1), (0xd0, 1)] {
+            keys.add(
+                0,
+                (key, 0),
+                0,
+                Some(KeyMsg::PopupStep(d)),
+                Some(KeyMsg::PopupStepEnd),
+                &held,
+            );
+        }
+        self.kind_popup = Some(pop);
+    }
+
+    /// The pop-up closes (0x52f100): its list and bindings go, the Esc
+    /// last, and the screen's bindings and receivers are back (0x1b,
+    /// 0x19). Nothing else changes.
+    fn close_kind_popup(&mut self) {
+        if self.kind_popup.take().is_none() {
+            return;
+        }
+        let down = self.scan_state();
+        let held = |k: u8| down[usize::from(k)];
+        use crate::sinput::{ENTER, ESCAPE};
+        let keys = &mut self.menu_keys;
+        keys.remove((ENTER, 0), &KeyMsg::PopupChoose, &held);
+        keys.remove((0xc8, 0), &KeyMsg::PopupStep(-1), &held);
+        keys.remove((0xd0, 0), &KeyMsg::PopupStep(1), &held);
+        keys.remove((ESCAPE, 0), &KeyMsg::PopupClose, &held);
+        keys.resume();
+    }
+
+    /// The pop-up's list moves its current entry a step, up to its ends
+    /// (_slist messages 0x2f and 0x30).
+    fn step_kind_popup(&mut self, d: i32) {
+        if let Some(p) = self.kind_popup.as_mut() {
+            p.current = (p.current as i32 + d).clamp(0, p.entries.len() as i32 - 1) as usize;
+        }
+    }
+
+    /// Up or Down held in the pop-up repeats every 50 ms.
+    fn kind_popup_repeat(&mut self) {
+        let Some((d, due)) = self.kind_popup.as_ref().and_then(|p| p.step) else {
+            return;
+        };
+        if self.time_ms < due {
+            return;
+        }
+        self.step_kind_popup(d);
+        if let Some(p) = self.kind_popup.as_mut() {
+            p.step = Some((d, self.time_ms + 50));
+        }
+    }
+
+    /// Entry `j` of the pop-up chosen (0x53b940 message 0x1cc): when it is
+    /// not the player's kind, Disable leaves the player empty; Human makes
+    /// the human player so far AI Weak and this one the human with the
+    /// session's name; a computer level sets it. When the player was
+    /// disabled, or becomes disabled or human, the map's player marks are
+    /// made again (0x528de0, 0x52f470) and the viewer goes to the human's
+    /// starting view (0x52a250; none without a human). Then it closes.
+    fn choose_kind(&mut self, j: usize) {
+        let Some(pop) = self.kind_popup.clone() else {
+            return;
+        };
+        let (Some(&v), Some(old)) = (
+            pop.entries.get(j),
+            self.custom_players.get(pop.player).map(|c| c.kind),
+        ) else {
+            self.close_kind_popup();
+            return;
+        };
+        if v != old {
+            let name = if v == 2 {
+                if let Some(h) = self.custom_players.iter_mut().find(|c| c.kind == 2) {
+                    h.kind = 3;
+                    h.name.clear();
+                }
+                self.player_name.clone()
+            } else {
+                String::new()
+            };
+            let cp = &mut self.custom_players[pop.player];
+            cp.kind = v;
+            cp.name = name;
+            if old == 0 || v == 0 || v == 2 {
+                self.recentre_custom_map();
+            }
+        }
+        self.close_kind_popup();
+    }
+
+    /// The map viewer to the human player's starting view (0x52a250), when
+    /// a player is human; the preview clamps it to the map.
+    fn recentre_custom_map(&mut self) {
+        let Some(human) = self.custom_players.iter().find(|c| c.kind == 2) else {
+            return;
+        };
+        let (nation, slot) = (human.info.nation, human.info.slot);
+        let Some(index) = self.custom_for else {
+            return;
+        };
+        let view = self
+            .data
+            .open_mission(&self.missions[index])
+            .ok()
+            .and_then(|a| openconquest_formats::mission::start_view(&a, nation, slot));
+        if let Some((x, y)) = view {
+            self.map_at = Some((x as usize, y as usize));
+        }
+    }
+
+    /// Custom missions' Start (0x53b940, 0x178): the players set up and
+    /// the game started at once (0x101), with no briefing: the Human row
+    /// the human player (side + 0x1a1d = 1), each computer row a computer
+    /// player at its level (side 3, + 0x1a31 through 0x528a20), each
+    /// disabled row none (side 0).
+    fn start_custom(&mut self, index: usize) {
+        if self.custom_for != Some(index) {
+            self.make_custom_players(index);
+        }
+        let players = self.custom_players.clone();
+        self.carry = None;
+        self.open_mission(index);
+        if self.menu != Some(MenuState::Briefing) {
+            return;
+        }
+        // With no Human row the mission's own human player is kept: what
+        // the original's game does with none is not decoded (0x50f910).
+        if let Some(h) = players.iter().find(|c| c.kind == 2) {
+            self.scene.play_as(h.info);
+        }
+        let c = &mut self.scene.computers;
+        c.levels = players
+            .iter()
+            .filter(|p| (3..=5).contains(&p.kind))
+            .map(|p| ((p.info.nation, p.info.slot), usize::from(p.kind - 3)))
+            .collect();
+        c.off = players
+            .iter()
+            .filter(|p| p.kind == 0)
+            .map(|p| (p.info.nation, p.info.slot))
+            .collect();
+        self.center_pending = true;
+        self.refresh_panels();
+        self.menu = None;
+        self.in_game = true;
     }
 
     /// The text of screen `state`'s active name edit.
@@ -2817,6 +3271,18 @@ impl App {
     /// A press of the left button at 800x600 point `p` of a front-end
     /// screen.
     fn menu_press(&mut self, p: (f32, f32)) {
+        // The kind pop-up open: a press outside its picture closes it
+        // (StartMouseClassTy 0x52fbb0, 0x1d5); on its list an entry is
+        // noted (_slist message 0x61); nothing else takes the pointer.
+        if let Some(pop) = self.kind_popup.as_mut() {
+            if pop.outside(p) {
+                self.close_kind_popup();
+            } else if let Some(i) = pop.entry_at(p) {
+                pop.pressed = Some(i);
+                pop.dragged = false;
+            }
+            return;
+        }
         let (Some(state), Some(menus)) = (self.menu, &self.menus) else {
             return;
         };
@@ -2853,15 +3319,14 @@ impl App {
             }
             // A difficulty: the mission is set up again for it.
             MenuHit::Check(i) => {
-                // A player's choice arrow on Custom missions: the computer
-                // players' level goes round Weak, Medium, Strong.
-                if let MenuState::Missions(Category::Single, _) = state {
-                    self.custom_ai = (self.custom_ai + 1) % 3;
-                } else if state == MenuState::Briefing && self.difficulty != i {
+                if state == MenuState::Briefing && self.difficulty != i {
                     self.difficulty = i;
                     self.open_mission(self.mission_index);
                 }
             }
+            // A players row's kind field or arrow is held down; it acts
+            // when let go inside (_sbutton).
+            MenuHit::Kind(k, arrow) => self.kind_held = Some((k, arrow)),
             MenuHit::Item(i) => {
                 self.menu_select(state, i);
             }
@@ -2872,6 +3337,26 @@ impl App {
     /// the button held down acts if the pointer is still inside it
     /// (_sbutton.cpp 0x54ab20, message 0x62).
     fn menu_release(&mut self, p: (f32, f32)) {
+        // On the pop-up's list (_slist message 0x62): let go on the entry
+        // it went down on, unless dragged, chooses it.
+        if let Some(pop) = self.kind_popup.as_mut() {
+            let pressed = pop.pressed.take();
+            if let (Some(i), false) = (pressed, pop.dragged) {
+                if pop.entry_at(p) == Some(i) {
+                    pop.current = i;
+                    self.choose_kind(i);
+                }
+            }
+            return;
+        }
+        if let (Some(held), Some(state), Some(menus)) =
+            (self.kind_held.take(), self.menu, &self.menus)
+        {
+            let page = self.menu_page(state);
+            if menus.hit(&page.view(None, None), p) == Some(MenuHit::Kind(held.0, held.1)) {
+                self.open_kind_popup(held.0);
+            }
+        }
         let (Some(held), Some(state), Some(menus)) =
             (self.menu_held.take(), self.menu, &self.menus)
         else {
@@ -2891,6 +3376,25 @@ impl App {
     /// held down is let go once the pointer leaves it (_sbutton.cpp
     /// message 0x60), without acting.
     fn menu_pointer_at(&mut self, p: (f32, f32)) {
+        // A drag on the pop-up's list (_slist message 0x60): from the
+        // current entry onto the next or the one before, that one becomes
+        // current, and the release chooses nothing.
+        if let Some(pop) = self.kind_popup.as_mut() {
+            if let (Some(i), Some(down)) = (pop.entry_at(p), pop.pressed) {
+                if down == pop.current && i.abs_diff(pop.current) == 1 {
+                    pop.dragged = true;
+                    pop.pressed = Some(i);
+                    pop.current = i;
+                }
+            }
+            return;
+        }
+        if let (Some(held), Some(state), Some(menus)) = (self.kind_held, self.menu, &self.menus) {
+            let page = self.menu_page(state);
+            if menus.hit(&page.view(None, None), p) != Some(MenuHit::Kind(held.0, held.1)) {
+                self.kind_held = None;
+            }
+        }
         let (Some(held), Some(state), Some(menus)) = (self.menu_held, self.menu, &self.menus)
         else {
             return;
@@ -2967,6 +3471,9 @@ impl App {
         match Preview::load(&self.data, &mut self.caches, &self.missions[index], index) {
             Ok(p) => self.preview = Some(p),
             Err(e) => self.say(format!("{e:#}")),
+        }
+        if let Some(MenuState::Missions(Category::Single, _)) = self.menu {
+            self.make_custom_players(index);
         }
     }
 
@@ -3101,11 +3608,12 @@ impl App {
             }
             (MenuState::Missions(c, Some(i)), "Start") => {
                 if let Some(&index) = self.screen_missions(c).get(i) {
-                    self.carry = None;
                     if c == Category::Single {
-                        self.difficulty = self.custom_ai;
+                        self.start_custom(index);
+                    } else {
+                        self.carry = None;
+                        self.open_mission(index);
                     }
-                    self.open_mission(index);
                 }
             }
             (MenuState::Load(tab, Some(i)), "Load") => {
@@ -3212,10 +3720,14 @@ impl App {
             }
             other => anyhow::bail!("unknown menu screen {other}"),
         };
+        self.menu = Some(state);
         if let MenuState::Missions(_, Some(i)) | MenuState::Load(_, Some(i)) = state {
             self.menu_select(state, i);
+            if let Some((index, _)) = self.preview_due {
+                self.preview_due = Some((index, Instant::now()));
+                self.load_due_preview();
+            }
         }
-        self.menu = Some(state);
         for p in presses {
             self.menu_press(p);
             self.menu_release(p);
@@ -5795,8 +6307,11 @@ impl App {
             return false;
         };
         let page = self.menu_page(state);
+        // While the kind pop-up is open the screen's widgets take no
+        // pointer (Sinput message 0x1a).
         let hover = self
             .cursor
+            .filter(|_| self.kind_popup.is_none())
             .map(|c| Menus::to_menu(size, c.x as f32, c.y as f32));
         menus.draw(frame, &page.view(hover, self.menu_held));
         let palette = menus.palette(page.backdrop).map(<[u32]>::to_vec);
@@ -5854,6 +6369,7 @@ impl App {
         if self.fade.is_none() {
             self.update(dt);
             self.menu_repeat_step();
+            self.kind_popup_repeat();
             self.load_due_preview();
             self.poll_menu_keys();
         } else {
@@ -6035,6 +6551,11 @@ impl ApplicationHandler for App {
                 // never come.)
                 if !self.modifiers.super_key() {
                     self.keys.insert(code);
+                }
+                if event.repeat {
+                    if let Some(c) = crate::sinput::scan_code(code) {
+                        self.key_repeats.push(c);
+                    }
                 }
                 // A fade waits for nothing (0x54a230 and 0x54a460 run
                 // without the message loop).
@@ -6341,7 +6862,8 @@ impl ApplicationHandler for App {
                         Menus::to_menu(self.window_size(), position.x as f32, position.y as f32);
                     self.menu_drag_to(p);
                 }
-                if self.menu_held.is_some() {
+                if self.menu_held.is_some() || self.kind_held.is_some() || self.kind_popup.is_some()
+                {
                     let p =
                         Menus::to_menu(self.window_size(), position.x as f32, position.y as f32);
                     self.menu_pointer_at(p);
@@ -6395,6 +6917,15 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state, button, .. } => match (button, state) {
                 // Nothing is read during a fade.
                 _ if self.fade.is_some() => {}
+                // A right press outside the kind pop-up closes it too.
+                (MouseButton::Right, ElementState::Pressed) if self.kind_popup.is_some() => {
+                    if let Some(c) = self.cursor {
+                        let p = Menus::to_menu(self.window_size(), c.x as f32, c.y as f32);
+                        if self.kind_popup.as_ref().is_some_and(|k| k.outside(p)) {
+                            self.close_kind_popup();
+                        }
+                    }
+                }
                 (MouseButton::Right | MouseButton::Middle, ElementState::Pressed) => {
                     self.drag_from = self.cursor;
                     if button == MouseButton::Right {
@@ -6451,11 +6982,15 @@ impl ApplicationHandler for App {
                     }
                 }
                 (MouseButton::Left, ElementState::Released) => {
-                    if let Some(c) = self.cursor.filter(|_| self.menu_held.is_some()) {
+                    let menu_hold = self.menu_held.is_some()
+                        || self.kind_held.is_some()
+                        || self.kind_popup.is_some();
+                    if let Some(c) = self.cursor.filter(|_| menu_hold) {
                         let p = Menus::to_menu(self.window_size(), c.x as f32, c.y as f32);
                         self.menu_release(p);
                     }
                     self.menu_held = None;
+                    self.kind_held = None;
                     if let Some(c) = self.left_down.take() {
                         self.left_click(c);
                     }
@@ -6654,3 +7189,148 @@ fn function_index(code: KeyCode) -> Option<usize> {
 
 /// A building site shown: its cell, the class and its facing.
 type SiteKey = ((i32, i32), u32, u32);
+
+#[cfg(test)]
+mod custom_tests {
+    use super::*;
+
+    /// An app on the title screen over the game data (needs
+    /// `OPENCONQUEST_DATA`).
+    pub(super) fn app() -> Option<App> {
+        let root = std::env::var_os("OPENCONQUEST_DATA")?;
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let missions = data.missions().unwrap();
+        let options = Options {
+            fullscreen: false,
+            edge_scroll: false,
+            window_size: (800, 600),
+            mute: true,
+            soundfont: None,
+            cd_audio: None,
+            intro: false,
+            fog: true,
+            difficulty: 1,
+        };
+        let camera = Camera::new(crate::view::ScalePolicy {
+            fixed: None,
+            integer: false,
+        });
+        Some(App::new(data, missions, 0, camera, options, None, true).unwrap())
+    }
+
+    /// Custom missions with `mission` chosen and shown.
+    fn show(app: &mut App, mission: &str) {
+        let list = app.screen_missions(Category::Single);
+        let i = list
+            .iter()
+            .position(|&k| app.missions[k] == mission)
+            .unwrap();
+        let state = MenuState::Missions(Category::Single, None);
+        app.menu = Some(state);
+        app.menu_select(state, i);
+        let (index, _) = app.preview_due.unwrap();
+        app.preview_due = Some((index, Instant::now()));
+        app.load_due_preview();
+        app.poll_menu_keys();
+    }
+
+    fn click(app: &mut App, p: (f32, f32)) {
+        app.menu_press(p);
+        app.menu_release(p);
+    }
+
+    fn kinds(app: &App) -> Vec<u8> {
+        app.custom_players.iter().map(|c| c.kind).collect()
+    }
+
+    /// The players' kinds as 0x52a990 starts them, the pop-up's entries
+    /// and place (0x53b940, 0x52ebe0), and what a choice sets (0x1cc).
+    #[test]
+    fn the_kind_popup_chooses_as_the_original() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        app.player_name = "Jason".into();
+        // battle01: HEAD_CUST (1, 1, 5): player 5 (nation 1, slot 1) human.
+        show(&mut app, "battle01");
+        assert_eq!(kinds(&app), vec![2, 3]);
+        assert_eq!(app.custom_players[0].name, "Jason");
+        // The second row's arrow: the five entries at (215, 258 + 27).
+        click(&mut app, (350.0, 280.0));
+        let pop = app.kind_popup.clone().unwrap();
+        assert_eq!(pop.entries, vec![0, 2, 3, 4, 5]);
+        assert_eq!((pop.x, pop.y), (215.0, 285.0));
+        assert_eq!(pop.current, 0);
+        // A press outside closes it, and Start under it is not pressed.
+        app.menu_press((280.0, 575.0));
+        assert!(app.kind_popup.is_none());
+        assert!(app.menu_held.is_none());
+        click(&mut app, (300.0, 280.0));
+        assert!(app.kind_popup.is_some());
+        // Esc: bound next to the suspended bindings, it does nothing.
+        app.keys.insert(KeyCode::Escape);
+        app.poll_menu_keys();
+        assert!(app.kind_popup.is_some());
+        app.keys.clear();
+        app.poll_menu_keys();
+        // Human (entry 1, at 285 + 12 + 21): the old human goes AI Weak.
+        click(&mut app, (260.0, 285.0 + 12.0 + 21.0 + 5.0));
+        assert!(app.kind_popup.is_none());
+        assert_eq!(kinds(&app), vec![3, 2]);
+        assert_eq!(app.custom_players[1].name, "Jason");
+        assert!(app.custom_players[0].name.is_empty());
+        // Press on one entry, let go on another: nothing.
+        click(&mut app, (350.0, 253.0));
+        let pop = app.kind_popup.clone().unwrap();
+        assert_eq!(pop.y, 258.0);
+        app.menu_press((260.0, 258.0 + 12.0 + 21.0 * 4.0 + 5.0));
+        app.menu_release((260.0, 258.0 + 12.0 + 21.0 * 3.0 + 5.0));
+        assert!(app.kind_popup.is_some());
+        // A drag from the current entry moves it, and chooses nothing.
+        app.menu_press((260.0, 270.0 + 5.0));
+        app.menu_pointer_at((260.0, 270.0 + 21.0 + 5.0));
+        assert_eq!(app.kind_popup.as_ref().unwrap().current, 1);
+        app.menu_release((260.0, 270.0 + 21.0 + 5.0));
+        assert!(app.kind_popup.is_some());
+        // Disable chosen.
+        click(&mut app, (260.0, 275.0));
+        assert_eq!(kinds(&app), vec![0, 2]);
+        // Start: straight into the game, the second player human, the
+        // first without a computer player.
+        let state = app.menu.unwrap();
+        app.menu_action(state, "Start");
+        assert_eq!(app.menu, None);
+        let h = app.scene.human.unwrap();
+        assert_eq!((h.nation, h.slot), (3, 3));
+        assert_eq!(app.scene.computers.off, vec![(1, 1)]);
+    }
+
+    /// single02's HEAD_CUST (1, 0, 15): the human's row does not open, a
+    /// computer's offers the three levels (T_PLAYER3); the last row opens
+    /// upward by the picture's height.
+    #[test]
+    fn a_custom_mission_without_b_offers_the_levels_only() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        show(&mut app, "single02");
+        // (1, 1) computer, (3, 3) human.
+        assert_eq!(kinds(&app), vec![3, 2]);
+        click(&mut app, (350.0, 280.0));
+        assert!(app.kind_popup.is_none());
+        click(&mut app, (350.0, 253.0));
+        let pop = app.kind_popup.clone().unwrap();
+        assert_eq!(pop.entries, vec![3, 4, 5]);
+        assert_eq!(pop.picture(), ("T_PLAYER3", 146.0, 87.0));
+        // AI Strong.
+        click(&mut app, (260.0, 258.0 + 12.0 + 42.0 + 5.0));
+        assert_eq!(kinds(&app), vec![5, 2]);
+        let state = app.menu.unwrap();
+        app.menu_action(state, "Start");
+        assert_eq!(app.scene.computers.levels, vec![((1, 1), 2)]);
+        // single03's computer is at level 1: AI Medium.
+        app.menu = None;
+        show(&mut app, "single03");
+        assert_eq!(kinds(&app), vec![2, 4]);
+    }
+}

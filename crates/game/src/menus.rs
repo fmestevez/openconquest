@@ -101,6 +101,9 @@ pub struct MenuView<'a> {
     /// Tabs (`M_LOADZ`, wide ones `M_LOADZ_BIG`; the second picture is
     /// the open tab).
     pub tabs: &'a [MenuTab],
+    /// A sprite over the whole screen (Custom missions' kind pop-up, layer
+    /// 10): its pictures, then its texts, drawn last.
+    pub top: (&'a [Placed], &'a [Text]),
 }
 
 /// One of the original's widget pictures placed on a screen.
@@ -179,6 +182,9 @@ pub enum MenuHit {
     /// A scroll bar's track at a position of what it scrolls.
     Track(Scroller, usize),
     Tab(usize),
+    /// Custom missions' kind field of a players row (_sbutton 0x197 + k),
+    /// or its arrow (M_CBUT, 0x1af + k) when the flag is set.
+    Kind(usize, bool),
 }
 
 /// What a scroll bar scrolls.
@@ -401,6 +407,8 @@ const PICTURES: &[&str] = &[
     "M_CBUT0",
     "M_CBUT1",
     "M_CBUT2",
+    "T_PLAYER3",
+    "T_PLAYER5",
     "M_CHECK0",
     "M_CHECK1",
     "M_LBUT_UP0",
@@ -816,18 +824,7 @@ impl Menus {
                 write(frame, font, rect.0, rect.1 + pitch + k as f32 * pitch, l);
             }
         }
-        for t in view.texts {
-            if let Some(f) = self.styles.get(&t.style) {
-                match t.clip {
-                    Some(w) => {
-                        let (px, py) = at(t.x, t.y);
-                        let right = (ox + (t.x + w) * s).round() as i32;
-                        f.draw_clipped(frame, px as i32, py as i32, ts, &t.text, right);
-                    }
-                    None => write(frame, f, t.x, t.y, &t.text),
-                }
-            }
-        }
+        self.write_texts(frame, view.texts, s, (ox, oy));
         for &((x, y, w, h), colour) in view.fills {
             let (x0, y0) = at(x, y);
             let (x1, y1) = at(x + w, y + h);
@@ -899,6 +896,31 @@ impl Menus {
                 b.y + ((h - th) / 2.0).floor() - lift,
                 &b.caption,
             );
+        }
+        let (sprites, texts) = view.top;
+        for p in sprites {
+            if let Some(img) = self.pictures.get(&p.name) {
+                let (x, y) = at(p.x, p.y);
+                blit_scaled(frame, img, (0, 0, img.width, img.height), x, y, s);
+            }
+        }
+        self.write_texts(frame, texts, s, (ox, oy));
+    }
+
+    /// Texts in their styles, each cut at its box's right when it has one.
+    fn write_texts(&self, frame: &mut Frame, texts: &[Text], s: f32, (ox, oy): (f32, f32)) {
+        let ts = s.round().max(1.0) as u32;
+        for t in texts {
+            if let Some(f) = self.styles.get(&t.style) {
+                let (px, py) = (ox + t.x * s, oy + t.y * s);
+                match t.clip {
+                    Some(w) => {
+                        let right = (ox + (t.x + w) * s).round() as i32;
+                        f.draw_clipped(frame, px as i32, py as i32, ts, &t.text, right);
+                    }
+                    None => f.draw(frame, px as i32, py as i32, ts, &t.text),
+                }
+            }
         }
     }
 

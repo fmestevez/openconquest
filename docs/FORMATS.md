@@ -1775,6 +1775,53 @@ original:
   across, centred in 26 (the chosen row's in 24, variant 2); a tab's
   caption (0x4eaa70) centred in (0, 0, w, 28) when open, in (1, 1, w, 28)
   in variant 1 when closed.
+- Custom missions' players (Startspl, 0x53b940; list made by 0x52a990
+  for type 6, an entry of 0x174 bytes: kind + 0x184, name + 0x188, id
+  + 0x294): every `DESCRIPTOR` player but nation 4. `HEAD_CUST` (three
+  dwords a, b, c; absent 1, 1, 0) decides the human: with a set the
+  player whose `nation * 4 + slot` is c, else the first; the human is
+  kind 2 with the session's name, the others 0x528a40(block byte +2): 1
+  AI Medium (4), 2 AI Strong (5), else AI Weak (3). Every battle and
+  single of the CD has a = 1; the singles have b = 0. Row k (k < 11)
+  stands at (204, 247 + 27k): LPLAY_FL at (2, 2), LPLAY_TP (110 x 21) at
+  (26, 2) with string 1146 + kind ("Disable", "Available", "Human", "AI
+  Weak", "AI Medium", "AI Strong") and LPLAY_NP (386 x 21) at (171, 2)
+  with the name, each in MH 4 across and centred down, variant 0 for
+  kinds 0/1, 2 Human, 1 AI. Over them three _sbuttons (0x529de0): the
+  kind field (id 0x197 + k, invisible, LPLAY_TP's size), the arrow M_CBUT
+  (29 x 21) at (342, 249 + 27k) (id 0x1af + k, 0x4ea6e0: M_CBUT1 pressed,
+  M_CBUT2 disabled, else M_CBUT0) and the name field (0x1a3 + k,
+  invisible). The field or the arrow released inside opens the kind
+  pop-up (0x52ebe0) for row k's player when none is open, unless a != 0,
+  b == 0 and the player is Human, at (196 + 19, 216 + 42 + 27k), on the
+  last row (k = 10) its picture's height higher. Entries: a == 0 or b !=
+  0, Disable, Human, AI Weak, Medium, Strong in `T_PLAYER5` (146 x 131);
+  else the three AI levels in `T_PLAYER3` (146 x 87). Drawn (0x52f270)
+  as a sprite (layer 10): the picture, LPLAY_TP at (16, 12 + 21i) under
+  the current entry, each entry's string 1146 + kind in MH variant 0, 4
+  across and centred down in (16, 12 + 21i, 110, 21). Its list (_slist
+  0x54cd00, rect (x + 16, y + 12, 110, 21n)) starts at entry 0. Left down
+  on an entry (band from its top to top + 21, both included, the first
+  that holds the pointer) notes it; let go on the same one, not dragged,
+  chooses it; moving with the button held from the current entry onto
+  the next or the one before makes that one current (a drag: its release
+  chooses nothing). A left or right press outside the picture (its left
+  and top edges count as outside; StartMouseClassTy 0x52fbb0) closes it
+  unchanged (0x1d5 -> 0x52f100). While it is open the screen's pointer
+  receivers are off (Sinput 0x1a, back with 0x1b) and its bindings
+  suspended (0x18, back with 0x19). A choice (0x1cc) different from the
+  player's kind: Disable empties the player (id 0, name ""); Human turns
+  the Human row (0x528a70) into AI Weak (name "") and the player into
+  Human with the session's name; a level sets it. When the player was
+  disabled or becomes disabled or Human, the map's player marks are made
+  again (0x528de0, 0x52f470) and the viewer goes to the Human's starting
+  view (0x52a250; none, it stays). Start (0x178) goes straight into the
+  game (0x101, no briefing): side + 0x1a1d by player = 0 for Disable, 1
+  for the Human row, 3 for a computer row with + 0x1a31 = 0x528a20(kind)
+  (AI Weak 0, Medium 1, Strong 2); 0x522d50 makes a computer player for
+  side 3 only. The port keeps the mission's human player when no row is
+  Human (what the original's game does then is not decoded, 0x50f910),
+  and does not draw the map's player marks (LMAP8X8, 0x52f470).
 - Connect (Startprv.cpp 0x538440): the name edit at (43, 256), its caret
   palette colour 0xfb (0xffff00 in the front end's backdrops).
 - End screen (Startrpt.cpp 0x5390a0, 0x539350, 0x539b20): M_BKGND_03 won,
@@ -1853,7 +1900,16 @@ waits for the first to come up. An exclusive binding turns off those
 below it with the same keys (the check for one above starts one past the
 first entry above it, 0x553807) and gives them back, waiting if held,
 when it goes (0x553930). A message that adds or removes bindings ends
-the poll.
+the poll. Message 0x18 (0x553ba0) suspends every binding once more
+(+ 0x5e), 0x19 (0x553be0) takes one suspension off; the poll passes
+suspended bindings over. A binding made next to one of its own priority
+(the entry before where it goes) starts with that one's suspensions
+(0x553670). So Custom missions' kind pop-up, which suspends the screen's
+bindings and then binds its exclusive Esc (0x1d5) at priority 0 next to
+Start's and Cancel's, has that Esc suspended too, and turns Cancel's Esc
+off: Esc does nothing while the pop-up is open (its list's Enter and its
+Up and Down buttons, bound at priority 0 when the list activates, the
+same).
 
 - Buttons (_sbutton 0x54ab20 message 8): their create record's key bytes
   as a binding, down = 0x2c (held, the pressed look), up = 0x2e (acts if
@@ -1932,17 +1988,15 @@ Known differences not yet ported:
   what the connect screen does with its edit's 0x175.
 - Config's player name (0x5ca578, written back by 0x53d2f0 when
   DAT_005d01fc is 0) is not kept between runs.
-- Custom missions' per-player kind pop-up (entry + 0x184, strings
-  1146-1151, list 0x52ebe0; the port cycles one level for every computer
-  player), the players' names in LPLAY_NP and the map tick (0x1dd,
-  DAT_005ca538).
+- Custom missions' map tick (0x1dd, DAT_005ca538, Config + 0x10): the
+  port always shows the map.
 - Start reports: the briefing's Start writes `MISSIONS\MISSION_%02d.RPM`
   (0x53a3a0), which Load game's "Start from..." lists; the port lists
   every campaign mission.
-- Custom missions' list: `CUSTOM\*.DKD` (0x52b7c0, watched with
-  FindFirstChangeNotification); the port lists the installation's
-  battle and single missions. A custom mission's Start goes straight
-  into the game, with no briefing.
+- Custom missions' list: `<MainPath>CUSTOM\*.DKD` (0x52b7c0, watched
+  with FindFirstChangeNotification), a file kept when its `HEAD_CUST` a
+  is set; the port lists the installation's battle and single missions
+  with a set (all of the CD's), not a `CUSTOM` folder.
 
 ## Timings
 

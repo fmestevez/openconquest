@@ -114,6 +114,10 @@ pub struct SaveGame {
     /// The computer players of a battle or single mission.
     #[serde(default)]
     pub computers: Option<crate::scene::Computers>,
+    /// The human player (nation, slot), when Custom missions' players
+    /// made another one human than the mission's (0x53b940, 0x178).
+    #[serde(default)]
+    pub human: Option<(u32, u32)>,
     /// The human player's technology permissions.
     #[serde(default)]
     pub permits: Option<crate::permits::Permits>,

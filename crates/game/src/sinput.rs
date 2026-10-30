@@ -9,7 +9,18 @@
 //! comes up when the first key does. An entry made while its keys are down
 //! waits for them to come up first (0x553670). An exclusive entry turns
 //! off the entries of lower priority with the same keys while it is there
-//! (0x553670, 0x553930).
+//! (0x553670, 0x553930). Entries can be suspended all at once (messages
+//! 0x18 and 0x19, a count each, + 0x5e); a suspended entry is passed over
+//! by the poll, and one made next to a suspended entry of its priority
+//! starts with that entry's count (0x553670 copies the + 0x5e of the entry
+//! before it when their priorities match).
+//!
+//! A repeating entry (flag 1) sends its press again while its keys stay
+//! down, after Sinput's + 0x58 then every + 0x5c ms (0x553090). Those are
+//! the host's keyboard settings (0x552cc0: (SPI_GETKEYBOARDDELAY + 1) x
+//! 250 ms and 1000 / (SPI_GETKEYBOARDSPEED + 1) ms), not numbers of the
+//! game; the port takes the host's own repeat, the system's repeated key
+//! events.
 
 use winit::keyboard::KeyCode;
 
@@ -117,6 +128,8 @@ struct Entry<M> {
     on: bool,
     down: bool,
     waiting: bool,
+    /// Suspended this many times (+0x5e).
+    suspended: u32,
 }
 
 /// The table (InputClassTy + 0x24).
@@ -169,6 +182,11 @@ impl<M: Clone + PartialEq> Keys<M> {
             .iter()
             .skip(at + 1)
             .any(|e| e.flags & EXCLUSIVE != 0 && e.keys == keys);
+        let suspended = at
+            .checked_sub(1)
+            .map(|k| &self.entries[k])
+            .filter(|e| e.priority == priority)
+            .map_or(0, |e| e.suspended);
         self.entries.insert(
             at,
             Entry {
@@ -180,6 +198,7 @@ impl<M: Clone + PartialEq> Keys<M> {
                 on,
                 down: false,
                 waiting,
+                suspended,
             },
         );
         // An exclusive one turns off those below it with the same keys,
@@ -226,6 +245,23 @@ impl<M: Clone + PartialEq> Keys<M> {
         }
     }
 
+    /// Suspends every entry once more (message 0x18, 0x553ba0).
+    pub fn suspend(&mut self) {
+        self.changed = true;
+        for e in &mut self.entries {
+            e.suspended += 1;
+        }
+    }
+
+    /// Takes one suspension off every suspended entry (message 0x19,
+    /// 0x553be0).
+    pub fn resume(&mut self) {
+        self.changed = true;
+        for e in &mut self.entries {
+            e.suspended = e.suspended.saturating_sub(1);
+        }
+    }
+
     /// Starts a poll (0x553090).
     pub fn begin(&mut self) {
         self.changed = false;
@@ -237,8 +273,14 @@ impl<M: Clone + PartialEq> Keys<M> {
     }
 
     /// Goes on with the poll from entry `*at`: the next message to send,
-    /// if any. The caller stops when `changed`.
-    pub fn next(&mut self, held: &impl Fn(u8) -> bool, at: &mut usize) -> Option<M> {
+    /// if any. The caller stops when `changed`. `repeated` tells the keys
+    /// the system repeated since the last poll.
+    pub fn next(
+        &mut self,
+        held: &impl Fn(u8) -> bool,
+        repeated: &impl Fn(u8) -> bool,
+        at: &mut usize,
+    ) -> Option<M> {
         let modifier = |k: u8| matches!(k, LSHIFT | RSHIFT | LALT | RALT | LCTRL | RCTRL);
         let none_held = !(held(LSHIFT)
             || held(RSHIFT)
@@ -248,7 +290,7 @@ impl<M: Clone + PartialEq> Keys<M> {
             || held(RCTRL));
         while let Some(e) = self.entries.get_mut(*at) {
             *at += 1;
-            if !e.on || e.keys.0 == 0 {
+            if !e.on || e.suspended != 0 || e.keys.0 == 0 {
                 continue;
             }
             if !held(e.keys.0) {
@@ -266,10 +308,13 @@ impl<M: Clone + PartialEq> Keys<M> {
             } else {
                 held(e.keys.1)
             };
-            // (Held, repeating entries resend after Sinput's intervals,
-            // +0x58 and +0x5c, which are not decoded: none here repeat.)
             if both && !e.waiting && !e.down {
                 e.down = true;
+                if e.press.is_some() {
+                    return e.press.clone();
+                }
+            } else if both && e.down && e.flags & 1 != 0 && repeated(e.keys.0) {
+                // Held, a repeating entry sends its press again.
                 if e.press.is_some() {
                     return e.press.clone();
                 }
@@ -288,7 +333,7 @@ mod tests {
         keys.begin();
         let mut at = 0;
         let mut out = Vec::new();
-        while let Some(m) = keys.next(&held, &mut at) {
+        while let Some(m) = keys.next(&held, &|_| false, &mut at) {
             out.push(m);
         }
         out
@@ -339,6 +384,44 @@ mod tests {
         assert_eq!(poll(&mut keys, &[ENTER]), Vec::<u32>::new());
         assert_eq!(poll(&mut keys, &[]), Vec::<u32>::new());
         assert_eq!(poll(&mut keys, &[ENTER]), vec![1]);
+    }
+
+    /// Custom missions' kind pop-up (0x52ebe0): the screen's bindings are
+    /// suspended, then its exclusive Esc made at their priority; it takes
+    /// the suspension of the entry before it, so Esc does nothing, the
+    /// Cancel button's Esc being turned off by it. Taken away and resumed,
+    /// Cancel's Esc is back.
+    #[test]
+    fn an_entry_next_to_a_suspended_one_is_suspended() {
+        let mut keys = Keys::default();
+        keys.add(0, (LALT, 0x1f), 0, Some(1), Some(2), &|_| false);
+        keys.add(0, (ESCAPE, 0), 0, Some(3), Some(4), &|_| false);
+        keys.suspend();
+        keys.add(EXCLUSIVE, (ESCAPE, 0), 0, Some(9), None, &|_| false);
+        assert_eq!(poll(&mut keys, &[ESCAPE]), Vec::<u32>::new());
+        assert_eq!(poll(&mut keys, &[]), Vec::<u32>::new());
+        keys.remove((ESCAPE, 0), &9, &|_| false);
+        keys.resume();
+        assert_eq!(poll(&mut keys, &[ESCAPE]), vec![3]);
+        assert_eq!(poll(&mut keys, &[]), vec![4]);
+        // A higher priority is not next to them: it works.
+        keys.suspend();
+        keys.add(EXCLUSIVE, (ESCAPE, 0), 0xff, Some(9), None, &|_| false);
+        assert_eq!(poll(&mut keys, &[ESCAPE]), vec![9]);
+    }
+
+    #[test]
+    fn a_repeating_entry_sends_again_on_the_system_repeat() {
+        let mut keys = Keys::default();
+        keys.add(EXCLUSIVE | 1, (0xcb, 0), 0xff, Some(5), None, &|_| false);
+        let held = |k: u8| k == 0xcb;
+        keys.begin();
+        let mut at = 0;
+        assert_eq!(keys.next(&held, &|_| false, &mut at), Some(5));
+        at = 0;
+        assert_eq!(keys.next(&held, &|_| false, &mut at), None);
+        at = 0;
+        assert_eq!(keys.next(&held, &|k| k == 0xcb, &mut at), Some(5));
     }
 
     #[test]
