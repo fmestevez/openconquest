@@ -43,7 +43,8 @@ are in `story.rs`.
   `Branch { test, yes, no }` for a member's own test before a primitive
   in the same state (made anew each turn; a ship count by 0x479dc0 is
   `fleet_types`); `WatchFor` for a wait whose length is a brain field
-  read when the step begins (member `+0x14`).
+  read when the step begins (member `+0x14`). `Patrol`'s `tol` is its call's
+  p7 (the legs' move tolerance; 1, 2 or 3 by call site).
 - `Target::Of(fn)` for an attack whose area the member's own code reads
   at its start (another member's zone index into a table, a site it
   picks). Brain fields shared by members (`+0x114`, ...) live in
