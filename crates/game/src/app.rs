@@ -4952,17 +4952,27 @@ impl App {
             // original's cut-off, volume and pan, from the object's cell
             // (0x525370, `audio::placed`); a sound with no place at the
             // master volume, in the middle.
-            if matches!(
-                crate::scene::sound_kind(name),
-                crate::scene::SoundKind::Voice | crate::scene::SoundKind::Battle
-            ) {
+            // The ambient sounds of channels 5 and 6 the same, silent
+            // from 12 cells (`scene::AMBIENT_PLACED`).
+            let ambient = crate::scene::AMBIENT_PLACED.contains(&name);
+            if ambient
+                || matches!(
+                    crate::scene::sound_kind(name),
+                    crate::scene::SoundKind::Voice | crate::scene::SoundKind::Battle
+                )
+            {
                 let t = openconquest_formats::map::TILE_SIZE as f32;
                 let cell = if x.is_nan() {
                     (-1, -1)
                 } else {
                     ((x / t).floor() as i32, (y / t).floor() as i32)
                 };
-                if let Some((attenuation, pan)) = crate::audio::placed(master, ear, cell) {
+                let place = if ambient {
+                    crate::audio::placed_ambient(master, ear, cell)
+                } else {
+                    crate::audio::placed(master, ear, cell)
+                };
+                if let Some((attenuation, pan)) = place {
                     // Relative to the effects volume the sink already has.
                     let gain = 10f32.powf((attenuation - master) as f32 / 2000.0);
                     audio.play_panned(archive, name, gain, pan);

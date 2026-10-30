@@ -11266,3 +11266,33 @@ fn town_counts_forts_going_up() {
         .place_building(home, 0x34, site.0, site.1, &data, &mut caches)
         .is_err());
 }
+
+/// The sounds of channels 5 and 6 (0x50e570 modes 5 and 6): exactly the
+/// names of those events' `SND_n` lists, all answering the ambient switch
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ambient_channel_sounds() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let a = data.sounds.as_ref().unwrap();
+    // Mode 5 (event 4: a building's fall by default) and mode 6.
+    let events = [
+        85, 86, 87, 89, 92, 93, 94, 96, 99, 103, 105, 107, 110, 111, 114, 115, 116, 122, 125, 126,
+        127, 129, 133, 136, 149, 150, 151, 152, 153, 154, 155, 169, 170, 174, 274, 1, 4, 88, 95,
+        106, 128, 146, 147, 148, 271, 272,
+    ];
+    let mut names: Vec<String> = events
+        .iter()
+        .flat_map(|&e| openconquest_formats::sound::sound_choices(a, e).unwrap())
+        .collect();
+    names.sort();
+    names.dedup();
+    let mut list: Vec<String> = AMBIENT_PLACED.iter().map(|s| s.to_string()).collect();
+    list.sort();
+    assert_eq!(names, list);
+    for n in AMBIENT_PLACED {
+        assert_eq!(sound_kind(n), SoundKind::Ambient, "{n}");
+    }
+}

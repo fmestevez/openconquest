@@ -148,10 +148,10 @@ impl Scene {
     ///
     /// The slots as the port knows them: the ships lying in a cell or
     /// stepping into it and the buildings on it hold `+0xc`; the gorgon
-    /// `+0x18`; fireballs (0x4060ec), harpies and dragons (0x41ff74,
+    /// and the sea monster (0x491780, the cell's short slot `(cell + 1) x
+    /// 12`) `+0x18`; fireballs (0x4060ec), harpies and dragons (0x41ff74,
     /// 0x4208a5) and tornadoes (0x43a9f6) `+0x14`. (Not decoded: whatever
-    /// else may hold `+0x14` or `+0x18`, and the sea monster's and siren's
-    /// slots.)
+    /// else may hold `+0x14` or `+0x18`, and the siren's slot.)
     pub(super) fn cast_cell_check(
         &self,
         spell: Spell,
@@ -169,10 +169,14 @@ impl Scene {
             let shoal = self.grid.get(1, x as u32, y as u32);
             matches!(base.tileset, 0 | 1) && shoal.variant == 0
         };
+        // `+0x18`: the gorgon, and the sea monster, under water too (its
+        // moves 0x490d60 / 0x491780 write it, only its end 0x491ed0
+        // clears it).
         let gorgon = || {
             self.objects
                 .iter()
                 .any(|o| o.class == ObjectClass::Monster(0x1fa) && cell_of(o.x, o.y) == (x, y))
+                || self.sea_monster_at((x, y), 0).is_some()
         };
         let flying = || {
             self.objects.iter().any(|o| {

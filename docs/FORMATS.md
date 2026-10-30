@@ -2663,10 +2663,25 @@ height hold, rounded up; the zoom changes those counts (at the original's
 scale the 592 x 512 field holds 9 x 8 cells, the 800-wide one 12, as the
 original's `+0x17be` / `+0x17c2`), so zoomed out the listener stays in the
 view's middle and the 19-cell cut-off stays 19 map cells. Modes 5 and 6
-(bit 4, cut-off at 12: `d > 11` silent, the same volume and pan) and 3
-(bit 4, no place) are not told apart in the port's ambient sounds (which
-of their events go through which mode is not decoded: the callers of
-0x50e570 with modes 3, 5, 6), so those keep the port's fall-off; the
+(bit 4; 0x525370 at 0x5255eb / 0x525a70: `d = min(byte, 20)`, `d >= 12`
+silent, the same volume and pan). The 108 callers of 0x50e570 (`(mode,
+x, y, event)`, the mode pushed last; event < 0 plays nothing) and the 29
+of 0x525370, read in the disassembly: mode 5 events 85-87, 89, 92-94,
+96, 99, 103, 105, 107, 110, 111, 114-116, 122, 125-127, 129, 133, 136,
+149-155, 169-171, 174, 141, 168, 274 (0x407a59, direct), event 1 (a
+ship, 0x4e00bc), event 5 (`firee1`, the drain 0x424214) and a
+building's sound events `+0x1a8` (its fall, 0x424492; 4 `razru2` by
+default, 0x422dec) and `+0x1a4` (0x425c1a); mode 6 events 88, 95, 106,
+117, 128, 146-148, 271, 272; mode 4 events 144, 145; mode 1 events 83,
+84, 118, 119, 121, 130 and the shots' (0x498ab4, 0x4b8990, 0x4c06db,
+0x4e510f event 5); mode 2 the voices; mode 3 only event 273 (`prib3`,
+0x51028c, 0x524ffb: the map's ambient loop, the front end's channel 9),
+mode 8 the interface's. The port places the names of the mode 5 / 6
+events' lists (`scene::AMBIENT_PLACED`, checked against the data) by
+`audio::placed_ambient`. Not decoded: the mode of the land creatures'
+death (events 100, 101 at 0x413c66, in a register: `deac1d` keeps the
+port's fall-off); the 176-178 / 180-182 events (`se8`, `wa6`) are mode 2
+(temples) but the port plays neither. The
 priority byte 0x525370 passes 0x568b30 for modes 1, 4, 5, 6 (255 within 5
 cells, `(20 - d) x 255 / 20` beyond; 0 for mode 2) is not used (the port
 mixes without the original's channels). The town's count of forts going
@@ -2760,8 +2775,11 @@ cleared on all 12 together. Who sets them:
   stays the temples'; the whirlpool's asking for the big reef and the
   reef is not applied to the player's temples: which Magic object and
   permission bits the player's pointer uses is not decoded). Not decoded:
-  what else holds `+0x14` and `+0x18`; the sea monster's and siren's
-  slots. The left press (0x4f34c0): command 3 sets the pointer
+  what else holds `+0x14` and `+0x18`; the siren's slot. The sea
+  monster holds `+0x18` (the scan's cell `+0x10`: its moves 0x490d60 and
+  0x491780 write it, as a short pointer `(cell + 1) x 12`, clearing the
+  cell left; only 0x491ed0, its end, clears it otherwise), under water
+  too. The left press (0x4f34c0): command 3 sets the pointer
   state 0x15, kind 7; 0x70 sends order 0x23 {sub 1 unticked or 2 ticked,
   0xffffffff, 0xffffffff, 0xff..}, 0x73 the same with sub 3 or 4; commands
   1 and 2 (Stop, Break) send order 10. The fort answers the pointer
@@ -2922,8 +2940,7 @@ unit), the fog test of computer players' structures (the port keeps the
 human's explored layer only: theirs scan every cell), the side `+0x57`
 of the ships a barbarian structure builds (0x4e2117 copies it from the
 creation record's `+0x1f`; not decoded, so the scan keeps the
-structure's own player's objects out), which slot the sea monster
-(0x1fb) takes (the port puts it with the medusa and the siren), the
+structure's own player's objects out), the
 state 2 of buildings 0x34-0x3e (a settlement's is its stock mending,
 0x441ba0, which the scan skips), a ship's reserved cell (the port's ships
 hold only the cell they are in), a port's 0xcb9 on 0x2874

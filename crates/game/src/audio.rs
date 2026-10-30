@@ -146,14 +146,29 @@ pub fn listener(view_x: f32, view_y: f32, view_w: f32, view_h: f32) -> (i32, i32
 /// silent (the byte wraps at 256); the master within 5 cells, `master -
 /// (master + 2000) x d / 12` from 6 to 12, -2000 from 13; the pan
 /// `min(|dx|, 20) x 50`, to the side of the sound (negative to the left).
-pub fn placed(master: i32, listener: (i32, i32), (x, y): (i32, i32)) -> Option<(i32, i32)> {
+pub fn placed(master: i32, listener: (i32, i32), cell: (i32, i32)) -> Option<(i32, i32)> {
+    placed_within(master, listener, cell, 20)
+}
+
+/// As `placed`, for the ambient channels 5 and 6 (0x525370 at 0x5255eb
+/// and 0x525a70): the same volume and pan, silent from 12 cells.
+pub fn placed_ambient(master: i32, listener: (i32, i32), cell: (i32, i32)) -> Option<(i32, i32)> {
+    placed_within(master, listener, cell, 12)
+}
+
+fn placed_within(
+    master: i32,
+    listener: (i32, i32),
+    (x, y): (i32, i32),
+    cut: u8,
+) -> Option<(i32, i32)> {
     if x < 0 || y < 0 {
         return Some((master, 0));
     }
     let (dx, dy) = (listener.0 - x, listener.1 - y);
     let square = dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy));
     let d = ((square as f64).sqrt() as i64 as u8).min(20);
-    if d > 19 {
+    if d >= cut {
         return None;
     }
     let attenuation = match d {
@@ -211,5 +226,15 @@ mod tests {
         assert_eq!(placed(-1000, ear, (-1, 3)), Some((-1000, 0)));
         // The byte wraps: 256 cells off is heard as 0.
         assert_eq!(placed(0, (0, 0), (256, 0)), Some((0, 1000)));
+    }
+
+    /// Channels 5 and 6: silent from 12 cells, else as above.
+    #[test]
+    fn ambient_sounds_cut_at_twelve() {
+        let ear = (30, 30);
+        assert_eq!(placed_ambient(-1000, ear, (24, 30)), Some((-1500, -300)));
+        assert_eq!(placed_ambient(-1000, ear, (30, 41)), Some((-1916, 0)));
+        assert_eq!(placed_ambient(-1000, ear, (30, 42)), None);
+        assert_eq!(placed_ambient(-1000, ear, (-1, 3)), Some((-1000, 0)));
     }
 }

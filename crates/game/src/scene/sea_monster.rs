@@ -203,7 +203,7 @@ impl Scene {
         }
     }
 
-    fn sea_monster_at(&self, cell: (i32, i32), but: u32) -> Option<usize> {
+    pub(super) fn sea_monster_at(&self, cell: (i32, i32), but: u32) -> Option<usize> {
         (0..self.objects.len()).find(|&k| {
             let o = &self.objects[k];
             o.id != but
