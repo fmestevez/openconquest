@@ -333,6 +333,22 @@ impl Scene {
                         c.max_hull * if shielded { 0.05 } else { 0.25 }
                     }
                 }
+                // A settlement or town (TownObj 0x441ba0 -> 0x4449d4): on
+                // its anchor unshielded it falls; else the map's 0x4e9 on
+                // its anchor (0x42e500 -> 0x42e1e0, the settlement's site
+                // check with flag 0x40: what stands there aside) failing,
+                // it falls; else 25 points of condition, 5 shielded.
+                ObjectClass::Building(crate::economy::SETTLEMENT | crate::economy::TOWN) => {
+                    let (hx, hy) = home;
+                    let holds = self
+                        .check_ground_but(crate::economy::SETTLEMENT, hx, hy, false)
+                        .is_ok();
+                    if (centre && !shielded) || !holds {
+                        c.hull
+                    } else {
+                        c.max_hull * if shielded { 0.05 } else { 0.25 }
+                    }
+                }
                 // A lair (CreaturesFlatClassTy 0x4158b7): on its anchor, or
                 // its site no longer holding (0x4eb with flags 0x41: free
                 // ground, what stands there aside, an inland tile), it
@@ -407,11 +423,25 @@ impl Scene {
             // creatures 0x414ce0, harpies 0x420cce), but a ship's wreck to
             // no one (0x4de2cd stores -1, and 0x4aa280's wreck event 0xff).
             // No handler shows a hit or plays `hitmed` for it.
-            let ship = self
-                .object_index(id)
-                .is_some_and(|k| self.objects[k].ship.is_some());
+            let k = self.object_index(id);
+            let ship = k.is_some_and(|k| self.objects[k].ship.is_some());
+            let walker = k.is_some_and(|k| {
+                matches!(self.objects[k].class, ObjectClass::Monster(0x1f4..=0x1f6))
+            });
             let by = if ship { None } else { caster };
+            let heard = self.sounds.len();
             self.strike(id, blow, false, by, true, data, caches);
+            // A land creature cries out at its death (0x413ad0, 0x138b)
+            // only when a shot has struck it since its last turn (`+0x144`,
+            // set by 0x138e at 0x413b69, cleared at 0x411698 / 0x411879);
+            // lightning's kill brings no 0x138e: no cry.
+            if walker {
+                let tail = self.sounds.split_off(heard);
+                self.sounds.extend(
+                    tail.into_iter()
+                        .filter(|s| !matches!(s.0, "deac1d" | "destr1")),
+                );
+            }
         }
         // A sheep flock in the 3 x 3 is removed (0x433a77), not reported.
         let sheep: Vec<u32> = self
@@ -427,6 +457,61 @@ impl Scene {
         for id in sheep {
             self.objects.retain(|o| o.id != id);
             self.flocks.remove(&id);
+        }
+        // Reefs (0x430d38) and whirlpools (0x448479) are removed (message
+        // 10), not reported, unless under water (state `+0x74` 3,
+        // 0x430320 / 0x447b80 case 3). (The port has not their rising and
+        // sinking: its reefs and whirlpools are always up.)
+        let hazards: Vec<u32> = self
+            .objects
+            .iter()
+            .filter(|o| matches!(o.class, ObjectClass::Whirlpool | ObjectClass::Reef(_)))
+            .filter(|o| {
+                let f = |i| o.record.field(i).unwrap_or(0) as i32;
+                near((f(5), f(6)))
+            })
+            .map(|o| o.id)
+            .collect();
+        for id in hazards {
+            self.objects.retain(|o| o.id != id);
+            self.summons.retain(|s| s.0 != id);
+        }
+        // Amber standing (its picture `+0xd5`, 0x48ae45): its amount to 0.
+        // 0x48a430 finds it empty (0x48d2f0 gives 0): state 1, then it lies
+        // fallow, or goes once it has grown back as often as it may
+        // (`+0x88 >= +0x84`), as one gathered out. (The original takes the
+        // two ticks of its states 0 and 1 over it; here at once.)
+        let amber: Vec<u32> = self
+            .objects
+            .iter()
+            .filter(|o| o.class == ObjectClass::Amber && o.deposit.is_some())
+            .filter(|o| {
+                let f = |i| o.record.field(i).unwrap_or(0) as i32;
+                near((f(6), f(7)))
+            })
+            .map(|o| o.id)
+            .collect();
+        for id in amber {
+            self.exhaust_deposit(id, data, caches);
+        }
+        // A fish shoal up (its picture `+0x111`: states 1-3, 0x48e7ef):
+        // its amount to 0 and down at once (0x48d910(0): 25-75 ticks under
+        // water); 0x48dd80 then finds it empty (`move_shoals`).
+        let shoals: Vec<u32> = self
+            .objects
+            .iter()
+            .filter(|o| o.class == ObjectClass::FishZone && !self.shoals_gone.contains_key(&o.id))
+            .filter(|o| near(((o.x / t).floor() as i32, (o.y / t).floor() as i32)))
+            .map(|o| o.id)
+            .collect();
+        for id in shoals {
+            if let Some(d) = self
+                .object_index(id)
+                .and_then(|k| self.objects[k].deposit.as_mut())
+            {
+                d.remaining = Some(0.0);
+            }
+            self.dive_shoal(id);
         }
         let monsters: Vec<(u32, bool)> = self
             .objects

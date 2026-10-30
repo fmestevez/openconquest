@@ -665,6 +665,24 @@ pub(super) fn amber_level(left: f32, full: f32) -> usize {
 }
 
 impl Scene {
+    /// Deposit `id` emptied at once: amber that may grow back lies fallow,
+    /// anything else goes, as one gathered out.
+    pub(super) fn exhaust_deposit(&mut self, id: u32, data: &GameData, caches: &mut Caches) {
+        let Some(k) = self.object_index(id) else {
+            return;
+        };
+        let Some(mut dep) = self.objects[k].deposit.take() else {
+            return;
+        };
+        dep.remaining = Some(0.0);
+        if dep.regrows > 0 {
+            self.objects[k].dormant = Some((dep, 0.0));
+            self.refresh_amber(k, data, caches);
+        } else {
+            self.objects.remove(k);
+        }
+    }
+
     /// Exhausted amber grows back to what it held, as often as it may.
     pub(super) fn run_regrowth(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         for i in 0..self.objects.len() {

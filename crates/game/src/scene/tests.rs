@@ -7469,6 +7469,120 @@ fn lightning_on_a_towns_buildings() {
     assert!(!scene.site_holds(i));
 }
 
+/// Lightning on a settlement (TownObj 0x441ba0 -> 0x4449d4): a quarter of
+/// its condition beside it with its site whole, felled on its anchor; on
+/// reefs and whirlpools (removed, 0x430d38, 0x448479), amber standing (its
+/// amount to 0: it lies fallow, 0x48ae45) and a fish shoal up (emptied
+/// and down, 0x48e7ef; gone at the end of its dive). Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn lightning_on_towns_and_nature() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let t = TILE_SIZE as f32;
+    let at = |c: (i32, i32)| (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+    // A settlement whose 3 x 3 about its anchor has water outside it.
+    let (mut scene, id, anchor, water) = (0..14)
+        .find_map(|m| {
+            let mut scene = Scene::load(&data, &mut caches, &format!("miss{m:03}")).ok()?;
+            scene.brain = None;
+            let (id, anchor, water) = scene
+                .objects
+                .iter()
+                .filter(|o| {
+                    matches!(
+                        o.class,
+                        ObjectClass::Building(crate::economy::SETTLEMENT | crate::economy::TOWN)
+                    )
+                })
+                .find_map(|o| {
+                    let (x, y) = o.cell?;
+                    let w = [(-1, -1), (0, -1), (1, -1), (-1, 0), (-1, 1)]
+                        .into_iter()
+                        .map(|(dx, dy)| (x + dx, y + dy))
+                        .find(|&(cx, cy)| scene.nav.is_water(cx, cy))?;
+                    Some((o.id, (x, y), w))
+                })?;
+            Some((scene, id, anchor, water))
+        })
+        .expect("a settlement by the sea");
+    let i = scene.object_index(id).unwrap();
+    assert!(scene
+        .check_ground_but(crate::economy::SETTLEMENT, anchor.0, anchor.1, false)
+        .is_ok());
+    let max = scene.objects[i].combat.as_ref().unwrap().max_hull;
+    let (x, y) = at(water);
+    scene.lightning_strike(x, y, None, &data, &mut caches);
+    let i = scene.object_index(id).expect("still standing");
+    let hull = scene.objects[i].combat.as_ref().unwrap().hull;
+    assert!((hull - max * 0.75).abs() < 1e-3, "{hull} of {max}");
+    let (x, y) = at(anchor);
+    scene.lightning_strike(x, y, None, &data, &mut caches);
+    assert!(scene
+        .object_index(id)
+        .is_none_or(|i| scene.objects[i].combat.as_ref().unwrap().hull <= 0.0));
+    // Nature about a strike on the water.
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let sea = scene.nav.nearest_water(20, 20).unwrap();
+    scene
+        .spawn_hazard(
+            magic::Spell::Whirlpool,
+            sea.0,
+            sea.1,
+            None,
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    let whirl = scene.objects.iter().map(|o| o.id).max().unwrap();
+    let (x, y) = at(sea);
+    scene.lightning_strike(x, y, None, &data, &mut caches);
+    assert!(scene.object_index(whirl).is_none());
+    assert!(!scene.summons.iter().any(|s| s.0 == whirl));
+    let (amber, cell, regrows) = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Amber && o.deposit.is_some())
+        .map(|o| {
+            let f = |i: usize| o.record.fields[i] as i32;
+            (o.id, (f(6), f(7)), o.deposit.unwrap().regrows)
+        })
+        .expect("amber");
+    let (x, y) = at(cell);
+    scene.lightning_strike(x, y, None, &data, &mut caches);
+    match scene.object_index(amber) {
+        Some(k) => {
+            assert!(regrows > 0);
+            assert!(scene.objects[k].deposit.is_none());
+            assert!(scene.objects[k].dormant.is_some());
+        }
+        None => assert_eq!(regrows, 0),
+    }
+    let (shoal, cell) = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::FishZone && o.deposit.is_some())
+        .map(|o| (o.id, ((o.x / t).floor() as i32, (o.y / t).floor() as i32)))
+        .expect("a fish shoal");
+    let (x, y) = at(cell);
+    scene.lightning_strike(x, y, None, &data, &mut caches);
+    let k = scene.object_index(shoal).unwrap();
+    assert_eq!(
+        scene.objects[k].deposit.and_then(|d| d.remaining),
+        Some(0.0)
+    );
+    let wait = scene.shoals_gone[&shoal];
+    assert!((crate::clock::ticks(25) - 1e-4..=crate::clock::ticks(75) + 1e-4).contains(&wait));
+    scene.move_shoals(wait + 1e-3);
+    assert!(scene
+        .object_index(shoal)
+        .is_none_or(|k| scene.objects[k].deposit.is_none()));
+}
+
 /// Quick lime's figures from the exe: its power by the heavy weapons'
 /// damage level (row 13's B), no hull share, the crew's taken as is, and
 /// the unique ships' reload at the third rate column (0x4c06e0).
@@ -9142,11 +9256,14 @@ fn lightning_on_creatures() {
     let cyclops = scene.objects.iter().map(|o| o.id).max().unwrap();
     assert!(scene.walker_half_shut(cyclops));
     let (x, y) = at(beside);
+    scene.sounds.clear();
     scene.lightning_strike(x, y, human, &data, &mut caches);
     assert!(scene.object_index(cyclops).is_none_or(|i| scene.objects[i]
         .combat
         .as_ref()
         .is_none_or(|c| c.hull <= 0.0)));
+    // No cry: no shot struck it (0x413ad0's `+0x144`).
+    assert!(!scene.sounds.iter().any(|s| s.0 == "deac1d"));
 }
 
 /// A ship being built takes shots by 0x4b4000 alone: `trunc(0x597fd8[letter]

@@ -3370,8 +3370,15 @@ temples, schools, castles, harpy nests and barbarian structures
 their site no longer holds (the town's check 0x4eb on their cell with
 their flags and 0x40, what stands there aside, and their town's id;
 barbarians `+0x1d8` 0x20 for 0x3f / 0x41, 0xa for 0x40),
-else lose 25 points of condition (5 shielded); settlements and towns take
-nothing. Creatures, each by its own rule:
+else lose 25 points of condition (5 shielded). Settlements and towns
+(TownObj 0x441ba0, its dispatch 0x442c2c -> 0x4449b7 -> 0x4449d4) the
+same by their own check: on the anchor (`+0x74`, `+0x78`) unshielded
+(`+0x15c` 0) they fall (killer `+0x1ac` the caster, 0x424740); else the
+map's 0x4e9 on the anchor with flag 0x40 (0x51dd9a -> 0x42e500 ->
+0x42e1e0, the settlement's site check, what stands there aside) failing,
+they fall; else condition `+0xa8 -= 25` (5 shielded), above 0 the hit
+points `+0xb0 x cond / 100` (unsigned), else cond and hit points 1 and
+0x138b, killer the caster. Creatures, each by its own rule:
 - the gorgon (0x402ab8) and the siren (0x404505), anywhere in the 3 x 3,
   shield or not: with a picture (not resting under water) life 0, the
   current picture cut short (`+0xac` / `+0x12c`), killer the caster; the
@@ -3410,19 +3417,41 @@ nothing. Creatures, each by its own rule:
   points `max x cond / 100`, at 0 they fall; killer the caster;
 - the hero's house (0x421150) passes 0xda93 nowhere: nothing; a landing
   party (0x4227c5): removed, reported to the caster; sheep (0x433a77),
-  reefs and whirlpools unless `+0x74 == 3` (0x430dae, 0x4484ef): removed;
-  amber (`+0xd5`: amount 0), fish (`+0x111`: amount 0, 0x48d910(0)),
-  the leviathan (not in states 5/6: `+0x80` 0 if above 0 else `+0x78` 0;
-  0x494400(0) on its cell, else `+0x11d` with `+0x189`); the sea monster
-  as ported (`sea_monster_lightning`).
+  reefs and whirlpools unless `+0x74 == 3` (0x430dae, 0x4484ef): removed,
+  not reported. State 3 is "under water" (0x430320 / 0x447b80 case 3:
+  landscape nibble 1 back to 0 or 3, picture message 0xd21, a wait),
+  where they wreck nothing: a cast whirlpool starts there (mode 1,
+  0x447b80(3, 1): 150-250 ticks, 0x5972d8 / 0x5972dc), and both go
+  there when a ship sits on the cell as they would rise. Amber standing
+  (`+0xd5` its picture: set in state 0 by 0x489f70 / 0x48a2c0, cleared in
+  state 1): amount `+0x78` 0; its tick 0x48a430 then finds 0x48d2f0 at 0:
+  state 1, and the tick after lies fallow (state 2) or goes when its
+  regrowths are used (`+0x88 >= +0x84`). Fish (`+0x111` the shoal's
+  picture, states 1-3 of 0x48d910): amount 0 and 0x48d910(0), down for
+  25-75 ticks (`+0xc5 = rand % 51 + 25`, its LCG `+0x18`); at the end of
+  the wait 0x48dd80 finds it empty and it goes (`+0x88 >= +0x84`) or
+  waits to regrow (state 4). The leviathan (not in states 5/6: life
+  `+0x80` (record field 6) 0 if above 0, else amount `+0x78` (field 4 x
+  100) 0; on its cell 0x494400(0), down (state 0, picture freed, 25-75
+  ticks); else with its picture `+0x189` the flag `+0x11d`); the sea
+  monster as ported (`sea_monster_lightning`). The land creatures' cry
+  (0x413ad0, 0x138b) needs `+0x144`, the flag a shot's blow 0x138e sets
+  (0x413b69) and the creature's next turn clears (0x411520 at 0x411698 /
+  0x411879; 0 at creation 0x411100, saved 0x4142cb): lightning's kill
+  cries only after a shot the same tick.
 The port follows these, the walk test with the creature's half by its
 position (its creatures appear on the north-west half but walk from cell
 middle to cell middle, not half to half as 0x412740 / 0x413240: one that
 has walked counts on its south-east half), the barbarians' site
 taken to hold (their flag 0x20 and `+0x1c8` not decoded), the creatures'
-percentages derived from their life (`life x 100 / max`, as 0x414c8f).
-Not ported: reefs and whirlpools (their state 3 not decoded), amber,
-fish and leviathan amounts (their fields not decoded). The ships' ways are rebuilt (0x49a950) and the caster's brain told
+percentages derived from their life (`life x 100 / max`, as 0x414c8f),
+the settlements' condition as their hull (`max / 4` off, `max / 20`
+shielded), amber emptied at once (the original's two ticks of states 0
+and 1 skipped), the land creatures' kills without a cry (the port has no
+shot-then-turn order for them). Not ported: the reefs' and whirlpools'
+rising and sinking (0x430320, 0x447b80; the port's are always up, so
+lightning removes any), the leviathan's life and states (the port's is
+a deposit only). The ships' ways are rebuilt (0x49a950) and the caster's brain told
 (0x5d9d, cell and caster): miss009's notes the player's strike in x 55-62,
 y 3-8. Its north-east sea is shut off by land at y = 4; only strikes at
 (58, 3), (59, 3), (57-61, 4), (60, 5) or (61, 5) open it.
@@ -3695,10 +3724,10 @@ else 2), sinking at the first hop after 250 ticks of moving.
 Lightning (LightningObjClassTy 0x42cfa0) strikes at frame 11 of its
 picture over water (40 over land) and posts 0xda93 to every object on the
 3 x 3 cells about its cell, whoever's: a ship unshielded from magic wrecks
-(0x4dc630); a settlement or town (unshielded), lair, nest or harpy only
-when it stands on the struck cell itself (0x441ba0, 0x414f00, 0x4207b0);
-a sea monster loses half its strength (0x492360), a land creature a
-quarter (0x413d70); other buildings ignore it.
+(0x4dc630); the rest by their own handlers, as **Lightning** above
+(settlements and towns 0x4449d4, lairs 0x4158b7, harpies 0x420cd8, sea
+monsters 0x492c34, land creatures 0x414b0f, WorkLandObj buildings
+0x428600).
 
 A fireball (class 0x25d, SlightClassTy `slight.cpp`, made by message
 0x16e1) sits on any free cell and is drawn a cell up, a frame a tick: it

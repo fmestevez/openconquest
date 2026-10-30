@@ -1872,6 +1872,7 @@ impl Scene {
         let zones: Vec<usize> = (0..self.objects.len())
             .filter(|&i| self.objects[i].class == ObjectClass::FishZone)
             .collect();
+        let mut emptied = Vec::new();
         for i in zones {
             let id = self.objects[i].id;
             if let Some(up) = self.shoals_up.get_mut(&id) {
@@ -1883,6 +1884,16 @@ impl Scene {
                     continue;
                 }
                 self.shoals_gone.remove(&id);
+                // Its wait over, one with nothing left (lightning's, 0x48e7ef)
+                // is done for (0x48dd80 state 0: 0x48d2f0 gives 0): it
+                // goes, or lies fallow while it may grow back.
+                if self.objects[i]
+                    .deposit
+                    .is_some_and(|d| d.remaining == Some(0.0))
+                {
+                    emptied.push(id);
+                    continue;
+                }
                 // Up to a hundred tries for a free water cell in the zone.
                 let f =
                     |k: usize| self.objects[i].record.fields.get(k).copied().unwrap_or(0) as i32;
@@ -1910,12 +1921,28 @@ impl Scene {
             let left = self.shoals_shown.get_mut(&id).unwrap();
             *left -= dt;
             if *left <= 0.0 {
-                self.shoals_shown.remove(&id);
-                self.shoals_up.remove(&id);
-                let away = (self.rng.next() % 51 + 25) as f32 * SHOAL_UNIT;
-                self.shoals_gone.insert(id, away);
+                self.dive_shoal(id);
             }
         }
+        for id in emptied {
+            if let Some(k) = self.object_index(id) {
+                if let Some(dep) = self.objects[k].deposit.take() {
+                    if dep.regrows > 0 {
+                        self.objects[k].dormant = Some((dep, 0.0));
+                    } else {
+                        self.objects.remove(k);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fish shoal `id` goes down for 25-75 ticks (0x48d910(0)).
+    pub(super) fn dive_shoal(&mut self, id: u32) {
+        self.shoals_shown.remove(&id);
+        self.shoals_up.remove(&id);
+        let away = (self.rng.next() % 51 + 25) as f32 * SHOAL_UNIT;
+        self.shoals_gone.insert(id, away);
     }
 
     /// What object `obj` shows at `time_ms`: a fish shoal rising, living

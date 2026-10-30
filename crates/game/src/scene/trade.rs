@@ -1450,7 +1450,7 @@ impl Scene {
         self.check_ground_but(class, cx, cy, true)
     }
 
-    fn check_ground_but(
+    pub(super) fn check_ground_but(
         &self,
         class: u32,
         cx: i32,
