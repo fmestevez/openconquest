@@ -2263,53 +2263,126 @@ byte (+0xc) 10. What it calls off is the object's, whatever button sent
 it (busy `+0x10c`, job `+0x110`, amber paid `+0x118`, progress `+0x120`
 in percent; state `+0xa4` 0 being built, 1 standing):
 
-- LandObj 0x425990 (every building, reached last): busy with job 0xff
-  (its own mending): `+0x10c` = 0, `+0xa4` = 1, no refund (mending is
-  paid step by step); then, when `+0xe8` != 0 (not identified) and `+0xa4`
-  == 0, the full price 0x42d8b0(class) back (0x4a8dc0) and the building
-  removed (0x424740).
-- TownObj 0x441ba0: upgrading (`+0xa4` 0, `+0x23c` set): 0x42d8b0(0x33) x
-  (total - done) / total back (the `+0x7c` record's +0x49 / +0x45), class
-  0x32 again, `+0xa4` = 1; else busy: the stock repair's cancel (0x4430f0,
-  above) or the training queue freed; then LandObj (0x444f17); the
-  settlement's sound 0xdc-0xdf for the local owner when handled.
-- Dock 0x416f90 (shipyard): upgrading (`+0x1e8` set): 0x42d8b0(0x3b) x
-  (total - done) / total back, class 0x3a again; else 0x4e8660 ->
-  0x4e7640 -> 0x427f50 -> LandObj.
-- Smithy 0x434ed0, Studio 0x436ee0, School 0x432210 (after 0x427f50 ->
-  LandObj), standing and busy: `+0x10c` = 0, (100 - `+0x120`) x paid / 100
-  back (the School: x its cost by job: 1 0x5971ac[player + 0xa3], 2
-  0x42d9a0(player + 0x5e), 3 0x42d9a0(+0x5f), 4 0x42d980(+0x51), 5-8
-  2000), the job's player flag cleared (Smithy job 2 + 0x63, 3 + 0x6a;
-  Studio jobs 2-4 + 0x91 / + 0x98 / + 0x9f; School 1-8 + 0xa4, + 0x5a,
-  + 0x56, + 0x52, + 0x72, + 0x7a, + 0x82, + 0x8a), a production list freed
-  (job 1); the Studio's job 5 goes to its settlement (`+0x1c8`, the stock
-  repair). Sounds for the local owner: the smithy's 0xe8 / 0xe9 / 0xeb /
-  0xea and the studio's 0xec / 0xed / 0xef / 0xee (nation 0-3) on any order
-  10; the school's 0xf0 / 0xf1 / 0xf3 / 0xf2 only when it cancelled.
-- TempleSea 0x438300, busy: learning (job 1) `+0x120` x 1000 / 100 back
-  (the elapsed percent), player + 0xb8 = 0; then `+0x100` = 1, no sound.
-- TempleWar 0x439260, busy: the Flame (job 1) `+0x120` x 6000 / 100 amber
-  ([0x596864]) and `+0x120` x 15 fish ([0x59689c], no / 100) back;
-  learning (job 2) `+0x120` x 1000 / 100, player + 0xc0 = 0; then the
-  temple's sound (0x43a180) for the local owner. Not busy, nothing.
-- Fortress 0x419f80: unless busy with job 0xff, its 12 unit groups stop
-  shooting (0x4469b0) and `+0x498` = 0; with it, the unit list `+0x4cc`
-  freed. Barb 0x40ef70: the 12 groups stop shooting.
-- A ship: 0x4e2ba0 (not read); ShipService 0x4e7640 takes order 0x32
-  only, GameObj 0x50c9e0 order 0x29 only.
+The chain decides who reads what first. **LandObj runs first** for
+every building but towns and the dock upgrade: School, Smithy, Studio and
+the temples call 0x427f50 -> 0x425990 before their own case; the port
+0x4e7640 calls it unconditionally; Fortress 0x419f80 calls 0x4e7640 at
+0x41a176 (for every message but 0x158bf); Barb 0x40ef70 and the yards
+reach it through 0x4e8660; TownObj 0x441ba0 calls it at the end
+(0x444f17); Dock 0x416f90 tests its upgrade first and returns if it took
+it.
+
+- LandObj 0x425990: busy with job 0xff (its own mending): `+0x10c` = 0,
+  `+0xa4` = 1, no refund (mending is paid step by step), which leaves the
+  class's own case nothing busy; then, with `+0xe8` != 0 (the name of
+  the construction scaffold picture loaded on layer 2 by message 0xc453:
+  "RAM_072X072" from the BuildingTy constructor 0x427750, "RAM_128X128"
+  from TownObj's 0x43b000; only the Cyclops lair leaves it 0) and
+  `+0xa4` == 0: the whole price 0x42d8b0(class) back in amber only
+  (0x4a8dc0; a fort's arming is not) and 0x424740: `+0x158` = 0 (so the
+  drain's fall sound and rubble are skipped), the queue's flag, message
+  0x138b drained at once (0x427bb0: 0x2874 to the settlement; forts
+  0x4184f0: the kill report and 0x2491 {settlement, class - 0x34}, the
+  town's count of forts going up less one; 0x423d60: state 2, the kill
+  report 0x50e750 with `+0x1ac` = 0xff, the owner's building lost and
+  nobody's kill, layers and unit lists freed, the cells cleared, then
+  message 10: removed), no ruins.
+- TownObj 0x441ba0, its own case first: upgrading (`+0xa4` 0, `+0x23c`
+  set): 0x42d8b0(0x33) x (n - f) / n back (`+0x7c` record: `n` +0x49,
+  `f` the frame +0x45; integers; the mending share of the price is not
+  refunded), class 0x32 again (vt+0x54), `+0xa4` = 1, `+0x100` = 1,
+  pictures (vt+0x38), `+0xa8` untouched; else busy: `+0x10c` = 0;
+  unless job 0xff `(100 - +0x120) x +0x118 / 100` amber back; job 1 (the
+  training) `v = (100 - p) x +0x11c / 100` (the raw fish) into the town's
+  bytes `+0x252` / `+0x253` instead of the player (0x44316a: with `+0x252`
+  set, `T = v + +0x253 + 100 x +0x252 - 100`, else `T = v`; `+0x252 = T /
+  100`, `+0x253 = T % 100`, a last part of 0 written 100, else `+0x252`
+  one more; what they mean is not decoded: 0x43c650 reads `+0x252` into
+  its info word +0x12, 0x4416c0 saves it); job 2 the stock repair's walk
+  (0x4430f0, above); then for any busy job the training list freed
+  (`+0x258 = +0x254 = 0`, `+0x25c = 5`: what was not made is lost). The
+  settlement's call (events 0xdc-0xdf) for the local owner when it
+  cancelled an upgrade or a busy job. A new town under construction
+  (`+0x23c` 0) is neither: LandObj pays 500 back and removes it.
+- Dock 0x416f90: upgrading (`+0xa4` 0, `+0x1e8` set): 0x42d8b0(0x3b) x
+  (n - f) / n back, class 0x3a again, standing, `+0xf8 = +0xf4 = 1`,
+  return: no call, no chain. A yard under construction: LandObj, 400
+  back, removed.
+- School 0x432210 (start 0x431b60 through order 0x21 -> 0x138a), standing
+  and busy: `+0x10c` = 0, `(100 - p) x C / 100` back, C recomputed from
+  the same player field (job 1 0x5971ac[+0xa3] (1200, 1300), 2
+  0x42d9a0(+0x5e), 3 0x42d9a0(+0x5f), 4 0x42d980(+0x51), 5-8 2000;
+  0x42d9a0: 0 -> 1000, 1 -> 1500, else 0; 0x42d980: 0 -> 2000, 1 -> 3000,
+  else 0), the job's player flag cleared (+0xa4, +0x5a, +0x56, +0x52,
+  +0x72, +0x7a, +0x82, +0x8a); its call (0xf0 / 0xf1 / 0xf3 / 0xf2) only
+  when it cancelled. `p` is `+0x120`, written each tick `(now - +0x124) x
+  100 / duration` (unsigned).
+- Smithy 0x434ed0: studies (order 0x21 -> 0x138a: job 2 armour kind, 3
+  ram kind) refund `(100 - p) x +0x118 / 100`, flag +0x63 / +0x6a
+  cleared; the refits are one batch (order 0x20 -> 0x138c: job 1, each
+  refit adding its price 30/60 or 25/50 to `+0x118` and its 150 or 200
+  ticks to `+0x114`, the progress over the whole batch): `(100 - p) x
+  +0x118 / 100` back, the rest of the batch dropped (`+0x1ec` freed).
+- Studio 0x436ee0: studies (jobs 2-4: flags +0x91 / +0x98 / +0x9f) as the
+  smithy's; the weapons batch (job 1, order 0x20 -> 0x138c: amber
+  0x597164[item / 3] and raw fish 0x597170[item] summed, ticks
+  0x5971a0[item / 3]): `(100 - p) x +0x118 / 100` amber, no fish back,
+  the list freed; job 5 (its settlement's stock repair): the message
+  passed to the settlement (`+0x1c8`), `+0x100` = 1. The smithy's call
+  (0xe8 / 0xe9 / 0xeb / 0xea) and the studio's (0xec / 0xed / 0xef / 0xee)
+  on every 0x280f order but 0x3c (their switch has no default), so every
+  order 10, even one that found them under construction.
+- TempleSea 0x438300, busy: learning (job 1) `+0x120 x 1000 / 100` back
+  (the elapsed percent, at the list price even when a computer of level
+  3/4 paid 200), player +0xb8 = 0; any busy job `+0x100` = 1; no call.
+- TempleWar 0x439260, busy: the Flame (job 1, 250 ticks): `+0x120 x
+  [0x596864] / 100` amber (6000) and `+0x120 x [0x59689c]` fish (15, no
+  / 100: the elapsed share of the fish price); learning (job 2) `+0x120
+  x 1000 / 100`, player +0xc0 = 0; `+0x100 = +0xf4 = 1` and the temple's
+  call (0xf8 / 0xf9 / 0xfb / 0xfa) for the local owner. Not busy,
+  nothing.
+- Fortress 0x419f80 (0x41af74; its job-0xff branch, freeing the unit
+  list `+0x4cc`, is unreachable after LandObj cleared it) and Barb
+  0x40ef70: all 12 unit groups cease fire (0x4469b0: mode `+0x3a` = 0,
+  target `+0x20` = 0; the fort also `+0x498` = 0). A group with mode 0
+  does not shoot at all (0x4469c0, 0x446a57); modes are set again by
+  0x4469a0 (fire at will: creation, order 0x23 sub 1, the fort's message
+  10000 0x418f60, a unit added 0x4193d0 while any group fires at will) and
+  0x446960 (orders 0x15 / 0x16, a target). (Not decoded: who sends a fort
+  10000; which interface buttons send 0x23 to a fort.)
+- A ship: 0x4e2ba0 case 10 is `vt+4(8, NULL)`, the stop event (0x4aa540),
+  with no permission test; a ship being built has its build called off.
+  ShipService 0x4e7640 takes order 0x32 only, GameObj 0x50c9e0 order 0x29
+  only.
+
+The voices (0x50e570 mode 2 -> 0x525370): only with the unit report
+option (bit 1 of `[0x5ca55f]`) and one of channels 7-8 free (0x5252d0),
+within 19 cells of the view's cell (`+0xd08`, `+0xd0c`); the sample is
+0x554820's pick: the event's `SND_n` names, the first when fewer than 2,
+else `rand() % count` (the C library's: `seed = seed x 0x343fd +
+0x269ec3; (seed >> 16) & 0x7fff`, seeded once with `GetTickCount()` at
+0x4ebdf9). The lists (dumped): 221 `re_o2a re_o4a re_o6a re_o5a`, 222
+`re_o2a re_o4a re_o5a re_o6a`, 233/234, 237/238, 249/250 `re_o2a re_o4a
+re_o5a re_o6a`, 241/242 `re_o2a re_o4a re_o6a`; 220, 223, 232, 235, 236,
+239, 240, 243, 248, 251 have no entry.
 
 The port blocks command buttons, left and right, while paused (no
-"Bad connection" box), sends order 10 for the codes above, and ports of
-it the buildings' own mending stop, the settlement's stock repair cancel
-(also through its workshop when the workshop studies nothing). Not
-ported: the forts' and strongholds' (their unit groups' targets are not
-kept by the port), the construction cancel (`+0xe8`), the upgrades'
-refunds (the `+0x7c` frame counts), the research, learning and Flame
-cancels (which command starts which job and their `+0x120` ticks not
-read; 0x42d9a0 / 0x42d980 not read), the training queue's, the sounds
-(how 0x50e570 picks among an event's sounds not read) and the ship's;
-nor the pointer's own pause test.
+"Bad connection" box), sends order 10 for the codes above, and runs the
+handlers in this chain (`Scene::halt`): its construction steps frames as
+0x4230f0; research entries refund at `p = elapsed ticks x 100 / study
+ticks`; a smithy's refits keep their batch (paid, ticks, elapsed); a
+cancelled training's fish share is kept per town (`town_fish`); forts and
+barbarian structures keep a cease-fire flag, which nothing in the port
+lifts (it has no fort target or fire-at-will orders). The voices are
+picked from the dumped lists with the port's own generator, for the
+viewing player. Not ported: the 19-cell cut-off (the front end fades
+sounds by distance; the unit of 0x525370's distance and the writer of
+the view fields not read), the settlement's lists (0x2874) and the town's
+count of forts going up (0x2491), which the port does not keep; the
+frame an upgrade's picture starts at (the port starts it at 0; whether
+vt+0x54 / 0x50d080 load a fresh sprite not traced), whether vt+0x54
+resets the hit points on an upgrade's cancel (the port keeps the
+condition reached); nor the pointer's own pause test.
 
 Known differences not yet ported:
 
@@ -2347,7 +2420,23 @@ speed is saved with a game (`SPEED_GAME`).
 - Construction: a building's construction picture plays once over the
   first entry of its class's cycle table (+0xc0, set by each constructor:
   200 ticks for every player building; 300 at 0x5949e8 and 50 at
-  0x595e80 for two other classes); progress is elapsed x 100 / cycle.
+  0x595e80 for two other classes). 0x422e30 (state 0) sets the frame
+  delay `+0x7c->+0x7d = cycle[0] / n` (integer, `n` the picture's frames
+  `+0x49`); the tick's 0x4230f0 steps the frame when `now >= last +
+  delay` or on the first tick (`+0xbc` clear), then, the frame `f` still
+  under `n`, 0x423410: condition `+0xa8 = f x 100 / n`, hit points `+0xac
+  = +0xb0 x +0xa8 / 100` (integers); the step reaching `n` stands it
+  (`+0xa8 = 100`, state 1; `+0xac` is left at the last step's) and plays
+  the finished call for the viewing player's own building (events
+  0xbc / 0xbd / 0xbf / 0xbe by nation 0-3: SND_189 / SND_190 `bi_c1a`,
+  `bi_c2a`, `bi_c4a`, `bi_c5a`, 188 and 191 empty). It stands after 1 +
+  (n - 1) x (200 / n) ticks. An upgrade (TownObj 0x43b290 / Dock 0x416340,
+  message 0x138a) costs `0x42d8b0(to) + 0x42d8b0(from) x (100 -
+  condition) / 100` (the town's mending part only when under 100) and
+  steps the same picture. The port keeps one hit-point figure and makes
+  it whole when the building stands. (Not ported: BuildingTy's frame step
+  0x427b30, which steps the frame down when the settlement's cell no
+  longer holds the settlement, removing the building at frame 0.)
 - The sage school (0x432210): arming 0x5971b8[+0xa3] = 450 ticks; ram,
   armour and rigging 600 ticks for the first level, 700 for the second;
   a unique ship 400 (0x432210 compares the elapsed ticks with 399).
@@ -3154,7 +3243,9 @@ once and appends; an idle building starts timing the run (+0x124 = now,
 `0x5971a0[kind / 3]` up to it), the last ending the run. Message 0x3c,
 sub-order 2 (sent by a right click on the button, 0x4f46c0, through the
 button's second id 0x1d83 + slot) takes the last of that kind still to be
-made off the queue and pays its amber and fish back; the time spent stays
+made off the queue and pays its amber `0x597164[k / 3]` back (0x4a8dc0) and
+its fish `0x597170[k]` raw (0x4a8c30: 2 or 3, a hundredth of the
+`0x597170[k] x 100` taken by 0x4a8be0 at 0x43baac); the time spent stays
 with the run. The menus give each button the count of its kind still to
 be made (menu byte 0x26 + slot) and the part not done (0x1a + slot, as
 100 - done): a settlement's done is the time since the run started over

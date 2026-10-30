@@ -160,12 +160,60 @@ pub const OBJECTIVES: [(&str, &[u32]); 11] = [
     ("Kill all cyclops", &[0x46]),
 ];
 
-/// A building going up.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// A building going up, or a settlement or shipyard being made a town or
+/// dock (the same picture, state 0). Its construction picture steps a
+/// frame every `BUILDING_CYCLE[0] / n` ticks, `n` its frame count (0x422e30
+/// sets the delay `+0x7c->+0x7d`; 0x4230f0 steps it, the first step on the
+/// first tick); it stands at the step that reaches `n`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Construction {
     pub site: u32,
-    pub elapsed: f32,
-    pub total: f32,
+    /// An upgrade (TownObj `+0x23c`, Dock `+0x1e8`), not a new building.
+    #[serde(default)]
+    pub upgrade: bool,
+    /// The picture's frame (`+0x7c->+0x45`) and frame count (`+0x49`).
+    #[serde(default)]
+    pub frame: u32,
+    #[serde(default)]
+    pub frames: u32,
+    /// The first step is made (`+0xbc`), and the ticks since the last.
+    #[serde(default)]
+    pub started: bool,
+    #[serde(default)]
+    pub wait: u32,
+    /// Saves from before the frames were counted: seconds of a whole.
+    #[serde(default, skip_serializing)]
+    elapsed: f32,
+    #[serde(default, skip_serializing)]
+    total: f32,
+}
+
+impl Construction {
+    pub fn new(site: u32, upgrade: bool) -> Self {
+        Self {
+            site,
+            upgrade,
+            ..Self::default()
+        }
+    }
+
+    /// How far it is, 0..1: the frame over the frame count.
+    pub fn done(&self) -> f32 {
+        if self.frames == 0 {
+            return 0.0;
+        }
+        (self.frame as f32 / self.frames as f32).min(1.0)
+    }
+
+    /// Converts a save from before the frames were counted.
+    pub(crate) fn upgrade_save(&mut self, frames: u32) {
+        if !self.started && self.total > 0.0 && frames > 0 {
+            self.frame = ((self.elapsed / self.total).min(1.0) * frames as f32) as u32;
+            self.frames = frames;
+            self.started = self.frame > 0;
+            self.total = 0.0;
+        }
+    }
 }
 
 /// How far from the settlement's own cells a moorage or shipyard may go, in
@@ -402,6 +450,15 @@ pub struct Scene {
     pub stock_conditions: std::collections::BTreeMap<u32, [Vec<u8>; 9]>,
     /// Settlements mending their stock (state 2, 0x441ba0).
     pub stock_repairs: Vec<repair::StockRepair>,
+    /// Each smithy's refits as the one batch the original runs (`+0x114`
+    /// ticks, `+0x118` amber summed, from `+0x124`; 0x434a00 message
+    /// 0x138c), for order 10's refund.
+    pub refit_batches: BTreeMap<u32, halt::Batch>,
+    /// What a cancelled training's fish share leaves in a settlement or
+    /// town: its bytes `+0x252` (count) and `+0x253` (last part), 0x44316a.
+    /// (Not decoded: what they mean; 0x43c650 reads `+0x252` into its info
+    /// record, 0x4416c0 saves it.)
+    pub town_fish: BTreeMap<u32, (u8, u8)>,
     /// Fractions of amber owed for repairs, per player.
     pub repair_owed: std::collections::BTreeMap<(u32, u32), f32>,
     /// Ships under a siren's song (not saved), and seconds until each
@@ -462,6 +519,7 @@ mod creatures;
 mod dig;
 pub mod fire;
 mod gulls;
+mod halt;
 pub mod load;
 mod orders;
 pub mod repair;
@@ -491,6 +549,7 @@ mod yard;
 pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use computer::Computers;
 pub use flyers::{Flyer, Nest};
+pub use halt::Batch;
 pub use load::{Cargo, Entry, LoadLink};
 pub use order::Order;
 pub use repair::{StockRepair, UnitMend};
@@ -713,6 +772,8 @@ impl Scene {
             unit_mends: Vec::new(),
             stock_conditions: Default::default(),
             stock_repairs: Vec::new(),
+            refit_batches: BTreeMap::new(),
+            town_fish: BTreeMap::new(),
             free_casts: Default::default(),
             creature_clock: 0.0,
             wizards: BTreeMap::new(),
@@ -946,6 +1007,8 @@ impl Scene {
             unit_mends: self.unit_mends.clone(),
             stock_conditions: self.stock_conditions.clone(),
             stock_repairs: self.stock_repairs.clone(),
+            refit_batches: self.refit_batches.clone(),
+            town_fish: self.town_fish.clone(),
             free_casts: self
                 .free_casts
                 .iter()
@@ -1050,6 +1113,13 @@ impl Scene {
         scene.yard_clocks = save.yard_clocks.iter().copied().collect();
         scene.rnd_init = save.rnd_init;
         scene.constructions = save.constructions.clone();
+        for k in 0..scene.constructions.len() {
+            let site = scene.constructions[k].site;
+            let n = scene
+                .object_index(site)
+                .map_or(0, |i| scene.objects[i].frames.len() as u32);
+            scene.constructions[k].upgrade_save(n);
+        }
         scene.trainings = save.trainings.clone();
         scene.trainings.iter_mut().for_each(Training::upgrade_save);
         scene.garrisons = save.garrisons.clone();
@@ -1090,6 +1160,8 @@ impl Scene {
         scene.unit_mends = save.unit_mends.clone();
         scene.stock_conditions = save.stock_conditions.clone();
         scene.stock_repairs = save.stock_repairs.clone();
+        scene.refit_batches = save.refit_batches.clone();
+        scene.town_fish = save.town_fish.clone();
         scene.delivered = save.delivered.clone();
         scene.joined = save.joined.clone();
         scene.had_argo = save.had_argo;
@@ -2020,6 +2092,7 @@ impl Scene {
             self.run_computers(data, caches);
             self.run_brain_jobs(data, caches);
             self.run_yards(data, caches);
+            self.step_constructions(data, caches);
             for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {
                 self.big_reef(x, y, kind, data, caches);
             }
@@ -2090,7 +2163,6 @@ impl Scene {
         self.run_regrowth(dt, data, caches);
         self.offer_argo();
         self.run_hazards(dt, data, caches);
-        self.run_constructions(dt, data, caches);
         self.run_ruins(dt);
         self.run_combat(dt, data, caches);
         self.run_shots(dt, data, caches);
@@ -2684,6 +2756,7 @@ pub fn sound_kind(name: &str) -> SoundKind {
         .any(|v| *v == name)
         || ["jb_d1", "121~2", "pe1", "bi_c4"].contains(&name)
         || name.starts_with("re_o")
+        || name.starts_with("bi_c")
         || name.starts_with("come");
     let battle = shot::LAUNCH.contains(&name)
         || shot::LAND.iter().flatten().any(|l| l.contains(&name))

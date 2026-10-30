@@ -73,7 +73,7 @@ fn shipyard_builds_and_settlement_upgrades() {
     // It goes up as a new building does: no town until it stands.
     assert!(scene.construction_at(settlement).is_some());
     assert!(scene.can_build_ship(1).is_err());
-    for _ in 0..(60.0 * (economy::BUILDING_SECONDS + 1.0)) as usize {
+    for _ in 0..(60.0 * (crate::clock::ticks(crate::objects::BUILDING_CYCLE[0]) + 1.0)) as usize {
         scene.update(1.0 / 60.0, &data, &mut caches);
     }
     assert!(scene.construction_at(settlement).is_none());
@@ -479,7 +479,7 @@ fn boat_founds_settlement() {
     }
     assert!(scene.messages.is_empty(), "{:?}", scene.messages);
     assert_eq!(scene.amber, 1000 - economy::building_cost(SETTLEMENT));
-    for _ in 0..50 * (economy::BUILDING_SECONDS as usize + 1) {
+    for _ in 0..50 * (crate::clock::ticks(crate::objects::BUILDING_CYCLE[0]) as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     assert_eq!(settlements(&scene), before + 1);
@@ -516,7 +516,9 @@ fn marines_train_and_embark() {
     scene.train(home, 0).unwrap();
     scene.train(home, 2).unwrap();
     scene.train(home, 0).unwrap();
-    // Kinds mix in one queue; a right click takes the last bowman back.
+    // Kinds mix in one queue; a right click takes the last bowman back:
+    // its 30 amber and 2 raw fish (0x597170[0], a hundredth of the 200
+    // taken, 0x4a8c30).
     let t = scene.training_at(home).unwrap();
     assert_eq!((t.count(0), t.count(2), t.count(1)), (2, 2, 0));
     let (a0, f0) = combat::item_cost(0);
@@ -525,7 +527,7 @@ fn marines_train_and_embark() {
     assert!(scene.cancel_training(home, 1).is_err());
     assert_eq!(
         (scene.amber, scene.fish),
-        (amber - 60 - a0, fish - 600 - f0)
+        (amber - 60 - a0, fish - 600 - 2 * f0 + 2)
     );
     // Halfway through the first, the swordsmen's button shows a sixth
     // (the time to the last of them, the third), the bowmen's a quarter.
@@ -602,7 +604,7 @@ fn temple_magic() {
         scene.learn_spell(Temple::Sea, None).is_err(),
         "still being built"
     );
-    for _ in 0..50 * (economy::BUILDING_SECONDS as usize + 1) {
+    for _ in 0..50 * (crate::clock::ticks(crate::objects::BUILDING_CYCLE[0]) as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     // Learn the first four: wind, view map, tornado, whirlpool.
@@ -687,7 +689,7 @@ fn war_magic() {
     scene
         .place_building(home, war, site.0, site.1, &data, &mut caches)
         .unwrap();
-    for _ in 0..50 * (economy::BUILDING_SECONDS as usize + 1) {
+    for _ in 0..50 * (crate::clock::ticks(crate::objects::BUILDING_CYCLE[0]) as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     for _ in 0..6 {
@@ -981,7 +983,7 @@ fn tornado_and_sea_monster() {
     scene
         .place_building(home, sea, site.0, site.1, &data, &mut caches)
         .unwrap();
-    for _ in 0..50 * (economy::BUILDING_SECONDS as usize + 1) {
+    for _ in 0..50 * (crate::clock::ticks(crate::objects::BUILDING_CYCLE[0]) as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     for _ in 0..6 {
@@ -1137,7 +1139,7 @@ fn school_research() {
         scene.start_research(id, combat::Upgrade::Weapons).is_err(),
         "still being built"
     );
-    for _ in 0..50 * (economy::BUILDING_SECONDS as usize + 1) {
+    for _ in 0..50 * (crate::clock::ticks(crate::objects::BUILDING_CYCLE[0]) as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     let amber = scene.amber;
@@ -1279,7 +1281,7 @@ fn settlement_builds_structures() {
     assert!(scene.check_site(home, smithy, cx, cy).is_err(), "occupied");
     let bit = 1 << (smithy - SETTLEMENT);
     assert_eq!(scene.owned_buildings() & bit, 0, "not standing yet");
-    for _ in 0..50 * (economy::BUILDING_SECONDS as usize + 1) {
+    for _ in 0..50 * (crate::clock::ticks(crate::objects::BUILDING_CYCLE[0]) as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     assert_ne!(scene.owned_buildings() & bit, 0, "the smithy stands");
@@ -1567,7 +1569,7 @@ fn workshop_research() {
         .find(|o| o.class == ObjectClass::Building(WORKSHOP))
         .unwrap()
         .id;
-    for _ in 0..50 * (economy::BUILDING_SECONDS as usize + 1) {
+    for _ in 0..50 * (crate::clock::ticks(crate::objects::BUILDING_CYCLE[0]) as usize + 1) {
         scene.update(0.02, &data, &mut caches);
     }
     let heavy = combat::Upgrade::Arms(2);
@@ -6284,7 +6286,7 @@ fn idle_ships_make_way_at_the_dock() {
         .id;
     scene.upgrade(yard, &data, &mut caches).unwrap();
     // The dock goes up first.
-    for _ in 0..(50.0 * (economy::BUILDING_SECONDS + 1.0)) as usize {
+    for _ in 0..(50.0 * (crate::clock::ticks(crate::objects::BUILDING_CYCLE[0]) + 1.0)) as usize {
         scene.update(0.02, &data, &mut caches);
     }
     let ids: Vec<u32> = scene
@@ -8582,4 +8584,296 @@ fn brain_picks_a_site_as_the_original() {
         0x3039,
         "one brain draw"
     );
+}
+
+/// The buildings' voice lists are the game's `SND_n` entries by nation
+/// (events base, base + 1, base + 3, base + 2). Needs `OPENCONQUEST_DATA`.
+#[test]
+fn building_calls_are_the_sound_entries() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let archive = data.sounds.as_ref().unwrap();
+    use super::halt::*;
+    for (calls, base) in [
+        (&TOWN_CALLS, 220),
+        (&SMITHY_CALLS, 232),
+        (&STUDIO_CALLS, 236),
+        (&SCHOOL_CALLS, 240),
+        (&WAR_TEMPLE_CALLS, 248),
+        (&FINISHED_CALLS, 188),
+    ] {
+        for (nation, add) in [0, 1, 3, 2].into_iter().enumerate() {
+            let names = openconquest_formats::sound::sound_choices(archive, base + add).unwrap();
+            assert_eq!(calls[nation], names.as_slice(), "event {}", base + add);
+        }
+    }
+}
+
+/// A settlement being made a town, called off at frame f of n: `500 x (n
+/// - f) / n` back, a settlement again (TownObj 0x441ba0 case 10); its
+/// training called off: `(100 - p) x amber / 100` back, the fish share
+/// into the town's `+0x252` / `+0x253` and the queue dropped. Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn order_10_on_a_town() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.amber = 10_000;
+    scene.fish = 10_000;
+    let home = scene.own_sites()[0];
+    let h = scene.object_index(home).unwrap();
+    let c = scene.objects[h].combat.as_mut().unwrap();
+    c.hull = c.max_hull;
+    let amber = scene.amber;
+    scene.upgrade(home, &data, &mut caches).unwrap();
+    assert_eq!(scene.amber, amber - 500);
+    for _ in 0..30 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let c = scene.construction_at(home).unwrap().clone();
+    assert!(c.frame > 0 && c.frame < c.frames);
+    let amber = scene.amber;
+    scene
+        .apply(&Order::Halt { id: home }, &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.amber, amber + 500 * (c.frames - c.frame) / c.frames);
+    let h = scene.object_index(home).unwrap();
+    assert_eq!(scene.objects[h].class, ObjectClass::Building(SETTLEMENT));
+    assert!(scene.construction_at(home).is_none());
+    // Two swordsmen (30 amber, 3 raw fish and 70 ticks each), 19 ticks
+    // in: p = 19 x 100 / 140 = 13.
+    let (amber, fish) = (scene.amber, scene.fish);
+    scene.train(home, 2).unwrap();
+    scene.train(home, 2).unwrap();
+    for _ in 0..19 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    scene
+        .apply(&Order::Halt { id: home }, &data, &mut caches)
+        .unwrap();
+    assert!(scene.training_at(home).is_none());
+    assert_eq!(scene.amber, amber - 60 + 87 * 60 / 100);
+    assert_eq!(scene.fish, fish - 600);
+    // v = 87 x 6 / 100 = 5: count 1, last part 5.
+    assert_eq!(scene.town_fish.get(&home), Some(&(1, 5)));
+}
+
+/// A building goes up a frame of its construction picture every 200 / n
+/// ticks, the first on the first tick, its hit points `max x (f x 100 /
+/// n) / 100` (0x4230f0, 0x423410); order 10 while it is built gives the
+/// whole price back and removes it, no ruins, counted as the owner's
+/// building lost (LandObj 0x425990, 0x424740). A school's study called
+/// off gives `(100 - p) x price / 100` back (0x432210). Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn order_10_on_buildings_and_studies() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.permits = crate::permits::Permits::ALL;
+    scene.amber = 10_000;
+    let home = scene.own_sites()[0];
+    let h = scene.object_index(home).unwrap();
+    let (hx, hy) = (
+        (scene.objects[h].x / 64.0) as i32,
+        (scene.objects[h].y / 64.0) as i32,
+    );
+    let school = economy::SCHOOL;
+    let site = (-BUILD_RADIUS..=BUILD_RADIUS)
+        .flat_map(|dy| (-BUILD_RADIUS..=BUILD_RADIUS).map(move |dx| (hx + dx, hy + dy)))
+        .find(|&(x, y)| scene.check_site(home, school, x, y).is_ok())
+        .unwrap();
+    let place = |scene: &mut Scene, caches: &mut Caches| {
+        scene
+            .place_building(home, school, site.0, site.1, &data, caches)
+            .unwrap();
+        scene
+            .objects
+            .iter()
+            .find(|o| o.class == ObjectClass::Building(school))
+            .unwrap()
+            .id
+    };
+    let id = place(&mut scene, &mut caches);
+    let i = scene.object_index(id).unwrap();
+    let n = scene.objects[i].frames.len() as u32;
+    let max = (scene.objects[i].combat.as_ref().unwrap().max_hull * 15.0).round() as u32;
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let c = scene.construction_at(id).unwrap().clone();
+    assert_eq!((c.frame, c.frames), (1, n));
+    let i = scene.object_index(id).unwrap();
+    let hull = scene.objects[i].combat.as_ref().unwrap().hull;
+    assert_eq!((hull * 15.0).round() as u32, max * (100 / n) / 100);
+    // Called off while built: 1000 (0x42d8b0(0x3c)) back, gone at once.
+    let amber = scene.amber;
+    let lost = scene.stats.buildings_lost;
+    scene
+        .apply(&Order::Halt { id }, &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.amber, amber + economy::building_cost(school));
+    assert!(scene.object_index(id).is_none());
+    assert!(scene.construction_at(id).is_none());
+    assert_eq!(scene.stats.buildings_lost, lost + 1);
+    assert!(!scene
+        .objects
+        .iter()
+        .any(|o| o.class == ObjectClass::Building(school)));
+    // Built again, it stands at the step reaching n: 1 + (n - 1) x d ticks.
+    let id = place(&mut scene, &mut caches);
+    let d = crate::objects::BUILDING_CYCLE[0] / n;
+    let mut ticks = 0;
+    while scene.construction_at(id).is_some() {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        ticks += 1;
+    }
+    assert_eq!(ticks, 1 + (n - 1) * d);
+    // The ram studied from level 0 (1000, 600 ticks): called off at once,
+    // all of it back; at 240 ticks (p = 40), 60%.
+    let amber = scene.amber;
+    scene.start_research(id, combat::Upgrade::Ram).unwrap();
+    assert_eq!(scene.amber, amber - 1000);
+    scene
+        .apply(&Order::Halt { id }, &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.amber, amber);
+    assert!(scene.research_at(id).is_none());
+    scene.start_research(id, combat::Upgrade::Ram).unwrap();
+    for _ in 0..240 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    scene
+        .apply(&Order::Halt { id }, &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.amber, amber - 1000 + 60 * 1000 / 100);
+    // Nothing on: nothing back.
+    let amber = scene.amber;
+    scene
+        .apply(&Order::Halt { id }, &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.amber, amber);
+}
+
+/// The temples called off (0x438300, 0x439260 case 10): learning gives
+/// back the elapsed share, `p x 1000 / 100`; the Flame `p x 6000 / 100`
+/// amber and `p x 15` fish. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn order_10_on_temples() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.permits = crate::permits::Permits::ALL;
+    scene.amber = 20_000;
+    scene.fish = 20_000;
+    let home = scene.own_sites()[0];
+    let h = scene.object_index(home).unwrap();
+    let (hx, hy) = (
+        (scene.objects[h].x / 64.0) as i32,
+        (scene.objects[h].y / 64.0) as i32,
+    );
+    let war = crate::magic::Temple::War.class();
+    let site = (-BUILD_RADIUS..=BUILD_RADIUS)
+        .flat_map(|dy| (-BUILD_RADIUS..=BUILD_RADIUS).map(move |dx| (hx + dx, hy + dy)))
+        .find(|&(x, y)| scene.check_site(home, war, x, y).is_ok())
+        .unwrap();
+    scene
+        .place_building(home, war, site.0, site.1, &data, &mut caches)
+        .unwrap();
+    let id = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(war))
+        .unwrap()
+        .id;
+    while scene.construction_at(id).is_some() {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    // 50 ticks of the 200: p = 25, 250 back.
+    scene
+        .learn_spell(crate::magic::Temple::War, Some(id))
+        .unwrap();
+    let amber = scene.amber;
+    for _ in 0..50 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    scene
+        .apply(&Order::Halt { id }, &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.amber, amber + 25 * 1000 / 100);
+    assert!(scene.magic.learning(crate::magic::Temple::War).is_none());
+    // The Flame, 100 ticks of 250: p = 40.
+    scene.magic.brew_flame(Some(id));
+    let (amber, fish) = (scene.amber, scene.fish);
+    for _ in 0..100 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    scene
+        .apply(&Order::Halt { id }, &data, &mut caches)
+        .unwrap();
+    assert_eq!(
+        (scene.amber, scene.fish),
+        (amber + 40 * 6000 / 100, fish + 40 * 15)
+    );
+    assert!(scene.magic.flame_brewing().is_none());
+}
+
+/// Order 10 to a fort: its twelve unit groups cease fire (0x4469b0) and
+/// it shoots no more (0x4469c0 with mode 0). Needs `OPENCONQUEST_DATA`.
+#[test]
+fn order_10_silences_a_fort() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+    let fort = scene
+        .objects
+        .iter()
+        .position(|o| matches!(o.class, ObjectClass::Building(0x34..=0x36)) && o.is_armed())
+        .expect("a fort");
+    let (fx, fy) = (scene.objects[fort].x, scene.objects[fort].y);
+    let owner = scene.objects[fort].owner.unwrap();
+    let forts: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| matches!(o.class, ObjectClass::Building(0x34..=0x36)))
+        .map(|o| o.id)
+        .collect();
+    for id in forts {
+        scene.halt(id, &data, &mut caches).unwrap();
+        let i = scene.object_index(id).unwrap();
+        assert!(scene.objects[i].combat.as_ref().unwrap().hold_fire);
+    }
+    let ship = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+    let ship_id = scene.objects[ship].id;
+    scene
+        .objects
+        .retain(|o| o.ship.is_none() || o.id == ship_id);
+    let i = scene.object_index(ship_id).unwrap();
+    scene.objects[i].owner = Some((owner.0, owner.1 + 1));
+    let water = scene
+        .nav
+        .nearest_water((fx / 64.0) as i32, (fy / 64.0) as i32)
+        .unwrap();
+    scene.objects[i].x = water.0 as f32 * 64.0 + 32.0;
+    scene.objects[i].y = water.1 as f32 * 64.0 + 32.0;
+    for _ in 0..50 * 5 {
+        scene.update(0.02, &data, &mut caches);
+        assert!(scene.shots.is_empty(), "a fort fired");
+    }
 }

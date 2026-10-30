@@ -298,6 +298,26 @@ impl Magic {
         self.learning = [None; 2];
     }
 
+    /// The temple a learning goes on at, if one was recorded.
+    pub fn learning_site(&self, temple: Temple) -> Option<u32> {
+        self.at[temple.slot()]
+    }
+
+    /// The temple a Flame brews at, if one was recorded.
+    pub fn flame_site(&self) -> Option<u32> {
+        self.flame_at
+    }
+
+    /// Calls off `temple`'s learning; the seconds it had gone on.
+    pub fn cancel_learning(&mut self, temple: Temple) -> Option<f32> {
+        self.learning[temple.slot()].take()
+    }
+
+    /// Calls off the Flame brewing; the seconds it had gone on.
+    pub fn cancel_flame(&mut self) -> Option<f32> {
+        self.flame_brew.take()
+    }
+
     /// Starts learning the next spell of `temple` at the temple `site`.
     pub fn start_learning(&mut self, temple: Temple, site: Option<u32>) {
         self.learning[temple.slot()] = Some(0.0);

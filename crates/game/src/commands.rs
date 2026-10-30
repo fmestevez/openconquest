@@ -658,7 +658,7 @@ pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
                 closes: false,
                 command,
                 enabled: true,
-                progress: Some((c.elapsed / c.total).min(1.0)),
+                progress: Some(c.done()),
                 count: 0,
             });
         }

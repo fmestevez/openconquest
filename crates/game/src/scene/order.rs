@@ -331,7 +331,7 @@ impl Scene {
             SellFitting { site, ram, level } => done(self.sell_fitting(site, ram, level)),
             SellTown { site } => done(self.sell_town(site, data, caches)),
             RepairStock { workshop } => done(self.order_repair_stock(workshop)),
-            Halt { id } => done(self.halt(id)),
+            Halt { id } => done(self.halt(id, data, caches)),
             BuildShip { site, kind } => {
                 let r = self.start_ship(site, kind);
                 self.make_new_ships(data, caches);

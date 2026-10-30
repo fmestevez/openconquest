@@ -77,6 +77,12 @@ pub struct SaveGame {
     pub stock_conditions: BTreeMap<u32, [Vec<u8>; 9]>,
     #[serde(default)]
     pub stock_repairs: Vec<crate::scene::StockRepair>,
+    /// Smithies' refit batches, and settlements' fish shares from
+    /// cancelled trainings (`+0x252`, `+0x253`).
+    #[serde(default)]
+    pub refit_batches: BTreeMap<u32, crate::scene::Batch>,
+    #[serde(default)]
+    pub town_fish: BTreeMap<u32, (u8, u8)>,
     /// Free casts from treasures, by spell index.
     #[serde(default)]
     pub free_casts: Vec<(u32, u32)>,

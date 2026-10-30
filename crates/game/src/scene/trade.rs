@@ -492,7 +492,16 @@ impl Scene {
         if self.yard_busy(id) {
             return Err("The shipyard is busy".into());
         }
-        let cost = economy::building_cost(to);
+        // The upgrade's price, and the mending of what the building lacks
+        // (TownObj 0x43b290 / Dock 0x416340, message 0x138a: 0x42d8b0(0x33)
+        // + 0x42d8b0(0x32) x (100 - condition) / 100 when under 100;
+        // 0x42d8b0(0x3b) + 0x42d8b0(0x3a) x (100 - condition) / 100).
+        let condition = self.objects[i].combat.as_ref().map_or(100, |c| {
+            ((c.hull / c.max_hull.max(1.0)) * 100.0).clamp(0.0, 100.0) as u32
+        });
+        let from = if to == TOWN { SETTLEMENT } else { SHIPYARD };
+        let cost =
+            economy::building_cost(to) + economy::building_cost(from) * (100 - condition) / 100;
         let owner = self.objects[i].owner.ok_or("No owner")?;
         if self.funds(owner).0 < cost {
             return Err(format!("Not enough amber: {cost} needed"));
@@ -519,11 +528,7 @@ impl Scene {
         obj.progress = Some(0.0);
         self.earn(owner, -(cost as i64), 0);
         self.objects[i] = obj;
-        self.constructions.push(Construction {
-            site: id,
-            elapsed: 0.0,
-            total: economy::BUILDING_SECONDS,
-        });
+        self.constructions.push(Construction::new(id, true));
         Ok(())
     }
 
@@ -804,6 +809,14 @@ impl Scene {
             return Err(format!("Not enough amber: {cost} needed"));
         }
         self.amber -= cost;
+        // One batch while it is busy (0x434a00): idle, it starts one; each
+        // refit adds its price and time (150 or 200 ticks).
+        if !self.refits.iter().any(|r| r.0 == smithy) {
+            self.refit_batches.remove(&smithy);
+        }
+        let batch = self.refit_batches.entry(smithy).or_default();
+        batch.paid += cost;
+        batch.ticks += (combat::refit_seconds(level) / crate::clock::TICK).round() as u32;
         self.refits.push((smithy, upgrade, level, 0.0));
         Ok(())
     }
@@ -854,6 +867,9 @@ impl Scene {
     pub(super) fn run_refits(&mut self, dt: f32) {
         let alive: Vec<u32> = self.objects.iter().map(|o| o.id).collect();
         self.refits.retain(|r| alive.contains(&r.0));
+        let refits = &self.refits;
+        self.refit_batches
+            .retain(|s, _| refits.iter().any(|r| r.0 == *s));
         let mut seen = Vec::new();
         let mut done = Vec::new();
         let limed = self.limed();
@@ -866,6 +882,9 @@ impl Scene {
                 continue;
             }
             r.3 += dt;
+            if let Some(b) = self.refit_batches.get_mut(&r.0) {
+                b.elapsed += dt;
+            }
             if r.3 >= combat::refit_seconds(r.2) {
                 done.push(k);
             }
@@ -1036,9 +1055,12 @@ impl Scene {
             .filter(|&k| k >= t.head)
             .ok_or("None of those are being made")?;
         t.queue.remove(k);
+        // Its amber 0x597164[k / 3] back (0x4a8dc0) and its fish
+        // 0x597170[k] raw (0x4a8c30): a hundredth of the 0x597170[k] x 100
+        // taken (0x4a8be0 at 0x43baac).
         let (amber, fish) = combat::item_cost(item);
         self.amber += amber;
-        self.fish += fish;
+        self.fish += fish / 100;
         Ok(())
     }
 
@@ -1727,38 +1749,67 @@ impl Scene {
         }
         self.objects.push(obj);
         self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
-        self.constructions.push(Construction {
-            site: id,
-            elapsed: 0.0,
-            total: economy::BUILDING_SECONDS,
-        });
+        self.constructions.push(Construction::new(id, false));
         Ok(())
     }
 
-    /// Advances constructions; finished buildings get their standing look.
-    pub(super) fn run_constructions(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+    /// Advances constructions a tick (0x4230f0, state 0): a frame every
+    /// `BUILDING_CYCLE[0] / n` ticks (`now >= last + delay`, the first on
+    /// the first tick); while the frame is under `n` the condition is
+    /// `frame x 100 / n` and the hit points `max x condition / 100`
+    /// (0x423410, integers on the original's points); the step reaching
+    /// `n` stands it (condition 100, state 1), and the owner's finished
+    /// call plays (events 188-191 by nation, for the viewing player).
+    /// (The original leaves `+0xac` at the last step's share while `+0xa8`
+    /// is 100; the port keeps one figure and makes it whole.)
+    pub(super) fn step_constructions(&mut self, data: &GameData, caches: &mut Caches) {
         let mut done = Vec::new();
-        for c in &mut self.constructions {
-            c.elapsed += dt;
-            let Some(i) = self.objects.iter().position(|o| o.id == c.site) else {
+        for k in 0..self.constructions.len() {
+            let Some(i) = self.object_index(self.constructions[k].site) else {
                 continue;
             };
-            self.objects[i].progress = Some((c.elapsed / c.total).min(1.0));
-            if let Some(h) = self.objects[i].combat.as_mut() {
-                // Hull grows with the work, from a tenth to whole.
-                h.hull = (h.hull + h.max_hull * 0.9 * dt / c.total).min(h.max_hull);
+            let n = (self.objects[i].frames.len() as u32).max(1);
+            let c = &mut self.constructions[k];
+            c.frames = n;
+            let delay = objects::BUILDING_CYCLE[0] / n;
+            if c.started {
+                c.wait += 1;
+                if c.wait < delay {
+                    continue;
+                }
             }
-            if c.elapsed >= c.total {
+            c.started = true;
+            c.wait = 0;
+            c.frame += 1;
+            let f = c.frame;
+            if f >= n {
                 done.push(c.site);
+                continue;
+            }
+            self.objects[i].progress = Some((f as f32 + 0.5) / n as f32);
+            if let Some(h) = self.objects[i].combat.as_mut() {
+                let condition = f as u64 * 100 / n as u64;
+                let max = (h.max_hull * 15.0).round() as u64;
+                h.hull = (max * condition / 100) as f32 / 15.0;
             }
         }
+        let alive: Vec<u32> = self.objects.iter().map(|o| o.id).collect();
         self.constructions
-            .retain(|c| c.elapsed < c.total && self.objects.iter().any(|o| o.id == c.site));
+            .retain(|c| c.frame < c.frames.max(1) && alive.contains(&c.site));
         for id in done {
+            if let Some(h) = self
+                .object_index(id)
+                .and_then(|i| self.objects[i].combat.as_mut())
+            {
+                h.hull = h.max_hull;
+            }
             self.refresh_building(id, data, caches);
             if let Some(i) = self.object_index(id) {
-                self.sounds
-                    .push(("bild6", self.objects[i].x, self.objects[i].y));
+                let o = &self.objects[i];
+                if self.is_own(o) {
+                    let (x, y, owner) = (o.x, o.y, o.owner);
+                    self.building_voice(owner, &super::halt::FINISHED_CALLS, x, y);
+                }
             }
         }
     }

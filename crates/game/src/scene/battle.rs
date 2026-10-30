@@ -126,8 +126,17 @@ impl Scene {
                                 Some(Task::Patrol { .. } | Task::Convoy { .. })
                             )),
                 ),
-                // Forts are always on guard.
-                None => (None, true),
+                // Forts and barbarian structures fire at will unless their
+                // groups were told to cease fire (order 10, 0x4469b0): then
+                // not at all (0x4469c0 with mode 0). (The port has no order
+                // that sets them firing again: 0x15 / 0x16 targets and 0x23
+                // sub 1 are not given to forts here.)
+                None => {
+                    if self.objects[i].combat.as_ref().is_some_and(|c| c.hold_fire) {
+                        continue;
+                    }
+                    (None, true)
+                }
             };
             let me = &self.objects[i];
             let target = match ordered {

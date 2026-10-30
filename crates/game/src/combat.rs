@@ -52,6 +52,12 @@ pub struct Combatant {
     /// Golden Fleece it stores (every 1000 heals a point).
     #[serde(default)]
     pub healing: f32,
+    /// A fort's or barbarian structure's unit groups cease fire (0x4469b0:
+    /// mode `+0x3a` and target `+0x20` cleared, so 0x4469c0 shoots not at
+    /// all), as order 10 leaves all twelve (0x419f80 0x41af74, 0x40ef70);
+    /// created firing at will (message 2).
+    #[serde(default)]
+    pub hold_fire: bool,
 }
 
 impl Combatant {
@@ -116,6 +122,7 @@ impl Combatant {
             wounds: 0.0,
             protect_weapons: 0.0,
             protect_magic: 0.0,
+            hold_fire: false,
         })
     }
 }
