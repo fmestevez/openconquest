@@ -672,7 +672,7 @@ impl Scene {
         for &(_, x, y, _) in changed {
             self.cell_types[(y * w + x) as usize] = cell_type(data, &self.grid, x, y);
         }
-        self.nav = NavGrid::from_map(&self.grid);
+        self.nav = NavGrid::from_types(self.grid.width, self.grid.height, &self.cell_types);
         let x0 = changed.iter().map(|c| c.1).min().unwrap();
         let x1 = changed.iter().map(|c| c.1).max().unwrap();
         let y0 = changed.iter().map(|c| c.2).min().unwrap();

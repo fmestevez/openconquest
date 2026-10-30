@@ -1,42 +1,40 @@
-//! Navigation grid and path finding for ships.
+//! Navigation grid and route finding for ships.
 //!
-//! Ships move between map cells. A cell is navigable when its base terrain
-//! is sea or shelf (tile sets 0 and 1); island ground, including coast cells,
-//! blocks ships. Shoals (layer 1, tile sets `b_ban01_`/`b_ban02_`) are
-//! water too, but ships of deep draught cannot cross them.
+//! Ships move between map cells over the ships' grids by draught, built
+//! from the landscape's tile types (0x49a950): a cell is open (0) when its
+//! layer-0 type is below 8 (sea, shelf) and its layer-1 type is not 5 (a
+//! raised reef); for a ship of deep draught (`+0x592`) not 3 either (a
+//! sandbank, the shoals). Every other cell is closed (-1). 0x5c93bc is
+//! the shallow grid, 0x5c9398 the deep one.
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-
-use openconquest_formats::MapGrid;
-
-const SEA: u8 = 0x00;
-const SHELF: u8 = 0x01;
-const SHOALS: [u8; 2] = [0x02, 0x03];
+use crate::scene::walk_path;
 
 pub struct NavGrid {
     pub width: u32,
     pub height: u32,
     water: Vec<bool>,
     shoal: Vec<bool>,
+    /// 0x4999e0's water (layer-0 type below 8, layer-1 type not 4, 5 or 6).
+    sea: Vec<bool>,
 }
 
 impl NavGrid {
-    pub fn from_map(grid: &MapGrid) -> Self {
-        let mut water = Vec::with_capacity((grid.width * grid.height) as usize);
-        let mut shoal = Vec::with_capacity(water.capacity());
-        for y in 0..grid.height {
-            for x in 0..grid.width {
-                water.push(matches!(grid.get(0, x, y).tileset, SEA | SHELF));
-                let over = grid.get(1, x, y);
-                shoal.push(!over.is_empty() && SHOALS.contains(&over.tileset));
-            }
-        }
+    /// The grids from the cells' tile types (`Scene::cell_types`, a nibble
+    /// a layer), as 0x49a950 builds them.
+    pub fn from_types(width: u32, height: u32, types: &[u32]) -> Self {
+        let layers = |t: u32| (t & 0xf, (t >> 4) & 0xf);
         Self {
-            width: grid.width,
-            height: grid.height,
-            water,
-            shoal,
+            width,
+            height,
+            water: types
+                .iter()
+                .map(|&t| matches!(layers(t), (l0, l1) if l0 < 8 && l1 != 5))
+                .collect(),
+            shoal: types.iter().map(|&t| layers(t).1 == 3).collect(),
+            sea: types
+                .iter()
+                .map(|&t| matches!(layers(t), (l0, l1) if l0 < 8 && !matches!(l1, 4..=6)))
+                .collect(),
         }
     }
 
@@ -48,9 +46,11 @@ impl NavGrid {
             height: rows.len() as u32,
             water: cells().map(|c| c == '.' || c == '~').collect(),
             shoal: cells().map(|c| c == '~').collect(),
+            sea: cells().map(|c| c == '.' || c == '~').collect(),
         }
     }
 
+    /// Whether `(x, y)` is open on the shallow grid (0x5c93bc).
     pub fn is_water(&self, x: i32, y: i32) -> bool {
         x >= 0
             && y >= 0
@@ -59,10 +59,21 @@ impl NavGrid {
             && self.water[(y as u32 * self.width + x as u32) as usize]
     }
 
-    /// Whether a ship can sail into `(x, y)`: water, and no shoal for a
-    /// ship of deep draught.
+    /// Whether `(x, y)` is open on the grid of the ship's draught (0x5c93bc,
+    /// or 0x5c9398 if `deep`).
     pub fn passable(&self, x: i32, y: i32, deep: bool) -> bool {
         self.is_water(x, y) && !(deep && self.shoal[(y as u32 * self.width + x as u32) as usize])
+    }
+
+    /// 0x4999e0(x, y, 0): water a move may end in (layer-0 type below 8,
+    /// layer-1 type not 4, 5 or 6). A plain move to any other cell plans
+    /// with a tolerance of 1 (0x4a5f30).
+    pub fn is_sea(&self, x: i32, y: i32) -> bool {
+        x >= 0
+            && y >= 0
+            && (x as u32) < self.width
+            && (y as u32) < self.height
+            && self.sea[(y as u32 * self.width + x as u32) as usize]
     }
 
     /// The water cell nearest to `(x, y)` (breadth-first), if any.
@@ -89,12 +100,24 @@ impl NavGrid {
         None
     }
 
-    /// The original's route finder (0x55ba50 with 0x5718f0 and 0x557910)
-    /// over 8-connected water cells: two straight runs if they are clear,
-    /// else a flood from `from` (a straight step 2, a diagonal 3; diagonals
-    /// may pass between closed cells) traced back downhill from `to`.
-    /// Returns the cells after `from` up to and including `to`, avoiding
-    /// shoals if `deep`.
+    /// The copy of the ship's grid a plan works on (0x5c93c0, copied from
+    /// 0x5c93bc or 0x5c9398 by draught), the cells `shut` names closed
+    /// (-1) too.
+    fn plan_grid(&self, deep: bool, shut: impl Fn((i32, i32)) -> bool) -> Vec<i16> {
+        let w = self.width as i32;
+        (0..(self.width * self.height) as i32)
+            .map(|i| (i % w, i / w))
+            .map(|c| {
+                if self.passable(c.0, c.1, deep) && !shut(c) {
+                    0
+                } else {
+                    -1
+                }
+            })
+            .collect()
+    }
+
+    /// The exact route from `from` to `to` on an open grid.
     #[cfg(test)]
     pub fn find_path(
         &self,
@@ -105,7 +128,10 @@ impl NavGrid {
         self.find_path_avoiding(from, to, deep, |_| false)
     }
 
-    /// The same, keeping out of the cells `avoid` names (other ships).
+    /// The exact route 0x55ca10 from `from` to `to` with the heading 0 (as
+    /// the ships' planners call it), over the ship's grid with the cells
+    /// `avoid` names closed: the cells after `from`, up to and including
+    /// `to`. `None` unless both ends are open and `to` is reached.
     pub fn find_path_avoiding(
         &self,
         from: (i32, i32),
@@ -113,137 +139,41 @@ impl NavGrid {
         deep: bool,
         avoid: impl Fn((i32, i32)) -> bool,
     ) -> Option<Vec<(i32, i32)>> {
-        if !self.passable(to.0, to.1, deep) || avoid(to) {
-            return None;
-        }
-        self.find_path_near(from, to, deep, avoid, None)
+        let mut m = self.plan_grid(deep, avoid);
+        let (w, h) = (self.width as i32, self.height as i32);
+        let route = walk_path::route_exact(&mut m, w, h, from, to, 0)?;
+        Some(cells_after(&route))
     }
 
-    /// As `find_path_avoiding`; with a tolerance, a goal it cannot reach
-    /// gives way to the nearest cell it can (0x55ba50): rings about the
-    /// goal are searched, within the tolerance for the least flood value,
-    /// beyond it for the nearest (twice the octile distance), the least
-    /// flood value on a tie, while the ring is within half the best.
+    /// The route 0x55ba50 from `from` towards `to` with the heading 0 and
+    /// the tolerance `tol` (as the ships' planners call it), over the
+    /// ship's grid with the cells `avoid` names closed: the cells after
+    /// `from` up to the goal, or to the reached cell it settles on
+    /// (`walk_path::route`). `None` with no reached cell; empty when it
+    /// gets no further than `from` (0x4a6330 then takes no route).
     pub fn find_path_near(
         &self,
         from: (i32, i32),
         to: (i32, i32),
         deep: bool,
         avoid: impl Fn((i32, i32)) -> bool,
-        tolerance: Option<i32>,
+        tol: i32,
     ) -> Option<Vec<(i32, i32)>> {
-        if from == to {
-            return Some(Vec::new());
-        }
-        let open = |c: (i32, i32)| self.passable(c.0, c.1, deep) && !avoid(c);
-        if let Some(path) = two_runs(from, to, &open) {
-            return Some(path);
-        }
-        let w = self.width as i32;
-        let h = self.height as i32;
-        let idx = |(x, y): (i32, i32)| (y * w + x) as usize;
-        let n = (self.width * self.height) as usize;
-        // The flood: the start 1, a straight step 2 more, a diagonal 3.
-        let mut value = vec![0u32; n];
-        let mut queue = BinaryHeap::new();
-        value[idx(from)] = 1;
-        queue.push(Reverse((1u32, from)));
-        while let Some(Reverse((v, cell))) = queue.pop() {
-            if v > value[idx(cell)] {
-                continue;
-            }
-            if cell == to {
-                break;
-            }
-            for (d, &(dx, dy)) in DIRS.iter().enumerate() {
-                let next = (cell.0 + dx, cell.1 + dy);
-                if next.0 < 0 || next.1 < 0 || next.0 >= w || next.1 >= h || !open(next) {
-                    continue;
-                }
-                let nv = v + if d % 2 == 1 { 3 } else { 2 };
-                let k = idx(next);
-                if value[k] == 0 || nv < value[k] {
-                    value[k] = nv;
-                    queue.push(Reverse((nv, next)));
-                }
-            }
-        }
-        let inside = |(x, y): (i32, i32)| x >= 0 && y >= 0 && x < w && y < h;
-        let mut to = to;
-        if !inside(to) || value[idx(to)] == 0 {
-            let tol = tolerance?;
-            let mut best: Option<((i32, u32), (i32, i32))> = None;
-            let goal = to;
-            for r in 1..w.max(h) {
-                if r > tol {
-                    if let Some(((d, _), _)) = best {
-                        if r > d / 2 || (r == 3 && d <= 6) {
-                            break;
-                        }
-                    }
-                }
-                for dy in -r..=r {
-                    for dx in -r..=r {
-                        if dx.abs() != r && dy.abs() != r {
-                            continue;
-                        }
-                        let c = (goal.0 + dx, goal.1 + dy);
-                        if !inside(c) || value[idx(c)] == 0 {
-                            continue;
-                        }
-                        let ring = 2 * dx.abs().max(dy.abs()) + dx.abs().min(dy.abs());
-                        let key = (if r <= tol { 0 } else { ring }, value[idx(c)]);
-                        if best.is_none_or(|(b, _)| key < b) {
-                            best = Some((key, c));
-                        }
-                    }
-                }
-            }
-            to = best?.1;
-            if to == from {
-                return Some(Vec::new());
-            }
-        }
-        // Back downhill from the goal: the diagonals first, each counted one
-        // more, then the straights; a tie keeps to the way it was going.
-        let mut path = vec![to];
-        let mut cell = to;
-        let mut prev: Option<usize> = None;
-        while cell != from {
-            let mut best: Option<(u32, usize)> = None;
-            for d in [1, 3, 5, 7, 0, 2, 4, 6] {
-                let (dx, dy) = DIRS[d];
-                let next = (cell.0 + dx, cell.1 + dy);
-                if next.0 < 0 || next.1 < 0 || next.0 >= w || next.1 >= h {
-                    continue;
-                }
-                let v = value[idx(next)];
-                if v == 0 {
-                    continue;
-                }
-                let score = if d % 2 == 1 { v + 1 } else { v };
-                let better = match best {
-                    None => true,
-                    Some((b, _)) => score < b || (score == b && prev == Some(d)),
-                };
-                if better {
-                    best = Some((score, d));
-                }
-            }
-            let (_, d) = best?;
-            let next = (cell.0 + DIRS[d].0, cell.1 + DIRS[d].1);
-            if value[idx(next)] >= value[idx(cell)] {
-                return None;
-            }
-            prev = Some(d);
-            cell = next;
-            if cell != from {
-                path.push(cell);
-            }
-        }
-        path.reverse();
-        Some(path)
+        let mut m = self.plan_grid(deep, avoid);
+        let (w, h) = (self.width as i32, self.height as i32);
+        let (route, _) = walk_path::route(&mut m, w, h, from, to, 0, tol)?;
+        Some(cells_after(&route))
     }
+}
+
+/// A route's cells after its first (where the ship plans from), as
+/// 0x4a6330 takes it: none when it holds one cell, or two the same.
+fn cells_after(route: &[(i32, i32, u8)]) -> Vec<(i32, i32)> {
+    let same = route.len() == 2 && (route[0].0, route[0].1) == (route[1].0, route[1].1);
+    if route.len() < 2 || same {
+        return Vec::new();
+    }
+    route[1..].iter().map(|&(x, y, _)| (x, y)).collect()
 }
 
 impl NavGrid {
@@ -320,86 +250,6 @@ impl NavGrid {
 }
 
 /// The eight directions: 0 east, counter-clockwise (north is up).
-const DIRS: [(i32, i32); 8] = [
-    (1, 0),
-    (1, -1),
-    (0, -1),
-    (-1, -1),
-    (-1, 0),
-    (-1, 1),
-    (0, 1),
-    (1, 1),
-];
-
-/// A route of two straight runs from `from` to `to` (0x5718f0): one along
-/// the axis the way leans and one diagonal, the axis first when it leans
-/// twice as much; the run nearer east first, then the other order. Every
-/// cell must be open.
-fn two_runs(
-    from: (i32, i32),
-    to: (i32, i32),
-    open: &impl Fn((i32, i32)) -> bool,
-) -> Option<Vec<(i32, i32)>> {
-    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
-    let (sx, sy) = (dx.signum(), dy.signum());
-    let axis = if dx.abs() >= dy.abs() {
-        (sx, 0)
-    } else {
-        (0, sy)
-    };
-    let diagonal = (sx, sy);
-    let lean = dx.abs() >= 2 * dy.abs() || dy.abs() >= 2 * dx.abs();
-    let (first, second) = if lean {
-        (axis, diagonal)
-    } else {
-        (diagonal, axis)
-    };
-    let east = |(x, y): (i32, i32)| {
-        let d = DIRS.iter().position(|&v| v == (x, y)).unwrap_or(0) as i32;
-        d.min(8 - d)
-    };
-    let orders = if east(second) < east(first) {
-        [(second, first), (first, second)]
-    } else {
-        [(first, second), (second, first)]
-    };
-    'order: for (a, b) in orders {
-        let mut cell = from;
-        let mut path = Vec::new();
-        let mut leg = a;
-        while cell != to {
-            let (lx, ly) = (to.0 - cell.0, to.1 - cell.1);
-            // A straight run ends when the rest is a diagonal; a diagonal
-            // one when the rest is straight.
-            let straight = leg.0 == 0 || leg.1 == 0;
-            if leg == a
-                && ((straight && lx.abs() == ly.abs()) || (!straight && (lx == 0 || ly == 0)))
-            {
-                leg = b;
-            }
-            let step = if leg.0 == 0 || leg.1 == 0 {
-                if leg.0 == 0 {
-                    (0, ly.signum())
-                } else {
-                    (lx.signum(), 0)
-                }
-            } else {
-                (lx.signum(), ly.signum())
-            };
-            if step == (0, 0) {
-                continue 'order;
-            }
-            cell = (cell.0 + step.0, cell.1 + step.1);
-            if !open(cell) {
-                continue 'order;
-            }
-            path.push(cell);
-        }
-        return Some(path);
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,7 +288,7 @@ mod tests {
         ]);
         assert!(nav.find_path((0, 1), (6, 1), false).is_none());
         let path = nav
-            .find_path_near((0, 1), (6, 1), false, |_| false, Some(0))
+            .find_path_near((0, 1), (6, 1), false, |_| false, 0)
             .unwrap();
         assert_eq!(path.last().map(|c| c.0), Some(3));
     }

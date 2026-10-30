@@ -5898,8 +5898,8 @@ fn ships_reload_from_each_other() {
         Err("No room aboard".to_string())
     );
     // Sailing off ends the reloading.
-    let (x, y) = (scene.objects[ka].x + 64.0 * 6.0, scene.objects[ka].y);
-    scene.order_move(a, x, y);
+    let (x, y) = (scene.objects[ka].x + 64.0 * 4.0, scene.objects[ka].y);
+    assert!(scene.order_move(a, x, y));
     scene.update(0.02, &data, &mut caches);
     assert!(scene.load_link(b).is_none());
 }
@@ -10768,4 +10768,163 @@ fn zone_sends_a_full_boat_to_unload() {
         }) if d == deposit && p == ports[0]
     ));
     assert_eq!(s.priority, 76);
+}
+
+/// The ships' routes on miss005's shallow grid as the original's machine
+/// code gives them (0x55ca10 and 0x55ba50 with the heading 0, run under
+/// an emulator): the exact route floods from the goal, the near one from
+/// the start, so round the same land they part (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn ship_routes_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    let nav = &scene.nav;
+    let exact = |s, g| nav.find_path_avoiding(s, g, false, |_| false).unwrap();
+    let near = |s, g, tol| nav.find_path_near(s, g, false, |_| false, tol).unwrap();
+    assert_eq!(
+        exact((33, 26), (27, 6)),
+        [
+            (32, 25),
+            (31, 24),
+            (30, 24),
+            (29, 24),
+            (28, 24),
+            (27, 24),
+            (26, 24),
+            (25, 24),
+            (24, 24),
+            (23, 24),
+            (22, 24),
+            (21, 23),
+            (20, 22),
+            (20, 21),
+            (20, 20),
+            (20, 19),
+            (20, 18),
+            (20, 17),
+            (20, 16),
+            (20, 15),
+            (21, 14),
+            (22, 13),
+            (23, 12),
+            (24, 11),
+            (25, 10),
+            (26, 9),
+            (27, 8),
+            (27, 7),
+            (27, 6)
+        ]
+    );
+    assert_eq!(
+        near((33, 26), (27, 6), 0),
+        [
+            (32, 27),
+            (31, 27),
+            (30, 27),
+            (29, 27),
+            (28, 27),
+            (27, 27),
+            (26, 27),
+            (25, 27),
+            (24, 26),
+            (23, 25),
+            (22, 24),
+            (21, 23),
+            (20, 22),
+            (20, 21),
+            (20, 20),
+            (20, 19),
+            (21, 18),
+            (22, 17),
+            (23, 16),
+            (24, 15),
+            (24, 14),
+            (24, 13),
+            (24, 12),
+            (24, 11),
+            (24, 10),
+            (24, 9),
+            (25, 8),
+            (26, 7),
+            (27, 6)
+        ]
+    );
+    assert_eq!(
+        exact((10, 1), (18, 13)),
+        [
+            (11, 1),
+            (12, 1),
+            (13, 1),
+            (14, 1),
+            (15, 2),
+            (16, 3),
+            (16, 4),
+            (16, 5),
+            (16, 6),
+            (16, 7),
+            (16, 8),
+            (15, 9),
+            (14, 10),
+            (14, 11),
+            (15, 12),
+            (16, 13),
+            (17, 13),
+            (18, 13)
+        ]
+    );
+    assert_eq!(
+        near((10, 1), (18, 13), 0),
+        [
+            (11, 1),
+            (12, 1),
+            (13, 1),
+            (14, 1),
+            (15, 2),
+            (16, 3),
+            (16, 4),
+            (16, 5),
+            (15, 6),
+            (14, 7),
+            (14, 8),
+            (14, 9),
+            (14, 10),
+            (14, 11),
+            (15, 12),
+            (16, 13),
+            (17, 13),
+            (18, 13)
+        ]
+    );
+    // A goal on land, with a tolerance of 1 (a plain move there, 0x4a5f30):
+    // it cannot be reached, so the nearest reached cell (0x55ba50's rings).
+    assert!(!nav.is_sea(1, 29));
+    assert_eq!(
+        near((18, 14), (1, 29), 1),
+        [
+            (17, 13),
+            (16, 13),
+            (15, 13),
+            (14, 14),
+            (13, 15),
+            (12, 16),
+            (11, 17),
+            (10, 18),
+            (10, 19),
+            (10, 20),
+            (9, 21),
+            (8, 22),
+            (7, 23),
+            (6, 23),
+            (5, 23),
+            (4, 24),
+            (3, 25),
+            (3, 26),
+            (3, 27)
+        ]
+    );
 }

@@ -544,7 +544,7 @@ mod story;
 mod towns;
 pub mod unload;
 pub mod volcano;
-mod walk_path;
+pub(crate) mod walk_path;
 mod walkers;
 mod yard;
 pub use brain::{Brain, EASY, HARD, NORMAL};
@@ -570,6 +570,16 @@ pub use trade::Arming;
 /// A ship held up: its id, the cell ahead, whether the ship there lies
 /// still (state 0) and whether it lies idle without a route, and its id.
 type Held = (u32, (i32, i32), bool, bool, u32);
+
+/// Which of 0x4a6330's planners a ship's route comes from: not waited
+/// with a tolerance of 0 (0x4a5740), a plain move's first plan
+/// (0x4a5f30), or waited (0x4a51b0).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Plan {
+    Unwaited,
+    Order,
+    Waited,
+}
 
 impl Scene {
     pub fn load(data: &GameData, caches: &mut Caches, mission: &str) -> Result<Self> {
@@ -670,7 +680,7 @@ impl Scene {
             Ok(small) => small,
             Err(_) => terrain.minimap(&palette_lut(data, 0)),
         };
-        let nav = NavGrid::from_map(&grid);
+        let nav = NavGrid::from_types(grid.width, grid.height, &cell_types);
         let gulls = Scene::new_gulls(nav.width, nav.height, &mut Rng(0x6011));
         let cells = (nav.width * nav.height) as usize;
         let players = players(&archive).unwrap_or_default();
@@ -1378,9 +1388,9 @@ impl Scene {
         if self.being_built(id) {
             return false;
         }
-        // As near as it can get (0x55ba50).
+        // The exact route, else as near as it can get (0x55ca10, 0x55ba50).
         let here = (self.objects[i].x, self.objects[i].y);
-        let Some(path) = self.plan_route_near(i, here, x, y, &HashSet::new()) else {
+        let Some(path) = self.plan_route_order(i, here, x, y) else {
             return false;
         };
         let Some(ship) = self.objects[i].ship.as_mut() else {
@@ -1441,7 +1451,9 @@ impl Scene {
         self.plan_route_avoiding(i, start, x, y, &HashSet::new())
     }
 
-    /// The same, keeping out of the cells in `avoid`.
+    /// The same, keeping out of the cells in `avoid`: a plan not waited
+    /// with a tolerance of 0 (0x4a6330 -> 0x4a5740), as the ships'
+    /// behaviours make (0x4a6270).
     fn plan_route_avoiding(
         &self,
         i: usize,
@@ -1450,11 +1462,31 @@ impl Scene {
         y: f32,
         avoid: &HashSet<(i32, i32)>,
     ) -> Option<VecDeque<(f32, f32)>> {
-        self.plan_route_tolerant(i, start, x, y, avoid, None)
+        self.plan_route_tolerant(i, start, x, y, avoid, Plan::Unwaited)
     }
 
-    /// The same for a plain move: a goal it cannot reach gives way to the
-    /// nearest cell it can (0x55ba50 with a tolerance of 0).
+    /// A plain move's first plan (0x4a5f30 -> 0x4a6330, not waited): to
+    /// water (0x4999e0) as `plan_route_avoiding`; to any other cell
+    /// 0x4a51b0 with a tolerance of 1, the nearest reached cell within 1
+    /// of it. A goal the exact route cannot reach takes the waited plan's
+    /// route at once (0x55ba50 with 0: as near as it gets), where the
+    /// original plans it 25 ticks later (0x4a6150).
+    fn plan_route_order(
+        &self,
+        i: usize,
+        start: (f32, f32),
+        x: f32,
+        y: f32,
+    ) -> Option<VecDeque<(f32, f32)>> {
+        let none = HashSet::new();
+        self.plan_route_tolerant(i, start, x, y, &none, Plan::Order)
+            .or_else(|| self.plan_route_near(i, start, x, y, &none))
+    }
+
+    /// A waited plan (0x4a6330 -> 0x4a51b0 with a plain move's arguments):
+    /// the goal left closed if `avoid` names it, the route 0x55ba50 with a
+    /// tolerance of 0 to water (0x4999e0), 1 to anything else: a goal it
+    /// cannot reach gives way to the nearest cell it can.
     fn plan_route_near(
         &self,
         i: usize,
@@ -1463,7 +1495,7 @@ impl Scene {
         y: f32,
         avoid: &HashSet<(i32, i32)>,
     ) -> Option<VecDeque<(f32, f32)>> {
-        self.plan_route_tolerant(i, start, x, y, avoid, Some(0))
+        self.plan_route_tolerant(i, start, x, y, avoid, Plan::Waited)
     }
 
     fn plan_route_tolerant(
@@ -1473,14 +1505,30 @@ impl Scene {
         x: f32,
         y: f32,
         avoid: &HashSet<(i32, i32)>,
-        tolerance: Option<i32>,
+        plan: Plan,
     ) -> Option<VecDeque<(f32, f32)>> {
         let t = TILE_SIZE as f32;
         let obj = &self.objects[i];
         let start_point = start;
         let from = ((start.0 / t).floor() as i32, (start.1 / t).floor() as i32);
         let target = ((x / t).floor() as i32, (y / t).floor() as i32);
-        let to = self.nav.nearest_water(target.0, target.1)?;
+        let on_map = |(x, y): (i32, i32)| {
+            x >= 0 && y >= 0 && x < self.nav.width as i32 && y < self.nav.height as i32
+        };
+        // A plain move plans to the cell itself, with a tolerance of 1 if
+        // it is not water (0x4a5f30, 0x4999e0). The behaviours' goals not
+        // on the shallow grid are moved to the nearest water on it (the
+        // port's own: 0x4a6330 makes no plan to a cell 0x4999e0 refuses
+        // with a tolerance of 0).
+        let sea = self.nav.is_sea(target.0, target.1);
+        let to = match plan {
+            Plan::Unwaited => self.nav.nearest_water(target.0, target.1)?,
+            Plan::Order | Plan::Waited if on_map(target) => target,
+            _ => return None,
+        };
+        if plan == Plan::Order && !sea {
+            return self.plan_route_tolerant(i, start, x, y, avoid, Plan::Waited);
+        }
         // A ship left on a non-water cell (e.g. placed at a dock) starts from
         // the nearest water.
         let start = if self.nav.is_water(from.0, from.1) {
@@ -1496,10 +1544,29 @@ impl Scene {
         // (the landscape's nibble 1, 0x430320 / 0x447b80): routes keep off
         // them.
         let traps: HashSet<(i32, i32)> = self.hazard_cells().into_keys().collect();
-        let shut = |c: (i32, i32)| (c != to && avoid.contains(&c)) || traps.contains(&c);
-        let cells = match tolerance {
-            None => self.nav.find_path_avoiding(start, to, deep, shut)?,
-            Some(_) => self.nav.find_path_near(start, to, deep, shut, tolerance)?,
+        // The ship's own cell is never closed to it (0x4a4e20 and 0x4a7290
+        // pass over cells it is in).
+        let base = |c: (i32, i32)| self.nav.passable(c.0, c.1, deep) && !traps.contains(&c);
+        let cells = if plan == Plan::Waited {
+            // 0x4a51b0: no route from a closed start; the goal stays as the
+            // plan's grid has it.
+            let shut = |c: (i32, i32)| (c != start && avoid.contains(&c)) || traps.contains(&c);
+            if !base(start) {
+                return None;
+            }
+            let tol = if sea { 0 } else { 1 };
+            self.nav.find_path_near(start, to, deep, shut, tol)?
+        } else {
+            // 0x4a5740: the goal opened again as the ships' grid has it;
+            // closed there, 0x55ba50 with a tolerance of 1, else the exact
+            // route 0x55ca10.
+            let shut =
+                |c: (i32, i32)| (c != start && c != to && avoid.contains(&c)) || traps.contains(&c);
+            if base(to) {
+                self.nav.find_path_avoiding(start, to, deep, shut)?
+            } else {
+                self.nav.find_path_near(start, to, deep, shut, 1)?
+            }
         };
         let mut points: Vec<(f32, f32)> = cells
             .into_iter()
@@ -1862,7 +1929,7 @@ impl Scene {
                 .any(|&(px, py)| closed.contains(&cell_of(px, py)));
             let start = (o.x, o.y);
             let route = if blocked {
-                self.plan_route_near(i, start, lx, ly, &closed)
+                self.plan_route_avoiding(i, start, lx, ly, &closed)
             } else {
                 None
             };

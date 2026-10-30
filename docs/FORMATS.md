@@ -1792,19 +1792,67 @@ pushes one of lower priority lying still, or goes round. The port does
 this when a ship is held, and every 25 ticks under way (only re-routing
 when its route runs into a closed cell).)
 
-The route finder (0x55ba50; 0x55ca10 floods from the goal instead): two
-straight runs if every cell is open (0x5718f0: along the axis the way
-leans and diagonally, the axis first when it leans twice as much, the run
-nearer east first, then the other order); else a flood from the start (1,
-a straight step 2 more, a diagonal 3, through open cells, a diagonal free
-to pass between closed ones) traced back from the goal downhill, the
-diagonals (one more) before the straights, a tie keeping the way it went;
-past the goal the nearest reached cell within the tolerance. The ships' behaviours move through
-0x4a6270 (11 callers, 0x4ac8d0 ... 0x4c26fa), all with a tolerance of 0:
-the first plan, not waited, takes the exact finder (0x55ca10, none for a
-goal it cannot reach, a tick of wait), and the next, waited, 0x55ba50, so
-a ship heads for the nearest cell it can reach. The port does so for plain
-moves and re-plans; its other orders refuse an unreachable goal outright.
+**The ships' route finders** (`walk_path::route`, `route_exact`; checked
+against the original's machine code under an emulator: 4000 random grids
+and 240 cases on miss003/005/009's grids, routes, reached flag and the
+flooded map all equal). Both work on the plan's copy of the ships' grid
+by draught (0x5c93c0 from 0x5c93bc / 0x5c9398, built by 0x49a950: open
+when the layer-0 type is below 8 and the layer-1 type is not 5, for deep
+draught not 3 either; the ship cells 0x4a4e20 closes, -1) and return
+5-byte entries `{short x, short y, byte dir}`, the start first. Every
+ship planner passes the heading 0 (east).
+- **0x55ca10(map, W, H, s, g, heading, &n)**, the exact route: NULL with
+  an end off the grid or `map[s]`, `map[g]` not 0. Two straight legs if
+  every cell is open (0x5718f0: the axis or the diagonal the way leans
+  first, the one nearer the heading first, then the other order), the
+  `max(|dx|, |dy|) + 1` cells, each byte the leg's direction. Else a
+  flood from the goal (0x557910 over the whole grid, `2 (W + H)`
+  generations, no head start, ending on reaching the start; see the
+  wavefront below): NULL when the start is not reached; then from the
+  start to the goal, each step to the diagonal neighbour of least
+  value + 1 (a tie: the one in the way it went), then to a straight one
+  of less value, or of equal value when the way it went was straight and
+  not the diagonal just taken; cells <= 0 passed over; the way it went
+  starts as the heading; it ends when a neighbour is the goal (the scan
+  order 1, 3, 5, 7, 0, 2, 4, 6 decides which). Each byte the direction
+  stepped in, the start's 0.
+- **0x55ba50(map, W, H, s, g, heading, tol, &reached, &n)**: NULL with an
+  end off the grid (no test of the ends' values). Two legs as above, a
+  leg also ending within `tol` (0x557440), up to the first cell within
+  `tol` of the goal (0x557480; the start written twice when it is);
+  reached 1. Else a flood from the **start** (0x557910 with the heading's
+  head start, d12 = heading); the goal if reached and `tol` is 0, else the
+  ring search about the goal (as 0x55ba50 for the creatures, below; NULL
+  for no cell); the same trace from that cell back to the start (the way
+  it went starts as none, -1) and the entries reversed; reached =
+  `0x557440(cell, goal) <= tol`. A cell that is the start gives `{s, 0},
+  {s, 4}`, which 0x4a6330 takes as no route.
+The best cell and its direction carry over between steps of the trace;
+since every reached cell has a neighbour at least 2 lower, it always finds
+one (no uninitialised read). So the exact and the near route round the
+same land differ: one floods from the goal, the other from the start.
+
+Which one (0x4a6330): with a tolerance of 0 and no wait, 0x4a5740: the
+goal reopened as the ships' grid has it, and if closed there 0x55ba50
+with a tolerance of 1, else 0x55ca10; otherwise 0x4a51b0: no route from a
+closed start, the goal left as closed if a ship lies there (a plain move
+passes keep-closed 1), 0x55ba50 with the move's tolerance. A plain move
+(0x4a5f30) plans to the clicked cell with a tolerance of 1 when 0x4999e0
+refuses it (layer-0 type 8 or more, layer-1 type 4, 5 or 6), else 0. The
+ships' behaviours move through 0x4a6270 (11 callers, 0x4ac8d0 ...
+0x4c26fa), all with a tolerance of 0: the first plan, not waited, takes
+the exact finder (none for a goal it cannot reach, a tick of wait), and
+the next, waited, 0x55ba50, so a ship heads for the nearest cell it can
+reach. The port: a plain move to water takes 0x55ca10 and, failing it,
+0x55ba50 at once (the original 25 ticks later); to any other cell
+0x55ba50 with 1; held-up re-plans 0x4a51b0's; the re-plan under way and
+the behaviours' plans 0x4a5740's. The behaviours' goals not on the
+shallow grid are first moved to the nearest water (the port's own: the
+original makes no plan to them with a tolerance of 0), and the ship's own
+cell is never closed to its plan (0x4a4e20 and 0x4a7290 pass over it).
+Not ported: the route's direction bytes (the port's ships turn by the
+cells), planning from the cell being entered while between cells
+(`+0x5b6`), and the region plan 0x4a5a10.
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to

@@ -869,6 +869,17 @@ pub fn near_last(
     if !(m[(gy * w + gx) as usize] < 1 || tol > 0) {
         return Some((gx, gy));
     }
+    ring_pick(m, w, h, (gx, gy), tol)
+}
+
+/// 0x55ba50's choice of the reached cell (value > 0) nearest `g` after
+/// its flood: rings `r` = 1, 2, ... about `g` while `r <= tol` or (`r` is
+/// within half the best ring distance, `2 max + min` of the offsets, and
+/// not 3 with that at most 6); each ring clipped to the grid, its east
+/// column, north row, west column, south row in turn. Within `tol` (and
+/// under 3) the least value wins; beyond, the nearest, the least value
+/// on a tie. `None` for none.
+fn ring_pick(m: &[i16], w: i32, h: i32, (gx, gy): (i32, i32), tol: i32) -> Option<(i32, i32)> {
     let (mut best, mut bestv, mut r) = (i32::MAX, i32::MAX, 0);
     let mut chosen = None;
     loop {
@@ -927,6 +938,212 @@ pub fn near_last(
         }
     }
     chosen
+}
+
+/// A route: `(x, y, direction stepped in)` a cell, the start first.
+pub type Route = Vec<(i32, i32, u8)>;
+
+/// The cells along two clear legs (0x5718f0's) from `s` to `g` as
+/// 0x55ba50 and 0x55ca10 write them: the start first, each entry's byte
+/// the leg direction in force (the second from the cell after the
+/// break), `n` entries at most; with a tolerance they stop at the first
+/// cell within it of the goal (0x557480), written twice when that is the
+/// start.
+fn along_legs(
+    (sx, sy): (i32, i32),
+    (gx, gy): (i32, i32),
+    (br, d1, d2): ((i32, i32), i32, i32),
+    n: i32,
+    tol: Option<i32>,
+) -> Vec<(i32, i32, u8)> {
+    let mut out = Vec::new();
+    let (mut x, mut y, mut d) = (sx, sy, d1);
+    while (out.len() as i32) < n {
+        out.push((x, y, d as u8));
+        if tol.is_some_and(|tol| dist2(x, y, gx, gy) <= tol) {
+            if out.len() == 1 {
+                out.push((x, y, d as u8));
+            }
+            break;
+        }
+        if (x, y) == br {
+            d = d2;
+        }
+        x += DIRS[d as usize].0;
+        y += DIRS[d as usize].1;
+    }
+    out
+}
+
+/// The back-trace of 0x55ba50 (0x55c160-0x55c2f6) and 0x55ca10
+/// (0x55cc3f-0x55cdec) over a flood `m` from `(x, y)` until a neighbour
+/// is `end`: each step to the diagonal neighbour of least value + 1 (on a
+/// tie the one in the way it went, `prev`), then to a straight one of
+/// less value, or equal when the way it went was straight and not the
+/// diagonal's; values <= 0 are passed over. The best cell and its
+/// direction carry over from step to step (the direction from 0).
+/// Calls `step(cell, direction)` for each cell taken and returns the
+/// direction to `end`.
+fn trace(
+    m: &[i16],
+    w: i32,
+    h: i32,
+    (mut x, mut y): (i32, i32),
+    end: (i32, i32),
+    mut prev: i32,
+    mut step: impl FnMut((i32, i32), i32),
+) -> i32 {
+    let inside = |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y);
+    let (mut bx, mut by, mut bd) = (x, y, 0);
+    loop {
+        let mut best = 30000;
+        for d in [1, 3, 5, 7, 0, 2, 4, 6] {
+            let (nx, ny) = (x + DIRS[d as usize].0, y + DIRS[d as usize].1);
+            if !inside(nx, ny) {
+                continue;
+            }
+            if (nx, ny) == end {
+                return d;
+            }
+            let v = m[(ny * w + nx) as usize] as i32;
+            if v <= 0 {
+                continue;
+            }
+            let take = if d & 1 == 1 {
+                v + 1 < best || (v + 1 == best && prev == d)
+            } else {
+                v < best || (v == best && prev != bd && prev & 1 == 0)
+            };
+            if take {
+                best = v + (d & 1);
+                (bx, by, bd) = (nx, ny, d);
+            }
+        }
+        step((bx, by), bd);
+        (x, y, prev) = (bx, by, bd);
+    }
+}
+
+/// The route 0x55ba50 over `m` (`w` x `h`, the flood written into it) from
+/// `s` towards `g`, with the initial heading `heading` and the tolerance
+/// `tol`: entries `(x, y, direction stepped in)`, the start first, and
+/// whether the route ends within `tol` (0x557440) of the goal. Two clear
+/// legs (0x5718f0, a leg ending within `tol`) are taken as they are, up
+/// to the first cell within `tol` (0x557480). Else a flood from the start
+/// (0x557910, `2 (w + h)` generations, the heading's head start); the
+/// goal itself if reached and `tol` is 0, else the ring search
+/// (`ring_pick`); then `trace` from that cell back to the start (the way
+/// it went starting as none), the entries reversed, the start's byte 0.
+/// `None` with an end off the grid or no reached cell.
+pub fn route(
+    m: &mut [i16],
+    w: i32,
+    h: i32,
+    (sx, sy): (i32, i32),
+    (gx, gy): (i32, i32),
+    heading: i32,
+    tol: i32,
+) -> Option<(Route, bool)> {
+    let inside = |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y);
+    if !inside(sx, sy) || !inside(gx, gy) {
+        return None;
+    }
+    let legs = two_legs(m, w, (sx, sy), (gx, gy), heading, tol);
+    if legs.0 {
+        let (ax, ay) = ((gx - sx).abs(), (gy - sy).abs());
+        if ax == 0 && ay == 0 {
+            let d = heading as u8;
+            return Some((vec![(sx, sy, d), (gx, gy, d)], true));
+        }
+        let (_, br, d1, d2) = legs;
+        let n = ax.max(ay) + 1;
+        let out = along_legs((sx, sy), (gx, gy), (br, d1, d2), n, Some(tol));
+        return Some((out, true));
+    }
+    wave(
+        m,
+        w,
+        (0, 0, w - 1, h - 1),
+        (sx, sy),
+        (gx, gy),
+        (w + h) * 2,
+        heading,
+        0,
+        0,
+    );
+    let c = if m[(gy * w + gx) as usize] < 1 || tol > 0 {
+        ring_pick(m, w, h, (gx, gy), tol)?
+    } else {
+        (gx, gy)
+    };
+    let mut out = vec![(c.0, c.1, 0u8)];
+    let last = if c == (sx, sy) {
+        0
+    } else {
+        trace(m, w, h, c, (sx, sy), -1, |(x, y), d| {
+            out.last_mut().unwrap().2 = ((d - 4) & 7) as u8;
+            out.push((x, y, 0));
+        })
+    };
+    out.last_mut().unwrap().2 = ((last - 4) & 7) as u8;
+    out.push((sx, sy, 0));
+    out.reverse();
+    Some((out, dist(c.0, c.1, gx, gy) <= tol))
+}
+
+/// The exact route 0x55ca10 over `m` (as `route`) from `s` to `g` with the
+/// initial heading `heading`: `None` unless both ends are on the grid and
+/// open (0). Two clear legs (0x5718f0) are taken as they are; else a
+/// flood from the goal (0x557910, `2 (w + h)` generations, ending on
+/// reaching the start), `None` if the start is not reached, and `trace`
+/// from the start to the goal (the way it went starting as `heading`),
+/// each entry's byte the direction stepped in, the start's 0.
+pub fn route_exact(
+    m: &mut [i16],
+    w: i32,
+    h: i32,
+    (sx, sy): (i32, i32),
+    (gx, gy): (i32, i32),
+    heading: i32,
+) -> Option<Vec<(i32, i32, u8)>> {
+    let inside = |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y);
+    if !inside(sx, sy) || !inside(gx, gy) {
+        return None;
+    }
+    if m[(sy * w + sx) as usize] != 0 || m[(gy * w + gx) as usize] != 0 {
+        return None;
+    }
+    let legs = two_legs(m, w, (sx, sy), (gx, gy), heading, 0);
+    if legs.0 {
+        let (ax, ay) = ((gx - sx).abs(), (gy - sy).abs());
+        if ax == 0 && ay == 0 {
+            let d = heading as u8;
+            return Some(vec![(sx, sy, d), (gx, gy, d)]);
+        }
+        let (_, br, d1, d2) = legs;
+        let n = ax.max(ay) + 1;
+        return Some(along_legs((sx, sy), (gx, gy), (br, d1, d2), n, None));
+    }
+    wave(
+        m,
+        w,
+        (0, 0, w - 1, h - 1),
+        (gx, gy),
+        (sx, sy),
+        (w + h) * 2,
+        -1,
+        0,
+        0,
+    );
+    if m[(sy * w + sx) as usize] == 0 {
+        return None;
+    }
+    let mut out = vec![(sx, sy, 0u8)];
+    let last = trace(m, w, h, (sx, sy), (gx, gy), heading, |(x, y), d| {
+        out.push((x, y, d as u8))
+    });
+    out.push((gx, gy, last as u8));
+    Some(out)
 }
 
 #[cfg(test)]
@@ -1057,5 +1274,54 @@ mod tests {
         assert_eq!(near((0, 0), (9, 6), 0), Some((5, 5)));
         assert_eq!(near((2, 3), (8, 3), 4), Some((3, 3)));
         assert_eq!(near((9, 0), (2, 3), 4), Some((6, 0)));
+    }
+
+    /// 0x55ba50 and 0x55ca10 on the fixture with the heading 0 (the ships'),
+    /// as the original's code gives them.
+    #[test]
+    fn routes_as_the_original() {
+        let near = |s, g, tol| route(&mut grid(), 10, 7, s, g, 0, tol).unwrap();
+        let exact = |s, g| route_exact(&mut grid(), 10, 7, s, g, 0).unwrap();
+        let round = vec![
+            (2, 3, 0),
+            (3, 3, 0),
+            (4, 4, 7),
+            (5, 3, 1),
+            (6, 2, 1),
+            (7, 1, 1),
+            (8, 2, 7),
+            (8, 3, 6),
+        ];
+        assert_eq!(near((2, 3), (8, 3), 0), (round.clone(), true));
+        assert_eq!(exact((2, 3), (8, 3)), round);
+        let west = vec![
+            (9, 6, 0),
+            (8, 6, 4),
+            (7, 6, 4),
+            (6, 6, 4),
+            (5, 6, 4),
+            (4, 6, 4),
+            (3, 6, 4),
+            (2, 6, 4),
+            (1, 5, 3),
+            (0, 4, 3),
+            (0, 3, 2),
+        ];
+        assert_eq!(near((9, 6), (0, 3), 0), (west.clone(), true));
+        assert_eq!(exact((9, 6), (0, 3)), west);
+        // A shut goal within the tolerance: two legs to the first cell
+        // within it; else the flood and the rings.
+        assert_eq!(
+            near((0, 0), (4, 2), 1),
+            (vec![(0, 0, 7), (1, 1, 7), (2, 2, 7), (3, 2, 0)], true)
+        );
+        assert_eq!(
+            near((3, 2), (8, 3), 2),
+            (
+                vec![(3, 2, 0), (3, 3, 6), (4, 4, 7), (5, 4, 0), (6, 4, 0)],
+                true
+            )
+        );
+        assert!(route_exact(&mut grid(), 10, 7, (2, 3), (4, 2), 0).is_none());
     }
 }
