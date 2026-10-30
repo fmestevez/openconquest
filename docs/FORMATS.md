@@ -258,7 +258,8 @@ the glyph count and parameter A packs `transparent << 16 | atlas height`.
 
 The 800x600 game screen is `GAME_FIELD` (592x600: frame around the view,
 message strip below; the see-through view is palette index 0) and
-`GAME_CTRLBAR` (208x600) on the right; `GAME_FIELD_FS` (800x600) is the
+`GAME_CTRLBAR` (208x600) on the right (on the left with "control bar
+left": below); `GAME_FIELD_FS` (800x600) is the
 frame without the bar. Names carry a theme prefix: `0` Greek, `3` Persian.
 On the bar (offsets from its left edge): minimap frame `BKGND_LMAPA` at
 (4, 4), 200x200 (0x4fffe0); object panel `COBJ_BKMAIN` at (3, 206),
@@ -270,6 +271,48 @@ The strip below the view holds the message line `GAME_MEDIT` (376x26) at
 the frame's right edge at y = 527, with the animated `GAME_MONEY` and
 `GAME_FISH` icons at panel + (10, 5) and (10, 35) (0x505330) and the
 amounts in `MONEY_FONT`.
+
+### Control bar left or right ([0x5ca54a])
+
+The configuration panel's radio pair (ids 0x3f1 left, 0x3f2 right) sets
+`[0x5ca54a]` (1 left, 0 right; 0 by default, 0x501710). Every reader of it
+(all 13 instructions referencing it in the exe):
+
+- 0x512ab0(x), the bar's x: 592 + x, or x with the bar on the left
+  (`[game+0xd91]`, the screen width 800, + x with the bar hidden,
+  `[game+0x328d]`). Every bar panel places its controls through it.
+- 0x511170(id, x): id 0x66 the same as 0x512ab0; id 0x67 the field's x,
+  x + 208 with the bar on the left (x with the bar hidden); other ids 0.
+  Callers with 0x67: the view's mapa, mode 1, at (0x67, 8) (16 with the
+  bar hidden) and the radar map, mode 2, at (0x67, 8) (Mapa.cpp 0x51cdd0
+  0x51ce87, 0x51b8c0, 0x51bd20; its message 0x24 re-places them the same
+  way), and `CHT_ALSIGN` at (0x67, 8) (0x514b00, not ported). The
+  bar's mapas (modes 3, 4) and the bar panels (0x4f0765-0x4f9cc5,
+  0x527896-0x527be8) use 0x66 (all 70 callers checked).
+- 0x504ef0(x), the field's: x + 208 with the bar on the left (unless
+  hidden). Fieldsys (0x504620 message 5) draws `GAME_FIELD` at
+  0x504ef0(0), `GAME_MEDIT` at (0x504ef0(0x6b), 568), `GAME_BKMONEY` at
+  (0x504ef0(592 - 106), 527), the wind rose at 0x504ef0(3) (0x504fa0), the
+  amounts (0x505530), the object info strip at (0x504ef0(0x6b), 527)
+  (0x503d60), a control at 0x504ef0(0x70) made by 0x5036d0 (type 0x163,
+  with 571, 365, 17 beside it) and a position 0x504ef0(0x70) kept by
+  0x506c70 (the message line's; not read further), the network name frame
+  `CHT_FRAMENAME` at 0x504ef0(207), the chat lines at 0x504ef0(8 or 16)
+  (chat.cpp 0x4ff390-0x4ffd0c). 0x504620 message 5 also calls 0x504ef0(3,
+  or 0x1e6 with the bar on the left) and drops the result.
+- 0x4faec0 (the panel's controls) starts the radio group on 0x3f2 - flag;
+  0x4fb540 message 0x506 sets the flag from the chosen id.
+
+The tab group (`_stab.cpp` 0x550c10, control type 5) notifies (0x506) only
+when an item other than the chosen one is pressed (message 0x61), so the
+side changes only on a change. Then, at once, 0x4fb540 sends message 0x24
+(move by dx) to the game screen (0x50f910): with `+0x18` 0 it moves the bar
+window by -592 (now left) or +592 and the field window by +208 or -208, and
+broadcasts message 5 (redraw). The screen is not rebuilt; every window
+moves in place, the mapas re-placing themselves on 0x24. Space (0x50f910
+message 0x4e1) uses the same message with `+0x18` 1 to hide or show the
+bar: the bar by 208 (right) or 800 (left), the field by 0 (right) or 208
+(left), so with the bar hidden the field is at 0 either side.
 
 ### Object info (the strip's middle)
 

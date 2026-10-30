@@ -186,6 +186,10 @@ struct Args {
     /// Debugging: show the radar map (Tab) in the screenshot.
     #[arg(long, hide = true)]
     radar: bool,
+    /// Debugging: the control bar on the left in the screenshot (the
+    /// configuration panel's "control bar left").
+    #[arg(long, hide = true)]
+    bar_left: bool,
     /// Debugging: show the site of a workshop at this cell, as when
     /// placing one from the settlement nearest it.
     #[arg(long, hide = true, value_parser = parse_size, value_name = "X,Y")]
@@ -538,7 +542,10 @@ fn screenshot(
     let text = TextRenderer::load(&data.controls, "0SYSTEM_FONT", 0)?;
     let interface = Interface::load(data, '0')?;
     let initial = camera;
-    let config = panels::Config::default();
+    let config = panels::Config {
+        bar_left: args.bar_left,
+        ..Default::default()
+    };
     let help = panels::help_paragraphs(
         &scene.briefing_lines,
         scene::is_custom(&scene.mission),
@@ -585,7 +592,7 @@ fn screenshot(
     let since = std::collections::HashMap::new();
     let hotkeys = hotkeys::Hotkeys::default();
     let radar = args.radar.then(|| {
-        let layout = interface.layout(size, &initial.policy, &scene);
+        let layout = interface.layout(size, &initial.policy, &scene, config.bar_left);
         crate::ui::Radar {
             origin: crate::ui::radar_origin(&layout, &scene, &initial, (0, 0)),
             view: initial,
@@ -644,6 +651,7 @@ fn screenshot(
         load: Some((load_panel::LoadView::default(), None)),
         object_info: None,
         hover_object: None,
+        bar_left: config.bar_left,
     };
     let (screen, _, _) = view.placement(size);
     let map = scene.map_size();

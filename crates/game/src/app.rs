@@ -956,6 +956,7 @@ impl App {
             .then(|| self.cursor.and_then(|c| self.object_at(c)))
             .flatten();
         GameView {
+            bar_left: self.settings.config.bar_left,
             hover_object,
             radar: self.radar_shown().then_some(crate::ui::Radar {
                 origin: self.radar_origin,
@@ -1059,9 +1060,12 @@ impl App {
     /// What of the load panel lies under window position `pos`.
     fn load_hit(&self, pos: PhysicalPosition<f64>) -> Option<crate::load_panel::Hit> {
         let panel = self.reloading()?;
-        let layout = self
-            .interface
-            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let layout = self.interface.layout(
+            self.window_size(),
+            &self.camera.policy,
+            &self.scene,
+            self.settings.config.bar_left,
+        );
         let x = (pos.x as f32 - layout.bar_x) / layout.scale;
         let y = pos.y as f32 / layout.scale;
         crate::load_panel::hit(&panel, &self.load_state(), x, y)
@@ -1136,12 +1140,16 @@ impl App {
         if !self.show_interface {
             return None;
         }
-        let layout = self
-            .interface
-            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let layout = self.interface.layout(
+            self.window_size(),
+            &self.camera.policy,
+            &self.scene,
+            self.settings.config.bar_left,
+        );
         let x = (pos.x as f32 - layout.bar_x) / layout.scale;
         let y = pos.y as f32 / layout.scale;
-        (x >= 0.0 && y >= 0.0).then_some((x as u32, y as u32))
+        // The bar is 208 wide, at either side.
+        (x >= 0.0 && x < crate::ui::BAR_W as f32 && y >= 0.0).then_some((x as u32, y as u32))
     }
 
     /// The panels' state, for hit testing.
@@ -3443,9 +3451,12 @@ impl App {
         if !self.show_interface || Panels::covers_bar(self.tab) || self.reloading().is_some() {
             return false;
         }
-        let layout = self
-            .interface
-            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let layout = self.interface.layout(
+            self.window_size(),
+            &self.camera.policy,
+            &self.scene,
+            self.settings.config.bar_left,
+        );
         let (x, y) = (
             (pos.x as f32 - layout.bar_x) / layout.scale,
             pos.y as f32 / layout.scale,
@@ -3549,9 +3560,12 @@ impl App {
         {
             return false;
         }
-        let layout = self
-            .interface
-            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let layout = self.interface.layout(
+            self.window_size(),
+            &self.camera.policy,
+            &self.scene,
+            self.settings.config.bar_left,
+        );
         let (x, y, w, h) = self.interface.arming_rect(&layout);
         let (px, py) = (pos.x as f32, pos.y as f32);
         px >= x && py >= y && px < x + w && py < y + h
@@ -3600,9 +3614,12 @@ impl App {
         if !self.show_interface || Panels::covers_bar(self.tab) || self.reloading().is_some() {
             return None;
         }
-        let layout = self
-            .interface
-            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let layout = self.interface.layout(
+            self.window_size(),
+            &self.camera.policy,
+            &self.scene,
+            self.settings.config.bar_left,
+        );
         self.interface
             .button_at(&layout, pos.x as f32, pos.y as f32)
     }
@@ -3884,7 +3901,12 @@ impl App {
         }
         let scale = self
             .interface
-            .layout(self.window_size(), &self.camera.policy, &self.scene)
+            .layout(
+                self.window_size(),
+                &self.camera.policy,
+                &self.scene,
+                self.settings.config.bar_left,
+            )
             .scale;
         let (screen, _) = self.placement();
         let (w, h) = self.interface.panels.ask_size();
@@ -4305,9 +4327,12 @@ impl App {
     fn placement(&self) -> (Screen, MinimapRect) {
         let window = self.window_size();
         if self.show_interface {
-            let layout = self
-                .interface
-                .layout(window, &self.camera.policy, &self.scene);
+            let layout = self.interface.layout(
+                window,
+                &self.camera.policy,
+                &self.scene,
+                self.settings.config.bar_left,
+            );
             (layout.view, layout.minimap)
         } else {
             (
@@ -4481,9 +4506,12 @@ impl App {
         if !self.radar_shown() {
             return None;
         }
-        let layout = self
-            .interface
-            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let layout = self.interface.layout(
+            self.window_size(),
+            &self.camera.policy,
+            &self.scene,
+            self.settings.config.bar_left,
+        );
         Some(crate::ui::radar_placement(
             &layout,
             &self.scene,
@@ -4518,9 +4546,12 @@ impl App {
         if !self.radar_shown() {
             return;
         }
-        let layout = self
-            .interface
-            .layout(self.window_size(), &self.camera.policy, &self.scene);
+        let layout = self.interface.layout(
+            self.window_size(),
+            &self.camera.policy,
+            &self.scene,
+            self.settings.config.bar_left,
+        );
         self.radar_origin =
             crate::ui::radar_origin(&layout, &self.scene, &self.camera, self.radar_origin);
     }
@@ -6317,8 +6348,12 @@ impl ApplicationHandler for App {
                 }
                 if let Some(slider) = self.slider_drag {
                     if let Some(layout) = self.show_interface.then(|| {
-                        self.interface
-                            .layout(self.window_size(), &self.camera.policy, &self.scene)
+                        self.interface.layout(
+                            self.window_size(),
+                            &self.camera.policy,
+                            &self.scene,
+                            self.settings.config.bar_left,
+                        )
                     }) {
                         let x = (position.x as f32 - layout.bar_x) / layout.scale;
                         let v =

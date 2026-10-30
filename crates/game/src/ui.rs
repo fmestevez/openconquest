@@ -1,15 +1,18 @@
 //! The original in-game interface: the framed game view, the control bar
-//! on the right with the minimap and the object panel.
+//! with the minimap and the object panel.
 //!
 //! The original screen is 800x600: `GAME_FIELD` (592x600, the frame around
-//! the view and the message strip) plus `GAME_CTRLBAR` (208x600). Panels on
+//! the view and the message strip) plus `GAME_CTRLBAR` (208x600), on the
+//! right, or on the left with "control bar left" ([0x5ca54a]): the bar's x
+//! is 592 or 0 (0x512ab0, 0x511170 id 0x66), the field's 0 or 208 (0x504ef0,
+//! 0x511170 id 0x67). Panels on
 //! the bar, from ANCIENT.EXE: the minimap frame `BKGND_LMAPA` at bar + (4, 4)
 //! (0x4fffe0) and the object panel `COBJ_BKMAIN` at bar + (3, 206)
 //! (0x4f5800). Names are prefixed with a theme digit, `0` (Greek) or `3`
 //! (Persian).
 //!
 //! Widescreen: everything is scaled by the window height, the control bar
-//! stays on the right and the frame is widened by tiling its middle part.
+//! stays at its side and the frame is widened by tiling its middle part.
 
 use anyhow::{Context, Result};
 use openconquest_formats::{Bitmap, ResourceKind, Sequence};
@@ -31,7 +34,7 @@ use crate::text::TextRenderer;
 use crate::view::{ScalePolicy, Screen};
 
 const ORIGINAL_FIELD_W: u32 = 592;
-const BAR_W: u32 = 208;
+pub const BAR_W: u32 = 208;
 const UI_H: u32 = 600;
 const MINIMAP_POS: (u32, u32) = (4, 4);
 const OBJECT_PANEL_POS: (u32, u32) = (3, 206);
@@ -147,6 +150,9 @@ pub struct Layout {
     pub view: Screen,
     pub minimap: MinimapRect,
     field_w: u32,
+    /// The field's left edge, in original pixels: 0, or the bar's width
+    /// with the bar on the left (0x504ef0, 0x511170 id 0x67: + 208).
+    field_x: u32,
     pub bar_x: f32,
 }
 
@@ -351,15 +357,31 @@ impl Interface {
         })
     }
 
-    pub fn layout(&self, window: (u32, u32), policy: &ScalePolicy, scene: &Scene) -> Layout {
+    /// The interface's placement, the control bar on the left with
+    /// `bar_left` ([0x5ca54a]): the bar at x 0 and the field after it
+    /// (0x512ab0, 0x504ef0, 0x511170), else the field at 0 and the bar
+    /// after it.
+    pub fn layout(
+        &self,
+        window: (u32, u32),
+        policy: &ScalePolicy,
+        scene: &Scene,
+        bar_left: bool,
+    ) -> Layout {
         let scale = policy.base_scale(window.1);
         let ui_w = (window.0 as f32 / scale) as u32;
         let field_w = ui_w.saturating_sub(BAR_W).max(2 * FRAME_EDGE);
-        let bar_x = field_w as f32 * scale;
+        let (field_x, bar_x) = if bar_left {
+            (BAR_W, 0.0)
+        } else {
+            (0, field_w as f32 * scale)
+        };
         let to_px = |v: u32| (v as f32 * scale).round() as u32;
         let (vx, vy, vw, vh) = self.field_view;
+        // The view at the field's (8, 8) (Mapa.cpp 0x51cdd0, mode 1:
+        // 0x511170(0x67, 8)).
         let view = Screen {
-            x: to_px(vx),
+            x: to_px(field_x + vx),
             y: to_px(vy),
             w: to_px((vw as i32 + field_w as i32 - ORIGINAL_FIELD_W as i32).max(16) as u32),
             h: to_px(vh),
@@ -378,6 +400,7 @@ impl Interface {
             view,
             minimap,
             field_w,
+            field_x,
             bar_x,
         }
     }
@@ -387,21 +410,23 @@ impl Interface {
     pub fn draw(&self, frame: &mut Frame, layout: &Layout, back: PanelBack) {
         let s = layout.scale;
         let f = &self.field;
-        // Frame: left and right edges as they are, the middle tiled.
-        blit_scaled(frame, f, (0, 0, FRAME_EDGE, UI_H), 0.0, 0.0, s);
+        // Frame (`GAME_FIELD` at the field's x, 0x504620 message 5): left
+        // and right edges as they are, the middle tiled.
+        let fx = layout.field_x;
+        blit_scaled(frame, f, (0, 0, FRAME_EDGE, UI_H), fx as f32 * s, 0.0, s);
         let mid = (FRAME_EDGE, 0, ORIGINAL_FIELD_W - 2 * FRAME_EDGE, UI_H);
         let right_at = layout.field_w - FRAME_EDGE;
         let mut x = FRAME_EDGE;
         while x < right_at {
             let w = mid.2.min(right_at - x);
-            blit_scaled(frame, f, (mid.0, 0, w, UI_H), x as f32 * s, 0.0, s);
+            blit_scaled(frame, f, (mid.0, 0, w, UI_H), (fx + x) as f32 * s, 0.0, s);
             x += w;
         }
         blit_scaled(
             frame,
             f,
             (ORIGINAL_FIELD_W - FRAME_EDGE, 0, FRAME_EDGE, UI_H),
-            right_at as f32 * s,
+            (fx + right_at) as f32 * s,
             0.0,
             s,
         );
@@ -441,11 +466,11 @@ impl Interface {
             frame,
             &self.wind_rose,
             full(&self.wind_rose),
-            WIND_ROSE.0 as f32 * s,
+            (fx + WIND_ROSE.0) as f32 * s,
             WIND_ROSE.1 as f32 * s,
             s,
         );
-        let (lx, ly) = (MESSAGE_LINE.0 as f32 * s, MESSAGE_LINE.1 as f32 * s);
+        let (lx, ly) = ((fx + MESSAGE_LINE.0) as f32 * s, MESSAGE_LINE.1 as f32 * s);
         blit_scaled(
             frame,
             &self.message_line,
@@ -459,7 +484,7 @@ impl Interface {
     fn money_panel_origin(&self, layout: &Layout) -> (f32, f32) {
         let s = layout.scale;
         (
-            (layout.field_w.saturating_sub(MONEY_PANEL.0)) as f32 * s,
+            (layout.field_x + layout.field_w.saturating_sub(MONEY_PANEL.0)) as f32 * s,
             MONEY_PANEL.1 as f32 * s,
         )
     }
@@ -477,7 +502,7 @@ impl Interface {
             frame,
             arrow,
             (0, 0, arrow.width, arrow.height),
-            WIND_ROSE.0 as f32 * s,
+            (layout.field_x + WIND_ROSE.0) as f32 * s,
             WIND_ROSE.1 as f32 * s,
             s,
         );
@@ -538,7 +563,7 @@ impl Interface {
         let s = layout.scale;
         let text_scale = s.round().max(1.0) as u32;
         let (x, y, _, h) = self.message_area;
-        let left = MESSAGE_LINE.0 as f32 * s + (x as f32 + 3.0) * s;
+        let left = (layout.field_x + MESSAGE_LINE.0) as f32 * s + (x as f32 + 3.0) * s;
         let top = MESSAGE_LINE.1 as f32 * s
             + y as f32 * s
             + (h as f32 * s - (text.line_height() * text_scale) as f32) / 2.0;
@@ -1208,6 +1233,8 @@ pub struct GameView<'a> {
     /// What the strip below the view tells of the object under the
     /// pointer (see `object_info`).
     pub object_info: Option<crate::object_info::ObjectInfo>,
+    /// The control bar on the left ([0x5ca54a]).
+    pub bar_left: bool,
 }
 
 impl GameView<'_> {
@@ -1339,7 +1366,7 @@ impl GameView<'_> {
     pub fn placement(&self, window: (u32, u32)) -> (Screen, MinimapRect, Option<Layout>) {
         match self.interface {
             Some(ui) => {
-                let layout = ui.layout(window, &self.camera.policy, self.scene);
+                let layout = ui.layout(window, &self.camera.policy, self.scene, self.bar_left);
                 let (view, minimap) = match self.radar {
                     Some(r) => radar_placement(&layout, self.scene, r.origin),
                     None => (layout.view, layout.minimap),
@@ -1643,7 +1670,8 @@ impl GameView<'_> {
             if let Some(info) = &self.object_info {
                 let (x, y) = crate::object_info::ORIGIN;
                 let s = layout.scale;
-                ui.info_art.draw(frame, x as f32 * s, y as f32 * s, s, info);
+                let x = (layout.field_x + x) as f32 * s;
+                ui.info_art.draw(frame, x, y as f32 * s, s, info);
             }
             // The button under the cursor says what it does and costs, and
             // its key (0x505e70).
@@ -1764,3 +1792,57 @@ const SHADE: [u8; 256] = [
     13, 13, 27, 27, 27, 27, 27, 27, 27, 28, 144, 235, 236, 237, 238, 239,
     240, 241, 242, 243, 244, 245, 27, 247, 248, 27, 13, 27, 27, 144, 27, 255,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::objects::Caches;
+
+    /// The control bar at either side ([0x5ca54a]): on the right the field
+    /// at 0 and the bar at 592 (0x512ab0: 0x250); on the left the bar at 0
+    /// and the field, the view (0x511170(0x67, 8)), the wind rose, the
+    /// money panel and the message line 208 further right (0x504ef0,
+    /// 0x504620 message 5). Needs `OPENCONQUEST_DATA`.
+    #[test]
+    fn the_bar_goes_to_either_side() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        let ui = Interface::load(&data, '0').unwrap();
+        let policy = ScalePolicy {
+            fixed: None,
+            integer: false,
+        };
+        let right = ui.layout((800, 600), &policy, &scene, false);
+        let left = ui.layout((800, 600), &policy, &scene, true);
+        let view = |l: &Layout| (l.view.x, l.view.y, l.view.w, l.view.h);
+        assert_eq!(view(&right), (8, 8, 576, 512));
+        assert_eq!(view(&left), (216, 8, 576, 512));
+        assert_eq!((right.bar_x, left.bar_x), (592.0, 0.0));
+        assert_eq!((right.field_x, left.field_x), (0, 208));
+        assert_eq!(right.minimap.x, left.minimap.x + 592);
+        assert_eq!(right.minimap.y, left.minimap.y);
+        // Drawn: the bar's pixels and the field's the same, moved.
+        let draw = |l: &Layout| {
+            let mut pixels = vec![0u32; 800 * 600];
+            let mut frame = Frame {
+                pixels: &mut pixels,
+                width: 800,
+                height: 600,
+            };
+            ui.draw(&mut frame, l, PanelBack::Clear);
+            ui.draw_wind(&mut frame, l, &scene.wind);
+            ui.draw_resources(&mut frame, l, 1234, 56, 0);
+            pixels
+        };
+        let (r, l) = (draw(&right), draw(&left));
+        for y in 0..600 {
+            let row = y * 800;
+            assert_eq!(r[row + 592..row + 800], l[row..row + 208], "bar row {y}");
+            assert_eq!(r[row..row + 592], l[row + 208..row + 800], "field row {y}");
+        }
+    }
+}
