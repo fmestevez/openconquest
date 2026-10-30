@@ -9,6 +9,7 @@ mod commands;
 mod cursor;
 mod economy;
 mod fade;
+mod formation;
 mod hotkeys;
 mod info_panel;
 mod launch;

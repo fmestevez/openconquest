@@ -1339,6 +1339,11 @@ fn buildings_fight() {
         .retain(|o| o.ship.is_none() || o.id == ship_id);
     let i = scene.object_index(ship_id).unwrap();
     scene.objects[i].owner = Some((owner.0, owner.1 + 1));
+    // Out of the brain's fleets: their move orders would send it back to
+    // its place in the formation (0x4ccd80).
+    for f in &mut scene.brain.as_mut().unwrap().fleets {
+        f.ships.retain(|&s| s != ship_id);
+    }
     let water = scene
         .nav
         .nearest_water((fx / 64.0) as i32, (fy / 64.0) as i32)
@@ -10459,5 +10464,63 @@ fn a_computers_ship_is_armed_from_its_town() {
     assert_eq!(
         (funds.0 - left.0, funds.1 - left.1),
         (price.amber, price.fish)
+    );
+}
+
+/// A brain's fleet sails in formation (fleet order 100, 0x4ccc30 ->
+/// 0x4cc970 -> the planner 0x560100): miss009's fleet 6, four shallow
+/// ships and a deep one ordered to (45, 41), each get the cell the
+/// original's planner gives for this layout (worked out by running
+/// 0x5614e0 itself on the same grids), and are sent there by command
+/// 0x14; miss010's fleet 4, six ships whose slots 0x55f870 deals out.
+#[test]
+fn brain_fleet_moves_in_formation() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss009").unwrap();
+    for _ in 0..30 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let order = scene.brain.as_ref().unwrap().fleets[6]
+        .move_order
+        .clone()
+        .unwrap();
+    assert_eq!(order.to, (45, 41));
+    let want = [
+        (62, (47, 41)),
+        (63, (44, 39)),
+        (64, (45, 41)),
+        (65, (43, 41)),
+        (66, (45, 42)),
+    ];
+    assert_eq!(order.slots, want);
+    // Delivered at the tick's end: each ship is on its way to its cell.
+    for (id, (x, y)) in want {
+        let i = scene.object_index(id).unwrap();
+        let end = *scene.objects[i].ship.as_ref().unwrap().path.back().unwrap();
+        assert_eq!(((end.0 / 64.0) as i32, (end.1 / 64.0) as i32), (x, y));
+    }
+    let mut scene = Scene::load(&data, &mut caches, "miss010").unwrap();
+    for _ in 0..70 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let order = scene.brain.as_ref().unwrap().fleets[4]
+        .move_order
+        .clone()
+        .unwrap();
+    assert_eq!(order.to, (6, 4));
+    assert_eq!(
+        order.slots,
+        [
+            (7, (6, 4)),
+            (6, (5, 3)),
+            (8, (6, 3)),
+            (9, (7, 3)),
+            (10, (5, 6)),
+            (11, (5, 4)),
+        ]
     );
 }

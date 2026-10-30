@@ -5027,6 +5027,84 @@ and the new ship joins the fleet that asked. State 0xffffff0 means "back to
 the state before". 0x48b180 and 0x48ebc0 lay an amber deposit (class 0x190)
 or a fishing ground (0x191) at a cell.
 
+**A fleet's move (fleet order 100) and its formation.** The brains'
+move (0x479870: payload `{x, y, p8, tolerance}`, `[4]` 0) goes to
+0x4a09d0 -> 0x4ccc30: a block not `{100, 1}` is ended (0x4a1c60), a new
+one made (0x4cc500: `{100, 1, now, x, y, p8, tolerance}`) or the move
+block rewritten in place (its slot list `+0x24` kept). Then 0x4cc970: one
+ship is given the cell itself; two or more go to the planner 0x5614e0 ->
+0x560100 with a record each (0x24 bytes: the ship's cell `+0x5a3/+0x5a7`,
+class `+8` 0, `+0xc` 1 for shallow draught `+0x592 == 0`) over copies of
+the ships' grids (0x4d50b0: 0x5c9398 if any ship is deep, 0x5c93bc if any
+is shallow). Each ship's cell is noted in the block's list by ship id
+(0x4cc7d0) and the ship sent there by command 0x14 `{x, y, 0}` (0x4cf070,
+0x520cc0). If the planner fails (negative), every ship gets command 0x14
+to the order's cell with priority byte 0xff (0x4cc650). The planner:
+- p1 the deep grid, p2 the shallow one (only one of them: both are it).
+  The centre is the ships' median cell (sorted x and y; an even count the
+  two middle values' mean rounded down). Centre or goal off the map: -4.
+- From the goal, on copies of p2 (with both draughts) and p1: 0x573350
+  opens the closed region the goal lies in (cells -1 joined side or
+  corner set to 0; nothing if the goal is open), then the wavefront
+  0x557910 (layers `2 (W + H)`, values up to `4 (W + H) + 2`); no layer
+  run: -4. A centre closed in p1 moves to the cell within three rings
+  with the lowest goal-flood value (the smaller ring distance on a tie);
+  each ring edge tests p1's openness at the edge's first cell only (the
+  original's code); none: -4. Then the wavefront from the centre on p1
+  (and p2), the goal's cell keeping its closed value.
+- 0x557910 is a wavefront of runs (16-byte records: side, match value,
+  length, least value written, first cell): the start 1, then each layer
+  every run steps one cell (the diagonal ahead of its start + 3 from the
+  run's first cell, each cell along + 2 from the cell behind, the far
+  diagonal + 3), splitting where a cell is not 0 or would pass the cap;
+  then each run's ends turn the corners (a diagonal + 3 and the cell
+  beside + 2). The next layer's runs are kept sorted by the least value
+  each wrote (0x571770, stable). It returns the layers run. (It is not a
+  shortest-path flood: about obstacles its values can be higher than the
+  least 2/3 sum.)
+- Slots (0x560f80 -> 0x561360, class 0): the open cells (exactly 0) in
+  square rings of radius 0-10 about the goal (an edge past the map left
+  out, the others cut to it; right side bottom to top, top right to left,
+  left top to bottom, bottom left to right), ring distance `(2r + |off|)
+  / 2`, radius 2 or less any, beyond only distance under 11. The best `n`
+  are kept in order: a cell where a ship would lie if the fleet moved
+  whole (its bounding-box bitmap shifted from the centre to the goal)
+  goes before another unless that one is two nearer; otherwise the nearer,
+  then the lower centre-flood value. Shallow ships' slots are found first
+  on p2, then the deep ones' on p1; each slot is marked taken (`| 0x8000`).
+  Too few: -4.
+- If every slot is a "whole fleet" cell, each ship goes to `goal - centre
+  + its cell`. Otherwise 0x55f870 deals them: the slots' median (an odd
+  sum of the two middle ones rounded up when below the goal); `toward`, the
+  direction from the centre to its 8-neighbour with the least goal-flood
+  value (`& 0x7fff`, a diagonal + 1, the direction to the slots' median
+  0x557560 on a tie), and `back`, from the slots' median to the least
+  centre-flood neighbour. Slots are bubble-sorted by 0x5574d0 along
+  `(back - 4) & 7` from the slots' median (the higher centre flood first
+  on a tie); ships by 0x5574d0 along `toward` from the first (unmoved)
+  centre (the lower goal flood first); the n-th ship takes the n-th slot.
+  With both draughts a shallow ship on a slot closed in p2 swaps it for
+  the next slot open in p2, and a deep ship takes the next p2-closed slot
+  while the deep ships left are no more than such slots (none: -4).
+  Not decoded: when no neighbour qualifies for `toward` or `back` the
+  routine goes on with a stack word it never wrote (`[esp+0x34]`,
+  `[esp+0x24]`, a pointer); the port then sends every ship to the order's
+  cell, as 0x4cc650 does on a failure.
+The move's pass (0x4ccd80, the fleet tick 0x4c4f40 each game tick): when
+fleet `+8` (zero when the fleet is made, + `game +0xe2` each call) is over
+100 it is zeroed and every ship lying still (`+0x58c` 0) more than one
+cell off its slot in x or y (the order's cell without a slot) is sent
+there again (0x4cf070). The brain's primitives never stop a fleet: on an
+event or timeout they only switch state (0x479750); the fleet keeps its
+task until another replaces it. Port: `formation.rs` (checked against
+0x5614e0 run on 600 random layouts and on the first formation move of each
+campaign mission), `Scene::fleet_move`, `run_move_orders`. Not ported: the
+pass's handling of ships that join (message 300, 0x4cc6a0: the whole fleet
+planned anew), its behaviour orders (0x4c42f0) and the move's status
+0x4ccf60 (done when every ship is within the order's tolerance, octile
+0x557440, of its slot; the port still asks whether the fleet is idle and
+any ship within two cells of the cell).
+
 Campaign state carries over between missions: at the start (message
 0x8d1) a brain restores the human's technology bits (+0x45, 12 bytes),
 rigging, ram and armour levels, the workshop's levels (+0x8e, +0x95,

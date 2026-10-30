@@ -197,6 +197,24 @@ pub struct Fleet {
     /// 0x4a1340, in the fleet's queue `+0x2d`), oldest first.
     #[serde(default)]
     pub joined: Vec<u32>,
+    /// The move order (fleet order 100, 0x4ccc30) it was last given, while
+    /// it is its task.
+    #[serde(default)]
+    pub move_order: Option<MoveOrder>,
+    /// Fleet `+8`: ticks towards its move order's pass (0x4ccd80), zero
+    /// when the fleet is made (0x49b990).
+    #[serde(default)]
+    pub elapsed: u32,
+}
+
+/// A fleet's move order (its block 0x4cc500 `{100, 1, now, x, y, ...}`).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct MoveOrder {
+    /// Block `+0xc`, `+0x10`: the cell it was sent to.
+    pub to: (i32, i32),
+    /// Block `+0x24`: each ship's cell in the formation (0x4cc7d0), by
+    /// ship id; kept, and rewritten, while the block lasts.
+    pub slots: Vec<(u32, (i32, i32))>,
 }
 
 /// A fleet's repair order (0x82, its block 0x4cd840 `{0x82, 0x51, now}`).
@@ -345,6 +363,8 @@ impl Fleet {
             vars: [0; 4],
             repair: None,
             joined: Vec::new(),
+            move_order: None,
+            elapsed: 0,
         }
     }
 }
@@ -772,6 +792,7 @@ impl Scene {
         // The fleets' orders tick too (the navy's message 0, 0x49ad18;
         // not decoded: whether before or after the brain's).
         self.run_repair_orders();
+        self.run_move_orders();
         if tick % 5 != 0 {
             return;
         }
@@ -1600,6 +1621,7 @@ impl Scene {
         // so on the player's fleet 0, then `+0x21` = yard, `+0x18` (the
         // fleet a mended ship is handed to) 0, `+0xc` 0.
         self.brain.as_mut().unwrap().fleets[k].repair = Some(RepairOrder::default());
+        self.brain.as_mut().unwrap().fleets[k].move_order = None;
         self.repair_pick(k);
         self.brain.as_mut().unwrap().fleets[k]
             .repair
@@ -1854,18 +1876,117 @@ impl Scene {
         self.brain.as_ref().unwrap().fleets[k].ships.clone()
     }
 
-    /// The fleet's ships sail to cell `(cx, cy)`: move commands (0x14,
-    /// 0x520cc0), delivered at the next tick.
-    fn fleet_move(&mut self, k: usize, (cx, cy): (i32, i32)) {
+    /// Fleet order 100 (0x479870 -> 0x4a09d0 -> 0x4ccc30): the fleet's
+    /// move block is made (0x4cc500; any other task ended, 0x4a1c60) or,
+    /// a move already, rewritten, keeping its ships' cells; then each ship
+    /// is given its cell of the formation about `to` (0x4cc970: one ship
+    /// `to` itself, more the planner `formation::plan` over the ships'
+    /// grids by draught), noted in the block (0x4cc7d0) and sent there by
+    /// command 0x14 (0x4cf070, 0x520cc0: delivered at the next tick). If
+    /// the planner gives no cells, each ship is sent to `to` (0x4cc650).
+    /// (Not ported: 0x4cc650's priority byte 0xff, which leaves the ship's
+    /// priority as it was; the port's move sets 0.)
+    fn fleet_move(&mut self, k: usize, to: (i32, i32)) {
         let t = TILE_SIZE as f32;
-        for (n, id) in self.fleet_ships(k).into_iter().enumerate() {
-            // Side by side, not on top of each other.
-            let dx = (n as f32 - 0.5) * 24.0;
-            self.post(super::Order::Move {
-                ship: id,
-                x: cx as f32 * t + t / 2.0 + dx,
-                y: cy as f32 * t + t / 2.0,
-            });
+        let ships: Vec<(u32, crate::formation::Ship)> = self
+            .fleet_ships(k)
+            .into_iter()
+            .filter_map(|id| {
+                let o = &self.objects[self.object_index(id)?];
+                let s = o.ship.as_ref()?;
+                Some((
+                    id,
+                    crate::formation::Ship {
+                        x: (o.x / t).floor() as i32,
+                        y: (o.y / t).floor() as i32,
+                        shallow: !crate::objects::deep_draught(s.kind),
+                    },
+                ))
+            })
+            .collect();
+        let cells = match ships.len() {
+            0 => Some(Vec::new()),
+            1 => Some(vec![to]),
+            _ => {
+                let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+                let grid = |deep: bool| -> Vec<i16> {
+                    (0..h)
+                        .flat_map(|y| (0..w).map(move |x| (x, y)))
+                        .map(|(x, y)| if self.nav.passable(x, y, deep) { 0 } else { -1 })
+                        .collect()
+                };
+                let list: Vec<_> = ships.iter().map(|s| s.1).collect();
+                crate::formation::plan(&grid(true), &grid(false), (w, h), to, &list).ok()
+            }
+        };
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        f.repair = None;
+        let order = f.move_order.get_or_insert_with(MoveOrder::default);
+        order.to = to;
+        let goal = |(x, y): (i32, i32)| (x as f32 * t + t / 2.0, y as f32 * t + t / 2.0);
+        match cells {
+            Some(cells) => {
+                for (&(id, _), &cell) in ships.iter().zip(&cells) {
+                    match order.slots.iter_mut().find(|s| s.0 == id) {
+                        Some(s) => s.1 = cell,
+                        None => order.slots.push((id, cell)),
+                    }
+                }
+                for ((id, _), cell) in ships.into_iter().zip(cells) {
+                    let (x, y) = goal(cell);
+                    self.post(super::Order::Move { ship: id, x, y });
+                }
+            }
+            None => {
+                let (x, y) = goal(to);
+                for (id, _) in ships {
+                    self.post(super::Order::Move { ship: id, x, y });
+                }
+            }
+        }
+    }
+
+    /// The move orders' pass (0x4ccd80, from the fleets' tick 0x4c4f40,
+    /// each game tick): when fleet `+8` is over 100 it goes back to 0 and
+    /// every ship lying still (`+0x58c` 0) more than a cell off its cell in
+    /// the block (in x or y; the order's cell without one) is sent there
+    /// again (0x4cf070); then `+8` grows by the tick. (Not ported here: the
+    /// pass's ships that joined (message 300, 0x4cc6a0, planned in anew),
+    /// its behaviour orders 0x4c42f0 and its reports of blows, 0x4a21c0,
+    /// which the port makes at once.)
+    fn run_move_orders(&mut self) {
+        let t = TILE_SIZE as f32;
+        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
+            let f = &self.brain.as_ref().unwrap().fleets[k];
+            let Some(order) = f.move_order.clone() else {
+                continue;
+            };
+            if f.elapsed > 100 {
+                self.brain.as_mut().unwrap().fleets[k].elapsed = 0;
+                for id in self.fleet_ships(k) {
+                    let Some(i) = self.object_index(id) else {
+                        continue;
+                    };
+                    let o = &self.objects[i];
+                    if o.ship.as_ref().is_none_or(|s| s.move_state != 0) {
+                        continue;
+                    }
+                    let cell = order
+                        .slots
+                        .iter()
+                        .find(|s| s.0 == id)
+                        .map_or(order.to, |s| s.1);
+                    let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+                    if (here.0 - cell.0).abs() > 1 || (here.1 - cell.1).abs() > 1 {
+                        self.post(super::Order::Move {
+                            ship: id,
+                            x: cell.0 as f32 * t + t / 2.0,
+                            y: cell.1 as f32 * t + t / 2.0,
+                        });
+                    }
+                }
+            }
+            self.brain.as_mut().unwrap().fleets[k].elapsed += 1;
         }
     }
 
@@ -1882,6 +2003,7 @@ impl Scene {
     }
 
     fn fleet_gather(&mut self, k: usize, (x, y, w, h): Cells, resource: Resource) {
+        self.brain.as_mut().unwrap().fleets[k].move_order = None;
         let t = TILE_SIZE as f32;
         let (a, b) = (
             (x as f32 * t, y as f32 * t),
@@ -1899,6 +2021,7 @@ impl Scene {
     }
 
     fn fleet_attack(&mut self, k: usize, (x, y, w, h): Cells) {
+        self.brain.as_mut().unwrap().fleets[k].move_order = None;
         let t = TILE_SIZE as f32;
         let (a, b) = (
             (x as f32 * t, y as f32 * t),
