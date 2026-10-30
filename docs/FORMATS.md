@@ -2137,20 +2137,37 @@ list and escorts).
   port); `T = (most + least) x m - sum > 0`: three draws `% T` walking
   the ports with `most - s + least` (0 for `s < 1`) until past the draw
   (none: port 0), the greatest value kept (strict from 0). The ship
-  counts 0x4c7a60 it also stores are never read. (Uninitialised in the
-  original: a port's `s` before any candidate rated it, and the entry of
-  a port that failed the test: taken as 0.)
+  counts 0x4c7a60 it also stores are never read. Its four arrays (loads,
+  port objects, berths, scores) come off the stack (0x5878f0, the stack
+  probe) and only the loads are set (-1): a port's object is written
+  when it passes the test, its `s` when rated. The last entry of each
+  holds the probe's return address left there: the last port's object
+  0x4c8068, read as an object its id is the dword at 0x4c80b4,
+  0xffff6c85 (no object; so a lone port that fails gives its deposits
+  that port, score 1), and the last `s` 0x4c8090. The other entries hold
+  what 0x4c65c0 / 0x4c6c30 left (frame, `ecx`): not known; the port
+  gives the rating up (0, nothing sent) when the walk or the pick reads
+  one. The least starts at 0 and is set only at the first deposit's
+  first port, so with that port unrated one deposit alone has `T = 0`.
 - **0x4c9270**: the candidate with the least value of the wavefront
   0x4a1e90 from the ship (limit 5000; an amber's approach 0x4c76f0 on it;
-  first on a tie, 0x4c5ec0; an amber with no approach reads the word
-  before the grid: 0 here). Amber / fish: a non-merchant follows a
+  first on a tie, 0x4c5ec0; an amber with no approach makes it read the
+  word before the wavefront, the end of the malloc heap header of
+  0x4a1e90's block, not the game's: with one candidate it is never
+  compared; with more the pick is not known and the port takes
+  0x4c9270's failure exit, nothing sent, 0). Amber / fish: a non-merchant follows a
   merchant drawn with the navy LCG; a merchant with port argument and a
   0x4c6640 port: full -> 0x1f, else the gather command with it; without:
   full -> 0x4c6640 with no ship (the port with the most ships bound,
   first on a tie) or nothing; else the gather command, port 0. A
   leviathan: no port -> gather port 0; full or a leviathan aboard -> 0x1f;
   else gather with the port.
-- **0x4c6640** as above, with no ship the most-bound port; the crowded
+- **0x4c6640** as above, with no ship the most-bound port; a berth is
+  0x4c6520's (the player's class 0x39 at the entry's cell, else -1), the
+  least starts at the list's first berth's value: with that -1 (a port
+  lost to another player: 0x4c65c0 does not test the owner) it reads the
+  word before the wavefront, not known, and with any port reached the
+  port gives no port (the pick's empty exit); the crowded
   step: 0x49a330 on the picked berth, `a > 0 && b > 0 && a - b < 2` ->
   the next ranked port with a score and a lower load. **0x49a330(berth,
   player)**: the berth's neighbours on the map (0x49a1d0 gives the cell's

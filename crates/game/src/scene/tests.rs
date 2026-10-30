@@ -11688,3 +11688,201 @@ fn fleet_move_status() {
     let sent: Vec<u32> = scene.outbox.iter().filter_map(|o| o.ship()).collect();
     assert_eq!(sent.len(), 2);
 }
+
+/// 0x4c7fc0's arrays come off the stack (0x5878f0): a zone's only port
+/// whose berth is not water leaves its object slot holding the stack
+/// probe's return address 0x4c8068, read as an object: the deposit is
+/// rated for the id at 0x4c80b4, 0xffff6c85, score 1 (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn zone_rating_reads_the_stack_probe() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, _boat, deposit, ports) = amber_boat_in_zone(&data, &mut caches);
+    let d = scene.object_index(deposit).unwrap();
+    let f = &scene.objects[d].record.fields;
+    let cell = (f[6] as i32, f[7] as i32);
+    let rec = |port| gather::Rec {
+        id: deposit,
+        cell,
+        port,
+        pscore: 0,
+        amount: 100,
+    };
+    // The port as it stands: its own id, score 1.
+    let mut recs = [rec(7)];
+    assert_eq!(scene.zone_rate(0, &mut recs), 1);
+    assert_eq!((recs[0].port, recs[0].pscore), (ports[0], 1));
+    // Face it to land.
+    let p = scene.object_index(ports[0]).unwrap();
+    let land = (0..8u32)
+        .find(|&k| {
+            scene.objects[p].record.fields[10] = k;
+            !scene.sea_cell(scene.berth_cell(p).unwrap(), false)
+        })
+        .unwrap();
+    scene.objects[p].record.fields[10] = land;
+    let mut recs = [rec(7)];
+    assert_eq!(scene.zone_rate(0, &mut recs), 1);
+    assert_eq!((recs[0].port, recs[0].pscore), (gather::PROBE_PORT_ID, 1));
+}
+
+/// 0x4c5ec0 with an amber that has no approach (0x4c76f0 -1) reads the
+/// word before the wavefront, a heap header: with one candidate it is
+/// never compared and the amber is sent; with two the pick is not known
+/// and 0x4c9270 sends nothing (needs `OPENCONQUEST_DATA`).
+#[test]
+fn zone_pick_without_an_approach() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, deposit, _ports) = amber_boat_in_zone(&data, &mut caches);
+    let i = scene.object_index(boat).unwrap();
+    let d = scene.object_index(deposit).unwrap();
+    let f = &scene.objects[d].record.fields;
+    let cell = (f[6] as i32, f[7] as i32);
+    // A cell of land with land all about it.
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let inland = (1..h - 1)
+        .flat_map(|y| (1..w - 1).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            (-1..=1).all(|dy| (-1..=1).all(|dx| !scene.sea_cell((x + dx, y + dy), false)))
+        })
+        .unwrap();
+    let amber = gather::Cand {
+        cell,
+        amount: 100,
+        id: deposit,
+    };
+    let dry = gather::Cand {
+        cell: inland,
+        amount: 100,
+        id: deposit,
+    };
+    scene.outbox.clear();
+    assert_eq!(scene.zone_one(0, i, &[amber], false), 0x19);
+    assert_eq!(scene.outbox.len(), 1);
+    scene.outbox.clear();
+    assert_eq!(scene.zone_one(0, i, &[amber, dry], false), 0);
+    assert_eq!(scene.zone_one(0, i, &[dry, amber], false), 0);
+    assert!(scene.outbox.is_empty());
+}
+
+/// 0x4c6640 starts its least at the list's first berth (0x4c6520): a
+/// first entry that is not the player's port gives -1 and the word
+/// before the wavefront is read (not known): with a port reached no port
+/// is picked; with the player's own first, the other is passed over
+/// (miss003's own port and the Persians'; needs `OPENCONQUEST_DATA`).
+#[test]
+fn zone_port_pick_with_a_foreign_first_port() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss008").unwrap();
+    past_hold(&mut scene);
+    let (own, foreign) = (18, 29);
+    let p = scene.object_index(own).unwrap();
+    let (bx, by) = scene.berth_cell(p).unwrap();
+    let owner = scene.objects[p].owner.unwrap();
+    // (The player's port lies asleep at the start: woken.)
+    scene.objects[p].asleep = None;
+    let boat = scene
+        .spawn_ship(owner, 0, bx, by, &data, &mut caches)
+        .unwrap();
+    let deposit = scene
+        .objects
+        .iter()
+        .find(|o| gather::deposit_class(o).is_some())
+        .unwrap()
+        .id;
+    scene.order_gather_at(&[boat], deposit).unwrap();
+    let i = scene.object_index(boat).unwrap();
+    scene.gather_zones[0].ports = Some(vec![own, foreign]);
+    assert_eq!(scene.zone_port_pick(0, Some(i)), Some(own));
+    scene.gather_zones[0].ports = Some(vec![foreign, own]);
+    assert_eq!(scene.zone_port_pick(0, Some(i)), None);
+}
+
+/// 0x4c7fc0 over two ports (miss008's own two). The last port's berth
+/// not water: its score holds the probe's 0x4c8090, not reached by the
+/// walk: the first port is taken. The same port first: the least stays
+/// 0 (set only by the first deposit's first port), so one deposit has
+/// no draws (`T` 0); with a second deposit nearer than the first the
+/// walk starts at the failed port's score, what 0x4c65c0 left on the
+/// stack, and the rating gives up (0) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn zone_rating_over_two_ports_with_one_failed() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss008").unwrap();
+    past_hold(&mut scene);
+    let ports = [18, 2];
+    for id in ports {
+        let p = scene.object_index(id).unwrap();
+        scene.objects[p].asleep = None;
+    }
+    let p = scene.object_index(ports[0]).unwrap();
+    let (bx, by) = scene.berth_cell(p).unwrap();
+    let owner = scene.objects[p].owner.unwrap();
+    let boat = scene
+        .spawn_ship(owner, 0, bx, by, &data, &mut caches)
+        .unwrap();
+    let t = TILE_SIZE as f32;
+    let mut shoals: Vec<(u32, (i32, i32))> = scene
+        .objects
+        .iter()
+        .filter(|o| gather::deposit_class(o) == Some(Resource::Fish))
+        .map(|o| (o.id, ((o.x / t).floor() as i32, (o.y / t).floor() as i32)))
+        .filter(|&(_, (x, y))| {
+            x >= 0 && y >= 0 && x < scene.nav.width as i32 && y < scene.nav.height as i32
+        })
+        .collect();
+    shoals.sort_by_key(|&(_, (x, y))| (x - bx).abs().max((y - by).abs()));
+    scene.order_gather_at(&[boat], shoals[0].0).unwrap();
+    let rec = |(id, cell): (u32, (i32, i32))| gather::Rec {
+        id,
+        cell,
+        port: 7,
+        pscore: 0,
+        amount: 100,
+    };
+    let p = scene.object_index(ports[1]).unwrap();
+    let land = (0..8u32)
+        .find(|&k| {
+            scene.objects[p].record.fields[10] = k;
+            !scene.sea_cell(scene.berth_cell(p).unwrap(), false)
+        })
+        .unwrap();
+    scene.objects[p].record.fields[10] = land;
+    scene.gather_zones[0].ports = Some(ports.to_vec());
+    // Alone with the one port rating it, a deposit's value is its `s`.
+    let mut rated: Vec<(_, i32)> = Vec::new();
+    for &sh in &shoals {
+        let mut recs = [rec(sh)];
+        assert_eq!(scene.zone_rate(0, &mut recs), 1);
+        if recs[0].port == ports[0] && rated.iter().all(|r| r.1 != recs[0].pscore) {
+            rated.push((sh, recs[0].pscore));
+        }
+    }
+    assert!(rated.len() >= 2);
+    rated.sort_by_key(|r| -r.1);
+    let (far, near) = (rated[0].0, rated[1].0);
+    // The failed port first.
+    scene.gather_zones[0].ports = Some(vec![ports[1], ports[0]]);
+    let mut recs = [rec(shoals[0])];
+    assert_eq!(scene.zone_rate(0, &mut recs), 1);
+    assert_eq!((recs[0].port, recs[0].pscore), (7, 0));
+    let mut recs = [rec(far), rec(near)];
+    assert_eq!(scene.zone_rate(0, &mut recs), 0);
+    assert_eq!((recs[1].port, recs[1].pscore), (7, 0));
+}

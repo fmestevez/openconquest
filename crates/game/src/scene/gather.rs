@@ -85,27 +85,35 @@ pub fn class_code(r: Resource) -> u32 {
 /// A deposit found by 0x4c5b90 / 0x4c95f0: its cell, amount `+0x78` and
 /// id.
 #[derive(Debug, Clone, Copy)]
-struct Cand {
-    cell: (i32, i32),
-    amount: i32,
-    id: u32,
+pub(super) struct Cand {
+    pub cell: (i32, i32),
+    pub amount: i32,
+    pub id: u32,
 }
 
 /// What 0x4c8f20 keeps for each candidate (0x18 bytes): its id, cell,
 /// port, the port's score.
 #[derive(Debug, Clone, Copy)]
-struct Rec {
-    id: u32,
-    cell: (i32, i32),
-    port: u32,
-    pscore: i32,
-    amount: i32,
+pub(super) struct Rec {
+    pub id: u32,
+    pub cell: (i32, i32),
+    pub port: u32,
+    pub pscore: i32,
+    pub amount: i32,
 }
 
 /// Ticks of the wait at a crowded berth before a merchant steps aside
 /// (0x4adef0 step 1: `== 300`), and before it gives its port up (`> 349`).
 pub const BERTH_ASIDE: u32 = 300;
 pub const BERTH_GIVE_UP: u32 = 350;
+
+/// What 0x4c7fc0 reads for its last port when that port failed the test:
+/// the stack probe's return address 0x4c8068 left in the slot, read as an
+/// object, gives the dword at 0x4c80b4 as its id.
+pub const PROBE_PORT_ID: u32 = 0xffff_6c85;
+/// The last port's `s` in 0x4c7fc0 before it is rated: the stack probe's
+/// return address 0x4c8090.
+pub const PROBE_SCORE: i32 = 0x004c_8090;
 
 impl Scene {
     /// The navy's generator (`[0x5c7504] +0x18`, the usual LCG), seeded
@@ -879,12 +887,20 @@ impl Scene {
     /// x m - sum > 0`, three draws `% T` walk the ports adding `most - s +
     /// least` (0 for `s < 1`) until past the draw (none: port 0), keeping
     /// the greatest value (strict, from 0). Returns the deposits matched.
-    /// (Uninitialised in the original: the `s` of a port no deposit has
-    /// rated yet, read by the walk, taken as 0 here; the port of an
-    /// entry whose building failed the test, taken as 0. The deposits'
-    /// ship counts 0x4c7a60, which 0x4c8f20 never reads, are left out.)
+    /// The four arrays (loads, port objects, berths, scores) are taken
+    /// from the stack (0x5878f0) and only the loads set (-1): a port's
+    /// object is written only when it passes the test, a port's `s` only
+    /// when rated. The last entry of each holds what the stack probe
+    /// left there, its return address: the last port's object 0x4c8068,
+    /// so a failed last port reads the id `[0x4c80b4]` = 0xffff6c85 (no
+    /// object), and the last `s` 0x4c8090. The other entries hold what
+    /// earlier calls left on the stack (0x4c65c0's or 0x4c6c30's frame
+    /// and registers): when the walk or the pick reads one of those, the
+    /// outcome is not known and the rating gives up as at its own failure
+    /// (0: 0x4c8f20 then sends nothing). (The deposits' ship counts
+    /// 0x4c7a60, which 0x4c8f20 never reads, are left out.)
     #[allow(clippy::needless_range_loop)]
-    fn zone_rate(&mut self, z: usize, recs: &mut [Rec]) -> i32 {
+    pub(super) fn zone_rate(&mut self, z: usize, recs: &mut [Rec]) -> i32 {
         let ports = self.zone_port_list(z);
         let np = ports.len();
         if np > 100 {
@@ -892,7 +908,11 @@ impl Scene {
         }
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
         let mut load = vec![-1i32; np];
-        let mut pid = vec![0u32; np];
+        // (The port objects' ids: `None` for what the stack holds.)
+        let mut pid: Vec<Option<u32>> = vec![None; np];
+        if np > 0 {
+            pid[np - 1] = Some(PROBE_PORT_ID);
+        }
         let mut berth = vec![(0, 0); np];
         let mut flood: Vec<Vec<i16>> = vec![Vec::new(); np];
         let shallow: Vec<i16> = (0..h)
@@ -918,7 +938,7 @@ impl Scene {
             if !self.sea_cell(b, false) {
                 continue;
             }
-            pid[u] = id;
+            pid[u] = Some(id);
             berth[u] = b;
             let mut g = shallow.clone();
             walk_path::wave(&mut g, w, (0, 0, w - 1, h - 1), b, (-1, -1), 5000, -1, 0, 0);
@@ -926,7 +946,10 @@ impl Scene {
             load[u] = self.port_load(z, id);
         }
         let at = |g: &[i16], c: (i32, i32)| g[(c.1 * w + c.0) as usize] as i32;
-        let mut s = vec![0i32; np];
+        let mut s: Vec<Option<i32>> = vec![None; np];
+        if np > 0 {
+            s[np - 1] = Some(PROBE_SCORE);
+        }
         let (mut least, mut most) = (0i32, 0i32);
         let mut matched = 0;
         for r in 0..recs.len() {
@@ -937,7 +960,7 @@ impl Scene {
                 continue;
             }
             if np == 1 {
-                recs[r].port = pid[0];
+                recs[r].port = pid[0].unwrap_or(PROBE_PORT_ID);
                 recs[r].pscore = 1;
             } else {
                 let amber = self.objects[d].class == ObjectClass::Amber;
@@ -969,7 +992,7 @@ impl Scene {
                         _ => l * l * 100,
                     };
                     let v = (at(&flood[u], c) - at(&flood[u], berth[u])) * 10 + pen;
-                    s[u] = v;
+                    s[u] = Some(v);
                     if r == 0 && u == 0 {
                         least = v;
                         most = v;
@@ -987,19 +1010,28 @@ impl Scene {
                         let mut acc = 0;
                         let mut sel = 0;
                         for (u, &x) in s.iter().enumerate() {
+                            let Some(x) = x else {
+                                return 0;
+                            };
                             acc += if x < 1 { 0 } else { most - x + least };
                             if acc > draw {
                                 sel = u;
                                 break;
                             }
                         }
-                        let v = most - s[sel] + least;
+                        let Some(x) = s[sel] else {
+                            return 0;
+                        };
+                        let v = most - x + least;
                         if best < v {
                             best = v;
                             bi = sel;
                         }
                     }
-                    recs[r].port = pid[bi];
+                    let Some(port) = pid[bi] else {
+                        return 0;
+                    };
+                    recs[r].port = port;
                     recs[r].pscore = best;
                 }
             }
@@ -1050,7 +1082,7 @@ impl Scene {
     /// the most bound; none, the gather command with 0; full or a
     /// leviathan aboard, 0x1f; else the gather command with it. Returns
     /// 0x1f, 0x19 or 0.
-    fn zone_one(&mut self, z: usize, i: usize, cands: &[Cand], port_arg: bool) -> u32 {
+    pub(super) fn zone_one(&mut self, z: usize, i: usize, cands: &[Cand], port_arg: bool) -> u32 {
         if cands.is_empty() {
             return 0;
         }
@@ -1068,23 +1100,29 @@ impl Scene {
         };
         let w = self.nav.width as i32;
         let amber = self.gather_zones[z].class == Resource::Amber;
-        // (An amber with no approach makes 0x4c5ec0 read the word before
-        // the grid: taken as 0 here.)
-        let value = |sc: &Scene, c: (i32, i32)| -> i32 {
-            let c = if amber {
-                sc.approach_cell(&a, c)
-            } else {
-                Some(c)
-            };
-            c.map_or(0, |c| a[(c.1 * w + c.0) as usize] as i32)
+        // An amber with no approach (0x4c76f0 gives -1) makes 0x4c5ec0
+        // read the word before the grid, the end of the heap's header of
+        // the block 0x4a1e90 took (0x557770 -> malloc): not the game's,
+        // not known. With one candidate it is never compared (the pick is
+        // 0); with more the pick is not known, and 0x4c9270 is left as at
+        // its own failure (nothing sent, 0).
+        let value = |sc: &Scene, c: (i32, i32)| -> Option<i32> {
+            let c = if amber { sc.approach_cell(&a, c)? } else { c };
+            Some(a[(c.1 * w + c.0) as usize] as i32)
         };
         let mut pick = 0;
-        let mut least = value(self, cands[0].cell);
-        for (k, c) in cands.iter().enumerate().skip(1) {
-            let v = value(self, c.cell);
-            if v < least {
-                least = v;
-                pick = k;
+        if cands.len() > 1 {
+            let Some(mut least) = value(self, cands[0].cell) else {
+                return 0;
+            };
+            for (k, c) in cands.iter().enumerate().skip(1) {
+                let Some(v) = value(self, c.cell) else {
+                    return 0;
+                };
+                if v < least {
+                    least = v;
+                    pick = k;
+                }
             }
         }
         let Some(d) = self.layer_deposit(cands[pick].cell) else {
@@ -1250,7 +1288,12 @@ impl Scene {
     /// them); if its berth is crowded (0x49a330: water about it `a > 0`,
     /// unloading merchants waiting there `b > 0`, `a - b < 2`) the next
     /// ranked with a value and fewer bound. None reached: the list's
-    /// first.
+    /// first. A berth is 0x4c6520's: the player's port at the entry, its
+    /// berth (vt+0xb8), else -1. The least starts at the list's first
+    /// berth's value: when that is -1 the original reads the word before
+    /// the wavefront (a heap header, not known), so with any port reached
+    /// the pick is not known and none is given, as at 0x4c6640's own
+    /// failure.
     pub(super) fn zone_port_pick(&mut self, z: usize, ship: Option<usize>) -> Option<u32> {
         let list = self.zone_port_list(z);
         if list.is_empty() {
@@ -1285,12 +1328,17 @@ impl Scene {
         );
         let a = self.nav.wavefront(at, deep, 5000)?;
         let w = self.nav.width as i32;
+        let owner = self.gather_zones[z].owner;
         let berth = |sc: &Scene, id: u32| {
             sc.object_index(id)
+                .filter(|&p| {
+                    let o = &sc.objects[p];
+                    o.owner == owner && o.class == ObjectClass::Building(crate::economy::PORT)
+                })
                 .and_then(|p| sc.berth_cell(p))
                 .map(|(x, y)| (y * w + x) as usize)
         };
-        let mut least = berth(self, list[0]).map_or(0, |b| a[b] as i32);
+        let mut least = berth(self, list[0]).map(|b| a[b] as i32);
         // (index in the list, score, load, berth cell)
         let mut ranked: Vec<(usize, i32, i32, usize)> = Vec::new();
         for (k, &id) in list.iter().enumerate() {
@@ -1301,7 +1349,7 @@ impl Scene {
             if v < 1 {
                 continue;
             }
-            least = least.min(v);
+            least = least.map(|l| l.min(v));
             let e = (k, v + 1, load[k], b);
             match ranked.iter().position(|r| r.1 < v) {
                 Some(j) => {
@@ -1315,6 +1363,7 @@ impl Scene {
         if ranked.is_empty() {
             return Some(list[0]);
         }
+        let least = least?;
         for r in &mut ranked {
             if r.1 > least {
                 r.1 -= least;
