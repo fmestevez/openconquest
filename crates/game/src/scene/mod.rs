@@ -1720,7 +1720,22 @@ impl Scene {
                 if !ship.path.is_empty() {
                     ship.remembered.clear();
                 }
-                ship.path.clear();
+                // Turning or at a cell (2, 3) it lies still at once; under
+                // way or braking (5, 4, 1) it is told to stop (1) and stops
+                // in the middle of the cell it is going into: at once if it
+                // has entered it, else at the crossing (0x4a6330 with the
+                // stop flag, then 0x4a38f0 and 0x4a3f40).
+                match ship.move_state {
+                    0 => ship.path.clear(),
+                    2 | 3 => {
+                        ship.path.clear();
+                        ship.move_state = 0;
+                    }
+                    _ => {
+                        ship.path.truncate(1);
+                        ship.move_state = 1;
+                    }
+                }
                 ship.zone = None;
                 ship.task = None;
             }
@@ -2279,8 +2294,11 @@ impl Scene {
                             ship.stalled = 0.0;
                             ship.waited = 0.0;
                             // The next cell reserved: under way (5,
-                            // 0x4a3560).
-                            ship.move_state = 5;
+                            // 0x4a3560); told to stop it stays 1 till
+                            // it crosses into it.
+                            if ship.move_state != 1 {
+                                ship.move_state = 5;
+                            }
                         }
                     }
                 }
@@ -2319,7 +2337,9 @@ impl Scene {
             // Come into its route's last cell, it brakes to a stop there
             // (4, 0x4a2f60 from 0x4a3f40).
             let last = ship.path.back().map(|&(lx, ly)| cell_of(lx, ly));
-            if ship.move_state == 5 && last == Some(cell_of(obj.x, obj.y)) {
+            // Told to stop (1), it brakes there once it has entered the
+            // cell (0x4a38f0: `+0x596 == 0`).
+            if matches!(ship.move_state, 1 | 5) && last == Some(cell_of(obj.x, obj.y)) {
                 ship.move_state = 4;
             }
         }

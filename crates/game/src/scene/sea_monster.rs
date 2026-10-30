@@ -379,9 +379,11 @@ impl Scene {
                 let Some(k) = self.ship_at(c) else { continue };
                 let o = &self.objects[k];
                 let s = o.ship.as_ref().unwrap();
-                // Held (move state 6) are passed over. (Not settled: whether
-                // a ship mended in a dock is held, 0x4adef0 task step 0x11;
-                // it is kept passed over.)
+                // Held (move state 6) are passed over. A ship in a dock is
+                // not held (no dock code writes `+0x58c`), but it is off
+                // its cell's ship slot (0x4a3970 on entering), so the
+                // original's look at the cell does not find it either.
+                // (Not settled: whether every dock entry takes it off.)
                 let held = s.move_state == 6 || self.in_dock(k);
                 if !Self::are_enemies(me, o) || held || !self.monster_sees(k, &mut m.rng) {
                     continue;

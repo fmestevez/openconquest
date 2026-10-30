@@ -2364,6 +2364,11 @@ impl Scene {
                 if self.may_build_ship_for(owner, kind).is_err() {
                     return PartStep::Wait;
                 }
+                // No yard answers: -5, a try spent. (Not ported: a yard
+                // idle with its berth taken answers -1, 0x4e82f0, which
+                // holds the part (flag 4) and every 25 passes has the
+                // town clear its berths, 0x428f20 at 0x4295cb, 0x4415a0;
+                // the port's yards have no berth.)
                 let Some(yard) = self.base_yard(ai, b) else {
                     return PartStep::Wait;
                 };

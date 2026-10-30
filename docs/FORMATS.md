@@ -1678,9 +1678,31 @@ to 0 (0x4c2425, 0x4c29aa, 0x4a3560: their contact `+0x6a9` = 6). The
 port keeps the state at its moves' events: 2 while the hull turns, 5 once
 the next cell is reserved, 4 once in the route's last cell, 3 at a route
 point and while a refused step holds it (0 after 50 ticks), 0 with no
-route or at its end; 1 is never set (the port's stop is at once). Not
-settled: whether a ship mended in a dock is in 6 (the port passes it over
-as before) and which state the prey of a ram ends in. The tick
+route or at its end. A stop (0x4a6330 with the stop flag; nothing on the
+tick it already re-planned) lays a ship turning or at a cell (2, 3) still
+(0) at once; any other state but 0 becomes 1. In state 1 the move tick
+runs 0x4a38f0 first: once the ship has entered the cell it is going
+into (`+0x596 == 0`; `+0x596` is 1 from a route point until the hull
+picture's centre crosses into the next cell) it brakes there (0x4a2f60,
+4; the route's end cut to that cell, a reservation of another cell
+released); still on its way out (`+0x596 == 1`) it sails on, and at the
+crossing (the cell taken, the route's end or a refused next cell) brakes
+in that cell, or on the next tick by 0x4a38f0. So a stop under way ends
+in the middle of the cell the ship is going into: the port keeps the
+path's first point and 1 till the ship is in its cell, then 4, then 0.
+No dock code writes `+0x58c` (none of the 35 stores is in 0x4b1d40-
+0x4b2700): a ship mended in a dock keeps its state; it is off its cell's
+ship slot (0x4a3970 on entering), so the sea monster's look at the cell
+passes it over (the port's `in_dock` test; not settled: whether every
+dock entry does). State 6 at 0x4adef0 step 0x11 (`+0x77c >= 0` and a
+contact `+0x8e6`, then step 0x4add10, the automatic unloading at a
+building) is not ported: the port has no counterpart of that step. The
+prey of a ram (event 2 code 3, 0x4aa2c0: `+0x713 = 3`, `+0x71e = 9`,
+`+0x25d |= 2`) goes to 6 in the contact machine 0x4c3410 case 9 (at
+0x4c35c6) only when its contact `+0x8e6` is a ship one cell off whose
+cell test 0x499ca0 passes, else its state is left; not ported: whether
+the prey's contact is the rammer when code 3 is handled was not
+traced. The tick
 stamps +0x58d every frame but in state 3, so a ship waiting there 50 ticks
 (0x4a374a) falls to state 0 with its route kept, where the push rule
 applies to it.
@@ -4125,9 +4147,26 @@ byte 0xf = 0xff, which 0x416a40 takes as "do not pay": the boat is built
 free, without the "ship built" sound (0xe4-0xe7). (The yard's queued
 branch, a berth taken, would charge, but the town only forwards to a yard
 whose berth is free.) A ship part refused with -1 (the yard idle but its
-berth taken, or the town busy) waits without counting down (part flag 4)
-and every 25 counting passes sends the town command 0x28 (0x428f20 at
-0x429348): not ported (the port has no berths), nor decoded what 0x28 does.
+berth taken, or the town busy) waits without counting down (part flag 4;
+for a part of any town, the last town's result is the one held), and,
+only for a ship part (f4 == 4) refused -1 in a pass after one that
+started nothing (`+0x18`), counts its `+0xe0` (0x4295cb); at 25 it is
+reset, the town command 0x28 with the one-byte payload 3 (0x520cc0) goes
+to the part's town (every town of the land fleet when `+0xc < 0`), and
+every other state-1 part of the same op, f4 and f5 whose last result
+(`+0x70`) was -1 has its `+0xe0` zeroed; no try is spent. The town
+(0x441ba0 case 0x28, payload 3 only) runs 0x4415a0: for each of its
+yards (class 0x149c) answering `0x4e82f0(yard, 1, 0xff) == -1`, the ship
+in the berth cell's object slot (vtable +0xb8), unless it is the town's
+own (same nation and slot, `+0x25d & 0x20`, task `+0x72f == 1` with
+`+0x73c` the yard's cell: sailing there to be mended), gets
+0x4b4b50(ship, 100, 0): a neighbouring cell it may enter (0x499aa0 with
+the direction 0x59791d[dx*4+dy] and its draught `+0x592`) drawn with the
+ship's LCG, else one held by a lower-priority (`+0x5c7 < 100`) own ship
+(0x499990), and the move event 0x80 to it. Not ported: the port's yards
+have no berth (0x4e82f0's test, 0x499a40 on the berth cell), so no ship
+part is refused -1; and 0x4ab250 (the event 0x80 move), 0x499aa0 and
+0x499990 were not read exactly.
 
 **The land fleet's pass** (0x42b910, the fleet's message 0 every tick;
 constructor 0x42b370). Fields: +0x14 the last pass started a part, +0x18

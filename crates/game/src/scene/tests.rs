@@ -3078,6 +3078,77 @@ fn statistics_and_score() {
     assert_eq!(scene.stats.values(scene.amber)[11] as i64, expected);
 }
 
+/// A ship told to stop under way is told to stop (move state 1) and goes
+/// on into the cell it is going into, braking (4) to lie still (0) in its
+/// middle (0x4a6330 with the stop flag, 0x4a38f0; needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn a_stop_under_way_ends_in_the_next_cell() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let t = TILE_SIZE as f32;
+    let cell = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
+    let id = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    // Where it is, its move state and its next point.
+    let ship = |s: &Scene| {
+        let o = &s.objects[s.object_index(id).unwrap()];
+        let sh = o.ship.as_ref().unwrap();
+        (o.x, o.y, sh.move_state, sh.path.front().copied())
+    };
+    // Far off, then under way and still in the cell it last reached.
+    let (ox, oy, ..) = ship(&scene);
+    let mut ordered = false;
+    for (dx, dy) in [(8, 0), (-8, 0), (0, 8), (0, -8), (6, 6), (-6, -6)] {
+        let (cx, cy) = cell(ox, oy);
+        let (x, y) = (
+            (cx + dx) as f32 * t + t / 2.0,
+            (cy + dy) as f32 * t + t / 2.0,
+        );
+        if scene.order_move(id, x, y) {
+            ordered = true;
+            break;
+        }
+    }
+    assert!(ordered);
+    let mut going = None;
+    for _ in 0..2000 {
+        scene.update(0.04, &data, &mut caches);
+        if let (x, y, 5, Some((nx, ny))) = ship(&scene) {
+            if cell(nx, ny) != cell(x, y) {
+                going = Some(cell(nx, ny));
+                break;
+            }
+        }
+    }
+    let going = going.expect("under way between cells");
+    scene.stop(id);
+    assert_eq!(ship(&scene).2, 1);
+    let mut states = vec![1];
+    for _ in 0..500 {
+        scene.update(0.04, &data, &mut caches);
+        let m = ship(&scene).2;
+        if states.last() != Some(&m) {
+            states.push(m);
+        }
+    }
+    let (x, y, ..) = ship(&scene);
+    assert_eq!(states, [1, 4, 0]);
+    assert_eq!(
+        (x, y),
+        (going.0 as f32 * t + t / 2.0, going.1 as f32 * t + t / 2.0)
+    );
+}
+
 /// miss006's brain draws the barbarian raiders' wait anew every 5 ticks
 /// while the southern Persians' yard (21, 68) is found standing ((8, 6,
 /// 4) + rand % 6, x 1500), and the northern raiders' once more when the
