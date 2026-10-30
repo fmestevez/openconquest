@@ -2343,12 +2343,161 @@ speed is saved with a game (`SPEED_GAME`).
   damage 100/125, 100/170, 170/150). There are no fish costs.
 - Marines (settlement) and weapons (workshop): 0x5971a0[item / 3] ticks
   each, 70, 80, 95.
-- Ships take no time to build: the yard (DockClassTy 0x416a40) pays and
-  creates the ship record at once (message 0x1488, record field 4 = 2,
-  which the ship loader 0x4dfe00 does not read) when a berth is free
-  (0x4e82f0), with the nation's "ship built" sound (events 0xe4-0xe7);
-  orders that find no free berth wait in a queue that is retried every 25
-  ticks (0x416f90).
+- Ships rise on the yard's berth, 39 or 40 steps of 8 ticks (below).
+
+## Shipyards' berths
+
+A yard (DockClassTy, classes 0x3a and 0x3b) has one berth (vtable +0xb8,
+0x40e050): its anchor cell (`+0x74`, `+0x78`, record fields 5 and 6) a step
+toward its facing (`+0x1dc`, record field 10, read when the class flag 8 is
+set) by the table at 0x5c4f4c (5 bytes an entry, `{i16 dx, i16 dy, u8}`):
+(1,0) (1,-1) (0,-1) (-1,-1) (-1,0) (-1,1) (0,1) (1,1), the ninth (0,0); a
+facing below 0 gives (-1, -1), whose grid index nothing guards.
+The berth is free (0x4e8250 = 0x499a40 with flag 0) when the cell's
+landscape dword (`grid + 8`) has its low nibble below 8 and nibble 1 not
+4, 5 or 6, and its object slot (`grid + 0xc`) is empty; a ship holds the
+slot of the cell it is in (0x499800 takes an empty slot, 0x4998a0 /
+0x499860 / 0x4a3970 clear their own; a ship mended in a dock is off its
+slot). **0x4e82f0(yard, 1, code)**: -5 unless the yard is idle (`+0xa4 ==
+1`: not going up, not being made a dock); for codes 0xc-0x17 the draught
+test 0x4e8290: royal ships, bombers and rammers (0x597ce4 = 0 0 1 1 0 1 0 0
+0 0 0 0, the ship's `+0x592`) get -5 when the berth's nibble 1 is 3; then 0
+with the berth free, else -1. (Not decoded: the reservation `+0x10c`,
+`+0x110`, `+0x114`, `+0x120`, which turns a free berth's 0 into -1 for any
+other code than `+0x114`.)
+
+**An order** (0x416a40(yard, payload, pay): message 0x280f sub-command
+0x20 with pay = byte 0xf != 0xff, or the queue with pay 0) needs code byte
+0xc 0xc-0x17 or 0x25 (the Argo). With 0x4e82f0(yard, 1, 0xff) == 0 the
+ship is **built now**: a 600-byte record (+0x10 = 2, nation, slot, kind by
+code: 0xc 0, 0xd 1, 0x13 2, 0x12 3, 0x10 4, 0x11 5, 0xf 6, 0xe 7, 0x14-0x17
+8-11, 0x25 2 with +0x1f0 = 1; +0x24/+0x28 the berth; heading +0x2c 6 for a
+yard facing 2 or 6, else 0; +0x1f4 the yard; +0x1f8 payload dword 2), the
+yard's town (`+0x1c8`, 0x51f1f0) must exist, the price 0x43ead0(town, rec,
+&amber, &fish, byte 0xd); with pay it must be affordable and is taken
+(amber, fish x 100); code 0x25 clears permission 80 (0x4a9810); `+0x34 =
+amber << 16 | fish`; message 0x1488 to the world makes the ship; the
+yard's call, events 228, 229, 231, 230 by nation (0xe4 + 0, 1, 3, 2; only
+`SND_229` and `SND_230` hold sounds, `re_o2a`, `re_o4a`, `re_o6a`), only
+for the viewing player's yard and only with pay. Otherwise the order is
+**queued**: without a town nothing happens (the order is lost); else a
+24-byte entry (the payload and the price of 0x43e5c0) is appended only if
+the price can be paid, and it is then taken **whatever pay** (a free
+order that queues is charged); no sound; `+0x1fc = now`. Both branches
+redraw the yard (`+0xfc`, `+0x100`). The ship (0x4dc630 message 2 with
+record +0x10 == 2, 0x4dfe00): owner, kind, heading, cell the berth, `+0x544`
+the price, `+0x259` the Argo, `+0x261 = 0x2000`, its arming, `+0x251 = 2`,
+task `+0x72f = 4`, `+0x73a = 1`, `+0x75a` the yard, frame 0 (heading 0) or
+40 (heading 6); then 0x499a40(berth, draught): it takes the slot, sound
+event 1 (`bildsh3`, every player); failing (the Argo on a nibble-3 berth)
+it is removed, its price not given back.
+
+**The build** (0x4b3ab0, the ship tick 0x4ab930 runs only task 4, or the
+sale's task 5, while `+0x251 == 2`: no firing, moving or events): every 8
+ticks (`now - +0x57b < 8` returns; `+0x57b` is 0 from the constructor
+0x4dc3f0, which zeroes `+0x54c..+0x5d1`, so the first step is the ship's
+first tick): the yard looked for at the berth (0x49a4b0; gone: `+0x73a =
+0xff`, return); hull `+0x271 += H / 40` (H = 0x5c76b0[kind] = 0x5bb4b0 x
+650: 18200 58500 65000 78000 42250 45500 23400 23400 42250 48750 71500
+78000), capped; frame = base + (hull + 1) x 40 / H; shown % = hull x 100 /
+H; done when frame >= base + 39 (heading 0) or >= 79 (heading 6; any other
+heading never finishes). In integers that is **39 steps for kinds 0, 2, 3,
+6, 7, 11 and 40 for 1, 4, 5, 8, 9, 10: 1 + 38 x 8 = 305 or 313 ticks** from
+the first step. Done (the yard looked for again): hull H, the kind's slots
+filled (0x4bd920: kind 0 slot 3, 1 slot 4, 8 slot 9, 9 slot 10, 11 slots
+0-2; not decoded), the picture heading x 4, `+0x544 = 0`, `+0x251 = 0`,
+capabilities `0x4e6930` (0xfffff7ff for kinds 0/1, else 0xfffffeff), the
+launch voice for the viewing player's ship (events 184, 185, 187, 186 by
+nation: `SND_184` empty, 185 and 186 `jb_d1`, 187 `121~2`), 0x4b3a20
+(message 0x5d95, the brains' "ship built"), for a computer player 0x4e7220
+(behaviour events 0x100, not decoded), then **0x4b46f0(ship, 'e')**.
+Called off (`+0x73a < 0`: the stop order, event 8 with no record while
+`+0x251 == 2`, 0x4aa540 at 0x4aa565; the yard gone; shots taking the hull
+below 1, 0x4b4000): the frame drops by 1 a step; below 1 (heading 0) or
+below 40 (heading 6) the price `+0x544` is given back (amber, fish x 100,
+whether or not 0x416a40 took it), the owner's ship lost counted
+(0x50e750 with -1), the slot cleared, the Argo's permission 80 given back,
+the ship removed.
+
+**The queue** (0x416f90 message 0): with the yard idle, entries waiting
+and `now >= +0x1fc + 25`: `+0x1fc = now`; with its town: the head entry's
+0x43da20(town, 4, 1, 1, kind, 0, byte 0xd, 1, 1) (price skipped): 0 and
+0x4e82f0(yard, 1, code) == 0 -> 0x416a40(yard, entry, 0) (built free, no
+call), removed, and the pass ends (one ship per 25 ticks); 0 with this yard
+refusing, or -1 etc.: wait; -5 or -7 (not allowed: permission or
+buildings -5, the unique ships' study or kinds 3/5's player flags -7; or
+no yard of the town answering 0 or -1) -> its price given back, removed,
+the next entry tried. 0x43da20 case 4 runs, in order: permission (-5),
+kinds 3, 5 and 8-11 (-7), buildings 0x5961a8 against town `+0x238` (-5),
+the arming's items with param_6, then with param_3 the town idle (-1), the
+price unless param_7 (-2 amber, -3 fish), then with param_8 the yard test
+over the town's buildings `+0x1d0`: the first class 0x149c answering 0
+gives 0, else -1 if one answered -1, else -5. The '<' sub-command takes
+the last queued entry of a kind back, refunded. The buttons (0x4164e0)
+count the queue by kind and test the price, not the berth; the Argo's
+(0x7d) also needs 0x4e82f0(yard, 1, 0xff) == 0.
+
+**Off the berth, 0x4b46f0(ship, prio)** (the end of a build with 'e' =
+101; a merchant leaving a port's berth with '[' = 91): the window from one
+before the ship's cell, clipped at 0, three cells on, clipped at the map's
+edge (so at x = 0 it covers columns 0-2), rows from the top, its own cell
+left out; the direction of each cell 0x59791d[dx x 4 + dy] (0..7 as the
+headings, 0xff for dx or dy = 2). Pass 1: cells passing 0x499aa0. None:
+pass 2, cells whose slot holds a ship (category 200, not a monster but
+class 0x1fb) of the same nation and slot or allied (0x4efe20 >= 0) with
+`+0x5c7` no higher than the ship's; after each row, prio + 1 if any was
+found so far. One draw of the ship's LCG (`+0x18`, seeded `game +0x2ee5 x
+id`) picks the cell; event 0x80 {x, y, prio at +0x19}. **0x4b4b50(ship,
+prio, via)** (the town's berth clearing with 100; a merchant waiting 300
+ticks by a taken port berth with 0x5a): one pass over the same window:
+0x499aa0 -> list B, else 0x499990(cell, 0) and a ship of the same
+`+0x24f` in the slot with `+0x5c7 < prio` -> list A; B drawn, else A, else
+nothing; via sends it as command 0x14. **0x499aa0(ship, cell, dir,
+draught)**: the landscape as 0x499a40 with the draught's nibble-3 test;
+the slot empty or the ship's own; an even dir passes; a slanting one looks
+at the two corner cells (dir 1: x = 0 passes, corners cell-1 and cell+W,
+cell+W past the map passes; 3: cell+W past the map or x = W-1 pass,
+corners cell+W, cell+1; 5: cell-W < 0 or x = W-1 pass, corners cell+1,
+cell-W; 7: cell-W < 0 or x = 0 pass, corners cell-W, cell-1; any other
+dir: cell-1 < 0 or cell+W past the map pass, corners cell-1, cell+W): it
+fails if the first corner's ship lies in state 6 with a ship contact
+(`+0x8e6`) whose cell is the second corner, or if one object fills both
+corners (two different objects pass). **0x499990(cell, flag)**: the
+landscape only (no slot), nibble 1's 3 refused with the flag; 0x4999e0 on
+(x, y); 0x499930 / 0x499a40 with the slot empty; 0x4998d0 / 0x499900 the
+slot empty only.
+
+**The move event 0x80** (0x4a9e30 copies the 26 bytes to `+0x858`, `+0x7d6
+|= 0x80`): 0x4ab720 runs the 0x1f0 group only while `+0x251` is not 1 or 2
+and `+0x261 & 0x1f0`, keeping them pending otherwise (unless `+0x864 ==
+0x17` with `+0x25c`), in the order 0x20 (0x4aa990), 0x40 (0x4aab00), 0x10
+(0x4aa840), 0x80 (0x4ab250), each also needing its bit in `+0x7da`; after
+each of the first four that runs, `+0x7d6 &= ~0x1f0` (`~0xf0` with 0x100
+pending and 0x4ab350 passing): one a tick, in that order. 0x4ab250 drops
+the event without capability `+0x261 & 0x400` (every finished ship has it;
+one being built, 0x2000, lacks it) unless `+0x864 == 0x17`; else it zeroes
+the route block `+0x562`, copies the target and kind, `+0x57b = 0`,
+`+0x57f = 25` (re-plan period), `+0x593 = 1`, `+0x591 = 0`, the priority
+`+0x5c7` from +0x19 unless 0xff, `+0x5c8 = 5`, `+0x25d |= 0x80` (0x4a5f30
+then plans and follows the route).
+
+The port: `scene::yard`. The port's slot is the cell a ship is in (a ship
+mended at a dock aside); ships just built hold their berth until made the
+same tick. Its towns' building lists are the yards a settlement is the
+nearest of (the computer players': those about the town). Not ported: the
+port's 0x80 move has no event queue (orders take effect at once; a ship
+being built drops them, and the original's pending events at the launch
+are not reproduced); the reservation fields; the arming sub-tests of the
+queue's 0x43da20; 0x4bd920 and 0x4e7220 at the launch; shots on a ship
+being built (0x4b4000: `0x597fd8[weapon] x blow / 100` off the hull) take
+the port's ordinary damage; whether the player's yard buttons reach
+0x416a40 at the yard or through the town's command 0x20 (the town hands
+it to its first yard answering 0; the port orders at the yard clicked);
+whether reefs and whirlpools mark the landscape nibbles the cell tests
+read (the port keeps them apart); a barbarian structure's building (the
+port's 25 ticks beside it). The ships' LCG seed `game +0x2ee5` is the
+original's time stamp or the saved `RND_INIT`: here drawn once from the
+scene's generator.
 
 ## Amber glints
 
@@ -4337,10 +4486,10 @@ own (same nation and slot, `+0x25d & 0x20`, task `+0x72f == 1` with
 0x4b4b50(ship, 100, 0): a neighbouring cell it may enter (0x499aa0 with
 the direction 0x59791d[dx*4+dy] and its draught `+0x592`) drawn with the
 ship's LCG, else one held by a lower-priority (`+0x5c7 < 100`) own ship
-(0x499990), and the move event 0x80 to it. Not ported: the port's yards
-have no berth (0x4e82f0's test, 0x499a40 on the berth cell), so no ship
-part is refused -1; and 0x4ab250 (the event 0x80 move), 0x499aa0 and
-0x499990 were not read exactly.
+(0x499990), and the move event 0x80 to it (see "Shipyards' berths").
+The port holds the part (`PartStep::Berth`), counts `+0xe0` and clears
+the berths at once (not decoded: the tick a 0x520cc0 command reaches the
+town); the town busy is, here, only its going up or being made a town.
 
 **The land fleet's pass** (0x42b910, the fleet's message 0 every tick;
 constructor 0x42b370). Fields: +0x14 the last pass started a part, +0x18

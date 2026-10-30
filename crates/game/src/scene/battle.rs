@@ -55,6 +55,15 @@ impl Scene {
             let Some(i) = self.object_index(id) else {
                 continue;
             };
+            // A ship being built does no more than rise (0x4ab930 runs
+            // only its task 4 while `+0x251 == 2`).
+            if self.objects[i]
+                .ship
+                .as_ref()
+                .is_some_and(|s| s.build.is_some())
+            {
+                continue;
+            }
             let levels = self.levels_of(self.objects[i].owner);
             let c = self.objects[i].combat.as_mut().unwrap();
             if c.stone > 0.0 {
@@ -678,6 +687,7 @@ impl Scene {
                     .push((if own { "deadsh" } else { "deny" }, tx, ty));
             }
             self.productions.retain(|p| p.site != target);
+            self.ship_orders.retain(|p| p.site != target);
             self.constructions.retain(|c| c.site != target);
             match self.objects[ti].ship.as_ref().map(|sh| sh.kind) {
                 // Ships go down with the sinking animation of their hull.
@@ -740,7 +750,8 @@ impl Scene {
             let Some(ship) = o.ship.as_ref() else {
                 continue;
             };
-            if o.frames.is_empty() {
+            // A ship being built shows its building sequence.
+            if o.frames.is_empty() || ship.build.is_some() {
                 continue;
             }
             let look = objects::ShipLook::of(ship, o.combat.as_ref());

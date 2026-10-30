@@ -215,8 +215,19 @@ pub struct Scene {
     /// amounts by 1, 10 or 100 a tick, from 1 at the start (0x505530).
     pub shown: [u32; 2],
     shown_clock: f32,
-    /// Ships being built.
+    /// Ships being built by builders other than shipyards (the brains'
+    /// barbarian structures); a yard's are on its berth (`Ship::build`).
     pub productions: Vec<Production>,
+    /// Ships ordered at yards, waiting for a free berth (0x416a40's queue),
+    /// and the ticks since each yard's queue was last looked at (`+0x1fc`).
+    pub ship_orders: Vec<yard::ShipOrder>,
+    pub yard_clocks: BTreeMap<u32, u32>,
+    /// Ships just built on berths, made before the next tick's yards look
+    /// (not saved: made at once).
+    new_ships: Vec<yard::NewShip>,
+    /// The ships' generators' seed (the game's `+0x2ee5`; see
+    /// `Scene::ship_draw`).
+    rnd_init: Option<u32>,
     /// Buildings going up.
     pub constructions: Vec<Construction>,
     /// Amber and fish of the computer players.
@@ -476,6 +487,7 @@ mod story;
 pub mod unload;
 pub mod volcano;
 mod walkers;
+mod yard;
 pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use computer::Computers;
 pub use flyers::{Flyer, Nest};
@@ -487,6 +499,7 @@ pub use stats::Stats;
 pub use story::goal_name;
 pub use story::{Carry, Goal};
 pub use walkers::{walker_frame_ms, walker_sequence, Walker};
+pub use yard::ShipOrder;
 #[cfg(test)]
 mod tests;
 mod trade;
@@ -609,6 +622,10 @@ impl Scene {
             objects: objs.drawn,
             nav,
             productions: Vec::new(),
+            ship_orders: Vec::new(),
+            yard_clocks: BTreeMap::new(),
+            new_ships: Vec::new(),
+            rnd_init: None,
             constructions: Vec::new(),
             messages: Vec::new(),
             sounds: Vec::new(),
@@ -901,6 +918,9 @@ impl Scene {
                 })
                 .collect(),
             productions: self.productions.clone(),
+            ship_orders: self.ship_orders.clone(),
+            yard_clocks: self.yard_clocks.iter().map(|(&k, &v)| (k, v)).collect(),
+            rnd_init: self.rnd_init,
             constructions: self.constructions.clone(),
             trainings: self.trainings.clone(),
             garrisons: self.garrisons.clone(),
@@ -1023,6 +1043,9 @@ impl Scene {
         scene.amber = save.amber;
         scene.fish = save.fish;
         scene.productions = save.productions.clone();
+        scene.ship_orders = save.ship_orders.clone();
+        scene.yard_clocks = save.yard_clocks.iter().copied().collect();
+        scene.rnd_init = save.rnd_init;
         scene.constructions = save.constructions.clone();
         scene.trainings = save.trainings.clone();
         scene.trainings.iter_mut().for_each(Training::upgrade_save);
@@ -1221,6 +1244,11 @@ impl Scene {
         let Some(i) = self.object_index(id) else {
             return false;
         };
+        // A ship being built takes no move (0x4ab720 skips its events,
+        // 0x4ab250 drops them without capability 0x400).
+        if self.being_built(id) {
+            return false;
+        }
         // As near as it can get (0x55ba50).
         let here = (self.objects[i].x, self.objects[i].y);
         let Some(path) = self.plan_route_near(i, here, x, y, &HashSet::new()) else {
@@ -1246,6 +1274,9 @@ impl Scene {
         let Some(i) = self.object_index(id) else {
             return false;
         };
+        if self.being_built(id) {
+            return false;
+        }
         let Some(ship) = self.objects[i].ship.as_ref() else {
             return false;
         };
@@ -1364,13 +1395,13 @@ impl Scene {
     /// Ship `mover`, held up by ship `still` lying in its way, pushes it
     /// aside (0x4a3a70, 0x4b4b50) once it has waited out its patience, if
     /// both are the same player's and `still`'s priority is the lower:
-    /// `still` sails to a free cell about it, chosen at random, or failing
-    /// one, into a cell of another of theirs of lower priority (which is
-    /// pushed in turn), taking `mover`'s priority. The patience triples.
+    /// `still` sails to a cell about it it may step into (0x499aa0), drawn
+    /// with its own generator, or failing one, into a cell of another of
+    /// theirs of lower priority (which is pushed in turn), taking
+    /// `mover`'s priority (`Scene::aside_cell`). The patience triples.
     /// True if it pushed.
     fn push_aside(&mut self, still: u32, mover: u32) -> bool {
         let t = TILE_SIZE as f32;
-        let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
         let (Some(k), Some(m)) = (self.object_index(still), self.object_index(mover)) else {
             return false;
         };
@@ -1382,6 +1413,7 @@ impl Scene {
         // ramming) stay.
         let busy = s.grapple.is_some()
             || s.ram_run.is_some()
+            || s.build.is_some()
             || matches!(
                 s.task,
                 Some(Task::Gather {
@@ -1398,43 +1430,13 @@ impl Scene {
             return false;
         }
         let priority = ms.priority;
-        let here = cell_of(o.x, o.y);
-        let deep = objects::deep_draught(s.kind);
-        let mut free = Vec::new();
-        let mut weaker = Vec::new();
-        for dy in -1..=1 {
-            for dx in -1..=1 {
-                let c = (here.0 + dx, here.1 + dy);
-                if (dx, dy) == (0, 0) || !self.nav.passable(c.0, c.1, deep) {
-                    continue;
-                }
-                let lying = self.objects.iter().find(|p| {
-                    p.id != still
-                        && p.ship.as_ref().is_some_and(|ps| {
-                            cell_of(p.x, p.y) == c
-                                || ps.path.back().is_some_and(|&(x, y)| cell_of(x, y) == c)
-                        })
-                });
-                match lying {
-                    None => free.push(c),
-                    Some(p)
-                        if p.owner == o.owner
-                            && p.ship.as_ref().is_some_and(|ps| ps.priority < priority) =>
-                    {
-                        weaker.push(c)
-                    }
-                    Some(_) => {}
-                }
-            }
-        }
-        let pool = if free.is_empty() { &weaker } else { &free };
-        if pool.is_empty() {
+        let Some(c) = self.aside_cell(k, priority) else {
             return false;
-        }
-        let c = pool[self.rng.next() as usize % pool.len()];
+        };
         let aside = (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
         // A ship lying still on its way (waiting) goes on from there about
         // its task; one idle simply moves.
+        let s = self.objects[k].ship.as_ref().unwrap();
         let on = match (s.task, s.path.back()) {
             (Some(_), Some(&(lx, ly))) => self.plan_route_from(k, aside, lx, ly),
             _ => None,
@@ -1753,6 +1755,12 @@ impl Scene {
     /// Cancels a ship's route.
     pub fn stop(&mut self, id: u32) {
         if let Some(i) = self.object_index(id) {
+            // A ship being built is called off (event 8 with no record,
+            // 0x4aa540 at 0x4aa565).
+            if self.being_built(id) {
+                self.cancel_build(i);
+                return;
+            }
             if let Some(ship) = self.objects[i].ship.as_mut() {
                 // A stop under way forgets the cells it kept closed
                 // (0x4a6330 with 1).
@@ -1939,8 +1947,9 @@ impl Scene {
                 };
             }
         }
-        // Each yard works on the first ship of its queue (orders waiting
-        // for a berth, 0x416f90).
+        // Each builder other than a yard works on the first ship of its
+        // queue. (Not decoded: how a barbarian structure builds; this is
+        // the port's, 25 ticks a ship beside it.)
         let mut working: Vec<u32> = Vec::new();
         for p in &mut self.productions {
             if !working.contains(&p.site) {
@@ -2002,6 +2011,7 @@ impl Scene {
             }
             self.run_computers(data, caches);
             self.run_brain_jobs(data, caches);
+            self.run_yards(data, caches);
             for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {
                 self.big_reef(x, y, kind, data, caches);
             }
@@ -2656,7 +2666,7 @@ pub fn sound_kind(name: &str) -> SoundKind {
         .chain(&order::FISH_VOICES)
         .chain(&order::LEVIATHAN_VOICES)
         .any(|v| *v == name)
-        || ["jb_d1", "pe1", "bi_c4"].contains(&name)
+        || ["jb_d1", "121~2", "pe1", "bi_c4"].contains(&name)
         || name.starts_with("re_o")
         || name.starts_with("come");
     let battle = shot::LAUNCH.contains(&name)

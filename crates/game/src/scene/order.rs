@@ -234,6 +234,36 @@ impl Scene {
     ) -> Result<u32, String> {
         use Order::*;
         let done = |r: Result<(), String>| r.map(|()| 0);
+        // A ship being built takes no orders but the stop, which calls the
+        // building off (0x4ab720 runs no event of the 0x1f0 group while
+        // `+0x251 == 2`; event 8 does run, 0x4aa540). (Not ported: the
+        // original keeps such events pending and runs one at the launch,
+        // when its own move off the berth may overwrite a pending move;
+        // which events the player's orders other than moves are was not
+        // traced.)
+        let ship = match *order {
+            Move { ship, .. }
+            | Waypoint { ship, .. }
+            | Attack { ship, .. }
+            | Close { ship, .. }
+            | Behaviour { ship, .. }
+            | Scout { ship, .. }
+            | Patrol { ship, .. }
+            | Zone { ship, .. }
+            | GatherZone { ship, .. }
+            | Convoy { ship, .. }
+            | Gather { ship, .. }
+            | Take { ship, .. }
+            | Unload { ship, .. }
+            | Found { ship, .. }
+            | Repair { ship, .. }
+            | LoadCrew { ship }
+            | LoadObject { ship, .. } => Some(ship),
+            _ => None,
+        };
+        if ship.is_some_and(|id| self.being_built(id)) {
+            return Err("The ship is still being built".into());
+        }
         match *order {
             Move { ship, x, y } => {
                 if self.order_move(ship, x, y) {
@@ -302,8 +332,16 @@ impl Scene {
             SellTown { site } => done(self.sell_town(site, data, caches)),
             RepairStock { workshop } => done(self.order_repair_stock(workshop)),
             Halt { id } => done(self.halt(id)),
-            BuildShip { site, kind } => done(self.start_ship(site, kind)),
-            BuildArgo { site } => done(self.start_argo(site)),
+            BuildShip { site, kind } => {
+                let r = self.start_ship(site, kind);
+                self.make_new_ships(data, caches);
+                done(r)
+            }
+            BuildArgo { site } => {
+                let r = self.start_argo(site);
+                self.make_new_ships(data, caches);
+                done(r)
+            }
             CancelShip { site, kind } => done(self.cancel_ship(site, kind)),
             Train { site, item } => done(self.train(site, item)),
             CancelTrain { site, item } => done(self.cancel_training(site, item)),

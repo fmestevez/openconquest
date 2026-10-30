@@ -33,18 +33,24 @@ fn shipyard_builds_and_settlement_upgrades() {
     scene.amber = 300;
     // A merchant needs a town; a boat only a shipyard and a settlement.
     assert!(scene.can_build_ship(1).is_err());
-    scene.start_ship(yard, 0).unwrap();
+    let order = Order::BuildShip {
+        site: yard,
+        kind: 0,
+    };
+    scene.apply(&order, &data, &mut caches).unwrap();
     assert_eq!(scene.amber, 100);
-    // More wait their turn; the last can be taken back, paid back.
+    // The first is built on the berth; more wait their turn, paid; the
+    // last can be taken back, paid back.
     scene.amber = 500;
-    scene.start_ship(yard, 0).unwrap();
-    scene.start_ship(yard, 0).unwrap();
-    assert_eq!(scene.ships_queued(yard, 0, false), 3);
+    scene.apply(&order, &data, &mut caches).unwrap();
+    scene.apply(&order, &data, &mut caches).unwrap();
+    assert_eq!(scene.ships_queued(yard, 0, false), 2);
+    assert_eq!(scene.amber, 100);
     scene.cancel_ship(yard, 0).unwrap();
-    assert_eq!((scene.ships_queued(yard, 0, false), scene.amber), (2, 300));
+    assert_eq!((scene.ships_queued(yard, 0, false), scene.amber), (1, 300));
     scene.amber = 100;
-    for _ in 0..(60.0 * (2.0 * economy::SHIP_BUILD_SECONDS + 1.0)) as usize {
-        scene.update(1.0 / 60.0, &data, &mut caches);
+    for _ in 0..1000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
     }
     let own_ships: Vec<_> = scene
         .objects
@@ -52,7 +58,7 @@ fn shipyard_builds_and_settlement_upgrades() {
         .filter(|o| o.ship.is_some() && scene.is_own(o))
         .collect();
     assert_eq!(own_ships.len(), ships_before + 2);
-    assert!(scene.productions.is_empty());
+    assert!(scene.ship_orders.is_empty() && !scene.yard_busy(yard));
 
     let settlement = own(&scene, SETTLEMENT);
     assert!(
@@ -74,6 +80,193 @@ fn shipyard_builds_and_settlement_upgrades() {
     // With a town and 500 amber, a merchant (400 amber, 200 fish) is possible.
     scene.amber = 500;
     assert_eq!(scene.can_build_ship(1), Ok(()));
+}
+
+/// A yard's berth is the cell a step from its anchor toward its facing
+/// (0x40e050 with 0x5c4f4c); an order with the berth free builds the ship
+/// there at once, hull at nothing, heading 6 for a yard facing north or
+/// south (0x416a40, 0x4dfe00); it rises a fortieth every 8 ticks and is
+/// done at the 39th step for a boat, the 40th for a merchant (0x4b3ab0),
+/// then moves a cell off the berth with priority 101 (0x4b46f0); an order
+/// while the berth is taken is queued, charged the full price even when
+/// free, and built free 25 ticks after the berth is clear (0x416f90);
+/// one that cannot be paid is dropped (needs `OPENCONQUEST_DATA`).
+#[test]
+fn shipyard_berth_and_queue_follow_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let yard = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .map(|o| o.id)
+        .unwrap();
+    let y = scene.object_index(yard).unwrap();
+    let (ax, ay) = scene.objects[y].cell.unwrap();
+    let facing = scene.objects[y].record.fields[10];
+    let steps = [
+        (1, 0),
+        (1, -1),
+        (0, -1),
+        (-1, -1),
+        (-1, 0),
+        (-1, 1),
+        (0, 1),
+        (1, 1),
+    ];
+    for (f, (dx, dy)) in steps.into_iter().enumerate() {
+        scene.objects[y].record.fields[10] = f as u32;
+        assert_eq!(scene.berth_cell(y), Some((ax + dx, ay + dy)), "facing {f}");
+    }
+    scene.objects[y].record.fields[10] = facing;
+    let berth = scene.berth_cell(y).unwrap();
+    assert_eq!(scene.berth_answer(yard), 0);
+    scene.amber = 1000;
+    scene
+        .apply(
+            &Order::BuildShip {
+                site: yard,
+                kind: 0,
+            },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    let k = scene.ship_on_berth(yard).expect("built on the berth");
+    let o = &scene.objects[k];
+    let t = TILE_SIZE as f32;
+    assert_eq!(((o.x / t) as i32, (o.y / t) as i32), berth);
+    let heading = if matches!(facing, 2 | 6) { 6 } else { 0 };
+    assert_eq!(o.ship.as_ref().unwrap().heading, heading);
+    assert_eq!(o.combat.as_ref().unwrap().hull, 0.0);
+    assert_eq!(scene.berth_answer(yard), -1);
+    let id = o.id;
+    // Taken: a free order is queued and charged all the same.
+    let amber = scene.amber;
+    scene.start_ship_with(yard, 0, false).unwrap();
+    assert_eq!(scene.ship_orders.len(), 1);
+    assert_eq!(scene.amber, amber - 200);
+    // One that cannot be paid is dropped.
+    let amber = scene.amber;
+    scene.amber = 50;
+    scene.yard_order(yard, 0, false, true, None).unwrap_err();
+    assert_eq!(scene.ship_orders.len(), 1);
+    scene.amber = amber;
+    // A ship being built takes no moves.
+    let (ox, oy) = (scene.objects[k].x, scene.objects[k].y);
+    assert!(!scene.order_move(id, ox + 3.0 * t, oy));
+    // The boat: 39 steps of 8 ticks, the first at its first tick.
+    let mut ticks = 0;
+    while scene.being_built(id) {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        ticks += 1;
+        assert!(ticks < 400);
+    }
+    assert_eq!(ticks, 1 + 38 * 8);
+    let k = scene.object_index(id).unwrap();
+    let o = &scene.objects[k];
+    let s = o.ship.as_ref().unwrap();
+    assert_eq!(
+        o.combat.as_ref().unwrap().hull,
+        o.combat.as_ref().unwrap().max_hull
+    );
+    // Off the berth: one cell, priority 101 (or one more a row, for a
+    // cell of an own ship).
+    assert!(s.priority >= 101);
+    let goal = s.path.back().copied().expect("moving off the berth");
+    let goal = ((goal.0 / t) as i32, (goal.1 / t) as i32);
+    let here = ((o.x / t) as i32, (o.y / t) as i32);
+    assert!(goal != here && (goal.0 - here.0).abs() <= 2 && (goal.1 - here.1).abs() <= 2);
+    // The queued boat goes on the berth once it is clear, at a 25-tick
+    // pass of the queue, built free.
+    let amber = scene.amber;
+    let mut ticks = 0;
+    while scene.ship_on_berth(yard).is_none() {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        ticks += 1;
+        assert!(ticks < 400, "the queue builds");
+    }
+    assert!(scene.ship_orders.is_empty());
+    assert_eq!(scene.amber, amber);
+    // A merchant's hull takes 40 steps.
+    let k = scene.ship_on_berth(yard).unwrap();
+    let id = scene.objects[k].id;
+    {
+        let s = scene.objects[k].ship.as_mut().unwrap();
+        s.kind = 1;
+        let b = s.build.as_mut().unwrap();
+        b.frame = if heading == 6 { 40 } else { 0 };
+        b.since = 8;
+        scene.objects[k].combat.as_mut().unwrap().hull = 0.0;
+    }
+    let mut ticks = 0;
+    while scene.being_built(id) {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        ticks += 1;
+        assert!(ticks < 400);
+    }
+    assert_eq!(ticks, 1 + 39 * 8);
+}
+
+/// A stop order calls off a ship being built: its picture runs back down
+/// a frame every 8 ticks, then its price is given back, the owner's ship
+/// counted lost and the ship removed (0x4aa540, 0x4b3ab0; needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn stopping_a_ship_being_built_calls_it_off() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let yard = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .map(|o| o.id)
+        .unwrap();
+    scene.amber = 1000;
+    scene
+        .apply(
+            &Order::BuildShip {
+                site: yard,
+                kind: 0,
+            },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    assert_eq!(scene.amber, 800);
+    let id = scene.objects[scene.ship_on_berth(yard).unwrap()].id;
+    for _ in 0..(1 + 8 * 4) {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let k = scene.object_index(id).unwrap();
+    let (frame, heading) = {
+        let s = scene.objects[k].ship.as_ref().unwrap();
+        (s.build.unwrap().frame, s.heading)
+    };
+    let base = if heading == 6 { 40 } else { 0 };
+    assert_eq!(frame - base, 5);
+    scene
+        .apply(&Order::Stop { id }, &data, &mut caches)
+        .unwrap();
+    // Back down to the base (heading 0: below 1; heading 6: below 40).
+    let steps = if heading == 6 { 6 } else { 5 };
+    for _ in 0..(steps * 8 - 1) {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert!(scene.being_built(id));
+    let lost = scene.stats.ships_lost[0];
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    assert!(scene.object_index(id).is_none());
+    assert_eq!(scene.amber, 1000);
+    assert_eq!(scene.stats.ships_lost[0], lost + 1);
 }
 
 /// A warship attacks and sinks an enemy ship (needs `OPENCONQUEST_DATA`).

@@ -964,7 +964,7 @@ impl Scene {
         let Some(&site) = brain.fleets[k]
             .ships
             .iter()
-            .find(|&&id| self.production_at(id).is_none())
+            .find(|&&id| !self.yard_busy(id))
         else {
             return false;
         };
@@ -982,19 +982,7 @@ impl Scene {
             return false;
         };
         let (fleet, kind) = brain.requests[r];
-        if !free {
-            let (amber, fish) = crate::economy::ship_cost(kind);
-            self.earn(owner, -(amber as i64), -(fish as i64));
-        }
-        self.productions.push(super::Production {
-            argo: false,
-            site,
-            ship: kind,
-            elapsed: 0.0,
-            total: crate::economy::SHIP_BUILD_SECONDS,
-            arming: None,
-            paid: (0, 0),
-        });
+        self.builder_order(site, owner, kind, free);
         let brain = self.brain.as_mut().unwrap();
         brain.requests.remove(r);
         brain.building.push((site, kind, fleet));
@@ -1010,7 +998,7 @@ impl Scene {
         let Some(&site) = brain.fleets[k]
             .ships
             .iter()
-            .find(|&&id| self.production_at(id).is_none())
+            .find(|&&id| !self.yard_busy(id))
         else {
             return false;
         };
@@ -1019,12 +1007,34 @@ impl Scene {
         };
         // Barbarian structures build for nothing (BarbarianClassTy pays
         // only to mend its units, 0x40eba0).
-        if !self.barbarian_site(site) {
+        let free = self.barbarian_site(site);
+        if !free {
             let (amber, fish) = crate::economy::ship_cost(kind);
             let (have_a, have_f) = self.funds(owner);
             if have_a < amber || have_f < fish {
                 return false;
             }
+        }
+        self.builder_order(site, owner, kind, free);
+        self.brain
+            .as_mut()
+            .unwrap()
+            .building
+            .push((site, kind, fleet));
+        true
+    }
+
+    /// A brain's builder `site` orders a ship of type `kind`: a yard as
+    /// any order (0x416a40, paid), a builder for nothing (`free`, the
+    /// barbarian structures) by the port's queue (not decoded: how a
+    /// barbarian structure builds).
+    fn builder_order(&mut self, site: u32, owner: (u32, u32), kind: u8, free: bool) {
+        if self.object_index(site).is_some_and(|i| self.is_yard(i)) {
+            let _ = self.yard_order(site, kind, false, !free, None);
+            return;
+        }
+        if !free {
+            let (amber, fish) = crate::economy::ship_cost(kind);
             self.earn(owner, -(amber as i64), -(fish as i64));
         }
         self.productions.push(super::Production {
@@ -1036,12 +1046,6 @@ impl Scene {
             arming: None,
             paid: (0, 0),
         });
-        self.brain
-            .as_mut()
-            .unwrap()
-            .building
-            .push((site, kind, fleet));
-        true
     }
 
     /// Whether `site` is a barbarian structure (class 0x3f-0x41).
@@ -1722,9 +1726,7 @@ impl Scene {
         if of(&[DOCK]).is_empty() {
             let yard = of(&[SHIPYARD]);
             return Some(match yard.first() {
-                Some(&y) if self.production_at(self.objects[y].id).is_none() => {
-                    Err(self.objects[y].id)
-                }
+                Some(&y) if !self.yard_busy(self.objects[y].id) => Err(self.objects[y].id),
                 _ => Ok(0),
             });
         }

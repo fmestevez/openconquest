@@ -156,15 +156,27 @@ impl Scene {
         self.productions.iter().find(|p| p.site == site)
     }
 
-    /// Starts building a ship of type `kind` at shipyard `site`.
+    /// Whether builder `site` has a ship under way: being built on its
+    /// berth, waiting for it, or (a builder other than a yard) in its
+    /// queue.
+    pub fn yard_busy(&self, site: u32) -> bool {
+        self.production_at(site).is_some()
+            || self.ship_orders.iter().any(|o| o.site == site)
+            || self.ship_on_berth(site).is_some()
+    }
+
+    /// Orders a ship of type `kind` at shipyard `site`.
     pub fn start_ship(&mut self, site: u32, kind: u8) -> Result<(), String> {
         self.start_ship_with(site, kind, true)
     }
 
-    /// Starts building a ship of type `kind` at shipyard `site`; without
-    /// `pay` it is built free (0x416a40 with param_2 = 0: the yard command
-    /// 0x20 whose byte 0xf is 0xff, order 0x5c's; no price test, nothing
-    /// taken, nothing to pay back).
+    /// Orders a ship of type `kind` at shipyard `site` (0x416a40, see
+    /// `yard_order`); without `pay` one built now is free (byte 0xf 0xff:
+    /// order 0x5c's part; no price test, nothing taken). It must be
+    /// allowed (0x43da20, the price aside). (Not settled: whether the
+    /// player's yard buttons reach 0x416a40 at the yard itself or through
+    /// the town's command 0x20, which hands the order to its first yard
+    /// answering 0; the port orders at the yard clicked.)
     pub fn start_ship_with(&mut self, site: u32, kind: u8, pay: bool) -> Result<(), String> {
         let owner = self
             .object_index(site)
@@ -175,68 +187,45 @@ impl Scene {
         } else {
             self.may_build_ship_for(owner, kind)?;
         }
-        // The player's ships come armed as the Building page says; the
-        // computer players' with their standard load.
-        let human = Some(owner) == self.human.map(|h| (h.nation, h.slot));
-        let (amber, fish, arming) = if human {
-            let price = self.ship_price(site, kind);
-            let (amber, fish) = if pay {
-                (price.amber, price.fish)
-            } else {
-                (0, 0)
-            };
-            let (have_amber, have_fish) = self.funds(owner);
-            if have_amber < amber || have_fish < fish {
-                return Err(format!(
-                    "Not enough resources: {amber} amber and {fish} fish needed"
-                ));
-            }
-            if let Some(home) = price.home {
-                self.garrisons.insert(home, price.stock_left);
-            }
-            (amber, fish, Some(price.arming))
-        } else if pay {
-            let (amber, fish) = economy::ship_cost(kind);
-            (amber, fish, None)
-        } else {
-            (0, 0, None)
-        };
-        self.earn(owner, -(amber as i64), -(fish as i64));
-        self.productions.push(Production {
-            site,
-            ship: kind,
-            argo: false,
-            elapsed: 0.0,
-            total: economy::SHIP_BUILD_SECONDS,
-            arming,
-            paid: (amber, fish),
-        });
-        Ok(())
+        self.yard_order(site, kind, false, pay, None)
     }
 
-    /// Ships of type `kind` ordered at yard `site` and not yet afloat.
+    /// Ships of type `kind` ordered at yard `site` and waiting their turn
+    /// (the yard's queue, counted on its buttons by 0x4164e0).
     pub fn ships_queued(&self, site: u32, kind: u8, argo: bool) -> u32 {
-        self.productions
-            .iter()
-            .filter(|p| p.site == site && p.ship == kind && p.argo == argo)
-            .count() as u32
+        self.ships_waiting(site, kind, argo)
+            + self
+                .productions
+                .iter()
+                .filter(|p| p.site == site && p.ship == kind && p.argo == argo)
+                .count() as u32
     }
 
-    /// Takes the last ship of type `kind` ordered at yard `site` off its
+    /// Takes the last ship of type `kind` waiting at yard `site` off its
     /// queue and pays its price back (a right click on its button, message
-    /// 0x3c; the stock its arming took stays spent).
+    /// 0x280f '<', 0x416f90; the stock its arming took stays spent). One
+    /// being built on the berth is called off by a stop order instead.
     pub fn cancel_ship(&mut self, site: u32, kind: u8) -> Result<(), String> {
-        let k = self
-            .productions
-            .iter()
-            .rposition(|p| p.site == site && p.ship == kind && !p.argo)
-            .ok_or("None of those are being built")?;
-        let p = self.productions.remove(k);
         let owner = self
             .object_index(site)
             .and_then(|i| self.objects[i].owner)
             .ok_or("No such shipyard")?;
-        self.earn(owner, p.paid.0 as i64, p.paid.1 as i64);
+        let paid = match self
+            .ship_orders
+            .iter()
+            .rposition(|p| p.site == site && p.ship == kind && !p.argo)
+        {
+            Some(k) => self.ship_orders.remove(k).paid,
+            None => {
+                let k = self
+                    .productions
+                    .iter()
+                    .rposition(|p| p.site == site && p.ship == kind && !p.argo)
+                    .ok_or("None of those are waiting")?;
+                self.productions.remove(k).paid
+            }
+        };
+        self.earn(owner, paid.0 as i64, paid.1 as i64);
         Ok(())
     }
 
@@ -441,19 +430,19 @@ impl Scene {
     /// Ship type of the Argo.
     pub const ROYAL_SHIP: u8 = 2;
 
-    /// Starts building the Argo at shipyard `site` (0x7d): a royal ship,
+    /// Orders the Argo at shipyard `site` (0x7d, code 0x25): a royal ship,
     /// once Argus has come to the player's town (permission bit 80, which
     /// building it clears: there is one Argo).
     pub fn start_argo(&mut self, site: u32) -> Result<(), String> {
         if !self.permits.argo() {
             return Err("Argus must come to your town first".into());
         }
-        self.start_ship(site, Self::ROYAL_SHIP)?;
-        if let Some(p) = self.productions.iter_mut().rev().find(|p| p.site == site) {
-            p.argo = true;
-        }
-        self.permits.set(crate::permits::ARGO, false);
-        Ok(())
+        let owner = self
+            .object_index(site)
+            .and_then(|i| self.objects[i].owner)
+            .ok_or("No such shipyard")?;
+        self.can_build_ship_for(owner, Self::ROYAL_SHIP)?;
+        self.yard_order(site, Self::ROYAL_SHIP, true, true, None)
     }
 
     /// In miss002, Argus come to one of the player's settlements lets
@@ -469,6 +458,7 @@ impl Scene {
             .iter()
             .any(|(site, heroes)| heroes.contains(&ARGUS) && self.object_index(*site).is_some());
         let argo = self.productions.iter().any(|p| p.argo)
+            || self.ship_orders.iter().any(|p| p.argo)
             || self
                 .objects
                 .iter()
@@ -499,7 +489,7 @@ impl Scene {
             ObjectClass::Building(SHIPYARD) => DOCK,
             _ => return Err("This cannot be upgraded".into()),
         };
-        if self.production_at(id).is_some() {
+        if self.yard_busy(id) {
             return Err("The shipyard is busy".into());
         }
         let cost = economy::building_cost(to);
@@ -673,46 +663,7 @@ impl Scene {
         let Some((x, y)) = self.launch_spot(i) else {
             return Ok(None);
         };
-        let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
-        let mut fields = vec![0u32; 13];
-        fields[0] = 0xc8;
-        fields[1] = 1;
-        fields[2] = nation;
-        fields[3] = slot;
-        fields[5] = nation;
-        fields[6] = slot;
-        fields[7] = kind as u32;
-        fields[8] = u32::MAX;
-        fields[9] = x as u32;
-        fields[10] = y as u32;
-        fields[11] = 6; // facing south
-        fields[12] = 100;
-        let rec = ObjectRecord {
-            id,
-            class_id: 0xc8,
-            fields,
-        };
-        if let Some(mut obj) = objects::resolve(data, caches, &rec)? {
-            // Armed as ordered; boats and merchants keep their one item.
-            if let (Some(a), Some(ship), Some(fight)) =
-                (arming, obj.ship.as_mut(), obj.combat.as_mut())
-            {
-                let mut squads = [0; 3];
-                for &w in a.items.iter().filter(|&&w| w < 3) {
-                    squads[w as usize] += 1;
-                }
-                ship.crew.squads = squads;
-                if combat::carries_weapons(kind) && kind > 1 {
-                    fight.weapons = a.items.iter().copied().filter(|&w| w >= 3).collect();
-                }
-                ship.armour = a.armour;
-                ship.ram = a.ram;
-            }
-            self.objects.push(obj);
-            self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
-            return Ok(Some(id));
-        }
-        Ok(None)
+        self.make_ship((nation, slot), kind, (x, y), 6, arming, data, caches)
     }
 
     /// Player `owner`'s research levels.

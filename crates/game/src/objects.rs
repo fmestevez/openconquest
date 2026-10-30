@@ -404,6 +404,34 @@ pub struct Ship {
     /// (0x4c2230 states 2, 3 and 6).
     #[serde(default)]
     pub ram_run: Option<RamRun>,
+    /// Being built on a shipyard's berth (`+0x251 = 2`, task 4: 0x4dfe00,
+    /// 0x4b3ab0); `None` once afloat.
+    #[serde(default)]
+    pub build: Option<Build>,
+    /// Its own random numbers (`+0x18`, the usual LCG), from its first
+    /// draw (`Scene::ship_draw`).
+    #[serde(default)]
+    pub lcg: Option<u32>,
+}
+
+/// A ship being built on its yard's berth (see `Ship::build`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Build {
+    /// The yard (`+0x75a`).
+    pub yard: u32,
+    /// Game ticks since its last step (`now - +0x57b`; `+0x57b` is 0 from
+    /// the constructor 0x4dc3f0, so the first step comes at its first tick).
+    pub since: u32,
+    /// The picture's frame (`+0x8be +0x45`) in the hull's building
+    /// sequence: from 0 for heading 0, from 40 for heading 6.
+    pub frame: i32,
+    /// Called off (`+0x73a < 0`): the frame runs back down.
+    pub cancelled: bool,
+    /// What it cost (amber, fish; `+0x544`), paid back if called off.
+    pub price: (u32, u32),
+    /// Its building frames are on the object (not saved: set again).
+    #[serde(skip)]
+    pub shown: bool,
 }
 
 /// What a grappled ship is doing, a game tick at a time.
@@ -1523,6 +1551,8 @@ pub fn resolve(
         lime_clock: 0.0,
         grapple: None,
         ram_run: None,
+        build: None,
+        lcg: None,
         cargo: 0.0,
         cargo_kind: None,
         task: None,
@@ -1695,6 +1725,8 @@ pub fn building_frame_ms(frames: usize) -> u64 {
 /// tick (0x4ac210).
 /// Whether ships of type `kind` cannot pass over shoals: the royal ship,
 /// bomber and rammer (the manual's comparison chart).
+/// The draught flag of a ship type (0x597ce4: royal ships, bombers and
+/// rammers), kept in `+0x592`.
 pub fn deep_draught(kind: u8) -> bool {
     matches!(kind, 2 | 3 | 5)
 }

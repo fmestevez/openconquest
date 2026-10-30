@@ -736,7 +736,14 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
 /// build, then the upgrade to a dock.
 fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     let Some(human) = scene.human else { return };
-    let building = scene.production_at(obj.id);
+    // The ship rising on the berth, and how far (its picture's frame from
+    // its sequence's base, of 39).
+    let building = scene.ship_on_berth(obj.id).and_then(|k| {
+        let s = scene.objects[k].ship.as_ref()?;
+        let b = s.build?;
+        let base = if s.heading == 6 { 40 } else { 0 };
+        Some((s.kind, s.argo, (b.frame - base).clamp(0, 39) as f32 / 39.0))
+    });
     // A ship type's slot is its number (0x42d750 gives slot n the command
     // of type n: boat, merchant, royal ship, bomber, boarder, rammer, ship
     // killer, men killer), the unique ships packed after; locked ones are
@@ -759,8 +766,9 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             checked: false,
             closes: false,
             command,
-            // More may be ordered while one is built: they wait their turn
-            // (0x4164e0 counts them on the button, 0x416f90).
+            // More may be ordered while the berth is taken: they wait their
+            // turn (0x4164e0 counts them on the button, 0x416f90; the
+            // button looks at the price, not at the berth).
             enabled: scene.can_build_ship(kind).is_ok() && {
                 let p = scene.ship_price(obj.id, kind);
                 scene.amber >= p.amber && scene.fish >= p.fish
@@ -768,8 +776,8 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             progress: None,
             count: scene.ships_queued(obj.id, kind, false),
         };
-        if let Some(p) = building.filter(|p| p.ship == kind && !p.argo) {
-            entry.progress = Some(p.elapsed / p.total);
+        if let Some((_, _, done)) = building.filter(|b| b.0 == kind && !b.1) {
+            entry.progress = Some(done);
         }
         menu[slot] = Some(entry);
     }
@@ -780,19 +788,21 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             checked: false,
             closes: false,
             command: Command::BUILD_ARGO,
+            // Only with the berth free as well (0x4e82f0 with 0xff).
             enabled: scene.ships_queued(obj.id, Scene::ROYAL_SHIP, true) == 0
-                && scene.can_build_ship(2).is_ok(),
+                && scene.can_build_ship(2).is_ok()
+                && scene.berth_answer(obj.id) == 0,
             progress: None,
             count: 0,
         };
-        if let Some(p) = building.filter(|p| p.argo) {
-            entry.progress = Some(p.elapsed / p.total);
+        if let Some((_, _, done)) = building.filter(|b| b.1) {
+            entry.progress = Some(done);
             entry.enabled = true;
         }
         menu[slot] = Some(entry);
     }
     if obj.class == ObjectClass::Building(SHIPYARD) && scene.permits.dock() {
-        let enabled = building.is_none() && scene.amber >= economy::building_cost(DOCK);
+        let enabled = !scene.yard_busy(obj.id) && scene.amber >= economy::building_cost(DOCK);
         set(menu, 11, Command::UPGRADE_DOCK, enabled);
     }
 }

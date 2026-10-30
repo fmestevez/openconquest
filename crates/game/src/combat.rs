@@ -758,8 +758,14 @@ pub fn throw_weakness(health: f32) -> f32 {
 /// over 15, as the original's shots deal A x 15 (0x4ac140) where ours deal
 /// A.
 pub fn hull_strength(kind: u8) -> f32 {
+    hull_points(kind) as f32 / 15.0
+}
+
+/// A ship type's full hull in the original's points (0x5c76b0: its chart
+/// value, 0x5bb4b0, x 650).
+pub fn hull_points(kind: u8) -> u32 {
     const CHART: [u32; 12] = [28, 90, 100, 120, 65, 70, 36, 36, 65, 75, 110, 120];
-    CHART[kind as usize % 12] as f32 * 650.0 / 15.0
+    CHART[kind as usize % 12] * 650
 }
 
 /// A ship's shares of a blow (0x4beb50, ship +0x269..+0x270): its hull

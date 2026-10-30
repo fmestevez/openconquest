@@ -28,6 +28,14 @@ pub struct SaveGame {
     pub fish: u32,
     pub objects: Vec<SavedObject>,
     pub productions: Vec<Production>,
+    /// Ships waiting for a yard's berth, and the yards' queue clocks.
+    #[serde(default)]
+    pub ship_orders: Vec<crate::scene::ShipOrder>,
+    #[serde(default)]
+    pub yard_clocks: Vec<(u32, u32)>,
+    /// The ships' generators' seed.
+    #[serde(default)]
+    pub rnd_init: Option<u32>,
     pub constructions: Vec<Construction>,
     pub trainings: Vec<Training>,
     pub garrisons: BTreeMap<u32, [u32; 9]>,

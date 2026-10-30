@@ -5248,9 +5248,7 @@ impl App {
         let ship_kind = economy::ship_of_command(entry.command);
         if !entry.enabled {
             let reason = match ship_kind {
-                Some(_) if self.scene.production_at(id).is_some() => {
-                    "The shipyard is busy".to_string()
-                }
+                Some(_) if self.scene.yard_busy(id) => "The shipyard is busy".to_string(),
                 Some(kind) => self.scene.can_build_ship(kind).err().unwrap_or_default(),
                 None if (Command::TRAIN_BOWMEN.0..=Command::TRAIN_BOWMEN.0 + 8)
                     .contains(&entry.command.0) =>

@@ -314,6 +314,12 @@ struct Part {
     tries: u32,
     /// Buildings of the class before it was ordered (+0xdc).
     before: usize,
+    /// A ship part's passes held by a -1 after a pass that started
+    /// nothing (+0xe0), and whether its last result was -1 (+0x70).
+    #[serde(default)]
+    berths: u32,
+    #[serde(default)]
+    refused: bool,
 }
 
 /// The land fleet (`LFleet.cpp`, the player fleet of kind 0xb, built by
@@ -374,6 +380,10 @@ impl Entry {
         }
     }
 }
+
+/// A ship part held this many passes by its town's -1 has the town clear
+/// its berths (0x428f20 at 0x4295cb).
+const BERTH_PASSES: u32 = 25;
 
 /// The land fleet's priority threshold (+0x24, 0x7fff from 0x42b370): a
 /// waiting entry at or above it stops the walk. Only a queued op-0x3f0
@@ -2215,8 +2225,18 @@ impl Scene {
                         let Job::Part { part: p, .. } = &mut ai.land.queue[i].job else {
                             unreachable!()
                         };
+                        p.refused = matches!(step, PartStep::Berth);
                         match step {
                             PartStep::Done => p.state = 3,
+                            PartStep::Berth => {
+                                if count {
+                                    p.berths += 1;
+                                }
+                                if p.berths >= BERTH_PASSES {
+                                    p.berths = 0;
+                                    self.berths_held(ai, i, base, part.op);
+                                }
+                            }
                             PartStep::Started(before) => {
                                 p.state = 2;
                                 p.before = before;
@@ -2268,7 +2288,7 @@ impl Scene {
                             }
                         }
                         PartStep::Failed => p.state = 4,
-                        PartStep::Hold | PartStep::Started(_) => {}
+                        PartStep::Hold | PartStep::Berth | PartStep::Started(_) => {}
                     }
                 }
             }
@@ -2299,6 +2319,25 @@ impl Scene {
                 break;
             }
             i += 1;
+        }
+    }
+
+    /// A ship part (the queue's entry `i`, of base `b`) held 25 passes by
+    /// a -1 (0x428f20 at 0x4295cb): its town is sent command 0x28 with
+    /// payload 3, clearing its berths (0x441ba0, 0x4415a0), and every other
+    /// tried part for a ship of the same type whose last result was -1
+    /// starts its count again. (Not decoded: the tick a command sent by
+    /// 0x520cc0 reaches the town; the port's is at once.)
+    fn berths_held(&mut self, ai: &mut Computer, i: usize, b: usize, op: Op) {
+        let yards = self.base_yards(ai, b);
+        self.clear_berths(Some(ai.owner), &yards);
+        for (k, e) in ai.land.queue.iter_mut().enumerate() {
+            let state = e.state();
+            if let Job::Part { part, .. } = &mut e.job {
+                if k != i && state == 1 && part.op == op && part.refused {
+                    part.berths = 0;
+                }
+            }
         }
     }
 
@@ -2364,14 +2403,12 @@ impl Scene {
                 if self.may_build_ship_for(owner, kind).is_err() {
                     return PartStep::Wait;
                 }
-                // No yard answers: -5, a try spent. (Not ported: a yard
-                // idle with its berth taken answers -1, 0x4e82f0, which
-                // holds the part (flag 4) and every 25 passes has the
-                // town clear its berths, 0x428f20 at 0x4295cb, 0x4415a0;
-                // the port's yards have no berth.)
-                let Some(yard) = self.base_yard(ai, b) else {
-                    return PartStep::Wait;
-                };
+                // Then (param_3 = 1) the town must be idle, else -1 (not
+                // ported: the town's states other than going up or being
+                // made a town, `+0xa4`).
+                if self.construction_at(site).is_some() {
+                    return PartStep::Berth;
+                }
                 // Field 8 skips the price (0x428f20 passes it to 0x43da20 as
                 // param_7) and builds the boat free (0x416a40).
                 let (amber, fish) = economy::ship_cost(kind);
@@ -2379,6 +2416,33 @@ impl Scene {
                 if !part.free && (have_amber < amber || have_fish < fish) {
                     return PartStep::Hold;
                 }
+                // The yard test (param_8 = 1): the first of the town's yards
+                // answering 0 to the ship's code (0x4e82f0) builds it (the
+                // town hands command 0x20 to that one, 0x441ba0); none: -1
+                // if one answered -1 (its berth taken), holding the part
+                // (flag 4), else -5, a try spent.
+                let mut refused = -5;
+                let mut yard = None;
+                for y in self.base_yards(ai, b) {
+                    let Some(i) = self.object_index(y) else {
+                        continue;
+                    };
+                    match self.yard_answer(i, Some(kind)) {
+                        0 => {
+                            yard = Some(y);
+                            break;
+                        }
+                        -1 => refused = -1,
+                        _ => {}
+                    }
+                }
+                let Some(yard) = yard else {
+                    return if refused == -1 {
+                        PartStep::Berth
+                    } else {
+                        PartStep::Wait
+                    };
+                };
                 match self.start_ship_with(yard, kind, !part.free) {
                     Ok(()) => {
                         if let Some(f) = fleet {
@@ -2565,12 +2629,27 @@ impl Scene {
             .next()
     }
 
-    /// The shipyard or dock building base `b`'s ships, the least busy.
-    fn base_yard(&self, ai: &Computer, b: usize) -> Option<u32> {
-        [DOCK, SHIPYARD]
+    /// The shipyards and docks of base `b`'s town (its buildings `+0x1d0`;
+    /// the port's are those `base_building` finds), in the objects' order.
+    fn base_yards(&self, ai: &Computer, b: usize) -> Vec<u32> {
+        let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
+            return Vec::new();
+        };
+        let Some((tx, ty)) = self.object_index(site).map(|i| self.cell_of(i)) else {
+            return Vec::new();
+        };
+        self.objects
             .iter()
-            .filter_map(|&c| self.base_building(ai, b, c))
-            .min_by_key(|&y| self.productions.iter().filter(|p| p.site == y).count())
+            .filter(|o| {
+                o.owner == Some(ai.owner)
+                    && matches!(o.class, ObjectClass::Building(SHIPYARD | DOCK))
+                    && self.construction_at(o.id).is_none()
+                    && o.cell.is_some_and(|(x, y)| {
+                        (x - tx).abs() <= BUILD_RADIUS + 2 && (y - ty).abs() <= BUILD_RADIUS + 2
+                    })
+            })
+            .map(|o| o.id)
+            .collect()
     }
 
     /// Base `b`'s area (0x484aa0 with 0x4218f0: the town and its buildings,
@@ -4580,6 +4659,10 @@ enum PartStep {
     /// Waiting for the price, as long as it takes (the town's refusals
     /// -1 to -3 with the order's flags 1, 2, 4: 0x428a70).
     Hold,
+    /// A ship part held by the town's -1 (busy, or no yard with its berth
+    /// free; flag 4): no try spent, counted towards the town's berth
+    /// clearing (0x428f20 at 0x4295cb).
+    Berth,
     Failed,
 }
 
@@ -5394,10 +5477,17 @@ mod tests {
         v
     }
 
-    /// Gives base 0 of `ai` a shipyard (its workshop, renamed).
+    /// Gives base 0 of `ai` a shipyard with its berth free (a ship on it
+    /// taken away, or its workshop renamed, facing a free water cell).
     fn give_yard(scene: &mut Scene, ai: &Computer) {
-        if scene.base_yard(ai, 0).is_some() {
-            return;
+        for y in scene.base_yards(ai, 0) {
+            let i = scene.object_index(y).unwrap();
+            if let Some(k) = scene.berth_cell(i).and_then(|c| scene.slot_ship(c)) {
+                scene.objects.remove(k);
+            }
+            if scene.berth_answer(y) == 0 {
+                return;
+            }
         }
         let w = scene
             .objects
@@ -5405,6 +5495,13 @@ mod tests {
             .position(|o| o.owner == Some(ai.owner) && o.class == ObjectClass::Building(WORKSHOP))
             .unwrap();
         scene.objects[w].class = ObjectClass::Building(SHIPYARD);
+        for f in 0..8 {
+            scene.objects[w].record.fields[10] = f;
+            if scene.berth_answer(scene.objects[w].id) == 0 {
+                return;
+            }
+        }
+        panic!("no water by the workshop");
     }
 
     /// A flotilla's boat (order 0x5c, part field 8 = 1) is built free: no
@@ -5423,7 +5520,7 @@ mod tests {
         let mut ai = std::mem::take(&mut scene.computers.players[0]);
         give_yard(&mut scene, &ai);
         let owner = ai.owner;
-        let yard = scene.base_yard(&ai, 0).expect("a shipyard");
+        let yard = scene.base_yards(&ai, 0)[0];
         scene.purses.insert(owner, (0, 0));
         let paid = Part {
             op: Op::Ship(0),
@@ -5435,10 +5532,89 @@ mod tests {
         let step = scene.order_part(&mut ai, 0, None, free, &data, &mut caches);
         assert!(matches!(step, PartStep::Done));
         assert_eq!(scene.funds(owner), (0, 0));
-        let p = scene.productions.last().unwrap();
-        assert_eq!((p.site, p.ship, p.paid), (yard, 0, (0, 0)));
+        scene.make_new_ships(&data, &mut caches);
+        let k = scene.ship_on_berth(yard).expect("built on the berth");
+        assert_eq!(scene.objects[k].ship.as_ref().unwrap().kind, 0);
         // Order 0x5c's part is the free one.
         assert_eq!(order_parts(0x5c)[0].0, Op::Ship(0));
+    }
+
+    /// A ship part whose town's yards have their berths taken is held (-1
+    /// with flag 4, no try spent); held after 25 passes that followed one
+    /// starting nothing, the town clears its berths (command 0x28,
+    /// 0x4415a0): the ship on the berth is told a cell aside with priority
+    /// 100 (0x428f20 at 0x4295cb, 0x4b4b50).
+    #[test]
+    fn held_ship_part_clears_the_berths() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        for _ in 0..600 {
+            scene.update(0.1, &data, &mut caches);
+        }
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        give_yard(&mut scene, &ai);
+        let yard = scene.base_yards(&ai, 0)[0];
+        let berth = scene.berth_cell(scene.object_index(yard).unwrap()).unwrap();
+        // One of its ships lying idle on the berth.
+        let ship = scene
+            .objects
+            .iter()
+            .position(|o| {
+                o.owner == Some(ai.owner) && o.ship.as_ref().is_some_and(|s| s.build.is_none())
+            })
+            .unwrap();
+        let t = TILE_SIZE as f32;
+        let id = scene.objects[ship].id;
+        scene.objects[ship].x = berth.0 as f32 * t + t / 2.0;
+        scene.objects[ship].y = berth.1 as f32 * t + t / 2.0;
+        {
+            let s = scene.objects[ship].ship.as_mut().unwrap();
+            s.path.clear();
+            s.task = None;
+            s.priority = 0;
+        }
+        assert_eq!(scene.berth_answer(yard), -1);
+        let part = Part {
+            op: Op::Ship(0),
+            free: true,
+            ..Default::default()
+        };
+        let step = scene.order_part(&mut ai, 0, None, part, &data, &mut caches);
+        assert!(matches!(step, PartStep::Berth));
+        ai.land = LandFleet::default();
+        ai.orders.clear();
+        ai.requests.clear();
+        let counted = |ai: &Computer| {
+            ai.land.queue.iter().find_map(|e| match e.job {
+                Job::Part { part, .. } => Some((part.state, part.tries, part.berths)),
+                _ => None,
+            })
+        };
+        scene.town_order(&mut ai, 0, 0x5c, Some(0), 23_000, 0x488);
+        scene.land_fleet(&mut ai, 50, &data, &mut caches);
+        scene.land_fleet(&mut ai, 53, &data, &mut caches);
+        // Tried after a pass that started the order: held, not counted.
+        let (state, tries, berths) = counted(&ai).unwrap();
+        assert_eq!((state, berths), (1, 0));
+        let mut now = 53;
+        for n in 1..25 {
+            now += 50;
+            scene.land_fleet(&mut ai, now, &data, &mut caches);
+            assert_eq!(counted(&ai).unwrap(), (1, tries, n), "held, no try spent");
+        }
+        let k = scene.object_index(id).unwrap();
+        assert!(scene.objects[k].ship.as_ref().unwrap().path.is_empty());
+        now += 50;
+        scene.land_fleet(&mut ai, now, &data, &mut caches);
+        assert_eq!(counted(&ai).unwrap().2, 0);
+        let s = scene.objects[k].ship.as_ref().unwrap();
+        assert_eq!((s.path.len(), s.priority), (1, 100));
+        let (gx, gy) = s.path[0];
+        let goal = ((gx / t) as i32, (gy / t) as i32);
+        assert!(goal != berth && (goal.0 - berth.0).abs() <= 2 && (goal.1 - berth.1).abs() <= 2);
     }
 
     /// The land fleet's passes (0x42b910): 50 ticks after one that started
@@ -5551,7 +5727,7 @@ mod tests {
         };
         let mut caches = Caches::default();
         let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
-        for _ in 0..600 {
+        for _ in 0..1500 {
             scene.update(0.1, &data, &mut caches);
         }
         let mut ai = std::mem::take(&mut scene.computers.players[0]);
@@ -5674,7 +5850,7 @@ mod tests {
         let mut caches = Caches::default();
         let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
         // Ships to point at each other.
-        for _ in 0..600 {
+        for _ in 0..1500 {
             scene.update(0.1, &data, &mut caches);
         }
         let human = scene.human.unwrap();
