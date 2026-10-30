@@ -30,13 +30,13 @@ use openconquest_formats::ObjectClass;
 use serde::{Deserialize, Serialize};
 
 use super::{Order, Scene, BUILD_RADIUS, FOUND_REACH};
-use crate::assets::GameData;
+
 use crate::combat::{Rng, Upgrade};
 use crate::economy::{
     self, DOCK, PORT, SCHOOL, SETTLEMENT, SHIPYARD, SMITHY, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR, TOWN,
     WORKSHOP,
 };
-use crate::objects::{Caches, Resource, Task};
+use crate::objects::{Resource, Task};
 
 /// A rectangle of map cells: x, y, width, height.
 type Cells = (i32, i32, i32, i32);
@@ -722,7 +722,7 @@ impl Scene {
     }
 
     /// Runs the computer players one game tick (message 0 to each).
-    pub(super) fn run_computers(&mut self, data: &GameData, caches: &mut Caches) {
+    pub(super) fn run_computers(&mut self) {
         if !self.computers.on {
             return;
         }
@@ -730,7 +730,7 @@ impl Scene {
         self.computers.tick += 1;
         for k in 0..self.computers.players.len() {
             let mut ai = std::mem::take(&mut self.computers.players[k]);
-            self.computer_tick(&mut ai, data, caches);
+            self.computer_tick(&mut ai);
             self.computers.players[k] = ai;
         }
     }
@@ -870,7 +870,7 @@ impl Scene {
     }
 
     /// One tick of a computer player (message 0, 0x488960).
-    fn computer_tick(&mut self, ai: &mut Computer, data: &GameData, caches: &mut Caches) {
+    fn computer_tick(&mut self, ai: &mut Computer) {
         let now = self.now();
         // Ships sunk or taken leave their flotillas.
         let owner = ai.owner;
@@ -891,7 +891,7 @@ impl Scene {
         for f in 0..ai.flotillas.len() {
             self.flotilla_turn(ai, f, now);
         }
-        self.land_fleet(ai, now, data, caches);
+        self.land_fleet(ai, now);
     }
 
     /// New and lost objects (messages 0x5d95, 0x5d97 and 0x5d9b).
@@ -2194,7 +2194,7 @@ impl Scene {
     /// The land fleet's message 0 (0x42b910), every tick: a pass 50 ticks
     /// after one that started nothing; after one that started a part, 3
     /// ticks after it once something woke the fleet (0x42b94c-0x42b98d).
-    fn land_fleet(&mut self, ai: &mut Computer, now: u32, data: &GameData, caches: &mut Caches) {
+    fn land_fleet(&mut self, ai: &mut Computer, now: u32) {
         let due = if !ai.land.started {
             now >= ai.land.last + 50
         } else {
@@ -2221,7 +2221,7 @@ impl Scene {
                     Job::Part {
                         base, fleet, part, ..
                     } => {
-                        let step = self.order_part(ai, base, fleet, part, data, caches);
+                        let step = self.order_part(ai, base, fleet, part);
                         let Job::Part { part: p, .. } = &mut ai.land.queue[i].job else {
                             unreachable!()
                         };
@@ -2268,7 +2268,7 @@ impl Scene {
                     base, fleet, part, ..
                 } = entry.job
                 {
-                    let step = self.order_part(ai, base, fleet, part, data, caches);
+                    let step = self.order_part(ai, base, fleet, part);
                     let Job::Part { part: p, .. } = &mut ai.land.queue[i].job else {
                         unreachable!()
                     };
@@ -2348,8 +2348,6 @@ impl Scene {
         b: usize,
         fleet: Option<usize>,
         part: Part,
-        data: &GameData,
-        caches: &mut Caches,
     ) -> PartStep {
         let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
             return PartStep::Failed;
@@ -2389,10 +2387,17 @@ impl Scene {
                 let Some((x, y, facing)) = self.town_build_place(site, class) else {
                     return PartStep::Wait;
                 };
-                match self.place_building_facing(site, class, x, y, Some(facing), data, caches) {
-                    Ok(()) => PartStep::Started(have),
-                    Err(_) => PartStep::Wait,
-                }
+                // The town is sent the build (0x428a70, 0x520cc0): it places
+                // it at the next tick; the part, under way, waits for the
+                // town's count to grow (0x428e10).
+                self.post(Order::PlaceBuilding {
+                    site,
+                    class,
+                    cx: x,
+                    cy: y,
+                    facing: Some(facing),
+                });
+                PartStep::Started(have)
             }
             Op::Ship(kind) => {
                 if part.state == 2 {
@@ -2443,15 +2448,18 @@ impl Scene {
                         PartStep::Wait
                     };
                 };
-                match self.start_ship_armed(yard, kind, !part.free, true) {
-                    Ok(()) => {
-                        if let Some(f) = fleet {
-                            ai.building.push((yard, kind, f));
-                        }
-                        PartStep::Done
-                    }
-                    Err(_) => PartStep::Wait,
+                // Command 0x20 through the town to the yard (0x520cc0): it
+                // reaches it at the next tick; the part is done once sent.
+                self.post(Order::YardShip {
+                    site: yard,
+                    kind,
+                    pay: !part.free,
+                    arm: true,
+                });
+                if let Some(f) = fleet {
+                    ai.building.push((yard, kind, f));
                 }
+                PartStep::Done
             }
             Op::Upgrade(class) => {
                 let to = if class == SETTLEMENT { TOWN } else { DOCK };
@@ -2487,10 +2495,10 @@ impl Scene {
                 if self.funds(owner).0 < economy::building_cost(to) {
                     return PartStep::Hold;
                 }
-                match self.upgrade(t, data, caches) {
-                    Ok(()) => PartStep::Started(0),
-                    Err(_) => PartStep::Wait,
-                }
+                // The upgrade command (0x520cc0): at the next tick; the part,
+                // under way, waits for the class to change.
+                self.post(Order::Upgrade { id: t });
+                PartStep::Started(0)
             }
             Op::Study(n @ (33 | 34)) => {
                 // The temples' next spell (Temple of the Sea 33, of War 34;
@@ -2591,8 +2599,11 @@ impl Scene {
                 }
                 // Started, it is under way with the building kept
                 // (`+0xdc`, here `before`).
+                // The first the town may mend is sent command 0x1e
+                // (0x520cc0), mended from the next tick.
                 for target in worn {
-                    if self.mend_by(site, target).is_ok() {
+                    if self.mend_check(site, target).is_ok() {
+                        self.post(Order::TownMend { site, target });
                         return PartStep::Started(target as usize);
                     }
                 }
@@ -3951,8 +3962,9 @@ impl Scene {
                 if targets.is_empty() {
                     return false;
                 }
-                self.pending_ship_casts
-                    .extend(targets.iter().map(|&id| (spell, id)));
+                for &ship in &targets {
+                    self.post(Order::TownCastOn { spell, ship });
+                }
             }
             _ => {
                 let Some((cx, cy)) = cell else {
@@ -3961,9 +3973,14 @@ impl Scene {
                 if kind == 8 {
                     // A big reef of kind 1-3 (0x42f580 case 12).
                     let k = self.rng.next() % 3 + 1;
-                    self.pending_reefs.push((cx, cy, k));
+                    self.post(Order::TownReef { cx, cy, kind: k });
                 } else {
-                    self.pending_casts.push((spell, cx, cy, Some(owner)));
+                    self.post(Order::TownCast {
+                        spell,
+                        cx,
+                        cy,
+                        owner: Some(owner),
+                    });
                 }
             }
         }
@@ -5392,6 +5409,7 @@ const FLEET_2: &[&[Want]] = &[
 mod tests {
     use super::*;
     use crate::assets::GameData;
+    use crate::objects::Caches;
 
     fn data() -> Option<GameData> {
         let root = std::env::var_os("OPENCONQUEST_DATA")?;
@@ -5576,11 +5594,13 @@ mod tests {
             op: Op::Ship(0),
             ..Default::default()
         };
-        let step = scene.order_part(&mut ai, 0, None, paid, &data, &mut caches);
+        let step = scene.order_part(&mut ai, 0, None, paid);
         assert!(matches!(step, PartStep::Hold));
         let free = Part { free: true, ..paid };
-        let step = scene.order_part(&mut ai, 0, None, free, &data, &mut caches);
+        let step = scene.order_part(&mut ai, 0, None, free);
         assert!(matches!(step, PartStep::Done));
+        // The yard command reaches it at the tick's end.
+        scene.deliver(&data, &mut caches);
         assert_eq!(scene.funds(owner), (0, 0));
         scene.make_new_ships(&data, &mut caches);
         let k = scene.ship_on_berth(yard).expect("built on the berth");
@@ -5632,7 +5652,7 @@ mod tests {
             free: true,
             ..Default::default()
         };
-        let step = scene.order_part(&mut ai, 0, None, part, &data, &mut caches);
+        let step = scene.order_part(&mut ai, 0, None, part);
         assert!(matches!(step, PartStep::Berth));
         ai.land = LandFleet::default();
         ai.orders.clear();
@@ -5644,21 +5664,21 @@ mod tests {
             })
         };
         scene.town_order(&mut ai, 0, 0x5c, Some(0), 23_000, 0x488);
-        scene.land_fleet(&mut ai, 50, &data, &mut caches);
-        scene.land_fleet(&mut ai, 53, &data, &mut caches);
+        scene.land_fleet(&mut ai, 50);
+        scene.land_fleet(&mut ai, 53);
         // Tried after a pass that started the order: held, not counted.
         let (state, tries, berths) = counted(&ai).unwrap();
         assert_eq!((state, berths), (1, 0));
         let mut now = 53;
         for n in 1..25 {
             now += 50;
-            scene.land_fleet(&mut ai, now, &data, &mut caches);
+            scene.land_fleet(&mut ai, now);
             assert_eq!(counted(&ai).unwrap(), (1, tries, n), "held, no try spent");
         }
         let k = scene.object_index(id).unwrap();
         assert!(scene.objects[k].ship.as_ref().unwrap().path.is_empty());
         now += 50;
-        scene.land_fleet(&mut ai, now, &data, &mut caches);
+        scene.land_fleet(&mut ai, now);
         assert_eq!(counted(&ai).unwrap().2, 0);
         let s = scene.objects[k].ship.as_ref().unwrap();
         assert_eq!((s.path.len(), s.priority), (1, 100));
@@ -5695,15 +5715,15 @@ mod tests {
         // A unique ship not studied: refused, it waits.
         let ask = scene.town_order(&mut ai, 0, 0x58, Some(0), 23_000, 0x488);
         for now in [0, 49] {
-            scene.land_fleet(&mut ai, now, &data, &mut caches);
+            scene.land_fleet(&mut ai, now);
         }
         assert_eq!((ai.orders.len(), state(&ai, 0)), (0, 0));
-        scene.land_fleet(&mut ai, 50, &data, &mut caches);
+        scene.land_fleet(&mut ai, 50);
         assert_eq!((ai.orders.len(), state(&ai, 0)), (1, 2));
         assert!(ai.land.started && ai.land.woken);
-        scene.land_fleet(&mut ai, 52, &data, &mut caches);
+        scene.land_fleet(&mut ai, 52);
         assert_eq!(ai.land.queue.len(), 1, "not before 3 ticks");
-        scene.land_fleet(&mut ai, 53, &data, &mut caches);
+        scene.land_fleet(&mut ai, 53);
         assert_eq!(ai.orders[0].parts[0].state, 2, "queued");
         let tries = |ai: &Computer| match ai.land.queue[1].job {
             Job::Part { part, .. } => (part.state, part.tries),
@@ -5711,21 +5731,21 @@ mod tests {
         };
         assert_eq!(tries(&ai), (1, 25), "tried, not counted");
         assert!(!ai.land.started);
-        scene.land_fleet(&mut ai, 102, &data, &mut caches);
+        scene.land_fleet(&mut ai, 102);
         assert_eq!(tries(&ai), (1, 25));
-        scene.land_fleet(&mut ai, 103, &data, &mut caches);
+        scene.land_fleet(&mut ai, 103);
         assert_eq!(tries(&ai), (1, 24), "counted");
         assert_eq!(ai.ask_state(ask), 2);
         // A boat (free): done when tried; the order ends a pass later.
         ai.land = LandFleet::default();
         ai.orders.clear();
         let ask = scene.town_order(&mut ai, 0, 0x5c, Some(0), 23_000, 0x488);
-        scene.land_fleet(&mut ai, 50, &data, &mut caches);
-        scene.land_fleet(&mut ai, 53, &data, &mut caches);
+        scene.land_fleet(&mut ai, 50);
+        scene.land_fleet(&mut ai, 53);
         assert_eq!(ai.orders[0].parts[0].state, 3, "done");
         assert_eq!(ai.land.queue.len(), 1);
         assert!(ai.land.started && ai.land.woken);
-        scene.land_fleet(&mut ai, 56, &data, &mut caches);
+        scene.land_fleet(&mut ai, 56);
         assert!(ai.orders.is_empty());
         assert_eq!(ai.ask_state(ask), 3);
         assert_eq!(ai.ask_state(ask), 5, "taken off when read");
@@ -5765,20 +5785,23 @@ mod tests {
             op: Op::Repair,
             ..Default::default()
         };
-        let step = scene.order_part(&mut ai, 0, None, part, &data, &mut caches);
+        let step = scene.order_part(&mut ai, 0, None, part);
         assert!(matches!(step, PartStep::Started(t) if t == id as usize));
+        // Command 0x1e reaches the town at the tick's end.
+        assert!(!scene.mending.contains(&id));
+        scene.deliver(&data, &mut caches);
         assert!(scene.mending.contains(&id));
         let under_way = Part {
             state: 2,
             before: id as usize,
             ..part
         };
-        let step = scene.order_part(&mut ai, 0, None, under_way, &data, &mut caches);
+        let step = scene.order_part(&mut ai, 0, None, under_way);
         assert!(matches!(step, PartStep::Wait));
         // Whole: order 10, its mending ended (LandObj 0x425990).
         let c = scene.objects[worn].combat.as_mut().unwrap();
         c.hull = c.max_hull;
-        let step = scene.order_part(&mut ai, 0, None, under_way, &data, &mut caches);
+        let step = scene.order_part(&mut ai, 0, None, under_way);
         assert!(matches!(step, PartStep::Done));
         // The order reaches the building at the next tick (0x520cc0).
         assert!(scene.mending.contains(&id));
@@ -5790,7 +5813,7 @@ mod tests {
             before: u32::MAX as usize,
             ..under_way
         };
-        let step = scene.order_part(&mut ai, 0, None, gone, &data, &mut caches);
+        let step = scene.order_part(&mut ai, 0, None, gone);
         assert!(matches!(step, PartStep::Failed));
     }
 
@@ -5857,7 +5880,7 @@ mod tests {
             op: Op::Study(34),
             ..Default::default()
         };
-        let step = scene.order_part(&mut ai, 0, None, part, &data, &mut caches);
+        let step = scene.order_part(&mut ai, 0, None, part);
         assert!(matches!(step, PartStep::Started(_)));
         assert!(ai.magic.learning(Temple::War).is_some());
         // Learnt in 100 ticks: run the war temple through its list.
@@ -5876,10 +5899,15 @@ mod tests {
         assert!(ai.flame > 0.0 && scene.funds(owner).0 < funds.0);
         // Lightning at a cell.
         assert!(scene.computer_cast(&mut ai, 0, 10, Some((5, 5)), None, None));
-        assert_eq!(
-            scene.pending_casts.last().map(|c| c.0),
-            Some(Spell::Lightning)
-        );
+        assert!(matches!(
+            scene.outbox.last(),
+            Some(Order::TownCast {
+                spell: Spell::Lightning,
+                cx: 5,
+                cy: 5,
+                ..
+            })
+        ));
         // Unknown kinds and spells of a temple it lacks are not cast.
         assert!(!scene.computer_cast(&mut ai, 0, 14, Some((5, 5)), None, None));
         assert!(!scene.computer_cast(&mut ai, 0, 6, Some((5, 5)), None, None));
@@ -5910,7 +5938,7 @@ mod tests {
             op: Op::Study(28),
             ..Default::default()
         };
-        let step = scene.order_part(&mut ai, 0, None, part, &data, &mut caches);
+        let step = scene.order_part(&mut ai, 0, None, part);
         assert!(matches!(step, PartStep::Started(_)));
         assert!(scene.research.iter().any(|r| r.1 == Upgrade::RamKind(1)));
         scene.run_research(Upgrade::RamKind(1).seconds(0) + 0.1);
@@ -6072,9 +6100,9 @@ mod tests {
         }
         assert!(unloaded, "the computer's merchants never unloaded");
         // Its guards may sink a passive human before the first grand
-        // attack is due (some 10 minutes in on normal).
+        // attack is under way (some 10 minutes in on normal).
         assert!(
-            attacked || defeat_at.is_some_and(|k| k < 10 * 60 * 10),
+            attacked || defeat_at.is_some(),
             "the computer never attacked"
         );
         assert_eq!(

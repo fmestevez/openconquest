@@ -140,6 +140,18 @@ impl Scene {
     /// Settlement or town `site` mends `target`, a building of the same
     /// player (command 0x1e, for any player).
     pub(super) fn mend_by(&mut self, site: u32, target: u32) -> Result<(), String> {
+        self.mend_check(site, target)?;
+        let t = self.object_index(target).unwrap();
+        if !self.mending.contains(&target) {
+            self.mending.push(target);
+            self.begin_unit_mend(t);
+        }
+        Ok(())
+    }
+
+    /// Whether settlement or town `site` may mend `target` (`mend_by`'s
+    /// tests).
+    pub(super) fn mend_check(&self, site: u32, target: u32) -> Result<(), String> {
         let s = self.object_index(site).ok_or("No such building")?;
         let t = self
             .object_index(target)
@@ -167,10 +179,6 @@ impl Scene {
         let c = obj.combat.as_ref().ok_or("Nothing to repair")?;
         if c.hull >= c.max_hull || self.construction_at(target).is_some() {
             return Err("It needs no repair".into());
-        }
-        if !self.mending.contains(&target) {
-            self.mending.push(target);
-            self.begin_unit_mend(t);
         }
         Ok(())
     }

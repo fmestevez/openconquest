@@ -207,6 +207,40 @@ pub enum Order {
         site: u32,
         kind: u8,
     },
+    /// The town command 0x20 a land fleet's ship part sends (0x428f20),
+    /// handed to yard `site`: paid unless `pay` is off (field 8), with
+    /// the default-arming byte `arm`.
+    YardShip {
+        site: u32,
+        kind: u8,
+        pay: bool,
+        arm: bool,
+    },
+    /// The town command 0x1e a land fleet's repair part sends (0x429f60):
+    /// settlement or town `site` mends `target`, for any player.
+    TownMend {
+        site: u32,
+        target: u32,
+    },
+    /// The town command 0x22 a computer's cast part sends (0x42a500): its
+    /// temple casts `spell` at cell `(cx, cy)` for `owner` (0x42fc80).
+    TownCast {
+        spell: Spell,
+        cx: i32,
+        cy: i32,
+        owner: Option<(u32, u32)>,
+    },
+    /// The same, a big reef of `kind` (0x42f580 case 12).
+    TownReef {
+        cx: i32,
+        cy: i32,
+        kind: u32,
+    },
+    /// The same, a shield or the phantom on ship `ship`.
+    TownCastOn {
+        spell: Spell,
+        ship: u32,
+    },
     BuildArgo {
         site: u32,
     },
@@ -581,6 +615,34 @@ impl Scene {
                 let r = self.start_ship(site, kind);
                 self.make_new_ships(data, caches);
                 done(r)
+            }
+            YardShip {
+                site,
+                kind,
+                pay,
+                arm,
+            } => {
+                let r = self.start_ship_armed(site, kind, pay, arm);
+                self.make_new_ships(data, caches);
+                done(r)
+            }
+            TownMend { site, target } => done(self.mend_by(site, target)),
+            TownCast {
+                spell,
+                cx,
+                cy,
+                owner,
+            } => {
+                self.brain_cast(spell, cx, cy, owner, data, caches);
+                Ok(0)
+            }
+            TownReef { cx, cy, kind } => {
+                self.big_reef(cx, cy, kind, data, caches);
+                Ok(0)
+            }
+            TownCastOn { spell, ship } => {
+                self.brain_cast_on(spell, ship, data, caches);
+                Ok(0)
             }
             BuildArgo { site } => {
                 let r = self.start_argo(site);

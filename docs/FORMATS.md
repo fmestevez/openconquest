@@ -6121,7 +6121,21 @@ one that started nothing; after one that started a part, only once woken
 and 3 ticks after it (0x42b94c-0x42b98d). Wakers: the walk itself for every
 entry it finds done or failed, 0x42c050 (an order put or refused), and the
 town at the end of each command it handles (0x441ba0 at 0x44393d; the port
-wakes at a part's start, its commands taking effect at once). A town order
+wakes at a part's start). A computer's parts send their town commands
+through the outbox (0x520cc0), reaching the town at the next tick, and
+read nothing back at once: a build (0x428a70) sends the place it chose
+and is under way, done when the town's count of the class grows
+(0x428e10); a ship part (0x428f20) sends command 0x20 to the yard that
+answered 0 (0x4e82f0, a direct test) and is done (`Order::YardShip`); an
+upgrade sends its command and is under way until the class changes; a
+repair part (0x429f60) sends command 0x1e for the first building the
+town may mend (its tests read at once, `mend_check`; `Order::TownMend`)
+and is under way; a cast part (0x42a500) sends command 0x22 (the
+town's temple casting at the next tick: `Order::TownCast`,
+`TownCastOn`, `TownReef`). (Not ported: the cast's own wait as a
+land-fleet part, queued and started on a pass, 0x42b910; the port posts
+it at the computer's turn. The berths' command 0x28 below and the
+studies 0x42a860 still act at once.) A town order
 is asked as an op-1000 entry (0x482f50 -> 0x4a09d0): dwords op, flags
 (request +0x20, 0), priority (the key), code, order flags (+0x24: 0x88 the
 base scripts', 0xd8 their order 0x60, 0x488 the ship requests; 0x47d2e0,
