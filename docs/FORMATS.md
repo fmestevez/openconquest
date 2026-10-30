@@ -6754,7 +6754,18 @@ fleet every 3000-4500 (+0x18c), at once if urgent. Unnamed spells: at a
 place n < 12 kind 11 or 14, n < 18 6 or 11, else 10 (1 in 3) or 6; on a
 fleet 9 (1 in 3), else 16 (1 in 16), else 12 or 15. With the grand attack
 it also casts kind 9 when 3000-4500 ticks have passed or 1 in 6. A cast
-needs the town's check (0x487640 -> 0x43fee0) and goes out as order
+needs the town's first check (0x487640 -> 0x43fee0 stage 0) and goes to
+the land fleet as message 0x3ee at priority 0x7ff5 with the base's town
+(dword 3) and a discount d (dword 9, 0x488810: `r % 21`, + 10 on normal,
++ 20 on hard): at a cell (0x4839e0, flags 0x800), over the base's area
+(0x483c40, 0x1800, kind 15), on a flotilla's ships (0x483ab0, 0xc00: one
+command per ship, none ending it at once) or the Flame (0x483b80, 0x800);
+flag 0x800 takes it off the queue when it ends. Before sending, a previous
+cast saved at the commander flotilla's `+0x2d0` is looked up through
+0x4a0f60(.., 0, buf) -> 0x42c870, but `buf` is the sender's uninitialised
+stack (0x483a19): the port takes the failure path, nothing found or
+removed. The passes try it as the brains' (below, 0x42a500 and the town's
+check at stage 1 with the ships' count), as order
 0x3ee (0x4839e0-0x483c40, part 0x42a500: command 0x22 with spell 1-8,
 12-15 for kinds 5-12, 13-16), which the temple turns into `Magic.cpp`'s
 spells (0x42fc80: codes 1, 2, 3, 4, 6, 7, 8, 0xd, 0xe, 0xf to 2, 3, 1,
@@ -6907,18 +6918,69 @@ also slows. Each active feather of Boreas (item kind 12, flag 0x10) adds its
 amount in percent to the top speed and, in a ram (0x4c1c60), to the
 rammer's blow.
 
-**Brains' casts on their ships** (0x47acf0 through 0x479c20): an order
-(message 0x3ee) to the casting member for each ship; a ship group drops it
-(0x4a09d0), a building group queues it (0x42c430) and its war temple
-carries one out a pass (every 50 ticks, 0x42b910, 0x42a500) when the town
-check 0x43fee0 passes (a war temple standing and idle, the permit, the
-spell learnt, the money). Each cast is paid in full (0x42f470); `pay`
-credits the caster member's player one cast's price (0x47abb0 amber,
-0x47ac50 x 100 fish; 0x4a8eb0, 0x4a8f40) as soon as the target fleet has
-ships (0x479e50), before and whatever comes of the orders (none at all
-with no ships). Not decoded: how the credit, to the computer's spending
-fields `+0x24` and `+0x1c`, maps onto the port's purse; the port credits
-the caster's player's purse. A shield or the
-phantom lasts 3000 ticks more (0xda9a, 0xda97); the Flame is the player's:
-brewed 250 ticks, then 1500 more of it (+0xa8, +0xb0). The port casts at
-once, each ship paid, the Flame brewed once a call.
+**Brains' casts on their ships** (0x47acf0 through 0x479c20, kinds 9, 12,
+15, 16): `pay` first credits the caster member's player one cast's price
+(0x47abb0 amber, 0x47ac50 x 100 fish; 0x4a8eb0, 0x4a8f40) as soon as the
+target fleet has ships (0x479e50), whatever comes of the casts (none at
+all with no ships); then each ship is a message 0x3ee to the casting
+member (flags 0, priority 0, dword 3 -1, dword 4 the kind, dword 7 the
+ship). A ship group drops it (0x4a09d0); a building group (`LFleet.cpp`)
+queues it (0x42c430, generic: after its equals; 10 passes,
+0x595170[0x3ee]). Its passes (0x42b910, message 0 every tick: 50 ticks
+after one that started nothing, 3 after one that did once woken) walk the
+queue until an entry is sent: 0x42a500 tries each of the fleet's towns
+(the port: the towns in the member's cells; a stronghold member is not
+tried, 0x43fee0 being the town's) with the town's check twice (below);
+passing, state 3 and the town command 0x22 {code, x, y, ship, ..., the
+discount at +0x1f} at the next tick; else, in a pass after one that started
+nothing (`+0x18`), one pass fewer, and at none it fails (state 4). Ended
+entries without flag 0x800 stay in the queue, skipped (the port drops
+them: they only wake the fleet, as the entry sent does). The town hands
+the command to its first temple of the kind idle (0x441ba0 case 0x22;
+vt+0x9c 0x4101b0: built, `+0x10c` 0), which pays and casts (below): a
+shield or the phantom lasts 3000 ticks more (0xda9a, 0xda97); the Flame is
+the player's: brewed 250 ticks at that temple (busy meanwhile), then 1500
+more of it (+0xa8, +0xb0). Not decoded: how the credit, to the computer's
+spending fields `+0x24` and `+0x1c`, maps onto the port's purse; the port
+credits the caster's player's purse, and pays from it. Not ported: the
+brains' town orders (`Job`) share the building group's queue in the
+original (a part started there ends the walk); the port runs them apart,
+every 50 ticks. The brains' players' spells learnt (`+0xb4`, `+0xbc`) and
+permission bits are not kept: their checks pass.
+
+**The town's spell check** (0x43fee0; 0x487640 is stage 0 alone): -5
+unless the town is built (`+0xa4` 1); kind to (permission bit, spell by
+`Magic.cpp`'s numbering): 5 (0x36, 0 the wind), 6 (0x39, 3), 7 (0x38, 12
+the big reef), 8 (0x37, 1 the reef), 9 (0x3f, 8), 10 (0x3d, 6), 11 (0x3e,
+7), 12 (0x40, 9), 13 (0x3b, 2 the whirlpool), 14 (0x3a, 4), 15 (0x42,
+10), 16 (0x43, 11): for kinds 5, 7, 8 and 13 not the spell cast (0x42a500's
+codes, 0x42fc80); the permission bit (player `+0x45`), else -5; kinds 5-8,
+13, 14 need a sea temple in the town (`+0x224`), the others a war temple
+(`+0x228`), else -5; the spell's place in the temple's order (0x596da8 /
+0x596ea8, 6 entries) below the spells learnt (`+0xb4` / `+0xbc`), else -7
+(the big reef is in neither: kind 7 never passes). Stage 0 ends there.
+Stage 1 (with n casts and the discount d): unless d is 100, `(100 - d) x
+price x n / 100` amber and fish (0x596844, 0x59687c by the spell) at hand,
+else -2; a computer side (3, 4) compares the fish against its hundredths
+as they are (0x4a8e80 `+0x24`, 0x4a8f10 `+0x1c`), a human's against
+hundredths / 100 (0x4a8d00, 0x4a8ba0); then 0 if a temple of the kind in
+its list answers vt+0x9c 0, -1 if one is at work, else -5. A -2 holds
+the entry with flag 1, a -1 with flag 4 (no sender sets them).
+
+**The temples' casts** (command 0x22): the war temple (0x439260) brews
+the Flame (code 5) if idle and the discounted price is at hand, paying
+`(100 - d) x 6000 / 100` amber and `(100 - d) x 15` fish hundredths
+(0x4a8ee0, 0x4a8f70); codes 6, 7, and 8, 0xe, 0xf with x and y not
+negative, if idle, go to `Magic.cpp` 0x42fa90 -> 0x42f580 (the spell's
+check 0x42ed40: a free cast counted at `Magic +0x10`, else the permission
+and the price at d off; then 0x42f470 pays `price x (100 - d) / 100`
+amber and `price x (100 - d)` fish hundredths, nothing at d >= 100); 8,
+0xe, 0xf with x or y negative cast over the area at `+0xf` (0x42faf0):
+each own ship (+0x57 1) on its cell in it, row by row, passing 0x42ef90
+(the price at d off, within 15 cells of the temple's cell, 0x5576d8 from
+`Magic +0/+4` = the temple's `+0x74`/`+0x78`) is cast on by 0x42f580 with
+d = 0, at full price. The sea temple (0x438300) sends codes 1-4 and 0xd
+to 0x42fa90 without the idle test (the town picks an idle one), the big
+reef's kind from payload `+0xd` or the temple's generator `+0x18`; code
+0xc pays the wind's price and posts 0x186f (the wind). Not ported: kinds 8
+and 13 (no player asks them), and the area casts of kinds 12 and 16.

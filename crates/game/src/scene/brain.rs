@@ -274,6 +274,9 @@ pub struct Brain {
     /// full-town order (code 1) and the builders' repairs (code 0x60).
     #[serde(default)]
     pub jobs: Vec<Job>,
+    /// The casts each land fleet (by fleet index) has queued (0x479c20).
+    #[serde(default)]
+    pub casts: std::collections::BTreeMap<usize, super::castq::CastQueue>,
     /// miss006's watch for waterspouts: armed, checks made, since when.
     #[serde(default)]
     pub watch: [u32; 3],
@@ -363,6 +366,13 @@ impl Brain {
                 for b in &mut self.building {
                     up(&mut b.2);
                 }
+                self.casts = std::mem::take(&mut self.casts)
+                    .into_iter()
+                    .map(|(mut f, q)| {
+                        up(&mut f);
+                        (f, q)
+                    })
+                    .collect();
                 for j in &mut self.jobs {
                     match j {
                         Job::FullTown { fleet, .. } | Job::Repair { fleet, .. } => up(fleet),
@@ -686,6 +696,7 @@ impl Scene {
             building: Vec::new(),
             difficulty,
             jobs: Vec::new(),
+            casts: Default::default(),
             watch: [1, 0, 0],
             joined: false,
             gone: [false; 2],
@@ -1963,7 +1974,7 @@ impl Scene {
         self.brain.as_ref().unwrap().fleets[k].started
     }
 
-    fn fleet_ships(&self, k: usize) -> Vec<u32> {
+    pub(super) fn fleet_ships(&self, k: usize) -> Vec<u32> {
         self.brain.as_ref().unwrap().fleets[k].ships.clone()
     }
 
@@ -2319,63 +2330,101 @@ impl Scene {
         }
     }
 
-    /// A brain's fleet-wide cast on `ships` by a member of player
-    /// `caster` (0x47acf0): with none of the ships about, nothing; else,
-    /// when `pay`, the caster's player is credited one cast's price
-    /// (0x47abb0 amber, 0x47ac50 x 100 fish; 0x4a8eb0, 0x4a8f40) whatever
-    /// comes of the cast, then each ship is an order to the caster (0x479c20,
-    /// message 0x3ee), which a land fleet queues for its war temple
-    /// (0x42c430, 0x42a500, 0x43fee0; a ship fleet's 0x4a09d0 drops it, and
-    /// no caller here casts by one): only with a war temple standing; each
-    /// cast paid in full (0x42f470). The Flame is the player's: brewed 250
-    /// ticks, then 1500 more of it (the temple's code 5). (Not decoded: how
-    /// the credit, to the computer's spending fields `+0x24` and `+0x1c`,
-    /// maps onto a purse; here the caster's player's. The temple's spells
-    /// learnt, `+0xbc`, which 0x42a500 tests, are not kept: a standing
-    /// temple casts.)
+    /// A brain's fleet-wide cast on `ships` (0x47acf0, kinds 9, 12, 15 and
+    /// 16) by the member whose land fleet is fleet `by`, of player
+    /// `caster`: with none of the ships about, nothing; else, when `pay`,
+    /// the caster's player is credited one cast's price (0x47abb0 amber,
+    /// 0x47ac50 x 100 fish; 0x4a8eb0, 0x4a8f40) whatever comes of the cast,
+    /// then each ship is a cast asked of the land fleet (0x479c20: message
+    /// 0x3ee, flags 0, priority 0, any town, dword 7 the ship), which
+    /// queues it (0x42c430) and tries it at its passes (0x42a500): a town
+    /// of the fleet's with a war temple idle, the price at hand, sends its
+    /// temple the cast, paid in full there (0x42f470; the Flame brewed 250
+    /// ticks, then 1500 more of it, the temple's code 5). (A ship fleet's
+    /// 0x4a09d0 drops it; no caller here casts by one. Not decoded: how the
+    /// credit, to the computer's spending fields `+0x24` and `+0x1c`, maps
+    /// onto a purse; here the caster's player's.)
     pub(super) fn brain_cast_fleet(
         &mut self,
         caster: (u32, u32),
+        by: Option<usize>,
         ships: Vec<u32>,
         spell: crate::magic::Spell,
         pay: bool,
     ) {
         use crate::magic::Spell;
-        if !ships.iter().any(|&id| self.object_index(id).is_some()) {
-            return;
-        }
-        let owner = caster;
-        let (amber, fish) = spell.cost();
-        if pay {
-            self.earn(owner, amber as i64, fish as i64);
-        }
-        let temple = self.objects.iter().any(|o| {
-            o.owner == Some(owner)
-                && o.class == openconquest_formats::ObjectClass::Building(0x3e)
-                && self.construction_at(o.id).is_none()
-        });
-        if !temple {
-            return;
-        }
-        let afford = |s: &Scene| {
-            let (a, f) = s.funds(owner);
-            a >= amber && f >= fish
+        let kind = match spell {
+            Spell::Flame => 9,
+            Spell::Phantom => 12,
+            Spell::ProtectWeapons => 15,
+            Spell::ProtectMagic => 16,
+            _ => return,
         };
-        if spell == Spell::Flame {
-            let brewing = self.brain_flames.get(&owner).is_some_and(|f| f.0 > 0.0);
-            if !brewing && afford(self) {
-                self.earn(owner, -(amber as i64), -(fish as i64));
-                self.brain_flames.entry(owner).or_default().0 = crate::clock::ticks(250);
-            }
+        let ships: Vec<u32> = ships
+            .into_iter()
+            .filter(|&id| self.object_index(id).is_some())
+            .collect();
+        if ships.is_empty() {
             return;
         }
-        for id in ships {
-            if !afford(self) {
-                break;
-            }
-            self.earn(owner, -(amber as i64), -(fish as i64));
-            self.pending_ship_casts.push((spell, id));
+        if pay {
+            let (amber, fish) = spell.cost();
+            self.earn(caster, amber as i64, fish as i64);
         }
+        let Some(k) = by else {
+            return;
+        };
+        let brain = self.brain.as_mut().unwrap();
+        let tick = brain.tick;
+        let q = brain
+            .casts
+            .entry(k)
+            .or_insert_with(|| super::castq::CastQueue::new(tick));
+        for ship in ships {
+            q.push(super::castq::CastAsk {
+                kind,
+                town: None,
+                cell: (0, 0),
+                rect: None,
+                ship: Some(ship),
+                discount: 0,
+            });
+        }
+    }
+
+    /// The towns standing in fleet `k`'s cells, in the objects' order: the
+    /// members a land fleet's cast is tried at (0x42a500). (Its other
+    /// members, a stronghold's, are not tried: 0x43fee0 is the town's.)
+    pub(super) fn fleet_towns(&self, k: usize) -> Vec<u32> {
+        let Some(defs) = self.brain.as_ref().and_then(|b| mission_fleets(&b.mission)) else {
+            return Vec::new();
+        };
+        let Some(cells) = defs.get(k).map(|d| d.cells) else {
+            return Vec::new();
+        };
+        self.objects
+            .iter()
+            .filter(|o| {
+                matches!(
+                    o.class,
+                    openconquest_formats::ObjectClass::Building(
+                        crate::economy::SETTLEMENT | crate::economy::TOWN
+                    )
+                ) && o.cell.is_some_and(|(x, y)| {
+                    cells.iter().any(|&(cx, cy, w, h)| {
+                        (cx..cx + w).contains(&x) && (cy..cy + h).contains(&y)
+                    })
+                })
+            })
+            .map(|o| o.id)
+            .collect()
+    }
+
+    /// The group of fleet `k`.
+    pub(super) fn fleet_group(&self, k: usize) -> Option<u8> {
+        mission_fleets(&self.brain.as_ref()?.mission)?
+            .get(k)
+            .map(|d| d.group)
     }
 
     /// The fleet of the brain's member `member` of group `group`.
@@ -4561,7 +4610,7 @@ mod miss004 {
                     _ => return,
                 };
                 let ships = scene.fleet_ships(k);
-                scene.brain_cast_fleet((3, 3), ships, spell, false);
+                scene.brain_cast_fleet((3, 3), scene.member_fleet(0, 5), ships, spell, false);
             }
             _ => {}
         }
@@ -5848,7 +5897,7 @@ mod miss005 {
         };
         if let Some(spell) = spell {
             let ships = scene.fleet_ships(k);
-            scene.brain_cast_fleet((3, 3), ships, spell, false);
+            scene.brain_cast_fleet((3, 3), scene.member_fleet(1, 0), ships, spell, false);
         }
         scene.brain.as_mut().unwrap().fleets[clear].vars[SPELL] = 0;
     }
@@ -6922,7 +6971,8 @@ mod miss006 {
             // Member 0 of the southern (player 15) or northern (14) group.
             let caster = if k == SOUTH_RAIDERS { (3, 3) } else { (3, 2) };
             let ships = scene.fleet_ships(k);
-            scene.brain_cast_fleet(caster, ships, spell, false);
+            let by = scene.fleet_group(k).and_then(|g| scene.member_fleet(g, 0));
+            scene.brain_cast_fleet(caster, by, ships, spell, false);
         }
         scene.brain.as_mut().unwrap().fleets[k].vars[SPELL] = 0;
     }
@@ -8695,7 +8745,7 @@ mod miss008 {
             return;
         }
         let ships = scene.fleet_ships(target);
-        scene.brain_cast_fleet((3, 3), ships, spell, true);
+        scene.brain_cast_fleet((3, 3), scene.member_fleet(1, 2), ships, spell, true);
     }
 
     fn idle(_: u32) -> Op {
@@ -9653,7 +9703,13 @@ mod miss009 {
                 let flames = f.vars[FLAMES];
                 if f.state == 20 && !scene.fleet_started(k) && flames != 0 {
                     let ships = scene.fleet_ships(k);
-                    scene.brain_cast_fleet((3, 2), ships, crate::magic::Spell::Flame, true);
+                    scene.brain_cast_fleet(
+                        (3, 2),
+                        scene.member_fleet(1, 0),
+                        ships,
+                        crate::magic::Spell::Flame,
+                        true,
+                    );
                     set_var(scene, k, FLAMES, flames - 1);
                 }
             }
@@ -12177,7 +12233,7 @@ mod miss011 {
         };
         if let Some(spell) = spell {
             let ships = scene.fleet_ships(STRIKERS);
-            scene.brain_cast_fleet((3, 2), ships, spell, false);
+            scene.brain_cast_fleet((3, 2), Some(PERSIANS), ships, spell, false);
         }
         set_var(scene, CASTER, SPELL, NONE);
     }
@@ -13419,7 +13475,7 @@ mod miss012 {
                 if let Some((spell, pay)) = spell {
                     // By member (2, 0), player 14's.
                     let ships = scene.fleet_ships(k);
-                    scene.brain_cast_fleet((3, 2), ships, spell, pay);
+                    scene.brain_cast_fleet((3, 2), scene.member_fleet(2, 0), ships, spell, pay);
                 }
                 25
             }),
@@ -14770,7 +14826,7 @@ mod miss013 {
                 if let Some((spell, pay)) = spell {
                     // By member (2, 0), player 14's.
                     let ships = scene.fleet_ships(k);
-                    scene.brain_cast_fleet((3, 2), ships, spell, pay);
+                    scene.brain_cast_fleet((3, 2), scene.member_fleet(2, 0), ships, spell, pay);
                 }
                 25
             }),

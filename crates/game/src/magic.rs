@@ -362,6 +362,14 @@ impl Magic {
     /// The temples' work, `dt` on; nothing goes on at a temple in
     /// `limed` (0x438300, 0x439260: `+0x144` set, they return).
     pub fn update(&mut self, dt: f32, limed: &[u32], permits: Permits) {
+        self.update_learning(dt, limed, permits);
+        self.update_flame(dt, limed);
+    }
+
+    /// The temples' learning, `dt` on (computer players learn twice as
+    /// fast, 100 ticks; the Flame brews 250 ticks for every player,
+    /// 0x439260).
+    pub fn update_learning(&mut self, dt: f32, limed: &[u32], permits: Permits) {
         for temple in [Temple::Sea, Temple::War] {
             let k = temple.slot();
             if self.at[k].is_some_and(|s| limed.contains(&s)) {
@@ -386,6 +394,10 @@ impl Magic {
                 }
             }
         }
+    }
+
+    /// The Flame brewing, `dt` on.
+    pub fn update_flame(&mut self, dt: f32, limed: &[u32]) {
         if self.flame_at.is_some_and(|s| limed.contains(&s)) {
             return;
         }

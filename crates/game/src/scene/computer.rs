@@ -363,19 +363,29 @@ enum Job {
         fleet: Option<usize>,
         part: Part,
     },
+    /// Op 0x3ee, a cast (origin 1, flags 0x800: taken off when it ends),
+    /// tried by 0x42a500; with `fleet` (flag 0x400) on the flotilla's ships.
+    /// +0x50 its state (0 queued, 1 tried, 3 done, 4 failed), +0x64 its
+    /// passes left.
+    Cast {
+        ask: super::castq::CastAsk,
+        fleet: Option<usize>,
+        state: u8,
+        tries: u32,
+    },
 }
 
 impl Entry {
     fn state(&self) -> u8 {
         match self.job {
-            Job::Ask { state, .. } => state,
+            Job::Ask { state, .. } | Job::Cast { state, .. } => state,
             Job::Part { part, .. } => part.state,
         }
     }
 
     fn set_state(&mut self, s: u8) {
         match &mut self.job {
-            Job::Ask { state, .. } => *state = s,
+            Job::Ask { state, .. } | Job::Cast { state, .. } => *state = s,
             Job::Part { part, .. } => part.state = s,
         }
     }
@@ -2218,6 +2228,29 @@ impl Scene {
                 ai.land.queue[i].set_state(1);
                 match entry.job {
                     Job::Ask { .. } => ai.accept_order(i),
+                    Job::Cast { ask, fleet, .. } => {
+                        let members: Vec<u32> = ai.bases.iter().filter_map(|b| b.site).collect();
+                        let ships = fleet.map(|f| {
+                            ai.flotillas.get(f).map_or(Vec::new(), |f| {
+                                f.ships
+                                    .iter()
+                                    .copied()
+                                    .filter(|&s| self.object_index(s).is_some())
+                                    .collect()
+                            })
+                        });
+                        let done = self.cast_entry(&members, ask, ships, Some(&ai.magic));
+                        if let Job::Cast { state, tries, .. } = &mut ai.land.queue[i].job {
+                            if done {
+                                *state = 3;
+                            } else if count {
+                                *tries = tries.saturating_sub(1);
+                                if *tries == 0 {
+                                    *state = 4;
+                                }
+                            }
+                        }
+                    }
                     Job::Part {
                         base, fleet, part, ..
                     } => {
@@ -2292,14 +2325,22 @@ impl Scene {
                     }
                 }
             }
-            // An entry's own flag 0x10 (restart when failed) and flag 0x800
-            // (an op-1000 entry removed when it ends) are not ported: the
-            // parts' flags are 7, 0x27 or 0x207 (0x5ac7c8) and the asks'
-            // +0x20 is 0 (0x47d2e0, 0x47fe60).
+            // An entry's own flag 0x10 (restart when failed) is not ported,
+            // nor flag 0x800 (an op-1000 entry removed when it ends) for the
+            // asks: the parts' flags are 7, 0x27 or 0x207 (0x5ac7c8) and the
+            // asks' +0x20 is 0 (0x47d2e0, 0x47fe60). The casts have 0x800
+            // (0x4839e0-0x483c40): taken off when they end.
             let e = ai.land.queue[i];
             let s = e.state();
             if s == 3 || s == 4 {
                 ai.land.woken = true;
+                if let Job::Cast { .. } = e.job {
+                    ai.land.queue.remove(i);
+                    if ai.land.started {
+                        break;
+                    }
+                    continue;
+                }
                 if let Job::Part { order, index, .. } = e.job {
                     if let Some(o) = ai.orders.iter_mut().find(|o| o.id == order) {
                         if let Some(p) = o.parts.get_mut(index) {
@@ -3990,15 +4031,20 @@ impl Scene {
         }
     }
 
-    /// Base `b`'s town casts spell `kind` (5-16, as 0x47ae10's; 0x42a500
-    /// sends it as command 0x22) if one of the player's temples knows it
-    /// and the player can pay (0x487640, 0x43fee0): at `cell`, over own
-    /// things in `rect`, or on flotilla `fl`'s ships. The kinds go out as
-    /// the temple's codes 1-8 and 12-15 (0x42a500), which it casts as
-    /// `Magic.cpp`'s spells (0x42fc80): 5 a whirlpool, 6 a waterspout, 7 a
-    /// reef, 8 a big reef, 9 the Flame (the temple brews it), 10
-    /// lightning, 11 a fireball, 12 the phantom, 13 nothing (code 12 has no
-    /// spell), 14 a sea monster, 15 and 16 the shields.
+    /// Base `b`'s town is asked for spell `kind` (5-16, as 0x47ae10's) if
+    /// it passes the town's first check (0x487640 -> 0x43fee0 stage 0: the
+    /// town built, a temple of the kind, the spell its check names learnt;
+    /// no price): the cast goes to the land fleet as message 0x3ee,
+    /// priority 0x7ff5 (0x4a09d0 -> 0x42c430), dword 3 the base's town and
+    /// dword 9 a discount drawn by difficulty (0x488810: `r % 21`, + 10
+    /// normal, + 20 hard): at `cell` (0x4839e0, flags 0x800), over `rect`'s
+    /// area from its corner (0x483c40, 0x1800, kind 15), on flotilla `fl`'s
+    /// ships (0x483ab0, 0xc00) or, the Flame, at the town (0x483b80,
+    /// 0x800). Its passes try it (0x42a500, `cast_entry`). Before sending,
+    /// a previous cast kept at the commander's `+0x2d0` is looked up
+    /// through 0x4a0f60(.., 0, buf) -> 0x42c870, but with `buf` the
+    /// sender's own uninitialised stack (0x483a19): taken as its failure
+    /// path, no entry found and none removed.
     fn computer_cast(
         &mut self,
         ai: &mut Computer,
@@ -4008,80 +4054,38 @@ impl Scene {
         rect: Option<Cells>,
         fl: Option<usize>,
     ) -> bool {
-        use crate::magic::Spell;
-        let spell = match kind {
-            5 => Spell::Whirlpool,
-            6 => Spell::Waterspout,
-            7 | 8 => Spell::Reef,
-            14 => Spell::Monster,
-            9 => Spell::Flame,
-            10 => Spell::Lightning,
-            11 => Spell::Fireball,
-            12 => Spell::Phantom,
-            15 => Spell::ProtectWeapons,
-            16 => Spell::ProtectMagic,
-            _ => return false,
+        let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
+            return false;
         };
-        let owner = ai.owner;
-        if ai.bases.get(b).and_then(|b| b.site).is_none() || !ai.magic.knows(spell) {
+        if self.town_cast_check(site, kind, Some(&ai.magic), None) != 0 {
             return false;
         }
-        let temple = spell.temple().class();
-        let has_temple = self.objects.iter().any(|o| {
-            o.owner == Some(owner)
-                && o.class == ObjectClass::Building(temple)
-                && self.construction_at(o.id).is_none()
+        let (cell, area) = match (rect, cell) {
+            (Some((x, y, w, h)), _) if kind == 15 => ((x, y), Some((w, h))),
+            (_, Some(c)) if kind != 9 && fl.is_none() => (c, None),
+            _ => ((0, 0), None),
+        };
+        let fleet = if kind == 9 { None } else { fl };
+        let discount = match ai.difficulty {
+            d @ 0..=2 => ai.roll(0x15) + 10 * d as u32,
+            _ => 0,
+        };
+        ai.land.queue_entry(Entry {
+            prio: 0x7ff5,
+            job: Job::Cast {
+                ask: super::castq::CastAsk {
+                    kind,
+                    town: Some(site),
+                    cell,
+                    rect: area,
+                    ship: None,
+                    discount,
+                },
+                fleet,
+                state: 0,
+                tries: super::castq::CAST_TRIES,
+            },
         });
-        let (amber, fish) = spell.cost();
-        let (have_a, have_f) = self.funds(owner);
-        if !has_temple || have_a < amber || have_f < fish {
-            return false;
-        }
-        let targets: Vec<u32> = match (rect, fl) {
-            (_, Some(fl)) => ai.flotillas[fl].ships.clone(),
-            (Some((x, y, w, h)), None) => (0..self.objects.len())
-                .filter(|&i| {
-                    let (cx, cy) = self.cell_of(i);
-                    self.objects[i].owner == Some(owner)
-                        && self.objects[i].combat.is_some()
-                        && cx >= x
-                        && cx < x + w
-                        && cy >= y
-                        && cy < y + h
-                })
-                .map(|i| self.objects[i].id)
-                .collect(),
-            _ => Vec::new(),
-        };
-        match spell {
-            Spell::Flame => ai.flame += crate::magic::FLAME_SECONDS,
-            Spell::Phantom | Spell::ProtectWeapons | Spell::ProtectMagic => {
-                if targets.is_empty() {
-                    return false;
-                }
-                for &ship in &targets {
-                    self.post(Order::TownCastOn { spell, ship });
-                }
-            }
-            _ => {
-                let Some((cx, cy)) = cell else {
-                    return false;
-                };
-                if kind == 8 {
-                    // A big reef of kind 1-3 (0x42f580 case 12).
-                    let k = self.rng.next() % 3 + 1;
-                    self.post(Order::TownReef { cx, cy, kind: k });
-                } else {
-                    self.post(Order::TownCast {
-                        spell,
-                        cx,
-                        cy,
-                        owner: Some(owner),
-                    });
-                }
-            }
-        }
-        self.earn(owner, -(amber as i64), -(fish as i64));
         true
     }
 
@@ -6021,24 +6025,70 @@ mod tests {
             );
         }
         assert!(ai.magic.knows(Spell::Lightning) && ai.magic.knows(Spell::Flame));
-        // The Flame on its own.
+        // The Flame on its own: asked of the land fleet (0x483b80), nothing
+        // paid yet, at 0x7ff5 with a discount by difficulty (0x488810).
+        ai.land.queue.clear();
+        ai.orders.clear();
+        ai.land.started = false;
         let funds = scene.funds(owner);
         assert!(scene.computer_cast(&mut ai, 0, 9, None, None, None));
-        assert!(ai.flame > 0.0 && scene.funds(owner).0 < funds.0);
-        // Lightning at a cell.
-        assert!(scene.computer_cast(&mut ai, 0, 10, Some((5, 5)), None, None));
+        assert_eq!(scene.funds(owner), funds);
+        assert_eq!(ai.land.queue.len(), 1);
+        assert_eq!(ai.land.queue[0].prio, 0x7ff5);
+        let Job::Cast { ask, .. } = ai.land.queue[0].job else {
+            panic!("not a cast");
+        };
+        let d = ask.discount;
+        let low = 10 * ai.difficulty as u32;
+        assert!((low..=low + 20).contains(&d));
+        // Its pass (0x42a500) sends the town command 0x22 and takes it off
+        // (flag 0x800).
+        let now = ai.land.last + 50;
+        scene.land_fleet(&mut ai, now);
+        assert!(ai.land.queue.is_empty());
         assert!(matches!(
             scene.outbox.last(),
-            Some(Order::TownCast {
-                spell: Spell::Lightning,
-                cx: 5,
-                cy: 5,
+            Some(Order::TownSpell { kind: 9, .. })
+        ));
+        // At the next tick the war temple brews it, paid then at `d` off.
+        scene.computers.players[0] = ai;
+        scene.deliver(&data, &mut caches);
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        assert!(ai.magic.flame_brewing().is_some());
+        assert_eq!(
+            scene.funds(owner),
+            (funds.0 - 6000 * (100 - d) / 100, funds.1 - 15 * (100 - d))
+        );
+        // Lightning at a cell waits while the only war temple brews: the
+        // passes count only after one that started nothing.
+        assert!(scene.computer_cast(&mut ai, 0, 10, Some((5, 5)), None, None));
+        let now = ai.land.last + 3;
+        ai.land.woken = true;
+        scene.land_fleet(&mut ai, now);
+        let tries = |ai: &Computer| match ai.land.queue[0].job {
+            Job::Cast { tries, .. } => tries,
+            _ => unreachable!(),
+        };
+        assert_eq!(tries(&ai), 10);
+        scene.land_fleet(&mut ai, now + 50);
+        assert_eq!(tries(&ai), 9);
+        // Brewed, the temple is idle: the next pass casts at (5, 5).
+        ai.magic.update_flame(crate::magic::FLAME_BREW_SECONDS, &[]);
+        scene.land_fleet(&mut ai, now + 100);
+        assert!(ai.land.queue.is_empty());
+        assert!(matches!(
+            scene.outbox.last(),
+            Some(Order::TownSpell {
+                kind: 10,
+                cell: (5, 5),
                 ..
             })
         ));
-        // Unknown kinds and spells of a temple it lacks are not cast.
+        // Kinds of a temple it lacks are not asked; nor kind 7, which the
+        // town checks as the big reef, in no temple's order (0x43fee0).
         assert!(!scene.computer_cast(&mut ai, 0, 14, Some((5, 5)), None, None));
         assert!(!scene.computer_cast(&mut ai, 0, 6, Some((5, 5)), None, None));
+        assert!(!scene.computer_cast(&mut ai, 0, 7, Some((5, 5)), None, None));
     }
 
     /// A gathering flotilla (task 4 state 5) reads its zone's state each

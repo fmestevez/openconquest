@@ -102,7 +102,7 @@ fn reach(a: (i32, i32), b: (i32, i32)) -> i32 {
 }
 
 /// 0x5576d8: the distance, its integer square root rounded (0x557670).
-fn distance(a: (i32, i32), b: (i32, i32)) -> i32 {
+pub(super) fn distance(a: (i32, i32), b: (i32, i32)) -> i32 {
     let d2 = ((a.0 - b.0).pow(2) + (a.1 - b.1).pow(2)) as f64;
     (d2.sqrt() + 0.5).floor() as i32
 }

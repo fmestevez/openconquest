@@ -237,24 +237,16 @@ pub enum Order {
         site: u32,
         target: u32,
     },
-    /// The town command 0x22 a computer's cast part sends (0x42a500): its
-    /// temple casts `spell` at cell `(cx, cy)` for `owner` (0x42fc80).
-    TownCast {
-        spell: Spell,
-        cx: i32,
-        cy: i32,
-        owner: Option<(u32, u32)>,
-    },
-    /// The same, a big reef of `kind` (0x42f580 case 12).
-    TownReef {
-        cx: i32,
-        cy: i32,
+    /// The town command 0x22 a land fleet's cast entry sends (0x42a500):
+    /// town `site`'s idle temple casts kind `kind` (5-16) at `cell`, on
+    /// `ship`, or (no cell) over `rect`, at `discount` hundredths off.
+    TownSpell {
+        site: u32,
         kind: u32,
-    },
-    /// The same, a shield or the phantom on ship `ship`.
-    TownCastOn {
-        spell: Spell,
-        ship: u32,
+        cell: (i32, i32),
+        rect: Option<(i32, i32, i32, i32)>,
+        ship: Option<u32>,
+        discount: u32,
     },
     /// The town command 0x21 a computer's study part sends (0x42a860):
     /// town `site` of `owner` has its first idle school, workshop or
@@ -694,17 +686,15 @@ impl Scene {
                 done(r)
             }
             TownMend { site, target } => done(self.mend_by(site, target)),
-            TownCast {
-                spell,
-                cx,
-                cy,
-                owner,
+            TownSpell {
+                site,
+                kind,
+                cell,
+                rect,
+                ship,
+                discount,
             } => {
-                self.brain_cast(spell, cx, cy, owner, data, caches);
-                Ok(0)
-            }
-            TownReef { cx, cy, kind } => {
-                self.big_reef(cx, cy, kind, data, caches);
+                self.town_spell(site, kind, cell, rect, ship, discount, data, caches);
                 Ok(0)
             }
             TownStudy {
@@ -720,10 +710,6 @@ impl Scene {
             TownBerths { site, owner } => {
                 let yards = self.town_yards_of(site, owner);
                 self.clear_berths(Some(owner), &yards);
-                Ok(0)
-            }
-            TownCastOn { spell, ship } => {
-                self.brain_cast_on(spell, ship, data, caches);
                 Ok(0)
             }
             BuildArgo { site } => {

@@ -8879,8 +8879,11 @@ fn miss008_patrol_casts_credit_as_the_original() {
 
 /// miss009's Persian patrol (member 3) casts the Flame on its ships by the
 /// land fleet (1, 0) on the first call of its fight in the north, paid,
-/// difficulty + 3 times (`+0x12e`, 0x465b20); then no more (needs
-/// `OPENCONQUEST_DATA`).
+/// difficulty + 3 times (`+0x12e`, 0x465b20); then no more. Each call
+/// credits one cast and queues a cast per ship (0x47acf0 -> 0x479c20); the
+/// land fleet's pass (every 50 ticks) has the war temple at (57, 44) brew
+/// it, paid there (0x42a500, 0x439260); while it brews the next waits
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn miss009_patrol_flames_as_the_original() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -8898,9 +8901,15 @@ fn miss009_patrol_flames_as_the_original() {
         .find(|o| o.owner == Some(persians) && o.ship.is_some())
         .map(|o| o.id)
         .expect("a Persian ship");
-    // The war temple at (57, 44) brews each Flame, paid by the credit.
-    let mut brewed = Vec::new();
-    for _ in 0..5 {
+    let temple = scene
+        .objects
+        .iter()
+        .find(|o| o.cell == Some((57, 44)))
+        .map(|o| o.id)
+        .expect("the war temple");
+    let land = scene.member_fleet(1, 0).expect("the land fleet (1, 0)");
+    let mut calls = Vec::new();
+    for _ in 0..2 {
         let tick = scene.brain.as_ref().unwrap().tick;
         let next = tick + 1 + (20 + 50 - (tick + 1) % 50) % 50;
         while scene.brain.as_ref().unwrap().tick + 1 < next {
@@ -8913,23 +8922,32 @@ fn miss009_patrol_flames_as_the_original() {
         brain.fleets[11].ships.push(ship);
         brain.fleets[11].state = 20;
         brain.fleets[11].started = false;
-        scene.brain_flames.clear();
         let funds = scene.funds(persians);
         scene.update(crate::clock::TICK, &data, &mut caches);
         assert_eq!(scene.brain.as_ref().unwrap().tick % 50, 20);
-        let brewing = scene.brain_flames.get(&persians).is_some_and(|f| f.0 > 0.0);
-        brewed.push((brewing, scene.funds(persians) == funds));
+        let queued = scene.brain.as_ref().unwrap().casts[&land].entries.len();
+        let credited = scene.funds(persians);
+        calls.push((queued, credited.0 - funds.0, credited.1 - funds.1));
+        // To the land fleet's pass at 0 modulo 50.
+        for _ in 0..30 {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        assert_eq!(scene.brain.as_ref().unwrap().tick % 50, 0);
+        let brewing = scene.brain_brews.iter().any(|b| b.0 == temple);
+        calls.push((
+            scene.brain.as_ref().unwrap().casts[&land].entries.len(),
+            brewing as u32,
+            0,
+        ));
     }
-    assert_eq!(scene.brain.as_ref().unwrap().fleets[11].vars[0], 0);
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[11].vars[0], 2);
+    // Each call: one cast credited (6000 and 1500) and one queued per ship
+    // (ten); the first brewed at the pass, the others waiting on the
+    // temple at work.
+    assert_eq!(scene.fleet_ships(11).len(), 10);
     assert_eq!(
-        brewed,
-        [
-            (true, true),
-            (true, true),
-            (true, true),
-            (true, true),
-            (false, true)
-        ]
+        calls,
+        [(10, 6000, 1500), (9, 1, 0), (19, 6000, 1500), (19, 1, 0)]
     );
 }
 

@@ -428,11 +428,12 @@ pub struct Scene {
     /// Spells a brain casts this tick for nothing (0x42f580): the spell,
     /// its cell and the caster (not saved: cast at once).
     pending_casts: Vec<BrainCast>,
-    /// Spells a brain casts this tick on a ship for nothing (0x47acf0):
-    /// the spell and the ship (not saved: cast at once).
-    pending_ship_casts: Vec<(Spell, u32)>,
-    /// The brains' players' Flame: (seconds left brewing, seconds of it).
+    /// The brains' players' Flame: (seconds left brewing, from saves made
+    /// before the brews were kept by temple; seconds of it burning).
     pub brain_flames: std::collections::BTreeMap<(u32, u32), (f32, f32)>,
+    /// The Flames the brains' war temples brew (0x439260): the temple, its
+    /// player and the seconds left.
+    pub brain_brews: Vec<(u32, (u32, u32), f32)>,
     /// Spells the player may cast once for nothing (disposable magic).
     pub free_casts: std::collections::BTreeMap<Spell, u32>,
     /// Buildings being repaired by a settlement or town.
@@ -524,6 +525,7 @@ pub struct Scene {
 mod ai;
 mod battle;
 mod brain;
+mod castq;
 mod computer;
 mod creatures;
 mod dig;
@@ -834,8 +836,8 @@ impl Scene {
             pending_reefs: Vec::new(),
             pending_walkers: Vec::new(),
             pending_casts: Vec::new(),
-            pending_ship_casts: Vec::new(),
             brain_flames: Default::default(),
+            brain_brews: Vec::new(),
             story: Vec::new(),
             start_sites: Vec::new(),
             delivered: Vec::new(),
@@ -1132,6 +1134,7 @@ impl Scene {
             lair_clocks: self.lair_clocks.clone(),
             volcanoes: self.volcanoes.clone(),
             brain_flames: self.brain_flames.iter().map(|(&k, &v)| (k, v)).collect(),
+            brain_brews: self.brain_brews.clone(),
             planks: self.saved_planks().0,
             porters: self.saved_planks().1,
             unloaded: self.unloaded.clone(),
@@ -1307,6 +1310,7 @@ impl Scene {
         scene.lair_clocks = save.lair_clocks.clone();
         scene.volcanoes = save.volcanoes.clone();
         scene.brain_flames = save.brain_flames.iter().copied().collect();
+        scene.brain_brews = save.brain_brews.clone();
         scene.unloaded = save.unloaded.clone();
         scene.refits = save.refits.clone();
         scene.flame = save.flame;
@@ -2475,6 +2479,7 @@ impl Scene {
             self.tick_walkers(data, caches);
             self.run_computers();
             self.run_brain_jobs();
+            self.run_brain_casts();
             self.run_town_links();
             self.run_yards(data, caches);
             // Standing pictures before construction, so one finished this
@@ -2488,12 +2493,11 @@ impl Scene {
                 self.brain_cast(spell, x, y, owner, data, caches);
             }
             self.run_brain_flames(dt);
+            let limed = self.limed();
+            self.run_brain_brews(dt, &limed);
             self.run_hazard_cycles(data, caches);
             self.run_leviathans(data, caches);
             self.run_hunts(data, caches);
-            for (spell, id) in std::mem::take(&mut self.pending_ship_casts) {
-                self.brain_cast_on(spell, id, data, caches);
-            }
             // The commands of this tick reach their objects at the start
             // of the next, before anything runs (0x51fe20: 0x521570,
             // 0x5228c0, then the tick 0x542390): delivered here, before
@@ -2528,12 +2532,15 @@ impl Scene {
         // 0x439260).
         let limed = self.limed();
         self.magic.update(dt, &limed, self.permits);
-        // Computer players learn spells in 100 ticks, not 200 (0x439260).
+        // Computer players learn spells in 100 ticks, not 200; their Flame
+        // brews 250 ticks as anyone's, then burns 1500 more (0x439260).
         // (The port keeps no permission bits for them: all allowed.)
         for c in &mut self.computers.players {
             c.magic
-                .update(dt * 2.0, &limed, crate::permits::Permits::ALL);
+                .update_learning(dt * 2.0, &limed, crate::permits::Permits::ALL);
+            c.magic.update_flame(dt, &limed);
             c.flame = (c.flame - dt).max(0.0);
+            c.flame += c.magic.take_flames() as f32 * crate::magic::FLAME_SECONDS;
         }
         self.seat_upkeep(dt, &limed);
         self.run_statuses(dt, data, caches);
