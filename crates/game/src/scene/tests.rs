@@ -1638,6 +1638,8 @@ fn repairs() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    // The mission's computer fleets stay home: this is about the mending.
+    scene.brain = None;
     scene.amber = 10_000;
     let home = scene
         .objects
