@@ -12718,3 +12718,81 @@ fn miss005_barbarian_raiders_as_the_original() {
     }
     assert_eq!(seen.len(), 2, "both ways taken");
 }
+
+/// A fort a computer's town orders comes armed (0x428a70 sets the town
+/// command 0x20's byte `+0xd`, 0x441ba0 copies it to the record, 0x43b290
+/// runs 0x43f440): miss005's town 2 orders a small fort holding two of
+/// item 4 in stock (60, 80): it takes the better for item 4, item 5 and
+/// item 6 if it may have them now, else their fallback 4 (the stock's
+/// other, then bought), and the fallbacks from the last but one while the
+/// units weigh under 4; the bought ones are whole and paid (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn a_computers_town_arms_its_forts() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    let owner = scene.objects[scene.object_index(2).unwrap()].owner.unwrap();
+    assert!(!scene.is_own(&scene.objects[scene.object_index(2).unwrap()]));
+    scene.earn(owner, 100_000, 100_000);
+    let mut units: [Vec<u8>; 9] = Default::default();
+    units[4] = vec![60, 80];
+    scene.set_stock_units(2, units);
+    let may = |s: &Scene, item: u8| s.may_buy(2, owner, super::trade::Piece::Item(item)) == 0;
+    // The plan, by 0x43f440's steps.
+    let mut stock = vec![80u8, 60];
+    let mut want: Vec<(u8, u8)> = vec![(4, stock.remove(0))];
+    let (mut amber, mut weight) = (0, 1);
+    for item in [5u8, 6] {
+        let (got, cond) = if may(&scene, item) {
+            (item, 100)
+        } else if !stock.is_empty() {
+            (4, stock.remove(0))
+        } else {
+            (4, 100)
+        };
+        if cond == 100 {
+            amber += combat::item_cost(got).0;
+        }
+        weight += combat::item_power(got);
+        want.push((got, cond));
+    }
+    for _ in [2, 1] {
+        if weight >= 4 {
+            break;
+        }
+        let cond = if stock.is_empty() {
+            amber += combat::item_cost(4).0;
+            100
+        } else {
+            stock.remove(0)
+        };
+        weight += 1;
+        want.push((4, cond));
+    }
+    let before = scene.funds(owner).0;
+    let site = (12, 14);
+    scene
+        .place_building_facing(2, 0x34, site.0, site.1, Some(0), &data, &mut caches)
+        .unwrap();
+    let fort = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(0x34) && o.cell == Some(site))
+        .unwrap();
+    let c = fort.combat.as_ref().unwrap();
+    let mut weapons: Vec<u8> = want.iter().map(|u| u.0).collect();
+    weapons.sort_unstable();
+    assert_eq!(c.weapons, weapons);
+    let conditions: Vec<u8> = want.iter().map(|u| u.1).collect();
+    assert_eq!(c.conditions, conditions);
+    assert_eq!(scene.stock_units(2)[4], stock);
+    assert_eq!(
+        before - scene.funds(owner).0,
+        economy::building_cost(0x34) + amber
+    );
+}

@@ -343,6 +343,66 @@ impl Scene {
         Some(price)
     }
 
+    /// The units a computer's town arms a fort of `class` it orders with
+    /// (0x43f440; the land fleet's build part sets the order's byte `+0xd`,
+    /// 0x428a70, which 0x441ba0 copies to the queued record's `+0x14`, and
+    /// 0x43b290 arms forts 0x34-0x36 with it, the building's price paid
+    /// first). Its stock's units are sorted best first (qsort 0x58791f with
+    /// 0x4478e0); for each item of the class's list (0x5966b8): the best
+    /// in stock, else bought if the town may have it now (0x43da20 `town,
+    /// 1, 1, 1, item, 0, 1, 0, 1`), else its fallback (0x596734) from
+    /// stock or bought untested; then, while the units' weight (0x59729c)
+    /// is under the fort's room (0x5967a8), the fallbacks from the list's
+    /// last but one down to the second, the same way. A bought unit is
+    /// whole. Returns the units in the order taken, their conditions, and
+    /// the price (amber 0x597164[item / 3], fish 0x597170[item] x 100);
+    /// the town's stock loses those taken.
+    pub(super) fn town_fort_arming(
+        &mut self,
+        town: Option<u32>,
+        owner: (u32, u32),
+        class: u32,
+    ) -> (Vec<(u8, u8)>, u32, u32) {
+        let (items, fallbacks) = combat::fort_arming(class);
+        let mut stock = town.map(|t| self.stock_units(t)).unwrap_or_default();
+        for u in &mut stock {
+            u.sort_by(|a, b| b.cmp(a));
+        }
+        let (mut units, mut amber, mut fish) = (Vec::new(), 0, 0);
+        let mut take = |item: u8, stock: &mut [Vec<u8>; 9]| {
+            let condition = if stock[item as usize].is_empty() {
+                let (a, f) = combat::item_cost(item);
+                amber += a;
+                fish += f;
+                100
+            } else {
+                stock[item as usize].remove(0)
+            };
+            units.push((item, condition));
+            combat::item_power(item)
+        };
+        let mut weight = 0;
+        for (k, &item) in items.iter().enumerate() {
+            let buy = || town.is_some_and(|t| self.may_buy(t, owner, Piece::Item(item)) == 0);
+            weight += if !stock[item as usize].is_empty() || buy() {
+                take(item, &mut stock)
+            } else {
+                take(fallbacks[k], &mut stock)
+            };
+        }
+        let room = combat::fort_room(class);
+        for j in (1..items.len()).rev() {
+            if weight >= room {
+                break;
+            }
+            weight += take(fallbacks[j], &mut stock);
+        }
+        if let Some(t) = town {
+            self.set_stock_units(t, stock);
+        }
+        (units, amber, fish)
+    }
+
     /// Whether the player may have `item` made at town `town` (0x43da20
     /// case 1, without the price): it is permitted, the sage school's
     /// arming has reached its group (player +0xa3, from 1, >= item / 3),
@@ -1865,6 +1925,24 @@ impl Scene {
             }
             obj.set_fort_places(places);
             self.earn(owner, -amber, -fish);
+        }
+        if town_fort && !human && self.seat_of(owner).is_none() {
+            // A computer's town order comes armed (0x43f440, after the
+            // price): the record's counts by item (fields 22-33) and the
+            // conditions in the order taken (from field 34), which the
+            // fort's message 2 reads as any record's (`from_record`), its
+            // own default arming then passed by (it holds units).
+            let home = self
+                .object_index(settlement)
+                .and_then(|i| self.home_settlement(i));
+            let (units, amber, fish) = self.town_fort_arming(home, owner, class);
+            if let Some(c) = obj.combat.as_mut() {
+                let mut weapons: Vec<u8> = units.iter().map(|u| u.0).collect();
+                weapons.sort_unstable();
+                c.conditions = units.iter().map(|u| u.1).take(weapons.len()).collect();
+                c.weapons = weapons;
+            }
+            self.earn(owner, -(amber as i64), -(fish as i64));
         }
         self.objects.push(obj);
         self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));

@@ -1625,8 +1625,28 @@ less (`w / 2`, `h`); at a leg's end it is on the goal cell or at the last
 entry: 0x421f00, then message 10. The port founds as the ship arrives:
 the gangway (0x4b3370 states 2-7: 0x4b2a40, 0x4b1d40, 0x4b2d50, 0x4b2f00,
 0x4e04a0 / 0x4e0470, its picture `+0x8c6`), the party and its walk are
-not ported. Not decoded: the computer's town orders of forts (0x43b290 with the order's arming byte +0xd ->
-0x43f440), which the port leaves unarmed.
+not ported.
+
+A computer's town order of a fort comes armed. The land fleet's build
+part (0x428a70) sends the town command 0x20 `{x, y, part[7], kind, 1,
+1}`: byte `+0xd` 1 always. The town (0x441ba0 case 0x20) queues 0x138c
+`{x, y, class}` with `+0x14` = that byte, and 0x43b290, the building's
+price paid, runs 0x43f440 for classes 0x34-0x36 when it is not 0
+(disassembly 0x43b842-0x43b894). 0x43f440(town, record, &amber, &fish)
+sorts each of the town's twelve stock places best first (qsort 0x58791f
+with 0x4478e0, on the condition byte). For each item k of the class's
+list (0x5966b8) it takes the best unit of the item in stock; else it buys
+the item if 0x43da20(`town, 1, 1, 1, item, 0, 1, 0, 1`) is 0; else it
+takes the fallback 0x596734[k] from stock, or buys it untested. Then,
+while the units' weight (0x59729c by group) is under the room (0x5967a8:
+4, 7, 10), it adds the fallbacks j = n - 1 down to 1 (n the list's count)
+the same way. A unit taken keeps its condition; a bought one is 100. Each
+goes into the record: its count at `+0x58 + 4 item` (fields 22-33), its
+condition at `+0x88` in the order taken (fields 34 on). The price,
+0x597164[item / 3] amber and 0x597170[item] x 100 fish, is paid after
+(0x4a8d40, 0x4a8be0, both floored at 0). The fort's message 2 finds
+units and gives no default arming. The port: `Scene::town_fort_arming`,
+in `place_building_facing` for a non-human player's town fort.
 
 ## Fish shoals and gulls
 
