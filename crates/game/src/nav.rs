@@ -246,6 +246,79 @@ impl NavGrid {
     }
 }
 
+impl NavGrid {
+    /// The wavefront 0x4a1e90 (0x545e20 -> 0x5459d0 with step 3) over a
+    /// copy of the ships' grid by draught (0 open, -1 closed): `from` gets
+    /// `(limit + 1) * 6`, then layer by layer, each cell of a layer in
+    /// the order it was reached, its open unfilled neighbours east, north,
+    /// west, south take its value less 6 while that stays above 0, then
+    /// north-east, north-west, south-west, south-east its value less 9
+    /// (corners may be cut); a cell keeps the value it was first given.
+    /// At most `limit + 1` layers. `None` with `from` off the map (-4).
+    pub fn wavefront(&self, from: (i32, i32), deep: bool, limit: i32) -> Option<Vec<i16>> {
+        let (w, h) = (self.width as i32, self.height as i32);
+        if from.0 < 0 || from.0 >= w || from.1 < 0 || from.1 >= h {
+            return None;
+        }
+        const STEP: i32 = 3;
+        let mut m: Vec<i16> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| if self.passable(x, y, deep) { 0 } else { -1 })
+            .collect();
+        let idx = |x: i32, y: i32| (y * w + x) as usize;
+        m[idx(from.0, from.1)] = ((limit + 1) * STEP * 2) as i16;
+        let mut layer = vec![from];
+        for _ in 0..limit + 1 {
+            let mut next = Vec::new();
+            for &(x, y) in &layer {
+                let v = m[idx(x, y)] as i32 - STEP * 2;
+                if v <= 0 {
+                    continue;
+                }
+                let mut fill = |c: (i32, i32), v: i32| {
+                    if m[idx(c.0, c.1)] == 0 {
+                        m[idx(c.0, c.1)] = v as i16;
+                        next.push(c);
+                    }
+                };
+                if x < w - 1 {
+                    fill((x + 1, y), v);
+                }
+                if y > 0 {
+                    fill((x, y - 1), v);
+                }
+                if x > 0 {
+                    fill((x - 1, y), v);
+                }
+                if y < h - 1 {
+                    fill((x, y + 1), v);
+                }
+                let v = v - STEP;
+                if v <= 0 {
+                    continue;
+                }
+                if x < w - 1 && y > 0 {
+                    fill((x + 1, y - 1), v);
+                }
+                if x > 0 && y > 0 {
+                    fill((x - 1, y - 1), v);
+                }
+                if x > 0 && y < h - 1 {
+                    fill((x - 1, y + 1), v);
+                }
+                if x < w - 1 && y < h - 1 {
+                    fill((x + 1, y + 1), v);
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            layer = next;
+        }
+        Some(m)
+    }
+}
+
 /// The eight directions: 0 east, counter-clockwise (north is up).
 const DIRS: [(i32, i32); 8] = [
     (1, 0),
@@ -382,5 +455,27 @@ mod tests {
         assert!(deep.iter().all(|&(x, y)| nav.passable(x, y, true)));
         assert!(deep.len() > 2);
         assert!(nav.find_path((0, 0), (1, 0), true).is_none());
+    }
+
+    /// The wavefront 0x5459d0 with step 3 and limit 5000: the start
+    /// 30006, a straight step 6 less, a diagonal 9 less, land -1, water
+    /// not reached 0.
+    #[test]
+    fn wavefront_counts_down_from_the_start() {
+        let nav = NavGrid::from_rows(&[
+            "...#.", //
+            ".#.#.", //
+            "...#.", //
+        ]);
+        let w = nav.wavefront((0, 0), false, 5000).unwrap();
+        let at = |x: usize, y: usize| w[y * 5 + x];
+        assert_eq!(at(0, 0), 30006);
+        assert_eq!((at(1, 0), at(0, 1)), (30000, 30000));
+        assert_eq!((at(2, 0), at(0, 2)), (29994, 29994));
+        assert_eq!((at(2, 1), at(1, 2)), (29991, 29991));
+        assert_eq!(at(2, 2), 29985);
+        assert_eq!((at(1, 1), at(3, 0)), (-1, -1));
+        assert_eq!(at(4, 1), 0);
+        assert!(nav.wavefront((5, 0), false, 5000).is_none());
     }
 }

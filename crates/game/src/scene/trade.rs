@@ -1780,21 +1780,49 @@ impl Scene {
         Ok(())
     }
 
-    /// Player `owner`'s building nearest to `(x, y)` where cargo can be
-    /// unloaded (0x4c5910 over the player's building list): a port (class
-    /// 0x39) not asleep (vt+0x2c, 0x40dfc0: `+0xa4 != 0x10`); for player 16
-    /// a barbarian structure of class 0x40. Settlements and towns take no
-    /// cargo (0x4aab00 drops an unloading order at one). (Not decoded: the
-    /// original measures by the wavefront 0x4a1e90 from the ship, the
-    /// first in the list winning ties; here the straight line.)
-    pub(super) fn unloading_site(&self, owner: Option<(u32, u32)>, x: f32, y: f32) -> Option<u32> {
-        let dist = |o: &MapObject| (o.x - x).powi(2) + (o.y - y).powi(2);
-        owner?;
-        self.objects
-            .iter()
-            .filter(|o| o.owner == owner && self.takes_cargo(o))
-            .min_by(|a, b| dist(a).total_cmp(&dist(b)))
-            .map(|o| o.id)
+    /// The building of ship `i`'s player nearest to it where cargo can be
+    /// unloaded (0x4c5910 mode 0 over the player's building list): a port
+    /// (class 0x39) not asleep (vt+0x2c, 0x40dfc0: `+0xa4 != 0x10`) by its
+    /// berth (vt+0xb8, 0x40e050); for player 16 a barbarian structure of
+    /// class 0x40 by its anchor (vt+0x28, 0x40dfa0). Settlements and towns
+    /// take no cargo (0x4aab00 drops an unloading order at one). Nearest
+    /// by the wavefront 0x4a1e90 from the ship's cell over its draught's
+    /// grid with limit 5000: the least `W[ship] - W[cell]` (a cell the
+    /// flood did not reach counts as `W[ship]`, a closed one one more),
+    /// the first in the list on a tie (strict `<`). (The list in object
+    /// order; a facing below 0, which gives 0x40e050's (-1, -1), counts
+    /// no berth here.)
+    pub(super) fn unloading_site(&self, i: usize) -> Option<u32> {
+        let owner = self.objects[i].owner?;
+        let t = TILE_SIZE as f32;
+        let at = (
+            (self.objects[i].x / t).floor() as i32,
+            (self.objects[i].y / t).floor() as i32,
+        );
+        let deep = crate::objects::deep_draught(self.objects[i].ship.as_ref()?.kind);
+        let w = self.nav.wavefront(at, deep, 5000)?;
+        let width = self.nav.width as i32;
+        let start = w[(at.1 * width + at.0) as usize] as i32;
+        let mut best: Option<(i32, u32)> = None;
+        for (k, o) in self.objects.iter().enumerate() {
+            if o.owner != Some(owner) || !self.takes_cargo(o) {
+                continue;
+            }
+            let cell = match o.class {
+                ObjectClass::Building(PORT) => self.berth_cell(k),
+                _ => o.cell,
+            };
+            let Some((x, y)) =
+                cell.filter(|&(x, y)| x >= 0 && y >= 0 && x < width && y < self.nav.height as i32)
+            else {
+                continue;
+            };
+            let d = start - w[(y * width + x) as usize] as i32;
+            if best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, o.id));
+            }
+        }
+        best.map(|(_, id)| id)
     }
 
     /// Whether building `o` takes an unloading order from a ship of its own
@@ -2421,10 +2449,14 @@ impl Scene {
         Ok(())
     }
 
+    /// (In the original a full or done amber or fish ship ends its task
+    /// and posts notice 0x138 to its group, whose gather zone (0x4c9e30
+    /// -> 0x4c9ae0) sends it to another deposit or, by command 0x1f, to
+    /// its own port or the zone's pick 0x4c6640. Not ported: that pick
+    /// and the zone's deposit choice; the port sends the ship to the
+    /// nearest port here, as only the leviathan's 0x4ad510 does.)
     pub(super) fn send_to_port(&mut self, i: usize, deposit: u32) {
-        let (x, y) = (self.objects[i].x, self.objects[i].y);
-        let owner = self.objects[i].owner;
-        let route = self.unloading_site(owner, x, y).and_then(|port| {
+        let route = self.unloading_site(i).and_then(|port| {
             let p = self.object_index(port)?;
             let (bx, by) = self.berth(p);
             Some((port, self.plan_route(i, bx, by)?))

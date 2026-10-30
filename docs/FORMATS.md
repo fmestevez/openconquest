@@ -1780,16 +1780,46 @@ event 0x40 {400, 0xc, id}), the leviathan's 0x4ad510 (its own port
 `+0x7ad`, or 0x4c5910) and 0x4adef0 step 1 when its port is gone
 (0x4c5910). 0x4c5910(ship, &dist, mode) walks the ship's player's
 building list (`[0x5c7508] + player x 0xba0 + 3000`): player 16's class
-0x40 (cell vt+0x28), others' class 0x39 with vt+0x2c (mode 1: class
-0x3b; berth cell vt+0xb8), the smallest wavefront distance (0x4a1e90,
-the draught `+0x592`, 5000). So **only a port of the ship's own player,
-not asleep, takes cargo** (player 16: its class 0x40); settlements and
-towns never do. The port follows this (`unloading_site`, `order_unload`).
-Not decoded: 0x4a1e90 (the port measures the straight line); what a
-group does with the notices 0x138 / 0x4a1520 (the port still sends a
-full amber or fish ship to its nearest port itself, which only the
-leviathan's 0x4ad510 does in the original); whether the unload pointer
-is offered over a town (0x5175b0 / 0x5180e0). The
+0x40 (cell vt+0x28, 0x40dfa0: the anchor), others' class 0x39 with
+vt+0x2c (mode 1: class 0x3b; berth cell vt+0xb8, 0x40e050: the anchor a
+step by the facing `+0x1dc`), the least `W[ship cell] - W[cell]` (strict
+`<`: the first in the list on a tie; 100000 and none without a
+candidate) of the wavefront 0x4a1e90(draught `+0x592`, ship cell, 5000).
+0x4a1e90 copies the ships' grid by draught (0x5c93bc shallow, 0x5c9398
+deep: 0 open, -1 closed) and floods it by 0x545e20 -> 0x5459d0(grid, W,
+H, x, y, 5000, step 3): the start gets `(5000 + 1) x 3 x 2` = 30006, then
+up to 5001 layers, each cell of a layer in the order it was reached:
+its neighbours east, north, west, south still 0 take its value less 6
+while that stays above 0, then north-east, north-west, south-west,
+south-east its value less 9 (corners may be cut); a cell keeps the value
+it was first given. A berth the flood never reached counts 30006, a
+closed one 30007. So **only a port of the ship's own player, not
+asleep, takes cargo** (player 16: its class 0x40); settlements and towns
+never do. The port follows this (`unloading_site` with
+`NavGrid::wavefront`, `order_unload`; the list in object order).
+
+The gathering notices go to the ship's group (0x4a1430: `{0x138, tick,
+ship +0x60, ship id, class}`; 0x4a1520 after unloading: `{0x139, ...,
+0}`, both appended to the group's list `+0x2d`, 0x49c020(player,
+group)). Of the navy's fleet tasks only the gather zone's queue handler
+0x4c9e30 (newest first; jump table 0x4ca240/0x4ca270) has cases for
+them (0x4cba10, 0x4cdc00, 0x4cf0b0, 0x4d6960, 0x4d7770, 0x4d8030,
+0x4d8b90, 0x4d0210, 0x4d1ea0, 0x4d4e50 and 0x4da0a0 have none): 0x138
+-> the ship (0x4cc590, class 200) to 0x4c9ae0: if 0x4ad280(ship, class)
+and not (a leviathan with `+0x480`) and 0x4c9930 sends it to another
+deposit of the zone, done; else its own port `+0x7ad` if the zone's port
+list (`+0x25 +0x28`) takes it (0x4c64b0 >= 0, 0x4ac050 finds it), else
+the zone's port pick 0x4c6640 (none: nothing sent); then command 0x1f
+`{1, port, 0x5a}` by 0x4c89b0 (0x520cc0), or with the zone's `+0x61`
+0x4cab20 and 0x4c9c60. 0x139 -> 0x4c9930(ship, 0, `+0x61` set): the
+zone's next deposit for it. So the human's and the computers' gather
+zones send a laden amber or fish ship to unload, a tick later at the
+earliest (the notice is read at the zone's turn, the command delivered
+at the next tick). Not ported: the port still sends a full amber or
+fish ship to the nearest port itself in its task (0x4ad280, 0x4c9930's
+0x4c96e0 / 0x4c5b90 / 0x4c8f20, 0x4c64b0, the zone's port list and
+0x4c6640's weighted pick, 0x4cab20 and 0x4c9c60 not read); whether the
+unload pointer is offered over a town (0x5175b0 / 0x5180e0). The
 prey of a ram keeps its move state: the ram (0x4c2230) sends it event 2
 with code 1 (`+0x811` 0x14 when the rammer is alongside, 3 at the blow,
 0x4c2544-0x4c2563), never code 3; code 1 (0x4aa2c0: `+0x713 = 1`, `+0x71e

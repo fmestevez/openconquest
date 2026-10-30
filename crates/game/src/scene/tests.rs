@@ -5039,11 +5039,7 @@ fn merchants_unload_where_sent() {
         .unwrap()
         .id;
     let port = scene
-        .unloading_site(
-            scene.objects[scene.object_index(ship).unwrap()].owner,
-            0.0,
-            0.0,
-        )
+        .unloading_site(scene.object_index(ship).unwrap())
         .unwrap();
     let k = scene.object_index(ship).unwrap();
     let s = scene.objects[k].ship.as_mut().unwrap();
@@ -9319,9 +9315,7 @@ fn only_ports_take_cargo() {
         .objects
         .retain(|o| o.class != ObjectClass::Building(economy::PORT));
     let i = scene.object_index(ship).unwrap();
-    let owner = scene.objects[i].owner;
-    let (x, y) = (scene.objects[i].x, scene.objects[i].y);
-    assert_eq!(scene.unloading_site(owner, x, y), None);
+    assert_eq!(scene.unloading_site(i), None);
     scene.send_to_port(i, 0);
     assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
 }
