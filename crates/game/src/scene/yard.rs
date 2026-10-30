@@ -233,7 +233,7 @@ impl Scene {
         let human = Some(owner) == self.human.map(|h| (h.nation, h.slot));
         let (amber, fish, arming, stock) = if human {
             let p = self.ship_price_with(site, kind, arm);
-            let stock = p.home.map(|h| (h, p.stock_left));
+            let stock = p.home.map(|h| (h, p.stock_left, p.fittings_left));
             (p.amber, p.fish, Some(p.arming), stock)
         } else {
             let (amber, fish) = economy::ship_cost(kind);
@@ -263,8 +263,13 @@ impl Scene {
             self.yard_clocks.insert(site, 0);
             return Ok(());
         }
-        if let Some((home, left)) = stock {
+        if let Some((home, left, fittings)) = stock {
             self.garrisons.insert(home, left);
+            if fittings.0.is_empty() && fittings.1.is_empty() {
+                self.fittings.remove(&home);
+            } else {
+                self.fittings.insert(home, fittings);
+            }
         }
         if pay {
             afford(self)?;
@@ -530,10 +535,18 @@ impl Scene {
     /// studies: the unique ships', a bomber's armour, a rammer's ram; the
     /// buildings), -1 while the town is not idle,
     /// then the town's yards: 0 if one answers 0, else -1 if one answered
-    /// -1, else -5. (Not ported: the sub-tests of the arming's items
-    /// that byte 0xd runs.)
-    fn queue_test(&self, owner: (u32, u32), town: u32, kind: u8) -> i32 {
+    /// -1, else -5. With the order's default-arming byte `arm`, before the
+    /// idle test (0x43da20 test 5), each fallback item of 0x5962f8[kind]
+    /// the settlement's stock lacks must be one it may have made (case 1
+    /// with `param_3` 0), the armour fallback (0x596238: level 1 for a
+    /// bomber) one it may fit unless stored (case 2: permitted, studied
+    /// that far, a smithy), and the ram fallback (0x596298: ram 4 for a
+    /// rammer) likewise (case 3); else -5.
+    fn queue_test(&self, owner: (u32, u32), town: u32, kind: u8, arm: bool) -> i32 {
         if self.may_build_ship_for(owner, kind).is_err() {
+            return -5;
+        }
+        if arm && !self.fallbacks_to_hand(owner, town, kind) {
             return -5;
         }
         if self.construction_at(town).is_some() {
@@ -548,6 +561,29 @@ impl Scene {
             }
         }
         r
+    }
+
+    /// 0x43da20 test 5 for a ship of type `kind` armed by default at
+    /// settlement `town` of `owner`: its fallback items, armour and ram
+    /// in its store or to be had.
+    fn fallbacks_to_hand(&self, owner: (u32, u32), town: u32, kind: u8) -> bool {
+        let k = kind as usize % 12;
+        let stock = self.garrison(town);
+        let (armour, rams) = self.fittings.get(&town).cloned().unwrap_or_default();
+        let levels = self.levels_of(Some(owner));
+        let smithy = self.buildings_of(owner) & (1 << (economy::SMITHY - SETTLEMENT)) != 0;
+        let fit = |u: combat::Upgrade, l: u8, store: &[u8]| {
+            l == 0 || store.contains(&l) || (self.permits.fit(u, l) && levels.get(u) >= l && smithy)
+        };
+        combat::FALLBACK_WEAPONS[k]
+            .iter()
+            .all(|&f| stock[f as usize] > 0 || self.can_make_by(owner, f))
+            && fit(
+                combat::Upgrade::Armour,
+                combat::DEFAULT_ARMOUR[k].1,
+                &armour,
+            )
+            && fit(combat::Upgrade::Ram, combat::DEFAULT_RAM[k].1, &rams)
     }
 
     /// The yards of settlement or town `town` (its buildings `+0x1d0`; the
@@ -587,7 +623,7 @@ impl Scene {
             let owner = self.objects[i].owner.unwrap();
             while let Some(k) = self.ship_orders.iter().position(|o| o.site == site) {
                 let e = self.ship_orders[k].clone();
-                match self.queue_test(owner, town, e.ship) {
+                match self.queue_test(owner, town, e.ship, e.default_arming) {
                     0 => {
                         let code = (!e.argo).then_some(e.ship);
                         if self.yard_answer(i, code) == 0 {
@@ -778,13 +814,14 @@ impl Scene {
 
     /// Ship `i` is built (0x4b3ab0): afloat with its whole hull, the
     /// launch voice for the viewing player's ship, the brains' and the
-    /// computer players' "ship built" (0x4b3a20, message 0x5d95), a
-    /// computer player's behaviours (0x4e7220, applied at once: on guard,
-    /// ram attack for kinds 5 and 10, board attack for 4 and 11), then it
-    /// moves one cell off the berth (0x4b46f0 with 'e'), which overwrites
-    /// a move it was sent while built; finding no cell it sends none, and
-    /// that move (`pending`) runs. (Not settled: whether 0x4e7220 runs for
-    /// player 16, the barbarians, `game +0x1a1d + player`: not here.)
+    /// computer players' "ship built" (0x4b3a20, message 0x5d95), for a
+    /// human's ship (side `game +0x1a1d + player` 1 or 2, 0x4b3fbe; not
+    /// the computers' 3 and 4, nor player 16, a computer or 0) the
+    /// behaviours of 0x4e7220 (applied at once: on guard, ram attack for
+    /// kinds 5 and 10, board attack for 4 and 11), then it moves one cell
+    /// off the berth (0x4b46f0 with 'e'), which overwrites a move it was
+    /// sent while built; finding no cell it sends none, and that move
+    /// (`pending`) runs.
     fn build_done(&mut self, i: usize, site: u32, pending: Option<((i32, i32), u8)>) {
         let id = self.objects[i].id;
         let o = &mut self.objects[i];
@@ -807,7 +844,7 @@ impl Scene {
                     .iter()
                     .any(|s| (s.player.nation, s.player.slot) == o)
         });
-        if owner.is_some() && !player && owner != Some((4, 0)) {
+        if player {
             let b = &mut self.objects[i].ship.as_mut().unwrap().behaviour;
             b.guard = true;
             if matches!(kind, 5 | 10) {

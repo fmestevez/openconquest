@@ -754,6 +754,28 @@ impl Scene {
             self.hit(target, blow, by, data, caches);
             return;
         };
+        // A ship being built (0x4befc0 with `+0x251 == 2`) takes the blow
+        // whole on its hull, in the original's points, never below 0; under
+        // 1 it sinks (`+0x251 = 4`), the blow's giver (`+0x80b`) its killer
+        // whether it sinks or not: the ordinary sinking, nothing given back.
+        let building = self
+            .object_index(target)
+            .and_then(|t| self.objects[t].ship.as_ref())
+            .is_some_and(|s| s.build.is_some());
+        if building {
+            let t = self.object_index(target).unwrap();
+            let c = self.objects[t].combat.as_mut().unwrap();
+            let hull = ((c.hull * 15.0).round() as i64 - (blow * 15.0).round() as i64).max(0);
+            c.hull = hull as f32 / 15.0;
+            if hull < 1 {
+                c.hull = 0.0;
+                if let Some(s) = self.objects[t].ship.as_mut() {
+                    s.build = None;
+                }
+                self.strike(target, 0.0, false, by, true, data, caches);
+            }
+            return;
+        }
         // The hull first; a wreck takes no more (0x4be0c0).
         self.hit(target, sh.hull_part(blow), by, data, caches);
         self.wound(target, sh.crew_part(blow) * 15.0);

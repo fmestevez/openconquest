@@ -867,6 +867,21 @@ impl Scene {
                         scene.garrisons.insert(o.id, stock);
                     }
                 }
+                // And the rams (fields 8-10: so many of 3 (none), 4, 5) and
+                // armour (11-13: levels 0, 1, 2) their store holds, each
+                // whole (0x441ba0 message 2, 0x441d3f-0x441e12).
+                let f = |k: usize| o.record.fields.get(k).copied().unwrap_or(0);
+                let fittings: load::Fittings = (
+                    (0..3u8)
+                        .flat_map(|l| std::iter::repeat_n(l, f(11 + l as usize) as usize))
+                        .collect(),
+                    (0..3u8)
+                        .flat_map(|l| std::iter::repeat_n(l, f(8 + l as usize) as usize))
+                        .collect(),
+                );
+                if !fittings.0.is_empty() || !fittings.1.is_empty() {
+                    scene.fittings.insert(o.id, fittings);
+                }
             }
         }
         // The campaign's missions are judged by their story.

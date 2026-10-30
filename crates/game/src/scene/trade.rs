@@ -20,6 +20,9 @@ pub struct Price {
     pub arming: Arming,
     pub home: Option<u32>,
     pub stock_left: [u32; 9],
+    /// The armour and rams `home` stores (`+0x248`, `+0x24c`) once those
+    /// fitted are taken.
+    pub fittings_left: super::load::Fittings,
 }
 
 /// Seconds a frame of a building collapsing into ruins: the ruins' cycle
@@ -238,10 +241,14 @@ impl Scene {
             .object_index(site)
             .and_then(|i| self.home_settlement(i));
         let stock = home.map(|h| self.garrison(h)).unwrap_or_default();
+        let fittings = home
+            .and_then(|h| self.fittings.get(&h).cloned())
+            .unwrap_or_default();
         let k = kind as usize % 12;
         let mut price = if arm {
             self.plan_arming(
                 stock,
+                fittings,
                 combat::DEFAULT_WEAPONS[k],
                 combat::FALLBACK_WEAPONS[k],
                 combat::MIN_POWER[k],
@@ -251,6 +258,7 @@ impl Scene {
         } else {
             Price {
                 stock_left: stock,
+                fittings_left: fittings,
                 ..Price::default()
             }
         };
@@ -277,7 +285,15 @@ impl Scene {
             {
                 return None;
             }
-            price = self.plan_arming(stock, items, fallbacks, 0, (0, 0), (0, 0));
+            price = self.plan_arming(
+                stock,
+                Default::default(),
+                items,
+                fallbacks,
+                0,
+                (0, 0),
+                (0, 0),
+            );
         }
         price.amber += economy::building_cost(class);
         price.home = settlement;
@@ -368,10 +384,13 @@ impl Scene {
     /// holds one, else bought if it may be made, else its fallback (from
     /// stock or bought); then more fallbacks, from the last, until the
     /// arms are as strong as `min_power`; and armour and a ram of their
-    /// levels, or of the fallback levels, if they may be fitted.
+    /// levels, or of the fallback levels, from the settlement's store
+    /// (`fittings`) free, else bought if they may be fitted.
+    #[allow(clippy::too_many_arguments)]
     fn plan_arming(
         &self,
         mut stock: [u32; 9],
+        mut fittings: super::load::Fittings,
         items: &[u8],
         fallbacks: &[u8],
         min_power: u32,
@@ -406,29 +425,53 @@ impl Scene {
             power += combat::item_power(fallbacks[k]);
         }
         let levels = self.levels_of(self.human.map(|h| (h.nation, h.slot)));
-        // Armour and ram (0x43ead0 steps 4, 5): the level if it may be
-        // fitted (0x43da20 case 2 / 3); else a level 2 with no fallback
-        // tries level 1 by the same test; else the fallback is bought
-        // with no test at all; none without one.
-        let fitted = |upgrade: combat::Upgrade, (level, fallback): (u8, u8)| {
-            let can = |l: u8| l > 0 && levels.get(upgrade) >= l && self.permits.fit(upgrade, l);
-            if level == 0 || can(level) {
-                return (level > 0).then_some(level);
-            }
-            if level == 2 && fallback == 0 {
-                return can(1).then_some(1);
-            }
-            (fallback > 0).then_some(fallback)
-        };
-        if let Some(l) = fitted(combat::Upgrade::Armour, armour) {
+        // Armour and ram (0x43ead0 steps 4, 5): the level from the
+        // settlement's store (`+0x248` / `+0x24c`, 0x4410f0 / 0x441140)
+        // free, else bought if it may be fitted (0x43da20 case 2 / 3);
+        // else a level 2 with no fallback tries level 1 the same way;
+        // else the fallback from the store, or bought with no test at
+        // all; none without one. The levels taken leave the store.
+        let fitted =
+            |upgrade: combat::Upgrade, (level, fallback): (u8, u8), store: &mut Vec<u8>| {
+                let can = |l: u8| l > 0 && levels.get(upgrade) >= l && self.permits.fit(upgrade, l);
+                let mut stored = |l: u8| {
+                    let p = store.iter().position(|&x| x == l);
+                    p.map(|p| store.remove(p)).is_some()
+                };
+                if level == 0 {
+                    return None;
+                }
+                if stored(level) {
+                    return Some((level, true));
+                }
+                if can(level) {
+                    return Some((level, false));
+                }
+                if level == 2 && fallback == 0 {
+                    if stored(1) {
+                        return Some((1, true));
+                    }
+                    return can(1).then_some((1, false));
+                }
+                if fallback == 0 {
+                    return None;
+                }
+                Some((fallback, stored(fallback)))
+            };
+        if let Some((l, free)) = fitted(combat::Upgrade::Armour, armour, &mut fittings.0) {
             price.arming.armour = l;
-            price.amber += [0, 30, 60][l as usize];
+            if !free {
+                price.amber += [0, 30, 60][l as usize];
+            }
         }
-        if let Some(l) = fitted(combat::Upgrade::Ram, ram) {
+        if let Some((l, free)) = fitted(combat::Upgrade::Ram, ram, &mut fittings.1) {
             price.arming.ram = l;
-            price.amber += [0, 25, 50][l as usize];
+            if !free {
+                price.amber += [0, 25, 50][l as usize];
+            }
         }
         price.stock_left = stock;
+        price.fittings_left = fittings;
         price
     }
 

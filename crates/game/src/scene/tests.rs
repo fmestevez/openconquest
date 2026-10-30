@@ -9384,6 +9384,75 @@ fn shots_on_a_ship_being_built() {
     assert!(scene.ship_on_berth(yard).is_none());
 }
 
+/// A settlement's store starts with the rams and armour its record counts
+/// (0x441ba0 message 2: fields 8-10 rams 3-5, 11-13 armour 0-2): battle08's
+/// settlement 0x12 a level-2 armour and a ram 5. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn settlements_start_with_their_fittings() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let scene = Scene::load(&data, &mut caches, "battle08").unwrap();
+    assert_eq!(scene.fittings.get(&0x12), Some(&(vec![2], vec![2])));
+    for m in 0..14 {
+        let scene = Scene::load(&data, &mut caches, &format!("miss{m:03}")).unwrap();
+        for (armour, rams) in scene.fittings.values() {
+            assert!(armour.len() + rams.len() < 100, "miss{m:03}");
+        }
+    }
+}
+
+/// A code-4 blow on a ship being built (0x4befc0, `+0x251 == 2`): the hull
+/// takes it whole, crew and weapons nothing; under 1 it sinks, the blow's
+/// giver its killer (`+0x80b`), nothing given back. Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn blows_on_a_ship_being_built() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let yard = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .map(|o| o.id)
+        .unwrap();
+    scene.amber = 1000;
+    scene.start_ship(yard, 0).unwrap();
+    scene.make_new_ships(&data, &mut caches);
+    let id = scene.objects[scene.ship_on_berth(yard).unwrap()].id;
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let hull = |s: &Scene| {
+        let k = s.object_index(id).unwrap();
+        (s.objects[k].combat.as_ref().unwrap().hull * 15.0).round() as i64
+    };
+    assert_eq!(hull(&scene), 455);
+    let crew = |s: &Scene| {
+        s.objects[s.object_index(id).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap()
+            .crew
+            .squads
+    };
+    let squads = crew(&scene);
+    scene.share_blow(id, 300.0 / 15.0, None, &data, &mut caches);
+    assert_eq!(hull(&scene), 155);
+    assert_eq!(crew(&scene), squads);
+    let (amber, fish) = (scene.amber, scene.fish);
+    let lost = scene.stats.ships_lost[0];
+    scene.share_blow(id, 155.0 / 15.0, Some((4, 0)), &data, &mut caches);
+    assert!(scene.object_index(id).is_none(), "sunk");
+    assert_eq!(scene.stats.ships_lost[0], lost + 1);
+    assert_eq!((scene.amber, scene.fish), (amber, fish));
+}
+
 /// 0x49a4b0 searches the berth's neighbours from the north-west clockwise,
 /// 3 at a corner and 5 on a side, from the first clockwise from outside
 /// (0x49a1d0, 0x499ff0).
@@ -9467,6 +9536,23 @@ fn default_arming_takes_its_fallbacks_untested() {
     assert_eq!(scene.ship_price(yard, 2).arming.armour, 1);
     scene.levels.get_mut(&owner).unwrap().armour = 0;
     assert_eq!(scene.ship_price(yard, 2).arming.armour, 0);
+    // Armour 2 and a ram 2 stored at the yard's settlement (`+0x248`,
+    // `+0x24c`): fitted free, though not studied; built now they leave the
+    // store (0x43ead0).
+    let home = scene
+        .home_settlement(scene.object_index(yard).unwrap())
+        .unwrap();
+    let bare = scene.ship_price(yard, 2);
+    scene.fittings.insert(home, (vec![1, 2], vec![2]));
+    let p = scene.ship_price(yard, 2);
+    assert_eq!((p.arming.armour, p.arming.ram), (2, 2));
+    assert_eq!(p.amber, bare.amber - [0, 25, 50][bare.arming.ram as usize]);
+    assert_eq!(p.fittings_left, (vec![1], vec![]));
+    scene.amber = 100_000;
+    scene.fish = 100_000;
+    scene.yard_order(yard, 2, false, true, None).unwrap();
+    assert_eq!(scene.new_ships.len(), 1);
+    assert_eq!(scene.fittings.get(&home), Some(&(vec![1], vec![])));
 }
 
 /// A barbarian structure's order builds on its berth at once, free, as a

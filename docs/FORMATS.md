@@ -2675,8 +2675,9 @@ filled (0x4bd920: kind 0 slot 3, 1 slot 4, 8 slot 9, 9 slot 10, 11 slots
 capabilities `0x4e6930` (0xfffff7ff for kinds 0/1, else 0xfffffeff), the
 launch voice for the viewing player's ship (events 184, 185, 187, 186 by
 nation: `SND_184` empty, 185 and 186 `jb_d1`, 187 `121~2`), 0x4b3a20
-(message 0x5d95, the brains' "ship built"), for a computer player 0x4e7220
-(behaviour events 0x100, not decoded), then **0x4b46f0(ship, 'e')**.
+(message 0x5d95, the brains' "ship built"), for a human's ship (side
+`game +0x1a1d + player` 1 local or 2 remote, 0x4b3fbe; computers are 3
+and 4, player 16 a computer or 0) 0x4e7220, then **0x4b46f0(ship, 'e')**.
 Blows on it (0x4ab720 runs the damage events whatever `+0x251`; event 1
 appends `{shot, id}` while fewer than 4, a fifth in a tick dropped; with
 some pending, `+0x25d & 1`, 0x4ab930 runs 0x4bf170, which for `+0x251 ==
@@ -2707,7 +2708,7 @@ position class (corners 3: (0,0) +1, +W+1, +W; (W-1,0) +W, +W-1, -1;
 +W-1, -1; right +W, +W-1, -1, -W-1, -W; bottom -1, -W-1, -W, -W+1, +1; left
 -W, -W+1, +1, +W+1, +W; inside 8: -W-1, -W, -W+1, +1, +W+1, +W, +W-1,
 -1; counts 0x597900), whose slot object's id `+0x4c` is it; else none.
-0x4e7220 at the launch (a computer player's): on guard, and ram attack for
+0x4e7220 at the launch (a human's ship, side 1 or 2): on guard, and ram attack for
 kinds 5 / 10, board attack for 4 / 11.
 Called off (`+0x73a < 0`: the stop order, event 8 with no record while
 `+0x251 == 2`, 0x4aa540 at 0x4aa565; the yard gone): the frame drops by 1 a step; below 1 (heading 0) or
@@ -2923,21 +2924,36 @@ in the list never. (Not traced: whether every brain build comes through
 
 The port keeps a queued order's byte 0xd and arms it when built, takes
 the stock before the funds test, buys the armour and ram fallbacks
-untested, refuses bombers and rammers without their study (-7), takes
-shots on a ship being built by 0x4b4000 (at most 4 a tick, at its tick),
+untested, takes armour and rams from the settlement's store free first
+(`+0x248` / `+0x24c`, taken out when built now; levels only: their
+condition is never read), with default arming tests the fallback items,
+armour and ram in the queue (0x43da20 test 5), starts each settlement's
+store from its record (0x441ba0 message 2: fields 8-10 rams 3, 4, 5,
+11-13 armour 0, 1, 2, each condition 100), refuses bombers and rammers
+without their study (-7), takes
+shots on a ship being built by 0x4b4000 (at most 4 a tick, at its tick)
+and code-4 blows by 0x4befc0 (whole on the hull, at once, the giver its
+killer; the original's 0x4e0d00 with `+0x252` and `+0x8d6` not read),
 lets behaviour switches through while it is built and keeps the berth
-clearing's move pending, sets a computer player's behaviours at the
-launch, and looks for the yard among the berth's neighbours (a cell
+clearing's move pending, sets a human's ship's behaviours at the
+launch (its own and the seats'), and looks for the yard among the berth's neighbours (a cell
 holds the building whose footprint covers it: the port has no building
 slots). `Scene::barbarian_order` builds a barbarian structure's ship on
 its berth. Not ported: the port's other moves have no event queue (see
-"One event a tick"); 0x4bd920 at the launch; the town's armour and ram
-lists (`+0x248`, `+0x24c`) as free stock (the port's `fittings` are not
-read by the price); the arming sub-tests of the queue's 0x43da20 (its
-case 1 on the fallback items with the town's workshop and smithy); the
-items' conditions (the port's stock has none); code-4 blows on a ship
-being built take the port's ordinary damage; whether 0x4e7220 runs for
-player 16; whether reefs and whirlpools mark the landscape nibbles the
+"One event a tick"); 0x4bd920 at the launch; the smithy's finished
+pieces go to its town's store (0x434ed0 job 1, messages 0x248d / 0x248e,
+0x4353c5 / 0x4354e8: the port's `run_refits` still fits them); the price
+tests of 0x43e5c0 / 0x43ead0 are 0x43da20's full ones (`param_3` 1: the
+owner can pay for that one piece now, the town idle for marines, one of
+its workshops idle for weapons, a smithy for armour and rams; the port
+keeps "may it be made"); the town's own workshop and smithy counts
+(`+0x1fc` / `+0x200`, attached by message 0x2873 at a building's first
+standing tick, detached by 0x2874; the port counts the owner's); the
+items' conditions on the ship (0x4dfe00 -> 0x4bd920, `+0x299`; taken best
+first, bought 100); the computers' ships armed by 0x43ead0 too (the port
+gives them their default load); a record ram of 0 (a barbarian order
+without arming: `+0x27b = 0 - 3 = 0xfd`, no ram drawn, the ram tables
+read past 0x598054; the brains always set the byte, 0x42957a); whether reefs and whirlpools mark the landscape nibbles the
 cell tests read (the port keeps them apart); the brains still build the
 barbarians' ships their own way (25 ticks beside the structure, brain.rs
 `builder_order`), not by `barbarian_order`. The ships' LCG seed `game +0x2ee5` is the
