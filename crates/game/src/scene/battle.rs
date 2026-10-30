@@ -687,7 +687,7 @@ impl Scene {
                     }
                 };
                 if ordered.is_some() && stale {
-                    if let Some(path) = self.plan_route(i, tx, ty) {
+                    if let Some(path) = self.plan_route_to_water(i, tx, ty) {
                         self.objects[i].ship.as_mut().unwrap().path = path;
                     }
                 }
@@ -1450,7 +1450,7 @@ impl Scene {
                     .back()
                     .is_none_or(|&(px, py)| ((px - tx).powi(2) + (py - ty).powi(2)).sqrt() > t);
                 if stale {
-                    if let Some(path) = self.plan_route(i, tx, ty) {
+                    if let Some(path) = self.plan_route_to_water(i, tx, ty) {
                         self.objects[i].ship.as_mut().unwrap().path = path;
                     }
                 }

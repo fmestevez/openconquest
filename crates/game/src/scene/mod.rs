@@ -591,10 +591,13 @@ type Held = (u32, (i32, i32), bool, bool, u32);
 
 /// Which of 0x4a6330's planners a ship's route comes from: not waited
 /// with a tolerance of 0 (0x4a5740), a plain move's first plan
-/// (0x4a5f30), or waited (0x4a51b0).
+/// (0x4a5f30), or waited (0x4a51b0). `ToWater` is the port's own: an
+/// unwaited plan to the nearest water of a goal 0x4a6330 would refuse,
+/// for the callers whose own water cell is not decoded.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Plan {
     Unwaited,
+    ToWater,
     Order,
     Waited,
 }
@@ -1526,7 +1529,7 @@ impl Scene {
             .back()
             .copied()
             .unwrap_or((self.objects[i].x, self.objects[i].y));
-        let Some(leg) = self.plan_route_from(i, from, x, y) else {
+        let Some(leg) = self.plan_route_to_water_from(i, from, x, y) else {
             return false;
         };
         let ship = self.objects[i].ship.as_mut().unwrap();
@@ -1535,8 +1538,10 @@ impl Scene {
         true
     }
 
-    /// A route for object `i` to the world point `(x, y)`, or to the nearest
-    /// water if the point is not navigable.
+    /// A route for object `i` to the world point `(x, y)` (0x4a6330 not
+    /// waited): none to a cell 0x499990 refuses (not water, or layer-1
+    /// type 4, 5 or 6), the original's callers choosing their own water
+    /// cell.
     fn plan_route(&self, i: usize, x: f32, y: f32) -> Option<VecDeque<(f32, f32)>> {
         let obj = &self.objects[i];
         self.plan_route_from(i, (obj.x, obj.y), x, y)
@@ -1565,6 +1570,34 @@ impl Scene {
         avoid: &HashSet<(i32, i32)>,
     ) -> Option<VecDeque<(f32, f32)>> {
         self.plan_route_tolerant(i, start, x, y, avoid, Plan::Unwaited)
+    }
+
+    /// The same to the nearest water of `(x, y)` (`nav.nearest_water`): the
+    /// port's own, for callers whose water cell is not decoded (not
+    /// decoded: the scout, patrol, zone and convoy orders' goals, a
+    /// waypoint, a treasure's or hero's house, a building or creature
+    /// attacked on land, an amber deposit and a port without a moorage
+    /// front; see "Ships' routes" in FORMATS.md).
+    pub(super) fn plan_route_to_water(
+        &self,
+        i: usize,
+        x: f32,
+        y: f32,
+    ) -> Option<VecDeque<(f32, f32)>> {
+        let obj = &self.objects[i];
+        self.plan_route_to_water_from(i, (obj.x, obj.y), x, y)
+    }
+
+    /// The same, setting out from the world point `start`.
+    fn plan_route_to_water_from(
+        &self,
+        i: usize,
+        start: (f32, f32),
+        x: f32,
+        y: f32,
+    ) -> Option<VecDeque<(f32, f32)>> {
+        let none = HashSet::new();
+        self.plan_route_tolerant(i, start, x, y, &none, Plan::ToWater)
     }
 
     /// A plain move's first plan (0x4a5f30 -> 0x4a6330, not waited): to
@@ -1661,13 +1694,14 @@ impl Scene {
             x >= 0 && y >= 0 && x < self.nav.width as i32 && y < self.nav.height as i32
         };
         // A plain move plans to the cell itself, with a tolerance of 1 if
-        // it is not water (0x4a5f30, 0x4999e0). The behaviours' goals not
-        // on the shallow grid are moved to the nearest water on it (the
-        // port's own: 0x4a6330 makes no plan to a cell 0x4999e0 refuses
-        // with a tolerance of 0).
+        // it is not water (0x4a5f30, 0x4999e0). Not waited, 0x4a6330 makes
+        // no plan to a cell 0x499990 refuses (after the goal-is-its-own-cell
+        // test, which makes none either).
         let sea = self.nav.is_sea(target.0, target.1);
         let to = match plan {
-            Plan::Unwaited => self.nav.nearest_water(target.0, target.1)?,
+            Plan::Unwaited if sea => target,
+            Plan::Unwaited => return None,
+            Plan::ToWater => self.nav.nearest_water(target.0, target.1)?,
             Plan::Order | Plan::Waited if on_map(target) => target,
             _ => return None,
         };

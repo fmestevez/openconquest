@@ -2198,7 +2198,7 @@ impl Scene {
         }
         let (x, y) = self.deposit_goal(i, d);
         let path = self
-            .plan_route(i, x, y)
+            .plan_route_to_water(i, x, y)
             .ok_or("The ship cannot sail there")?;
         let own_port = self.object_index(port).is_some_and(|p| {
             self.objects[p].owner == self.objects[i].owner && self.takes_cargo(&self.objects[p])
@@ -2403,7 +2403,7 @@ impl Scene {
                 if let (false, Some(d)) = (arrived, deposit_at) {
                     let (dx, dy) = (self.objects[d].x, self.objects[d].y);
                     let gap = |(x, y): (f32, f32)| (x - dx).hypot(y - dy);
-                    if let Some(path) = self.plan_route(i, dx, dy) {
+                    if let Some(path) = self.plan_route_to_water(i, dx, dy) {
                         if path
                             .back()
                             .is_some_and(|&e| gap(e) + t / 2.0 < gap((sx, sy)))
@@ -2747,7 +2747,7 @@ impl Scene {
         let from = (self.objects[i].x, self.objects[i].y);
         self.beside_cells(b, from)
             .into_iter()
-            .find_map(|(x, y)| self.plan_route(i, x, y))
+            .find_map(|(x, y)| self.plan_route_to_water(i, x, y))
     }
 
     /// The water cells of object `b`'s berth ring, nearest `from` first,
@@ -2896,7 +2896,7 @@ impl Scene {
         };
         let (bx, by) = self.berth(p);
         let path = self
-            .plan_route(i, bx, by)
+            .plan_route_to_water(i, bx, by)
             .ok_or("The ship cannot reach it")?;
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path = path;
@@ -2939,7 +2939,7 @@ impl Scene {
         let route = self.unloading_site(i).and_then(|port| {
             let p = self.object_index(port)?;
             let (bx, by) = self.berth(p);
-            Some((port, self.plan_route(i, bx, by)?))
+            Some((port, self.plan_route_to_water(i, bx, by)?))
         });
         let ship = self.objects[i].ship.as_mut().unwrap();
         match route {
@@ -2970,9 +2970,14 @@ impl Scene {
         // capability, `+0x261`): the landing party pays on the site, or
         // builds nothing (0x421f00).
         self.check_ground(class, cx, cy)?;
+        // 0x4aa990: the ship berths at 0x4b2710's cell, its wait (`+0x591`)
+        // zeroed after; no berth, and the order is dropped.
+        let berth = self.found_berth(i, class, (cx, cy));
+        self.objects[i].ship.as_mut().unwrap().waited = 0.0;
+        let (bx, by) = berth.ok_or("There is no water to land from")?;
         let t = TILE_SIZE as f32;
         let path = self
-            .plan_route(i, cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0)
+            .plan_route(i, bx as f32 * t + t / 2.0, by as f32 * t + t / 2.0)
             .ok_or("The ship cannot sail there")?;
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path = path;
@@ -2980,6 +2985,107 @@ impl Scene {
         Ok(())
     }
 }
+
+impl Scene {
+    /// Where ship `i` lies to found `class` on `site` (0x4b2710), nearest
+    /// its cell by 0x557440 (the first of equals). A fort: the side cell
+    /// east, west, south or north on the map that 0x499990(cell, 0) takes
+    /// (0x499930 with the ship's draught, the slot empty too, while it has
+    /// a wait `+0x591`); a cell of index 0 is never taken. A settlement
+    /// (site its 2 x 2's top-left): the water cell A (layer-0 type below
+    /// 8) of the 24 pairs of 0x5c7500 + 0x15c / + 0x1bc on the map, within
+    /// half the map's width across of the site, whose land cell B (type 8
+    /// or more) has an empty slot (0x4998d0); the offsets are linear, as
+    /// the original adds them to the cell's index.
+    pub(super) fn found_berth(&self, i: usize, class: u32, site: (i32, i32)) -> Option<(i32, i32)> {
+        let (w, total) = (
+            self.grid.width as i32,
+            (self.grid.width * self.grid.height) as i32,
+        );
+        let t = TILE_SIZE as f32;
+        let o = &self.objects[i];
+        let ship = o.ship.as_ref()?;
+        let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let idx = site.1 * w + site.0;
+        let at = |c: i32| (c % w, c / w);
+        let dist = |c: i32| super::placement::distance(at(c).0 - here.0, at(c).1 - here.1);
+        let low = |c: i32| self.cell_types[c as usize] & 0xf;
+        if class == SETTLEMENT {
+            let mut best: Option<(i32, i32)> = None;
+            for &((ax, ay), (bx, by)) in &FOUND_BERTHS {
+                let a = idx + ay * w + ax;
+                let b = idx + by * w + bx;
+                if a < 0 || a >= total || (a % w - site.0).abs() >= w / 2 || low(a) >= 8 {
+                    continue;
+                }
+                // B is not checked against the map (0x4b2710): off it, the
+                // original reads outside the landscape; taken as refused.
+                if b < 0 || b >= total || low(b) < 8 || self.cell_slot_taken(at(b)) {
+                    continue;
+                }
+                if best.is_none_or(|(_, d)| dist(a) < d) {
+                    best = Some((a, dist(a)));
+                }
+            }
+            return best.map(|(a, _)| at(a));
+        }
+        if !(0x34..=0x36).contains(&class) {
+            return None;
+        }
+        let deep = crate::objects::deep_draught(ship.kind);
+        let water = |c: i32| {
+            if ship.waited > 0.0 {
+                self.sea_cell(at(c), deep) && !self.cell_slot_taken(at(c))
+            } else {
+                self.sea_cell(at(c), false)
+            }
+        };
+        let sides = [
+            (idx + 1 < total && site.0 + 1 < w).then_some(idx + 1),
+            (idx > 0 && site.0 > 0).then_some(idx - 1),
+            (idx + w < total).then_some(idx + w),
+            (idx - w >= 0).then_some(idx - w),
+        ];
+        let mut best: Option<(i32, i32)> = None;
+        for c in sides.into_iter().flatten().filter(|&c| water(c)) {
+            if c != 0 && best.is_none_or(|(_, d)| dist(c) < d) {
+                best = Some((c, dist(c)));
+            }
+        }
+        best.map(|(c, _)| at(c))
+    }
+}
+
+/// 0x4b2710's settlement berths (0x5c7500 + 0x15c and + 0x1bc, from
+/// 0x499e00 / 0x499f00): the water cell A a ship lies on and the land
+/// cell B its settlers land on, from the site's top-left. Pair 19 has
+/// A == B, so it never passes.
+const FOUND_BERTHS: [((i32, i32), (i32, i32)); 24] = [
+    ((-1, -2), (-1, -1)),
+    ((0, -2), (0, -1)),
+    ((1, -2), (1, -1)),
+    ((2, -2), (2, -1)),
+    ((-2, -1), (-1, -1)),
+    ((3, -1), (2, -1)),
+    ((-2, 0), (-1, 0)),
+    ((3, 0), (2, 0)),
+    ((-2, 1), (-1, 1)),
+    ((3, 1), (2, 1)),
+    ((-2, 2), (-1, 2)),
+    ((3, 2), (2, 2)),
+    ((-1, 3), (-1, 2)),
+    ((0, 3), (0, 2)),
+    ((1, 3), (1, 2)),
+    ((2, 3), (2, 2)),
+    ((-1, -1), (0, -1)),
+    ((2, -1), (2, 0)),
+    ((2, 2), (1, 2)),
+    ((-1, 2), (-1, 2)),
+    ((-1, -1), (-1, 0)),
+    ((2, -1), (1, -1)),
+    ((2, 2), (2, 1)),
+    ((-1, 2), (0, 2)),
+];
 
 /// How many cells across a building stands on: settlements and towns two.
 pub(super) fn building_cells(o: &MapObject) -> i32 {

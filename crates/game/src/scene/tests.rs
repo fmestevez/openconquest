@@ -11511,6 +11511,88 @@ fn ship_founded_fort_bare() {
     assert_eq!(scene.home_settlement(i), None);
 }
 
+/// A founding ship sails for 0x4b2710's berth: for a fort the nearest
+/// 0x499990 side cell (east, west, south, north), for a settlement the
+/// nearest water cell of the 24 pairs beside a free land cell; a plan not
+/// waited to land makes no route (0x4a6330) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn founding_ship_berths_at_the_original_cell() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let boat = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+        .unwrap()
+        .id;
+    let i = scene.object_index(boat).unwrap();
+    let t = 64.0;
+    let here = (
+        (scene.objects[i].x / t).floor() as i32,
+        (scene.objects[i].y / t).floor() as i32,
+    );
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let d = |c: (i32, i32)| super::placement::distance(c.0 - here.0, c.1 - here.1);
+    let low = |s: &Scene, (x, y): (i32, i32)| s.cell_types[(y * w + x) as usize] & 0xf;
+    let fort = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .find(|&(x, y)| scene.check_ground(0x34, x, y).is_ok())
+        .unwrap();
+    let sides = [(1, 0), (-1, 0), (0, 1), (0, -1)].map(|(dx, dy)| (fort.0 + dx, fort.1 + dy));
+    let mut want = None;
+    for c in sides {
+        if scene.nav.is_sea(c.0, c.1) && want.is_none_or(|b| d(c) < d(b)) {
+            want = Some(c);
+        }
+    }
+    assert!(want.is_some());
+    assert_eq!(scene.found_berth(i, 0x34, fort), want);
+    let site = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            scene.check_ground(SETTLEMENT, x, y).is_ok()
+                && scene.found_berth(i, SETTLEMENT, (x, y)).is_some()
+        })
+        .unwrap();
+    let a = scene.found_berth(i, SETTLEMENT, site).unwrap();
+    assert!(low(&scene, a) < 8);
+    // Some pair puts its land cell beside the berth, in the 4 x 4 ring.
+    assert!((-1..=2).any(|dy| (-1..=2).any(|dx| {
+        let b = (site.0 + dx, site.1 + dy);
+        let ring = !(0..=1).contains(&dx) || !(0..=1).contains(&dy);
+        ring && (b.0 - a.0).abs() + (b.1 - a.1).abs() == 1 && low(&scene, b) >= 8
+    })));
+    // No other qualifying water cell of the 6 x 6 ring is nearer.
+    for dy in -2..=3 {
+        for dx in -2..=3 {
+            let c = (site.0 + dx, site.1 + dy);
+            if c.0 >= 0 && c.1 >= 0 && c.0 < w && c.1 < h && d(c) < d(a) {
+                let near_land = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(ex, ey)| {
+                    let b = (c.0 + ex, c.1 + ey);
+                    (-1..=2).contains(&(b.0 - site.0))
+                        && (-1..=2).contains(&(b.1 - site.1))
+                        && !((0..=1).contains(&(b.0 - site.0)) && (0..=1).contains(&(b.1 - site.1)))
+                        && low(&scene, b) >= 8
+                        && !scene.cell_slot_taken(b)
+                });
+                assert!(low(&scene, c) >= 8 || !near_land, "{c:?} nearer than {a:?}");
+            }
+        }
+    }
+    scene.order_found(boat, fort.0, fort.1, 0x34).unwrap();
+    let end = *scene.objects[i].ship.as_ref().unwrap().path.back().unwrap();
+    let want = want.unwrap();
+    assert_eq!(end, (want.0 as f32 * t + 32.0, want.1 as f32 * t + 32.0));
+    // 0x4a6330 not waited: no plan to a land cell.
+    assert!(scene
+        .plan_route(i, fort.0 as f32 * t + 32.0, fort.1 as f32 * t + 32.0)
+        .is_none());
+}
+
 /// A ship's building page (0x4e6980 page 2) keeps each button in its own
 /// slot (settlement 0, forts 0x34-0x36 in 1-3, by the technology) and
 /// tests no price; the founding order takes no amber either (0x4aa990):

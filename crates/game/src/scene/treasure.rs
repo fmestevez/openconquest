@@ -55,7 +55,7 @@ impl Scene {
         }
         let (x, y) = (self.objects[t].x, self.objects[t].y);
         let path = self
-            .plan_route(i, x, y)
+            .plan_route_to_water(i, x, y)
             .ok_or("The ship cannot sail there")?;
         let s = self.objects[i].ship.as_mut().unwrap();
         s.path = path;

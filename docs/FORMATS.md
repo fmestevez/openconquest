@@ -1576,7 +1576,17 @@ forts, and is refused two cells away with none of them beside it.) A ship founds
 a fort on a shore tile (the nation's permission, then 0x4eb with flags
 0x20 and no id) and a settlement on 2 x 2 free inland cells with a shore
 tile in the 12 about them (0x42e1e0); it berths beside it from anywhere
-(0x4b2710: for a fort the nearest side cell, east, west, south, north). A moorage's front is the
+(0x4b2710, distances 0x557440 from the ship's cell, the first of equals:
+for a fort the nearest side cell, east, west, south, north, on the map,
+that 0x499990(cell, 0) takes, or 0x499930 with the ship's draught while
+it has a wait `+0x591`; a cell of index 0 is skipped; for a settlement
+the nearest water cell A (layer-0 type < 8 only) of the 24 linear pairs
+0x5c7500 + 0x15c / + 0x1bc (0x499e00, 0x499f00: the 6 x 6 ring's sides
+and the 4 x 4 ring's corners, from the site's top-left) on the map and
+less than half the map's width across, whose land cell B (type 8 or
+more, `+0x740`) has an empty slot (0x4998d0; B is not tested against
+the map, the port refusing it off the map); pair 19 has A == B; none:
+-1, the order dropped). A moorage's front is the
 cell its record field 10 faces (0 east, 2 north, 4 west, 6 south), where
 ships berth.
 
@@ -1930,13 +1940,20 @@ wait of 150 or on the goal's cell the move is given up (message 0x80 sub
 0x55ba50 with 1; with no route it keeps its route, its wait 1, and plans
 again so every 25 ticks (`Ship::pending`, `Scene::plan_pending`, through
 the held-up re-plan's 0x4a51b0); held-up re-plans 0x4a51b0's; the
-re-plan under way and the behaviours' plans 0x4a5740's. The behaviours'
-goals not on the shallow grid are first moved to the nearest water (the
-port's own: the original makes no plan to them with a tolerance of 0,
-0x4a6330 returning before any plan when 0x499990 refuses the cell; the
-port's 29 callers of `plan_route` pass land cells where the original
-computes its own water cell, e.g. 0x4b2710 for a founding ship, so this
-is kept), and the ship's own cell is never closed to its plan (0x4a4e20
+re-plan under way and the behaviours' plans 0x4a5740's. Not waited (wait 0), 0x4a6330 makes no plan to a goal
+0x499990(cell, 0) refuses (layer-0 type 8 or more, or layer-1 type 4, 5
+or 6), after its goal-is-its-own-cell test (returns 1) and before any
+planner (the region planner 0x4a5a10 included); its callers choose their
+own water cell. The port's `plan_route` does the same. A founding ship
+(0x4aa990) sails for 0x4b2710's berth (`Scene::found_berth`, "A ship's
+fort" below; no berth drops the order, and `+0x591` is zeroed after).
+Not decoded, and kept on the port's own nearest water
+(`plan_route_to_water`): the scout, patrol, zone and convoy orders, a
+waypoint, a treasure or hero's house, the attack chase and boarding
+approach (battle.rs), an amber deposit's goal and a port's berth without
+a moorage front, and the berth ring of a dock; their originals' water
+cells are still to read (the attack's state-3 re-plan after 0x4ab3f0,
+0x4afe50 for amber, 0x4c5910's port). and the ship's own cell is never closed to its plan (0x4a4e20
 and 0x4a7290 pass over it). Every plan starts from the ship's own cell
 (`+0x5a3`, `+0x5a7`) unless 0x4e0b50 says it is between cells: then from
 the cell it is entering (`+0x5b6`, set by 0x4a3a70 as a step is taken),

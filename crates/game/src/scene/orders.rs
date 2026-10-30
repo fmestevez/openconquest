@@ -14,7 +14,7 @@ impl Scene {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let home = (self.objects[i].x, self.objects[i].y);
         let path = self
-            .plan_route(i, x, y)
+            .plan_route_to_water(i, x, y)
             .ok_or("The ship cannot sail there")?;
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
         s.path = path;
@@ -27,7 +27,7 @@ impl Scene {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let from = (self.objects[i].x, self.objects[i].y);
         let path = self
-            .plan_route(i, x, y)
+            .plan_route_to_water(i, x, y)
             .ok_or("The ship cannot sail there")?;
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
         s.path = path;
@@ -51,7 +51,7 @@ impl Scene {
         let rect = (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1));
         let (cx, cy) = ((rect.0 + rect.2) / 2.0, (rect.1 + rect.3) / 2.0);
         let path = self
-            .plan_route(i, cx, cy)
+            .plan_route_to_water(i, cx, cy)
             .ok_or("The ship cannot sail there")?;
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
         s.path = path;
@@ -117,7 +117,7 @@ impl Scene {
         let Some(Task::Scout { home }) = self.objects[i].ship.as_ref().and_then(|s| s.task) else {
             return;
         };
-        if let Some(path) = self.plan_route(i, home.0, home.1) {
+        if let Some(path) = self.plan_route_to_water(i, home.0, home.1) {
             let s = self.objects[i].ship.as_mut().unwrap();
             s.path = path;
             s.task = None;
@@ -161,7 +161,7 @@ impl Scene {
                 .back()
                 .is_none_or(|&(px, py)| ((px - wx).powi(2) + (py - wy).powi(2)).sqrt() > 64.0);
             if far && stale {
-                if let Some(path) = self.plan_route(i, wx, wy) {
+                if let Some(path) = self.plan_route_to_water(i, wx, wy) {
                     self.objects[i].ship.as_mut().unwrap().path = path;
                 }
             }
@@ -187,7 +187,7 @@ impl Scene {
             let o = &self.objects[i];
             let away = ((o.x - cx).powi(2) + (o.y - cy).powi(2)).sqrt() > 64.0;
             if away && o.ship.as_ref().unwrap().path.is_empty() {
-                if let Some(path) = self.plan_route(i, cx, cy) {
+                if let Some(path) = self.plan_route_to_water(i, cx, cy) {
                     self.objects[i].ship.as_mut().unwrap().path = path;
                 }
             }
@@ -209,7 +209,7 @@ impl Scene {
                 Task::Patrol { from, to } => (from, Some(Task::Patrol { from: to, to: from })),
                 _ => continue,
             };
-            let path = self.plan_route(i, goal.0, goal.1);
+            let path = self.plan_route_to_water(i, goal.0, goal.1);
             let s = self.objects[i].ship.as_mut().unwrap();
             match path {
                 Some(p) => {
