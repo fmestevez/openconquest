@@ -1748,9 +1748,20 @@ No dock code writes `+0x58c` (none of the 35 stores is in 0x4b1d40-
 0x4b2700): a ship mended in a dock keeps its state; it is off its cell's
 ship slot (0x4a3970 on entering), so the sea monster's look at the cell
 passes it over (the port's `in_dock` test; not settled: whether every
-dock entry does). State 6 at 0x4adef0 step 0x11 (`+0x77c >= 0` and a
-contact `+0x8e6`, then step 0x4add10, the automatic unloading at a
-building) is not ported: the port has no counterpart of that step. The
+dock entry does). State 6 is written on every tick of 0x4adef0 step 0x11
+(`+0x77c >= 0` and a contact `+0x8e6`, then step 0x4add10): the
+unloading order 0xc (event 0x40, 0x4aab00; the target, 0x4ac050, a port
+of class 0x39, for player 16 a class 0x40), lying at the port's berth
+with the anchor down while the porters carry the goods in (the port's
+`GatherPhase::Unloading` at a port); leaving (step 0xe, anchor up, then
+0x13: the contact released, 0x4a5b70 clears the route, state 0) it gets
+event 8 0x40 and moves a cell off the berth, 0x4b46f0 with '[' = 91 (see
+"Shipyards' berths"). Waiting by a taken port berth 300 ticks it steps
+aside itself (0x4b4b50 with 0x5a) and gives up after 349. A ship can be
+sold (message 0x248f, task 5) only in state 6 with a building contact.
+Not ported: selling ships (the port has none); whether unloading at a
+town has another path (0x4b0590, sub-codes 10/11); how the gathering's
+next leg and the move aside combine (the port moves aside first). The
 prey of a ram keeps its move state: the ram (0x4c2230) sends it event 2
 with code 1 (`+0x811` 0x14 when the rammer is alongside, 3 at the blow,
 0x4c2544-0x4c2563), never code 3; code 1 (0x4aa2c0: `+0x713 = 1`, `+0x71e

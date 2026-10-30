@@ -2222,8 +2222,16 @@ impl Scene {
                 continue;
             }
             // No route (dropped, 0x4a5b70, or run to its end): it lies
-            // still (0).
-            if ship.path.is_empty() {
+            // still (0); but held (6) where it lies, as at a port's berth
+            // unloading, until it leaves.
+            let unloading = matches!(
+                ship.task,
+                Some(Task::Gather {
+                    phase: objects::GatherPhase::Unloading(_),
+                    ..
+                })
+            );
+            if ship.path.is_empty() && !(unloading && ship.move_state == 6) {
                 ship.move_state = 0;
             }
             // It gathers way up to its speed, and loses it in time to stop

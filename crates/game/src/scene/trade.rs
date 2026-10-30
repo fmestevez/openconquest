@@ -2122,8 +2122,18 @@ impl Scene {
                 self.show_activity(i, port, super::unload::Activity::Unloading, data, caches);
             }
             GatherPhase::Unloading(port) => {
-                if self.object_index(port).is_none() {
+                let Some(p) = self.object_index(port) else {
                     return self.send_to_port(i, deposit);
+                };
+                // Lying at a port with its anchor down, the porters at
+                // work, it is held: move state 6, written each tick
+                // (0x4adef0 step 0x11 at 0x4ae486). Only ports take that
+                // path (the unloading order 0xc, 0x4aab00: class 0x39, for
+                // player 16 class 0x40); not decoded: whether unloading at
+                // a town has another (0x4b0590).
+                let at_port = self.unloads_at_port(i, p);
+                if at_port {
+                    self.objects[i].ship.as_mut().unwrap().move_state = 6;
                 }
                 let id = self.objects[i].id;
                 let walkway = self
@@ -2197,6 +2207,11 @@ impl Scene {
                 if (1..=234).contains(&ship.priority) {
                     ship.priority = roll;
                 }
+                // Leaving a port its route is cleared and it lies still
+                // (step 0x13, 0x4a5b70).
+                if at_port {
+                    ship.move_state = 0;
+                }
                 match deposit_at {
                     Some(d) => {
                         let (x, y) = self.deposit_goal(i, d);
@@ -2209,7 +2224,26 @@ impl Scene {
                     }
                     None => set(self, None, None),
                 }
+                // It moves a cell off the port's berth (0x4b46f0 with '[',
+                // priority 91), going on from there. (Not decoded: how the
+                // gathering's next leg, 0x4ac2d0, and this move, run by the
+                // ship's events one a tick, combine; here the move aside
+                // comes first.)
+                if at_port {
+                    self.off_the_berth(i, 91);
+                }
             }
+        }
+    }
+
+    /// Whether ship `i` unloads at `p` by the unloading order 0xc (0x4aab00
+    /// with 0x4ac050): a port (class 0x39), or, for player 16, a
+    /// barbarian structure of class 0x40.
+    pub(super) fn unloads_at_port(&self, i: usize, p: usize) -> bool {
+        match self.objects[p].class {
+            ObjectClass::Building(PORT) => true,
+            ObjectClass::Barbarian(0x40) => self.objects[i].owner == Some((4, 0)),
+            _ => false,
         }
     }
 

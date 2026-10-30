@@ -8088,3 +8088,79 @@ fn order_10_calls_off_what_the_object_does() {
     assert!(scene.stock_repair_at(home).is_none());
     assert_eq!(scene.amber, amber);
 }
+
+/// A merchant unloading at a port lies held, move state 6, each tick
+/// (0x4adef0 step 0x11); leaving, it lies still (0x4a5b70) and moves a
+/// cell off the berth with priority 91 (0x4b46f0 with '['; needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn merchant_unloading_at_a_port_is_held() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut found = None;
+    for m in [
+        "miss000", "miss001", "miss002", "miss003", "battle01", "battle02",
+    ] {
+        let scene = Scene::load(&data, &mut caches, m).unwrap();
+        let port = scene
+            .objects
+            .iter()
+            .position(|o| o.class == ObjectClass::Building(PORT) && o.owner.is_some());
+        if let Some(p) = port {
+            found = Some((m, scene, p));
+            break;
+        }
+    }
+    let (_, mut scene, p) = found.expect("a mission with a port");
+    let owner = scene.objects[p].owner;
+    let port = scene.objects[p].id;
+    let k = scene
+        .objects
+        .iter()
+        .position(|o| o.owner == owner && o.ship.as_ref().is_some_and(|s| s.kind <= 1))
+        .or_else(|| scene.objects.iter().position(|o| o.ship.is_some()))
+        .unwrap();
+    let id = scene.objects[k].id;
+    scene.objects[k].owner = owner;
+    let berth = scene.front_cell(scene.object_index(port).unwrap()).unwrap();
+    let t = TILE_SIZE as f32;
+    scene.objects[k].x = berth.0 as f32 * t + t / 2.0;
+    scene.objects[k].y = berth.1 as f32 * t + t / 2.0;
+    {
+        let s = scene.objects[k].ship.as_mut().unwrap();
+        s.path.clear();
+        s.cargo = 50.0;
+        s.cargo_kind = Some(crate::objects::Resource::Fish);
+        s.move_state = 0;
+        s.task = Some(Task::Gather {
+            deposit: u32::MAX,
+            phase: crate::objects::GatherPhase::Unloading(port),
+        });
+    }
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let k = scene.object_index(id).unwrap();
+    let s = scene.objects[k].ship.as_ref().unwrap();
+    assert_eq!(s.move_state, 6);
+    let mut ticks = 0;
+    while scene.objects[scene.object_index(id).unwrap()]
+        .ship
+        .as_ref()
+        .unwrap()
+        .task
+        .is_some()
+    {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        ticks += 1;
+        assert!(ticks < 2000);
+    }
+    let k = scene.object_index(id).unwrap();
+    let s = scene.objects[k].ship.as_ref().unwrap();
+    assert_ne!(s.move_state, 6);
+    assert!(s.priority >= 91);
+    let goal = s.path.back().copied().expect("a cell off the berth");
+    let goal = ((goal.0 / t) as i32, (goal.1 / t) as i32);
+    assert!(goal != berth && (goal.0 - berth.0).abs() <= 2 && (goal.1 - berth.1).abs() <= 2);
+}
