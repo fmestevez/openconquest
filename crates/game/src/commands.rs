@@ -1089,9 +1089,9 @@ fn behaviour_menu(scene: &Scene, obj: &MapObject) -> Menu {
 fn zones_menu(scene: &Scene, obj: &MapObject) -> Menu {
     use crate::objects::Resource;
     let mut menu: Menu = [None; SLOTS];
-    let Some(ship) = obj.ship.as_ref().filter(|_| scene.is_own(obj)) else {
+    if obj.ship.is_none() || !scene.is_own(obj) {
         return menu;
-    };
+    }
     for (slot, (command, resource)) in GATHER_ZONES
         .into_iter()
         .zip([Resource::Amber, Resource::Fish, Resource::Leviathan])
@@ -1102,7 +1102,9 @@ fn zones_menu(scene: &Scene, obj: &MapObject) -> Menu {
             enabled: true,
             progress: None,
             count: 0,
-            checked: ship.zone.is_some_and(|z| z.1 == resource),
+            checked: scene
+                .ship_zone(obj.id)
+                .is_some_and(|z| scene.gather_zones[z].class == resource),
             closes: false,
         });
     }

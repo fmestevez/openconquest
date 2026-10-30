@@ -733,7 +733,6 @@ impl Scene {
         // == 2`), and the commands that make them are refused (0x4e6700):
         // any task or route given it by other means comes to nothing.
         s.task = None;
-        s.zone = None;
         s.path.clear();
         let (kind, heading, argo) = (s.kind, s.heading, s.argo);
         if !b.shown {

@@ -592,7 +592,7 @@ impl Scene {
             let ship = o.ship.clone().map(|mut s| {
                 s.path.clear();
                 s.task = None;
-                s.zone = None;
+                s.gathered = None;
                 s.heroes.clear();
                 s.cargo = 0.0;
                 s.cargo_kind = None;

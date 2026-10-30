@@ -2045,22 +2045,66 @@ impl Scene {
         }
     }
 
-    /// Orders merchant `ship` to gather from `deposit` and deliver to port.
+    /// Orders merchant `ship` to gather from `deposit` (the gather command
+    /// with port 0).
     pub fn order_gather(&mut self, ship: u32, deposit: u32) -> Result<(), String> {
+        self.order_gather_with(ship, deposit, 0)
+    }
+
+    /// The gather command `{deposit, port, 0x5a}` reaching merchant `ship`
+    /// (0x4e2ba0 -> event 0x40 -> 0x4aab00): the deposit by id; its class
+    /// `+0x76e`, its cell `+0x797` (amber) and the box about it, the cell
+    /// -/+ 2 clipped to the map's last cell (`+0x7c2..+0x7ce`); `+0x7ad`
+    /// the payload's port if it is one of the ship's player's taking cargo
+    /// (0x4ac050: class 0x39 not asleep; player 16 class 0x40), else 0. An
+    /// amber lying fallow is taken up, as 0x4b0590 does at its step 1 when
+    /// its cell holds no standing amber, by the nearest standing one to
+    /// the middle of the box (0x4ac610 mode 1), else refused (the original
+    /// finds it there on arrival, event 8).
+    pub fn order_gather_with(&mut self, ship: u32, deposit: u32, port: u32) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
-        let d = self.object_index(deposit).ok_or("No such deposit")?;
+        let mut d = self.object_index(deposit).ok_or("No such deposit")?;
         let kind = self.objects[i].ship.as_ref().ok_or("Not a ship")?.kind;
         if cargo_capacity(kind) <= 0.0 {
             return Err("Only merchant ships can gather".into());
         }
-        let resource = self.objects[d]
-            .deposit
-            .ok_or("Nothing to gather there")?
-            .resource;
+        let class =
+            super::gather::deposit_class(&self.objects[d]).ok_or("Nothing to gather there")?;
+        let cell = |sc: &Scene, d: usize| -> (i32, i32) {
+            let o = &sc.objects[d];
+            match (o.class, o.record.fields.get(6..8)) {
+                (ObjectClass::Amber, Some(f)) => (f[0] as i32, f[1] as i32),
+                _ => (
+                    (o.x / TILE_SIZE as f32).floor() as i32,
+                    (o.y / TILE_SIZE as f32).floor() as i32,
+                ),
+            }
+        };
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        let at = cell(self, d);
+        let rect = (
+            (at.0 - 2).max(0),
+            (at.1 - 2).max(0),
+            (at.0 + 2).min(w - 1),
+            (at.1 + 2).min(h - 1),
+        );
+        if self.objects[d].deposit.is_none() {
+            if class != Resource::Amber {
+                return Err("Nothing to gather there".into());
+            }
+            d = self
+                .box_deposit(i, rect, Resource::Amber, 1, -1)
+                .ok_or("Nothing to gather there")?;
+        }
+        let deposit = self.objects[d].id;
+        let resource = class;
         let (x, y) = self.deposit_goal(i, d);
         let path = self
             .plan_route(i, x, y)
             .ok_or("The ship cannot sail there")?;
+        let own_port = self.object_index(port).is_some_and(|p| {
+            self.objects[p].owner == self.objects[i].owner && self.takes_cargo(&self.objects[p])
+        });
         let ship = self.objects[i].ship.as_mut().unwrap();
         if ship.cargo_kind.is_some_and(|k| k != resource) {
             ship.cargo = 0.0;
@@ -2070,10 +2114,24 @@ impl Scene {
             deposit,
             phase: GatherPhase::ToDeposit,
         });
-        // The gather command's port (0x4aab00): 0 on the port's paths.
-        ship.home_port = 0;
+        ship.home_port = if own_port { port } else { 0 };
         ship.last_deposit = deposit;
-        ship.zone_ports = None;
+        ship.gathered = Some(crate::objects::Gathered {
+            class: resource,
+            cell: at,
+            rect,
+        });
+        Ok(())
+    }
+
+    /// Message `*` (0x4d8b30) reaching ship `ship` (0x4ab250): it keeps
+    /// within `range` cells of `ward`, priority 0.
+    pub fn order_follow(&mut self, ship: u32, ward: u32, range: u8) -> Result<(), String> {
+        let i = self.object_index(ship).ok_or("No such ship")?;
+        self.object_index(ward).ok_or("No such ship")?;
+        let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
+        s.task = Some(Task::Convoy { ward, range });
+        s.priority = 0;
         Ok(())
     }
 
@@ -2518,23 +2576,14 @@ impl Scene {
                 if at_port {
                     ship.move_state = 0;
                 }
-                match deposit_at {
-                    Some(d) => {
-                        let (x, y) = self.deposit_goal(i, d);
-                        let path = self.plan_route(i, x, y);
-                        let task = path.as_ref().map(|_| Task::Gather {
-                            deposit,
-                            phase: GatherPhase::ToDeposit,
-                        });
-                        set(self, task, path);
-                    }
-                    None => set(self, None, None),
-                }
+                // Its task ends (event 8, mask 0x40) and it posts notice
+                // 0x139 to its group (0x4a1520, step 0x13): it goes back
+                // only when its gather zone sends it (0x4c9930).
+                set(self, None, None);
+                let id = self.objects[i].id;
+                self.post_notice(id, 0x139, 0);
                 // It moves a cell off the port's berth (0x4b46f0 with '[',
-                // priority 91), going on from there. (Not decoded: how the
-                // gathering's next leg, 0x4ac2d0, and this move, run by the
-                // ship's events one a tick, combine; here the move aside
-                // comes first.)
+                // priority 91).
                 if at_port {
                     self.off_the_berth(i, 91);
                 }
@@ -2729,14 +2778,16 @@ impl Scene {
 
     /// Sends merchant `ship` to unload its goods at own port `port` (the
     /// original's unload pointer, mode 13: message 0x1f kind 1, event 0x40
-    /// code 0xc), then back to what it was gathering. 0x4aab00 takes it
+    /// code 0xc); unloaded it posts notice 0x139 for its gather zone to
+    /// send it on. Any ship with cargo of any player (the command 0x1f
+    /// kind 1 is sent only with cargo aboard, 0x4e2ba0). 0x4aab00 takes it
     /// only for a port of the ship's player (0x4ac050) not asleep; any
     /// other target drops it, the old task kept.
     pub fn order_unload(&mut self, ship: u32, port: u32) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let p = self.object_index(port).ok_or("Choose one of your ports")?;
         let o = &self.objects[i];
-        if !self.is_own(o) || o.ship.as_ref().is_none_or(|s| s.cargo < 1.0) {
+        if o.ship.as_ref().is_none_or(|s| s.cargo < 1.0) {
             return Err("The ship has nothing to unload".into());
         }
         let b = &self.objects[p];
@@ -2767,23 +2818,25 @@ impl Scene {
         .tag();
         ship.priority = 76;
         ship.home_port = port;
+        ship.berth_wait = 0;
         Ok(())
     }
 
     /// A full or done amber or fish ship ends its task (event 8, mask
-    /// 0xc0) and posts notice 0x138 to its group (0x4a1430), whose gather
-    /// zone sends it on (`run_zone_notices`); a leviathan hunter sends
-    /// itself to its port, or the nearest (0x4ad510).
+    /// 0xc0) and posts notice 0x138 with its class to its group (0x4a1430),
+    /// whose gather zone sends it on (`run_gather_zones`); a leviathan
+    /// hunter sends itself to its port, or the nearest (0x4ad510).
     pub(super) fn gathering_done(&mut self, i: usize, deposit: u32) {
         let ship = self.objects[i].ship.as_mut().unwrap();
         if ship.cargo_kind == Some(Resource::Leviathan) {
             return self.send_to_port(i, deposit);
         }
+        let class = ship.cargo_kind.map_or(0, super::gather::class_code);
         ship.task = None;
         ship.path.clear();
         ship.last_deposit = deposit;
         let id = self.objects[i].id;
-        self.zone_notices.push(id);
+        self.post_notice(id, 0x138, class);
     }
 
     /// Sends ship `i` to the nearest port (0x4c5910), as the leviathan's

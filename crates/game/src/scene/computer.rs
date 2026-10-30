@@ -4155,12 +4155,34 @@ impl Scene {
         self.give_order(ai, f);
     }
 
-    /// Gives the flotilla's order to its ships.
+    /// Gives the flotilla's order to its ships. A gather order is the
+    /// flotilla's gather zone (fleet order 0x78 from 0x483090: its area,
+    /// its class; not decoded: the flags (flotilla `+0x154`), the port
+    /// list its base town gives (0x43d220, 0x440c60) and the route
+    /// 0x40b010 makes; here flags 0, the list made by 0x4c6c30, no
+    /// route); any other ends it.
     fn give_order(&mut self, ai: &mut Computer, f: usize) {
         let order = ai.flotillas[f].order;
+        let group = super::gather::ZoneGroup::Computer(ai.id(), f);
+        if let FleetOrder::Gather(area, res) = order {
+            let ships = ai.flotillas[f].ships.clone();
+            self.start_zone(group, ships, area, res, 0, false);
+            return;
+        }
+        self.end_zone(group);
         for id in ai.flotillas[f].ships.clone() {
             self.order_ship(ai, id, order);
         }
+    }
+
+    /// A flotilla's ships, for its gather zone.
+    pub(super) fn computer_flotilla_ships(&self, player: u32, f: usize) -> Option<Vec<u32>> {
+        self.computers
+            .players
+            .iter()
+            .find(|c| c.id() == player)
+            .and_then(|c| c.flotillas.get(f))
+            .map(|fl| fl.ships.clone())
     }
 
     /// Ships that joined, or fell idle, take up the order again.
@@ -4178,10 +4200,7 @@ impl Scene {
         }
         if !matches!(
             order,
-            FleetOrder::Gather(..)
-                | FleetOrder::Guard(_)
-                | FleetOrder::Attack(_)
-                | FleetOrder::Treasure(_)
+            FleetOrder::Guard(_) | FleetOrder::Attack(_) | FleetOrder::Treasure(_)
         ) {
             return;
         }
@@ -4192,7 +4211,7 @@ impl Scene {
             let idle = self.objects[i]
                 .ship
                 .as_ref()
-                .is_some_and(|s| s.task.is_none() && s.path.is_empty() && s.zone.is_none());
+                .is_some_and(|s| s.task.is_none() && s.path.is_empty());
             if idle {
                 self.order_ship(ai, id, order);
             }
@@ -4214,17 +4233,9 @@ impl Scene {
         let Some(i) = self.object_index(id) else {
             return;
         };
-        let merchant = self.objects[i]
-            .ship
-            .as_ref()
-            .is_some_and(|s| crate::objects::cargo_capacity(s.kind) > 0.0);
         match order {
-            FleetOrder::Gather(area, res) => {
-                if merchant {
-                    let (a, b) = world(area);
-                    let _ = self.order_gather_zone(id, a, b, res);
-                }
-            }
+            // The flotilla's own zone (`give_order`).
+            FleetOrder::Gather(..) => {}
             FleetOrder::Guard(area) | FleetOrder::Attack(area) => {
                 let (a, b) = world(area);
                 let attack = matches!(order, FleetOrder::Attack(_));
@@ -5444,7 +5455,7 @@ mod tests {
                             o.x / 64.0,
                             o.y / 64.0,
                             s.task,
-                            s.zone,
+                            scene.ship_zone(id),
                             s.cargo,
                             s.cargo_kind,
                             s.path.len()
@@ -6015,12 +6026,6 @@ mod tests {
         let mut defeat_at = None;
         // 25 minutes of game time.
         for k in 0..25 * 60 * 10 {
-            // The leviathans struck down whenever they have life, as the
-            // warships' part of the hunt would (0x4ac8d0 / 0x4af6a0, not
-            // ported): a merchant nets one only once it is (0x4aeef0).
-            for l in scene.leviathans.values_mut() {
-                l.life = l.life.min(0);
-            }
             scene.update(0.1, &data, &mut caches);
             let ai = &scene.computers.players[0];
             if k % 5 == 0 {

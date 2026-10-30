@@ -455,9 +455,13 @@ pub struct Scene {
     /// (`+0x2e`, 0x520cc0), delivered in order at the next tick
     /// (`Scene::deliver`).
     pub outbox: Vec<Order>,
-    /// Notices 0x138 (0x4a1430) posted by ships whose gathering ended, by
-    /// ship id, oldest first, until their zone's next pass.
-    pub zone_notices: Vec<u32>,
+    /// The groups' gather zones (fleet order 0x78, `gather`), in the
+    /// order the navy's tick runs them.
+    pub gather_zones: Vec<gather::GatherZone>,
+    /// The last human group's serial number.
+    pub zone_serial: u32,
+    /// The navy's generator (`[0x5c7504] +0x18`), until its first draw.
+    pub navy_lcg: Option<u32>,
     /// Game ticks played (`Players +0xde`), for the outbox's first hold.
     pub ticks: u32,
     /// What a cancelled training's fish share leaves in a settlement or
@@ -543,6 +547,7 @@ pub use sight::{FogArt, Seen};
 mod fireball;
 mod flyers;
 mod fort;
+mod gather;
 mod grapple;
 mod order;
 mod placement;
@@ -560,6 +565,7 @@ mod yard;
 pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use computer::Computers;
 pub use flyers::{Flyer, Nest};
+pub use gather::GatherZone;
 pub use halt::Batch;
 pub use hazards::Hazard;
 pub use leviathan::Leviathan;
@@ -801,7 +807,9 @@ impl Scene {
             refit_batches: BTreeMap::new(),
             tick_orders: BTreeMap::new(),
             outbox: Vec::new(),
-            zone_notices: Vec::new(),
+            gather_zones: Vec::new(),
+            zone_serial: 0,
+            navy_lcg: None,
             ticks: 0,
             town_fish: BTreeMap::new(),
             free_casts: Default::default(),
@@ -1070,7 +1078,9 @@ impl Scene {
             refit_batches: self.refit_batches.clone(),
             tick_orders: self.tick_orders.clone(),
             outbox: self.outbox.clone(),
-            zone_notices: self.zone_notices.clone(),
+            gather_zones: self.gather_zones.clone(),
+            zone_serial: self.zone_serial,
+            navy_lcg: self.navy_lcg,
             ticks: self.ticks,
             town_fish: self.town_fish.clone(),
             free_casts: self
@@ -1231,7 +1241,9 @@ impl Scene {
         scene.refit_batches = save.refit_batches.clone();
         scene.tick_orders = save.tick_orders.clone();
         scene.outbox = save.outbox.clone();
-        scene.zone_notices = save.zone_notices.clone();
+        scene.gather_zones = save.gather_zones.clone();
+        scene.zone_serial = save.zone_serial;
+        scene.navy_lcg = save.navy_lcg;
         scene.ticks = save.ticks;
         scene.town_fish = save.town_fish.clone();
         scene.delivered = save.delivered.clone();
@@ -1420,7 +1432,6 @@ impl Scene {
         };
         ship.path = path;
         ship.task = None;
-        ship.zone = None;
         // A plain move carries priority 0 (0x4cf070).
         ship.priority = 0;
         ship.patience = objects::PATIENCE;
@@ -1658,7 +1669,6 @@ impl Scene {
             Some(rest) => s.path.extend(rest.into_iter().skip_while(|&p| p == aside)),
             None => {
                 s.task = None;
-                s.zone = None;
                 s.order_tag = 0;
             }
         }
@@ -1994,7 +2004,6 @@ impl Scene {
                         ship.move_state = 1;
                     }
                 }
-                ship.zone = None;
                 ship.task = None;
             }
         }
@@ -2218,9 +2227,9 @@ impl Scene {
             self.brain_clock -= crate::clock::TICK;
             self.ticks += 1;
             // The navy's tick (message 0, 0x49ab30 -> 0x4c4f40): the gather
-            // zones hear their ships' notices. (Not settled: whether
-            // before or after the ships' own ticks.)
-            self.run_zone_notices();
+            // zones hear their ships' notices and plan again. (Not settled:
+            // whether before or after the ships' own ticks.)
+            self.run_gather_zones();
             self.run_brain();
             self.step_fort_draws();
             for (class, cell) in std::mem::take(&mut self.pending_walkers) {

@@ -75,9 +75,33 @@ pub enum Order {
         ship: u32,
         port: u32,
     },
+    /// The gather command (0x19 fish, 0x1a amber, 0x1d leviathan) from a
+    /// gather zone: `{deposit, port, 0x5a}`.
     Gather {
         ship: u32,
         deposit: u32,
+        #[serde(default)]
+        port: u32,
+    },
+    /// The human's gather click on a deposit with `ships` selected
+    /// (0x49d3c0): a gather zone of the 3 x 3 cells about it.
+    GatherAt {
+        ships: Vec<u32>,
+        deposit: u32,
+    },
+    /// The merchants' zone buttons over a rectangle (0x49d790).
+    GatherArea {
+        ships: Vec<u32>,
+        a: (f32, f32),
+        b: (f32, f32),
+        resource: Resource,
+    },
+    /// Message `*` (0x4d8b30): `ship` keeps within `range` cells of
+    /// `ward`, priority 0.
+    Follow {
+        ship: u32,
+        ward: u32,
+        range: u8,
     },
     Take {
         ship: u32,
@@ -247,6 +271,33 @@ pub enum Order {
     },
 }
 
+impl Order {
+    /// The ship a ship command goes to.
+    pub fn ship(&self) -> Option<u32> {
+        use Order::*;
+        match *self {
+            Move { ship, .. }
+            | Waypoint { ship, .. }
+            | Attack { ship, .. }
+            | Close { ship, .. }
+            | Scout { ship, .. }
+            | Patrol { ship, .. }
+            | Zone { ship, .. }
+            | GatherZone { ship, .. }
+            | Convoy { ship, .. }
+            | Gather { ship, .. }
+            | Follow { ship, .. }
+            | Take { ship, .. }
+            | Unload { ship, .. }
+            | Found { ship, .. }
+            | Repair { ship, .. }
+            | LoadCrew { ship }
+            | LoadObject { ship, .. } => Some(ship),
+            _ => None,
+        }
+    }
+}
+
 /// Ticks at the start of a game whose commands are held (0x521570: while
 /// the Players object's `+0x3e` is below the speed's `+0x14`, 2 at the
 /// default speed 5, it counts up and delivers nothing; single player never
@@ -270,6 +321,18 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) -> Result<u32, String> {
+        // A human's order to ships makes them a group of their own
+        // (0x49ca60), out of their gather zone.
+        match order {
+            Order::GatherAt { .. } | Order::GatherArea { .. } | Order::GatherZone { .. } => {}
+            Order::Behaviour { .. } | Order::LoadCrew { .. } | Order::LoadObject { .. } => {}
+            Order::Stop { id } => self.leave_zones(&[*id]),
+            o => {
+                if let Some(id) = o.ship() {
+                    self.leave_zones(&[id]);
+                }
+            }
+        }
         if self.ticks < HOLD && !matches!(order, Order::DefaultArming { .. }) {
             self.outbox.push(order.clone());
             return Ok(0);
@@ -305,7 +368,6 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) -> Result<u32, String> {
-        use Order::*;
         // A ship being built refuses its commands (0x4e2ba0 tests each with
         // 0x4e6700, and its capability word `+0x261` is 0x2000 alone:
         // moves 0x14, fire 0x15 / 0x16, board, ram, gather, dock,
@@ -313,25 +375,7 @@ impl Scene {
         // stop, which calls the building off (event 8, 0x4aa540), the
         // behaviour switches (0x23: applied at once by 0x4a9e30) and the
         // spells cast on it.
-        let ship = match *order {
-            Move { ship, .. }
-            | Waypoint { ship, .. }
-            | Attack { ship, .. }
-            | Close { ship, .. }
-            | Scout { ship, .. }
-            | Patrol { ship, .. }
-            | Zone { ship, .. }
-            | GatherZone { ship, .. }
-            | Convoy { ship, .. }
-            | Gather { ship, .. }
-            | Take { ship, .. }
-            | Unload { ship, .. }
-            | Found { ship, .. }
-            | Repair { ship, .. }
-            | LoadCrew { ship }
-            | LoadObject { ship, .. } => Some(ship),
-            _ => None,
-        };
+        let ship = order.ship();
         if ship.is_some_and(|id| self.being_built(id)) {
             return Err("The ship is still being built".into());
         }
@@ -458,15 +502,29 @@ impl Scene {
                 a,
                 b,
                 resource,
-            } => done(self.order_gather_zone(ship, a, b, resource)),
-            Convoy { ship, a, b } => done(self.order_convoy(ship, a, b)),
-            Gather { ship, deposit } => {
-                let r = self.order_gather(ship, deposit);
+            } => done(self.order_gather_area(&[ship], a, b, resource)),
+            GatherArea {
+                ref ships,
+                a,
+                b,
+                resource,
+            } => done(self.order_gather_area(ships, a, b, resource)),
+            GatherAt { ref ships, deposit } => {
+                let r = self.order_gather_at(ships, deposit);
                 if r.is_ok() {
-                    self.gather_voice(ship, deposit);
+                    if let Some(&first) = ships.first() {
+                        self.gather_voice(first, deposit);
+                    }
                 }
                 done(r)
             }
+            Follow { ship, ward, range } => done(self.order_follow(ship, ward, range)),
+            Convoy { ship, a, b } => done(self.order_convoy(ship, a, b)),
+            Gather {
+                ship,
+                deposit,
+                port,
+            } => done(self.order_gather_with(ship, deposit, port)),
             Take { ship, target } => done(self.order_take(ship, target)),
             Unload { ship, port } => done(self.order_unload(ship, port)),
             Found {

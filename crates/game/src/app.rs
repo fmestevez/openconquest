@@ -6144,7 +6144,8 @@ impl App {
                 (Some(deposit), Some(_)) => {
                     self.pending = None;
                     self.status = None;
-                    if let Err(e) = self.order_each(|ship| Order::Gather { ship, deposit }) {
+                    let ships = self.selection();
+                    if let Err(e) = self.issue(Order::GatherAt { ships, deposit }) {
                         self.say(e);
                     }
                 }
@@ -6637,12 +6638,16 @@ impl App {
         {
             let resource = [Resource::Amber, Resource::Fish, Resource::Leviathan][k];
             let order = match (self.world_at(from), self.world_at(to)) {
-                (Some(a), Some(b)) => self.order_each(|ship| Order::GatherZone {
-                    ship,
-                    a,
-                    b,
-                    resource,
-                }),
+                (Some(a), Some(b)) => {
+                    let ships = self.selection();
+                    self.issue(Order::GatherArea {
+                        ships,
+                        a,
+                        b,
+                        resource,
+                    })
+                    .map(|_| ())
+                }
                 _ => Err("Drag a rectangle around the zone".into()),
             };
             match order {
@@ -6814,8 +6819,9 @@ impl App {
                         .is_some_and(|s| crate::objects::cargo_capacity(s.kind) > 0.0)
             });
             if is_deposit && own_merchant {
-                if let Err(e) = self.issue(Order::Gather {
-                    ship: id,
+                let ships = self.selection();
+                if let Err(e) = self.issue(Order::GatherAt {
+                    ships,
                     deposit: target,
                 }) {
                     self.say(e);

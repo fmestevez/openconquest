@@ -1040,11 +1040,17 @@ impl Scene {
                     // Order 0x78 (0x479970) writes the area into `+0x40`.
                     self.brain.as_mut().unwrap().fleets[k].last_area = area;
                     self.fleet_gather(k, area, resource);
-                } else if empty || (ticks > 0 && elapsed >= ticks) {
-                    // With no ships, result 1 sends 0x47a570 to its p4,
-                    // which every mission passes equal to its p3. The
-                    // gathering goes on (0x47a570 switches the state only).
-                    self.set_state(k, next);
+                } else {
+                    // The zone's state (query 0x79, 0x4c8da0): result 1 (no
+                    // ships, or no merchants) sends 0x47a570 to its p4, 10
+                    // (no deposit left) to its p3; every mission passes the
+                    // two equal. Then the time. The gathering goes on
+                    // (0x47a570 switches the state only).
+                    let status = self.zone_status(super::gather::ZoneGroup::Brain(k));
+                    let over = matches!(status, Some((0x1f5, 1 | 10)));
+                    if over || (ticks > 0 && elapsed >= ticks) {
+                        self.set_state(k, next);
+                    }
                 }
             }
             Op::Patrol {
@@ -1618,6 +1624,7 @@ impl Scene {
         // dock pick (args[1] == 0, args[2] >= 0) before `+0x21` is written,
         // so on the player's fleet 0, then `+0x21` = yard, `+0x18` (the
         // fleet a mended ship is handed to) 0, `+0xc` 0.
+        self.end_zone(super::gather::ZoneGroup::Brain(k));
         self.brain.as_mut().unwrap().fleets[k].repair = Some(RepairOrder::default());
         self.brain.as_mut().unwrap().fleets[k].move_order = None;
         self.repair_pick(k);
@@ -1797,7 +1804,22 @@ impl Scene {
         if !f.ships.contains(&id) {
             f.ships.push(id);
         }
-        f.joined.push(id);
+        // Its gather zone hears it in its own list (`+0x2d`).
+        let group = super::gather::ZoneGroup::Brain(k);
+        if let Some(z) = self.gather_zones.iter().position(|z| z.group == group) {
+            if !self.gather_zones[z].ships.contains(&id) {
+                self.gather_zones[z].ships.push(id);
+            }
+            let tick = self.ticks;
+            self.gather_zones[z].notices.push(super::gather::Notice {
+                code: 300,
+                tick,
+                ship: id,
+                class: 0,
+            });
+            return;
+        }
+        self.brain.as_mut().unwrap().fleets[k].joined.push(id);
     }
 
     /// Puts a leviathan zone (class 0x192, 0x4960b0) of `area` on the map:
@@ -1917,6 +1939,7 @@ impl Scene {
                 crate::formation::plan(&grid(true), &grid(false), (w, h), to, &list).ok()
             }
         };
+        self.end_zone(super::gather::ZoneGroup::Brain(k));
         let f = &mut self.brain.as_mut().unwrap().fleets[k];
         f.repair = None;
         let order = f.move_order.get_or_insert_with(MoveOrder::default);
@@ -1988,26 +2011,25 @@ impl Scene {
         }
     }
 
-    fn fleet_gather(&mut self, k: usize, (x, y, w, h): Cells, resource: Resource) {
+    /// Fleet order 0x78 (0x479970 -> 0x4a09d0 -> 0x4c8a80): the fleet's
+    /// gather zone over `area`, flags 0 (0x47a570's argument 11 is 0 in
+    /// every mission), no port list, no route, no key flags.
+    fn fleet_gather(&mut self, k: usize, area: Cells, resource: Resource) {
         self.brain.as_mut().unwrap().fleets[k].move_order = None;
-        let t = TILE_SIZE as f32;
-        let (a, b) = (
-            (x as f32 * t, y as f32 * t),
-            ((x + w) as f32 * t, (y + h) as f32 * t),
+        let ships = self.fleet_ships(k);
+        self.start_zone(
+            super::gather::ZoneGroup::Brain(k),
+            ships,
+            area,
+            resource,
+            0,
+            false,
         );
-        for id in self.fleet_ships(k) {
-            if let Some(i) = self.object_index(id) {
-                if let Some(s) = self.objects[i].ship.as_mut() {
-                    if crate::objects::cargo_capacity(s.kind) > 0.0 {
-                        s.zone = Some(((a.0, a.1, b.0, b.1), resource));
-                    }
-                }
-            }
-        }
     }
 
     fn fleet_attack(&mut self, k: usize, (x, y, w, h): Cells) {
         self.brain.as_mut().unwrap().fleets[k].move_order = None;
+        self.end_zone(super::gather::ZoneGroup::Brain(k));
         let t = TILE_SIZE as f32;
         let (a, b) = (
             (x as f32 * t, y as f32 * t),

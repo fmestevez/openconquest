@@ -1411,7 +1411,16 @@ fn merchant_gathers_amber() {
         })
         .unwrap();
     let (deposit, before) = (deposit.id, deposit.deposit.unwrap().remaining.unwrap());
-    scene.order_gather(boat, deposit).unwrap();
+    scene
+        .apply(
+            &Order::GatherAt {
+                ships: vec![boat],
+                deposit,
+            },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
     let amber = scene.amber;
     let (mut partly, mut walkway, mut porters) = (false, false, false);
     let mut amber_walkway = false;
@@ -2020,8 +2029,11 @@ fn zones() {
     assert_eq!(task(&scene), None);
 }
 
-/// A boat given an amber zone goes to gather from the deposit in it on
-/// its own; moving it by hand ends the zone (needs `OPENCONQUEST_DATA`).
+/// A click on amber with a boat selected makes the boat a group with a
+/// gather zone of the 3 x 3 cells about the amber (0x49d3c0, flags
+/// 0x100); the zone sends it there, port 0, through the outbox (0x4c8a80
+/// -> 0x4c6ee0 -> 0x4c8f20 -> 0x4c9270); moving it by hand takes it out
+/// of the group (needs `OPENCONQUEST_DATA`).
 #[test]
 fn gathering_zone() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -2030,6 +2042,7 @@ fn gathering_zone() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
     let boat = scene
         .objects
         .iter()
@@ -2041,16 +2054,37 @@ fn gathering_zone() {
         .iter()
         .find(|o| o.deposit.is_some_and(|d| d.resource == Resource::Amber))
         .unwrap();
-    let (d, dx, dy) = (deposit.id, deposit.x, deposit.y);
+    let d = deposit.id;
+    let (cx, cy) = (
+        deposit.record.fields[6] as i32,
+        deposit.record.fields[7] as i32,
+    );
     scene
-        .order_gather_zone(
-            boat,
-            (dx - 32.0, dy - 32.0),
-            (dx + 32.0, dy + 32.0),
-            Resource::Amber,
+        .apply(
+            &Order::GatherAt {
+                ships: vec![boat],
+                deposit: d,
+            },
+            &data,
+            &mut caches,
         )
         .unwrap();
-    scene.update(0.02, &data, &mut caches);
+    assert_eq!(scene.gather_zones.len(), 1);
+    let z = &scene.gather_zones[0];
+    assert_eq!(z.rect, (cx - 1, cy - 1, 3, 3));
+    assert_eq!(z.flags, 0x100);
+    assert_eq!(z.ships, [boat]);
+    assert_eq!(z.deposits, [d]);
+    // The command waits in the outbox till the tick's end.
+    assert_eq!(
+        scene.outbox,
+        [Order::Gather {
+            ship: boat,
+            deposit: d,
+            port: 0,
+        }]
+    );
+    scene.update(crate::clock::TICK, &data, &mut caches);
     let ship = |s: &Scene| {
         s.objects[s.object_index(boat).unwrap()]
             .ship
@@ -2058,12 +2092,27 @@ fn gathering_zone() {
             .unwrap()
     };
     assert!(matches!(ship(&scene).task, Some(Task::Gather { deposit, .. }) if deposit == d));
+    let g = ship(&scene).gathered.unwrap();
+    assert_eq!(g.cell, (cx, cy));
+    assert_eq!(g.rect, (cx - 2, cy - 2, cx + 2, cy + 2));
+    assert_eq!(ship(&scene).home_port, 0);
     let (bx, by) = {
         let o = &scene.objects[scene.object_index(boat).unwrap()];
         (o.x, o.y)
     };
-    assert!(scene.order_move(boat, bx, by));
-    assert!(ship(&scene).zone.is_none());
+    scene
+        .apply(
+            &Order::Move {
+                ship: boat,
+                x: bx,
+                y: by,
+            },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    assert_eq!(scene.ship_zone(boat), None);
+    assert!(scene.gather_zones.is_empty());
 }
 
 /// An escort follows the ship it convoys (needs `OPENCONQUEST_DATA`).
@@ -2645,11 +2694,7 @@ fn miss000_brain() {
     }
     let brain = scene.brain.clone().unwrap();
     let merchant = brain.fleets[1].ships[0];
-    let m = scene.object_index(merchant).unwrap();
-    assert!(
-        scene.objects[m].ship.as_ref().unwrap().zone.is_some(),
-        "fishing"
-    );
+    assert!(scene.ship_zone(merchant).is_some(), "fishing");
     assert_eq!(brain.fleets[0].state, 5, "the guards patrol");
     // A ship of the player's sails into the western bay.
     let t = TILE_SIZE as f32;
@@ -5010,8 +5055,8 @@ fn merchants_answer_gather_orders() {
     scene.sounds.clear();
     scene
         .apply(
-            &order::Order::Gather {
-                ship,
+            &order::Order::GatherAt {
+                ships: vec![ship],
                 deposit: shoal,
             },
             &data,
@@ -10166,7 +10211,11 @@ fn one_ship_order_a_tick() {
             .unwrap()
             .task
     };
-    let gather = Order::Gather { ship, deposit };
+    let gather = Order::Gather {
+        ship,
+        deposit,
+        port: 0,
+    };
     let go = Order::Move { ship, x: mx, y: my };
     // Move, then gather: the gather.
     scene.apply(&go, &data, &mut caches).unwrap();
@@ -10938,18 +10987,9 @@ fn brain_fleet_moves_in_formation() {
     );
 }
 
-/// A full amber boat ends its gathering and posts notice 0x138; its zone
-/// hears it at the navy's tick (0x4c9e30 -> 0x4c9ae0) and sends it to its
-/// port, picked by 0x4c6640, by command 0x1f, delivered at the end of the
-/// tick: the boat does not choose a port itself.
-#[test]
-fn zone_sends_a_full_boat_to_unload() {
-    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
-        return;
-    };
-    let data = GameData::open(std::path::Path::new(&root)).unwrap();
-    let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+/// A boat of miss000's gathering amber in a zone, with its first cargo.
+fn amber_boat_in_zone(data: &GameData, caches: &mut Caches) -> (Scene, u32, u32, Vec<u32>) {
+    let mut scene = Scene::load(data, caches, "miss000").unwrap();
     past_hold(&mut scene);
     let boat = scene
         .objects
@@ -10969,6 +11009,33 @@ fn zone_sends_a_full_boat_to_unload() {
         .filter(|o| scene.is_own(o) && o.class == ObjectClass::Building(PORT))
         .map(|o| o.id)
         .collect();
+    scene
+        .apply(
+            &Order::GatherAt {
+                ships: vec![boat],
+                deposit,
+            },
+            data,
+            caches,
+        )
+        .unwrap();
+    scene.update(crate::clock::TICK, data, caches);
+    (scene, boat, deposit, ports)
+}
+
+/// A full amber boat ends its gathering and posts notice 0x138; its zone
+/// hears it at the navy's tick (0x4c9e30 -> 0x4c9ae0): full, it has no
+/// deposit to go to and is sent to its port, picked by 0x4c6640, by
+/// command 0x1f, delivered at the end of the tick: the boat does not
+/// choose a port itself (needs `OPENCONQUEST_DATA`).
+#[test]
+fn zone_sends_a_full_boat_to_unload() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, deposit, ports) = amber_boat_in_zone(&data, &mut caches);
     assert_eq!(ports.len(), 1);
     let i = scene.object_index(boat).unwrap();
     {
@@ -10983,14 +11050,19 @@ fn zone_sends_a_full_boat_to_unload() {
     scene.gathering_done(i, deposit);
     let s = scene.objects[i].ship.as_ref().unwrap();
     assert!(s.task.is_none());
-    assert_eq!(scene.zone_notices, [boat]);
+    let notes: Vec<(u32, u32, u32)> = scene.gather_zones[0]
+        .notices
+        .iter()
+        .map(|n| (n.code, n.ship, n.class))
+        .collect();
+    assert_eq!(notes, [(0x138, boat, 400)]);
     // The zone's list is the player's one port; the boat goes there.
     scene.update(crate::clock::TICK, &data, &mut caches);
-    assert!(scene.zone_notices.is_empty());
+    assert!(scene.gather_zones[0].notices.is_empty());
+    assert_eq!(scene.gather_zones[0].ports.as_deref(), Some(&ports[..]));
     let i = scene.object_index(boat).unwrap();
     let s = scene.objects[i].ship.as_ref().unwrap();
     assert_eq!(s.home_port, ports[0]);
-    assert_eq!(s.zone_ports.as_deref(), Some(&ports[..]));
     assert!(matches!(
         s.task,
         Some(Task::Gather {
@@ -11347,4 +11419,193 @@ fn upgrade_starts_from_the_standing_frame() {
     assert_eq!(c.frame, if frame >= nc { 0 } else { frame });
     assert!(!c.started);
     assert!(!scene.standing_frames.contains_key(&id));
+}
+
+/// After unloading the boat's task ends and it posts notice 0x139; it
+/// does not go back by itself: its zone sends it to the amber still in
+/// its cell `+0x797` (0x4c9930 -> 0x4c96e0), port 0 (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn zone_sends_an_unloaded_boat_back() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, deposit, ports) = amber_boat_in_zone(&data, &mut caches);
+    let i = scene.object_index(boat).unwrap();
+    {
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.cargo = 0.0;
+        s.cargo_kind = None;
+        s.path.clear();
+        s.task = Some(Task::Gather {
+            deposit,
+            phase: GatherPhase::Unloading(ports[0]),
+        });
+    }
+    scene.run_task(i, 0.0, &data, &mut caches);
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert!(s.task.is_none());
+    let notes: Vec<(u32, u32)> = scene.gather_zones[0]
+        .notices
+        .iter()
+        .map(|n| (n.code, n.ship))
+        .collect();
+    assert_eq!(notes, [(0x139, boat)]);
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let i = scene.object_index(boat).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert!(matches!(
+        s.task,
+        Some(Task::Gather {
+            deposit: d,
+            phase: GatherPhase::ToDeposit,
+        }) if d == deposit
+    ));
+    assert_eq!(s.home_port, 0);
+}
+
+/// 0x49a330 counts a berth's neighbours on the map (0x49a1d0 / 0x597900:
+/// 3 at a corner, 5 on an edge, 8 inside) that are water, and those
+/// holding a merchant of the player sailing in to unload; a merchant
+/// waiting by a crowded berth steps aside 300 ticks after coming within
+/// a cell of it and gives its port up after 350, posting notice 0x138
+/// (0x4adef0 step 1; needs `OPENCONQUEST_DATA`).
+#[test]
+fn crowded_berth_wait() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, deposit, ports) = amber_boat_in_zone(&data, &mut caches);
+    let p = scene.object_index(ports[0]).unwrap();
+    let b = scene.berth_cell(p).unwrap();
+    let owner = scene.objects[p].owner;
+    let water: Vec<(i32, i32)> = (-1..=1)
+        .flat_map(|dy| (-1..=1).map(move |dx| (b.0 + dx, b.1 + dy)))
+        .filter(|&c| c != b && scene.sea_cell(c, false))
+        .collect();
+    assert_eq!(scene.berth_crowd(b, owner), (water.len() as i32, 0));
+    // Fill the free water about the berth but one cell with merchants
+    // coming in to unload: crowded.
+    let t = TILE_SIZE as f32;
+    let free: Vec<(i32, i32)> = water
+        .iter()
+        .copied()
+        .filter(|&c| scene.slot_ship(c).is_none())
+        .collect();
+    for &(x, y) in &free[1..] {
+        let id = scene
+            .spawn_ship(owner.unwrap(), 1, x, y, &data, &mut caches)
+            .unwrap();
+        let k = scene.object_index(id).unwrap();
+        let s = scene.objects[k].ship.as_mut().unwrap();
+        s.task = Some(Task::Gather {
+            deposit,
+            phase: GatherPhase::ToPort(ports[0]),
+        });
+    }
+    let (a, n) = scene.berth_crowd(b, owner);
+    assert_eq!((a, n), (water.len() as i32, free.len() as i32 - 1));
+    // The boat waits by the berth with cargo, its timer started 349 ticks
+    // ago: it gives its port up.
+    let w = free[0];
+    let i = scene.object_index(boat).unwrap();
+    scene.ticks = 1000;
+    let now = scene.ticks;
+    {
+        let o = &mut scene.objects[i];
+        o.x = w.0 as f32 * t + t / 2.0;
+        o.y = w.1 as f32 * t + t / 2.0;
+        let s = o.ship.as_mut().unwrap();
+        s.path.clear();
+        s.cargo = 100.0;
+        s.cargo_kind = Some(Resource::Amber);
+        s.home_port = ports[0];
+        s.task = Some(Task::Gather {
+            deposit,
+            phase: GatherPhase::ToPort(ports[0]),
+        });
+        s.berth_wait = now - gather::BERTH_GIVE_UP;
+    }
+    scene.run_berth_waits();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert_eq!(s.home_port, 0);
+    assert_eq!(s.berth_wait, 0);
+    let notes: Vec<(u32, u32, u32)> = scene.gather_zones[0]
+        .notices
+        .iter()
+        .map(|n| (n.code, n.ship, n.class))
+        .collect();
+    assert_eq!(notes, [(0x138, boat, 0)]);
+}
+
+/// miss000's merchant (fleet 1) fishes in its fleet's gather zone (order
+/// 0x78, flags 0, 0x47a570); the zone's state answers its query 0x79
+/// (0x4c8da0) with deposits left but no port list (player 16's class-0x40
+/// structures are pruned from it, 0x4c65c0): result 0xb, which leaves
+/// the member's state (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brain_gather_zone() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    for _ in 0..25 * 10 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let merchant = scene.brain.as_ref().unwrap().fleets[1].ships[0];
+    let z = scene.ship_zone(merchant).unwrap();
+    let zone = &scene.gather_zones[z];
+    assert_eq!(zone.group, gather::ZoneGroup::Brain(1));
+    assert_eq!(zone.class, Resource::Fish);
+    assert_eq!(zone.flags, 0);
+    assert!(!zone.deposits.is_empty());
+    assert_eq!(zone.owner, Some((4, 0)));
+    let status = scene.zone_status(gather::ZoneGroup::Brain(1));
+    assert_eq!(status, Some((0x1f5, 0xb)));
+}
+
+/// A zone ship lying idle without a notice is sent again only by the
+/// re-plan (0x4ca290), when the group's count passes 85 (0x4ca8d0): to
+/// the same amber (0x4c96e0) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn zone_replans_its_idle_ships() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, deposit, _) = amber_boat_in_zone(&data, &mut caches);
+    let i = scene.object_index(boat).unwrap();
+    {
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.task = None;
+        s.path.clear();
+    }
+    scene.gather_zones[0].elapsed = 0;
+    let idle = |s: &Scene| {
+        s.objects[s.object_index(boat).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap()
+            .task
+            .is_none()
+    };
+    // Calls 0..=85 leave it; the 87th plans it (`+8 > 0x55`), and its
+    // command is delivered at that tick's end.
+    for _ in 0..86 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        assert!(idle(&scene));
+    }
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let s = scene.objects[scene.object_index(boat).unwrap()]
+        .ship
+        .as_ref()
+        .unwrap();
+    assert!(matches!(s.task, Some(Task::Gather { deposit: d, .. }) if d == deposit));
 }

@@ -1921,10 +1921,8 @@ event 8 0x40 and moves a cell off the berth, 0x4b46f0 with '[' = 91 (see
 "Shipyards' berths"). Waiting by a taken port berth 300 ticks it steps
 aside itself (0x4b4b50 with 0x5a) and gives up after 349. A ship can be
 sold (message 0x248f, task 5) only in state 6 with a building contact.
-Not ported: selling ships (the port has none); the wait by a taken
-port berth (300 ticks, 0x4b4b50 with 0x5a; 349, giving up: the port's
-ships queue at the pier its own way); how the gathering's
-next leg and the move aside combine (the port moves aside first).
+Not ported: selling ships (the port has none). The wait by a crowded
+port berth is in "Gather zones".
 
 **Where cargo comes ashore.** 0x4ac2d0 routes the gathering task by its
 record class `+0x76e` and sub-code `+0x772` (jump tables 0x4ac594 /
@@ -1997,23 +1995,8 @@ unranked array), the first on a tie; if its berth is crowded (0x49a330:
 `a > 0`, `b > 0`, `a - b < 2`) the next ranked with a value and a lower
 load. None ranked: the list's first. `+0x7ad` is written by 0x4aab00 (an
 unload command's port; a gather command's port, 0 on the paths the port
-has) and zeroed by 0x4adef0 after its 350-tick wait. Port: a full or done
-amber or fish ship ends its task and posts the notice
-(`Scene::gathering_done`, `zone_notices`, saved), heard newest first at
-the navy's tick before the brain (`run_zone_notices`: own `+0x7ad` if
-listed and its player's port, else `zone_port_pick`), the command 0x1f
-posted (`Order::Unload`, delivered at the tick's end; the ship's last
-deposit kept for its way back, `last_deposit`); the leviathan alone
-still sends itself (0x4ad510, `send_to_port`). Not ported: zones as
-groups (each ship keeps its own port list, `zone_ports`; the loads are
-the player's merchants with that `+0x7ad`); the deposit picks (0x4c9930
--> 0x4c96e0 / 0x4c5b90 / 0x4c8f20 / 0x4c9270: a ship with room left goes
-to unload here), notice 0x139 (the ship goes back to its deposit on its
-own after unloading), the zone's re-plan 0x4ca290 and the 300/350-tick
-wait at a crowded berth (all in the workspace's `gather_zone_spec.md`);
-not decoded: 0x49a330's neighbour table (0x49a1d0) and cell test
-(0x4999e0), so the crowded-berth step is left out; whether the navy's
-tick runs before or after the ships'. Whether the unload pointer is
+has) and zeroed by 0x4adef0 after its 350-tick wait. The rest of the
+zone is in "Gather zones" below. Whether the unload pointer is
 offered over a town (0x5175b0 / 0x5180e0) is not read either. The
 prey of a ram keeps its move state: the ram (0x4c2230) sends it event 2
 with code 1 (`+0x811` 0x14 when the rammer is alongside, 3 at the blow,
@@ -2035,9 +2018,10 @@ When a navy gathering zone has no deposit left (0x4ca290, the search
 0x4c5b90 finding none), each of its ships: on the zone's list of points
 (+0x61; 0x4cea20 finds the ship's), once lying still sails by a plain move
 to the next point (0x4ce7c0 steps the list, wrapping by its last argument;
-0x4cf070); laden, goes to unload (0x4c6640, priority 90); idle in the
-zone, is sent message `*` (0x4d8b30: 1, 1, 0 and the id of a ship of the
-zone picked at random): a follow order. Message `*` reaches the ship as
+0x4cf070); laden, goes to unload (0x4c6640, priority 90); an idle one
+would be sent message `*` (0x4d8b30: 1, 1, 0 and the id of a ship of
+the zone picked at random), but that list is filled only on a path that
+needs the gathering bit both set and clear (0x4ca73b), so never. Message `*` reaches the ship as
 event 0x280f (0x5228c0, 0x4dc630, 0x4e2ba0) and goes in by intake 0x80
 (+0x858); 0x4ab250 replaces its movement with task 1 (+0x54c): keep within
 A cells (+0x556, payload bytes 1-2) of object B (+0x55a, bytes 5-8),
@@ -2047,9 +2031,9 @@ priority 0 (byte 9), patience 5, re-plan every 25 ticks. Each tick
 is gone (0xc0), it gives up stuck (150) or another order replaces it; a
 new `*` retargets. The navy uses A = 1 (zones, 0x4ca290, 0x4d8920, ...)
 and 2 (escorts, 0x4c6270, 0x4c6ee0, 0x4c9270). When none is laden,
-listed or under way, a human's zone is marked done (+0x5d). The port's idle zone
-gatherers follow a zone ship so, looking out for deposits meanwhile; alone,
-they sail to the zone's middle.
+listed or under way, a human's zone is marked done (+0x5d). (That
+branch's follow list is never filled, see "Gather zones": the zone's idle
+ships stay idle.)
 
 Pushing aside (0x4b4b50): the blocker picks at random one of the eight
 cells about it that it may enter; failing one, a cell held by another
@@ -2076,6 +2060,155 @@ ship is moving (0x4a6330 with 1, 0x4a639a). Unloading (0x4ad9f0) rolls one
 between 1 and 234 again, 91-100. Only an order's intake sets it: each kept
 order copies its byte unless 0xff, with the patience 5 and the re-plan
 every 25 ticks; the ships' own behaviours move without touching it. 
+
+## Gather zones
+
+A gather zone is a group's task (fleet order 0x78 / 0x3d, 0x4c8a80; the
+block `+0x25`, 0x65 bytes). Port: `scene/gather.rs` (`Scene.gather_zones`,
+saved; each zone keeps its group's ships, notices, known deposits, port
+list and escorts).
+
+- **Made by.** The human's click on a deposit with ships selected (codes
+  0x19 fish, 0x1a amber, 0x1c / 0x1d leviathan, 0x49e230 -> 0x49d3c0): the
+  selection made a group (0x49ca60), a zone of the 3 x 3 cells about the
+  deposit's cell (amber `+0x90/+0x94`, fish `+0x9d/+0xa1`, leviathan
+  `+0xa9/+0xad`), clipped to the map, its class, flags `+0x24 = 0x100`,
+  args[9] -1, no port list, no route; with key flag 4 a 1 x 1 zone, or
+  only the deposit added (0x4c6e30) to a running zone of its class (not
+  ported: the interface has no such key). The zone buttons (0x23 sub
+  0x10-0x12, 0x49d790): flags 0x10000, class 400 / 0x191 / 0x192, the
+  rectangle from the payload's two short pairs (not decoded: whether the
+  second pair is the size or the far corner; the port takes the dragged
+  cells). A brain's 0x47a570 -> 0x479970: the area, class, flags its
+  argument 11 (0 in every mission), args[9] the member p10's id, no port
+  list, mask or route. A computer player's flotilla (0x483090): its area
+  `+0x158..+0x164`, class `+0x70` (tasks 4, 5), flags `+0x154`, its base
+  town's ports (0x43d220 / 0x440c60 of class 0x39) and up to 4 route
+  points (0x40b010, table 0x594520) (not decoded: `+0x154`, the port
+  helpers, the route; the port uses flags 0, the list 0x4c6c30 fills, no
+  route). Any other order to the group ends the zone (0x4a1c60); a group
+  given 0x78 again has its lists cleared (0x4c7650: deposits, port list,
+  escorts, `+0x35`, `+0x3d`; its notices kept) and its block rewritten.
+- **Start** (0x4c8a80 tail): 0x4c5b90 mode 0 lists the rectangle's
+  deposits of the class and knows them (`+0x39`); if any: 0x4c5f40 splits
+  the group into merchants (types 0/1, with their room 0x4be800(3),
+  sorted most room first by an exchange sort: for i, for j < i, swap when
+  `room[j] < room[i]`) and others; 0x4c6ee0: the port list filled if null
+  (0x4c6c30); under 6 merchants each to 0x4c8f20 with port argument 0; 6
+  or more, ship k to deposit k mod n, except a computer's (side
+  `+0x1a1d` 3 / 4) under half its room or with a leviathan aboard, sent
+  to 0x4c6640's port if any; each other ship follows merchant k mod n
+  (message `*` 0x4d8b30 with 2, priority 0; 0x4c6100 lists it as an
+  escort `+0x41` and sends 0x4c42f0 with -1s, not ported).
+- **Notices** (0x4ca8d0 -> 0x4c9e30, newest first, each removed after its
+  case; a notice of a ship no longer in the group dropped): 300 (a ship
+  joined, 0x4a1340) and 0x139 (unloaded, 0x4a1520) -> 0x4c9930; 0x138
+  (gathering ended, or a berth given up) -> 0x4c9ae0. The value the last
+  case wrote, when non-zero, skips the re-plan. Not ported (posters not
+  traced): 0x12f, 0x133, 0x136, 0x137, 0x13e, 0x145-0x148.
+- **0x4c9930**: 0x4c96e0 (the same deposit), else the deposits not known
+  yet (0x4c5b90 mode 1), else the known ones still to be had (0x4c95f0:
+  amber state below 2, fish below 4, a leviathan below 5; the original's
+  walk skips the one after each it forgets) to 0x4c8f20 with port
+  argument 1 (+1 only when that returns non-zero). **0x4c96e0**: no room
+  and a port (0x4c6640) -> 0x1f; amber: the amber in `+0x797`'s deposit
+  slot (any state), else 0x4ac610(box `+0x7c2..+0x7ce`, mode 1); fish: one
+  navy draw `% 1000` for 0x4ac610 mode 2 (0x49a270, the shoal last fished
+  found in an object slot about the ship, never holds: shoals are in the
+  deposit slot); leviathan mode 1; the deposit known, gather command port
+  0. The box is the deposit's cell -/+ 2 clipped to the map's last cell,
+  scanned `[x0, x1)`, so the far column and row are left out.
+- **0x4c8f20** (2 or more candidates, a merchant, not a leviathan zone;
+  else 0x4c9270): 0x4c7fc0 rates; weights `pscore + amount`; three navy
+  draws `% total`, each the first whose running sum passes it, the
+  heaviest kept (strict); no room -> 0x1f to its port; else the gather
+  command with its port (port argument 1) or 0. It returns 0 always on
+  this path (0x4c9257), so 0x4c9ae0 then sends 0x1f too.
+- **0x4c7fc0**: the zone's ports (filled / pruned; over 100 gives 0); each
+  of class 0x39 at its cell whose berth is water (0x4999e0) flooded from
+  the berth over a copy of the shallow grid (0x558fa0 -> 0x557910, limit
+  5000) with its load L (0x4c7ea0). A candidate still in its cell's
+  deposit slot: one port, it, score 1; more: per port with a load, an
+  amber's cell becomes its approach (0x4c76f0: east, west, south, north
+  water neighbours with a value above 0, the least; north returns at
+  once; none: port and score 0 and the next port), `s = (B[cell] -
+  B[berth]) x 10 + 20L (L < 3) / 200L (3, 4) / 100L^2`, least and most
+  over all candidates and ports (set at the first candidate's first
+  port); `T = (most + least) x m - sum > 0`: three draws `% T` walking
+  the ports with `most - s + least` (0 for `s < 1`) until past the draw
+  (none: port 0), the greatest value kept (strict from 0). The ship
+  counts 0x4c7a60 it also stores are never read. (Uninitialised in the
+  original: a port's `s` before any candidate rated it, and the entry of
+  a port that failed the test: taken as 0.)
+- **0x4c9270**: the candidate with the least value of the wavefront
+  0x4a1e90 from the ship (limit 5000; an amber's approach 0x4c76f0 on it;
+  first on a tie, 0x4c5ec0; an amber with no approach reads the word
+  before the grid: 0 here). Amber / fish: a non-merchant follows a
+  merchant drawn with the navy LCG; a merchant with port argument and a
+  0x4c6640 port: full -> 0x1f, else the gather command with it; without:
+  full -> 0x4c6640 with no ship (the port with the most ships bound,
+  first on a tie) or nothing; else the gather command, port 0. A
+  leviathan: no port -> gather port 0; full or a leviathan aboard -> 0x1f;
+  else gather with the port.
+- **0x4c6640** as above, with no ship the most-bound port; the crowded
+  step: 0x49a330 on the picked berth, `a > 0 && b > 0 && a - b < 2` ->
+  the next ranked port with a score and a lower load. **0x49a330(berth,
+  player)**: the berth's neighbours on the map (0x49a1d0 gives the cell's
+  kind 1-9: corners 1 (0, 0), 2 (W-1, 0), 3 (W-1, H-1), 4 (0, H-1), edges
+  5 top, 6 right, 7 bottom, 8 left, 9 inside; counts at 0x597900 = 3, 3,
+  3, 3, 5, 5, 5, 5, 8 copied to the map object `+0x18`, offsets filled by
+  0x499ff0 at `+0x3c + 0x20 (kind - 1)`: exactly the in-map eight
+  neighbours); `a` those passing 0x4999e0 (landscape low nibble below 8,
+  nibble 1 not 4, 5, 6), `b` those whose `+0xc` slot holds a ship of the
+  player of type below 2 with `+0x25d & 0x40` (a gathering or unloading
+  task, set by 0x4aab00, cleared by event 8), sub-code `+0x772` 0xc and
+  step `+0x77d` 1; crowded when `a - b < 2`.
+- **The berth wait** (0x4adef0 step 1, the ship not on its berth
+  `+0x7bd`): with `+0x78e` 0 the timer starts at a 0x557440 distance of
+  exactly 1; then at 300 ticks a crowded berth sends it aside (0x4b4b50
+  with 0x5a), from 350 a crowded berth makes it give its port up
+  (`+0x7ad = 0`, notice 0x138 class 0), and the timer is 0 again either
+  way (301-349 nothing). An unload command zeroes it (0x4aab00). Port:
+  `run_berth_waits` at the navy's tick.
+- **Re-plan 0x4ca290** (`group +8 > 0x55`, with ships; `+8 = 0`, so every
+  86 calls; `+8` grows each call): deposits not known or still to be had
+  (0x4c5b90 mode 1): each ship without `+0x25d & 0x40`: a merchant
+  0x4c96e0, else 0x4c8f20 with port argument 1; another ship found among
+  the escorts (0x4c61d0) to 0x4c6270 (lying still, `+0x58c` 0, its ward in
+  the group: follows it again, state 10; a ward with a pending blow
+  `+0x691` -> 0x4d0140, not decoded); 0x4c6270 never returns below 0, so
+  such ships never reach 0x4c8f20. None: ships unloading this class count
+  working; laden ones (`+0x47f/+0x480/+0x481/+0x782`) count and, not
+  unloading and with flag bit 0, go to 0x4c6640's port (0x1f); its idle
+  list is never filled (no follows); none laden, working or on a route:
+  `+0x5d = 1` for sides 1 / 2 when `+0x24 >> 16 != 1`. Not ported: the
+  route `+0x61` (0x4cea20, 0x4ce7c0, 0x4cf070, 0x4ce8a0), `+0x691`'s
+  reports (0x4a21c0, 0x4cf760), `+0x35`'s command 0x29.
+- **Query 0x79** (0x4a0d00 -> 0x4c8da0, only for a 0x78 block): no ships
+  or no merchants (and not a leviathan zone with ships): 0x1f5 / 1;
+  deposits left (0x4c5b90 mode 1, which also forgets the gone ones): 500,
+  or 0x1f5 / 0xb with no port list; none: 0x1f5 / 10. 0x47a570 takes 1 to
+  its p4, 10 to its p3, then its time, then its events (each switching
+  the state, the last winning). Player 16's zones have no port list
+  (0x4c65c0 prunes its class-0x40 entries), so they answer 0xb.
+- **Commands** (0x4c89b0, through 0x520cc0; a route stores them in
+  `+0x3d` instead, not ported): 0x1f `{port, 1, 0x5a}`; else by class 400
+  0x1a, 0x191 0x19, 0x192 0x1d `{deposit, port, 0x5a}`; any other class
+  command 0 with no payload (not sent here). The gather command (0x4aab00)
+  sets `+0x76e`, `+0x77e` / `+0x78a`, `+0x797` and the box, and `+0x7ad`
+  to the payload's port if it is the player's port (0x39 not asleep;
+  player 16 class 0x40), else 0.
+- The navy's generator is `[0x5c7504] +0x18`, seeded with `game +0x2ee5`
+  at its first tick (0x49ac11 / 0x49ac1f), one for every player's fleets
+  (`Scene::navy_draw`).
+- Ship side: a full or done amber or fish ship ends its task (event 8
+  0xc0) and posts 0x138 with its class; after unloading (step 0x13) the
+  task ends, notice 0x139, and the ship moves off the berth: it goes back
+  only when its zone sends it. An amber lying fallow taken by a gather
+  command is exchanged for the nearest standing one of its box (0x4ac610
+  mode 1), as 0x4b0590 step 1 finds on arrival, else refused (the port
+  does it at the command). The port does not keep an exhausted amber's
+  state 1 (one tick before it lies fallow) apart.
 
 ## Resource counters
 

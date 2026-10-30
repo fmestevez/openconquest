@@ -373,10 +373,6 @@ pub struct Ship {
     /// What the ship does on its own (warships).
     #[serde(default)]
     pub behaviour: Behaviour,
-    /// A zone a merchant gathers in on its own: world rectangle (x0, y0,
-    /// x1, y1) and what it gathers.
-    #[serde(default)]
-    pub zone: Option<((f32, f32, f32, f32), Resource)>,
     /// `+0x7ad`: the port it was sent to unload at (0x4aab00: the unload
     /// command's port; a gather command's, 0 from the port's paths).
     #[serde(default)]
@@ -385,11 +381,16 @@ pub struct Ship {
     /// its gathering ends and the zone sends it to unload.
     #[serde(default)]
     pub last_deposit: u32,
-    /// Its gather zone's port list (block `+0x28`, filled by 0x4c6c30 at
-    /// the zone's first port pick): the ports by id. (Not ported: zones
-    /// as groups of ships; the list is the ship's own.)
+    /// What its last gather command set (0x4aab00): the class `+0x76e`,
+    /// the deposit's cell `+0x797` and the box about it `+0x7c2..+0x7ce`
+    /// (the cell -/+ 2, clipped to the map's last cell; searched as
+    /// `[x0, x1) x [y0, y1)`).
     #[serde(default)]
-    pub zone_ports: Option<Vec<u32>>,
+    pub gathered: Option<Gathered>,
+    /// `+0x78e`: the tick its wait by the berth began (0x4adef0 step 1),
+    /// 0 for none.
+    #[serde(default)]
+    pub berth_wait: u32,
     /// Treasures aboard.
     #[serde(default)]
     pub treasures: Vec<Treasure>,
@@ -719,6 +720,15 @@ pub struct Deposit {
 /// Seconds an exhausted amber deposit lies empty before it grows back: 100
 /// ticks of its state machine (0x48a430, state 3).
 pub const REGROW_SECONDS: f32 = 100.0 * crate::clock::TICK;
+
+/// A merchant's last gather command (0x4aab00): the deposit's class, its
+/// cell and the box of cells about it.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Gathered {
+    pub class: Resource,
+    pub cell: (i32, i32),
+    pub rect: (i32, i32, i32, i32),
+}
 
 /// A ship's standing order.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1574,7 +1584,8 @@ pub fn resolve(
         move_state: 0,
         home_port: 0,
         last_deposit: 0,
-        zone_ports: None,
+        gathered: None,
+        berth_wait: 0,
         face: None,
         furl: 0.0,
         rock: 0,
@@ -1595,7 +1606,6 @@ pub fn resolve(
         armour: rec.fields.get(15).map_or(0, |&v| v.min(2) as u8),
         ram: crate::combat::Crew::from_record(&rec.fields, 0).class,
         behaviour: Behaviour::default(),
-        zone: None,
         treasures: Vec::new(),
         heroes: Vec::new(),
         argo: false,

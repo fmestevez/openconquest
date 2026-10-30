@@ -97,9 +97,14 @@ pub struct SaveGame {
     /// Commands given and not yet delivered, and the ticks played.
     #[serde(default)]
     pub outbox: Vec<crate::scene::Order>,
-    /// Ships' notices 0x138 their gather zones have not yet heard.
+    /// The groups' gather zones.
     #[serde(default)]
-    pub zone_notices: Vec<u32>,
+    pub gather_zones: Vec<crate::scene::GatherZone>,
+    #[serde(default)]
+    pub zone_serial: u32,
+    /// The navy's generator.
+    #[serde(default)]
+    pub navy_lcg: Option<u32>,
     #[serde(default)]
     pub ticks: u32,
     /// Free casts from treasures, by spell index.
