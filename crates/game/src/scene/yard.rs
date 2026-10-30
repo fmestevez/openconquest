@@ -38,9 +38,17 @@ const BUILD_TICKS: u32 = 8;
 const LAUNCH_PRIORITY: u8 = 101;
 /// The priority of the moves the town's berth clearing gives (0x4415a0).
 const CLEAR_PRIORITY: u8 = 100;
+/// The share of a shot's blow a ship being built takes, by the shot's
+/// picture letter (0x597fd8, dumped): the marines' letters 0-2 and 11, 13
+/// none; 9 (the hook) never reaches it.
+const BUILD_HIT_SHARE: [i64; 19] = [
+    0, 0, 0, 100, 100, 100, 100, 100, 100, 0, 100, 0, 100, 0, 100, 100, 100, 100, 100,
+];
 
 /// A ship ordered at a yard whose berth was taken (0x416a40's queue
-/// branch: a 24-byte entry `+0x200[+0x1f4]`), its price paid.
+/// branch: a 24-byte entry `+0x200[+0x1f4]`), its price paid. It keeps the
+/// order's payload, not an arming: the arming is made when it is built
+/// (0x43ead0, from the stock then).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShipOrder {
     pub site: u32,
@@ -48,8 +56,12 @@ pub struct ShipOrder {
     /// The Argo (code 0x25), a royal ship.
     #[serde(default)]
     pub argo: bool,
-    /// What it is armed with (`None`: the mission's standard load).
+    /// The order's default-arming byte (0xd): the Building page's switch
+    /// when it was given.
     #[serde(default)]
+    pub default_arming: bool,
+    /// Saves from before the payload was kept: the arming planned then.
+    #[serde(default, skip_serializing)]
     pub arming: Option<Arming>,
     /// What was taken for it (amber, fish), given back if it is called off.
     pub paid: (u32, u32),
@@ -141,9 +153,10 @@ impl Scene {
     /// with 1; `None` for code 0xff or the Argo's 0x25): -5 while it is
     /// not idle (going up or being made a dock, `+0xa4 != 1`) or for a
     /// royal ship, bomber or rammer (0x597ce4, 0x4e8290) on a berth whose
-    /// nibble 1 is 3; 0 with its berth free, else -1. (Not decoded: the
-    /// reservation `+0x10c`, `+0x110`, `+0x114`, `+0x120`, which refuses
-    /// a free berth to any other code; its writers were not read.)
+    /// nibble 1 is 3; 0 with its berth free, else -1. (The busy block
+    /// `+0x10c..+0x120` that 0x4e82f0's code match reads is the buildings'
+    /// job block; a yard's only job is mending, job 0xff (0x424626), so the
+    /// match never applies, and a yard being mended still builds.)
     pub(super) fn yard_answer(&self, i: usize, kind: Option<u8>) -> i32 {
         if self.construction_at(self.objects[i].id).is_some() {
             return -5;
@@ -185,40 +198,46 @@ impl Scene {
 
     /// An order for a ship of type `kind` (the Argo with `argo`) at yard
     /// `site` (0x416a40; `pay` false for an order whose byte 0xf is 0xff,
-    /// or one from the queue). With the yard idle and its berth free the
-    /// ship is built there now: its price taken only with `pay`, the
-    /// yard's call for the player's paid order. Else, with a town, it
-    /// waits in the yard's queue, its full price taken whatever `pay`
-    /// (one that cannot be paid for is dropped); without one it is lost.
+    /// or one from the queue, `queued`). With the yard idle and its berth
+    /// free the ship is built there now: 0x43ead0 first takes the stock its
+    /// arming counts (so an order then refused for its price has lost
+    /// them), then its price is taken only with `pay`, the arming's items
+    /// the stock lacked given free without; the yard's call for the
+    /// player's paid order. Else, with a town, it waits in the yard's
+    /// queue with its payload, its full price (0x43e5c0, the stock counted
+    /// but not taken) taken whatever `pay` (one that cannot be paid for is
+    /// dropped); without one it is lost. The default-arming byte is the
+    /// Building page's switch, or the queued order's.
     pub(super) fn yard_order(
         &mut self,
         site: u32,
         kind: u8,
         argo: bool,
         pay: bool,
-        queued: Option<Option<Arming>>,
+        queued: Option<&ShipOrder>,
     ) -> Result<(), String> {
         let i = self.object_index(site).ok_or("No such shipyard")?;
         let owner = self.objects[i].owner.ok_or("No such shipyard")?;
         if self.home_settlement(i).is_none() {
             return Ok(());
         }
-        // The price with the arming: the player's by the Building page
-        // (0x43e5c0, the arms its settlement holds taken from its stock),
-        // the computer players' their standard load; a queued order keeps
-        // the arming it was given. (Not compared: 0x43ead0, the price of a
-        // ship built now, against 0x43e5c0, the queued one's.)
+        let arm = match queued {
+            Some(e) => {
+                e.default_arming || e.arming.as_ref().is_some_and(|a| *a != Arming::default())
+            }
+            None => self.default_arming,
+        };
+        // The price with the arming: the player's by the order's byte 0xd
+        // (0x43e5c0 / 0x43ead0, the arms its settlement holds counted
+        // from its stock), the computer players' their standard load.
         let human = Some(owner) == self.human.map(|h| (h.nation, h.slot));
         let (amber, fish, arming, stock) = if human {
-            let p = self.ship_price(site, kind);
+            let p = self.ship_price_with(site, kind, arm);
             let stock = p.home.map(|h| (h, p.stock_left));
-            match queued.clone() {
-                Some(arming) => (p.amber, p.fish, arming, None),
-                None => (p.amber, p.fish, Some(p.arming), stock),
-            }
+            (p.amber, p.fish, Some(p.arming), stock)
         } else {
             let (amber, fish) = economy::ship_cost(kind);
-            (amber, fish, queued.clone().flatten(), None)
+            (amber, fish, None, None)
         };
         let afford = |scene: &Scene| {
             let (have_amber, have_fish) = scene.funds(owner);
@@ -233,25 +252,23 @@ impl Scene {
         if self.yard_answer(i, None) != 0 {
             afford(self)?;
             self.earn(owner, -(amber as i64), -(fish as i64));
-            if let Some((home, left)) = stock {
-                self.garrisons.insert(home, left);
-            }
             self.ship_orders.push(ShipOrder {
                 site,
                 ship: kind,
                 argo,
-                arming,
+                default_arming: arm,
+                arming: None,
                 paid: (amber, fish),
             });
             self.yard_clocks.insert(site, 0);
             return Ok(());
         }
+        if let Some((home, left)) = stock {
+            self.garrisons.insert(home, left);
+        }
         if pay {
             afford(self)?;
             self.earn(owner, -(amber as i64), -(fish as i64));
-        }
-        if let Some((home, left)) = stock {
-            self.garrisons.insert(home, left);
         }
         // The Argo takes the permission to build it (0x4a9810 with 0x50, 0).
         if argo && human {
@@ -278,6 +295,49 @@ impl Scene {
             self.sounds.push((pick, x, y));
         }
         Ok(())
+    }
+
+    /// A barbarian structure's order 0x20 (BarbarianClassTy 0x40ef70, codes
+    /// 0xc-0x17, no Argo): at once, with no berth test, no queue, no town,
+    /// no price and no call, a ship of type `kind` for its owner on its
+    /// berth (vtable +0xb8, 0x40e050, as a yard's), heading 6 for a
+    /// structure facing north or south; with the default-arming byte
+    /// `arm`, every item of 0x5964d8[kind] whole, its armour and ram
+    /// (0x596268, 0x5962c8), no stock, no fallbacks, no tests. It is put on
+    /// the berth by the same message 0x1488, dropped if the berth will not
+    /// take it, and built as a yard's (0x4b3ab0, 8 ticks a step). (Not
+    /// decoded: how 0x4dfe00 reads a record ram of 0, left by an order
+    /// without arming.) For the brains' builder orders (brain.rs, which
+    /// still builds the barbarians' ships its own way).
+    #[allow(dead_code)]
+    pub(super) fn barbarian_order(&mut self, site: u32, kind: u8, arm: bool) {
+        let Some(i) = self.object_index(site) else {
+            return;
+        };
+        if !matches!(self.objects[i].class, ObjectClass::Barbarian(_)) {
+            return;
+        }
+        let (Some(owner), Some(cell)) = (self.objects[i].owner, self.berth_cell(i)) else {
+            return;
+        };
+        let facing = self.objects[i].record.fields.get(10).copied();
+        let heading = if matches!(facing, Some(2 | 6)) { 6 } else { 0 };
+        let k = kind as usize % 12;
+        let arming = arm.then(|| Arming {
+            items: combat::DEFAULT_WEAPONS[k].to_vec(),
+            armour: combat::DEFAULT_ARMOUR[k].0,
+            ram: combat::DEFAULT_RAM[k].0,
+        });
+        self.new_ships.push(NewShip {
+            site,
+            owner,
+            kind,
+            argo: false,
+            cell,
+            heading,
+            arming,
+            price: (0, 0),
+        });
     }
 
     /// Makes the ships the yards have just built (message 0x1488, 0x4dc630
@@ -335,6 +395,9 @@ impl Scene {
                 cancelled: false,
                 price: n.price,
                 shown: true,
+                hits: [(0, 0); 4],
+                hit_count: 0,
+                pending_move: None,
             });
             let (x, y) = (o.x, o.y);
             self.sounds.push(("bildsh3", x, y));
@@ -465,7 +528,8 @@ impl Scene {
     /// The test the queue makes of its head entry (0x43da20 with 4, 1, 1,
     /// the kind, no arming record, byte 0xd, the price skipped, the yard
     /// test): -5 or -7 if the ship is not allowed (the permission, the
-    /// buildings, the unique ships' study), -1 while the town is not idle,
+    /// studies: the unique ships', a bomber's armour, a rammer's ram; the
+    /// buildings), -1 while the town is not idle,
     /// then the town's yards: 0 if one answers 0, else -1 if one answered
     /// -1, else -5. (Not ported: the sub-tests of the arming's items
     /// that byte 0xd runs.)
@@ -529,7 +593,7 @@ impl Scene {
                         let code = (!e.argo).then_some(e.ship);
                         if self.yard_answer(i, code) == 0 {
                             self.ship_orders.remove(k);
-                            let _ = self.yard_order(site, e.ship, e.argo, false, Some(e.arming));
+                            let _ = self.yard_order(site, e.ship, e.argo, false, Some(&e));
                         }
                         break;
                     }
@@ -567,6 +631,45 @@ impl Scene {
         let Some(i) = self.object_index(id) else {
             return;
         };
+        // Shots landed since its last tick (0x4ab930 -> 0x4bf170 ->
+        // 0x4b4000, run only with some pending): each takes
+        // `trunc(0x597fd8[letter] x blow / 100)` off the hull, hooks
+        // (letter 9) and blows of 0 skipped, the first that takes it
+        // below 0 leaving it at 0 and ending the list; at 0 or less it
+        // sinks (`+0x251 = 4`, killer none, `+0x73a = 0xff`): the
+        // ordinary sinking, its price not given back.
+        let hits = self.objects[i]
+            .ship
+            .as_mut()
+            .and_then(|s| s.build.as_mut())
+            .filter(|b| b.hit_count > 0)
+            .map(|b| {
+                let n = std::mem::take(&mut b.hit_count) as usize;
+                b.hits[..n].to_vec()
+            });
+        if let (Some(hits), Some(c)) = (hits, self.objects[i].combat.as_mut()) {
+            let mut hull = (c.hull * 15.0).round() as i64;
+            for (letter, blow) in hits {
+                if letter == 9 || blow == 0 {
+                    continue;
+                }
+                let share = BUILD_HIT_SHARE.get(letter as usize).copied().unwrap_or(0);
+                hull -= share * blow as i64 / 100;
+                if hull < 0 {
+                    hull = 0;
+                    break;
+                }
+            }
+            c.hull = hull as f32 / 15.0;
+            if hull <= 0 {
+                c.hull = 0.0;
+                if let Some(s) = self.objects[i].ship.as_mut() {
+                    s.build = None;
+                }
+                self.strike(id, 0.0, false, None, true, data, caches);
+                return;
+            }
+        }
         let nation = self.objects[i].record.fields.get(5).copied().unwrap_or(1);
         let Some(s) = self.objects[i].ship.as_mut() else {
             return;
@@ -575,7 +678,8 @@ impl Scene {
             return;
         };
         // Its events are not run while it is built (0x4ab720 with `+0x251
-        // == 2`): orders given it meanwhile come to nothing here.
+        // == 2`), and the commands that make them are refused (0x4e6700):
+        // any task or route given it by other means comes to nothing.
         s.task = None;
         s.zone = None;
         s.path.clear();
@@ -598,7 +702,7 @@ impl Scene {
                     self.build_called_off(i, b);
                     return;
                 }
-            } else if !self.yard_stands(b.yard) {
+            } else if !self.yard_stands(i, b.yard) {
                 b.cancelled = true;
             } else {
                 let whole = combat::hull_points(kind) as i64;
@@ -609,8 +713,9 @@ impl Scene {
                 let done = (heading == 0 && b.frame >= 39) || (heading == 6 && b.frame >= 79);
                 if done {
                     c.hull = c.max_hull;
-                    if self.yard_stands(b.yard) {
-                        self.build_done(i, b.yard);
+                    if self.yard_stands(i, b.yard) {
+                        let pending = b.pending_move;
+                        self.build_done(i, b.yard, pending);
                         return;
                     }
                     b.cancelled = true;
@@ -623,11 +728,37 @@ impl Scene {
         o.ship.as_mut().unwrap().build = Some(b);
     }
 
-    /// Whether yard `site` still stands by its berth (0x49a4b0 with the
-    /// yard's id; not decoded: which cells of the berth's neighbourhood
-    /// list it searches).
-    fn yard_stands(&self, site: u32) -> bool {
-        self.object_index(site).is_some_and(|y| self.is_yard(y))
+    /// Whether ship `i`'s yard `site` still stands by its berth (0x49a4b0
+    /// with the ship's cell and `+0x75a`): the berth's slot object if its
+    /// class is `site` (the slot holds the ship itself, class 200 + kind:
+    /// so a yard whose id happens to be that passes even gone), else the
+    /// first of the berth's neighbours in 0x499ff0's order (north-west and
+    /// clockwise inside the map, 3 or 5 at its corners and sides) whose
+    /// slot holds the object of id `site`. (The port has no cell slots for
+    /// buildings: a cell holds the building whose footprint covers it.)
+    fn yard_stands(&self, i: usize, site: u32) -> bool {
+        let t = TILE_SIZE as f32;
+        let o = &self.objects[i];
+        let Some(kind) = o.ship.as_ref().map(|s| s.kind) else {
+            return false;
+        };
+        if 200 + kind as u32 == site {
+            return true;
+        }
+        let berth = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        neighbours(berth, (self.grid.width as i32, self.grid.height as i32))
+            .into_iter()
+            .any(|c| {
+                self.objects.iter().any(|b| {
+                    b.id == site
+                        && b.combat.is_some()
+                        && b.ship.is_none()
+                        && b.cell.is_some_and(|(bx, by)| {
+                            let n = super::trade::building_cells(b);
+                            (bx..bx + n).contains(&c.0) && (by..by + n).contains(&c.1)
+                        })
+                })
+            })
     }
 
     /// A building called off has run back down (0x4b3ab0 with `+0x73a <
@@ -648,10 +779,14 @@ impl Scene {
 
     /// Ship `i` is built (0x4b3ab0): afloat with its whole hull, the
     /// launch voice for the viewing player's ship, the brains' and the
-    /// computer players' "ship built" (0x4b3a20, message 0x5d95; not
-    /// decoded: 0x4e7220's behaviour settings for a computer player's),
-    /// then it moves one cell off the berth (0x4b46f0 with 'e').
-    fn build_done(&mut self, i: usize, site: u32) {
+    /// computer players' "ship built" (0x4b3a20, message 0x5d95), a
+    /// computer player's behaviours (0x4e7220, applied at once: on guard,
+    /// ram attack for kinds 5 and 10, board attack for 4 and 11), then it
+    /// moves one cell off the berth (0x4b46f0 with 'e'), which overwrites
+    /// a move it was sent while built; finding no cell it sends none, and
+    /// that move (`pending`) runs. (Not settled: whether 0x4e7220 runs for
+    /// player 16, the barbarians, `game +0x1a1d + player`: not here.)
+    fn build_done(&mut self, i: usize, site: u32, pending: Option<((i32, i32), u8)>) {
         let id = self.objects[i].id;
         let o = &mut self.objects[i];
         o.progress = None;
@@ -665,13 +800,35 @@ impl Scene {
                 self.sounds.push((voice, x, y));
             }
         }
+        let owner = self.objects[i].owner;
+        let player = owner.is_some_and(|o| {
+            Some(o) == self.human.map(|h| (h.nation, h.slot))
+                || self
+                    .seats
+                    .iter()
+                    .any(|s| (s.player.nation, s.player.slot) == o)
+        });
+        if owner.is_some() && !player && owner != Some((4, 0)) {
+            let b = &mut self.objects[i].ship.as_mut().unwrap().behaviour;
+            b.guard = true;
+            if matches!(kind, 5 | 10) {
+                b.ram = true;
+            }
+            if matches!(kind, 4 | 11) {
+                b.board = true;
+            }
+        }
         if argo {
             self.christen_argo(id);
         }
         self.ship_launched(site, kind, id);
         self.computer_launched(site, kind, id);
         if let Some(k) = self.object_index(id) {
-            self.off_the_berth(k, LAUNCH_PRIORITY);
+            if !self.off_the_berth(k, LAUNCH_PRIORITY) {
+                if let Some((cell, prio)) = pending {
+                    self.go_to_cell(k, cell, prio);
+                }
+            }
         }
     }
 
@@ -822,7 +979,8 @@ impl Scene {
     /// alliances) of no higher priority than its own, the priority one
     /// higher for each row of the window after the first with one; drawn
     /// with its generator. The move is a plain go-to-cell (event 0x80).
-    pub(super) fn off_the_berth(&mut self, k: usize, prio: u8) {
+    /// Whether it found a cell.
+    pub(super) fn off_the_berth(&mut self, k: usize, prio: u8) -> bool {
         let cells = self.window(k);
         let mut pool: Vec<(i32, i32)> = cells
             .iter()
@@ -855,10 +1013,11 @@ impl Scene {
             }
         }
         if pool.is_empty() {
-            return;
+            return false;
         }
         let c = pool[self.ship_draw(k) as usize % pool.len()];
         self.go_to_cell(k, c, prio);
+        true
     }
 
     /// The cell ship `k` is told to move to when it lies in another's way
@@ -927,7 +1086,8 @@ impl Scene {
     /// 0x4415a0): each of `yards` idle with its berth taken has the ship
     /// lying there move one cell aside (0x4b4b50 with 100), unless it is
     /// one of `town_owner`'s sailing to that yard to be mended. A ship
-    /// being built takes no notice (0x4ab720 skips its events).
+    /// being built keeps the move pending (0x4ab720 skips its events while
+    /// `+0x251 == 2`), a later one overwriting it.
     pub(super) fn clear_berths(&mut self, town_owner: Option<(u32, u32)>, yards: &[u32]) {
         for &site in yards {
             let Some(y) = self.object_index(site) else {
@@ -947,12 +1107,53 @@ impl Scene {
             // `slot_ship`, so this one is never found there.)
             let mending_here = self.objects[k].owner == town_owner
                 && matches!(s.task, Some(Task::Repair { dock }) if dock == site);
-            if mending_here || s.build.is_some() {
+            if mending_here {
                 continue;
             }
+            let built = s.build.is_some();
             if let Some(c) = self.aside_cell(k, CLEAR_PRIORITY) {
-                self.go_to_cell(k, c, CLEAR_PRIORITY);
+                if built {
+                    if let Some(b) = self.objects[k].ship.as_mut().and_then(|s| s.build.as_mut()) {
+                        b.pending_move = Some((c, CLEAR_PRIORITY));
+                    }
+                } else {
+                    self.go_to_cell(k, c, CLEAR_PRIORITY);
+                }
             }
         }
     }
+}
+
+/// The in-map neighbours of `cell` on a map of `(w, h)` cells in the order
+/// 0x49a4b0 searches them (0x49a1d0's position class, the offsets 0x499ff0
+/// writes at the map's creation): from the north-west clockwise inside;
+/// at a corner or side from the first neighbour clockwise from outside.
+pub(super) fn neighbours((x, y): (i32, i32), (w, h): (i32, i32)) -> Vec<(i32, i32)> {
+    let ring: [(i32, i32); 8] = [
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+        (1, 0),
+        (1, 1),
+        (0, 1),
+        (-1, 1),
+        (-1, 0),
+    ];
+    // The first offset of each position class, as an index into `ring`,
+    // and how many follow.
+    let (first, n) = match (x == 0, y == 0, x == w - 1, y == h - 1) {
+        (true, true, _, _) => (3, 3),
+        (_, true, true, _) => (5, 3),
+        (_, _, true, true) => (7, 3),
+        (true, _, _, true) => (1, 3),
+        (_, true, _, _) => (3, 5),
+        (_, _, true, _) => (5, 5),
+        (_, _, _, true) => (7, 5),
+        (true, _, _, _) => (1, 5),
+        _ => (0, 8),
+    };
+    (0..n)
+        .map(|k| ring[(first + k) % 8])
+        .map(|(dx, dy)| (x + dx, y + dy))
+        .collect()
 }

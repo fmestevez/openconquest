@@ -234,19 +234,18 @@ impl Scene {
     ) -> Result<u32, String> {
         use Order::*;
         let done = |r: Result<(), String>| r.map(|()| 0);
-        // A ship being built takes no orders but the stop, which calls the
-        // building off (0x4ab720 runs no event of the 0x1f0 group while
-        // `+0x251 == 2`; event 8 does run, 0x4aa540). (Not ported: the
-        // original keeps such events pending and runs one at the launch,
-        // when its own move off the berth may overwrite a pending move;
-        // which events the player's orders other than moves are was not
-        // traced.)
+        // A ship being built refuses its commands (0x4e2ba0 tests each with
+        // 0x4e6700, and its capability word `+0x261` is 0x2000 alone:
+        // moves 0x14, fire 0x15 / 0x16, board, ram, gather, dock,
+        // transfer, found and treasure are dropped, nothing kept), but the
+        // stop, which calls the building off (event 8, 0x4aa540), the
+        // behaviour switches (0x23: applied at once by 0x4a9e30) and the
+        // spells cast on it.
         let ship = match *order {
             Move { ship, .. }
             | Waypoint { ship, .. }
             | Attack { ship, .. }
             | Close { ship, .. }
-            | Behaviour { ship, .. }
             | Scout { ship, .. }
             | Patrol { ship, .. }
             | Zone { ship, .. }

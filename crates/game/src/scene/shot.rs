@@ -634,6 +634,22 @@ impl Scene {
             }
             return;
         }
+        // A ship being built keeps the hit for its tick (event 1, 0x4a9e30:
+        // a fifth in a tick is dropped), where 0x4bf170 hands it to 0x4b4000
+        // alone: no fire, lime, crew or weapon damage.
+        if let Some(b) = target.and_then(|i| {
+            self.objects[i]
+                .ship
+                .as_mut()
+                .and_then(|sh| sh.build.as_mut())
+        }) {
+            if b.hit_count < 4 {
+                b.hits[b.hit_count as usize] =
+                    (s.letter, (s.damage.max(0.0) * 15.0).round() as u32);
+                b.hit_count += 1;
+            }
+            return;
+        }
         // The hull's share first, then the crew's and the weapons'
         // (0x4bf170).
         if let Some(i) = target.filter(|_| s.volcanic) {

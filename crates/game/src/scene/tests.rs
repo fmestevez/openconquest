@@ -8960,3 +8960,191 @@ fn lightning_on_creatures() {
         .as_ref()
         .is_none_or(|c| c.hull <= 0.0)));
 }
+
+/// A ship being built takes shots by 0x4b4000 alone: `trunc(0x597fd8[letter]
+/// x blow / 100)` off the hull, letters 0-2 nothing; at 0 it sinks, its
+/// owner's ship lost, nothing given back. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn shots_on_a_ship_being_built() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let yard = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .map(|o| o.id)
+        .unwrap();
+    scene.amber = 1000;
+    scene.start_ship(yard, 0).unwrap();
+    scene.make_new_ships(&data, &mut caches);
+    let id = scene.objects[scene.ship_on_berth(yard).unwrap()].id;
+    // Its first step: 18200 / 40 = 455.
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let hull = |s: &Scene| {
+        let k = s.object_index(id).unwrap();
+        (s.objects[k].combat.as_ref().unwrap().hull * 15.0).round() as i64
+    };
+    assert_eq!(hull(&scene), 455);
+    let hit = |s: &mut Scene, letter: u8, blow: u32| {
+        let k = s.object_index(id).unwrap();
+        let b = s.objects[k].ship.as_mut().unwrap().build.as_mut().unwrap();
+        b.hits[0] = (letter, blow);
+        b.hit_count = 1;
+    };
+    hit(&mut scene, 3, 300);
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    assert_eq!(hull(&scene), 155);
+    hit(&mut scene, 0, 300);
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    assert_eq!(hull(&scene), 155);
+    let (amber, fish) = (scene.amber, scene.fish);
+    let lost = scene.stats.ships_lost[0];
+    hit(&mut scene, 3, 500);
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    assert!(scene.object_index(id).is_none(), "sunk");
+    assert_eq!(scene.stats.ships_lost[0], lost + 1);
+    assert_eq!((scene.amber, scene.fish), (amber, fish));
+    assert!(scene.ship_on_berth(yard).is_none());
+}
+
+/// 0x49a4b0 searches the berth's neighbours from the north-west clockwise,
+/// 3 at a corner and 5 on a side, from the first clockwise from outside
+/// (0x49a1d0, 0x499ff0).
+#[test]
+fn berth_neighbours_in_the_original_order() {
+    use super::yard::neighbours;
+    let n = neighbours((11, 10), (64, 64));
+    assert_eq!(n.len(), 8);
+    assert_eq!(n[0], (10, 9));
+    assert_eq!(n[7], (10, 10), "a yard at (10, 10) facing east: the 8th");
+    assert_eq!(neighbours((0, 0), (64, 64)), vec![(1, 0), (1, 1), (0, 1)]);
+    assert_eq!(
+        neighbours((63, 0), (64, 64)),
+        vec![(63, 1), (62, 1), (62, 0)]
+    );
+    assert_eq!(
+        neighbours((5, 0), (64, 64)),
+        vec![(6, 0), (6, 1), (5, 1), (4, 1), (4, 0)]
+    );
+    assert_eq!(
+        neighbours((0, 5), (64, 64)),
+        vec![(0, 4), (1, 4), (1, 5), (1, 6), (0, 6)]
+    );
+}
+
+/// A bomber needs armour studied, a rammer the ram (0x43da20 case 4: -7).
+/// Needs `OPENCONQUEST_DATA`.
+#[test]
+fn bombers_and_rammers_need_their_study() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.permits = crate::permits::Permits::ALL;
+    let owner = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+    scene.levels.insert(owner, Default::default());
+    let e = scene.may_build_ship_for(owner, 3).unwrap_err();
+    assert!(e.contains("armour"), "{e}");
+    let e = scene.may_build_ship_for(owner, 5).unwrap_err();
+    assert!(e.contains("rams"), "{e}");
+    let levels = scene.levels.get_mut(&owner).unwrap();
+    levels.armour = 1;
+    levels.ram = 1;
+    for kind in [3, 5] {
+        if let Err(e) = scene.may_build_ship_for(owner, kind) {
+            assert!(!e.contains("studied"), "{e}");
+        }
+    }
+}
+
+/// A plan's armour falls back as 0x43ead0 does: a level 2 with no
+/// fallback tries level 1 by the fit test; a fallback is bought untested.
+/// Needs `OPENCONQUEST_DATA`.
+#[test]
+fn default_arming_takes_its_fallbacks_untested() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.permits = crate::permits::Permits::ALL;
+    scene.default_arming = true;
+    let owner = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+    let yard = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .map(|o| o.id)
+        .unwrap();
+    // A bomber (armour 2, fallback 1) with no armour studied: the
+    // fallback 1, untested (+30).
+    scene.levels.insert(owner, Default::default());
+    let p = scene.ship_price(yard, 3);
+    assert_eq!(p.arming.armour, 1);
+    // A royal ship (armour 2, no fallback) with armour 1 studied: level 1
+    // by the test (+30); none studied: none.
+    scene.levels.get_mut(&owner).unwrap().armour = 1;
+    assert_eq!(scene.ship_price(yard, 2).arming.armour, 1);
+    scene.levels.get_mut(&owner).unwrap().armour = 0;
+    assert_eq!(scene.ship_price(yard, 2).arming.armour, 0);
+}
+
+/// A barbarian structure's order builds on its berth at once, free, as a
+/// yard's: a merchant in 1 + 39 x 8 ticks (0x40ef70 case 0x20, 0x4b3ab0).
+/// Needs `OPENCONQUEST_DATA`.
+#[test]
+fn barbarian_structures_build_on_their_berth() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut found = false;
+    for m in 0..14 {
+        let mut scene = Scene::load(&data, &mut caches, &format!("miss{m:03}")).unwrap();
+        scene.brain = None;
+        let sites: Vec<u32> = scene
+            .objects
+            .iter()
+            .filter(|o| matches!(o.class, ObjectClass::Barbarian(_)) && o.owner.is_some())
+            .map(|o| o.id)
+            .collect();
+
+        for site in sites {
+            let funds = scene.funds(
+                scene.objects[scene.object_index(site).unwrap()]
+                    .owner
+                    .unwrap(),
+            );
+            scene.barbarian_order(site, 1, false);
+            scene.make_new_ships(&data, &mut caches);
+            let Some(k) = scene.ship_on_berth(site) else {
+                continue;
+            };
+            let owner = scene.objects[k].owner.unwrap();
+            assert_eq!(scene.funds(owner), funds, "nothing paid");
+            let id = scene.objects[k].id;
+            let mut ticks = 0;
+            while scene.being_built(id) {
+                scene.update(crate::clock::TICK, &data, &mut caches);
+                ticks += 1;
+                assert!(ticks < 400);
+            }
+            assert_eq!(ticks, 1 + 39 * 8);
+            found = true;
+            break;
+        }
+        if found {
+            break;
+        }
+    }
+    assert!(found, "a barbarian structure with a free berth");
+}

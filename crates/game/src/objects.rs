@@ -432,6 +432,17 @@ pub struct Build {
     /// Its building frames are on the object (not saved: set again).
     #[serde(skip)]
     pub shown: bool,
+    /// Shots and bombs landed on it since its last tick (event 1: at most
+    /// 4, `+0x7de`), each its picture's letter and blow in the original's
+    /// points; the count.
+    #[serde(default)]
+    pub hits: [(u8, u32); 4],
+    #[serde(default)]
+    pub hit_count: u8,
+    /// A move it was sent (event 0x80, kept while it is built: the town's
+    /// berth clearing, 0x4b4b50): the cell and priority.
+    #[serde(default)]
+    pub pending_move: Option<((i32, i32), u8)>,
 }
 
 /// What a grappled ship is doing, a game tick at a time.

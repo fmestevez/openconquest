@@ -2465,9 +2465,15 @@ slot). **0x4e82f0(yard, 1, code)**: -5 unless the yard is idle (`+0xa4 ==
 1`: not going up, not being made a dock); for codes 0xc-0x17 the draught
 test 0x4e8290: royal ships, bombers and rammers (0x597ce4 = 0 0 1 1 0 1 0 0
 0 0 0 0, the ship's `+0x592`) get -5 when the berth's nibble 1 is 3; then 0
-with the berth free, else -1. (Not decoded: the reservation `+0x10c`,
-`+0x110`, `+0x114`, `+0x120`, which turns a free berth's 0 into -1 for any
-other code than `+0x114`.)
+with the berth free, else -1. Its code match on `+0x10c` / `+0x110 == 1`
+/ `+0x120 == 0` / `+0x114` (a free berth's 0 turned into -1 for any other
+code) reads the buildings' job block (LandObj, every building: busy,
+job, parameter, amber paid, progress); a yard's only job is its mending,
+job 0xff (0x424626-0x42463c; every other writer of `+0x110` is another
+class's method on its own `this`), so the match never applies and a yard
+being mended still builds. Mode 2 (the upgrade to a dock, 0x43f9ec,
+0x443654): -5 not idle, -6 under 100 condition, -1 with no town, `+0x1e4`
+0, busy (being mended) or `+0x104`; else 0.
 
 **An order** (0x416a40(yard, payload, pay): message 0x280f sub-command
 0x20 with pay = byte 0xf != 0xff, or the queue with pay 0) needs code byte
@@ -2486,7 +2492,22 @@ for the viewing player's yard and only with pay. Otherwise the order is
 **queued**: without a town nothing happens (the order is lost); else a
 24-byte entry (the payload and the price of 0x43e5c0) is appended only if
 the price can be paid, and it is then taken **whatever pay** (a free
-order that queues is charged); no sound; `+0x1fc = now`. Both branches
+order that queues is charged); no sound; `+0x1fc = now`. 0x43ead0 and
+0x43e5c0 give the same price (dumped tables: hull 0x5961d8 / 0x596208,
+items 0x5964d8 with fallbacks 0x5962f8, minimum strength 0x597ae4, armour
+0x596268 / 0x596238, ram 0x5962c8 / 0x596298): each item from stock (free),
+else bought if 0x43da20 case 1 allows it, else its fallback from stock or
+**bought untested**; more fallbacks from the last (never index 0) while
+under strength; armour: from the town's armour list (`+0x248`), else
+bought if case 2 allows it, else for level 2 with no fallback level 1 by
+the same test, else the fallback **bought untested**; ram the same (case
+3, the list `+0x24c`, 3 = none). 0x43e5c0 only counts; 0x43ead0 sorts the
+town's lists (best condition first), **takes** what it counts from the
+stock and fills the record (bought items at 100), and 0x416a40 calls it
+before its funds test, so a paid order refused for its price has lost
+them. A queued entry keeps only its payload: it is armed when built, by
+0x43ead0 from the stock then, the bought items free (pay 0), `+0x544` that
+price. Both branches
 redraw the yard (`+0xfc`, `+0x100`). The ship (0x4dc630 message 2 with
 record +0x10 == 2, 0x4dfe00): owner, kind, heading, cell the berth, `+0x544`
 the price, `+0x259` the Argo, `+0x261 = 0x2000`, its arming, `+0x251 = 2`,
@@ -2514,9 +2535,40 @@ launch voice for the viewing player's ship (events 184, 185, 187, 186 by
 nation: `SND_184` empty, 185 and 186 `jb_d1`, 187 `121~2`), 0x4b3a20
 (message 0x5d95, the brains' "ship built"), for a computer player 0x4e7220
 (behaviour events 0x100, not decoded), then **0x4b46f0(ship, 'e')**.
+Blows on it (0x4ab720 runs the damage events whatever `+0x251`; event 1
+appends `{shot, id}` while fewer than 4, a fifth in a tick dropped; with
+some pending, `+0x25d & 1`, 0x4ab930 runs 0x4bf170, which for `+0x251 ==
+2` is 0x4b4000 alone): unless being sold (task 5), each entry whose shot
+is still there with its id, letter not 9 and blow non-zero takes
+`trunc(0x597fd8[letter] x blow / 100)` off the hull (0x597fd8, dumped: 0 0
+0 100 100 100 100 100 100 0 100 0 100 0 100 100 100 100 100); below 0 it
+is 0 and the rest are skipped; at 0 or less `+0x251 = 4`, `+0x7f = 0xff`,
+`+0x73a = 0xff`: it sinks as any ship (0x4dec40: reported with -1, the
+owner's ship lost, the slot and berth freed, the sinking picture and
+sound, removed), **no refund** of `+0x544`; no fire, lime, crew or weapon
+damage. Code-4 blows (0x4befc0): `hull -= blow`, below 1 sunk, `+0x7f` the
+blow's player; wrecks (event 0x200: lightning, reef, whirlpool) sink it at
+once, killer none. Orders while built: 0x4e2ba0 tests each command with
+0x4e6700 against `+0x261 = 0x2000`, so moves, fire, board, ram, gather,
+dock, transfer, found and treasure are dropped (nothing kept); the stop,
+spells (0x22 other subs), behaviours (0x23, and 0x4e7220's: 0x100 records
+of kinds 4-11 applied at once by 0x4a9e30), 0x28 sub 4, 0x29 sub 2, 0x2a
+pass; events sent straight to it (the town's berth clearing 0x4415a0 ->
+0x4b4b50, event 0x80) stay pending, one record a code, until the launch,
+where 0x4b46f0 'e' overwrites a pending 0x80 unless it finds no cell.
+The yard looked for (0x49a4b0(cell, id), the ship's cell and `+0x75a`):
+the berth's slot object if its class `+0x50` is the id (the slot holds the
+ship itself, `+0x50 = 200 + kind`: a yard whose id is that passes even
+gone), else the first in-map neighbour, in 0x499ff0's order by 0x49a1d0's
+position class (corners 3: (0,0) +1, +W+1, +W; (W-1,0) +W, +W-1, -1;
+(W-1,H-1) -1, -W-1, -W; (0,H-1) -W, -W+1, +1; sides 5: top +1, +W+1, +W,
++W-1, -1; right +W, +W-1, -1, -W-1, -W; bottom -1, -W-1, -W, -W+1, +1; left
+-W, -W+1, +1, +W+1, +W; inside 8: -W-1, -W, -W+1, +1, +W+1, +W, +W-1,
+-1; counts 0x597900), whose slot object's id `+0x4c` is it; else none.
+0x4e7220 at the launch (a computer player's): on guard, and ram attack for
+kinds 5 / 10, board attack for 4 / 11.
 Called off (`+0x73a < 0`: the stop order, event 8 with no record while
-`+0x251 == 2`, 0x4aa540 at 0x4aa565; the yard gone; shots taking the hull
-below 1, 0x4b4000): the frame drops by 1 a step; below 1 (heading 0) or
+`+0x251 == 2`, 0x4aa540 at 0x4aa565; the yard gone): the frame drops by 1 a step; below 1 (heading 0) or
 below 40 (heading 6) the price `+0x544` is given back (amber, fish x 100,
 whether or not 0x416a40 took it), the owner's ship lost counted
 (0x50e750 with -1), the slot cleared, the Argo's permission 80 given back,
@@ -2575,8 +2627,9 @@ slot empty only.
 and `+0x261 & 0x1f0`, keeping them pending otherwise (unless `+0x864 ==
 0x17` with `+0x25c`), in the order 0x20 (0x4aa990), 0x40 (0x4aab00), 0x10
 (0x4aa840), 0x80 (0x4ab250), each also needing its bit in `+0x7da`; after
-each of the first four that runs, `+0x7d6 &= ~0x1f0` (`~0xf0` with 0x100
-pending and 0x4ab350 passing): one a tick, in that order. 0x4ab250 drops
+each of the first four that runs, `+0x7d6 &= ~m` with `m = 0x1f0` when
+0x100 is pending and 0x4ab350 passes, else `0xf0` (disassembly
+0x4ab821-0x4ab83b): one a tick, in that order, the others dropped. 0x4ab250 drops
 the event without capability `+0x261 & 0x400` (every finished ship has it;
 one being built, 0x2000, lacks it) unless `+0x864 == 0x17`; else it zeroes
 the route block `+0x562`, copies the target and kind, `+0x57b = 0`,
@@ -2587,18 +2640,43 @@ then plans and follows the route).
 The port: `scene::yard`. The port's slot is the cell a ship is in (a ship
 mended at a dock aside); ships just built hold their berth until made the
 same tick. Its towns' building lists are the yards a settlement is the
-nearest of (the computer players': those about the town). Not ported: the
-port's 0x80 move has no event queue (orders take effect at once; a ship
-being built drops them, and the original's pending events at the launch
-are not reproduced); the reservation fields; the arming sub-tests of the
-queue's 0x43da20; 0x4bd920 and 0x4e7220 at the launch; shots on a ship
-being built (0x4b4000: `0x597fd8[weapon] x blow / 100` off the hull) take
-the port's ordinary damage; whether the player's yard buttons reach
-0x416a40 at the yard or through the town's command 0x20 (the town hands
-it to its first yard answering 0; the port orders at the yard clicked);
-whether reefs and whirlpools mark the landscape nibbles the cell tests
-read (the port keeps them apart); a barbarian structure's building (the
-port's 25 ticks beside it). The ships' LCG seed `game +0x2ee5` is the
+nearest of (the computer players': those about the town). The player's
+yard buttons (0x4f34c0: codes 0x21-0x2c and 0x7d, payload dword 2 = -1,
+byte 0xc `code - 0x15` or 0x25, byte 0xd the Building page's switch at
+the click, 0xe 1, 0xf 0) send order 0x20 through the navy (0x49e230:
+one selected object that is not a ship gets it raw, 0x520cc0) to the yard
+clicked, which runs 0x416a40 with pay 1; the town's command 0x20 is the
+computers' and brains' path. The right press sends 0x3c {1, kind}.
+
+A barbarian structure (0x40ef70, classes 0x3f-0x41, its berth vtable
++0xb8 0x40e050 as a yard's) builds on order 0x20 (codes 0xc-0x17, no
+Argo, no state test) at once: no berth test, queue, town, price or sound;
+the record as a yard's, with byte 0xd every item of 0x5964d8[kind] at 100
+and its armour and ram, no stock or fallbacks; message 0x1488 puts it on
+the berth (removed at once, nothing paid, if 0x499a40 fails) and 0x4b3ab0
+builds it as a yard's. Its "busy" answer (vt+0x9c 0x40e7b0): class 0x40
+`0x4e82f0(this, 1, 0xff)`, the others -5.
+
+The port keeps a queued order's byte 0xd and arms it when built, takes
+the stock before the funds test, buys the armour and ram fallbacks
+untested, refuses bombers and rammers without their study (-7), takes
+shots on a ship being built by 0x4b4000 (at most 4 a tick, at its tick),
+lets behaviour switches through while it is built and keeps the berth
+clearing's move pending, sets a computer player's behaviours at the
+launch, and looks for the yard among the berth's neighbours (a cell
+holds the building whose footprint covers it: the port has no building
+slots). `Scene::barbarian_order` builds a barbarian structure's ship on
+its berth. Not ported: the port's other moves have no event queue (see
+"One event a tick"); 0x4bd920 at the launch; the town's armour and ram
+lists (`+0x248`, `+0x24c`) as free stock (the port's `fittings` are not
+read by the price); the arming sub-tests of the queue's 0x43da20 (its
+case 1 on the fallback items with the town's workshop and smithy); the
+items' conditions (the port's stock has none); code-4 blows on a ship
+being built take the port's ordinary damage; whether 0x4e7220 runs for
+player 16; whether reefs and whirlpools mark the landscape nibbles the
+cell tests read (the port keeps them apart); the brains still build the
+barbarians' ships their own way (25 ticks beside the structure, brain.rs
+`builder_order`), not by `barbarian_order`. The ships' LCG seed `game +0x2ee5` is the
 original's time stamp or the saved `RND_INIT`: here drawn once from the
 scene's generator.
 

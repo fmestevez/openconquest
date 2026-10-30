@@ -84,11 +84,26 @@ impl Scene {
     }
 
     /// Whether player `owner` may have a ship of type `kind`, its price
-    /// aside (0x43da20 case 4 with param_7 set: the permission, the unique
-    /// ships' study and the buildings it needs).
+    /// aside (0x43da20 case 4 with param_7 set: the permission, the
+    /// studies and the buildings it needs, in that order). (The buildings
+    /// are the town's own, `+0x238`; the port counts the player's.)
     pub fn may_build_ship_for(&self, owner: (u32, u32), kind: u8) -> Result<(), String> {
         if Some(owner) == self.human.map(|h| (h.nation, h.slot)) && !self.permits.ship(kind) {
             return Err(format!("{} cannot be built yet", SHIP_NAMES[kind as usize]));
+        }
+        // -7 (0x43dfb0): a bomber without the armour studied (player
+        // `+0x5f`), a rammer without the ram (`+0x5e`).
+        let study = match kind {
+            3 => Some(combat::Upgrade::Armour),
+            5 => Some(combat::Upgrade::Ram),
+            _ => None,
+        };
+        if let Some(u) = study.filter(|&u| self.levels_of(Some(owner)).get(u) == 0) {
+            return Err(format!(
+                "{} needs {} studied at the sage school",
+                SHIP_NAMES[kind as usize],
+                u.name()
+            ));
         }
         // The unique ships must first be studied at the sage school.
         if (8..12).contains(&kind)
@@ -173,10 +188,9 @@ impl Scene {
     /// Orders a ship of type `kind` at shipyard `site` (0x416a40, see
     /// `yard_order`); without `pay` one built now is free (byte 0xf 0xff:
     /// order 0x5c's part; no price test, nothing taken). It must be
-    /// allowed (0x43da20, the price aside). (Not settled: whether the
-    /// player's yard buttons reach 0x416a40 at the yard itself or through
-    /// the town's command 0x20, which hands the order to its first yard
-    /// answering 0; the port orders at the yard clicked.)
+    /// allowed (0x43da20, the price aside). The player's yard buttons send
+    /// order 0x20 straight to the yard clicked, pay 1, the default-arming
+    /// byte the switch at the click (0x4f34c0, 0x49e230 -> 0x520cc0).
     pub fn start_ship_with(&mut self, site: u32, kind: u8, pay: bool) -> Result<(), String> {
         let owner = self
             .object_index(site)
@@ -232,13 +246,21 @@ impl Scene {
     /// What a ship of type `kind` built at shipyard `site` costs the
     /// player, with its arming if "default arming" is on (0x43e5c0).
     pub fn ship_price(&self, site: u32, kind: u8) -> Price {
+        self.ship_price_with(site, kind, self.default_arming)
+    }
+
+    /// The same with the order's default-arming byte `arm` (byte 0xd):
+    /// 0x43e5c0 for an order queued, 0x43ead0 for one built now (the same
+    /// price; 0x43ead0 also takes what it counts from the stock, the
+    /// caller's `stock_left`).
+    pub(super) fn ship_price_with(&self, site: u32, kind: u8, arm: bool) -> Price {
         let (hull_amber, hull_fish) = economy::ship_cost(kind);
         let home = self
             .object_index(site)
             .and_then(|i| self.home_settlement(i));
         let stock = home.map(|h| self.garrison(h)).unwrap_or_default();
         let k = kind as usize % 12;
-        let mut price = if self.default_arming {
+        let mut price = if arm {
             self.plan_arming(
                 stock,
                 combat::DEFAULT_WEAPONS[k],
@@ -405,15 +427,19 @@ impl Scene {
             power += combat::item_power(fallbacks[k]);
         }
         let levels = self.levels_of(self.human.map(|h| (h.nation, h.slot)));
+        // Armour and ram (0x43ead0 steps 4, 5): the level if it may be
+        // fitted (0x43da20 case 2 / 3); else a level 2 with no fallback
+        // tries level 1 by the same test; else the fallback is bought
+        // with no test at all; none without one.
         let fitted = |upgrade: combat::Upgrade, (level, fallback): (u8, u8)| {
             let can = |l: u8| l > 0 && levels.get(upgrade) >= l && self.permits.fit(upgrade, l);
-            // A level-2 fit without a fallback falls back to level 1.
-            let fallback = if level == 2 && fallback == 0 {
-                1
-            } else {
-                fallback
-            };
-            [level, fallback].into_iter().find(|&l| can(l))
+            if level == 0 || can(level) {
+                return (level > 0).then_some(level);
+            }
+            if level == 2 && fallback == 0 {
+                return can(1).then_some(1);
+            }
+            (fallback > 0).then_some(fallback)
         };
         if let Some(l) = fitted(combat::Upgrade::Armour, armour) {
             price.arming.armour = l;
