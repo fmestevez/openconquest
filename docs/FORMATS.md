@@ -1839,6 +1839,21 @@ original:
 - Best Conquerors (Startba.cpp 0x528210, 0x528390): the RAM_BEST
   picture at (15, 305), OK (1001) at (345, 540).
 
+**Player's name** (Config 0x5ca528, 0x26c bytes, the name at + 0x50 =
+0x5ca578, 0x104 bytes; HKLM `...\Ancient conquest\Config` value
+`Config`, its byte sum at + 0). Read at start-up (0x500810); on a bad sum
+the block takes its defaults (0x501710), the name Windows'
+`RegisteredOwner` (empty when absent; the port has no counterpart and
+starts empty). The main menu's Start scenario (0x168), MultiPlayer
+(0x16a), Custom missions (0x1cd) and Load game (0x1cf) make the session's
+name list (resources + 0x1b9) from it once (0x53d220); the connect
+screen's edit edits that list; Custom missions' Human row and the end
+screen's row take it (the end screen the stored name when the list is
+empty or not made). At exit (0x4ee6c0 -> 0x53d2f0, unless started by a
+DirectPlay lobby) the list's string goes back into + 0x50 and the block
+is written (0x501090). The port keeps the name in its settings file
+(`player_name`), written when the program ends.
+
 **Best Conquerors table** (0x5c9ed0, 0x540 bytes: 4 campaign types x 7
 rows of 0x30, a name of 0x28 bytes, the score at + 0x28, the game's id at
 + 0x2c). The original keeps it in HKLM `...\Ancient conquest\Config`,
@@ -2004,8 +2019,6 @@ state with kind 9; what enters and leaves it is not decoded (0x518db0,
 
 Known differences not yet ported:
 
-- Config's player name (0x5ca578, written back by 0x53d2f0 when
-  DAT_005d01fc is 0) is not kept between runs.
 - Custom missions' map tick (0x1dd, DAT_005ca538, Config + 0x10): the
   port always shows the map.
 - Start reports: the briefing's Start writes `MISSIONS\MISSION_%02d.RPM`

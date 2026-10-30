@@ -31,6 +31,10 @@ struct Config {
     /// The Best Conquerors table (the original's registry `Result`).
     #[serde(default)]
     best: crate::records::Table,
+    /// The player's name (the original's registry `Config` + 0x50,
+    /// 0x5ca578).
+    #[serde(default)]
+    player_name: String,
 }
 
 fn read_config() -> Config {
@@ -83,11 +87,23 @@ pub fn best_table() -> crate::records::Table {
     read_config().best
 }
 
-/// Keeps the Best Conquerors table (when the program ends, as the
-/// original's 0x501090).
-pub fn set_best_table(best: &crate::records::Table) {
+/// The player's name as last kept: empty when none is (the original's
+/// default is Windows' `RegisteredOwner`, 0x501710, which has no
+/// counterpart here).
+pub fn player_name() -> String {
+    read_config().player_name
+}
+
+/// Keeps the Best Conquerors table and, when given, the player's name
+/// (when the program ends, as the original's 0x4ee6c0: 0x53d2f0 copies
+/// the session's name into Config + 0x50, then 0x501090 writes the
+/// registry).
+pub fn save_at_exit(best: &crate::records::Table, name: Option<&str>) {
     let mut config = read_config();
     config.best = best.clone();
+    if let Some(name) = name {
+        config.player_name = name.to_string();
+    }
     write_config(&config);
 }
 

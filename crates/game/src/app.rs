@@ -854,8 +854,14 @@ pub struct App {
     kind_popup: Option<KindPopup>,
     /// The scan codes the system repeated since the keyboard's last poll.
     key_repeats: Vec<u8>,
-    /// The name typed on the multiplayer screen.
+    /// The session's name (the front end's name list, resources + 0x1b9,
+    /// one string): made once from the stored name (`stored_name`) by
+    /// Start scenario, MultiPlayer, Custom missions or Load game
+    /// (0x53d220), edited by the connect screen's edit.
     player_name: String,
+    session_made: bool,
+    /// The stored player's name (Config + 0x50, 0x5ca578).
+    stored_name: String,
     /// A chat line being typed in a multiplayer game.
     chat_line: Option<String>,
     /// The first entry shown of a front-end list, and wheel movement not
@@ -1073,6 +1079,8 @@ impl App {
             lobby_players: 2,
             join_address: String::new(),
             player_name: String::new(),
+            session_made: false,
+            stored_name: crate::launch::player_name(),
             custom_players: Vec::new(),
             custom_for: None,
             custom_head: [1, 1, 0],
@@ -1137,9 +1145,13 @@ impl App {
     pub fn run(mut self) -> Result<()> {
         let event_loop = EventLoop::new()?;
         event_loop.run_app(&mut self)?;
-        // The table is written when the program ends, as the original
-        // writes its registry (0x4ee6c0 -> 0x501090).
-        crate::launch::set_best_table(&self.best);
+        // The table and the name are written when the program ends, as the
+        // original writes its registry (0x4ee6c0 -> 0x53d2f0, 0x501090):
+        // the session's name, if it was made, into the stored one.
+        crate::launch::save_at_exit(
+            &self.best,
+            self.session_made.then_some(self.player_name.as_str()),
+        );
         match self.error {
             Some(e) => Err(e),
             None => Ok(()),
@@ -2791,10 +2803,13 @@ impl App {
         };
         // Game + 0x3335, the twelfth figure, a dword.
         let score = self.scene.stats.values(self.scene.amber)[11] as u32 as i32;
-        // The name: the resources' list (+ 0x1b9, the connect screen's
-        // name), else Config's (0x5ca578), which the port does not keep
-        // (its default, Windows' RegisteredOwner, is none here).
-        let name = self.player_name.clone();
+        // The name: the session's (resources + 0x1b9) when made and not
+        // empty, else the stored one (Config's 0x5ca578).
+        let name = if self.session_made && !self.player_name.is_empty() {
+            self.player_name.clone()
+        } else {
+            self.stored_name.clone()
+        };
         if let Some(row) = self.best.enter(kind, score, self.game_id, &name) {
             self.score_entry = Some(ScoreEntry {
                 kind,
@@ -3754,6 +3769,19 @@ impl App {
     }
 
     fn menu_action(&mut self, state: MenuState, caption: &str) {
+        // The main menu's Start scenario (0x168), MultiPlayer (0x16a),
+        // Custom missions (0x1cd) and Load game (0x1cf) make the session's
+        // name from the stored one, once (0x53d220).
+        if state == MenuState::Main
+            && matches!(
+                caption,
+                "Start scenario" | "MultiPlayer game" | "Custom missions" | "Load game"
+            )
+            && !self.session_made
+        {
+            self.session_made = true;
+            self.player_name = self.stored_name.clone();
+        }
         match (state, caption) {
             (_, "Load game") => {
                 self.refresh_panels();
@@ -7548,6 +7576,25 @@ mod custom_tests {
         // A click outside leaves it again.
         app.menu_press((600.0, 100.0));
         assert!(!app.connect_edit.active);
+    }
+
+    /// The session's name is made once from the stored one (0x53d220) by
+    /// the main menu's mission buttons, and the human takes it.
+    #[test]
+    fn the_session_name_comes_from_the_stored_one() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        app.stored_name = "Medea".into();
+        app.menu_action(MenuState::Main, "Custom missions");
+        assert!(app.session_made);
+        assert_eq!(app.player_name, "Medea");
+        show(&mut app, "battle01");
+        assert_eq!(app.custom_players[0].name, "Medea");
+        // Made once: a changed session name stays.
+        app.player_name = "Jason".into();
+        app.menu_action(MenuState::Main, "Load game");
+        assert_eq!(app.player_name, "Jason");
     }
 
     /// single02's HEAD_CUST (1, 0, 15): the human's row does not open, a
