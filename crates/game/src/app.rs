@@ -6145,7 +6145,12 @@ impl App {
                     self.pending = None;
                     self.status = None;
                     let ships = self.selection();
-                    if let Err(e) = self.issue(Order::GatherAt { ships, deposit }) {
+                    let keys = self.key_flags();
+                    if let Err(e) = self.issue(Order::GatherAt {
+                        ships,
+                        deposit,
+                        keys,
+                    }) {
                         self.say(e);
                     }
                 }
@@ -6541,6 +6546,18 @@ impl App {
         result
     }
 
+    /// A click's key flags, as Sinput puts them in the mouse message's
+    /// `+0x14` (0x55345d-0x5534ef): 8 Ctrl, 4 Shift (either), 2 the right
+    /// button held, 1 the left; a map click is taken at the release
+    /// (messages 0x62 / 0x64, 0x51d552), so its own button is not in it.
+    /// (Not ported: the left button held through a right click.)
+    fn key_flags(&self) -> u8 {
+        let m = self.modifiers;
+        u8::from(m.control_key()) * 8
+            + u8::from(m.shift_key()) * 4
+            + u8::from(self.right_press.is_some()) * 2
+    }
+
     /// The selected object and the ships selected with it.
     fn selection(&self) -> Vec<u32> {
         self.selected
@@ -6820,9 +6837,11 @@ impl App {
             });
             if is_deposit && own_merchant {
                 let ships = self.selection();
+                let keys = self.key_flags();
                 if let Err(e) = self.issue(Order::GatherAt {
                     ships,
                     deposit: target,
+                    keys,
                 }) {
                     self.say(e);
                 }

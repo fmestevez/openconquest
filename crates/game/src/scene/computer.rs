@@ -4173,23 +4173,45 @@ impl Scene {
     }
 
     /// Gives the flotilla's order to its ships. A gather order is the
-    /// flotilla's gather zone (fleet order 0x78 from 0x483090: its area,
-    /// its class; not decoded: the flags (flotilla `+0x154`), the port
-    /// list its base town gives (0x43d220, 0x440c60) and the route
-    /// 0x40b010 makes; here flags 0, the list made by 0x4c6c30, no
-    /// route); any other ends it.
+    /// flotilla's gather zone (fleet order 0x78 from 0x483090, key flags
+    /// 0: its area, its class, flags `+0x154`, which only tasks 7-11 and
+    /// 13 write, so 0 here); its ports are its base town's (0x43d220 with
+    /// 0x39: none for a town of state `+0xa4` 2, 3 or 0xff; 0x440c60: the
+    /// class-0x39 buildings of its list `+0x1d0`, in order), none leaving
+    /// the list for 0x4c6c30. (Not ported: the deposits 0x40b010 ranks
+    /// (up to 4, args[10] / [11]), which 0x4c8560 makes known first; the
+    /// town states 3 and 0xff, not identified: the port tests mending,
+    /// 2.) Any other order ends it.
     fn give_order(&mut self, ai: &mut Computer, f: usize) {
         let order = ai.flotillas[f].order;
         let group = super::gather::ZoneGroup::Computer(ai.id(), f);
         if let FleetOrder::Gather(area, res) = order {
             let ships = ai.flotillas[f].ships.clone();
-            self.start_zone(group, ships, area, res, 0, false);
+            let ports = self.flotilla_ports(ai, f);
+            self.start_zone_ports(group, ships, area, res, 0, false, ports);
             return;
         }
         self.end_zone(group);
         for id in ai.flotillas[f].ships.clone() {
             self.order_ship(ai, id, order);
         }
+    }
+
+    /// The ports of flotilla `f`'s base town for its gather zone
+    /// (0x43d220, 0x440c60): the town's class-0x39 buildings in its list's
+    /// order; none for a town being mended (`+0xa4` 2).
+    fn flotilla_ports(&self, ai: &Computer, f: usize) -> Vec<u32> {
+        let Some(town) = ai.bases.get(ai.flotillas[f].base).and_then(|b| b.site) else {
+            return Vec::new();
+        };
+        if self.mending.contains(&town) {
+            return Vec::new();
+        }
+        self.town_buildings(town)
+            .into_iter()
+            .filter(|&k| self.objects[k].class == ObjectClass::Building(PORT))
+            .map(|k| self.objects[k].id)
+            .collect()
     }
 
     /// A flotilla's ships, for its gather zone.

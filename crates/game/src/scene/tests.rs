@@ -1416,6 +1416,7 @@ fn merchant_gathers_amber() {
             &Order::GatherAt {
                 ships: vec![boat],
                 deposit,
+                keys: 0,
             },
             &data,
             &mut caches,
@@ -2064,6 +2065,7 @@ fn gathering_zone() {
             &Order::GatherAt {
                 ships: vec![boat],
                 deposit: d,
+                keys: 0,
             },
             &data,
             &mut caches,
@@ -5058,6 +5060,7 @@ fn merchants_answer_gather_orders() {
             &order::Order::GatherAt {
                 ships: vec![ship],
                 deposit: shoal,
+                keys: 0,
             },
             &data,
             &mut caches,
@@ -11014,6 +11017,7 @@ fn amber_boat_in_zone(data: &GameData, caches: &mut Caches) -> (Scene, u32, u32,
             &Order::GatherAt {
                 ships: vec![boat],
                 deposit,
+                keys: 0,
             },
             data,
             caches,
@@ -11802,7 +11806,7 @@ fn zone_port_pick_with_a_foreign_first_port() {
         .find(|o| gather::deposit_class(o).is_some())
         .unwrap()
         .id;
-    scene.order_gather_at(&[boat], deposit).unwrap();
+    scene.order_gather_at(&[boat], deposit, 0).unwrap();
     let i = scene.object_index(boat).unwrap();
     scene.gather_zones[0].ports = Some(vec![own, foreign]);
     assert_eq!(scene.zone_port_pick(0, Some(i)), Some(own));
@@ -11848,7 +11852,7 @@ fn zone_rating_over_two_ports_with_one_failed() {
         })
         .collect();
     shoals.sort_by_key(|&(_, (x, y))| (x - bx).abs().max((y - by).abs()));
-    scene.order_gather_at(&[boat], shoals[0].0).unwrap();
+    scene.order_gather_at(&[boat], shoals[0].0, 0).unwrap();
     let rec = |(id, cell): (u32, (i32, i32))| gather::Rec {
         id,
         cell,
@@ -11981,4 +11985,125 @@ fn zone_escort_turns_on_its_wards_attacker() {
             target: 0
         }
     );
+}
+
+/// The gather click's key flags (0x49d3c0): Shift on the same selection's
+/// zone of the code's class only makes the deposit known (0x4c6e30), no
+/// ship sent; of another class nothing; Shift on a new selection makes a
+/// 1 x 1 zone, and any key flag the zone's first deposit only (group
+/// `+0x10`); Ctrl keeps the 3 x 3 zone (needs `OPENCONQUEST_DATA`).
+#[test]
+fn gather_click_key_flags() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, deposit, _ports) = amber_boat_in_zone(&data, &mut caches);
+    let other = scene
+        .objects
+        .iter()
+        .find(|o| o.id != deposit && gather::deposit_class(o) == Some(Resource::Amber))
+        .unwrap()
+        .id;
+    let fish = scene
+        .objects
+        .iter()
+        .find(|o| gather::deposit_class(o) == Some(Resource::Fish))
+        .unwrap()
+        .id;
+    let before = scene.gather_zones[0].clone();
+    scene.outbox.clear();
+    scene.order_gather_at(&[boat], other, 4).unwrap();
+    assert_eq!(scene.gather_zones.len(), 1);
+    assert_eq!(scene.gather_zones[0].group, before.group);
+    assert_eq!(scene.gather_zones[0].rect, before.rect);
+    let mut known = before.deposits.clone();
+    known.push(other);
+    assert_eq!(scene.gather_zones[0].deposits, known);
+    assert!(scene.outbox.is_empty());
+    // A shoal on an amber zone: nothing.
+    scene.order_gather_at(&[boat], fish, 4).unwrap();
+    assert_eq!(scene.gather_zones[0].deposits, known);
+    assert!(scene.outbox.is_empty());
+    // Shift with another selection: a zone of the amber's cell alone.
+    let d = scene.object_index(deposit).unwrap();
+    let f = &scene.objects[d].record.fields;
+    let cell = (f[6] as i32, f[7] as i32);
+    let i = scene.object_index(boat).unwrap();
+    let owner = scene.objects[i].owner.unwrap();
+    let t = TILE_SIZE as f32;
+    let at = (
+        (scene.objects[i].x / t).floor() as i32,
+        (scene.objects[i].y / t).floor() as i32,
+    );
+    let near = (-2..=2)
+        .flat_map(|dy| (-2..=2).map(move |dx| (at.0 + dx, at.1 + dy)))
+        .find(|&c| c != at && scene.sea_cell(c, false) && scene.slot_ship(c).is_none())
+        .unwrap();
+    let mate = scene
+        .spawn_ship(owner, 0, near.0, near.1, &data, &mut caches)
+        .unwrap();
+    scene.order_gather_at(&[boat, mate], deposit, 4).unwrap();
+    let z = scene.gather_zones.last().unwrap();
+    assert_eq!(z.rect, (cell.0, cell.1, 1, 1));
+    assert!(z.first_only);
+    // Ctrl: 3 x 3, the first deposit only.
+    scene.order_gather_at(&[boat], deposit, 8).unwrap();
+    let z = scene.gather_zones.last().unwrap();
+    assert_eq!(z.rect, (cell.0 - 1, cell.1 - 1, 3, 3));
+    assert!(z.first_only);
+}
+
+/// The zone buttons' drag sends its top-left cell and its size in cells
+/// (0x51cdd0 -> 0x517c00 -> 0x49d790), the cells toward zero and not
+/// clipped to the map (needs `OPENCONQUEST_DATA`).
+#[test]
+fn gather_area_is_the_dragged_cells() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, _deposit, _ports) = amber_boat_in_zone(&data, &mut caches);
+    let w = scene.nav.width as f32 * 64.0;
+    scene
+        .order_gather_area(
+            &[boat],
+            (w + 100.0, 200.0),
+            (w - 70.0, 130.0),
+            Resource::Amber,
+        )
+        .unwrap();
+    let z = scene.gather_zones.last().unwrap();
+    let mw = scene.nav.width as i32;
+    assert_eq!(z.rect, (mw - 2, 2, 4, 2));
+    assert_eq!(z.flags, 0x10000);
+}
+
+/// An order's port list is kept as given, each port once (0x4c6400),
+/// none leaving it null for 0x4c6c30 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn zone_takes_the_orders_ports() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, _deposit, ports) = amber_boat_in_zone(&data, &mut caches);
+    let group = scene.gather_zones[0].group;
+    let rect = scene.gather_zones[0].rect;
+    scene.start_zone_ports(
+        group,
+        vec![boat],
+        rect,
+        Resource::Amber,
+        0,
+        false,
+        vec![ports[0], ports[0]],
+    );
+    assert_eq!(scene.gather_zones[0].ports, Some(vec![ports[0]]));
+    scene.start_zone(group, vec![boat], rect, Resource::Amber, 0, false);
+    // (Null, then filled by the start's dispatch, 0x4c6c30.)
+    assert_eq!(scene.gather_zones[0].ports, Some(ports.clone()));
 }

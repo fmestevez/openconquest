@@ -91,10 +91,14 @@ pub enum Order {
         port: u32,
     },
     /// The human's gather click on a deposit with `ships` selected
-    /// (0x49d3c0): a gather zone of the 3 x 3 cells about it.
+    /// (0x49d3c0): a gather zone of the 3 x 3 cells about it. `keys`: the
+    /// click's key flags (Sinput, the mouse message's `+0x14`: 4 Shift, 8
+    /// Ctrl, 2 the right button held).
     GatherAt {
         ships: Vec<u32>,
         deposit: u32,
+        #[serde(default)]
+        keys: u8,
     },
     /// The merchants' zone buttons over a rectangle (0x49d790).
     GatherArea {
@@ -570,8 +574,12 @@ impl Scene {
                 b,
                 resource,
             } => done(self.order_gather_area(ships, a, b, resource)),
-            GatherAt { ref ships, deposit } => {
-                let r = self.order_gather_at(ships, deposit);
+            GatherAt {
+                ref ships,
+                deposit,
+                keys,
+            } => {
+                let r = self.order_gather_at(ships, deposit, keys);
                 if r.is_ok() {
                     if let Some(&first) = ships.first() {
                         self.gather_voice(first, deposit);

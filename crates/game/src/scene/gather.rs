@@ -184,26 +184,56 @@ impl Scene {
     }
 
     /// The human's gather click on a deposit (codes 0x19 fish, 0x1a amber,
-    /// 0x1c / 0x1d leviathan; 0x49e230 -> 0x49d3c0): the selection made a
-    /// group, a zone of the 3 x 3 cells about the deposit's cell (clipped
-    /// to the map), its class, `+0x24 = 0x100`, started (0x4c8a80 with no
-    /// key flags). (Not ported: key flag 4, which adds the deposit to a
-    /// running zone of its class, 0x4c6e30, or makes the zone 1 x 1: the
-    /// interface has no such key.)
-    pub fn order_gather_at(&mut self, ships: &[u32], deposit: u32) -> Result<(), String> {
+    /// 0x1c / 0x1d leviathan; 0x49e230 -> 0x49d3c0) with the click's key
+    /// flags. With Shift (4) on the selection's group (0x49e230 keeps the
+    /// group while the selection is unchanged: here a zone of exactly
+    /// these ships) running a zone: of the code's class (400 for amber,
+    /// 0x191 for the others, so never a leviathan zone) the deposit is
+    /// only known (0x4c6e30), no ship sent; of another, nothing. Else the
+    /// selection made a group, a zone of the 3 x 3 cells about the
+    /// deposit's cell (1 x 1 with Shift), clipped to the map, its class,
+    /// `+0x24 = 0x100`, args[9] -1, started (0x4c8a80 with the flags:
+    /// any set group `+0x10`, the first deposit only). (Not ported: the
+    /// message 0xc45d 0x4a1f20 sends the interface on the Shift add; the
+    /// kept `+0x61` of a group's earlier waypoint move, which skips the
+    /// start's dispatch: the port's zones have none.)
+    pub fn order_gather_at(&mut self, ships: &[u32], deposit: u32, keys: u8) -> Result<(), String> {
         let d = self.object_index(deposit).ok_or("No such deposit")?;
         let class = deposit_class(&self.objects[d]).ok_or("Nothing to gather there")?;
         let (cx, cy) = self.deposit_cell(d);
+        let shift = keys & 4 != 0;
+        if shift {
+            let mut sel: Vec<u32> = ships.to_vec();
+            sel.sort_unstable();
+            let same = self.gather_zones.iter().position(|z| {
+                let mut s = z.ships.clone();
+                s.sort_unstable();
+                matches!(z.group, ZoneGroup::Human(_)) && s == sel
+            });
+            if let Some(z) = same {
+                let code = if class == Resource::Amber { 400 } else { 0x191 };
+                if class_code(self.gather_zones[z].class) == code {
+                    let id = self.objects[d].id;
+                    if !self.gather_zones[z].deposits.contains(&id) {
+                        self.gather_zones[z].deposits.push(id);
+                    }
+                }
+                return Ok(());
+            }
+        }
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
-        let (x0, y0) = ((cx - 1).max(0), (cy - 1).max(0));
-        let rect = (x0, y0, (cx + 2).min(w) - x0, (cy + 2).min(h) - y0);
-        self.human_zone(ships, rect, class, 0x100)
+        let u = i32::from(!shift);
+        let (x0, y0) = ((cx - u).max(0), (cy - u).max(0));
+        let rect = (x0, y0, (cx + u + 1).min(w) - x0, (cy + u + 1).min(h) - y0);
+        self.human_zone(ships, rect, class, 0x100, keys != 0)
     }
 
     /// The merchants' amber, fish and leviathan zone buttons (0x23 sub
-    /// 0x10-0x12, 0x49d790): a zone of the rectangle, flags 0x10000.
-    /// (Not decoded: the interface's payload, whether its second pair is
-    /// the size or the far corner; here the dragged cells.)
+    /// 0x10-0x12, 0x49d790): a zone of the rectangle, flags 0x10000. The
+    /// drag (0x51cdd0) takes its start and end cells (pixels / 64 toward
+    /// zero), orders them and sends `{x0, y0, x1 - x0 + 1, y1 - y0 + 1}`
+    /// (0x517c00, key flags 0): the cells dragged over, not clipped to
+    /// the map (0x4c5b90 clips its walk).
     pub fn order_gather_area(
         &mut self,
         ships: &[u32],
@@ -212,11 +242,17 @@ impl Scene {
         class: Resource,
     ) -> Result<(), String> {
         let t = TILE_SIZE as f32;
-        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
-        let cell = |v: f32, n: i32| ((v / t).floor() as i32).clamp(0, n - 1);
-        let (x0, x1) = (cell(a.0.min(b.0), w), cell(a.0.max(b.0), w));
-        let (y0, y1) = (cell(a.1.min(b.1), h), cell(a.1.max(b.1), h));
-        self.human_zone(ships, (x0, y0, x1 - x0 + 1, y1 - y0 + 1), class, 0x10000)
+        let cell = |v: f32| (v / t) as i32;
+        let (ax, ay, bx, by) = (cell(a.0), cell(a.1), cell(b.0), cell(b.1));
+        let (x0, x1) = (ax.min(bx), ax.max(bx));
+        let (y0, y1) = (ay.min(by), ay.max(by));
+        self.human_zone(
+            ships,
+            (x0, y0, x1 - x0 + 1, y1 - y0 + 1),
+            class,
+            0x10000,
+            false,
+        )
     }
 
     fn human_zone(
@@ -225,6 +261,7 @@ impl Scene {
         rect: Cells,
         class: Resource,
         flags: u32,
+        first_only: bool,
     ) -> Result<(), String> {
         let ships: Vec<u32> = ships
             .iter()
@@ -240,7 +277,7 @@ impl Scene {
         self.leave_zones(&ships);
         self.zone_serial += 1;
         let group = ZoneGroup::Human(self.zone_serial);
-        self.start_zone(group, ships, rect, class, flags, false);
+        self.start_zone(group, ships, rect, class, flags, first_only);
         Ok(())
     }
 
@@ -249,7 +286,8 @@ impl Scene {
     /// list, escorts; the notices kept) and its block rewritten; else a
     /// new block (0x4c87d0). Then the rectangle's deposits of the class
     /// are listed and known (0x4c5b90 mode 0) and, if any, the group's
-    /// ships split (0x4c5f40) and sent (0x4c6ee0).
+    /// ships split (0x4c5f40) and sent (0x4c6ee0). No port list: null,
+    /// for 0x4c6c30 to fill.
     pub(super) fn start_zone(
         &mut self,
         group: ZoneGroup,
@@ -259,6 +297,29 @@ impl Scene {
         flags: u32,
         first_only: bool,
     ) {
+        self.start_zone_ports(group, ships, rect, class, flags, first_only, Vec::new());
+    }
+
+    /// `start_zone` with the order's port list (args[7] / args[8]): each
+    /// port added once by id (0x4c6400); none leaves the list null.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn start_zone_ports(
+        &mut self,
+        group: ZoneGroup,
+        ships: Vec<u32>,
+        rect: Cells,
+        class: Resource,
+        flags: u32,
+        first_only: bool,
+        listed: Vec<u32>,
+    ) {
+        let mut ports: Vec<u32> = Vec::new();
+        for id in listed {
+            if !ports.contains(&id) {
+                ports.push(id);
+            }
+        }
+        let ports = (!ports.is_empty()).then_some(ports);
         let owner = ships
             .iter()
             .find_map(|&id| self.object_index(id).and_then(|i| self.objects[i].owner));
@@ -266,7 +327,7 @@ impl Scene {
             Some(z) => {
                 let zone = &mut self.gather_zones[z];
                 zone.deposits.clear();
-                zone.ports = None;
+                zone.ports = ports;
                 zone.escorts.clear();
                 zone.rect = rect;
                 zone.class = class;
@@ -287,7 +348,7 @@ impl Scene {
                     flags,
                     first_only,
                     deposits: Vec::new(),
-                    ports: None,
+                    ports,
                     ships,
                     notices: Vec::new(),
                     escorts: Vec::new(),

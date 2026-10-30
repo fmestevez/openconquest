@@ -2073,20 +2073,36 @@ list and escorts).
   selection made a group (0x49ca60), a zone of the 3 x 3 cells about the
   deposit's cell (amber `+0x90/+0x94`, fish `+0x9d/+0xa1`, leviathan
   `+0xa9/+0xad`), clipped to the map, its class, flags `+0x24 = 0x100`,
-  args[9] -1, no port list, no route; with key flag 4 a 1 x 1 zone, or
-  only the deposit added (0x4c6e30) to a running zone of its class (not
-  ported: the interface has no such key). The zone buttons (0x23 sub
-  0x10-0x12, 0x49d790): flags 0x10000, class 400 / 0x191 / 0x192, the
-  rectangle from the payload's two short pairs (not decoded: whether the
-  second pair is the size or the far corner; the port takes the dragged
-  cells). A brain's 0x47a570 -> 0x479970: the area, class, flags its
-  argument 11 (0 in every mission), args[9] the member p10's id, no port
-  list, mask or route. A computer player's flotilla (0x483090): its area
-  `+0x158..+0x164`, class `+0x70` (tasks 4, 5), flags `+0x154`, its base
-  town's ports (0x43d220 / 0x440c60 of class 0x39) and up to 4 route
-  points (0x40b010, table 0x594520) (not decoded: `+0x154`, the port
-  helpers, the route; the port uses flags 0, the list 0x4c6c30 fills, no
-  route). Any other order to the group ends the zone (0x4a1c60); a group
+  args[9] -1, no port list. The click's key flags (Sinput,
+  0x55345d-0x5534ef, the mouse message's `+0x14`: 8 Ctrl, 4 Shift, 2 the
+  right button held, 1 the left; the map click is taken at the release,
+  messages 0x62 / 0x64, so its own button is not in it) go whole to
+  0x4c8a80, where any sets group `+0x10` (the first deposit only). Shift
+  (4) on the selection's group (0x49e230 keeps it while the selection is
+  unchanged) running a zone: of the code's class (400 for amber, 0x191
+  for the others, so never a leviathan zone) the deposit is only known
+  (0x4c6e30; the local player's interface gets message 0xc45d, not
+  ported), no ship sent; of another class nothing; else a 1 x 1 zone. The
+  voice plays first either way. The zone buttons (0x23 sub 0x10-0x12,
+  0x49d790): flags 0x10000, class 400 / 0x191 / 0x192, the rectangle the
+  drag gives (0x51cdd0 -> 0x517c00, key flags 0): its top-left cell and
+  its size, cells of pixels / 64 toward zero, not clipped to the map. A
+  brain's 0x47a570 -> 0x479970: the area, class, flags its argument 11
+  (0 in every mission), args[9] the member p10's id, no port list or
+  mask. A computer player's flotilla (0x483090, only at the first turn of
+  task 4 state 5 and task 5 states 7 and 10; key flags 0): its area
+  `+0x158..+0x164`, class `+0x70`, flags `+0x154` (0 here: only tasks
+  7-11 and 13 write it), args[9] the manager flotilla's group (never
+  read), its base town's ports (0x43d220 with 0x39: none for a town of
+  `+0xa4` 2, 3 or 0xff; 0x440c60: the class-0x39 buildings of its list
+  `+0x1d0` in order; none: the list null for 0x4c6c30), and as args[10] /
+  [11] up to 4 deposits of the class 0x40b010 ranks in the area (table
+  0x594520), which 0x4c8560 makes known before the area's, ordered for
+  each port by its flood (0x4c7800) (not ported: 0x40b010 and 0x4c8560;
+  the town states 3 and 0xff, not identified, the port tests mending).
+  The block's `+0x61` is no route of the order's: it is a group's
+  waypoint list (a Shift move on a zone group, 0x49de70), kept by a Shift
+  order 0x78, which then skips the start's dispatch (not ported). Any other order to the group ends the zone (0x4a1c60); a group
   given 0x78 again has its lists cleared (0x4c7650: deposits, port list,
   escorts, `+0x35`, `+0x3d`; its notices kept) and its block rewritten.
 - **Start** (0x4c8a80 tail): 0x4c5b90 mode 0 lists the rectangle's
