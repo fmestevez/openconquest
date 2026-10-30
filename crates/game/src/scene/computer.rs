@@ -2243,9 +2243,9 @@ impl Scene {
                                 p.tries = p.op.tries_under_way();
                                 // The town wakes its land fleet when it
                                 // has handled the part's command (0x441ba0
-                                // at 0x44393d). Not decoded: the tick the
-                                // command (0x520cc0) reaches the town; the
-                                // port's command takes effect at once.
+                                // at 0x44393d); the command (0x520cc0)
+                                // reaches it at the next tick, before the
+                                // pass 3 ticks on that the wake allows.
                                 ai.land.woken = true;
                             }
                             PartStep::Wait => {
@@ -2326,11 +2326,15 @@ impl Scene {
     /// a -1 (0x428f20 at 0x4295cb): its town is sent command 0x28 with
     /// payload 3, clearing its berths (0x441ba0, 0x4415a0), and every other
     /// tried part for a ship of the same type whose last result was -1
-    /// starts its count again. (Not decoded: the tick a command sent by
-    /// 0x520cc0 reaches the town; the port's is at once.)
+    /// starts its count again. The command (0x520cc0) reaches the town at
+    /// the next tick.
     fn berths_held(&mut self, ai: &mut Computer, i: usize, b: usize, op: Op) {
-        let yards = self.base_yards(ai, b);
-        self.clear_berths(Some(ai.owner), &yards);
+        if let Some(site) = ai.bases.get(b).and_then(|b| b.site) {
+            self.post(Order::TownBerths {
+                site,
+                owner: ai.owner,
+            });
+        }
         for (k, e) in ai.land.queue.iter_mut().enumerate() {
             let state = e.state();
             if let Job::Part { part, .. } = &mut e.job {
@@ -2515,15 +2519,20 @@ impl Scene {
                 if ai.magic.all_known(temple) {
                     return PartStep::Done;
                 }
-                let Some(at) = self.base_building(ai, b, temple.class()) else {
+                if self.base_building(ai, b, temple.class()).is_none() {
                     return PartStep::Wait;
-                };
+                }
                 let cost = crate::magic::LEARN_COST as i64;
                 if (self.funds(owner).0 as i64) < cost {
                     return PartStep::Hold;
                 }
-                self.earn(owner, -cost, 0);
-                ai.magic.start_learning(temple, Some(at));
+                // Command 0x21 (code 0xe, 0x520cc0): the town hands it to
+                // its temple at the next tick, which pays and learns.
+                self.post(Order::TownLearn {
+                    site,
+                    owner,
+                    temple,
+                });
                 PartStep::Started(0)
             }
             Op::Study(n) => {
@@ -2550,11 +2559,18 @@ impl Scene {
                 if self.funds(owner).0 < upgrade.cost(level) {
                     return PartStep::Hold;
                 }
-                if self.computer_study(ai, b, upgrade, level) {
-                    PartStep::Started(0)
-                } else {
-                    PartStep::Wait
+                if !self.computer_may_study(ai, b, upgrade, level) {
+                    return PartStep::Wait;
                 }
+                // Command 0x21 (0x520cc0): the town hands it to its first
+                // idle school, workshop or smithy at the next tick (0x441ba0
+                // case 0x21), which pays and studies.
+                self.post(Order::TownStudy {
+                    site,
+                    owner,
+                    upgrade,
+                });
+                PartStep::Started(0)
             }
             Op::Repair => {
                 let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
@@ -2613,46 +2629,94 @@ impl Scene {
         }
     }
 
-    /// Starts studying `upgrade` from `level` at base `b`'s school or
-    /// workshop, paying for it (0x4404e0 for the computer).
-    fn computer_study(&mut self, ai: &Computer, b: usize, upgrade: Upgrade, level: u8) -> bool {
-        let class = upgrade.building();
-        if let Upgrade::Special(k) = upgrade {
-            if self.levels_of(Some(ai.owner)).weapons < 1 || (ai.nation() == 1) != (k < 2) {
-                return false;
-            }
-        }
-        let Some(site) = self.base_building(ai, b, class) else {
+    /// Whether base `b`'s town may study `upgrade` from `level` now
+    /// (0x4404e0 for the computer, the part's tests before its command).
+    fn computer_may_study(&self, ai: &Computer, b: usize, upgrade: Upgrade, level: u8) -> bool {
+        let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
             return false;
         };
-        if self.construction_at(site).is_some()
-            || self.research.iter().any(|r| r.0 == site)
+        self.study_site(site, ai.owner, upgrade, level).is_some()
+    }
+
+    /// The building of town `site` of `owner` that would study `upgrade`
+    /// from `level` now: the first standing school, workshop or smithy of
+    /// its class not studying (none while another study of the player's
+    /// excludes it), the unique ships only after arming and of the
+    /// player's nation, the player able to pay.
+    fn study_site(&self, site: u32, owner: (u32, u32), upgrade: Upgrade, level: u8) -> Option<u32> {
+        if let Upgrade::Special(k) = upgrade {
+            if self.levels_of(Some(owner)).weapons < 1 || (owner.0 == 1) != (k < 2) {
+                return None;
+            }
+        }
+        let at = self.town_building_of(site, owner, upgrade.building())?;
+        let busy = self.construction_at(at).is_some()
+            || self.research.iter().any(|r| r.0 == at)
             || self.research.iter().any(|r| {
                 r.1.excludes(upgrade)
                     && self
                         .object_index(r.0)
-                        .is_some_and(|i| self.objects[i].owner == Some(ai.owner))
-            })
-        {
-            return false;
+                        .is_some_and(|i| self.objects[i].owner == Some(owner))
+            });
+        (!busy && self.funds(owner).0 >= upgrade.cost(level)).then_some(at)
+    }
+
+    /// Town command 0x21 reaching town `site` of `owner` (0x441ba0 case
+    /// 0x21): its building studies `upgrade` from the level the player
+    /// has, paying for it; nothing if none may.
+    pub(super) fn town_study(
+        &mut self,
+        site: u32,
+        owner: (u32, u32),
+        upgrade: Upgrade,
+    ) -> Result<(), String> {
+        let level = self.levels_of(Some(owner)).get(upgrade);
+        let at = self
+            .study_site(site, owner, upgrade, level)
+            .ok_or("No building may study it")?;
+        self.earn(owner, -(upgrade.cost(level) as i64), 0);
+        self.research.push((at, upgrade, level + 1, 0.0));
+        Ok(())
+    }
+
+    /// Town command 0x21 code 0xe reaching town `site` of `owner`: its
+    /// temple learns its next spell, paying for it.
+    pub(super) fn town_learn(
+        &mut self,
+        site: u32,
+        owner: (u32, u32),
+        temple: crate::magic::Temple,
+    ) -> Result<(), String> {
+        let at = self
+            .town_building_of(site, owner, temple.class())
+            .ok_or("No temple")?;
+        let cost = crate::magic::LEARN_COST as i64;
+        if (self.funds(owner).0 as i64) < cost {
+            return Err("Not enough amber".into());
         }
-        let cost = upgrade.cost(level);
-        if self.funds(ai.owner).0 < cost {
-            return false;
+        let Some(ai) = self.computers.players.iter_mut().find(|p| p.owner == owner) else {
+            return Err("No such player".into());
+        };
+        if ai.magic.all_known(temple) || ai.magic.learning(temple).is_some() {
+            return Err("Nothing to learn".into());
         }
-        self.earn(ai.owner, -(cost as i64), 0);
-        self.research.push((site, upgrade, level + 1, 0.0));
-        true
+        ai.magic.start_learning(temple, Some(at));
+        self.earn(owner, -cost, 0);
+        Ok(())
     }
 
     /// A standing building of class `class` of base `b`'s town.
     fn base_building(&self, ai: &Computer, b: usize, class: u32) -> Option<u32> {
-        let site = ai.bases.get(b)?.site?;
+        self.town_building_of(ai.bases.get(b)?.site?, ai.owner, class)
+    }
+
+    /// A standing building of class `class` of `owner`'s town `site`.
+    fn town_building_of(&self, site: u32, owner: (u32, u32), class: u32) -> Option<u32> {
         let (tx, ty) = self.cell_of(self.object_index(site)?);
         self.objects
             .iter()
             .filter(|o| {
-                o.owner == Some(ai.owner)
+                o.owner == Some(owner)
                     && o.class == ObjectClass::Building(class)
                     && self.construction_at(o.id).is_none()
                     && o.cell.is_some_and(|(x, y)| {
@@ -2666,16 +2730,21 @@ impl Scene {
     /// The shipyards and docks of base `b`'s town (its buildings `+0x1d0`;
     /// the port's are those `base_building` finds), in the objects' order.
     fn base_yards(&self, ai: &Computer, b: usize) -> Vec<u32> {
-        let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
-            return Vec::new();
-        };
+        match ai.bases.get(b).and_then(|b| b.site) {
+            Some(site) => self.town_yards_of(site, ai.owner),
+            None => Vec::new(),
+        }
+    }
+
+    /// The shipyards and docks of `owner`'s town `site`.
+    pub(super) fn town_yards_of(&self, site: u32, owner: (u32, u32)) -> Vec<u32> {
         let Some((tx, ty)) = self.object_index(site).map(|i| self.cell_of(i)) else {
             return Vec::new();
         };
         self.objects
             .iter()
             .filter(|o| {
-                o.owner == Some(ai.owner)
+                o.owner == Some(owner)
                     && matches!(o.class, ObjectClass::Building(SHIPYARD | DOCK))
                     && self.construction_at(o.id).is_none()
                     && o.cell.is_some_and(|(x, y)| {
@@ -5702,6 +5771,10 @@ mod tests {
         now += 50;
         scene.land_fleet(&mut ai, now);
         assert_eq!(counted(&ai).unwrap().2, 0);
+        // Command 0x28 reaches the town at the next tick (0x520cc0).
+        assert!(scene.objects[k].ship.as_ref().unwrap().path.is_empty());
+        scene.deliver(&data, &mut caches);
+        let k = scene.object_index(id).unwrap();
         let s = scene.objects[k].ship.as_ref().unwrap();
         assert_eq!((s.path.len(), s.priority), (1, 100));
         let (gx, gy) = s.path[0];
@@ -5904,6 +5977,11 @@ mod tests {
         };
         let step = scene.order_part(&mut ai, 0, None, part);
         assert!(matches!(step, PartStep::Started(_)));
+        // Command 0x21 reaches the temple at the next tick (0x520cc0).
+        assert!(ai.magic.learning(Temple::War).is_none());
+        scene.computers.players[0] = ai;
+        scene.deliver(&data, &mut caches);
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
         assert!(ai.magic.learning(Temple::War).is_some());
         // Learnt in 100 ticks: run the war temple through its list.
         for _ in 0..6 {
@@ -5962,7 +6040,13 @@ mod tests {
         };
         let step = scene.order_part(&mut ai, 0, None, part);
         assert!(matches!(step, PartStep::Started(_)));
+        // Command 0x21 reaches the smithy at the next tick (0x520cc0),
+        // which pays then.
+        let funds = scene.funds(owner).0;
+        assert!(!scene.research.iter().any(|r| r.1 == Upgrade::RamKind(1)));
+        scene.deliver(&data, &mut caches);
         assert!(scene.research.iter().any(|r| r.1 == Upgrade::RamKind(1)));
+        assert!(scene.funds(owner).0 < funds);
         scene.run_research(Upgrade::RamKind(1).seconds(0) + 0.1);
         assert_eq!(scene.levels_of(Some(owner)).ram_kinds[1], 1);
         assert_eq!(study(32, 0), Some(Upgrade::ArmourKind(2)));

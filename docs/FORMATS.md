@@ -6452,10 +6452,9 @@ own (same nation and slot, `+0x25d & 0x20`, task `+0x72f == 1` with
 the direction 0x59791d[dx*4+dy] and its draught `+0x592`) drawn with the
 ship's LCG, else one held by a lower-priority (`+0x5c7 < 100`) own ship
 (0x499990), and the move event 0x80 to it (see "Shipyards' berths").
-The port holds the part (`PartStep::Berth`), counts `+0xe0` and clears
-the berths at once (the original's command reaches the town at the
-next tick, "When a command arrives": not ported for the town commands);
-the town busy is, here, only its going up or being made a town.
+The port holds the part (`PartStep::Berth`), counts `+0xe0` and posts
+the command (`Order::TownBerths`), which clears the berths at the next
+tick; the town busy is, here, only its going up or being made a town.
 
 **The land fleet's pass** (0x42b910, the fleet's message 0 every tick;
 constructor 0x42b370). Fields: +0x14 the last pass started a part, +0x18
@@ -6481,8 +6480,15 @@ and is under way; a cast part (0x42a500) sends command 0x22 (the
 town's temple casting at the next tick: `Order::TownCast`,
 `TownCastOn`, `TownReef`). (Not ported: the cast's own wait as a
 land-fleet part, queued and started on a pass, 0x42b910; the port posts
-it at the computer's turn. The berths' command 0x28 below and the
-studies 0x42a860 still act at once.) A town order
+it at the computer's turn.) A study part (0x42a860), its tests passed
+(0x4404e0 twice, without and with the price), sends command 0x21
+`{code, sub}` (1 arming 3, 2 ram 4, 3 armour 5, 17 rigging 9, 18-26 the
+workshop 6-8 with group 1-3, 27-32 the smithy's kinds 4-5 with 4-6, 33/34
+code 0xe with 7/8, 35-38 codes 10-13) and is under way; the town (0x441ba0
+case 0x21) hands it to its first school (0x3c), smithy (0x38, codes 4 and
+5 with a sub) or workshop (0x37) answering idle (vt+0x9c(0xff) == 0), or
+for code 0xe to its temple (0x3d sub 7, 0x3e sub 8), which pays and
+starts at the next tick (`Order::TownStudy`, `TownLearn`). A town order
 is asked as an op-1000 entry (0x482f50 -> 0x4a09d0): dwords op, flags
 (request +0x20, 0), priority (the key), code, order flags (+0x24: 0x88 the
 base scripts', 0xd8 their order 0x60, 0x488 the ship requests; 0x47d2e0,

@@ -256,6 +256,28 @@ pub enum Order {
         spell: Spell,
         ship: u32,
     },
+    /// The town command 0x21 a computer's study part sends (0x42a860):
+    /// town `site` of `owner` has its first idle school, workshop or
+    /// smithy (0x441ba0 case 0x21) study `upgrade`.
+    TownStudy {
+        site: u32,
+        owner: (u32, u32),
+        upgrade: Upgrade,
+    },
+    /// The same for a temple's next spell (code 0xe, sub 7 or 8: the
+    /// temple of the sea or of war).
+    TownLearn {
+        site: u32,
+        owner: (u32, u32),
+        temple: Temple,
+    },
+    /// The town command 0x28 with payload 3 a land fleet's held ship part
+    /// sends (0x428f20 at 0x4295cb): town `site` of `owner` clears its
+    /// berths (0x4415a0).
+    TownBerths {
+        site: u32,
+        owner: (u32, u32),
+    },
     BuildArgo {
         site: u32,
     },
@@ -683,6 +705,21 @@ impl Scene {
             }
             TownReef { cx, cy, kind } => {
                 self.big_reef(cx, cy, kind, data, caches);
+                Ok(0)
+            }
+            TownStudy {
+                site,
+                owner,
+                upgrade,
+            } => done(self.town_study(site, owner, upgrade)),
+            TownLearn {
+                site,
+                owner,
+                temple,
+            } => done(self.town_learn(site, owner, temple)),
+            TownBerths { site, owner } => {
+                let yards = self.town_yards_of(site, owner);
+                self.clear_berths(Some(owner), &yards);
                 Ok(0)
             }
             TownCastOn { spell, ship } => {
