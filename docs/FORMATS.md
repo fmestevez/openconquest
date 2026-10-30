@@ -1581,12 +1581,70 @@ then flies a diagonal (1, 3, 5, 7) from the opposite edge, 2 pixels a step
 every other tick, `GULLSPR` frames heading x 10 + step, its shadow
 `GULLSHD_SPR` 120 pixels below drawn through the shadow table.
 
+## A town's buildings
+
+A building of classes 0x34-0x3e (WorkLandObj 0x427f50, `+0x1d8 & 0x30`:
+the BuildingTy constructor 0x427750 with 0x15 for the schools, smithy,
+workshop and temples, 0x1e for ports, yards and docks (0x4e7f50), 0x20 for
+forts (0x417814)) keeps its town `+0x1c8`, a town cell `+0x1cc` /
+`+0x1d0` (its record's fields 8 and 9, 0xff for none) and `+0x1d4`, set
+1 by the constructor. Nation 4 (the barbarians) never takes a town.
+- 0x427de0: the object in the town cell's slot, of the building's nation
+  and slot, is its town (`+0x1d4 = 0`); else none. No class test.
+- A town's order 0x138c (0x43b290, the player's click and the computer's
+  search alike) makes the building from a record of type 1 (`+0x10`) with
+  the town's anchor as town cell; 0x427f50 message 2 runs 0x427de0 for a
+  type-1 record, so the building is the ordering town's from its creation.
+- At the start (message 0x8d1, broadcast by 0x522d50 to every object in
+  the world's order) each building with a town cell runs 0x427de0 and,
+  standing, tells its town at once; each settlement or town (not in state
+  0xff) offers itself, 0x441190: message 0x2490 {town, anchor} to the
+  objects on the cells x-1..x+2, y-1..y+2 of its anchor that are a
+  player's (`+0x57` 1), of its nation and slot, of classes 0x34-0x3e. A
+  building takes 0x2490 only without a town, with a town cell (not 0xff)
+  and not of nation 4: the cell becomes the town's anchor, 0x427de0, and,
+  found, it offers the town on to its own 3 x 3 (0x427e40). The calls are
+  direct, so the chain runs depth first. (Checked over every mission: the
+  result does not depend on the objects' order; the buildings left without
+  a town are those whose record cell is 0xff.)
+- Each tick (message 0) a building standing with `+0x1d4` 0 sets it and
+  posts 0x2873 {its id} to its town: the town (not in state 2, 3, 0xff)
+  appends it to its list `+0x1d0` (count `+0x1c8`) once and counts it by
+  class (workshops `+0x1fc` and their pointers `+0x1d4[]`, the first five;
+  smithies `+0x200`, `+0x1e8[]`; ports `+0x208`, yards `+0x20c`, docks
+  `+0x210`, schools `+0x220`, temples `+0x224` / `+0x228`, forts `+0x218`,
+  `+0x214`, `+0x21c` with their being-built counts lowered; mask `+0x238`).
+  So a building joins its town's list on its first tick standing.
+- 0x2874 {id} to the town (same state test) takes a listed building off and
+  uncounts it. Sent by the drain 0x427bb0 when a building falls or is
+  called off, and by Dock 0x416340 as a shipyard is made a dock, which also
+  sets `+0x1d4 = 0`: the dock joins again, last, when it stands. A town
+  falling (0x43bc30) sends 0x2874 {town} to each building of its list,
+  which then forgets it (`+0x1c8 = 0`, 0x427f50).
+- Saves (0x4277c0) write fields 8, 9 = the town's anchor (0xff without
+  one); neither `+0x1d4` nor the town's list is saved (0x4416c0): the
+  load's 0x8d1 makes them again.
+- Buildings never change owner: their nation and slot bytes are written
+  only by the constructors and the creation handlers (0x427f50, 0x4221c0,
+  0x43aa10, 0x441ba0), so a building's town never changes but by the
+  0x2874s above.
+
+The port: `scene::towns` (`Towns`: each building's town, those yet to
+tell it, each town's list; saved, and made again as at the start for a
+save without them). Its `home_settlement` is the building's `+0x1c8`
+(a settlement its own). The port's falls that do not go through the
+strike leave the list at the next tick. Not decoded: the record of a fort
+a ship founds (0x4aa990 / 0x4b3370; the port gives it no town); whether
+0x2873's post is handled the tick it is sent (the port lists the building
+the tick after it stands); 0x427b30 (a building going up whose town cell
+no longer holds its town loses frames) is not ported.
+
 ## Default arming
 
 The Building page's checkbox (string 501, `TRIGGER_BKGND` with `MARKER`,
 message 0x1fdb toggling `[game+0x3295]`). While on, a new ship (0x43e5c0)
 or fort (0x43e990) comes armed: each item of its list (ships 0x5964d8,
-forts 0x5966b8) is taken from the nearest settlement's stock if it holds
+forts 0x5966b8) is taken from the stock of the yard's town (`+0x1c8`) if it holds
 one, else bought (amber 30/50/70 by group, fish 200/200/300 for marines) if
 it may be made (permitted, with a workshop; swordsmen a smithy), else its
 fallback (0x5962f8, 0x596730) taken or bought; ships then add fallbacks from
@@ -2622,9 +2680,9 @@ The port keeps the fire in `combat::FortFire` (at will, a target per
 group, the aggressor flag): `Scene::fort_attack` (0x15 / 0x16),
 `fort_order` (0x23), `fort_aggressed` (0x4184f0), order 10 in `halt`, the
 masks in `combat::FortMasks` (tested by `fort_may_shoot`), the 0x2874
-path in `Scene::town_gone` (the buildings whose nearest settlement of
-their owner's it was, the port's `+0x1c8`; busy, `Scene::busy`, they are
-halted; their reload contacts end); its
+path in `Scene::town_gone` (the buildings of its list, see "A town's
+buildings"; busy, `Scene::busy`, they are halted; their reload contacts
+end); its
 fort menu has slots 0-4 and its pointer the fort's answer (`fort_reaches`:
 a unit's reach); `scene/fort.rs` has its Repair (`fort_repair`, the
 progress `fort_mend_progress`) and its stored spell (`fort_spells`,
@@ -3010,8 +3068,8 @@ tick early in the port.
 
 The port: `scene::yard`. The port's slot is the cell a ship is in (a ship
 mended at a dock aside); ships just built hold their berth until made the
-same tick. Its towns' building lists are the yards a settlement is the
-nearest of (the computer players': those about the town). The player's
+same tick. Its towns' building lists are kept as the original keeps
+them ("A town's buildings"). The player's
 yard buttons (0x4f34c0: codes 0x21-0x2c and 0x7d, payload dword 2 = -1,
 byte 0xc `code - 0x15` or 0x25, byte 0xd the Building page's switch at
 the click, 0xe 1, 0xf 0) send order 0x20 through the navy (0x49e230:
@@ -4878,12 +4936,10 @@ Primitives not yet ported (the later brains use them):
   `run_repair_orders` (each brain tick), `brain_repaired` (0x134),
   `brain_join` (0x5d97, from `brain_prize`), the order on `Fleet::repair`
   (`+0x10`, `+0x21`, `+8`, `+0x1d`) and the queue on `Fleet::joined`; a
-  land fleet's list is its member's buildings, a town's docks those whose
-  nearest town it is (`home_settlement`, as the full-town order), first in
-  the scene's order; the update's ticks `game +0xe2` are taken as 1 a
+  land fleet's list is its member's buildings, a town's docks those of
+  its list `+0x1d0`, in its order; the update's ticks `game +0xe2` are taken as 1 a
   tick, as the wind's counter. Not decoded: the manager LCG's seed (0
-  here); the towns' states 2, 3 and 0xff (not dropped); the order of a
-  town's buildings `+0x1d0`; what ship command 0x1e does with dock 0 or an
+  here); the towns' states 2, 3 and 0xff (not dropped); what ship command 0x1e does with dock 0 or an
   unhurt ship (the port's repair order refuses both); ship command 10
   after 0x134; 0x4c42f0; whether the navy's tick (0x49ad18) runs before or
   after the brain's; the 0x5d98 gate `+0x14`. The pass's blow reports are

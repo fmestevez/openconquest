@@ -941,7 +941,9 @@ impl Scene {
                 self.note_destroyed(ti, by);
             }
             self.drop_held(target, data, caches);
-            // A settlement or town gone tells its buildings (0x2874).
+            // A building gone leaves its town's list (the drain 0x427bb0,
+            // 0x2874); a settlement or town gone tells its buildings.
+            self.leave_town(target, false);
             if matches!(
                 self.objects[ti].class,
                 ObjectClass::Building(SETTLEMENT | TOWN)

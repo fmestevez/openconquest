@@ -595,30 +595,38 @@ mod data_tests {
             let hull = scene.objects[s].combat.as_ref().unwrap().hull;
             scene.strike(site, hull + 1.0, false, None, true, &data, caches);
         };
-        // Idle: nothing changes.
+        // Another settlement of its player falls: nothing changes.
         let f = scene.object_index(fort).unwrap();
-        let next = scene.objects.iter().enumerate().find(|(i, o)| {
-            *i != f
-                && o.id != site
-                && o.owner == scene.objects[f].owner
-                && matches!(
-                    o.class,
-                    openconquest_formats::ObjectClass::Building(crate::economy::SETTLEMENT)
-                        | openconquest_formats::ObjectClass::Building(crate::economy::TOWN)
-                )
-        });
-        assert!(next.is_some(), "another settlement of the fort's player");
-        raze(&mut scene, &mut caches, site);
+        let home = scene.home_settlement(f).expect("the fort's town");
+        let next = scene
+            .objects
+            .iter()
+            .enumerate()
+            .find(|(i, o)| {
+                *i != f
+                    && o.id != home
+                    && o.owner == scene.objects[f].owner
+                    && matches!(
+                        o.class,
+                        openconquest_formats::ObjectClass::Building(crate::economy::SETTLEMENT)
+                            | openconquest_formats::ObjectClass::Building(crate::economy::TOWN)
+                    )
+            })
+            .map(|(_, o)| o.id);
+        let other = next.expect("another settlement of the fort's player");
+        let _ = site;
+        raze(&mut scene, &mut caches, other);
         assert!(fire(&scene).at_will);
-        // Mending, its new settlement falls: order 10 ends the mending and
-        // silences the fort.
+        // Mending, its own town falls: order 10 ends the mending and
+        // silences the fort, which has no town since.
         let f = scene.object_index(fort).unwrap();
-        let home = scene.home_settlement(f).unwrap();
         let c = scene.objects[f].combat.as_mut().unwrap();
         c.hull = c.max_hull / 2.0;
         scene.fort_repair(fort).unwrap();
         raze(&mut scene, &mut caches, home);
         assert!(!scene.mending.contains(&fort));
+        let f = scene.object_index(fort).unwrap();
+        assert_eq!(scene.home_settlement(f), None);
         assert!(!fire(&scene).fires());
     }
 

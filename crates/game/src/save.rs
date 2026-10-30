@@ -129,6 +129,9 @@ pub struct SaveGame {
     /// Armour and rams stored at settlements (site id, (armour, rams)).
     #[serde(default)]
     pub fittings: Vec<(u32, crate::scene::load::Fittings)>,
+    /// The towns' buildings; `None` in saves from before them.
+    #[serde(default)]
+    pub towns: Option<crate::scene::Towns>,
     /// Ships reloading alongside a port, dock or ship.
     #[serde(default)]
     pub loads: Vec<crate::scene::LoadLink>,

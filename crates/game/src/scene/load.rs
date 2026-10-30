@@ -7,8 +7,7 @@
 //! 200 for a ship) sends message 0x2875 to the target once alongside, which
 //! takes it up (`+0x104`, `+0x108`); either side then shows the panel. A
 //! port, shipyard or dock (`ShipServiceObjClassTy`, 0x4e7640) lists and
-//! moves its settlement's stock (`+0x1c8`); here that is the nearest own
-//! settlement or town (`home_settlement`).
+//! moves its settlement's stock (`+0x1c8`, `home_settlement`).
 //!
 //! A fort (`FortressClassTy`, 0x419f80) lists and moves its own units and
 //! treasure, with a ship alongside or with its settlement, which takes it up
@@ -383,22 +382,12 @@ impl Scene {
         }
     }
 
-    /// Settlement `site`'s forts: own forts whose settlement it is.
+    /// Settlement `site`'s forts: the forts of its list (`+0x1d0`).
     pub fn forts_of(&self, site: u32) -> Vec<u32> {
-        let Some(s) = self.object_index(site) else {
-            return Vec::new();
-        };
-        self.objects
-            .iter()
-            .enumerate()
-            .filter(|(i, o)| {
-                o.owner.is_some()
-                    && o.owner == self.objects[s].owner
-                    && self.is_fort(o.id)
-                    && self.construction_at(o.id).is_none()
-                    && self.home_settlement(*i) == Some(site)
-            })
-            .map(|(_, o)| o.id)
+        self.town_buildings(site)
+            .into_iter()
+            .map(|k| self.objects[k].id)
+            .filter(|&id| self.is_fort(id) && self.construction_at(id).is_none())
             .collect()
     }
 

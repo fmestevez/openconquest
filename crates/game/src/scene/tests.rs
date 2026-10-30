@@ -10227,3 +10227,59 @@ fn lightning_on_a_leviathan() {
     let k = scene.object_index(id).unwrap();
     assert!(scene.objects[k].deposit.is_none() && scene.objects[k].dormant.is_some());
 }
+
+/// A town's buildings (0x427de0, 0x441190 / 0x427e40 at the start,
+/// 0x43b290's record, 0x2873 on the first tick standing, 0x2874): in
+/// miss005 the town 2's ten buildings name its anchor (8, 11) as their
+/// town cell and join it in the objects' order; the port 41, free-standing
+/// (0xff), has none; 35 is its workshop. A workshop it orders is its own at once and joins
+/// its list on the first tick it stands; a save without the links has
+/// them made again the same way.
+#[test]
+fn a_town_lists_its_buildings() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    let list = [34, 35, 36, 37, 38, 39, 40, 42, 60, 61];
+    assert_eq!(scene.towns.lists.get(&2), Some(&list.to_vec()));
+    let i = scene.object_index(41).unwrap();
+    assert_eq!(scene.home_settlement(i), None);
+    for id in list {
+        let k = scene.object_index(id).unwrap();
+        assert_eq!(scene.home_settlement(k), Some(2));
+    }
+    // An old save: made again as at the start.
+    let mut save = scene.save();
+    save.towns = None;
+    let copy = Scene::restore(&data, &mut caches, &save).unwrap();
+    assert_eq!(copy.towns, scene.towns);
+    // A workshop ordered by the town: its own now, listed once standing.
+    let id = scene.objects.iter().map(|o| o.id).max().unwrap() + 1;
+    scene
+        .place_building_facing(2, WORKSHOP, 12, 12, Some(0xff), &data, &mut caches)
+        .unwrap();
+    let w = scene.object_index(id).unwrap();
+    assert_eq!(scene.objects[w].record.fields[8..10], [8, 11]);
+    assert_eq!(scene.home_settlement(w), Some(2));
+    let workshops = |scene: &Scene| -> Vec<usize> {
+        scene
+            .town_buildings(2)
+            .into_iter()
+            .filter(|&k| scene.objects[k].class == ObjectClass::Building(WORKSHOP))
+            .collect()
+    };
+    let shops = workshops(&scene);
+    assert_eq!(shops, vec![scene.object_index(35).unwrap()]);
+    scene.run_town_links();
+    assert!(!scene.towns.lists[&2].contains(&id));
+    scene.constructions.retain(|c| c.site != id);
+    scene.run_town_links();
+    assert_eq!(scene.towns.lists[&2].last(), Some(&id));
+    assert_eq!(workshops(&scene), [shops, vec![w]].concat());
+    // Gone, it leaves the list.
+    scene.leave_town(id, false);
+    assert!(!scene.towns.lists[&2].contains(&id));
+}

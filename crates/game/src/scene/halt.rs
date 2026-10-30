@@ -464,19 +464,9 @@ impl Scene {
     /// (`+0x10c`), order 10 to itself (`Scene::halt`); a reload contact
     /// (`+0x104`) told 0x2876 and let go. (A port's ShipService first
     /// sends 0xcb9 to `+0x1e0` and clears it: not ported, `+0x1e0` not
-    /// decoded.) The port has no list: a building's settlement is the
-    /// nearest of its owner's (`home_settlement`), which a barbarian
-    /// structure, never joining one (0x427f50 case 0x2490 refuses nation
-    /// 4), and the settlements themselves do not have.
+    /// decoded.)
     pub(super) fn town_gone(&mut self, town: u32, data: &GameData, caches: &mut Caches) {
-        let theirs: Vec<u32> = (0..self.objects.len())
-            .filter(|&i| {
-                matches!(self.objects[i].class, ObjectClass::Building(c) if c != SETTLEMENT && c != TOWN)
-                    && self.home_settlement(i) == Some(town)
-            })
-            .map(|i| self.objects[i].id)
-            .collect();
-        for id in theirs {
+        for id in self.town_falls(town) {
             if self.busy(id) {
                 let _ = self.halt(id, data, caches);
             }

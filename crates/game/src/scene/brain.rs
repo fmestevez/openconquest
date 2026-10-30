@@ -1358,20 +1358,12 @@ impl Scene {
     }
 
     /// The rect of settlement or town `site` (0x421740): its anchor, 2 x 2,
-    /// grown to take in the anchor of each of its buildings (`+0x1d0`;
-    /// the port's are those it is the nearest settlement of, as
-    /// `town_yards`).
+    /// grown to take in the anchor of each of its buildings (`+0x1d0`).
     pub(super) fn site_rect(&self, site: u32) -> Option<Cells> {
         let (mut x, mut y) = self.objects[self.object_index(site)?].cell?;
         let (mut w, mut h) = (2, 2);
-        for k in 0..self.objects.len() {
+        for k in self.town_buildings(site) {
             let o = &self.objects[k];
-            if o.id == site
-                || !matches!(o.class, openconquest_formats::ObjectClass::Building(_))
-                || self.home_settlement(k) != Some(site)
-            {
-                continue;
-            }
             let Some((bx, by)) = o.cell else {
                 continue;
             };
@@ -1634,10 +1626,9 @@ impl Scene {
     /// generator is drawn for a random one, returned (0 with none). A
     /// ship fleet holds no town, so it lists none. (Not decoded: the
     /// towns in states `+0xa4` 2, 3 and 0xff, which 0x42c9a0 drops from
-    /// the land fleet's list too; and the order of a town's buildings
-    /// (`+0x1d0`), taken as the scene's: it matters only to a town with
-    /// two docks. Player 16 lists its class-0x40 buildings instead, never
-    /// a repair member's.)
+    /// the land fleet's list too.) The docks come in the town's list
+    /// order (`+0x1d0`). (Player 16 lists its class-0x40 buildings
+    /// instead, never a repair member's.)
     fn repair_pick(&mut self, k: usize) -> u32 {
         use crate::economy::{DOCK, SETTLEMENT, TOWN};
         use openconquest_formats::ObjectClass;
@@ -1665,12 +1656,9 @@ impl Scene {
                 continue;
             }
             docks.extend(
-                (0..self.objects.len())
-                    .filter(|&d| {
-                        self.objects[d].class == ObjectClass::Building(DOCK)
-                            && self.objects[d].owner == self.objects[i].owner
-                            && self.home_settlement(d) == Some(id)
-                    })
+                self.town_buildings(id)
+                    .into_iter()
+                    .filter(|&d| self.objects[d].class == ObjectClass::Building(DOCK))
                     .map(|d| self.objects[d].id),
             );
         }

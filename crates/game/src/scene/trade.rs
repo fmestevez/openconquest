@@ -362,24 +362,6 @@ impl Scene {
         }
     }
 
-    /// The player's settlement or town nearest building `i`: whose stock
-    /// arms what it builds.
-    pub fn home_settlement(&self, i: usize) -> Option<u32> {
-        let (x, y, owner) = (self.objects[i].x, self.objects[i].y, self.objects[i].owner?);
-        self.objects
-            .iter()
-            .filter(|o| {
-                o.owner == Some(owner)
-                    && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
-                    && self.construction_at(o.id).is_none()
-            })
-            .min_by(|a, b| {
-                let d = |o: &&MapObject| (o.x - x).hypot(o.y - y);
-                d(a).total_cmp(&d(b))
-            })
-            .map(|o| o.id)
-    }
-
     /// Default arming (0x43e5c0): each of `items` taken from `stock` if it
     /// holds one, else bought if it may be made, else its fallback (from
     /// stock or bought); then more fallbacks, from the last, until the
@@ -587,6 +569,11 @@ impl Scene {
         self.earn(owner, -(cost as i64), 0);
         self.objects[i] = obj;
         self.constructions.push(Construction::new(id, true));
+        // A shipyard made a dock leaves its town's list, to join it again
+        // once it stands (Dock 0x416340: 0x2874, `+0x1d4 = 0`).
+        if to == DOCK {
+            self.leave_town(id, true);
+        }
         Ok(())
     }
 
@@ -1632,7 +1619,7 @@ impl Scene {
             .ok_or("No settlement")?;
         let human = self.human.is_some_and(|h| (h.nation, h.slot) == owner);
         // A fort comes armed (default arming), its weapons paid for or
-        // taken from the nearest settlement's stock; a computer player's
+        // taken from the ordering town's stock; a computer player's
         // with its standard weapons.
         let fort = if human && (0x34..=0x36).contains(&class) {
             let home = self
@@ -1703,6 +1690,18 @@ impl Scene {
         self.objects.push(obj);
         self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
         self.constructions.push(Construction::new(id, false));
+        // Ordered by a settlement or town, it is that town's from its
+        // creation (0x43b290's record: its anchor, type 1). (Not decoded:
+        // the record of a fort a ship founds, 0x4aa990 / 0x4b3370; the
+        // port gives it no town.)
+        if self.object_index(settlement).is_some_and(|k| {
+            matches!(
+                self.objects[k].class,
+                ObjectClass::Building(SETTLEMENT | TOWN)
+            )
+        }) {
+            self.ordered_by(id, settlement);
+        }
         Ok(())
     }
 

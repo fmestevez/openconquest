@@ -586,14 +586,6 @@ impl Scene {
             && fit(combat::Upgrade::Ram, combat::DEFAULT_RAM[k].1, &rams)
     }
 
-    /// The yards of settlement or town `town` (its buildings `+0x1d0`; the
-    /// port's are those it is the nearest of), in the objects' order.
-    pub(super) fn town_yards(&self, town: u32) -> Vec<usize> {
-        (0..self.objects.len())
-            .filter(|&k| self.is_yard(k) && self.home_settlement(k) == Some(town))
-            .collect()
-    }
-
     /// A game tick of the yards and the ships on their berths: each idle
     /// yard with orders waiting tries the first every 25 ticks (0x416f90
     /// message 0); each ship being built steps every 8 (0x4b3ab0).

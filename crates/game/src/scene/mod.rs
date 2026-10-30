@@ -379,6 +379,8 @@ pub struct Scene {
     /// Armour and rams stored at settlements (levels: armour, rams), put
     /// ashore from ships in the load panel.
     pub fittings: BTreeMap<u32, load::Fittings>,
+    /// The towns' buildings (`+0x1c8` of each, `+0x1d0` of each town).
+    pub towns: towns::Towns,
     /// Settlements and towns sold (state 3).
     pub sold: Vec<u32>,
     /// Ships lying alongside an own port, dock or ship to reload.
@@ -536,6 +538,7 @@ mod seats;
 mod spells;
 mod stats;
 mod story;
+mod towns;
 pub mod unload;
 pub mod volcano;
 mod walkers;
@@ -552,6 +555,7 @@ pub use stats::Stats;
 #[cfg(test)]
 pub use story::goal_name;
 pub use story::{Carry, Goal};
+pub use towns::Towns;
 pub use walkers::{walker_frame_ms, walker_sequence, Walker};
 pub use yard::ShipOrder;
 #[cfg(test)]
@@ -810,6 +814,7 @@ impl Scene {
             losing: None,
             held: Vec::new(),
             fittings: Default::default(),
+            towns: Default::default(),
             loads: Vec::new(),
             permits: crate::permits::Permits::ALL,
             seats: Vec::new(),
@@ -960,8 +965,14 @@ impl Scene {
             scene.story = scene.story_goals(heroes);
             let wanted: Vec<u8> = (0..9u8).filter(|&h| heroes[h as usize]).collect();
             scene.hide_hero_items(&wanted, data, caches);
+            // The start's message 0x8d1 reaches the map's objects before
+            // the brain made after them.
+            scene.towns_start();
             scene.start_brain(data, caches, difficulty);
             scene.start_sites = scene.own_sites();
+        }
+        if !is_campaign(mission) {
+            scene.towns_start();
         }
         scene.start_nests(data, caches);
         for i in 0..scene.objects.len() {
@@ -1049,6 +1060,7 @@ impl Scene {
             losing: self.losing,
             held: self.held.clone(),
             fittings: self.fittings.iter().map(|(k, v)| (*k, v.clone())).collect(),
+            towns: Some(self.towns.clone()),
             loads: self.loads.clone(),
             permits: Some(self.permits),
             stats: self.stats.clone(),
@@ -1210,6 +1222,13 @@ impl Scene {
         scene.losing = save.losing;
         scene.held = save.held.clone();
         scene.fittings = save.fittings.iter().cloned().collect();
+        // The towns' links as saved; a save from before them has them made
+        // again as at the start (0x8d1), as the original's own load does
+        // (its saves keep neither, 0x4277c0, 0x4416c0).
+        match &save.towns {
+            Some(t) => scene.towns = t.clone(),
+            None => scene.towns_start(),
+        }
         scene.loads = save.loads.clone();
         scene.flyers = save.flyers.clone();
         scene.stats = save.stats.clone();
@@ -2104,6 +2123,7 @@ impl Scene {
             }
             self.run_computers(data, caches);
             self.run_brain_jobs(data, caches);
+            self.run_town_links();
             self.run_yards(data, caches);
             self.step_constructions(data, caches);
             for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {
