@@ -3482,6 +3482,21 @@ and Atalanta. The campaign missions' `CONDITIONS` only ever say "kill all
 enemies"; their real objectives (bring the parchment to Iolcus, recruit a
 hero, bring Jason and the heroes to a settlement, ...) live in the brains.
 
+The brain's generator (`+0x18`, the usual LCG, its own): the base
+constructor 0x4788a0 sets it 0 (0x4788af; also `+0xe4 = -1`, `+0xf8 =
+5`). Message 2 of each main: with a saved record (`r[0] != 0`) 0x478bb0
+restores everything and `+0x18 = r[0x139]`, `+0x1c = 0`; a new game sets
+`+0x1c = 1` and runs the mission's set-up, where only miss007 (0x45f84c),
+miss008 (0x463370), miss009 (0x4664a9) and miss010 (0x46a21f) seed it,
+with 0x541840(game) = the game's `+0x18`, written by 0x53fde8 and each
+frame by 0x541745 with `timeGetTime()` (import 0x5942d8) plus a pacing
+adjustment (not decoded); the other mains leave 0, so their draws are the
+same game after game (the first is 0x3039 >> 16 = 0). The port:
+`Brain::rng`, saved with the brain, seeded 0 or, for miss007-010, the wall clock's
+milliseconds; every brain step's draw comes from it (the helpers
+0x421490 / 0x421740 and the brain's repair fleet keep the scene's
+generator: theirs was not read).
+
 In the executable each brain's per-fleet handlers come first and its main
 function (the message handler that creates the fleets, lays deposits and
 dispatches each member to its handler) last: miss011's handlers are

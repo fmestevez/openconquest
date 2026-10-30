@@ -228,6 +228,10 @@ pub struct Brain {
     /// cleared by the brain's pass, never set again).
     #[serde(default = "standing")]
     pub yards: [bool; 2],
+    /// The brain's own generator (`+0x18`, the usual LCG; saved with it,
+    /// 0x478bb0 restoring `r[0x139]`).
+    #[serde(default)]
+    pub rng: crate::combat::Rng,
 }
 
 fn standing() -> [bool; 2] {
@@ -438,13 +442,36 @@ fn mission(name: &str) -> Option<Mission> {
 /// (both terms read the seed again after the second draw: the same `x`).
 /// So only on a tick a multiple of 10, one time in five.
 pub(super) fn random_tick(scene: &mut Scene) -> bool {
-    scene.rng.next();
-    let x = scene.rng.next();
+    scene.brain_draw();
+    let x = scene.brain_draw();
     let phase = ((x % 10 + x % 10) % 10) * 5;
     scene.brain.as_ref().unwrap().tick % 50 == phase
 }
 
+/// The seed a new game's brain starts from (message 2 of each mission's
+/// main): 0 from the base constructor 0x4788a0, which miss007 (0x45f84c),
+/// miss008 (0x463370), miss009 (0x4664a9) and miss010 (0x46a21f) replace
+/// with the game's `+0x18` (0x541840), the `timeGetTime()` milliseconds of
+/// the frame (0x53fde8, 0x541745; not decoded: the frame pacing's
+/// adjustment added at 0x541745). Here the wall clock's milliseconds.
+fn brain_seed(mission: &str) -> u32 {
+    match mission {
+        "miss007" | "miss008" | "miss009" | "miss010" => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u32),
+        _ => 0,
+    }
+}
+
 impl Scene {
+    /// The brain's next draw (`+0x18`).
+    pub(super) fn brain_draw(&mut self) -> u32 {
+        match self.brain.as_mut() {
+            Some(b) => b.rng.next(),
+            None => self.rng.next(),
+        }
+    }
+
     /// Starts the brain of campaign mission `mission`, if ported.
     pub(super) fn start_brain(&mut self, data: &GameData, caches: &mut Caches, difficulty: usize) {
         let Some(m) = mission(&self.mission) else {
@@ -466,6 +493,7 @@ impl Scene {
             gone: [false; 2],
             landed: [false; 2],
             yards: [true; 2],
+            rng: crate::combat::Rng(brain_seed(&self.mission)),
         };
         for def in m.fleets {
             // The ships (or buildings) standing in the given cells (0x479200).
@@ -1263,7 +1291,7 @@ impl Scene {
         };
         let player = n * 4 + s;
         let mission = brain.mission.clone();
-        let bit = |scene: &mut Scene| scene.rng.next() & 1 != 0;
+        let bit = |scene: &mut Scene| scene.brain_draw() & 1 != 0;
         // Ship classes: 200 + type; 0xca-0xcf types 2-7, 0xd0-0xd1 8-9,
         // 0xd2-0xd3 10-11.
         let (group, member) = match (mission.as_str(), player, kind) {
@@ -2105,7 +2133,7 @@ mod miss000 {
                 }
             }),
             // Two ways to the player's harbour, picked at random.
-            50 => Op::Custom(|scene, _| if scene.rng.next() % 2 == 0 { 51 } else { 52 }),
+            50 => Op::Custom(|scene, _| if scene.brain_draw() % 2 == 0 { 51 } else { 52 }),
             51 => Op::Move {
                 ok: 55,
                 failed: 55,
@@ -2209,7 +2237,7 @@ mod miss001 {
         const RAID_AFTER: [u32; 3] = [8, 6, 4];
         const RAID_SIZE: [u32; 3] = [2, 3, 4];
         const RETREAT_AT: [u32; 3] = [1, 1, 3];
-        let wait = (RAID_AFTER[difficulty()] + scene.rng.next() % 4) * 1500;
+        let wait = (RAID_AFTER[difficulty()] + scene.brain_draw() % 4) * 1500;
         if let Some(b) = scene.brain.as_mut() {
             b.fleets[4].vars = [wait, RAID_SIZE[difficulty()], RETREAT_AT[difficulty()], 0];
         }
@@ -2734,7 +2762,7 @@ mod miss002 {
             },
             7 => Op::WaitVar { next: 10, var: 0 },
             10 => Op::Custom(|scene, k| {
-                let r = scene.rng.next() % 4;
+                let r = scene.brain_draw() % 4;
                 let f = &mut scene.brain.as_mut().unwrap().fleets[k];
                 if f.vars[0] == 0 {
                     f.vars[0] = (r + WAIT[difficulty()]) * 1500;
@@ -3014,7 +3042,7 @@ mod miss003 {
         const PERSIAN_WAIT: [u32; 3] = [9, 7, 5];
         const BARBARIAN_WAIT: [u32; 3] = [11, 9, 7];
         const YARD_REST: [u32; 3] = [1000, 750, 500];
-        let (a, b) = (scene.rng.next() % 4, scene.rng.next() % 4);
+        let (a, b) = (scene.brain_draw() % 4, scene.brain_draw() % 4);
         if let Some(br) = scene.brain.as_mut() {
             br.fleets[2].vars = [(a + PERSIAN_WAIT[difficulty()]) * 1500, 2, 0, 0];
             br.fleets[5].vars[0] = YARD_REST[difficulty()];
@@ -3533,7 +3561,7 @@ mod miss004 {
         // (0x5aef98), and when raiders fall back (fewer than three).
         const RAID_WAIT: [u32; 3] = [7, 5, 3];
         const YARD_REST: [u32; 3] = [1500, 1000, 750];
-        let (a, b) = (scene.rng.next() % 3, scene.rng.next() % 3);
+        let (a, b) = (scene.brain_draw() % 3, scene.brain_draw() % 3);
         if let Some(br) = scene.brain.as_mut() {
             br.fleets[4].vars = [(a + RAID_WAIT[difficulty()]) * 1500, 2, 0, 0];
             br.fleets[6].vars[0] = YARD_REST[difficulty()];
@@ -4150,7 +4178,7 @@ mod miss005 {
         const BARBARIAN_WAIT: [u32; 3] = [7, 6, 4];
         const NORTH_WAIT: [u32; 3] = [8, 7, 5];
         const WEST_WAIT: [u32; 3] = [7, 6, 4];
-        let r: Vec<u32> = (0..3).map(|_| scene.rng.next() % 4).collect();
+        let r: Vec<u32> = (0..3).map(|_| scene.brain_draw() % 4).collect();
         if let Some(br) = scene.brain.as_mut() {
             br.fleets[0].vars[0] = YARD_REST[difficulty()];
             br.fleets[3].vars = [(r[0] + BARBARIAN_WAIT[difficulty()]) * 1500, 3, 0, 0];
@@ -4490,8 +4518,8 @@ mod miss005 {
         } else {
             [7, 6, 4][d]
         };
-        let wait = (base + (scene.rng.next() & 3)) * 1500;
-        let r = scene.rng.next();
+        let wait = (base + (scene.brain_draw() & 3)) * 1500;
+        let r = scene.brain_draw();
         let spell = match (k == NORTH, second) {
             (true, false) => [9, 15, 12, 9][(r & 3) as usize],
             (false, false) => [9, 12, 9, 15][(r & 3) as usize],
@@ -4946,7 +4974,7 @@ mod miss006 {
     pub fn after(scene: &mut Scene) {
         let d = difficulty();
         let roll = |scene: &mut Scene, k: usize, n: u32| {
-            let draw = scene.rng.next();
+            let draw = scene.brain_draw();
             let r = if n == 6 { draw % 6 } else { draw & 3 };
             set(scene, k, RAID_WAIT, ([8, 6, 4][d] + r) * 1500);
         };
@@ -5341,9 +5369,9 @@ mod miss006 {
             0 => Op::Custom(|scene, k| {
                 let yard = scene.brain.as_ref().unwrap().yards[0];
                 let base = if yard { [15, 10, 10] } else { [8, 6, 4] }[difficulty()];
-                let wait = (base + (scene.rng.next() & 3)) * 1500;
+                let wait = (base + (scene.brain_draw() & 3)) * 1500;
                 set(scene, k, RAID_WAIT, wait);
-                let way = scene.rng.next() & 1;
+                let way = scene.brain_draw() & 1;
                 set(scene, k, WAY, way);
                 5
             }),
@@ -5583,7 +5611,7 @@ mod miss006 {
         ];
         match state {
             0 => Op::Custom(|scene, k| {
-                let wait = ([8, 6, 4][difficulty()] + (scene.rng.next() & 3)) * 1500;
+                let wait = ([8, 6, 4][difficulty()] + (scene.brain_draw() & 3)) * 1500;
                 set(scene, k, 0, wait);
                 set(scene, k, SPELL, 9);
                 1
@@ -5775,7 +5803,7 @@ mod miss006 {
             // Its behaviour, then the roll, both in state 0 (0x45ab40,
             // 0x45ab67).
             0 => Op::Custom(|scene, k| {
-                let draw = scene.rng.next() & 3;
+                let draw = scene.brain_draw() & 3;
                 let held = scene.brain.as_ref().unwrap().yards != [false; 2];
                 let base = if held { [20, 15, 15] } else { [8, 6, 4] }[difficulty()];
                 set(scene, k, 0, (base + draw) * 1500);
@@ -5805,7 +5833,7 @@ mod miss006 {
                 events: W,
             },
             25 => Op::Custom(|scene, k| {
-                let spell = if scene.rng.next() & 3 < 2 { 12 } else { 9 };
+                let spell = if scene.brain_draw() & 3 < 2 { 12 } else { 9 };
                 set(scene, k, SPELL, spell);
                 match scene.human_site_area(Some((0, 0, 56, 70))) {
                     Some(a) => {
@@ -6185,12 +6213,12 @@ mod miss007 {
         scene.start_jobs(&[(1, 0)], &[(0, 0)]);
         // The Persians' studies at the start (the main's 0x8d1).
         scene.persian_bonus(&[15], false, &[]);
-        let (x, y) = if scene.rng.next() & 1 == 0 {
+        let (x, y) = if scene.brain_draw() & 1 == 0 {
             (41, 69)
         } else {
             (39, 70)
         };
-        let kind = scene.rng.next() % 3 + 1;
+        let kind = scene.brain_draw() % 3 + 1;
         scene.big_reef(x, y, kind, data, caches);
         let level = difficulty();
         if level == EASY {
@@ -6211,7 +6239,7 @@ mod miss007 {
         let d = level as u32;
         let rolls = [(2, 3), (1, 4), (2, 3), (2, 3), (3, 4)];
         for (n, (span, base)) in rolls.into_iter().enumerate() {
-            let target = scene.rng.next() % (d + span) + base;
+            let target = scene.brain_draw() % (d + span) + base;
             let f = &mut scene.brain.as_mut().unwrap().fleets[FIRST_BARBARIAN_FLEET + n];
             f.vars = [target, 7500, 0, 2];
         }
@@ -6226,7 +6254,7 @@ mod miss007 {
         let f = &scene.brain.as_ref().unwrap().fleets[0];
         if f.vars[0] == 0 && scene.human_ships_in((14, 17, 8, 14)) {
             scene.brain.as_mut().unwrap().fleets[0].vars[0] = 1;
-            let kind = scene.rng.next() % 3 + 1;
+            let kind = scene.brain_draw() % 3 + 1;
             scene.pending_reefs.push((22, 17, kind));
         }
     }
@@ -6280,13 +6308,14 @@ mod miss007 {
                 _ => None,
             }
         };
-        let r = scene.rng.next();
+        let r = scene.brain_draw();
         if let Some((have, kind, (span, base))) = ask(r) {
-            let f = &mut scene.brain.as_mut().unwrap().fleets[k];
+            let brain = scene.brain.as_mut().unwrap();
+            let f = &mut brain.fleets[k];
             if (have as u32) < f.vars[TARGET] && f.vars[ASKED] == 0 {
                 f.vars[ASKED] = kind as u32 + 1;
             } else {
-                f.vars[TARGET] = scene.rng.next() % (d + span) + base;
+                f.vars[TARGET] = brain.rng.next() % (d + span) + base;
             }
             return;
         }
@@ -6301,7 +6330,7 @@ mod miss007 {
                 if ((n[ROYAL as usize] + n[BOMBER as usize] + n[BOARDER as usize]) as u32)
                     < d + 3 =>
             {
-                Some(match scene.rng.next() % (d + 3) {
+                Some(match scene.brain_draw() % (d + 3) {
                     1 | 2 => ROYAL,
                     3 | 4 => BOMBER,
                     _ => BOARDER,
@@ -6346,7 +6375,7 @@ mod miss007 {
                     return 10;
                 }
                 let base = if k == 1 { 60 } else { 70 };
-                let wait = (scene.rng.next() % 61 + base) * 25;
+                let wait = (scene.brain_draw() % 61 + base) * 25;
                 scene.brain.as_mut().unwrap().fleets[k].vars[0] = wait;
                 11
             }),
@@ -6365,7 +6394,7 @@ mod miss007 {
         match state {
             0 => Op::Build { next: 11 },
             11 => Op::Custom(|scene, k| {
-                let wait = (scene.rng.next() % 31 + 40) * 25;
+                let wait = (scene.brain_draw() % 31 + 40) * 25;
                 scene.brain.as_mut().unwrap().fleets[k].vars[0] = wait;
                 12
             }),
@@ -6469,7 +6498,7 @@ mod miss007 {
             },
             // Nothing to raid: look again in (30 + rand 41) x 25 ticks.
             30 => Op::Custom(|scene, k| {
-                let wait = (scene.rng.next() % 41 + 30) * 25;
+                let wait = (scene.brain_draw() % 41 + 30) * 25;
                 scene.brain.as_mut().unwrap().fleets[k].vars[PATIENCE] = wait;
                 31
             }),
@@ -6495,7 +6524,7 @@ mod miss007 {
     /// difficulty + 2), else one of their towns in `rect`.
     fn raid_target(scene: &mut Scene, k: usize, fort: bool, rect: Option<Cells>) -> bool {
         let d = difficulty() as u32;
-        if fort && scene.human_class_at(0x36, (15, 26)) && scene.rng.next() % (d + 2) != 0 {
+        if fort && scene.human_class_at(0x36, (15, 26)) && scene.brain_draw() % (d + 2) != 0 {
             scene.set_fleet_area(k, (13, 25, 5, 7));
             return true;
         }
@@ -7184,7 +7213,7 @@ mod miss008 {
                 if count(&[ROYAL, BOMBER, KILLER]) < 2 * d + 3 && (free(scene, 1) || free(scene, 2))
                 {
                     let holder = if free(scene, 1) { 1 } else { 2 };
-                    let kind = match scene.rng.next() % (d + 2) {
+                    let kind = match scene.brain_draw() % (d + 2) {
                         0 => KILLER,
                         3 => BOMBER,
                         _ => ROYAL,
@@ -7204,7 +7233,7 @@ mod miss008 {
                     scene.fleet_merge(RAIDERS, HOME);
                 }
                 if have < d + 4 && free(scene, HOME) {
-                    match scene.rng.next() % (d + 1) {
+                    match scene.brain_draw() % (d + 1) {
                         0 | 1 => ask(scene, HOME, ROYAL),
                         2 => ask(scene, HOME, BOMBER),
                         _ => {}
@@ -7224,7 +7253,7 @@ mod miss008 {
             11 | 16 if count(&[MERCHANT]) < 1 => ask(scene, k, MERCHANT),
             12 => {
                 if count(&[ROYAL, BOMBER]) < d + 3 && free(scene, k) {
-                    let kind = if scene.rng.next() & 1 == 0 {
+                    let kind = if scene.brain_draw() & 1 == 0 {
                         ROYAL
                     } else {
                         BOMBER
@@ -7248,19 +7277,19 @@ mod miss008 {
                     scene.brain.as_mut().unwrap().fleets[k].vars[SENT] = sent + 1;
                 }
                 if have < d + 3 && free(scene, k) {
-                    let kind = [ROYAL, BOMBER, BOARDER, RAMMER][scene.rng.next() as usize & 3];
+                    let kind = [ROYAL, BOMBER, BOARDER, RAMMER][scene.brain_draw() as usize & 3];
                     ask(scene, k, kind);
                 }
             }
             17 => {
                 if count(&[ROYAL, BOARDER, RAMMER]) < d + 3 && free(scene, k) {
-                    let kind = [RAMMER, ROYAL, BOARDER][scene.rng.next() as usize % 3];
+                    let kind = [RAMMER, ROYAL, BOARDER][scene.brain_draw() as usize % 3];
                     ask(scene, k, kind);
                 }
             }
             18 => {
                 if count(&[BOARDER, PERSIAN_B]) < d + 3 && free(scene, k) {
-                    match scene.rng.next() % (d + 1) {
+                    match scene.brain_draw() % (d + 1) {
                         0 => ask(scene, k, BOARDER),
                         _ => ask(scene, k, PERSIAN_B),
                     }
@@ -7332,7 +7361,7 @@ mod miss008 {
                 if scene.fleet_building(k) {
                     return 11;
                 }
-                let wait = (scene.rng.next() % 41 + 30) * 25;
+                let wait = (scene.brain_draw() % 41 + 30) * 25;
                 scene.brain.as_mut().unwrap().fleets[k].vars[WAIT] = wait;
                 12
             }),
@@ -7540,7 +7569,7 @@ mod miss008 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Custom(|scene, k| {
-                let ticks = (scene.rng.next() % (difficulty() as u32 + 1) + 3) * 1500;
+                let ticks = (scene.brain_draw() % (difficulty() as u32 + 1) + 3) * 1500;
                 scene.brain.as_mut().unwrap().fleets[k].vars[0] = ticks;
                 6
             }),
@@ -8147,7 +8176,7 @@ mod miss009 {
         match k {
             RAIDERS => {
                 if count(&[ROYAL, BOMBER, RAMMER, KILLER]) < d + 3 && free(scene, YARD1) {
-                    let kind = match scene.rng.next() % (d + 3) {
+                    let kind = match scene.brain_draw() % (d + 3) {
                         0 | 1 => KILLER,
                         2 | 3 => ROYAL,
                         _ => BOMBER,
@@ -8158,7 +8187,7 @@ mod miss009 {
             SOUTH => {
                 let have = count(&[ROYAL, BOMBER, RAMMER, KILLER]);
                 if have < d + 4 && free(scene, YARD2) {
-                    let kind = match scene.rng.next() % (d + 3) {
+                    let kind = match scene.brain_draw() % (d + 3) {
                         0 => KILLER,
                         1 | 2 => RAMMER,
                         3 => ROYAL,
@@ -8174,7 +8203,7 @@ mod miss009 {
             }
             EAST => {
                 if count(&[ROYAL, BOMBER, RAMMER]) < 2 * (d + 2) && free(scene, YARD3) {
-                    let kind = match scene.rng.next() % (d + 3) {
+                    let kind = match scene.brain_draw() % (d + 3) {
                         0 => RAMMER,
                         1 | 2 => ROYAL,
                         _ => BOMBER,
@@ -8207,7 +8236,7 @@ mod miss009 {
             PATROL => {
                 if count(&[ROYAL, BOMBER, BOARDER, RAMMER, KILLER]) < 2 * (d + 2) && free(scene, k)
                 {
-                    let kind = [ROYAL, BOMBER, BOARDER][scene.rng.next() as usize % 3];
+                    let kind = [ROYAL, BOMBER, BOARDER][scene.brain_draw() as usize % 3];
                     ask(scene, k, kind);
                 }
             }
@@ -8264,7 +8293,7 @@ mod miss009 {
     /// (10, 0, 40, 20).
     fn tick(scene: &mut Scene) {
         if var(scene, 0, WOKEN) == 0 && scene.human_in((0, 9, 18, 5)) {
-            let x = if scene.rng.next() & 1 != 0 { 10 } else { 12 };
+            let x = if scene.brain_draw() & 1 != 0 { 10 } else { 12 };
             scene.pending_casts.push((Spell::Lightning, x, 9, None));
             set_var(scene, 0, WOKEN, 1);
         }
@@ -8344,7 +8373,7 @@ mod miss009 {
                     return 11;
                 }
                 let span = 41 - 10 * difficulty() as u32;
-                let wait = (scene.rng.next() % span + 50) * 25;
+                let wait = (scene.brain_draw() % span + 50) * 25;
                 set_var(scene, k, WAIT, wait);
                 12
             }),
@@ -8395,7 +8424,7 @@ mod miss009 {
                     return 11;
                 }
                 let span = 41 - 10 * difficulty() as u32;
-                let wait = (scene.rng.next() % span + 30) * 25;
+                let wait = (scene.brain_draw() % span + 30) * 25;
                 set_var(scene, k, WAIT, wait);
                 12
             }),
@@ -8605,7 +8634,7 @@ mod miss009 {
     /// ticks, rest 1500.
     fn fishers(state: u32) -> Op {
         match state {
-            0 => Op::Custom(|scene, _| if scene.rng.next() & 1 != 0 { 5 } else { 6 }),
+            0 => Op::Custom(|scene, _| if scene.brain_draw() & 1 != 0 { 5 } else { 6 }),
             5 => Op::Gather {
                 next: 15,
                 area: (10, 20, 20, 20),
@@ -8634,7 +8663,7 @@ mod miss009 {
         match state {
             0 => Op::Behave { next: 5 },
             5 => Op::Custom(|scene, k| {
-                let ticks = (scene.rng.next() % (difficulty() as u32 + 1) + 3) * 1500;
+                let ticks = (scene.brain_draw() % (difficulty() as u32 + 1) + 3) * 1500;
                 set_var(scene, k, 0, ticks);
                 6
             }),
@@ -9051,7 +9080,7 @@ mod miss010 {
                 })
                 .map(|o| o.id)
         };
-        let magic = if scene.rng.next() & 1 != 0 {
+        let magic = if scene.brain_draw() & 1 != 0 {
             (58, 29)
         } else {
             (56, 33)
@@ -9160,7 +9189,7 @@ mod miss010 {
         let d = difficulty() as u32;
         let n = scene.fleet_types(k);
         let have = count(scene, k, strength(k));
-        let roll = |scene: &mut Scene| scene.rng.next() % (d + 3);
+        let roll = |scene: &mut Scene| scene.brain_draw() % (d + 3);
         match k {
             RAIDERS => {
                 if have < var(scene, k, N) && free(scene, YARD1) {
@@ -9321,7 +9350,7 @@ mod miss010 {
                     return 20;
                 }
                 let span = 41 - 10 * difficulty() as u32;
-                let wait = (scene.rng.next() % span + 50) * 25;
+                let wait = (scene.brain_draw() % span + 50) * 25;
                 set_var(scene, k, WAIT, wait);
                 11
             }),
@@ -9376,7 +9405,7 @@ mod miss010 {
                 if scene.fleet_building(k) {
                     return 20;
                 }
-                let wait = (scene.rng.next() % 41 + 30) * 25;
+                let wait = (scene.brain_draw() % 41 + 30) * 25;
                 set_var(scene, k, WAIT, wait);
                 11
             }),
@@ -9645,7 +9674,7 @@ mod miss010 {
     }
 
     fn roll_length(scene: &mut Scene, k: usize, base: u32) -> u32 {
-        let ticks = (scene.rng.next() % (difficulty() as u32 + 1) + base) * 1500;
+        let ticks = (scene.brain_draw() % (difficulty() as u32 + 1) + base) * 1500;
         set_var(scene, k, 0, ticks);
         6
     }
@@ -10205,7 +10234,7 @@ mod miss011 {
         match state {
             0 => Op::Custom(|scene, k| {
                 if var(scene, k, WAIT) == 0 {
-                    let rest = ([50, 30, 10][difficulty()] + scene.rng.next() % 31) * 25;
+                    let rest = ([50, 30, 10][difficulty()] + scene.brain_draw() % 31) * 25;
                     set_var(scene, k, WAIT, rest);
                 }
                 let serves: &[usize] = if k == YARD1 {
@@ -10491,7 +10520,7 @@ mod miss011 {
             &[(14, 21, 500), (15, 26, 750), (17, 31, 500), (15, 26, 875)];
         match state {
             0 => Op::Custom(|scene, k| {
-                let ticks = (scene.rng.next() % 4 + [10, 8, 6][difficulty()]) * 1500;
+                let ticks = (scene.brain_draw() % 4 + [10, 8, 6][difficulty()]) * 1500;
                 set_var(scene, k, 0, ticks);
                 5
             }),
@@ -10763,9 +10792,9 @@ mod miss011 {
         match state {
             0 => Op::Custom(|scene, k| {
                 let d = difficulty();
-                let after = ([8, 6, 4][d] + (scene.rng.next() & 3)) * 1500;
+                let after = ([8, 6, 4][d] + (scene.brain_draw() & 3)) * 1500;
                 set_var(scene, k, AFTER, after);
-                let roll = scene.rng.next() % ([10, 6, 3][d] + 1);
+                let roll = scene.brain_draw() % ([10, 6, 3][d] + 1);
                 if var(scene, CASTER, SPELL) == NONE {
                     let kind = match roll {
                         0 | 1 => 9,
@@ -10776,7 +10805,7 @@ mod miss011 {
                     set_var(scene, CASTER, SPELL, kind);
                 }
                 // `+0x198`, rolled and never read.
-                scene.rng.next();
+                scene.brain_draw();
                 5
             }),
             5 => Op::Patrol {
@@ -10899,18 +10928,18 @@ mod miss011 {
                 continue;
             }
             let (spell, at) = match class {
-                ObjectClass::Building(0x32) => match scene.rng.next() & 3 {
+                ObjectClass::Building(0x32) => match scene.brain_draw() & 3 {
                     0 | 2 => (Spell::Fireball, cell),
                     _ => break,
                 },
                 ObjectClass::Building(0x33 | 0x3e) => (Spell::Lightning, cell),
-                ObjectClass::Building(0x34 | 0x35 | 0x36 | 0x3d) => match scene.rng.next() & 3 {
+                ObjectClass::Building(0x34 | 0x35 | 0x36 | 0x3d) => match scene.brain_draw() & 3 {
                     0 => (Spell::Waterspout, cell),
                     2 => (Spell::Fireball, cell),
                     _ => break,
                 },
                 _ => {
-                    let roll = scene.rng.next() % ([20, 15, 10][d] + 1);
+                    let roll = scene.brain_draw() % ([20, 15, 10][d] + 1);
                     let near = scene.cells_about(cell, 3);
                     let at = (near.0 + near.2 / 2, near.1 + near.3 / 2);
                     if human_count(scene, near) < 4 {
@@ -11390,7 +11419,7 @@ mod miss012 {
         match state {
             0 => Op::Custom(|scene, k| {
                 if var(scene, k, WAIT) == 0 {
-                    let rest = ([50, 30, 10][difficulty()] + scene.rng.next() % 31) * 25;
+                    let rest = ([50, 30, 10][difficulty()] + scene.brain_draw() % 31) * 25;
                     set_var(scene, k, WAIT, rest);
                 }
                 match (B_YARD..=B_RAIDERS).find(|&f| var(scene, f, ASKED) != 0) {
@@ -11592,7 +11621,7 @@ mod miss012 {
 
     /// Rolls a patrol's length `(rand(4) + base by difficulty) x 1500`.
     fn roll_length(scene: &mut Scene, k: usize, base: [u32; 3]) -> u32 {
-        let ticks = ((scene.rng.next() & 3) + base[difficulty()]) * 1500;
+        let ticks = ((scene.brain_draw() & 3) + base[difficulty()]) * 1500;
         set_var(scene, k, LENGTH, ticks);
         5
     }
@@ -11930,7 +11959,7 @@ mod miss012 {
         ];
         match state {
             0 => Op::Custom(|scene, k| {
-                let r = scene.rng.next() & 3;
+                let r = scene.brain_draw() & 3;
                 set_var(scene, k, SPELL, [9, 9, 12, 15][r as usize]);
                 let ticks = ([20, 15, 10][difficulty()] + r) * 1500;
                 set_var(scene, k, LENGTH, ticks);
@@ -12050,18 +12079,18 @@ mod miss012 {
                 continue;
             }
             let (spell, at) = match class {
-                ObjectClass::Building(0x32) => match scene.rng.next() & 3 {
+                ObjectClass::Building(0x32) => match scene.brain_draw() & 3 {
                     0 | 2 => (Spell::Fireball, cell),
                     _ => break,
                 },
                 ObjectClass::Building(0x33 | 0x3e) => (Spell::Lightning, cell),
-                ObjectClass::Building(0x34 | 0x35 | 0x36 | 0x3d) => match scene.rng.next() & 3 {
+                ObjectClass::Building(0x34 | 0x35 | 0x36 | 0x3d) => match scene.brain_draw() & 3 {
                     0 => (Spell::Waterspout, cell),
                     2 => (Spell::Fireball, cell),
                     _ => break,
                 },
                 _ => {
-                    let roll = scene.rng.next() % ([20, 15, 10][d] + 1);
+                    let roll = scene.brain_draw() % ([20, 15, 10][d] + 1);
                     let near = scene.cells_about(cell, 3);
                     let at = (near.0 + near.2 / 2, near.1 + near.3 / 2);
                     if human_count(scene, near) < 4 {
@@ -12589,7 +12618,7 @@ mod miss013 {
         match state {
             0 => Op::Custom(|scene, k| {
                 if var(scene, k, WAIT) == 0 {
-                    let rest = ([50, 30, 10][difficulty()] + scene.rng.next() % 31) * 25;
+                    let rest = ([50, 30, 10][difficulty()] + scene.brain_draw() % 31) * 25;
                     set_var(scene, k, WAIT, rest);
                 }
                 match (B_YARD..=B_RAIDERS).find(|&f| var(scene, f, ASKED) != 0) {
@@ -12743,7 +12772,7 @@ mod miss013 {
 
     /// Rolls a patrol's length `(rand(4) + base by difficulty) x 1500`.
     fn roll_length(scene: &mut Scene, k: usize, base: [u32; 3]) -> u32 {
-        let ticks = ((scene.rng.next() & 3) + base[difficulty()]) * 1500;
+        let ticks = ((scene.brain_draw() & 3) + base[difficulty()]) * 1500;
         set_var(scene, k, LENGTH, ticks);
         5
     }
@@ -13043,7 +13072,7 @@ mod miss013 {
                 if let Some(cell) = carrier {
                     let area = scene.cells_about(cell, 2);
                     set_var(scene, MIDDLE, STRIKE_AREA, pack(area));
-                    if scene.rng.next() & 1 == 0 {
+                    if scene.brain_draw() & 1 == 0 {
                         scene.set_fleet_area(k, area);
                         return 35;
                     }
@@ -13210,7 +13239,7 @@ mod miss013 {
                     .map(cell_of);
                 if let Some(cell) = heroes {
                     scene.set_fleet_area(k, scene.cells_about(cell, 2));
-                    if cell.1 > 44 && scene.rng.next() & 1 == 0 {
+                    if cell.1 > 44 && scene.brain_draw() & 1 == 0 {
                         return 25;
                     }
                 }
@@ -13271,7 +13300,7 @@ mod miss013 {
         ];
         match state {
             0 => Op::Custom(|scene, k| {
-                let r = scene.rng.next() & 3;
+                let r = scene.brain_draw() & 3;
                 set_var(scene, k, SPELL, [9, 9, 12, 15][r as usize]);
                 let ticks = ([20, 15, 10][difficulty()] + r) * 1500;
                 set_var(scene, k, LENGTH, ticks);
@@ -13402,18 +13431,18 @@ mod miss013 {
                 continue;
             }
             let (spell, at) = match class {
-                ObjectClass::Building(0x32) => match scene.rng.next() & 3 {
+                ObjectClass::Building(0x32) => match scene.brain_draw() & 3 {
                     0 | 2 => (Spell::Fireball, cell),
                     _ => break,
                 },
                 ObjectClass::Building(0x33 | 0x3e) => (Spell::Lightning, cell),
-                ObjectClass::Building(0x34 | 0x35 | 0x36 | 0x3d) => match scene.rng.next() & 3 {
+                ObjectClass::Building(0x34 | 0x35 | 0x36 | 0x3d) => match scene.brain_draw() & 3 {
                     0 => (Spell::Waterspout, cell),
                     2 => (Spell::Fireball, cell),
                     _ => break,
                 },
                 _ => {
-                    let roll = scene.rng.next() % ([20, 15, 10][d] + 1);
+                    let roll = scene.brain_draw() % ([20, 15, 10][d] + 1);
                     let near = scene.cells_about(cell, 3);
                     let at = (near.0 + near.2 / 2, near.1 + near.3 / 2);
                     if human_count(scene, near) < 4 {

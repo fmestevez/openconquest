@@ -7889,13 +7889,13 @@ fn brain_random_tick_draws_twice() {
     let mut runs = [0u32; 50];
     for seed in 0..2000u32 {
         for tick in (0..50).step_by(5) {
-            scene.rng = crate::combat::Rng(seed);
+            scene.brain.as_mut().unwrap().rng = crate::combat::Rng(seed);
             scene.brain.as_mut().unwrap().tick = tick;
             let s = lcg(lcg(seed));
             let x = s >> 16;
             let expect = tick % 50 == ((x % 10 + x % 10) % 10) * 5;
             assert_eq!(brain::random_tick(&mut scene), expect);
-            assert_eq!(scene.rng.0, s, "two draws");
+            assert_eq!(scene.brain.as_ref().unwrap().rng.0, s, "two draws");
             runs[tick as usize] += expect as u32;
         }
     }
@@ -8204,4 +8204,32 @@ fn misplaced_mission_ships_are_removed() {
     assert_eq!(scene.drop_misplaced_ships(), vec![second]);
     assert!(scene.object_index(first).is_some());
     assert_eq!(scene.stats.ships_lost[kind], lost + 1);
+}
+
+/// A new game's brain starts its own generator from 0 (0x4788a0), but in
+/// miss007-010 from the clock (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brain_seed_follows_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss006").unwrap();
+    let mut fresh = Scene::load(&data, &mut caches, "miss006").unwrap();
+    // The same draws from 0, game after game; the first is 0x3039 >> 16.
+    fresh.brain.as_mut().unwrap().rng = crate::combat::Rng(0);
+    assert_eq!(fresh.brain_draw(), 0);
+    for _ in 0..200 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let a = scene.brain.as_ref().unwrap().rng.0;
+    let mut again = Scene::load(&data, &mut caches, "miss006").unwrap();
+    for _ in 0..200 {
+        again.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert_eq!(again.brain.as_ref().unwrap().rng.0, a);
+    // Saved with the brain.
+    let save = again.save();
+    assert_eq!(save.brain.as_ref().unwrap().rng.0, a);
 }
