@@ -2489,9 +2489,12 @@ Mended`) wait for the building whole and halt it. Not ported: slots 3 and
 (every order of the player's sets all but its own player), the jam, the
 0x2874 path, whether a navy group of a computer ever holds a fort (the
 port's flotillas hold ships), 0x43d300's test that the building is still
-the town's, the other 0x138e senders' `+0x16`; the brains' under-way
-passes are counted every pass (the original counts those after a pass
-that started nothing).
+the town's, the other 0x138e senders' `+0x16`. The brains' under-way
+passes count from the second pass after the one that started the
+mending (the original counts those after a pass that started nothing,
+`+0x18`; the port's builder land fleet starts nothing else: its ship
+parts and the pass after a start, run once woken and 3 ticks later, are
+not modelled).
 
 Known differences not yet ported:
 
@@ -2804,14 +2807,13 @@ buildings in order, a stronghold (type 0x1a6b) answering 0 to vt+0x9c(1)
 field 7, +0xc the ship's code, +0xd 1, +0xe 1, +0xf 0xff with field 8}
 (0x42957a: the default-arming byte always set); a town (0x1491) after
 0x43da20's tests is sent command 0x20, which it hands to the first of its
-yards answering 0 (0x441ba0); yards themselves are passed over. The port
-(brain.rs `builder_ready` / `builder_order`): the barbarian structure by
-`yard::barbarian_order` with the arming, a town through its yards (the
-computer players' ship part's way); the old 25-tick build beside the
-builder is gone. (Not ported: a yard in a builder's list is still given
-the order itself, which 0x428f20 passes over; whether every brain build
-comes through 0x428f20 rather than another sender of 0x20 was not
-traced.)
+yards answering 0 (0x441ba0); yards themselves are passed over (any type but 0x1491 and 0x1a6b: the
+list loop goes on; with a part's own building, 0x429001, it breaks off
+to the tries). The port (brain.rs `builder_ready` / `builder_order`):
+the barbarian structure by `yard::barbarian_order` with the arming, a
+town through its yards (the computer players' ship part's way); a yard
+in the list never. (Not traced: whether every brain build comes through
+0x428f20 rather than another sender of 0x20.)
 
 The port keeps a queued order's byte 0xd and arms it when built, takes
 the stock before the funds test, buys the armour and ram fallbacks

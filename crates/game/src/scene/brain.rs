@@ -375,8 +375,15 @@ pub enum Job {
     /// Order 96's part under way (0x42a2f0): building `target` is waited
     /// for until it is whole, then sent order 10 (0x42a3dd), which leaves
     /// a fort's or barbarian structure's groups ceasing fire; gone, or its
-    /// passes (0x595198: 10) out, the order fails.
-    Mended { target: u32, tries: u32 },
+    /// passes (0x595198: 10) out, the order fails. The passes count only
+    /// after one that started nothing (`+0x18`, 0x42bcf8): not the first,
+    /// after the pass that started the mending (`fresh`).
+    Mended {
+        target: u32,
+        tries: u32,
+        #[serde(default)]
+        fresh: bool,
+    },
 }
 
 /// The difficulty levels (+0x32a1).
@@ -1210,20 +1217,22 @@ impl Scene {
         true
     }
 
-    /// A brain's builder `site` orders a ship of type `kind`: a yard as
-    /// any order (0x416a40, paid), a barbarian structure (`free`) by its
+    /// A brain's builder `site` orders a ship of type `kind`: a barbarian
+    /// structure (`free`) by its
     /// order 0x20 (`barbarian_order`), which the land fleet's ship part
     /// sends with the default-arming byte 0xd set (0x428f20 at 0x42957a:
     /// bytes 0xd and 0xe 1, 0xf 0xff with the part's field 8); a town by
     /// its command 0x20, which it hands to the first of its yards
     /// answering 0 to the ship (0x441ba0, 0x4e82f0), as the computer
-    /// players' ship part. False if nothing was ordered.
+    /// players' ship part. A yard in the builder's list is passed over
+    /// (0x428f20 orders only types 0x1a6b and 0x1491; with a part's own
+    /// building, 0x429001, any other type breaks off). False if nothing
+    /// was ordered.
     fn builder_order(&mut self, site: u32, kind: u8, free: bool) -> bool {
         let Some(i) = self.object_index(site) else {
             return false;
         };
         match self.objects[i].class {
-            _ if self.is_yard(i) => self.yard_order(site, kind, false, !free, None).is_ok(),
             openconquest_formats::ObjectClass::Barbarian(_) => {
                 self.barbarian_order(site, kind, true);
                 true
@@ -1248,12 +1257,12 @@ impl Scene {
     /// asleep) with its berth free (0x4e82f0 with code 0xff), the others
     /// never (-5); a town idle with one of its yards' berths free (0x43da20
     /// with param_8 1; the ship's own draught test is `builder_order`'s).
+    /// A yard never (0x428f20 passes it over).
     fn builder_ready(&self, site: u32) -> bool {
         let Some(i) = self.object_index(site) else {
             return false;
         };
         match self.objects[i].class {
-            _ if self.is_yard(i) => !self.yard_busy(site),
             openconquest_formats::ObjectClass::Barbarian(c) => {
                 c == 0x40 && self.objects[i].asleep.is_none() && self.yard_answer(i, None) == 0
             }
@@ -2294,6 +2303,7 @@ impl Scene {
                             keep.push(Job::Mended {
                                 target: id,
                                 tries: 10,
+                                fresh: true,
                             });
                         }
                         None if idle > 1 => keep.push(Job::Repair {
@@ -2303,7 +2313,11 @@ impl Scene {
                         None => {}
                     }
                 }
-                Job::Mended { target, tries } => {
+                Job::Mended {
+                    target,
+                    tries,
+                    fresh,
+                } => {
                     let Some(t) = self.object_index(target) else {
                         continue;
                     };
@@ -2313,13 +2327,17 @@ impl Scene {
                         .is_none_or(|c| c.hull >= c.max_hull);
                     if whole {
                         let _ = self.halt(target, data, caches);
+                    } else if fresh {
+                        keep.push(Job::Mended {
+                            target,
+                            tries,
+                            fresh: false,
+                        });
                     } else if tries > 1 {
-                        // (Counted every pass, as the idle passes above;
-                        // the original counts those after a pass that
-                        // started nothing, `+0x18`.)
                         keep.push(Job::Mended {
                             target,
                             tries: tries - 1,
+                            fresh: false,
                         });
                     }
                 }

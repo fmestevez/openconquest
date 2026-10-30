@@ -5169,10 +5169,9 @@ fn miss007_mended_structure_ceases_fire() {
         let i = scene.object_index(id).unwrap();
         let c = scene.objects[i].combat.as_ref().unwrap();
         let jobs = &scene.brain.as_ref().unwrap().jobs;
-        if jobs.contains(&super::brain::Job::Mended {
-            target: id,
-            tries: 10,
-        }) {
+        if jobs.iter().any(
+            |j| matches!(j, super::brain::Job::Mended { target, tries: 10, .. } if *target == id),
+        ) {
             mended = true;
         }
         if mended
@@ -9457,4 +9456,88 @@ fn barbarian_builder_builds_on_its_berth() {
     );
     assert_eq!(s.armour, combat::DEFAULT_ARMOUR[3].0);
     assert_eq!(s.ram, combat::DEFAULT_RAM[3].0);
+}
+
+/// The land fleet's ship part passes a yard in a builder's list over
+/// (0x428f20 orders types 0x1a6b and 0x1491 only): a computer player's
+/// yard put in miss008's builder list, with the price in its purse, is
+/// ordered nothing. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn builder_passes_yards_over() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss008").unwrap();
+    let yard = scene
+        .objects
+        .iter()
+        .position(|o| {
+            !scene.is_own(o)
+                && o.owner.is_some()
+                && matches!(
+                    o.class,
+                    ObjectClass::Building(economy::SHIPYARD | economy::DOCK)
+                )
+        })
+        .expect("a computer player's yard");
+    let (id, owner) = (scene.objects[yard].id, scene.objects[yard].owner.unwrap());
+    scene.earn(owner, 100_000, 100_000);
+    assert!(!scene.yard_busy(id));
+    scene.brain.as_mut().unwrap().fleets[0].ships = vec![id];
+    assert!(!scene.fleet_build_for(0, 1, 1));
+    assert!(!scene.yard_busy(id));
+}
+
+/// Order 96's wait for a mended building counts only the land fleet's
+/// passes after one that started nothing (`+0x18`): the pass after the
+/// one that started the mending does not count. Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn mended_wait_skips_the_pass_after_the_start() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| matches!(o.class, ObjectClass::Barbarian(_)) && o.combat.is_some())
+        .unwrap();
+    let id = scene.objects[i].id;
+    let c = scene.objects[i].combat.as_mut().unwrap();
+    c.hull = c.max_hull * 0.5;
+    // Not being mended: it stays worn while the order waits.
+    scene.brain.as_mut().unwrap().jobs = vec![super::brain::Job::Mended {
+        target: id,
+        tries: 2,
+        fresh: true,
+    }];
+    let mut passes = |scene: &mut Scene, n: u32| {
+        for _ in 0..50 * n {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            scene.mending.clear();
+        }
+    };
+    let waiting = |scene: &Scene| {
+        scene
+            .brain
+            .as_ref()
+            .unwrap()
+            .jobs
+            .iter()
+            .find_map(|j| match *j {
+                super::brain::Job::Mended { target, tries, .. } if target == id => Some(tries),
+                _ => None,
+            })
+    };
+    passes(&mut scene, 1);
+    assert_eq!(waiting(&scene), Some(2));
+    passes(&mut scene, 1);
+    assert_eq!(waiting(&scene), Some(1));
+    passes(&mut scene, 1);
+    assert_eq!(waiting(&scene), None);
 }
