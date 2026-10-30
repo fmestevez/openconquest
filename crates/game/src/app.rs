@@ -5157,8 +5157,14 @@ impl App {
 
     /// A right click on command button `slot` (0x4f46c0): on a ship,
     /// marine, weapon or refit button, takes the last one ordered off the
-    /// queue (message 0x3c), its price paid back.
+    /// queue (message 0x3c), its price paid back; on 0x14, 0x15, 0x3a-0x3c,
+    /// 0x3e-0x54 and 0x67, order 10 to the selection. Nothing while the
+    /// game is paused (screen + 0x17e6; the "Bad connection to" box, + 0x17ea,
+    /// is not ported).
     fn cancel_button(&mut self, slot: usize) {
+        if self.paused {
+            return;
+        }
         let Some(obj) = self
             .selected
             .and_then(|id| self.scene.object_index(id))
@@ -5175,16 +5181,12 @@ impl App {
         if matches!(code, 0x14 | 0x15 | 0x21..=0x3c | 0x3e..=0x54 | 0x67 | 0x7d) {
             self.pending = None;
         }
-        // Order 10 (no data) to the selection for 0x14, 0x15, 0x3a-0x3c,
-        // 0x3e-0x54 and 0x67; what it calls off is the object's: the
-        // settlement's stock repair (0x4430f0) is the one ported.
-        if code == Command::REPAIR_STOCK.0 {
-            let (id, i) = (obj.id, self.scene.object_index(obj.id));
-            let repairing = i
-                .and_then(|i| self.scene.home_settlement(i))
-                .is_some_and(|home| self.scene.stock_repair_at(home).is_some());
-            if repairing {
-                if let Err(e) = self.issue(Order::CancelStockRepair { workshop: id }) {
+        // Order 10 (no data) to the selection for 0x14, 0x15, 0x3a-0x3c
+        // (UPGTOWN, UPGDOCK, CBUT_UPARMING: the inner switch's 0x3a/0x3b
+        // labels are dead), 0x3e-0x54 and 0x67 (`Scene::halt`).
+        if matches!(code, 0x14 | 0x15 | 0x3a..=0x3c | 0x3e..=0x54 | 0x67) {
+            for id in self.selection() {
+                if let Err(e) = self.issue(Order::Halt { id }) {
                     self.say(e);
                 }
             }
@@ -5224,7 +5226,13 @@ impl App {
         }
     }
 
+    /// A left click (or accelerator) on command button `slot` (0x4f34c0):
+    /// nothing while the game is paused (0x4f34fc/0x4f3508: screen +
+    /// 0x17e6).
     fn press_button(&mut self, slot: usize) {
+        if self.paused {
+            return;
+        }
         let Some(obj) = self
             .selected
             .and_then(|id| self.scene.object_index(id))

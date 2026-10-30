@@ -7824,3 +7824,74 @@ fn score_counts_the_human_players_kills() {
     assert_eq!(scene.stats.ships_lost.iter().sum::<u32>(), 0);
     assert_eq!(scene.stats.score(), 1100 / 10);
 }
+
+/// Order 10 (0x280f, order byte 10): a building's own mending stops with
+/// nothing given back (LandObj 0x425990, job 0xff); a settlement's stock
+/// repair is called off (TownObj 0x441ba0 -> 0x4430f0), also through its
+/// workshop (Studio 0x436ee0, job 5); a fort's mending is left (not
+/// ported). Needs `OPENCONQUEST_DATA`.
+#[test]
+fn order_10_calls_off_what_the_object_does() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.amber = 10_000;
+    let home = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN)))
+        .unwrap()
+        .id;
+    let h = scene.object_index(home).unwrap();
+    let c = scene.objects[h].combat.as_mut().unwrap();
+    c.hull = c.max_hull / 2.0;
+    scene.order_mend(home, home).unwrap();
+    scene.update(crate::clock::TICK * 10.0, &data, &mut caches);
+    assert!(scene.mending.contains(&home));
+    let amber = scene.amber;
+    scene
+        .apply(&Order::Halt { id: home }, &data, &mut caches)
+        .unwrap();
+    assert!(!scene.mending.contains(&home));
+    assert_eq!(scene.amber, amber);
+    // Nothing to call off: nothing happens.
+    scene
+        .apply(&Order::Halt { id: home }, &data, &mut caches)
+        .unwrap();
+    assert_eq!(scene.amber, amber);
+    // The stock repair, through the workshop: (100 - progress) x paid /
+    // 100 back.
+    let w = scene
+        .objects
+        .iter()
+        .position(|o| {
+            scene.is_own(o) && matches!(o.class, ObjectClass::Building(_)) && o.id != home
+        })
+        .unwrap();
+    scene.objects[w].class = ObjectClass::Building(economy::WORKSHOP);
+    let workshop = scene.objects[w].id;
+    assert_eq!(scene.home_settlement(w), Some(home));
+    scene.set_stock_units(home, {
+        let mut u: [Vec<u8>; 9] = Default::default();
+        u[6] = vec![50, 100];
+        u
+    });
+    let amber = scene.amber;
+    scene.order_repair_stock(workshop).unwrap();
+    assert_eq!(amber - scene.amber, 35);
+    scene
+        .apply(&Order::Halt { id: workshop }, &data, &mut caches)
+        .unwrap();
+    assert!(scene.stock_repair_at(home).is_none());
+    assert_eq!(scene.amber, amber);
+    // On the settlement itself too.
+    scene.order_repair_stock(workshop).unwrap();
+    scene
+        .apply(&Order::Halt { id: home }, &data, &mut caches)
+        .unwrap();
+    assert!(scene.stock_repair_at(home).is_none());
+    assert_eq!(scene.amber, amber);
+}

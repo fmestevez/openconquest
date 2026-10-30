@@ -2234,15 +2234,68 @@ button exists and is not the back button): by its command code, 0x14,
 + 0xe1, + 0xe6) and send order 10 with no data to the selection
 (0x518db0); 0x21-0x39 and 0x7d reset it and send order 0x3c {group,
 item} (ships 0x21-0x2c and 0x7d group 1, training 0x2d-0x35 group 2,
-armour 0x36/0x37 group 3, rams 0x38/0x39 group 4); others nothing. What
-order 10 calls off is the object's: the settlement's stock repair
-(0x4430f0, command 0x15), the war temple's flame (0x439260: when busy,
-+ 0x110 = 1 gives back + 0x120 x the amber of 0x596864 / 100 and the fish
-of 0x59689c, + 0x110 = 2 + 0x120 x 1000 / 100 and clears the player's
-+ 0xc0). The port sends the stock repair's (and the cancels of 0x3c)
-and resets its waiting command; the war temple's order 10 and the
-other order-10 codes' objects are not ported, nor the conditions game
-+ 0x15b5 + 0x17e6 / + 0x17ea (not identified).
+armour 0x36/0x37 group 3, rams 0x38/0x39 group 4); others nothing (the
+inner switch's 0x3a/0x3b labels are dead: those codes take the order-10
+branch). Both, and the left press (0x4f34c0, 0x4f34fc/0x4f3508) and the
+pointer (0x5175b0, 0x5180e0), act only while the screen's + 0x17e6 (the
+game paused: gamesys 0x4e5 case 1 flips it and shows `WIN_PAUSE`;
+cleared by messages 8, 9 and the constructor) and + 0x17ea (a "Bad
+connection to" box up, string 1127: Players.cpp 0x520a52..0x520b26, in
+multiplayer, a player silent for over 20000 ms; cleared by a message from
+him, 0x522d50 and gamesys 8/9) are both 0. The order goes through
+0x518db0 -> 0xc458 to the navy -> 0x49e230 -> the order queue (0x520cc0)
+-> Players.cpp 0x5228c0, which delivers message 0x280f with the order
+byte (+0xc) 10. What it calls off is the object's, whatever button sent
+it (busy `+0x10c`, job `+0x110`, amber paid `+0x118`, progress `+0x120`
+in percent; state `+0xa4` 0 being built, 1 standing):
+
+- LandObj 0x425990 (every building, reached last): busy with job 0xff
+  (its own mending): `+0x10c` = 0, `+0xa4` = 1, no refund (mending is
+  paid step by step); then, when `+0xe8` != 0 (not identified) and `+0xa4`
+  == 0, the full price 0x42d8b0(class) back (0x4a8dc0) and the building
+  removed (0x424740).
+- TownObj 0x441ba0: upgrading (`+0xa4` 0, `+0x23c` set): 0x42d8b0(0x33) x
+  (total - done) / total back (the `+0x7c` record's +0x49 / +0x45), class
+  0x32 again, `+0xa4` = 1; else busy: the stock repair's cancel (0x4430f0,
+  above) or the training queue freed; then LandObj (0x444f17); the
+  settlement's sound 0xdc-0xdf for the local owner when handled.
+- Dock 0x416f90 (shipyard): upgrading (`+0x1e8` set): 0x42d8b0(0x3b) x
+  (total - done) / total back, class 0x3a again; else 0x4e8660 ->
+  0x4e7640 -> 0x427f50 -> LandObj.
+- Smithy 0x434ed0, Studio 0x436ee0, School 0x432210 (after 0x427f50 ->
+  LandObj), standing and busy: `+0x10c` = 0, (100 - `+0x120`) x paid / 100
+  back (the School: x its cost by job: 1 0x5971ac[player + 0xa3], 2
+  0x42d9a0(player + 0x5e), 3 0x42d9a0(+0x5f), 4 0x42d980(+0x51), 5-8
+  2000), the job's player flag cleared (Smithy job 2 + 0x63, 3 + 0x6a;
+  Studio jobs 2-4 + 0x91 / + 0x98 / + 0x9f; School 1-8 + 0xa4, + 0x5a,
+  + 0x56, + 0x52, + 0x72, + 0x7a, + 0x82, + 0x8a), a production list freed
+  (job 1); the Studio's job 5 goes to its settlement (`+0x1c8`, the stock
+  repair). Sounds for the local owner: the smithy's 0xe8 / 0xe9 / 0xeb /
+  0xea and the studio's 0xec / 0xed / 0xef / 0xee (nation 0-3) on any order
+  10; the school's 0xf0 / 0xf1 / 0xf3 / 0xf2 only when it cancelled.
+- TempleSea 0x438300, busy: learning (job 1) `+0x120` x 1000 / 100 back
+  (the elapsed percent), player + 0xb8 = 0; then `+0x100` = 1, no sound.
+- TempleWar 0x439260, busy: the Flame (job 1) `+0x120` x 6000 / 100 amber
+  ([0x596864]) and `+0x120` x 15 fish ([0x59689c], no / 100) back;
+  learning (job 2) `+0x120` x 1000 / 100, player + 0xc0 = 0; then the
+  temple's sound (0x43a180) for the local owner. Not busy, nothing.
+- Fortress 0x419f80: unless busy with job 0xff, its 12 unit groups stop
+  shooting (0x4469b0) and `+0x498` = 0; with it, the unit list `+0x4cc`
+  freed. Barb 0x40ef70: the 12 groups stop shooting.
+- A ship: 0x4e2ba0 (not read); ShipService 0x4e7640 takes order 0x32
+  only, GameObj 0x50c9e0 order 0x29 only.
+
+The port blocks command buttons, left and right, while paused (no
+"Bad connection" box), sends order 10 for the codes above, and ports of
+it the buildings' own mending stop, the settlement's stock repair cancel
+(also through its workshop when the workshop studies nothing). Not
+ported: the forts' and strongholds' (their unit groups' targets are not
+kept by the port), the construction cancel (`+0xe8`), the upgrades'
+refunds (the `+0x7c` frame counts), the research, learning and Flame
+cancels (which command starts which job and their `+0x120` ticks not
+read; 0x42d9a0 / 0x42d980 not read), the training queue's, the sounds
+(how 0x50e570 picks among an event's sounds not read) and the ship's;
+nor the pointer's own pause test.
 
 Known differences not yet ported:
 

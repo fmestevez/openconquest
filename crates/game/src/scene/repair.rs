@@ -4,7 +4,7 @@
 use openconquest_formats::ObjectClass;
 
 use super::Scene;
-use crate::economy::{DOCK, SETTLEMENT, TOWN};
+use crate::economy::{DOCK, SETTLEMENT, TOWN, WORKSHOP};
 use crate::objects::Task;
 
 /// A settlement mends a building (message 0x1389, 0x425100) a hundredth of
@@ -319,6 +319,59 @@ impl Scene {
     /// turn and least worn first, as long as each one's time still fits in
     /// the time spent, the first that does not ending it. Given by a right
     /// click on the workshop's command 0x15 (0x4f46c0).
+    /// Order 10 to object `id` (no data: a right click on a command button
+    /// whose code sends it, 0x4f46c0; Players.cpp 0x5228c0 delivers it as
+    /// message 0x280f, order byte 10). What it calls off is the object's,
+    /// whatever button sent it. Ported:
+    ///
+    /// - a settlement or town (TownObj 0x441ba0) mending its stock: called
+    ///   off (0x4430f0, `cancel_stock_repair`); then, as every building
+    ///   (LandObj 0x425990, 0x444f17), its own mending (job 0xff) stopped,
+    ///   no refund (it is paid step by step);
+    /// - a workshop (Studio 0x436ee0): its own mending stopped first
+    ///   (0x427f50 -> 0x425990); else, busy with its settlement's stock
+    ///   repair (job 5) and nothing else, the order goes on to the
+    ///   settlement (`+0x1c8`);
+    /// - the other buildings but forts (Smithy 0x434ed0, School 0x432210,
+    ///   the temples 0x438300 / 0x439260, Dock 0x416f90 through 0x4e8660):
+    ///   their own mending stopped.
+    ///
+    /// Not ported: the forts' and barbarian strongholds' (Fortress
+    /// 0x419f80, Barb 0x40ef70: their 12 unit groups stop shooting, the
+    /// unit mending list freed; whether 0x419f80 reaches LandObj not
+    /// found), a building under construction's (LandObj's second dispatch,
+    /// its guard `+0xe8` not identified), the town and dock upgrades' (their
+    /// refund's `+0x7c` record +0x49 / +0x45 not tied to the port's
+    /// construction), the research, learning and Flame cancels (which
+    /// command starts which job, their `+0x120` ticks and the cost functions
+    /// 0x42d9a0 / 0x42d980 not read), the smithy's and studio's sounds (how
+    /// 0x50e570 picks among the events' sounds not read), and a ship's
+    /// (0x4e2ba0 not read).
+    pub fn halt(&mut self, id: u32) -> Result<(), String> {
+        let i = self.object_index(id).ok_or("No such object")?;
+        let class = self.objects[i].class;
+        let forts = matches!(class, ObjectClass::Building(0x34..=0x36));
+        let mending = !forts && self.mending.contains(&id);
+        match class {
+            ObjectClass::Building(SETTLEMENT | TOWN) if self.stock_repair_at(id).is_some() => {
+                self.cancel_stock_repair(id)?;
+            }
+            ObjectClass::Building(WORKSHOP) if !mending && self.research_at(id).is_none() => {
+                if let Some(home) = self
+                    .home_settlement(i)
+                    .filter(|&h| self.stock_repair_at(h).is_some())
+                {
+                    self.cancel_stock_repair(home)?;
+                }
+            }
+            _ => {}
+        }
+        if mending {
+            self.mending.retain(|&m| m != id);
+        }
+        Ok(())
+    }
+
     pub fn cancel_stock_repair(&mut self, site: u32) -> Result<(), String> {
         let k = self
             .stock_repairs
