@@ -89,10 +89,10 @@ impl Scene {
     /// stores the masks (`+0x494` the byte `+5`, `+0x48c` the dword `+6`
     /// less its own player's bit, `+0x490` the dword `+10`), whatever is
     /// found; a barbarian structure the same as they come (`+0x200`,
-    /// `+0x1f8`, `+0x1fc`, 0x40f75b). (A click on a land creature gives
-    /// the creature itself; the original's order names its jam, class
-    /// 0x1f7, which the fort turns into the jam's first member, 0x415df0:
-    /// not ported.)
+    /// `+0x1f8`, `+0x1fc`, 0x40f75b). The pointer picks a land
+    /// creatures' jam (0x49a580), class 0x1f7, which the fort turns into
+    /// the jam's first member (0x415df0): the port's pick gives that
+    /// member (`Scene::jam_at`).
     pub fn fort_attack(&mut self, site: u32, target: u32, groups: u8, masks: combat::FortMasks) {
         let Some(i) = self
             .object_index(site)

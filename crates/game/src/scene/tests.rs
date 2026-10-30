@@ -9155,6 +9155,76 @@ fn shots_aim_at_ships_as_the_original() {
     assert_eq!(scene.ship_aim(k, false), (left + x, top + w * u / 5));
 }
 
+/// A land creature's picture stands up and left of its place by its
+/// class's offset (0x4111b0: the cyclops' 0x1e, 0x30); the pointer picks
+/// its jam, given as the first member, when it is on any member's picture
+/// rectangle (0x49a580, 0x415c70, 0x411b50), not on a dying one, and the
+/// cells about the pointer's are tried too (needs `OPENCONQUEST_DATA`).
+#[test]
+fn the_pointer_picks_a_land_creatures_jam() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let t = TILE_SIZE as f32;
+    // A land cell with land all about and nothing standing on or near it.
+    let (mut scene, cell) = (0..14)
+        .find_map(|m| {
+            let mut scene = Scene::load(&data, &mut caches, &format!("miss{m:03}")).ok()?;
+            scene.brain = None;
+            let (w, h) = (scene.grid.width as i32, scene.grid.height as i32);
+            let land = |x: i32, y: i32| scene.cell_types[(y * w + x) as usize] & 0xf == 8;
+            let cell = (2..h - 2)
+                .flat_map(|y| (2..w - 2).map(move |x| (x, y)))
+                .find(|&(x, y)| {
+                    (-2..=2).all(|dy| (-2..=2).all(|dx| land(x + dx, y + dy)))
+                        && scene
+                            .objects
+                            .iter()
+                            .filter(|o| o.combat.is_some() || o.cell.is_some())
+                            .all(|o| {
+                                let (ox, oy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+                                (ox - x).abs() > 3 || (oy - y).abs() > 3
+                            })
+                })?;
+            Some((scene, cell))
+        })
+        .expect("a free land cell");
+    scene.put_walker(super::walkers::NO_LAIR, 0x1f4, cell, &data, &mut caches);
+    scene.put_walker(super::walkers::NO_LAIR, 0x1f4, cell, &data, &mut caches);
+    let (a, b) = (scene.walkers[0].id, scene.walkers[1].id);
+    // Put the second a half off, so its picture reaches other pixels.
+    let pos = scene.walkers[0].pos;
+    scene.walkers[1].pos = (pos.0 + 32, pos.1);
+    let i = scene.object_index(b).unwrap();
+    (scene.objects[i].x, scene.objects[i].y) = (pos.0 as f32 + 32.0, pos.1 as f32);
+    let k = scene.object_index(a).unwrap();
+    let l = &scene.objects[k].frames[0][0];
+    let (fw, fh) = (l.image.width as i32, l.image.height as i32);
+    assert_eq!(
+        crate::render::layer_origin(&scene.objects[k], l),
+        (pos.0 - 0x1e, pos.1 - 0x30)
+    );
+    let pick = |scene: &Scene, x: i32, y: i32| {
+        crate::render::hit_test(scene, x as f32 + 0.5, y as f32 + 0.5, 0)
+    };
+    // The first's picture's corners pick the jam; just outside, nothing
+    // of it (the second's lies a half to the east).
+    let (left, top) = (pos.0 - 0x1e, pos.1 - 0x30);
+    assert_eq!(pick(&scene, left, top), Some(a));
+    assert_eq!(pick(&scene, left, top + fh - 1), Some(a));
+    assert_ne!(pick(&scene, left - 1, top), Some(a));
+    assert_ne!(pick(&scene, left, top - 1), Some(a));
+    // The second's far side: still the jam, as its first member.
+    assert_eq!(pick(&scene, left + 32 + fw - 1, top), Some(a));
+    assert_ne!(pick(&scene, left + 32 + fw, top), Some(a));
+    // A dying member is not on it.
+    scene.walkers[1].state = super::walkers::DYING;
+    assert_ne!(pick(&scene, left + 32 + fw - 1, top), Some(a));
+    assert!(scene.pick_cells(left, top).len() == 9);
+}
+
 /// A blow to a land creature waits for its tick (0x4139e0, 0x413ad0): one
 /// that leaves it life takes it off (30000 - 10000, 66 percent) and shows
 /// the hit when its picture next ends (state 4, its 10 frames, then back);

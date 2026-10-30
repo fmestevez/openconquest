@@ -577,7 +577,7 @@ pub use stats::Stats;
 pub use story::goal_name;
 pub use story::{Carry, Goal};
 pub use towns::Towns;
-pub use walkers::{walker_frame_ms, walker_sequence, Jam, Walker};
+pub use walkers::{anchor_walker_frames, walker_frame_ms, walker_sequence, Jam, Walker};
 pub use yard::ShipOrder;
 #[cfg(test)]
 mod tests;
@@ -1404,6 +1404,58 @@ impl Scene {
             (Some(h), Some(owner)) => (h.nation, h.slot) == owner,
             _ => false,
         }
+    }
+
+    /// The cells whose occupants the pointer at world pixel `(x, y)` tries
+    /// (0x49a580 with the main view's cursor `+0xbd` 1): its own cell, then
+    /// those about it in the list 0x499ff0 builds for its place by the
+    /// map's edges (0x49a1d0): inside, north-west, north, north-east, east,
+    /// south-east, south, south-west, west; on the edges and in the corners
+    /// the cells on the map, from east (top edge, top-left corner), south
+    /// (right edge, top-right), west (bottom edge, bottom-right) or north
+    /// (left edge, bottom-left) round that way.
+    pub fn pick_cells(&self, x: i32, y: i32) -> Vec<(i32, i32)> {
+        let t = TILE_SIZE as i32;
+        let (cx, cy) = (x.div_euclid(t), y.div_euclid(t));
+        let (w, h) = (self.grid.width as i32, self.grid.height as i32);
+        const NW: (i32, i32) = (-1, -1);
+        const N: (i32, i32) = (0, -1);
+        const NE: (i32, i32) = (1, -1);
+        const E: (i32, i32) = (1, 0);
+        const SE: (i32, i32) = (1, 1);
+        const S: (i32, i32) = (0, 1);
+        const SW: (i32, i32) = (-1, 1);
+        const W: (i32, i32) = (-1, 0);
+        let (left, right, top, bottom) = (cx == 0, cx == w - 1, cy == 0, cy == h - 1);
+        let about: &[(i32, i32)] = match (left, right, top, bottom) {
+            (true, _, true, _) => &[E, SE, S],
+            (true, _, _, true) => &[N, NE, E],
+            (true, ..) => &[N, NE, E, SE, S],
+            (_, true, true, _) => &[S, SW, W],
+            (_, true, _, true) => &[W, NW, N],
+            (_, true, ..) => &[S, SW, W, NW, N],
+            (.., true, _) => &[E, SE, S, SW, W],
+            (.., true) => &[W, NW, N, NE, E],
+            _ => &[NW, N, NE, E, SE, S, SW, W],
+        };
+        std::iter::once((cx, cy))
+            .chain(about.iter().map(|&(dx, dy)| (cx + dx, cy + dy)))
+            .collect()
+    }
+
+    /// Whether the pointer at world pixel `(x, y)` picks the land
+    /// creatures' jam on `cell` (its vt+8, 0x415c70: one of its members,
+    /// not dying, with the point on its picture, 0x411b50), giving the jam
+    /// as its first member (orders naming a jam reach that one, 0x415df0).
+    pub fn jam_at(&self, cell: (i32, i32), x: i32, y: i32) -> Option<u32> {
+        let jam = self.jams.iter().find(|j| j.cell == cell)?;
+        let hit = jam.members.iter().any(|&m| {
+            self.walkers
+                .iter()
+                .find(|w| w.id == m)
+                .is_some_and(|w| walkers::on_walker(self, w, x, y))
+        });
+        hit.then(|| jam.members.first().copied()).flatten()
     }
 
     /// Index of the object with mission id `id`.

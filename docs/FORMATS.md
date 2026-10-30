@@ -4778,9 +4778,36 @@ a building's is not ported, as its generator (`+0x18`, seeded
 elsewhere too (0x4281de, 0x424185, 0x4244a4, the forts' 0x41a895 /
 0x41bc61, the towns' 0x430449 / 0x441e9c / 0x4422ad), none of which
 the port has: a throw at a building aims as the port's other shots.
-Not ported: message 0xda96 (life off by the message's amount); the
-original's order on a jam (a click gives the
-creature); several sounds to pick from are picked by the port's
+Its picture stands up and left of its place (`+0xb4`, `+0xb8`) by
+`+0xbc` / `+0xc0` (0x4111b0 by class: the cyclops' 0x1e, 0x30, the
+minotaur's 0x1f, 0x35, the amazon's 0x1f, 0x2f; 0x411520 places it so at
+0x411ac1 through 0x50d660, which writes the picture's `+0x59` / `+0x5d`).
+
+**The pointer on a jam.** The cursor (0x5175b0) asks the view (message
+0xc44f) for the object under it: 0x49a580 (point, its cell, and the
+cursor's `+0xbd`, which the view's activation sets to 1 in the main view,
+`+0x58` 1, and 0 in the other, 0x51e436-0x51e46c) tries, each by its
+vt+8, the pointer cell's flyer slot (`+20`: harpies and dragons,
+0x1f8 / 0x1f9), its `+28` slot (kind 700, not 0x2c1), the flyers and
+class 0x25b in the cells about it, the cell's occupant (`+12`), with
+`+0xbd` the occupants of the cells about it, then its `+16` slot (not
+0x2c1) and the next cell's. The cells about are 0x499ff0's lists by the
+map's edges (0x49a1d0): inside, north-west, north, north-east, east,
+south-east, south, south-west, west; on an edge or in a corner the cells
+on the map from east (top edge and top-left corner), south (right edge,
+top-right), west (bottom edge, bottom-right) or north (left edge,
+bottom-left), round that way. A jam's vt+8 (0x415c70) answers 1 at once
+when `+0xbd` is 0, else when any member's does (0x411b50: not dying, the
+point within its picture's `+0x59`, `+0x5d`, `+0x61`, `+0x65`). So the
+pointer picks the jam, never a creature: the info strip and line are
+left as they were (0x516c10 sends nothing for type 0x1f7), and an order
+names the jam (a fort's turns it into its first member, 0x415df0). The
+port draws them so, picks a jam over its members' picture rectangles in
+that order of cells (`Scene::pick_cells`, `Scene::jam_at`; the other
+occupants there by their pixels, as the port's other picks), giving the
+jam as its first member, and shows nothing for it. Not ported: message
+0xda96 (life off by the message's amount); what a ship does with an
+order naming a jam (the port's names its first member); several sounds to pick from are picked by the port's
 stand-in for the C library's `rand()` (`gull_rng`). Not decoded:
 0x55b560's back-trace when its first step finds no cell (it
 writes its uninitialised best cell, `[esp+0x28]` / `[esp+0x38]` read at

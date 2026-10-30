@@ -1404,9 +1404,11 @@ impl App {
         // With "help string" on, the object under the pointer names itself
         // in the message line (gcursor 0x516c10 sends its info to the line,
         // InfoStringTy, as to the strip).
+        // A land creatures' jam (type 0x1f7) sends nothing (0x516c10).
         let hover_object = (self.settings.config.help_string && self.pending.is_none())
             .then(|| self.cursor.and_then(|c| self.object_at(c)))
-            .flatten();
+            .flatten()
+            .filter(|&id| !self.jam_picked(id));
         GameView {
             bar_left: self.settings.config.bar_left,
             hover_object,
@@ -1484,6 +1486,8 @@ impl App {
             .map(|i| &self.scene.objects[i]);
         let info = match obj {
             None => None,
+            // A jam (type 0x1f7) leaves the strip as it was (0x516c10).
+            Some(o) if self.jam_picked(o.id) => self.shown_info.get(),
             Some(o) => crate::object_info::of(&self.scene, o).or(self.shown_info.get()),
         };
         self.shown_info.set(info);
@@ -6791,6 +6795,12 @@ impl App {
     }
 
     /// The object under a window position in the world view.
+    /// Whether the pointer's pick `id` stands for a land creatures' jam
+    /// (`Scene::jam_at`).
+    fn jam_picked(&self, id: u32) -> bool {
+        self.scene.walkers.iter().any(|w| w.id == id)
+    }
+
     fn object_at(&self, pos: PhysicalPosition<f64>) -> Option<u32> {
         let (wx, wy) = self.view_world(pos)?;
         hit_test(&self.scene, wx, wy, self.time_ms)

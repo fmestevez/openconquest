@@ -519,8 +519,40 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
             .rev()
             .filter(|o| scene.is_visible(o) && o.asleep.is_none())
     };
-    // Ships, buildings and creatures first: what can be selected or fought.
-    if let Some(o) = visible().find(|o| o.combat.is_some() && solid(o)) {
+    // Harpies and dragons first (0x49a580 tests the cells' flyers before
+    // their occupants), then the land creatures' jams (`Scene::jam_at`);
+    // land creatures are picked only so.
+    let walker = |o: &&crate::objects::MapObject| {
+        matches!(
+            o.class,
+            openconquest_formats::ObjectClass::Monster(0x1f4..=0x1f6)
+        )
+    };
+    let flyer = |o: &&crate::objects::MapObject| {
+        matches!(
+            o.class,
+            openconquest_formats::ObjectClass::Monster(0x1f8 | 0x1f9)
+        )
+    };
+    if let Some(o) = visible().find(|o| flyer(o) && o.combat.is_some() && solid(o)) {
+        return Some(o.id);
+    }
+    // The occupants of the pointer's cell and of those about it, in
+    // 0x49a580's order: a jam by its members' pictures, anything else by
+    // its own pixels.
+    for cell in scene.pick_cells(px, py) {
+        if let Some(id) = scene.jam_at(cell, px, py) {
+            return Some(id);
+        }
+        if let Some(k) = scene.slot_object(cell) {
+            let o = &scene.objects[k];
+            if scene.is_visible(o) && o.asleep.is_none() && solid(&o) {
+                return Some(o.id);
+            }
+        }
+    }
+    // Ships, buildings and creatures: what can be selected or fought.
+    if let Some(o) = visible().find(|o| !walker(o) && o.combat.is_some() && solid(o)) {
         return Some(o.id);
     }
     // Deposits are areas: anywhere in a fishing ground (its cells, record
@@ -544,7 +576,7 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
     }) {
         return Some(o.id);
     }
-    visible().find(|o| solid(o)).map(|o| o.id)
+    visible().find(|o| !walker(o) && solid(o)).map(|o| o.id)
 }
 
 /// Draws the selection box around object `id` (with its hull bar).

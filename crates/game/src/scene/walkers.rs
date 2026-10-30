@@ -324,6 +324,43 @@ pub fn walker_frame_ms(state: u8) -> u64 {
     FRAME_TICKS[(state as usize).min(6)] as u64 * crate::clock::TICK_MS
 }
 
+/// Where a land creature's picture stands from its place (`+0xb4`,
+/// `+0xb8`): its top left that far up and left (`+0xbc`, `+0xc0`, set by
+/// 0x4111b0 by class; drawn there by 0x411520 at 0x411ac1, 0x50d660
+/// putting it in the picture's `+0x59` / `+0x5d`): cyclops (0x1e, 0x30),
+/// minotaur (0x1f, 0x35), amazon (0x1f, 0x2f).
+const DRAWN_AT: [(i32, i32); 3] = [(0x1e, 0x30), (0x1f, 0x35), (0x1f, 0x2f)];
+
+/// Puts land creature `class`'s frames where the original draws them
+/// (`DRAWN_AT`), the port drawing a layer centred on the object's place
+/// plus its offset.
+pub fn anchor_walker_frames(class: u32, frames: &mut [Vec<objects::Layer>]) {
+    let (bx, by) = DRAWN_AT[kind_of(class)];
+    for l in frames.iter_mut().flatten() {
+        l.dx = (l.image.width / 2) as i32 - bx;
+        l.dy = (l.image.height / 2) as i32 - by;
+    }
+}
+
+/// Whether the world point `(x, y)` is on land creature `id`'s picture
+/// (its vt+8, 0x411b50): not dying, and within the picture's rectangle,
+/// from its top left (`DRAWN_AT`) its first frame's width and height
+/// (`+0x61`, `+0x65`).
+pub(crate) fn on_walker(scene: &Scene, w: &Walker, x: i32, y: i32) -> bool {
+    let Some(i) = scene.object_index(w.id) else {
+        return false;
+    };
+    let class = scene.objects[i].record.class_id;
+    let Some(l) = scene.objects[i].frames.first().and_then(|f| f.first()) else {
+        return false;
+    };
+    let (bx, by) = DRAWN_AT[kind_of(class)];
+    let (left, top) = (w.pos.0 - bx, w.pos.1 - by);
+    w.state != DYING
+        && (left..left + l.image.width as i32).contains(&x)
+        && (top..top + l.image.height as i32).contains(&y)
+}
+
 /// A land creature's sprite sequence (0x4111b0: `<CLP|MNT|AMZ>SPR_` and
 /// state and heading digits; state 6 has no heading). The amazons' throw
 /// (`AMZSPR_3<h><b>`) takes its variant `b` from a draw.
@@ -770,7 +807,7 @@ impl Scene {
     /// 24 n + 4`), but for a land creatures' jam: a ship (the port's ships hold
     /// only the cell they are in) or a building whose footprint covers
     /// the cell, while it stands (not ruins).
-    fn slot_object(&self, (x, y): (i32, i32)) -> Option<usize> {
+    pub(crate) fn slot_object(&self, (x, y): (i32, i32)) -> Option<usize> {
         if let Some(k) = self.slot_ship((x, y)) {
             return Some(k);
         }
@@ -1525,9 +1562,10 @@ impl Scene {
         } else {
             walker_sequence(class, w.state, w.heading as usize)
         };
-        if let Ok(frames) = objects::sequence_frames(data, caches, &name) {
+        if let Ok(mut frames) = objects::sequence_frames(data, caches, &name) {
             if !frames.is_empty() {
                 w.count = frames.len() as i32;
+                anchor_walker_frames(class, &mut frames);
                 self.objects[i].frames = frames;
             }
         }

@@ -1420,7 +1420,8 @@ pub fn resolve(
             // A cyclops, minotaur or amazon out of its lair (CyclopClassTy),
             // appearing.
             let name = crate::scene::walker_sequence(cls, 0, 0);
-            let frames = sequence_frames(data, caches, &name)?;
+            let mut frames = sequence_frames(data, caches, &name)?;
+            crate::scene::anchor_walker_frames(cls, &mut frames);
             (
                 CellCentre(f(4), f(5)),
                 Visual {
