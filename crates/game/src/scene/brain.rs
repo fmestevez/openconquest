@@ -1245,7 +1245,7 @@ impl Scene {
                     .into_iter()
                     .find(|&y| self.yard_answer(y, Some(kind)) == 0)
                     .map(|y| self.objects[y].id);
-                yard.is_some_and(|y| self.start_ship_with(y, kind, !free).is_ok())
+                yard.is_some_and(|y| self.start_ship_armed(y, kind, !free, true).is_ok())
             }
             _ => false,
         }

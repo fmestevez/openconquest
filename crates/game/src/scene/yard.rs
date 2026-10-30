@@ -78,8 +78,8 @@ pub(super) struct NewShip {
     argo: bool,
     cell: (i32, i32),
     heading: usize,
-    arming: Option<Arming>,
-    price: (u32, u32),
+    pub(super) arming: Option<Arming>,
+    pub(super) price: (u32, u32),
 }
 
 /// The launch voice of a nation's new ship (events 184, 185, 187, 186 by
@@ -206,8 +206,11 @@ impl Scene {
     /// player's paid order. Else, with a town, it waits in the yard's
     /// queue with its payload, its full price (0x43e5c0, the stock counted
     /// but not taken) taken whatever `pay` (one that cannot be paid for is
-    /// dropped); without one it is lost. The default-arming byte is the
-    /// Building page's switch, or the queued order's.
+    /// dropped); without one it is lost. The default-arming byte `arm` is
+    /// the order's (byte 0xd: the Building page's switch for the player's
+    /// buttons, 1 for the computers' and brains' orders through 0x428f20,
+    /// 0x42957a), or the queued order's; every owner's ship is priced and
+    /// armed by it alike (0x416a40 calls 0x43ead0 for any).
     pub(super) fn yard_order(
         &mut self,
         site: u32,
@@ -215,6 +218,7 @@ impl Scene {
         argo: bool,
         pay: bool,
         queued: Option<&ShipOrder>,
+        arm: bool,
     ) -> Result<(), String> {
         let i = self.object_index(site).ok_or("No such shipyard")?;
         let owner = self.objects[i].owner.ok_or("No such shipyard")?;
@@ -225,20 +229,14 @@ impl Scene {
             Some(e) => {
                 e.default_arming || e.arming.as_ref().is_some_and(|a| *a != Arming::default())
             }
-            None => self.default_arming,
+            None => arm,
         };
-        // The price with the arming: the player's by the order's byte 0xd
-        // (0x43e5c0 / 0x43ead0, the arms its settlement holds counted
-        // from its stock), the computer players' their standard load.
+        // The price with the arming by the order's byte 0xd (0x43e5c0 /
+        // 0x43ead0, the arms its town holds counted from its stock).
         let human = Some(owner) == self.human.map(|h| (h.nation, h.slot));
-        let (amber, fish, arming, stock) = if human {
-            let p = self.ship_price_with(site, kind, arm);
-            let stock = p.home.map(|h| (h, p.units_left, p.fittings_left));
-            (p.amber, p.fish, Some(p.arming), stock)
-        } else {
-            let (amber, fish) = economy::ship_cost(kind);
-            (amber, fish, None, None)
-        };
+        let p = self.ship_price_with(site, kind, arm);
+        let (amber, fish, arming) = (p.amber, p.fish, Some(p.arming));
+        let stock = p.home.map(|h| (h, p.units_left, p.fittings_left));
         let afford = |scene: &Scene| {
             let (have_amber, have_fish) = scene.funds(owner);
             if have_amber < amber || have_fish < fish {
@@ -310,10 +308,17 @@ impl Scene {
     /// `arm`, every item of 0x5964d8[kind] whole, its armour and ram
     /// (0x596268, 0x5962c8), no stock, no fallbacks, no tests. It is put on
     /// the berth by the same message 0x1488, dropped if the berth will not
-    /// take it, and built as a yard's (0x4b3ab0, 8 ticks a step). (Not
-    /// decoded: how 0x4dfe00 reads a record ram of 0, left by an order
-    /// without arming.) The brains' builder orders (brain.rs
-    /// `builder_order`, through the land fleet's ship part, 0x428f20).
+    /// take it, and built as a yard's (0x4b3ab0, 8 ticks a step). Without
+    /// the byte the record holds no items, armour 0 and ram 0, and the
+    /// ship is made bare (boats and merchants keep their one item, 0x4dfe00
+    /// -> 0x4bd920 with item 3 or 4 at 100). (Not ported: the ram of such a
+    /// ship, `+0x27b = 0 - 3 = 0xfd` (0x4dfe9a), which draws no ram
+    /// (0x4e5da0), lists as level 0 (0x4e5e40), refuses any ram fitted
+    /// (0x4bc8c0 case 4) and reads past the ram table 0x598054 when it
+    /// rams (0x4ba950, 0x4c1c60, 0x4e8db0); the port's ship has none. It
+    /// cannot arise: the brains' orders, through the land fleet's ship part
+    /// 0x428f20, always set the byte, 0x42957a.) The brains' builder
+    /// orders (brain.rs `builder_order`).
     pub(super) fn barbarian_order(&mut self, site: u32, kind: u8, arm: bool) {
         let Some(i) = self.object_index(site) else {
             return;
@@ -327,12 +332,17 @@ impl Scene {
         let facing = self.objects[i].record.fields.get(10).copied();
         let heading = if matches!(facing, Some(2 | 6)) { 6 } else { 0 };
         let k = kind as usize % 12;
-        let arming = arm.then(|| Arming {
-            items: combat::DEFAULT_WEAPONS[k].to_vec(),
-            armour: combat::DEFAULT_ARMOUR[k].0,
-            ram: combat::DEFAULT_RAM[k].0,
-            conditions: Vec::new(),
-        });
+        let arming = if arm {
+            Arming {
+                items: combat::DEFAULT_WEAPONS[k].to_vec(),
+                armour: combat::DEFAULT_ARMOUR[k].0,
+                ram: combat::DEFAULT_RAM[k].0,
+                conditions: Vec::new(),
+            }
+        } else {
+            Arming::default()
+        };
+        let arming = Some(arming);
         self.new_ships.push(NewShip {
             site,
             owner,
@@ -634,7 +644,8 @@ impl Scene {
                         let code = (!e.argo).then_some(e.ship);
                         if self.yard_answer(i, code) == 0 {
                             self.ship_orders.remove(k);
-                            let _ = self.yard_order(site, e.ship, e.argo, false, Some(&e));
+                            let arm = e.default_arming;
+                            let _ = self.yard_order(site, e.ship, e.argo, false, Some(&e), arm);
                         }
                         break;
                     }

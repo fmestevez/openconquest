@@ -2542,13 +2542,17 @@ upgrade and on its cancel. Its picture's frame is not reset either: the
 sprite load (0x50d080 -> 0x5461d0) leaves the layer's `+0x45`, and
 0x422e30 zeroes it only when `>= n`, so the construction starts from the
 frame the standing settlement or shipyard showed (its loop, 0x4230f0
-state 1). Not ported: the 19-cell cut-off and its volume and pan (the
-front end fades sounds its own way; the cells across of the port's
-zoomable view are not the original's), the settlement's lists of the
-building's side (0x2874 to it) and the town's count of forts going up
-(0x2491), which the port does not keep; the frame an upgrade starts from
-(the port's standing buildings keep no frame of their own: it starts at
-0); nor the pointer's own pause test.
+state 1: a step every `75 / n` ticks, drawing the frame then adding one,
+back to 0 on reaching n; the first step on the first tick after the
+picture was set, since every vt+0x38 call, 0x422e30, clears `+0xbc`).
+Not ported: the 19-cell cut-off and its volume and pan (the front end
+fades sounds its own way; the cells across of the port's zoomable view
+are not the original's), the town's count of forts going up (0x2491),
+which the port does not keep; the frame an upgrade starts from (the
+port's standing buildings keep no frame of their own: it starts at 0;
+porting it needs each standing building's frame stepped by 0x4230f0 and
+reset in step by every vt+0x38 call, 41 indirect call sites not traced);
+nor the pointer's own pause test.
 
 **Forts' fire.** A fort's or barbarian structure's 12 groups (group k
 the units of item k) shoot by mode `+0x3a` (0x4469c0): 0 not at all; bit
@@ -3150,11 +3154,14 @@ sorts each item's units by condition, qsort 0x58791f with 0x4478e0) and
 carries each one's condition, a bought one whole, in the order taken
 (0x4dfe00 -> 0x4bd920, `+0x299 + 4 x (8u + count)`, kinds 2 and up;
 `Arming::conditions`); armour and rams keep no condition on a ship. The
-smithy's finished pieces go to its town's store (`run_refits`). Not ported: the port's other moves have no event queue (see
-"One event a tick"); 0x4bd920 at the launch; the computers' ships armed by 0x43ead0 too (the port
-gives them their default load); a record ram of 0 (a barbarian order
-without arming: `+0x27b = 0 - 3 = 0xfd`, no ram drawn, the ram tables
-read past 0x598054; the brains always set the byte, 0x42957a); whether reefs and whirlpools mark the landscape nibbles the
+smithy's finished pieces go to its town's store (`run_refits`). Every
+owner's ship is priced and armed so: the computers' and brains' orders
+(0x428f20) carry the default-arming byte 1 (`start_ship_armed`). Not ported: the port's other moves have no event queue (see
+"One event a tick"); 0x4bd920 at the launch; a record ram of 0 (a
+barbarian order without arming, made bare by the port: `+0x27b = 0 - 3 =
+0xfd`, no ram drawn, listed as level 0, any ram fitted refused, the ram
+tables read past 0x598054; it cannot arise, the brains always set the
+byte, 0x42957a); whether reefs and whirlpools mark the landscape nibbles the
 cell tests read (the port keeps them apart); the brains still build the
 barbarians' ships their own way (25 ticks beside the structure, brain.rs
 `builder_order`), not by `barbarian_order`. The ships' LCG seed `game +0x2ee5` is the

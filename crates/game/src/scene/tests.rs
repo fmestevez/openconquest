@@ -161,7 +161,9 @@ fn shipyard_berth_and_queue_follow_the_original() {
     // One that cannot be paid is dropped.
     let amber = scene.amber;
     scene.amber = 50;
-    scene.yard_order(yard, 0, false, true, None).unwrap_err();
+    scene
+        .yard_order(yard, 0, false, true, None, scene.default_arming)
+        .unwrap_err();
     assert_eq!(scene.ship_orders.len(), 1);
     scene.amber = amber;
     // A ship being built takes no moves.
@@ -9614,7 +9616,7 @@ fn default_arming_takes_its_fallbacks_untested() {
     assert_eq!(p.fittings_left, (vec![1], vec![]));
     scene.amber = 100_000;
     scene.fish = 100_000;
-    scene.yard_order(yard, 2, false, true, None).unwrap();
+    scene.yard_order(yard, 2, false, true, None, true).unwrap();
     assert_eq!(scene.new_ships.len(), 1);
     assert_eq!(scene.fittings.get(&home), Some(&(vec![1], vec![])));
 }
@@ -9653,6 +9655,10 @@ fn barbarian_structures_build_on_their_berth() {
             };
             let owner = scene.objects[k].owner.unwrap();
             assert_eq!(scene.funds(owner), funds, "nothing paid");
+            // Without the default-arming byte: bare, no marines.
+            let sh = scene.objects[k].ship.as_ref().unwrap();
+            assert_eq!(sh.crew.squads, [0; 3]);
+            assert_eq!((sh.armour, sh.ram), (0, 0));
             let id = scene.objects[k].id;
             let mut ticks = 0;
             while scene.being_built(id) {
@@ -10401,7 +10407,7 @@ fn a_ship_built_takes_the_best_stock_unit() {
         scene.ship_orders.remove(k);
     }
     assert_eq!(scene.yard_answer(scene.object_index(36).unwrap(), None), 0);
-    scene.yard_order(36, 2, false, true, None).unwrap();
+    scene.yard_order(36, 2, false, true, None, true).unwrap();
     assert_eq!(scene.stock_units(2)[0], vec![40]);
     scene.make_new_ships(&data, &mut caches);
     let ship = scene
@@ -10414,4 +10420,44 @@ fn a_ship_built_takes_the_best_stock_unit() {
         })
         .unwrap();
     assert_eq!(ship.ship.as_ref().unwrap().conditions[0], vec![90]);
+}
+
+/// A computer player's ship is priced and armed by 0x43ead0 as the
+/// player's, its orders carrying the default-arming byte (0x428f20,
+/// 0x42957a): miss005's town 2 (a computer's) builds a royal ship at its
+/// dock 36 now, taking its stock's item 0 and paying the rest.
+#[test]
+fn a_computers_ship_is_armed_from_its_town() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    scene.permits = crate::permits::Permits::ALL;
+    let owner = scene.objects[scene.object_index(36).unwrap()]
+        .owner
+        .unwrap();
+    assert_ne!(scene.human.map(|h| (h.nation, h.slot)), Some(owner));
+    scene.earn(owner, 100_000, 100_000);
+    let mut units: [Vec<u8>; 9] = Default::default();
+    units[0] = vec![90];
+    scene.set_stock_units(2, units);
+    scene.fittings.remove(&2);
+    scene.ship_orders.retain(|o| o.site != 36);
+    let price = scene.ship_price_with(36, 2, true);
+    let funds = scene.funds(owner);
+    scene.start_ship_armed(36, 2, true, true).unwrap();
+    assert_eq!(scene.garrison(2)[0], 0);
+    let n = scene.new_ships.last().unwrap();
+    let arming = n.arming.as_ref().unwrap();
+    assert_eq!(arming, &price.arming);
+    assert_eq!((arming.items[0], arming.conditions[0]), (0, 90));
+    assert_eq!(n.price, (price.amber, price.fish));
+    let left = scene.funds(owner);
+    assert_eq!(
+        (funds.0 - left.0, funds.1 - left.1),
+        (price.amber, price.fish)
+    );
 }

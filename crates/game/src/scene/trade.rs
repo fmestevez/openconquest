@@ -204,6 +204,18 @@ impl Scene {
     /// order 0x20 straight to the yard clicked, pay 1, the default-arming
     /// byte the switch at the click (0x4f34c0, 0x49e230 -> 0x520cc0).
     pub fn start_ship_with(&mut self, site: u32, kind: u8, pay: bool) -> Result<(), String> {
+        self.start_ship_armed(site, kind, pay, self.default_arming)
+    }
+
+    /// The same with the order's default-arming byte `arm` (byte 0xd; the
+    /// computers' and brains' orders, 0x428f20, always set it, 0x42957a).
+    pub(super) fn start_ship_armed(
+        &mut self,
+        site: u32,
+        kind: u8,
+        pay: bool,
+        arm: bool,
+    ) -> Result<(), String> {
         let owner = self
             .object_index(site)
             .and_then(|i| self.objects[i].owner)
@@ -213,7 +225,7 @@ impl Scene {
         } else {
             self.may_build_ship_for(owner, kind)?;
         }
-        self.yard_order(site, kind, false, pay, None)
+        self.yard_order(site, kind, false, pay, None, arm)
     }
 
     /// Ships of type `kind` ordered at yard `site` and waiting their turn
@@ -595,7 +607,14 @@ impl Scene {
             .and_then(|i| self.objects[i].owner)
             .ok_or("No such shipyard")?;
         self.can_build_ship_for(owner, Self::ROYAL_SHIP)?;
-        self.yard_order(site, Self::ROYAL_SHIP, true, true, None)
+        self.yard_order(
+            site,
+            Self::ROYAL_SHIP,
+            true,
+            true,
+            None,
+            self.default_arming,
+        )
     }
 
     /// In miss002, Argus come to one of the player's settlements lets
@@ -674,9 +693,15 @@ impl Scene {
         // new class's maximum and the hit points to it times the
         // condition it had, until the first step (the first tick) writes
         // the frame's share. (Not ported: the frame it starts from, the
-        // standing picture's own, `+0x45`, kept by 0x422e30 unless it is
-        // `>= n`: the port's standing buildings keep no frame of their
-        // own; it starts from 0.)
+        // standing picture's own, `+0x7c->+0x45`, kept by 0x422e30 unless
+        // it is `>= n`. A standing building steps that frame in 0x4230f0
+        // as a building going up does (a step every `75 / n` ticks, the
+        // first on the first tick after its picture was set; state 1 back
+        // to 0 on reaching n), and every vt+0x38 call (0x422e30: standing,
+        // and each picture change, the damage digit among them) clears
+        // `+0xbc`, so the next tick steps at once: which calls those are
+        // (41 indirect vt+0x38 sites) is not traced. The port's standing
+        // buildings keep no frame of their own; it starts from 0.)
         if let Ok(frames) =
             objects::building_frames(data, caches, &rec, BuildingState::Construction)
         {

@@ -2443,7 +2443,7 @@ impl Scene {
                         PartStep::Wait
                     };
                 };
-                match self.start_ship_with(yard, kind, !part.free) {
+                match self.start_ship_armed(yard, kind, !part.free, true) {
                     Ok(()) => {
                         if let Some(f) = fleet {
                             ai.building.push((yard, kind, f));
