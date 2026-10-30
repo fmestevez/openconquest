@@ -1759,8 +1759,9 @@ event 8 0x40 and moves a cell off the berth, 0x4b46f0 with '[' = 91 (see
 "Shipyards' berths"). Waiting by a taken port berth 300 ticks it steps
 aside itself (0x4b4b50 with 0x5a) and gives up after 349. A ship can be
 sold (message 0x248f, task 5) only in state 6 with a building contact.
-Not ported: selling ships (the port has none); whether unloading at a
-town has another path (0x4b0590, sub-codes 10/11); how the gathering's
+Not ported: selling ships (the port has none); the wait by a taken
+port berth (300 ticks, 0x4b4b50 with 0x5a; 349, giving up: the port's
+ships queue at the pier its own way); whether unloading at a town has another path (0x4b0590, sub-codes 10/11); how the gathering's
 next leg and the move aside combine (the port moves aside first). The
 prey of a ram keeps its move state: the ram (0x4c2230) sends it event 2
 with code 1 (`+0x811` 0x14 when the rammer is alongside, 3 at the blow,
