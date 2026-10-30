@@ -46,6 +46,9 @@ pub struct SaveGame {
     pub clock: f32,
     pub ai_timer: f32,
     pub rng: Rng,
+    /// Reefs' and whirlpools' cycles (0x4306d0, 0x447ee0).
+    #[serde(default)]
+    pub hazards: std::collections::BTreeMap<u32, crate::scene::Hazard>,
     /// Fish shoals below and in sight: zone and seconds left.
     #[serde(default)]
     pub shoals_gone: std::collections::BTreeMap<u32, f32>,

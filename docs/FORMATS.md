@@ -3563,10 +3563,8 @@ percentages derived from their life (`life x 100 / max`, as 0x414c8f),
 the settlements' condition as their hull (`max / 4` off, `max / 20`
 shielded), amber emptied at once (the original's two ticks of states 0
 and 1 skipped), the land creatures' kills without a cry (the port has no
-shot-then-turn order for them). Not ported: the reefs' and whirlpools'
-rising and sinking (0x430320, 0x447b80; the port's are always up, so
-lightning removes any), the leviathan's life and states (the port's is
-a deposit only). The ships' ways are rebuilt (0x49a950) and the caster's brain told
+shot-then-turn order for them). Not ported: the leviathan's life and
+states (the port's is a deposit only). The ships' ways are rebuilt (0x49a950) and the caster's brain told
 (0x5d9d, cell and caster): miss009's notes the player's strike in x 55-62,
 y 3-8. Its north-east sea is shut off by land at y = 4; only strikes at
 (58, 3), (59, 3), (57-61, 4), (60, 5) or (61, 5) open it.
@@ -3827,9 +3825,45 @@ value 3 or 4; 0x439260). Casts (`Magic.cpp` 0x42f580) are checked by
 waterspout, phantom and the protections within 15. Protections and the
 phantom add 3000 ticks to what is left (messages 0xda9a, 0xda97 to the
 ship, 0x4dc630). Cast whirlpools and reefs go after 7500 + rand(7501)
-ticks (Whirl.cpp 0x447ee0, Reef.cpp 0x4306d0); every tick they post
-0xda95/0xda94 to the ships on their cell, which then wreck (flag 0x200,
-state 4: 0x4ab720, 0x4aa280). A tornado (`TRNDSPR`, Tornado.cpp 0x43a380)
+ticks (Whirl.cpp 0x447ee0, Reef.cpp 0x4306d0); every tick, but under
+the water, they post 0xda95/0xda94 to the ships on their cell, which then
+wreck (flag 0x200, state 4: 0x4ab720, 0x4aa280).
+
+Reefs and whirlpools rise and sink (0x430320 / 0x447b80 set the state,
+0x4300a0 / 0x447930 the picture, 0x4301f0 / 0x447a50 step it). `+0x74`:
+0 rising (`BREEF<k>SPR_0`, `MREEF<k>SPR_0`, `WHIRLSPR_0`), 1 up (`_1`), 2
+sinking (`_2`), 3 under the water (no picture), 0xff not yet (ctors
+0x430070 / 0x447900). A picture steps a frame each `cycle[state] /
+frames` ticks (integer; reef 30/60/30, whirlpool 60/60/60); at its end
+rising goes up and sinking under. Waits are drawn from the object's own
+generator (`+0x18`, seeded `game +0x2ee5 x id`), `r % (max - min + 1) +
+min` by state (reef 0x596a60: up 1-2, under 150-250; whirlpool 0x5972c0:
+up 125-250, under 150-250; 0 for the others). Up, a medium reef or a
+whirlpool sinks once its wait is out and its picture is at its last
+frame; under, it rises once its wait is out. A big reef never sinks.
+Going up: if the cell's occupant is a ship with Jason (0x4ba790: a hero
+slot holding 0), it stays under (a new wait of the state it was to take;
+a whirlpool's tick first waits on while Jason lies there, not stepping
+in, 0x4482a0); else the sound event 151 `riff1wav` / 149 `whirl3` when it
+was under (or cast), nibble 1 of the landscape 5 big reef, 6 medium, 4
+whirlpool (0x499aa0 refuses those steps), state 0. Rising ended: event
+152 / 150 (`spider`). Going under: nibble 1 back to the tile's (3 under a
+layer-1 tile set 2-6, else 0), a wait of 150-250. Creation (record field
+4): 0, the map's and a brain's (0x430ec0), straight up (state 1, no
+sound); 1, cast (0x42f580: a reef's kind field 7 = `draw % 3 + 1`, a
+whirlpool's field 7 its caster), its end `r % 7501 + 7500` ticks on (the
+first draw): a medium reef 75 ticks unseen then up (its occupant with
+Jason, off its reserved cell, holds it back), a big reef up at once, a
+whirlpool under (150-250). A cast big reef goes at its end whatever its
+state; a medium reef or whirlpool only while under. The wrecks spare a
+ship on its reserved next cell (`+0x5ab`) or with Jason. A ship with
+Jason sinks a medium reef or whirlpool (0xda9e / 0xda9f via 0x4a7630,
+unless sinking or under) when stepping into its cell free of ships
+(0x4a3a70, then steps in), and lying still (0x4a3150) on a cell holding
+one, the one at (x, x): both arguments are the cell's x (`push ecx; push
+ecx`, 0x4a330c). Not ported: the 0xda94 the reefs also send to a cell's
+slots `+0x10` and `+0x18` (the leviathan, the gorgon: its picture cut
+short). A tornado (`TRNDSPR`, Tornado.cpp 0x43a380)
 steps a frame every 2 ticks: rising 0-41, moving 42-83 looped, sinking
 84-124; moving, it slides to its next cell over 16 frames, then strikes
 the objects on it (0xda96, 30000, a fifth on a ship shielded from magic)

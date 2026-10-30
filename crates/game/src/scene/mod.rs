@@ -297,6 +297,8 @@ pub struct Scene {
     /// they surface again; and those in sight: seconds until they leave
     /// (FishClassTy, Fish.cpp 0x48dd80).
     pub shoals_gone: std::collections::BTreeMap<u32, f32>,
+    /// Reefs' and whirlpools' cycles (0x4306d0, 0x447ee0), by object.
+    pub hazards: std::collections::BTreeMap<u32, hazards::Hazard>,
     shoals_shown: std::collections::BTreeMap<u32, f32>,
     /// Seconds since a shoal surfaced (it rises with `FISH_11`).
     shoals_up: std::collections::BTreeMap<u32, f32>,
@@ -507,6 +509,7 @@ mod dig;
 pub mod fire;
 mod gulls;
 mod halt;
+mod hazards;
 pub mod load;
 mod orders;
 pub mod repair;
@@ -538,6 +541,7 @@ pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use computer::Computers;
 pub use flyers::{Flyer, Nest};
 pub use halt::Batch;
+pub use hazards::Hazard;
 pub use load::{Cargo, Entry, LoadLink};
 pub use order::{Order, TickOrder};
 pub use repair::{StockRepair, UnitMend};
@@ -703,6 +707,7 @@ impl Scene {
             last_attack: None,
             rng: Rng(0x1234_5678),
             shoals_gone: Default::default(),
+            hazards: Default::default(),
             shoals_shown: Default::default(),
             shoals_up: Default::default(),
             fish_art: std::rc::Rc::new([1, 2, 3].map(|size| {
@@ -1001,6 +1006,7 @@ impl Scene {
             ai_timer: self.ai_timer,
             rng: self.rng.clone(),
             shoals_gone: self.shoals_gone.clone(),
+            hazards: self.hazards.clone(),
             shoals_shown: self.shoals_shown.clone(),
             shoals_up: self.shoals_up.clone(),
             default_arming: self.default_arming,
@@ -1147,6 +1153,7 @@ impl Scene {
         scene.ai_timer = save.ai_timer;
         scene.rng = save.rng.clone();
         scene.shoals_gone = save.shoals_gone.clone();
+        scene.hazards = save.hazards.clone();
         scene.shoals_shown = save.shoals_shown.clone();
         scene.shoals_up = save.shoals_up.clone();
         scene.default_arming = save.default_arming;
@@ -1192,6 +1199,7 @@ impl Scene {
             .collect();
         scene.after_dig(&dug, data, caches);
         scene.dug = dug;
+        scene.mark_hazards();
         scene.winning = save.winning;
         scene.losing = save.losing;
         scene.held = save.held.clone();
@@ -1452,17 +1460,10 @@ impl Scene {
             .ship
             .as_ref()
             .is_some_and(|s| crate::objects::deep_draught(s.kind));
-        // Whirlpools and reefs hold their cells (the landscape grid marks
-        // them, Reef.cpp 0x4306d0): routes keep off them.
-        let traps: HashSet<(i32, i32)> = self
-            .objects
-            .iter()
-            .filter(|o| matches!(o.class, ObjectClass::Whirlpool | ObjectClass::Reef(_)))
-            .map(|o| {
-                let f = |i| o.record.field(i).unwrap_or(0) as i32;
-                (f(5), f(6))
-            })
-            .collect();
+        // Whirlpools and reefs hold their cells while not under the water
+        // (the landscape's nibble 1, 0x430320 / 0x447b80): routes keep off
+        // them.
+        let traps: HashSet<(i32, i32)> = self.hazard_cells().into_keys().collect();
         let shut = |c: (i32, i32)| (c != to && avoid.contains(&c)) || traps.contains(&c);
         let cells = match tolerance {
             None => self.nav.find_path_avoiding(start, to, deep, shut)?,
@@ -2001,6 +2002,12 @@ impl Scene {
                 return &live[(time_ms / unit) as usize % live.len()];
             }
         }
+        // A reef or whirlpool: the frame its cycle is at (0x4301f0).
+        if let Some(f) = self.hazard_frame(obj.id) {
+            if let Some(layers) = obj.frames.get(f as usize).or(obj.frames.last()) {
+                return layers;
+            }
+        }
         obj.frame_at(time_ms)
     }
 
@@ -2100,6 +2107,7 @@ impl Scene {
                 self.brain_cast(spell, x, y, owner, data, caches);
             }
             self.run_brain_flames(dt);
+            self.run_hazard_cycles(data, caches);
             for (spell, id) in std::mem::take(&mut self.pending_ship_casts) {
                 self.brain_cast_on(spell, id, data, caches);
             }
@@ -2238,6 +2246,9 @@ impl Scene {
             .collect();
         // Ships held up: the cell ahead, and whether a ship lies in it.
         let mut held = Vec::new();
+        // Cells reefs and whirlpools hold, and the ones Jason sinks.
+        let hazard_cells = self.hazard_cells();
+        let mut jason_sinks = Vec::new();
         let players: Vec<Option<(u32, u32)>> = self
             .human
             .iter()
@@ -2395,6 +2406,32 @@ impl Scene {
                     break;
                 };
                 let next = cell_of(tx, ty);
+                // A reef or whirlpool up there: 0x499aa0 refuses the step
+                // (nibble 1 of 4-6). With no ship there, one with Jason
+                // aboard sinks a whirlpool or medium reef (0x4a3a70 ->
+                // 0x4a7630: 0xda9f / 0xda9e) and steps in; others wait
+                // there as for any refused step.
+                let hazard = hazard_cells.get(&next).copied();
+                if next != cell_of(obj.x, obj.y) && hazard.is_some() && !taken.contains_key(&next) {
+                    if hazard == Some(true) && ship.has_hero(objects::JASON) {
+                        jason_sinks.push(next);
+                    } else {
+                        ship.blocked += dt;
+                        ship.stalled += dt;
+                        let last = ship.path.back().map(|&(lx, ly)| cell_of(lx, ly));
+                        if last != Some(next) {
+                            ship.waited += dt;
+                        }
+                        ship.velocity = 0.0;
+                        ship.move_state = if ship.stalled >= crate::clock::ticks(50) {
+                            0
+                        } else {
+                            3
+                        };
+                        held.push((obj.id, next, false, false, 0));
+                        break;
+                    }
+                }
                 if next != cell_of(obj.x, obj.y) {
                     match taken.get(&next) {
                         Some(&other)
@@ -2487,6 +2524,9 @@ impl Scene {
             if matches!(ship.move_state, 1 | 5) && last == Some(cell_of(obj.x, obj.y)) {
                 ship.move_state = 4;
             }
+        }
+        for c in jason_sinks {
+            self.sink_hazard_at(c, data, caches);
         }
         self.go_round(held);
         self.refresh_routes(dt);

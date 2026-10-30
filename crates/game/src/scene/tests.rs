@@ -2249,8 +2249,22 @@ fn gorgon_and_siren() {
             .stone
     };
     let (mut stoned, mut perseus) = (false, false);
+    // Held where they were put (sharing a cell, they would make room for
+    // each other and sail off).
+    let held: Vec<(f32, f32)> = ships
+        .iter()
+        .map(|&id| {
+            let o = &scene.objects[scene.object_index(id).unwrap()];
+            (o.x, o.y)
+        })
+        .collect();
     for _ in 0..50 * 60 {
         scene.update(0.02, &data, &mut caches);
+        for (&id, &(x, y)) in ships.iter().zip(&held) {
+            let i = scene.object_index(id).unwrap();
+            (scene.objects[i].x, scene.objects[i].y) = (x, y);
+            scene.objects[i].ship.as_mut().unwrap().path.clear();
+        }
         stoned |= stone(&scene, ships[0]) > 0.0;
         perseus |= stone(&scene, ships[1]) > 0.0;
         if stoned {
@@ -7542,8 +7556,16 @@ fn lightning_on_towns_and_nature() {
         .unwrap();
     let whirl = scene.objects.iter().map(|o| o.id).max().unwrap();
     let (x, y) = at(sea);
+    // Cast, it starts under the water (state 3): spared.
+    assert_eq!(scene.hazards[&whirl].state, 3);
+    scene.lightning_strike(x, y, None, &data, &mut caches);
+    assert!(scene.object_index(whirl).is_some());
+    while scene.hazards[&whirl].state == 3 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
     scene.lightning_strike(x, y, None, &data, &mut caches);
     assert!(scene.object_index(whirl).is_none());
+    assert!(!scene.hazards.contains_key(&whirl));
     assert!(!scene.summons.iter().any(|s| s.0 == whirl));
     let (amber, cell, regrows) = scene
         .objects
@@ -10038,4 +10060,127 @@ fn upgrade_keeps_the_condition_till_its_first_step() {
     let c = scene.objects[i].combat.as_ref().unwrap();
     let want = (100.0 / n).floor() / 100.0;
     assert!((c.hull / c.max_hull - want).abs() < 0.01);
+}
+
+/// A cast whirlpool's cycle (Whirl.cpp 0x447ee0, 0x447b80): under the
+/// water 150-250 ticks, it rises (`whirl3`, `WHIRLSPR_0`, nibble 1 4),
+/// is up (`spider`) 125-250 ticks till its picture's last frame, sinks
+/// (`WHIRLSPR_2`) and is under again, its cell its own. A ship with Jason
+/// on the cell keeps it under. A cast medium reef shows nothing for 75
+/// ticks, then rises (`riff1wav`) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn hazards_rise_and_sink() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let tick = |scene: &mut Scene, caches: &mut Caches| {
+        scene.sounds.clear();
+        scene.update(crate::clock::TICK, &data, caches);
+    };
+    let heard = |scene: &Scene, name: &str| scene.sounds.iter().any(|s| s.0 == name);
+    let sea = scene.nav.nearest_water(20, 20).unwrap();
+    let w = scene.grid.width as i32;
+    let nibble = |scene: &Scene| (scene.cell_types[(sea.1 * w + sea.0) as usize] >> 4) & 0xf;
+    let own = nibble(&scene);
+    scene
+        .spawn_hazard(
+            magic::Spell::Whirlpool,
+            sea.0,
+            sea.1,
+            None,
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    let id = scene.objects.iter().map(|o| o.id).max().unwrap();
+    let h = scene.hazards[&id];
+    assert_eq!(h.state, 3);
+    assert!((150..=250).contains(&h.wait));
+    assert!((7500..=15000).contains(&(h.ends - scene.ticks)));
+    assert!(scene.hazard_hidden(id) && !scene.hazard_cells().contains_key(&sea));
+    for _ in 1..h.wait {
+        tick(&mut scene, &mut caches);
+        assert_eq!(scene.hazards[&id].state, 3);
+    }
+    tick(&mut scene, &mut caches);
+    assert_eq!(scene.hazards[&id].state, 0);
+    assert!(heard(&scene, "whirl3"));
+    assert_eq!(nibble(&scene), 4);
+    assert_eq!(scene.hazard_cells().get(&sea), Some(&true));
+    let n0 = scene.objects[scene.object_index(id).unwrap()].frames.len() as u32;
+    assert_eq!(scene.hazards[&id].step, 60 / n0);
+    while scene.hazards[&id].state == 0 {
+        tick(&mut scene, &mut caches);
+    }
+    assert!(heard(&scene, "spider"));
+    let h = scene.hazards[&id];
+    assert_eq!(h.state, 1);
+    assert!((125..=250).contains(&h.wait));
+    let up = scene.ticks;
+    while scene.hazards[&id].state == 1 {
+        tick(&mut scene, &mut caches);
+    }
+    assert!(scene.ticks - up >= h.wait);
+    assert_eq!(scene.hazards[&id].state, 2);
+    while scene.hazards[&id].state == 2 {
+        tick(&mut scene, &mut caches);
+    }
+    assert_eq!(scene.hazards[&id].state, 3);
+    assert_eq!(nibble(&scene), own);
+    // Jason lying on the cell: its wait out, it stays under.
+    let k = scene
+        .objects
+        .iter()
+        .position(|o| o.ship.is_some())
+        .expect("a ship");
+    let ship = scene.objects[k].id;
+    scene.objects[k].x = sea.0 as f32 * 64.0 + 32.0;
+    scene.objects[k].y = sea.1 as f32 * 64.0 + 32.0;
+    let s = scene.objects[k].ship.as_mut().unwrap();
+    s.path.clear();
+    s.task = None;
+    s.heroes.push(crate::objects::JASON);
+    for _ in 0..300 {
+        tick(&mut scene, &mut caches);
+        let k = scene.object_index(ship).unwrap();
+        let o = &mut scene.objects[k];
+        (o.x, o.y) = (sea.0 as f32 * 64.0 + 32.0, sea.1 as f32 * 64.0 + 32.0);
+        o.ship.as_mut().unwrap().path.clear();
+    }
+    assert_eq!(scene.hazards[&id].state, 3);
+    // A cast medium reef: 75 ticks unseen (0xff), then up with its sound.
+    let reef_at = scene.nav.nearest_water(10, 10).unwrap();
+    scene
+        .spawn_hazard(
+            magic::Spell::Reef,
+            reef_at.0,
+            reef_at.1,
+            None,
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    let reef = scene.objects.iter().map(|o| o.id).max().unwrap();
+    assert_eq!(scene.hazards[&reef].state, 0xff);
+    assert!((1..=3).contains(
+        &scene.objects[scene.object_index(reef).unwrap()]
+            .record
+            .fields[7]
+    ));
+    for _ in 1..75 {
+        tick(&mut scene, &mut caches);
+        assert_eq!(scene.hazards[&reef].state, 0xff);
+    }
+    tick(&mut scene, &mut caches);
+    assert_eq!(scene.hazards[&reef].state, 0);
+    assert!(heard(&scene, "riff1wav"));
+    // Saved and restored, it holds its cell again.
+    let save = scene.save();
+    let back = Scene::restore(&data, &mut caches, &save).unwrap();
+    assert_eq!(back.hazards[&reef].state, 0);
+    assert_eq!(back.hazard_cells().get(&reef_at), Some(&true));
 }

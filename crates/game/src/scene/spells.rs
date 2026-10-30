@@ -460,8 +460,8 @@ impl Scene {
         }
         // Reefs (0x430d38) and whirlpools (0x448479) are removed (message
         // 10), not reported, unless under water (state `+0x74` 3,
-        // 0x430320 / 0x447b80 case 3). (The port has not their rising and
-        // sinking: its reefs and whirlpools are always up.)
+        // 0x430320 / 0x447b80 case 3); a cast medium reef not yet up
+        // (0xff) goes too.
         let hazards: Vec<u32> = self
             .objects
             .iter()
@@ -470,11 +470,11 @@ impl Scene {
                 let f = |i| o.record.field(i).unwrap_or(0) as i32;
                 near((f(5), f(6)))
             })
+            .filter(|o| self.hazard_wrecks(o.id))
             .map(|o| o.id)
             .collect();
         for id in hazards {
-            self.objects.retain(|o| o.id != id);
-            self.summons.retain(|s| s.0 != id);
+            self.remove_hazard(id);
         }
         // Amber standing (its picture `+0xd5`, 0x48ae45): its amount to 0.
         // 0x48a430 finds it empty (0x48d2f0 gives 0): state 1, then it lies
@@ -628,7 +628,15 @@ impl Scene {
         fields[1] = 1;
         fields[5] = cx as u32;
         fields[6] = cy as u32;
-        fields[7] = 1;
+        // Cast (0x42f580 cases 1, 2): mode 1 (field 4); a reef of kind
+        // `draw % 3 + 1` (field 7, the caster's draw; field 8 left
+        // unwritten), a whirlpool its caster's player (field 7, nation x 4
+        // + slot).
+        fields[4] = 1;
+        fields[7] = match spell {
+            Spell::Reef => self.rng.next() % 3 + 1,
+            _ => master.map_or(0xff, |(n, s)| n * 4 + s),
+        };
         if spell == Spell::Monster {
             // UMonster records (0x42f580 case 4, 0x493780): full strength
             // and whole (fields 5, 6, percent), the cell in fields 7 and 8,
@@ -662,23 +670,16 @@ impl Scene {
             // till it dies (`sea_monster`).
             obj.owner = master;
             self.summons.push((id, f32::INFINITY));
-        } else {
-            // Cast whirlpools and reefs go after 7500-15000 ticks (Whirl.cpp
-            // 0x447ee0, Reef.cpp 0x4306d0); the map's own stay.
-            let ticks = 7500 + self.rng.next() % 7501;
-            self.summons.push((id, crate::clock::ticks(ticks)));
         }
-        self.sounds.push((
-            if spell == Spell::Whirlpool {
-                "whirl3"
-            } else {
-                "splash1"
-            },
-            obj.x,
-            obj.y,
-        ));
+        // Cast whirlpools and reefs go after 7500-15000 ticks, start under
+        // the water (a whirlpool) or 75 ticks unseen (a reef), and are
+        // heard as they rise (`hazards`: Whirl.cpp 0x447ee0, Reef.cpp
+        // 0x4306d0).
         self.objects.push(obj);
         self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
+        if spell != Spell::Monster {
+            self.create_hazard(id, data, caches);
+        }
         Ok(())
     }
 
@@ -702,10 +703,14 @@ impl Scene {
         // 0xda95, 0xda94: Whirl.cpp 0x447ee0, Reef.cpp 0x4306d0), but for
         // Jason's; a tornado strikes the ships on each cell it comes to,
         // but for Zetes's.
+        // Not while under the water (state 3); a ship stepping into the
+        // cell (its reserved next cell, `+0x5ab`) is spared till it lies
+        // there.
         let traps: Vec<(i32, i32)> = self
             .objects
             .iter()
             .filter(|o| matches!(o.class, ObjectClass::Whirlpool | ObjectClass::Reef(_)))
+            .filter(|o| self.hazard_wrecks(o.id))
             .map(|o| {
                 let f = |i| o.record.field(i).unwrap_or(0) as i32;
                 (f(5), f(6))
@@ -721,7 +726,11 @@ impl Scene {
             let cell = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
             let s = o.ship.as_ref().unwrap();
             let (jason, zetes) = (s.has_hero(objects::JASON), s.has_hero(objects::ZETES));
-            if !jason && traps.contains(&cell) {
+            let reserved = s
+                .path
+                .front()
+                .is_some_and(|&(x, y)| ((x / t).floor() as i32, (y / t).floor() as i32) == cell);
+            if !jason && !reserved && traps.contains(&cell) {
                 if let Some(c) = o.combat.as_mut() {
                     c.hull = 0.0;
                 }
