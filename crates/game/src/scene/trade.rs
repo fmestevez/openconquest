@@ -564,13 +564,24 @@ impl Scene {
             .ok_or("Missing upgrade graphics")?;
         // It goes up as a new building does (the town or dock in its
         // building state, 0x43c740 / 0x4164e0 showing the work on the
-        // upgrade's button), whole: the price mends it first.
+        // upgrade's button). The price pays the mending, but the
+        // condition `+0xa8` is not written: vt+0x54 (0x424910) sets the
+        // new class's maximum and the hit points to it times the
+        // condition it had, until the first step (the first tick) writes
+        // the frame's share. (Not ported: the frame it starts from, the
+        // standing picture's own, `+0x45`, kept by 0x422e30 unless it is
+        // `>= n`: the port's standing buildings keep no frame of their
+        // own; it starts from 0.)
         if let Ok(frames) =
             objects::building_frames(data, caches, &rec, BuildingState::Construction)
         {
             if !frames.is_empty() {
                 obj.frames = frames;
             }
+        }
+        if let Some(h) = obj.combat.as_mut() {
+            let max = (h.max_hull * 15.0).round() as u64;
+            h.hull = (max * condition as u64 / 100) as f32 / 15.0;
         }
         obj.progress = Some(0.0);
         self.earn(owner, -(cost as i64), 0);

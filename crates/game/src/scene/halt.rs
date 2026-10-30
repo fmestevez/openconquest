@@ -247,9 +247,11 @@ impl Scene {
     /// An upgrade of `id` to class `to` called off: its price `x (n - f) /
     /// n` back, class `from` again (vt+0x54), standing (`+0xa4` 1, its
     /// pictures by vt+0x38), keeping the condition the construction had
-    /// reached (`+0xa8` is not written). (Not decoded: whether vt+0x54
-    /// resets the hit points; the frame an upgrade starts from, 0x422e30
-    /// resetting it only when `>= n`: the port starts it at 0.)
+    /// reached (`+0xa8` is not written): vt+0x54 (0x424910) sets the
+    /// class's maximum `+0xb0` and the hit points `+0xb0 x +0xa8 / 100`,
+    /// rescaled, not reset. (The frame an upgrade starts from is the
+    /// standing picture's own, 0x422e30 zeroing it only when `>= n`: the
+    /// port starts it at 0, see `upgrade`.)
     fn upgrade_halt(
         &mut self,
         id: u32,
@@ -344,8 +346,12 @@ impl Scene {
     /// (`+0x114`); `(100 - p) x +0x118 / 100` amber back. A settlement's
     /// fish share, `(100 - p) x +0x11c / 100` (raw: 0x597170 per unit),
     /// goes not to the player but into its bytes `+0x252` / `+0x253`
-    /// (0x44316a); the workshop gives no fish back. The list is freed: the
-    /// units not made are lost.
+    /// (0x44316a), which nothing uses: only the save (0x4416c0) and the
+    /// info record (0x43c650, word +0x12) read them, and that record's
+    /// one reader, the info cloud 0x50bf10, ignores its contents; no load
+    /// writes them back. So the fish is lost (kept here as the save keeps
+    /// it). The workshop gives no fish back. The list is freed: the units
+    /// not made are lost.
     fn training_halt(&mut self, site: u32) -> bool {
         let Some(k) = self.trainings.iter().position(|t| t.site == site) else {
             return false;
@@ -495,8 +501,15 @@ impl Scene {
     /// player (0x50e570 mode 2): one of the event's sounds, the first when
     /// it has fewer than two, else `rand() % count` (0x554820, the C
     /// library's generator, seeded from the clock: the port's own).
-    /// (Not ported here: 0x525370's cut-off at 20 cells from the view;
-    /// the unit report switch is the front end's.)
+    /// (Not ported here: 0x525370's cut-off, in cells: `(byte)
+    /// ftol(sqrt(dx^2 + dy^2))` from the building's cell to the listener's
+    /// `+0xd08/+0xd0c`, the view's left / top cell plus half its cells
+    /// across rounded up (0x51a040-0x51a0b8, 0x524d90), 20 and more
+    /// silent; its volume, the master within 5 cells, then `master -
+    /// (master + 2000) x d / 12` hundredths of a dB to 12, -2000 to 19;
+    /// its pan `min(|dx|, 20) x sign x 50`; the cells across, screen
+    /// `+0x17be` / `+0x17c2`, are not the port's zoomable view's, which
+    /// keeps its own fall-off. The unit report switch is the front end's.)
     pub(super) fn building_voice(
         &mut self,
         owner: Option<(u32, u32)>,

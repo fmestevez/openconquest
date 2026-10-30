@@ -2354,8 +2354,11 @@ it.
   bytes `+0x252` / `+0x253` instead of the player (0x44316a: with `+0x252`
   set, `T = v + +0x253 + 100 x +0x252 - 100`, else `T = v`; `+0x252 = T /
   100`, `+0x253 = T % 100`, a last part of 0 written 100, else `+0x252`
-  one more; what they mean is not decoded: 0x43c650 reads `+0x252` into
-  its info word +0x12, 0x4416c0 saves it); job 2 the stock repair's walk
+  one more; nothing uses them: the save 0x4416c0 writes them, 0x43c650
+  copies `+0x252` into its info record's word +0x12, whose only reader,
+  the info cloud 0x50bf10 (from 0x423a60, 0x425990, 0x41d300, 0x41d4a0),
+  tests the record non-null and draws an empty cloud, and no load writes
+  them back: the fish is lost); job 2 the stock repair's walk
   (0x4430f0, above); then for any busy job the training list freed
   (`+0x258 = +0x254 = 0`, `+0x25c = 5`: what was not made is lost). The
   settlement's call (events 0xdc-0xdf) for the local owner when it
@@ -2414,7 +2417,16 @@ it.
 
 The voices (0x50e570 mode 2 -> 0x525370): only with the unit report
 option (bit 1 of `[0x5ca55f]`) and one of channels 7-8 free (0x5252d0),
-within 19 cells of the view's cell (`+0xd08`, `+0xd0c`); the sample is
+within 19 cells of the listener (`+0xd08`, `+0xd0c`): the distance is
+`(byte) ftol(sqrt(dx^2 + dy^2))` in cells, from the cell the caller passes
+(the building's `+0x74`, `+0x78`) to the listener, which 0x524d90 sets
+from the view (0x51a040-0x51a0b8: its left / top cell `+0x2c` / `+0x30`
+plus its cells across / down, screen `+0x17be` / `+0x17c2`, halved and
+rounded up); 20 and more is silent (the byte wraps at 256). Modes 1 and 4
+cut the same. The volume (DirectSound hundredths of a dB): the effects
+volume `[0x5ca56c]` within 5 cells, `master - (master + 2000) x d / 12`
+from 6 to 12, -2000 from 13; the pan `min(|dx|, 20) x sign(dx) x 50`;
+the sample is
 0x554820's pick: the event's `SND_n` names, the first when fewer than 2,
 else `rand() % count` (the C library's: `seed = seed x 0x343fd +
 0x269ec3; (seed >> 16) & 0x7fff`, seeded once with `GetTickCount()` at
@@ -2432,14 +2444,24 @@ cancelled training's fish share is kept per town (`town_fish`); forts and
 barbarian structures keep their groups' fire (`combat::FortFire`, below).
 The voices are
 picked from the dumped lists with the port's own generator, for the
-viewing player. Not ported: the 19-cell cut-off (the front end fades
-sounds by distance; the unit of 0x525370's distance and the writer of
-the view fields not read), the settlement's lists (0x2874) and the town's
-count of forts going up (0x2491), which the port does not keep; the
-frame an upgrade's picture starts at (the port starts it at 0; whether
-vt+0x54 / 0x50d080 load a fresh sprite not traced), whether vt+0x54
-resets the hit points on an upgrade's cancel (the port keeps the
-condition reached); nor the pointer's own pause test.
+viewing player. An upgrade keeps its condition until its first step:
+the town's 0x138a and the dock's do not write `+0xa8`, and vt+0x54
+(0x424910, both ways) sets the class's maximum `+0xb0` (0x32 160000, 0x33
+220000, 0x34-0x36 and 0x3f-0x41 180000, 0x37, 0x3a, 0x46 100000, 0x38,
+0x39 130000, 0x3b 140000, 0x3c 81500, 0x3d 67500, 0x3e 110000, castles
+300000, 0x44 350000, 0x45 280000, 0x47 80000, 0x48 60000, 0x49 40000) and
+the hit points `+0xb0 x +0xa8 / 100`: rescaled, not reset, on the
+upgrade and on its cancel. Its picture's frame is not reset either: the
+sprite load (0x50d080 -> 0x5461d0) leaves the layer's `+0x45`, and
+0x422e30 zeroes it only when `>= n`, so the construction starts from the
+frame the standing settlement or shipyard showed (its loop, 0x4230f0
+state 1). Not ported: the 19-cell cut-off and its volume and pan (the
+front end fades sounds its own way; the cells across of the port's
+zoomable view are not the original's), the settlement's lists of the
+building's side (0x2874 to it) and the town's count of forts going up
+(0x2491), which the port does not keep; the frame an upgrade starts from
+(the port's standing buildings keep no frame of their own: it starts at
+0); nor the pointer's own pause test.
 
 **Forts' fire.** A fort's or barbarian structure's 12 groups (group k
 the units of item k) shoot by mode `+0x3a` (0x4469c0): 0 not at all; bit

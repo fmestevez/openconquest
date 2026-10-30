@@ -10000,3 +10000,40 @@ fn commands_reach_ships_at_the_next_tick() {
         assert_eq!(state(&scene).0, Some(Task::Repair { dock }));
     }
 }
+
+/// An upgrade keeps the settlement's condition (TownObj 0x43b290 does not
+/// write `+0xa8`; vt+0x54, 0x424910, rescales the hit points to the
+/// town's maximum), until the first step writes the frame's share
+/// (0x423410). Needs `OPENCONQUEST_DATA`.
+#[test]
+fn upgrade_keeps_the_condition_till_its_first_step() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let settlement = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SETTLEMENT) && scene.is_own(o))
+        .unwrap()
+        .id;
+    let i = scene.object_index(settlement).unwrap();
+    let c = scene.objects[i].combat.as_mut().unwrap();
+    c.hull = c.max_hull * 0.6;
+    scene.amber = 10_000;
+    scene.upgrade(settlement, &data, &mut caches).unwrap();
+    // 500 and 400 x 40 / 100 for the mending.
+    assert_eq!(scene.amber, 10_000 - 500 - 160);
+    let i = scene.object_index(settlement).unwrap();
+    let c = scene.objects[i].combat.as_ref().unwrap();
+    assert!((c.hull / c.max_hull - 0.6).abs() < 1e-3);
+    // The first tick steps frame 1 of n: `100 / n` percent.
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let i = scene.object_index(settlement).unwrap();
+    let n = scene.objects[i].frames.len() as f32;
+    let c = scene.objects[i].combat.as_ref().unwrap();
+    let want = (100.0 / n).floor() / 100.0;
+    assert!((c.hull / c.max_hull - want).abs() < 0.01);
+}
