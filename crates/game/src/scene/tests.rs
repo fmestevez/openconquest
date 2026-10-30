@@ -13113,3 +13113,35 @@ fn a_patrol_moves_with_its_own_tolerance() {
     assert_eq!(b.fleets[4].state, 20);
     assert!(b.fleets[4].move_order.is_none());
 }
+
+/// A brain member has one request slot (brain2.c: `if count < 1 and slot
+/// == -1, slot = 200 + type`, in turn): miss002's fishers (1, 1), with
+/// neither a merchant nor a ship killer, ask for the merchant only, and
+/// nothing more while it waits (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brain_member_asks_one_ship_at_a_time() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+    let k = scene.member_fleet(1, 1).unwrap();
+    let brain = scene.brain.as_mut().unwrap();
+    brain.fleets[k].ships.clear();
+    brain.requests.clear();
+    brain.building.clear();
+    let def = &brain::mission_fleets("miss002").unwrap()[k];
+    scene.ask_for_ships(k, def);
+    scene.ask_for_ships(k, def);
+    let asked: Vec<u8> = scene
+        .brain
+        .as_ref()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|r| r.0 == k)
+        .map(|r| r.1)
+        .collect();
+    assert_eq!(asked, [1]);
+}

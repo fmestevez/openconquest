@@ -486,7 +486,7 @@ struct Mission {
 }
 
 /// A mission's fleets as it defines them.
-fn mission_fleets(name: &str) -> Option<&'static [FleetDef]> {
+pub(super) fn mission_fleets(name: &str) -> Option<&'static [FleetDef]> {
     mission(name).map(|m| m.fleets)
 }
 
@@ -877,11 +877,23 @@ impl Scene {
         }
     }
 
-    /// A fleet short of a ship type it wants asks the builder for one.
-    fn ask_for_ships(&mut self, k: usize, def: &FleetDef) {
+    /// A member short of a ship type it wants asks the builder for one
+    /// through its one request slot (brain `+0x114` + 4m in miss001,
+    /// `+0x118` miss002, `+0x124` miss003, `+0x128` miss004, `+0x120`
+    /// miss005: each `if count < n and slot == -1, slot = 200 + type`, the
+    /// types tested in turn, 0x479dc0's counts): only the first type it is
+    /// short of fills it, and none while it is taken. The builder holds the
+    /// slot until it has ordered the ship and waited after (miss004's yard,
+    /// states 5-0xc: 750 ticks, then -1); the port holds it while the
+    /// request waits or its ship is being built. (Not ported: the
+    /// builder's 750-tick wait itself.)
+    pub(super) fn ask_for_ships(&mut self, k: usize, def: &FleetDef) {
+        let brain = self.brain.as_ref().unwrap();
+        if brain.requests.iter().any(|r| r.0 == k) || brain.building.iter().any(|b| b.2 == k) {
+            return;
+        }
         for &(kind, min) in def.wants {
-            let brain = self.brain.as_ref().unwrap();
-            let have = brain.fleets[k]
+            let have = self.brain.as_ref().unwrap().fleets[k]
                 .ships
                 .iter()
                 .filter(|&&id| {
@@ -893,10 +905,9 @@ impl Scene {
                     })
                 })
                 .count();
-            let asked = brain.requests.contains(&(k, kind))
-                || brain.building.iter().any(|b| b.2 == k && b.1 == kind);
-            if have < min[difficulty()] && !asked {
+            if have < min[difficulty()] {
                 self.brain.as_mut().unwrap().requests.push((k, kind));
+                return;
             }
         }
     }

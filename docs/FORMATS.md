@@ -6122,8 +6122,13 @@ with p3 = p4 = 0, back to 0 and round again, never waiting.
 The port: `Op::Branch` for each count, `Op::WatchFor` (the latched
 wait), `Target::Of` (an area table at another member's index), the
 fields in `Brain::fields`, the cross-calls and draws in `miss004::turn`.
-Not ported: a member has one request slot (`+0x128` + 4m, filled by the
-first short type only); the port's `wants` asks for each short type.
+A member has one request slot (`+0x128` + 4m here; miss001 `+0x114`,
+miss002 `+0x118`, miss003 `+0x124`, miss005 `+0x120`): its types are tested
+in turn, `count < n and slot == -1` filling it with 200 + type, so only the
+first short type is asked and nothing while it is taken. miss004's yard
+(states 5-0xc) serves the first slot set in member order, orders the ship,
+waits 750 ticks and then clears it (-1). The port holds the slot while the
+request waits or its ship is being built (not ported: the 750-tick wait).
 Not decoded: 0x4a8620 adds an object other than a ship or building only
 after a first match, leaving a hole in the list 0x4795f0 reads; what
 else a player's list holds is not read.
