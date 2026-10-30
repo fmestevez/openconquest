@@ -1751,12 +1751,14 @@ passes it over (the port's `in_dock` test; not settled: whether every
 dock entry does). State 6 at 0x4adef0 step 0x11 (`+0x77c >= 0` and a
 contact `+0x8e6`, then step 0x4add10, the automatic unloading at a
 building) is not ported: the port has no counterpart of that step. The
-prey of a ram (event 2 code 3, 0x4aa2c0: `+0x713 = 3`, `+0x71e = 9`,
-`+0x25d |= 2`) goes to 6 in the contact machine 0x4c3410 case 9 (at
-0x4c35c6) only when its contact `+0x8e6` is a ship one cell off whose
-cell test 0x499ca0 passes, else its state is left; not ported: whether
-the prey's contact is the rammer when code 3 is handled was not
-traced. The tick
+prey of a ram keeps its move state: the ram (0x4c2230) sends it event 2
+with code 1 (`+0x811` 0x14 when the rammer is alongside, 3 at the blow,
+0x4c2544-0x4c2563), never code 3; code 1 (0x4aa2c0: `+0x713 = 1`, `+0x71e
+= +0x811`, `+0x25d |= 2`) runs 0x4c3ec0 from the contact machine 0x4c3ca0,
+which stores no `+0x58c` (nor do 0x4abc40, 0x4b3850, 0x4e06a0, 0x4c3320 it
+calls); by then the prey's contact is the rammer (type 1, set by 0x4c1760
+as the ram reached state 2). State 6 from contact is 0x4c3410 case 9 (at
+0x4c35c6, `+0x713 == 2`), the ship a hook holds. The tick
 stamps +0x58d every frame but in state 3, so a ship waiting there 50 ticks
 (0x4a374a) falls to state 0 with its route kept, where the push rule
 applies to it.
