@@ -83,6 +83,9 @@ pub struct SaveGame {
     pub refit_batches: BTreeMap<u32, crate::scene::Batch>,
     #[serde(default)]
     pub town_fish: BTreeMap<u32, (u8, u8)>,
+    /// The ships' orders of the 0x1f0 group since the last tick.
+    #[serde(default)]
+    pub tick_orders: BTreeMap<u32, crate::scene::TickOrder>,
     /// Free casts from treasures, by spell index.
     #[serde(default)]
     pub free_casts: Vec<(u32, u32)>,

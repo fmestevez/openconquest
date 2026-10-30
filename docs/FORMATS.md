@@ -2664,6 +2664,39 @@ the route block `+0x562`, copies the target and kind, `+0x57b = 0`,
 `+0x5c7` from +0x19 unless 0xff, `+0x5c8 = 5`, `+0x25d |= 0x80` (0x4a5f30
 then plans and follows the route).
 
+**One event a tick** (0x4ab720, disassembly 0x4ab720-0x4ab925): nothing
+with `+0x7d6 == 0` and `+0x265 == 0`; 0x200 (wreck: lightning 0xda93 /
+0xda94, reef, whirlpool) with `+0x7da & 1` -> 0x4aa280; return with
+`+0x251 == 4`; bits 4, 1, 2 (0x4aa290, 0x4aa2a0, 0x4aa2c0) and 8 (stop /
+cancel by mask, 0x4aa540: clears `+0x265` and the pending group, `&=
+0xfffffe07`); then the 0x1f0 group as above, after 0x4abe50 and, with
+`+0x25d & 0x100` and `+0x251 == 0`, 0x4abe00: the first pending of 0x20
+(0x4aa990: dock 0x101 / found 0x102; commands 0x1e, 0x20), 0x40
+(0x4aab00: gather 0x19-0x1d, treasure 0x22 sub 0x10, unload 0x1f sub 1,
+and 0x4b0590 / 0x4ad510 / 0x4adef0's re-sends), 0x10 (0x4aa840: board
+0x17, ram 0x18, load 0x1f sub 2), 0x80 (0x4ab250: move 0x14, 0x2a sub 1,
+follow, 0x4b46f0, 0x4b4b50) runs and the others are dropped with it,
+even when it refuses; then 0x100 (fire records of commands 0x15 / 0x16;
+behaviours 4-11 are applied at once by 0x4a9e30) if still pending. Each
+code has one record (0x10 `+0x81c`, 0x20 `+0x824`, 0x40 `+0x839`, 0x80
+`+0x858`, 0x100 `+0x872 + 0x13k`): a second event of a code before the
+tick overwrites the first. Events run at the ship's next tick, not when
+sent; a stop and an order in one tick leave the ship stopped. The port
+applies the player's orders at once (`Scene::apply`) and, within a tick,
+keeps the ship as it was before its first order of the group, running a
+later one over it only when the original's would win (a higher code, or
+the same code overwriting), a refusal leaving the old task; a stop drops
+the tick's. Not ported: the tick's delay itself; the fire records (0x100:
+whether 0x4ab350 drops them with the group, 0x4ab350 / 0x4abe50 /
+0x4abe00 / 0x4aa290 / 0x4aa2a0 not read in full; `+0x251 == 1` not
+identified); the computer players' and brains' calls, which set tasks at
+once (so a member's move and a repair order to one ship in one tick do
+not resolve to the dock as the original's would); the end of unloading
+(0x4adef0 step 0x13: event 8 mask 0x40 and the move aside 0x80, the way
+back from the group's gather task later: the port goes back to its
+deposit at once after the move aside); lightning's, reefs' and
+whirlpools' wrecks, a tick early in the port.
+
 The port: `scene::yard`. The port's slot is the cell a ship is in (a ship
 mended at a dock aside); ships just built hold their berth until made the
 same tick. Its towns' building lists are the yards a settlement is the

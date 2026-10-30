@@ -217,7 +217,7 @@ impl Scene {
 
     /// Takes the last ship of type `kind` waiting at yard `site` off its
     /// queue and pays its price back (a right click on its button, message
-    /// 0x280f '<', 0x416f90; the stock its arming took stays spent). One
+    /// 0x280f '<', 0x416f90; a queued order took no stock). One
     /// being built on the berth is called off by a stop order instead.
     pub fn cancel_ship(&mut self, site: u32, kind: u8) -> Result<(), String> {
         let owner = self

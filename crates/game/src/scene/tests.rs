@@ -9187,3 +9187,67 @@ fn only_ports_take_cargo() {
     scene.send_to_port(i, 0);
     assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
 }
+
+/// One order of the 0x1f0 group a tick (0x4ab720): of a move (0x80) and
+/// a gather (0x40) given in one tick the gather runs whatever their order;
+/// a second move overwrites the first; a stop in the tick leaves the ship
+/// stopped. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn one_ship_order_a_tick() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let t = TILE_SIZE as f32;
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind <= 1))
+        .unwrap();
+    let ship = scene.objects[i].id;
+    let deposit = scene
+        .objects
+        .iter()
+        .find(|o| o.deposit.is_some_and(|d| d.resource == Resource::Amber))
+        .unwrap()
+        .id;
+    let (sx, sy) = (scene.objects[i].x, scene.objects[i].y);
+    let water = (0..20)
+        .flat_map(|d| [(d, 0), (-d, 0), (0, d), (0, -d)])
+        .map(|(dx, dy)| ((sx / t) as i32 + dx, (sy / t) as i32 + dy))
+        .find(|&(x, y)| (x, y) != ((sx / t) as i32, (sy / t) as i32) && scene.nav.is_water(x, y))
+        .unwrap();
+    let (mx, my) = (water.0 as f32 * t + t / 2.0, water.1 as f32 * t + t / 2.0);
+    let task = |s: &Scene| {
+        s.objects[s.object_index(ship).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap()
+            .task
+    };
+    let gather = Order::Gather { ship, deposit };
+    let go = Order::Move { ship, x: mx, y: my };
+    // Move, then gather: the gather.
+    scene.apply(&go, &data, &mut caches).unwrap();
+    scene.apply(&gather, &data, &mut caches).unwrap();
+    assert!(matches!(task(&scene), Some(Task::Gather { .. })));
+    // Next tick, gather then move: the move is dropped.
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    scene
+        .apply(&Order::Stop { id: ship }, &data, &mut caches)
+        .unwrap();
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    scene.apply(&gather, &data, &mut caches).unwrap();
+    scene.apply(&go, &data, &mut caches).unwrap();
+    assert!(matches!(task(&scene), Some(Task::Gather { .. })));
+    // A stop then a gather in one tick: stopped.
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    scene
+        .apply(&Order::Stop { id: ship }, &data, &mut caches)
+        .unwrap();
+    scene.apply(&gather, &data, &mut caches).unwrap();
+    assert!(task(&scene).is_none());
+}

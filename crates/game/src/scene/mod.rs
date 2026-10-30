@@ -454,6 +454,9 @@ pub struct Scene {
     /// ticks, `+0x118` amber summed, from `+0x124`; 0x434a00 message
     /// 0x138c), for order 10's refund.
     pub refit_batches: BTreeMap<u32, halt::Batch>,
+    /// The ships' orders of the 0x1f0 group given since the last tick
+    /// (one a tick, `Scene::one_event_a_tick`).
+    pub tick_orders: BTreeMap<u32, order::TickOrder>,
     /// What a cancelled training's fish share leaves in a settlement or
     /// town: its bytes `+0x252` (count) and `+0x253` (last part), 0x44316a.
     /// (Not decoded: what they mean; 0x43c650 reads `+0x252` into its info
@@ -551,7 +554,7 @@ pub use computer::Computers;
 pub use flyers::{Flyer, Nest};
 pub use halt::Batch;
 pub use load::{Cargo, Entry, LoadLink};
-pub use order::Order;
+pub use order::{Order, TickOrder};
 pub use repair::{StockRepair, UnitMend};
 pub use stats::Stats;
 #[cfg(test)]
@@ -773,6 +776,7 @@ impl Scene {
             stock_conditions: Default::default(),
             stock_repairs: Vec::new(),
             refit_batches: BTreeMap::new(),
+            tick_orders: BTreeMap::new(),
             town_fish: BTreeMap::new(),
             free_casts: Default::default(),
             creature_clock: 0.0,
@@ -1008,6 +1012,7 @@ impl Scene {
             stock_conditions: self.stock_conditions.clone(),
             stock_repairs: self.stock_repairs.clone(),
             refit_batches: self.refit_batches.clone(),
+            tick_orders: self.tick_orders.clone(),
             town_fish: self.town_fish.clone(),
             free_casts: self
                 .free_casts
@@ -1161,6 +1166,7 @@ impl Scene {
         scene.stock_conditions = save.stock_conditions.clone();
         scene.stock_repairs = save.stock_repairs.clone();
         scene.refit_batches = save.refit_batches.clone();
+        scene.tick_orders = save.tick_orders.clone();
         scene.town_fish = save.town_fish.clone();
         scene.delivered = save.delivered.clone();
         scene.joined = save.joined.clone();
@@ -2085,6 +2091,7 @@ impl Scene {
         self.brain_clock += dt;
         while self.brain_clock >= crate::clock::TICK {
             self.brain_clock -= crate::clock::TICK;
+            self.tick_orders.clear();
             self.run_brain();
             for (class, cell) in std::mem::take(&mut self.pending_walkers) {
                 self.put_walker(walkers::NO_LAIR, class, cell, data, caches);

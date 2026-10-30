@@ -233,7 +233,6 @@ impl Scene {
         caches: &mut Caches,
     ) -> Result<u32, String> {
         use Order::*;
-        let done = |r: Result<(), String>| r.map(|()| 0);
         // A ship being built refuses its commands (0x4e2ba0 tests each with
         // 0x4e6700, and its capability word `+0x261` is 0x2000 alone:
         // moves 0x14, fire 0x15 / 0x16, board, ram, gather, dock,
@@ -263,6 +262,83 @@ impl Scene {
         if ship.is_some_and(|id| self.being_built(id)) {
             return Err("The ship is still being built".into());
         }
+        if let Some(r) = self.one_event_a_tick(order, data, caches) {
+            return r;
+        }
+        self.apply_now(order, data, caches)
+    }
+
+    /// A ship takes one order of the 0x1f0 group a tick (0x4ab720): its
+    /// events are kept one a code (0x20 dock / found, 0x40 gather /
+    /// treasure / unload, 0x10 board / ram, 0x80 move; a later one of the
+    /// same code overwrites the record) and at its tick the first pending
+    /// of 0x20, 0x40, 0x10, 0x80 runs, the others dropped with it (`+0x7d6
+    /// &= ~m`), even when it refuses; a stop (event 8) runs before the
+    /// group and drops what is pending. The port applies orders at once,
+    /// so the ship's state before its first such order of the tick is
+    /// kept and an order is run over it only if the original's would win.
+    /// `None` for an order outside the group. (Not ported: the original
+    /// runs them at the ship's next tick, a tick late; the fire records
+    /// 0x100, which 0x4ab350 may or may not drop with them; the computer
+    /// players' and brains' own calls, which do not come through here.)
+    fn one_event_a_tick(
+        &mut self,
+        order: &Order,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Option<Result<u32, String>> {
+        use Order::*;
+        let (ship, rank) = match *order {
+            Found { ship, .. } | Repair { ship, .. } => (ship, 0),
+            Gather { ship, .. } | Take { ship, .. } | Unload { ship, .. } => (ship, 1),
+            Close { ship, .. } => (ship, 2),
+            Move { ship, .. } => (ship, 3),
+            Stop { id } => {
+                let i = self.object_index(id)?;
+                self.objects[i].ship.as_ref()?;
+                // The group pending this tick goes; then the stop.
+                if let Some(TickOrder::Ran { before, .. }) = self.tick_orders.remove(&id) {
+                    self.objects[i].ship = Some(*before);
+                }
+                self.tick_orders.insert(id, TickOrder::Stopped);
+                return None;
+            }
+            _ => return None,
+        };
+        let i = self.object_index(ship)?;
+        let now = self.objects[i].ship.clone()?;
+        let before = match self.tick_orders.get(&ship) {
+            Some(TickOrder::Stopped) => return Some(Ok(0)),
+            Some(TickOrder::Ran { rank: won, .. }) if *won < rank => return Some(Ok(0)),
+            Some(TickOrder::Ran { before, .. }) => {
+                let before = before.clone();
+                self.objects[i].ship = Some((*before).clone());
+                before
+            }
+            None => Box::new(now),
+        };
+        let r = self.apply_now(order, data, caches);
+        if r.is_err() {
+            // Refused (0x4aab00, 0x4ab250 returning early): the old task
+            // stays, and what was pending went with the clear.
+            if let Some(i) = self.object_index(ship) {
+                self.objects[i].ship = Some((*before).clone());
+            }
+        }
+        self.tick_orders
+            .insert(ship, TickOrder::Ran { rank, before });
+        Some(r)
+    }
+
+    /// Carries out `order` at once.
+    fn apply_now(
+        &mut self,
+        order: &Order,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Result<u32, String> {
+        use Order::*;
+        let done = |r: Result<(), String>| r.map(|()| 0);
         match *order {
             Move { ship, x, y } => {
                 if self.order_move(ship, x, y) {
@@ -405,4 +481,16 @@ impl Scene {
         let pick = voices[self.gull_rng.next() as usize % voices.len()];
         self.sounds.push((pick, f32::NAN, f32::NAN));
     }
+}
+
+/// A ship's order of the 0x1f0 group this tick (`Scene::one_event_a_tick`):
+/// one ran, of its rank (0 for 0x20 .. 3 for 0x80), over the ship as it was
+/// before; or a stop came, which drops the rest of the tick's.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum TickOrder {
+    Ran {
+        rank: u8,
+        before: Box<crate::objects::Ship>,
+    },
+    Stopped,
 }
