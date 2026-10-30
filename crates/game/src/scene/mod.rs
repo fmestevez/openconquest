@@ -1422,21 +1422,37 @@ impl Scene {
         if self.being_built(id) {
             return false;
         }
-        // The exact route, else as near as it can get (0x55ca10, 0x55ba50).
-        let here = (self.objects[i].x, self.objects[i].y);
-        let Some(path) = self.plan_route_order(i, here, x, y) else {
+        // The exact route (0x55ca10; to a cell not water 0x55ba50 within
+        // 1). None, the ship keeps the route it had and waits: one more of
+        // its wait (+0x591), and 25 ticks on it plans again, waited, as
+        // near as it gets (0x4a6330 returns 0xff, then 0x4a6150).
+        let t = TILE_SIZE as f32;
+        let (cx, cy) = ((x / t).floor() as i32, (y / t).floor() as i32);
+        if cx < 0 || cy < 0 || cx >= self.nav.width as i32 || cy >= self.nav.height as i32 {
             return false;
-        };
+        }
+        let here = (self.objects[i].x, self.objects[i].y);
+        let path = self.plan_route_order(i, here, x, y);
         let Some(ship) = self.objects[i].ship.as_mut() else {
             return false;
         };
-        ship.path = path;
+        ship.planned = 0.0;
+        match path {
+            Some(path) => {
+                ship.path = path;
+                ship.pending = None;
+                ship.waited = 0.0;
+            }
+            None => {
+                ship.pending = Some((x, y));
+                ship.waited = crate::clock::TICK;
+            }
+        }
         ship.task = None;
         // A plain move carries priority 0 (0x4cf070).
         ship.priority = 0;
         ship.patience = objects::PATIENCE;
         ship.order_tag = 0;
-        ship.waited = 0.0;
         true
     }
 
@@ -1501,9 +1517,8 @@ impl Scene {
     /// A plain move's first plan (0x4a5f30 -> 0x4a6330, not waited): to
     /// water (0x4999e0) as `plan_route_avoiding`; to any other cell
     /// 0x4a51b0 with a tolerance of 1, the nearest reached cell within 1
-    /// of it. A goal the exact route cannot reach takes the waited plan's
-    /// route at once (0x55ba50 with 0: as near as it gets), where the
-    /// original plans it 25 ticks later (0x4a6150).
+    /// of it. A goal it cannot reach is planned again 25 ticks later,
+    /// waited (`Scene::plan_pending`).
     fn plan_route_order(
         &self,
         i: usize,
@@ -1513,7 +1528,51 @@ impl Scene {
     ) -> Option<VecDeque<(f32, f32)>> {
         let none = HashSet::new();
         self.plan_route_tolerant(i, start, x, y, &none, Plan::Order)
-            .or_else(|| self.plan_route_near(i, start, x, y, &none))
+    }
+
+    /// Ships with a plain move they found no route for (`Ship::pending`)
+    /// plan again 25 ticks after the last (0x4a6150: the ship lying still
+    /// counts as changed; `+0x57b`, `+0x57f`), waited, with its wait
+    /// (0x4a6330 -> 0x4a51b0, 0x55ba50 with a tolerance of 0 to water, 1
+    /// to anything else): a route of two cells or more is taken; else
+    /// its wait grows by one (0x4a6330's 0xff and 2 both count it) and it
+    /// tries again. At a wait of 150, or on the goal's cell, the move is
+    /// given up (0x4a618d). A ship given a task meanwhile drops it.
+    fn plan_pending(&mut self, dt: f32) {
+        let t = TILE_SIZE as f32;
+        let every = crate::clock::ticks(25);
+        for i in 0..self.objects.len() {
+            let o = &self.objects[i];
+            let Some(s) = o.ship.as_ref() else { continue };
+            let Some(to) = s.pending else { continue };
+            if s.task.is_some() {
+                self.objects[i].ship.as_mut().unwrap().pending = None;
+                continue;
+            }
+            if s.planned + dt < every {
+                continue;
+            }
+            let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+            let goal = ((to.0 / t).floor() as i32, (to.1 / t).floor() as i32);
+            if s.waited >= crate::clock::ticks(150) || here == goal {
+                let s = self.objects[i].ship.as_mut().unwrap();
+                (s.pending, s.waited) = (None, 0.0);
+                continue;
+            }
+            let cell = |&(x, y): &(f32, f32)| ((x / t).floor() as i32, (y / t).floor() as i32);
+            let route = self.replan(i, to).filter(|r| {
+                let first = r.front().map(cell);
+                r.iter().any(|p| Some(cell(p)) != first)
+            });
+            let s = self.objects[i].ship.as_mut().unwrap();
+            s.planned = 0.0;
+            match route {
+                Some(path) => {
+                    (s.path, s.pending) = (path, None);
+                }
+                None => s.waited += crate::clock::TICK,
+            }
+        }
     }
 
     /// A waited plan (0x4a6330 -> 0x4a51b0 with a plain move's arguments):
@@ -1983,6 +2042,7 @@ impl Scene {
                 return;
             }
             if let Some(ship) = self.objects[i].ship.as_mut() {
+                ship.pending = None;
                 // A stop under way forgets the cells it kept closed
                 // (0x4a6330 with 1).
                 if !ship.path.is_empty() {
@@ -2674,6 +2734,7 @@ impl Scene {
             self.sink_hazard_at(c, data, caches);
         }
         self.go_round(held);
+        self.plan_pending(dt);
         self.refresh_routes(dt);
         if moved {
             // Keep painter's order as ships move.

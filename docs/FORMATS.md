@@ -1897,16 +1897,35 @@ ships' behaviours move through 0x4a6270 (11 callers, 0x4ac8d0 ...
 0x4c26fa), all with a tolerance of 0: the first plan, not waited, takes
 the exact finder (none for a goal it cannot reach, a tick of wait), and
 the next, waited, 0x55ba50, so a ship heads for the nearest cell it can
-reach. The port: a plain move to water takes 0x55ca10 and, failing it,
-0x55ba50 at once (the original 25 ticks later); to any other cell
-0x55ba50 with 1; held-up re-plans 0x4a51b0's; the re-plan under way and
-the behaviours' plans 0x4a5740's. The behaviours' goals not on the
-shallow grid are first moved to the nearest water (the port's own: the
-original makes no plan to them with a tolerance of 0), and the ship's own
-cell is never closed to its plan (0x4a4e20 and 0x4a7290 pass over it).
-Not ported: the route's direction bytes (the port's ships turn by the
-cells), planning from the cell being entered while between cells
-(`+0x5b6`), and the region plan 0x4a5a10.
+reach. A plain move's first plan (0x4a5f30 with `+0x593` set: 0x4a6330
+directly, then the snapshot 0x4a6100) finding no route leaves the
+ship's route as it was (0x4a6330 replaces it only on success) with one
+more of wait (`+0x591`) and `+0x57b` the tick; 0x4a6150 then plans again
+once 25 ticks (`+0x57f`) have passed and something changed (the wait,
+the ship's cell, the goal, or the ship lying still), waited (0x4a51b0,
+0x55ba50 with the move's tolerance): no route, or one of a cell (2), is
+one more of wait for a plain move (priority 0, not 50: retried); at a
+wait of 150 or on the goal's cell the move is given up (message 0x80 sub
+8). The port: a plain move to water takes 0x55ca10, to any other cell
+0x55ba50 with 1; with no route it keeps its route, its wait 1, and plans
+again so every 25 ticks (`Ship::pending`, `Scene::plan_pending`, through
+the held-up re-plan's 0x4a51b0); held-up re-plans 0x4a51b0's; the
+re-plan under way and the behaviours' plans 0x4a5740's. The behaviours'
+goals not on the shallow grid are first moved to the nearest water (the
+port's own: the original makes no plan to them with a tolerance of 0,
+0x4a6330 returning before any plan when 0x499990 refuses the cell; the
+port's 29 callers of `plan_route` pass land cells where the original
+computes its own water cell, e.g. 0x4b2710 for a founding ship, so this
+is kept), and the ship's own cell is never closed to its plan (0x4a4e20
+and 0x4a7290 pass over it). Not ported: the route's direction bytes
+(the port's ships turn by the cells); planning from the cell being
+entered while between cells (`+0x5b6`; the port's move states do not
+keep the original's between-cells flag `+0x596`, set leaving state 3
+for 5 and cleared by 0x4e0b50 in states 0, 2 and 3); and the region
+plan 0x4a5a10 (not decoded: 0x4a6330 runs it when its last argument, a
+region, is given and active; 0x4a6270 passes its own on, non-zero from
+0x4ad0ba, 0x4b8493, 0x4c2666 and 0x4c272e, the region structures not
+read).
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to

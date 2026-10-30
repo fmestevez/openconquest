@@ -11406,6 +11406,62 @@ fn ship_building_page_tests_no_price() {
     assert!(scene.order_found(boat, site.0, site.1, 0x35).is_ok());
 }
 
+/// A plain move to water the exact route (0x55ca10) cannot reach makes no
+/// route at first: the ship waits one (`+0x591`), and 25 ticks on plans
+/// again, waited (0x4a6150 -> 0x4a6330 -> 0x4a51b0), as near as it gets
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn unreachable_move_waits_then_plans_near() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let t = TILE_SIZE as f32;
+    let found = (0..14).find_map(|m| {
+        let mut scene = Scene::load(&data, &mut caches, &format!("miss{m:03}")).ok()?;
+        scene.brain = None;
+        let k = scene
+            .objects
+            .iter()
+            .position(|o| scene.is_own(o) && o.ship.is_some())?;
+        let o = &scene.objects[k];
+        let from = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let deep = crate::objects::deep_draught(o.ship.as_ref().unwrap().kind);
+        let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+        let goal = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .find(|&(x, y)| {
+                scene.nav.is_sea(x, y)
+                    && scene.nav.passable(x, y, deep)
+                    && scene
+                        .nav
+                        .find_path_avoiding(from, (x, y), deep, |_| false)
+                        .is_none()
+            })?;
+        let id = scene.objects[k].id;
+        Some((scene, id, goal))
+    });
+    let (mut scene, id, goal) = found.expect("a water cell a ship cannot reach");
+    let (gx, gy) = (goal.0 as f32 * t + t / 2.0, goal.1 as f32 * t + t / 2.0);
+    assert!(scene.order_move(id, gx, gy));
+    let i = scene.object_index(id).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert!(s.path.is_empty());
+    assert_eq!(s.pending, Some((gx, gy)));
+    assert_eq!(s.waited, crate::clock::TICK);
+    for _ in 0..24 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let i = scene.object_index(id).unwrap();
+    assert!(scene.objects[i].ship.as_ref().unwrap().path.is_empty());
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let i = scene.object_index(id).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert_eq!(s.pending, None);
+    assert!(!s.path.is_empty());
+}
+
 /// A computer's landing party founds a settlement without the amber
 /// (0x421f00 kind 1, side 3 or 4), its amber left at 0 (0x4a8d60); the
 /// player's builds nothing without it (needs `OPENCONQUEST_DATA`).

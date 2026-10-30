@@ -324,6 +324,11 @@ pub struct Ship {
     /// 25 ticks, +0x57f).
     #[serde(default)]
     pub planned: f32,
+    /// A plain move's goal it has no route to yet (the order's cell, kept
+    /// by 0x4a5f30): its first plan found none, so it plans again, waited,
+    /// every 25 ticks (0x4a6150), keeping whatever route it had.
+    #[serde(default)]
+    pub pending: Option<(f32, f32)>,
     /// How fast it is going now, in world pixels a second: it gathers way
     /// up to its speed and loses it to stop where it is bound or to turn.
     #[serde(default)]
@@ -1584,6 +1589,7 @@ pub fn resolve(
         stalled: 0.0,
         remembered: Vec::new(),
         planned: 0.0,
+        pending: None,
         velocity: 0.0,
         move_state: 0,
         home_port: 0,
