@@ -544,6 +544,7 @@ mod story;
 mod towns;
 pub mod unload;
 pub mod volcano;
+mod walk_path;
 mod walkers;
 mod yard;
 pub use brain::{Brain, EASY, HARD, NORMAL};
@@ -2132,6 +2133,7 @@ impl Scene {
             for (class, cell) in std::mem::take(&mut self.pending_walkers) {
                 self.put_walker(walkers::NO_LAIR, class, cell, data, caches);
             }
+            self.tick_walkers(data, caches);
             self.run_computers(data, caches);
             self.run_brain_jobs();
             self.run_town_links();

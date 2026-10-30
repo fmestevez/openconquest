@@ -3777,10 +3777,9 @@ points `+0xb0 x cond / 100` (unsigned), else cond and hit points 1 and
   (0x413b69) and the creature's next turn clears (0x411520 at 0x411698 /
   0x411879; 0 at creation 0x411100, saved 0x4142cb): lightning's kill
   cries only after a shot the same tick.
-The port follows these, the walk test with the creature's half by its
-position (its creatures appear on the north-west half but walk from cell
-middle to cell middle, not half to half as 0x412740 / 0x413240: one that
-has walked counts on its south-east half), the barbarians' site
+The port follows these, the walk test with the creature's own half
+(`+0x90` / `+0x94`, which it walks from half to half, **Land creatures**
+below), the barbarians' site
 taken to hold (their flag 0x20 and `+0x1c8` not decoded), the creatures'
 percentages derived from their life (`life x 100 / max`, as 0x414c8f),
 the settlements' condition as their hull (`max / 4` off, `max / 20`
@@ -4230,19 +4229,79 @@ tick at a time by 0x41fbd0, moved by 0x41e4b0):
 
 Lairs (`CreaturesFlatClassTy`, 0x414f00) send out another creature once
 `(10 - field 9) x (20-25)` ticks have passed since the last, drawn afresh
-at each look, up to field 8 out. A creature (0x4111b0) shows
-`<CLP|MNT|AMZ>SPR_<state><heading>` with a frame delay by state
-(0x59538c: 1, 25, 1, 1, 1, 2, 2 ticks; walking's 25 becomes 5 after the
-first frame, 0x411520) and walks a cell a pass of its walking picture. It
-wanders (0x413240) to any land cell (tile type 8) it can reach within a
-round mask about where it stands (13 x 13 cells: 0x594ba0 cyclopes, radius
-5; 0x594e44 and 0x5950e8 minotaurs and amazons, radius 4). A creature
+at each look, up to field 8 out. A creature's state `+0x154` is also
+its picture's state digit (0x4111b0: `<CLP|MNT|AMZ>SPR_<state><heading>`,
+state 6 `<..>SPR_6`, the amazon's throw `AMZSPR_3<h><draw & 1>`): 0
+appearing, 1 standing, 2 walking, 3 throwing, 4 hit, 5 dying, 6 turning;
+a frame every 0x59538c[state] ticks (1, 25, 1, 1, 1, 2, 2; standing's 25
+becomes 5 after its first frame). Each tick (message 0, 0x413d70): every
+5 ticks, unless hit or dying, its walk grid refreshed about it (0x411ef0,
+over its mask's cells) and a look about (0x412290); then its step
+(0x412740), then its picture (0x411520).
+
+**The walk.** It holds its half cell in the walk grid (`+0x90` /
+`+0x94`, from the grid's origin; drawn at `origin x 64 + half x 32 +
+16`). Standing (state 1), 40 ticks after it stopped (`+0xf0`) and on the
+standing loop's first frame, it chooses a route (0x413240): a pursuit
+(`+0xd0`) to the last cell of 0x55ba50's route within 5 of its goal;
+else a destination among the halves of its 13 x 13 mask (dumped:
+0x594ba0 the cyclopes', 0x594e44 / 0x5950e8 the others'), indexed by
+half / 2 over a 26 x 26 window about its half, value 1 (the centre's
+four halves never), that a flood of the grid from its half reaches in 14
+(0x558fa0 -> 0x557910), each weighed 10 when the cell's layer-0 tile is
+of type 8 else 0 (0x42eb20), picked by a draw of its own generator
+(`+0x18`, the usual LCG, seeded `[game +0x2ee5] x id`): `r = draw %
+total`, the first entry whose running sum is at least `r`; then the
+route 0x55b560 (two straight legs if clear and their first direction
+within 45 degrees of the heading, else a flood from the goal, 0x557910,
+and a back-trace turning 45, 90, 135 degrees, then any, a step, to the
+least value plus 2 straight / 3 diagonal, 0x5c5074, the nearer the goal
+(0x557440) on a tie, at most `(start - goal) / 2 + 10` entries of
+`{x, y, direction}`); no route drops the entry and draws again. With a
+route whose first step turns from its heading (0x5c4f74, clamped to 0-7)
+it turns first (state 6, 12 frames a heading, 9 for the amazon, 2 ticks
+a frame), then chooses again with a pursuit of that half; else it walks.
+0x557910 is a sweep of segments generation by generation (values + 2
+straight, + 3 diagonal, capped at `2 lim + 2`, the new segments ordered
+by their least value), not a shortest-path search. Walking (state 2),
+on the tick after a half step ends it takes the route's next half if
+the grid there is 0 (else the route is shut, `+0x11c`) and its picture
+again, then starts the step to the entry after, its heading the entry's
+direction; its place goes from the step's start to its end with the
+picture's frame, `(to - from) x (frame - f0) / (end - f0)`: the
+cyclops's frames 0-0x26 on the first step (frames below 7 hold, f0 6),
+0x16-0x36 after; the minotaur's and amazon's from 0 (below 9 / 10 hold,
+f0 8 / 9) or 0x14 / 0x13 after, to the sequence's end. A half step so
+takes 39 ticks then 33 for a cyclops; a minotaur heading straight 37
+then 17 (36 frames), diagonally 53 then 33 (52); an amazon 36 / 17 (35)
+and 47 / 28 (46). At the route's end, with a target, a pursuit or the
+route shut it stops: another creature of its jam on its half (0x415e40)
+makes it choose again at once, without turning; else it throws or
+stands. Every 5 ticks, after the grid's refresh, a half of the route
+ahead that is -1 shuts it. A creature
 throws (0x412740) a shot (`BOMB<letter>`, 0x4126f0: cyclopes G with a
 ballista's level-1 blow, minotaurs O with a small catapult's, amazons A
 with item 3's; the A x 15 cache's copy at 0x5c73a8), its blow kept by
 health (0x594ab8: 1000, 947, 894, 837, 775, 740, 532, 548, 447, 376, 30
 thousandths by tenths lost); it hits but from 2 cells off, where 1 in
 (8 - cells) misses.
+
+The port walks its creatures so (`scene/walkers.rs`, the route finding in
+`scene/walk_path.rs`, checked against the original's routes on a fixture
+grid). Not ported: the look about 0x412290 (the port's creature takes a
+ship in its first weapon's reach as its target and turns to it to
+throw), the alerts it sends its jam (0x187a2, which start the others'
+pursuits), the throw's aim and draws but the first a tick (0x412740 state
+3), the hit reaction (state 4) and the dying picture (the port's
+creatures go when killed), the jams (a creature's cell's fellows are the
+creatures on it), the walking and hit sounds (0x85-0x87, 0x6f-0x71: the
+port has no samples for those events; the walking sound's draws are
+kept). Not decoded: 0x55b560's back-trace when its first step finds no
+cell (it writes its uninitialised best cell, `[esp+0x28]` / `[esp+0x38]`
+read at 0x55b809 and 0x55b9c1: the port takes it as no route); a
+destination list whose weights are all 0 (0x413622 divides by zero: the
+port stands); `[game +0x2ee5]` (the port's draw of it, as for the
+ships').
 
 ## Sheep
 

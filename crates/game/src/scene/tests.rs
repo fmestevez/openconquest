@@ -2374,7 +2374,8 @@ fn crews_under_fire() {
     scene.objects[e].ship.as_mut().unwrap().behaviour.guard = false;
     let hull = scene.objects[e].combat.as_ref().unwrap().hull;
     let mut limed = 0.0f32;
-    for _ in 0..50 * 20 {
+    // Long enough for the hits the draws give.
+    for _ in 0..50 * 80 {
         scene.update(0.02, &data, &mut caches);
         let e = scene.object_index(enemy).unwrap();
         limed = limed.max(scene.objects[e].combat.as_ref().unwrap().lime);
@@ -3102,6 +3103,19 @@ fn creatures_leave_their_lairs() {
     }
     assert!(scene.walkers.len() >= 3, "{} out", scene.walkers.len());
     let t = TILE_SIZE as f32;
+    for w in &scene.walkers {
+        let o = &scene.objects[scene.object_index(w.id).unwrap()];
+        assert!(!scene.nav.is_water((o.x / t) as i32, (o.y / t) as i32));
+    }
+    // They walk off the half they came out on, on land.
+    let halves: Vec<(u32, (i32, i32))> = scene.walkers.iter().map(|w| (w.id, w.half)).collect();
+    for _ in 0..50 * 30 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert!(scene
+        .walkers
+        .iter()
+        .any(|w| halves.iter().any(|&(id, h)| id == w.id && h != w.half)));
     for w in &scene.walkers {
         let o = &scene.objects[scene.object_index(w.id).unwrap()];
         assert!(!scene.nav.is_water((o.x / t) as i32, (o.y / t) as i32));
@@ -9359,6 +9373,70 @@ fn lightning_on_gorgon_and_siren() {
         assert_eq!(scene.sounds.iter().any(|s| s.0 == "hitmed"), sound);
         scene.lightning_strike(x, y, human, &data, &mut caches);
         assert_eq!(killed(&scene), 1);
+    }
+}
+
+/// A land creature walks from half cell to half cell as the original's
+/// picture runs (0x412740, 0x411520, 0x4111b0): the first step takes 39
+/// ticks for a cyclops (frames 0-0x26, a frame a tick, and the tick that
+/// takes the next half), the later ones 33 (0x16-0x36); a minotaur heading
+/// east 37 and 17 (its 36 frames, from 0x14 after); its place moves 32
+/// pixels a half, held over the first frames (cyclops below 7). Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn land_creatures_step_half_cells() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for (class, steps) in [(0x1f4, [39, 33, 33]), (0x1f5, [37, 17, 17])] {
+        let mut scene = Scene::load(&data, &mut caches, "miss006").unwrap();
+        scene.brain = None;
+        let w = scene.grid.width as i32;
+        let land = |s: &Scene, x: i32, y: i32| s.cell_types[(y * w + x) as usize] & 0xf == 8;
+        let start = (2..scene.grid.height as i32 - 2)
+            .flat_map(|y| (2..w - 4).map(move |x| (x, y)))
+            .find(|&(x, y)| (0..3).all(|d| land(&scene, x + d, y)))
+            .unwrap();
+        scene.put_walker(super::walkers::NO_LAIR, class, start, &data, &mut caches);
+        let k = scene.walkers.len() - 1;
+        let id = scene.walkers[k].id;
+        let w = &mut scene.walkers[k];
+        let (hx, hy) = w.half;
+        let gw = w.grid.unwrap().2 * 2;
+        w.path = (0..4).map(|d| (hx + d, hy, 0)).collect();
+        for &(x, y, _) in &w.path {
+            w.halves[(y * gw + x) as usize] = 0;
+        }
+        (w.state, w.step, w.moving, w.heading) = (super::walkers::WALK, 0, false, 0);
+        w.scan = u32::MAX;
+        let x0 = w.pos.0;
+        let mut changes = Vec::<u32>::new();
+        let mut last = (hx, hy);
+        let mut held = None;
+        for t in 1..200u32 {
+            scene.ticks += 1;
+            scene.tick_walkers(&data, &mut caches);
+            let w = &scene.walkers[k];
+            if t == 5 {
+                held = Some(w.pos.0);
+            }
+            if w.half != last {
+                changes.push(t);
+                last = w.half;
+            }
+            if changes.len() == 3 {
+                break;
+            }
+        }
+        // The first tick takes the start half itself; then a half a step.
+        changes.insert(0, 1);
+        let gaps: Vec<u32> = changes.windows(2).map(|p| p[1] - p[0]).collect();
+        assert_eq!(gaps, steps, "class {class:#x}: {changes:?}");
+        assert_eq!(held, Some(x0), "held over the first frames");
+        let i = scene.object_index(id).unwrap();
+        assert_eq!(scene.objects[i].x as i32, x0 + 3 * 32);
     }
 }
 
