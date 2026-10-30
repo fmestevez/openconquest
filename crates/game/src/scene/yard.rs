@@ -307,9 +307,8 @@ impl Scene {
     /// the berth by the same message 0x1488, dropped if the berth will not
     /// take it, and built as a yard's (0x4b3ab0, 8 ticks a step). (Not
     /// decoded: how 0x4dfe00 reads a record ram of 0, left by an order
-    /// without arming.) For the brains' builder orders (brain.rs, which
-    /// still builds the barbarians' ships its own way).
-    #[allow(dead_code)]
+    /// without arming.) The brains' builder orders (brain.rs
+    /// `builder_order`, through the land fleet's ship part, 0x428f20).
     pub(super) fn barbarian_order(&mut self, site: u32, kind: u8, arm: bool) {
         let Some(i) = self.object_index(site) else {
             return;

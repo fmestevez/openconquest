@@ -222,25 +222,6 @@ pub const BUILD_RADIUS: i32 = 2;
 /// How close a ship must lie to the site of the settlement it founds.
 pub const FOUND_REACH: i32 = 2;
 
-/// A ship under construction at a shipyard.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Production {
-    pub site: u32,
-    pub ship: u8,
-    /// The Argo (command 0x7d), a royal ship.
-    #[serde(default)]
-    pub argo: bool,
-    pub elapsed: f32,
-    pub total: f32,
-    /// What it is armed with when launched; `None` for the mission's
-    /// standard load (computer players).
-    #[serde(default)]
-    pub arming: Option<Arming>,
-    /// What it cost (amber, fish), paid back if cancelled.
-    #[serde(default)]
-    pub paid: (u32, u32),
-}
-
 pub struct Scene {
     /// "Default arming" (the Building page's checkbox, 0x1fdb): new ships
     /// and forts come armed, the weapons paid for or taken from stock.
@@ -263,9 +244,6 @@ pub struct Scene {
     /// amounts by 1, 10 or 100 a tick, from 1 at the start (0x505530).
     pub shown: [u32; 2],
     shown_clock: f32,
-    /// Ships being built by builders other than shipyards (the brains'
-    /// barbarian structures); a yard's are on its berth (`Ship::build`).
-    pub productions: Vec<Production>,
     /// Ships ordered at yards, waiting for a free berth (0x416a40's queue),
     /// and the ticks since each yard's queue was last looked at (`+0x1fc`).
     pub ship_orders: Vec<yard::ShipOrder>,
@@ -683,7 +661,6 @@ impl Scene {
             terrain,
             objects: objs.drawn,
             nav,
-            productions: Vec::new(),
             ship_orders: Vec::new(),
             yard_clocks: BTreeMap::new(),
             new_ships: Vec::new(),
@@ -985,7 +962,6 @@ impl Scene {
                     combat: o.combat.clone(),
                 })
                 .collect(),
-            productions: self.productions.clone(),
             ship_orders: self.ship_orders.clone(),
             yard_clocks: self.yard_clocks.iter().map(|(&k, &v)| (k, v)).collect(),
             rnd_init: self.rnd_init,
@@ -1113,7 +1089,6 @@ impl Scene {
         // also decides who goes first where ships meet.
         scene.amber = save.amber;
         scene.fish = save.fish;
-        scene.productions = save.productions.clone();
         scene.ship_orders = save.ship_orders.clone();
         scene.yard_clocks = save.yard_clocks.iter().copied().collect();
         scene.rnd_init = save.rnd_init;
@@ -2031,43 +2006,6 @@ impl Scene {
                 } else {
                     *shown - step
                 };
-            }
-        }
-        // Each builder other than a yard works on the first ship of its
-        // queue. (Not decoded: how a barbarian structure builds; this is
-        // the port's, 25 ticks a ship beside it.)
-        let mut working: Vec<u32> = Vec::new();
-        for p in &mut self.productions {
-            if !working.contains(&p.site) {
-                working.push(p.site);
-                p.elapsed += dt;
-            }
-        }
-        self.show_productions(data, caches);
-        let (done, running): (Vec<_>, Vec<_>) = self
-            .productions
-            .drain(..)
-            .partition(|p| p.elapsed >= p.total);
-        self.productions = running;
-        for p in done {
-            match self.launch_ship(p.site, p.ship, p.arming.as_ref(), data, caches) {
-                Ok(Some(id)) => {
-                    if p.argo {
-                        self.christen_argo(id);
-                    }
-                    // The new ship's crew reports (events 184-187 by
-                    // nation, 0x4b3ab0).
-                    if let Some(k) = self.object_index(id) {
-                        let o = &self.objects[k];
-                        if self.is_own(o) && matches!(o.owner, Some((1 | 3, _))) {
-                            self.sounds.push(("jb_d1", o.x, o.y));
-                        }
-                    }
-                    self.ship_launched(p.site, p.ship, id);
-                    self.computer_launched(p.site, p.ship, id);
-                }
-                Ok(None) => {}
-                Err(e) => eprintln!("could not launch ship: {e:#}"),
             }
         }
         let ships: Vec<u32> = self

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::combat::{Combatant, Levels, Rng, Upgrade};
 use crate::magic::Magic;
 use crate::objects::{Deposit, Ship};
-use crate::scene::{Construction, Outcome, Production, Training};
+use crate::scene::{Construction, Outcome, Training};
 use crate::weather::Wind;
 
 /// Bumped when the layout changes incompatibly.
@@ -27,7 +27,6 @@ pub struct SaveGame {
     pub amber: u32,
     pub fish: u32,
     pub objects: Vec<SavedObject>,
-    pub productions: Vec<Production>,
     /// Ships waiting for a yard's berth, and the yards' queue clocks.
     #[serde(default)]
     pub ship_orders: Vec<crate::scene::ShipOrder>,

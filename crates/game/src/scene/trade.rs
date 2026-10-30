@@ -167,17 +167,10 @@ impl Scene {
         }
     }
 
-    pub fn production_at(&self, site: u32) -> Option<&Production> {
-        self.productions.iter().find(|p| p.site == site)
-    }
-
-    /// Whether builder `site` has a ship under way: being built on its
-    /// berth, waiting for it, or (a builder other than a yard) in its
-    /// queue.
+    /// Whether yard `site` has a ship under way: being built on its berth
+    /// or waiting for it.
     pub fn yard_busy(&self, site: u32) -> bool {
-        self.production_at(site).is_some()
-            || self.ship_orders.iter().any(|o| o.site == site)
-            || self.ship_on_berth(site).is_some()
+        self.ship_orders.iter().any(|o| o.site == site) || self.ship_on_berth(site).is_some()
     }
 
     /// Orders a ship of type `kind` at shipyard `site`.
@@ -208,11 +201,6 @@ impl Scene {
     /// (the yard's queue, counted on its buttons by 0x4164e0).
     pub fn ships_queued(&self, site: u32, kind: u8, argo: bool) -> u32 {
         self.ships_waiting(site, kind, argo)
-            + self
-                .productions
-                .iter()
-                .filter(|p| p.site == site && p.ship == kind && p.argo == argo)
-                .count() as u32
     }
 
     /// Takes the last ship of type `kind` waiting at yard `site` off its
@@ -224,21 +212,12 @@ impl Scene {
             .object_index(site)
             .and_then(|i| self.objects[i].owner)
             .ok_or("No such shipyard")?;
-        let paid = match self
+        let k = self
             .ship_orders
             .iter()
             .rposition(|p| p.site == site && p.ship == kind && !p.argo)
-        {
-            Some(k) => self.ship_orders.remove(k).paid,
-            None => {
-                let k = self
-                    .productions
-                    .iter()
-                    .rposition(|p| p.site == site && p.ship == kind && !p.argo)
-                    .ok_or("None of those are waiting")?;
-                self.productions.remove(k).paid
-            }
-        };
+            .ok_or("None of those are waiting")?;
+        let paid = self.ship_orders.remove(k).paid;
         self.earn(owner, paid.0 as i64, paid.1 as i64);
         Ok(())
     }
@@ -483,8 +462,7 @@ impl Scene {
             .site_heroes
             .iter()
             .any(|(site, heroes)| heroes.contains(&ARGUS) && self.object_index(*site).is_some());
-        let argo = self.productions.iter().any(|p| p.argo)
-            || self.ship_orders.iter().any(|p| p.argo)
+        let argo = self.ship_orders.iter().any(|p| p.argo)
             || self
                 .objects
                 .iter()
@@ -558,90 +536,6 @@ impl Scene {
         Ok(())
     }
 
-    /// Creates a new ship of the human player next to building `site`.
-    /// Keeps a hull-under-construction animation beside every shipyard that
-    /// is building, its frame following the work done.
-    pub(super) fn show_productions(&mut self, data: &GameData, caches: &mut Caches) {
-        let building: Vec<u32> = self.productions.iter().map(|p| p.site).collect();
-        self.effects
-            .retain(|fx| fx.site.is_none_or(|s| building.contains(&s)));
-        let t = TILE_SIZE as f32;
-        // The ship at the head of each yard's queue.
-        let mut heads: Vec<super::Production> = Vec::new();
-        for p in &self.productions {
-            if !heads.iter().any(|h| h.site == p.site) {
-                heads.push(p.clone());
-            }
-        }
-        for p in heads {
-            let Some(i) = self.object_index(p.site) else {
-                continue;
-            };
-            // Lying along the shore: across for yards facing east or west.
-            let facing = self.objects[i].record.fields.get(10).copied().unwrap_or(0);
-            let base = if facing % 4 == 0 { 0 } else { 40 };
-            let frame = base + ((p.elapsed / p.total).clamp(0.0, 1.0) * 39.0) as usize;
-            if let Some(fx) = self.effects.iter_mut().find(|fx| fx.site == Some(p.site)) {
-                fx.show_frame(frame);
-                continue;
-            }
-            let Some((cx, cy)) = self.launch_spot(i) else {
-                continue;
-            };
-            let nation = self.objects[i].owner.map_or(1, |o| o.0);
-            let Ok(frames) = objects::ship_build_frames(data, caches, p.ship, nation, p.argo)
-            else {
-                continue;
-            };
-            if frames.len() < 80 {
-                continue;
-            }
-            let mut fx = Effect {
-                x: cx as f32 * t + t / 2.0,
-                y: cy as f32 * t + t / 2.0,
-                frames,
-                age_ms: 0.0,
-                follow: None,
-                life_ms: None,
-                frame_ms: crate::combat::FX_FRAME_MS,
-                tornado: None,
-                site: Some(p.site),
-            };
-            fx.show_frame(frame);
-            self.effects.push(fx);
-        }
-    }
-
-    /// Where a ship built at the yard `i` goes into the water: the nearest
-    /// water cell not already holding a ship.
-    pub(super) fn launch_spot(&self, i: usize) -> Option<(i32, i32)> {
-        let t = TILE_SIZE as f32;
-        let (cx, cy) = (
-            (self.objects[i].x / t) as i32,
-            (self.objects[i].y / t) as i32,
-        );
-        let occupied: Vec<(i32, i32)> = self
-            .objects
-            .iter()
-            .filter(|o| o.ship.is_some())
-            .map(|o| ((o.x / t) as i32, (o.y / t) as i32))
-            .collect();
-        for r in 0..8 {
-            for dy in -r..=r {
-                for dx in -r..=r {
-                    let c = (cx + dx, cy + dy);
-                    if (dx.abs() == r || dy.abs() == r)
-                        && self.nav.is_water(c.0, c.1)
-                        && !occupied.contains(&c)
-                    {
-                        return Some(c);
-                    }
-                }
-            }
-        }
-        self.nav.nearest_water(cx, cy)
-    }
-
     /// Puts a new ship of type `kind` for `owner` at cell `(cx, cy)`.
     pub(super) fn spawn_ship(
         &mut self,
@@ -676,27 +570,6 @@ impl Scene {
         self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
         Some(id)
     }
-
-    pub(super) fn launch_ship(
-        &mut self,
-        site: u32,
-        kind: u8,
-        arming: Option<&Arming>,
-        data: &GameData,
-        caches: &mut Caches,
-    ) -> Result<Option<u32>> {
-        let Some(i) = self.object_index(site) else {
-            return Ok(None);
-        };
-        let Some((nation, slot)) = self.objects[i].owner else {
-            return Ok(None);
-        };
-        let Some((x, y)) = self.launch_spot(i) else {
-            return Ok(None);
-        };
-        self.make_ship((nation, slot), kind, (x, y), 6, arming, data, caches)
-    }
-
     /// Player `owner`'s research levels.
     pub fn levels_of(&self, owner: Option<(u32, u32)>) -> combat::Levels {
         owner

@@ -9390,3 +9390,71 @@ fn one_ship_order_a_tick() {
     scene.apply(&gather, &data, &mut caches).unwrap();
     assert!(task(&scene).is_none());
 }
+
+/// A brain's barbarian builder (miss001 fleet 0: a class 0x3f and a class
+/// 0x40 structure) orders through the land fleet's ship part: only the
+/// class 0x40 takes it (vtable +0x9c, 0x40e7b0), with its berth free; the
+/// ship goes on the berth at once, free, with the full default arming
+/// (byte 0xd 1, 0x428f20), and is built in 1 + 38 x 8 ticks as a yard's
+/// (0x4b3ab0); with the berth taken no order is given. Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn barbarian_builder_builds_on_its_berth() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    let sites = scene.brain.as_ref().unwrap().fleets[0].ships.clone();
+    let class = |scene: &Scene, id: u32| scene.objects[scene.object_index(id).unwrap()].class;
+    assert!(sites
+        .iter()
+        .any(|&s| class(&scene, s) == ObjectClass::Barbarian(0x3f)));
+    let site = *sites
+        .iter()
+        .find(|&&s| class(&scene, s) == ObjectClass::Barbarian(0x40))
+        .unwrap();
+    let owner = scene.objects[scene.object_index(site).unwrap()]
+        .owner
+        .unwrap();
+    let funds = scene.funds(owner);
+    // A bomber (type 3): weapons, armour and ram by 0x5964d8, 0x596268,
+    // 0x5962c8.
+    assert!(scene.fleet_build_for(0, 1, 3));
+    scene.make_new_ships(&data, &mut caches);
+    let k = scene
+        .ship_on_berth(site)
+        .expect("built on the barbarians' berth");
+    let berth = scene.berth_cell(scene.object_index(site).unwrap()).unwrap();
+    let t = TILE_SIZE as f32;
+    let o = &scene.objects[k];
+    assert_eq!(((o.x / t) as i32, (o.y / t) as i32), berth);
+    assert_eq!(o.owner, Some(owner));
+    assert_eq!(scene.funds(owner), funds);
+    let id = o.id;
+    // The berth taken: no order.
+    assert!(!scene.fleet_build_for(0, 1, 3));
+    let mut ticks = 0;
+    while scene.being_built(id) {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        ticks += 1;
+        assert!(ticks < 400);
+    }
+    assert_eq!(ticks, 1 + 38 * 8);
+    let o = &scene.objects[scene.object_index(id).unwrap()];
+    let mut weapons = o.combat.as_ref().unwrap().weapons.clone();
+    weapons.sort();
+    // Its marines (items 0-2) go aboard as crew.
+    let list = combat::DEFAULT_WEAPONS[3];
+    let mut want: Vec<u8> = list.iter().copied().filter(|&w| w >= 3).collect();
+    want.sort();
+    assert_eq!(weapons, want);
+    let s = o.ship.as_ref().unwrap();
+    assert_eq!(
+        s.crew.count(),
+        list.iter().filter(|&&w| w < 3).count() as u32
+    );
+    assert_eq!(s.armour, combat::DEFAULT_ARMOUR[3].0);
+    assert_eq!(s.ram, combat::DEFAULT_RAM[3].0);
+}

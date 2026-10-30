@@ -885,7 +885,6 @@ impl Scene {
                 self.sounds
                     .push((if own { "deadsh" } else { "deny" }, tx, ty));
             }
-            self.productions.retain(|p| p.site != target);
             self.ship_orders.retain(|p| p.site != target);
             self.constructions.retain(|c| c.site != target);
             match self.objects[ti].ship.as_ref().map(|sh| sh.kind) {

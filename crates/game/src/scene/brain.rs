@@ -669,14 +669,25 @@ impl Scene {
     /// A ship launched at `site`: if the brain ordered it, it joins the
     /// fleet that asked.
     pub(super) fn ship_launched(&mut self, site: u32, kind: u8, id: u32) {
-        let Some(brain) = self.brain.as_mut() else {
+        let Some(brain) = self.brain.as_ref() else {
             return;
         };
-        if let Some(k) = brain
+        // Ordered at the builder, or at a town that handed it to this yard.
+        let by = |b: &(u32, u8, usize)| {
+            b.1 == kind
+                && (b.0 == site
+                    || self
+                        .town_yards(b.0)
+                        .into_iter()
+                        .any(|y| self.objects[y].id == site))
+        };
+        let k = brain
             .building
             .iter()
             .position(|b| b.0 == site && b.1 == kind)
-        {
+            .or_else(|| brain.building.iter().position(by));
+        let brain = self.brain.as_mut().unwrap();
+        if let Some(k) = k {
             let (_, _, fleet) = brain.building.remove(k);
             brain.fleets[fleet].ships.push(id);
         }
@@ -1135,7 +1146,7 @@ impl Scene {
         let Some(&site) = brain.fleets[k]
             .ships
             .iter()
-            .find(|&&id| !self.yard_busy(id))
+            .find(|&&id| self.builder_ready(id))
         else {
             return false;
         };
@@ -1153,7 +1164,9 @@ impl Scene {
             return false;
         };
         let (fleet, kind) = brain.requests[r];
-        self.builder_order(site, owner, kind, free);
+        if !self.builder_order(site, kind, free) {
+            return false;
+        }
         let brain = self.brain.as_mut().unwrap();
         brain.requests.remove(r);
         brain.building.push((site, kind, fleet));
@@ -1169,7 +1182,7 @@ impl Scene {
         let Some(&site) = brain.fleets[k]
             .ships
             .iter()
-            .find(|&&id| !self.yard_busy(id))
+            .find(|&&id| self.builder_ready(id))
         else {
             return false;
         };
@@ -1186,7 +1199,9 @@ impl Scene {
                 return false;
             }
         }
-        self.builder_order(site, owner, kind, free);
+        if !self.builder_order(site, kind, free) {
+            return false;
+        }
         self.brain
             .as_mut()
             .unwrap()
@@ -1196,27 +1211,63 @@ impl Scene {
     }
 
     /// A brain's builder `site` orders a ship of type `kind`: a yard as
-    /// any order (0x416a40, paid), a builder for nothing (`free`, the
-    /// barbarian structures) by the port's queue (not decoded: how a
-    /// barbarian structure builds).
-    fn builder_order(&mut self, site: u32, owner: (u32, u32), kind: u8, free: bool) {
-        if self.object_index(site).is_some_and(|i| self.is_yard(i)) {
-            let _ = self.yard_order(site, kind, false, !free, None);
-            return;
+    /// any order (0x416a40, paid), a barbarian structure (`free`) by its
+    /// order 0x20 (`barbarian_order`), which the land fleet's ship part
+    /// sends with the default-arming byte 0xd set (0x428f20 at 0x42957a:
+    /// bytes 0xd and 0xe 1, 0xf 0xff with the part's field 8); a town by
+    /// its command 0x20, which it hands to the first of its yards
+    /// answering 0 to the ship (0x441ba0, 0x4e82f0), as the computer
+    /// players' ship part. False if nothing was ordered.
+    fn builder_order(&mut self, site: u32, kind: u8, free: bool) -> bool {
+        let Some(i) = self.object_index(site) else {
+            return false;
+        };
+        match self.objects[i].class {
+            _ if self.is_yard(i) => self.yard_order(site, kind, false, !free, None).is_ok(),
+            openconquest_formats::ObjectClass::Barbarian(_) => {
+                self.barbarian_order(site, kind, true);
+                true
+            }
+            openconquest_formats::ObjectClass::Building(
+                crate::economy::SETTLEMENT | crate::economy::TOWN,
+            ) => {
+                let yard = self
+                    .town_yards(site)
+                    .into_iter()
+                    .find(|&y| self.yard_answer(y, Some(kind)) == 0)
+                    .map(|y| self.objects[y].id);
+                yard.is_some_and(|y| self.start_ship_with(y, kind, !free).is_ok())
+            }
+            _ => false,
         }
-        if !free {
-            let (amber, fish) = crate::economy::ship_cost(kind);
-            self.earn(owner, -(amber as i64), -(fish as i64));
+    }
+
+    /// Whether builder `site` may take a ship order now: a yard not busy;
+    /// a barbarian structure as the land fleet's ship part asks it (vtable
+    /// +0x9c with 1, 0x40e7b0): class 0x40 standing (`+0xa4` 1, so not
+    /// asleep) with its berth free (0x4e82f0 with code 0xff), the others
+    /// never (-5); a town idle with one of its yards' berths free (0x43da20
+    /// with param_8 1; the ship's own draught test is `builder_order`'s).
+    fn builder_ready(&self, site: u32) -> bool {
+        let Some(i) = self.object_index(site) else {
+            return false;
+        };
+        match self.objects[i].class {
+            _ if self.is_yard(i) => !self.yard_busy(site),
+            openconquest_formats::ObjectClass::Barbarian(c) => {
+                c == 0x40 && self.objects[i].asleep.is_none() && self.yard_answer(i, None) == 0
+            }
+            openconquest_formats::ObjectClass::Building(
+                crate::economy::SETTLEMENT | crate::economy::TOWN,
+            ) => {
+                self.construction_at(site).is_none()
+                    && self
+                        .town_yards(site)
+                        .into_iter()
+                        .any(|y| self.yard_answer(y, None) == 0)
+            }
+            _ => false,
         }
-        self.productions.push(super::Production {
-            argo: false,
-            site,
-            ship: kind,
-            elapsed: 0.0,
-            total: crate::economy::SHIP_BUILD_SECONDS,
-            arming: None,
-            paid: (0, 0),
-        });
     }
 
     /// Whether `site` is a barbarian structure (class 0x3f-0x41).

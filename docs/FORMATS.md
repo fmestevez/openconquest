@@ -2797,7 +2797,21 @@ the record as a yard's, with byte 0xd every item of 0x5964d8[kind] at 100
 and its armour and ram, no stock or fallbacks; message 0x1488 puts it on
 the berth (removed at once, nothing paid, if 0x499a40 fails) and 0x4b3ab0
 builds it as a yard's. Its "busy" answer (vt+0x9c 0x40e7b0): class 0x40
-`0x4e82f0(this, 1, 0xff)`, the others -5.
+`0x4e82f0(this, 1, 0xff)`, the others -5. Its orders come from the land
+fleet's ship part (0x428f20, the brains' builders): over the fleet's
+buildings in order, a stronghold (type 0x1a6b) answering 0 to vt+0x9c(1)
+(so class 0x40, standing, berth free) is sent order 0x20 {+8 the part's
+field 7, +0xc the ship's code, +0xd 1, +0xe 1, +0xf 0xff with field 8}
+(0x42957a: the default-arming byte always set); a town (0x1491) after
+0x43da20's tests is sent command 0x20, which it hands to the first of its
+yards answering 0 (0x441ba0); yards themselves are passed over. The port
+(brain.rs `builder_ready` / `builder_order`): the barbarian structure by
+`yard::barbarian_order` with the arming, a town through its yards (the
+computer players' ship part's way); the old 25-tick build beside the
+builder is gone. (Not ported: a yard in a builder's list is still given
+the order itself, which 0x428f20 passes over; whether every brain build
+comes through 0x428f20 rather than another sender of 0x20 was not
+traced.)
 
 The port keeps a queued order's byte 0xd and arms it when built, takes
 the stock before the funds test, buys the armour and ram fallbacks
