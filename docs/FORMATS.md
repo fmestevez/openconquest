@@ -5948,10 +5948,73 @@ no time limit (p10 0). Not ported: 0x4c42f0, the behaviour command sent
 with each join and by the pass to a ship whose `+0x689 / +0x68d` differ
 from the group's `+0x19 / +0x1d` when group `+0x14` is set (the port's
 fleets have no behaviour bytes); the patrol's own tolerance (0x47a900's
-p7: 2, 1, 2, ...), whose arrival is the port's own test; miss004's and
-miss005's members that move only on a ship count (0x451890, 0x451a60,
-0x451c60, 0x4528a0, 0x4551e0 case 5, else their case 6) and miss005's
-raiders 0x455620 (cases 5 and 0x32), still simplified.
+p7: 2, 1, 2, ...), whose arrival is the port's own test.
+
+**miss004's and miss005's members that move on a ship count.** Each
+counts its ships by type (0x479dc0: query 7, 0x4c4e40, an int per type
+`class - 200`) and tests the count in its state 5 anew each turn: equal,
+it sails home with p3 = p4 = 7 (the watch); not, its state 6 sails there
+with p3 = p4 = 0, back to 0 and round again, never waiting.
+- miss004 (0, 2) 0x451890, (0, 3) 0x451a60: exactly 2 royal ships
+  (whatever their asks, 0x5aef38 / 0x5aef44 (2, 3, 3) / (2, 2, 3)); to
+  (5, 3) / (7, 10), tol 2, the zones 0x5af068 / 0x5af108; 7 watches 1500
+  ticks with them (0x47a3b0 given events), 0x14 attacks 1500. (0, 3)'s
+  attack takes its own zones' area (0x5af118) at the southern raiders'
+  index (`*(+0x44) +0x1b8`, member (2, 2)'s `+0x50`: a slip), and once
+  until its state 0 (`+0x17c`) sends (2, 2) to 0x5a.
+- miss004 (0, 4) 0x451c60: royal + boarders == 3, to (8, 9) tol 3,
+  zones 0x5af1f0. State 0 draws `+0x118` = rand % 3 if 0, then `+0x114`
+  = (rand % 3 + (7, 5, 3)) x 1500 if 0 (2250 at message 2: the first wait
+  is not drawn), zeroes `+0x184`, `+0x188`. 7 watches `+0x114` (read at
+  the step's start, member `+0x14`) then 0x28 patrols 0x5af400 (8, 9,
+  500), (24, 18, 750), (8, 9, 750) 4500 ticks, p3 = p4 = 0x50, with the
+  zones 0x5af260 (`+0x118` 0: home 0x14, the rest 0x32) or 0x5af318
+  (1-2: 0x3c). 0x32 / 0x3c draw once (`+0x184` / `+0x188` = rand % 6 + 1)
+  and on a 1 or a 4 send message 0x3ee to the yard's member (0, 5) for
+  each ship (0x479c20, unpaid): the weapon shield (0xf) or the phantom
+  (0xc); then attack the zone 4500 ticks, p3 = p4 = 0x50, events 0x5af458
+  (home zones; fewer than 3, back to 0). 0x50 zeroes `+0x118`, `+0x114`.
+  0x5a attacks 6000 ticks the area 0x5af1b8 at (2, 2)'s `+0x50`: index 1
+  (its zone 0x5af470 [1]) is past 0x5af1a8's one record, zeros.
+- miss004 (2, 2) 0x4528a0: royal + boarders == its asks summed (0x5aef74
+  + 0x5aef80), to (7, 24), zone 0x5af1a8. State 0 draws `+0x120` (never
+  read) if 0; 7 watches the northern raiders' `+0x114`; 0x14 sends (0, 4)
+  to 0x5a once (`+0x180`); 0x28 patrols 0x5af510 with the zones 0x5af470
+  (home 0x14, east 0x1e); 0x1e attacks 4500 (p3 = p4 = 0x50, fewer than 3
+  first); 0x50 zeroes `+0x120`; 0x5a attacks 6000 the area 0x5af118 at
+  (0, 3)'s `+0x50`.
+- miss005 (0, 1) 0x4551e0: royal + boarders + rammers == royal + bomber
+  asks (0x5af8f4 + 0x5af900; its bombers are not counted), to (7, 29) tol
+  1, zone 0x5afa60; 7 watches 7500; 0x14 attacks 1500 without events;
+  0x32 (sent by the raiders) attacks 4500, no events, the area 0x5afa30 at
+  `+0x158`.
+- miss005 (0, 3) 0x455620: before its switch every turn `+0x150` =
+  0x4795f0(the human, 0x5afa30, 3, `+0x158`): the player's objects in list
+  order (0x4a8620), the first fort (0x34-0x36) whose cell lies in (11, 18,
+  6, 6), (13, 25, 9, 7) or (9, 32, 8, 4) (vt+0x58 0x423660: a fort is one
+  cell), `+0x158` its area (kept when none). State 0: `+0x15c` = -1,
+  `+0x114` = `+0x110` = `+0x154` = 0, the wait 0x5afbd8 = ((7, 6, 4) +
+  rand & 3) x 1500. 5: `+0x154` = `+0x150`; royal + rammers > 2 -> 6, else
+  to (1, 23) tol 2, p3 = p4 = 0 (zones 0x5afad0; at least 3 after the
+  wait -> 0x28). 6 patrols 0x5afb60 (p3 = p4 = 5; also attacked after 375
+  -> 0x1e). 0x14 attacks the zone 1500 when it is the home zone (index 0)
+  or royal + rammers == 3, else back to 0, tested each turn. 0x1e attacks
+  `+0x40` 375. 0x28: `+0x110` 0 -> rand & 3, and with `+0x154` set sends
+  (0, 1) to 0x32 (each turn the draw stays 0); with `+0x154` and `+0x110`
+  0 or 1 it attacks the fort's area 6000 (zones; fewer than 2 -> 0), else
+  `+0x114` = rand & 1 and 0x32. 0x32 sails to (11, 30) (0) or (15, 24),
+  750 ticks, then 0x3c raids a settlement or town of the player's in (0,
+  0, 35, 35) (0x421490, 0x421740, grown by 2), else (27, 28, 9, 8), 6000.
+- Neither main draws at the start (the port drew the raids' waits there).
+
+The port: `Op::Branch` for each count, `Op::WatchFor` (the latched
+wait), `Target::Of` (an area table at another member's index), the
+fields in `Brain::fields`, the cross-calls and draws in `miss004::turn`.
+Not ported: a member has one request slot (`+0x128` + 4m, filled by the
+first short type only); the port's `wants` asks for each short type.
+Not decoded: 0x4a8620 adds an object other than a ship or building only
+after a first match, leaving a hole in the list 0x4795f0 reads; what
+else a player's list holds is not read.
 
 Campaign state carries over between missions: at the start (message
 0x8d1) a brain restores the human's technology bits (+0x45, 12 bytes),

@@ -12498,3 +12498,223 @@ fn zone_hears_wrecks_leavers_and_new_ports() {
     scene.run_gather_zones();
     assert!(scene.gather_zones[0].escorts.is_empty());
 }
+
+/// miss004's western post (0x451890) waits at (5, 3) only with exactly
+/// two royal ships: with two it goes 5, 7 (the watch), with three 5, 6
+/// (the move again, back to 0 on arriving) and never waits (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn miss004_posts_wait_on_their_ship_count() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for n in [2usize, 3] {
+        let mut scene = Scene::load(&data, &mut caches, "miss004").unwrap();
+        let near: Vec<(i32, i32)> = (-2..=2)
+            .flat_map(|dy| (-2..=2).map(move |dx| (5 + dx, 3 + dy)))
+            .filter(|&c| scene.sea_cell(c, false) && scene.slot_ship(c).is_none())
+            .take(n)
+            .collect();
+        for &(x, y) in &near {
+            let id = scene
+                .spawn_ship((3, 3), 2, x, y, &data, &mut caches)
+                .unwrap();
+            scene.brain.as_mut().unwrap().fleets[2].ships.push(id);
+        }
+        let mut states = Vec::new();
+        for _ in 0..1500 {
+            scene.update(0.04, &data, &mut caches);
+            let f = &scene.brain.as_ref().unwrap().fleets[2];
+            if states.last() != Some(&f.state) {
+                states.push(f.state);
+            }
+        }
+        let want: &[u32] = if n == 2 {
+            &[0, 5, 7]
+        } else {
+            &[0, 5, 6, 0, 5, 6]
+        };
+        assert_eq!(&states[..want.len()], want, "{n}: {states:?}");
+        assert!(!states.contains(&if n == 2 { 6 } else { 7 }), "{states:?}");
+    }
+}
+
+/// miss004's raiders as the original's 0x451c60 and 0x4528a0: the brain
+/// draws nothing at the start; the northern raiders' first wait is 2250
+/// (`+0x114`) and their first turn draws only the sweep (rand % 3); the
+/// eastern post seeing the player calls the southern raiders to 0x5a once,
+/// which attack the area of the post's zone, and they at home call the
+/// northern raiders to 0x5a, which attack the area of their zone (index
+/// 1: past the end of 0x5af1a8, zeros); the northern raiders' attacks
+/// draw rand % 6 + 1 once (needs `OPENCONQUEST_DATA`).
+#[test]
+fn miss004_raiders_call_each_other_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss004").unwrap();
+    const EAST: usize = 3;
+    const NORTH: usize = 4;
+    const SOUTH: usize = 13;
+    let mut rng = scene.brain.as_ref().unwrap().rng.clone();
+    assert_eq!(scene.brain.as_ref().unwrap().fields[0], 2250);
+    // The northern raiders run at tick 20, the first member to draw.
+    for _ in 0..20 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!(b.fleets[NORTH].state, 5);
+    assert_eq!((b.fields[0], b.fields[1]), (2250, rng.next() % 3));
+    // Then the southern raiders, at the same tick, their own wait.
+    assert_eq!(b.fields[2], (rng.next() % 3 + 5) * 1500);
+    assert_eq!(b.rng.0, rng.0, "no other draw");
+    // The eastern post at war in its second zone; the southern raiders
+    // last saw their second zone.
+    while scene.brain.as_ref().unwrap().tick % 50 != 0 {
+        scene.run_brain();
+    }
+    {
+        let b = scene.brain.as_mut().unwrap();
+        b.fleets[EAST].state = 20;
+        b.fleets[EAST].started = false;
+        b.fleets[EAST].area = Some((0, 0, 12, 7));
+        b.fleets[SOUTH].area = Some((13, 23, 13, 12));
+    }
+    // Tick 15: the post attacks (5, 7, 7, 8), its zones at the southern
+    // raiders' index 1, and calls them in.
+    for _ in 0..15 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!(b.fleets[EAST].last_area, (0, 0, 12, 7));
+    assert_eq!((b.fleets[SOUTH].state, b.fields[3]), (90, 1));
+    // Tick 20: the southern raiders attack the post's zone (index 1).
+    for _ in 0..5 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!(b.fleets[SOUTH].last_area, (0, 0, 12, 7));
+    // At home they call the northern raiders, which attack at the
+    // southern raiders' index (1, zeros); in their sweep's attack they
+    // draw once.
+    {
+        let b = scene.brain.as_mut().unwrap();
+        b.fleets[SOUTH].state = 20;
+        b.fleets[SOUTH].started = false;
+    }
+    for _ in 0..50 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!((b.fleets[NORTH].state, b.fields[4]), (90, 1));
+    for _ in 0..50 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!(b.fleets[NORTH].last_area, (0, 0, 0, 0));
+    let mut rng = b.rng.clone();
+    {
+        let b = scene.brain.as_mut().unwrap();
+        b.fleets[NORTH].state = 50;
+        b.fleets[NORTH].started = false;
+        b.fleets[NORTH].area = Some((14, 0, 5, 15));
+    }
+    for _ in 0..50 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!(b.fields[5], rng.next() % 6 + 1);
+    assert_eq!(b.fleets[NORTH].last_area, (14, 0, 5, 15));
+}
+
+/// miss005's barbarian raiders as the original's 0x455620: their wait
+/// drawn in state 0 ((7, 6, 4) + rand & 3, x 1500); home at (1, 23) with
+/// two ships or fewer; a fort of the player's in (13, 25, 9, 7) found
+/// before their turn; ready to raid with it found when they set out and
+/// the draw 0 or 1, they attack its area and send the guard there (whose
+/// attack takes it too), else they draw their way and sail (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn miss005_barbarian_raiders_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    const GUARD: usize = 1;
+    const RAIDERS: usize = 3;
+    let mut rng = scene.brain.as_ref().unwrap().rng.clone();
+    // (0, 3) runs at tick 15, the first member to draw.
+    for _ in 0..15 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!(b.fleets[RAIDERS].state, 5);
+    assert_eq!(b.fleets[RAIDERS].vars[0], (6 + (rng.next() & 3)) * 1500);
+    assert_eq!(b.rng.0, rng.0);
+    // No ships: home.
+    for _ in 0..50 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!(b.fleets[RAIDERS].state, 5);
+    let home = b.fleets[RAIDERS].move_order.as_ref().map(|m| m.to);
+    assert_eq!(home, Some((1, 23)));
+    // A fort of the player's at (14, 27).
+    let mut fort = scene
+        .site_preview(0x35, 14, 27, 0, &data, &mut caches)
+        .unwrap();
+    fort.id = scene.objects.iter().map(|o| o.id).max().unwrap() + 1;
+    assert!(scene.is_own(&fort) && fort.combat.is_some());
+    assert_eq!(fort.cell, Some((14, 27)));
+    scene.objects.push(fort);
+    for _ in 0..50 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!((b.fields[2], b.fields[4]), (1, 1));
+    // Ready to raid, the fort found as they set out.
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..40 {
+        {
+            let b = scene.brain.as_mut().unwrap();
+            b.fleets[RAIDERS].state = 40;
+            b.fleets[RAIDERS].started = false;
+            b.fleets[GUARD].state = 0;
+            b.fields[0] = 0;
+            b.fields[3] = 1;
+        }
+        for _ in 0..49 {
+            scene.run_brain();
+        }
+        let mut rng = scene.brain.as_ref().unwrap().rng.clone();
+        scene.run_brain();
+        let b = scene.brain.as_ref().unwrap();
+        let draw = rng.next() & 3;
+        assert_eq!(b.fields[0], draw);
+        if draw <= 1 {
+            assert_eq!(b.fleets[RAIDERS].state, 40);
+            assert_eq!(b.fleets[RAIDERS].last_area, (13, 25, 9, 7));
+            assert_eq!(b.fleets[GUARD].state, 50);
+            // The guard's turn, at 5.
+            for _ in 0..40 {
+                scene.run_brain();
+            }
+            let b = scene.brain.as_ref().unwrap();
+            assert_eq!(b.fleets[GUARD].last_area, (13, 25, 9, 7));
+            while scene.brain.as_ref().unwrap().tick % 50 != 15 {
+                scene.run_brain();
+            }
+        } else {
+            let way = rng.next() & 1;
+            assert_eq!((b.fleets[RAIDERS].state, b.fields[1]), (50, way));
+        }
+        seen.insert(draw <= 1);
+    }
+    assert_eq!(seen.len(), 2, "both ways taken");
+}

@@ -41,7 +41,13 @@ are in `story.rs`.
   `Patrol`, `Attack`, `Build`, or `Custom(fn(&mut Scene, usize) -> u32)` for
   the member-specific code between primitives (returns the next state);
   `Branch { test, yes, no }` for a member's own test before a primitive
-  in the same state (made anew each turn).
+  in the same state (made anew each turn; a ship count by 0x479dc0 is
+  `fleet_types`); `WatchFor` for a wait whose length is a brain field
+  read when the step begins (member `+0x14`).
+- `Target::Of(fn)` for an attack whose area the member's own code reads
+  at its start (another member's zone index into a table, a site it
+  picks). Brain fields shared by members (`+0x114`, ...) live in
+  `Brain::fields`, each mission naming its indices.
 - `Event` (`Zone`, `Attacked`, `Size`, `Cell`) are the primitives' event
   lists: conditions that jump to a state. `Zone` remembers the zone
   (`Target::Seen`); `Attacked` takes the fleet's pending report of a blow

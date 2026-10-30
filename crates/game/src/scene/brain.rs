@@ -76,6 +76,9 @@ pub enum Target {
     LastArea,
     /// Around one of the human player's buildings, picked at random.
     HumanBuilding,
+    /// The area the member's own code reads when the attack starts (an
+    /// area table at another member's zone index, a site it picks).
+    Of(fn(&mut Scene, usize) -> Cells),
 }
 
 /// One step of a fleet's program.
@@ -92,6 +95,14 @@ pub enum Op {
     Watch {
         next: u32,
         ticks: u32,
+        events: &'static [Event],
+    },
+    /// Wait (0x47a3b0) as long as a brain field holds when the step
+    /// begins (kept, member `+0x14`; 0 is for ever), unless an event fires
+    /// first.
+    WatchFor {
+        next: u32,
+        ticks: fn(&Scene) -> u32,
         events: &'static [Event],
     },
     /// Sail to a cell (0x47a450): `ok` on arriving, `failed` if stopped
@@ -208,6 +219,10 @@ pub struct Fleet {
     /// when the fleet is made (0x49b990).
     #[serde(default)]
     pub elapsed: u32,
+    /// Member `+0x14`: the length of a `WatchFor` step, read when the step
+    /// began (0x47a3b0).
+    #[serde(default)]
+    pub span: u32,
 }
 
 /// A fleet's move order (its block 0x4cc500 `{100, 1, now, x, y, ...}`).
@@ -289,6 +304,10 @@ pub struct Brain {
     /// saved before miss002-miss005's repair members were added.
     #[serde(default)]
     pub layout: u32,
+    /// The mission's own brain fields its members share (each mission
+    /// names its own: miss004's `+0x114`..., miss005's `+0x110`...).
+    #[serde(default)]
+    pub fields: [u32; 8],
 }
 
 /// The layout of a brain's fleets: 1 since miss002-miss005 have their
@@ -371,6 +390,7 @@ impl Fleet {
             joined: Vec::new(),
             move_order: None,
             elapsed: 0,
+            span: 0,
         }
     }
 }
@@ -498,7 +518,7 @@ fn mission(name: &str) -> Option<Mission> {
         "miss004" => Some(Mission {
             fleets: miss004::FLEETS,
             start: miss004::start,
-            turn: None,
+            turn: Some(miss004::turn),
             silent: &[(0, 7), (2, 5)],
             gate: None,
             before: None,
@@ -671,6 +691,7 @@ impl Scene {
             rng: crate::combat::Rng(brain_seed(&self.mission)),
             fleet_rng: crate::combat::Rng(0),
             layout: LAYOUT,
+            fields: [0; 8],
         };
         for def in m.fleets {
             // The ships (or buildings) standing in the given cells (0x479200).
@@ -995,6 +1016,25 @@ impl Scene {
                     }
                 }
             }
+            Op::WatchFor {
+                next,
+                ticks,
+                events,
+            } => {
+                if !started {
+                    let span = ticks(self);
+                    self.brain.as_mut().unwrap().fleets[k].span = span;
+                } else {
+                    // The time first, then the events, the later winning.
+                    let span = self.brain.as_ref().unwrap().fleets[k].span;
+                    if span != 0 && elapsed >= span {
+                        self.set_state(k, next);
+                    }
+                    if let Some(s) = self.event_fired(k, events, elapsed) {
+                        self.set_state(k, s);
+                    }
+                }
+            }
             Op::Move {
                 ok,
                 failed,
@@ -1139,6 +1179,7 @@ impl Scene {
                         Target::Seen => seen,
                         Target::Attacker | Target::LastArea => Some(last),
                         Target::HumanBuilding => self.random_human_building(),
+                        Target::Of(pick) => Some(pick(self, k)),
                     };
                     match area {
                         // Order 0x70 (0x479a40) writes the area into `+0x40`.
@@ -4301,16 +4342,17 @@ mod miss004 {
         scene.add_deposit(0x190, (30, 24, 1, 1), data, caches);
         scene.add_deposit(0x190, (33, 26, 1, 1), data, caches);
         scene.add_deposit(0x191, (42, 16, 2, 2), data, caches);
-        // Raid waits (0x5aef68, 0x5aef8c), the barbarian yard's rest
-        // (0x5aef98), and when raiders fall back (fewer than three).
-        const RAID_WAIT: [u32; 3] = [7, 5, 3];
+        // The barbarian yard's rest (0x5aef98), when raiders fall back
+        // (fewer than three) and the northern raiders' first wait
+        // (`+0x114` = 0x8ca at message 2; drawn anew only once a sweep is
+        // over, 0x451c60 state 0x50).
         const YARD_REST: [u32; 3] = [1500, 1000, 750];
-        let (a, b) = (scene.brain_draw() % 3, scene.brain_draw() % 3);
         if let Some(br) = scene.brain.as_mut() {
-            br.fleets[4].vars = [(a + RAID_WAIT[difficulty()]) * 1500, 2, 0, 0];
+            br.fields[WAIT] = 2250;
+            br.fleets[NORTH_RAIDERS].vars[1] = 2;
             br.fleets[7].vars[0] = YARD_REST[difficulty()];
             br.fleets[10].vars = [7500, 3, 0, 0];
-            br.fleets[13].vars = [(b + RAID_WAIT[difficulty()]) * 1500, 2, 0, 0];
+            br.fleets[SOUTH_RAIDERS].vars[1] = 2;
         }
     }
 
@@ -4409,8 +4451,101 @@ mod miss004 {
         }
     }
 
-    /// Two posts by Pylos (0x451890, 0x451a60).
+    /// The brain's own fields the members share (`Brain::fields`): the
+    /// northern raiders' wait (`+0x114`, 2250 at the start, which the
+    /// southern raiders wait too), their sweep (`+0x118`, rand % 3: 0 the
+    /// zones of 0x5af260, else those of 0x5af318), the waits the southern
+    /// raiders draw and never read (`+0x120`), whether the eastern post
+    /// and the southern raiders have called the other raiders in
+    /// (`+0x17c`, `+0x180`), and the northern raiders' draws for a spell
+    /// in their two attacks (`+0x184`, `+0x188`).
+    const WAIT: usize = 0;
+    const SWEEP: usize = 1;
+    const SOUTH_WAIT: usize = 2;
+    const CALLED: usize = 3;
+    const SOUTH_CALLED: usize = 4;
+    const SPELL_A: usize = 5;
+    const SPELL_B: usize = 6;
+
+    /// Fleet indices of the members that call on each other.
+    const EAST_POST: usize = 3;
+    const NORTH_RAIDERS: usize = 4;
+    const SOUTH_RAIDERS: usize = 13;
+
+    fn field(scene: &Scene, f: usize) -> u32 {
+        scene.brain.as_ref().unwrap().fields[f]
+    }
+
+    fn set_field(scene: &mut Scene, f: usize, v: u32) {
+        scene.brain.as_mut().unwrap().fields[f] = v;
+    }
+
+    /// How many ships of `types` fleet `k` has (0x479dc0).
+    fn count(scene: &Scene, k: usize, types: &[u8]) -> usize {
+        let n = scene.fleet_types(k);
+        types.iter().map(|&t| n[t as usize]).sum()
+    }
+
+    /// The index of the zone a fleet's events last saw in their list
+    /// (member `+0x50`, written by 0x47a010; 0 until the first).
+    fn zone_index(scene: &Scene, k: usize, zones: &[Cells]) -> usize {
+        let seen = scene.brain.as_ref().unwrap().fleets[k].area;
+        seen.and_then(|a| zones.iter().position(|&z| z == a))
+            .unwrap_or(0)
+    }
+
+    /// The eastern post's zones (0x5af108) and the southern raiders' last
+    /// ones (0x5af470): the area tables the members read at another's
+    /// index (0x5af118 at the southern raiders', 0x5af1b8 at theirs).
+    const EAST_ZONES: [Cells; 3] = [(5, 7, 7, 8), (0, 0, 12, 7), (0, 11, 5, 8)];
+    const SOUTH_ZONES: [Cells; 2] = [(0, 22, 11, 14), (13, 23, 13, 12)];
+    /// 0x5af1a8's one record's rect, then the one after its end (zeros):
+    /// what 0x5af1b8 holds at index 0 and 1.
+    const SOUTH_HOME: [Cells; 2] = [(0, 22, 11, 14), (0, 0, 0, 0)];
+
+    /// Each member's own work at the start of its turn: the eastern post
+    /// (state 0x14) and the southern raiders (0x14) call the other raiders
+    /// to state 0x5a, once until their state 0; the northern raiders, in
+    /// their attacks 0x32 and 0x3c, draw once (rand % 6 + 1) and on a 1 or
+    /// a 4 have the yard's member (0, 5) cast the weapon shield (0xf) or
+    /// the phantom (0xc) on each of their ships (0x479c20, message 0x3ee,
+    /// unpaid; on hard 0x451c60 tests 1-3 and 4-5 instead, which a draw
+    /// of 1 or 4 alone reaches alike).
+    pub fn turn(scene: &mut Scene, k: usize) {
+        let state = scene.brain.as_ref().unwrap().fleets[k].state;
+        match (k, state) {
+            (EAST_POST, 20) if field(scene, CALLED) == 0 => {
+                scene.set_state(SOUTH_RAIDERS, 90);
+                set_field(scene, CALLED, 1);
+            }
+            (SOUTH_RAIDERS, 20) if field(scene, SOUTH_CALLED) == 0 => {
+                scene.set_state(NORTH_RAIDERS, 90);
+                set_field(scene, SOUTH_CALLED, 1);
+            }
+            (NORTH_RAIDERS, 50 | 60) => {
+                let f = if state == 50 { SPELL_A } else { SPELL_B };
+                if field(scene, f) != 0 {
+                    return;
+                }
+                let r = scene.brain_draw() % 6 + 1;
+                set_field(scene, f, r);
+                let spell = match r {
+                    1 => crate::magic::Spell::ProtectWeapons,
+                    4 => crate::magic::Spell::Phantom,
+                    _ => return,
+                };
+                let ships = scene.fleet_ships(k);
+                scene.brain_cast_fleet((3, 3), ships, spell, false);
+            }
+            _ => {}
+        }
+    }
+
+    /// The western post (0x451890): to (5, 3); with exactly two royal
+    /// ships (whatever it asks for) it waits there 1500 ticks, else it
+    /// goes round again at once.
     fn north_post_a(state: u32) -> Op {
+        // Events 0x5af0f8: the zones 0x5af068.
         const W: &[Event] = &[
             Event::Zone {
                 state: 20,
@@ -4427,70 +4562,116 @@ mod miss004 {
         ];
         match state {
             0 => Op::Behave { next: 5 },
-            5 => Op::Move {
+            5 => Op::Branch {
+                test: |scene, k| count(scene, k, &[ROYAL]) == 2,
+                yes: &Op::Move {
+                    tol: 2,
+                    ok: 7,
+                    failed: 7,
+                    to: (5, 3),
+                    ticks: 0,
+                    events: W,
+                },
+                no: &Op::Behave { next: 6 },
+            },
+            6 => Op::Move {
                 tol: 2,
-                ok: 7,
-                failed: 7,
+                ok: 0,
+                failed: 0,
                 to: (5, 3),
                 ticks: 0,
                 events: W,
             },
-            7 => Op::Wait {
+            7 => Op::Watch {
                 next: 0,
                 ticks: 1500,
+                events: W,
             },
-            _ => Op::Attack {
+            20 => Op::Attack {
                 next: 0,
                 failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: W,
             },
+            // The original's other states do nothing.
+            _ => Op::Custom(|scene, k| scene.brain.as_ref().unwrap().fleets[k].state),
         }
     }
 
+    /// The eastern post (0x451a60): as the western, at (7, 10); its attack
+    /// takes the area of its own zones at the southern raiders' index
+    /// (0x5af118 by `(2, 2) +0x50`, the original's slip), and calls those
+    /// raiders in (`turn`).
     fn north_post_b(state: u32) -> Op {
+        // Events 0x5af198: the zones 0x5af108.
         const W: &[Event] = &[
             Event::Zone {
                 state: 20,
-                area: (5, 7, 7, 8),
+                area: EAST_ZONES[0],
             },
             Event::Zone {
                 state: 20,
-                area: (0, 0, 12, 7),
+                area: EAST_ZONES[1],
             },
             Event::Zone {
                 state: 20,
-                area: (0, 11, 5, 8),
+                area: EAST_ZONES[2],
             },
         ];
         match state {
-            0 => Op::Behave { next: 5 },
-            5 => Op::Move {
+            0 => Op::Custom(|scene, _| {
+                set_field(scene, CALLED, 0);
+                5
+            }),
+            5 => Op::Branch {
+                test: |scene, k| count(scene, k, &[ROYAL]) == 2,
+                yes: &Op::Move {
+                    tol: 2,
+                    ok: 7,
+                    failed: 7,
+                    to: (7, 10),
+                    ticks: 0,
+                    events: W,
+                },
+                no: &Op::Behave { next: 6 },
+            },
+            6 => Op::Move {
                 tol: 2,
-                ok: 7,
-                failed: 7,
+                ok: 0,
+                failed: 0,
                 to: (7, 10),
                 ticks: 0,
                 events: W,
             },
-            7 => Op::Wait {
+            7 => Op::Watch {
                 next: 0,
-                ticks: 1500,
-            },
-            _ => Op::Attack {
-                next: 0,
-                failed: 0,
-                target: Target::Seen,
                 ticks: 1500,
                 events: W,
             },
+            20 => Op::Attack {
+                next: 0,
+                failed: 0,
+                target: Target::Of(|scene, _| {
+                    EAST_ZONES[zone_index(scene, SOUTH_RAIDERS, &SOUTH_ZONES)]
+                }),
+                ticks: 1500,
+                events: W,
+            },
+            _ => Op::Custom(|scene, k| scene.brain.as_ref().unwrap().fleets[k].state),
         }
     }
 
-    /// Waits off Pylos, then sweeps east and attacks what it finds there,
-    /// coming back when down to two ships (0x451c60).
+    /// The northern raiders (0x451c60): off Pylos at (8, 9); with three
+    /// royal ships and boarders together they wait there (`+0x114`), then
+    /// sweep east, through one of two zone lists (`+0x118`), and attack
+    /// what they find (casting first, `turn`), falling back below three
+    /// ships; called in by the southern raiders (0x5a), they attack the
+    /// area of those raiders' zone (0x5af1b8 by `(2, 2) +0x50`).
     fn north_raiders(state: u32) -> Op {
+        // Events 0x5af3d0 (zones 0x5af1f0), 0x5af3e0 (0x5af260), 0x5af3f0
+        // (0x5af318) and 0x5af458 (0x5af1f0 and the Size record 0x5af428:
+        // fewer than 3, back to 0).
         const HOME: &[Event] = &[
             Event::Zone {
                 state: 20,
@@ -4501,7 +4682,7 @@ mod miss004 {
                 area: (8, 7, 6, 8),
             },
         ];
-        const SWEEP: &[Event] = &[
+        const SWEEP_A: &[Event] = &[
             Event::Zone {
                 state: 20,
                 area: (0, 2, 9, 12),
@@ -4519,6 +4700,24 @@ mod miss004 {
                 area: (19, 13, 9, 9),
             },
         ];
+        const SWEEP_B: &[Event] = &[
+            Event::Zone {
+                state: 20,
+                area: (0, 2, 9, 12),
+            },
+            Event::Zone {
+                state: 60,
+                area: (14, 0, 5, 15),
+            },
+            Event::Zone {
+                state: 60,
+                area: (19, 13, 9, 9),
+            },
+            Event::Zone {
+                state: 60,
+                area: (19, 0, 7, 13),
+            },
+        ];
         const FIGHT: &[Event] = &[
             HOME[0],
             HOME[1],
@@ -4529,39 +4728,98 @@ mod miss004 {
                 n: 1,
             },
         ];
+        // The round 0x5af400.
         const ROUND: &[(i32, i32, u32)] = &[(8, 9, 500), (24, 18, 750), (8, 9, 750)];
+        const WAIT_BASE: [u32; 3] = [7, 5, 3];
         match state {
-            0 => Op::Behave { next: 5 },
-            5 => Op::Move {
+            0 => Op::Custom(|scene, _| {
+                if field(scene, SWEEP) == 0 {
+                    let r = scene.brain_draw() % 3;
+                    set_field(scene, SWEEP, r);
+                }
+                if field(scene, WAIT) == 0 {
+                    let r = scene.brain_draw() % 3;
+                    set_field(scene, WAIT, (r + WAIT_BASE[difficulty()]) * 1500);
+                }
+                set_field(scene, SPELL_A, 0);
+                set_field(scene, SPELL_B, 0);
+                5
+            }),
+            5 => Op::Branch {
+                test: |scene, k| count(scene, k, &[ROYAL, BOARDER]) == 3,
+                yes: &Op::Move {
+                    tol: 3,
+                    ok: 7,
+                    failed: 7,
+                    to: (8, 9),
+                    ticks: 0,
+                    events: HOME,
+                },
+                no: &Op::Behave { next: 6 },
+            },
+            6 => Op::Move {
                 tol: 3,
-                ok: 7,
-                failed: 7,
+                ok: 0,
+                failed: 0,
                 to: (8, 9),
                 ticks: 0,
                 events: HOME,
             },
-            7 => Op::WaitVar { next: 40, var: 0 },
-            40 => Op::Patrol {
-                timeout: 0,
-                failed: 0,
-                points: ROUND,
-                ticks: 4500,
-                events: SWEEP,
+            7 => Op::WatchFor {
+                next: 40,
+                ticks: |scene| field(scene, WAIT),
+                events: HOME,
             },
-            50 => Op::Attack {
-                next: 0,
-                failed: 0,
-                target: Target::Seen,
-                ticks: 4500,
-                events: FIGHT,
-            },
-            _ => Op::Attack {
+            20 => Op::Attack {
                 next: 0,
                 failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: HOME,
             },
+            40 => Op::Branch {
+                test: |scene, _| field(scene, SWEEP) == 0,
+                yes: &Op::Patrol {
+                    timeout: 80,
+                    failed: 80,
+                    points: ROUND,
+                    ticks: 4500,
+                    events: SWEEP_A,
+                },
+                no: &Op::Branch {
+                    test: |scene, _| (1..=2).contains(&field(scene, SWEEP)),
+                    yes: &Op::Patrol {
+                        timeout: 80,
+                        failed: 80,
+                        points: ROUND,
+                        ticks: 4500,
+                        events: SWEEP_B,
+                    },
+                    no: &Op::Custom(|scene, k| scene.brain.as_ref().unwrap().fleets[k].state),
+                },
+            },
+            50 | 60 => Op::Attack {
+                next: 80,
+                failed: 80,
+                target: Target::Seen,
+                ticks: 4500,
+                events: FIGHT,
+            },
+            80 => Op::Custom(|scene, _| {
+                set_field(scene, SWEEP, 0);
+                set_field(scene, WAIT, 0);
+                0
+            }),
+            90 => Op::Attack {
+                next: 0,
+                failed: 0,
+                target: Target::Of(|scene, _| {
+                    SOUTH_HOME[zone_index(scene, SOUTH_RAIDERS, &SOUTH_ZONES)]
+                }),
+                ticks: 6000,
+                events: HOME,
+            },
+            _ => Op::Custom(|scene, k| scene.brain.as_ref().unwrap().fleets[k].state),
         }
     }
 
@@ -4764,65 +5022,120 @@ mod miss004 {
         }
     }
 
-    /// Waits off the south-west, then sweeps south-east (0x4528a0).
+    /// The southern raiders (0x4528a0): off the south-west at (7, 24);
+    /// with as many royal ships and boarders together as they ask for
+    /// they wait there as long as the northern raiders' wait (`+0x114`,
+    /// the original's slip), then sweep south-east and attack what they
+    /// find, falling back below three ships; seeing the player at home
+    /// they call the northern raiders in (`turn`); called in by the
+    /// eastern post (0x5a) they attack the area of its zone (0x5af118 by
+    /// `(0, 3) +0x50`).
     fn south_raiders(state: u32) -> Op {
+        // Events 0x5af538 (the zone 0x5af1a8), 0x5af548 (0x5af470),
+        // 0x5af558 (the Size record 0x5af4e0, fewer than 3, then 0x5af470)
+        // and 0x5af570 (0x5af4e0, then 0x5af1a8).
         const HOME: &[Event] = &[Event::Zone {
             state: 20,
-            area: (0, 22, 11, 14),
+            area: SOUTH_ZONES[0],
         }];
         const SWEEP: &[Event] = &[
-            HOME[0],
+            Event::Zone {
+                state: 20,
+                area: SOUTH_ZONES[0],
+            },
             Event::Zone {
                 state: 30,
-                area: (13, 23, 13, 12),
+                area: SOUTH_ZONES[1],
             },
         ];
-        const FIGHT: &[Event] = &[
-            Event::Size {
-                state: 0,
-                after: None,
-                cmp: Cmp::AtMost,
-                n: 1,
-            },
-            HOME[0],
-            Event::Zone {
-                state: 30,
-                area: (13, 23, 13, 12),
-            },
-        ];
+        const FEWER: Event = Event::Size {
+            state: 0,
+            after: None,
+            cmp: Cmp::AtMost,
+            n: 1,
+        };
+        const FIGHT: &[Event] = &[FEWER, SWEEP[0], SWEEP[1]];
+        const CALLED_IN: &[Event] = &[FEWER, HOME[0]];
+        // The round 0x5af510.
         const ROUND: &[(i32, i32, u32)] = &[(17, 28, 500), (21, 24, 750), (7, 24, 750)];
+        // Its asks (0x5aef74 royal ships, 0x5aef80 boarders) and its own
+        // wait (0x5aef8c).
+        const ROYALS: [usize; 3] = [2, 2, 3];
+        const BOARDERS: [usize; 3] = [1, 2, 2];
+        const WAIT_BASE: [u32; 3] = [7, 5, 3];
         match state {
-            0 => Op::Behave { next: 5 },
-            5 => Op::Move {
+            0 => Op::Custom(|scene, _| {
+                if field(scene, SOUTH_WAIT) == 0 {
+                    let r = scene.brain_draw() % 3;
+                    set_field(scene, SOUTH_WAIT, (r + WAIT_BASE[difficulty()]) * 1500);
+                }
+                set_field(scene, SOUTH_CALLED, 0);
+                5
+            }),
+            5 => Op::Branch {
+                test: |scene, k| {
+                    let d = difficulty();
+                    count(scene, k, &[ROYAL, BOARDER]) == ROYALS[d] + BOARDERS[d]
+                },
+                yes: &Op::Move {
+                    tol: 2,
+                    ok: 7,
+                    failed: 7,
+                    to: (7, 24),
+                    ticks: 0,
+                    events: HOME,
+                },
+                no: &Op::Behave { next: 6 },
+            },
+            6 => Op::Move {
                 tol: 2,
-                ok: 7,
-                failed: 7,
+                ok: 0,
+                failed: 0,
                 to: (7, 24),
                 ticks: 0,
                 events: HOME,
             },
-            7 => Op::WaitVar { next: 40, var: 0 },
-            40 => Op::Patrol {
-                timeout: 0,
-                failed: 0,
-                points: ROUND,
-                ticks: 4500,
-                events: SWEEP,
+            7 => Op::WatchFor {
+                next: 40,
+                ticks: |scene| field(scene, WAIT),
+                events: HOME,
             },
-            30 => Op::Attack {
-                next: 0,
-                failed: 0,
-                target: Target::Seen,
-                ticks: 4500,
-                events: FIGHT,
-            },
-            _ => Op::Attack {
+            // 0x5af1b8 at its own index: the zone it saw.
+            20 => Op::Attack {
                 next: 0,
                 failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: HOME,
             },
+            30 => Op::Attack {
+                next: 80,
+                failed: 80,
+                target: Target::Seen,
+                ticks: 4500,
+                events: FIGHT,
+            },
+            40 => Op::Patrol {
+                timeout: 80,
+                failed: 80,
+                points: ROUND,
+                ticks: 4500,
+                events: SWEEP,
+            },
+            80 => Op::Custom(|scene, _| {
+                set_field(scene, SOUTH_WAIT, 0);
+                0
+            }),
+            90 => Op::Attack {
+                next: 0,
+                failed: 0,
+                target: Target::Of(|scene, _| {
+                    EAST_ZONES[zone_index(scene, EAST_POST, &EAST_ZONES)]
+                }),
+                ticks: 6000,
+                events: CALLED_IN,
+            },
+            _ => Op::Custom(|scene, k| scene.brain.as_ref().unwrap().fleets[k].state),
         }
     }
 }
@@ -4935,18 +5248,17 @@ mod miss005 {
         scene.add_deposit(0x190, (13, 34, 1, 1), data, caches);
         scene.add_deposit(0x190, (35, 26, 1, 1), data, caches);
         scene.add_deposit(0x191, (18, 33, 2, 2), data, caches);
-        // The barbarian yard's rest (0x5af8e8) and the raids' waits
-        // (0x5af924, 0x5af96c, 0x5af990), in 1500-tick units plus 0-3.
+        // The barbarian yard's rest (0x5af8e8); the barbarian raiders'
+        // wait (0x5afbd8, 15000 in the exe, drawn anew in their state 0),
+        // the sizes their records compare with (at least 3, fewer than 2),
+        // and the Persian raiders' (their waits are drawn in their state
+        // 0; the brain draws nothing at the start).
         const YARD_REST: [u32; 3] = [1500, 1000, 750];
-        const BARBARIAN_WAIT: [u32; 3] = [7, 6, 4];
-        const NORTH_WAIT: [u32; 3] = [8, 7, 5];
-        const WEST_WAIT: [u32; 3] = [7, 6, 4];
-        let r: Vec<u32> = (0..3).map(|_| scene.brain_draw() % 4).collect();
         if let Some(br) = scene.brain.as_mut() {
             br.fleets[0].vars[0] = YARD_REST[difficulty()];
-            br.fleets[3].vars = [(r[0] + BARBARIAN_WAIT[difficulty()]) * 1500, 3, 0, 0];
-            br.fleets[10].vars = [(r[1] + NORTH_WAIT[difficulty()]) * 1500, 5, 0, 2];
-            br.fleets[11].vars = [(r[2] + WEST_WAIT[difficulty()]) * 1500, 3, 0, 1];
+            br.fleets[RAIDERS].vars = [15000, 3, 1, 0];
+            br.fleets[10].vars = [0, 5, 0, 2];
+            br.fleets[11].vars = [0, 3, 0, 1];
         }
     }
 
@@ -4976,33 +5288,145 @@ mod miss005 {
         }
     }
 
+    /// The barbarians' fleets that call on each other: the guard (0, 1) and
+    /// the raiders (0, 3).
+    const GUARD: usize = 1;
+    const RAIDERS: usize = 3;
+
+    /// The raiders' brain fields (`Brain::fields`): their raid's draw
+    /// (`+0x110`, rand & 3, 0 until drawn), which way they sail to raid a
+    /// site (`+0x114`, rand & 1), a fort of the player's found in
+    /// `FORT_AREAS` (`+0x150`, each turn) and as it was when they set out
+    /// (`+0x154`, copied in state 5), and the area it was found in
+    /// (`+0x158`, kept when none is).
+    const RAID_DRAW: usize = 0;
+    const TURN_BACK: usize = 1;
+    const FORT_FOUND: usize = 2;
+    const SET_OUT: usize = 3;
+    const FORT_AT: usize = 4;
+
+    /// The areas the raiders look for the player's forts in (0x5afa30).
+    const FORT_AREAS: [Cells; 3] = [(11, 18, 6, 6), (13, 25, 9, 7), (9, 32, 8, 4)];
+    /// The raiders' zones (0x5afad0).
+    const RAIDER_ZONES: [Cells; 3] = [(3, 24, 7, 10), (7, 20, 8, 9), (7, 29, 6, 7)];
+
+    fn field(scene: &Scene, f: usize) -> u32 {
+        scene.brain.as_ref().unwrap().fields[f]
+    }
+
+    fn set_field(scene: &mut Scene, f: usize, v: u32) {
+        scene.brain.as_mut().unwrap().fields[f] = v;
+    }
+
+    fn set(scene: &mut Scene, k: usize, v: usize, value: u32) {
+        scene.brain.as_mut().unwrap().fleets[k].vars[v] = value;
+    }
+
+    /// How many ships of `types` fleet `k` has (0x479dc0).
+    fn count(scene: &Scene, k: usize, types: &[u8]) -> usize {
+        let n = scene.fleet_types(k);
+        types.iter().map(|&t| n[t as usize]).sum()
+    }
+
+    /// The index of the zone a fleet's events last saw in their list
+    /// (member `+0x50`, written by 0x47a010; 0 until the first).
+    fn zone_index(scene: &Scene, k: usize, zones: &[Cells]) -> usize {
+        let seen = scene.brain.as_ref().unwrap().fleets[k].area;
+        seen.and_then(|a| zones.iter().position(|&z| z == a))
+            .unwrap_or(0)
+    }
+
+    /// The raiders' look for a fort of the player's (0x4795f0, before
+    /// their switch each turn): the player's objects in order (0x4a8620),
+    /// the first fort (class 0x34-0x36) whose cell lies in one of
+    /// `FORT_AREAS` (its vt+0x58, 0x423660; a fort is one cell), the first
+    /// such area.
+    fn find_fort(scene: &mut Scene) {
+        let found = scene
+            .objects
+            .iter()
+            .filter(|o| {
+                scene.is_own(o)
+                    && o.combat.is_some()
+                    && matches!(
+                        o.class,
+                        openconquest_formats::ObjectClass::Building(0x34..=0x36)
+                    )
+            })
+            .find_map(|o| {
+                let (x, y) = o.cell?;
+                FORT_AREAS
+                    .iter()
+                    .position(|&(rx, ry, w, h)| x >= rx && y >= ry && x < rx + w && y < ry + h)
+            });
+        if let Some(at) = found {
+            set_field(scene, FORT_AT, at as u32);
+        }
+        set_field(scene, FORT_FOUND, found.is_some() as u32);
+    }
+
     const BARBARIAN_HOME: Event = Event::Zone {
         state: 20,
         area: (3, 24, 7, 10),
     };
 
+    /// The barbarians' guard (0x4551e0): off their stronghold at (7, 29);
+    /// with as many royal ships, boarders and rammers together as royal
+    /// ships and bombers it asks for (0x5af8f4 + 0x5af900; its bombers not
+    /// counted, the original's slip) it waits there 7500 ticks, else it
+    /// goes round again at once. Sent by the raiders (0x32), it attacks
+    /// the area where they found the player's fort (0x5afa30 by
+    /// `+0x158`), heeding nothing (no events).
     fn barbarian_guard(state: u32) -> Op {
+        // Events 0x5afac0: the zone 0x5afa60.
+        const W: &[Event] = &[BARBARIAN_HOME];
         match state {
             0 => Op::Behave { next: 5 },
-            5 => Op::Move {
+            5 => Op::Branch {
+                test: |scene, k| {
+                    let d = difficulty();
+                    count(scene, k, &[ROYAL, BOARDER, RAMMER]) == [1, 1, 2][d] + [1, 2, 1][d]
+                },
+                yes: &Op::Move {
+                    tol: 1,
+                    ok: 7,
+                    failed: 7,
+                    to: (7, 29),
+                    ticks: 0,
+                    events: W,
+                },
+                no: &Op::Behave { next: 6 },
+            },
+            6 => Op::Move {
                 tol: 1,
-                ok: 7,
-                failed: 7,
+                ok: 0,
+                failed: 0,
                 to: (7, 29),
                 ticks: 0,
-                events: &[BARBARIAN_HOME],
+                events: W,
             },
-            7 => Op::Wait {
+            7 => Op::Watch {
                 next: 0,
                 ticks: 7500,
+                events: W,
             },
-            _ => Op::Attack {
+            // 0x5afa70 at its index: the one zone's area.
+            20 => Op::Attack {
                 next: 0,
                 failed: 0,
                 target: Target::Seen,
                 ticks: 1500,
                 events: &[],
             },
+            50 => Op::Attack {
+                next: 0,
+                failed: 0,
+                target: Target::Of(|scene, _| FORT_AREAS[field(scene, FORT_AT) as usize]),
+                ticks: 4500,
+                events: &[],
+            },
+            // The original's other states do nothing.
+            _ => Op::Custom(|scene, k| scene.brain.as_ref().unwrap().fleets[k].state),
         }
     }
 
@@ -5050,40 +5474,114 @@ mod miss005 {
         }
     }
 
-    /// Patrols the barbarians' waters; answers fire; when three strong and
-    /// it has waited long enough, raids the player (0x455620).
+    /// The barbarian raiders (0x455620). Back home at (1, 23) while they
+    /// have two ships or fewer of royal ships and rammers, else on patrol
+    /// of the barbarians' waters; they answer fire, and attack the player
+    /// in their zones (out of the home zone only three strong). Three
+    /// strong once their wait is over (0x5afbd8, drawn in state 0), they
+    /// draw (rand & 3): with a fort of the player's found in one of
+    /// three areas (`+0x154`, as it was when they set out) and a 0 or a 1
+    /// they attack that area 6000 ticks, sending the guard there too
+    /// (each turn the draw stays 0, the original's slip); else they sail
+    /// to (11, 30) or (15, 24) (rand & 1) and raid one of the player's
+    /// settlements or towns in (0, 0, 35, 35), else (27, 28, 9, 8).
     fn barbarian_raiders(state: u32) -> Op {
+        // The round 0x5afb60.
         const ROUND: &[(i32, i32, u32)] =
             &[(7, 29, 500), (10, 23, 750), (13, 25, 500), (10, 29, 875)];
-        const W: &[Event] = &[
+        // Events 0x5afc00: the zones 0x5afad0, the Size record 0x5afbc8
+        // (at least 3 once the wait is over) and, on patrol only (three
+        // of them), the attacked record 0x5afb90.
+        const ZONES: [Event; 3] = [
             BARBARIAN_HOME,
             Event::Zone {
                 state: 20,
-                area: (7, 20, 8, 9),
+                area: RAIDER_ZONES[1],
             },
             Event::Zone {
                 state: 20,
-                area: (7, 29, 6, 7),
+                area: RAIDER_ZONES[2],
             },
-            Event::Size {
-                state: 40,
-                after: Some(0),
-                cmp: Cmp::AtLeast,
-                n: 1,
-            },
+        ];
+        const READY: Event = Event::Size {
+            state: 40,
+            after: Some(0),
+            cmp: Cmp::AtLeast,
+            n: 1,
+        };
+        const HOME: &[Event] = &[ZONES[0], ZONES[1], ZONES[2], READY];
+        const W: &[Event] = &[
+            ZONES[0],
+            ZONES[1],
+            ZONES[2],
+            READY,
             Event::Attacked {
                 state: 30,
                 after: 375,
             },
         ];
+        // Events 0x5afc50: the zones, then the Size record 0x5afc20 (fewer
+        // than 2, back to 0).
+        const RAID: &[Event] = &[
+            ZONES[0],
+            ZONES[1],
+            ZONES[2],
+            Event::Size {
+                state: 0,
+                after: None,
+                cmp: Cmp::AtMost,
+                n: 2,
+            },
+        ];
+        // The raids' wait (0x5af924), in 1500-tick units plus 0-3.
+        const WAIT_BASE: [u32; 3] = [7, 6, 4];
         match state {
-            0 => Op::Behave { next: 5 },
-            5 => Op::Patrol {
+            0 => Op::Custom(|scene, k| {
+                set_field(scene, TURN_BACK, 0);
+                set_field(scene, RAID_DRAW, 0);
+                set_field(scene, SET_OUT, 0);
+                let r = scene.brain_draw() & 3;
+                set(scene, k, 0, (WAIT_BASE[difficulty()] + r) * 1500);
+                5
+            }),
+            5 => Op::Branch {
+                test: |scene, k| {
+                    let fort = field(scene, FORT_FOUND);
+                    set_field(scene, SET_OUT, fort);
+                    count(scene, k, &[ROYAL, RAMMER]) <= 2
+                },
+                yes: &Op::Move {
+                    tol: 2,
+                    ok: 0,
+                    failed: 0,
+                    to: (1, 23),
+                    ticks: 0,
+                    events: HOME,
+                },
+                no: &Op::Behave { next: 6 },
+            },
+            6 => Op::Patrol {
                 timeout: 5,
                 failed: 5,
                 points: ROUND,
                 ticks: 0,
                 events: W,
+            },
+            // 0x5afae0 at its index: the zone it saw; out of the home
+            // zone only with exactly three, tested each turn.
+            20 => Op::Branch {
+                test: |scene, k| {
+                    zone_index(scene, k, &RAIDER_ZONES) == 0
+                        || count(scene, k, &[ROYAL, RAMMER]) == 3
+                },
+                yes: &Op::Attack {
+                    next: 0,
+                    failed: 0,
+                    target: Target::Seen,
+                    ticks: 1500,
+                    events: &[],
+                },
+                no: &Op::Behave { next: 0 },
             },
             30 => Op::Attack {
                 next: 0,
@@ -5092,20 +5590,67 @@ mod miss005 {
                 ticks: 375,
                 events: &[],
             },
-            40 => Op::Attack {
+            40 => Op::Branch {
+                test: |scene, _| {
+                    if field(scene, RAID_DRAW) == 0 {
+                        let r = scene.brain_draw() & 3;
+                        set_field(scene, RAID_DRAW, r);
+                        if field(scene, SET_OUT) == 0 {
+                            let r = scene.brain_draw() & 1;
+                            set_field(scene, TURN_BACK, r);
+                            return false;
+                        }
+                        scene.set_state(GUARD, 50);
+                    }
+                    if field(scene, SET_OUT) == 0 || field(scene, RAID_DRAW) > 1 {
+                        let r = scene.brain_draw() & 1;
+                        set_field(scene, TURN_BACK, r);
+                        return false;
+                    }
+                    true
+                },
+                yes: &Op::Attack {
+                    next: 0,
+                    failed: 0,
+                    target: Target::Of(|scene, _| FORT_AREAS[field(scene, FORT_AT) as usize]),
+                    ticks: 6000,
+                    events: RAID,
+                },
+                no: &Op::Behave { next: 50 },
+            },
+            50 => Op::Branch {
+                test: |scene, _| field(scene, TURN_BACK) == 0,
+                yes: &Op::Move {
+                    tol: 2,
+                    ok: 60,
+                    failed: 60,
+                    to: (11, 30),
+                    ticks: 750,
+                    events: &[],
+                },
+                no: &Op::Move {
+                    tol: 2,
+                    ok: 60,
+                    failed: 60,
+                    to: (15, 24),
+                    ticks: 750,
+                    events: &[],
+                },
+            },
+            // The site is picked when the raid starts (`+0x15c`, -1 from
+            // state 0; 0x421490, 0x421740, grown by 2 by 0x4796c0).
+            60 => Op::Attack {
                 next: 0,
                 failed: 0,
-                target: Target::HumanBuilding,
-                ticks: 3000,
-                events: &[],
+                target: Target::Of(|scene, _| {
+                    scene
+                        .human_site_area(Some((0, 0, 35, 35)))
+                        .unwrap_or((27, 28, 9, 8))
+                }),
+                ticks: 6000,
+                events: RAID,
             },
-            _ => Op::Attack {
-                next: 0,
-                failed: 0,
-                target: Target::Seen,
-                ticks: 1500,
-                events: &[],
-            },
+            _ => Op::Custom(|scene, k| scene.brain.as_ref().unwrap().fleets[k].state),
         }
     }
 
@@ -5332,10 +5877,14 @@ mod miss005 {
         scene.brain.as_mut().unwrap().gone = gone;
     }
 
-    /// Each turn (`turn`): west, in its raids on settlements (85, 90 and
+    /// Each turn (`turn`): the barbarian raiders look for the player's
+    /// fort (`find_fort`); west, in its raids on settlements (85, 90 and
     /// their attacks), casts its spell again and clears north's instead
     /// (the original's slip at 0x456e80).
     pub fn turn(scene: &mut Scene, k: usize) {
+        if k == RAIDERS {
+            find_fort(scene);
+        }
         let state = scene.brain.as_ref().unwrap().fleets[k].state;
         if k == WEST && matches!(state, 86 | 91) {
             cast_spell(scene, WEST, NORTH);
