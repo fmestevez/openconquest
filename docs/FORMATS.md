@@ -2560,8 +2560,17 @@ cleared on all 12 together. Who sets them:
   100, then sends it order 10 (0x42a384 for a town's building `+0xdc`,
   0x42a3dd for a fort 0x1494 or stronghold 0x1a6b mended itself), so a
   fort or stronghold so mended ceases fire for good; and from 0x427f50
-  on message 0x2874 (its settlement gone, sent by the town 0x43bc30 to
-  its buildings `+0x1d0`) while it is busy. Nothing in the land fleet
+  on message 0x2874 while it is busy. A settlement or town falling (its
+  0x138b in state other than 2, 0x43bc30) sends 0x2874 {its id} to each
+  building of its list `+0x1d0` (`+0x1c8` of them; a building joins with
+  0x2490, which refuses nation 4: barbarian structures never do), and
+  each, in 0x427f50 when the id is its `+0x1c8`: clears `+0x1c8`; busy
+  (`+0x10c`), sends itself order 10 (vt+0 with 0x280f, order byte 10:
+  its whole order-10 chain, so a fort mending itself stops and ceases
+  fire); with a reload contact `+0x104` sends 0x2876 {`+0x108`} and
+  clears both; sets `+0xf8`; then LandObj 0x425990 as for any message.
+  A port (ShipService 0x4e7640) first sends 0xcb9 to its `+0x1e0` and
+  clears it. Nothing in the land fleet
   sends 0x23, 0x15 or 0x16 (its 0x520cc0 codes: 0x1e, 0x20, 0x21, 0x22,
   0x28, 0x2d and 10). The navy's 0x4c5b30 (0x4a1150, a new group of a
   computer player, side 3 or 4) sends 0x23 sub 1 with the fleet's masks
@@ -2570,7 +2579,10 @@ cleared on all 12 together. Who sets them:
 The port keeps the fire in `combat::FortFire` (at will, a target per
 group, the aggressor flag): `Scene::fort_attack` (0x15 / 0x16),
 `fort_order` (0x23), `fort_aggressed` (0x4184f0), order 10 in `halt`, the
-masks in `combat::FortMasks` (tested by `fort_may_shoot`); its
+masks in `combat::FortMasks` (tested by `fort_may_shoot`), the 0x2874
+path in `Scene::town_gone` (the buildings whose nearest settlement of
+their owner's it was, the port's `+0x1c8`; busy, `Scene::busy`, they are
+halted; their reload contacts end); its
 fort menu has slots 0-4 and its pointer the fort's answer (`fort_reaches`:
 a unit's reach); `scene/fort.rs` has its Repair (`fort_repair`, the
 progress `fort_mend_progress`) and its stored spell (`fort_spells`,
@@ -2581,8 +2593,8 @@ cell's tile layers and slots, not decoded here: the button is offered,
 the click refused), the draw of the fort's generator `+0x18` with a cast,
 the jam (the port has none: a click gives the creature itself), the
 scan's score and its creatures (the port's forts scan enemy ships, the
-nearest), the barbarian structures' shot test, the
-0x2874 path, whether a navy group of a computer ever holds a fort (the
+nearest), the barbarian structures' shot test, a port's 0xcb9 on 0x2874
+(`+0x1e0` not decoded), whether a navy group of a computer ever holds a fort (the
 port's flotillas hold ships), 0x43d300's test that the building is still
 the town's, the other 0x138e senders' `+0x16`. The brains' under-way
 passes count from the second pass after the one that started the

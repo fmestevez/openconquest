@@ -449,4 +449,52 @@ mod data_tests {
         assert_eq!((m.players, m.classes, m.kinds), (!own, u32::MAX, 0xff));
         assert!(!quiet(&mut scene, &mut caches), "the fort did not fire");
     }
+
+    /// A settlement falling tells its buildings (0x43bc30 -> 0x2874 ->
+    /// 0x427f50): a busy one is sent order 10, so a fort mending itself
+    /// stops and ceases fire; an idle one keeps firing (needs
+    /// `OPENCONQUEST_DATA`).
+    #[test]
+    fn a_town_gone_halts_its_busy_buildings() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = crate::assets::GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let (mut scene, fort, site) = own_fort(&data, &mut caches);
+        let fire = |scene: &crate::scene::Scene| {
+            let f = scene.object_index(fort).unwrap();
+            scene.objects[f].combat.as_ref().unwrap().fire
+        };
+        let raze = |scene: &mut crate::scene::Scene, caches: &mut Caches, site: u32| {
+            let s = scene.object_index(site).unwrap();
+            let hull = scene.objects[s].combat.as_ref().unwrap().hull;
+            scene.strike(site, hull + 1.0, false, None, true, &data, caches);
+        };
+        // Idle: nothing changes.
+        let f = scene.object_index(fort).unwrap();
+        let next = scene.objects.iter().enumerate().find(|(i, o)| {
+            *i != f
+                && o.id != site
+                && o.owner == scene.objects[f].owner
+                && matches!(
+                    o.class,
+                    openconquest_formats::ObjectClass::Building(crate::economy::SETTLEMENT)
+                        | openconquest_formats::ObjectClass::Building(crate::economy::TOWN)
+                )
+        });
+        assert!(next.is_some(), "another settlement of the fort's player");
+        raze(&mut scene, &mut caches, site);
+        assert!(fire(&scene).at_will);
+        // Mending, its new settlement falls: order 10 ends the mending and
+        // silences the fort.
+        let f = scene.object_index(fort).unwrap();
+        let home = scene.home_settlement(f).unwrap();
+        let c = scene.objects[f].combat.as_mut().unwrap();
+        c.hull = c.max_hull / 2.0;
+        scene.fort_repair(fort).unwrap();
+        raze(&mut scene, &mut caches, home);
+        assert!(!scene.mending.contains(&fort));
+        assert!(!fire(&scene).fires());
+    }
 }

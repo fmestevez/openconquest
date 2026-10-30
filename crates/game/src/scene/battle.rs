@@ -941,6 +941,16 @@ impl Scene {
                 self.note_destroyed(ti, by);
             }
             self.drop_held(target, data, caches);
+            // A settlement or town gone tells its buildings (0x2874).
+            if matches!(
+                self.objects[ti].class,
+                ObjectClass::Building(SETTLEMENT | TOWN)
+            ) {
+                self.town_gone(target, data, caches);
+            }
+            let Some(ti) = self.object_index(target) else {
+                return;
+            };
             // Creatures die with their own cry (land creatures 0x413ad0:
             // events 100-102 by class; the harpy 0x41fb02 event 103; the
             // sea's creatures events 105-107), buildings fall, ships wreck.

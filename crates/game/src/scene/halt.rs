@@ -428,6 +428,56 @@ impl Scene {
         false
     }
 
+    /// Whether building `id` is busy (`+0x10c`): its own mending (job
+    /// 0xff), a study, a refit batch, a training or weapons batch, a
+    /// temple's learning or Flame.
+    pub(super) fn busy(&self, id: u32) -> bool {
+        let here = |s: Option<u32>| s.is_none_or(|s| s == id);
+        let temple = self
+            .object_index(id)
+            .and_then(|i| match self.objects[i].class {
+                ObjectClass::Building(c) => Temple::of_class(c),
+                _ => None,
+            });
+        let temple_busy = temple.is_some_and(|t| {
+            (self.magic.learning(t).is_some() && here(self.magic.learning_site(t)))
+                || (t == Temple::War
+                    && self.magic.flame_brewing().is_some()
+                    && here(self.magic.flame_site()))
+        });
+        self.mending.contains(&id)
+            || self.research.iter().any(|r| r.0 == id)
+            || self.refits.iter().any(|r| r.0 == id)
+            || self.trainings.iter().any(|t| t.site == id)
+            || temple_busy
+    }
+
+    /// Settlement or town `town` falls (its 0x138b, 0x43bc30): message
+    /// 0x2874 {town} to each of its buildings (`+0x1d0`), which each
+    /// handle in 0x427f50: the settlement link `+0x1c8` cleared; busy
+    /// (`+0x10c`), order 10 to itself (`Scene::halt`); a reload contact
+    /// (`+0x104`) told 0x2876 and let go. (A port's ShipService first
+    /// sends 0xcb9 to `+0x1e0` and clears it: not ported, `+0x1e0` not
+    /// decoded.) The port has no list: a building's settlement is the
+    /// nearest of its owner's (`home_settlement`), which a barbarian
+    /// structure, never joining one (0x427f50 case 0x2490 refuses nation
+    /// 4), and the settlements themselves do not have.
+    pub(super) fn town_gone(&mut self, town: u32, data: &GameData, caches: &mut Caches) {
+        let theirs: Vec<u32> = (0..self.objects.len())
+            .filter(|&i| {
+                matches!(self.objects[i].class, ObjectClass::Building(c) if c != SETTLEMENT && c != TOWN)
+                    && self.home_settlement(i) == Some(town)
+            })
+            .map(|i| self.objects[i].id)
+            .collect();
+        for id in theirs {
+            if self.busy(id) {
+                let _ = self.halt(id, data, caches);
+            }
+            self.loads.retain(|l| l.ship != id && l.other != id);
+        }
+    }
+
     /// A fort's or barbarian structure's twelve unit groups cease fire
     /// (0x4469b0; the fort also `+0x498 = 0`): it stays silent until set
     /// firing again (`Scene::fort_order`, `fort_aggressed`).
