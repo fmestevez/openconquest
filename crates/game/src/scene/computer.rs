@@ -3011,8 +3011,29 @@ impl Scene {
                     self.give_order(ai, f);
                 } else {
                     self.keep_order(ai, f);
-                    if Computer::over(&ai.flotillas[f], now) {
-                        ai.push(f, 7);
+                    // The zone's state (0x483320: query 0x79, 0x4c8da0):
+                    // done with result 1 (no ships or no merchants), 10 (no
+                    // deposit left) or 0xb goes to p[7], p[6] or p[8], the
+                    // resource switched and state 2 when that is 0; else
+                    // state 7 once the time is up. (A flotilla whose task is
+                    // no zone gets no answer: 0x47dc60 then reads its
+                    // uninitialised `local_1c`; the port takes it as no
+                    // answer.)
+                    let group = super::gather::ZoneGroup::Computer(ai.id(), f);
+                    let next = match self.zone_status(group) {
+                        Some((0x1f5, 1)) => Some(ai.flotillas[f].p[7]),
+                        Some((0x1f5, 10)) => Some(ai.flotillas[f].p[6]),
+                        Some((0x1f5, 0xb)) => Some(ai.flotillas[f].p[8]),
+                        _ => None,
+                    };
+                    match next {
+                        Some(0) => {
+                            self.switch_resource(ai, f);
+                            ai.push(f, 2);
+                        }
+                        Some(s) => ai.push(f, s as u32),
+                        None if Computer::over(&ai.flotillas[f], now) => ai.push(f, 7),
+                        None => {}
                     }
                 }
             }
@@ -3231,8 +3252,15 @@ impl Scene {
                     self.give_order(ai, f);
                 } else {
                     self.keep_order(ai, f);
+                    // The zone done (0x483320, 0x4c8da0: 0x1f5) moves on;
+                    // then the time up pushes the same state again
+                    // (0x47dfb0). (No zone: no answer, as in task 4.)
+                    let next = if ai.flotillas[f].state == 7 { 10 } else { 2 };
+                    let group = super::gather::ZoneGroup::Computer(ai.id(), f);
+                    if matches!(self.zone_status(group), Some((0x1f5, _))) {
+                        ai.push(f, next);
+                    }
                     if Computer::over(&ai.flotillas[f], now) {
-                        let next = if ai.flotillas[f].state == 7 { 10 } else { 2 };
                         ai.push(f, next);
                     }
                 }
@@ -6011,6 +6039,45 @@ mod tests {
         // Unknown kinds and spells of a temple it lacks are not cast.
         assert!(!scene.computer_cast(&mut ai, 0, 14, Some((5, 5)), None, None));
         assert!(!scene.computer_cast(&mut ai, 0, 6, Some((5, 5)), None, None));
+    }
+
+    /// A gathering flotilla (task 4 state 5) reads its zone's state each
+    /// turn (0x483320, query 0x79): its zone left without ships is done,
+    /// result 1, and with p[7] 0 it switches its resource and goes back
+    /// to 2 before its time is up (0x47dc60).
+    #[test]
+    fn computer_gatherers_read_their_zone() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        let mut found = None;
+        for _ in 0..6000 {
+            scene.update(0.1, &data, &mut caches);
+            let ai = &scene.computers.players[0];
+            found = ai
+                .flotillas
+                .iter()
+                .position(|fl| fl.task == 4 && fl.state == 5 && fl.step);
+            if found.is_some() {
+                break;
+            }
+        }
+        let f = found.expect("a flotilla gathering");
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        let group = super::super::gather::ZoneGroup::Computer(ai.id(), f);
+        let z = scene
+            .gather_zones
+            .iter()
+            .position(|z| z.group == group)
+            .expect("its zone");
+        scene.gather_zones[z].ships.clear();
+        assert_eq!(scene.zone_status(group), Some((0x1f5, 1)));
+        assert_eq!(ai.flotillas[f].p[7], 0);
+        let now = ai.flotillas[f].since + 1;
+        scene.task_gather(&mut ai, f, now);
+        assert_eq!(ai.flotillas[f].state, 2);
     }
 
     #[test]

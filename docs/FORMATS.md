@@ -6350,6 +6350,16 @@ computer while the enemy is human) becomes the enemy.
 | 11 spare | 0x481fe0 | 0xd (0x47f6b0) | the same without handing out (mode 1) |
 | 4 commander | 0x482160 | none | the grand attack, founding settlements, spells |
 
+The gathering steps read their zone's state each turn after the first
+(0x483320: query 0x79, 0x4c8da0). Task 4 state 5: 0x1f5 with result 1,
+10 or 0xb goes to p[7], p[6] or p[8] (`+0x8c`, `+0x88`, `+0x90`; all 0 as
+the role handlers set them, so the resource is switched and state 2);
+any other answer leaves the time test (state 7). Task 5 states 7 and 10:
+0x1f5 pushes 10 or 2, and the time up pushes it again. A flotilla whose
+task is no zone gets no answer (0x4a0d00 leaves `out` alone; 0x47dc60 and
+0x47dfb0 then read their uninitialised `local_1c`): the port takes it as
+no answer.
+
 Any flotilla with ships may be mailed task 0xc (0x47f050): found a
 settlement (order 0x8c, class 0x32) at a cell. Letters (kind 1 a task, 2
 start over, 3 the zones changed, 4 the home area changed, 0x65 the base
