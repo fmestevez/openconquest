@@ -5061,7 +5061,8 @@ fn merchants_unload_where_sent() {
 }
 
 /// A ship a campaign brain's player captures goes to be mended at one of
-/// that player's docks (needs `OPENCONQUEST_DATA`).
+/// that player's docks (miss007-miss013, whose prize tables are not
+/// ported; needs `OPENCONQUEST_DATA`).
 #[test]
 fn brains_mend_their_prizes() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -5069,7 +5070,7 @@ fn brains_mend_their_prizes() {
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
     assert!(scene.brain.is_some());
     let human = scene.human.map(|h| (h.nation, h.slot));
     // One of the computer's buildings stands in for a dock.
@@ -8232,4 +8233,164 @@ fn brain_seed_follows_the_original() {
     // Saved with the brain.
     let save = again.save();
     assert_eq!(save.brain.as_ref().unwrap().rng.0, a);
+}
+
+/// The repair members of miss002-miss005 sit where the original makes
+/// them (0x479200 at 0x8d1, member order), and the members after them
+/// move up (needs `OPENCONQUEST_DATA`).
+#[test]
+fn repair_members_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for (mission, members) in [
+        ("miss002", &[(1, 8, 9)][..]),
+        ("miss003", &[(0, 4, 4), (0, 5, 5), (1, 0, 6), (1, 4, 10)]),
+        (
+            "miss004",
+            &[(0, 6, 6), (1, 0, 7), (1, 3, 10), (2, 2, 13), (2, 4, 15)],
+        ),
+        ("miss005", &[(1, 5, 9), (1, 6, 10), (1, 7, 11)]),
+    ] {
+        let scene = Scene::load(&data, &mut caches, mission).unwrap();
+        for &(g, m, k) in members {
+            assert_eq!(scene.member_fleet(g, m), Some(k), "{mission} ({g}, {m})");
+        }
+        let brain = scene.brain.as_ref().unwrap();
+        match mission {
+            // The barbarian yard's rest and the raids' waits land on their
+            // members: miss003's yard (1, 0) rests 750 on normal.
+            "miss003" => {
+                assert_eq!(brain.fleets[6].vars[0], 750);
+                assert!(brain.fleets[10].vars[0] >= 9 * 1500);
+            }
+            "miss004" => {
+                assert_eq!(brain.fleets[10].vars, [7500, 3, 0, 0]);
+                assert_eq!(brain.fleets[13].vars[1], 2);
+            }
+            "miss005" => {
+                assert_eq!(brain.fleets[10].vars[1], 5);
+                assert_eq!(brain.fleets[11].vars[1], 3);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A brain saved before the repair members were added lines up again on
+/// restore: the members go in empty at their places and the fleet
+/// indices it holds move up (needs `OPENCONQUEST_DATA`).
+#[test]
+fn old_brains_get_their_repair_members() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let scene = Scene::load(&data, &mut caches, "miss004").unwrap();
+    let mut old = scene.brain.clone().unwrap();
+    let new = old.clone();
+    old.fleets.remove(15);
+    old.fleets.remove(6);
+    old.layout = 0;
+    old.requests = vec![(5, 2), (6, 2), (13, 4)];
+    old.upgrade();
+    assert_eq!(old.layout, super::brain::LAYOUT);
+    assert_eq!(old.fleets.len(), new.fleets.len());
+    assert_eq!(old.requests, vec![(5, 2), (7, 2), (14, 4)]);
+    for k in 0..new.fleets.len() {
+        assert_eq!(old.fleets[k].ships, new.fleets[k].ships, "fleet {k}");
+    }
+}
+
+/// The repair members' order 0x82 (0x47a7e0, 0x4cdf80): miss003's (0, 4)
+/// picks its start dock from the player's fleet 0, a ship fleet, so has
+/// none; a prize of player 15 joins it and is sent to the first dock of
+/// the yard's town at (58, 1) (fleet 3; 0x4cdea0 at the join, 0x4cdb00
+/// to `+0x10`). miss005's (1, 5) has fleet 0 for its yard: its start dock
+/// is the first of the town at (8, 11) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn repair_orders_as_the_original() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let town_dock = |scene: &Scene, (x, y): (i32, i32)| {
+        let town = scene
+            .objects
+            .iter()
+            .find(|o| {
+                matches!(
+                    o.class,
+                    ObjectClass::Building(economy::SETTLEMENT | economy::TOWN)
+                ) && o
+                    .cell
+                    .is_some_and(|(cx, cy)| (x..x + 2).contains(&cx) && (y..y + 2).contains(&cy))
+            })
+            .map(|o| o.id)
+            .expect("the yard's town");
+        let docks: Vec<u32> = (0..scene.objects.len())
+            .filter(|&d| {
+                scene.objects[d].class == ObjectClass::Building(economy::DOCK)
+                    && scene.home_settlement(d) == Some(town)
+            })
+            .map(|d| scene.objects[d].id)
+            .collect();
+        assert_eq!(docks.len(), 1, "one dock to the town");
+        docks[0]
+    };
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    // (0, 4) behaves at tick 20 and gives the order at its next turn, 70.
+    for _ in 0..70 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let f = &scene.brain.as_ref().unwrap().fleets[4];
+    assert_eq!(f.state, 10);
+    let order = f.repair.clone().expect("the repair order");
+    assert_eq!((order.dock, order.yard), (0, 3));
+    let dock = town_dock(&scene, (58, 1));
+    let ship = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let c = scene.objects[ship].combat.as_mut().unwrap();
+    c.hull = c.max_hull / 2.0;
+    let id = scene.objects[ship].id;
+    let crew = scene.objects[ship].ship.as_ref().unwrap().crew;
+    let units = scene.objects[ship].unit_conditions();
+    let marines = [units[0].clone(), units[1].clone(), units[2].clone()];
+    scene.capture(id, Some((3, 3)), crew.class, marines, &data, &mut caches);
+    assert!(scene.brain.as_ref().unwrap().fleets[4].ships.contains(&id));
+    let i = scene.object_index(id).unwrap();
+    assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
+    // Heard at the order's next tick.
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let i = scene.object_index(id).unwrap();
+    assert_eq!(
+        scene.objects[i].ship.as_ref().unwrap().task,
+        Some(Task::Repair { dock })
+    );
+    assert_eq!(
+        scene.brain.as_ref().unwrap().fleets[4]
+            .repair
+            .as_ref()
+            .unwrap()
+            .dock,
+        dock
+    );
+
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    // (1, 5) runs at 30, then 80.
+    for _ in 0..80 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let order = scene.brain.as_ref().unwrap().fleets[9]
+        .repair
+        .clone()
+        .expect("the repair order");
+    assert_eq!((order.dock, order.yard), (town_dock(&scene, (8, 11)), 0));
 }

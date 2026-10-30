@@ -608,6 +608,7 @@ impl Scene {
             })
             .collect();
         for id in leaving {
+            self.brain_repaired(id);
             self.brain_mended(id);
         }
         for &id in &done {

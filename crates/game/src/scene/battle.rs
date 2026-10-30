@@ -1265,12 +1265,30 @@ impl Scene {
     }
 
     /// A prize taken by a campaign brain's player (event 0x5d97, sent by
-    /// the capture 0x4b6f20) joins the brain's repair fleet: it sails to
-    /// one of the player's docks, picked at random, and is mended there
-    /// (0x47a7e0, order 0x82, 0x4cdea0), then stays (every brain's repair
-    /// fleet hands its ships to no other).
+    /// the capture 0x4b6f20). In miss002-miss006 it joins the player's
+    /// repair member (0x479300 op 2: the handlers' tables), whose repair
+    /// order sends it to its yard's dock (message 300, `run_repair_orders`):
+    /// player 15's in miss002 (1, 8), miss003 (0, 4), miss004 (0, 6),
+    /// miss005 and miss006 (1, 5); player 14's in miss004 (2, 4), miss006
+    /// (2, 5). Elsewhere (not ported: miss007-miss013's tables) it sails to
+    /// one of the player's docks, picked at random.
     fn brain_prize(&mut self, id: u32, owner: (u32, u32)) {
         if self.brain.is_none() || self.human.map(|h| (h.nation, h.slot)) == Some(owner) {
+            return;
+        }
+        let mission = self.brain.as_ref().unwrap().mission.clone();
+        let repair = match (mission.as_str(), owner.0 * 4 + owner.1) {
+            ("miss002", 15) => Some((1, 8)),
+            ("miss003", 15) => Some((0, 4)),
+            ("miss004", 15) => Some((0, 6)),
+            ("miss004", 14) => Some((2, 4)),
+            ("miss005" | "miss006", 15) => Some((1, 5)),
+            ("miss006", 14) => Some((2, 5)),
+            ("miss002" | "miss003" | "miss004" | "miss005" | "miss006", _) => return,
+            _ => None,
+        };
+        if let Some((group, member)) = repair {
+            self.brain_join(id, group, member);
             return;
         }
         let docks: Vec<u32> = self

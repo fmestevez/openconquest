@@ -190,6 +190,29 @@ pub struct Fleet {
     pub last_area: Cells,
     /// The mission's own numbers (e.g. a raid's timing).
     pub vars: [u32; 4],
+    /// The repair order (fleet order 0x82, 0x4cdf80) its member gave.
+    #[serde(default)]
+    pub repair: Option<RepairOrder>,
+    /// Ships that joined it, not yet heard by its order (message 300,
+    /// 0x4a1340, in the fleet's queue `+0x2d`), oldest first.
+    #[serde(default)]
+    pub joined: Vec<u32>,
+}
+
+/// A fleet's repair order (0x82, its block 0x4cd840 `{0x82, 0x51, now}`).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct RepairOrder {
+    /// Block `+0x10`: the dock its ships are sent to (0: none).
+    pub dock: u32,
+    /// Block `+0x21`: the number of the player's fleet whose towns' docks
+    /// it picks from (the member's `YARD`).
+    pub yard: usize,
+    /// Fleet `+8`: ticks towards its pass (0x4ce140), zero when the fleet
+    /// is made (0x49b990).
+    pub elapsed: u32,
+    /// Block `+0x1d`: the ships it heard were mended (message 0x134,
+    /// 0x4cd980 with state 10).
+    pub mended: Vec<u32>,
 }
 
 /// A mission's brain.
@@ -232,6 +255,97 @@ pub struct Brain {
     /// 0x478bb0 restoring `r[0x139]`).
     #[serde(default)]
     pub rng: crate::combat::Rng,
+    /// The fleet manager's generator (`DAT_005c7504 +0x18`, the same LCG),
+    /// one for every fleet of every player; the port draws it only in the
+    /// repair order's dock pick (0x4cdea0). Not decoded: its seed; 0 here,
+    /// as the brain's own base seed.
+    #[serde(default)]
+    pub fleet_rng: crate::combat::Rng,
+    /// The layout of `fleets` it was made with (`LAYOUT`); 0 for brains
+    /// saved before miss002-miss005's repair members were added.
+    #[serde(default)]
+    pub layout: u32,
+}
+
+/// The layout of a brain's fleets: 1 since miss002-miss005 have their
+/// repair members ((1, 8); (0, 4); (0, 6) and (2, 4); (1, 5)).
+pub const LAYOUT: u32 = 1;
+
+/// Members added by a layout to a mission: (layout, mission, (group,
+/// member)s).
+type Added = (u32, &'static str, &'static [(u8, u8)]);
+
+/// The members each layout added, by mission (`Brain::upgrade`).
+const ADDED: &[Added] = &[
+    (1, "miss002", &[(1, 8)]),
+    (1, "miss003", &[(0, 4)]),
+    (1, "miss004", &[(0, 6), (2, 4)]),
+    (1, "miss005", &[(1, 5)]),
+];
+
+impl Brain {
+    /// Brings a brain saved with an older layout to `LAYOUT`: the members
+    /// added since start empty in state 0 at their places, and every
+    /// fleet index the brain holds (requests, ships being built, town
+    /// orders) moves up past them.
+    pub fn upgrade(&mut self) {
+        let Some(defs) = mission_fleets(&self.mission) else {
+            return;
+        };
+        for &(layout, mission, added) in ADDED {
+            if self.layout >= layout || mission != self.mission {
+                continue;
+            }
+            let mut at: Vec<usize> = added
+                .iter()
+                .filter_map(|&(g, m)| defs.iter().position(|d| (d.group, d.member) == (g, m)))
+                .collect();
+            at.sort_unstable();
+            for k in at {
+                if k > self.fleets.len() {
+                    continue;
+                }
+                self.fleets.insert(k, Fleet::new(Vec::new()));
+                let up = |f: &mut usize| {
+                    if *f >= k {
+                        *f += 1;
+                    }
+                };
+                for r in &mut self.requests {
+                    up(&mut r.0);
+                }
+                for b in &mut self.building {
+                    up(&mut b.2);
+                }
+                for j in &mut self.jobs {
+                    match j {
+                        Job::FullTown { fleet, .. } | Job::Repair { fleet, .. } => up(fleet),
+                    }
+                }
+            }
+        }
+        self.layout = LAYOUT;
+    }
+}
+
+impl Fleet {
+    fn new(ships: Vec<u32>) -> Self {
+        Fleet {
+            ships,
+            state: 0,
+            previous: 0,
+            started: false,
+            since: 0,
+            area: None,
+            point: 0,
+            paused_at: None,
+            attacked_by: None,
+            last_area: (0, 0, 0, 0),
+            vars: [0; 4],
+            repair: None,
+            joined: Vec::new(),
+        }
+    }
 }
 
 fn standing() -> [bool; 2] {
@@ -463,6 +577,24 @@ fn brain_seed(mission: &str) -> u32 {
     }
 }
 
+/// A repair member: every brain's is the same program (0x44cf20,
+/// 0x452580, 0x452fb0, 0x4564c0, 0x459f60, 0x45f370, 0x462fb0, 0x4661e0,
+/// 0x469d10, 0x46e090, 0x475a70, 0x477190; 0x45f370 counts its ships
+/// first, 0x479dc0, for nothing): state 0 behaves (0x4797e0) and goes to
+/// 10; state 10 is the repair step (0x47a7e0 with `YARD`, the number of
+/// its player's fleet whose towns' docks it uses: its group's yard).
+/// Other states do nothing.
+fn repair<const YARD: usize>(state: u32) -> Op {
+    match state {
+        0 => Op::Behave { next: 10 },
+        10 => Op::Custom(|scene, k| {
+            scene.repair_order(k, YARD);
+            10
+        }),
+        _ => Op::Custom(|scene, k| scene.brain.as_ref().unwrap().fleets[k].state),
+    }
+}
+
 impl Scene {
     /// The brain's next draw (`+0x18`).
     pub(super) fn brain_draw(&mut self) -> u32 {
@@ -494,6 +626,8 @@ impl Scene {
             landed: [false; 2],
             yards: [true; 2],
             rng: crate::combat::Rng(brain_seed(&self.mission)),
+            fleet_rng: crate::combat::Rng(0),
+            layout: LAYOUT,
         };
         for def in m.fleets {
             // The ships (or buildings) standing in the given cells (0x479200).
@@ -516,19 +650,7 @@ impl Scene {
                         .map(|o| o.id)
                 })
                 .collect();
-            brain.fleets.push(Fleet {
-                ships,
-                state: 0,
-                previous: 0,
-                started: false,
-                since: 0,
-                area: None,
-                point: 0,
-                paused_at: None,
-                attacked_by: None,
-                last_area: (0, 0, 0, 0),
-                vars: [0; 4],
-            });
+            brain.fleets.push(Fleet::new(ships));
         }
         self.brain = Some(brain);
         (m.start)(self, data, caches);
@@ -611,6 +733,9 @@ impl Scene {
         let Some(m) = mission(&brain.mission) else {
             return;
         };
+        // The fleets' orders tick too (the navy's message 0, 0x49ad18;
+        // not decoded: whether before or after the brain's).
+        self.run_repair_orders();
         if tick % 5 != 0 {
             return;
         }
@@ -1344,41 +1469,202 @@ impl Scene {
         }
     }
 
-    /// Fleet `k`'s damaged ships with nothing to do sail to one of their
-    /// player's docks, picked at random, to be mended (0x47a7e0 with order
-    /// 0x82: the repair member sends each ship that joins it to a dock,
-    /// message 300; as `brain_prize` does for prizes).
-    pub(super) fn fleet_to_docks(&mut self, k: usize) {
+    /// The repair member `k`'s step (0x47a7e0 with `YARD` its third
+    /// argument): on its first call it gives its fleet the repair order
+    /// (0x479900: fleet order 0x82, `{0, 0, yard, 0}`, 0x4cdf80); later
+    /// calls query it (0x83, 0x4ce2d0) and stay. (Not decoded: the exits,
+    /// 0 and 0, are taken on the stack word `out[5]`, which 0x4ce2d0 never
+    /// writes; the member is kept in its state.)
+    pub(super) fn repair_order(&mut self, k: usize, yard: usize) {
+        if self.brain.as_ref().unwrap().fleets[k].repair.is_some() {
+            return;
+        }
+        // A new block (0x4cd840, zeroed): `+0x10` = args[1] = 0, then the
+        // dock pick (args[1] == 0, args[2] >= 0) before `+0x21` is written,
+        // so on the player's fleet 0, then `+0x21` = yard, `+0x18` (the
+        // fleet a mended ship is handed to) 0, `+0xc` 0.
+        self.brain.as_mut().unwrap().fleets[k].repair = Some(RepairOrder::default());
+        self.repair_pick(k);
+        self.brain.as_mut().unwrap().fleets[k]
+            .repair
+            .as_mut()
+            .unwrap()
+            .yard = yard;
+        // Every ship of the fleet, hurt or not, to the dock `+0x10`
+        // (0x4cdb00, 0x4cd930: ship command 0x1e).
+        let dock = self.brain.as_ref().unwrap().fleets[k]
+            .repair
+            .as_ref()
+            .unwrap()
+            .dock;
         for id in self.fleet_ships(k) {
-            let Some(i) = self.object_index(id) else {
-                continue;
-            };
-            let o = &self.objects[i];
-            let idle = o
-                .ship
-                .as_ref()
-                .is_some_and(|s| s.path.is_empty() && s.task.is_none());
-            let hurt = o.combat.as_ref().is_some_and(|c| c.hull < c.max_hull);
-            if !idle || !hurt {
+            self.repair_send(id, dock);
+        }
+    }
+
+    /// The repair order's dock pick (0x4cdea0): the player's fleet
+    /// `+0x21` must be a land fleet (kind 0xb, `+0x29`); its buildings gone
+    /// are dropped from its list (0x42c9a0), and the docks of its towns
+    /// (type 0x1491, 0x43d220 and 0x440c60 with class 0x3b) are listed.
+    /// With any, `+0x10` becomes the first and the fleet manager's
+    /// generator is drawn for a random one, returned (0 with none). A
+    /// ship fleet holds no town, so it lists none. (Not decoded: the
+    /// towns in states `+0xa4` 2, 3 and 0xff, which 0x42c9a0 drops from
+    /// the land fleet's list too; and the order of a town's buildings
+    /// (`+0x1d0`), taken as the scene's: it matters only to a town with
+    /// two docks. Player 16 lists its class-0x40 buildings instead, never
+    /// a repair member's.)
+    fn repair_pick(&mut self, k: usize) -> u32 {
+        use crate::economy::{DOCK, SETTLEMENT, TOWN};
+        use openconquest_formats::ObjectClass;
+        let Some(defs) = mission_fleets(&self.brain.as_ref().unwrap().mission) else {
+            return 0;
+        };
+        let brain = self.brain.as_ref().unwrap();
+        let n = brain.fleets[k].repair.as_ref().map_or(0, |r| r.yard);
+        let Some(land) = self.member_fleet(defs[k].group, n) else {
+            return 0;
+        };
+        let list: Vec<u32> = brain.fleets[land]
+            .ships
+            .iter()
+            .copied()
+            .filter(|&id| self.object_index(id).is_some())
+            .collect();
+        let mut docks = Vec::new();
+        for &id in &list {
+            let i = self.object_index(id).unwrap();
+            if !matches!(
+                self.objects[i].class,
+                ObjectClass::Building(SETTLEMENT | TOWN)
+            ) {
                 continue;
             }
-            let owner = o.owner;
-            let docks: Vec<u32> = self
-                .objects
-                .iter()
-                .filter(|d| {
-                    d.owner == owner
-                        && d.class
-                            == openconquest_formats::ObjectClass::Building(crate::economy::DOCK)
-                })
-                .map(|d| d.id)
-                .collect();
-            if docks.is_empty() {
-                continue;
-            }
-            let dock = docks[self.rng.next() as usize % docks.len()];
+            docks.extend(
+                (0..self.objects.len())
+                    .filter(|&d| {
+                        self.objects[d].class == ObjectClass::Building(DOCK)
+                            && self.objects[d].owner == self.objects[i].owner
+                            && self.home_settlement(d) == Some(id)
+                    })
+                    .map(|d| self.objects[d].id),
+            );
+        }
+        let brain = self.brain.as_mut().unwrap();
+        brain.fleets[land].ships = list;
+        if docks.is_empty() {
+            return 0;
+        }
+        brain.fleets[k].repair.as_mut().unwrap().dock = docks[0];
+        let r = brain.fleet_rng.next() as usize;
+        docks[r % docks.len()]
+    }
+
+    /// Ship command 0x1e `{0, dock, 0x50}` (0x4cd930), the human's "go to
+    /// dock": the ship sails to `dock` to be mended. (Not decoded: what a
+    /// ship does with dock 0, and with a dock when it is not hurt; the
+    /// port's order refuses both.)
+    fn repair_send(&mut self, id: u32, dock: u32) {
+        if dock != 0 {
             let _ = self.order_repair(id, dock);
         }
+    }
+
+    /// The repair orders' tick (0x4ce140, from the fleets' tick 0x4c4f40,
+    /// each game tick): the fleet's queue is heard newest first (0x4cdc00):
+    /// a ship that joined (300) and is in the fleet gets the dock pick on
+    /// the order's `+0x21` (the yard now) and is sent to `+0x10` (with
+    /// `+0x18 == 0` 0x4cdb00 sends every ship to `+0x10`, the random dock
+    /// the pick returns only telling whether any was found), or not at
+    /// all if `+0x10` is still 0. If none was sent and `+8 > 0x5f`, `+8`
+    /// = 0 and every ship lying still (`+0x58c` 0) and not heard mended
+    /// is sent to `+0x10` again. Then `+8` grows by the update's ticks
+    /// (`game +0xe2`, as the wind's counter). (Not ported here: the
+    /// pass's reports of blows, 0x4a21c0, which the port makes at once,
+    /// `fleet_attacked`; 0x4c42f0 after a join.)
+    fn run_repair_orders(&mut self) {
+        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
+            if self.brain.as_ref().unwrap().fleets[k].repair.is_none() {
+                continue;
+            }
+            let queue = std::mem::take(&mut self.brain.as_mut().unwrap().fleets[k].joined);
+            let mut sent = 0;
+            for &id in queue.iter().rev() {
+                if !self.brain.as_ref().unwrap().fleets[k].ships.contains(&id) {
+                    continue;
+                }
+                self.repair_pick(k);
+                let dock = self.brain.as_ref().unwrap().fleets[k]
+                    .repair
+                    .as_ref()
+                    .unwrap()
+                    .dock;
+                if dock != 0 {
+                    self.repair_send(id, dock);
+                    sent += 1;
+                }
+            }
+            let order = self.brain.as_ref().unwrap().fleets[k]
+                .repair
+                .clone()
+                .unwrap();
+            if sent == 0 && order.elapsed > 0x5f {
+                self.brain.as_mut().unwrap().fleets[k]
+                    .repair
+                    .as_mut()
+                    .unwrap()
+                    .elapsed = 0;
+                for id in self.fleet_ships(k) {
+                    let still = self.object_index(id).is_some_and(|i| {
+                        self.objects[i]
+                            .ship
+                            .as_ref()
+                            .is_some_and(|s| s.move_state == 0)
+                    });
+                    if still && !order.mended.contains(&id) {
+                        self.repair_send(id, order.dock);
+                    }
+                }
+            }
+            self.brain.as_mut().unwrap().fleets[k]
+                .repair
+                .as_mut()
+                .unwrap()
+                .elapsed += 1;
+        }
+    }
+
+    /// A brain's ship mended at a dock: the repair order of its fleet
+    /// hears it (message 0x134, 0x4cdc00): with `+0x18 == 0` it is not
+    /// handed on, but noted mended (0x4cd980, state 10) so the order's
+    /// pass sends it no more. (Not decoded: ship command 10, 0x520cc0,
+    /// it is given too.)
+    pub(super) fn brain_repaired(&mut self, id: u32) {
+        let Some(brain) = self.brain.as_mut() else {
+            return;
+        };
+        for f in &mut brain.fleets {
+            if let Some(r) = f.repair.as_mut() {
+                if f.ships.contains(&id) {
+                    r.mended.retain(|&m| m != id);
+                    r.mended.push(id);
+                }
+            }
+        }
+    }
+
+    /// A prize joins the repair member (`group`, `member`) (0x479300 op 2,
+    /// 0x49bd60), its order hearing of it at its next tick (message 300,
+    /// 0x4a1340).
+    pub(super) fn brain_join(&mut self, id: u32, group: u8, member: usize) {
+        let Some(k) = self.member_fleet(group, member) else {
+            return;
+        };
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        if !f.ships.contains(&id) {
+            f.ships.push(id);
+        }
+        f.joined.push(id);
     }
 
     /// Puts a leviathan zone (class 0x192, 0x4960b0) of `area` on the map:
@@ -2520,11 +2806,20 @@ mod miss002 {
         },
         FleetDef {
             group: 1,
-            // (1, 6) does nothing (0x406330), (1, 8) is the builders'
-            // repair (0x44cf20): the yard is (1, 7) (0x44cbd0).
+            // (1, 6) does nothing (0x406330): the yard is (1, 7)
+            // (0x44cbd0).
             member: 7,
             cells: &[(34, 29, 2, 2)],
             program: persian_yard,
+            wants: &[],
+        },
+        // Mends the Persians' prizes (0x44cf20, by the yard's docks; see
+        // `brain_prize`).
+        FleetDef {
+            group: 1,
+            member: 8,
+            cells: &[],
+            program: repair::<7>,
             wants: &[],
         },
     ];
@@ -2985,7 +3280,15 @@ mod miss003 {
             program: persian_yard,
             wants: &[],
         },
-        // (0, 4) mends (0x452fb0, not ported): the southern guard is (0, 5).
+        // Mends the Persians' prizes (0x452fb0, by the yard's docks; see
+        // `brain_prize`).
+        FleetDef {
+            group: 0,
+            member: 4,
+            cells: &[],
+            program: repair::<3>,
+            wants: &[],
+        },
         FleetDef {
             group: 0,
             member: 5,
@@ -3045,8 +3348,8 @@ mod miss003 {
         let (a, b) = (scene.brain_draw() % 4, scene.brain_draw() % 4);
         if let Some(br) = scene.brain.as_mut() {
             br.fleets[2].vars = [(a + PERSIAN_WAIT[difficulty()]) * 1500, 2, 0, 0];
-            br.fleets[5].vars[0] = YARD_REST[difficulty()];
-            br.fleets[9].vars = [(b + BARBARIAN_WAIT[difficulty()]) * 1500, 0, 0, 0];
+            br.fleets[6].vars[0] = YARD_REST[difficulty()];
+            br.fleets[10].vars = [(b + BARBARIAN_WAIT[difficulty()]) * 1500, 0, 0, 0];
         }
     }
 
@@ -3492,6 +3795,15 @@ mod miss004 {
             program: yard_750,
             wants: &[],
         },
+        // Mends the prizes (0x452580, by the yard's docks; see
+        // `brain_prize`).
+        FleetDef {
+            group: 0,
+            member: 6,
+            cells: &[],
+            program: repair::<5>,
+            wants: &[],
+        },
         // The barbarians (player 16; 0x453030-0x4536c0).
         FleetDef {
             group: 1,
@@ -3550,6 +3862,15 @@ mod miss004 {
             program: yard_2000,
             wants: &[],
         },
+        // Mends the prizes (0x452fb0, by the yard's docks; see
+        // `brain_prize`).
+        FleetDef {
+            group: 2,
+            member: 4,
+            cells: &[],
+            program: repair::<3>,
+            wants: &[],
+        },
     ];
 
     pub fn start(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
@@ -3564,9 +3885,9 @@ mod miss004 {
         let (a, b) = (scene.brain_draw() % 3, scene.brain_draw() % 3);
         if let Some(br) = scene.brain.as_mut() {
             br.fleets[4].vars = [(a + RAID_WAIT[difficulty()]) * 1500, 2, 0, 0];
-            br.fleets[6].vars[0] = YARD_REST[difficulty()];
-            br.fleets[9].vars = [7500, 3, 0, 0];
-            br.fleets[12].vars = [(b + RAID_WAIT[difficulty()]) * 1500, 2, 0, 0];
+            br.fleets[7].vars[0] = YARD_REST[difficulty()];
+            br.fleets[10].vars = [7500, 3, 0, 0];
+            br.fleets[13].vars = [(b + RAID_WAIT[difficulty()]) * 1500, 2, 0, 0];
         }
     }
 
@@ -4149,8 +4470,16 @@ mod miss005 {
             program: persian_east,
             wants: &[(ROYAL, [1, 3, 3])],
         },
-        // (1, 5) mends (0x4564c0, not ported): the raiders are (1, 6) and
-        // (1, 7), run at 35 and 40 (0x457950).
+        // Mends the Persians' prizes (0x4564c0, by the yard's docks; see
+        // `brain_prize`).
+        FleetDef {
+            group: 1,
+            member: 5,
+            cells: &[],
+            program: repair::<0>,
+            wants: &[],
+        },
+        // The raiders (1, 6) and (1, 7), run at 35 and 40 (0x457950).
         FleetDef {
             group: 1,
             member: 6,
@@ -4182,8 +4511,8 @@ mod miss005 {
         if let Some(br) = scene.brain.as_mut() {
             br.fleets[0].vars[0] = YARD_REST[difficulty()];
             br.fleets[3].vars = [(r[0] + BARBARIAN_WAIT[difficulty()]) * 1500, 3, 0, 0];
-            br.fleets[9].vars = [(r[1] + NORTH_WAIT[difficulty()]) * 1500, 5, 0, 2];
-            br.fleets[10].vars = [(r[2] + WEST_WAIT[difficulty()]) * 1500, 3, 0, 1];
+            br.fleets[10].vars = [(r[1] + NORTH_WAIT[difficulty()]) * 1500, 5, 0, 2];
+            br.fleets[11].vars = [(r[2] + WEST_WAIT[difficulty()]) * 1500, 3, 0, 1];
         }
     }
 
@@ -4477,13 +4806,13 @@ mod miss005 {
         }
     }
 
-    /// Raider fleets: north 9, west 10. Their variables: 0 the wait before
+    /// Raider fleets: north 10, west 11. Their variables: 0 the wait before
     /// a raid, 1 the size it raids at, 2 the spell it casts on its ships
     /// as it attacks (0 none), 3 the size below which a raid is called off
     /// ("fewer than" + 1). The barbarian yard's (fleet 0) 2 and 3: north
     /// and west have landed.
-    const NORTH: usize = 9;
-    const WEST: usize = 10;
+    const NORTH: usize = 10;
+    const WEST: usize = 11;
     const SPELL: usize = 2;
     const LANDED: [usize; 2] = [2, 3];
 
@@ -5091,7 +5420,7 @@ mod miss006 {
             group: 1,
             member: 5,
             cells: &[],
-            program: repair,
+            program: repair::<0>,
             wants: &[],
         },
         // Members (1, 6), which never runs (no case in 0x45b280), and
@@ -5152,7 +5481,7 @@ mod miss006 {
             group: 2,
             member: 5,
             cells: &[],
-            program: repair,
+            program: repair::<0>,
             wants: &[],
         },
         // Member (2, 6) (0x45ae70).
@@ -6009,15 +6338,6 @@ mod miss006 {
         }
     }
 
-    /// The prize members (1, 5) and (2, 5) (0x459f60, 0x477190): their
-    /// ships to the docks to be mended (0x47a7e0).
-    fn repair(_: u32) -> Op {
-        Op::Custom(|scene, k| {
-            scene.fleet_to_docks(k);
-            0
-        })
-    }
-
     /// A member with no ships of its own.
     fn idle(_: u32) -> Op {
         Op::Custom(|_, _| 0)
@@ -6198,7 +6518,7 @@ mod miss007 {
             group: 1,
             member: 6,
             cells: &[],
-            program: idle,
+            program: repair::<0>,
             wants: &[],
         },
     ];
@@ -7134,7 +7454,7 @@ mod miss008 {
             group: 1,
             member: 13,
             cells: &[],
-            program: repair,
+            program: repair::<2>,
             wants: &[],
         },
     ];
@@ -7862,14 +8182,6 @@ mod miss008 {
         ];
         patrol(state, ROUND, W, 4500, 0)
     }
-
-    /// Member 13 (0x462fb0): sends what it is handed to the docks.
-    fn repair(_: u32) -> Op {
-        Op::Custom(|scene, k| {
-            scene.fleet_to_docks(k);
-            0
-        })
-    }
 }
 
 /// miss009's brain (0x4663d0). The barbarians (player 16, group 0) have a
@@ -8052,7 +8364,7 @@ mod miss009 {
             group: 1,
             member: 6,
             cells: &[],
-            program: repair,
+            program: repair::<2>,
             wants: &[],
         },
     ];
@@ -8806,14 +9118,6 @@ mod miss009 {
             _ => Op::Custom(|_, _| 0),
         }
     }
-
-    /// Member 6 (0x4661e0): sends what it is handed to the docks.
-    fn repair(_: u32) -> Op {
-        Op::Custom(|scene, k| {
-            scene.fleet_to_docks(k);
-            0
-        })
-    }
 }
 
 /// miss010's brain (0x46a0f0; constructor 0x469d90). The barbarians
@@ -9045,7 +9349,7 @@ mod miss010 {
             group: 1,
             member: 10,
             cells: &[],
-            program: repair,
+            program: repair::<2>,
             wants: &[],
         },
     ];
@@ -9809,14 +10113,6 @@ mod miss010 {
             op => op,
         }
     }
-
-    /// Member 10 (0x469d10): sends what it is handed to the docks.
-    fn repair(_: u32) -> Op {
-        Op::Custom(|scene, k| {
-            scene.fleet_to_docks(k);
-            0
-        })
-    }
 }
 
 /// miss011's brain (0x46e8e0; its members' handlers precede it,
@@ -10041,7 +10337,7 @@ mod miss011 {
             group: 1,
             member: 6,
             cells: &[],
-            program: repair,
+            program: repair::<0>,
             wants: &[],
         },
         // Casts at the player near the Persians' temple (0x46e110; see
@@ -10851,14 +11147,6 @@ mod miss011 {
         }
     }
 
-    /// Member 6 (0x46e090): sends what it is handed to the docks.
-    fn repair(_: u32) -> Op {
-        Op::Custom(|scene, k| {
-            scene.fleet_to_docks(k);
-            0
-        })
-    }
-
     /// The things of the player in `area`, ships and buildings (0x479ed0
     /// with masks 0xfff and 0xffffff).
     fn human_count(scene: &Scene, area: Cells) -> usize {
@@ -11125,7 +11413,7 @@ mod miss012 {
             group: 1,
             member: 5,
             cells: &[],
-            program: repair,
+            program: repair::<0>,
             wants: &[],
         },
         // Casts at the player near player 15's temple (0x471440; see
@@ -11192,7 +11480,7 @@ mod miss012 {
             group: 2,
             member: 6,
             cells: &[],
-            program: repair,
+            program: repair::<0>,
             wants: &[],
         },
         // Casts at the player near player 14's temple (0x472890; see
@@ -12007,15 +12295,6 @@ mod miss012 {
         }
     }
 
-    /// Members (1, 5) and (2, 6) (0x475a70, 0x477190): send what they are
-    /// handed to the docks.
-    fn repair(_: u32) -> Op {
-        Op::Custom(|scene, k| {
-            scene.fleet_to_docks(k);
-            0
-        })
-    }
-
     /// A caster (members (1, 6) and (2, 7), 0x471440 and 0x472890), run
     /// from `turn` as it has no ships: waits `(3, 2, 1) by difficulty x
     /// 1500` ticks (10), then, if it has cast fewer than (1, 2, 3) spells,
@@ -12290,7 +12569,7 @@ mod miss013 {
             group: 1,
             member: 5,
             cells: &[],
-            program: repair,
+            program: repair::<0>,
             wants: &[],
         },
         // Casts at the player near player 15's temple (0x475af0; see
@@ -12350,7 +12629,7 @@ mod miss013 {
             group: 2,
             member: 6,
             cells: &[],
-            program: repair,
+            program: repair::<0>,
             wants: &[],
         },
         // Casts at the player near player 14's temple (0x477210; see
@@ -13357,15 +13636,6 @@ mod miss013 {
             },
             _ => fight(state, 375),
         }
-    }
-
-    /// Members (1, 5) and (2, 6) (0x475a70, 0x477190): send what they are
-    /// handed to the docks.
-    fn repair(_: u32) -> Op {
-        Op::Custom(|scene, k| {
-            scene.fleet_to_docks(k);
-            0
-        })
     }
 
     /// A caster (members (1, 6) and (2, 7), 0x475af0 and 0x477210), run

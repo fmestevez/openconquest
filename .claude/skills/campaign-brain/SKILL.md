@@ -23,9 +23,12 @@ are in `story.rs`.
   rerolls).
 - `FleetDef { group, member, cells, program, wants }`: the member's group
   (computer player) and its original member index (not always its place
-  in `FLEETS`: miss002's yard is (1, 7), miss003's southern guard (0, 5),
-  miss005's raiders (1, 6), (1, 7)), the cells its ships start in, its
-  program, and the ship types it asks its builder for, by difficulty.
+  in `FLEETS`: miss002's (1, 6), which does nothing, is left out), the
+  cells its ships start in, its program, and the ship types it asks its
+  builder for, by difficulty. Adding a member shifts every later fleet
+  index: fix the literals (`br.fleets[N]`, `const ...: usize`) and add the
+  members to `ADDED` with a new `LAYOUT` so old saves line up
+  (`Brain::upgrade`).
 - The cadence (`run_brain`): the brain's tick is the game clock; every 5
   ticks `before`, then each member (g, m) when the tick is 5 x (g + m)
   modulo 50, then `after`. Members run with or without ships: an empty
@@ -48,6 +51,8 @@ are in `story.rs`.
   it.
 - Fleet vars (`fleets[k].vars`) are the member's fields; brain-wide state
   lives on `Brain` (serde-default fields, saved).
+- Every repair member is `repair::<YARD>` (0x47a7e0, fleet order 0x82:
+  `repair_order`, `run_repair_orders`; prizes join by `brain_join`).
 - Shared helpers: `brain_cast_fleet`, `want_full_town`/`want_town_order`
   (town orders, 0x47b130), `run_brain_jobs`, `persian_bonus`,
   `brain_mended`, `wake_volcano`, `human_site_area`, `fleet_types`...

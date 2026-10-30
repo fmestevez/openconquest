@@ -1143,6 +1143,11 @@ impl Scene {
         scene.site_heroes = save.site_heroes.iter().cloned().collect();
         if save.brain.is_some() {
             scene.brain = save.brain.clone();
+            // A brain saved with fewer members lines up with the mission's
+            // fleets again.
+            if let Some(b) = scene.brain.as_mut() {
+                b.upgrade();
+            }
         }
         if let Some(c) = &save.computers {
             scene.computers = c.clone();

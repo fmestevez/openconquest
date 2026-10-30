@@ -3495,8 +3495,9 @@ adjustment (not decoded); the other mains leave 0, so their draws are the
 same game after game (the first is 0x3039 >> 16 = 0). The port:
 `Brain::rng`, saved with the brain, seeded 0 or, for miss007-010, the wall clock's
 milliseconds; every brain step's draw comes from it (the helpers
-0x421490 / 0x421740 and the brain's repair fleet keep the scene's
-generator: theirs was not read).
+0x421490 / 0x421740 keep the scene's generator: theirs was not read; the
+repair order's dock pick draws the fleet manager's, `Brain::fleet_rng`,
+below).
 
 In the executable each brain's per-fleet handlers come first and its main
 function (the message handler that creates the fleets, lays deposits and
@@ -3615,9 +3616,12 @@ the start (0x8d1) that the switch has no case for never run: miss004
 (0, 7), (2, 5); miss006 (1, 6); miss008 (0, 0), (1, 0); miss009 (0, 0);
 miss010 (0, 0), (1, 0). A member's index is not always its place among
 the port's fleets: miss002's Persian yard is (1, 7) (0x44cbd0; (1, 6) is
-0x406330, which does nothing, (1, 8) the repair 0x44cf20), miss003's
-southern guard (0, 5) ((0, 4) the repair 0x452fb0), miss005's raiders
-(1, 6) and (1, 7), at 35 and 40 ((1, 5) the repair 0x4564c0). Every 125
+0x406330, which does nothing and is not among them), then (1, 8) the
+repair 0x44cf20. The repair members (0, 4) of miss003, (1, 5) of miss005,
+(1, 8) of miss002, (0, 6) and (2, 4) of miss004 are in the port's fleets
+in member order since its brain layout 1 (`Brain::layout`; a brain saved
+before is given them, empty, on restore, `Brain::upgrade`, and its
+requests, ships being built and town orders move up past them). Every 125
 ticks it judges the mission (vtable + 8, e.g. 0x448e90 for miss000, which counts
 objects with 0x4c46c0) and ends it as won or lost. At the start (message
 0x8d1) miss000's brain creates its three barbarian fleets and gives their
@@ -4066,19 +4070,74 @@ miss013 (0x477930; members 0x4741b0-0x477210, judge 0x473f40):
 
 Primitives not yet ported (the later brains use them):
 
-- **0x47a7e0, repair** (ported as prizes sailing to a dock; `(group,
-  member, ok, failed, builder, b, timeout,
-  events)`). It gives the fleet order 0x82 (0x479900, 0x4cdf80; `builder` =
-  the brain member that holds the docks, kind 11). The fleet's ships go to
-  one of that member's docks, picked at random (0x4cdea0, 0x42cc40), and are
-  mended there. Every brain has one member running only this, set up as
-  behave, then repair (miss001 0x44cf20 with builder 7, miss003 0x452580
-  with 5, ...). Ships join it when the brain's player captures them: the
-  capture (0x4b6f20) sends event 0x5d97 and the brain adds the prize to that
-  member (0x479300, op 2; miss002 group 1, member 8). Message 300 (a ship
-  joined, 0x4a1340) sends it to a dock (0x4cdc00, 0x4cdb00). Once mended
-  (message 0x134) it goes to the fleet named by the order's second
-  argument, which is 0 in every brain, so it stays.
+- **0x47a7e0, repair** (ported). Every repair member is the same program
+  (0x44cf20 miss002 (1, 8) with `YARD` 7, 0x452580 miss004 (0, 6) 5,
+  0x452fb0 miss003 (0, 4) and miss004 (2, 4) 3, 0x4564c0 miss005 (1, 5)
+  0, 0x459f60 / 0x477190 miss006 (1, 5) / (2, 5) 0, 0x45f370 miss007
+  (1, 6) 0, 0x462fb0 miss008 member 13 2, 0x4661e0 miss009 member 6 2,
+  0x469d10 miss010 member 10 2, 0x46e090 miss011 member 6 0, 0x475a70 /
+  0x477190 miss012 and miss013 (1, 5) / (2, 6) 0): state 0 behaves and
+  goes to 10, state 10 is `0x47a7e0(g, m, 0, 0, YARD, 0, 0, none)`. `YARD`
+  is a number in the player's fleet list (0x479200 makes the members in
+  order, 0x49b990 appending: fleet n is member (g, n)): its group's yard.
+  First call: fleet order **0x82** with `{0, 0, YARD, 0}` (0x479900,
+  0x4cdf80). A new block (0x4cd840, 0x65 bytes zeroed, `{0x82, 0x51,
+  now}`) gets `+0x10` = args[1] = 0 (a dock id), then, args[1] being 0
+  and args[2] >= 0, the dock pick 0x4cdea0 **before** `+0x21` = args[2]
+  is written (so it looks at the player's fleet 0), then `+0x21` = YARD,
+  `+0x18` = args[3] = 0 (the fleet a mended ship is handed to), `+0xc` =
+  0; every ship of the fleet, hurt or not, is sent (0x4cdb00, 0x4cd930:
+  ship command 0x1e `{+0xc, +0x10, 0x50}`, the human's "go to dock").
+  Later calls query 0x83 (0x4ce2d0), which writes only `out[0..4]`;
+  0x47a7e0's exits read `out[5]`, a stack word never written: not
+  decoded, the port keeps the member in 10. **The dock pick 0x4cdea0**:
+  the player's fleet `+0x21` must be kind 0xb with a land fleet `+0x29`,
+  else 0. 0x42cc40 = 0x42c9a0(class 0x3b) (player 16: class 0x40, its
+  buildings of that class directly) on the land fleet drops from its
+  list every building gone or in state `+0xa4` 2, 3 or 0xff, then lists
+  the docks of its towns (type 0x1491: count 0x43d220 `+0x210`, entries
+  0x440c60 from the town's buildings `+0x1d0` of class 0x3b, `{id, x,
+  y}`). With any: `+0x10` = the first, `+0x14` its cell, one draw of the
+  fleet manager's LCG (`DAT_005c7504 +0x18`, `s * 0x41c64e6d + 0x3039`),
+  and the id of entry `(s >> 16) % count` is returned. **The tick
+  0x4ce140**: the fleet's queue `+0x2d` is heard newest first (0x4cdc00):
+  300 (a ship joined, posted by 0x4a1340 when 0x4a0480 op 2 adds one) for
+  a ship in the fleet (0x4cc590): the dock pick (now on the yard), and the
+  ship sent if the pick found one or `+0x10` is set: 0x4cdb00 with
+  `+0x61` 0 (no waypoints, every repair order) sends to `+0x10` whatever
+  dock it is given, so the random dock only tells whether any was found;
+  then 0x4c42f0(1, ...). 0x134 (mended): `+0x18 > 0` would hand it on
+  (0x49bd60); it is noted in `+0x1d` with state 10 (0x4cd980) and given
+  ship command 10. 0x136 only with waypoints. If no 300 sent a ship and
+  fleet `+8 > 0x5f`: `+8` = 0, each ship's pending blow is reported
+  (0x4a21c0, 0x4cf760), and each ship lying still (`+0x58c` 0) not noted
+  mended is sent to `+0x10` again. Last `+8 += game +0xe2`. The fleet
+  record is zeroed when made (0x49b990), so `+8` starts at 0. **Who
+  joins**: the brain's message 0x5d97 (the capture 0x4b6f20) for player
+  15's (miss004 and miss006 also 14's) prizes, by 0x479300 op 2: miss002
+  15 (1, 8); miss003 15 (0, 4); miss004 15 (0, 6), 14 (2, 4); miss005 15
+  (1, 5); miss006 15 (1, 5), 14 (2, 5); no type test. 0x49bd60 adds the
+  ship to fleet n of **the ship's own player**. So miss003's order starts
+  with no dock (fleet 0 is a ship fleet, kind 10) and its first prize sets
+  `+0x10` to the dock of the town at (58, 1); miss005's starts with the
+  dock of the town at (8, 11) (fleet 0 is the yard); miss002's (1, 0) and
+  miss004's (0, 0) and (2, 0) are kind 10 too (0x8d1). The port:
+  `repair::<YARD>`, `Scene::repair_order`, `repair_pick`,
+  `run_repair_orders` (each brain tick), `brain_repaired` (0x134),
+  `brain_join` (0x5d97, from `brain_prize`), the order on `Fleet::repair`
+  (`+0x10`, `+0x21`, `+8`, `+0x1d`) and the queue on `Fleet::joined`; a
+  land fleet's list is its member's buildings, a town's docks those whose
+  nearest town it is (`home_settlement`, as the full-town order), first in
+  the scene's order; the update's ticks `game +0xe2` are taken as 1 a
+  tick, as the wind's counter. Not decoded: the manager LCG's seed (0
+  here); the towns' states 2, 3 and 0xff (not dropped); the order of a
+  town's buildings `+0x1d0`; what ship command 0x1e does with dock 0 or an
+  unhurt ship (the port's repair order refuses both); ship command 10
+  after 0x134; 0x4c42f0; whether the navy's tick (0x49ad18) runs before or
+  after the brain's; the 0x5d98 gate `+0x14`. The pass's blow reports are
+  not ported (the port reports at once). miss007-miss013's prize tables
+  are not ported: their prizes sail to one of the player's docks, picked
+  at random.
 - **0x47ae10, cast** (`(group, member, kind, x, y, pay)`). The fleet casts
   spell `kind` (5-16, one per command; costs from 0x596844 by 0x47abb0,
   paid when `pay`) at cell (x, y) through message 0x3ee (0x47ab40). It is
