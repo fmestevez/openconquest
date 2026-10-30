@@ -271,6 +271,12 @@ enum AfterFade {
     LoadingIn,
     LoadingOut,
     GameIn,
+    /// A saved game loading (command 0x102: 0x4ef350 after the systems
+    /// are torn down, then gamesys 0x101's own): a second fade out, black
+    /// to black, the full 50 x 5 ms, then `LoadingIn`.
+    Black,
+    /// Quit (command 0x131: 0x4ef350, then the loop ends): no fade in.
+    Exit,
 }
 
 /// The screen last shown: which (none, the game) and its picture (without
@@ -1120,6 +1126,9 @@ pub struct App {
     /// The game being started by the briefing's or Custom missions' Start
     /// (command 0x101): the fade into it shows `LOADING`.
     entering: bool,
+    /// The game entered is a saved one being loaded (command 0x102): the
+    /// fade into it goes through black first (`AfterFade::Black`).
+    entering_load: bool,
     /// The game's fade in (0x50f740): steps taken and when the last was.
     game_fade: Option<(u32, Instant)>,
     /// What the menus' sample channel plays (`mus_menu` or the briefing's
@@ -1321,6 +1330,7 @@ impl App {
             fade: None,
             shown: None,
             entering: false,
+            entering_load: false,
             game_fade: None,
             menu_sample: None,
             tasks: None,
@@ -2905,6 +2915,9 @@ impl App {
         self.page = Page::Main;
         self.center_pending = true;
         self.briefing = false;
+        // As Custom missions' Start: command 0x101 (0x5373ab), gamesys
+        // 0x101's fades (from the session screen).
+        self.entering = self.menu.is_some();
         self.menu = None;
         self.in_game = true;
         self.videos.clear();
@@ -4086,7 +4099,7 @@ impl App {
                 self.refresh_panels();
                 self.open_list(MenuState::Load(LoadTab::Scenario, None));
             }
-            (_, "Quit game") => self.quit = true,
+            (_, "Quit game") => self.quit_game(),
             // The campaign from its first mission, on its briefing.
             (_, "Start scenario") => {
                 if let Some(&first) = self.category_missions(Category::Campaign).first() {
@@ -5117,14 +5130,18 @@ impl App {
                 }
             }
             Ask::NoName | Ask::SaveFailed => {}
-            Ask::Restart => self.switch_mission(0),
+            Ask::Restart => {
+                if self.switch_mission(0) {
+                    self.fade_into_load();
+                }
+            }
             // The game ends and the title screen comes back (0x4fc).
             Ask::MainMenu => {
                 if self.menus.is_some() {
                     self.leave_game();
                 }
             }
-            Ask::Quit => self.quit = true,
+            Ask::Quit => self.quit_game(),
         }
     }
 
@@ -5533,10 +5550,10 @@ impl App {
         }
     }
 
-    fn switch_mission(&mut self, delta: isize) {
+    fn switch_mission(&mut self, delta: isize) -> bool {
         if self.net.is_some() {
             self.say("Not in a multiplayer game");
-            return;
+            return false;
         }
         let n = self.missions.len() as isize;
         let next = (self.mission_index as isize + delta).rem_euclid(n) as usize;
@@ -5559,8 +5576,12 @@ impl App {
                 self.briefing = true;
                 self.refresh_panels();
                 self.update_title();
+                true
             }
-            Err(e) => eprintln!("failed to load {}: {e:#}", self.missions[next]),
+            Err(e) => {
+                eprintln!("failed to load {}: {e:#}", self.missions[next]);
+                false
+            }
         }
     }
 
@@ -5619,6 +5640,7 @@ impl App {
                 self.briefing = false;
                 self.refresh_panels();
                 self.update_title();
+                self.fade_into_load();
                 self.say("Game loaded");
             }
             Err(e) => self.say(format!("Could not load: {e:#}")),
@@ -6953,7 +6975,11 @@ impl App {
                         let then = if screen.is_some() {
                             AfterFade::ScreenIn
                         } else if std::mem::take(&mut self.entering) {
-                            AfterFade::LoadingIn
+                            if std::mem::take(&mut self.entering_load) {
+                                AfterFade::Black
+                            } else {
+                                AfterFade::LoadingIn
+                            }
                         } else {
                             AfterFade::Nothing
                         };
@@ -6972,8 +6998,11 @@ impl App {
                 last => self.shown = last,
             }
         }
-        if self.fade.as_ref().is_some_and(|f| f.size != size) {
-            self.fade = None;
+        // A fade of another size is dropped (Quit's ends at once).
+        if self.fade.as_ref().is_some_and(|f| f.size != size)
+            && self.fade.take().is_some_and(|f| f.then == AfterFade::Exit)
+        {
+            self.quit = true;
         }
         if let Some(f) = &self.fade {
             if level(f.way, f.since.elapsed().as_millis() as u64) == Level::Done {
@@ -6985,6 +7014,17 @@ impl App {
                         self.fade = None;
                         self.game_fade = Some((0, Instant::now()));
                     }
+                    AfterFade::Black => {
+                        self.fade = Some(Fading {
+                            way: Way::Out,
+                            since: Instant::now(),
+                            pixels: vec![0; (size.0 * size.1) as usize],
+                            size,
+                            then: AfterFade::LoadingIn,
+                        });
+                    }
+                    // Black until the program ends.
+                    AfterFade::Exit => self.quit = true,
                     AfterFade::Nothing => self.fade = None,
                 }
             }
@@ -7028,6 +7068,55 @@ impl App {
             size,
         });
         true
+    }
+
+    /// The picture shown now fades out (0x4ef350(50, 5)), then `then`: a
+    /// saved game loaded in the game, or Quit. With no picture shown yet
+    /// (nothing drawn), `then` at once.
+    fn fade_out_then(&mut self, then: AfterFade) {
+        let shown = self
+            .shown
+            .take()
+            .filter(|s| !s.pixels.is_empty() && s.pixels.len() == (s.size.0 * s.size.1) as usize);
+        match shown {
+            Some(s) => {
+                self.fade = Some(Fading {
+                    way: crate::fade::Way::Out,
+                    since: Instant::now(),
+                    pixels: s.pixels,
+                    size: s.size,
+                    then,
+                });
+                // The game's frame is kept again once it is drawn.
+                self.shown = Some(Shown {
+                    screen: s.screen,
+                    pixels: Vec::new(),
+                    size: s.size,
+                });
+            }
+            None => self.quit |= then == AfterFade::Exit,
+        }
+    }
+
+    /// Quit game (the main menu's, 0x5310a0 message 0x164, and Alt+Q's yes,
+    /// 0x4f0: command 0x131): the picture fades out (0x4ef350(50, 5)),
+    /// then the program ends; no pointer hidden, no fade in.
+    fn quit_game(&mut self) {
+        self.fade_out_then(AfterFade::Exit);
+    }
+
+    /// A saved game built in place of the one under way (command 0x102:
+    /// the file panel's load, Restart, Ctrl+O): the game's picture fades
+    /// out, then black, `LOADING` in and out and the game in (gamesys
+    /// 0x101). From a front-end screen the screen change does it
+    /// (`entering_load`).
+    fn fade_into_load(&mut self) {
+        if self.menu.is_none() {
+            self.fade_out_then(AfterFade::Black);
+        } else {
+            self.entering = true;
+            self.entering_load = true;
+        }
     }
 
     /// `LOADING` fading `way`, drawn into a picture of `size`, then `then`.
@@ -7576,8 +7665,12 @@ impl ApplicationHandler for App {
                         }
                     }
                     KeyCode::Enter if self.modifiers.alt_key() => self.toggle_fullscreen(),
-                    KeyCode::PageDown => self.switch_mission(1),
-                    KeyCode::PageUp => self.switch_mission(-1),
+                    KeyCode::PageDown => {
+                        self.switch_mission(1);
+                    }
+                    KeyCode::PageUp => {
+                        self.switch_mission(-1);
+                    }
                     // Tab puts the radar map in place of the view.
                     KeyCode::Tab => self.toggle_radar(),
                     // Space hides or shows the control bar (the manual's
@@ -8149,6 +8242,81 @@ mod custom_tests {
         assert!(!mine.is_empty() && !rest.is_empty());
         assert!(mine.iter().all(|e| marked(&app, e)));
         assert!(!rest.iter().any(|e| marked(&app, e)));
+    }
+
+    /// The fades of Quit (command 0x131: 0x4ef350(50, 5), then the end)
+    /// and of a saved game loaded (command 0x102: the picture out, a
+    /// black 50 x 5 ms, `LOADING` in and out, the game's 25 steps in).
+    #[test]
+    fn quit_and_load_fade_as_the_original() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        let size = (800, 600);
+        let mut pixels = vec![0u32; 800 * 600];
+        let mut draw = |app: &mut App| {
+            let mut frame = Frame {
+                pixels: &mut pixels,
+                width: size.0,
+                height: size.1,
+            };
+            app.draw_front_end(&mut frame)
+        };
+        // Ages the fade under way past its 50 steps of 5 ms.
+        let age = |app: &mut App| {
+            let f = app.fade.as_mut().unwrap();
+            f.since -= Duration::from_millis(crate::fade::STEPS as u64 * crate::fade::STEP_MS);
+            f.then
+        };
+        // The title screen shown, Quit game: it fades out, then the end.
+        app.menu = Some(MenuState::Main);
+        app.shown = None;
+        draw(&mut app);
+        age(&mut app);
+        draw(&mut app);
+        assert!(app.fade.is_none());
+        app.menu_action(MenuState::Main, "Quit game");
+        let f = app.fade.as_ref().unwrap();
+        assert_eq!((f.way, f.then), (crate::fade::Way::Out, AfterFade::Exit));
+        assert!(!app.quit);
+        draw(&mut app);
+        assert!(!app.quit);
+        age(&mut app);
+        draw(&mut app);
+        assert!(app.quit);
+        // A game shown, a save loaded in it: out, black, LOADING in and
+        // out, then the game's own fade in.
+        app.quit = false;
+        app.fade = None;
+        app.menu = None;
+        app.in_game = true;
+        app.shown = Some(Shown {
+            screen: None,
+            pixels: vec![7; 800 * 600],
+            size,
+        });
+        app.fade_into_load();
+        assert_eq!(app.fade.as_ref().unwrap().pixels[0], 7);
+        let mut chain = Vec::new();
+        while app.fade.is_some() {
+            chain.push(age(&mut app));
+            draw(&mut app);
+        }
+        assert_eq!(
+            chain,
+            [
+                AfterFade::Black,
+                AfterFade::LoadingIn,
+                AfterFade::LoadingOut,
+                AfterFade::GameIn
+            ]
+        );
+        assert!(app.game_fade.is_some());
+        // From the Load game screen the screen change does it, through
+        // black too.
+        app.menu = Some(MenuState::Load(LoadTab::Scenario, None));
+        app.fade_into_load();
+        assert!(app.entering && app.entering_load);
     }
 
     /// Custom missions' Start with no Human row (0x53b940: no viewing

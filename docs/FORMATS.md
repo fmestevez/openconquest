@@ -2163,12 +2163,26 @@ loaded, fade out again (50, 5), resource `PALETTE` taken, and message
 0x102 fades the game in from its idle (0x50f740 -> 0x54a100): each idle
 pass, while i < 25 and at least 1 ms after the last step, step i at
 ftol(100 / 25 x i) = 4i percent; at 25 the palette exactly and message
-0x4e8. The port, drawing in true colour, shades every pixel; the
-pointer is not drawn while a fade runs. The briefing's and Custom
-missions' Start take the 0x101 way; the port's other ways into a game
-(a saved game loaded, the multiplayer start) fade out only (their
-commands are not followed). Quit (0x131) also fades out (50, 5): not
-ported.
+0x4e8. Every game build goes through it: 0x4ebf50 (commands 0x101,
+0x102, 0x103 of 0x4ec1a0) makes the game screen and posts it 0x101. The
+briefing's and Custom missions' Start and the multiplayer session's
+(0x532b20, the post at 0x5373ab) send command 0x101, which has no fade of
+its own. A saved game loaded (the Load game screen, 0x530480 -> 0x4edcc0
+then 0x102 at 0x53097c; the file panel's load, 0x50a700/0x50b54c;
+Restart, 0x4fd at 0x50aea2; the bar's Ctrl+O with a save name, 0x5128b9)
+is command 0x102: sounds stopped, the game's systems torn down, pointer
+hidden and a fade out (50, 5) from the screen or the game's picture,
+the save read, then 0x4ebf50 and gamesys 0x101: a second fade out, black
+to black, the full 250 ms, `LOADING` in and out, the game in. The demo
+(0x103) hides the pointer and fades out before the same build. Quit
+(the main menu's 0x164 -> command 0x131 at 0x53128c; the in-game Alt+Q's
+yes, 0x4f0; the dispatcher's own 0x131 at 0x53e271): in multiplayer a
+leave message (0x548fe0), then a fade out (50, 5) and the loop ends
+(`[game+0x1c]` = 1; 0x4ee6c0 saves Config); no pointer hidden, no fade
+in. The port, drawing in true colour, shades every pixel; the pointer
+is not drawn while a fade runs (the original's, a sprite, fades with
+the palette on Quit). The port's quick load (its own Ctrl+O) and
+Restart (which reloads the mission) take the 0x102 fades.
 
 **Version.** The title screen's line is `(game + 0xa7d >> 16) & 0xff`
 in string 1145 "Version 2.%02d"; + 0xa7d is the registry `Type`, which
