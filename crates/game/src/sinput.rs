@@ -26,7 +26,6 @@ use winit::keyboard::KeyCode;
 
 /// Scan codes (`DIK_*`) the front end binds.
 pub const ESCAPE: u8 = 0x01;
-pub const BACKSPACE: u8 = 0x0e;
 pub const ENTER: u8 = 0x1c;
 pub const SPACE: u8 = 0x39;
 pub const LALT: u8 = 0x38;

@@ -1876,11 +1876,36 @@ program ends.
   + 24 i, 286, 19), 39 characters, starting active, text the name (MH
   variant 2 from its top left, the 0x174 background the backdrop's, so
   the row's name under it is not seen); a caret 2 x 18 in palette colour
-  0xfb. Characters (WM_CHAR) go in but Backspace, Enter and Esc; its keys
-  (Sinput, priority 0xff, repeating, exclusive): Esc leaves it, Enter
-  posts 0x175 (the text into the row), Backspace. OK (0x16c) also puts
-  the text into the row. The connect screen's name edit (0x538440) is the
-  same, 0x104 characters, its text the resources' name list.
+  0xfb. OK (0x16c) also puts the text into the row. The connect screen's
+  name edit (0x538440, (43, 256, 420, 24)) is the same, 0x104 characters,
+  its text the resources' name list.
+- The name edits (_sedit.cpp, handler 0x54f040, single line, flag 1):
+  made active (state 1) with the caret before the first character
+  (message 2 zeroes the caret and scroll fields; neither screen sends 0x29
+  or 0x33 after). Active, the edit binds eleven keys (priority 0xff,
+  repeating and exclusive, in this order): Esc 0x35, Up 0x3a, Down 0x3b,
+  Right 0x3c, Left 0x3d, Home 0x3e, End 0x3f, Enter 0x39, Insert 0x38,
+  Backspace 0x36, Delete 0x37. Characters (WM_CHAR, any but 8, 0x0d,
+  0x1b) are inserted at the caret while the text is shorter than its
+  limit (0x54ecd0; there is no overwrite: Insert toggles flag 2, which
+  nothing of a single-line edit reads). The caret mover 0x54e5f0 clamps
+  to the text's end, brings the first shown column (+ 0x146) back to the
+  caret and on while the characters from it to the caret, each its width
+  and the gap (1), reach the box's width; the caret's x is that sum. Left
+  at column 0 does nothing, Right stops at the end, Home and End go to
+  the ends, Up does nothing, Down stays. Backspace deletes the character
+  before the caret, Delete the one at it (0x54ea60; nothing at column 0
+  or the end). Enter posts 0x175: the end screen puts the text into its
+  row; the connect screen posts 0x170, New's action (0x538af0). Esc (and
+  a left press outside, 0x61) leaves the edit: state 0, its bindings
+  gone, the caret not drawn, the text and caret kept. A left press
+  strictly inside its box makes it active again (the keys bound again)
+  and puts the caret before the first character, from the first shown,
+  whose band [x, x + width + 1) holds the click, else at the end
+  (0x54e430; it stores that column, counted from the text's start, in
+  the field counted from the first shown). The keys repeat at the host's
+  keyboard delay and speed (Sinput 0x552cc0); the port takes the
+  system's own key repeat.
 - Best Conquerors' title (0x528520): `CD<t+1>` (game + 0x66d + 0x104 t)
   when game + 0xb8f has bit t and the name is set, else string 1038 + t
   (" "); variant 2 or 0. The installer (setup.exe 0x404cc0) reads the
@@ -1979,13 +2004,6 @@ state with kind 9; what enters and leaves it is not decoded (0x518db0,
 
 Known differences not yet ported:
 
-- The name edits' caret keys (Left, Right, Up, Down, Home, End, Insert,
-  Delete: _sedit messages 0x3a-0x3f, 0x37, 0x38) and the repeat
-  intervals of held keys (Sinput + 0x58, + 0x5c): the port's edits type
-  and take Backspace at the end, without repeat; how an edit left with
-  Esc is entered again (_sedit message 0x20) and where its caret goes
-  (the port: at the text's end, as on the connect screen) are not read;
-  what the connect screen does with its edit's 0x175.
 - Config's player name (0x5ca578, written back by 0x53d2f0 when
   DAT_005d01fc is 0) is not kept between runs.
 - Custom missions' map tick (0x1dd, DAT_005ca538, Config + 0x10): the

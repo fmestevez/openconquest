@@ -123,12 +123,11 @@ enum KeyMsg {
     /// A key the screen binds itself (0x4e9840): the command of the button
     /// it acts for, on the key's going down.
     Command(&'static str),
-    /// A name edit's keys (_sedit.cpp 0x54f040 message 8): Esc leaves it
-    /// (0x35), Enter (0x39) posts 0x175, Backspace (0x36) takes the
-    /// character before the caret.
-    EditLeave,
-    EditEnter,
-    EditBack,
+    /// A name edit's keys (_sedit.cpp 0x54f040 message 8), by the message
+    /// each sends it: Esc 0x35, Backspace 0x36, Delete 0x37, Insert 0x38,
+    /// Enter 0x39, Up 0x3a, Down 0x3b, Right 0x3c, Left 0x3d, Home 0x3e,
+    /// End 0x3f.
+    Edit(u8),
     /// Custom missions' kind pop-up (0x52ebe0): its Esc (0x1d5), its
     /// list's Enter, and its Up and Down buttons down and up.
     PopupClose,
@@ -149,9 +148,103 @@ struct ScoreEntry {
     kind: usize,
     row: usize,
     text: String,
-    /// Not yet left with Esc.
-    active: bool,
+    edit: NameEdit,
 }
+
+/// A single-line name edit (_sedit.cpp 0x54f040, flags 1: the connect
+/// screen's and the end screen's), in the fields the original keeps. It is
+/// made active with the caret before the first character (message 2
+/// zeroes the caret and scroll fields).
+#[derive(Debug, Clone, Copy, Default)]
+struct NameEdit {
+    /// State 1: its keys bound and the caret drawn.
+    active: bool,
+    /// The first column shown (+ 0x146), the caret's column from it
+    /// (+ 0x1c6) and its x in the box (+ 0x1ba).
+    first: usize,
+    col: usize,
+    x: f32,
+}
+
+impl NameEdit {
+    fn new() -> Self {
+        Self {
+            active: true,
+            ..Default::default()
+        }
+    }
+
+    /// The caret to column `c` of `text` (0x54e5f0, single line): up to
+    /// the text's end; the first column shown back to it, then on while the
+    /// characters from it to the caret, each its width and the gap
+    /// (`band`), reach the box's width.
+    fn move_to(&mut self, text: &str, c: usize, band: &dyn Fn(&str) -> f32, width: f32) {
+        let c = c.min(text.chars().count());
+        self.first = self.first.min(c);
+        while band(columns(text, self.first, c)) >= width {
+            self.first += 1;
+        }
+        self.x = band(columns(text, self.first, c));
+        self.col = c - self.first;
+    }
+
+    /// The caret's column in the text.
+    fn at(&self) -> usize {
+        self.first + self.col
+    }
+
+    /// A left click `px` across the box (0x54e430): the caret before the
+    /// first character from the first shown whose band holds it, past the
+    /// end at the end. The column found is stored as it is, from the
+    /// text's start, in the field counted from the first shown (equal
+    /// while nothing is scrolled).
+    fn click(&mut self, text: &str, px: f32, band: &dyn Fn(&str) -> f32) {
+        let n = text.chars().count();
+        let hit = (self.first..n).find(|&i| {
+            band(columns(text, self.first, i)) <= px && px < band(columns(text, self.first, i + 1))
+        });
+        let c = hit.unwrap_or(n);
+        self.col = c;
+        self.x = band(columns(text, self.first, c));
+    }
+}
+
+/// Characters `a` to `b` (not included) of `text`.
+fn columns(text: &str, a: usize, b: usize) -> &str {
+    let at = |k: usize| text.char_indices().nth(k).map_or(text.len(), |(i, _)| i);
+    if b <= a {
+        return "";
+    }
+    &text[at(a)..at(b)]
+}
+
+/// The name edits' keys (scan code, message), in the order 0x54f040 binds
+/// them (priority 0xff, repeating and exclusive).
+const EDIT_KEYS: [(u8, u8); 11] = [
+    (0x01, 0x35),
+    (0xc8, 0x3a),
+    (0xd0, 0x3b),
+    (0xcd, 0x3c),
+    (0xcb, 0x3d),
+    (0xc7, 0x3e),
+    (0xcf, 0x3f),
+    (0x1c, 0x39),
+    (0xd2, 0x38),
+    (0x0e, 0x36),
+    (0xd3, 0x37),
+];
+
+/// The name edits' font: MH variant 2, characters a pixel apart.
+const EDIT_STYLE: crate::menus::Style = crate::menus::Style {
+    font: "MH",
+    variant: 2,
+    spacing: 1,
+};
+
+/// The connect screen's name edit box (0x538440: (30 + 13, 225 + 31),
+/// 0x1a4 x 0x18) and the end screen's width (0x539350).
+const CONNECT_EDIT: crate::menus::Rect = (43.0, 256.0, 420.0, 24.0);
+const SCORE_EDIT_WIDTH: f32 = 286.0;
 
 /// A front-end fade under way (`fade`): the picture it shades, its size
 /// and the palette it is in, and whether the new screen fades in after.
@@ -815,8 +908,8 @@ pub struct App {
     campaign_mask: u32,
     /// The end screen's name edit, when a row was entered.
     score_entry: Option<ScoreEntry>,
-    /// The connect screen's name edit has not been left with Esc.
-    connect_edit: bool,
+    /// The connect screen's name edit.
+    connect_edit: NameEdit,
     /// The front end's key bindings, and the screen they are for.
     menu_keys: crate::sinput::Keys<KeyMsg>,
     keys_screen: Option<std::mem::Discriminant<MenuState>>,
@@ -1012,7 +1105,7 @@ impl App {
             game_id,
             campaign_mask: 0,
             score_entry: None,
-            connect_edit: false,
+            connect_edit: NameEdit::default(),
             menu_keys: Default::default(),
             keys_screen: None,
             fade: None,
@@ -1715,22 +1808,16 @@ impl App {
                     text: t.into(),
                     clip: None,
                 };
-                let name_style = style("MH", 2);
-                let typed = self
-                    .menus
-                    .as_ref()
-                    .map_or(0.0, |m| m.measure(name_style, &self.player_name));
-                // The name's edit (type 6) at (43, 256), its caret in
-                // palette colour 0xfb (0x538440, 0x563140).
+                let name_style = EDIT_STYLE;
+                // The name's edit (type 6) at (43, 256), its text from its
+                // first column shown, its caret in palette colour 0xfb
+                // (0x538440, 0x563140) at the caret's x.
                 let caret_colour = self
                     .menus
                     .as_ref()
                     .and_then(|m| m.colour(Backdrop::TitleDim, 0xfb));
-                let caret = if self.player_name.is_empty() {
-                    43.0
-                } else {
-                    44.0 + typed
-                };
+                let edit = self.connect_edit;
+                let shown = columns(&self.player_name, edit.first, usize::MAX);
                 let at_button = |caption: &str, x, shape| Button {
                     caption: caption.into(),
                     x,
@@ -1751,13 +1838,16 @@ impl App {
                     texts: vec![
                         text(style("BH", 2), 43.0, 228.0, "Player's name"),
                         text(style("BH", 2), 43.0, 293.0, "Select communication channel"),
-                        text(name_style, 43.0, 256.0, &self.player_name),
+                        Text {
+                            clip: Some(CONNECT_EDIT.2),
+                            ..text(name_style, 43.0, 256.0, shown)
+                        },
                         text(style("MH", 2), 43.0, 321.0, "Internet TCP/IP Connection"),
                     ],
                     // While the edit is not left (Esc).
                     fills: caret_colour
-                        .filter(|_| self.connect_edit)
-                        .map(|c| vec![((caret, 256.0, 2.0, 18.0), c)])
+                        .filter(|_| edit.active)
+                        .map(|c| vec![((43.0 + edit.x, 256.0, 2.0, 18.0), c)])
                         .unwrap_or_default(),
                     buttons: vec![
                         at_button("New", 60.0, 2),
@@ -1914,17 +2004,12 @@ impl App {
                             style,
                             x: 410.0,
                             y,
-                            text: e.text.clone(),
-                            clip: Some(286.0),
+                            text: columns(&e.text, e.edit.first, usize::MAX).into(),
+                            clip: Some(SCORE_EDIT_WIDTH),
                         });
-                        if e.active {
-                            let x = if e.text.is_empty() {
-                                410.0
-                            } else {
-                                411.0 + menus.measure(style, &e.text)
-                            };
+                        if e.edit.active {
                             if let Some(c) = menus.colour(Backdrop::Accomplished, 0xfb) {
-                                fills.push(((x, y, 2.0, h), c));
+                                fills.push(((410.0 + e.edit.x, y, 2.0, h), c));
                             }
                         }
                     }
@@ -2715,7 +2800,7 @@ impl App {
                 kind,
                 row,
                 text: name,
-                active: true,
+                edit: NameEdit::new(),
             });
         }
     }
@@ -2750,19 +2835,12 @@ impl App {
         };
         let command =
             |caption: &'static str, key: u8| (0, (key, 0), 0, KeyMsg::Command(caption), None);
-        let edit = |enter: bool| {
-            let mut keys = vec![(EXCLUSIVE | 1, (ESCAPE, 0), 0xff, KeyMsg::EditLeave, None)];
-            if enter {
-                keys.push((EXCLUSIVE | 1, (ENTER, 0), 0xff, KeyMsg::EditEnter, None));
-            }
-            keys.push((
-                EXCLUSIVE | 1,
-                (crate::sinput::BACKSPACE, 0),
-                0xff,
-                KeyMsg::EditBack,
-                None,
-            ));
-            keys
+        // The edit's eleven, in the order 0x54f040 makes them.
+        let edit = || {
+            EDIT_KEYS
+                .iter()
+                .map(|&(key, msg)| (EXCLUSIVE | 1, (key, 0), 0xff, KeyMsg::Edit(msg), None))
+                .collect::<Vec<Binding>>()
         };
         match state {
             // Startmm.cpp 0x530cb0: no Esc, Enter or Space.
@@ -2796,8 +2874,8 @@ impl App {
             // Startrpt.cpp 0x539350: the edit (made first), OK, Enter.
             MenuState::Outcome(_) => {
                 let mut keys = Vec::new();
-                if self.score_entry.as_ref().is_some_and(|e| e.active) {
-                    keys.extend(edit(true));
+                if self.score_entry.as_ref().is_some_and(|e| e.edit.active) {
+                    keys.extend(edit());
                 }
                 keys.push(button("OK", (LALT, 0x18)));
                 keys.push(command("OK", ENTER));
@@ -2817,8 +2895,8 @@ impl App {
                     button("Join", (LALT, 0x24)),
                     button("Cancel", (ESCAPE, 0)),
                 ];
-                if self.connect_edit {
-                    keys.extend(edit(false));
+                if self.connect_edit.active {
+                    keys.extend(edit());
                 }
                 keys
             }
@@ -2896,20 +2974,7 @@ impl App {
                 }
             }
             KeyMsg::Command(caption) => self.menu_fire(state, caption),
-            KeyMsg::EditLeave => self.leave_edit(state),
-            // In a single-line edit Enter posts 0x175: the end screen
-            // names the row (what the connect screen does with it is not
-            // read).
-            KeyMsg::EditEnter => {
-                if let MenuState::Outcome(_) = state {
-                    self.store_score_name();
-                }
-            }
-            KeyMsg::EditBack => {
-                if let Some(text) = self.edit_text(state) {
-                    text.pop();
-                }
-            }
+            KeyMsg::Edit(msg) => self.edit_key(state, msg),
             KeyMsg::PopupClose => self.close_kind_popup(),
             KeyMsg::PopupChoose => {
                 if let Some(i) = self.kind_popup.as_ref().map(|p| p.current) {
@@ -3190,64 +3255,180 @@ impl App {
         self.in_game = true;
     }
 
-    /// The text of screen `state`'s active name edit.
-    fn edit_text(&mut self, state: MenuState) -> Option<&mut String> {
+    /// Runs `op` on screen `state`'s name edit with its text, the band of
+    /// a run of characters (their widths and a pixel's gap each, 0x547280
+    /// and 0x547110), its length limit and its box's width. False when the
+    /// screen has none.
+    fn with_edit(
+        &mut self,
+        state: MenuState,
+        op: impl FnOnce(&mut String, &mut NameEdit, &dyn Fn(&str) -> f32, usize, f32),
+    ) -> bool {
+        let Some(menus) = self.menus.as_ref() else {
+            return false;
+        };
+        let band = |t: &str| {
+            if t.is_empty() {
+                0.0
+            } else {
+                menus.measure(EDIT_STYLE, t) + 1.0
+            }
+        };
+        let (text, edit, max, width) = match state {
+            MenuState::Outcome(_) => match self.score_entry.as_mut() {
+                Some(e) => (&mut e.text, &mut e.edit, SCORE_NAME_MAX, SCORE_EDIT_WIDTH),
+                None => return false,
+            },
+            MenuState::Connect => (
+                &mut self.player_name,
+                &mut self.connect_edit,
+                PLAYER_NAME_MAX,
+                CONNECT_EDIT.2,
+            ),
+            _ => return false,
+        };
+        op(text, edit, &band, max, width);
+        true
+    }
+
+    /// Whether screen `state`'s name edit is active.
+    fn edit_active(&self, state: MenuState) -> bool {
         match state {
-            MenuState::Outcome(_) => self
-                .score_entry
-                .as_mut()
-                .filter(|e| e.active)
-                .map(|e| &mut e.text),
-            MenuState::Connect if self.connect_edit => Some(&mut self.player_name),
-            _ => None,
+            MenuState::Outcome(_) => self.score_entry.as_ref().is_some_and(|e| e.edit.active),
+            MenuState::Connect => self.connect_edit.active,
+            _ => false,
         }
     }
 
-    /// Esc in a name edit (0x35): it is left (state 0) and its bindings go,
-    /// giving back those they shadowed.
-    fn leave_edit(&mut self, state: MenuState) {
-        let enter = match state {
-            MenuState::Outcome(_) => match self.score_entry.as_mut() {
-                Some(e) => {
-                    e.active = false;
-                    true
-                }
-                None => return,
+    /// A key of the active name edit (0x54f040, a single-line edit that is
+    /// not read-only): the caret moves left, right, home and end, up to
+    /// the text's ends (Up has no line above; Down stays on the line);
+    /// Backspace takes the character before the caret, Delete the one at
+    /// it (0x54ea60); Insert toggles a flag nothing here reads (flag 2,
+    /// typing always inserts); Enter posts 0x175; Esc leaves the edit.
+    fn edit_key(&mut self, state: MenuState, msg: u8) {
+        match msg {
+            0x35 => self.leave_edit(state),
+            // Single line (flag 1): the Enter message, 0x175. The end
+            // screen puts the text into its row (0x539b20); the connect
+            // screen posts 0x170, New's action (0x538af0; the port's one
+            // channel is always the one chosen).
+            0x39 => match state {
+                MenuState::Outcome(_) => self.store_score_name(),
+                MenuState::Connect => self.menu_fire(state, "New"),
+                _ => {}
             },
-            MenuState::Connect => {
-                self.connect_edit = false;
-                false
+            0x38 => {}
+            _ => {
+                self.with_edit(state, |text, e, band, _, width| {
+                    let n = text.chars().count();
+                    let c = e.at();
+                    match msg {
+                        0x36 | 0x37 => {
+                            let Some(c) = (if msg == 0x36 {
+                                c.checked_sub(1)
+                            } else {
+                                Some(c)
+                            }) else {
+                                return;
+                            };
+                            if c < n {
+                                let from = columns(text, 0, c).len();
+                                let len = columns(text, c, c + 1).len();
+                                text.replace_range(from..from + len, "");
+                            }
+                            e.move_to(text, c, band, width);
+                        }
+                        0x3a => {}
+                        0x3b => e.move_to(text, c, band, width),
+                        0x3c => e.move_to(text, c + 1, band, width),
+                        0x3d => {
+                            if let Some(c) = c.checked_sub(1) {
+                                e.move_to(text, c, band, width);
+                            }
+                        }
+                        0x3e => e.move_to(text, 0, band, width),
+                        0x3f => e.move_to(text, n, band, width),
+                        _ => {}
+                    }
+                });
             }
-            _ => return,
-        };
+        }
+    }
+
+    /// Esc in a name edit (0x35): it is left (state 0, the caret kept)
+    /// and its bindings go, giving back those they shadowed.
+    fn leave_edit(&mut self, state: MenuState) {
+        if !self.with_edit(state, |_, e, _, _, _| e.active = false) {
+            return;
+        }
         let down = self.scan_state();
         let held = |k: u8| down[usize::from(k)];
-        use crate::sinput::{BACKSPACE, ENTER, ESCAPE};
-        self.menu_keys
-            .remove((ESCAPE, 0), &KeyMsg::EditLeave, &held);
-        if enter {
-            self.menu_keys.remove((ENTER, 0), &KeyMsg::EditEnter, &held);
+        for &(key, msg) in &EDIT_KEYS {
+            self.menu_keys.remove((key, 0), &KeyMsg::Edit(msg), &held);
         }
-        self.menu_keys
-            .remove((BACKSPACE, 0), &KeyMsg::EditBack, &held);
+    }
+
+    /// A left press at `p` on screen `state` reaches its name edit
+    /// (0x54f040 message 0x61): strictly inside its box it becomes active
+    /// (its keys bound again) and the caret goes where the click is
+    /// (0x54e430); outside, an active edit is left.
+    fn edit_press(&mut self, state: MenuState, p: (f32, f32)) {
+        let rect = match state {
+            MenuState::Connect => CONNECT_EDIT,
+            MenuState::Outcome(_) => match (&self.score_entry, &self.menus) {
+                (Some(e), Some(menus)) => {
+                    let h = menus.tallest(EDIT_STYLE);
+                    (
+                        410.0,
+                        344.0 + (h + 6.0) * e.row as f32,
+                        SCORE_EDIT_WIDTH,
+                        h + 1.0,
+                    )
+                }
+                _ => return,
+            },
+            _ => return,
+        };
+        let (x, y, w, h) = rect;
+        let inside = p.0 > x && p.0 < x + w && p.1 > y && p.1 < y + h;
+        let was = self.edit_active(state);
+        if !inside {
+            if was {
+                self.leave_edit(state);
+            }
+            return;
+        }
+        if !was {
+            self.with_edit(state, |_, e, _, _, _| e.active = true);
+            let down = self.scan_state();
+            let held = |k: u8| down[usize::from(k)];
+            use crate::sinput::EXCLUSIVE;
+            for &(key, msg) in &EDIT_KEYS {
+                self.menu_keys.add(
+                    EXCLUSIVE | 1,
+                    (key, 0),
+                    0xff,
+                    Some(KeyMsg::Edit(msg)),
+                    None,
+                    &held,
+                );
+            }
+        }
+        self.with_edit(state, |text, e, band, _, _| e.click(text, p.0 - x, band));
     }
 
     /// Characters typed (WM_CHAR, _sedit.cpp case 0x34): into the active
-    /// name edit, any but Backspace, Enter and Esc, up to its length (the
-    /// original's bytes, here characters); not with Alt held (Windows sends
-    /// those as WM_SYSCHAR).
-    fn edit_typed(&mut self, code: KeyCode, text: &str) -> bool {
+    /// name edit at the caret, any but Backspace, Enter and Esc, while the
+    /// text is shorter than its limit (0x54ecd0; the original's bytes,
+    /// here characters); not with Alt held (Windows sends those as
+    /// WM_SYSCHAR). The system repeats them as it repeats the key.
+    fn edit_typed(&mut self, code: KeyCode, typed: &str) -> bool {
         let Some(state) = self.menu else { return false };
-        let max = match state {
-            MenuState::Outcome(_) => SCORE_NAME_MAX,
-            MenuState::Connect => PLAYER_NAME_MAX,
-            _ => return false,
-        };
-        let alt = self.modifiers.alt_key();
-        let Some(edit) = self.edit_text(state) else {
+        if !self.edit_active(state) {
             return false;
-        };
-        if alt
+        }
+        if self.modifiers.alt_key()
             || matches!(
                 code,
                 KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape
@@ -3255,10 +3436,17 @@ impl App {
         {
             return true;
         }
-        for c in text.chars() {
-            if edit.chars().count() < max {
-                edit.push(c);
-            }
+        for ch in typed.chars() {
+            self.with_edit(state, |text, e, band, max, width| {
+                let n = text.chars().count();
+                if n >= max {
+                    return;
+                }
+                let c = e.at().min(n);
+                let from = columns(text, 0, c).len();
+                text.insert(from, ch);
+                e.move_to(text, e.at() + 1, band, width);
+            });
         }
         true
     }
@@ -3282,6 +3470,10 @@ impl App {
                 pop.dragged = false;
             }
             return;
+        }
+        // A screen's name edit takes the press too.
+        if let Some(state) = self.menu {
+            self.edit_press(state, p);
         }
         let (Some(state), Some(menus)) = (self.menu, &self.menus) else {
             return;
@@ -3582,7 +3774,7 @@ impl App {
             (MenuState::Best, "OK") => self.menu = Some(MenuState::Main),
             // The name's edit starts active (0x538440, state 1).
             (_, "MultiPlayer game") => {
-                self.connect_edit = true;
+                self.connect_edit = NameEdit::new();
                 self.menu = Some(MenuState::Connect);
             }
             (MenuState::Connect, "New") | (MenuState::Connect, "Join") => {
@@ -3710,7 +3902,7 @@ impl App {
             "best" => MenuState::Best,
             "connect" => {
                 self.player_name.clear();
-                self.connect_edit = true;
+                self.connect_edit = NameEdit::new();
                 MenuState::Connect
             }
             "multiplayer" => {
@@ -7303,6 +7495,59 @@ mod custom_tests {
         let h = app.scene.human.unwrap();
         assert_eq!((h.nation, h.slot), (3, 3));
         assert_eq!(app.scene.computers.off, vec![(1, 1)]);
+    }
+
+    /// The connect screen's name edit (_sedit.cpp): the caret starts at
+    /// column 0, typing inserts at it, the keys move and delete as
+    /// 0x54f040 does, Esc leaves and a click inside comes back with the
+    /// caret at the character clicked.
+    #[test]
+    fn the_name_edit_keys_as_the_original() {
+        let Some(mut app) = app() else {
+            return;
+        };
+        let state = MenuState::Connect;
+        app.menu_action(MenuState::Main, "MultiPlayer game");
+        assert_eq!(app.menu, Some(state));
+        app.poll_menu_keys();
+        app.player_name = "Jason".into();
+        assert_eq!((app.connect_edit.at(), app.connect_edit.x), (0, 0.0));
+        let type_in = |app: &mut App, t: &str| assert!(app.edit_typed(KeyCode::KeyA, t));
+        let key = |app: &mut App, m: u8| app.key_message(state, KeyMsg::Edit(m));
+        type_in(&mut app, "A");
+        assert_eq!(app.player_name, "AJason");
+        assert_eq!(app.connect_edit.at(), 1);
+        key(&mut app, 0x3f);
+        key(&mut app, 0x3d);
+        key(&mut app, 0x3d);
+        type_in(&mut app, "X");
+        assert_eq!(app.player_name, "AJasXon");
+        key(&mut app, 0x3e);
+        key(&mut app, 0x36);
+        assert_eq!(app.player_name, "AJasXon");
+        key(&mut app, 0x37);
+        assert_eq!(app.player_name, "JasXon");
+        key(&mut app, 0x3f);
+        key(&mut app, 0x37);
+        key(&mut app, 0x36);
+        assert_eq!(app.player_name, "JasXo");
+        key(&mut app, 0x3c);
+        assert_eq!(app.connect_edit.at(), 5);
+        // The caret's x: each character's width and a pixel.
+        let band = app.menus.as_ref().unwrap().measure(EDIT_STYLE, "JasXo") + 1.0;
+        assert_eq!(app.connect_edit.x, band);
+        // Esc leaves it: nothing typed goes in.
+        key(&mut app, 0x35);
+        assert!(!app.connect_edit.active);
+        assert!(!app.edit_typed(KeyCode::KeyA, "Q"));
+        // A click inside, on the second character.
+        let one = app.menus.as_ref().unwrap().measure(EDIT_STYLE, "J") + 1.0;
+        app.menu_press((CONNECT_EDIT.0 + one + 1.0, 260.0));
+        assert!(app.connect_edit.active);
+        assert_eq!(app.connect_edit.at(), 1);
+        // A click outside leaves it again.
+        app.menu_press((600.0, 100.0));
+        assert!(!app.connect_edit.active);
     }
 
     /// single02's HEAD_CUST (1, 0, 15): the human's row does not open, a
