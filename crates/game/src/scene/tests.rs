@@ -647,6 +647,13 @@ fn temple_magic() {
             .is_err(),
         "unknown"
     );
+    // Not under one of the player's own ships (0x42ef90: the occupant
+    // at war with the caster only); another player's, yes.
+    assert!(scene
+        .cast_hazard(Spell::Whirlpool, cx, cy, &data, &mut caches)
+        .is_err());
+    let i = scene.object_index(ship).unwrap();
+    scene.objects[i].owner = scene.objects[i].owner.map(|(n, s)| (n, s + 1));
     scene
         .cast_hazard(Spell::Whirlpool, cx, cy, &data, &mut caches)
         .unwrap();

@@ -169,6 +169,9 @@ impl Scene {
                 self.lightning.push((x, y, crate::clock::ticks(at), caster));
             }
             Spell::Fireball => {
+                // 0x42ef90 case 7: nothing at the cell's `+0x14`.
+                let caster = self.human.map(|h| (h.nation, h.slot));
+                self.cast_cell_check(spell, (cx, cy), caster)?;
                 self.pay_spell(spell)?;
                 self.add_sight_point(cx, cy);
                 let owner = self.human.map(|h| (h.nation, h.slot));
@@ -563,16 +566,17 @@ impl Scene {
         ) {
             return Err("Not a spell for the sea".into());
         }
-        if !self.nav.is_water(cx, cy) {
-            return Err("Choose open water".into());
-        }
+        // The pointer's cell tests (0x42ef90): the tile layers and the
+        // slots, for the reef, whirlpool and monster; the waterspout only
+        // a free `+0x14`, wherever it is.
+        let master = self.human.map(|h| (h.nation, h.slot));
+        self.cast_cell_check(spell, (cx, cy), master)?;
         let t = TILE_SIZE as f32;
         self.in_reach(spell, cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0)?;
         if !self.magic.knows(spell) && self.free_casts.get(&spell).is_none_or(|&n| n == 0) {
             return Err("The temple does not know that spell".into());
         }
         self.pay_spell(spell)?;
-        let master = self.human.map(|h| (h.nation, h.slot));
         self.spawn_hazard(spell, cx, cy, master, data, caches)
     }
 

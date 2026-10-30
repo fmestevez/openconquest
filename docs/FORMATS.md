@@ -2517,7 +2517,27 @@ cleared on all 12 together. Who sets them:
   empty; reef (3) the cell's tile layers and occupants within 12;
   whirlpool (1) also asks 0x42ed40 for the big reef (12) and the reef;
   tornado (2) within 15 and 0x406830; monster (0xd) within 12 and the
-  cell's tiles. The left press (0x4f34c0): command 3 sets the pointer
+  cell's tiles. In full: reef (3; big reef 4 after 0x42ed40(12);
+  whirlpool 1 after 0x42ed40(2) and (12)) 0x42ed40(1), layer 0's tile set
+  0 or 1 and layer 1's variant 0 (no shoal) and d <= 12, else no; then no
+  if the occupant (`grid + 0xc`) is a nature object (`+0x57` 2) or
+  0x4efe20(its player, the caster's) >= 0 (the same player, or at peace:
+  -2 both 0, -1 / 1 one way, 2 both 1 in the table `+0x2f45`), or the
+  third place `+0x1c` holds anything, or `+0x18` does. Monster: 0x42ed40(4),
+  d <= 12, the layers so, `+0x18` empty (no occupant test). Fireball:
+  0x42ed40(7), `+0x14` empty, d <= 12. Tornado: 0x42ed40(3), d < 16,
+  0x406830(0, x, y): `+0x14` empty (or 0). No water test for the tornado.
+  The slots of a cell: `+0xc` ships and buildings, `+0x10` skarb, amber,
+  fish, leviathan, `+0x14` fireballs (0x4060ec), harpies and dragons
+  (0x41ff74, 0x4208a5), tornadoes (0x43a9f6), `+0x18` the gorgon, `+0x1c`
+  treasure, reef, whirlpool, flock, volcano. The port casts a fort's
+  stored reef, whirlpool, monster, waterspout and fireball so, and puts
+  the temples' casts of those through the same cell tests (their reach
+  stays the temples'; the whirlpool's asking for the big reef and the
+  reef is not applied to the player's temples: which Magic object and
+  permission bits the player's pointer uses is not decoded). Not decoded:
+  what else holds `+0x14` and `+0x18`; the sea monster's and siren's
+  slots. The left press (0x4f34c0): command 3 sets the pointer
   state 0x15, kind 7; 0x70 sends order 0x23 {sub 1 unticked or 2 ticked,
   0xffffffff, 0xffffffff, 0xff..}, 0x73 the same with sub 3 or 4; commands
   1 and 2 (Stop, Break) send order 10. The fort answers the pointer

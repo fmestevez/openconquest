@@ -134,14 +134,112 @@ impl Scene {
         allowed && have_amber >= amber && have_fish >= fish
     }
 
+    /// 0x42ef90's tests of the cell `(x, y)` a spell is cast at, for
+    /// `caster`'s magic (the reach and permissions aside):
+    /// - reef, whirlpool (and big reef): layer 0 of tile set 0 or 1 (sea,
+    ///   shelf), layer 1's variant 0 (no shoal); the occupant (`grid +
+    ///   0xc`) none, or another player's (0x4efe20 < 0: the port's players
+    ///   are all at war), not a nature object (`+0x57` 2); nothing on the
+    ///   third place (`+0x1c`: a treasure, reef, whirlpool, flock or
+    ///   volcano) nor at `+0x18`;
+    /// - the sea monster: the layers so, nothing at `+0x18`;
+    /// - the waterspout (0x406830 with 0) and the fireball: nothing at
+    ///   `+0x14`.
+    ///
+    /// The slots as the port knows them: the ships lying in a cell or
+    /// stepping into it and the buildings on it hold `+0xc`; the gorgon
+    /// `+0x18`; fireballs (0x4060ec), harpies and dragons (0x41ff74,
+    /// 0x4208a5) and tornadoes (0x43a9f6) `+0x14`. (Not decoded: whatever
+    /// else may hold `+0x14` or `+0x18`, and the sea monster's and siren's
+    /// slots.)
+    pub(super) fn cast_cell_check(
+        &self,
+        spell: Spell,
+        (x, y): (i32, i32),
+        caster: Option<(u32, u32)>,
+    ) -> Result<(), String> {
+        let (w, h) = (self.grid.width as i32, self.grid.height as i32);
+        if x < 0 || y < 0 || x >= w || y >= h {
+            return Err("Choose open water".into());
+        }
+        let t = TILE_SIZE as f32;
+        let cell_of = |px: f32, py: f32| ((px / t).floor() as i32, (py / t).floor() as i32);
+        let layers = || {
+            let base = self.grid.get(0, x as u32, y as u32);
+            let shoal = self.grid.get(1, x as u32, y as u32);
+            matches!(base.tileset, 0 | 1) && shoal.variant == 0
+        };
+        let gorgon = || {
+            self.objects
+                .iter()
+                .any(|o| o.class == ObjectClass::Monster(0x1fa) && cell_of(o.x, o.y) == (x, y))
+        };
+        let flying = || {
+            self.objects.iter().any(|o| {
+                matches!(o.class, ObjectClass::Monster(0x1f8 | 0x1f9))
+                    && cell_of(o.x, o.y) == (x, y)
+            }) || self.fireballs.iter().any(|f| f.cell == (x, y))
+                || self
+                    .effects
+                    .iter()
+                    .any(|e| e.tornado.is_some() && cell_of(e.x, e.y) == (x, y))
+        };
+        match spell {
+            Spell::Reef | Spell::Whirlpool => {
+                if !layers() {
+                    return Err("Choose open water".into());
+                }
+                let ship = self
+                    .hazard_occupant((x, y))
+                    .and_then(|(id, _, _)| self.object_index(id));
+                let building = || {
+                    self.objects.iter().position(|o| {
+                        let Some((bx, by)) = o.cell else {
+                            return false;
+                        };
+                        let n = super::trade::building_cells(o);
+                        o.ship.is_none() && (bx..bx + n).contains(&x) && (by..by + n).contains(&y)
+                    })
+                };
+                if let Some(k) = ship.or_else(building) {
+                    let owner = self.objects[k].owner;
+                    if owner.is_none() || owner == caster {
+                        return Err("Something of yours is there".into());
+                    }
+                }
+                if self.third_place_object((x, y)).is_some() || gorgon() {
+                    return Err("Something is there already".into());
+                }
+                Ok(())
+            }
+            Spell::Monster => {
+                if !layers() {
+                    return Err("Choose open water".into());
+                }
+                if gorgon() {
+                    return Err("Something is there already".into());
+                }
+                Ok(())
+            }
+            Spell::Waterspout | Spell::Fireball => {
+                if flying() {
+                    return Err("Something is there already".into());
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// The pointer's check for a spell cast by fort `id` at cell `cell`
-    /// over `target` (0x42ef90; Magic.cpp distances from the fort's cell,
-    /// 0x5576d8): lightning (6) within 12 cells; the phantom and the
-    /// shields (8, 0xe, 0xf) on an object of the fort's own player within
-    /// 15; the view (0x11) anywhere. (Not ported: the sea's spells, whose
-    /// checks read the cell's tile layers and occupants, and the
-    /// fireball's, which reads one of the cell's slots, in ways not
-    /// decoded here; whirlpool also asks for the big reef and the reef.)
+    /// over `target` (0x42ef90, jump table 0x42f418; Magic.cpp distances
+    /// from the fort's cell, 0x5576d8): lightning (6) within 12 cells; the
+    /// phantom and the shields (8, 0xe, 0xf) on an object of the fort's
+    /// own player within 15; the view (0x11) anywhere; reef (3), monster
+    /// (0xd) and fireball (7) within 12, whirlpool (1) too but asking
+    /// 0x42ed40 for itself, the big reef (12) and the reef (1) in turn,
+    /// the waterspout (2) within 15 (below 16), each with its cell's tests
+    /// (`cast_cell_check`).
     fn fort_cast_check(
         &self,
         id: u32,
@@ -173,7 +271,24 @@ impl Scene {
                 }
                 Ok(())
             }
-            _ => Err("Not yet cast from a fort in this port".into()),
+            Spell::Reef | Spell::Whirlpool | Spell::Monster | Spell::Fireball => {
+                if spell == Spell::Whirlpool
+                    && !(self.fort_may_cast(id, BIG_REEF) && self.fort_may_cast(id, 1))
+                {
+                    return Err(String::new());
+                }
+                if d > 12 {
+                    return Err("Too far from the fort (reach: 12 cells)".into());
+                }
+                self.cast_cell_check(spell, cell, self.objects[i].owner)
+            }
+            Spell::Waterspout => {
+                if d >= 16 {
+                    return Err("Too far from the fort (reach: 15 cells)".into());
+                }
+                self.cast_cell_check(spell, cell, self.objects[i].owner)
+            }
+            _ => Err(String::new()),
         }
     }
 
@@ -227,6 +342,15 @@ impl Scene {
                     // over land, a frame a tick (0x42cfa0).
                     let at = if water { 11 } else { 40 };
                     self.lightning.push((x, y, crate::clock::ticks(at), owner));
+                }
+                // Magic.cpp 0x42f580 cases 1, 2, 4, 3: the record or the
+                // monster at the cell, fighting for the fort's player.
+                Spell::Reef | Spell::Whirlpool | Spell::Monster | Spell::Waterspout => {
+                    self.spawn_hazard(spell, cx, cy, owner, data, caches)?;
+                }
+                Spell::Fireball => {
+                    self.add_sight_point(cx, cy);
+                    self.spawn_fireball(cx, cy, owner, data, caches);
                 }
                 _ => {
                     if let Some(t) = target.and_then(|t| self.object_index(t)) {
@@ -496,5 +620,159 @@ mod data_tests {
         raze(&mut scene, &mut caches, home);
         assert!(!scene.mending.contains(&fort));
         assert!(!fire(&scene).fires());
+    }
+
+    /// A fort's stored sea spells (0x42ef90 cases 1, 2, 3, 0xd, 7 and
+    /// 0x42f580): a reef on open water within 12 cells, not under one of
+    /// its own ships but under another's, not on a cell holding a treasure,
+    /// not on land; a whirlpool only with the big reef and the reef to be
+    /// had as well (counts or permissions and prices); a monster, a
+    /// waterspout and a fireball cast (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn fort_casts_the_sea_spells() {
+        use openconquest_formats::ObjectClass;
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = crate::assets::GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let (mut scene, fort, _) = own_fort(&data, &mut caches);
+        scene.permits = crate::permits::Permits(0);
+        let f = scene.object_index(fort).unwrap();
+        let owner = scene.objects[f].owner;
+        let (fx, fy) = scene.objects[f].cell.unwrap();
+        // Open water (sea or shelf, no shoal) within 12 cells, with nothing
+        // on it.
+        let open = |scene: &crate::scene::Scene, skip: &[(i32, i32)]| {
+            (-8..=8)
+                .flat_map(|dy| (-8..=8).map(move |dx| (fx + dx, fy + dy)))
+                .filter(|c| !skip.contains(c))
+                .find(|&c| {
+                    scene.cast_cell_check(super::Spell::Reef, c, owner).is_ok()
+                        && scene.nav.is_water(c.0, c.1)
+                        && scene.hazard_occupant(c).is_none()
+                        && scene.third_place_object(c).is_none()
+                })
+                .expect("open water by the fort")
+        };
+        let sea = open(&scene, &[]);
+        let land = (-8..=8)
+            .flat_map(|dy| (-8..=8).map(move |dx| (fx + dx, fy + dy)))
+            .find(|&(x, y)| {
+                let (w, h) = (scene.grid.width as i32, scene.grid.height as i32);
+                (0..w).contains(&x)
+                    && (0..h).contains(&y)
+                    && !matches!(scene.grid.get(0, x as u32, y as u32).tileset, 0 | 1)
+            })
+            .unwrap();
+        scene.held.push((fort, spell(1)));
+        let reef = super::Spell::Reef;
+        assert!(scene
+            .fort_cast(fort, reef, land, None, &data, &mut caches)
+            .is_err());
+        // One of its own ships there: refused; another player's: cast.
+        let k = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+        let ship = scene.objects[k].id;
+        scene.objects[k].owner = owner;
+        (scene.objects[k].x, scene.objects[k].y) =
+            (sea.0 as f32 * 64.0 + 32.0, sea.1 as f32 * 64.0 + 32.0);
+        scene.objects[k].ship.as_mut().unwrap().path.clear();
+        assert!(scene
+            .fort_cast(fort, reef, sea, None, &data, &mut caches)
+            .is_err());
+        assert_eq!(scene.fort_spells(fort)[1], 1);
+        scene.objects[k].owner = owner.map(|(n, s)| (n, s + 1));
+        let before = scene.objects.len();
+        scene
+            .fort_cast(fort, reef, sea, None, &data, &mut caches)
+            .unwrap();
+        assert_eq!(scene.objects.len(), before + 1);
+        let r = scene.objects.iter().map(|o| o.id).max().unwrap();
+        let o = &scene.objects[scene.object_index(r).unwrap()];
+        assert_eq!(o.class, ObjectClass::Reef(0x25a));
+        assert_eq!(
+            (o.record.fields[4], o.record.fields[5], o.record.fields[6]),
+            (1, sea.0 as u32, sea.1 as u32)
+        );
+        assert_eq!(scene.hazards[&r].state, 0xff);
+        assert_eq!(scene.fort_spells(fort)[1], 0);
+        scene.objects.retain(|o| o.id != ship);
+        // The reef's own cell holds it now (`+0x1c`).
+        scene.held.push((fort, spell(2)));
+        let whirl = super::Spell::Whirlpool;
+        assert!(scene
+            .fort_cast(fort, whirl, sea, None, &data, &mut caches)
+            .is_err());
+        // A whirlpool asks for the big reef and the reef too.
+        let other = open(&scene, &[sea]);
+        assert!(scene
+            .fort_cast(fort, whirl, other, None, &data, &mut caches)
+            .is_err());
+        assert_eq!(scene.fort_spells(fort)[2], 1);
+        scene.held.push((fort, spell(1)));
+        scene.held.push((fort, spell(12)));
+        scene
+            .fort_cast(fort, whirl, other, None, &data, &mut caches)
+            .unwrap();
+        let w = scene.objects.iter().map(|o| o.id).max().unwrap();
+        assert_eq!(
+            scene.objects[scene.object_index(w).unwrap()].class,
+            ObjectClass::Whirlpool
+        );
+        assert_eq!(scene.hazards[&w].state, 3);
+        assert_eq!(scene.fort_spells(fort)[2], 0);
+        // A monster, a fireball, a waterspout.
+        scene.held.clear();
+        let third = open(&scene, &[sea, other]);
+        scene.held.push((fort, spell(4)));
+        scene
+            .fort_cast(fort, super::Spell::Monster, third, None, &data, &mut caches)
+            .unwrap();
+        assert!(scene
+            .objects
+            .iter()
+            .any(|o| o.class == ObjectClass::Monster(0x1fb)));
+        scene.held.push((fort, spell(7)));
+        let balls = scene.fireballs.len();
+        scene
+            .fort_cast(
+                fort,
+                super::Spell::Fireball,
+                (fx + 3, fy),
+                None,
+                &data,
+                &mut caches,
+            )
+            .unwrap();
+        assert_eq!(scene.fireballs.len(), balls + 1);
+        // A second on the same cell: its `+0x14` is taken.
+        scene.held.push((fort, spell(7)));
+        assert!(scene
+            .fort_cast(
+                fort,
+                super::Spell::Fireball,
+                (fx + 3, fy),
+                None,
+                &data,
+                &mut caches
+            )
+            .is_err());
+        scene.held.clear();
+        scene.held.push((fort, spell(3)));
+        let spouts = scene.effects.iter().filter(|e| e.tornado.is_some()).count();
+        scene
+            .fort_cast(
+                fort,
+                super::Spell::Waterspout,
+                (fx + 15, fy),
+                None,
+                &data,
+                &mut caches,
+            )
+            .unwrap();
+        assert_eq!(
+            scene.effects.iter().filter(|e| e.tornado.is_some()).count(),
+            spouts + 1
+        );
     }
 }

@@ -230,7 +230,7 @@ impl Scene {
     }
 
     /// The object on a cell's third place (+0x1c), by index.
-    fn third_place_object(&self, cell: (i32, i32)) -> Option<usize> {
+    pub(super) fn third_place_object(&self, cell: (i32, i32)) -> Option<usize> {
         (0..self.objects.len()).find(|&k| {
             let o = &self.objects[k];
             let f = |k| o.record.field(k).unwrap_or(0) as i32;
