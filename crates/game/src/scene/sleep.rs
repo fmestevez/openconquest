@@ -1,5 +1,6 @@
 //! Buildings asleep (record field 4 = 3, state 0x10, 0x441ba0 and
-//! 0x427f50): every 15 ticks each looks about its footprint, one cell
+//! 0x427f50): first `r % 15` ticks on (`r` its own generator's first
+//! draw, 0x4281de / 0x4422ad), then every 15 ticks each looks about its footprint, one cell
 //! round (0x425590), and wakes when a ship of its owner's stands there or
 //! an awake building of its owner's (0x32-0x3e) does; waking (0x425720)
 //! wakes the sleepers of its owner's about it the same way, and tells the
@@ -9,6 +10,13 @@ use super::*;
 
 impl Scene {
     pub(super) fn run_wakeups(&mut self, dt: f32) {
+        // A sleeper's first look is its generator's first draw.
+        for k in 0..self.objects.len() {
+            let o = &self.objects[k];
+            if o.asleep.is_some() && !self.building_lcgs.contains_key(&o.id) {
+                self.building_wake_drawn(k);
+            }
+        }
         let mut woken = Vec::new();
         for o in self.objects.iter_mut() {
             if let Some(left) = o.asleep.as_mut() {

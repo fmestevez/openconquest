@@ -1854,9 +1854,10 @@ pub fn resolve(
         progress: None,
         banner,
         cell,
-        // The first look at load + rand % 15 ticks.
-        asleep: (matches!(class, ObjectClass::Building(_)) && f(4) == 3)
-            .then(|| crate::clock::ticks(rec.id % 15)),
+        // The first look at load + `r % 15` ticks, `r` its generator's
+        // first draw (0x4281de, 0x4422ad), which the scene takes
+        // (`Scene::building_draw`).
+        asleep: (matches!(class, ObjectClass::Building(_)) && f(4) == 3).then_some(0.0),
     }))
 }
 

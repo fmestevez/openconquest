@@ -592,6 +592,20 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) -> Result<(), String> {
+        self.spawn_hazard_drawn(spell, (cx, cy), master, None, data, caches)
+    }
+
+    /// `spawn_hazard` with the caster's draw (0x42f580's fifth argument: a
+    /// fort's own generator's, 0x41bc61); without one the scene's.
+    pub(super) fn spawn_hazard_drawn(
+        &mut self,
+        spell: Spell,
+        (cx, cy): (i32, i32),
+        master: Option<(u32, u32)>,
+        draw: Option<u32>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Result<(), String> {
         let class = match spell {
             Spell::Whirlpool => 0x258,
             Spell::Reef => 0x25a,
@@ -639,7 +653,7 @@ impl Scene {
         // + slot).
         fields[4] = 1;
         fields[7] = match spell {
-            Spell::Reef => self.rng.next() % 3 + 1,
+            Spell::Reef => draw.unwrap_or_else(|| self.rng.next()) % 3 + 1,
             _ => master.map_or(0xff, |(n, s)| n * 4 + s),
         };
         if spell == Spell::Monster {
@@ -658,7 +672,7 @@ impl Scene {
             fields[14] = 2;
             fields[15] = 2;
             fields[10] = match master {
-                Some((4, _)) | None => self.rng.next() & 3,
+                Some((4, _)) | None => draw.unwrap_or_else(|| self.rng.next()) & 3,
                 Some((n, _)) => n.min(3),
             };
         }

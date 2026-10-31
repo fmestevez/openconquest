@@ -4175,7 +4175,7 @@ count), so a mission is never won without a town to carry:
 2 a saved state, 3 asleep (0x10), else standing. Asleep it keeps its owner
 and counts for the judges, but has no banner, no radar dot, no sight, can
 not be clicked, does not fire, is not aimed at (0x40dfc0), ignores blows,
-and takes no cargo or trade. Every 15 ticks (first at load + rand % 15) it
+and takes no cargo or trade. Every 15 ticks (first at load + `r % 15`, `r` its own generator's first draw, 0x4281de) it
 looks one cell round its footprint (0x425590) for a ship of its owner's or
 an awake building 0x32-0x3e of theirs; then it wakes (0x425720), waking its
 owner's sleepers round it in turn, and tells its owner (0x5d9a): miss001's
@@ -4902,20 +4902,47 @@ the side, by heading (0 / 4: `x = w u / 5`, `y = h / 4` or `h - h /
 / 5`, `h / 2 - (h / 2) u / 5`; 2 / 6: `w - w / 8` or `w / 8`, and `w u
 / 5` down, the width as written; 3 / 7: `(w / 2) u / 5 + w / 2`, `(h /
 2) u / 5`, or `(w / 2) u / 5`, `(h / 2) u / 5 + h / 2`). A building's
-(0x423520; harpy nests' 0x41cef0): with its own generator, a hit `w / 3
-+ (r % w) / 3`, `h / 3 + (r % h) / 3`, a miss a corner (`(r & 1) w`,
-`(r & 1) h`), clamped to the map. A jam's (0x415ce0): a hit its cell's
-centre with two members or more, else its member's; a miss its cell's
-corner. The port ports the start and a ship's aim (`Scene::ship_aim`);
-a building's is not ported, as its generator (`+0x18`, seeded
-`[game +0x2ee5] x id` at 0x4281a2, a save's own at type 2) is drawn
-elsewhere too (0x4281de, 0x424185, 0x4244a4, the forts' 0x41a895 /
-0x41bc61, the towns' 0x430449 / 0x441e9c / 0x4422ad), none of which
-the port has: a throw at a building aims as the port's other shots.
-Its picture stands up and left of its place (`+0xb4`, `+0xb8`) by
-`+0xbc` / `+0xc0` (0x4111b0 by class: the cyclops' 0x1e, 0x30, the
-minotaur's 0x1f, 0x35, the amazon's 0x1f, 0x2f; 0x411520 places it so at
-0x411ac1 through 0x50d660, which writes the picture's `+0x59` / `+0x5d`).
+(0x423520; harpy nests' 0x41cef0): two draws of its own generator, `r1`
+for x, `r2` for y, from its picture's (`+0x7c`) top left `+0x59` /
+`+0x5d`: a hit `w / 3 + (r1 % w) / 3`, `h / 3 + (r2 % h) / 3` (a nest's
+`((r1 & 1) + 1) (w / 3)`, `((r2 & 1) + 1) (h / 3)`), a miss a corner
+(`(r1 & 1) w`, `(r2 & 1) h`), clamped to `0 .. 64 x map - 1`. A jam's
+(0x415ce0): a hit its cell's centre with two members or more, else its
+member's; a miss its cell's corner. The port ports the start, a ship's
+aim (`Scene::ship_aim`) and a building's or nest's
+(`Scene::building_aim`). The creature's picture stands up and left of
+its place (`+0xb4`, `+0xb8`) by `+0xbc` / `+0xc0` (0x4111b0 by class: the
+cyclops' 0x1e, 0x30, the minotaur's 0x1f, 0x35, the amazon's 0x1f, 0x2f;
+0x411520 places it so at 0x411ac1 through 0x50d660, which writes the
+picture's `+0x59` / `+0x5d`).
+
+**A building's own generator** (`+0x18`; the base constructor 0x50b960
+sets it 0). Message 2 seeds it `[game +0x2ee5] x id` (WorkLandObj
+0x427f50 at 0x4281a2, TownObj 0x441ba0 at 0x442268, a harpy nest's
+0x41d715; a save's own at type 2). Record type 3 (asleep, state 0x10)
+draws the first look at once: `+0x1c0 = r % 15 + [game +0xde]`
+(0x4281de, 0x4422ad), then looks each time `+0x1c0 <= tick`, `+0x1c0 =
+tick + 15`. A fort (0x419f80, which runs 0x427f50 through 0x4e7640
+first) draws once more at its message 2 for its stock's first dword
+(0x41a895), and once at each cast it lets through (order 0x22, not busy
+and some count: 0x41bc61), which Magic.cpp 0x42f580 takes as the
+caster's draw (a reef's kind `r % 3 + 1`, a barbarian monster's `r &
+3`); the sea temple (0x438300) likewise for kinds 1-4, 0xd, 0x11 unless
+the order's byte `+0xd` gives it (0x438694); the war temple passes 0
+(0x439aa2). The town's draw at 0x441e9c runs before its seed, from 0,
+and leaves nothing. Also drawn: a burning blow's fire (0x423d60 at
+0x42417d: `r % 5` with the hit's third 1, else `r % 3`, 0, a free fire
+slot lit) and the fall's rubble, two a cell (0x4244a4, 0x4244cb). The
+port keeps the generators (`Scene::building_lcgs`, saved) and ports the
+first look, the fort's draws and the aim. Not ported: the building
+fires and rubble (none in the port, so their draws are not taken: a
+building aimed at after a burning blow draws as one that never burned),
+the sea temple's (the port's casts name no temple), and the aim at
+barbarian structures, castles, lairs and heroes' houses (0x423520 too,
+but their classes draw their generators elsewhere, not read: castles
+0x410e6e / 0x410ed8, lairs 0x415337 / 0x4156a8, barbarians
+0x4e8a5e-0x4e927a). (0x430449 is a reef's, 0x4300a0, not a building's.)
+
 
 **The pointer on a jam.** The cursor (0x5175b0) asks the view (message
 0xc44f) for the object under it: 0x49a580 (point, its cell, and the

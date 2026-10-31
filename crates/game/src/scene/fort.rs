@@ -301,9 +301,9 @@ impl Scene {
     /// count of its Magic object is not 0; Magic.cpp 0x42f580 casts it
     /// (0x42ed40 again, then 0x42f470: a count taken if there is one,
     /// else the price), and the first treasure of kind 9 for that spell
-    /// leaves the store (0x424cf0), cast or not. (Not ported: the draw of
-    /// the fort's own generator `+0x18` that goes with it, which the port
-    /// does not keep.)
+    /// leaves the store (0x424cf0), cast or not. Before it a draw of the
+    /// fort's own generator `+0x18` (0x41bc61), the caster's draw 0x42f580
+    /// takes (a reef's kind `r % 3 + 1`, a barbarian monster's `r & 3`).
     pub fn fort_cast(
         &mut self,
         site: u32,
@@ -323,6 +323,7 @@ impl Scene {
         }
         let s = spell as usize;
         let owner = self.objects[i].owner;
+        let draw = self.building_draw(i);
         if self.fort_may_cast(site, s) {
             if self.fort_spells(site)[s] == 0 {
                 if let Some(owner) = owner {
@@ -350,7 +351,7 @@ impl Scene {
                 // Magic.cpp 0x42f580 cases 1, 2, 4, 3: the record or the
                 // monster at the cell, fighting for the fort's player.
                 Spell::Reef | Spell::Whirlpool | Spell::Monster | Spell::Waterspout => {
-                    self.spawn_hazard(spell, cx, cy, owner, data, caches)?;
+                    self.spawn_hazard_drawn(spell, (cx, cy), owner, Some(draw), data, caches)?;
                 }
                 Spell::Fireball => {
                     self.add_sight_point(cx, cy);

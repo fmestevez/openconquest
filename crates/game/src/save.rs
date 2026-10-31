@@ -35,6 +35,9 @@ pub struct SaveGame {
     /// The ships' generators' seed.
     #[serde(default)]
     pub rnd_init: Option<u32>,
+    /// The buildings' own generators (`+0x18`), by id.
+    #[serde(default)]
+    pub building_lcgs: Vec<(u32, u32)>,
     pub constructions: Vec<Construction>,
     /// Standing settlements' and shipyards' own frames (`+0x7c->+0x45`).
     #[serde(default)]
@@ -235,6 +238,9 @@ pub struct SavedObject {
     #[serde(default)]
     pub dormant: Option<(Deposit, f32)>,
     pub combat: Option<Combatant>,
+    /// An asleep building's seconds to its next look (`+0x1c0`).
+    #[serde(default)]
+    pub asleep: Option<f32>,
 }
 
 impl SaveGame {

@@ -7463,6 +7463,74 @@ fn campaign_missions_start_unlost() {
     }
 }
 
+/// A sleeper's first look is its own generator's first draw (`[game
+/// +0x2ee5] x id`, 0x4281a2; `r % 15` ticks on, 0x4281de), and a
+/// building's aim draws on from there (0x423520: a miss a corner of its
+/// picture, clamped to the map); a harpy nest's (0x41cef0) a hit at a
+/// third or two of its picture (needs `OPENCONQUEST_DATA`).
+#[test]
+fn buildings_draw_their_own_generators() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    scene.brain = None;
+    let seed = scene.game_seed();
+    let asleep: Vec<usize> = (0..scene.objects.len())
+        .filter(|&k| scene.objects[k].asleep.is_some())
+        .collect();
+    assert_eq!(asleep.len(), 3);
+    scene.run_wakeups(0.0);
+    for &k in &asleep {
+        let id = scene.objects[k].id;
+        let mut r = crate::combat::Rng(seed.wrapping_mul(id));
+        let first = r.next() % 15;
+        assert_eq!(scene.objects[k].asleep, Some(crate::clock::ticks(first)));
+        assert_eq!(scene.building_lcgs.get(&id), Some(&r.0));
+        // A miss: a corner, by bit 0 of each draw.
+        let o = &scene.objects[k];
+        let l = &o.frames[0][0];
+        let (left, top) = crate::render::layer_origin(o, l);
+        let (w, h) = (l.image.width as i32, l.image.height as i32);
+        let (r1, r2) = (r.next() as i32, r.next() as i32);
+        let (mw, mh) = scene.map_size();
+        let cap = |v: i32, n: u32| v.clamp(0, n as i32 * 64 - 1);
+        let want = (cap(left + (r1 & 1) * w, mw), cap(top + (r2 & 1) * h, mh));
+        assert_eq!(scene.building_aim(k, false), want);
+        assert_eq!(scene.building_lcgs.get(&id), Some(&r.0));
+    }
+    // The first campaign mission with a harpy or dragon nest: a hit.
+    for m in 0..14 {
+        let Ok(mut scene) = Scene::load(&data, &mut caches, &format!("miss{m:03}")) else {
+            continue;
+        };
+        let Some(k) = scene
+            .objects
+            .iter()
+            .position(|o| o.class == ObjectClass::HarpyNest && !o.frames.is_empty())
+        else {
+            continue;
+        };
+        let id = scene.objects[k].id;
+        let mut r = crate::combat::Rng(scene.game_seed().wrapping_mul(id));
+        let o = &scene.objects[k];
+        let l = &o.frames[0][0];
+        let (left, top) = crate::render::layer_origin(o, l);
+        let (w, h) = (l.image.width as i32, l.image.height as i32);
+        let (r1, r2) = (r.next() as i32, r.next() as i32);
+        let (mw, mh) = scene.map_size();
+        let cap = |v: i32, n: u32| v.clamp(0, n as i32 * 64 - 1);
+        let want = (
+            cap(left + ((r1 & 1) + 1) * (w / 3), mw),
+            cap(top + ((r2 & 1) + 1) * (h / 3), mh),
+        );
+        assert_eq!(scene.building_aim(k, true), want);
+        return;
+    }
+}
+
 /// miss001's settlement, port and dock sleep (record field 4 = 3): unseen
 /// on the radar, unclickable, unharmed, till a ship of the player's comes
 /// beside them, when all three wake together (needs `OPENCONQUEST_DATA`).
@@ -9136,6 +9204,14 @@ fn land_creatures_look_alert_and_throw() {
     // throws at frame 0xb, twelve ticks on, or thirteen when it turned
     // (its picture set again is first drawn without a step, `+0xa8`).
     assert_eq!(scene.walkers[0].state, super::walkers::THROW);
+    // The building's own generator as it stands (`+0x18`: the game's seed
+    // x id, a fort's draw at 0x41a895), for its aim.
+    let seed = scene.game_seed().wrapping_mul(bid);
+    let fort = matches!(scene.objects[bi].class, ObjectClass::Building(0x34..=0x36));
+    let mut aim_rng = crate::combat::Rng(scene.building_lcgs.get(&bid).copied().unwrap_or(seed));
+    if !scene.building_lcgs.contains_key(&bid) && fort {
+        aim_rng.next();
+    }
     let entered = scene.ticks;
     let before = scene.walkers[0].heading;
     let mut thrown_at = None;
@@ -9176,8 +9252,9 @@ fn land_creatures_look_alert_and_throw() {
     assert_eq!(scene.walkers[0].heading as usize, heading);
     // It leaves from its picture's top left as 0x412a8d takes it (`+0xb4
     // - w / 2`, `+0xb8 - h`, the sequence's first frame's size) and the
-    // cyclops' spot for its heading (0x594ae0); at a building it aims as
-    // the port's other shots (0x423520 not ported).
+    // cyclops' spot for its heading (0x594ae0); it aims where the
+    // building's 0x423520 gives: two draws of its own generator, a hit
+    // `w / 3 + (r % w) / 3` from its picture's top left, a miss a corner.
     let names = caches
         .sequence(&data, &format!("CLPSPR_3{heading}"))
         .unwrap();
@@ -9202,7 +9279,18 @@ fn land_creatures_look_alert_and_throw() {
     ][heading];
     let pos = scene.walkers[0].pos;
     assert_eq!(throw.from, (pos.0 - w / 2 + spot.0, spot.1 - h + pos.1));
-    assert_eq!(throw.to, None);
+    let o = &scene.objects[bi];
+    let l = &o.frames[0][0];
+    let (left, top) = crate::render::layer_origin(o, l);
+    let (bw, bh) = (l.image.width as i32, l.image.height as i32);
+    let (r1, r2) = (aim_rng.next() as i32, aim_rng.next() as i32);
+    let aim = if throw.strikes {
+        (left + bw / 3 + (r1 % bw) / 3, top + bh / 3 + (r2 % bh) / 3)
+    } else {
+        (left + (r1 & 1) * bw, top + (r2 & 1) * bh)
+    };
+    assert_eq!(throw.to, Some(aim));
+    assert_eq!(scene.building_lcgs.get(&bid), Some(&aim_rng.0));
 }
 
 /// An armed ship ordered at a jam keeps the jam (0x4d04a0 `+0xc`) and

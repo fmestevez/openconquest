@@ -410,6 +410,80 @@ impl Scene {
         };
         (left + x, top + y)
     }
+
+    /// Building or harpy nest `k`'s own generator (`+0x18`), made at its
+    /// first use as its message 2 makes it: seeded `[game +0x2ee5] x id`
+    /// (WorkLandObj 0x427f50 at 0x4281a2, TownObj 0x441ba0 at 0x442268, a
+    /// nest's 0x41d715; the base constructor 0x50b960 left it 0); asleep
+    /// (record type 3, state 0x10) its first draw sets the first look
+    /// `r % 15` ticks on (`+0x1c0`, 0x4281de / 0x4422ad); a fort then
+    /// takes one more for its stock's first dword (FortressClassTy
+    /// 0x419f80 at 0x41a895, after 0x4e7640 has run 0x427f50). (The
+    /// town's draw at 0x441e9c comes before its seed, from the
+    /// constructor's 0, and leaves nothing behind.)
+    fn building_rng(&mut self, k: usize) -> Rng {
+        let id = self.objects[k].id;
+        if let Some(&v) = self.building_lcgs.get(&id) {
+            return Rng(v);
+        }
+        let mut r = Rng(self.game_seed().wrapping_mul(id));
+        let o = &mut self.objects[k];
+        if o.asleep.is_some() {
+            o.asleep = Some(crate::clock::ticks(r.next() % 15));
+        }
+        if matches!(o.class, ObjectClass::Building(0x34..=0x36)) {
+            r.next();
+        }
+        self.building_lcgs.insert(id, r.0);
+        r
+    }
+
+    /// A draw of building or harpy nest `k`'s own generator (`+0x18`).
+    pub(super) fn building_draw(&mut self, k: usize) -> u32 {
+        let mut r = self.building_rng(k);
+        let v = r.next();
+        self.building_lcgs.insert(self.objects[k].id, r.0);
+        v
+    }
+
+    /// Makes asleep building `k`'s generator, which draws its first look.
+    pub(super) fn building_wake_drawn(&mut self, k: usize) {
+        self.building_rng(k);
+    }
+
+    /// Where a throw at building `t` aims (its vt+0xc, 0x423520; a harpy
+    /// nest's 0x41cef0), by the hit byte, from its picture's top left and
+    /// size (`+0x7c` `+0x59` / `+0x5d`, `+0x61` / `+0x65`; here as the
+    /// port places it, `render::layer_origin`), two draws of its own
+    /// generator, `r1` for x and `r2` for y: a hit `w / 3 + (r1 % w) / 3`,
+    /// `h / 3 + (r2 % h) / 3` (a nest's `(r1 & 1 + 1) (w / 3)`, `(r2 & 1 +
+    /// 1) (h / 3)`); a miss a corner, `(r1 & 1) w`, `(r2 & 1) h`; then
+    /// clamped to the map (`0 ..= 64 x width - 1`, the same down).
+    pub(super) fn building_aim(&mut self, t: usize, hit: bool) -> (i32, i32) {
+        let o = &self.objects[t];
+        let nest = o.class == ObjectClass::HarpyNest;
+        let (left, top, w, h) = match o.frames.first().and_then(|f| f.first()) {
+            Some(l) => {
+                let (x, y) = crate::render::layer_origin(o, l);
+                (x, y, l.image.width as i32, l.image.height as i32)
+            }
+            None => (o.x as i32, o.y as i32, 0, 0),
+        };
+        let r1 = self.building_draw(t) as i32;
+        let r2 = self.building_draw(t) as i32;
+        // (A drawn picture has a size: the original divides by it.)
+        let (x, y) = match (hit, nest) {
+            (false, _) => ((r1 & 1) * w, (r2 & 1) * h),
+            (true, true) => (((r1 & 1) + 1) * (w / 3), ((r2 & 1) + 1) * (h / 3)),
+            (true, false) => (
+                w / 3 + r1.checked_rem(w).unwrap_or(0) / 3,
+                h / 3 + r2.checked_rem(h).unwrap_or(0) / 3,
+            ),
+        };
+        let (mw, mh) = self.map_size();
+        let cap = |v: i32, n: u32| if v < 0 { 0 } else { v.min(n as i32 * 64 - 1) };
+        (cap(left + x, mw), cap(top + y, mh))
+    }
 }
 
 /// The 16 directions (0x497e50): 0 east, counter-clockwise.

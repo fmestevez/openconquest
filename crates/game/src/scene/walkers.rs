@@ -1232,12 +1232,12 @@ impl Scene {
     /// T[heading].x`, `+0xb8 - h + T[heading].y` (`THROW_FROM`), `w` and
     /// `h` its picture's size (`+0x61` / `+0x65`, from the sequence's
     /// `+0x29` / `+0x2b`, 0x5463bf: its first frame's width and height,
-    /// 0x554bf0). (Not ported: a building's aim, 0x423520, draws from the
-    /// building's own generator (`+0x18`, seeded `[game +0x2ee5] x id` at
-    /// 0x4281a2), which the port does not keep, nor its other draws
-    /// (0x4281de, 0x424185, 0x4244a4, the forts' 0x41a895 / 0x41bc61, the
-    /// towns' 0x430449 / 0x441e9c / 0x4422ad); a throw at one aims as the
-    /// port's other shots.)
+    /// 0x554bf0). At a building 0x423520, at a harpy nest 0x41cef0
+    /// (`Scene::building_aim`). (Not decoded: the aim at barbarian
+    /// structures, castles, lairs and heroes' houses, 0x423520 too, but
+    /// from generators their own code draws elsewhere, not read: castles
+    /// 0x410e6e / 0x410ed8, lairs 0x415337 / 0x4156a8, barbarians
+    /// 0x4e8a5e-0x4e927a; a throw at one aims as the port's other shots.)
     fn throw_step(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
         let Some(i) = self.object_index(self.walkers[k].id) else {
@@ -1289,10 +1289,16 @@ impl Scene {
         let strikes = !(d > 1 && w.draw() % (8 - d) == 0);
         w.thrown = true;
         let (shooter, pct, (x, y), heading) = (w.id, w.pct, w.pos, w.heading as usize);
-        let to = self
-            .object_index(target)
-            .filter(|&t| self.objects[t].ship.is_some())
-            .map(|t| self.ship_aim(t, strikes));
+        let to = self.object_index(target).and_then(|t| {
+            let o = &self.objects[t];
+            if o.ship.is_some() {
+                Some(self.ship_aim(t, strikes))
+            } else if matches!(o.class, ObjectClass::Building(_) | ObjectClass::HarpyNest) {
+                Some(self.building_aim(t, strikes))
+            } else {
+                None
+            }
+        });
         let (pw, ph) = self.objects[i]
             .frames
             .first()

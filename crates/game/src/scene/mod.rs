@@ -254,6 +254,10 @@ pub struct Scene {
     /// The ships' generators' seed (the game's `+0x2ee5`; see
     /// `Scene::ship_draw`).
     rnd_init: Option<u32>,
+    /// The buildings' and harpy nests' own generators (`+0x18`, seeded
+    /// `[game +0x2ee5] x id` at message 2: 0x4281a2, the towns' 0x442268,
+    /// the nests' 0x41d715), by id; see `Scene::building_draw`.
+    pub(super) building_lcgs: BTreeMap<u32, u32>,
     /// Buildings going up.
     pub constructions: Vec<Construction>,
     /// The frame a standing settlement or shipyard's picture is at
@@ -738,6 +742,7 @@ impl Scene {
             yard_clocks: BTreeMap::new(),
             new_ships: Vec::new(),
             rnd_init: None,
+            building_lcgs: BTreeMap::new(),
             constructions: Vec::new(),
             standing_frames: BTreeMap::new(),
             messages: Vec::new(),
@@ -1067,11 +1072,13 @@ impl Scene {
                     deposit: o.deposit,
                     dormant: o.dormant,
                     combat: o.combat.clone(),
+                    asleep: o.asleep,
                 })
                 .collect(),
             ship_orders: self.ship_orders.clone(),
             yard_clocks: self.yard_clocks.iter().map(|(&k, &v)| (k, v)).collect(),
             rnd_init: self.rnd_init,
+            building_lcgs: self.building_lcgs.iter().map(|(&k, &v)| (k, v)).collect(),
             constructions: self.constructions.clone(),
             standing_frames: self
                 .standing_frames
@@ -1206,6 +1213,11 @@ impl Scene {
             obj.deposit = s.deposit;
             obj.dormant = s.dormant;
             obj.combat = s.combat.clone();
+            // An asleep building's next look as it stood (a save without
+            // it draws the first look again, `Scene::building_draw`).
+            if obj.asleep.is_some() && s.asleep.is_some() {
+                obj.asleep = s.asleep;
+            }
             scene.objects.push(obj);
         }
         // Kept in the saved order: the drawing order as it stood, which
@@ -1215,6 +1227,7 @@ impl Scene {
         scene.ship_orders = save.ship_orders.clone();
         scene.yard_clocks = save.yard_clocks.iter().copied().collect();
         scene.rnd_init = save.rnd_init;
+        scene.building_lcgs = save.building_lcgs.iter().copied().collect();
         scene.constructions = save.constructions.clone();
         for k in 0..scene.constructions.len() {
             let site = scene.constructions[k].site;
