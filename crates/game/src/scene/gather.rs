@@ -607,8 +607,9 @@ impl Scene {
 
     /// Ship `o` follows `ward` within 2 cells (message `*`, 0x4d8b30 with
     /// 2 and priority 0) and is listed as its escort (0x4c6100: a new
-    /// entry, or its ward changed). (Not ported: 0x4c6100's behaviour
-    /// command 0x23 with -1s, 0x4c42f0, sent for a new escort.)
+    /// entry, or its ward changed). A new escort of a group never given a
+    /// behaviour (`+0x14` 0) is sent `#` sub 1 with players, classes and
+    /// third -1 (0x4c618a-0x4c619c, 0x4c42f0).
     fn zone_follow(&mut self, z: usize, o: u32, ward: u32) {
         self.post(Order::Follow {
             ship: o,
@@ -618,12 +619,54 @@ impl Scene {
         let e = &mut self.gather_zones[z].escorts;
         match e.iter_mut().find(|e| e.ship == o) {
             Some(x) => x.ward = ward,
-            None => e.push(Escort {
-                ship: o,
-                ward,
-                state: 0,
-                target: 0,
-            }),
+            None => {
+                e.push(Escort {
+                    ship: o,
+                    ward,
+                    state: 0,
+                    target: 0,
+                });
+                if !self.zone_group_behaves(z) {
+                    self.post(Order::BehaviourCommand {
+                        ship: o,
+                        sub: 1,
+                        players: u32::MAX,
+                        classes: u32::MAX,
+                        third: u32::MAX,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Whether zone `z`'s group was given a behaviour (`+0x14`, fleet
+    /// order 0x72): a brain's fleet once told one; a computer's flotilla
+    /// always (its navy group gets one at its making, 0x483e10); a
+    /// human's group never (the port has no order 0x72 for them).
+    fn zone_group_behaves(&self, z: usize) -> bool {
+        match self.gather_zones[z].group {
+            ZoneGroup::Brain(k) => self
+                .brain
+                .as_ref()
+                .and_then(|b| b.fleets.get(k))
+                .is_some_and(|f| f.behaviour.is_some()),
+            ZoneGroup::Computer(..) => true,
+            ZoneGroup::Human(_) => false,
+        }
+    }
+
+    /// Zone `z`'s group's behaviour (`+0x19`, `+0x1d`, `+0x21`), zeroes
+    /// when never given.
+    fn zone_group_behaviour(&self, z: usize) -> (u32, u32, u32) {
+        match self.gather_zones[z].group {
+            ZoneGroup::Brain(k) => self
+                .brain
+                .as_ref()
+                .and_then(|b| b.fleets.get(k))
+                .and_then(|f| f.behaviour)
+                .unwrap_or((0, 0, 0)),
+            ZoneGroup::Computer(p, f) => self.computer_flotilla_behaviour(p, f),
+            ZoneGroup::Human(_) => (0, 0, 0),
         }
     }
 
@@ -978,8 +1021,8 @@ impl Scene {
     /// only with a route (`zone_arrived`). The others: 0x133 (wrecked) its
     /// cell kept (`+0x35`); 0x137 (a ship left) its escort entry removed
     /// (0x4c61d0); 0x145 (a new port) still standing at its cell: listed
-    /// (0x4c6400) and 0x4c7b80. (Not ported: 300's behaviour command
-    /// 0x4c42f0; 0x12f, the takes, adds to `+0x30`, which nothing
+    /// (0x4c6400) and 0x4c7b80. A 300 is then sent `#` sub 1 with the
+    /// group's three (0x4c42f0). (Not ported: 0x12f, the takes, adds to `+0x30`, which nothing
     /// reads; 0x13e, the human's Shift unload click on a port, toggling
     /// it in the list (0x49dfb0), whose case 0x4c6ad0 sends nothing; no
     /// code posts 0x146-0x148.)
@@ -1019,13 +1062,26 @@ impl Scene {
                 continue;
             };
             r = match n.code {
-                300 => match self.deferred_index(z, n.ship) {
-                    Some(k) => {
-                        self.zone_fire_deferred(z, k, i);
-                        r
-                    }
-                    None => self.zone_next_deposit(z, i, false, route),
-                },
+                300 => {
+                    let r = match self.deferred_index(z, n.ship) {
+                        Some(k) => {
+                            self.zone_fire_deferred(z, k, i);
+                            r
+                        }
+                        None => self.zone_next_deposit(z, i, false, route),
+                    };
+                    // Then the group's behaviour, whether or not it was
+                    // given one (0x4c9e30's case 300, 0x4c42f0).
+                    let (players, classes, third) = self.zone_group_behaviour(z);
+                    self.post(Order::BehaviourCommand {
+                        ship: n.ship,
+                        sub: 1,
+                        players,
+                        classes,
+                        third,
+                    });
+                    r
+                }
                 0x139 => self.zone_next_deposit(z, i, false, route),
                 _ => self.zone_heard_full(z, i),
             };
