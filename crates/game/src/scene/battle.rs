@@ -17,25 +17,18 @@ impl Scene {
             && matches!((a.owner, b.owner), (Some(x), Some(y)) if x != y)
     }
 
-    /// Whether `me` is a ship of a computer player (the `computers`
-    /// module's, not a brain's).
-    pub(super) fn computer_ship(&self, me: &MapObject) -> bool {
-        me.ship.is_some()
-            && me
-                .owner
-                .is_some_and(|o| self.computers.players.iter().any(|c| c.owner == o))
-    }
-
     /// Whether `me`'s at-will search may pick `o`: a ship by its masks
     /// (`objects::Behaviour::may_pick`: players `+0x689`, classes
-    /// `+0x68d`, positions `+0x685`), a computer player's ship by its
-    /// spared players instead (`holds_fire`: its tasks' masks, not
-    /// ported), anything else always.
+    /// `+0x68d`, positions `+0x685`), anything else always. A computer
+    /// player's ship that joined its flotilla during a move and has had
+    /// no `#` since (`Computer::uncovered`: the move's join and pass are
+    /// not ported for the computers) keeps the old rule: on guard,
+    /// sparing its spared players (`holds_fire`).
     pub(super) fn picks_at_will(&self, me: &MapObject, o: &MapObject) -> bool {
         let Some(ship) = me.ship.as_ref() else {
             return true;
         };
-        if self.computer_ship(me) {
+        if self.computer_uncovered(me) {
             return !self.holds_fire(me, o);
         }
         let class = combat::class_bit(o.record.class_id, o.ship.as_ref().map(|s| s.kind));
@@ -649,10 +642,11 @@ impl Scene {
                     },
                     // The at-will search runs on guard only (0x4bfc60
                     // calls 0x4c0cd0 with `+0x684 & 1`). A computer
-                    // player's ship keeps the port's former test (on
-                    // guard always): not ported, the behaviour those
-                    // players' tasks send (0x482e80 / 0x482eb0, order 0x72).
-                    (ship.behaviour.guard || self.computer_ship(&self.objects[i]))
+                    // player's ship its flotilla's behaviour has not
+                    // reached for want of the move's join and pass keeps
+                    // the former test (on guard always; see
+                    // `picks_at_will`).
+                    (ship.behaviour.guard || self.computer_uncovered(&self.objects[i]))
                         && ((ship.task.is_none() && ship.path.is_empty())
                             || matches!(
                                 ship.task,

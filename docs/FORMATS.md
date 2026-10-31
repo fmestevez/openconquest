@@ -2481,12 +2481,12 @@ list and escorts).
   0x4bf3aa for every shot landing on a ship (not one in a dock, state
   `+0x251` 2, nor a hook of class 9 with `+0xed` 100): `+0x691` 1,
   `+0x692` the shot's `+0xbe`, `+0x634` its cell (not decoded: `+0xbe`
-  of a shot with no shooter; the port marks only shots with one). Not
-  ported: 0x4c6100's behaviour command for a new escort (0x4c42f0 with
+  of a shot with no shooter; the port marks only shots with one). Ported
+  since: 0x4c6100's behaviour command for a new escort (0x4c42f0 with
   -1s, when group `+0x14` is 0) and notice 300's (the group's masks):
   case 0x23 sub 1 turns guard, ram and board on with the masks `+0x685`,
-  `+0x689`, `+0x68d` and fire state `+0x5d1` 4 (the port keeps them,
-  "Ships' behaviour and masks"; gather.rs sends no `#`). None: ships unloading this class count
+  `+0x689`, `+0x68d` and fire state `+0x5d1` 4 ("Ships' behaviour and
+  masks"). None: ships unloading this class count
   working; laden ones (`+0x47f/+0x480/+0x481/+0x782`) count and, not
   unloading and with flag bit 0, go to 0x4c6640's port (0x1f); its idle
   list is never filled (no follows): a ship unloading this class
@@ -6993,9 +6993,44 @@ buildings 12-17, lairs 18-20, creatures 21-23, nests 24-25, castles
 the ship: its low byte is the weapon positions (+0x685), bit 25 turns ram
 attack on and bit 26 board attack (0x4e2c34-0x4e2d03). So the reserve's
 and spare's 0x1ffffff gives guard alone, every other task guard, ram and
-board. Not ported: the computer players' sends (25 call sites of
-0x482e80 / 0x482eb0, 0x47dd5b-0x483f57); their ships keep the port's
-older test (always on guard, sparing `update_spared`'s players).
+board. The 25 call sites of 0x482e80 / 0x482eb0 (always 0x482eb0 with
+1: order 0x72's first field 0, so no sub 2 first, 0x4c4410 being for
+100): the making of a flotilla (0x483e10 at 0x483f47, for a group of
+type 10: 0x483df0 gives 10 for every role but the manager's 0, 11; no
+ships yet); task 4 state 5 on its first turn after the gather order
+(0x47dd51); task 5 state 0 after its rolls (0x47e0ce); task 7 state 2
+first (0x47ef8f); task 8 state 2 first (0x47ebc1), state 5's first turn
+before the guard order (0x47ec96), state 0xc's first turn before the
+attack order (0x47ed8d); tasks 9 / 10 state 2 first (0x47e40b /
+0x47e80b), state 10 first (0x47e5b9 / 0x47e968), state 0xc's first
+turn before the attack (0x47e62e / 0x47e9dd); tasks 0xb / 0xd state 5's
+first turn after the roll, before the move (0x47f5b4 / 0x47f7c3, third
+0x1ffffff); and letter 8 in the role handlers of roles 1-3 and 5-9
+(0x482950, 0x480680, 0x480840, 0x480a00, 0x481a10, 0x4815a0, 0x480c40,
+0x481100) and of the reserve and spare (0x481e60, 0x481fe0, third
+0x1ffffff); the manager's (0x480580) and commander's (0x482160) have no
+case 8. All take players +0xe18 (-1 at the start, 0x487d47) and classes
+-1, third -1 but where said. A computer's ship also gets its flotilla's
+three when the group gets a new task block (below, 0x4c5b30) and, joined
+(0x483fb0: 0x4a0480 op 2, notice 300 by 0x4a1340 when the group has a
+block, `+0x2d`), from the block's case 300: guard 0x4d1ea0, attack
+(0x70 / 0x21) 0x4d6960, founding 0x4cba10, dock 0x4db110, treasure
+0x4da0a0, the gather zone 0x4c9e30, the move 0x4cc6a0 (only a join
+0x4cc650 sends to the order's cell). Ported (computer.rs
+`flotilla_behave`, `new_block`, `read_joins`): every site, the blocks'
+sends, the joins' (read at the computer's tick, not the navy's). Not
+ported: the move's join and its pass (0x4ccd80, every 100 ticks of group
+`+8`, each ship whose `+0x689 / +0x68d` differ) for the computers'
+moves, which plan no formation in the port; the attack zone's pass
+(0x4d6cd0) and its own end (0x4d6520 when 0x4d6640 finds no target,
+freeing `+0x2d`): the port's block stays until an order of another kind.
+A ship joining a computer's flotilla during its move (the reserve's and
+spare's state 5) is therefore listed (`Computer::uncovered`) and keeps
+the port's older test (on guard, sparing `update_spared`'s players)
+until a `#` reaches it; every other computer ship picks by its masks.
+Whether a fort of the forts' flotilla (role 1, a navy group) takes the
+`#` the port sends only to ships: not decoded (0x520cc0's '#' to a
+building).
 
 **Ships' behaviour and masks.** The constructor (0x4dc3f0) zeroes
 `+0x5d1..+0x695`: guard, ram and board off (`+0x684`), the positions
@@ -7040,14 +7075,24 @@ move order's join (0x4cc6a0: a join sent to the order's cell by
 its pass (0x4ccd80, every 100 ticks: each ship whose `+0x689 / +0x68d`
 are not `+0x19 / +0x1d`, with `+0x14` set); a new navy group of a
 computer side 3 / 4 (0x4a1150 -> 0x4c5b30 -> 0x4c4230, the group's
-three); the gather zones (0x4c6100 a new escort with -1s when `+0x14` is
-0, notice 300 the group's). The brains' 0x4797e0 call sites: 137 with
+three, to every ship of it: 0x4a1150 makes the notices list `+0x2d` when
+none, which every task's end frees, 0x4cc4c0, 0x4d0c90, 0x4d4030,
+0x4d6520, 0x4dab80, 0x4d95a0, 0x4cef60, 0x4cd800, 0x4caf90, 0x4c7650
+with 1; each order's maker, 0x4ccc30, 0x4d1ce0, 0x4d6a90, 0x4c8a80,
+0x4cbcf0, 0x4da550, 0x4db9e0, ends a block of another kind and makes a
+new one, rewriting one of its own kind); the gather zones (0x4c6100 a
+new escort with -1s when `+0x14` is 0, 0x4c618a; notice 300 the group's,
+zeroes when never given, after the held command or next deposit). The brains' 0x4797e0 call sites: 137 with
 classes 0xfffffff, players -1, third -1; 19 classes 0x3ffff; 6 players
 0x10020; 3 with `ecx` (gather_escort_spec). Ported: 0x4c4350 for the
 brains' `Op::Behave` (the 137 sites' masks for every one), the move
-order's join and pass. Not ported: the 28 other sites' masks (listed at
-`Op::Behave`), the computers' 0x482eb0, 0x4c5b30, the gather zones'
-sends (gather.rs), the attack zone's, and the other fleet orders' calls
+order's join and pass. Ported since: the computers' 0x482eb0 and
+0x4c5b30 (for the computers' flotillas; a brain fleet's new block is
+not, brain.rs), the gather zones' sends (gather.rs: a brain's fleet's
+`+0x14` its behaviour given, a computer's always, a human's never), and
+for the computers the case 300 of the guard, attack, founding, dock and
+treasure blocks (above). Not ported: the 28 other sites' masks (listed
+at `Op::Behave`), the attack zone's, and the other fleet orders' calls
 of 0x4c42f0 (0x4c449b, 0x4cbcb7, 0x4cde70, 0x4cf296, 0x4d02bb, 0x4d1f8a,
 0x4d4f84, 0x4d6a65, 0x4d6e88, 0x4d7966, 0x4d8185, 0x4d8c94, 0x4da1e2,
 0x4db1ec, 0x4dc2fa; not read).
