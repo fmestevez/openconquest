@@ -240,6 +240,10 @@ pub fn draw_objects(
             }
             None => draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y),
         }
+        // A leviathan hunt's haul and line, from their top left.
+        for (l, left, top) in scene.hunt_gear(obj) {
+            draw_image(frame, screen, camera, lut, &l.image, left, top);
+        }
         // Flames on a burning ship.
         if let Some((layers, left, top)) = scene.fire_on(obj, time_ms) {
             if let Some(l) = layers.first() {

@@ -334,6 +334,9 @@ pub struct Scene {
     sheep_clock: f32,
     sheep_ticks: u32,
     pub sheep_art: std::rc::Rc<[[Frames; 2]; 8]>,
+    /// A leviathan hunt's line and haul (`WMOST_`, `WNOSIL_`; see
+    /// `Scene::hunt_gear`).
+    pub hunt_art: std::rc::Rc<(Frames, Frames)>,
     /// Amber deposits' glints and the sparkle's frames (`ASTAR_`).
     pub sparkles: sparkle::Sparkles,
     pub sparkle_art: std::rc::Rc<Frames>,
@@ -805,6 +808,10 @@ impl Scene {
             })),
             landing_art: std::rc::Rc::new(landing::landing_art(data, caches)),
             parties: Vec::new(),
+            hunt_art: std::rc::Rc::new((
+                objects::sequence_frames(data, caches, "WMOST_").unwrap_or_default(),
+                objects::sequence_frames(data, caches, "WNOSIL_").unwrap_or_default(),
+            )),
             plank_art: std::rc::Rc::new(std::array::from_fn(|facing| {
                 objects::composite_layer_frames(data, caches, "MOST0_", facing).unwrap_or_default()
             })),
@@ -2271,6 +2278,13 @@ impl Scene {
                         ship.path.truncate(1);
                         ship.move_state = 1;
                     }
+                }
+                // Netting a leviathan (`+0x25d & 0x40` past step 1) the
+                // hunt is called off (0x4abc60: `+0x77c = -1`) and winds up
+                // on its own (`Scene::run_hunts`); at step 1 it ends.
+                if let Some(h) = ship.hunt.as_mut().filter(|h| h.step != 1) {
+                    h.called_off = true;
+                    return;
                 }
                 ship.task = None;
             }

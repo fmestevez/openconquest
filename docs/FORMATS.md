@@ -5222,13 +5222,29 @@ corner lies more than 0x59af48[type] / 2 = 2 cells off (0x557440), else
   four to six frames and, on even headings, its last one or two: shots
   landing then miss.
 
-Not ported: the line's and haul's pictures (their place `(hull w - slot
-w) / 2 + hull x`, `hull y + hull h / 2 + 5`, is taken with the width of
-the picture id 0x3e6 that 0x50cbf0 loads before 0x4e1bb0 puts `WMOST_` in;
-0x545ef0 -> 0x55dbc0 not read: not decoded), sub-code 11 (0x4af640: any
-leviathan in 0x59af78 = 11 cells; not traced who sends it), the call-off
-`+0x77c < 0` during the netting and a stop then (0x4aa540: the port's
-stop ends the hunt), the crew's experience, notice 0x12f (the port's zones
+The line's and haul's pictures stand at `(hull w - slot w) / 2 + hull
+x`, `hull h / 2 + 5 + hull y` (step 10 at 0x4af252; the haul's at the
+line's, 0x4af396), set once. The slot is the picture 0x50cbf0 has just
+made: its second argument (0x3e6 for the line, 0x3de for the haul) is
+not a record but the slot's depth, which 0x545ef0 -> 0x55dbc0 ->
+0x55d6e0 only files it under (0x55d9d0 keeps an object's slots sorted
+by it, lowest first; the hull's is 0xa); the record comes with 0x4e1bb0
+(vt+4, 0x50d080) after the place is taken, so the slot's `+0x61` is
+still the constructor's 0 (0x545e70): the line hangs from the hull's
+middle, the haul under it, both over the hull. Ported
+(`Scene::hunt_gear`). A stop (0x4aa540 with no record, 0x4abc60; or
+with the gather bit `+0x818 & 0x40`, 0x4aa540 itself) ends a hunt at
+step 1 (`+0x25d &= ~0x40`), else calls it off (`+0x77c = -1`; the
+order's event code 4 does too, 0x4aab00): step 10 goes on (the hull's y
+is where it was), 0xc takes the line back a frame a tick from where it
+is, at 0 off and step 0x13 (0x4af316, 0x4af526); 6 drops the haul for
+0x12 (0x4af436); 2 is unchanged; at 5 0x4ad510 gives nothing, so the
+task ends (event 8 0xc0). Ported. Sub-code 11 (0x4af640, from 0x4ac2d0's
+table 0x4ac594: any leviathan in 0x59af78 = 11 cells) is set only from
+the event's code (0x4aab00 at 0x4aac51 / 0x4aad83 copies `+0x83d`); no
+sender with code 11 found (no byte 11 stored within a dozen
+instructions of a 0x192 in the listing): not ported, senders not
+traced. Not ported: the crew's experience, notice 0x12f (the port's zones
 drop it), 0x4967b0's hit in flight (the port's shots land at their aim),
 the gorgon's and siren's vt +0x30 in 0x403010, the order of a hazard's
 0xda94 and the leviathan's own tick, and of the ships' and its ticks. Not

@@ -680,6 +680,47 @@ impl Scene {
     }
 
     /// Sub-code 10 (0x4aeef0), by its step.
+    /// Where the line's and haul's pictures stand (0x4aeef0 step 10 at
+    /// 0x4af252; the haul's at the line's, 0x4af396): `(hull w - slot w) /
+    /// 2 + hull x`, `hull h / 2 + 5 + hull y`, the hull picture `+0x8be`
+    /// as the port places it (`render::layer_origin`). The slot is the
+    /// picture 0x50cbf0 has just made (depth 0x3e6, kind 8, no record:
+    /// 0x545ef0 -> 0x55dbc0 -> 0x55d6e0 only files it at that depth,
+    /// 0x55d9d0), whose `+0x61` its constructor 0x545e70 left 0: the
+    /// line hangs from the hull's middle.
+    fn hunt_gear_at(&self, i: usize) -> (i32, i32) {
+        let o = &self.objects[i];
+        match o.frames.first().and_then(|f| f.first()) {
+            Some(l) => {
+                let (x, y) = crate::render::layer_origin(o, l);
+                let (w, h) = (l.image.width as i32, l.image.height as i32);
+                (w / 2 + x, h / 2 + 5 + y)
+            }
+            None => (o.x as i32, o.y as i32),
+        }
+    }
+
+    /// The line's and haul's pictures to draw over ship `obj`'s hull, the
+    /// haul (depth 0x3de) under the line (0x3e6), both over the hull
+    /// (0xa): an object's slots are kept by depth, lowest first (0x55d9d0),
+    /// as the hooks' lines below the hull are (its depth less 0x46).
+    pub fn hunt_gear(&self, obj: &crate::objects::MapObject) -> Vec<(&objects::Layer, i32, i32)> {
+        let Some(h) = obj.ship.as_ref().and_then(|s| s.hunt) else {
+            return Vec::new();
+        };
+        let (line, haul) = (&self.hunt_art.0, &self.hunt_art.1);
+        fn pick(art: &super::Frames, f: Option<i32>) -> Option<&objects::Layer> {
+            f.and_then(|f| usize::try_from(f).ok())
+                .and_then(|f| art.get(f))
+                .and_then(|l| l.first())
+        }
+        [pick(haul, h.haul), pick(line, h.line)]
+            .into_iter()
+            .flatten()
+            .map(|l| (l, h.gear.0, h.gear.1))
+            .collect()
+    }
+
     fn hunt_watch(&mut self, i: usize, lev: u32, data: &GameData, caches: &mut Caches) {
         let Some(s) = self.objects[i].ship.as_ref() else {
             return;
@@ -762,17 +803,32 @@ impl Scene {
                         Some(at as u8)
                     };
                 }
+                let gear = self.hunt_gear_at(i);
                 let h = self.hunt_mut(i);
                 if h.turn == 0 {
                     // The line goes down (slot 1, `WMOST_`), a frame a
-                    // tick from the next.
+                    // tick from the next, its picture's top left set once
+                    // (`hunt_gear_at`).
                     h.step = 0xc;
                     h.line = Some(0);
+                    h.gear = gear;
                 }
             }
             0xc => {
-                let n = objects::sequence_frames(data, caches, "WMOST_").map_or(0, |f| f.len());
+                let n = self.hunt_art.0.len();
                 let h = self.hunt_mut(i);
+                // Called off (`+0x77c < 0`): the line back up a frame a
+                // tick, at 0 off and step 0x13 (0x4af316, 0x4af526).
+                if h.called_off {
+                    match h.line {
+                        Some(f) if f > 0 => h.line = Some(f - 1),
+                        _ => {
+                            h.line = None;
+                            h.step = 0x13;
+                        }
+                    }
+                    return;
+                }
                 let f = h.line.unwrap_or(0) + 1;
                 if f >= n as i32 {
                     // Down: the net (slot 3, `WNOSIL_`) goes out.
@@ -804,8 +860,14 @@ impl Scene {
             6 => {
                 // The haul, a frame a tick; at its end the catch is stored
                 // (0x4ad300): room left, another cast; full, the line up.
-                let n = objects::sequence_frames(data, caches, "WNOSIL_").map_or(0, |f| f.len());
+                let n = self.hunt_art.1.len();
                 let h = self.hunt_mut(i);
+                // Called off: the haul off, the line up (step 0x12).
+                if h.called_off {
+                    h.haul = None;
+                    h.step = 0x12;
+                    return;
+                }
                 let f = h.haul.unwrap_or(0) + 1;
                 if f < n as i32 {
                     h.haul = Some(f);
@@ -839,13 +901,14 @@ impl Scene {
             }
             5 => {
                 // 0x4b3850: its commands and flags back, the route cleared
-                // (0x4a5b70); step 1, then 0x4ad510, or the task ends
-                // (event 8 0xc0).
+                // (0x4a5b70); step 1, then 0x4ad510 (nothing when called
+                // off), or the task ends (event 8 0xc0).
                 let h = self.hunt_mut(i);
                 h.held = false;
                 h.step = 1;
+                let called_off = h.called_off;
                 self.objects[i].ship.as_mut().unwrap().path.clear();
-                if !self.hunt_next(i) {
+                if called_off || !self.hunt_next(i) {
                     let s = self.objects[i].ship.as_mut().unwrap();
                     s.task = None;
                     s.path.clear();
@@ -1174,6 +1237,85 @@ mod tests {
         let k = scene.object_index(BOAT).unwrap();
         assert_eq!(scene.objects[k].ship.as_ref().unwrap().cargo, 100.0);
         assert!(phase(&scene, BOAT).is_some());
+    }
+
+    /// A stop while netting calls the hunt off (0x4aa540 -> 0x4abc60:
+    /// `+0x77c = -1`): the line, its top left at the hull's middle and 5
+    /// below (0x4af252: the new slot's `+0x61` is 0), comes back up a
+    /// frame a tick from where it was, then step 0x13 and 5, where the
+    /// task ends (0x4ad510 gives nothing); hauling, the haul goes and the
+    /// line comes up (step 0x12). At step 1 the stop ends the hunt.
+    #[test]
+    fn a_stop_calls_the_netting_off() {
+        let Some((data, mut caches, mut scene)) = miss005() else {
+            return;
+        };
+        bring_up(&mut scene, &data, &mut caches);
+        let lc = scene.leviathan_where(LEV).unwrap();
+        place(&mut scene, BOAT, lc, 0);
+        send(&mut scene, &data, &mut caches, BOAT);
+        for _ in 0..5 {
+            tick(&mut scene, &data, &mut caches);
+        }
+        let h = hunt(&scene, BOAT).unwrap();
+        assert_eq!((h.step, h.line), (0xc, Some(3)));
+        let k = scene.object_index(BOAT).unwrap();
+        let o = &scene.objects[k];
+        let l = &o.frames[0][0];
+        let (x, y) = crate::render::layer_origin(o, l);
+        let (w, hh) = (l.image.width as i32, l.image.height as i32);
+        assert_eq!(h.gear, (w / 2 + x, hh / 2 + 5 + y));
+        assert_eq!(scene.hunt_gear(&scene.objects[k]).len(), 1);
+        scene.stop(BOAT);
+        assert!(hunt(&scene, BOAT).unwrap().called_off);
+        let mut lines = Vec::new();
+        for _ in 0..7 {
+            tick(&mut scene, &data, &mut caches);
+            lines.push(hunt(&scene, BOAT).map(|h| (h.step, h.line)));
+        }
+        assert_eq!(
+            lines,
+            [
+                Some((0xc, Some(2))),
+                Some((0xc, Some(1))),
+                Some((0xc, Some(0))),
+                Some((0x13, None)),
+                Some((5, None)),
+                Some((1, None)),
+                None,
+            ]
+        );
+        assert!(phase(&scene, BOAT).is_none());
+        assert!(!scene.hunt_holds(BOAT));
+
+        // Hauling: the haul off, the line up.
+        let Some((data, mut caches, mut scene)) = miss005() else {
+            return;
+        };
+        bring_up(&mut scene, &data, &mut caches);
+        place(&mut scene, BOAT, lc, 0);
+        send(&mut scene, &data, &mut caches, BOAT);
+        for _ in 0..15 {
+            tick(&mut scene, &data, &mut caches);
+        }
+        let h = hunt(&scene, BOAT).unwrap();
+        assert_eq!(h.step, 6);
+        assert!(h.haul.is_some());
+        assert_eq!(scene.hunt_gear(&scene.objects[k]).len(), 2);
+        scene.stop(BOAT);
+        tick(&mut scene, &data, &mut caches);
+        let h = hunt(&scene, BOAT).unwrap();
+        assert_eq!((h.step, h.haul, h.line), (0x12, None, Some(8)));
+
+        // At step 1 the stop ends it.
+        let Some((data, caches, mut scene)) = miss005() else {
+            return;
+        };
+        scene.order_gather(BOAT, LEV).unwrap();
+        assert_eq!(hunt(&scene, BOAT).map(|h| h.step), Some(1));
+        scene.stop(BOAT);
+        assert!(phase(&scene, BOAT).is_none());
+        let _ = (data, caches);
     }
 
     /// A boat lying on heading 2 turns to 4 (0x4aed30: equally near, the

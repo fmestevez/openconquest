@@ -486,6 +486,14 @@ pub struct Hunt {
     /// 3, `WNOSIL_`), while they are out.
     pub line: Option<i32>,
     pub haul: Option<i32>,
+    /// Where those pictures' top left stands (slot 1's `+0x59` / `+0x5d`,
+    /// set as the line goes down; the haul's is the same).
+    #[serde(default)]
+    pub gear: (i32, i32),
+    /// The hunt called off (`+0x77c < 0`: a stop while netting, 0x4abc60):
+    /// the line comes up and the task ends at step 5.
+    #[serde(default)]
+    pub called_off: bool,
     /// Its commands held (0x4b37d0: `+0x261 &= 0x2000`) until 0x4b3850.
     pub held: bool,
 }
@@ -505,6 +513,8 @@ impl Default for Hunt {
             frame: 0,
             line: None,
             haul: None,
+            gear: (0, 0),
+            called_off: false,
             held: false,
         }
     }

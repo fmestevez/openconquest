@@ -451,8 +451,8 @@ impl Scene {
             return Err("The ship is still being built".into());
         }
         // So one netting a leviathan (0x4b37d0 leaves `+0x261` 0x2000 till
-        // 0x4b3850). (Not decoded: a stop meanwhile, 0x4aa540 with the
-        // gather task; the port's ends the hunt.)
+        // 0x4b3850); its stop calls the hunt off (0x4aa540 -> 0x4abc60,
+        // `Scene::stop`).
         if ship.is_some_and(|id| self.hunt_holds(id)) {
             return Err("The ship is hunting".into());
         }
