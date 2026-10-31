@@ -2281,10 +2281,16 @@ list and escorts).
   each port by its flood (0x4c7800) (not ported: 0x40b010 and 0x4c8560;
   the town states 3 and 0xff, not identified, the port tests mending).
   The block's `+0x61` is no route of the order's: it is a group's
-  waypoint list (a Shift move on a zone group, 0x49de70), kept by a Shift
-  order 0x78, which then skips the start's dispatch (not ported). Any other order to the group ends the zone (0x4a1c60); a group
-  given 0x78 again has its lists cleared (0x4c7650: deposits, port list,
-  escorts, `+0x35`, `+0x3d`; its notices kept) and its block rewritten.
+  waypoint route (see **Route** below). Any other order to the group ends
+  the zone (0x4a1c60); a group given 0x78 again (the selection unchanged:
+  0x49e230 keeps its group, so a gather click or zone drag on a zone
+  group's own ships restarts that zone) has its lists cleared (0x4c7650:
+  deposits, port list, escorts, `+0x35`, `+0x3d`; its notices and its
+  route `+0x61` kept) and its block rewritten. On a group whose block is
+  another order: without key flag 4 that block's route is freed
+  (0x4ce5a0); with it the route is moved to the new block and the start's
+  dispatch is skipped (`local_8`). The port's human groups have no other
+  blocks (their waypoint moves are per ship), so that case never arises.
 - **Start** (0x4c8a80 tail): 0x4c5b90 mode 0 lists the rectangle's
   deposits of the class and knows them (`+0x39`); if any: 0x4c5f40 splits
   the group into merchants (types 0/1, with their room 0x4be800(3),
@@ -2295,7 +2301,10 @@ list and escorts).
   `+0x1a1d` 3 / 4) under half its room or with a leviathan aboard, sent
   to 0x4c6640's port if any; each other ship follows merchant k mod n
   (message `*` 0x4d8b30 with 2, priority 0; 0x4c6100 lists it as an
-  escort `+0x41` and sends 0x4c42f0 with -1s, not ported).
+  escort `+0x41` and sends 0x4c42f0 with -1s, not ported). 0x4c6ee0's
+  route argument is the block's `+0x61` being set: under 6 merchants it
+  goes to 0x4c8f20; 6 or more, the gathers are only held back (no
+  0x4c9c60), the computer's unloads go with route 0.
 - **Notices** (0x4ca8d0 -> 0x4c9e30, newest first, each removed after its
   case; records `{code, tick, ship +0x60, ship id, rec[4..]}` from the
   posters 0x4a1240-0x4a1bf0). The ship's cases, a notice of a ship no
@@ -2303,7 +2312,9 @@ list and escorts).
   0x49bd60) and 0x139 (unloaded, 0x4a1520) -> 0x4c9930; 0x138 (gathering
   ended, or a berth given up) -> 0x4c9ae0; 0x136 (a ship at its move
   goal, 0x4a3f40 at 0x4a49af / 0x4a4a67, or 0x4ce8a0) acts only with a
-  route. The others whoever the ship: 0x133 (0x4a1620: a ship wrecked by
+  route. 300 and 0x139 pass 0x4c9930 the route flag `local_c` (the
+  route's being set as the read began); 300 with a held command for the
+  ship fires it instead (0x4cabd0, 0x4cac30). The others whoever the ship: 0x133 (0x4a1620: a ship wrecked by
   a reef or by lightning, 0x4dc630 on 0xda94; the whirlpool's 0xda95
   posts nothing) appends its cell to `+0x35`, duplicates kept; 0x137
   (0x4a1770: a ship leaving a group with a block, 0x49bef0, before the
@@ -2434,8 +2445,8 @@ list and escorts).
   working; laden ones (`+0x47f/+0x480/+0x481/+0x782`) count and, not
   unloading and with flag bit 0, go to 0x4c6640's port (0x1f); its idle
   list is never filled (no follows); none laden, working or on a route:
-  `+0x5d = 1` for sides 1 / 2 when `+0x24 >> 16 != 1`. Not ported: the
-  route `+0x61` (0x4cea20, 0x4ce7c0, 0x4cf070, 0x4ce8a0). In the branch
+  `+0x5d = 1` for sides 1 / 2 when `+0x24 >> 16 != 1`. With a route, see
+  **Route**. In the branch
   with deposits, after the ships, each `+0x35` cell in order goes to every
   ship as command 0x29 `{2, cell, 0xff}` (0x4a7230: kept once in the
   path memory `+0x5cd`), at every re-plan.
@@ -2446,13 +2457,85 @@ list and escorts).
   its p4, 10 to its p3, then its time, then its events (each switching
   the state, the last winning). Player 16's zones have no port list
   (0x4c65c0 prunes its class-0x40 entries), so they answer 0xb.
-- **Commands** (0x4c89b0, through 0x520cc0; a route stores them in
-  `+0x3d` instead, not ported): 0x1f `{port, 1, 0x5a}`; else by class 400
+- **Commands** (0x4c89b0, through 0x520cc0; with the route flag stored
+  in `+0x3d` instead, 0x4cab20): 0x1f `{port, 1, 0x5a}`; else by class 400
   0x1a, 0x191 0x19, 0x192 0x1d `{deposit, port, 0x5a}`; any other class
   command 0 with no payload (not sent here). The gather command (0x4aab00)
   sets `+0x76e`, `+0x77e` / `+0x78a`, `+0x797` and the box, and `+0x7ad`
   to the payload's port if it is the player's port (0x39 not asleep;
   player 16 class 0x40), else 0.
+- **Route** `+0x61` (0xc bytes, 0x4ce5e0: `R[0]` a count, `R[1]` the
+  waypoints `{x, y, marker}`, `R[2]` the progress `{ship, id, dir byte, x,
+  y}`). Only the human makes one: a Shift move click (0x49e230 case 0x14
+  -> 0x49de70, key flag 4) on a group whose block is neither null nor a
+  move's 100 makes it if null and appends the click's cell unless listed
+  (0x4ce6c0 with -1); no ship is sent (0x4cec00 needs the cell listed in
+  a route just made: never). Without Shift the group gets a move order
+  (0x4ccc30), which ends the zone; with Shift on a group with no block or
+  a move block, a waypoint move (0x4cf2c0, not ported: the port's
+  per-ship waypoints). The brain and the computer never make one. The
+  marker picture (0x4ced80, placed by 0x4ced10 at `(x*64 + 14, y*64 +
+  18)`) is not ported. Port: `GatherZone.route`, `Order::ZoneWaypoint`
+  (app.rs: Shift right click on a zone group's own ships, the click's
+  cell, once for the selection).
+  - The route flag: 0x4c96e0's gather (its unload with no room goes with
+    route 0), 0x4c8f20 / 0x4c9270 (from 0x4c9930 and 0x4ca290 with it),
+    0x4c9ae0 (the route's being set; its first 0x4c9930 with route 0) and
+    0x4c6ee0. A command given with it is held (0x4cab20: `+0x3d`, 0x14
+    bytes `{ship id, a, class, b, code}`, the ship's earlier entry taken
+    out), then 0x4c9c60(a, b) puts the ship on the route: an unload with
+    `(0, port)`, a gather with `(deposit, 0)` (0x4c95a5 / 0x4c95ca: the
+    gather passes no port, so the "both set" case does not occur).
+  - **0x4c9c60**: kind `s` = 1 for a deposit alone, -1 for a port alone,
+    else 0; `c` = 0x4ca950; no waypoints, `s` 0 or `c` 0: nothing (the
+    command stays held). Entry `k`: for a deposit `c < 0 ? n-1 : 0`, way
+    `c`; for a port `c >= 1 ? n-1 : 0`, way `-c`. The ship (`+0x5a3`,
+    `+0x5a7`) more than a cell off W[k] on either axis, or `n < 2`: move
+    there (0x4cf070, command 0x14 `{x, y, 0}`, priority 0), progress `(-1,
+    -1)` with the way, 1. Else W[1] or W[n-2] (deposit: `c >= 0 ? 1 :
+    n-2`; port: `c < 1 ? 1 : n-2`), move there, progress that cell, 0.
+  - **0x4ca950** (the way): no waypoints 0, one 1; else the flood
+    0x4a1e90 (draught `+0x592`, limit 5000, bigger nearer) from the
+    deposit's cell (400 `+0x90/+0x94`, 0x191 `+0x9d/+0xa1`, 0x192
+    `+0xa9/+0xad`; flood null 0): `f[W0] > f[Wn-1] ? -1 : 1`; else from
+    the port's cell `+0x74/+0x78` (no null test, 0x4caad4-0x4caaf2; null
+    only off the map, where the port gives 0): `f[W0] > f[Wn-1] ? 1 : -1`;
+    neither found 0. So the ship enters at the end farther from its goal.
+  - **0x4ce8a0**(ship, R, x, y, remove, mark): R[2] made if null; the
+    ship's entry with `remove` and `|dir| != 2` is taken out (`R[0] -=
+    1`), nothing else; then, the ship within 0x557480 distance 2 of `(x,
+    y)`, notice 0x136 with that cell (0x4a1700, to the ship's group); the
+    entry set to `(x, y)` (its way to `mark` when not 0), or appended
+    (`R[0]` = its index + 1). **0x4cea20**: the entry's cell (0 for `(-1,
+    -1)`) and way; none -1, way 0. **0x4ce7c0**(x, y, dir): the waypoint
+    after `(x, y)` that way (`dir >= 1` forward, else back), as a cell;
+    off the end, end flag 1 and -1, but 2 / -2 go round to the other end;
+    `(x, y)` not listed -1, end 0.
+  - **Case 0x136** (0x4ca120-0x4ca215): route set, the ship in the group
+    with `+0x25d & 0x80` (on a move; the port: a plain move's goal and no
+    task); `nx` = 0x4ce7c0 from rec[4] with its way. `0 < nx < W*H`: move
+    there and 0x4ce8a0(nx, remove = end). Else with end: 0x4ce8a0(-1, -1,
+    remove 1), then its held command (0x4cac30), or, none, 0x4c9930 with
+    the ship given (0x4c96e0 skipped) and route 0, its value the case's.
+  - **0x4cac30**: entry k (found by 0x4cabd0 if < 0) of the ship: an
+    unload whose port is no longer in a non-null `+0x28` stays held, 0;
+    else sent with route 0 and taken out, 1.
+  - **The 0x136 posters** in 0x4a3f40: the ship has just come into a cell
+    (`+0x5a3/+0x5a7` set) that is its move goal `+0x5b2` (0x4a49af), then
+    0x4a2f60 unless braking (state 4); or (0x4a49f6-0x4a4a67) not between
+    cells (`+0x596` 0), no reserved cell (`+0x5ab < 0`), the next step
+    refused (0x4a3a70), 0x4a2f60 unless state 4, and 0x557440 from the
+    goal exactly 1. Port: `Ship.goal` set by each plain move, posted in
+    the move loop at the cell change and at a refused step with
+    `between` clear (the stop there is not ported: the held ship keeps
+    its route).
+  - **Re-plan with a route**: deposits found: the route flag is set for
+    every ship; a ship listed (0x4cea20 >= 0) and lying still (`+0x58c`
+    0) is sent to the next waypoint (0x4ce7c0; progress not updated), the
+    normal plan only past the end; listed and not still: nothing. None
+    found: listed and still, the same (past the end or out of the map:
+    the normal branch); listed and not still: `local_34 = 1`, which keeps
+    the zone from done and is the route flag of the later ships' unloads.
 - The navy's generator is `[0x5c7504] +0x18`, seeded with `game +0x2ee5`
   at its first tick (0x49ac11 / 0x49ac1f), one for every player's fleets
   (`Scene::navy_draw`).

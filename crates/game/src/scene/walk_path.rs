@@ -30,7 +30,7 @@ pub fn dist(x1: i32, y1: i32, x2: i32, y2: i32) -> i32 {
 }
 
 /// 0x557480: 0x557440 but (2, 2) is 2.
-fn dist2(x1: i32, y1: i32, x2: i32, y2: i32) -> i32 {
+pub fn dist2(x1: i32, y1: i32, x2: i32, y2: i32) -> i32 {
     let (ax, ay) = ((x2 - x1).abs(), (y2 - y1).abs());
     if ax == 2 && ay == 2 {
         return 2;

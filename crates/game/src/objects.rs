@@ -353,6 +353,11 @@ pub struct Ship {
     /// 5 or 6) its plans start from it (0x4a6330 with 0x4e0b50).
     #[serde(default)]
     pub entering: (i32, i32),
+    /// Its move goal (`+0x5b2`): the cell of its last plain move (command
+    /// 0x14). Coming into it, or held one short of it, a ship of a zone
+    /// group posts notice 0x136 (0x4a3f40).
+    #[serde(default)]
+    pub goal: Option<(i32, i32)>,
     /// The heading it turns to while closing in on a shore or pier, to lie
     /// side-on (0x4afe50).
     #[serde(default)]
@@ -1745,6 +1750,7 @@ pub fn resolve(
         move_state: 0,
         between: std::cell::Cell::new(false),
         entering: (0, 0),
+        goal: None,
         home_port: 0,
         last_deposit: 0,
         gathered: None,

@@ -90,6 +90,14 @@ pub enum Order {
         #[serde(default)]
         port: u32,
     },
+    /// The human's Shift move click with `ships` selected, the ships of a
+    /// group running a gather zone (0x49e230 case 0x14 -> 0x49de70 with
+    /// key flag 4): cell `(x, y)` added to the zone's waypoints `+0x61`.
+    ZoneWaypoint {
+        ships: Vec<u32>,
+        x: i32,
+        y: i32,
+    },
     /// The human's gather click on a deposit with `ships` selected
     /// (0x49d3c0): a gather zone of the 3 x 3 cells about it. `keys`: the
     /// click's key flags (Sinput, the mouse message's `+0x14`: 4 Shift, 8
@@ -395,7 +403,10 @@ impl Scene {
         // A human's order to ships makes them a group of their own
         // (0x49ca60), out of their gather zone.
         match order {
-            Order::GatherAt { .. } | Order::GatherArea { .. } | Order::GatherZone { .. } => {}
+            Order::GatherAt { .. }
+            | Order::GatherArea { .. }
+            | Order::GatherZone { .. }
+            | Order::ZoneWaypoint { .. } => {}
             Order::Behaviour { .. } | Order::LoadCrew { .. } | Order::LoadObject { .. } => {}
             Order::Stop { id } => self.leave_zones(&[*id]),
             o => {
@@ -605,6 +616,7 @@ impl Scene {
                 b,
                 resource,
             } => done(self.order_gather_area(ships, a, b, resource)),
+            ZoneWaypoint { ref ships, x, y } => done(self.order_zone_waypoint(ships, x, y)),
             GatherAt {
                 ref ships,
                 deposit,

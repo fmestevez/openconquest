@@ -12430,11 +12430,11 @@ fn zone_pick_without_an_approach() {
         id: deposit,
     };
     scene.outbox.clear();
-    assert_eq!(scene.zone_one(0, i, &[amber], false), 0x19);
+    assert_eq!(scene.zone_one(0, i, &[amber], false, false), 0x19);
     assert_eq!(scene.outbox.len(), 1);
     scene.outbox.clear();
-    assert_eq!(scene.zone_one(0, i, &[amber, dry], false), 0);
-    assert_eq!(scene.zone_one(0, i, &[dry, amber], false), 0);
+    assert_eq!(scene.zone_one(0, i, &[amber, dry], false, false), 0);
+    assert_eq!(scene.zone_one(0, i, &[dry, amber], false, false), 0);
     assert!(scene.outbox.is_empty());
 }
 
@@ -13227,4 +13227,145 @@ fn brain_member_asks_one_ship_at_a_time() {
         .map(|r| r.1)
         .collect();
     assert_eq!(asked, [1]);
+}
+
+/// A Shift move on a zone group's ships adds a waypoint to the zone's
+/// route (0x49de70 -> 0x4ce6c0, once a cell) and sends no ship. From then
+/// on the zone's commands are held back (0x4c89b0 -> 0x4cab20) and the
+/// ship is sent to the route's end farther from its goal (0x4c9c60,
+/// 0x4ca950); at each waypoint (notice 0x136 from its move, 0x4a3f40) the
+/// next (0x4ce7c0, 0x4cf070), and past the route's end its held gather
+/// goes (0x4cac30). The group given 0x78 again keeps its route (0x4c7650)
+/// and its start holds the commands back (0x4c6ee0 with the route flag;
+/// needs `OPENCONQUEST_DATA`).
+#[test]
+fn zone_route_from_shift_moves() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, deposit, ports) = amber_boat_in_zone(&data, &mut caches);
+    let t = TILE_SIZE as f32;
+    let i = scene.object_index(boat).unwrap();
+    // Two water cells on the way from the boat to the deposit: `near` by
+    // the deposit, `far` by the boat.
+    let d = scene.object_index(deposit).unwrap();
+    let dc = scene.objects[d].record.fields[6..8].to_vec();
+    assert!(scene.order_move(boat, dc[0] as f32 * t + t / 2.0, dc[1] as f32 * t + t / 2.0));
+    let path: Vec<(i32, i32)> = scene.objects[i]
+        .ship
+        .as_ref()
+        .unwrap()
+        .path
+        .iter()
+        .map(|&(x, y)| ((x / t).floor() as i32, (y / t).floor() as i32))
+        .collect();
+    assert!(path.len() > 8, "{path:?}");
+    let (far, near) = (path[path.len() / 3], path[path.len() * 2 / 3]);
+    {
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.path.clear();
+        s.task = None;
+    }
+    let before = scene.objects[i].ship.as_ref().unwrap().goal;
+    for c in [near, far, near] {
+        scene
+            .apply(
+                &Order::ZoneWaypoint {
+                    ships: vec![boat],
+                    x: c.0,
+                    y: c.1,
+                },
+                &data,
+                &mut caches,
+            )
+            .unwrap();
+    }
+    let zi = scene.ship_zone(boat).unwrap();
+    let route = scene.gather_zones[zi].route.clone().unwrap();
+    assert_eq!(route.waypoints, [near, far]);
+    assert!(route.progress.is_empty());
+    assert!(scene.outbox.is_empty());
+    assert_eq!(scene.objects[i].ship.as_ref().unwrap().goal, before);
+    // Unloaded (notice 0x139): its gather is held back and it sails to
+    // the route's end away from the deposit, `far`, to walk it back.
+    {
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.cargo = 0.0;
+        s.cargo_kind = None;
+        s.task = Some(Task::Gather {
+            deposit,
+            phase: GatherPhase::Unloading(ports[0]),
+        });
+    }
+    scene.run_task(i, 0.0, &data, &mut caches);
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let z = &scene.gather_zones[zi];
+    assert_eq!(z.deferred.len(), 1);
+    let e = z.deferred[0];
+    assert_eq!(
+        (e.ship, e.a, e.class, e.b, e.code),
+        (boat, deposit, 400, 0, 0x1a)
+    );
+    let r = z.route.as_ref().unwrap();
+    assert_eq!(
+        r.progress,
+        [gather::Progress {
+            ship: boat,
+            dir: -1,
+            at: (-1, -1)
+        }]
+    );
+    assert_eq!(r.count, 1);
+    let i = scene.object_index(boat).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert!(s.task.is_none());
+    assert_eq!(s.goal, Some(far));
+    // It sails there, on to `near`, and past the route's end its gather
+    // is sent.
+    let mut seen_near = false;
+    for _ in 0..4000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let r = scene.gather_zones[zi].route.as_ref().unwrap();
+        if r.progress.first().is_some_and(|p| p.at == near) {
+            seen_near = true;
+        }
+        if scene.gather_zones[zi].deferred.is_empty() {
+            break;
+        }
+    }
+    assert!(seen_near);
+    let z = &scene.gather_zones[zi];
+    assert!(z.deferred.is_empty());
+    assert!(z.route.as_ref().unwrap().progress.is_empty());
+    assert_eq!(z.route.as_ref().unwrap().count, 0);
+    let i = scene.object_index(boat).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert!(matches!(s.task, Some(Task::Gather { deposit: g, .. }) if g == deposit));
+    // The same selection's gather click again: the same group, its route
+    // kept, and its start's gather held back, the boat sent onto the
+    // route (0x4c6ee0 -> 0x4c8f20 -> 0x4c9270 -> 0x4c9c60): to `far`.
+    let group = scene.gather_zones[zi].group;
+    scene
+        .apply(
+            &Order::GatherAt {
+                ships: vec![boat],
+                deposit,
+                keys: 0,
+            },
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    assert_eq!(scene.ship_zone(boat), Some(zi));
+    let z = &scene.gather_zones[zi];
+    assert_eq!(z.group, group);
+    assert_eq!(z.route.as_ref().unwrap().waypoints, [near, far]);
+    assert_eq!(z.deferred.len(), 1);
+    assert!(matches!(
+        scene.outbox[..],
+        [Order::Move { ship, x, y }]
+            if ship == boat && (x, y) == (far.0 as f32 * t + t / 2.0, far.1 as f32 * t + t / 2.0)
+    ));
 }

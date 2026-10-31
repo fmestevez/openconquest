@@ -1551,6 +1551,7 @@ impl Scene {
             }
         }
         ship.task = None;
+        ship.goal = Some((cx, cy));
         // A plain move carries priority 0 (0x4cf070).
         ship.priority = 0;
         ship.patience = objects::PATIENCE;
@@ -2682,6 +2683,8 @@ impl Scene {
         // Cells reefs and whirlpools hold, and the ones Jason sinks.
         let hazard_cells = self.hazard_cells();
         let mut jason_sinks = Vec::new();
+        // Ships at their move goal (notice 0x136, 0x4a3f40).
+        let mut arrived: Vec<(u32, (i32, i32))> = Vec::new();
         let players: Vec<Option<(u32, u32)>> = self
             .human
             .iter()
@@ -2840,6 +2843,18 @@ impl Scene {
                 ship.velocity = 0.0;
                 budget = CLOSING_PACE * dt;
             }
+            let from_cell = cell_of(obj.x, obj.y);
+            // Held one short of its goal (0x4a3f40 at 0x4a49f6-0x4a4a67):
+            // not between cells (`+0x596` 0), the next step refused and
+            // the goal 1 away (0x557440): notice 0x136 with the goal. (The
+            // original also stops it there, 0x4a2f60 unless braking: not
+            // ported, the port's held ship keeps its route.)
+            let short = |ship: &objects::Ship, at: (i32, i32)| {
+                (!ship.between.get())
+                    .then_some(ship.goal)
+                    .flatten()
+                    .filter(|g| walk_path::dist(g.0, g.1, at.0, at.1) == 1)
+            };
             while budget > 0.0 {
                 let Some(&(tx, ty)) = ship.path.front() else {
                     break;
@@ -2868,6 +2883,9 @@ impl Scene {
                             3
                         };
                         held.push((obj.id, next, false, false, 0));
+                        if let Some(g) = short(ship, from_cell) {
+                            arrived.push((obj.id, g));
+                        }
                         break;
                     }
                 }
@@ -2907,6 +2925,9 @@ impl Scene {
                                 idle.contains(&other),
                                 other,
                             ));
+                            if let Some(g) = short(ship, from_cell) {
+                                arrived.push((obj.id, g));
+                            }
                             break;
                         }
                         _ => {
@@ -2972,6 +2993,12 @@ impl Scene {
                 }
                 moved = true;
             }
+            // Come into a cell that is its move goal `+0x5b2`: notice 0x136
+            // with the goal (0x4a3f40 at 0x4a49af).
+            let now = cell_of(obj.x, obj.y);
+            if now != from_cell && ship.goal == Some(now) {
+                arrived.push((obj.id, now));
+            }
             // Come into its route's last cell, it brakes to a stop there
             // (4, 0x4a2f60 from 0x4a3f40).
             let last = ship.path.back().map(|&(lx, ly)| cell_of(lx, ly));
@@ -2983,6 +3010,9 @@ impl Scene {
         }
         for c in jason_sinks {
             self.sink_hazard_at(c, data, caches);
+        }
+        for (id, (x, y)) in arrived {
+            self.post_arrival(id, x, y);
         }
         self.go_round(held);
         self.plan_pending(dt);

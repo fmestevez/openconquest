@@ -73,10 +73,56 @@ pub struct GatherZone {
     /// duplicates kept.
     #[serde(default)]
     pub wrecks: Vec<u32>,
+    /// Block `+0x61`: the waypoint route, made by the human's Shift moves
+    /// on the group (0x49de70); a new 0x78 to the group keeps it
+    /// (0x4c7650 leaves it).
+    #[serde(default)]
+    pub route: Option<Route>,
+    /// Block `+0x3d`: the commands held back while the route runs
+    /// (0x4cab20), one per ship.
+    #[serde(default)]
+    pub deferred: Vec<Deferred>,
     /// Group `+8`: calls since the last re-plan.
     pub elapsed: u32,
     /// Block `+0x5d`: nothing left to do (0x4ca290).
     pub done: bool,
+}
+
+/// A zone's route `+0x61` (0xc bytes, 0x4ce5e0).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Route {
+    /// `R[0]`: 0x4ce8a0's count (an entry's index + 1 when it appends,
+    /// less 1 at a removal).
+    pub count: i32,
+    /// `R[1]`: the waypoints, cells in the order given (12-byte entries
+    /// `{x, y, marker}`, 0x4ce6c0).
+    pub waypoints: Vec<(i32, i32)>,
+    /// `R[2]`: where each ship sent along it is bound (0x11-byte entries
+    /// `{ship, id, dir, x, y}`, 0x4ce8a0).
+    pub progress: Vec<Progress>,
+}
+
+/// An entry of a route's `R[2]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Progress {
+    pub ship: u32,
+    /// The way along the waypoints: 1 forward, -1 back (2 / -2, looping,
+    /// are read by 0x4ce7c0 but nothing gives them).
+    pub dir: i8,
+    /// The waypoint it was sent to, `(-1, -1)` for the route's entry.
+    pub at: (i32, i32),
+}
+
+/// An entry of block `+0x3d` (0x14 bytes, 0x4cab20): `{ship id, a, class,
+/// b, code}` as given to 0x4c89b0: the deposit `a`, the port `b`, the
+/// command (0x1f unload, else the gather of `class`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Deferred {
+    pub ship: u32,
+    pub a: u32,
+    pub class: u32,
+    pub b: u32,
+    pub code: u32,
 }
 
 /// An entry of block `+0x41` (0xd bytes: `{escort, ward, target,
@@ -252,23 +298,17 @@ impl Scene {
     /// deposit's cell (1 x 1 with Shift), clipped to the map, its class,
     /// `+0x24 = 0x100`, args[9] -1, started (0x4c8a80 with the flags:
     /// any set group `+0x10`, the first deposit only). (Not ported: the
-    /// message 0xc45d 0x4a1f20 sends the interface on the Shift add; the
-    /// kept `+0x61` of a group's earlier waypoint move, which skips the
-    /// start's dispatch: the port's zones have none.)
+    /// message 0xc45d 0x4a1f20 sends the interface on the Shift add. A
+    /// Shift 0x78 to a group of another block moves that block's `+0x61`
+    /// over and skips the start's dispatch: the port's human groups have
+    /// no other blocks, their waypoint moves being per ship.)
     pub fn order_gather_at(&mut self, ships: &[u32], deposit: u32, keys: u8) -> Result<(), String> {
         let d = self.object_index(deposit).ok_or("No such deposit")?;
         let class = deposit_class(&self.objects[d]).ok_or("Nothing to gather there")?;
         let (cx, cy) = self.deposit_cell(d);
         let shift = keys & 4 != 0;
         if shift {
-            let mut sel: Vec<u32> = ships.to_vec();
-            sel.sort_unstable();
-            let same = self.gather_zones.iter().position(|z| {
-                let mut s = z.ships.clone();
-                s.sort_unstable();
-                matches!(z.group, ZoneGroup::Human(_)) && s == sel
-            });
-            if let Some(z) = same {
+            if let Some(z) = self.selection_zone(ships) {
                 let code = if class == Resource::Amber { 400 } else { 0x191 };
                 if class_code(self.gather_zones[z].class) == code {
                     let id = self.objects[d].id;
@@ -332,10 +372,50 @@ impl Scene {
         if ships.is_empty() {
             return Err("No such ship".into());
         }
-        self.leave_zones(&ships);
-        self.zone_serial += 1;
-        let group = ZoneGroup::Human(self.zone_serial);
+        // The selection unchanged, its group gets the order (0x49e230):
+        // a zone of it is started again (0x4c8a80 on a 0x78 block,
+        // 0x4c7650), its route kept.
+        let group = match self.selection_zone(&ships) {
+            Some(z) => self.gather_zones[z].group,
+            None => {
+                self.leave_zones(&ships);
+                self.zone_serial += 1;
+                ZoneGroup::Human(self.zone_serial)
+            }
+        };
         self.start_zone(group, ships, rect, class, flags, first_only);
+        Ok(())
+    }
+
+    /// The human zone whose group is the selection `ships` (0x49e230
+    /// keeps the group while the selection is unchanged: here a zone of
+    /// exactly these ships).
+    pub fn selection_zone(&self, ships: &[u32]) -> Option<usize> {
+        let mut sel: Vec<u32> = ships.to_vec();
+        sel.sort_unstable();
+        sel.dedup();
+        self.gather_zones.iter().position(|z| {
+            let mut s = z.ships.clone();
+            s.sort_unstable();
+            matches!(z.group, ZoneGroup::Human(_)) && !s.is_empty() && s == sel
+        })
+    }
+
+    /// The human's Shift move on a group running a zone (0x49de70 with
+    /// key flag 4, the block neither null nor a move's 100): the route
+    /// `+0x61` made if null (0x4ce5e0), then cell `(x, y)` appended to
+    /// its waypoints unless listed (0x4ce6c0 with -1). No ship is sent:
+    /// 0x4cec00 runs only for a cell listed in a route just made, which
+    /// cannot be. (Not ported: the flag picture 0x4ced80 puts at the
+    /// waypoint for its player, 0x4ced10 at `(x*64 + 14, y*64 + 18)`.)
+    pub fn order_zone_waypoint(&mut self, ships: &[u32], x: i32, y: i32) -> Result<(), String> {
+        let z = self.selection_zone(ships).ok_or("No such group")?;
+        let route = self.gather_zones[z]
+            .route
+            .get_or_insert_with(Route::default);
+        if !route.waypoints.contains(&(x, y)) {
+            route.waypoints.push((x, y));
+        }
         Ok(())
     }
 
@@ -388,6 +468,7 @@ impl Scene {
                 zone.ports = ports;
                 zone.escorts.clear();
                 zone.wrecks.clear();
+                zone.deferred.clear();
                 zone.rect = rect;
                 zone.class = class;
                 zone.flags = flags;
@@ -412,6 +493,8 @@ impl Scene {
                     notices: Vec::new(),
                     escorts: Vec::new(),
                     wrecks: Vec::new(),
+                    route: None,
+                    deferred: Vec::new(),
                     elapsed: 0,
                     done: false,
                 });
@@ -426,7 +509,10 @@ impl Scene {
         if merchants.is_empty() {
             return;
         }
-        self.zone_dispatch(z, &cands, &merchants, &others);
+        // 0x4c6ee0's route argument: the group's `+0x61` (kept by
+        // 0x4c7650 from its earlier zone).
+        let route = self.gather_zones[z].route.is_some();
+        self.zone_dispatch(z, &cands, &merchants, &others, route);
     }
 
     /// 0x4c6ee0: fewer than 6 merchants, the port list filled if null
@@ -436,14 +522,21 @@ impl Scene {
     /// aboard, to the zone's port for it (command 0x1f) if there is one;
     /// then each other ship follows a merchant in turn (0x4d8b30 with 2,
     /// 0x4c6100).
-    fn zone_dispatch(&mut self, z: usize, cands: &[Cand], merchants: &[u32], others: &[u32]) {
+    fn zone_dispatch(
+        &mut self,
+        z: usize,
+        cands: &[Cand],
+        merchants: &[u32],
+        others: &[u32],
+        route: bool,
+    ) {
         if self.gather_zones[z].ports.is_none() {
             self.zone_port_list(z);
         }
         if merchants.len() < 6 {
             for &m in merchants {
                 if let Some(i) = self.object_index(m) {
-                    self.zone_weighted(z, i, cands, false);
+                    self.zone_weighted(z, i, cands, false, route);
                 }
             }
         } else {
@@ -458,15 +551,17 @@ impl Scene {
                     || s.cargo_kind == Some(Resource::Leviathan) && s.cargo > 0.0;
                 if self.side_computer(self.objects[i].owner) && low {
                     if let Some(p) = self.zone_port_pick(z, Some(i)) {
-                        self.zone_send_port(m, p);
+                        self.zone_send_port(z, m, p, false);
                         continue;
                     }
                 }
+                // With a route the gather is only held back (0x4c89b0 ->
+                // 0x4cab20): this path does not put the ship on the route.
                 let c = cands[k % cands.len()];
                 if let Some(d) = self.layer_deposit(c.cell) {
                     if deposit_class(&self.objects[d]) == Some(class) {
                         let did = self.objects[d].id;
-                        self.zone_send_gather(m, did, 0);
+                        self.zone_send_gather(z, m, did, 0, route);
                     }
                 }
             }
@@ -732,22 +827,31 @@ impl Scene {
     }
 
     /// 0x4c9e30: the notices newest first, each removed after its case;
-    /// returns the last value a case wrote. The ship's cases, a notice of
-    /// a ship no longer in the group dropped: 300 (a ship joined): its
-    /// next deposit (0x4c9930); 0x138: 0x4c9ae0; 0x139: 0x4c9930; 0x136
-    /// (arrived): only with a route. The others: 0x133 (wrecked) its cell
-    /// kept (`+0x35`); 0x137 (a ship left) its escort entry removed
+    /// returns the last value a case wrote. The route flag is whether the
+    /// zone had a route as the read began (`local_c`). The ship's cases,
+    /// a notice of a ship no longer in the group dropped: 300 (a ship
+    /// joined): its held command if any (0x4cabd0, 0x4cac30), else its
+    /// next deposit (0x4c9930 with the route flag); 0x138: 0x4c9ae0;
+    /// 0x139: 0x4c9930 with the route flag; 0x136 (at its move goal):
+    /// only with a route (`zone_arrived`). The others: 0x133 (wrecked) its
+    /// cell kept (`+0x35`); 0x137 (a ship left) its escort entry removed
     /// (0x4c61d0); 0x145 (a new port) still standing at its cell: listed
-    /// (0x4c6400) and 0x4c7b80. (Not ported: the deferred orders of a
-    /// route, `+0x3d` with 0x4cabd0 / 0x4cac30, and 300's behaviour
-    /// command 0x4c42f0; 0x12f, the takes, adds to `+0x30`, which nothing
+    /// (0x4c6400) and 0x4c7b80. (Not ported: 300's behaviour command
+    /// 0x4c42f0; 0x12f, the takes, adds to `+0x30`, which nothing
     /// reads; 0x13e, the human's Shift unload click on a port, toggling
     /// it in the list (0x49dfb0), whose case 0x4c6ad0 sends nothing; no
     /// code posts 0x146-0x148.)
     fn zone_notices(&mut self, z: usize) -> i32 {
         let mut r = 0;
+        let route = self.gather_zones[z].route.is_some();
         while let Some(n) = self.gather_zones.get_mut(z).and_then(|zz| zz.notices.pop()) {
             match n.code {
+                0x136 => {
+                    if let Some(v) = self.zone_arrived(z, n.ship, n.class) {
+                        r = v;
+                    }
+                    continue;
+                }
                 0x133 => {
                     self.gather_zones[z].wrecks.push(n.class);
                     continue;
@@ -773,11 +877,98 @@ impl Scene {
                 continue;
             };
             r = match n.code {
-                300 | 0x139 => self.zone_next_deposit(z, i, false),
+                300 => match self.deferred_index(z, n.ship) {
+                    Some(k) => {
+                        self.zone_fire_deferred(z, k, i);
+                        r
+                    }
+                    None => self.zone_next_deposit(z, i, false, route),
+                },
+                0x139 => self.zone_next_deposit(z, i, false, route),
                 _ => self.zone_heard_full(z, i),
             };
         }
         r
+    }
+
+    /// Notice 0x136, a ship at its move goal (0x4c9e30 at 0x4ca120-
+    /// 0x4ca215): with a route, the ship in the group and on a move
+    /// (`+0x25d & 0x80`: the port's ship with a plain move's goal and no
+    /// task), its way along the route (0x4cea20) and the waypoint after
+    /// the arrival cell that way (0x4ce7c0). One inside the map (above
+    /// cell 0): a move there (0x4cf070) and its progress updated
+    /// (0x4ce8a0, removing with the route's end flag). Past the route's
+    /// end: off the route (0x4ce8a0, removed unless looping), then its
+    /// held command (0x4cac30), or, none held, 0x4c9930 with the ship
+    /// given (no same deposit) and route 0, whose value it returns. A cell
+    /// not a waypoint: nothing.
+    fn zone_arrived(&mut self, z: usize, id: u32, cell: u32) -> Option<i32> {
+        self.gather_zones[z].route.as_ref()?;
+        if !self.gather_zones[z].ships.contains(&id) {
+            return None;
+        }
+        let i = self.object_index(id)?;
+        let s = self.objects[i].ship.as_ref()?;
+        if s.task.is_some() || s.goal.is_none() {
+            return None;
+        }
+        let (_, dir) = self.route_at(z, id);
+        let w = self.nav.width as i32;
+        let n = w * self.nav.height as i32;
+        let c = cell as i32;
+        let (nx, end) = self.route_next(z, c % w, c / w, dir);
+        if nx < 1 || nx >= n {
+            if !end {
+                return None;
+            }
+            self.route_progress(z, i, -1, -1, true, 0);
+            return match self.deferred_index(z, id) {
+                Some(k) => {
+                    self.zone_fire_deferred(z, k, i);
+                    None
+                }
+                None => Some(self.zone_next_deposit(z, i, true, false)),
+            };
+        }
+        self.zone_move(id, nx % w, nx / w);
+        self.route_progress(z, i, nx % w, nx / w, end, 0);
+        None
+    }
+
+    /// A ship at its move goal `(x, y)` posts notice 0x136 with the cell
+    /// (0x4a1700, from the move 0x4a3f40 and from 0x4ce8a0).
+    pub(super) fn post_arrival(&mut self, id: u32, x: i32, y: i32) {
+        let w = self.nav.width as i32;
+        self.post_notice(id, 0x136, (y * w + x) as u32);
+    }
+
+    /// 0x4cabd0(group, ship, 0): the index of ship `id`'s held command.
+    fn deferred_index(&self, z: usize, id: u32) -> Option<usize> {
+        self.gather_zones[z]
+            .deferred
+            .iter()
+            .position(|e| e.ship == id)
+    }
+
+    /// 0x4cac30(group, k, ship): entry `k` being the ship's, an unload to
+    /// a port no longer in the zone's (non-null) list stays held and
+    /// gives 0; else it is sent (0x4c89b0 with route 0), taken out, 1.
+    fn zone_fire_deferred(&mut self, z: usize, k: usize, i: usize) -> i32 {
+        let e = self.gather_zones[z].deferred[k];
+        if e.ship != self.objects[i].id {
+            return 0;
+        }
+        if e.code == 0x1f
+            && self.gather_zones[z]
+                .ports
+                .as_ref()
+                .is_some_and(|p| !p.contains(&e.b))
+        {
+            return 0;
+        }
+        self.zone_command(z, e, false);
+        self.gather_zones[z].deferred.remove(k);
+        1
     }
 
     /// Notice 0x145: the port still the building of its cell: added to
@@ -839,7 +1030,7 @@ impl Scene {
             );
             if s.kind < 2 && unloading {
                 if let Some(port) = self.zone_port_pick(z, Some(i)) {
-                    self.zone_send_port(sid, port);
+                    self.zone_send_port(z, sid, port, false);
                 }
             }
         }
@@ -856,9 +1047,11 @@ impl Scene {
         let lev = class == Resource::Leviathan
             && s.cargo_kind == Some(Resource::Leviathan)
             && s.cargo > 0.0;
-        if self.fill_left(i, class) != 0 && !lev && self.zone_next_deposit(z, i, false) != 0 {
+        if self.fill_left(i, class) != 0 && !lev && self.zone_next_deposit(z, i, false, false) != 0
+        {
             return 1;
         }
+        let route = self.gather_zones[z].route.is_some();
         let home = self.objects[i].ship.as_ref().unwrap().home_port;
         let listed = home != 0 && self.zone_port_list(z).contains(&home);
         let own = self.object_index(home).is_some_and(|p| {
@@ -871,25 +1064,31 @@ impl Scene {
         };
         if let Some(p) = port {
             let id = self.objects[i].id;
-            self.zone_send_port(id, p);
+            self.zone_send_port(z, id, p, route);
+            if route {
+                self.zone_onto_route(z, i, 0, p);
+            }
         }
         0
     }
 
-    /// 0x4c9930(ship, 0, route): the same deposit again (0x4c96e0); none,
+    /// 0x4c9930(ship, given, route): the same deposit again (0x4c96e0),
+    /// unless `given`; none,
     /// the zone's deposits not known yet (0x4c5b90 mode 1) or, none of
     /// those, the known ones to be had (0x4c95f0, the others forgotten:
     /// the original's walk skips the one after each it forgets) to the
     /// weighted pick 0x4c8f20 with port argument 1, which counts 1 only
     /// when it returns non-zero.
-    fn zone_next_deposit(&mut self, z: usize, i: usize, route: bool) -> i32 {
-        let n = self.zone_same_deposit(z, i, route);
-        if n >= 1 {
-            return n;
+    fn zone_next_deposit(&mut self, z: usize, i: usize, given: bool, route: bool) -> i32 {
+        if !given {
+            let n = self.zone_same_deposit(z, i, route);
+            if n >= 1 {
+                return n;
+            }
         }
         let list = self.zone_deposits(z, 1);
         if !list.is_empty() {
-            return i32::from(self.zone_weighted(z, i, &list, true) != 0);
+            return i32::from(self.zone_weighted(z, i, &list, true, route) != 0);
         }
         let mut list = Vec::new();
         let mut count = self.gather_zones[z].deposits.len();
@@ -905,7 +1104,7 @@ impl Scene {
             }
             k += 1;
         }
-        if !list.is_empty() && self.zone_weighted(z, i, &list, true) != 0 {
+        if !list.is_empty() && self.zone_weighted(z, i, &list, true, route) != 0 {
             return 1;
         }
         0
@@ -917,12 +1116,13 @@ impl Scene {
     /// its box (0x4ac610 mode 1); fish, one of its box's shoals drawn
     /// with the navy's generator (mode 2); a leviathan, mode 1, none
     /// giving 0. The deposit is known (0x4c6e30) and the ship sent there
-    /// with port 0.
-    fn zone_same_deposit(&mut self, z: usize, i: usize, _route: bool) -> i32 {
+    /// with port 0 and the route flag, then, with it, onto the route
+    /// (0x4c9c60 with the deposit). (The unload goes with route 0.)
+    fn zone_same_deposit(&mut self, z: usize, i: usize, route: bool) -> i32 {
         let id = self.objects[i].id;
         if self.room(i) == 0 {
             if let Some(p) = self.zone_port_pick(z, Some(i)) {
-                self.zone_send_port(id, p);
+                self.zone_send_port(z, id, p, false);
                 return 1;
             }
         }
@@ -951,7 +1151,10 @@ impl Scene {
         if !self.gather_zones[z].deposits.contains(&did) {
             self.gather_zones[z].deposits.push(did);
         }
-        self.zone_send_gather(id, did, 0);
+        self.zone_send_gather(z, id, did, 0, route);
+        if route {
+            self.zone_onto_route(z, i, did, 0);
+        }
         1
     }
 
@@ -1045,12 +1248,20 @@ impl Scene {
     /// amount; three draws of the navy's generator `% total`, each the
     /// first whose running sum passes it, keeping the heaviest (strict);
     /// no room, command 0x1f to its port; else the gather command with
-    /// that port, or 0 without `port_arg`. Returns 0 on this path always
-    /// (0x4c9257).
-    fn zone_weighted(&mut self, z: usize, i: usize, cands: &[Cand], port_arg: bool) -> u32 {
+    /// that port, or 0 without `port_arg`; with the route flag, then onto
+    /// the route (0x4c9c60: an unload with its port, a gather with its
+    /// deposit). Returns 0 on this path always (0x4c9257).
+    fn zone_weighted(
+        &mut self,
+        z: usize,
+        i: usize,
+        cands: &[Cand],
+        port_arg: bool,
+        route: bool,
+    ) -> u32 {
         let kind = self.objects[i].ship.as_ref().map_or(0xff, |s| s.kind);
         if cands.len() < 2 || kind > 1 || self.gather_zones[z].class == Resource::Leviathan {
-            return self.zone_one(z, i, cands, port_arg);
+            return self.zone_one(z, i, cands, port_arg, route);
         }
         let mut recs: Vec<Rec> = cands
             .iter()
@@ -1093,9 +1304,15 @@ impl Scene {
         let rec = recs[best as usize];
         let id = self.objects[i].id;
         if self.room(i) == 0 {
-            self.zone_send_port(id, rec.port);
+            self.zone_send_port(z, id, rec.port, route);
+            if route {
+                self.zone_onto_route(z, i, 0, rec.port);
+            }
         } else {
-            self.zone_send_gather(id, rec.id, if port_arg { rec.port } else { 0 });
+            self.zone_send_gather(z, id, rec.id, if port_arg { rec.port } else { 0 }, route);
+            if route {
+                self.zone_onto_route(z, i, rec.id, 0);
+            }
         }
         0
     }
@@ -1309,7 +1526,14 @@ impl Scene {
     /// the most bound; none, the gather command with 0; full or a
     /// leviathan aboard, 0x1f; else the gather command with it. Returns
     /// 0x1f, 0x19 or 0.
-    pub(super) fn zone_one(&mut self, z: usize, i: usize, cands: &[Cand], port_arg: bool) -> u32 {
+    pub(super) fn zone_one(
+        &mut self,
+        z: usize,
+        i: usize,
+        cands: &[Cand],
+        port_arg: bool,
+        route: bool,
+    ) -> u32 {
         if cands.is_empty() {
             return 0;
         }
@@ -1359,7 +1583,8 @@ impl Scene {
             return 0;
         };
         let (did, id) = (self.objects[d].id, self.objects[i].id);
-        if class != Resource::Leviathan {
+        // What it sent: the command and its port (`local_c`, `local_8`).
+        let (code, port) = if class != Resource::Leviathan {
             if kind > 1 {
                 let (merchants, _) = self.zone_split(z);
                 if !merchants.is_empty() {
@@ -1378,23 +1603,23 @@ impl Scene {
                     if self.room(i) == 0 {
                         match self.zone_port_pick(z, None) {
                             Some(p) => {
-                                self.zone_send_port(id, p);
-                                0x1f
+                                self.zone_send_port(z, id, p, route);
+                                (0x1f, p)
                             }
-                            None => 0,
+                            None => (0, 0),
                         }
                     } else {
-                        self.zone_send_gather(id, did, 0);
-                        0x19
+                        self.zone_send_gather(z, id, did, 0, route);
+                        (0x19, 0)
                     }
                 }
                 Some(p) => {
                     if self.room(i) == 0 {
-                        self.zone_send_port(id, p);
-                        0x1f
+                        self.zone_send_port(z, id, p, route);
+                        (0x1f, p)
                     } else {
-                        self.zone_send_gather(id, did, p);
-                        0x19
+                        self.zone_send_gather(z, id, did, p, route);
+                        (0x19, p)
                     }
                 }
             }
@@ -1403,36 +1628,315 @@ impl Scene {
             let lev = s.cargo_kind == Some(Resource::Leviathan) && s.cargo > 0.0;
             match self.zone_port_pick(z, None) {
                 None => {
-                    self.zone_send_gather(id, did, 0);
-                    0x19
+                    self.zone_send_gather(z, id, did, 0, route);
+                    (0x19, 0)
                 }
                 Some(p) if self.room(i) == 0 || lev => {
-                    self.zone_send_port(id, p);
-                    0x1f
+                    self.zone_send_port(z, id, p, route);
+                    (0x1f, p)
                 }
                 Some(p) => {
-                    self.zone_send_gather(id, did, p);
-                    0x19
+                    self.zone_send_gather(z, id, did, p, route);
+                    (0x19, p)
                 }
             }
+        };
+        // With the route flag, onto the route (0x4c95a5: an unload with
+        // its port; 0x4c95ca: a gather with its deposit alone).
+        if route && code == 0x1f {
+            self.zone_onto_route(z, i, 0, port);
+        } else if route && code != 0 {
+            self.zone_onto_route(z, i, did, 0);
         }
+        code
     }
 
     /// 0x4c89b0 with code 0x1f: command 0x1f `{port, 1, 0x5a}` through
-    /// the outbox.
-    fn zone_send_port(&mut self, ship: u32, port: u32) {
-        self.post(Order::Unload { ship, port });
+    /// the outbox; with the route flag held back instead (0x4cab20).
+    fn zone_send_port(&mut self, z: usize, ship: u32, port: u32, route: bool) {
+        let e = Deferred {
+            ship,
+            a: 0,
+            class: 0,
+            b: port,
+            code: 0x1f,
+        };
+        self.zone_command(z, e, route);
     }
 
     /// 0x4c89b0 with a deposit: the gather command of its class (0x1a
     /// amber, 0x19 fish, 0x1d leviathan) `{deposit, port, 0x5a}` through
-    /// the outbox.
-    fn zone_send_gather(&mut self, ship: u32, deposit: u32, port: u32) {
-        self.post(Order::Gather {
+    /// the outbox; with the route flag held back instead (0x4cab20).
+    fn zone_send_gather(&mut self, z: usize, ship: u32, deposit: u32, port: u32, route: bool) {
+        let class = self
+            .object_index(deposit)
+            .and_then(|d| deposit_class(&self.objects[d]))
+            .map_or(0, class_code);
+        let code = match class {
+            400 => 0x1a,
+            0x192 => 0x1d,
+            _ => 0x19,
+        };
+        let e = Deferred {
             ship,
-            deposit,
-            port,
+            a: deposit,
+            class,
+            b: port,
+            code,
+        };
+        self.zone_command(z, e, route);
+    }
+
+    /// 0x4c89b0(group, ship, a, b, code, class, route): with the route
+    /// flag the command is held back, 0x4cab20: the ship's entry (by id)
+    /// taken out of `+0x3d` and this one appended, nothing sent. Else
+    /// code 0x1f the unload to port `b`; else the gather of class 400,
+    /// 0x191 or 0x192 at deposit `a` with port `b`. (Another class gives
+    /// command 0 with no payload: never, every deposit has one.)
+    fn zone_command(&mut self, z: usize, e: Deferred, route: bool) {
+        if route {
+            let d = &mut self.gather_zones[z].deferred;
+            if let Some(k) = d.iter().position(|o| o.ship == e.ship) {
+                d.remove(k);
+            }
+            d.push(e);
+            return;
+        }
+        if e.code == 0x1f {
+            self.post(Order::Unload {
+                ship: e.ship,
+                port: e.b,
+            });
+        } else if (400..=0x192).contains(&e.class) {
+            self.post(Order::Gather {
+                ship: e.ship,
+                deposit: e.a,
+                port: e.b,
+            });
+        }
+    }
+
+    /// 0x4cf070(group, ship, x, y): command 0x14 `{x, y, 0}`, a plain move
+    /// to the cell, priority 0, through the outbox.
+    fn zone_move(&mut self, ship: u32, x: i32, y: i32) {
+        let t = TILE_SIZE as f32;
+        self.post(Order::Move {
+            ship,
+            x: x as f32 * t + t / 2.0,
+            y: y as f32 * t + t / 2.0,
         });
+    }
+
+    /// The cell a ship is in (`+0x5a3`, `+0x5a7`).
+    fn ship_cell(&self, i: usize) -> (i32, i32) {
+        let t = TILE_SIZE as f32;
+        (
+            (self.objects[i].x / t).floor() as i32,
+            (self.objects[i].y / t).floor() as i32,
+        )
+    }
+
+    /// 0x4cea20(ship, route, &dir): ship `id`'s progress entry: its cell
+    /// `y*W + x` (0 for the entry's `(-1, -1)`) and its way; none, -1 and
+    /// way 0.
+    fn route_at(&self, z: usize, id: u32) -> (i32, i8) {
+        let w = self.nav.width as i32;
+        let Some(r) = self.gather_zones[z].route.as_ref() else {
+            return (-1, 0);
+        };
+        match r.progress.iter().find(|p| p.ship == id) {
+            None => (-1, 0),
+            Some(p) if p.at == (-1, -1) => (0, p.dir),
+            Some(p) => (p.at.1 * w + p.at.0, p.dir),
+        }
+    }
+
+    /// 0x4ce7c0(route, x, y, &end, dir): the waypoint after `(x, y)` the
+    /// way `dir` (1 and up forward, else back), as a cell `y*W + x`, and
+    /// whether the walk ran off the route's end; past the end only a way
+    /// of 2 (forward) or -2 (back) goes round to the other end. `(x, y)`
+    /// not a waypoint: -1.
+    fn route_next(&self, z: usize, x: i32, y: i32, dir: i8) -> (i32, bool) {
+        let w = self.nav.width as i32;
+        let Some(r) = self.gather_zones[z].route.as_ref() else {
+            return (-1, false);
+        };
+        let wp = &r.waypoints;
+        let n = wp.len();
+        let Some(k) = wp.iter().position(|&c| c == (x, y)) else {
+            return (-1, false);
+        };
+        let cell = |c: (i32, i32)| c.1 * w + c.0;
+        if dir < 1 {
+            if k >= 1 {
+                return (cell(wp[k - 1]), false);
+            }
+            if dir != -2 {
+                return (-1, true);
+            }
+            (cell(wp[n - 1]), true)
+        } else {
+            if k + 1 < n {
+                return (cell(wp[k + 1]), false);
+            }
+            if dir != 2 {
+                return (-1, true);
+            }
+            (cell(wp[0]), true)
+        }
+    }
+
+    /// 0x4ce8a0(ship, route, x, y, remove, mark): the ship's progress
+    /// entry, with `remove` and a way not looping (|dir| != 2), taken out
+    /// (`R[0]` less 1) and nothing else. Then, the ship within 0x557480
+    /// distance 2 of `(x, y)`, notice 0x136 with that cell (0x4a1700);
+    /// the entry set to `(x, y)` (and the way to `mark` if not 0), or,
+    /// none, appended `{ship, mark, (x, y)}` (`R[0]` its index + 1).
+    fn route_progress(&mut self, z: usize, i: usize, x: i32, y: i32, remove: bool, mark: i8) {
+        let id = self.objects[i].id;
+        let at = self.ship_cell(i);
+        let Some(r) = self.gather_zones[z].route.as_mut() else {
+            return;
+        };
+        let k = r.progress.iter().position(|p| p.ship == id);
+        if let Some(k) = k {
+            if remove && r.progress[k].dir.unsigned_abs() != 2 {
+                r.progress.remove(k);
+                r.count -= 1;
+                return;
+            }
+        }
+        if walk_path::dist2(x, y, at.0, at.1) < 2 {
+            self.post_arrival(id, x, y);
+        }
+        let r = self.gather_zones[z].route.as_mut().unwrap();
+        match k {
+            Some(k) => {
+                r.progress[k].at = (x, y);
+                if mark != 0 {
+                    r.progress[k].dir = mark;
+                }
+            }
+            None => {
+                r.progress.push(Progress {
+                    ship: id,
+                    dir: mark,
+                    at: (x, y),
+                });
+                r.count = r.progress.len() as i32;
+            }
+        }
+    }
+
+    /// 0x4ca950(ship, route, a deposit, b port): the way along the route
+    /// towards the goal. No waypoints: 0; one: 1. Else, by the flood
+    /// 0x4a1e90 (the ship's draught, limit 5000, bigger nearer) from the
+    /// deposit `a` (its cell; flood none: 0): -1 when the first waypoint
+    /// is nearer it than the last, else 1; else from the port `b`'s cell:
+    /// 1 when the first is nearer, else -1; neither found: 0. (The port's
+    /// flood is read without a null test, 0x4caad4-0x4caaf2: it is null
+    /// only for a cell off the map; the port takes 0 then, as for the
+    /// deposit.)
+    fn route_dir(&self, z: usize, i: usize, a: u32, b: u32) -> i8 {
+        let Some(r) = self.gather_zones[z].route.as_ref() else {
+            return 0;
+        };
+        let n = r.waypoints.len();
+        if n == 0 {
+            return 0;
+        }
+        if n == 1 {
+            return 1;
+        }
+        let (f, l) = (r.waypoints[0], r.waypoints[n - 1]);
+        let w = self.nav.width as i32;
+        let deep = self.objects[i]
+            .ship
+            .as_ref()
+            .is_some_and(|s| deep_draught(s.kind));
+        let at =
+            |m: &[i16], c: (i32, i32)| m.get((c.1 * w + c.0) as usize).copied().unwrap_or_default();
+        if let Some(d) = (a != 0).then(|| self.object_index(a)).flatten() {
+            let c = match deposit_class(&self.objects[d]) {
+                Some(_) => self.deposit_cell(d),
+                None => (0, 0),
+            };
+            let Some(m) = self.nav.wavefront(c, deep, 5000) else {
+                return 0;
+            };
+            return if at(&m, f) > at(&m, l) { -1 } else { 1 };
+        }
+        if let Some(p) = (b != 0).then(|| self.object_index(b)).flatten() {
+            let Some(c) = self.objects[p].cell else {
+                return 0;
+            };
+            let Some(m) = self.nav.wavefront(c, deep, 5000) else {
+                return 0;
+            };
+            return if at(&m, f) > at(&m, l) { 1 } else { -1 };
+        }
+        0
+    }
+
+    /// 0x4c9c60(group, ship, a deposit, b port): onto the route, after a
+    /// command held back. The goal's kind: a deposit alone 1, a port alone
+    /// -1, else 0; the way `c` (0x4ca950); no waypoints, kind 0 or `c` 0:
+    /// 0, nothing sent (the command stays held). The route's entry is the
+    /// end away from the goal: for a deposit the last waypoint when `c` is
+    /// below 0, else the first, the way `c`; for a port the last when `c`
+    /// is 1 or more, else the first, the way `-c`. The ship more than a
+    /// cell from it either way, or a route of one waypoint: a move there
+    /// (0x4cf070), its progress `(-1, -1)` with the way, 1. Else (by the
+    /// entry already) the waypoint after it towards the goal (the second
+    /// or the last but one), a move there, its progress that waypoint, 0.
+    fn zone_onto_route(&mut self, z: usize, i: usize, a: u32, b: u32) -> i32 {
+        let s: i32 = match (a != 0, b != 0) {
+            (true, false) => 1,
+            (false, true) => -1,
+            _ => 0,
+        };
+        if self.gather_zones[z].route.is_none() {
+            return 0;
+        }
+        let c = self.route_dir(z, i, a, b);
+        let wp = self.gather_zones[z]
+            .route
+            .as_ref()
+            .unwrap()
+            .waypoints
+            .clone();
+        let n = wp.len();
+        if n == 0 || s == 0 || c == 0 {
+            return 0;
+        }
+        let (k, dir) = if s >= 1 {
+            (if c < 0 { n - 1 } else { 0 }, c)
+        } else {
+            (if c >= 1 { n - 1 } else { 0 }, -c)
+        };
+        let p = wp[k];
+        let id = self.objects[i].id;
+        let at = self.ship_cell(i);
+        if (at.0 - p.0).abs() > 1 || (at.1 - p.1).abs() > 1 || n < 2 {
+            self.zone_move(id, p.0, p.1);
+            self.route_progress(z, i, -1, -1, false, dir);
+            return 1;
+        }
+        let k2 = if s >= 1 {
+            if c >= 0 {
+                1
+            } else {
+                n - 2
+            }
+        } else if c < 1 {
+            1
+        } else {
+            n - 2
+        };
+        let q = wp[k2];
+        self.zone_move(id, q.0, q.1);
+        self.route_progress(z, i, q.0, q.1, false, dir);
+        0
     }
 
     /// 0x4c7ea0: the player's merchants (types 0 and 1) in its gather
@@ -1743,7 +2247,14 @@ impl Scene {
     /// 0 and a port for it, is sent to unload (0x1f); ships unloading
     /// count working; with none laden or working the zone is done
     /// (`+0x5d`) for a human's (side 1 or 2) when `+0x24 >> 16 != 1`.
-    /// (Not ported: the route `+0x61`; the blow's report to the brain,
+    /// With a route (`+0x61`), first, each ship listed on it (0x4cea20)
+    /// and lying still (`+0x58c` 0) is sent on to the waypoint after its
+    /// own (0x4ce7c0, 0x4cf070; its progress left as it was), the normal
+    /// plan only past the route's end; one listed and not still: with
+    /// deposits nothing, without it counts as working (`local_34`, which
+    /// is also the route flag of the later unloads). With deposits the
+    /// route flag of the plan is the route's being there (`local_c`).
+    /// (Not ported: the blow's report to the brain,
     /// message 0x5d9c (0x4a21c0, whose header words `[0]`, `[1]` are left
     /// unwritten on the stack): the port reports blows as they land
     /// (`fleet_attacked`).) After the ships, each wreck's cell (`+0x35`)
@@ -1752,12 +2263,30 @@ impl Scene {
     fn zone_replan(&mut self, z: usize) -> i32 {
         let cands = self.zone_deposits(z, 1);
         let ships = self.gather_zones[z].ships.clone();
+        let route = self.gather_zones[z].route.is_some();
+        let n = self.nav.width as i32 * self.nav.height as i32;
+        let w = self.nav.width as i32;
         let mut sent = 0;
         if !cands.is_empty() {
             for id in ships {
                 let Some(i) = self.object_index(id) else {
                     continue;
                 };
+                if route {
+                    let (pos, dir) = self.route_at(z, id);
+                    if pos >= 0 {
+                        if self.objects[i].ship.as_ref().unwrap().move_state != 0 {
+                            continue;
+                        }
+                        let (nx, end) = self.route_next(z, pos % w, pos / w, dir);
+                        if !end {
+                            if 0 < nx && nx < n {
+                                self.zone_move(id, nx % w, nx / w);
+                            }
+                            continue;
+                        }
+                    }
+                }
                 if self.objects[i].ship.as_ref().unwrap().blow.is_some() {
                     self.post(Order::ClearBlow { ship: id });
                 }
@@ -1766,8 +2295,8 @@ impl Scene {
                     continue;
                 }
                 if s.kind < 2 {
-                    sent = self.zone_same_deposit(z, i, false);
-                    if sent < 1 && self.zone_weighted(z, i, &cands, true) != 0 {
+                    sent = self.zone_same_deposit(z, i, route);
+                    if sent < 1 && self.zone_weighted(z, i, &cands, true, route) != 0 {
                         sent += 1;
                     }
                 } else if let Some(e) = self.gather_zones[z]
@@ -1793,10 +2322,25 @@ impl Scene {
         }
         let class = self.gather_zones[z].class;
         let (mut laden, mut working) = (0, 0);
+        let mut on_route = false;
         for id in ships {
             let Some(i) = self.object_index(id) else {
                 continue;
             };
+            if route {
+                let (pos, dir) = self.route_at(z, id);
+                if pos >= 0 {
+                    if self.objects[i].ship.as_ref().unwrap().move_state != 0 {
+                        on_route = true;
+                        continue;
+                    }
+                    let (nx, end) = self.route_next(z, pos % w, pos / w, dir);
+                    if !end && 0 < nx && nx < n {
+                        self.zone_move(id, nx % w, nx / w);
+                        continue;
+                    }
+                }
+            }
             let s = self.objects[i].ship.as_ref().unwrap();
             let unloading = matches!(
                 s.task,
@@ -1813,7 +2357,7 @@ impl Scene {
                 laden += 1;
                 if !unloading && self.gather_zones[z].flags & 1 != 0 {
                     if let Some(p) = self.zone_port_pick(z, Some(i)) {
-                        self.zone_send_port(id, p);
+                        self.zone_send_port(z, id, p, on_route);
                         working += 1;
                     }
                 }
@@ -1822,6 +2366,7 @@ impl Scene {
         let owner = self.gather_zones[z].owner;
         if laden == 0
             && working == 0
+            && !on_route
             && !self.side_computer(owner)
             && owner != Some((4, 0))
             && self.gather_zones[z].flags >> 16 != 1
