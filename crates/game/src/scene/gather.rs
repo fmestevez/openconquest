@@ -2387,8 +2387,12 @@ impl Scene {
     /// see it. None: each ship not unloading this zone's
     /// class with cargo aboard counts laden and, with the zone's flag bit
     /// 0 and a port for it, is sent to unload (0x1f); ships unloading
-    /// count working; with none laden or working the zone is done
-    /// (`+0x5d`) for a human's (side 1 or 2) when `+0x24 >> 16 != 1`.
+    /// count working (0x4e4f90, their cargo sum, writes nothing, and the
+    /// idle list takes a ship only with `+0x25d & 0x40` clear after it,
+    /// 0x4ca71c: never, so no idle ship is sent after a busy one,
+    /// 0x4d8b30 sub 1, nor the navy's generator drawn for it); with none
+    /// laden or working the zone is done (`+0x5d`) for a human's (side 1
+    /// or 2) when `+0x24 >> 16 != 1`.
     /// With a route (`+0x61`), first, each ship listed on it (0x4cea20)
     /// and lying still (`+0x58c` 0) is sent on to the waypoint after its
     /// own (0x4ce7c0, 0x4cf070; its progress left as it was), the normal

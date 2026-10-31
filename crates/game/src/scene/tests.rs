@@ -12275,6 +12275,73 @@ fn zone_replans_its_idle_ships() {
     assert!(matches!(s.task, Some(Task::Gather { deposit: d, .. }) if d == deposit));
 }
 
+/// A zone with no deposit left (0x4ca290's second branch): its idle,
+/// empty ship stays idle beside a mate sailing in to unload this class
+/// (the busy list, 0x4ca767): the idle list is never filled, so no
+/// follow (0x4d8b30 sub 1) is sent and the navy's generator is not drawn
+/// (0x4ca80d); the zone is not done while the mate works. With the mate
+/// idle too, nothing laden or working: a human's zone is done (`+0x5d`)
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn zone_without_deposits_leaves_its_idle_ships() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, boat, deposit, ports) = amber_boat_in_zone(&data, &mut caches);
+    let mate = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.id != boat && o.ship.is_some())
+        .unwrap()
+        .id;
+    let d = scene.object_index(deposit).unwrap();
+    scene.objects.remove(d);
+    for (id, task) in [
+        (boat, None),
+        (
+            mate,
+            Some(Task::Gather {
+                deposit,
+                phase: GatherPhase::ToPort(ports[0]),
+            }),
+        ),
+    ] {
+        let i = scene.object_index(id).unwrap();
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.task = task;
+        s.cargo = 0.0;
+        s.cargo_kind = None;
+        s.path.clear();
+    }
+    scene.gather_zones[0].ships = vec![boat, mate];
+    scene.gather_zones[0].deposits.clear();
+    scene.gather_zones[0].notices.clear();
+    scene.gather_zones[0].elapsed = 0x56;
+    scene.outbox.clear();
+    let lcg = scene.navy_lcg;
+    scene.run_gather_zones();
+    let idle = |s: &Scene, id: u32| {
+        s.objects[s.object_index(id).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap()
+            .task
+            .is_none()
+    };
+    assert!(idle(&scene, boat));
+    assert!(scene.outbox.is_empty());
+    assert_eq!(scene.navy_lcg, lcg);
+    assert!(!scene.gather_zones[0].done);
+    let i = scene.object_index(mate).unwrap();
+    scene.objects[i].ship.as_mut().unwrap().task = None;
+    scene.gather_zones[0].elapsed = 0x56;
+    scene.run_gather_zones();
+    assert!(scene.outbox.is_empty());
+    assert!(scene.gather_zones[0].done);
+}
+
 /// A brain fleet's move is judged by 0x4ccf60: each ship within the
 /// order's tolerance (0x557440) of its cell in the formation is in; all
 /// in, done (0x1f5 / 0xb); none in and none under way, failed (0x1f5 /

@@ -2489,7 +2489,15 @@ list and escorts).
   keep. None: ships unloading this class count
   working; laden ones (`+0x47f/+0x480/+0x481/+0x782`) count and, not
   unloading and with flag bit 0, go to 0x4c6640's port (0x1f); its idle
-  list is never filled (no follows); none laden, working or on a route:
+  list is never filled (no follows): a ship unloading this class
+  (`+0x25d & 0x40`, `+0x76e` the zone's class, `+0x772` 0xc) asks
+  0x4e4f90, which only sums its cargo bytes `+0x47f + 0x480 + 0x481` and
+  writes nothing, and the list takes a ship only when `+0x25d & 0x40`,
+  read again after that call (0x4ca71c), is clear, so every such ship,
+  laden or empty, goes to the busy list (0x4ca767), the list of idle
+  ships stays empty and the 0x4d8b30 sub 1 follows to a busy ship at
+  random (one LCG draw each, 0x4ca80d) are never sent nor drawn; none
+  laden, working or on a route:
   `+0x5d = 1` for sides 1 / 2 when `+0x24 >> 16 != 1`. With a route, see
   **Route**. In the branch
   with deposits, after the ships, each `+0x35` cell in order goes to every
