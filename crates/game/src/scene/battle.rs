@@ -17,6 +17,31 @@ impl Scene {
             && matches!((a.owner, b.owner), (Some(x), Some(y)) if x != y)
     }
 
+    /// Whether `me` is a ship of a computer player (the `computers`
+    /// module's, not a brain's).
+    pub(super) fn computer_ship(&self, me: &MapObject) -> bool {
+        me.ship.is_some()
+            && me
+                .owner
+                .is_some_and(|o| self.computers.players.iter().any(|c| c.owner == o))
+    }
+
+    /// Whether `me`'s at-will search may pick `o`: a ship by its masks
+    /// (`objects::Behaviour::may_pick`: players `+0x689`, classes
+    /// `+0x68d`, positions `+0x685`), a computer player's ship by its
+    /// spared players instead (`holds_fire`: its tasks' masks, not
+    /// ported), anything else always.
+    pub(super) fn picks_at_will(&self, me: &MapObject, o: &MapObject) -> bool {
+        let Some(ship) = me.ship.as_ref() else {
+            return true;
+        };
+        if self.computer_ship(me) {
+            return !self.holds_fire(me, o);
+        }
+        let class = combat::class_bit(o.record.class_id, o.ship.as_ref().map(|s| s.kind));
+        o.owner.is_some_and(|ow| ship.behaviour.may_pick(ow, class))
+    }
+
     /// Orders armed ship `ship` to attack the enemy ship or building `target`.
     pub fn order_attack(&mut self, ship: u32, target: u32) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
@@ -622,7 +647,12 @@ impl Scene {
                         Some(Task::Zone { rect, attack }) => self.zone_target(i, rect, attack),
                         _ => None,
                     },
-                    ship.behaviour.guard
+                    // The at-will search runs on guard only (0x4bfc60
+                    // calls 0x4c0cd0 with `+0x684 & 1`). A computer
+                    // player's ship keeps the port's former test (on
+                    // guard always): not ported, the behaviour those
+                    // players' tasks send (0x482e80 / 0x482eb0, order 0x72).
+                    (ship.behaviour.guard || self.computer_ship(&self.objects[i]))
                         && ((ship.task.is_none() && ship.path.is_empty())
                             || matches!(
                                 ship.task,
@@ -676,7 +706,7 @@ impl Scene {
                     .filter(|(_, o)| {
                         o.ship.is_some()
                             && Self::are_enemies(me, o)
-                            && !self.holds_fire(me, o)
+                            && self.picks_at_will(me, o)
                             && dist(me, o) <= range
                             && o.combat.as_ref().is_none_or(|c| c.phantom <= 0.0)
                             && !(me.owner == Some(combat::MONSTERS)
@@ -1470,7 +1500,12 @@ impl Scene {
     }
 
     /// Switches one of own ship `ship`'s behaviours (`commands::GUARD`,
-    /// `RAM_ATTACK`, `BOARD_ATTACK`, `FIRE_ON_AGGRESSOR`).
+    /// `RAM_ATTACK`, `BOARD_ATTACK`, `FIRE_ON_AGGRESSOR`): the left press
+    /// 0x4f34c0 sends command `#` with the button's state as the sub.
+    /// Guard 0x6f / 0x70 sub 1 (2 when set), fire on aggressor 0x72 /
+    /// 0x73 sub 3 (4 when set), payload players `+1` -1, classes `+5` -1,
+    /// `+9` 0xffff (positions 0xff, no ram or board bit); board 0x78 sub
+    /// 5 (0xe when set), ram 0x79 sub 6 (0xf when set), payload all -1.
     pub fn toggle_behaviour(
         &mut self,
         ship: u32,
@@ -1481,15 +1516,18 @@ impl Scene {
         if !self.is_own(&self.objects[i]) {
             return Err("Not your ship".into());
         }
-        let b = &mut self.objects[i].ship.as_mut().ok_or("Not a ship")?.behaviour;
-        match command {
-            c::GUARD => b.guard = !b.guard,
-            c::RAM_ATTACK => b.ram = !b.ram,
-            c::BOARD_ATTACK => b.board = !b.board,
-            c::FIRE_ON_AGGRESSOR if b.guard => b.aggressor = !b.aggressor,
+        let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
+        let firing = s.fire_task();
+        let b = &mut s.behaviour;
+        let (sub, third) = match command {
+            c::GUARD => (if b.guard { 2 } else { 1 }, 0xffff),
+            c::RAM_ATTACK => (if b.ram { 0xf } else { 6 }, u32::MAX),
+            c::BOARD_ATTACK => (if b.board { 0xe } else { 5 }, u32::MAX),
+            c::FIRE_ON_AGGRESSOR if b.guard => (if b.aggressor { 4 } else { 3 }, 0xffff),
             c::FIRE_ON_AGGRESSOR => return Err("The ship must be on guard".into()),
             _ => return Err("Not a behaviour".into()),
-        }
+        };
+        b.command(sub, u32::MAX, u32::MAX, third, firing);
         Ok(())
     }
 
@@ -1907,6 +1945,10 @@ impl Scene {
             }
             ship.task = None;
             ship.path.clear();
+            // The capture (0x4b6f20 at 0x4b7085) clears the ram and board
+            // switches (`+0x684 &= ~6`); the guard and the masks stay.
+            ship.behaviour.ram = false;
+            ship.behaviour.board = false;
             // Its new colours drawn with its damage.
             ship.look = None;
         }

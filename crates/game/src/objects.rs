@@ -775,8 +775,11 @@ pub fn ship_frames(
 }
 
 /// A warship's behaviour switches (ship byte +0x684 bits 0-2 and +0x633;
-/// the manual's "Ship AI options").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// the manual's "Ship AI options") and the masks its own target search
+/// reads. The constructor (0x4dc3f0) zeroes `+0x5d1..+0x695`: a new ship
+/// is off guard, every mask 0, fire state 0, until a behaviour reaches it
+/// (`launch`, `command`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Behaviour {
     /// Fire at enemies in range.
     pub guard: bool,
@@ -786,20 +789,150 @@ pub struct Behaviour {
     pub board: bool,
     /// Go after whoever fires at the ship (needs `guard`).
     pub aggressor: bool,
+    /// `+0x685`: the weapon positions its own search fires (bit k the
+    /// position group of weapon slots 3k..3k+2: 0x4e8af0 returns only
+    /// those). Written from a record's byte `+0x11`.
+    #[serde(default)]
+    pub positions: u8,
+    /// `+0x689`: the players it may target (bit nation x 4 + slot;
+    /// 0x4bfc60, 0x4c0cd0).
+    #[serde(default)]
+    pub players: u32,
+    /// `+0x68d`: the classes it may target at will (0x50ebb0 over
+    /// `combat::class_bit`; 0x4bfc60 at 0x4bffb9).
+    #[serde(default)]
+    pub classes: u32,
+    /// `+0x5d1`, the fire state (0x4c1240: 1 and 4 search, 2 the point
+    /// target, 3 firing). The port's fire pass has no such states: kept
+    /// as the original writes it, not read.
+    #[serde(default)]
+    pub fire_state: u8,
 }
 
-impl Default for Behaviour {
-    fn default() -> Self {
-        Self {
-            guard: true,
-            ram: false,
-            board: false,
-            aggressor: false,
+/// A behaviour record (the ship's event 0x100, 0x4a9e30 kinds 4-11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BehaviourKind {
+    /// 4: guard on.
+    Guard,
+    /// 5: guard off.
+    GuardOff,
+    /// 6: ram attack on.
+    Ram,
+    /// 7: ram attack off.
+    RamOff,
+    /// 8: board attack on.
+    Board,
+    /// 9: board attack off.
+    BoardOff,
+    /// 10: fire on aggressor on (`+0x633 = 1`).
+    Aggressor,
+    /// 11: fire on aggressor off.
+    AggressorOff,
+}
+
+impl Behaviour {
+    /// Applies one behaviour record (0x4a9e30, disassembly
+    /// 0x4aa1b0-0x4aa20a): the switch, then for the four "on" kinds the
+    /// masks (`+0x685` = record byte `+0x11`, `+0x689` = record `+8`,
+    /// `+0x68d` = record `+4`) and fire state 4, unless a fire task runs
+    /// (`+0x5d1 != 0` and `+0x25d & 0x100`: `firing`). The "off" kinds
+    /// leave the masks as they were.
+    pub fn apply(
+        &mut self,
+        kind: BehaviourKind,
+        players: u32,
+        classes: u32,
+        positions: u8,
+        firing: bool,
+    ) {
+        use BehaviourKind as K;
+        let on = matches!(kind, K::Guard | K::Ram | K::Board | K::Aggressor);
+        match kind {
+            K::Guard | K::GuardOff => self.guard = on,
+            K::Ram | K::RamOff => self.ram = on,
+            K::Board | K::BoardOff => self.board = on,
+            K::Aggressor | K::AggressorOff => self.aggressor = on,
         }
+        if on {
+            self.positions = positions;
+            self.players = players;
+            self.classes = classes;
+            if self.fire_state == 0 || !firing {
+                self.fire_state = 4;
+            }
+        }
+    }
+
+    /// The ship's behaviour command `#` (0x4e2ba0 case 0x23, disassembly
+    /// 0x4e2c34-0x4e2d03) with payload players `+1`, classes `+5` and
+    /// `third` `+9` (its low byte the positions, bit 25 ram, bit 26
+    /// board). Sub 1 turns on the guard, and ram / board when their bit is
+    /// set, each only where off (a switch already on gets no record and
+    /// keeps its masks); 2 guard off; 3 / 4 fire on aggressor on / off
+    /// (each only when it changes); 5 / 6 board / ram on (where off); 0xe /
+    /// 0xf board / ram off. Any other sub does nothing.
+    pub fn command(&mut self, sub: u8, players: u32, classes: u32, third: u32, firing: bool) {
+        use BehaviourKind as K;
+        let positions = third as u8;
+        let send = |b: &mut Behaviour, k| b.apply(k, players, classes, positions, firing);
+        match sub {
+            1 => {
+                if !self.guard {
+                    send(self, K::Guard);
+                }
+                if !self.ram && third & 0x200_0000 != 0 {
+                    send(self, K::Ram);
+                }
+                if !self.board && third & 0x400_0000 != 0 {
+                    send(self, K::Board);
+                }
+            }
+            2 => send(self, K::GuardOff),
+            3 if !self.aggressor => send(self, K::Aggressor),
+            4 if self.aggressor => send(self, K::AggressorOff),
+            5 if !self.board => send(self, K::Board),
+            6 if !self.ram => send(self, K::Ram),
+            0xe => send(self, K::BoardOff),
+            0xf => send(self, K::RamOff),
+            _ => {}
+        }
+    }
+
+    /// 0x4e7220: guard on, then ram attack for kinds 5 and 10 and board
+    /// attack for 4 and 11, each record with players and classes -1 and
+    /// positions 0xff (`+0x11`): every mask all ones, fire state 4. Run
+    /// by the map loader for every ship (0x4dfa90 at 0x4dfd12, record
+    /// `+0x10 == 0`) and at the launch for a human's ship (0x4b3fcf).
+    pub fn launch(&mut self, kind: u8, firing: bool) {
+        use BehaviourKind as K;
+        self.apply(K::Guard, u32::MAX, u32::MAX, 0xff, firing);
+        if matches!(kind, 10 | 5) {
+            self.apply(K::Ram, u32::MAX, u32::MAX, 0xff, firing);
+        }
+        if matches!(kind, 11 | 4) {
+            self.apply(K::Board, u32::MAX, u32::MAX, 0xff, firing);
+        }
+    }
+
+    /// Whether the at-will search may pick an object of player `owner`
+    /// (nation, slot) whose class bit is `class` (0x4bfc60: `+0x689` at
+    /// 0x4bfe7f, `+0x68d` through 0x50ebb0 at 0x4bffb9) with some weapon
+    /// position enabled (`+0x685`: 0x4e8af0 mode 10 returns only those).
+    pub fn may_pick(&self, (nation, slot): (u32, u32), class: u32) -> bool {
+        self.positions != 0
+            && self.players & 1 << ((slot + nation * 4) & 0x1f) != 0
+            && self.classes & class != 0
     }
 }
 
 impl Ship {
+    /// `+0x25d & 0x100`, a fire task: 0x4ab3f0 sets it on taking the fire
+    /// records of an attack (orders 0x15 / 0x16, 0x4ab577-0x4ab589); the
+    /// port's attack task. (Where the original clears it is not traced.)
+    pub fn fire_task(&self) -> bool {
+        matches!(self.task, Some(Task::Attack { .. }))
+    }
+
     /// 0x4e0b50, asked by every plan (0x4a6330): lying still, turning or
     /// at a cell (move states 0, 2, 3) it is no longer between cells;
     /// whether it plans from its own cell, not the one it is entering.
@@ -1808,7 +1941,13 @@ pub fn resolve(
         // loader 0x4dfa90: ship +0x27a, +0x27b).
         armour: rec.fields.get(15).map_or(0, |&v| v.min(2) as u8),
         ram: crate::combat::Crew::from_record(&rec.fields, 0).class,
-        behaviour: Behaviour::default(),
+        // The map loader (0x4dfa90) runs 0x4e7220 on every ship it makes;
+        // the yard's (0x4dfe00) does not (`Scene::make_ship`).
+        behaviour: {
+            let mut b = Behaviour::default();
+            b.launch(f(7).min(11) as u8, false);
+            b
+        },
         treasures: Vec::new(),
         heroes: Vec::new(),
         argo: false,

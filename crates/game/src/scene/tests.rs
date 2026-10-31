@@ -1818,6 +1818,144 @@ fn behaviours() {
     assert!(matches!(task(&scene, mine), Some(Task::Ram { target }) if target == enemy));
 }
 
+/// The ships' behaviour masks: the constructor's zeroes (0x4dc3f0), the
+/// map loader's 0x4e7220, the `#` command (0x4e2ba0 case 0x23 into
+/// 0x4a9e30), and the at-will pick reading players `+0x689`, classes
+/// `+0x68d` and positions `+0x685` (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ship_behaviour_masks() {
+    use crate::objects::Behaviour;
+    // Made by the yard: off guard, every mask 0, fire state 0.
+    let b = Behaviour::default();
+    assert!(!b.guard && !b.ram && !b.board && !b.aggressor);
+    assert_eq!(
+        (b.positions, b.players, b.classes, b.fire_state),
+        (0, 0, 0, 0)
+    );
+    // Sub 1 with the group masks of a fleet never given a behaviour (all
+    // 0): the guard alone, masks 0, so the search picks nothing.
+    let mut z = b;
+    z.command(1, 0, 0, 0, false);
+    assert!(z.guard && !z.ram && !z.board);
+    assert_eq!(
+        (z.positions, z.players, z.classes, z.fire_state),
+        (0, 0, 0, 4)
+    );
+    assert!(!z.may_pick((1, 0), u32::MAX));
+    // Sub 1 with -1s (0x4c6100): guard, ram and board on, all ones.
+    let mut all = b;
+    all.command(1, u32::MAX, u32::MAX, u32::MAX, false);
+    assert!(all.guard && all.ram && all.board);
+    assert_eq!(all.positions, 0xff);
+    // A switch already on gets no record: its masks stay.
+    let mut kept = all;
+    kept.command(1, 0x10, 0x3ffff, u32::MAX, false);
+    assert_eq!((kept.players, kept.classes), (u32::MAX, u32::MAX));
+    // The reserve's third mask 0x1ffffff has neither bit 25 nor 26.
+    let mut reserve = b;
+    reserve.command(1, u32::MAX, u32::MAX, 0x1ff_ffff, false);
+    assert!(reserve.guard && !reserve.ram && !reserve.board);
+    // Off: the switch alone; a fire task keeps a running fire state.
+    let mut off = all;
+    off.fire_state = 3;
+    off.command(2, 0, 0, 0, true);
+    assert!(!off.guard);
+    assert_eq!((off.players, off.fire_state), (u32::MAX, 3));
+    // Classes: a brain's 0x3ffff spares lairs and creatures.
+    let mut ships_only = b;
+    ships_only.command(1, u32::MAX, 0x3ffff, u32::MAX, false);
+    assert!(ships_only.may_pick((1, 0), combat::class_bit(200, Some(3))));
+    assert!(!ships_only.may_pick((4, 0), combat::class_bit(0x1fb, None)));
+
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    // Every ship of the map went through 0x4e7220.
+    for o in scene.objects.iter().filter(|o| o.ship.is_some()) {
+        let s = o.ship.as_ref().unwrap();
+        let b = s.behaviour;
+        assert!(b.guard, "ship {} on guard", o.id);
+        assert_eq!(
+            (b.positions, b.players, b.classes, b.fire_state),
+            (0xff, !0, !0, 4)
+        );
+        assert_eq!(b.ram, matches!(s.kind, 5 | 10));
+        assert_eq!(b.board, matches!(s.kind, 4 | 11));
+    }
+    // An idle guard fires only at players its mask holds.
+    let human = scene.human.unwrap();
+    let mine = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let enemy = scene
+        .objects
+        .iter()
+        .find(|o| o.ship.is_some() && o.id != mine)
+        .unwrap()
+        .id;
+    scene
+        .objects
+        .retain(|o| o.ship.is_none() || o.id == mine || o.id == enemy);
+    scene
+        .objects
+        .retain(|o| o.ship.is_some() || o.combat.as_ref().is_none_or(|c| c.weapons.is_empty()));
+    let foe = (1, (human.slot + 1) % 4);
+    let m = scene.object_index(mine).unwrap();
+    let (mx, my) = (scene.objects[m].x, scene.objects[m].y);
+    let e = scene.object_index(enemy).unwrap();
+    scene.objects[e].owner = Some(foe);
+    scene.objects[e].x = mx + 128.0;
+    scene.objects[e].y = my;
+    for id in [mine, enemy] {
+        let i = scene.object_index(id).unwrap();
+        let c = scene.objects[i].combat.as_mut().unwrap();
+        c.weapons = vec![4; 2];
+        c.max_hull = 100_000.0;
+        c.hull = 100_000.0;
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.kind = 3;
+        s.path.clear();
+        s.task = None;
+        s.behaviour.ram = false;
+        s.behaviour.board = false;
+    }
+    let e = scene.object_index(enemy).unwrap();
+    scene.objects[e].ship.as_mut().unwrap().behaviour.guard = false;
+    let hull = |s: &Scene| {
+        s.objects[s.object_index(enemy).unwrap()]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hull
+    };
+    let m = scene.object_index(mine).unwrap();
+    scene.objects[m].ship.as_mut().unwrap().behaviour.players = !(1 << (foe.0 * 4 + foe.1));
+    for _ in 0..50 * 5 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert_eq!(hull(&scene), 100_000.0, "its player's bit clear: held fire");
+    let m = scene.object_index(mine).unwrap();
+    let b = &mut scene.objects[m].ship.as_mut().unwrap().behaviour;
+    b.players = u32::MAX;
+    b.positions = 0;
+    for _ in 0..50 * 5 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert_eq!(hull(&scene), 100_000.0, "no position: held fire");
+    let m = scene.object_index(mine).unwrap();
+    scene.objects[m].ship.as_mut().unwrap().behaviour.positions = 0xff;
+    for _ in 0..50 * 5 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert!(hull(&scene) < 100_000.0, "fired");
+}
+
 /// A boat hunts a leviathan and brings it home for 5000 amber and 2500
 /// fish; the zone is then empty (needs `OPENCONQUEST_DATA`).
 #[test]

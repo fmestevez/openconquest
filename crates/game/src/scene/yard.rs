@@ -482,6 +482,11 @@ impl Scene {
             ship.armour = a.armour;
             ship.ram = a.ram;
         }
+        // The yard's loader (0x4dfe00) sends no behaviour: the ship keeps
+        // the constructor's zeroes (0x4dc3f0) till its launch.
+        if let Some(ship) = obj.ship.as_mut() {
+            ship.behaviour = objects::Behaviour::default();
+        }
         self.objects.push(obj);
         self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
         Ok(Some(id))
@@ -861,14 +866,9 @@ impl Scene {
                     .any(|s| (s.player.nation, s.player.slot) == o)
         });
         if player {
-            let b = &mut self.objects[i].ship.as_mut().unwrap().behaviour;
-            b.guard = true;
-            if matches!(kind, 5 | 10) {
-                b.ram = true;
-            }
-            if matches!(kind, 4 | 11) {
-                b.board = true;
-            }
+            let s = self.objects[i].ship.as_mut().unwrap();
+            let firing = s.fire_task();
+            s.behaviour.launch(kind, firing);
         }
         if argo {
             self.christen_argo(id);

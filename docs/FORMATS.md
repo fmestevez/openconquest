@@ -2485,8 +2485,8 @@ list and escorts).
   ported: 0x4c6100's behaviour command for a new escort (0x4c42f0 with
   -1s, when group `+0x14` is 0) and notice 300's (the group's masks):
   case 0x23 sub 1 turns guard, ram and board on with the masks `+0x685`,
-  `+0x689`, `+0x68d` and fire state `+0x5d1` 4, which the port does not
-  keep. None: ships unloading this class count
+  `+0x689`, `+0x68d` and fire state `+0x5d1` 4 (the port keeps them,
+  "Ships' behaviour and masks"; gather.rs sends no `#`). None: ships unloading this class count
   working; laden ones (`+0x47f/+0x480/+0x481/+0x782`) count and, not
   unloading and with flag bit 0, go to 0x4c6640's port (0x1f); its idle
   list is never filled (no follows): a ship unloading this class
@@ -6989,8 +6989,47 @@ ship keeps the first as +0x689 (players) and the second as +0x68d, the
 kinds it may target (0x50ebb0 with 0x50ed20: ship types bits 0-11,
 buildings 12-17, lairs 18-20, creatures 21-23, nests 24-25, castles
 26-27), as the fleet's own check shows (0x4ccd80 compares +0x689 with
-+0x19 and +0x68d with +0x1d). The third is only ever passed along, so the
-reserve's mask has no effect and every fleet may target every kind.
++0x19 and +0x68d with +0x1d). The third (payload `+9` of `#`) is read by
+the ship: its low byte is the weapon positions (+0x685), bit 25 turns ram
+attack on and bit 26 board attack (0x4e2c34-0x4e2d03). So the reserve's
+and spare's 0x1ffffff gives guard alone, every other task guard, ram and
+board. Not ported: the computer players' sends (25 call sites of
+0x482e80 / 0x482eb0, 0x47dd5b-0x483f57); their ships keep the port's
+older test (always on guard, sparing `update_spared`'s players).
+
+**Ships' behaviour and masks.** The constructor (0x4dc3f0) zeroes
+`+0x5d1..+0x695`: guard, ram and board off (`+0x684`), the positions
+`+0x685`, players `+0x689` and classes `+0x68d` 0, fire state `+0x5d1`
+0. The only writers of the masks are 0x4a9e30 (event 0x100 kinds 4, 6, 8,
+10: guard, ram, board, aggressor on; `+0x685` = record byte `+0x11`,
+`+0x689` = record `+8`, `+0x68d` = record `+4`, then fire state 4 unless
+`+0x5d1 != 0` with `+0x25d & 0x100`, the fire task 0x4ab3f0 sets at
+0x4ab580) and 0x4ab3f0 (a kind-2 fire record: guard on and the masks;
+kind 5 in its list zeroes them all, though 0x4a9e30 never lists kind 5;
+the sender of kind 2, 0x4a9e30's split by positions, not traced). Kinds
+5, 7, 9, 11 clear the switch alone. 0x4e7220 sends kind 4, and 6 for
+ship kinds 5 / 10, 8 for 4 / 11, with players and classes -1, positions
+0xff: from the map loader for every ship of the map (0x4dfa90 at
+0x4dfd12: record `+0x10 == 0`; the yard's 0x4dfe00 and 0x4e2180 do not)
+and at the launch of a human's ship (0x4b3fcf). So a computer's or
+brain's yard-built ship sits off guard, masks 0, until a `#` reaches it.
+The capture (0x4b6f20, 0x4b7085) clears ram and board, nothing else.
+Command `#` (0x4e2ba0 case 0x23; payload players `+1`, classes `+5`,
+third `+9`): sub 1 guard on where off, ram where off with bit 25, board
+where off with bit 26 (a switch on gets nothing, its masks kept); 2 guard
+off; 3 / 4 aggressor on / off when it changes; 5 / 6 board / ram on where
+off; 0xe / 0xf board / ram off. The human's buttons (0x4f34c0): guard
+sub 1 / 2 and aggressor 3 / 4 with players -1, classes -1, third 0xffff;
+board 5 / 0xe and ram 6 / 0xf with all -1. The at-will search 0x4bfc60
+(fire states 1 and 4, 0x4c1240) runs 0x4c0cd0 only on guard, for an
+enemy (side 2 but the sea monster 0x1fb, or another player at war,
+0x4efe20 < 0) whose player bit is in `+0x689`, alive (vt+0x2c), whose
+class passes `+0x68d` (0x50ebb0); 0x4e8af0 mode 10 fires only the
+positions in `+0x685`. Ported: the masks, records, `#` subs, 0x4e7220 and
+the at-will test (`Behaviour::may_pick`); not ported: the search's
+geometry by weapon position (0x4bfc60's square, 0x4c0cd0's arcs
+0x4bf5f0, 0x4e8af0's draws), so a partial positions mask counts as all;
+the fire state is kept but not read.
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
 about the base's town, from 4 cells and 4 more a time, that holds a
