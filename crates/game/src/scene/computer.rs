@@ -115,6 +115,13 @@ pub struct Computer {
     /// (see `Scene::update_spared`).
     #[serde(default)]
     spared: u32,
+    /// Ships that joined a flotilla during its move (block 100) and have
+    /// had no `#` since: the move order's join and pass (0x4cc6a0,
+    /// 0x4ccd80) are not ported for the computers' flotillas, so these
+    /// keep the old rule (on guard, sparing `spared`; see
+    /// `Scene::picks_at_will`).
+    #[serde(default)]
+    uncovered: Vec<u32>,
     /// +0xe14: when a fleet last got help.
     helped_at: u32,
     /// Role flotillas: +0x30 manager, +0x34 forts, +0x3c commander, +0x40
@@ -235,6 +242,20 @@ pub struct Flotilla {
     /// Commander's clocks: +0x188 spells at a place, +0x18c spells at a
     /// fleet, +0x190 the last settlement founded, +0x194 the last attack.
     clocks: [u32; 4],
+    /// Its group's behaviour (fleet order 0x72, 0x4c4350: `+0x14` set,
+    /// players `+0x19`, classes `+0x1d`, third `+0x21`): every flotilla
+    /// but the manager's has a navy group (0x483df0: type 10 for a role
+    /// other than 0), given one at its making (0x483e10).
+    #[serde(default)]
+    behaviour: Option<(u32, u32, u32)>,
+    /// The group's task block (`+0x25`, with its notices `+0x2d`): the
+    /// fleet order code it was made for, 0 none.
+    #[serde(default)]
+    block: u32,
+    /// Ships that joined while it had a block (0x483fb0 -> 0x4a0480 op 2
+    /// -> notice 300, 0x4a1340), with the block they were posted to.
+    #[serde(default)]
+    joined: Vec<(u32, u32)>,
 }
 
 /// A letter between flotillas (0xd4 bytes, `Plr_mail.cpp`).
@@ -487,6 +508,22 @@ enum FleetOrder {
     Treasure(Cells),
 }
 
+impl FleetOrder {
+    /// The fleet order's code (0x4a09d0), its block's kind.
+    fn code(self) -> Option<u32> {
+        Some(match self {
+            FleetOrder::None => return None,
+            FleetOrder::Gather(..) => 0x78,
+            FleetOrder::Guard(_) => 0x6e,
+            FleetOrder::Attack(_) => 0x70,
+            FleetOrder::Move(_) => 100,
+            FleetOrder::Found(..) => 0x8c,
+            FleetOrder::Dock => 200,
+            FleetOrder::Treasure(_) => 0xbe,
+        })
+    }
+}
+
 /// What a want table entry asks: (ship type, how many, flag, priority);
 /// each group lists alternatives, the first the town can build counting.
 type Want = (u8, i32, i32, i32);
@@ -526,13 +563,35 @@ impl Computer {
         self.owner.0
     }
 
+    /// The players its ships may pick (+0xe18, -1 at the start,
+    /// 0x487d47): every bit but the spared players'.
+    fn players(&self) -> u32 {
+        !self.spared
+    }
+
+    /// Ship `id` joins flotilla `f` (0x483fb0: 0x4a0480 op 2), which
+    /// posts notice 300 to its group's block if it has one (0x4a1340).
+    fn join(&mut self, f: usize, id: u32) {
+        let fl = &mut self.flotillas[f];
+        fl.ships.push(id);
+        if fl.block != 0 {
+            fl.joined.push((id, fl.block));
+        }
+    }
+
     /// Makes a flotilla (0x483e10): its period 25-75 ticks.
     fn add_flotilla(&mut self, role: u8, base: usize) -> usize {
         let period = self.roll(0x33) + 0x19;
+        // A navy group (0x483df0: type 10 for every role but the
+        // manager's, 11) is given its behaviour at once: 0x482e80 with
+        // players +0xe18, classes and third -1, 0x482eb0 (order 0x72;
+        // no ships yet, so nothing is sent).
+        let behaviour = (role != MANAGER).then_some((self.players(), u32::MAX, u32::MAX));
         self.flotillas.push(Flotilla {
             role,
             base,
             period,
+            behaviour,
             ..Default::default()
         });
         self.by_role[role as usize] = self.flotillas.len() - 1;
@@ -751,8 +810,8 @@ impl Scene {
         for ai in &mut self.computers.players {
             if let Some(k) = ai.building.iter().position(|b| b.0 == site && b.1 == kind) {
                 let (_, _, f) = ai.building.remove(k);
-                if let Some(fl) = ai.flotillas.get_mut(f) {
-                    fl.ships.push(id);
+                if f < ai.flotillas.len() {
+                    ai.join(f, id);
                 }
                 ai.known.push(id);
                 return;
@@ -872,7 +931,7 @@ impl Scene {
                 None => ai.fleet_for_type(kind),
             };
             if let Some(f) = f {
-                ai.flotillas[f].ships.push(id);
+                ai.join(f, id);
             }
         }
         ai.known = mine.iter().map(|&i| self.objects[i].id).collect();
@@ -898,6 +957,13 @@ impl Scene {
         if self.owned(owner).is_empty() {
             return;
         }
+        for f in 0..ai.flotillas.len() {
+            self.read_joins(ai, f);
+        }
+        ai.uncovered.retain(|&id| {
+            self.object_index(id)
+                .is_some_and(|i| self.objects[i].owner == Some(owner))
+        });
         for f in 0..ai.flotillas.len() {
             self.flotilla_turn(ai, f, now);
         }
@@ -940,7 +1006,7 @@ impl Scene {
                 } else {
                     ai.reserve
                 };
-                ai.flotillas[f].ships.push(id);
+                ai.join(f, id);
                 continue;
             }
             let Some(class) = self.class_of(i) else {
@@ -1260,16 +1326,143 @@ impl Scene {
     /// fleet with its behaviour (order 0x72, 0x482eb0: fleet +0x19), and
     /// on to the ships (+0x689), which only pick targets whose owner's bit
     /// is set (0x4bfc60).
-    fn update_spared(&self, ai: &mut Computer) {
+    ///
+    /// A changed mask (0x4848c0) is letter 8 to every flotilla in turn
+    /// (0x482ac0 -> 0x4829d0 by role): the role handlers of roles 1-3 and
+    /// 5-9 (0x482950, 0x480680, 0x480840, 0x480a00, 0x481a10, 0x4815a0,
+    /// 0x480c40, 0x481100) send the behaviour with classes and third -1,
+    /// the reserve's and the spare's (0x481e60, 0x481fe0) with third
+    /// 0x1ffffff; the manager's (0x480580) and the commander's (0x482160)
+    /// have no case 8.
+    fn update_spared(&mut self, ai: &mut Computer) {
+        let before = ai.players();
         ai.spared = 0;
-        if ai.difficulty == 0 || !ai.enemy.is_some_and(|e| self.is_human_id(e)) {
-            return;
-        }
-        for other in &self.computers.players {
-            if other.owner != ai.owner && other.difficulty > 0 && other.enemy == ai.enemy {
-                ai.spared |= 1 << other.id();
+        if ai.difficulty > 0 && ai.enemy.is_some_and(|e| self.is_human_id(e)) {
+            for other in &self.computers.players {
+                if other.owner != ai.owner && other.difficulty > 0 && other.enemy == ai.enemy {
+                    ai.spared |= 1 << other.id();
+                }
             }
         }
+        if ai.players() == before {
+            return;
+        }
+        for f in 0..ai.flotillas.len() {
+            match ai.flotillas[f].role {
+                MANAGER | COMMANDER => {}
+                RESERVE | SPARE => self.flotilla_behave(ai, f, 0x1ff_ffff),
+                _ => self.flotilla_behave(ai, f, u32::MAX),
+            }
+        }
+    }
+
+    /// Flotilla `f`'s behaviour (0x482e80 with players +0xe18, classes -1
+    /// and `third`; 0x482eb0 with 1: fleet order 0x72 `{0, players,
+    /// classes, third}`, 0x4a09d0 -> 0x4c4350): its group keeps it and
+    /// each of its ships is sent command `#` sub 1 with the three
+    /// (0x4c42f0, queued: it reaches them at the next tick). The first
+    /// field 0 sends no sub 2 first (0x4c4410 is for 100 only).
+    fn flotilla_behave(&mut self, ai: &mut Computer, f: usize, third: u32) {
+        let b = (ai.players(), u32::MAX, third);
+        ai.flotillas[f].behaviour = Some(b);
+        for id in ai.flotillas[f].ships.clone() {
+            self.send_behaviour(ai, id, b);
+        }
+    }
+
+    /// Command `#` sub 1 with `(players, classes, third)` to ship `id`
+    /// (0x4c42f0); none to a building (the forts' flotilla).
+    fn send_behaviour(
+        &mut self,
+        ai: &mut Computer,
+        id: u32,
+        (players, classes, third): (u32, u32, u32),
+    ) {
+        if !self
+            .object_index(id)
+            .is_some_and(|i| self.objects[i].ship.is_some())
+        {
+            return;
+        }
+        ai.uncovered.retain(|&x| x != id);
+        self.post(Order::BehaviourCommand {
+            ship: id,
+            sub: 1,
+            players,
+            classes,
+            third,
+        });
+    }
+
+    /// Fleet order `code` reaches flotilla `f`'s group: a block of another
+    /// kind is ended (0x4a1c60, which frees the notices `+0x2d`) and a new
+    /// one made, one of the same kind rewritten (0x4ccc30, 0x4d1ce0,
+    /// 0x4d6a90, 0x4c8a80, 0x4cbcf0, 0x4da550, 0x4db9e0). A new block
+    /// makes the notices (0x4a1150) and, the group of a computer side (3
+    /// or 4), sends every ship of it `#` sub 1 with the group's `+0x19`,
+    /// `+0x1d`, `+0x21` (0x4c5b30 -> 0x4c4230; zeroes when never given).
+    fn new_block(&mut self, ai: &mut Computer, f: usize, code: u32) {
+        if ai.flotillas[f].block == code {
+            return;
+        }
+        ai.flotillas[f].block = code;
+        ai.flotillas[f].joined.clear();
+        let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
+        for id in ai.flotillas[f].ships.clone() {
+            self.send_behaviour(ai, id, b);
+        }
+    }
+
+    /// The notices 300 of the ships that joined flotilla `f` (read here at
+    /// the computer's tick; the original's navy reads them at its own).
+    /// A ship still in it and the block the same: the gather zone hears it
+    /// (0x4c9e30, which sends the group's behaviour); the guard (0x4d1ea0),
+    /// attack (0x4d6960), founding (0x4cba10), dock (0x4db110) and
+    /// treasure (0x4da0a0) blocks send it `#` sub 1 with the group's
+    /// three. The move's join (0x4cc6a0: the formation planned again, the
+    /// three only to a ship 0x4cc650 sends) is not ported for the
+    /// computers' moves, which plan no formation: the ship is listed in
+    /// `uncovered` instead.
+    fn read_joins(&mut self, ai: &mut Computer, f: usize) {
+        let block = ai.flotillas[f].block;
+        let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
+        for (id, at) in std::mem::take(&mut ai.flotillas[f].joined) {
+            if at != block || !ai.flotillas[f].ships.contains(&id) {
+                continue;
+            }
+            match block {
+                0x78 => {
+                    let group = super::gather::ZoneGroup::Computer(ai.id(), f);
+                    if let Some(z) = self.gather_zones.iter().position(|z| z.group == group) {
+                        let tick = self.ticks;
+                        self.gather_zones[z].notices.push(super::gather::Notice {
+                            code: 300,
+                            tick,
+                            ship: id,
+                            class: 0,
+                        });
+                    }
+                }
+                100 => {
+                    if !ai.uncovered.contains(&id) {
+                        ai.uncovered.push(id);
+                    }
+                }
+                _ => self.send_behaviour(ai, id, b),
+            }
+        }
+    }
+
+    /// Whether `me` is a computer player's ship its flotilla's behaviour
+    /// has not reached (`Computer::uncovered`).
+    pub(super) fn computer_uncovered(&self, me: &crate::objects::MapObject) -> bool {
+        me.ship.is_some()
+            && me.owner.is_some_and(|o| {
+                self.computers
+                    .players
+                    .iter()
+                    .any(|c| c.owner == o && c.uncovered.contains(&me.id))
+            })
     }
 
     /// Whether ship `me` holds its fire on `o` (see `update_spared`).
@@ -3053,6 +3246,8 @@ impl Scene {
                     let res = resource(fl.p[0]);
                     fl.order = FleetOrder::Gather(fl.area, res);
                     self.give_order(ai, f);
+                    // Then its behaviour (0x47dd51-0x47dd5b).
+                    self.flotilla_behave(ai, f, u32::MAX);
                 } else {
                     self.keep_order(ai, f);
                     // The zone's state (0x483320: query 0x79, 0x4c8da0):
@@ -3230,6 +3425,8 @@ impl Scene {
                 fl.p[5] = c;
                 fl.p[6] = d;
                 fl.p[1] = total as i32;
+                // Its behaviour (0x47e0ce-0x47e0d8).
+                self.flotilla_behave(ai, f, u32::MAX);
                 ai.push(f, 2);
             }
             // The treasure hunt: order 0xbe in the area about the base
@@ -3397,6 +3594,8 @@ impl Scene {
                 ai.push(f, 2);
             }
             2 => {
+                // Its behaviour first (0x47ef8f-0x47ef99).
+                self.flotilla_behave(ai, f, u32::MAX);
                 self.read_zone(ai, f);
                 self.read_home(ai, f);
                 let z = ai.flotillas[f].zone;
@@ -3433,6 +3632,8 @@ impl Scene {
                 ai.push(f, next);
             }
             2 => {
+                // Its behaviour first (0x47ebc1-0x47ebcb).
+                self.flotilla_behave(ai, f, u32::MAX);
                 self.read_zone(ai, f);
                 self.read_home(ai, f);
                 let z = ai.flotillas[f].zone;
@@ -3450,6 +3651,8 @@ impl Scene {
                     fl.since = now;
                     fl.len = 0;
                     fl.order = FleetOrder::Guard(fl.zone);
+                    // Its behaviour, then the guard (0x47ec96-0x47eca0).
+                    self.flotilla_behave(ai, f, u32::MAX);
                     self.give_order(ai, f);
                 } else {
                     ai.flotillas[f].worn = true;
@@ -3467,6 +3670,8 @@ impl Scene {
                     fl.len = fl.p[7] as u32;
                     fl.area = (fl.p[1], fl.p[2], fl.p[3], fl.p[4]);
                     fl.order = FleetOrder::Attack(fl.area);
+                    // Its behaviour, then the attack (0x47ed8d-0x47ed97).
+                    self.flotilla_behave(ai, f, u32::MAX);
                     self.give_order(ai, f);
                 } else {
                     ai.flotillas[f].wants = false;
@@ -3497,6 +3702,9 @@ impl Scene {
                 ai.push(f, 2);
             }
             2 => {
+                // Its behaviour first (0x47e40b-0x47e415; task 10
+                // 0x47e80b-0x47e815).
+                self.flotilla_behave(ai, f, u32::MAX);
                 self.read_zone(ai, f);
                 self.read_home(ai, f);
                 let size = self.target_size(ai, f, fleet) as i32;
@@ -3551,6 +3759,9 @@ impl Scene {
                 }
             }
             10 => {
+                // Its behaviour first (0x47e5b9-0x47e5c3; task 10
+                // 0x47e968-0x47e972).
+                self.flotilla_behave(ai, f, u32::MAX);
                 if ai.enemy.is_none() {
                     return;
                 }
@@ -3565,6 +3776,9 @@ impl Scene {
                     fl.since = now;
                     fl.len = fl.p[2] as u32;
                     fl.order = FleetOrder::Attack(fl.area);
+                    // Its behaviour, then the attack (0x47e62e-0x47e638;
+                    // task 10 0x47e9dd-0x47e9e7).
+                    self.flotilla_behave(ai, f, u32::MAX);
                     self.give_order(ai, f);
                     return;
                 }
@@ -3754,6 +3968,9 @@ impl Scene {
                     fl.step = true;
                     fl.since = now;
                     fl.len = len;
+                    // Its behaviour with no ram or board (third 0x1ffffff,
+                    // 0x47f5b4-0x47f5be; task 0xd 0x47f7c3-0x47f7cd).
+                    self.flotilla_behave(ai, f, 0x1ff_ffff);
                     self.read_zone(ai, f);
                     self.move_to_zone(ai, f);
                 } else if self.report(ai, f) == Some(DONE) || Computer::over(&ai.flotillas[f], now)
@@ -3811,7 +4028,7 @@ impl Scene {
             None => ai.fleet_by_type(kind),
         };
         if let Some(f) = f {
-            ai.flotillas[f].ships.push(id);
+            ai.join(f, id);
         }
     }
 
@@ -3874,7 +4091,7 @@ impl Scene {
             if hull < limit {
                 ai.flotillas[f].ships.retain(|&x| x != id);
                 let r = ai.reserve;
-                ai.flotillas[r].ships.push(id);
+                ai.join(r, id);
             }
         }
     }
@@ -3949,6 +4166,7 @@ impl Scene {
             return;
         };
         ai.flotillas[f].order = FleetOrder::Found(ship, cell, class);
+        self.new_block(ai, f, 0x8c);
         self.found_by(ship, cell, class);
     }
 
@@ -4288,6 +4506,9 @@ impl Scene {
     /// mending, 2.) Any other order ends it.
     fn give_order(&mut self, ai: &mut Computer, f: usize) {
         let order = ai.flotillas[f].order;
+        if let Some(code) = order.code() {
+            self.new_block(ai, f, code);
+        }
         let group = super::gather::ZoneGroup::Computer(ai.id(), f);
         if let FleetOrder::Gather(area, res) = order {
             let ships = ai.flotillas[f].ships.clone();
@@ -4425,6 +4646,18 @@ impl Scene {
             .find(|c| c.id() == player)
             .and_then(|c| c.flotillas.get(f))
             .map(|fl| fl.ships.clone())
+    }
+
+    /// A flotilla's group behaviour (`+0x19`, `+0x1d`, `+0x21`), for its
+    /// gather zone's notice 300; zeroes when never given.
+    pub(super) fn computer_flotilla_behaviour(&self, player: u32, f: usize) -> (u32, u32, u32) {
+        self.computers
+            .players
+            .iter()
+            .find(|c| c.id() == player)
+            .and_then(|c| c.flotillas.get(f))
+            .and_then(|fl| fl.behaviour)
+            .unwrap_or((0, 0, 0))
     }
 
     /// Ships that joined, or fell idle, take up the order again.
@@ -6541,6 +6774,112 @@ mod tests {
         a.enemy = Some(b.id());
         scene.update_spared(&mut a);
         assert_eq!(a.spared, 0);
+    }
+
+    /// A computer's ship that joins its flotilla is off guard (no 0x4e7220
+    /// at a computer's launch) until a `#` reaches it: none while the
+    /// flotilla has no block; its guard block's notice 300 (0x4d1ea0) or
+    /// its task's order 0x72 (0x482eb0) turns guard on with players
+    /// +0xe18 and classes -1, ram and board with third -1, not with the
+    /// reserve's 0x1ffffff. Then it picks at will by those masks; a ship
+    /// joining a move is left to the old rule (`uncovered`).
+    #[test]
+    fn computer_ships_take_their_flotillas_behaviour() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        // Ships to try.
+        for _ in 0..1500 {
+            scene.update(0.1, &data, &mut caches);
+        }
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let owner = scene.computers.players[0].owner;
+        // Two ships: the computer's and the human's.
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(2)
+            .collect();
+        let (i, foe) = (ships[0], ships[1]);
+        scene.objects[i].owner = Some(owner);
+        scene.objects[foe].owner = Some(human);
+        let id = scene.objects[i].id;
+        let reset = |scene: &mut Scene, ai: &mut Computer| {
+            for fl in &mut ai.flotillas {
+                fl.ships.retain(|&x| x != id);
+            }
+            scene.objects[i].ship.as_mut().unwrap().behaviour = Default::default();
+            scene.outbox.clear();
+        };
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        let g = ai.by_role[GUARD as usize];
+        // Built for the guards (computer_launched), the flotilla blockless.
+        reset(&mut scene, &mut ai);
+        ai.flotillas[g].block = 0;
+        ai.building.push((0, 1, g));
+        scene.computers.players[0] = ai;
+        scene.computer_launched(0, 1, id);
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        assert!(ai.flotillas[g].ships.contains(&id));
+        scene.read_joins(&mut ai, g);
+        scene.deliver(&data, &mut caches);
+        assert!(!scene.objects[i].ship.as_ref().unwrap().behaviour.guard);
+        scene.computers.players[0] = ai;
+        assert!(!scene.picks_at_will(&scene.objects[i], &scene.objects[foe]));
+        // Joined to a guard block: its notice 300 sends the masks.
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        reset(&mut scene, &mut ai);
+        ai.flotillas[g].block = 0x6e;
+        ai.flotillas[g].behaviour = Some((ai.players(), u32::MAX, u32::MAX));
+        ai.join(g, id);
+        scene.read_joins(&mut ai, g);
+        scene.deliver(&data, &mut caches);
+        let b = scene.objects[i].ship.as_ref().unwrap().behaviour;
+        assert!(b.guard && b.ram && b.board);
+        assert_eq!(
+            (b.players, b.classes, b.positions),
+            (u32::MAX, u32::MAX, 0xff)
+        );
+        scene.computers.players[0] = ai;
+        assert!(scene.picks_at_will(&scene.objects[i], &scene.objects[foe]));
+        // The reserve's behaviour: no ram or board; the spared spared.
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        reset(&mut scene, &mut ai);
+        let r = ai.reserve;
+        ai.flotillas[r].ships.push(id);
+        ai.spared = 1 << (human.0 * 4 + human.1);
+        scene.flotilla_behave(&mut ai, r, 0x1ff_ffff);
+        assert_eq!(
+            ai.flotillas[r].behaviour,
+            Some((ai.players(), u32::MAX, 0x1ff_ffff))
+        );
+        scene.deliver(&data, &mut caches);
+        let b = scene.objects[i].ship.as_ref().unwrap().behaviour;
+        assert!(b.guard && !b.ram && !b.board);
+        scene.computers.players[0] = ai;
+        assert!(!scene.picks_at_will(&scene.objects[i], &scene.objects[foe]));
+        // A new block of another kind sends the group's masks (0x4c5b30).
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        reset(&mut scene, &mut ai);
+        ai.spared = 0;
+        ai.flotillas[r].ships.push(id);
+        ai.flotillas[r].block = 100;
+        scene.new_block(&mut ai, r, 200);
+        scene.deliver(&data, &mut caches);
+        assert!(scene.objects[i].ship.as_ref().unwrap().behaviour.guard);
+        // Joining the move: left to the old rule until a `#` comes.
+        reset(&mut scene, &mut ai);
+        ai.flotillas[r].block = 100;
+        ai.join(r, id);
+        scene.read_joins(&mut ai, r);
+        assert!(ai.uncovered.contains(&id));
+        scene.computers.players[0] = ai;
+        assert!(scene.picks_at_will(&scene.objects[i], &scene.objects[foe]));
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        scene.flotilla_behave(&mut ai, r, 0x1ff_ffff);
+        assert!(!ai.uncovered.contains(&id));
+        scene.computers.players[0] = ai;
     }
 
     #[test]
