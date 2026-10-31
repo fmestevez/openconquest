@@ -133,9 +133,11 @@ pub struct Computer {
     by_role: [usize; 12],
     /// Ships being built for a flotilla: (shipyard, ship type, flotilla).
     building: Vec<(u32, u8, usize)>,
-    /// The town orders under way (the land fleet's +0x34, `LFleet.cpp`),
-    /// by priority, highest first; +0x20 the next order's id.
+    /// An old save's town orders and next id, now the land fleet's
+    /// (`LandFleet::orders`), moved there at its next pass.
+    #[serde(default, skip_serializing)]
     orders: Vec<TownOrder>,
+    #[serde(default, skip_serializing)]
     next_order: u32,
     /// The land fleet's pass state and queue (0x42b910).
     #[serde(default)]
@@ -296,12 +298,12 @@ struct Request {
 /// code (dword 3), priority (dwords 2 and 5), base (whose town is dword
 /// 6) and flotilla (dword 7, request +0x14). The land fleet finds the
 /// asker's entry by these (0x42c870 compares the message's 20 dwords).
-type Ask = (u32, i32, usize, Option<usize>);
+pub(super) type Ask = (u32, i32, usize, Option<usize>);
 
 /// An order to a town (the land fleet's message 1000 and its parts,
 /// 0x42c050 with the table at 0x5ac7c8).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct TownOrder {
+pub(super) struct TownOrder {
     id: u32,
     prio: i32,
     /// +8: the order's flags (message dword 4): 0x88 for the base
@@ -312,15 +314,15 @@ struct TownOrder {
     base: usize,
     /// For ships: the flotilla to join.
     fleet: Option<usize>,
-    parts: Vec<Part>,
+    pub(super) parts: Vec<Part>,
     /// +0x18: 0 new, 2 under way, 4 failed.
     #[serde(default)]
     state: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-struct Part {
-    op: Op,
+pub(super) struct Part {
+    pub(super) op: Op,
     /// Done at once if the town has it already (flag 0x20).
     once: bool,
     /// Field 8: the ship is built free (order 0x5c's part).
@@ -329,10 +331,10 @@ struct Part {
     after: After,
     /// In an order, +0x58: 0 waiting, 2 queued, 3 done, 4 failed; in the
     /// queue (+0x50): 0 queued, 1 tried, 2 under way, 3 done, 4 failed.
-    state: u8,
+    pub(super) state: u8,
     /// Passes left (+0x64 from 0x595170 waiting, +0x68 from 0x595198
     /// under way, by operation).
-    tries: u32,
+    pub(super) tries: u32,
     /// Buildings of the class before it was ordered (+0xdc).
     before: usize,
     /// A ship part's passes held by a -1 after a pass that started
@@ -341,32 +343,53 @@ struct Part {
     berths: u32,
     #[serde(default)]
     refused: bool,
+    /// +0x60: the member it was started at (the brains' parts, tried at
+    /// each town of the land fleet in turn); `None` for a computer's,
+    /// whose town is its base's.
+    #[serde(default)]
+    pub(super) at: Option<u32>,
+}
+
+/// Who a land fleet belongs to: where its parts and casts are tried.
+pub(super) enum LandHost<'a> {
+    /// A computer player's: its parts go to the base's town (order flag
+    /// 8), its casts to its bases' towns.
+    Computer(&'a mut Computer),
+    /// A brain member's (by fleet index): its list the member's
+    /// buildings, every part tried at each in turn (part dword 3 = -1).
+    Brain(usize),
 }
 
 /// The land fleet (`LFleet.cpp`, the player fleet of kind 0xb, built by
 /// 0x42b370): what its passes (0x42b910) keep.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct LandFleet {
+pub(super) struct LandFleet {
     /// +0x1c: the tick of the last pass.
-    last: u32,
+    pub(super) last: u32,
     /// +0x14: the last pass started a part.
-    started: bool,
+    pub(super) started: bool,
     /// +0x28: woken, a pass may come 3 ticks after the last.
-    woken: bool,
+    pub(super) woken: bool,
     /// +0x30: the queue, by priority (+8) highest first.
-    queue: Vec<Entry>,
+    pub(super) queue: Vec<Entry>,
+    /// +0x34: the town orders under way, by priority, highest first;
+    /// +0x20 the next order's id.
+    #[serde(default)]
+    pub(super) orders: Vec<TownOrder>,
+    #[serde(default)]
+    pub(super) next_order: u32,
 }
 
 /// An entry of the land fleet's queue (0xe4 bytes, 0x42c430).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct Entry {
+pub(super) struct Entry {
     /// +8.
-    prio: i32,
-    job: Job,
+    pub(super) prio: i32,
+    pub(super) job: Job,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-enum Job {
+pub(super) enum Job {
     /// Op 1000, a town order asked (origin 1, 0x4a09d0): started by
     /// 0x42c050, which puts the order (its id at +0xdc); +0x50 its state.
     Ask {
@@ -393,11 +416,15 @@ enum Job {
         fleet: Option<usize>,
         state: u8,
         tries: u32,
+        /// Without flag 0x800 (the brains' casts, 0x479c20: dword 1 0):
+        /// ended, it stays in the queue, waking the fleet at each pass.
+        #[serde(default)]
+        keep: bool,
     },
 }
 
 impl Entry {
-    fn state(&self) -> u8 {
+    pub(super) fn state(&self) -> u8 {
         match self.job {
             Job::Ask { state, .. } | Job::Cast { state, .. } => state,
             Job::Part { part, .. } => part.state,
@@ -423,7 +450,7 @@ const BERTH_PASSES: u32 = 25;
 const LAND_THRESHOLD: u32 = 0x7fff;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-enum Op {
+pub(super) enum Op {
     /// 0x3e9: put up a building of the class.
     Build(u32),
     /// 0x3ea: build a ship of the type.
@@ -442,7 +469,7 @@ enum Op {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-enum After {
+pub(super) enum After {
     /// Field 20 = 0.
     #[default]
     Nothing,
@@ -2006,7 +2033,7 @@ impl Scene {
                     1 => {
                         // Its entry's state (0x482ff0); none (5) is not
                         // looked at (0x47d2e0).
-                        let result = ai.ask_state(base.ask);
+                        let result = ai.land.ask_state(base.ask);
                         if result == 3 || result == 4 {
                             ai.bases[b].progress = result - 1;
                             ai.bases[b].ended = now;
@@ -2234,9 +2261,15 @@ impl Scene {
 
     /// Buildings of class `class` of base `b`'s town, standing or going up.
     fn town_count(&self, ai: &Computer, b: usize, class: u32) -> usize {
-        let Some(site) = ai.bases[b].site else {
-            return 0;
-        };
+        match ai.bases[b].site {
+            Some(site) => self.site_count(site, ai.owner, class),
+            None => 0,
+        }
+    }
+
+    /// Buildings of class `class` of `owner`'s town `site`, standing or
+    /// going up (0x43d220).
+    pub(super) fn site_count(&self, site: u32, owner: (u32, u32), class: u32) -> usize {
         let Some(t) = self.object_index(site) else {
             return 0;
         };
@@ -2244,7 +2277,7 @@ impl Scene {
         self.objects
             .iter()
             .filter(|o| {
-                o.owner == Some(ai.owner)
+                o.owner == Some(owner)
                     && o.class == ObjectClass::Building(class)
                     && o.cell.is_some_and(|(x, y)| {
                         (x - tx).abs() <= BUILD_RADIUS + 2 && (y - ty).abs() <= BUILD_RADIUS + 2
@@ -2347,7 +2380,7 @@ impl Scene {
                 }
                 1 => {
                     // Its entry's state (0x482ff0): 3 done, 4 failed, 5 none.
-                    let result = ai.ask_state(r.ask);
+                    let result = ai.land.ask_state(r.ask);
                     if result == 3 {
                         ai.requests[k].state = 2;
                         ai.requests[k].ended = now;
@@ -2394,46 +2427,61 @@ impl Scene {
         Some(ask)
     }
 
-    /// The land fleet's message 0 (0x42b910), every tick: a pass 50 ticks
-    /// after one that started nothing; after one that started a part, 3
-    /// ticks after it once something woke the fleet (0x42b94c-0x42b98d).
+    /// The land fleet's message 0 (0x42b910), every tick (the pass in
+    /// `land_pass`). Orders an old save kept on the player move to the
+    /// land fleet.
     fn land_fleet(&mut self, ai: &mut Computer, now: u32) {
-        let due = if !ai.land.started {
-            now >= ai.land.last + 50
+        if !ai.orders.is_empty() {
+            ai.land.orders.append(&mut ai.orders);
+        }
+        ai.land.next_order = ai.land.next_order.max(ai.next_order);
+        ai.next_order = 0;
+        let mut land = std::mem::take(&mut ai.land);
+        self.land_pass(&mut land, &mut LandHost::Computer(ai), now);
+        ai.land = land;
+    }
+
+    /// A land fleet's pass (0x42b910): 50 ticks after one that started
+    /// nothing; after one that started a part, 3 ticks after it once
+    /// something woke the fleet (0x42b94c-0x42b98d). The orders queue the
+    /// parts they are ready for, then the queue is walked by priority:
+    /// waiting entries started by their message number (1000 0x42c050,
+    /// 0x3e9 0x428a70, 0x3ea 0x428f20, 0x3eb 0x429ae0, 0x3ec 0x429f60,
+    /// 0x3ee 0x42a500, 0x3ef 0x42a860), under-way ones checked (0x428e10,
+    /// 0x4297d0, 0x429e10, 0x42a2f0, 0x42b080); the walk ends after the
+    /// first start that leaves its entry under way or done (`+0x14`, the
+    /// loop's test at 0x42bf69), or at a waiting entry at or above the
+    /// threshold. The computers' and the brains' land fleets alike.
+    pub(super) fn land_pass(&mut self, lf: &mut LandFleet, host: &mut LandHost, now: u32) {
+        let due = if !lf.started {
+            now >= lf.last + 50
         } else {
-            ai.land.woken && now >= ai.land.last + 3
+            lf.woken && now >= lf.last + 3
         };
         if !due {
             return;
         }
-        ai.land.last = now;
-        ai.queue_order_parts();
+        lf.last = now;
+        lf.queue_order_parts();
         // B: the queue, by priority. Waiting tries and under-way waits
         // count down only in a pass after one that started nothing (+0x18).
-        let count = !ai.land.started;
-        ai.land.started = false;
-        ai.land.woken = false;
+        let count = !lf.started;
+        lf.started = false;
+        lf.woken = false;
         let mut i = 0;
-        while i < ai.land.queue.len() {
-            let entry = ai.land.queue[i];
+        while i < lf.queue.len() {
+            let entry = lf.queue[i];
             let s = entry.state();
             if s <= 1 {
-                ai.land.queue[i].set_state(1);
+                lf.queue[i].set_state(1);
                 match entry.job {
-                    Job::Ask { .. } => ai.accept_order(i),
+                    Job::Ask { .. } => {
+                        let nation = self.host_nation(host);
+                        lf.accept_order(i, nation);
+                    }
                     Job::Cast { ask, fleet, .. } => {
-                        let members: Vec<u32> = ai.bases.iter().filter_map(|b| b.site).collect();
-                        let ships = fleet.map(|f| {
-                            ai.flotillas.get(f).map_or(Vec::new(), |f| {
-                                f.ships
-                                    .iter()
-                                    .copied()
-                                    .filter(|&s| self.object_index(s).is_some())
-                                    .collect()
-                            })
-                        });
-                        let done = self.cast_entry(&members, ask, ships, Some(&ai.magic));
-                        if let Job::Cast { state, tries, .. } = &mut ai.land.queue[i].job {
+                        let done = self.host_cast(host, ask, fleet);
+                        if let Job::Cast { state, tries, .. } = &mut lf.queue[i].job {
                             if done {
                                 *state = 3;
                             } else if count {
@@ -2447,34 +2495,37 @@ impl Scene {
                     Job::Part {
                         base, fleet, part, ..
                     } => {
-                        let step = self.order_part(ai, base, fleet, part);
-                        let Job::Part { part: p, .. } = &mut ai.land.queue[i].job else {
+                        let step = self.host_part(host, base, fleet, part);
+                        let Job::Part { part: p, .. } = &mut lf.queue[i].job else {
                             unreachable!()
                         };
                         p.refused = matches!(step, PartStep::Berth);
                         match step {
-                            PartStep::Done => p.state = 3,
+                            PartStep::Done | PartStep::Shipped(_) => p.state = 3,
                             PartStep::Berth => {
                                 if count {
                                     p.berths += 1;
                                 }
                                 if p.berths >= BERTH_PASSES {
                                     p.berths = 0;
-                                    self.berths_held(ai, i, base, part.op);
+                                    self.berths_held(lf, host, i, base, part.op);
                                 }
                             }
-                            PartStep::Started(before) => {
+                            PartStep::Started(before) | PartStep::StartedAt(before, _) => {
                                 p.state = 2;
                                 p.before = before;
                                 p.tries = p.op.tries_under_way();
+                                if let PartStep::StartedAt(_, at) = step {
+                                    p.at = Some(at);
+                                }
                                 // The town wakes its land fleet when it
                                 // has handled the part's command (0x441ba0
                                 // at 0x44393d); the command (0x520cc0)
                                 // reaches it at the next tick, before the
                                 // pass 3 ticks on that the wake allows.
-                                ai.land.woken = true;
+                                lf.woken = true;
                             }
-                            PartStep::Wait => {
+                            PartStep::Wait | PartStep::Refused => {
                                 if count {
                                     p.tries = p.tries.saturating_sub(1);
                                     if p.tries == 0 {
@@ -2487,25 +2538,25 @@ impl Scene {
                         }
                     }
                 }
-                ai.land.started = matches!(ai.land.queue[i].state(), 2 | 3);
+                lf.started = matches!(lf.queue[i].state(), 2 | 3);
             } else if s == 2 {
                 // The under-way checks (op 1000 waits for its order).
                 if let Job::Part {
                     base, fleet, part, ..
                 } = entry.job
                 {
-                    let step = self.order_part(ai, base, fleet, part);
-                    let Job::Part { part: p, .. } = &mut ai.land.queue[i].job else {
+                    let step = self.host_part(host, base, fleet, part);
+                    let Job::Part { part: p, .. } = &mut lf.queue[i].job else {
                         unreachable!()
                     };
                     match step {
-                        PartStep::Done => {
+                        PartStep::Done | PartStep::Shipped(_) => {
                             p.state = 3;
                             if let Op::Build(_) = part.op {
-                                ai.land.built(i, base, part.op);
+                                lf.built(i, base, part.at, part.op);
                             }
                         }
-                        PartStep::Wait => {
+                        PartStep::Wait | PartStep::Refused => {
                             if count {
                                 p.tries = p.tries.saturating_sub(1);
                                 if p.tries == 0 {
@@ -2514,34 +2565,39 @@ impl Scene {
                             }
                         }
                         PartStep::Failed => p.state = 4,
-                        PartStep::Hold | PartStep::Berth | PartStep::Started(_) => {}
+                        PartStep::Hold
+                        | PartStep::Berth
+                        | PartStep::Started(_)
+                        | PartStep::StartedAt(..) => {}
                     }
                 }
             }
-            // An entry's own flag 0x10 (restart when failed) is not ported,
-            // nor flag 0x800 (an op-1000 entry removed when it ends) for the
-            // asks: the parts' flags are 7, 0x27 or 0x207 (0x5ac7c8) and the
-            // asks' +0x20 is 0 (0x47d2e0, 0x47fe60). The casts have 0x800
-            // (0x4839e0-0x483c40): taken off when they end.
-            let e = ai.land.queue[i];
+            // An entry's own flag 0x10 (restart when failed) is not ported:
+            // the parts' flags are 7, 0x27 or 0x207 (0x5ac7c8) and the asks'
+            // +0x20 is 0 (0x47d2e0, 0x47fe60; the brains' 0x47b130 calls,
+            // dword 1 = 0). Flag 0x800 (an entry removed when it ends)
+            // only the computers' casts have (0x4839e0-0x483c40); an ask
+            // without it stays, done or failed, until its asker reads it
+            // (0x42c870), and wakes the fleet at every pass meanwhile.
+            let e = lf.queue[i];
             let s = e.state();
             if s == 3 || s == 4 {
-                ai.land.woken = true;
-                if let Job::Cast { .. } = e.job {
-                    ai.land.queue.remove(i);
-                    if ai.land.started {
-                        break;
-                    }
-                    continue;
-                }
-                if let Job::Part { order, index, .. } = e.job {
-                    if let Some(o) = ai.orders.iter_mut().find(|o| o.id == order) {
-                        if let Some(p) = o.parts.get_mut(index) {
-                            p.state = s;
+                lf.woken = true;
+                let gone = match e.job {
+                    Job::Cast { keep, .. } => !keep,
+                    Job::Part { order, index, .. } => {
+                        if let Some(o) = lf.orders.iter_mut().find(|o| o.id == order) {
+                            if let Some(p) = o.parts.get_mut(index) {
+                                p.state = s;
+                            }
                         }
+                        true
                     }
-                    ai.land.queue.remove(i);
-                    if ai.land.started {
+                    Job::Ask { .. } => false,
+                };
+                if gone {
+                    lf.queue.remove(i);
+                    if lf.started {
                         break;
                     }
                     continue;
@@ -2549,27 +2605,94 @@ impl Scene {
             } else if s == 1 && e.prio as u32 >= LAND_THRESHOLD {
                 break;
             }
-            if ai.land.started {
+            if lf.started {
                 break;
             }
             i += 1;
         }
     }
 
-    /// A ship part (the queue's entry `i`, of base `b`) held 25 passes by
-    /// a -1 (0x428f20 at 0x4295cb): its town is sent command 0x28 with
-    /// payload 3, clearing its berths (0x441ba0, 0x4415a0), and every other
-    /// tried part for a ship of the same type whose last result was -1
-    /// starts its count again. The command (0x520cc0) reaches the town at
-    /// the next tick.
-    fn berths_held(&mut self, ai: &mut Computer, i: usize, b: usize, op: Op) {
-        if let Some(site) = ai.bases.get(b).and_then(|b| b.site) {
-            self.post(Order::TownBerths {
-                site,
-                owner: ai.owner,
-            });
+    /// The nation a land fleet's order 0x86 reads (its player, `+8`).
+    fn host_nation(&self, host: &LandHost) -> u32 {
+        match host {
+            LandHost::Computer(ai) => ai.nation(),
+            LandHost::Brain(k) => self.brain_land_owner(*k).map_or(0, |o| o.0),
         }
-        for (k, e) in ai.land.queue.iter_mut().enumerate() {
+    }
+
+    /// A cast entry tried (0x42a500) at the land fleet's towns.
+    fn host_cast(
+        &mut self,
+        host: &mut LandHost,
+        ask: super::castq::CastAsk,
+        fleet: Option<usize>,
+    ) -> bool {
+        match host {
+            LandHost::Computer(ai) => {
+                let members: Vec<u32> = ai.bases.iter().filter_map(|b| b.site).collect();
+                let ships = fleet.map(|f| {
+                    ai.flotillas.get(f).map_or(Vec::new(), |f| {
+                        f.ships
+                            .iter()
+                            .copied()
+                            .filter(|&s| self.object_index(s).is_some())
+                            .collect()
+                    })
+                });
+                self.cast_entry(&members, ask, ships, Some(&ai.magic))
+            }
+            LandHost::Brain(k) => {
+                let members = self.fleet_towns(*k);
+                self.cast_entry(&members, ask, None, None)
+            }
+        }
+    }
+
+    /// A part tried or checked.
+    fn host_part(
+        &mut self,
+        host: &mut LandHost,
+        base: usize,
+        fleet: Option<usize>,
+        part: Part,
+    ) -> PartStep {
+        match host {
+            LandHost::Computer(ai) => self.order_part(ai, base, fleet, part),
+            LandHost::Brain(k) => self.brain_part(*k, fleet, part),
+        }
+    }
+
+    /// A ship part (the queue's entry `i`) held 25 passes by a -1
+    /// (0x428f20 at 0x4295cb): the part's town, or every town of the land
+    /// fleet for a part of dword 3 = -1, is sent command 0x28 with payload
+    /// 3, clearing its berths (0x441ba0, 0x4415a0), and every other tried
+    /// part for a ship of the same type whose last result was -1 starts
+    /// its count again. The command (0x520cc0) reaches the town at the
+    /// next tick. (Not decoded: command 0x28 at a member not a town, the
+    /// brains' barbarian structures; none is sent there.)
+    fn berths_held(&mut self, lf: &mut LandFleet, host: &LandHost, i: usize, b: usize, op: Op) {
+        let towns: Vec<(u32, (u32, u32))> = match host {
+            LandHost::Computer(ai) => ai
+                .bases
+                .get(b)
+                .and_then(|b| b.site)
+                .map(|s| (s, ai.owner))
+                .into_iter()
+                .collect(),
+            LandHost::Brain(k) => self
+                .brain_land_members(*k)
+                .into_iter()
+                .filter_map(|m| {
+                    let o = &self.objects[self.object_index(m)?];
+                    matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN))
+                        .then_some((m, o.owner?))
+                })
+                .collect(),
+        };
+        for (site, owner) in towns {
+            self.post(Order::TownBerths { site, owner });
+        }
+        for (k, e) in lf.queue.iter_mut().enumerate() {
             let state = e.state();
             if let Job::Part { part, .. } = &mut e.job {
                 if k != i && state == 1 && part.op == op && part.refused {
@@ -2579,7 +2702,7 @@ impl Scene {
         }
     }
 
-    /// One pass at a part of a town's order.
+    /// One pass at a part of a town's order of base `b`.
     fn order_part(
         &mut self,
         ai: &mut Computer,
@@ -2593,12 +2716,31 @@ impl Scene {
         if self.object_index(site).is_none() {
             return PartStep::Failed;
         }
-        let owner = ai.owner;
+        let step = self.town_part(site, ai.owner, ai.nation(), Some(&ai.magic), part);
+        if let (PartStep::Shipped(yard), Op::Ship(kind), Some(f)) = (&step, part.op, fleet) {
+            ai.building.push((*yard, kind, f));
+        }
+        step
+    }
+
+    /// One pass at a part of a town's order at town `site` of `owner`
+    /// (the handlers' single-town branch, part dword 3 the town: 0x428a70,
+    /// 0x428f20, 0x429ae0, 0x429f60, 0x42a860 and their under-way checks).
+    /// The brains' parts (dword 3 = -1) try it at each town of the land
+    /// fleet in turn (`Scene::brain_part`).
+    pub(super) fn town_part(
+        &mut self,
+        site: u32,
+        owner: (u32, u32),
+        nation: u32,
+        magic: Option<&crate::magic::Magic>,
+        part: Part,
+    ) -> PartStep {
         match part.op {
             Op::Build(class) => {
-                let have = self.town_count(ai, b, class)
+                let have = self.site_count(site, owner, class)
                     + if class == SHIPYARD {
-                        self.town_count(ai, b, DOCK)
+                        self.site_count(site, owner, DOCK)
                     } else {
                         0
                     };
@@ -2644,7 +2786,7 @@ impl Scene {
                 // First whether it is allowed at all, the price aside
                 // (0x43da20 with param_3 = 0): refused, it counts down.
                 if self.may_build_ship_for(owner, kind).is_err() {
-                    return PartStep::Wait;
+                    return PartStep::Refused;
                 }
                 // Then (param_3 = 1) the town must be idle, else -1 (not
                 // ported: the town's states other than going up or being
@@ -2666,7 +2808,7 @@ impl Scene {
                 // (flag 4), else -5, a try spent.
                 let mut refused = -5;
                 let mut yard = None;
-                for y in self.base_yards(ai, b) {
+                for y in self.town_yards_of(site, owner) {
                     let Some(i) = self.object_index(y) else {
                         continue;
                     };
@@ -2694,17 +2836,14 @@ impl Scene {
                     pay: !part.free,
                     arm: true,
                 });
-                if let Some(f) = fleet {
-                    ai.building.push((yard, kind, f));
-                }
-                PartStep::Done
+                PartStep::Shipped(yard)
             }
             Op::Upgrade(class) => {
                 let to = if class == SETTLEMENT { TOWN } else { DOCK };
                 let target = if class == SETTLEMENT {
                     Some(site)
                 } else {
-                    self.base_building(ai, b, SHIPYARD)
+                    self.town_building_of(site, owner, SHIPYARD)
                 };
                 if part.state == 2 {
                     return match target.and_then(|t| self.object_index(t)) {
@@ -2722,7 +2861,7 @@ impl Scene {
                     self.object_index(site)
                         .is_some_and(|i| self.class_of(i) == Some(TOWN))
                 } else {
-                    self.town_count(ai, b, DOCK) > 0
+                    self.site_count(site, owner, DOCK) > 0
                 };
                 if part.once && upgraded {
                     return PartStep::Done;
@@ -2744,16 +2883,20 @@ impl Scene {
                 use crate::magic::Temple;
                 let temple = if n == 33 { Temple::Sea } else { Temple::War };
                 if part.state == 2 {
-                    return if ai.magic.learning(temple).is_some() {
+                    return if magic.is_some_and(|m| m.learning(temple).is_some()) {
                         PartStep::Wait
                     } else {
                         PartStep::Done
                     };
                 }
-                if ai.magic.all_known(temple) {
+                let Some(magic) = magic else {
+                    // Not decoded: what a brain's temple knows.
+                    return PartStep::Failed;
+                };
+                if magic.all_known(temple) {
                     return PartStep::Done;
                 }
-                if self.base_building(ai, b, temple.class()).is_none() {
+                if self.town_building_of(site, owner, temple.class()).is_none() {
                     return PartStep::Wait;
                 }
                 let cost = crate::magic::LEARN_COST as i64;
@@ -2770,7 +2913,7 @@ impl Scene {
                 PartStep::Started(0)
             }
             Op::Study(n) => {
-                let Some(upgrade) = study(n, ai.nation()) else {
+                let Some(upgrade) = study(n, nation) else {
                     return PartStep::Failed;
                 };
                 let level = self.levels_of(Some(owner)).get(upgrade);
@@ -2793,7 +2936,7 @@ impl Scene {
                 if self.funds(owner).0 < upgrade.cost(level) {
                     return PartStep::Hold;
                 }
-                if !self.computer_may_study(ai, b, upgrade, level) {
+                if !self.study_site(site, owner, upgrade, level).is_some() {
                     return PartStep::Wait;
                 }
                 // Command 0x21 (0x520cc0): the town hands it to its first
@@ -2807,14 +2950,12 @@ impl Scene {
                 PartStep::Started(0)
             }
             Op::Repair => {
-                let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
-                    return PartStep::Failed;
-                };
                 // Under way (0x42a2f0): the building mended (`+0xdc`) gone
                 // fails it; whole (life `+0xa8` 100), it is sent order 10
                 // (0x42a384), which, besides ending its mending, calls off
-                // its work and leaves a fort's groups ceasing fire. (Not
-                // ported: 0x43d300's test that it is still the town's.)
+                // its work and leaves a fort's groups ceasing fire; not yet
+                // whole, it waits, no pass counted (0x42a2f0 has no count).
+                // (Not ported: 0x43d300's test that it is still the town's.)
                 if part.state == 2 {
                     let target = part.before as u32;
                     let Some(t) = self.object_index(target) else {
@@ -2825,7 +2966,7 @@ impl Scene {
                         .as_ref()
                         .is_none_or(|c| c.hull >= c.max_hull);
                     if !whole {
-                        return PartStep::Wait;
+                        return PartStep::Hold;
                     }
                     // Order 10 (0x520cc0): at the next tick.
                     self.post(Order::Halt { id: target });
@@ -2861,15 +3002,6 @@ impl Scene {
             }
             Op::Other => PartStep::Done,
         }
-    }
-
-    /// Whether base `b`'s town may study `upgrade` from `level` now
-    /// (0x4404e0 for the computer, the part's tests before its command).
-    fn computer_may_study(&self, ai: &Computer, b: usize, upgrade: Upgrade, level: u8) -> bool {
-        let Some(site) = ai.bases.get(b).and_then(|b| b.site) else {
-            return false;
-        };
-        self.study_site(site, ai.owner, upgrade, level).is_some()
     }
 
     /// The building of town `site` of `owner` that would study `upgrade`
@@ -2959,15 +3091,6 @@ impl Scene {
             })
             .map(|o| o.id)
             .next()
-    }
-
-    /// The shipyards and docks of base `b`'s town (its buildings `+0x1d0`;
-    /// the port's are those `base_building` finds), in the objects' order.
-    fn base_yards(&self, ai: &Computer, b: usize) -> Vec<u32> {
-        match ai.bases.get(b).and_then(|b| b.site) {
-            Some(site) => self.town_yards_of(site, ai.owner),
-            None => Vec::new(),
-        }
     }
 
     /// The shipyards and docks of `owner`'s town `site`.
@@ -4305,6 +4428,7 @@ impl Scene {
                 fleet,
                 state: 0,
                 tries: super::castq::CAST_TRIES,
+                keep: false,
             },
         });
         true
@@ -4948,9 +5072,63 @@ impl Computer {
 }
 
 impl LandFleet {
+    /// A brain member's land fleet made at `tick`, its passes so far at
+    /// the multiples of 50 (0x42b370: `+0x1c` 0, a pass every 50 ticks
+    /// while nothing starts); one at `tick` itself is still to come.
+    pub(super) fn from_tick(tick: u32) -> Self {
+        let last = if tick % 50 == 0 {
+            tick.saturating_sub(50)
+        } else {
+            tick - tick % 50
+        };
+        LandFleet {
+            last,
+            ..Default::default()
+        }
+    }
+
+    /// Moves the brain fleet indices its orders hold (the ships' members
+    /// to join, dword 7) as `up` says.
+    pub(super) fn renumber(&mut self, up: &dyn Fn(&mut usize)) {
+        for e in &mut self.queue {
+            match &mut e.job {
+                Job::Ask { ask, .. } => {
+                    if let Some(f) = &mut ask.3 {
+                        up(f);
+                    }
+                }
+                Job::Part { fleet, .. } | Job::Cast { fleet, .. } => {
+                    if let Some(f) = fleet {
+                        up(f);
+                    }
+                }
+            }
+        }
+        for o in &mut self.orders {
+            if let Some(f) = &mut o.fleet {
+                up(f);
+            }
+        }
+    }
+
+    /// Queues a cast (message 0x3ee from 0x479c20: flags 0, priority 0;
+    /// 0x42c430's generic branch, its passes from 0x595170).
+    pub(super) fn queue_cast(&mut self, ask: super::castq::CastAsk) {
+        self.queue_entry(Entry {
+            prio: 0,
+            job: Job::Cast {
+                ask,
+                fleet: None,
+                state: 0,
+                tries: super::castq::CAST_TRIES,
+                keep: true,
+            },
+        });
+    }
+
     /// Queues an entry (0x42c430's generic branch): before the first of
     /// lower priority, after its equals (compared unsigned).
-    fn queue_entry(&mut self, entry: Entry) {
+    pub(super) fn queue_entry(&mut self, entry: Entry) {
         let at = self
             .queue
             .iter()
@@ -4962,40 +5140,43 @@ impl LandFleet {
     /// A building of entry `i`'s build went up (0x428e10): every other
     /// build of the class under way at the same town counts one more
     /// before it and waits afresh.
-    fn built(&mut self, i: usize, base: usize, op: Op) {
+    fn built(&mut self, i: usize, base: usize, at: Option<u32>, op: Op) {
         for (k, e) in self.queue.iter_mut().enumerate() {
             if let Job::Part {
                 base: b, part: p, ..
             } = &mut e.job
             {
-                if k != i && p.state == 2 && *b == base && p.op == op {
+                // The same town: a computer's base, a brain's member
+                // (+0x60).
+                let same = match at {
+                    Some(at) => p.at == Some(at),
+                    None => *b == base,
+                };
+                if k != i && p.state == 2 && same && p.op == op {
                     p.before += 1;
                     p.tries = op.tries_under_way();
                 }
             }
         }
     }
-}
 
-impl Computer {
     /// The state of the order asked as `ask` (0x482ff0 -> 0x42c870): the
     /// first queue entry asking the same; one done (3) or failed (4) is
     /// taken off the queue; 5 when there is none.
-    fn ask_state(&mut self, ask: Option<Ask>) -> u32 {
+    pub(super) fn ask_state(&mut self, ask: Option<Ask>) -> u32 {
         let Some(ask) = ask else {
             return 5;
         };
         let Some(k) = self
-            .land
             .queue
             .iter()
             .position(|e| matches!(e.job, Job::Ask { ask: a, .. } if a == ask))
         else {
             return 5;
         };
-        let s = self.land.queue[k].state();
+        let s = self.queue[k].state();
         if s == 3 || s == 4 {
-            self.land.queue.remove(k);
+            self.queue.remove(k);
         }
         s as u32
     }
@@ -5003,14 +5184,14 @@ impl Computer {
     /// Starts the op-1000 entry `i` (0x42c050): puts its order before the
     /// first of no higher priority, the entry under way until the order
     /// ends; an order not in the table fails it. Either wakes the fleet.
-    fn accept_order(&mut self, i: usize) {
-        let Job::Ask { ask, flags, .. } = self.land.queue[i].job else {
+    fn accept_order(&mut self, i: usize, nation: u32) {
+        let Job::Ask { ask, flags, .. } = self.queue[i].job else {
             return;
         };
         let (code, prio, base, fleet) = ask;
         let code = if code == 0x86 {
             // The nation's unique ships' study.
-            match self.nation() {
+            match nation {
                 1 => 0x73,
                 3 => 0x74,
                 _ => 0,
@@ -5018,12 +5199,12 @@ impl Computer {
         } else {
             code
         };
-        self.land.woken = true;
+        self.woken = true;
         // Only code 0 is refused (0x86 for the other nations); every other
         // order the computer asks is in the table.
         let table = order_parts(code);
         if code == 0 || table.is_empty() {
-            self.land.queue[i].set_state(4);
+            self.queue[i].set_state(4);
             return;
         }
         // Flag 0x80 (all the computer's orders): every part takes the
@@ -5059,7 +5240,7 @@ impl Computer {
                 state: 0,
             },
         );
-        if let Job::Ask { state, order, .. } = &mut self.land.queue[i].job {
+        if let Job::Ask { state, order, .. } = &mut self.queue[i].job {
             *state = 2;
             *order = Some(id);
         }
@@ -5072,8 +5253,14 @@ impl Computer {
         part.state = 0;
         part.tries = part.op.tries();
         part.before = 0;
-        self.land.queue_entry(Entry {
-            prio: o.prio,
+        part.at = None;
+        // The part's priority (+8), set when the order was put (0x42c050):
+        // with order flag 0x80 the order's, with 0x100 the table's plus the
+        // order's, else the table's (0 in every part of 0x5ac7c8: the
+        // brains' orders, flags 0, 0x10 and 0x400).
+        let prio = if o.flags & 0x180 != 0 { o.prio } else { 0 };
+        self.queue_entry(Entry {
+            prio,
             job: Job::Part {
                 order: o.id,
                 index,
@@ -5123,7 +5310,7 @@ impl Computer {
                     },
                     2 if part.after == After::Again => {
                         let code = part.op.code();
-                        let waiting = self.land.queue.iter().any(|e| {
+                        let waiting = self.queue.iter().any(|e| {
                             matches!(e.job, Job::Part { part: q, .. }
                                 if q.op.code() == code && q.state <= 1)
                         });
@@ -5160,7 +5347,6 @@ impl Computer {
             }
             let id = self.orders[k].id;
             let Some(e) = self
-                .land
                 .queue
                 .iter_mut()
                 .find(|e| matches!(e.job, Job::Ask { order: Some(o), .. } if o == id))
@@ -5175,12 +5361,19 @@ impl Computer {
 }
 
 /// How a part of a town's order went this pass.
-enum PartStep {
+pub(super) enum PartStep {
     Done,
+    /// A ship part sent to the yard (command 0x20 through the town), done.
+    Shipped(u32),
     /// Ordered; the count of buildings before.
     Started(usize),
+    /// Ordered at the land fleet's member (+0x60), a brain's part.
+    StartedAt(usize, u32),
     /// Not yet: a pass less to try.
     Wait,
+    /// The town's first test (without the price) refused it: a pass less
+    /// to try, the part's last result (+0x70) left as it was.
+    Refused,
     /// Waiting for the price, as long as it takes (the town's refusals
     /// -1 to -3 with the order's flags 1, 2, 4: 0x428a70).
     Hold,
@@ -5325,6 +5518,19 @@ fn order_parts(code: u32) -> Vec<(Op, bool, After)> {
     use After::{All, Nothing, Part};
     use Op::{Build, Ship, Study, Upgrade as Up};
     match code {
+        // The full town (the brains' 0x47b130 code 1): order 2 and the
+        // two temples, each after the one before.
+        1 => vec![
+            (Build(PORT), true, Nothing),
+            (Build(WORKSHOP), true, All),
+            (Build(SHIPYARD), true, All),
+            (Build(SMITHY), true, All),
+            (Up(SETTLEMENT), true, All),
+            (Up(SHIPYARD), true, Part(4)),
+            (Build(SCHOOL), true, Part(5)),
+            (Build(TEMPLE_OF_THE_SEA), true, Part(6)),
+            (Build(TEMPLE_OF_WAR), true, Part(7)),
+        ],
         2 => vec![
             (Build(PORT), true, Nothing),
             (Build(WORKSHOP), true, All),
@@ -5339,6 +5545,20 @@ fn order_parts(code: u32) -> Vec<(Op, bool, After)> {
             (Build(TEMPLE_OF_WAR), true, Nothing),
         ],
         48 => vec![(Build(0x35), false, Nothing)],
+        // Order 240 (0xf0, the yards of miss002-miss004): the four first
+        // buildings at once, the town, the dock, the school, then a small
+        // and a medium fort both after the school.
+        240 => vec![
+            (Build(PORT), true, Nothing),
+            (Build(WORKSHOP), true, Nothing),
+            (Build(SHIPYARD), true, Nothing),
+            (Build(SMITHY), true, Nothing),
+            (Up(SETTLEMENT), true, All),
+            (Up(SHIPYARD), true, Part(4)),
+            (Build(SCHOOL), true, Part(5)),
+            (Build(0x34), true, Part(6)),
+            (Build(0x35), true, Part(6)),
+        ],
         50 => vec![(Build(0x34), false, Nothing)],
         52 => vec![(Build(0x36), false, Nothing)],
         0x50..=0x5b => vec![(Ship((code - 0x50) as u8), false, Nothing)],
@@ -6128,7 +6348,7 @@ mod tests {
                     ai.flotillas[ai.commander].clocks,
                     scene.levels_of(Some(ai.owner)),
                     scene.outcome,
-                    ai.orders.len()
+                    ai.land.orders.len()
                 );
             }
         }
@@ -6167,7 +6387,7 @@ mod tests {
     /// Gives base 0 of `ai` a shipyard with its berth free (a ship on it
     /// taken away, or its workshop renamed, facing a free water cell).
     fn give_yard(scene: &mut Scene, ai: &Computer) {
-        for y in scene.base_yards(ai, 0) {
+        for y in scene.town_yards_of(ai.bases[0].site.unwrap(), ai.owner) {
             let i = scene.object_index(y).unwrap();
             if let Some(k) = scene.berth_cell(i).and_then(|c| scene.slot_ship(c)) {
                 scene.objects.remove(k);
@@ -6207,7 +6427,7 @@ mod tests {
         let mut ai = std::mem::take(&mut scene.computers.players[0]);
         give_yard(&mut scene, &ai);
         let owner = ai.owner;
-        let yard = scene.base_yards(&ai, 0)[0];
+        let yard = scene.town_yards_of(ai.bases[0].site.unwrap(), ai.owner)[0];
         scene.purses.insert(owner, (0, 0));
         let paid = Part {
             op: Op::Ship(0),
@@ -6217,7 +6437,7 @@ mod tests {
         assert!(matches!(step, PartStep::Hold));
         let free = Part { free: true, ..paid };
         let step = scene.order_part(&mut ai, 0, None, free);
-        assert!(matches!(step, PartStep::Done));
+        assert!(matches!(step, PartStep::Shipped(_)));
         // The yard command reaches it at the tick's end.
         scene.deliver(&data, &mut caches);
         assert_eq!(scene.funds(owner), (0, 0));
@@ -6245,7 +6465,7 @@ mod tests {
         }
         let mut ai = std::mem::take(&mut scene.computers.players[0]);
         give_yard(&mut scene, &ai);
-        let yard = scene.base_yards(&ai, 0)[0];
+        let yard = scene.town_yards_of(ai.bases[0].site.unwrap(), ai.owner)[0];
         let berth = scene.berth_cell(scene.object_index(yard).unwrap()).unwrap();
         // One of its ships lying idle on the berth.
         let ship = scene
@@ -6274,7 +6494,7 @@ mod tests {
         let step = scene.order_part(&mut ai, 0, None, part);
         assert!(matches!(step, PartStep::Berth));
         ai.land = LandFleet::default();
-        ai.orders.clear();
+        ai.land.orders.clear();
         ai.requests.clear();
         let counted = |ai: &Computer| {
             ai.land.queue.iter().find_map(|e| match e.job {
@@ -6330,7 +6550,7 @@ mod tests {
         let mut ai = std::mem::take(&mut scene.computers.players[0]);
         give_yard(&mut scene, &ai);
         ai.land = LandFleet::default();
-        ai.orders.clear();
+        ai.land.orders.clear();
         ai.requests.clear();
         let owner = ai.owner;
         scene.purses.insert(owner, (0, 0));
@@ -6340,14 +6560,14 @@ mod tests {
         for now in [0, 49] {
             scene.land_fleet(&mut ai, now);
         }
-        assert_eq!((ai.orders.len(), state(&ai, 0)), (0, 0));
+        assert_eq!((ai.land.orders.len(), state(&ai, 0)), (0, 0));
         scene.land_fleet(&mut ai, 50);
-        assert_eq!((ai.orders.len(), state(&ai, 0)), (1, 2));
+        assert_eq!((ai.land.orders.len(), state(&ai, 0)), (1, 2));
         assert!(ai.land.started && ai.land.woken);
         scene.land_fleet(&mut ai, 52);
         assert_eq!(ai.land.queue.len(), 1, "not before 3 ticks");
         scene.land_fleet(&mut ai, 53);
-        assert_eq!(ai.orders[0].parts[0].state, 2, "queued");
+        assert_eq!(ai.land.orders[0].parts[0].state, 2, "queued");
         let tries = |ai: &Computer| match ai.land.queue[1].job {
             Job::Part { part, .. } => (part.state, part.tries),
             _ => unreachable!(),
@@ -6358,20 +6578,20 @@ mod tests {
         assert_eq!(tries(&ai), (1, 25));
         scene.land_fleet(&mut ai, 103);
         assert_eq!(tries(&ai), (1, 24), "counted");
-        assert_eq!(ai.ask_state(ask), 2);
+        assert_eq!(ai.land.ask_state(ask), 2);
         // A boat (free): done when tried; the order ends a pass later.
         ai.land = LandFleet::default();
-        ai.orders.clear();
+        ai.land.orders.clear();
         let ask = scene.town_order(&mut ai, 0, 0x5c, Some(0), 23_000, 0x488);
         scene.land_fleet(&mut ai, 50);
         scene.land_fleet(&mut ai, 53);
-        assert_eq!(ai.orders[0].parts[0].state, 3, "done");
+        assert_eq!(ai.land.orders[0].parts[0].state, 3, "done");
         assert_eq!(ai.land.queue.len(), 1);
         assert!(ai.land.started && ai.land.woken);
         scene.land_fleet(&mut ai, 56);
-        assert!(ai.orders.is_empty());
-        assert_eq!(ai.ask_state(ask), 3);
-        assert_eq!(ai.ask_state(ask), 5, "taken off when read");
+        assert!(ai.land.orders.is_empty());
+        assert_eq!(ai.land.ask_state(ask), 3);
+        assert_eq!(ai.land.ask_state(ask), 5, "taken off when read");
         assert_eq!(scene.funds(owner), (0, 0));
     }
 
@@ -6419,8 +6639,9 @@ mod tests {
             before: id as usize,
             ..part
         };
+        // Not whole: it waits, no pass counted (0x42a2f0).
         let step = scene.order_part(&mut ai, 0, None, under_way);
-        assert!(matches!(step, PartStep::Wait));
+        assert!(matches!(step, PartStep::Hold));
         // Whole: order 10, its mending ended (LandObj 0x425990).
         let c = scene.objects[worn].combat.as_mut().unwrap();
         c.hull = c.max_hull;
@@ -6524,7 +6745,7 @@ mod tests {
         // The Flame on its own: asked of the land fleet (0x483b80), nothing
         // paid yet, at 0x7ff5 with a discount by difficulty (0x488810).
         ai.land.queue.clear();
-        ai.orders.clear();
+        ai.land.orders.clear();
         ai.land.started = false;
         let funds = scene.funds(owner);
         assert!(scene.computer_cast(&mut ai, 0, 9, None, None, None));

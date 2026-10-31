@@ -239,6 +239,14 @@ pub struct Fleet {
     /// until the first.
     #[serde(default)]
     pub behaviour: Option<(u32, u32, u32)>,
+    /// The member's town order sent (0x47b130 with `+0x10` 1, set at its
+    /// first call, cleared with the state by 0x479750): its later calls
+    /// read the order's state.
+    #[serde(default)]
+    pub ordered: bool,
+    /// The request `Op::Build` took (fleet, type), until its order ends.
+    #[serde(default)]
+    pub build: Option<(usize, u8)>,
 }
 
 /// A fleet's move order (its block 0x4cc500 `{100, 1, now, x, y, ...}`).
@@ -288,13 +296,23 @@ pub struct Brain {
     /// The original's difficulty (+0x32a1): 0 easy, 1 normal, 2 hard.
     #[serde(default = "normal")]
     pub difficulty: usize,
-    /// Town orders given to members' land fleets (0x47b130): the yards'
-    /// full-town order (code 1) and the builders' repairs (code 0x60).
-    #[serde(default)]
+    /// An old save's town orders (`Job`), moved into `lands` at the next
+    /// pass.
+    #[serde(default, skip_serializing)]
     pub jobs: Vec<Job>,
-    /// The casts each land fleet (by fleet index) has queued (0x479c20).
-    #[serde(default)]
+    /// An old save's casts, moved into `lands` at the next pass.
+    #[serde(default, skip_serializing)]
     pub casts: std::collections::BTreeMap<usize, super::castq::CastQueue>,
+    /// The members' land fleets (`LFleet.cpp`, by fleet index), made at
+    /// their first message: their queues of town orders, parts and casts
+    /// (0x42c430) and their passes (0x42b910).
+    #[serde(default)]
+    pub(super) lands: std::collections::BTreeMap<usize, super::computer::LandFleet>,
+    /// The members whose full-town order (code 1) they read at each of
+    /// their turns until it ends, beside their own states (miss007-
+    /// miss010's yards, `+0x133`, 0x45e510).
+    #[serde(default)]
+    pub side: Vec<usize>,
     /// miss006's watch for waterspouts: armed, checks made, since when.
     #[serde(default)]
     pub watch: [u32; 3],
@@ -387,6 +405,11 @@ impl Brain {
                 if let Some(f) = &mut self.served {
                     up(f);
                 }
+                for f in &mut self.fleets {
+                    if let Some(b) = &mut f.build {
+                        up(&mut b.0);
+                    }
+                }
                 self.casts = std::mem::take(&mut self.casts)
                     .into_iter()
                     .map(|(mut f, q)| {
@@ -399,6 +422,17 @@ impl Brain {
                         Job::FullTown { fleet, .. } | Job::Repair { fleet, .. } => up(fleet),
                         Job::Mended { .. } => {}
                     }
+                }
+                self.lands = std::mem::take(&mut self.lands)
+                    .into_iter()
+                    .map(|(mut f, mut lf)| {
+                        up(&mut f);
+                        lf.renumber(&up);
+                        (f, lf)
+                    })
+                    .collect();
+                for f in &mut self.side {
+                    up(f);
                 }
             }
         }
@@ -426,6 +460,8 @@ impl Fleet {
             elapsed: 0,
             span: 0,
             behaviour: None,
+            ordered: false,
+            build: None,
         }
     }
 }
@@ -434,8 +470,9 @@ fn standing() -> [bool; 2] {
     [true; 2]
 }
 
-/// A town order a brain member gave (0x47b130 through the land fleet,
-/// 0x42b910, a pass every 50 ticks).
+/// A town order as an old save kept it, before the brains' orders went
+/// through their land fleets' queues (`Brain::lands`); read only to move
+/// it there (`run_brain_lands`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Job {
     /// Code 1 (table 0x5ac7c8's order 2 and the two temples): the town in
@@ -720,6 +757,8 @@ impl Scene {
             difficulty,
             jobs: Vec::new(),
             casts: Default::default(),
+            lands: Default::default(),
+            side: Vec::new(),
             watch: [1, 0, 0],
             joined: false,
             gone: [false; 2],
@@ -886,6 +925,7 @@ impl Scene {
             if let Some(turn) = m.turn {
                 turn(self, k);
             }
+            self.read_side_order(k);
             self.ask_for_ships(k, &m.fleets[k]);
             // A member with no ships runs its steps as any other (see
             // `fleet_step`), but for one whose own code holds it.
@@ -944,6 +984,7 @@ impl Scene {
         f.previous = f.state;
         f.state = state;
         f.started = false;
+        f.ordered = false;
         f.paused_at = None;
     }
 
@@ -1263,21 +1304,31 @@ impl Scene {
                 }
             }
             Op::Build { next } => {
-                if !started {
-                    if !self.fleet_build(k, groups) {
-                        // Nothing asked for, or not affordable yet: try
-                        // again next turn.
-                        self.brain.as_mut().unwrap().fleets[k].started = false;
+                let f = &self.brain.as_ref().unwrap().fleets[k];
+                match f.build {
+                    None if !started => {
+                        if !self.fleet_build(k, groups) {
+                            // Nothing asked for: try again next turn.
+                            self.brain.as_mut().unwrap().fleets[k].started = false;
+                        }
                     }
-                } else if !self
-                    .brain
-                    .as_ref()
-                    .unwrap()
-                    .building
-                    .iter()
-                    .any(|b| self.brain.as_ref().unwrap().fleets[k].ships.contains(&b.0))
-                {
-                    self.set_state(k, next);
+                    Some((fleet, kind)) => {
+                        // The order's later calls (0x47b130): ended, the
+                        // request is served.
+                        if self.fleet_build_for(k, fleet, kind) {
+                            let brain = self.brain.as_mut().unwrap();
+                            brain.fleets[k].build = None;
+                            if let Some(r) = brain.requests.iter().position(|&r| r == (fleet, kind))
+                            {
+                                brain.requests.remove(r);
+                            }
+                        }
+                    }
+                    None => {
+                        if !self.fleet_building(k) {
+                            self.set_state(k, next);
+                        }
+                    }
                 }
             }
             Op::Branch { .. } => {}
@@ -1293,147 +1344,33 @@ impl Scene {
         }
     }
 
-    /// The builder fleet `k` orders the oldest request at one of its
-    /// buildings, paying from its player's purse. False if it could not.
+    /// The builder fleet `k` takes the oldest request of its group and
+    /// orders its ship (`fleet_build_for`). False if there is none. (The
+    /// pick is the port's: each mission's yard picks by its own slots.)
     fn fleet_build(&mut self, k: usize, groups: &[u8]) -> bool {
         let brain = self.brain.as_ref().unwrap();
-        let Some(&site) = brain.fleets[k]
-            .ships
+        let Some(&(fleet, kind)) = brain
+            .requests
             .iter()
-            .find(|&&id| self.builder_ready(id))
+            .find(|&&(f, _)| groups.get(f) == groups.get(k))
         else {
             return false;
         };
-        let Some(owner) = self.object_index(site).and_then(|i| self.objects[i].owner) else {
-            return false;
-        };
-        // The oldest request of the builder's group it can pay for (one it
-        // cannot afford waits, without holding up cheaper ones).
-        let free = self.barbarian_site(site);
-        let (have_a, have_f) = self.funds(owner);
-        let Some(r) = brain.requests.iter().position(|&(f, kind)| {
-            let (amber, fish) = crate::economy::ship_cost(kind);
-            groups.get(f) == groups.get(k) && (free || (have_a >= amber && have_f >= fish))
-        }) else {
-            return false;
-        };
-        let (fleet, kind) = brain.requests[r];
-        if !self.builder_order(site, kind, free) {
-            return false;
-        }
-        let brain = self.brain.as_mut().unwrap();
-        brain.requests.remove(r);
-        brain.building.push((site, kind, fleet));
+        self.brain.as_mut().unwrap().fleets[k].build = Some((fleet, kind));
+        self.fleet_build_for(k, fleet, kind);
         true
     }
 
-    /// The builder fleet `k` orders a ship of type `kind` for fleet
-    /// `fleet` at one of its buildings, paying from its player's purse
-    /// (0x47b130 with the member to hand the ship to). False if it could
-    /// not (no free yard, or not affordable yet).
+    /// The builder fleet `k`'s order of a ship of type `kind` for member
+    /// `fleet` (0x47b130 code 0x50 + type, order flag 0x400, dword 7 the
+    /// member): sent at the first call, the land fleet's ship part trying
+    /// it at each of the builder's members at its passes, the price waited
+    /// for (0x428f20); true once the order is done or failed (every call
+    /// site's p3 and p4 alike). The ship joins `fleet` when launched
+    /// (`ship_launched`).
     pub(super) fn fleet_build_for(&mut self, k: usize, fleet: usize, kind: u8) -> bool {
-        let brain = self.brain.as_ref().unwrap();
-        let Some(&site) = brain.fleets[k]
-            .ships
-            .iter()
-            .find(|&&id| self.builder_ready(id))
-        else {
-            return false;
-        };
-        let Some(owner) = self.object_index(site).and_then(|i| self.objects[i].owner) else {
-            return false;
-        };
-        // Barbarian structures build for nothing (BarbarianClassTy pays
-        // only to mend its units, 0x40eba0).
-        let free = self.barbarian_site(site);
-        if !free {
-            let (amber, fish) = crate::economy::ship_cost(kind);
-            let (have_a, have_f) = self.funds(owner);
-            if have_a < amber || have_f < fish {
-                return false;
-            }
-        }
-        if !self.builder_order(site, kind, free) {
-            return false;
-        }
-        self.brain
-            .as_mut()
-            .unwrap()
-            .building
-            .push((site, kind, fleet));
-        true
-    }
-
-    /// A brain's builder `site` orders a ship of type `kind`: a barbarian
-    /// structure (`free`) by its
-    /// order 0x20 (`barbarian_order`), which the land fleet's ship part
-    /// sends with the default-arming byte 0xd set (0x428f20 at 0x42957a:
-    /// bytes 0xd and 0xe 1, 0xf 0xff with the part's field 8); a town by
-    /// its command 0x20, which it hands to the first of its yards
-    /// answering 0 to the ship (0x441ba0, 0x4e82f0), as the computer
-    /// players' ship part. A yard in the builder's list is passed over
-    /// (0x428f20 orders only types 0x1a6b and 0x1491; with a part's own
-    /// building, 0x429001, any other type breaks off). False if nothing
-    /// was ordered.
-    fn builder_order(&mut self, site: u32, kind: u8, free: bool) -> bool {
-        let Some(i) = self.object_index(site) else {
-            return false;
-        };
-        match self.objects[i].class {
-            openconquest_formats::ObjectClass::Barbarian(_) => {
-                self.barbarian_order(site, kind, true);
-                true
-            }
-            openconquest_formats::ObjectClass::Building(
-                crate::economy::SETTLEMENT | crate::economy::TOWN,
-            ) => {
-                let yard = self
-                    .town_yards(site)
-                    .into_iter()
-                    .find(|&y| self.yard_answer(y, Some(kind)) == 0)
-                    .map(|y| self.objects[y].id);
-                yard.is_some_and(|y| self.start_ship_armed(y, kind, !free, true).is_ok())
-            }
-            _ => false,
-        }
-    }
-
-    /// Whether builder `site` may take a ship order now: a yard not busy;
-    /// a barbarian structure as the land fleet's ship part asks it (vtable
-    /// +0x9c with 1, 0x40e7b0): class 0x40 standing (`+0xa4` 1, so not
-    /// asleep) with its berth free (0x4e82f0 with code 0xff), the others
-    /// never (-5); a town idle with one of its yards' berths free (0x43da20
-    /// with param_8 1; the ship's own draught test is `builder_order`'s).
-    /// A yard never (0x428f20 passes it over).
-    fn builder_ready(&self, site: u32) -> bool {
-        let Some(i) = self.object_index(site) else {
-            return false;
-        };
-        match self.objects[i].class {
-            openconquest_formats::ObjectClass::Barbarian(c) => {
-                c == 0x40 && self.objects[i].asleep.is_none() && self.yard_answer(i, None) == 0
-            }
-            openconquest_formats::ObjectClass::Building(
-                crate::economy::SETTLEMENT | crate::economy::TOWN,
-            ) => {
-                self.construction_at(site).is_none()
-                    && self
-                        .town_yards(site)
-                        .into_iter()
-                        .any(|y| self.yard_answer(y, None) == 0)
-            }
-            _ => false,
-        }
-    }
-
-    /// Whether `site` is a barbarian structure (class 0x3f-0x41).
-    fn barbarian_site(&self, site: u32) -> bool {
-        self.object_index(site).is_some_and(|i| {
-            matches!(
-                self.objects[i].class,
-                openconquest_formats::ObjectClass::Barbarian(_)
-            )
-        })
+        self.brain_order(k, 0x50 + kind as u32, 0x400, Some(fleet))
+            .is_some()
     }
 
     /// Whether a ship builder fleet `k` started is still being built.
@@ -2465,14 +2402,9 @@ impl Scene {
         let Some(k) = by else {
             return;
         };
-        let brain = self.brain.as_mut().unwrap();
-        let tick = brain.tick;
-        let q = brain
-            .casts
-            .entry(k)
-            .or_insert_with(|| super::castq::CastQueue::new(tick));
+        let q = self.brain_land(k);
         for ship in ships {
-            q.push(super::castq::CastAsk {
+            q.queue_cast(super::castq::CastAsk {
                 kind,
                 town: None,
                 cell: (0, 0),
@@ -2526,253 +2458,315 @@ impl Scene {
     }
 
     /// The orders a mission's members give their land fleets at the start
-    /// (0x47b130): the yards' full-town orders (`full`, by group and
-    /// member) and the builders' repairs (`mend`).
+    /// (the start's 0x47b130 calls): the yards' full-town orders (`full`,
+    /// by group and member; code 1, flag 0x10), which the yard then reads
+    /// at each of its turns until it ends (`side`, `+0x133`, 0x45e510),
+    /// and the builders' repairs (`mend`; code 0x60, flags 0), which no
+    /// one reads (order 96 never ends). (Not ported: the start's call
+    /// leaves the builder's `+0x10` set for its first state.)
     pub(super) fn start_jobs(&mut self, full: &[(u8, usize)], mend: &[(u8, usize)]) {
-        let mut jobs = Vec::new();
         for &(g, m) in full {
-            if let Some(fleet) = self.member_fleet(g, m) {
-                jobs.push(Job::FullTown {
-                    fleet,
-                    forts: false,
-                });
+            if let Some(k) = self.member_fleet(g, m) {
+                self.queue_brain_ask(k, (1, 1, 0, None), 0x10);
+                self.brain.as_mut().unwrap().side.push(k);
             }
         }
         for &(g, m) in mend {
-            if let Some(fleet) = self.member_fleet(g, m) {
-                jobs.push(Job::Repair { fleet, idle: 10 });
+            if let Some(k) = self.member_fleet(g, m) {
+                self.queue_brain_ask(k, (0x60, 1, 0, None), 0);
             }
         }
-        self.brain.as_mut().unwrap().jobs.extend(jobs);
     }
 
-    /// The town standing in fleet `k`'s cells (a yard's), by index.
-    fn fleet_town(&self, k: usize) -> Option<usize> {
-        let defs = mission_fleets(&self.brain.as_ref()?.mission)?;
-        let cells = defs.get(k)?.cells;
-        (0..self.objects.len()).find(|&i| {
-            matches!(
-                self.objects[i].class,
-                openconquest_formats::ObjectClass::Building(
-                    crate::economy::SETTLEMENT | crate::economy::TOWN
-                )
-            ) && self.objects[i].cell.is_some_and(|(x, y)| {
-                cells
-                    .iter()
-                    .any(|&(cx, cy, w, h)| (cx..cx + w).contains(&x) && (cy..cy + h).contains(&y))
-            })
-        })
-    }
-
-    /// The first part of the full-town order the town at `t` lacks: a
-    /// building class to put up, or a building to upgrade (`Err(id)`);
-    /// `None` when it is complete. A part being built waits (`Some(Ok(0))`).
-    fn town_part(&self, t: usize, forts: bool) -> Option<Result<u32, u32>> {
-        use crate::economy::{
-            DOCK, PORT, SCHOOL, SETTLEMENT, SHIPYARD, SMITHY, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR,
-            TOWN,
-        };
-        use openconquest_formats::ObjectClass;
-        let site = self.objects[t].id;
-        let owner = self.objects[t].owner;
-        let of = |classes: &[u32]| -> Vec<usize> {
-            (0..self.objects.len())
-                .filter(|&i| {
-                    self.objects[i].owner == owner
-                        && matches!(self.objects[i].class, ObjectClass::Building(c) if classes.contains(&c))
-                        && self.home_settlement(i) == Some(site)
-                })
-                .collect()
-        };
-        let building = |v: &[usize]| {
-            v.iter()
-                .any(|&i| self.construction_at(self.objects[i].id).is_some())
-        };
-        for classes in [&[PORT][..], &[0x37], &[SHIPYARD, DOCK], &[SMITHY]] {
-            let have = of(classes);
-            if have.is_empty() {
-                return Some(Ok(classes[0]));
-            }
-            if building(&have) {
-                return Some(Ok(0));
-            }
-        }
-        if self.construction_at(site).is_some() {
-            return Some(Ok(0));
-        }
-        if self.objects[t].class == ObjectClass::Building(SETTLEMENT) {
-            return Some(Err(site));
-        }
-        let _ = TOWN;
-        if of(&[DOCK]).is_empty() {
-            let yard = of(&[SHIPYARD]);
-            return Some(match yard.first() {
-                Some(&y) if !self.yard_busy(self.objects[y].id) => Err(self.objects[y].id),
-                _ => Ok(0),
-            });
-        }
-        let rest: &[u32] = if forts {
-            &[SCHOOL, 0x34, 0x35]
-        } else {
-            &[SCHOOL, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR]
-        };
-        // A town's forts are those about it (the town's counters +0x214,
-        // +0x218; free-standing forts further off do not count).
-        let (tx, ty) = self.objects[t].cell.unwrap_or((0, 0));
-        let r = super::BUILD_RADIUS + 2;
-        let forts_of = |class: u32| -> Vec<usize> {
-            (0..self.objects.len())
-                .filter(|&i| {
-                    self.objects[i].owner == owner
-                        && self.objects[i].class == ObjectClass::Building(class)
-                        && self.objects[i]
-                            .cell
-                            .is_some_and(|(x, y)| (x - tx).abs() <= r && (y - ty).abs() <= r)
-                })
-                .collect()
-        };
-        for &class in rest {
-            let have = if (0x34..=0x36).contains(&class) {
-                forts_of(class)
-            } else {
-                of(&[class])
-            };
-            if have.is_empty() {
-                return Some(Ok(class));
-            }
-            if building(&have) {
-                return Some(Ok(0));
-            }
-        }
-        None
-    }
-
-    /// Whether yard `k`'s town has all the full-town order asks for.
-    pub(super) fn yard_town_complete(&self, k: usize) -> bool {
-        self.fleet_town(k)
-            .is_some_and(|t| self.town_part(t, false).is_none())
-    }
-
-    /// Whether yard `k`'s town has all order 240 asks for.
-    pub(super) fn yard_town_fortified(&self, k: usize) -> bool {
-        self.fleet_town(k)
-            .is_some_and(|t| self.town_part(t, true).is_none())
-    }
-
-    /// Yard `k` gives its full-town order, if it has not already.
-    pub(super) fn want_full_town(&mut self, k: usize) {
-        self.want_town_order(k, false);
-    }
-
-    /// The same, of order 240 with `forts` (the yards of miss002-004).
-    pub(super) fn want_town_order(&mut self, k: usize, forts: bool) {
+    /// Member `k`'s land fleet, made at its first message.
+    fn brain_land(&mut self, k: usize) -> &mut super::computer::LandFleet {
         let brain = self.brain.as_mut().unwrap();
-        let job = Job::FullTown { fleet: k, forts };
-        if !brain.jobs.contains(&job) {
-            brain.jobs.push(job);
+        let tick = brain.tick;
+        brain
+            .lands
+            .entry(k)
+            .or_insert_with(|| super::computer::LandFleet::from_tick(tick))
+    }
+
+    /// Message 1000 to member `k`'s land fleet (0x479ba0 -> 0x4a09d0 ->
+    /// 0x42c430): dword 1 (the entry's flags) 0, dword 2 the priority,
+    /// dword 3 the code, dword 4 the order's flags, dword 6 the town (0:
+    /// the parts keep their -1, every town of the fleet, without order
+    /// flag 8), dword 7 the member a ship joins (order flag 0x400).
+    fn queue_brain_ask(&mut self, k: usize, ask: super::computer::Ask, flags: u32) {
+        use super::computer::{Entry, Job};
+        self.brain_land(k).queue_entry(Entry {
+            prio: ask.1,
+            job: Job::Ask {
+                ask,
+                flags,
+                state: 0,
+                order: None,
+            },
+        });
+    }
+
+    /// Member `k`'s town order (0x47b130, every call site's priority 1,
+    /// town 0 and no timeout): its first call in a state sends message
+    /// 1000 to the member's own land fleet; the later ones read the order's
+    /// entry (0x4a0f60 -> 0x42c870): done (3) or failed (4), taken off the
+    /// queue, is returned (the member goes to the call's p3 or p4); under
+    /// way, or none found (5), `None`. `join` is the member a ship part's
+    /// ship joins (dword 7).
+    pub(super) fn brain_order(
+        &mut self,
+        k: usize,
+        code: u32,
+        flags: u32,
+        join: Option<usize>,
+    ) -> Option<u32> {
+        let ask = (code, 1, 0, join);
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        if !f.ordered {
+            f.ordered = true;
+            self.queue_brain_ask(k, ask, flags);
+            return None;
+        }
+        let state = self.brain_land(k).ask_state(Some(ask));
+        matches!(state, 3 | 4).then_some(state)
+    }
+
+    /// Member `k`'s full-town order read at its turn (0x45e510's
+    /// `+0x133`): ended, it is no longer read.
+    fn read_side_order(&mut self, k: usize) {
+        if !self.brain.as_ref().unwrap().side.contains(&k) {
+            return;
+        }
+        let state = self.brain_land(k).ask_state(Some((1, 1, 0, None)));
+        if matches!(state, 3 | 4) {
+            self.brain.as_mut().unwrap().side.retain(|&f| f != k);
         }
     }
 
-    /// Carries the brain's town orders on, a pass every 50 ticks.
-    pub(super) fn run_brain_jobs(&mut self) {
-        let Some(brain) = self.brain.as_ref() else {
-            return;
+    /// The members of fleet `k`'s land fleet (its list `+0x2c`): the
+    /// member's buildings, in their order. (Not decoded: the pass's drop
+    /// of members in states `+0xa4` 2, 3 or 0xff; only the gone are left
+    /// out.)
+    pub(super) fn brain_land_members(&self, k: usize) -> Vec<u32> {
+        self.brain
+            .as_ref()
+            .and_then(|b| b.fleets.get(k))
+            .map_or(Vec::new(), |f| {
+                f.ships
+                    .iter()
+                    .copied()
+                    .filter(|&id| self.object_index(id).is_some())
+                    .collect()
+            })
+    }
+
+    /// The player of fleet `k`'s land fleet (`+8`): its first member's.
+    pub(super) fn brain_land_owner(&self, k: usize) -> Option<(u32, u32)> {
+        self.brain_land_members(k)
+            .into_iter()
+            .find_map(|m| self.objects[self.object_index(m)?].owner)
+    }
+
+    /// One pass at a part of member `k`'s land fleet (part dword 3 = -1,
+    /// the brains' orders having no flag 8): waiting, it is tried at each
+    /// member in turn, started at the first that takes it, done at the
+    /// first that has it already (flag 0x20), held (the price, or a -1
+    /// with flag 4) if any refused so, else a try spent (0x428a70,
+    /// 0x428f20, 0x429ae0, 0x429f60); under way it is checked at the
+    /// member it was started at (`at`, +0x60), failing when that one is
+    /// no longer the fleet's (0x428e10, 0x429e10, 0x42a2f0).
+    pub(super) fn brain_part(
+        &mut self,
+        k: usize,
+        fleet: Option<usize>,
+        part: super::computer::Part,
+    ) -> super::computer::PartStep {
+        use super::computer::{Op, PartStep};
+        use crate::economy::{SETTLEMENT, TOWN};
+        use openconquest_formats::ObjectClass;
+        let members = self.brain_land_members(k);
+        let nation = self.brain_land_owner(k).map_or(0, |o| o.0);
+        let is_town = |s: &Scene, m: u32| {
+            s.object_index(m).is_some_and(|i| {
+                matches!(s.objects[i].class, ObjectClass::Building(SETTLEMENT | TOWN))
+            })
         };
-        if brain.tick % 50 != 0 || brain.jobs.is_empty() {
-            return;
+        let owner_of = |s: &Scene, m: u32| s.object_index(m).and_then(|i| s.objects[i].owner);
+        if part.state == 2 {
+            let Some(at) = part.at.filter(|a| members.contains(a)) else {
+                return PartStep::Failed;
+            };
+            if part.op == Op::Repair && !is_town(self, at) {
+                // A fort or stronghold mended itself (0x42a2f0): whole,
+                // order 10 (0x42a3dd) and done; else it waits, no pass
+                // counted.
+                let i = self.object_index(at).unwrap();
+                let whole = self.objects[i]
+                    .combat
+                    .as_ref()
+                    .is_none_or(|c| c.hull >= c.max_hull);
+                if !whole {
+                    return PartStep::Hold;
+                }
+                self.post(super::Order::Halt { id: at });
+                return PartStep::Done;
+            }
+            let Some(owner) = owner_of(self, at) else {
+                return PartStep::Failed;
+            };
+            return self.town_part(at, owner, nation, None, part);
         }
-        let jobs = brain.jobs.clone();
-        let mut keep = Vec::new();
-        for job in jobs {
-            match job {
-                Job::FullTown { fleet, forts } => {
-                    let Some(t) = self.fleet_town(fleet) else {
-                        continue;
-                    };
-                    let site = self.objects[t].id;
-                    match self.town_part(t, forts) {
-                        None => continue,
-                        Some(Ok(0)) => {}
-                        Some(Ok(class)) => {
-                            // The town's command (0x520cc0): at the next tick.
-                            if let Some((x, y, facing)) = self.town_build_place(site, class) {
-                                self.post(super::Order::PlaceBuilding {
-                                    site,
-                                    class,
-                                    cx: x,
-                                    cy: y,
-                                    facing: Some(facing),
-                                });
+        let mut hold = false;
+        // The last member's result (+0x70), whose -1 counts a ship part's
+        // berth passes (0x428f20 at 0x429348).
+        let mut last = -5;
+        for &m in &members {
+            let i = self.object_index(m).unwrap();
+            let class = self.objects[i].class;
+            if !is_town(self, m) {
+                match (part.op, class) {
+                    (Op::Ship(kind), ObjectClass::Barbarian(c)) => {
+                        // vtable +0x9c with 1 (0x40e7b0): class 0x40 as a
+                        // yard (0x4e82f0), the others -5.
+                        let r = if c == 0x40 && self.objects[i].asleep.is_none() {
+                            self.yard_answer(i, None)
+                        } else {
+                            -5
+                        };
+                        last = r;
+                        if r == 0 {
+                            // Command 0x20 to the structure (0x520cc0), the
+                            // part done: built for nothing, armed by
+                            // default (bytes 0xd, 0xe).
+                            self.post(super::Order::StructureShip { site: m, kind });
+                            if let Some(f) = fleet {
+                                self.brain.as_mut().unwrap().building.push((m, kind, f));
                             }
+                            return PartStep::Shipped(m);
                         }
-                        Some(Err(id)) => self.post(super::Order::Upgrade { id }),
                     }
-                    keep.push(job);
-                }
-                Job::Repair { fleet, idle } => {
-                    let defs = mission_fleets(&self.brain.as_ref().unwrap().mission).unwrap_or(&[]);
-                    let cells = defs.get(fleet).map_or(&[][..], |d| d.cells);
-                    let worn = self.objects.iter().find(|o| {
-                        o.ship.is_none()
-                            && o.combat
+                    (
+                        Op::Repair,
+                        ObjectClass::Barbarian(_) | ObjectClass::Building(0x34..=0x36),
+                    ) => {
+                        // Worn (vtable +0x6c, 0x423be0: standing, no job,
+                        // life under 100), then idle (+0x9c with 0xff: a
+                        // fort's 0x4101b0, standing and no job; a
+                        // stronghold's 0x40e7b0 -> 0x4e82f0, the same and
+                        // its berth free, else -1).
+                        let busy = self.mending.contains(&m) || self.construction_at(m).is_some();
+                        let worn = !busy
+                            && self.objects[i]
+                                .combat
                                 .as_ref()
-                                .is_some_and(|c| c.hull > 0.0 && c.hull < c.max_hull)
-                            && o.cell.is_some_and(|(x, y)| {
-                                cells.iter().any(|&(cx, cy, w, h)| {
-                                    (cx..cx + w).contains(&x) && (cy..cy + h).contains(&y)
-                                })
-                            })
-                    });
-                    match worn.map(|o| o.id) {
-                        Some(id) => {
-                            if !self.mending.contains(&id) {
-                                self.mending.push(id);
-                            }
-                            keep.push(Job::Mended {
-                                target: id,
-                                tries: 10,
-                                fresh: true,
-                            });
+                                .is_some_and(|c| c.hull < c.max_hull);
+                        if !worn {
+                            // -5. (Not ported: a town's 0x43fcb0 leaving
+                            // the part's +0xc8 set, which holds it here.)
+                            last = -5;
+                            continue;
                         }
-                        None if idle > 1 => keep.push(Job::Repair {
-                            fleet,
-                            idle: idle - 1,
-                        }),
-                        None => {}
+                        let r = match class {
+                            ObjectClass::Barbarian(_) => self.yard_answer(i, None),
+                            _ => 0,
+                        };
+                        last = r;
+                        if r == 0 {
+                            // Command 0x1e to the member (0x520cc0): it
+                            // mends itself (0x423d60) at the next tick.
+                            self.post(super::Order::SelfMend { id: m });
+                            return PartStep::StartedAt(m as usize, m);
+                        }
+                        if r == -1 {
+                            // Flag 4 (the part's flags 7).
+                            hold = true;
+                        }
                     }
+                    // Not decoded: the town's 0x43d430 and 0x43f8d0 that
+                    // 0x428a70 and 0x429ae0 would call on a member not a
+                    // town; it is passed over.
+                    _ => {}
                 }
-                Job::Mended {
-                    target,
-                    tries,
-                    fresh,
-                } => {
-                    let Some(t) = self.object_index(target) else {
-                        continue;
-                    };
-                    let whole = self.objects[t]
-                        .combat
-                        .as_ref()
-                        .is_none_or(|c| c.hull >= c.max_hull);
-                    if whole {
-                        // Order 10 (0x520cc0): at the next tick.
-                        self.post(super::Order::Halt { id: target });
-                    } else if fresh {
-                        keep.push(Job::Mended {
-                            target,
-                            tries,
-                            fresh: false,
-                        });
-                    } else if tries > 1 {
-                        keep.push(Job::Mended {
-                            target,
-                            tries: tries - 1,
-                            fresh: false,
-                        });
+                continue;
+            }
+            let Some(owner) = owner_of(self, m) else {
+                continue;
+            };
+            match self.town_part(m, owner, nation, None, part) {
+                PartStep::Done => return PartStep::Done,
+                PartStep::Shipped(yard) => {
+                    if let (Op::Ship(kind), Some(f)) = (part.op, fleet) {
+                        // The ship joins the member (dword 7), from the
+                        // town's yard.
+                        self.brain.as_mut().unwrap().building.push((m, kind, f));
                     }
+                    return PartStep::Shipped(yard);
                 }
+                PartStep::Started(before) | PartStep::StartedAt(before, _) => {
+                    return PartStep::StartedAt(before, m)
+                }
+                PartStep::Hold => {
+                    last = -2;
+                    hold = true;
+                }
+                PartStep::Berth => {
+                    last = -1;
+                    hold = true;
+                }
+                PartStep::Wait => last = -5,
+                PartStep::Refused | PartStep::Failed => {}
             }
         }
-        self.brain.as_mut().unwrap().jobs = keep;
+        match (hold, last) {
+            (true, -1) => PartStep::Berth,
+            (true, _) => PartStep::Hold,
+            _ => PartStep::Wait,
+        }
+    }
+
+    /// The brains' land fleets' message 0, every tick (`land_pass`, the
+    /// computers' own). An old save's town orders and casts join the
+    /// queues first: its repairs (`Job::Repair`) are sent again, its
+    /// waiting casts queued with their passes left; its full-town orders,
+    /// which their yards send at their state 0, and its mendings under
+    /// way are dropped (the building mends on, unhalted).
+    pub(super) fn run_brain_lands(&mut self) {
+        let Some(brain) = self.brain.as_mut() else {
+            return;
+        };
+        let jobs = std::mem::take(&mut brain.jobs);
+        let casts = std::mem::take(&mut brain.casts);
+        for job in jobs {
+            if let Job::Repair { fleet, .. } = job {
+                self.queue_brain_ask(fleet, (0x60, 1, 0, None), 0);
+            }
+        }
+        for (k, q) in casts {
+            let (last, started, woken, entries) = q.into_parts();
+            let lf = self.brain_land(k);
+            if lf.queue.is_empty() {
+                (lf.last, lf.started, lf.woken) = (last, started, woken);
+            }
+            for (ask, tries) in entries {
+                lf.queue_entry(super::computer::Entry {
+                    prio: 0,
+                    job: super::computer::Job::Cast {
+                        ask,
+                        fleet: None,
+                        state: 0,
+                        tries,
+                        keep: true,
+                    },
+                });
+            }
+        }
+        let now = self.brain.as_ref().unwrap().tick;
+        let fleets: Vec<usize> = self.brain.as_ref().unwrap().lands.keys().copied().collect();
+        for k in fleets {
+            let mut lf = self.brain.as_mut().unwrap().lands.remove(&k).unwrap();
+            self.land_pass(&mut lf, &mut super::computer::LandHost::Brain(k), now);
+            self.brain.as_mut().unwrap().lands.insert(k, lf);
+        }
     }
 
     /// The brains' players' Flame: brewing, then burning.
@@ -3460,11 +3454,10 @@ mod miss002 {
         match state {
             // Order 240 before every ship (0x47b130 code 0xf0).
             0 => Op::Custom(|scene, k| {
-                if scene.yard_town_fortified(k) {
-                    1
-                } else {
-                    scene.want_town_order(k, true);
-                    0
+                // Done or failed alike (p3 = p4).
+                match scene.brain_order(k, 240, 0x10, None) {
+                    Some(_) => 1,
+                    None => 0,
                 }
             }),
             1 => Op::Build { next: 11 },
@@ -4058,11 +4051,10 @@ mod miss003 {
         match state {
             // Order 240 before every ship (0x47b130 code 0xf0).
             0 => Op::Custom(|scene, k| {
-                if scene.yard_town_fortified(k) {
-                    1
-                } else {
-                    scene.want_town_order(k, true);
-                    0
+                // Done or failed alike (p3 = p4).
+                match scene.brain_order(k, 240, 0x10, None) {
+                    Some(_) => 1,
+                    None => 0,
                 }
             }),
             1 => Op::Build { next: 11 },
@@ -4534,11 +4526,10 @@ mod miss004 {
         match state {
             // The full-town order before every ship (0x47b130 code 1).
             0 => Op::Custom(|scene, k| {
-                if scene.yard_town_complete(k) {
-                    1
-                } else {
-                    scene.want_full_town(k);
-                    0
+                // Done or failed alike (p3 = p4).
+                match scene.brain_order(k, 1, 0x10, None) {
+                    Some(_) => 1,
+                    None => 0,
                 }
             }),
             // State 5: the member picked.
@@ -4602,11 +4593,10 @@ mod miss004 {
         match state {
             // Order 240 before every ship (0x47b130 code 0xf0).
             0 => Op::Custom(|scene, k| {
-                if scene.yard_town_fortified(k) {
-                    1
-                } else {
-                    scene.want_town_order(k, true);
-                    0
+                // Done or failed alike (p3 = p4).
+                match scene.brain_order(k, 240, 0x10, None) {
+                    Some(_) => 1,
+                    None => 0,
                 }
             }),
             1 => Op::Build { next: 11 },
@@ -5501,11 +5491,10 @@ mod miss005 {
         match state {
             // The full-town order before every ship (0x47b130 code 1).
             0 => Op::Custom(|scene, k| {
-                if scene.yard_town_complete(k) {
-                    1
-                } else {
-                    scene.want_full_town(k);
-                    0
+                // Done or failed alike (p3 = p4).
+                match scene.brain_order(k, 1, 0x10, None) {
+                    Some(_) => 1,
+                    None => 0,
                 }
             }),
             1 => Op::Build { next: 11 },
@@ -6750,11 +6739,10 @@ mod miss006 {
         match state {
             // The full-town order before every ship (0x47b130 code 1).
             0 => Op::Custom(|scene, k| {
-                if scene.yard_town_complete(k) {
-                    1
-                } else {
-                    scene.want_full_town(k);
-                    0
+                // Done or failed alike (p3 = p4).
+                match scene.brain_order(k, 1, 0x10, None) {
+                    Some(_) => 1,
+                    None => 0,
                 }
             }),
             1 => Op::Build { next: 11 },
@@ -6769,11 +6757,10 @@ mod miss006 {
         match state {
             // The full-town order before every ship (0x47b130 code 1).
             0 => Op::Custom(|scene, k| {
-                if scene.yard_town_complete(k) {
-                    1
-                } else {
-                    scene.want_full_town(k);
-                    0
+                // Done or failed alike (p3 = p4).
+                match scene.brain_order(k, 1, 0x10, None) {
+                    Some(_) => 1,
+                    None => 0,
                 }
             }),
             1 => Op::Build { next: 11 },
@@ -11902,7 +11889,7 @@ mod miss011 {
         }
     }
 
-    /// The Persian yard (0x46cf80): (its order of class 1 at 0: the full town, see `Job`) takes the first request of members 1-5 (5), builds it
+    /// The Persian yard (0x46cf80): (its full-town order at 0: 0x47b130 code 1, `brain_order`) takes the first request of members 1-5 (5), builds it
     /// for that member (10), rests 500 ticks once it is launched (11),
     /// then clears it (12). (State 20, waiting for the launch, is the
     /// port's.)
@@ -11910,11 +11897,10 @@ mod miss011 {
         match state {
             // The full-town order before every ship (0x47b130 code 1).
             0 => Op::Custom(|scene, k| {
-                if scene.yard_town_complete(k) {
-                    5
-                } else {
-                    scene.want_full_town(k);
-                    0
+                // Done or failed alike (p3 = p4).
+                match scene.brain_order(k, 1, 0x10, None) {
+                    Some(_) => 5,
+                    None => 0,
                 }
             }),
             5 => Op::Custom(|scene, k| {
@@ -13085,7 +13071,7 @@ mod miss012 {
         }
     }
 
-    /// A Persian yard (0x470620, 0x471b50): (its order of class 1 at 0: the full town, see `Job`) takes the first request of its group's members 0-7 (5),
+    /// A Persian yard (0x470620, 0x471b50): (its full-town order at 0: 0x47b130 code 1, `brain_order`) takes the first request of its group's members 0-7 (5),
     /// builds it for that member (10), rests 500 ticks once it is launched
     /// (11), then clears it (12). (State 20, waiting for the launch, is
     /// the port's.)
@@ -13093,11 +13079,10 @@ mod miss012 {
         match state {
             // The full-town order before every ship (0x47b130 code 1).
             0 => Op::Custom(|scene, k| {
-                if scene.yard_town_complete(k) {
-                    5
-                } else {
-                    scene.want_full_town(k);
-                    0
+                // Done or failed alike (p3 = p4).
+                match scene.brain_order(k, 1, 0x10, None) {
+                    Some(_) => 5,
+                    None => 0,
                 }
             }),
             5 => Op::Custom(
@@ -14297,7 +14282,7 @@ mod miss013 {
         }
     }
 
-    /// A Persian yard (0x474be0, 0x475f70): (its order of class 1 at 0: the full town, see `Job`) takes the first request of its group's members (5),
+    /// A Persian yard (0x474be0, 0x475f70): (its full-town order at 0: 0x47b130 code 1, `brain_order`) takes the first request of its group's members (5),
     /// builds it for that member (10), rests 500 ticks once it is launched
     /// (11), then clears it (12). (State 20, waiting for the launch, is
     /// the port's.)
@@ -14305,11 +14290,10 @@ mod miss013 {
         match state {
             // The full-town order before every ship (0x47b130 code 1).
             0 => Op::Custom(|scene, k| {
-                if scene.yard_town_complete(k) {
-                    5
-                } else {
-                    scene.want_full_town(k);
-                    0
+                // Done or failed alike (p3 = p4).
+                match scene.brain_order(k, 1, 0x10, None) {
+                    Some(_) => 5,
+                    None => 0,
                 }
             }),
             5 => Op::Custom(

@@ -3466,8 +3466,9 @@ end); its
 fort menu has slots 0-4 and its pointer the fort's answer (`fort_reaches`:
 a unit's reach); `scene/fort.rs` has its Repair (`fort_repair`, the
 progress `fort_mend_progress`) and its stored spell (`fort_spells`,
-`fort_spell`, `fort_cast`). The computer's repairs part and the brains'
-(`Job::Mended`) wait for the building whole and halt it. Not ported: a
+`fort_spell`, `fort_cast`). The computers' and the brains' repair parts
+under way (0x42a2f0) wait for the building whole, counting no passes,
+and halt it. Not ported: a
 fort's casts of the sea's spells and the fireball (their checks read the
 cell's tile layers and slots, not decoded here: the button is offered,
 the click refused), the draw of the fort's generator `+0x18` with a cast,
@@ -4200,16 +4201,55 @@ miss009 boats (1, 2), merchants (1, 1), warships (1, 4); miss010 (1, 7),
 15 (1, 2) for boats and merchants, (1, 4) the rest, player 14 (2, 2) and
 (2, 4) (the "or" a draw of the brain's generator).
 
-**The brains' town orders** (0x47b130 through the member's land fleet):
-code 1, the full town (table 0x5ac7c8's order 2 and both temples: port,
-sage school, shipyard, smithy, the settlement made a town, the shipyard a
-dock, school, temple of the sea, temple of war; a part done if it stands
-already; flag 0x10 tries failed parts again), sent once by the Persian
-yards of miss007-miss010 beside their ship building (miss010 its yard 2
-only), and by those of miss011-miss013 in their state 0, before every ship;
-code 0x60, order 96 (the first worn building of the member mended once;
-after 10 idle passes the order fails, never sent again), at the start by
-the builders of miss007-miss010.
+**The brains' town orders** (0x47b130, `Scene::brain_order`): a member's
+first call in a state (`+0x10` 0) sends message 1000 to its own land fleet
+(0x479ba0 -> 0x4a09d0 -> 0x42c430): dword 1 0 (no entry flags: the entry
+stays, ended, until read), priority 1, the code, the order's flags, town 0,
+dword 7 the member a ship joins; its later calls read the entry (0x4a0f60
+-> 0x42c870): done or failed it is taken off and the member goes to p3 or
+p4 (equal at every call site); under way, or not found (5), it stays. No
+call site has a timeout (p11 0) or events. The calls: code 1 (the full
+town: order 2's parts then both temples, each after the one before),
+flags 0x10 (failed parts queued again), at the yards' state 0 (miss004-
+miss006, miss011-miss013), and by miss007-miss010's yards beside their
+states (`+0x133`: sent at the start, read at each of the yard's turns
+until it ends, 0x45e510; the port's `Brain::side`); code 240 (0xf0: the
+four first buildings at once, town, dock, school, then a small and a
+medium fort after the school), flags 0x10, the state 0 of miss002-
+miss004's yards; code 0x60 (order 96), flags 0, sent at the start by
+miss007-miss010's builders (never ends, never read); 0x50 + type with
+flag 0x400 for the ships (0x30, a medium fort, flags 0, the Persian yards'
+slot 0x34). The land fleet is the computers' (`land_pass`, see "The land
+fleet's pass"): the order's parts, without flag 0x80 or 0x100, keep the
+table's priority 0, queued with the casts (0x479c20, also 0) behind the
+asks (1); without flag 8 each part's dword 3 stays -1, so its handler tries
+every member of the fleet's list (the member's buildings) in turn
+(`Scene::brain_part`): a build (0x428a70) and an upgrade (0x429ae0) at
+the towns only, done at the first that has it (flag 0x20), started at the
+first that takes it, held if any refused for the price or -1 (flags 1, 2,
+4), else a try spent; a ship (0x428f20) at a town by its yards as the
+computer's, or at a barbarian structure (type 0x1a6b, ships, vtable +0x9c
+with 1 = 0x40e7b0: class 0x40 as a yard, 0x4e82f0, the others -5) by
+command 0x20 to it (`Order::StructureShip`), done once sent; the hold is
+counted as berth passes when the last member's result was -1; a repair
+(0x429f60) at a town by 0x43fcb0 as the computer's, or at a fort (0x1494)
+or stronghold (0x1a6b) worn (vtable +0x6c = 0x423be0: standing, no job,
+life under 100) and idle (+0x9c with 0xff: the fort's 0x4101b0, standing
+and no job; the stronghold's 0x40e7b0 -> 0x4e82f0(0xff, 0xff), the same
+and its berth free, else -1, held with flag 4) by command 0x1e to it,
+which mends itself (`Order::SelfMend`); under way (0x42a2f0) a fort or
+stronghold whole is sent order 10 and done, else it waits, counting no
+passes. Under-way checks read the member the part was started at
+(+0x60), failing when it is no longer in the list. A ship joins its member
+when launched (`ship_launched`). Not decoded: the town's 0x43d430 and
+0x43f8d0 that 0x428a70 and 0x429ae0 call on a member that is not a town
+(passed over); the town's 0x43fcb0 out field `+0xc8` that holds a repair
+at a fort tested after it (not kept); command 0x28 at a member not a town
+(sent to the towns only); the pass's drop of members in states `+0xa4`
+2, 3 or 0xff; the start's 0x47b130 leaving the builder's `+0x10` set for
+its first state (not ported). No brain orders a study. (The port's own
+`Op::Build` picks the oldest request of the builder's group; each
+mission's yard picks by its own slots, not ported there.)
 
 **miss005's Persian raiders** (0x456580 north, member 6; 0x456e80 west,
 member 7): each waits its rolled time ((8, 7, 5) or (7, 6, 4) + rand & 3,
@@ -6872,7 +6912,9 @@ is forgotten (its parts still queued run on). (B) +0x18 = !+0x14, +0x14 =
 before the first of no higher priority, with flag 0x80 every part of the
 order's priority, its entry under way), under-way ones checked (0x428e10,
 0x4297d0, 0x429e10, 0x42a2f0, 0x42b080); +0x14 is set when a start leaves
-its entry under way or done, and **the walk stops there**: one start a pass;
+its entry under way or done, and **the walk stops there** (the loop runs
+while +0x14 is 0, 0x42bf69; after it only the no-op at 0x42bf6f, +0x28 set
+1 when already 1, 1500 ticks on): one start a pass;
 done or failed parts write back to their order and leave the queue; a
 waiting entry at or above +0x24 stops it too. Waiting tries (0x595170: 20,
 25, 10 by op) and under-way waits (0x595198) count down only when +0x18 is
@@ -7304,18 +7346,16 @@ tried, 0x43fee0 being the town's) with the town's check twice (below);
 passing, state 3 and the town command 0x22 {code, x, y, ship, ..., the
 discount at +0x1f} at the next tick; else, in a pass after one that started
 nothing (`+0x18`), one pass fewer, and at none it fails (state 4). Ended
-entries without flag 0x800 stay in the queue, skipped (the port drops
-them: they only wake the fleet, as the entry sent does). The town hands
+entries without flag 0x800 stay in the queue, skipped, waking the fleet
+at each pass (0x42be84; `Job::Cast::keep`). The town hands
 the command to its first temple of the kind idle (0x441ba0 case 0x22;
 vt+0x9c 0x4101b0: built, `+0x10c` 0), which pays and casts (below): a
 shield or the phantom lasts 3000 ticks more (0xda9a, 0xda97); the Flame is
 the player's: brewed 250 ticks at that temple (busy meanwhile), then 1500
 more of it (+0xa8, +0xb0). Not decoded: how the credit, to the computer's
 spending fields `+0x24` and `+0x1c`, maps onto the port's purse; the port
-credits the caster's player's purse, and pays from it. Not ported: the
-brains' town orders (`Job`) share the building group's queue in the
-original (a part started there ends the walk); the port runs them apart,
-every 50 ticks. The brains' players' spells learnt (`+0xb4`, `+0xbc`) and
+credits the caster's player's purse, and pays from it. The brains' town
+orders share this queue (below, "The brains' town orders"). The brains' players' spells learnt (`+0xb4`, `+0xbc`) and
 permission bits are not kept: their checks pass.
 
 **The town's spell check** (0x43fee0; 0x487640 is stage 0 alone): -5

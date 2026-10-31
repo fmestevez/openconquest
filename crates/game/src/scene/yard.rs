@@ -318,7 +318,7 @@ impl Scene {
     /// rams (0x4ba950, 0x4c1c60, 0x4e8db0); the port's ship has none. It
     /// cannot arise: the brains' orders, through the land fleet's ship part
     /// 0x428f20, always set the byte, 0x42957a.) The brains' builder
-    /// orders (brain.rs `builder_order`).
+    /// ship parts (brain.rs `brain_part`, `Order::StructureShip`).
     pub(super) fn barbarian_order(&mut self, site: u32, kind: u8, arm: bool) {
         let Some(i) = self.object_index(site) else {
             return;

@@ -211,6 +211,17 @@ pub enum Order {
     RepairStock {
         workshop: u32,
     },
+    /// Command 0x1e a land fleet's repair part sends a fort or barbarian
+    /// structure of its list (0x429f60): it mends itself.
+    SelfMend {
+        id: u32,
+    },
+    /// Command 0x20 a brain's ship part sends a barbarian structure of its
+    /// list (0x428f20): it builds the ship, armed by default.
+    StructureShip {
+        site: u32,
+        kind: u8,
+    },
     /// Order 10 to `id` (`Scene::halt`).
     Halt {
         id: u32,
@@ -704,6 +715,12 @@ impl Scene {
             SellTown { site } => done(self.sell_town(site, data, caches)),
             RepairStock { workshop } => done(self.order_repair_stock(workshop)),
             Halt { id } => done(self.halt(id, data, caches)),
+            SelfMend { id } => done(self.self_mend(id)),
+            StructureShip { site, kind } => {
+                self.barbarian_order(site, kind, true);
+                self.make_new_ships(data, caches);
+                Ok(0)
+            }
             FortBehaviour { site, sub } => done(self.fort_order(site, sub)),
             FortRepair { site } => done(self.fort_repair(site)),
             FortCast {

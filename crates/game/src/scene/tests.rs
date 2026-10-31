@@ -5547,9 +5547,42 @@ fn miss007_brain_builds_its_fleets() {
     assert!(persians > 0, "the Persians built ships");
 }
 
-/// miss007's builder repairs (order 96): a barbarian structure worn in
-/// its cells is mended and, once whole, sent order 10 (0x42a2f0 at
-/// 0x42a3dd), its groups then ceasing fire (0x40ef70). Needs
+/// The passes left of a brain's repair part under way at `id` (0x42a2f0),
+/// in any member's land fleet.
+fn brain_mending(scene: &Scene, id: u32) -> Option<u32> {
+    brain_mending_in(scene, id)
+}
+
+/// The casts waiting in fleet `k`'s land fleet (0x479c20; the ended ones
+/// stay, without flag 0x800, and are not counted).
+fn brain_casts(scene: &Scene, k: usize) -> usize {
+    scene.brain.as_ref().unwrap().lands.get(&k).map_or(0, |lf| {
+        lf.queue
+            .iter()
+            .filter(|e| matches!(e.job, super::computer::Job::Cast { .. }) && e.state() < 3)
+            .count()
+    })
+}
+
+fn brain_mending_in(scene: &Scene, id: u32) -> Option<u32> {
+    use super::computer::{Job, Op};
+    scene.brain.as_ref()?.lands.values().find_map(|lf| {
+        lf.queue.iter().find_map(|e| match e.job {
+            Job::Part { part, .. }
+                if part.op == Op::Repair && part.state == 2 && part.at == Some(id) =>
+            {
+                Some(part.tries)
+            }
+            _ => None,
+        })
+    })
+}
+
+/// miss007's builder repairs (order 96, part 0x3ec of the land fleet of
+/// member (0, 0), tried at each of its members, 0x429f60): a barbarian
+/// structure of its list worn mends itself (command 0x1e) and, once
+/// whole, is sent order 10 (0x42a2f0 at 0x42a3dd), its groups then
+/// ceasing fire (0x40ef70); its wait counts no passes. Needs
 /// `OPENCONQUEST_DATA`.
 #[test]
 fn miss007_mended_structure_ceases_fire() {
@@ -5576,17 +5609,11 @@ fn miss007_mended_structure_ceases_fire() {
         scene.update(crate::clock::TICK, &data, &mut caches);
         let i = scene.object_index(id).unwrap();
         let c = scene.objects[i].combat.as_ref().unwrap();
-        let jobs = &scene.brain.as_ref().unwrap().jobs;
-        if jobs.iter().any(
-            |j| matches!(j, super::brain::Job::Mended { target, tries: 10, .. } if *target == id),
-        ) {
+        let under_way = brain_mending(&scene, id);
+        if under_way == Some(10) {
             mended = true;
         }
-        if mended
-            && !jobs
-                .iter()
-                .any(|j| matches!(j, super::brain::Job::Mended { .. }))
-        {
+        if mended && under_way.is_none() {
             assert!(c.hull >= c.max_hull);
             assert!(!c.fire.fires(), "the mended structure still fires at will");
             return;
@@ -9157,10 +9184,11 @@ fn miss008_patrol_casts_credit_as_the_original() {
 /// miss009's Persian patrol (member 3) casts the Flame on its ships by the
 /// land fleet (1, 0) on the first call of its fight in the north, paid,
 /// difficulty + 3 times (`+0x12e`, 0x465b20); then no more. Each call
-/// credits one cast and queues a cast per ship (0x47acf0 -> 0x479c20); the
-/// land fleet's pass (every 50 ticks) has the war temple at (57, 44) brew
-/// it, paid there (0x42a500, 0x439260); while it brews the next waits
-/// (needs `OPENCONQUEST_DATA`).
+/// credits one cast and queues a cast per ship (0x47acf0 -> 0x479c20); a
+/// land fleet's pass has the war temple at (57, 44) brew it, paid there
+/// (0x42a500, 0x439260), once no part of the town orders sharing the
+/// queue ends the walk first; while it brews the next waits (needs
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn miss009_patrol_flames_as_the_original() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -9202,7 +9230,7 @@ fn miss009_patrol_flames_as_the_original() {
         let funds = scene.funds(persians);
         scene.update(crate::clock::TICK, &data, &mut caches);
         assert_eq!(scene.brain.as_ref().unwrap().tick % 50, 20);
-        let queued = scene.brain.as_ref().unwrap().casts[&land].entries.len();
+        let queued = brain_casts(&scene, land);
         let credited = scene.funds(persians);
         calls.push((queued, credited.0 - funds.0, credited.1 - funds.1));
         // To the land fleet's pass at 0 modulo 50.
@@ -9211,20 +9239,20 @@ fn miss009_patrol_flames_as_the_original() {
         }
         assert_eq!(scene.brain.as_ref().unwrap().tick % 50, 0);
         let brewing = scene.brain_brews.iter().any(|b| b.0 == temple);
-        calls.push((
-            scene.brain.as_ref().unwrap().casts[&land].entries.len(),
-            brewing as u32,
-            0,
-        ));
+        calls.push((brain_casts(&scene, land), brewing as u32, 0));
     }
     assert_eq!(scene.brain.as_ref().unwrap().fleets[11].vars[0], 2);
     // Each call: one cast credited (6000 and 1500) and one queued per ship
-    // (ten); the first brewed at the pass, the others waiting on the
-    // temple at work.
+    // (ten). The land fleet's queue also holds the yard's full-town order
+    // (the start's 0x47b130 code 1), its ask and parts ahead of the casts
+    // (priorities 1 and 0, after their equals): at the first pass a part
+    // of it ends the walk before any cast is tried (0x42bf69); one is
+    // brewed at a later pass, the others waiting on the temple at work.
     assert_eq!(scene.fleet_ships(11).len(), 10);
+    assert!(!scene.brain.as_ref().unwrap().lands[&land].orders.is_empty());
     assert_eq!(
         calls,
-        [(10, 6000, 1500), (9, 1, 0), (19, 6000, 1500), (19, 1, 0)]
+        [(10, 6000, 1500), (10, 0, 0), (19, 6000, 1500), (19, 1, 0)]
     );
 }
 
@@ -10873,13 +10901,30 @@ fn one_ship_order_a_tick() {
     assert!(task(&scene).is_none());
 }
 
+/// A pass of brain fleet `k`'s land fleet (0x42b910), due now.
+fn brain_pass(scene: &mut Scene, k: usize) {
+    let mut lf = scene
+        .brain
+        .as_mut()
+        .unwrap()
+        .lands
+        .remove(&k)
+        .unwrap_or_default();
+    lf.started = false;
+    let now = lf.last + 50;
+    scene.land_pass(&mut lf, &mut super::computer::LandHost::Brain(k), now);
+    scene.brain.as_mut().unwrap().lands.insert(k, lf);
+}
+
 /// A brain's barbarian builder (miss001 fleet 0: a class 0x3f and a class
-/// 0x40 structure) orders through the land fleet's ship part: only the
-/// class 0x40 takes it (vtable +0x9c, 0x40e7b0), with its berth free; the
-/// ship goes on the berth at once, free, with the full default arming
-/// (byte 0xd 1, 0x428f20), and is built in 1 + 38 x 8 ticks as a yard's
-/// (0x4b3ab0); with the berth taken no order is given. Needs
-/// `OPENCONQUEST_DATA`.
+/// 0x40 structure) orders through its land fleet (0x47b130 code 0x53):
+/// the order put at one pass (0x42c050), its ship part tried at the next
+/// at each member (0x428f20): only the class 0x40 takes it (vtable +0x9c,
+/// 0x40e7b0), with its berth free, sent command 0x20; the ship goes on the
+/// berth when it arrives, free, with the full default arming (byte 0xd 1),
+/// and is built in 1 + 38 x 8 ticks as a yard's (0x4b3ab0); the order is
+/// done at the pass after, and the member's call reads it. With the berth
+/// taken the part is not taken. Needs `OPENCONQUEST_DATA`.
 #[test]
 fn barbarian_builder_builds_on_its_berth() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -10903,8 +10948,19 @@ fn barbarian_builder_builds_on_its_berth() {
     let funds = scene.funds(owner);
     // A bomber (type 3): weapons, armour and ram by 0x5964d8, 0x596268,
     // 0x5962c8.
-    assert!(scene.fleet_build_for(0, 1, 3));
-    scene.make_new_ships(&data, &mut caches);
+    assert!(!scene.fleet_build_for(0, 1, 3), "sent");
+    brain_pass(&mut scene, 0);
+    assert!(scene.outbox.is_empty(), "the order put");
+    brain_pass(&mut scene, 0);
+    assert!(matches!(
+        scene.outbox[..],
+        [Order::StructureShip { site: s, kind: 3 }] if s == site
+    ));
+    scene.ticks = scene.ticks.max(order::HOLD);
+    scene.deliver(&data, &mut caches);
+    assert!(!scene.fleet_build_for(0, 1, 3), "the order not ended yet");
+    brain_pass(&mut scene, 0);
+    assert!(scene.fleet_build_for(0, 1, 3), "done");
     let k = scene
         .ship_on_berth(site)
         .expect("built on the barbarians' berth");
@@ -10915,8 +10971,12 @@ fn barbarian_builder_builds_on_its_berth() {
     assert_eq!(o.owner, Some(owner));
     assert_eq!(scene.funds(owner), funds);
     let id = o.id;
-    // The berth taken: no order.
+    // The berth taken: no ship sent.
+    scene.brain.as_mut().unwrap().fleets[0].ordered = false;
     assert!(!scene.fleet_build_for(0, 1, 3));
+    brain_pass(&mut scene, 0);
+    brain_pass(&mut scene, 0);
+    assert!(scene.outbox.is_empty());
     let mut ticks = 0;
     while scene.being_built(id) {
         scene.update(crate::clock::TICK, &data, &mut caches);
@@ -10970,15 +11030,20 @@ fn builder_passes_yards_over() {
     assert!(!scene.yard_busy(id));
     scene.brain.as_mut().unwrap().fleets[0].ships = vec![id];
     assert!(!scene.fleet_build_for(0, 1, 1));
+    for _ in 0..3 {
+        brain_pass(&mut scene, 0);
+    }
+    assert!(scene.outbox.is_empty());
+    assert!(!scene.fleet_build_for(0, 1, 1));
     assert!(!scene.yard_busy(id));
 }
 
-/// Order 96's wait for a mended building counts only the land fleet's
-/// passes after one that started nothing (`+0x18`): the pass after the
-/// one that started the mending does not count. Needs
+/// Order 96's part under way (0x42a2f0) waits for the mended building
+/// to be whole without counting passes: kept worn, it is still under way
+/// with its passes untouched many passes later. Needs
 /// `OPENCONQUEST_DATA`.
 #[test]
-fn mended_wait_skips_the_pass_after_the_start() {
+fn mended_wait_counts_no_passes() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
@@ -10988,41 +11053,33 @@ fn mended_wait_skips_the_pass_after_the_start() {
     let i = scene
         .objects
         .iter()
-        .position(|o| matches!(o.class, ObjectClass::Barbarian(_)) && o.combat.is_some())
+        .position(|o| {
+            matches!(o.class, ObjectClass::Barbarian(_))
+                && o.cell == Some((36, 26))
+                && o.combat.is_some()
+        })
         .unwrap();
     let id = scene.objects[i].id;
-    let c = scene.objects[i].combat.as_mut().unwrap();
-    c.hull = c.max_hull * 0.5;
-    // Not being mended: it stays worn while the order waits.
-    scene.brain.as_mut().unwrap().jobs = vec![super::brain::Job::Mended {
-        target: id,
-        tries: 2,
-        fresh: true,
-    }];
-    let mut passes = |scene: &mut Scene, n: u32| {
-        for _ in 0..50 * n {
-            scene.update(crate::clock::TICK, &data, &mut caches);
-            scene.mending.clear();
+    let worn = |scene: &mut Scene| {
+        let i = scene.object_index(id).unwrap();
+        let c = scene.objects[i].combat.as_mut().unwrap();
+        c.hull = c.max_hull * 0.5;
+    };
+    worn(&mut scene);
+    let mut tries = None;
+    for _ in 0..1000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        tries = brain_mending(&scene, id);
+        if tries.is_some() {
+            break;
         }
-    };
-    let waiting = |scene: &Scene| {
-        scene
-            .brain
-            .as_ref()
-            .unwrap()
-            .jobs
-            .iter()
-            .find_map(|j| match *j {
-                super::brain::Job::Mended { target, tries, .. } if target == id => Some(tries),
-                _ => None,
-            })
-    };
-    passes(&mut scene, 1);
-    assert_eq!(waiting(&scene), Some(2));
-    passes(&mut scene, 1);
-    assert_eq!(waiting(&scene), Some(1));
-    passes(&mut scene, 1);
-    assert_eq!(waiting(&scene), None);
+    }
+    assert_eq!(tries, Some(10), "the mending under way");
+    for _ in 0..50 * 12 {
+        worn(&mut scene);
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert_eq!(brain_mending(&scene, id), Some(10));
 }
 
 /// An attack's fire records (0x100) run after the 0x1f0 group and go with
@@ -13708,4 +13765,66 @@ fn zone_route_from_shift_moves() {
         [Order::Move { ship, x, y }]
             if ship == boat && (x, y) == (far.0 as f32 * t + t / 2.0, far.1 as f32 * t + t / 2.0)
     ));
+}
+
+/// A brain's full-town order (0x47b130 code 1, flags 0x10) goes to the
+/// member's land fleet as an op-1000 entry of priority 1; a pass puts the
+/// order (0x42c050: nine parts, order 2's and both temples), the next
+/// queues its parts at the table's priority 0 (no order flag 0x80) behind
+/// the ask, each tried at the fleet's towns (dword 3 -1). Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn brain_full_town_order_goes_through_the_land_fleet() {
+    use super::computer::Job;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss011").unwrap();
+    let k = (0..scene.brain.as_ref().unwrap().fleets.len())
+        .find(|&k| {
+            scene.brain.as_ref().unwrap().fleets[k]
+                .ships
+                .iter()
+                .any(|&s| {
+                    scene.object_index(s).is_some_and(|i| {
+                        matches!(
+                            scene.objects[i].class,
+                            ObjectClass::Building(economy::SETTLEMENT | economy::TOWN)
+                        )
+                    })
+                })
+        })
+        .expect("a member with a town");
+    scene.brain.as_mut().unwrap().lands.remove(&k);
+    scene.brain.as_mut().unwrap().fleets[k].ordered = false;
+    assert_eq!(scene.brain_order(k, 1, 0x10, None), None);
+    let lf = &scene.brain.as_ref().unwrap().lands[&k];
+    assert!(matches!(
+        lf.queue[..],
+        [super::computer::Entry {
+            prio: 1,
+            job: Job::Ask {
+                ask: (1, 1, 0, None),
+                flags: 0x10,
+                state: 0,
+                ..
+            }
+        }]
+    ));
+    brain_pass(&mut scene, k);
+    let lf = &scene.brain.as_ref().unwrap().lands[&k];
+    assert_eq!(lf.orders.len(), 1);
+    assert_eq!(lf.orders[0].parts.len(), 9);
+    assert_eq!(lf.queue[0].state(), 2, "under way");
+    assert!(lf.started, "the walk ended at the start");
+    brain_pass(&mut scene, k);
+    let lf = &scene.brain.as_ref().unwrap().lands[&k];
+    assert!(matches!(lf.queue[0].job, Job::Ask { .. }));
+    assert!(lf
+        .queue
+        .iter()
+        .all(|e| matches!(e.job, Job::Ask { .. }) || e.prio == 0));
+    assert_eq!(scene.brain_order(k, 1, 0x10, None), None, "not ended");
 }

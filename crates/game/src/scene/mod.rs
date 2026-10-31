@@ -2521,8 +2521,7 @@ impl Scene {
             }
             self.tick_walkers(data, caches);
             self.run_computers();
-            self.run_brain_jobs();
-            self.run_brain_casts();
+            self.run_brain_lands();
             self.run_town_links();
             self.run_yards(data, caches);
             // Standing pictures before construction, so one finished this

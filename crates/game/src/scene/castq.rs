@@ -34,12 +34,9 @@ const PRICE_AMBER: [u32; 13] = [
 ];
 const PRICE_FISH: [u32; 13] = [1, 12, 12, 5, 15, 0, 25, 7, 15, 1, 1, 1, 10];
 
-/// A brain's land fleet's queue of casts (`LFleet.cpp`, the member's
-/// building group: 0x42c430 queues, 0x42b910 passes). The entries are
-/// all of priority 0 (0x479c20), in the order asked, each with its passes
-/// left. (Not ported: the brains' town orders, `Job`, are not in this
-/// queue but run on their own pass every 50 ticks, so a part started
-/// there does not end this queue's walk as in the original.)
+/// An old save's queue of a brain's land fleet's casts: its entries now
+/// join the land fleet's one queue (`Brain::lands`, with the town orders'
+/// parts, walked by `Scene::land_pass`).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CastQueue {
     /// +0x1c: the tick of the last pass.
@@ -52,25 +49,9 @@ pub struct CastQueue {
 }
 
 impl CastQueue {
-    /// A queue first asked at `tick`, its passes so far at the multiples
-    /// of 50 (0x42b370: `+0x1c` 0; the brains' land fleets start nothing
-    /// before their first cast, their town orders running apart). One at
-    /// `tick` itself is still to come.
-    pub fn new(tick: u32) -> Self {
-        let last = if tick % 50 == 0 {
-            tick.saturating_sub(50)
-        } else {
-            tick - tick % 50
-        };
-        CastQueue {
-            last,
-            ..Default::default()
-        }
-    }
-
-    /// Queues a cast (0x42c430's generic branch: after its equals).
-    pub fn push(&mut self, ask: CastAsk) {
-        self.entries.push((ask, CAST_TRIES));
+    /// An old save's queue: its last pass, flags and entries.
+    pub fn into_parts(self) -> (u32, bool, bool, Vec<(CastAsk, u32)>) {
+        (self.last, self.started, self.woken, self.entries)
     }
 }
 
@@ -399,56 +380,6 @@ impl Scene {
                 self.side_pays(owner, idx, d);
                 self.brain_cast(spell, cell.0, cell.1, Some(owner), data, caches);
             }
-        }
-    }
-
-    /// The brains' land fleets' passes at their casts (0x42b910, message 0
-    /// every tick): a pass 50 ticks after one that started nothing; after
-    /// one that sent a cast, 3 ticks after it once woken. In each pass the
-    /// entries are tried in order (0x42a500) until one is sent; a waiting
-    /// one's passes count down only in a pass after one that started
-    /// nothing (`+0x18`), and with none left it fails (state 4). Ended
-    /// entries wake the fleet.
-    pub(super) fn run_brain_casts(&mut self) {
-        let Some(brain) = self.brain.as_ref() else {
-            return;
-        };
-        let now = brain.tick;
-        let fleets: Vec<usize> = brain.casts.keys().copied().collect();
-        for k in fleets {
-            let mut q = self.brain.as_mut().unwrap().casts.remove(&k).unwrap();
-            let due = if !q.started {
-                now >= q.last + 50
-            } else {
-                q.woken && now >= q.last + 3
-            };
-            if due {
-                q.last = now;
-                let count = !q.started;
-                q.started = false;
-                q.woken = false;
-                let members = self.fleet_towns(k);
-                let mut i = 0;
-                while i < q.entries.len() {
-                    let (ask, tries) = q.entries[i];
-                    if self.cast_entry(&members, ask, None, None) {
-                        q.entries.remove(i);
-                        q.started = true;
-                        q.woken = true;
-                        break;
-                    }
-                    if count {
-                        if tries <= 1 {
-                            q.entries.remove(i);
-                            q.woken = true;
-                            continue;
-                        }
-                        q.entries[i].1 = tries - 1;
-                    }
-                    i += 1;
-                }
-            }
-            self.brain.as_mut().unwrap().casts.insert(k, q);
         }
     }
 

@@ -149,6 +149,19 @@ impl Scene {
         Ok(())
     }
 
+    /// A fort or barbarian structure's command 0x1e (0x419f80, message
+    /// 0x1389): standing and idle (0x423d60) it mends itself, its units
+    /// noted; no worn test there.
+    pub(super) fn self_mend(&mut self, id: u32) -> Result<(), String> {
+        let i = self.object_index(id).ok_or("No such building")?;
+        if self.construction_at(id).is_some() || self.mending.contains(&id) {
+            return Ok(());
+        }
+        self.mending.push(id);
+        self.begin_unit_mend(i);
+        Ok(())
+    }
+
     /// Whether settlement or town `site` may mend `target` (`mend_by`'s
     /// tests).
     pub(super) fn mend_check(&self, site: u32, target: u32) -> Result<(), String> {

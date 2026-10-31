@@ -60,8 +60,14 @@ are in `story.rs`.
   lives on `Brain` (serde-default fields, saved).
 - Every repair member is `repair::<YARD>` (0x47a7e0, fleet order 0x82:
   `repair_order`, `run_repair_orders`; prizes join by `brain_join`).
-- Shared helpers: `brain_cast_fleet`, `want_full_town`/`want_town_order`
-  (town orders, 0x47b130), `run_brain_jobs`, `persian_bonus`,
+- Town orders (0x47b130): `brain_order(k, code, flags, join)` sends at a
+  state's first call and returns the order's end (3/4) at a later one;
+  the member's land fleet (`Brain::lands`, computer.rs `LandFleet`) holds
+  the asks, the orders' parts and the casts in one queue, walked by the
+  computers' own pass (`land_pass`, 0x42b910; parts tried at each member
+  by `brain_part`); ships by `fleet_build_for`, start orders by
+  `start_jobs`.
+- Shared helpers: `brain_cast_fleet`, `persian_bonus`,
   `brain_mended`, `wake_volcano`, `human_site_area`, `fleet_types`...
 - `story.rs`: `judge_of` (each mission's win and keep terms, period),
   `judge_campaign`, `Goal`, the carry-over (`carried_on`, `arrive`,
