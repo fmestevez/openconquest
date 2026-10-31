@@ -13327,6 +13327,70 @@ fn brain_member_asks_one_ship_at_a_time() {
     assert_eq!(asked, [1]);
 }
 
+/// miss004's northern yard (0x452240) serves the first member, in member
+/// order, whose request slot is taken (state 5, `+0x11c`), not the
+/// oldest request; after the ship it waits 750 ticks (state 0xb, 0x2ee)
+/// and only then clears the member's slot (state 0xc): until then the
+/// member asks for nothing (needs `OPENCONQUEST_DATA`).
+#[test]
+fn miss004_yard_holds_the_slot_750_ticks() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss004").unwrap();
+    let defs = brain::mission_fleets("miss004").unwrap();
+    let yard = scene.member_fleet(0, 5).unwrap();
+    let fishers = scene.member_fleet(0, 1).unwrap();
+    let post = scene.member_fleet(0, 3).unwrap();
+    {
+        let b = scene.brain.as_mut().unwrap();
+        b.requests = vec![(post, 2), (fishers, 1)];
+        b.building.clear();
+        b.fleets[yard].state = 1;
+    }
+    for _ in 0..50 {
+        scene.run_brain();
+    }
+    let b = scene.brain.as_ref().unwrap();
+    assert_eq!(b.served, Some(fishers));
+    assert_eq!(b.fleets[yard].state, 10);
+    // Its ship launched: the 750 ticks.
+    {
+        let b = scene.brain.as_mut().unwrap();
+        b.requests.clear();
+        b.building.clear();
+        b.fleets[fishers].ships.clear();
+        b.fleets[yard].state = 2;
+    }
+    let asked = |s: &Scene| {
+        s.brain
+            .as_ref()
+            .unwrap()
+            .requests
+            .iter()
+            .any(|r| r.0 == fishers)
+    };
+    let mut ticks = 0;
+    while scene.brain.as_ref().unwrap().fleets[yard].state != 11 {
+        scene.run_brain();
+    }
+    while scene.brain.as_ref().unwrap().served.is_some() {
+        scene.ask_for_ships(fishers, &defs[fishers]);
+        assert!(!asked(&scene));
+        scene.run_brain();
+        ticks += 1;
+        assert!(ticks <= 850);
+    }
+    // The wait starts at the yard's next turn (50 ticks), ends at the
+    // first turn 750 after, and state 0xc clears at the turn after that.
+    assert_eq!(ticks, 850);
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[yard].state, 0);
+    scene.ask_for_ships(fishers, &defs[fishers]);
+    assert!(asked(&scene));
+}
+
 /// A Shift move on a zone group's ships adds a waypoint to the zone's
 /// route (0x49de70 -> 0x4ce6c0, once a cell) and sends no ship. From then
 /// on the zone's commands are held back (0x4c89b0 -> 0x4cab20) and the

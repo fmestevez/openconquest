@@ -267,6 +267,11 @@ pub struct Brain {
     /// (shipyard, type, fleet).
     pub requests: Vec<(usize, u8)>,
     pub building: Vec<(u32, u8, usize)>,
+    /// miss004's northern yard's member served (`+0x11c`, 0x452240): its
+    /// request slot stays taken from the yard's pick (state 5) until the
+    /// yard's 750 ticks after the ship are over (state 0xc).
+    #[serde(default)]
+    pub served: Option<usize>,
     /// The original's difficulty (+0x32a1): 0 easy, 1 normal, 2 hard.
     #[serde(default = "normal")]
     pub difficulty: usize,
@@ -365,6 +370,9 @@ impl Brain {
                 }
                 for b in &mut self.building {
                     up(&mut b.2);
+                }
+                if let Some(f) = &mut self.served {
+                    up(f);
                 }
                 self.casts = std::mem::take(&mut self.casts)
                     .into_iter()
@@ -694,6 +702,7 @@ impl Scene {
             fleets: Vec::new(),
             requests: Vec::new(),
             building: Vec::new(),
+            served: None,
             difficulty,
             jobs: Vec::new(),
             casts: Default::default(),
@@ -883,13 +892,16 @@ impl Scene {
     /// miss005: each `if count < n and slot == -1, slot = 200 + type`, the
     /// types tested in turn, 0x479dc0's counts): only the first type it is
     /// short of fills it, and none while it is taken. The builder holds the
-    /// slot until it has ordered the ship and waited after (miss004's yard,
-    /// states 5-0xc: 750 ticks, then -1); the port holds it while the
-    /// request waits or its ship is being built. (Not ported: the
-    /// builder's 750-tick wait itself.)
+    /// slot until it has ordered the ship and waited after (miss004's
+    /// northern yard, 0x452240 states 5-0xc: 750 ticks, then -1,
+    /// `served`); the port holds it too while the request waits or its
+    /// ship is being built.
     pub(super) fn ask_for_ships(&mut self, k: usize, def: &FleetDef) {
         let brain = self.brain.as_ref().unwrap();
-        if brain.requests.iter().any(|r| r.0 == k) || brain.building.iter().any(|b| b.2 == k) {
+        if brain.requests.iter().any(|r| r.0 == k)
+            || brain.building.iter().any(|b| b.2 == k)
+            || brain.served == Some(k)
+        {
             return;
         }
         for &(kind, min) in def.wants {
@@ -4442,6 +4454,14 @@ mod miss004 {
         }
     }
 
+    /// The northern yard (0x452240): the full-town order (state 0), then
+    /// the first member, in member order, with its request slot
+    /// (`+0x128` + 4m) taken (state 5, `+0x11c`); its ship ordered for it
+    /// (state 10, 0x47b130 code 0x50 + type, flag 0x400; a slot of
+    /// another value is cleared at once); 750 ticks after (state 0xb,
+    /// 0x47a3b0 with 0x2ee); then its slot and `+0x11c` cleared (state
+    /// 0xc) and the full-town order again. The member cannot ask again
+    /// until then (`served`).
     fn yard_750(state: u32) -> Op {
         match state {
             // The full-town order before every ship (0x47b130 code 1).
@@ -4453,11 +4473,60 @@ mod miss004 {
                     0
                 }
             }),
-            1 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            // State 5: the member picked.
+            1 => Op::Custom(|scene, k| {
+                let brain = scene.brain.as_ref().unwrap();
+                let group = FLEETS[k].group;
+                let served = brain.served.or_else(|| {
+                    brain
+                        .requests
+                        .iter()
+                        .filter(|r| FLEETS.get(r.0).is_some_and(|d| d.group == group))
+                        .min_by_key(|r| FLEETS[r.0].member)
+                        .map(|r| r.0)
+                });
+                let Some(f) = served else {
+                    return 1;
+                };
+                scene.brain.as_mut().unwrap().served = Some(f);
+                10
+            }),
+            // State 10: its ship ordered (tried again each turn while not
+            // affordable or no yard free, as `Op::Build`).
+            10 => Op::Custom(|scene, k| {
+                let brain = scene.brain.as_ref().unwrap();
+                let Some(f) = brain.served else {
+                    return 0;
+                };
+                let Some(r) = brain.requests.iter().position(|r| r.0 == f) else {
+                    scene.brain.as_mut().unwrap().served = None;
+                    return 0;
+                };
+                let kind = brain.requests[r].1;
+                if !scene.fleet_build_for(k, f, kind) {
+                    return 10;
+                }
+                scene.brain.as_mut().unwrap().requests.remove(r);
+                2
+            }),
+            // The order ends with the ship launched.
+            2 => Op::Custom(|scene, k| {
+                let brain = scene.brain.as_ref().unwrap();
+                let ships = &brain.fleets[k].ships;
+                if brain.building.iter().any(|b| ships.contains(&b.0)) {
+                    2
+                } else {
+                    11
+                }
+            }),
+            11 => Op::Wait {
+                next: 12,
                 ticks: 750,
             },
+            _ => Op::Custom(|scene, _| {
+                scene.brain.as_mut().unwrap().served = None;
+                0
+            }),
         }
     }
 
