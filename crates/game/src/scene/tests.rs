@@ -4992,6 +4992,37 @@ fn mending_takes_the_original_time_and_price() {
     assert!((199..=201).contains(&paid), "paid {paid}");
 }
 
+/// A nest paints the waiting zones' weights (0x594470) only right of the
+/// area's left column (0x40b920 tests `x0 < cx`, the x 0x484900 passes
+/// through 0x4093a0 and 0x40bbf0): the column itself keeps nothing of it
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn nest_paints_right_of_the_zones_left_column() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    let (nx, ny) = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::HarpyNest)
+        .and_then(|o| o.cell)
+        .unwrap();
+    assert!(nx > 1);
+    let w = scene.grid.width as i32;
+    let at = |x: i32, y: i32| (y * w + x) as usize;
+    let rect = (nx - 1, ny - 3, 7, 7);
+    let owner = (0, 0);
+    let t = &super::placement::ZONE_WEIGHTS;
+    let left = scene.influence_map(owner, t, rect, nx - 1, &|_, _| false);
+    let open = scene.influence_map(owner, t, rect, 0, &|_, _| false);
+    let reach = t.nest.0 - t.nest.2 * super::placement::distance(-1, 0);
+    assert_eq!(open[at(nx - 1, ny)] - left[at(nx - 1, ny)], reach);
+    assert_eq!(open[at(nx, ny)], left[at(nx, ny)]);
+}
+
 /// A harpy wanders its nest's range, strikes a crewed ship beside it,
 /// then flies home and rests (needs `OPENCONQUEST_DATA`).
 #[test]

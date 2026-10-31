@@ -2896,12 +2896,14 @@ impl Scene {
                 }
             }
         }
-        // What lies about, by the zones' weights (0x594470).
+        // What lies about, by the zones' weights (0x594470), over the
+        // rect (0x484900 -> 0x4093a0 -> 0x40bbf0 with its x, y, w, h, so a
+        // nest paints only right of its left column, 0x40b920).
         let wt = self.influence_map(
             ai.owner,
             &super::placement::ZONE_WEIGHTS,
             (x0, y0, rw, rh),
-            0,
+            x0,
             &|_, _| false,
         );
         let mw = self.grid.width as i32;
