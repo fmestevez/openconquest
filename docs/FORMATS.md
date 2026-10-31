@@ -6281,10 +6281,10 @@ on any other 0x1f5, to p3 when its time is up (ticks > 0), and to an
 event's state, the later winning. A fleet whose task is no longer the
 move gets no answer (0x47a450's result is then its stack's leftover:
 taken as none). miss006's raiders (0x459b90, 0x45a9f0 case 5) move with
-no time limit (p10 0). Not ported: 0x4c42f0, the behaviour command sent
-with each join and by the pass to a ship whose `+0x689 / +0x68d` differ
-from the group's `+0x19 / +0x1d` when group `+0x14` is set (the port's
-fleets have no behaviour bytes).
+no time limit (p10 0). The behaviour command 0x4c42f0 goes with a join
+sent to the order's cell and, by the pass, to a ship whose `+0x689 /
++0x68d` differ from the group's `+0x19 / +0x1d` when group `+0x14` is set
+(ported; "Ships' behaviour and masks").
 
 The patrol (0x47a900): its first turn sets point 0 and "on the way"
 (`+0x58`, `+0x60`), then tests the time (never true yet) and the events:
@@ -7030,6 +7030,27 @@ the at-will test (`Behaviour::may_pick`); not ported: the search's
 geometry by weapon position (0x4bfc60's square, 0x4c0cd0's arcs
 0x4bf5f0, 0x4e8af0's draws), so a partial positions mask counts as all;
 the fire state is kept but not read.
+Who sends `#` (0x4c42f0, `{sub, +1, +5, +9, 0.., +0x15 0xff}`, queued:
+it reaches the ship at the next tick): 0x4c4350 (fleet order 0x72, from
+the brains' 0x4797e0 and the computers' 0x482eb0; the interface's attack
+zone 0x49da43) keeps group `+0x14 = 1`, `+0x15`, `+0x19`, `+0x1d`,
+`+0x21` and sends sub 1 with the three to each ship of the group; the
+move order's join (0x4cc6a0: a join sent to the order's cell by
+0x4cc650 is then sent the group's three, zeroes when never given) and
+its pass (0x4ccd80, every 100 ticks: each ship whose `+0x689 / +0x68d`
+are not `+0x19 / +0x1d`, with `+0x14` set); a new navy group of a
+computer side 3 / 4 (0x4a1150 -> 0x4c5b30 -> 0x4c4230, the group's
+three); the gather zones (0x4c6100 a new escort with -1s when `+0x14` is
+0, notice 300 the group's). The brains' 0x4797e0 call sites: 137 with
+classes 0xfffffff, players -1, third -1; 19 classes 0x3ffff; 6 players
+0x10020; 3 with `ecx` (gather_escort_spec). Ported: 0x4c4350 for the
+brains' `Op::Behave` (the 137 sites' masks for every one), the move
+order's join and pass. Not ported: the 28 other sites' masks (listed at
+`Op::Behave`), the computers' 0x482eb0, 0x4c5b30, the gather zones'
+sends (gather.rs), the attack zone's, and the other fleet orders' calls
+of 0x4c42f0 (0x4c449b, 0x4cbcb7, 0x4cde70, 0x4cf296, 0x4d02bb, 0x4d1f8a,
+0x4d4f84, 0x4d6a65, 0x4d6e88, 0x4d7966, 0x4d8185, 0x4d8c94, 0x4da1e2,
+0x4db1ec, 0x4dc2fa; not read).
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
 about the base's town, from 4 cells and 4 more a time, that holds a

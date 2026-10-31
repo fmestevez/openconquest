@@ -84,7 +84,15 @@ pub enum Target {
 /// One step of a fleet's program.
 #[derive(Debug, Clone, Copy)]
 pub enum Op {
-    /// Set the fleet's behaviour, then go on (0x4797e0).
+    /// Set the fleet's behaviour, then go on (0x4797e0 with 137 of its 165
+    /// call sites' `(0, 0xfffffff, -1, -1)`: `Scene::behave`). Not
+    /// ported: the other 28 sites' masks (classes 0x3ffff at 0x4615e1,
+    /// 0x4618b0, 0x461b0f, 0x464c32, 0x464ed6, 0x46510b, 0x468344,
+    /// 0x46860e, 0x46897b, 0x468b9f, 0x46bc00, 0x46bd33, 0x46bf30,
+    /// 0x46c3e0, 0x46c590, 0x46c8d6, 0x46ca96, 0x46cc56, 0x46ce16;
+    /// players 0x10020 at 0x451938, 0x451b06, 0x451d33, 0x452973,
+    /// 0x45431d, 0x45442b; players and third `ecx`, not traced, at
+    /// 0x4652fd, 0x47bd7e, 0x47beeb): those fleets take the default.
     Behave { next: u32 },
     /// Wait (0x47a3b0).
     Wait { next: u32, ticks: u32 },
@@ -226,6 +234,11 @@ pub struct Fleet {
     /// began (0x47a3b0).
     #[serde(default)]
     pub span: u32,
+    /// Group `+0x14` set and `+0x19` (players), `+0x1d` (classes), `+0x21`
+    /// (third): the behaviour 0x4c4350 kept; none (0, zeroed by 0x49b990)
+    /// until the first.
+    #[serde(default)]
+    pub behaviour: Option<(u32, u32, u32)>,
 }
 
 /// A fleet's move order (its block 0x4cc500 `{100, 1, now, x, y, ...}`).
@@ -412,6 +425,7 @@ impl Fleet {
             move_order: None,
             elapsed: 0,
             span: 0,
+            behaviour: None,
         }
     }
 }
@@ -1028,7 +1042,10 @@ impl Scene {
         // the member's next turn.
         let empty = started && self.brain.as_ref().unwrap().fleets[k].ships.is_empty();
         match op {
-            Op::Behave { next } => self.set_state(k, next),
+            Op::Behave { next } => {
+                self.behave(k, 0, 0xfff_ffff, u32::MAX, u32::MAX);
+                self.set_state(k, next)
+            }
             Op::Wait { next, ticks } => {
                 if started && elapsed >= ticks {
                     self.set_state(k, next);
@@ -2001,6 +2018,27 @@ impl Scene {
         self.brain.as_ref().unwrap().fleets[k].ships.clone()
     }
 
+    /// Fleet `k`'s behaviour (0x4797e0 `(p3, classes, players, third)`
+    /// -> fleet order 0x72 `{p3, players, classes, third}`, 0x4a0ad4 ->
+    /// 0x4c4350): the group keeps it (`+0x14 = 1`, `+0x15` p3, `+0x19`,
+    /// `+0x1d`, `+0x21`) and each of its ships is sent command `#` sub 1
+    /// with the three (0x4c42f0, queued: it reaches them at the next
+    /// tick). `+0x15` has no reader in the port.
+    pub(super) fn behave(&mut self, k: usize, _p3: u32, classes: u32, players: u32, third: u32) {
+        self.brain.as_mut().unwrap().fleets[k].behaviour = Some((players, classes, third));
+        for ship in self.fleet_ships(k) {
+            if self.object_index(ship).is_some() {
+                self.post(super::Order::BehaviourCommand {
+                    ship,
+                    sub: 1,
+                    players,
+                    classes,
+                    third,
+                });
+            }
+        }
+    }
+
     /// Fleet order 100 (0x479870 -> 0x4a09d0 -> 0x4ccc30): the fleet's
     /// move block is made (0x4cc500; any other task ended, 0x4a1c60) or,
     /// a move already, rewritten, keeping its ships' cells; then each ship
@@ -2161,11 +2199,12 @@ impl Scene {
     /// none was heard, and fleet `+8` is over 100, `+8` goes back to 0 and
     /// every ship lying still (`+0x58c` 0) more than a cell off its cell in
     /// the block (in x or y; the order's cell without one) is sent there
-    /// again (0x4cf070); then `+8` grows by the tick. (Not ported: the
-    /// behaviour command 0x4c42f0 sent with each join and to a ship whose
-    /// behaviour `+0x689 / +0x68d` is not the group's `+0x19 / +0x1d` when
-    /// group `+0x14` is set: the port's fleets have no behaviour bytes;
-    /// and the reports of blows, 0x4a21c0, which the port makes at once.)
+    /// again (0x4cf070), each ship of the fleet whose behaviour `+0x689 /
+    /// +0x68d` is not the group's `+0x19 / +0x1d` (group `+0x14` set)
+    /// first sent it again (0x4c42f0); then `+8` grows by the tick. A
+    /// join sent to the order's cell is also sent the group's behaviour
+    /// (0x4cc72f). (Not ported: the reports of blows, 0x4a21c0, which the
+    /// port makes at once.)
     pub(super) fn run_move_orders(&mut self) {
         let t = TILE_SIZE as f32;
         for k in 0..self.brain.as_ref().unwrap().fleets.len() {
@@ -2186,6 +2225,18 @@ impl Scene {
                         order.to.1 as f32 * t + t / 2.0,
                     );
                     self.post(super::Order::MoveKeep { ship: id, x, y });
+                    // Then the group's behaviour, whether or not it was
+                    // given one (0x4cc71b-0x4cc72f: the zeroes then).
+                    let (players, classes, third) = self.brain.as_ref().unwrap().fleets[k]
+                        .behaviour
+                        .unwrap_or((0, 0, 0));
+                    self.post(super::Order::BehaviourCommand {
+                        ship: id,
+                        sub: 1,
+                        players,
+                        classes,
+                        third,
+                    });
                     heard += 1;
                 }
             }
@@ -2195,10 +2246,27 @@ impl Scene {
                 .unwrap();
             if heard == 0 && self.brain.as_ref().unwrap().fleets[k].elapsed > 100 {
                 self.brain.as_mut().unwrap().fleets[k].elapsed = 0;
+                let behaviour = self.brain.as_ref().unwrap().fleets[k].behaviour;
                 for id in self.fleet_ships(k) {
                     let Some(i) = self.object_index(id) else {
                         continue;
                     };
+                    // A ship whose players or classes are not the group's
+                    // (0x4cce41-0x4cce73, group `+0x14` set) is sent the
+                    // group's behaviour again.
+                    if let (Some(s), Some((players, classes, third))) =
+                        (self.objects[i].ship.as_ref(), behaviour)
+                    {
+                        if s.behaviour.players != players || s.behaviour.classes != classes {
+                            self.post(super::Order::BehaviourCommand {
+                                ship: id,
+                                sub: 1,
+                                players,
+                                classes,
+                                third,
+                            });
+                        }
+                    }
                     let o = &self.objects[i];
                     if o.ship.as_ref().is_none_or(|s| s.move_state != 0) {
                         continue;

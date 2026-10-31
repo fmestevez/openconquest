@@ -50,6 +50,15 @@ pub enum Order {
         ship: u32,
         command: Command,
     },
+    /// The behaviour command `#` a fleet sends (0x4c42f0: sub, players
+    /// `+1`, classes `+5`, third `+9`; `objects::Behaviour::command`).
+    BehaviourCommand {
+        ship: u32,
+        sub: u8,
+        players: u32,
+        classes: u32,
+        third: u32,
+    },
     Scout {
         ship: u32,
         x: f32,
@@ -601,6 +610,23 @@ impl Scene {
                 board,
             } => done(self.order_close(ship, target, board)),
             Behaviour { ship, command } => done(self.toggle_behaviour(ship, command)),
+            // 0x4e2ba0 case 0x23: no capability test (0x4e6700 is not
+            // called), so a ship being built takes it too.
+            BehaviourCommand {
+                ship,
+                sub,
+                players,
+                classes,
+                third,
+            } => {
+                let s = self
+                    .object_index(ship)
+                    .and_then(|i| self.objects[i].ship.as_mut())
+                    .ok_or("Not a ship")?;
+                let firing = s.fire_task();
+                s.behaviour.command(sub, players, classes, third, firing);
+                Ok(0)
+            }
             Scout { ship, x, y } => done(self.order_scout(ship, x, y)),
             Patrol { ship, x, y } => done(self.order_patrol(ship, x, y)),
             Zone { ship, a, b, attack } => done(self.order_zone(ship, a, b, attack)),

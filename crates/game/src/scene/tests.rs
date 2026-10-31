@@ -1956,6 +1956,46 @@ fn ship_behaviour_masks() {
     assert!(hull(&scene) < 100_000.0, "fired");
 }
 
+/// A brain fleet's behaviour (0x4797e0 -> order 0x72 -> 0x4c4350): the
+/// group keeps the masks and each ship is sent `#` sub 1, reaching it at
+/// the next tick (needs `OPENCONQUEST_DATA`).
+#[test]
+fn fleet_behaviour_command() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    for _ in 0..5 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    let ship = scene.brain.as_ref().unwrap().fleets[0].ships[0];
+    // As if made by the yard: the constructor's zeroes.
+    let i = scene.object_index(ship).unwrap();
+    scene.objects[i].ship.as_mut().unwrap().behaviour = crate::objects::Behaviour::default();
+    scene.behave(0, 0, 0x3ffff, 0x10020, u32::MAX);
+    assert_eq!(
+        scene.brain.as_ref().unwrap().fleets[0].behaviour,
+        Some((0x10020, 0x3ffff, u32::MAX))
+    );
+    let b = |s: &Scene| {
+        s.objects[s.object_index(ship).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap()
+            .behaviour
+    };
+    assert!(!b(&scene).guard, "queued");
+    scene.update(0.02, &data, &mut caches);
+    let got = b(&scene);
+    assert!(got.guard && got.ram && got.board);
+    assert_eq!(
+        (got.positions, got.players, got.classes, got.fire_state),
+        (0xff, 0x10020, 0x3ffff, 4)
+    );
+}
+
 /// A boat hunts a leviathan and brings it home for 5000 amber and 2500
 /// fish; the zone is then empty (needs `OPENCONQUEST_DATA`).
 #[test]
