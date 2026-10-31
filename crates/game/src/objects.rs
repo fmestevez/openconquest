@@ -451,6 +451,10 @@ pub struct Ship {
     /// Landing a founding party at its berth (0x4b3370 states 2-8).
     #[serde(default)]
     pub landing: Option<Landing>,
+    /// What its last close-in left (0x4b2ff0's fields, kept between
+    /// orders).
+    #[serde(default)]
+    pub close_in: CloseIn,
     /// Being built on a shipyard's berth (`+0x251 = 2`, task 4: 0x4dfe00,
     /// 0x4b3ab0); `None` once afloat.
     #[serde(default)]
@@ -611,12 +615,20 @@ pub struct Landing {
     /// Called off by a stop (`+0x73a` < 0).
     pub abort: bool,
     /// The direction of the land cell (`+0x76b`, 0x59791d) and its shore
-    /// tile's group (`+0x748`, 0x4b3770).
+    /// tile's group (`+0x748`, 0x4b3770); both kept from the last close-in
+    /// when the shore has no group.
     pub dir: u8,
     pub group: Option<u8>,
-    /// The close-in line (0x4b5220, `+0x766`): from, to and its points
-    /// (`+0x75e`); the point it is at (`+0x74d`) and the one backing out
-    /// takes (`+0x751`).
+    /// The direction of the land cell as this close-in read it (`+0x76d`,
+    /// written before the group is looked for): the walkway's picture.
+    #[serde(default)]
+    pub walk_dir: u8,
+    /// The close-in line (0x4b5220, `+0x766`; false once freed, or none
+    /// made): from, to and its points (`+0x75e`, kept from the last
+    /// close-in when none is made); the point it is at (`+0x74d`) and the
+    /// one backing out takes (`+0x751`).
+    #[serde(default = "landing_line")]
+    pub line: bool,
     pub from: (f32, f32),
     pub to: (f32, f32),
     pub count: i32,
@@ -637,6 +649,24 @@ pub struct Landing {
     pub plank_at: (f32, f32),
     /// Seconds owed to the next tick.
     pub clock: f32,
+}
+
+fn landing_line() -> bool {
+    true
+}
+
+/// The fields of a ship's close-in (0x4b2ff0) that outlast its landing:
+/// the direction (`+0x76b`), the shore's group (`+0x748`), the heading
+/// turned to (`+0x76a`), the way (`+0x76c`) and the line's points
+/// (`+0x75e`; the line itself is freed as the landing ends, 0x4b1c60 /
+/// 0x4b1d40). 0 on a new ship (zeroed at 0x4dc3f0).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CloseIn {
+    pub dir: u8,
+    pub group: u8,
+    pub face: u8,
+    pub turn: i8,
+    pub count: i32,
 }
 
 /// What a ramming ship is doing.
@@ -1766,6 +1796,7 @@ pub fn resolve(
         grapple: None,
         ram_run: None,
         landing: None,
+        close_in: CloseIn::default(),
         build: None,
         lcg: None,
         hunt: None,

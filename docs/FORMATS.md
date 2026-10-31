@@ -1652,8 +1652,13 @@ The ship's landing (0x4b3370, run by the ship tick 0x4ab930 while
   commands held (0x4b37d0: `+0x261 &= 0x2000`, `+0x25d` saved and 0x20).
 - **0x4b2ff0**: the cell `+0x740` (B; the site for a fort) from its own:
   direction 0x59791d (`+0x76d`), shore group 0x4b3770 (< 0: returns,
-  `+0x76b` and the line left as they were); `+0x76b` the direction,
-  `+0x748` the group; straight across, a line (0x4b5220) from the hull's
+  `+0x76b`, `+0x748`, `+0x76a`, `+0x76c` and the count `+0x75e` left as
+  the last close-in had them, 0 on a new ship, zeroed at 0x4dc3f0; its
+  line `+0x766` was freed and zeroed (0x557750) as that landing ended,
+  0x4b1c60 / 0x4b1d40, so 0x4b1a90 and 0x4b1d40 count the kept points
+  without moving the hull); `+0x76b` the direction, `+0x748` the group;
+  slanting (odd), `+0x76c` 0 and the line freed, `+0x76a` and `+0x75e`
+  kept; straight across, a line (0x4b5220) from the hull's
   top-left to its cell's moved 0x599c44 / 0x59a1c8 / 0x599ee8 / 0x59a4c8
   `[group + type x 12]` towards B (the amber close-in's tables), and the
   side-on heading (2 / 6 across, 0 / 4 up and down) fewer turns away

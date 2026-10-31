@@ -231,7 +231,7 @@ impl Scene {
                     l.porters = None;
                     l.state = 3;
                 } else {
-                    let n = self.landing_art[l.dir as usize % 8][0].len() as i32;
+                    let n = self.landing_art[l.walk_dir as usize % 8][0].len() as i32;
                     let f = l.plank.unwrap_or(0) + 1;
                     if n <= f {
                         l.plank = Some(n - 1);
@@ -302,9 +302,16 @@ impl Scene {
                     s.rotation = None;
                     s.landing = None;
                     s.task = None;
+                    s.close_in = objects::CloseIn {
+                        dir: l.dir,
+                        group: l.group.unwrap_or(0),
+                        face: l.face,
+                        turn: l.turn,
+                        count: l.count,
+                    };
                     return;
                 }
-                if l.back < l.count {
+                if l.line && l.back < l.count {
                     (o.x, o.y) = line_point(l.from, l.to, l.back);
                 }
             }
@@ -317,7 +324,9 @@ impl Scene {
 
     /// 0x4b2ff0: towards the cell `land` (`+0x740` for a settlement, the
     /// site for a fort) from its own, its direction by 0x59791d
-    /// (`+0x76d`), the shore tile's group 0x4b3770 (none: no close-in);
+    /// (`+0x76d`), the shore tile's group 0x4b3770 (none: it returns, the
+    /// last close-in's `+0x76b`, `+0x748`, `+0x76a`, `+0x76c`, `+0x75e`
+    /// kept);
     /// straight across, a line (0x4b5220) from where the hull is to its
     /// cell's middle moved 0x599c44 / 0x59a1c8 / 0x599ee8 / 0x59a4c8[type
     /// x 12 + group] towards the cell, and of the two side-on headings
@@ -338,18 +347,21 @@ impl Scene {
             0xff
         };
         let group = trade::shore_group(&self.grid, land.0, land.1).map(|g| g as u8);
+        let kept = s.close_in;
         let mut l = Landing {
             state: 2,
             abort: false,
-            dir,
-            group,
+            dir: kept.dir,
+            group: Some(kept.group),
+            walk_dir: dir,
+            line: false,
             from: (o.x, o.y),
             to: (o.x, o.y),
-            count: 0,
+            count: kept.count,
             at: 0,
             back: 0,
-            face: s.heading as u8,
-            turn: 0,
+            face: kept.face,
+            turn: kept.turn,
             furl: -1,
             hull_ticks: 0,
             plank: None,
@@ -357,14 +369,18 @@ impl Scene {
             plank_at: (0.0, 0.0),
             clock: 0.0,
         };
-        // No shore group (0x4b3770 < 0): it returns before the line; the
-        // original then keeps `+0x76b` and the line of an earlier
-        // close-in (not kept by the port: the direction above, no line).
+        // No shore group (0x4b3770 < 0): it returns before the line,
+        // keeping the direction, group, heading, way and point count of
+        // the last close-in; that line was freed as its landing ended.
         let Some(g) = group else {
             return l;
         };
+        l.dir = dir;
+        l.group = Some(g);
         if dir == 0xff || dir % 2 == 1 {
-            // Slanting: no line nor turn (`+0x76c` 0).
+            // Slanting: the line freed and no turn (`+0x76c` 0); the
+            // count and heading stay.
+            l.turn = 0;
             return l;
         }
         let kind = s.kind as usize % 12;
@@ -377,6 +393,7 @@ impl Scene {
             .max((l.to.1 - l.from.1).abs())
             .round() as i32;
         l.count = (major + 1 + 1) / 2 * 2;
+        l.line = true;
         let (a, b) = if dir % 4 == 0 { (2u8, 6u8) } else { (0, 4) };
         let s = self.objects[k].ship.as_mut().unwrap();
         let way = |s: &objects::Ship, c: u8| -> i32 {
@@ -449,7 +466,9 @@ impl Scene {
             if l.turn < 1 && l.at == 0 {
                 done = true;
             }
-            (o.x, o.y) = line_point(l.from, l.to, l.at);
+            if l.line {
+                (o.x, o.y) = line_point(l.from, l.to, l.at);
+            }
         } else {
             l.at = l.count - 1;
             if l.turn == 0 {
@@ -660,8 +679,13 @@ impl Scene {
             let Some(l) = o.ship.as_ref().and_then(|s| s.landing.as_ref()) else {
                 continue;
             };
-            let art = &self.landing_art[l.dir as usize % 8];
-            for (frames, f) in [(&art[0], l.plank), (&art[1], l.porters)] {
+            // The walkway `AMOST_<+0x76d>`, the party `ANOSIL_<+0x76b>`
+            // (0x4e1bb0).
+            let (walk, party) = (l.walk_dir as usize % 8, l.dir as usize % 8);
+            for (frames, f) in [
+                (&self.landing_art[walk][0], l.plank),
+                (&self.landing_art[party][1], l.porters),
+            ] {
                 let Some(layers) = f
                     .and_then(|f| usize::try_from(f).ok())
                     .and_then(|f| frames.get(f))
@@ -915,6 +939,48 @@ mod tests {
         assert_eq!(scene.amber, economy::building_cost(0x34) - 1);
         assert!(scene.messages.is_empty(), "{:?}", scene.messages);
         assert!(!looks.last().unwrap().1, "the order done");
+    }
+
+    /// A landing leaves its close-in's direction, group, heading, way and
+    /// point count on the ship; a close-in to a cell with no shore group
+    /// (0x4b3770 < 0) keeps them, only `+0x76d` its own, and with the line
+    /// freed (0x4b1d40) the hull stays put for the kept count of points
+    /// (0x4b1a90) (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn close_in_without_a_shore_group_keeps_the_last() {
+        let Some((data, mut caches, mut scene, boat, _)) = founding(0x34) else {
+            return;
+        };
+        scene.amber = 5000;
+        run(&data, &mut caches, &mut scene, boat, 3000, |_, _| {});
+        let i = scene.object_index(boat).unwrap();
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        assert_eq!(s.landing, None);
+        // The fort's landing: south (6) onto group 0, 22 points.
+        let kept = s.close_in;
+        assert_eq!((kept.dir, kept.group, kept.count), (6, 0, 22));
+        let t = TILE_SIZE as f32;
+        let o = &scene.objects[i];
+        let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let at = (o.x, o.y);
+        let (dx, dy) = (-1..=1)
+            .flat_map(|dx| (-1..=1).map(move |dy| (dx, dy)))
+            .find(|&(dx, dy)| {
+                (dx, dy) != (0, 0)
+                    && trade::shore_group(&scene.grid, here.0 + dx, here.1 + dy).is_none()
+            })
+            .unwrap();
+        let mut l = scene.close_in(i, (here.0 + dx, here.1 + dy));
+        assert_eq!(l.walk_dir, NEIGHBOUR_DIR[(5 + dx * 4 + dy) as usize]);
+        assert_eq!(
+            (l.dir, l.group, l.face, l.turn),
+            (6, Some(0), kept.face, kept.turn)
+        );
+        assert_eq!((l.count, l.line), (22, false));
+        let steps = (1..).find(|_| scene.close_in_step(i, &mut l)).unwrap();
+        assert_eq!(steps, 22);
+        let o = &scene.objects[i];
+        assert_eq!((o.x, o.y), at);
     }
 
     /// A stop as the party goes down the walkway calls the landing off
