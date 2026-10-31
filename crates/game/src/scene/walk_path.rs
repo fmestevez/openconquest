@@ -1146,6 +1146,97 @@ pub fn route_exact(
     Some(out)
 }
 
+/// 0x559470(map, w, h, x, y, &n): the way back from `(x, y)` down a
+/// flood `m` to its start (the cell of 1), each entry its cell and the
+/// direction stepped in (the first 0). Off the map, `None`. A cell below
+/// 1 starts from its neighbour of least value above 0 (0x5c4f4c's order,
+/// a tie taken on the even directions; a neighbour of 1 ends the look,
+/// the best so far kept; none, `None`). Each step: the slanting
+/// directions first (1, 3, 5, 7: value + 1, a tie taken in the way of the
+/// last step), then the straight ones (0, 2, 4, 6: a tie taken unless
+/// the best is the last step's way or that way slants); a neighbour of 1
+/// ends it on that cell. A start of 1 gives it twice.
+pub fn flood_back(m: &[i16], w: i32, h: i32, (x, y): (i32, i32)) -> Option<Vec<(i32, i32, u8)>> {
+    let inside = |x: i32, y: i32| (0..w).contains(&x) && (0..h).contains(&y);
+    if !inside(x, y) {
+        return None;
+    }
+    let at = |x: i32, y: i32| m[(y * w + x) as usize] as i32;
+    let (mut x, mut y) = (x, y);
+    let mut v = at(x, y);
+    let (mut bx, mut by) = (x, y);
+    if v < 1 {
+        let mut best = 30000;
+        let mut odd = false;
+        for &(dx, dy) in &DIRS {
+            let (nx, ny) = (x + dx, y + dy);
+            if inside(nx, ny) {
+                let s = at(nx, ny);
+                if s == 1 {
+                    break;
+                }
+                if s > 0 && (s < best || (s == best && !odd)) {
+                    (best, bx, by) = (s, nx, ny);
+                }
+            }
+            odd = !odd;
+        }
+        if best == 30000 {
+            return None;
+        }
+        (x, y) = (bx, by);
+        v = at(x, y);
+    }
+    let mut out = vec![(x, y, 0u8)];
+    if v == 1 {
+        out.push((x, y, 0));
+        return Some(out);
+    }
+    // The original's buffer holds `v / 2 + 3` entries; a flood falls by
+    // 2 or more a step, so the walk ends before (past it the original
+    // would write beyond the buffer: `None` here).
+    let cap = (v / 2 + 3) as usize;
+    let mut last: u32 = u32::MAX;
+    let mut dir: u32 = 0;
+    loop {
+        let mut best = 30000;
+        for k in [1u32, 3, 5, 7] {
+            let (nx, ny) = (x + DIRS[k as usize].0, y + DIRS[k as usize].1);
+            if !inside(nx, ny) {
+                continue;
+            }
+            let s = at(nx, ny);
+            if s == 1 {
+                out.push((nx, ny, k as u8));
+                return Some(out);
+            }
+            if s > 0 && (s + 1 < best || (s + 1 == best && last == k)) {
+                (best, dir, bx, by) = (s + 1, k, nx, ny);
+            }
+        }
+        for k in [0u32, 2, 4, 6] {
+            let (nx, ny) = (x + DIRS[k as usize].0, y + DIRS[k as usize].1);
+            if !inside(nx, ny) {
+                continue;
+            }
+            let s = at(nx, ny);
+            if s == 1 {
+                out.push((nx, ny, k as u8));
+                return Some(out);
+            }
+            if s > 0 && (s < best || (s == best && last != dir && last & 1 == 0)) {
+                (best, dir, bx, by) = (s, k, nx, ny);
+            }
+        }
+        last = dir;
+        (x, y) = (bx, by);
+        out.push((x, y, dir as u8));
+        if out.len() > cap {
+            return None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1323,5 +1414,49 @@ mod tests {
             )
         );
         assert!(route_exact(&mut grid(), 10, 7, (2, 3), (4, 2), 0).is_none());
+    }
+
+    /// 0x559470 down the flood of `grid` from (2, 3) (0x558fa0, 14), as
+    /// the original's code gives it run under an emulator: a slanting
+    /// step taken on a tie with the last step's way, a shut cell starting
+    /// from its least neighbour, the start given twice.
+    #[test]
+    fn flood_back_as_the_original() {
+        let mut m = grid();
+        wave(&mut m, 10, (0, 0, 9, 6), (2, 3), (-1, -1), 14, -1, 0, 0);
+        let path = |x, y| flood_back(&m, 10, 7, (x, y)).unwrap();
+        assert_eq!(
+            path(9, 6),
+            [
+                (9, 6, 0),
+                (8, 6, 4),
+                (7, 6, 4),
+                (6, 6, 4),
+                (5, 6, 4),
+                (4, 5, 3),
+                (3, 4, 3),
+                (2, 3, 3)
+            ]
+        );
+        assert_eq!(path(4, 1), [(3, 2, 0), (2, 3, 5)]);
+        assert_eq!(
+            path(5, 2),
+            [(5, 2, 0), (5, 3, 6), (4, 4, 5), (3, 3, 3), (2, 3, 4)]
+        );
+        assert_eq!(path(2, 3), [(2, 3, 0), (2, 3, 0)]);
+        assert_eq!(
+            path(8, 3),
+            [
+                (8, 3, 0),
+                (8, 2, 2),
+                (7, 1, 3),
+                (6, 2, 5),
+                (5, 3, 5),
+                (4, 4, 5),
+                (3, 3, 3),
+                (2, 3, 4)
+            ]
+        );
+        assert_eq!(flood_back(&m, 10, 7, (10, 0)), None);
     }
 }

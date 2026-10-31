@@ -451,6 +451,36 @@ impl Scene {
         first_only: bool,
         listed: Vec<u32>,
     ) {
+        self.start_zone_listed(group, ships, rect, class, flags, first_only, listed, &[]);
+    }
+
+    /// A computer flotilla's order 0x78 (0x483090: key flags 0, flags
+    /// 0): its ports and, as args[10] / [11], its ranked deposits, made
+    /// known (0x4c8560) before the area's.
+    pub(super) fn start_zone_ranked(
+        &mut self,
+        group: ZoneGroup,
+        ships: Vec<u32>,
+        rect: Cells,
+        class: Resource,
+        listed: Vec<u32>,
+        ranked: &[(u32, (i32, i32))],
+    ) {
+        self.start_zone_listed(group, ships, rect, class, 0, false, listed, ranked);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_zone_listed(
+        &mut self,
+        group: ZoneGroup,
+        ships: Vec<u32>,
+        rect: Cells,
+        class: Resource,
+        flags: u32,
+        first_only: bool,
+        listed: Vec<u32>,
+        ranked: &[(u32, (i32, i32))],
+    ) {
         let mut ports: Vec<u32> = Vec::new();
         for id in listed {
             if !ports.contains(&id) {
@@ -501,6 +531,9 @@ impl Scene {
                 self.gather_zones.len() - 1
             }
         };
+        if !ranked.is_empty() {
+            self.zone_know_listed(z, ranked);
+        }
         let cands = self.zone_deposits(z, 0);
         if cands.is_empty() {
             return;
@@ -653,6 +686,115 @@ impl Scene {
                 .map_or(0, |r| r as i32),
             id: self.objects[d].id,
         }
+    }
+
+    /// 0x4c8560(list `{id, x, y}`, n; nothing for no list or n outside
+    /// 0-100): with a port list of 1 to 99 ports, each port's copy of the
+    /// list ordered (0x4c7800) and, port by port, the first of each copy
+    /// as many as it gave made known (0x4c6e30: added once, by id); else
+    /// each entry whose cell's deposit is still it.
+    fn zone_know_listed(&mut self, z: usize, list: &[(u32, (i32, i32))]) {
+        let ports = self.gather_zones[z].ports.clone().unwrap_or_default();
+        let known: Vec<u32> = if (1..=99).contains(&ports.len()) {
+            ports
+                .iter()
+                .flat_map(|&p| {
+                    let mut copy = list.to_vec();
+                    let n = self.zone_port_order(z, &mut copy, p);
+                    copy.truncate(n);
+                    copy.into_iter().map(|e| e.0)
+                })
+                .collect()
+        } else {
+            list.iter()
+                .filter(|&&(id, cell)| {
+                    self.layer_deposit(cell)
+                        .is_some_and(|d| self.objects[d].id == id)
+                })
+                .map(|e| e.0)
+                .collect()
+        };
+        let zone = &mut self.gather_zones[z];
+        for id in known {
+            if !zone.deposits.contains(&id) {
+                zone.deposits.push(id);
+            }
+        }
+    }
+
+    /// 0x4c7800(zone, list, n, port cell): the building at the port's cell
+    /// a port (class 0x39) with its berth water (0x4999e0), flooded from
+    /// the berth over the shallow ships' grid (0x558fa0, limit 5000); else
+    /// 0. An amber zone walks the n entries: one whose cell's deposit is
+    /// still it, amber, with an approach on the flood (0x4c76f0) takes the
+    /// approach for its cell and counts; another has the entries after it
+    /// moved down one (but the last's), the walk going on at the next
+    /// place, so the entry moved into its place is not looked at. Others
+    /// count all n. The first as many as counted are then bubble sorted,
+    /// the greater flood value at their cells first; returns the count.
+    pub(super) fn zone_port_order(
+        &self,
+        z: usize,
+        list: &mut [(u32, (i32, i32))],
+        port: u32,
+    ) -> usize {
+        let Some(p) = self.object_index(port) else {
+            return 0;
+        };
+        if self.objects[p].class != ObjectClass::Building(crate::economy::PORT) {
+            return 0;
+        }
+        let Some(b) = self.berth_cell(p) else {
+            return 0;
+        };
+        if !self.sea_cell(b, false) {
+            return 0;
+        }
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        let mut g: Vec<i16> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                if self.nav.passable(x, y, false) {
+                    0
+                } else {
+                    -1
+                }
+            })
+            .collect();
+        walk_path::wave(&mut g, w, (0, 0, w - 1, h - 1), b, (-1, -1), 5000, -1, 0, 0);
+        let n = list.len();
+        let count = if self.gather_zones[z].class == Resource::Amber {
+            let mut count = 0;
+            for j in 0..n {
+                let (id, cell) = list[j];
+                let approach = self
+                    .layer_deposit(cell)
+                    .filter(|&d| {
+                        self.objects[d].id == id && self.objects[d].class == ObjectClass::Amber
+                    })
+                    .and_then(|_| self.approach_cell(&g, cell));
+                match approach {
+                    Some(a) => {
+                        list[j].1 = a;
+                        count += 1;
+                    }
+                    None if j + 1 < n => list.copy_within(j + 1..n, j),
+                    None => {}
+                }
+            }
+            count
+        } else {
+            n
+        };
+        let v = |c: (i32, i32)| g[(c.1 * w + c.0) as usize];
+        for pass in (1..count).rev() {
+            for k in 0..pass {
+                if v(list[k].1) < v(list[k + 1].1) {
+                    list.swap(k, k + 1);
+                }
+            }
+        }
+        count
     }
 
     /// 0x4c5b90(class, rect, mode): with mode 1 first the known deposits,

@@ -875,7 +875,7 @@ impl Scene {
             }
         }
         let is_site: HashSet<(i32, i32)> = sites.iter().map(|s| (s.x, s.y)).collect();
-        let wt = self.influence_map(owner, &SITE_WEIGHTS, (0, 0, w - 1, h - 1), &|x, y| {
+        let wt = self.influence_map(owner, &SITE_WEIGHTS, (0, 0, w - 1, h - 1), 0, &|x, y| {
             is_site.contains(&(x, y))
         });
         // Regions big enough: 9 inland and 2 shore cells.
@@ -927,11 +927,14 @@ impl Scene {
     /// cells of `scan` but those `skip`ped, 0x40bbf0 painting) by `table`
     /// (0x5945c0 for settlements' sites, 0x594470 for waiting zones): a
     /// (weight, radius, falloff) for each kind, a weight of 0 left out.
+    /// `nest_left`: the painted area's left column, which a nest's reach
+    /// paints only to the right of (0x40b920).
     pub(super) fn influence_map(
         &self,
         owner: (u32, u32),
         table: &Influence,
         scan: (i32, i32, i32, i32),
+        nest_left: i32,
         skip: &dyn Fn(i32, i32) -> bool,
     ) -> Vec<i32> {
         let g = &self.grid;
@@ -1103,7 +1106,7 @@ impl Scene {
                             let ry = o.record.field(8).unwrap_or(1) as i32 + 1;
                             for cy in y - ry..=y + ry {
                                 for cx in x - rx..=x + rx {
-                                    if inside(cx, cy) && cx > 0 {
+                                    if inside(cx, cy) && cx > nest_left {
                                         wt[at(cx, cy)] +=
                                             table.nest.0 - table.nest.2 * distance(cx - x, cy - y);
                                     }
@@ -1337,6 +1340,23 @@ pub(super) const SITE_WEIGHTS: Influence = Influence {
     lava: -10,
 };
 
+/// For the computer's ranking of a flotilla's deposits (0x594520).
+pub(super) const DEPOSIT_WEIGHTS: Influence = Influence {
+    own: (0, 5, 1),
+    foe_town: (-10, 10, 0),
+    foe_fort: (-10, 10, 0),
+    foe_building: (-10, 10, 0),
+    foe_ship: (-5, 5, 0),
+    amber: (0, 0, 0),
+    fish: (0, 0, 0),
+    whale: (0, 0, 0),
+    lair: -30,
+    nest: (-20, 0, -1),
+    castle: (-20, 0, -1),
+    medusa: (-20, 5, -1),
+    lava: -1,
+};
+
 /// For waiting zones (0x594470).
 pub(super) const ZONE_WEIGHTS: Influence = Influence {
     own: (20, 10, 0),
@@ -1356,7 +1376,7 @@ pub(super) const ZONE_WEIGHTS: Influence = Influence {
 
 /// The C runtime's `qsort` (0x58791f, Visual C++ 6): not stable, so ties
 /// fall where it leaves them.
-fn vc6_qsort<T: Copy>(v: &mut [T], cmp: impl Fn(&T, &T) -> i32) {
+pub(super) fn vc6_qsort<T: Copy>(v: &mut [T], cmp: impl Fn(&T, &T) -> i32) {
     if v.len() < 2 {
         return;
     }

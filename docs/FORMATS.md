@@ -2283,8 +2283,48 @@ list and escorts).
   `+0x1d0` in order; none: the list null for 0x4c6c30), and as args[10] /
   [11] up to 4 deposits of the class 0x40b010 ranks in the area (table
   0x594520), which 0x4c8560 makes known before the area's, ordered for
-  each port by its flood (0x4c7800) (not ported: 0x40b010 and 0x4c8560;
-  the town states 3 and 0xff, not identified, the port tests mending).
+  each port by its flood (0x4c7800) (the town states 3 and 0xff, not
+  identified, the port tests mending).
+- **The ranking** (0x40b010 -> 0x40a4a0(town, player, x, y, w, h,
+  0x594520, class, 1, 1, &n, &list, 1)): the town looked up (0x51f1f0;
+  gone: its error path, none); its ports (0x43d220, 0x440c60), each
+  flooded from its berth (vtable +0xb8, no water test) over the shallow
+  ships' grid 0x5c93bc (0x558fa0, limit w + h of the map). The area's
+  weights: 0x40b050 collects over its cells, 0x40bbf0 paints over it, by
+  0x594520 (own buildings 0 (0, 5, 1); others' towns, forts, buildings
+  (-10, 10, 0), ships (-5, 5, 0); amber, fish, leviathans 0; lairs -30;
+  nests and castles (-20, 0, -1); medusas and sirens (-20, 5, -1); lava
+  -1; a nest's reach paints only right of the area's left column). A
+  record (0x20 bytes) for each cell whose deposit slot (cell +0x10) holds
+  the class. Windows of 1 x 1 over the area but its last row and column
+  (the loops run to `x + w - 1`, `y + h - 1`), row by row: a record is
+  rated once, for each port the way back down its flood (0x559470:
+  from a cell below 1 its least positive neighbour, 0x5c4f4c order, ties
+  on even directions, a neighbour of 1 ending the look; then each step
+  the slanting directions at value + 1, a tie in the last step's way, then
+  the straight ones, a tie taken unless the best is the last way or that
+  way slants; a neighbour of 1 ends on it; a start of 1 given twice),
+  its cells' weights summed (-50000 if one is outside the area): the
+  first port with a way, then a greater sum, or equal and fewer cells.
+  Each window with a record gives `{1, x, y, 1, 1, cells, sum, port
+  {id, x, y}}` (no way: cells and sum 0); sorted by 0x40a440 (VC6 qsort:
+  cells 0 last, then greater sum, fewer cells, more deposits). 0x483090
+  keeps of the first 4 those whose cell's deposit is still of the class,
+  `{id, x, y}`. Not decoded: a town with no ports (0x42d9c0 with `{x, y,
+  0x1e}` places one, the flood from beside it; the port gives none).
+  Checked against the original's code under an emulator (0x40a4a0 on
+  1100 synthetic scenes; 0x559470 on 3600 floods).
+- **0x4c8560** (list, n; none for no list or n outside 0-100): with 1-99
+  ports in the zone's list, each port's copy ordered by 0x4c7800 and the
+  first as many as it returns known (0x4c6e30), port by port; else each
+  entry whose cell's deposit is still it. **0x4c7800**(zone, list, n,
+  port cell): the cell's building a port (0x39) with its berth water
+  (0x4999e0), flooded (0x558fa0, 5000); else 0. An amber zone walks the
+  entries: one still that amber with an approach (0x4c76f0) takes the
+  approach as its cell and counts; another has the later entries moved
+  down one (not on the last), the walk going on at the next place (so
+  the entry moved in is skipped). Other classes count all. The first
+  count entries bubble sorted, the greater flood value first.
   The block's `+0x61` is no route of the order's: it is a group's
   waypoint route (see **Route** below). Any other order to the group ends
   the zone (0x4a1c60); a group given 0x78 again (the selection unchanged:

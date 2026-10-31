@@ -2901,6 +2901,7 @@ impl Scene {
             ai.owner,
             &super::placement::ZONE_WEIGHTS,
             (x0, y0, rw, rh),
+            0,
             &|_, _| false,
         );
         let mw = self.grid.width as i32;
@@ -4279,17 +4280,18 @@ impl Scene {
     /// 13 write, so 0 here); its ports are its base town's (0x43d220 with
     /// 0x39: none for a town of state `+0xa4` 2, 3 or 0xff; 0x440c60: the
     /// class-0x39 buildings of its list `+0x1d0`, in order), none leaving
-    /// the list for 0x4c6c30. (Not ported: the deposits 0x40b010 ranks
-    /// (up to 4, args[10] / [11]), which 0x4c8560 makes known first; the
-    /// town states 3 and 0xff, not identified: the port tests mending,
-    /// 2.) Any other order ends it.
+    /// the list for 0x4c6c30; and as args[10] / [11] the deposits
+    /// 0x40b010 ranks (`flotilla_deposits`), which 0x4c8560 makes known
+    /// first. (The town states 3 and 0xff, not identified: the port tests
+    /// mending, 2.) Any other order ends it.
     fn give_order(&mut self, ai: &mut Computer, f: usize) {
         let order = ai.flotillas[f].order;
         let group = super::gather::ZoneGroup::Computer(ai.id(), f);
         if let FleetOrder::Gather(area, res) = order {
             let ships = ai.flotillas[f].ships.clone();
             let ports = self.flotilla_ports(ai, f);
-            self.start_zone_ports(group, ships, area, res, 0, false, ports);
+            let ranked = self.flotilla_deposits(ai, f, area, res);
+            self.start_zone_ranked(group, ships, area, res, ports, &ranked);
             return;
         }
         self.end_zone(group);
@@ -4312,6 +4314,104 @@ impl Scene {
             .into_iter()
             .filter(|&k| self.objects[k].class == ObjectClass::Building(PORT))
             .map(|k| self.objects[k].id)
+            .collect()
+    }
+
+    /// The deposits 0x483090 gives flotilla `f`'s gather zone (args[10] /
+    /// [11]): 0x40b010 -> 0x40a4a0(town, area, table 0x594520, class,
+    /// window 1 x 1, deposits on the cells' deposit slot) ranks them, and
+    /// of its first 4 those whose cell still holds a deposit of the class
+    /// are kept, by id and cell.
+    ///
+    /// 0x40a4a0: the town's ports (0x43d220, 0x440c60), each flooded from
+    /// its berth (vtable +0xb8, no water test) over the shallow ships'
+    /// grid (0x558fa0, limit width + height); the area's weights (0x40b050
+    /// collecting over the area, 0x40bbf0 painting it, by 0x594520 and
+    /// the town's player); a record for each cell of the area whose
+    /// deposit is of the class. Then each cell of the area but its last
+    /// row and column (the window loops stop one short), row by row: a
+    /// record there is rated once, for each port the way back down its
+    /// flood (0x559470) summing the weights of its cells (-50000 if one
+    /// lies outside the area), the first port with a way taken, a later
+    /// one with a greater sum, or an equal sum and fewer cells; and the
+    /// window gives a result `{1, x, y, 1, 1, cells, sum, port}` (a
+    /// record with no way: 0 cells, sum 0). The results are sorted by
+    /// 0x40a440 (VC6 qsort): those with cells first, then greater sum,
+    /// fewer cells, more deposits. Not decoded: a town with no ports
+    /// (0x42d9c0 places one, `{x, y, 0x1e}`, and the flood starts beside
+    /// it): none given here. A town gone (0x51f1f0 fails, its error
+    /// path): none.
+    pub(super) fn flotilla_deposits(
+        &self,
+        ai: &Computer,
+        f: usize,
+        (x0, y0, aw, ah): (i32, i32, i32, i32),
+        res: Resource,
+    ) -> Vec<(u32, (i32, i32))> {
+        let Some(town) = ai.bases.get(ai.flotillas[f].base).and_then(|b| b.site) else {
+            return Vec::new();
+        };
+        let Some(t) = self.object_index(town) else {
+            return Vec::new();
+        };
+        let Some(owner) = self.objects[t].owner else {
+            return Vec::new();
+        };
+        let ports = self.flotilla_ports(ai, f);
+        if ports.is_empty() {
+            return Vec::new();
+        }
+        let class = super::gather::class_code(res);
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        let shallow: Vec<i16> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                if self.nav.passable(x, y, false) {
+                    0
+                } else {
+                    -1
+                }
+            })
+            .collect();
+        let floods: Vec<Option<Vec<i16>>> = ports
+            .iter()
+            .map(|&id| {
+                let b = self.berth_cell(self.object_index(id)?)?;
+                let mut g = shallow.clone();
+                super::walk_path::wave(
+                    &mut g,
+                    w,
+                    (0, 0, w - 1, h - 1),
+                    b,
+                    (-1, -1),
+                    w + h,
+                    -1,
+                    0,
+                    0,
+                );
+                Some(g)
+            })
+            .collect();
+        let deposit = |x: i32, y: i32| {
+            self.layer_deposit((x, y)).filter(|&d| {
+                super::gather::deposit_class(&self.objects[d]).map(super::gather::class_code)
+                    == Some(class)
+            })
+        };
+        let wt = self.influence_map(
+            owner,
+            &super::placement::DEPOSIT_WEIGHTS,
+            (x0, y0, aw, ah),
+            x0,
+            &|_, _| false,
+        );
+        let found = rank_deposit_cells(w, h, &floods, &wt, (x0, y0, aw, ah), &|x, y| {
+            deposit(x, y).is_some()
+        });
+        found
+            .iter()
+            .take(4)
+            .filter_map(|&(x, y, _, _)| deposit(x, y).map(|d| (self.objects[d].id, (x, y))))
             .collect()
     }
 
@@ -5528,11 +5628,172 @@ const FLEET_2: &[&[Want]] = &[
     &[(3, 10, 0, 10)],
 ];
 
+/// 0x40a4a0's rating of the deposit cells of `area` (`deposit`) and its
+/// sort (see `Scene::flotilla_deposits`): over the ports' floods (`None`
+/// for a port with no berth) and the weights `wt` (map-sized, the area's
+/// read), each result `(x, y, cells, sum)`, best first.
+pub(super) fn rank_deposit_cells(
+    w: i32,
+    h: i32,
+    floods: &[Option<Vec<i16>>],
+    wt: &[i32],
+    (x0, y0, aw, ah): (i32, i32, i32, i32),
+    deposit: &dyn Fn(i32, i32) -> bool,
+) -> Vec<(i32, i32, i32, i32)> {
+    let in_area = |x: i32, y: i32| (x0..x0 + aw).contains(&x) && (y0..y0 + ah).contains(&y);
+    // `{deposits, x, y, cells, sum}` of each window with a record.
+    let mut found: Vec<(i32, i32, i32, i32, i32)> = Vec::new();
+    for y in y0..y0 + ah - 1 {
+        for x in x0..x0 + aw - 1 {
+            if !deposit(x, y) {
+                continue;
+            }
+            let (mut cells, mut sum, mut first) = (0, 0, true);
+            for g in floods.iter().flatten() {
+                let Some(way) = super::walk_path::flood_back(g, w, h, (x, y)) else {
+                    continue;
+                };
+                let n = way.len() as i32;
+                let s = if way.iter().all(|&(cx, cy, _)| in_area(cx, cy)) {
+                    way.iter()
+                        .map(|&(cx, cy, _)| wt[(cy * w + cx) as usize])
+                        .sum()
+                } else {
+                    -50000
+                };
+                if first || sum < s || (s == sum && n < cells) {
+                    (cells, sum, first) = (n, s, false);
+                }
+            }
+            found.push((1, x, y, cells, sum));
+        }
+    }
+    super::placement::vc6_qsort(&mut found, |a, b| match (a.3 != 0, b.3 != 0) {
+        (false, true) => 1,
+        (true, false) => -1,
+        (false, false) => 0,
+        (true, true) => {
+            let d = b.4 - a.4;
+            if d != 0 {
+                return d;
+            }
+            let d = a.3 - b.3;
+            if d != 0 {
+                return d;
+            }
+            b.0 - a.0
+        }
+    });
+    found
+        .into_iter()
+        .map(|(_, x, y, n, s)| (x, y, n, s))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::assets::GameData;
     use crate::objects::Caches;
+
+    /// The scene of a ranking case: a shallow grid, ports `(cell, berth)`,
+    /// amber cells, another player's building, the area; the weights as
+    /// 0x40bbf0 paints that building (-10 over the disc of 10 about it,
+    /// 0x40ba80) when 0x40b050 finds it in the area.
+    #[allow(clippy::type_complexity)]
+    fn rank_case(
+        w: i32,
+        h: i32,
+        shallow: &[i16],
+        berths: &[(i32, i32)],
+        deposits: &[(i32, i32)],
+        foe: Option<(i32, i32)>,
+        area: (i32, i32, i32, i32),
+    ) -> Vec<(i32, i32, i32, i32)> {
+        let floods: Vec<Option<Vec<i16>>> = berths
+            .iter()
+            .map(|&b| {
+                let mut g = shallow.to_vec();
+                super::super::walk_path::wave(
+                    &mut g,
+                    w,
+                    (0, 0, w - 1, h - 1),
+                    b,
+                    (-1, -1),
+                    w + h,
+                    -1,
+                    0,
+                    0,
+                );
+                Some(g)
+            })
+            .collect();
+        let mut wt = vec![0; (w * h) as usize];
+        let (x0, y0, aw, ah) = area;
+        if let Some((fx, fy)) =
+            foe.filter(|&(x, y)| (x0..x0 + aw).contains(&x) && (y0..y0 + ah).contains(&y))
+        {
+            for y in 0..h {
+                for x in 0..w {
+                    if (x - fx).pow(2) + (y - fy).pow(2) <= 100 {
+                        wt[(y * w + x) as usize] -= 10;
+                    }
+                }
+            }
+        }
+        rank_deposit_cells(w, h, &floods, &wt, area, &|x, y| deposits.contains(&(x, y)))
+    }
+
+    /// 0x40a4a0 as the original's code gives it run under an emulator
+    /// on a 9 x 14 scene (one port, berth (6, 6); another player's
+    /// building at (4, 7); the area (0, 6) 7 x 8): the deposits of the
+    /// area but its last row and column, rated by the way down the port's
+    /// flood, one leaving the area at -50000, sorted (0x40a440).
+    #[test]
+    fn deposits_rank_as_the_original() {
+        let (w, h) = (9, 14);
+        let shut = [
+            11, 21, 30, 37, 38, 41, 48, 49, 50, 51, 53, 56, 63, 66, 69, 72, 76, 83, 88, 115, 122,
+        ];
+        let mut shallow = vec![0i16; (w * h) as usize];
+        for k in shut {
+            shallow[k] = -1;
+        }
+        let deposits = [
+            (2, 11),
+            (7, 13),
+            (6, 3),
+            (4, 12),
+            (3, 1),
+            (0, 5),
+            (8, 2),
+            (4, 2),
+            (0, 1),
+            (2, 4),
+            (6, 8),
+            (2, 8),
+            (4, 4),
+            (0, 10),
+        ];
+        let got = rank_case(
+            w,
+            h,
+            &shallow,
+            &[(6, 6)],
+            &deposits,
+            Some((4, 7)),
+            (0, 6, 7, 8),
+        );
+        assert_eq!(
+            got,
+            [
+                (2, 8, 5, -50),
+                (2, 11, 6, -60),
+                (0, 10, 7, -70),
+                (4, 12, 7, -50000)
+            ]
+        );
+    }
 
     fn data() -> Option<GameData> {
         let root = std::env::var_os("OPENCONQUEST_DATA")?;
@@ -6128,6 +6389,58 @@ mod tests {
         let now = ai.flotillas[f].since + 1;
         scene.task_gather(&mut ai, f, now);
         assert_eq!(ai.flotillas[f].state, 2);
+    }
+
+    /// A gathering flotilla's zone is given the deposits 0x40b010 ranks
+    /// in its area (0x483090 args[10] / [11]), which 0x4c8560 makes known
+    /// before the area's (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn computer_gatherers_know_their_ranked_deposits() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        let mut found = None;
+        for _ in 0..6000 {
+            scene.update(0.1, &data, &mut caches);
+            let ai = &scene.computers.players[0];
+            found = ai
+                .flotillas
+                .iter()
+                .position(|fl| fl.task == 4 && fl.state == 5 && fl.step);
+            if found.is_some() {
+                break;
+            }
+        }
+        let f = found.expect("a flotilla gathering");
+        let ai = std::mem::take(&mut scene.computers.players[0]);
+        let FleetOrder::Gather(area, res) = ai.flotillas[f].order else {
+            panic!("not gathering");
+        };
+        assert_eq!((area, res), ((12, 0, 12, 13), Resource::Amber));
+        // Its base town's one port; four of the area's amber (none on its
+        // last row or column), best first.
+        assert_eq!(scene.flotilla_ports(&ai, f).len(), 1);
+        let ranked = scene.flotilla_deposits(&ai, f, area, res);
+        assert_eq!(
+            ranked,
+            [(7, (22, 8)), (8, (21, 9)), (9, (21, 10)), (11, (15, 9))]
+        );
+        // Known first, in the port's order (0x4c7800: the greater flood
+        // value at their approaches first), then the area's.
+        let group = super::super::gather::ZoneGroup::Computer(ai.id(), f);
+        let z = scene
+            .gather_zones
+            .iter()
+            .position(|z| z.group == group)
+            .unwrap();
+        let mut copy = ranked.clone();
+        let port = scene.gather_zones[z].ports.clone().unwrap()[0];
+        assert_eq!(scene.zone_port_order(z, &mut copy, port), 4);
+        let order: Vec<u32> = copy.iter().map(|e| e.0).collect();
+        assert_eq!(order, [11, 9, 8, 7]);
+        assert_eq!(scene.gather_zones[z].deposits[..4], order[..]);
     }
 
     #[test]
