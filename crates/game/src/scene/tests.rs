@@ -11661,7 +11661,7 @@ fn founding_ship_berths_at_the_original_cell() {
         }
     }
     assert!(want.is_some());
-    assert_eq!(scene.found_berth(i, 0x34, fort), want);
+    assert_eq!(scene.found_berth(i, 0x34, fort), want.map(|w| (w, fort)));
     let site = (0..h)
         .flat_map(|y| (0..w).map(move |x| (x, y)))
         .find(|&(x, y)| {
@@ -11669,7 +11669,7 @@ fn founding_ship_berths_at_the_original_cell() {
                 && scene.found_berth(i, SETTLEMENT, (x, y)).is_some()
         })
         .unwrap();
-    let a = scene.found_berth(i, SETTLEMENT, site).unwrap();
+    let a = scene.found_berth(i, SETTLEMENT, site).unwrap().0;
     assert!(low(&scene, a) < 8);
     // Some pair puts its land cell beside the berth, in the 4 x 4 ring.
     assert!((-1..=2).any(|dy| (-1..=2).any(|dx| {
@@ -11830,9 +11830,8 @@ fn computer_founds_a_settlement_without_amber() {
     let (mut scene, ship, owner, site) = found.expect("a computer's ship and a site");
     let cost = economy::building_cost(SETTLEMENT);
     scene.purses.insert(owner, (cost - 1, 0));
-    scene
-        .place_building(ship, SETTLEMENT, site.0, site.1, &data, &mut caches)
-        .unwrap();
+    let _ = ship;
+    assert!(scene.found_by_party(owner, SETTLEMENT, site, &data, &mut caches));
     assert_eq!(scene.purses[&owner].0, 0);
     // The player's own ship: refused.
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
@@ -11848,13 +11847,9 @@ fn computer_founds_a_settlement_without_amber() {
         .flat_map(|y| (0..w).map(move |x| (x, y)))
         .find(|&(x, y)| scene.check_ground(SETTLEMENT, x, y).is_ok())
         .unwrap();
-    let t = TILE_SIZE as f32;
     let i = scene.object_index(boat).unwrap();
-    (scene.objects[i].x, scene.objects[i].y) = (site.0 as f32 * t, site.1 as f32 * t);
-    assert!(scene.check_site(boat, SETTLEMENT, site.0, site.1).is_ok());
-    assert!(scene
-        .place_building(boat, SETTLEMENT, site.0, site.1, &data, &mut caches)
-        .is_err());
+    let owner = scene.objects[i].owner.unwrap();
+    assert!(!scene.found_by_party(owner, SETTLEMENT, site, &data, &mut caches));
     assert_eq!(scene.amber, cost - 1);
 }
 

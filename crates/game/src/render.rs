@@ -179,6 +179,10 @@ pub fn draw_objects(
     for (layers, x, y) in scene.planks_shown() {
         draw(frame, layers, x, y);
     }
+    // A founding ship's walkway and its party going down it, likewise.
+    for (layers, x, y) in scene.landings_shown() {
+        draw(frame, layers, x, y);
+    }
     let rope = Image::new(1, 1, vec![Some(lut[0x6d])]);
     for ((x0, y0), (x1, y1)) in scene.ropes() {
         let (x0, y0, x1, y1) = (
@@ -285,6 +289,10 @@ pub fn draw_objects(
         if let Some(layers) = p.frame(time_ms) {
             draw(frame, layers, p.x, p.y);
         }
+    }
+    // Landing parties ashore.
+    for (layers, x, y) in scene.parties_shown() {
+        draw(frame, layers, x, y);
     }
     for obj in above {
         draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y);

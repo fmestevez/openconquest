@@ -1631,11 +1631,70 @@ entry becomes the quarter's centre (`q x 16 + 8` from the region's
 corner). Each leg (0x422140, 0x421d00) runs the picture `LNDSPR_<dir>`
 (0x421bb0, the entry's direction byte; `+0x7d` 0, so a frame a tick,
 from the leg's start to its end by `frame / frames`), drawn at its point
-less (`w / 2`, `h`); at a leg's end it is on the goal cell or at the last
-entry: 0x421f00, then message 10. The port founds as the ship arrives:
-the gangway (0x4b3370 states 2-7: 0x4b2a40, 0x4b1d40, 0x4b2d50, 0x4b2f00,
-0x4e04a0 / 0x4e0470, its picture `+0x8c6`), the party and its walk are
-not ported.
+less (`w / 2`, `h`) through the shadow table for colour 0x2a (0x50e130(0,
+1, 0x2a)); at a leg's end it is on the goal cell or at the last entry:
+0x421f00, then message 10. The grid (0x42e720 with 4): a cell not land
+all shut; else each shore edge shuts its half (north rows 0-1, east
+columns 2-3, south rows 2-3, west columns 0-1); nibble 5 at 1 or layers
+6-7 set shut all but the outer ring's quarters on the edges without a
+shore (its test of a layer 6-7 of type 4 against 0x42e6e0, the tile set
+records' types, always takes that branch on the same types). The start
+and goal cells' 16 quarters are opened by linear index (off the grid
+they land elsewhere in it). The first leg goes to entry 1. LNDSPR_ has 8
+frames: a leg is 8 ticks.
+
+The ship's landing (0x4b3370, run by the ship tick 0x4ab930 while
+`+0x25d & 0x20`; `+0x755`):
+
+- **1**: off the berth `+0x756` it is sent there again (0x4a6270); there
+  with `+0x58c` 0, the site checked (0x4e4420): refused, the order is done
+  (message 8, 0xa0); else 0x4b2ff0, `+0x74d` = `+0x751` = 0, state 2, its
+  commands held (0x4b37d0: `+0x261 &= 0x2000`, `+0x25d` saved and 0x20).
+- **0x4b2ff0**: the cell `+0x740` (B; the site for a fort) from its own:
+  direction 0x59791d (`+0x76d`), shore group 0x4b3770 (< 0: returns,
+  `+0x76b` and the line left as they were); `+0x76b` the direction,
+  `+0x748` the group; straight across, a line (0x4b5220) from the hull's
+  top-left to its cell's moved 0x599c44 / 0x59a1c8 / 0x599ee8 / 0x59a4c8
+  `[group + type x 12]` towards B (the amber close-in's tables), and the
+  side-on heading (2 / 6 across, 0 / 4 up and down) fewer turns away
+  (0x4b5390, the second on a tie; a hull past its rotations goes to `h x
+  4`), the way `+0x76c` its sign, the hull on `h x 3 + 0x20` to turn.
+- **2** (0x4b2a40 -> 0x4b1a90, every tick): a point of the line forward
+  (two back with `+0x73a` < 0) and a hull rotation the way it turns
+  (called off: the turn stops); at the line's end and turned (or back at
+  its start) the site is checked again: good, `+0x751` = `+0x74d`, state 8;
+  else state 3, `+0x751` = the count.
+- **8** (0x4b89b0): the hull's delay `+0x7d` 2 (a step once more than 2
+  ticks have passed): from `h x 8 + 0x58` a frame a step; on the fourth
+  it stays at `+ 0x5b`, `+0x25b` = 5, state 4. **4** (0x4b2d50 ->
+  0x4b2b00): slot 1 picture 0x3e6 as `AMOST_<+0x76d>` at the hull's
+  top-left plus 0x599e88 / 0x59a408 (groups 4, 5, 11) / 0x59a468 (6, 7) /
+  0x59a128 / 0x59a708 (0, 1, 10) / 0x59a768 (2, 3) `[type]` (the amber
+  walkway's; other groups leave it at 0x545e70's (0, 0)), frame 0, state
+  5. **5** (0x4b2f00): a frame a tick (delay 0); past the last (12, north
+  10) slot 3 picture 0x3de as `ANOSIL_<+0x76b>` at slot 1's top-left,
+  `+0x76` 9, state 6. **6**: a frame a tick to 0x17 (0x15 north); there,
+  kind 2 (found), 0x4b2d60 makes the party at slot 1's top-left plus
+  0x59a188[dir] ((46, 17) east, (6, 21) north, (6, 17) west, (7, 48)
+  south), 0x4b4680(200) (crew experience) and 0x4a15a0 (notice 0x130 to
+  the ship's zone, `{time, ship, x, y, class}`); slot 3 goes, state 7.
+  **7**: slot 1 a frame back a tick; below 1 it goes, state 3. **3**
+  (0x4b1d40): a hull step backs it two points (`+0x751 -= 2`) and unfurls a
+  frame (down to `h x 8 + 0x58`); below 1 it lies in its cell's middle,
+  hull `h x 4`, `+0x25b` 0; then 0x4b3850 (commands and flags back) and
+  the order done (message 8, 0xa0).
+- `+0x73a` < 0 (a stop, 0x4aa540 -> 0x4abc60, in any state but 1, where
+  the stop just clears 0x20): 8 and 4 go to 3, 5 removes both pictures
+  and goes to 3, 6 removes slot 3 and goes to 7.
+
+The port runs it at the game tick and draws the walkway and party with
+the amber walkways. Its lines are the slide's (`grapple::slide`) points.
+Not ported: the crew's experience, the notice 0x130 (the port's zones
+take no founding notices), lightning on a party (0xda93, 0x50e750), the
+0x8e6 contact test of 0x4b2a40 / 0x4b1d40. Not settled: the hull clock's
+phase (`+0x81`) at the landing's start (the port counts from it), and
+whether the party's first tick falls on the tick it is made (the port's:
+the next).
 
 A computer's town order of a fort comes armed. The land fleet's build
 part (0x428a70) sends the town command 0x20 `{x, y, part[7], kind, 1,

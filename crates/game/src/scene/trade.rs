@@ -1797,27 +1797,16 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) -> Result<(), String> {
-        // The settlement's (or founding ship's) player builds it.
+        // The settlement's player builds it. (A ship's founding is its
+        // landing party's, `found_by_party`.)
         let owner = self
             .object_index(settlement)
             .and_then(|i| self.objects[i].owner)
             .ok_or("No settlement")?;
         let human = self.human.is_some_and(|h| (h.nation, h.slot) == owner);
-        // Founded by a ship: its landing party (LandingClassTy, class
-        // 0x1fc, made by 0x4b2d60 as the ship lands, message 0x1a67)
-        // walks to the site and there (0x421f00, record type 2) pays the
-        // building's price 0x42d8b0(class) if the player has it (0x4a8d00)
-        // and creates the fort (0x1494) from a record with no units: no
-        // default arming, no town's stock. (Not ported: the ship's gangway
-        // (0x4b3370 states 2-7) and the party's walk (0x4221c0, 0x421d00,
-        // 0x422140: a quarter-cell route 0x55ca10, a leg a `LNDSPR_<dir>`
-        // run): here it is done as the ship arrives.)
-        let founded = self
-            .object_index(settlement)
-            .is_some_and(|i| self.objects[i].ship.is_some());
         // A fort a town orders comes armed (default arming), its weapons
         // paid for or taken from the ordering town's stock.
-        let fort = if human && !founded && (0x34..=0x36).contains(&class) {
+        let fort = if human && (0x34..=0x36).contains(&class) {
             let home = self
                 .object_index(settlement)
                 .and_then(|i| self.home_settlement(i));
@@ -1832,17 +1821,12 @@ impl Scene {
             .as_ref()
             .map_or((economy::building_cost(class), 0), |p| (p.amber, p.fish));
         let (have_amber, have_fish) = self.funds(owner);
-        // A computer's (side 3 or 4) landing party founds a settlement even
-        // without the amber (0x421f00 kind 1), paying what it has: 0x4a8d60
-        // leaves 0 for a price above it.
-        let computer = !human && self.seat_of(owner).is_none();
-        let unpaid = founded && class == SETTLEMENT && computer;
-        if (have_amber < cost || have_fish < fish) && !unpaid {
+        if have_amber < cost || have_fish < fish {
             return Err("Not enough resources".into());
         }
         // A town orders no fort past its weighted count (0x43b290, after
         // the price test).
-        let town_fort = !founded && (0x34..=0x36).contains(&class);
+        let town_fort = (0x34..=0x36).contains(&class);
         if town_fort && self.forts_full(settlement, class) {
             return Err("This settlement has too many forts".into());
         }
@@ -1851,41 +1835,8 @@ impl Scene {
             None => self.check_site(settlement, class, cx, cy)?,
         };
         let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
-        let mut fields = vec![0u32; 66];
-        fields[0] = class;
-        fields[1] = 1;
-        fields[2] = owner.0;
-        fields[3] = owner.1;
-        fields[5] = cx as u32;
-        fields[6] = cy as u32;
-        fields[7] = 100;
-        fields[10] = facing;
-        if founded && (0x34..=0x36).contains(&class) {
-            // The landing party's fort record (0x4b2d60, disassembly
-            // 0x4b2e4e-0x4b2e58): town cell (0xff, 0), so 0x427f50 looks
-            // no town up and the towns' offers (0x2490) pass it by: it
-            // never has a town.
-            fields[8] = 0xff;
-        }
-        let rec = ObjectRecord {
-            id,
-            class_id: class,
-            fields,
-        };
-        let failed = |e: anyhow::Error| format!("Cannot build here: {e:#}");
-        let mut obj = objects::resolve(data, caches, &rec)
-            .map_err(failed)?
-            .ok_or("Your nation cannot build that")?;
-        let frames = objects::building_frames(data, caches, &rec, BuildingState::Construction)
-            .map_err(failed)?;
-        if !frames.is_empty() {
-            obj.frames = frames;
-        }
-        // The building goes up as the work does.
-        obj.progress = Some(0.0);
-        if let Some(c) = obj.combat.as_mut() {
-            c.hull = c.max_hull * 0.1;
-        }
+        let fields = site_fields(owner, class, cx, cy, facing);
+        let mut obj = self.raise_site(id, class, fields, data, caches)?;
         self.earn(owner, -(cost as i64), -(fish as i64));
         if let Some(price) = fort {
             if let Some(home) = price.home {
@@ -1900,31 +1851,6 @@ impl Scene {
                     .filter(|&w| w >= 3)
                     .collect();
             }
-        }
-        if founded && (0x34..=0x36).contains(&class) && !human && self.seat_of(owner).is_none() {
-            // Its creation (FortressClassTy 0x419f80 message 2, 0x41a760):
-            // a computer player's (side 3 or 4) fort holding no units
-            // takes each item of its class's default arming (0x5966b8)
-            // whole, as room allows (0x419390 -> 0x417ef0), and pays for
-            // every item of the list, amber 0x597164[item / 3] and fish
-            // 0x597170[item] x 100 (0x4a8d40, 0x4a8be0).
-            let room = combat::fort_room(class);
-            let mut held: Vec<u8> = Vec::new();
-            let (mut amber, mut fish) = (0i64, 0i64);
-            for &item in combat::fort_arming(class).0 {
-                let (a, f) = combat::item_cost(item);
-                amber += a as i64;
-                fish += f as i64;
-                if combat::fort_load(&held) + combat::item_power(item) <= room {
-                    held.push(item);
-                }
-            }
-            let mut places: [Vec<u8>; 9] = Default::default();
-            for &item in &held {
-                places[item as usize].push(100);
-            }
-            obj.set_fort_places(places);
-            self.earn(owner, -amber, -fish);
         }
         if town_fort && !human && self.seat_of(owner).is_none() {
             // A computer's town order comes armed (0x43f440, after the
@@ -1949,7 +1875,7 @@ impl Scene {
         self.constructions.push(Construction::new(id, false));
         // Ordered by a settlement or town, it is that town's from its
         // creation (0x43b290's record: its anchor, type 1); a fort a ship
-        // founds has none (above).
+        // founds has none (`found_by_party`).
         if self.object_index(settlement).is_some_and(|k| {
             matches!(
                 self.objects[k].class,
@@ -1964,6 +1890,108 @@ impl Scene {
             }
         }
         Ok(())
+    }
+
+    /// A landing party at its site (0x421f00): a settlement (its record's
+    /// kind 1) when the site's slot is empty (0x499900 on the record's cell)
+    /// and the player holds its price 0x42d8b0 (0x4a8d00) or is a computer
+    /// (side 3 or 4, `[game +0x1a1d + nation x 4 + slot]`), the price
+    /// taken (0x4a8d40 -> 0x4a8d60: 0 if below) and the settlement made
+    /// (0x1491); a fort (kind 2, classes 0x34-0x36, 0x1494) when the slot
+    /// is empty and the price held. Otherwise nothing, and nothing said.
+    /// Its record (0x4b2d60): class, 1, nation, slot, 1, x, y, 100, field
+    /// 10 0; a fort's town cell (0xff, 0), so 0x427f50 looks no town up and
+    /// the towns' offers (0x2490) pass it by: it never has a town.
+    pub(super) fn found_by_party(
+        &mut self,
+        owner: (u32, u32),
+        class: u32,
+        site: (i32, i32),
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> bool {
+        let fort = (0x34..=0x36).contains(&class);
+        if !(class == SETTLEMENT || fort) || self.cell_slot_taken(site) {
+            return false;
+        }
+        let cost = economy::building_cost(class);
+        let human = self.human.is_some_and(|h| (h.nation, h.slot) == owner);
+        let computer = !human && self.seat_of(owner).is_none();
+        if self.funds(owner).0 < cost && !(class == SETTLEMENT && computer) {
+            return false;
+        }
+        let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
+        let mut fields = site_fields(owner, class, site.0, site.1, 0);
+        fields[4] = 1;
+        if fort {
+            // Disassembly 0x4b2e4e-0x4b2e58.
+            fields[8] = 0xff;
+        }
+        let Ok(mut obj) = self.raise_site(id, class, fields, data, caches) else {
+            return false;
+        };
+        self.earn(owner, -(cost as i64), 0);
+        if fort && computer {
+            // Its creation (FortressClassTy 0x419f80 message 2, 0x41a760):
+            // a computer player's (side 3 or 4) fort holding no units
+            // takes each item of its class's default arming (0x5966b8)
+            // whole, as room allows (0x419390 -> 0x417ef0), and pays for
+            // every item of the list, amber 0x597164[item / 3] and fish
+            // 0x597170[item] x 100 (0x4a8d40, 0x4a8be0).
+            let room = combat::fort_room(class);
+            let mut held: Vec<u8> = Vec::new();
+            let (mut amber, mut fish) = (0i64, 0i64);
+            for &item in combat::fort_arming(class).0 {
+                let (a, f) = combat::item_cost(item);
+                amber += a as i64;
+                fish += f as i64;
+                if combat::fort_load(&held) + combat::item_power(item) <= room {
+                    held.push(item);
+                }
+            }
+            let mut places: [Vec<u8>; 9] = Default::default();
+            for &item in &held {
+                places[item as usize].push(100);
+            }
+            obj.set_fort_places(places);
+            self.earn(owner, -amber, -fish);
+        }
+        self.objects.push(obj);
+        self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
+        self.constructions.push(Construction::new(id, false));
+        true
+    }
+
+    /// A new building `id` of `class` from its record `fields`, going up
+    /// (construction frames, the condition at 0, the hull at a tenth).
+    fn raise_site(
+        &self,
+        id: u32,
+        class: u32,
+        fields: Vec<u32>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Result<MapObject, String> {
+        let rec = ObjectRecord {
+            id,
+            class_id: class,
+            fields,
+        };
+        let failed = |e: anyhow::Error| format!("Cannot build here: {e:#}");
+        let mut obj = objects::resolve(data, caches, &rec)
+            .map_err(failed)?
+            .ok_or("Your nation cannot build that")?;
+        let frames = objects::building_frames(data, caches, &rec, BuildingState::Construction)
+            .map_err(failed)?;
+        if !frames.is_empty() {
+            obj.frames = frames;
+        }
+        // The building goes up as the work does.
+        obj.progress = Some(0.0);
+        if let Some(c) = obj.combat.as_mut() {
+            c.hull = c.max_hull * 0.1;
+        }
+        Ok(obj)
     }
 
     /// Advances constructions a tick (0x4230f0, state 0): a frame every
@@ -2304,24 +2332,12 @@ impl Scene {
 
     /// Advances the standing order of ship `i`.
     pub(super) fn run_task(&mut self, i: usize, dt: f32, data: &GameData, caches: &mut Caches) {
-        if let Some(Task::Found { cx, cy, class }) =
-            self.objects[i].ship.as_ref().and_then(|s| s.task)
-        {
-            if !self.objects[i].ship.as_ref().unwrap().path.is_empty() {
-                return;
-            }
-            self.objects[i].ship.as_mut().unwrap().task = None;
-            let id = self.objects[i].id;
-            let own = self.is_own(&self.objects[i]);
-            if let Err(e) = self.place_building(id, class, cx, cy, data, caches) {
-                if !own {
-                    return;
-                }
-                self.messages.push(format!(
-                    "Cannot build the {}: {e}",
-                    crate::objects::building_label(class)
-                ));
-            }
+        // A founding ship's order runs at its tick (`Scene::run_landings`,
+        // 0x4b3370).
+        if matches!(
+            self.objects[i].ship.as_ref().and_then(|s| s.task),
+            Some(Task::Found { .. })
+        ) {
             return;
         }
         let t = TILE_SIZE as f32;
@@ -2974,14 +2990,20 @@ impl Scene {
         // zeroed after; no berth, and the order is dropped.
         let berth = self.found_berth(i, class, (cx, cy));
         self.objects[i].ship.as_mut().unwrap().waited = 0.0;
-        let (bx, by) = berth.ok_or("There is no water to land from")?;
+        let ((bx, by), land) = berth.ok_or("There is no water to land from")?;
         let t = TILE_SIZE as f32;
         let path = self
             .plan_route(i, bx as f32 * t + t / 2.0, by as f32 * t + t / 2.0)
             .ok_or("The ship cannot sail there")?;
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path = path;
-        ship.task = Some(Task::Found { cx, cy, class });
+        ship.task = Some(Task::Found {
+            cx,
+            cy,
+            class,
+            berth: (bx, by),
+            land,
+        });
         Ok(())
     }
 }
@@ -2996,8 +3018,14 @@ impl Scene {
     /// 8) of the 24 pairs of 0x5c7500 + 0x15c / + 0x1bc on the map, within
     /// half the map's width across of the site, whose land cell B (type 8
     /// or more) has an empty slot (0x4998d0); the offsets are linear, as
-    /// the original adds them to the cell's index.
-    pub(super) fn found_berth(&self, i: usize, class: u32, site: (i32, i32)) -> Option<(i32, i32)> {
+    /// the original adds them to the cell's index. The berth and the cell
+    /// it lands on (`+0x740`: B, or the fort's site).
+    pub(super) fn found_berth(
+        &self,
+        i: usize,
+        class: u32,
+        site: (i32, i32),
+    ) -> Option<((i32, i32), (i32, i32))> {
         let (w, total) = (
             self.grid.width as i32,
             (self.grid.width * self.grid.height) as i32,
@@ -3011,7 +3039,7 @@ impl Scene {
         let dist = |c: i32| super::placement::distance(at(c).0 - here.0, at(c).1 - here.1);
         let low = |c: i32| self.cell_types[c as usize] & 0xf;
         if class == SETTLEMENT {
-            let mut best: Option<(i32, i32)> = None;
+            let mut best: Option<(i32, i32, i32)> = None;
             for &((ax, ay), (bx, by)) in &FOUND_BERTHS {
                 let a = idx + ay * w + ax;
                 let b = idx + by * w + bx;
@@ -3023,11 +3051,11 @@ impl Scene {
                 if b < 0 || b >= total || low(b) < 8 || self.cell_slot_taken(at(b)) {
                     continue;
                 }
-                if best.is_none_or(|(_, d)| dist(a) < d) {
-                    best = Some((a, dist(a)));
+                if best.is_none_or(|(_, _, d)| dist(a) < d) {
+                    best = Some((a, b, dist(a)));
                 }
             }
-            return best.map(|(a, _)| at(a));
+            return best.map(|(a, b, _)| (at(a), at(b)));
         }
         if !(0x34..=0x36).contains(&class) {
             return None;
@@ -3052,8 +3080,23 @@ impl Scene {
                 best = Some((c, dist(c)));
             }
         }
-        best.map(|(c, _)| at(c))
+        best.map(|(c, _)| (at(c), site))
     }
+}
+
+/// A building's record: class, 1, nation, slot, the cell, condition 100
+/// and its facing (field 10).
+fn site_fields(owner: (u32, u32), class: u32, cx: i32, cy: i32, facing: u32) -> Vec<u32> {
+    let mut fields = vec![0u32; 66];
+    fields[0] = class;
+    fields[1] = 1;
+    fields[2] = owner.0;
+    fields[3] = owner.1;
+    fields[5] = cx as u32;
+    fields[6] = cy as u32;
+    fields[7] = 100;
+    fields[10] = facing;
+    fields
 }
 
 /// 0x4b2710's settlement berths (0x5c7500 + 0x15c and + 0x1bc, from
@@ -3124,7 +3167,7 @@ const SHORE_GROUPS: [&[u8]; 12] = [
 /// How far a ship closes in on amber from its cell's middle, by direction
 /// (east 0x599c44, north 0x59a1c8, west 0x599ee8, south 0x59a4c8), ship
 /// type and shore group; 0 where it does not.
-const APPROACH: [[[u8; 12]; 12]; 4] = [
+pub(super) const APPROACH: [[[u8; 12]; 12]; 4] = [
     [
         [16, 16, 0, 0, 33, 33, 0, 0, 27, 0, 0, 0],
         [20, 20, 0, 0, 38, 38, 0, 0, 30, 0, 0, 0],

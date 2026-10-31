@@ -609,11 +609,21 @@ impl Scene {
             .push((pick, cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0));
     }
 
-    /// A land creature's walk grid's box (0x411ce0): the bounding box of
-    /// the cells of the land region (0x42e590, `[0x5c74f4]`) of cell
-    /// `(x, y)`, 6 more each way, kept on the map (origin at least 0,
+    /// A land creature's walk grid's box (0x411ce0): `region_box` of the
+    /// cell, 6 more each way, kept on the map (origin at least 0,
     /// origin + size at most the map's size). Origin and size, in cells.
-    pub(super) fn walk_grid_box(&self, (x, y): (i32, i32)) -> (i32, i32, i32, i32) {
+    pub(super) fn walk_grid_box(&self, cell: (i32, i32)) -> (i32, i32, i32, i32) {
+        let (w, h) = (self.grid.width as i32, self.grid.height as i32);
+        let (ox, oy, bw, bh) = self.region_box(cell);
+        let (ox, oy) = ((ox - 6).max(0), (oy - 6).max(0));
+        let (bw, bh) = ((bw + 13).min(w - ox), (bh + 13).min(h - oy));
+        (ox, oy, bw, bh)
+    }
+
+    /// The bounding box of the cells of the land region of cell `(x, y)`
+    /// (0x42e590, `[0x5c74f4]`), as it grows it from the cell: origin and
+    /// size, in cells.
+    pub(super) fn region_box(&self, (x, y): (i32, i32)) -> (i32, i32, i32, i32) {
         let (w, h) = (self.grid.width as i32, self.grid.height as i32);
         let regions = self.land_regions();
         let (mut ox, mut oy, mut bw, mut bh) = (x, y, 1, 1);
@@ -639,8 +649,6 @@ impl Scene {
                 }
             }
         }
-        let (ox, oy) = ((ox - 6).max(0), (oy - 6).max(0));
-        let (bw, bh) = ((bw + 13).min(w - ox), (bh + 13).min(h - oy));
         (ox, oy, bw, bh)
     }
 

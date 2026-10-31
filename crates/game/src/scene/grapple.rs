@@ -307,7 +307,8 @@ impl Scene {
         let mut held = HashSet::new();
         for o in &self.objects {
             let Some(s) = o.ship.as_ref() else { continue };
-            if s.grapple.is_some() {
+            // A landing ship's hull is its landing's (0x4b3370) too.
+            if s.grapple.is_some() || s.landing.is_some() {
                 held.insert(o.id);
             }
             if let Some(r) = s.ram_run {

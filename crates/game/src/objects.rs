@@ -443,6 +443,9 @@ pub struct Ship {
     /// (0x4c2230 states 2, 3 and 6).
     #[serde(default)]
     pub ram_run: Option<RamRun>,
+    /// Landing a founding party at its berth (0x4b3370 states 2-8).
+    #[serde(default)]
+    pub landing: Option<Landing>,
     /// Being built on a shipyard's berth (`+0x251 = 2`, task 4: 0x4dfe00,
     /// 0x4b3ab0); `None` once afloat.
     #[serde(default)]
@@ -582,6 +585,43 @@ pub struct Grapple {
     /// The hook's line still runs to the other ship (held by the boarded
     /// one until its sail is furled).
     pub rope: bool,
+}
+
+/// A founding ship's landing (0x4b3370, `+0x755`): closing in on the
+/// shore (2), furling (8), the walkway `AMOST_` going down (4, 5), the
+/// party `ANOSIL_` going ashore (6), the walkway up (7), backing out (3).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Landing {
+    pub state: u8,
+    /// Called off by a stop (`+0x73a` < 0).
+    pub abort: bool,
+    /// The direction of the land cell (`+0x76b`, 0x59791d) and its shore
+    /// tile's group (`+0x748`, 0x4b3770).
+    pub dir: u8,
+    pub group: Option<u8>,
+    /// The close-in line (0x4b5220, `+0x766`): from, to and its points
+    /// (`+0x75e`); the point it is at (`+0x74d`) and the one backing out
+    /// takes (`+0x751`).
+    pub from: (f32, f32),
+    pub to: (f32, f32),
+    pub count: i32,
+    pub at: i32,
+    pub back: i32,
+    /// The heading it turns to (`+0x76a`) and the way (`+0x76c`).
+    pub face: u8,
+    pub turn: i8,
+    /// The hull's furling frame (0-3 from `h x 8 + 0x58`), and ticks since
+    /// its last frame (`+0x81`).
+    pub furl: i32,
+    pub hull_ticks: u32,
+    /// The walkway's frame (`+0x8c2`) and the party's (`+0x8c6`), while
+    /// shown.
+    pub plank: Option<i32>,
+    pub porters: Option<i32>,
+    /// The walkway's top-left (picture slot 1's).
+    pub plank_at: (f32, f32),
+    /// Seconds owed to the next tick.
+    pub clock: f32,
 }
 
 /// What a ramming ship is doing.
@@ -846,6 +886,13 @@ pub enum Task {
         cy: i32,
         #[serde(default = "settlement_class")]
         class: u32,
+        /// The berth it sails to (`+0x756`, 0x4b2710's water cell) and the
+        /// cell it lands on (`+0x740`: the pair's land cell for a
+        /// settlement, the site for a fort).
+        #[serde(default)]
+        berth: (i32, i32),
+        #[serde(default)]
+        land: (i32, i32),
     },
     /// Run into an enemy ship.
     Ram { target: u32 },
@@ -1702,6 +1749,7 @@ pub fn resolve(
         lime_clock: 0.0,
         grapple: None,
         ram_run: None,
+        landing: None,
         build: None,
         lcg: None,
         hunt: None,

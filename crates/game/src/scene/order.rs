@@ -456,6 +456,11 @@ impl Scene {
         if ship.is_some_and(|id| self.hunt_holds(id)) {
             return Err("The ship is hunting".into());
         }
+        // A landing ship holds them too (0x4b37d0, till 0x4b3850), but
+        // the stop (event 8), which calls the landing off (0x4abc60).
+        if ship.is_some_and(|id| self.landing_holds(id)) && !matches!(order, Order::Stop { .. }) {
+            return Err("The ship is landing".into());
+        }
         if let Some(r) = self.one_event_a_tick(order, data, caches) {
             return r;
         }

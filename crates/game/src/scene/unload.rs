@@ -227,6 +227,24 @@ const AMBER_WALKWAY_S: [[(i8, i8); 12]; 2] = [
     ],
 ];
 
+/// The top-left of an amber or landing walkway (`AMOST_<dir>`) from the
+/// top-left of the ship's frame, by ship type `k`, the direction of the
+/// shore and its tile's group (0x4b0590 state 0xb, 0x4b2b00): east and
+/// west any group, north groups 4, 5 and 11 or 6 and 7, south 0, 1 and 10
+/// or 2 and 3; none else (the picture's place left unset).
+pub(super) fn walkway_offset(k: usize, dir: usize, group: Option<usize>) -> Option<(i8, i8)> {
+    let in_group = |gs: &[usize]| group.is_some_and(|g| gs.contains(&g));
+    match dir {
+        0 => Some(AMBER_WALKWAY_E[k]),
+        4 => Some(AMBER_WALKWAY_W[k]),
+        2 if in_group(&[4, 5, 11]) => Some(AMBER_WALKWAY_N[0][k]),
+        2 if in_group(&[6, 7]) => Some(AMBER_WALKWAY_N[1][k]),
+        6 if in_group(&[0, 1, 10]) => Some(AMBER_WALKWAY_S[0][k]),
+        6 if in_group(&[2, 3]) => Some(AMBER_WALKWAY_S[1][k]),
+        _ => None,
+    }
+}
+
 /// Which of a walkway's two placings a ship on `heading` uses for `facing`
 /// (0x4b8a40).
 pub(super) fn walkway_side(facing: usize, heading: usize) -> usize {
@@ -362,16 +380,14 @@ impl Scene {
         let (tx, ty) = (f[0] as i32, f[1] as i32);
         let (cx, cy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
         let group = super::trade::shore_group(&self.grid, tx, ty);
-        let in_group = |gs: &[usize]| group.is_some_and(|g| gs.contains(&g));
-        match (tx - cx, ty - cy) {
-            (1, 0) => Some((0, AMBER_WALKWAY_E[k])),
-            (-1, 0) => Some((4, AMBER_WALKWAY_W[k])),
-            (0, -1) if in_group(&[4, 5, 11]) => Some((2, AMBER_WALKWAY_N[0][k])),
-            (0, -1) if in_group(&[6, 7]) => Some((2, AMBER_WALKWAY_N[1][k])),
-            (0, 1) if in_group(&[0, 1, 10]) => Some((6, AMBER_WALKWAY_S[0][k])),
-            (0, 1) if in_group(&[2, 3]) => Some((6, AMBER_WALKWAY_S[1][k])),
-            _ => None,
-        }
+        let dir = match (tx - cx, ty - cy) {
+            (1, 0) => 0,
+            (0, -1) => 2,
+            (-1, 0) => 4,
+            (0, 1) => 6,
+            _ => return None,
+        };
+        walkway_offset(k, dir, group).map(|off| (dir, off))
     }
 
     /// Ship `i` works at `target` (a building it unloads at or a deposit):

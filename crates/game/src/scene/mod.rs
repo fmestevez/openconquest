@@ -335,6 +335,11 @@ pub struct Scene {
     pub sparkle_art: std::rc::Rc<Frames>,
     /// The boarders' walkway `MOST0_` by facing (a layer each).
     pub plank_art: std::rc::Rc<[Frames; 8]>,
+    /// The founding walkway, its party and the party ashore, by direction
+    /// (`landing::landing_art`).
+    pub landing_art: std::rc::Rc<[[Frames; 3]; 8]>,
+    /// Landing parties walking to their sites (LandingClassTy, 0x4221c0).
+    pub parties: Vec<landing::Party>,
     /// Ships whose laden porter trips have just put a slot ashore.
     unloaded: Vec<u32>,
     wake_clock: f32,
@@ -534,6 +539,7 @@ mod gulls;
 mod halt;
 mod hazards;
 mod hunt;
+mod landing;
 mod leviathan;
 pub mod load;
 mod orders;
@@ -792,6 +798,8 @@ impl Scene {
                         .unwrap_or_default()
                 })
             })),
+            landing_art: std::rc::Rc::new(landing::landing_art(data, caches)),
+            parties: Vec::new(),
             plank_art: std::rc::Rc::new(std::array::from_fn(|facing| {
                 objects::composite_layer_frames(data, caches, "MOST0_", facing).unwrap_or_default()
             })),
@@ -1170,6 +1178,7 @@ impl Scene {
                     .map(|(k, v)| (*k, v.clone()))
                     .collect(),
                 wizards: self.wizards.iter().map(|(k, v)| (*k, v.clone())).collect(),
+                parties: self.parties.clone(),
             },
             game_id: None,
         }
@@ -1361,6 +1370,7 @@ impl Scene {
         scene.gorgons = b.gorgons.iter().copied().collect();
         scene.sea_monster_states = b.sea_monster_states.iter().cloned().collect();
         scene.wizards = b.wizards.iter().cloned().collect();
+        scene.parties = b.parties.clone();
         scene.refresh_sight();
         if !save.start_sites.is_empty() {
             scene.start_sites = save.start_sites.clone();
@@ -2221,6 +2231,11 @@ impl Scene {
                 self.cancel_build(i);
                 return;
             }
+            // A landing is called off (0x4abc60: `+0x73a`), its order kept
+            // till it has backed out.
+            if self.stop_landing(i) {
+                return;
+            }
             if let Some(ship) = self.objects[i].ship.as_mut() {
                 ship.pending = None;
                 // A stop under way forgets the cells it kept closed
@@ -2498,6 +2513,7 @@ impl Scene {
             self.run_hazard_cycles(data, caches);
             self.run_leviathans(data, caches);
             self.run_hunts(data, caches);
+            self.run_landings(data, caches);
             // The commands of this tick reach their objects at the start
             // of the next, before anything runs (0x51fe20: 0x521570,
             // 0x5228c0, then the tick 0x542390): delivered here, before
@@ -3045,8 +3061,9 @@ impl Scene {
             let (id, Some(s)) = (o.id, o.ship.as_mut()) else {
                 continue;
             };
-            // A grappled ship's sail is the boarding's to furl.
-            if s.grapple.is_some() {
+            // A grappled ship's sail is the boarding's to furl, a landing
+            // one's its landing's.
+            if s.grapple.is_some() || s.landing.is_some() {
                 continue;
             }
             s.furl = if lying.contains(&id) {
@@ -3087,6 +3104,8 @@ pub struct Battle {
     pub sea_monster_states: Vec<(u32, sea_monster::SeaMonster)>,
     #[serde(default)]
     pub wizards: Vec<(u32, script::Wizard)>,
+    #[serde(default)]
+    pub parties: Vec<landing::Party>,
 }
 
 /// The least way a ship keeps while bound somewhere, in world pixels a
