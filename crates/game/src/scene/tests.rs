@@ -1643,6 +1643,80 @@ fn workshop_research() {
     assert!(combat::reach(7, levels.reach_for(7)).1 > combat::reach(7, 0).1);
 }
 
+/// A settlement mends a building in steps (0x425100): every 2 ticks
+/// (`cycle / 100`, 200) 1% of its condition for a hundredth of its price,
+/// the strength `full x condition / 100`; at 100% one more step ends it;
+/// short of the price it stops (needs `OPENCONQUEST_DATA`).
+#[test]
+fn buildings_mend_in_steps() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.amber = 10_000;
+    let home = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN)))
+        .unwrap()
+        .id;
+    let h = scene.object_index(home).unwrap();
+    let class = match scene.objects[h].class {
+        ObjectClass::Building(c) => c,
+        _ => unreachable!(),
+    };
+    let price = economy::building_cost(class) / 100;
+    let c = scene.objects[h].combat.as_mut().unwrap();
+    let full = c.max_hull as u32;
+    // Just above 97% (its condition `+0xa8` 97).
+    c.hull = (full * 97 / 100 + 1) as f32;
+    scene.order_mend(home, home).unwrap();
+    let hull = |s: &Scene| {
+        s.objects[s.object_index(home).unwrap()]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hull
+    };
+    let tick = |s: &mut Scene, caches: &mut Caches| {
+        let end = s.ticks + 1;
+        while s.ticks < end {
+            s.update(crate::clock::TICK, &data, caches);
+        }
+    };
+    let amber = scene.amber;
+    tick(&mut scene, &mut caches);
+    assert_eq!(
+        hull(&scene),
+        (full * 97 / 100 + 1) as f32,
+        "nothing the first tick"
+    );
+    tick(&mut scene, &mut caches);
+    assert_eq!(hull(&scene), (full * 98 / 100) as f32);
+    assert_eq!(amber - scene.amber, price);
+    for _ in 0..4 {
+        tick(&mut scene, &mut caches);
+    }
+    assert_eq!(hull(&scene), full as f32);
+    assert!(scene.mending.contains(&home), "done on the step after 100%");
+    tick(&mut scene, &mut caches);
+    tick(&mut scene, &mut caches);
+    assert!(!scene.mending.contains(&home));
+    assert_eq!(amber - scene.amber, 3 * price);
+    // Short of the price it stops.
+    let c = scene.objects[h].combat.as_mut().unwrap();
+    c.hull = (full / 2) as f32;
+    scene.order_mend(home, home).unwrap();
+    scene.amber = price - 1;
+    for _ in 0..3 {
+        tick(&mut scene, &mut caches);
+    }
+    assert!(!scene.mending.contains(&home));
+    assert_eq!(hull(&scene), (full / 2) as f32);
+}
 /// Ships are repaired at a dock and buildings by a settlement, for amber
 /// (needs `OPENCONQUEST_DATA`).
 #[test]

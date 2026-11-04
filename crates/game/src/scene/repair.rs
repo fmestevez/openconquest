@@ -171,6 +171,7 @@ impl Scene {
         let t = self.object_index(target).unwrap();
         if !self.mending.contains(&target) {
             self.mending.push(target);
+            self.begin_mend_steps(t);
             self.begin_unit_mend(t);
         }
         Ok(())
@@ -185,6 +186,7 @@ impl Scene {
             return Ok(());
         }
         self.mending.push(id);
+        self.begin_mend_steps(i);
         self.begin_unit_mend(i);
         Ok(())
     }
@@ -221,6 +223,16 @@ impl Scene {
             return Err("It needs no repair".into());
         }
         Ok(())
+    }
+
+    /// The mending's start (0x423d60): `+0x124` = now, the condition
+    /// `+0xa8` the building's.
+    fn begin_mend_steps(&mut self, t: usize) {
+        let o = &self.objects[t];
+        if let Some(c) = o.combat.as_ref() {
+            self.mend_steps
+                .insert(o.id, (self.ticks, structure_percent(c)));
+        }
     }
 
     /// A fort or barbarian structure begins being mended: its units are
@@ -272,15 +284,14 @@ impl Scene {
     /// each step paid `0x597164[item / 3]` amber and `0x597170[item]` fish
     /// x 100 a hundredth of the unit (the owner's, barbarians too) and done
     /// only when both suffice.
-    fn mend_fort_units(&mut self, i: usize, owner: (u32, u32)) {
+    fn mend_fort_units(&mut self, i: usize, owner: (u32, u32), now: u32) {
         let site = self.objects[i].id;
-        let Some(c) = self.objects[i].combat.as_ref() else {
+        if self.objects[i].combat.is_none() {
             return;
-        };
+        }
         let Some(k) = self.unit_mends.iter().position(|m| m.site == site) else {
             return;
         };
-        let now = structure_percent(c);
         let start = self.unit_mends[k].start.min(99);
         let progress = now.saturating_sub(start) * 100 / (100 - start);
         let mut places = self.objects[i].fort_places();
@@ -502,6 +513,20 @@ impl Scene {
 
     pub(super) fn run_repairs(&mut self, dt: f32) {
         self.run_stock_repairs(dt);
+    }
+
+    /// Buildings being mended at the game tick (message 0 of 0x425990:
+    /// while busy with job 0xff, standing idle and not limed, `+0x144`
+    /// 0, vtable +0x70; a fort's 0x419ba0 mends its units after it). The
+    /// step 0x425100: once `cycle / 100` ticks (`+0xc0`, 200 for every
+    /// player building) have passed since the last (`+0x124`, set as the
+    /// mending begins, 0x423d60), below 100% it pays a hundredth of the
+    /// building's price (0x42d8b0, `price / 100`; short of it the mending
+    /// stops) and raises the condition `+0xa8` 1%, the strength `+0xac`
+    /// following (`full x condition / 100`); at 100% the strength is full,
+    /// vtable +0x74 runs (a fort's 0x419910, `rearm_fort`) and it stops.
+    pub(super) fn step_mending(&mut self) {
+        let now = self.ticks;
         let work: Vec<u32> = self.mending.clone();
         let mut done = Vec::new();
         for id in work {
@@ -514,46 +539,48 @@ impl Scene {
                 done.push(id);
                 continue;
             };
-            // A limed building's mending stands still: no step, nothing
-            // paid (0x425990 calls the step, vtable +0x70 = 0x425100, only
-            // while +0x144 is 0).
             if c.lime > 0.0 {
                 continue;
             }
-            // Never below what it has (a hull above full is left alone).
-            let cost = match self.objects[i].class {
-                ObjectClass::Building(class) => crate::economy::building_cost(class),
-                _ => 0,
-            };
-            let (rate, price) = (
-                c.max_hull / crate::clock::ticks(MEND_CYCLE),
-                cost as f32 / c.max_hull.max(1.0),
-            );
-            let heal = (rate * dt).min(c.max_hull - c.hull).max(0.0);
-            let owed = self.repair_owed.entry(owner).or_default();
-            *owed += heal * price;
-            let pay = owed.floor() as u32;
-            let (amber, _) = self.funds(owner);
-            if pay > amber {
-                done.push(id);
-                continue;
+            let max = c.max_hull;
+            let full = max as u32;
+            let strength = |n: u32| (full * n / 100) as f32;
+            let (last, mut cond) = *self
+                .mend_steps
+                .entry(id)
+                .or_insert((now, structure_percent(c)));
+            // A blow meanwhile lowers the condition (0x423f9c).
+            if c.hull < strength(cond) {
+                cond = structure_percent(c);
             }
-            *self.repair_owed.get_mut(&owner).unwrap() -= pay as f32;
-            self.earn(owner, -(pay as i64), 0);
-            let c = self.objects[i].combat.as_mut().unwrap();
-            c.hull += heal;
-            let whole = c.hull >= c.max_hull;
-            self.mend_fort_units(i, owner);
-            if whole {
-                done.push(id);
+            if now >= last + MEND_CYCLE / 100 {
+                if cond < 100 {
+                    let price = match self.objects[i].class {
+                        ObjectClass::Building(class) => crate::economy::building_cost(class),
+                        _ => 0,
+                    } / 100;
+                    if self.funds(owner).0 < price {
+                        done.push(id);
+                    } else {
+                        self.earn(owner, -(price as i64), 0);
+                        cond += 1;
+                        self.objects[i].combat.as_mut().unwrap().hull = strength(cond);
+                    }
+                } else {
+                    self.objects[i].combat.as_mut().unwrap().hull = max;
+                    done.push(id);
+                    self.rearm_fort(id);
+                }
+                self.mend_steps.insert(id, (now, cond));
+            } else {
+                self.mend_steps.insert(id, (last, cond));
             }
-        }
-        for &id in &done {
-            self.rearm_fort(id);
+            self.mend_fort_units(i, owner, cond);
         }
         for id in done {
             self.mending.retain(|&m| m != id);
             self.unit_mends.retain(|m| m.site != id);
+            self.mend_steps.remove(&id);
         }
     }
 

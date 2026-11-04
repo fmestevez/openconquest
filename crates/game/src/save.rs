@@ -199,7 +199,7 @@ pub struct SaveGame {
     #[serde(default)]
     pub flame: f32,
     #[serde(default)]
-    pub repair_owed: Vec<((u32, u32), f32)>,
+    pub mend_steps: Vec<(u32, (u32, u32))>,
     #[serde(default)]
     pub creature_clock: f32,
     #[serde(default)]

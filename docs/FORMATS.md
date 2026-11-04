@@ -5075,17 +5075,26 @@ non-zero "not done" byte shades the 49x49 button (0x54a580) clockwise from
 12 o'clock: the part beyond `done x 3.6` degrees has its palette indexes
 remapped through the table at 0x5c1658 (a dark grey-blue). Then, on
 buttons 0x21-0x39 with a count, the count in `NUMBER_FONT` at (3, 3).
-
 Repairing a building (sub-order 1, a target id, checked by 0x43fcb0) is
 for the settlement itself and its own buildings (0x441350: those whose
 vtable +0x6c says they are damaged). It sends 0x1389 to the building, which
-(0x423d60) marks itself busy (+0x10c) with work 0xff (+0x110) from its
-current condition (+0xa8, percent). Every `cycle / 100` ticks (`+0xc0`,
-200 for every player building) 0x425100 takes `cost / 100` amber
-(0x42d8b0) and raises the condition 1%, the hull following
-(`max x condition / 100`). It stops at 100%, or as soon as the owner cannot
-pay. So a full repair takes 200 ticks and costs the building's price. Blows
-taken meanwhile lower the target (0x423f9c).
+(0x423d60), standing idle (`+0xa4 == 1`) and not busy, marks itself busy
+(+0x10c) with work 0xff (+0x110) from its current condition (`+0x114` =
++0xa8, percent), progress `+0x120` 0, `+0x124` = now. At the building's
+tick (0x425990 message 0: busy with job 0xff, `+0xa4 == 1`, not limed,
+`+0x144` 0) vtable +0x70 runs (0x425100; a fort's 0x419ba0 calls it and
+then mends its units): once `now >= +0x124 + cycle / 100` (`+0xc0`, 200
+for every player building: every 2 ticks), `+0x124` = now; below 100% the
+owner holding `cost / 100` amber (0x42d8b0, 0x4a8d00) pays it (0x4a8d40),
+the condition goes up 1%, the hull `max x condition / 100` (integers),
+`+0x120 = (condition - start) x 100 / (100 - start)`, a new damage look
+(vtable +0x38) when its stage changes; short of the amber it stops
+(`+0x10c` 0, `+0xa4` 1). At 100% (the step after the last 1%) the hull is
+full, vtable +0x74 runs (a fort's 0x419910) and it stops. So a full
+repair takes 200 ticks and costs the building's price. Blows taken
+meanwhile lower the condition (0x423f9c). The port steps it at the game
+tick (`Scene::step_mending`, the tick and condition in `mend_steps`).
+Not ported: the notice 0x10a4 to `+0x130` (the panel's progress).
 
 Docks (`Shipserv.cpp`, 0x4e7640) serve ships alongside
 (reloading); a dock's own queue (0x416f90, every 25 ticks) builds ships.

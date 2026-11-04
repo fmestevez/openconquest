@@ -485,8 +485,9 @@ pub struct Scene {
     /// (Not decoded: what they mean; 0x43c650 reads `+0x252` into its info
     /// record, 0x4416c0 saves it.)
     pub town_fish: BTreeMap<u32, (u8, u8)>,
-    /// Fractions of amber owed for repairs, per player.
-    pub repair_owed: std::collections::BTreeMap<(u32, u32), f32>,
+    /// Buildings being mended: the last step's tick (`+0x124`) and the
+    /// condition (`+0xa8`, 0x425100).
+    pub mend_steps: std::collections::BTreeMap<u32, (u32, u32)>,
     /// Ships under a siren's song (not saved), and seconds until each
     /// siren sings.
     pub charmed: HashMap<u32, creatures::Charm>,
@@ -921,7 +922,7 @@ impl Scene {
                 level: difficulty,
                 ..Default::default()
             },
-            repair_owed: Default::default(),
+            mend_steps: Default::default(),
             flame: 0.0,
             shown: [1, 1],
             shown_clock: 0.0,
@@ -1172,7 +1173,7 @@ impl Scene {
             fires: self.saved_fires(),
             refits: self.refits.clone(),
             flame: self.flame,
-            repair_owed: self.repair_owed.iter().map(|(&k, &v)| (k, v)).collect(),
+            mend_steps: self.mend_steps.iter().map(|(&k, &v)| (k, v)).collect(),
             creature_clock: self.creature_clock,
             gull_rng: Some(self.gull_rng.clone()),
             last_attack: self.last_attack,
@@ -1353,7 +1354,7 @@ impl Scene {
         scene.unloaded = save.unloaded.clone();
         scene.refits = save.refits.clone();
         scene.flame = save.flame;
-        scene.repair_owed = save.repair_owed.iter().copied().collect();
+        scene.mend_steps = save.mend_steps.iter().copied().collect();
         scene.creature_clock = save.creature_clock;
         if let Some(r) = &save.gull_rng {
             scene.gull_rng = r.clone();
@@ -2521,6 +2522,7 @@ impl Scene {
             self.step_fort_draws();
             self.heal_aboard();
             self.step_dock_repairs();
+            self.step_mending();
             for (class, cell) in std::mem::take(&mut self.pending_walkers) {
                 self.put_walker(walkers::NO_LAIR, class, cell, data, caches);
             }
