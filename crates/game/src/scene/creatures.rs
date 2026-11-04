@@ -168,6 +168,10 @@ impl Scene {
             }
             if c.left > 0.0 && self.object_index(id).is_some() {
                 self.charmed.insert(id, c);
+            } else {
+                // The song over, the status ends (0x4df320): its stats
+                // refreshed (0x4bece0), the top speed its own again.
+                self.refresh_stats(id);
             }
         }
     }

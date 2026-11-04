@@ -1217,6 +1217,8 @@ impl Scene {
         self.hit(target, sh.hull_part(blow), by, data, caches);
         self.wound(target, sh.crew_part(blow) * 15.0);
         self.wear(target, sh.weapons_part(blow) * 15.0);
+        // Afloat, its stats refreshed (0x4befc0 -> 0x4bee60).
+        self.refresh_stats(target);
     }
 
     /// Deals `damage` to the hull of `target`, with a hit (or splash) effect;
@@ -1637,6 +1639,8 @@ impl Scene {
         self.hit(id, hull, by, data, caches);
         self.wound(id, sh.crew_part(blow) * 15.0 * combat::RAM_CREW_FACTOR);
         self.wear(id, sh.weapons_part(blow) * 15.0);
+        // Afloat, its stats refreshed (0x4c1ad0 -> 0x4bee60).
+        self.refresh_stats(id);
     }
 
     /// A side's boarding strength in the original's units (0x4b4e80,

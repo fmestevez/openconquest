@@ -7276,6 +7276,180 @@ fn ships_cross_cells_in_the_original_ticks() {
     }
 }
 
+/// A blow taken under way refreshes the ship's stats (0x4befc0 ->
+/// 0x4bee60 -> 0x4bece0): its acceleration `+0x280` falls by half the
+/// share of hull lost (and its armour's 85 / 65 percent) until the next
+/// step granted (0x4a3a70) sets the plain one back (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn a_blow_slows_the_way_till_the_next_step() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let id = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    scene.objects.retain(|o| o.ship.is_none() || o.id == id);
+    scene.wind.strength = 0;
+    let open = |s: &Scene, c: (i32, i32)| {
+        (-1..=1).all(|dx| (-1..=1).all(|dy| s.nav.is_water(c.0 + dx, c.1 + dy)))
+    };
+    let hazards = scene.hazard_cells();
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let t = TILE_SIZE as f32;
+    let cell = (2..h - 2)
+        .flat_map(|y| (2..w - 4).map(move |x| (x, y)))
+        .find(|&c| {
+            (0..3).all(|k| open(&scene, (c.0 + k, c.1)))
+                && (-1..4).all(|k| (-1..=1).all(|j| !hazards.contains_key(&(c.0 + k, c.1 + j))))
+        })
+        .unwrap();
+    let middle = |c: (i32, i32)| (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+    let i = scene.object_index(id).unwrap();
+    let o = &mut scene.objects[i];
+    (o.x, o.y) = middle(cell);
+    let s = o.ship.as_mut().unwrap();
+    s.kind = 0;
+    s.armour = 1;
+    (s.heading, s.rotation, s.task) = (0, None, None);
+    (s.way, s.way_rest, s.brake, s.ahead) = (0, 0, 0, None);
+    s.move_state = 3;
+    s.between.set(true);
+    s.path = [middle((cell.0 + 1, cell.1)), middle((cell.0 + 2, cell.1))]
+        .into_iter()
+        .collect();
+    let tick = |scene: &mut Scene, caches: &mut Caches| {
+        scene.update(crate::clock::TICK, &data, caches);
+        let k = scene.object_index(id).unwrap();
+        scene.objects[k].ship.clone().unwrap()
+    };
+    // Granted its first step, plain: calm (60%), 720 a tick.
+    let s = tick(&mut scene, &mut caches);
+    assert_eq!((s.move_state, s.way, s.accel), (5, 720, None));
+    let s = tick(&mut scene, &mut caches);
+    assert_eq!(s.way, 1440);
+    let i = scene.object_index(id).unwrap();
+    let max = scene.objects[i].combat.as_ref().unwrap().max_hull;
+    scene.share_blow(id, max / 2.0, None, &data, &mut caches);
+    let i = scene.object_index(id).unwrap();
+    let o = &scene.objects[i];
+    let hull = super::sail::hull_of(o.combat.as_ref().unwrap(), 0);
+    let a = super::sail::refreshed_accel(0, hull, 1);
+    assert!(a < 1020, "{a}");
+    assert_eq!(o.ship.as_ref().unwrap().accel, Some(a));
+    let s = tick(&mut scene, &mut caches);
+    assert_eq!(s.way, 1440 + 60 * a / 100);
+    // Entering the next cell the step after it is granted: plain again.
+    let mut s = s;
+    let mut n = 0;
+    while s.accel.is_some() {
+        assert_eq!(s.move_state, 5);
+        s = tick(&mut scene, &mut caches);
+        n += 1;
+        assert!(n < 40);
+    }
+    assert!(s.ahead.is_some());
+}
+
+/// A ship under way whose look-ahead cell is refused (0x4a3f40 ->
+/// 0x4a3a70) waits as at a route point (`+0x591`): a tick for each ask
+/// with a ship lying still there, a tick more short of its route's last
+/// cell; the step granted, the wait is over (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_refused_look_ahead_counts_the_wait() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let id = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let still = scene
+        .objects
+        .iter()
+        .find(|o| o.ship.is_some() && o.id != id)
+        .unwrap()
+        .id;
+    scene
+        .objects
+        .retain(|o| o.ship.is_none() || o.id == id || o.id == still);
+    scene.wind.strength = 0;
+    let open = |s: &Scene, c: (i32, i32)| {
+        (-1..=1).all(|dx| (-1..=1).all(|dy| s.nav.is_water(c.0 + dx, c.1 + dy)))
+    };
+    let hazards = scene.hazard_cells();
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let t = TILE_SIZE as f32;
+    let cell = (2..h - 2)
+        .flat_map(|y| (2..w - 5).map(move |x| (x, y)))
+        .find(|&c| {
+            (0..4).all(|k| open(&scene, (c.0 + k, c.1)))
+                && (-1..5).all(|k| (-1..=1).all(|j| !hazards.contains_key(&(c.0 + k, c.1 + j))))
+        })
+        .unwrap();
+    let middle = |c: (i32, i32)| (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+    // Another ship, of no player, lying still two cells east.
+    let k = scene.object_index(still).unwrap();
+    let other = &mut scene.objects[k];
+    other.owner = None;
+    (other.x, other.y) = middle((cell.0 + 2, cell.1));
+    let s = other.ship.as_mut().unwrap();
+    (s.task, s.move_state) = (None, 0);
+    s.path.clear();
+    let i = scene.object_index(id).unwrap();
+    let o = &mut scene.objects[i];
+    (o.x, o.y) = middle(cell);
+    let s = o.ship.as_mut().unwrap();
+    s.kind = 0;
+    (s.heading, s.rotation, s.task) = (0, None, None);
+    (s.way, s.way_rest, s.brake, s.ahead) = (0, 0, 0, None);
+    s.move_state = 3;
+    s.between.set(true);
+    s.waited = 0.0;
+    s.path = (1..4).map(|k| middle((cell.0 + k, cell.1))).collect();
+    let mut asks = 0;
+    for _ in 0..60 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let k = scene.object_index(id).unwrap();
+        let s = scene.objects[k].ship.as_ref().unwrap();
+        let here = (
+            (scene.objects[k].x / t) as i32,
+            (scene.objects[k].y / t) as i32,
+        );
+        if here == (cell.0 + 1, cell.1) && !s.between.get() {
+            asks += 1;
+            assert!(s.ahead.is_none());
+            // Lying still (a tick) and short of the last cell (a tick).
+            let waited = s.waited / crate::clock::TICK;
+            assert!((waited - 2.0 * asks as f32).abs() < 1e-3, "{waited} {asks}");
+        }
+        if asks >= 2 {
+            break;
+        }
+    }
+    assert_eq!(asks, 2);
+    // The way clear, the next ask is granted and the wait over.
+    scene.objects.retain(|o| o.id != still);
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let k = scene.object_index(id).unwrap();
+    let s = scene.objects[k].ship.as_ref().unwrap();
+    assert!(s.ahead.is_some());
+    assert_eq!(s.waited, 0.0);
+}
+
 /// A ship under way about to leave its cell cannot be hooked (0x4b84b0,
 /// 0x4b5140); one lying still, or just entering its cell, can (needs
 /// `OPENCONQUEST_DATA`).

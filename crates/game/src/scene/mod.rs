@@ -2730,6 +2730,10 @@ impl Scene {
             .collect();
         // Ships held up: the cell ahead, and whether a ship lies in it.
         let mut held = Vec::new();
+        // Ships lying still in the cell a ship under way looks ahead to,
+        // to be pushed aside (0x4a3a70 -> 0x4b4b50): (lying, mover).
+        // The mover's wait before it asked.
+        let mut asides: Vec<(u32, u32, f32)> = Vec::new();
         // Cells reefs and whirlpools hold, and the ones Jason sinks.
         let hazard_cells = self.hazard_cells();
         let mut jason_sinks = Vec::new();
@@ -2778,7 +2782,8 @@ impl Scene {
             }
             // What steps its way (`sail`): `+0x59f` by its type, its
             // owner's rigging and its hull (0x4bece0; 7000 under a siren's
-            // song, 0x4a74c0), `+0x280` by its type (0x4a3a70), the wind
+            // song, 0x4a74c0), `+0x280` by its type (0x4a3a70; by its hull
+            // and armour from a stats refresh till then, 0x4bece0), the wind
             // on its heading (not with Zetes aboard, 0x4ba790 with 3) and
             // lime (`+0x258`).
             let top = tops.get(&obj.id).copied().unwrap_or(0);
@@ -2950,6 +2955,7 @@ impl Scene {
                             ship.entering = next;
                             ship.between.set(true);
                             ship.move_state = 5;
+                            ship.accel = None;
                         }
                     }
                 }
@@ -2962,7 +2968,7 @@ impl Scene {
                 };
                 let sailing = sail::Sailing {
                     top,
-                    accel: sail::accel(ship.kind),
+                    accel: ship.accel.unwrap_or_else(|| sail::accel(ship.kind)),
                     brake: ship.brake,
                     wind: (!zetes).then(|| self.wind.speed_percent(ship.heading)),
                     braking: ship.move_state == 4,
@@ -3029,6 +3035,30 @@ impl Scene {
                                 taken.insert(c, obj.id);
                                 ship.ahead = Some(c);
                                 ship.entering = c;
+                                ship.accel = None;
+                                ship.waited = 0.0;
+                            } else {
+                                // Refused, the wait (`+0x591`) grows as
+                                // for a step asked at a route point
+                                // (0x4a3a70): a tick when the ship there
+                                // lies still (pushing it aside, 0x4b4b50,
+                                // the same player's of lower priority),
+                                // waits or is held; a tick more short of
+                                // the route's last cell.
+                                if let Some(&other) = taken.get(&c).filter(|&&o| o != obj.id) {
+                                    if lying.contains(&other) {
+                                        asides.push((other, obj.id, ship.waited));
+                                    }
+                                    if lying.contains(&other)
+                                        || waiting.contains(&other)
+                                        || held_still.contains(&other)
+                                    {
+                                        ship.waited += crate::clock::TICK;
+                                    }
+                                }
+                                if last != Some(c) {
+                                    ship.waited += crate::clock::TICK;
+                                }
                             }
                             free
                         }
@@ -3077,6 +3107,18 @@ impl Scene {
         }
         for c in jason_sinks {
             self.sink_hazard_at(c, data, caches);
+        }
+        // The push is weighed on the wait before the ask; pushed, the
+        // wait starts again from 0 and counts this ask (0x4a3b56-0x4a3bab).
+        for (still, mover, before) in asides {
+            let Some(m) = self.object_index(mover) else {
+                continue;
+            };
+            let after = self.objects[m].ship.as_ref().unwrap().waited;
+            self.objects[m].ship.as_mut().unwrap().waited = before;
+            let pushed = self.push_aside(still, mover);
+            self.objects[m].ship.as_mut().unwrap().waited =
+                if pushed { after - before } else { after };
         }
         for (id, (x, y)) in arrived {
             self.post_arrival(id, x, y);
@@ -3237,8 +3279,10 @@ pub struct Battle {
 }
 
 /// World pixels a second a ship slides closing in on a shore or pier, or
-/// backing out: two points of its line a frame of its picture, every 3
-/// ticks (0x4b02a0).
+/// backing out. (Not decoded: the original steps two points of its
+/// Bresenham line, 0x4b5220, each call of 0x4b02a0, from case 10 of
+/// 0x4adef0 / 0x4b0590 / 0x4b0e40; how often the dispatch at 0x4ac34b
+/// runs them is not read. The port slides two pixels each 3 ticks.)
 const CLOSING_PACE: f32 = 2.0 / (3.0 * crate::clock::TICK);
 
 /// Seconds a ship takes to turn its hull one of 24 rotations: a frame of

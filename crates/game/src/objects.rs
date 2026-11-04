@@ -340,6 +340,11 @@ pub struct Ship {
     /// Its brake (`+0x284`, negative), set as it starts braking (0x4a2f60).
     #[serde(default)]
     pub brake: i32,
+    /// Its acceleration (`+0x280`) as the last stats refresh left it
+    /// (0x4bece0: hull and armour), until the next step granted sets the
+    /// plain one (0x4a3a70); `None` for the plain one.
+    #[serde(default)]
+    pub accel: Option<i32>,
     /// The cell after the one it has entered, reserved as it entered it
     /// (`+0x5ab` at a cell, 0x4a3a70 from 0x4a3f40); released as it enters
     /// the next or lies still.
@@ -1944,6 +1949,7 @@ pub fn resolve(
         way: 0,
         way_rest: 0,
         brake: 0,
+        accel: None,
         ahead: None,
         move_state: 0,
         between: std::cell::Cell::new(false),

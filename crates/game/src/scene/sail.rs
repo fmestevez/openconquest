@@ -41,6 +41,22 @@ pub fn accel(kind: u8) -> i32 {
     ACCEL[kind as usize % 12] * 8
 }
 
+/// `+0x280` as the stats refresh 0x4bece0 leaves it: the acceleration
+/// less half the percentage of hull lost (as `top_speed`), then x 85 / 100
+/// with armour 1 and x 65 / 100 with armour 2 (`+0x27a`), in integers.
+/// It holds until the next step granted (0x4a3a70) sets the plain one.
+pub fn refreshed_accel(kind: u8, hull: i32, armour: u8) -> i32 {
+    let full = crate::combat::hull_points(kind) as i32;
+    let d = 100 - hull * 100 / full.max(1);
+    let a = accel(kind);
+    let a = a - a * d / 200;
+    match armour {
+        1 => a * 85 / 100,
+        2 => a * 65 / 100,
+        _ => a,
+    }
+}
+
 /// What the move tick steps the way by.
 pub struct Sailing {
     /// `+0x59f`.
@@ -209,6 +225,23 @@ impl super::Scene {
             });
         top_speed(s.kind, rigging, hull)
     }
+
+    /// The stats refresh 0x4bee60 -> 0x4bece0 on ship `id`, for its
+    /// acceleration: `+0x280` by its hull and armour (`refreshed_accel`)
+    /// until its next granted step. (Its `+0x59f` the port reads from the
+    /// hull as it stands, `ship_top`.) The original refreshes after a
+    /// blow it survives (0x4befc0, 0x4c1ad0), at a status's end (0x4df320,
+    /// the siren's song) and on other changes aboard.
+    pub(super) fn refresh_stats(&mut self, id: u32) {
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        let o = &mut self.objects[i];
+        let (Some(s), Some(c)) = (o.ship.as_mut(), o.combat.as_ref()) else {
+            return;
+        };
+        s.accel = Some(refreshed_accel(s.kind, hull_of(c, s.kind), s.armour));
+    }
 }
 
 #[cfg(test)]
@@ -232,6 +265,19 @@ mod tests {
         );
         assert_eq!(base_top(1, 1), 64400);
         assert_eq!(base_top(1, 2), 72800);
+    }
+
+    /// 0x4bece0's `+0x280`: half the share of hull lost off, then armour
+    /// 1 x 85 / 100, 2 x 65 / 100.
+    #[test]
+    fn refreshed_acceleration() {
+        let full = crate::combat::hull_points(0) as i32;
+        assert_eq!(refreshed_accel(0, full, 0), 1200);
+        assert_eq!(refreshed_accel(0, full, 1), 1020);
+        assert_eq!(refreshed_accel(0, full, 2), 780);
+        assert_eq!(refreshed_accel(0, full / 2, 0), 900);
+        assert_eq!(refreshed_accel(0, full / 2, 1), 765);
+        assert_eq!(refreshed_accel(0, full / 2, 2), 585);
     }
 
     /// One tick's way and move (0x4a3f40): calm (60%) a boat gains 720 a

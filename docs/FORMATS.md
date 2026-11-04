@@ -3673,12 +3673,53 @@ speed is saved with a game (`SPEED_GAME`).
   middle east in 35 ticks, north-east in 44 (braking by -540 / -854); a
   merchant in 37 and 46. The port's mover (`scene::sail`, `Scene::update`)
   steps the way and the picture so a game tick at a time, with the look-
-  ahead cell reserved (`Ship::ahead`). Not ported: 0x4bece0's armoured or
-  damaged `+0x280` between a hull change and the next granted step; the
-  charm's 7000 kept after the song until the next stats refresh; the
-  look-ahead refusal's wait counting (`+0x591`); the closing-in branches
-  of the tick (`+0x25d & 0x10`, the port's grapple). The port's shore and
-  pier slide (0x4b02a0) keeps its own pace.
+  ahead cell reserved (`Ship::ahead`).
+- `[clock+0xe2]`, the ticks the update runs, is 1 in single player: the
+  host path (0x5203c2-0x5203fc) takes `(now - +0xe6) / period`, runs no
+  tick at 0 and sets 1 above it (0x5203f2), then 0 after the tick
+  (0x520432); only the replay and network paths (0x52139e, 0x52146f,
+  0x5214ef, 0x522348, 0x522845, 0x522883) take it from the tick buffer's
+  byte (1 locally, a peer's `+0x4e`).
+- The stats refresh 0x4bee60 -> 0x4bece0 sets `+0x280` by the hull and
+  armour (above); 0x4a3a70 sets it back to the plain one on every step it
+  granted, so the lowered one steps the way only between a refresh under
+  way and the next step (from rest, 0x4a3560 grants before the first
+  move). Refreshes: a blow survived (0x4befc0 via 0x4bee60 after the hull,
+  crew and weapons parts; not for a ship being built; 0x4c1ad0 a ram's),
+  the end of a status (0x4df320 from the tick at 0x4defc1, when `now -
+  +0xb1 >= +0xb5`: commands back 0x4b3850, 0x4bece0, `+0xa9..+0xcc`
+  cleared, `+0x25c = 0`), the hull mended aboard (0x4b98b0), mending at a
+  yard (0x4b1fc0), loading (0x4bc8c0, 0x4bcd10, 0x4bd0c0, 0x4bd350,
+  0x4bd410), boarding (0x4b5df0, 0x4c3410), refits (0x4e72e0, 0x4e73c0),
+  being built (0x4b3ab0), the loader 0x4dfa90 and message 0x8d1 at the
+  start (0x4dc630). The port refreshes (`Scene::refresh_stats`, `Ship::
+  accel`) after a shared blow and a ram's, and when the siren's song ends.
+- The siren's song is such a status (0x4a7390: `+0x25c = 1`, `+0xb1` now,
+  `+0xb5` the length): 0x4a74c0 sets `+0x59f = 7000` every tick before the
+  move tick, so a refresh during the song changes nothing, and its end
+  (0x4df320) refreshes `+0x59f` to the hull's: the 7000 does not outlast
+  the song.
+- A step refused (0x4a3a70, asked at a route point or by the look-ahead
+  alike) counts the wait `+0x591` (to 150): a tick when the cell holds a
+  ship lying still (state 0; first, the same player's of lower priority
+  `+0x5c7` is pushed aside, 0x4b4b50, when the wait is over the patience
+  `+0x5c8`, which then triples under 200, the wait from 0), stepping to it
+  (3) or held (6), or holds a non-ship object; none for a ship under way;
+  then a tick more when the cell is not the route's last (or `+0x594`). A
+  step granted sets it to 0 (0x4a3c62).
+- Not ported: the closing-in branches of the tick (`+0x25d & 0x10`, the
+  port's grapple); the refreshes under way other than blows and the song's
+  end (Argus's and the Fleece's mending 0x4b98b0, whose port is not the
+  original's steps of 1000); 0x4a6330's 0x4a3a70(1) when planning between
+  cells. Not decoded: the shore and pier slide's pace. 0x4b02a0 steps
+  `+0x78e` by 2 (back out: down by 2, to 0) along the line 0x4b5220 built
+  from the picture's top-left (Bresenham, an odd count padded with the
+  last point), the picture set to that point while under the count, done
+  at the end (idx count - 1, the picture left at the point before) once
+  `+0x79d`'s turn is over; it is called by case 10 of 0x4adef0, 0x4b0590
+  and 0x4b0e40 (from the dispatch at 0x4ac34b-0x4ac41b by `+0x772`) with
+  no frame test in the case; how often that dispatch runs is not read.
+  The port slides 2 pixels each 3 ticks (`CLOSING_PACE`).
 
 - Construction: a building's construction picture plays once over the
   first entry of its class's cycle table (+0xc0, set by each constructor:
