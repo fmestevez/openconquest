@@ -2179,7 +2179,26 @@ always, no lime). The charge, the hook and what follows
 are the port's grapple.rs; the bow is looked for from the tick after the
 charge starts. Not ported: the 0x4a6150 wait counter's part (`+0x591`
 and 150: the port's mover's own), the rammer's state 1 reservation and
-its state 6 turn when 0x4c1760 refuses, and the search mode.
+its state 6 turn when 0x4c1760 refuses, and the search mode. What they
+do (0x4c2230 states 1 / 2, alongside, 0x4c1f60 giving 2): `+0x6aa` the
+goal cell, `+0x6a0 = 1`; in state 1 `+0x6ae` = its own cell when that
+cell's slot holds it, else 0x49a450 (the cell about its own whose slot
+holds it, by the grid's offset list; none: stay in state 1 this tick),
+state 2, then 0x4c1760. Contact made: 0x1401 to the prey, the move to
+the goal. Refused: not between cells (`+0x596` not 1), it stays in state
+2 (next tick 0x4c1760 again, refused there: state 1 and message 8 /
+0x80); its picture at its cell's middle, state 1 and 8 / 0x80; else its
+commands held once (0x4b37d0 with 0x2000, `+0x698`, `+0x25d |= 0x10`),
+`+0x6e4` the heading opposite its own (0x4a34f0: h + 4 mod 8), state 6,
+move state 0. State 6, once a frame (`+0x7d`, `+0x81` of the picture):
+the picture a pixel along `+0x6e4` on each axis it moves, not past its
+cell's middle (types with 0x597a24 also step the frame `+0x45` down one
+on odd ticks, from below heading x 4 back to heading x 4 + 3: their
+under-way frames run backwards); at the middle `+0x6ae`
+released (0x4a3970) unless its own cell or `+0x5ab`, 0x13d to its player
+(0x4a1880 with `+0x6cb`), commands back (0x4b3850), 0x4b8d10, `+0x696 =
+1`, state 1, 8 / 0x90, the prey `+0x6cf` and `+0x6cb` cleared, `+0x704`
+now. The port's `start_ram` returns doing nothing when refused.
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
