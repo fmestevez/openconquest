@@ -284,12 +284,18 @@ impl Scene {
     /// (0x42fa90 -> 0x42f580: the price at `d` off checked, 0x42ed40, and
     /// paid, 0x42f470), on the ship, at the cell, or (8, 0xe, 0xf with no
     /// cell) on each own ship over the area (0x42faf0: within 15 cells of
-    /// the temple at `d` off, 0x42ef90, then cast at full price). (Not
-    /// ported: kind 8's big reef, whose kind the temple draws from its own
-    /// generator, `+0x18`, and kind 13's wind (message 0x186f); the area
-    /// casts of kinds 12 and 16, 0x42ef90's cases 8 and 0xf: no player
-    /// asks them. The temple's free casts, `Magic +0x10`, are only the
-    /// brains' direct casts'.)
+    /// the temple at `d` off, 0x42ef90, then cast at full price). The sea
+    /// temple (0x438300) draws its own generator (`+0x18`) for codes 1-4
+    /// and 0xd (kinds 5-8, 14: the command's `+0xd` is 0 from every
+    /// sender) before the cast, which takes it as its draw (a reef's and a
+    /// big reef's kind, a barbarian monster's type: 0x42f580 cases 1, 0xc,
+    /// 4); kind 8 casts a big reef (0x42f580 case 0xc: the reef's record,
+    /// class 0x259). Kind 13 (code 0xc) checks and pays the wind's price at
+    /// `d` off itself (0x4a8d00, 0x4a8ba0; 0x4a8d40, 0x4a8be0) and posts
+    /// message 0x186f with `+0xd`, 0: the weather's 0x1103 with 0, a calm
+    /// for the period (0x407a80). (No sender asks kinds 8 and 13, nor the
+    /// area for 12 and 16. The temple's free casts, `Magic +0x10`, are
+    /// only the brains' direct casts'.)
     #[allow(clippy::too_many_arguments)]
     pub(super) fn town_spell(
         &mut self,
@@ -328,14 +334,37 @@ impl Scene {
             }
             return;
         }
+        if kind == 13 {
+            // The wind (code 0xc): spell 0's price.
+            if d != 100 && !self.side_affords(owner, 0, 1, d) {
+                return;
+            }
+            self.side_pays(owner, 0, d);
+            self.wind.blow(0);
+            return;
+        }
         let Some(idx) = cast_spell(kind) else {
             return;
         };
+        let draw = match (temple, self.object_index(t)) {
+            (Temple::Sea, Some(k)) => Some(self.building_draw(k)),
+            _ => None,
+        };
+        if kind == 8 {
+            if d != 100 && !self.side_affords(owner, idx, 1, d) {
+                return;
+            }
+            self.side_pays(owner, idx, d);
+            if let Err(e) = self.spawn_big_reef(cell, draw.unwrap_or(0), data, caches) {
+                eprintln!("a temple's big reef failed: {e}");
+            }
+            return;
+        }
         let Some(spell) = Spell::of_index(idx as u32) else {
             return;
         };
         match (kind, rect) {
-            (15, Some((x, y, w, h))) if cell.0 < 0 || cell.1 < 0 => {
+            (12 | 15 | 16, Some((x, y, w, h))) if cell.0 < 0 || cell.1 < 0 => {
                 let Some(tc) = self.object_index(t).map(|k| self.cell_of(k)) else {
                     return;
                 };
@@ -363,7 +392,6 @@ impl Scene {
                 }
             }
             (12 | 15 | 16, _) if cell.0 < 0 || cell.1 < 0 => {}
-            (8, _) => {}
             (12 | 15 | 16, _) => {
                 if d != 100 && !self.side_affords(owner, idx, 1, d) {
                     return;
@@ -378,7 +406,7 @@ impl Scene {
                     return;
                 }
                 self.side_pays(owner, idx, d);
-                self.brain_cast(spell, cell.0, cell.1, Some(owner), data, caches);
+                self.brain_cast_drawn(spell, cell.0, cell.1, Some(owner), draw, data, caches);
             }
         }
     }

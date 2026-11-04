@@ -14151,3 +14151,110 @@ fn brain_behaviour_masks() {
         }
     }
 }
+
+/// The temples' casts of kinds 13, 8, 12 and 16 (command 0x22): the wind
+/// calms for the period at the wind's price (0x438300 code 0xc, message
+/// 0x186f with 0, 0x407a80); a big reef rises at the cell, its kind from
+/// the sea temple's own generator (0x438300 codes 1-4, 0x42f580 case
+/// 0xc); the phantom and the magic shield over an area go on each own ship
+/// within 15 cells of the war temple at full price (0x42faf0, 0x42ef90
+/// cases 8, 0xf; needs `OPENCONQUEST_DATA`).
+#[test]
+fn temple_casts_wind_big_reef_and_areas() {
+    use crate::economy::{TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR, TOWN};
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+    for _ in 0..600 {
+        scene.update(0.1, &data, &mut caches);
+    }
+    let owner = scene.computers.players[0].owner;
+    let town = scene
+        .objects
+        .iter()
+        .find(|o| o.owner == Some(owner) && o.class == ObjectClass::Building(TOWN))
+        .unwrap();
+    let (site, at) = (town.id, (town.x, town.y));
+    // Its two nearest buildings made temples.
+    let mut near: Vec<usize> = (0..scene.objects.len())
+        .filter(|&k| {
+            let o = &scene.objects[k];
+            o.owner == Some(owner) && o.id != site && matches!(o.class, ObjectClass::Building(_))
+        })
+        .collect();
+    near.sort_by(|&a, &b| {
+        let d =
+            |k: usize| (scene.objects[k].x - at.0).powi(2) + (scene.objects[k].y - at.1).powi(2);
+        d(a).total_cmp(&d(b))
+    });
+    let (sea, war) = (near[0], near[1]);
+    scene.objects[sea].class = ObjectClass::Building(TEMPLE_OF_THE_SEA);
+    scene.objects[war].class = ObjectClass::Building(TEMPLE_OF_WAR);
+    let (sea_id, war_id) = (scene.objects[sea].id, scene.objects[war].id);
+    scene.earn(owner, 100_000, 100_000);
+
+    // Kind 13: the wind's price (400 amber, 1 fish), a calm.
+    let funds = scene.funds(owner);
+    scene.town_spell(site, 13, (-1, -1), None, None, 0, &data, &mut caches);
+    assert_eq!(scene.funds(owner), (funds.0 - 400, funds.1 - 100));
+    assert_eq!((scene.wind.strength, scene.wind.direction), (0, u32::MAX));
+
+    // Kind 8 at 10 off: the big reef's price, a reef of class 0x259 of the
+    // temple's draw's kind, cast (mode 1).
+    let k = scene.object_index(sea_id).unwrap();
+    scene.building_draw(k);
+    let mut rng = crate::combat::Rng(scene.building_lcgs[&sea_id]);
+    let kind = rng.next() % 3 + 1;
+    let funds = scene.funds(owner);
+    let cell = (20, 20);
+    scene.town_spell(site, 8, cell, None, None, 10, &data, &mut caches);
+    assert_eq!(
+        scene.funds(owner),
+        (funds.0 - 4000 * 90 / 100, funds.1 - 10 * 90)
+    );
+    assert_eq!(scene.building_lcgs[&sea_id], rng.0);
+    let reef = scene
+        .objects
+        .iter()
+        .find(|o| o.record.class_id == 0x259 && o.record.field(4) == Some(1))
+        .expect("a cast big reef");
+    assert_eq!(
+        (
+            reef.record.field(5),
+            reef.record.field(6),
+            reef.record.field(7)
+        ),
+        (Some(20), Some(20), Some(kind))
+    );
+
+    // Kinds 12 and 16 over an area: each own ship in it within 15 cells
+    // of the war temple, at full price.
+    let w = scene.object_index(war_id).unwrap();
+    let tc = scene.cell_of(w);
+    for (kind, amber, fish) in [(12, 1000, 1), (16, 1000, 1)] {
+        let n = (0..scene.objects.len())
+            .filter(|&k| scene.objects[k].ship.is_some() && scene.objects[k].owner == Some(owner))
+            .filter(|&k| super::sea_monster::distance(scene.cell_of(k), tc) <= 15)
+            .count() as u32;
+        assert!(n > 0);
+        let funds = scene.funds(owner);
+        scene.town_spell(
+            site,
+            kind,
+            (-1, -1),
+            Some((0, 0, 200, 200)),
+            None,
+            0,
+            &data,
+            &mut caches,
+        );
+        assert_eq!(
+            scene.funds(owner),
+            (funds.0 - n * amber, funds.1 - n * fish * 100),
+            "kind {kind}: {n} ships"
+        );
+    }
+}

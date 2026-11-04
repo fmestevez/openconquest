@@ -508,7 +508,8 @@ Wind (WeatherClassTy, Weather.cpp; global object at 0x5c6a40):
 - Message 0x1103 forces strength 7 in a given direction (the CBUT_WIND
   command) for the current period, its own counter running; sent again
   while it blows, the counter becomes period less counter. Then the old
-  wind returns.
+  wind returns. In full (0x407a80): its value v gives strength 7 if v is
+  not 0, else 0, and direction v - 1 (-1 for 0).
 - Ship speed (0x4a68b0, 0x4a3f40): base speed x 0x597b2c[(merchant ? 11 :
   0) + strength][angle] / 100, where angle = |wind - heading| folded to 0-4
   (0x4e0100). Calm 60%; strength 9: 120 100 80 60 40; strength 10 (storm
@@ -7632,5 +7633,21 @@ each own ship (+0x57 1) on its cell in it, row by row, passing 0x42ef90
 d = 0, at full price. The sea temple (0x438300) sends codes 1-4 and 0xd
 to 0x42fa90 without the idle test (the town picks an idle one), the big
 reef's kind from payload `+0xd` or the temple's generator `+0x18`; code
-0xc pays the wind's price and posts 0x186f (the wind). Not ported: kinds 8
-and 13 (no player asks them), and the area casts of kinds 12 and 16.
+0xc pays the wind's price and posts 0x186f (the wind). In full (0x438300
+on command 0x22): codes 1-4, 0xd and 0x11 take the command's `+0xd` as the
+draw, or with it 0 a draw of the temple's own generator (`+0x18`), made
+before 0x42fa90 -> 0x42f580 checks the price; every sender leaves `+0xd`
+0 (0x4839e0 and the like zero the message), so a reef's and a big reef's
+kind (`draw % 3 + 1`) and a barbarian monster's type (`draw & 3`) come
+from that temple. Code 4 (kind 8) is the big reef, 0x42f580 case 0xc: case
+1's record (the reef's) with class 0x259, mode 1. Code 0xc (kind 13), with
+the discount `+0x1f` not 100, needs `(100 - d) x 400 / 100` amber and
+`(100 - d) x 1 / 100` fish (0x4a8d00, 0x4a8ba0: the wind's price,
+0x596844[0], 0x59687c[0]), else nothing; below 100 it pays them (0x4a8d40;
+0x4a8be0 `(100 - d) x 1` hundredths) and posts 0x186f {3, 0x1103, `+0xd`}
+to the weather: message 0x1103 with 0, a calm (below). The area casts of
+codes 8 and 0xf (kinds 12 and 16) are code 0xe's (0x42faf0 takes spells 9,
+10 and 11; 0x42ef90's cases 8, 0xe and 0xf differ only in the spell
+checked, 9, 10, 11). Ported (`town_spell`, `spawn_big_reef`,
+`Weather::blow`). No sender asks kinds 8 and 13, nor the area for 12 and
+16.

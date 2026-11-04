@@ -114,14 +114,21 @@ impl Wind {
     /// wind returns; called again while it blows, what was left becomes
     /// what has passed.
     pub fn force(&mut self, direction: u32) {
+        self.blow((direction & 7) + 1);
+    }
+
+    /// Message 0x1103 with `value` (0x407a80): strength 7 towards
+    /// `value - 1`, or 0 for a value of 0 (the direction then -1), for the
+    /// current period as `force`.
+    pub fn blow(&mut self, value: u32) {
         let period = self.period * crate::clock::TICK;
         let (seconds, strength, old) = match self.forced {
             Some((left, s, d)) => (period - left, s, d),
             None => (period, self.strength, self.direction),
         };
         self.forced = Some((seconds, strength, old));
-        self.strength = 7;
-        self.direction = direction & 7;
+        self.strength = if value != 0 { 7 } else { 0 };
+        self.direction = value.wrapping_sub(1);
     }
 
     /// Speed factor for a ship sailing on `heading` (0x4a68b0).

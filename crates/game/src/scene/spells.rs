@@ -702,6 +702,38 @@ impl Scene {
         Ok(())
     }
 
+    /// A cast big reef at map cell `(cx, cy)` (0x42f580 case 0xc: case 1's
+    /// record, a reef's, of class 0x259; mode 1, field 7 the kind `draw %
+    /// 3 + 1`): up at once, gone after 7500-15000 ticks (`hazards`).
+    pub(super) fn spawn_big_reef(
+        &mut self,
+        (cx, cy): (i32, i32),
+        draw: u32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Result<(), String> {
+        let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
+        let mut fields = vec![0u32; 17];
+        fields[0] = 0x259;
+        fields[1] = 1;
+        fields[4] = 1;
+        fields[5] = cx as u32;
+        fields[6] = cy as u32;
+        fields[7] = draw % 3 + 1;
+        let rec = ObjectRecord {
+            id,
+            class_id: 0x259,
+            fields,
+        };
+        let obj = objects::resolve(data, caches, &rec)
+            .map_err(|e| format!("The spell failed: {e:#}"))?
+            .ok_or("The spell failed")?;
+        self.objects.push(obj);
+        self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));
+        self.create_hazard(id, data, caches);
+        Ok(())
+    }
+
     /// Ships caught in whirlpools or on reefs take damage.
     pub(super) fn run_hazards(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         let struck = self.run_tornadoes(dt);

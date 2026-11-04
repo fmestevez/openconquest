@@ -2417,6 +2417,22 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) {
+        self.brain_cast_drawn(spell, cx, cy, owner, None, data, caches);
+    }
+
+    /// `brain_cast` with the caster's draw (0x42f580's fifth argument: a
+    /// sea temple's own generator's, 0x438300); without one the scene's.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn brain_cast_drawn(
+        &mut self,
+        spell: crate::magic::Spell,
+        cx: i32,
+        cy: i32,
+        owner: Option<(u32, u32)>,
+        draw: Option<u32>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         use crate::magic::Spell;
         let t = TILE_SIZE as f32;
         let (x, y) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
@@ -2430,7 +2446,8 @@ impl Scene {
             }
             Spell::Fireball => self.spawn_fireball(cx, cy, owner, data, caches),
             Spell::Waterspout | Spell::Whirlpool | Spell::Reef | Spell::Monster if water => {
-                if let Err(e) = self.spawn_hazard(spell, cx, cy, owner, data, caches) {
+                if let Err(e) = self.spawn_hazard_drawn(spell, (cx, cy), owner, draw, data, caches)
+                {
                     eprintln!("a brain's spell failed: {e}");
                 }
             }
