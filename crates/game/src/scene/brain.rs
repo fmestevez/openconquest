@@ -84,16 +84,26 @@ pub enum Target {
 /// One step of a fleet's program.
 #[derive(Debug, Clone, Copy)]
 pub enum Op {
-    /// Set the fleet's behaviour, then go on (0x4797e0 with 137 of its 165
-    /// call sites' `(0, 0xfffffff, -1, -1)`: `Scene::behave`). Not
-    /// ported: the other 28 sites' masks (classes 0x3ffff at 0x4615e1,
-    /// 0x4618b0, 0x461b0f, 0x464c32, 0x464ed6, 0x46510b, 0x468344,
-    /// 0x46860e, 0x46897b, 0x468b9f, 0x46bc00, 0x46bd33, 0x46bf30,
-    /// 0x46c3e0, 0x46c590, 0x46c8d6, 0x46ca96, 0x46cc56, 0x46ce16;
-    /// players 0x10020 at 0x451938, 0x451b06, 0x451d33, 0x452973,
-    /// 0x45431d, 0x45442b; players and third `ecx`, not traced, at
-    /// 0x4652fd, 0x47bd7e, 0x47beeb): those fleets take the default.
+    /// Set the fleet's behaviour, then go on (0x4797e0 with the default
+    /// masks `(0, 0xfffffff, -1, -1)` of 139 of its 165 call sites:
+    /// `Scene::behave`; the repair members' 0x47bd7e and 0x47beeb push
+    /// `ecx`, which holds -1 there, `or ecx, -1` at 0x47bd11 / 0x47be7c).
     Behave { next: u32 },
+    /// Set the fleet's behaviour with a site's own masks, then go on: the
+    /// barbarians' fleets of miss008-miss011 give classes 0x3ffff (0x4615e1,
+    /// 0x4618b0, 0x461b0f, 0x464c32, 0x464ed6, 0x46510b, 0x4652fd,
+    /// 0x468344, 0x46860e, 0x46897b, 0x468b9f, 0x46bc00, 0x46bd33,
+    /// 0x46bf30, 0x46c3e0, 0x46c590, 0x46c8d6, 0x46ca96, 0x46cc56,
+    /// 0x46ce16), miss004's Persian posts and raiders players 0x10020
+    /// (0x451938, 0x451b06, 0x451d33, 0x452973; its start's 0x45431d,
+    /// 0x45442b go to members that never run); the rest as the default.
+    BehaveWith {
+        next: u32,
+        classes: u32,
+        players: u32,
+    },
+    /// Go to `next` at once (0x479750), nothing else.
+    Goto { next: u32 },
     /// Wait (0x47a3b0).
     Wait { next: u32, ticks: u32 },
     /// Wait as many ticks as the fleet's variable `var` holds.
@@ -1087,6 +1097,15 @@ impl Scene {
                 self.behave(k, 0, 0xfff_ffff, u32::MAX, u32::MAX);
                 self.set_state(k, next)
             }
+            Op::BehaveWith {
+                next,
+                classes,
+                players,
+            } => {
+                self.behave(k, 0, classes, players, u32::MAX);
+                self.set_state(k, next)
+            }
+            Op::Goto { next } => self.set_state(k, next),
             Op::Wait { next, ticks } => {
                 if started && elapsed >= ticks {
                     self.set_state(k, next);
@@ -4774,7 +4793,12 @@ mod miss004 {
             },
         ];
         match state {
-            0 => Op::Behave { next: 5 },
+            // 0x451938: players 0x10020.
+            0 => Op::BehaveWith {
+                next: 5,
+                classes: 0xfff_ffff,
+                players: 0x10020,
+            },
             5 => Op::Branch {
                 test: |scene, k| count(scene, k, &[ROYAL]) == 2,
                 yes: &Op::Move {
@@ -4785,7 +4809,7 @@ mod miss004 {
                     ticks: 0,
                     events: W,
                 },
-                no: &Op::Behave { next: 6 },
+                no: &Op::Goto { next: 6 },
             },
             6 => Op::Move {
                 tol: 2,
@@ -4833,7 +4857,9 @@ mod miss004 {
             },
         ];
         match state {
-            0 => Op::Custom(|scene, _| {
+            0 => Op::Custom(|scene, k| {
+                // 0x451b06: players 0x10020.
+                scene.behave(k, 0, 0xfff_ffff, 0x10020, u32::MAX);
                 set_field(scene, CALLED, 0);
                 5
             }),
@@ -4847,7 +4873,7 @@ mod miss004 {
                     ticks: 0,
                     events: W,
                 },
-                no: &Op::Behave { next: 6 },
+                no: &Op::Goto { next: 6 },
             },
             6 => Op::Move {
                 tol: 2,
@@ -4945,7 +4971,9 @@ mod miss004 {
         const ROUND: &[(i32, i32, u32)] = &[(8, 9, 500), (24, 18, 750), (8, 9, 750)];
         const WAIT_BASE: [u32; 3] = [7, 5, 3];
         match state {
-            0 => Op::Custom(|scene, _| {
+            0 => Op::Custom(|scene, k| {
+                // 0x451d33: players 0x10020.
+                scene.behave(k, 0, 0xfff_ffff, 0x10020, u32::MAX);
                 if field(scene, SWEEP) == 0 {
                     let r = scene.brain_draw() % 3;
                     set_field(scene, SWEEP, r);
@@ -4968,7 +4996,7 @@ mod miss004 {
                     ticks: 0,
                     events: HOME,
                 },
-                no: &Op::Behave { next: 6 },
+                no: &Op::Goto { next: 6 },
             },
             6 => Op::Move {
                 tol: 3,
@@ -5281,7 +5309,9 @@ mod miss004 {
         const BOARDERS: [usize; 3] = [1, 2, 2];
         const WAIT_BASE: [u32; 3] = [7, 5, 3];
         match state {
-            0 => Op::Custom(|scene, _| {
+            0 => Op::Custom(|scene, k| {
+                // 0x452973: players 0x10020.
+                scene.behave(k, 0, 0xfff_ffff, 0x10020, u32::MAX);
                 if field(scene, SOUTH_WAIT) == 0 {
                     let r = scene.brain_draw() % 3;
                     set_field(scene, SOUTH_WAIT, (r + WAIT_BASE[difficulty()]) * 1500);
@@ -5302,7 +5332,7 @@ mod miss004 {
                     ticks: 0,
                     events: HOME,
                 },
-                no: &Op::Behave { next: 6 },
+                no: &Op::Goto { next: 6 },
             },
             6 => Op::Move {
                 tol: 2,
@@ -5612,7 +5642,7 @@ mod miss005 {
                     ticks: 0,
                     events: W,
                 },
-                no: &Op::Behave { next: 6 },
+                no: &Op::Goto { next: 6 },
             },
             6 => Op::Move {
                 tol: 1,
@@ -5775,7 +5805,7 @@ mod miss005 {
                     ticks: 0,
                     events: HOME,
                 },
-                no: &Op::Behave { next: 6 },
+                no: &Op::Goto { next: 6 },
             },
             6 => Op::Patrol {
                 tol: 2,
@@ -5799,7 +5829,7 @@ mod miss005 {
                     ticks: 1500,
                     events: &[],
                 },
-                no: &Op::Behave { next: 0 },
+                no: &Op::Goto { next: 0 },
             },
             30 => Op::Attack {
                 next: 0,
@@ -5834,7 +5864,7 @@ mod miss005 {
                     ticks: 6000,
                     events: RAID,
                 },
-                no: &Op::Behave { next: 50 },
+                no: &Op::Goto { next: 50 },
             },
             50 => Op::Branch {
                 test: |scene, _| field(scene, TURN_BACK) == 0,
@@ -6932,7 +6962,7 @@ mod miss006 {
                     ticks: 0,
                     events: &[BARBARIAN_HOME],
                 },
-                no: &Op::Behave { next: 6 },
+                no: &Op::Goto { next: 6 },
             },
             6 => Op::Patrol {
                 tol: 2,
@@ -8973,7 +9003,7 @@ mod miss008 {
         wide: &'static [Event],
     ) -> Op {
         match state {
-            // Behave (a no-op here), then choose.
+            // Behaves (in `start`), then chooses.
             0 => Op::Custom(start),
             5 => Op::Patrol {
                 tol: 2,
@@ -9057,6 +9087,8 @@ mod miss008 {
         barbarian(
             state,
             |scene, k| {
+                // 0x4615e1: classes 0x3ffff.
+                scene.behave(k, 0, 0x3ffff, u32::MAX, u32::MAX);
                 let n = scene.fleet_types(k);
                 let have = n[ROYAL as usize] + n[BOMBER as usize] + n[KILLER as usize];
                 if (have as u32) < 2 * difficulty() as u32 + 2 {
@@ -9113,6 +9145,8 @@ mod miss008 {
             _ => barbarian(
                 state,
                 |scene, k| {
+                    // 0x4618b0: classes 0x3ffff.
+                    scene.behave(k, 0, 0x3ffff, u32::MAX, u32::MAX);
                     let n = scene.fleet_types(k);
                     let have = n[ROYAL as usize] + n[BOMBER as usize];
                     if (have as u32) < difficulty() as u32 + 3 {
@@ -9132,7 +9166,12 @@ mod miss008 {
     /// 7500 ticks, rest 1500.
     fn barbarian_fish(state: u32) -> Op {
         match state {
-            0 => Op::Behave { next: 5 },
+            // 0x461b0f: classes 0x3ffff.
+            0 => Op::BehaveWith {
+                next: 5,
+                classes: 0x3ffff,
+                players: u32::MAX,
+            },
             5 => Op::Gather {
                 next: 15,
                 area: (0, 7, 23, 15),
@@ -9804,6 +9843,8 @@ mod miss009 {
                 match scene.first_human_zone(&EAST_ZONES) {
                     Some(i) if state != 10 => {
                         scene.set_fleet_area(k, EAST_ZONES[i]);
+                        // 0x46510b: classes 0x3ffff, then state 10.
+                        scene.behave(k, 0, 0x3ffff, u32::MAX, u32::MAX);
                         scene.set_state(k, 10);
                     }
                     _ => scene.set_state(k, 20),
@@ -10098,11 +10139,13 @@ mod miss009 {
             },
         ];
         match state {
-            // Behave (a no-op here), then choose.
+            // Behaves, then chooses.
             0 => Op::Custom(|scene, k| {
                 if var(scene, 0, WOKEN) == 0 {
                     return 0;
                 }
+                // 0x464c32: classes 0x3ffff.
+                scene.behave(k, 0, 0x3ffff, u32::MAX, u32::MAX);
                 let n = scene.fleet_types(k);
                 let have = [ROYAL, BOMBER, RAMMER, KILLER]
                     .iter()
@@ -10173,7 +10216,12 @@ mod miss009 {
             },
         ];
         match state {
-            0 => Op::Behave { next: 10 },
+            // 0x464ed6: classes 0x3ffff.
+            0 => Op::BehaveWith {
+                next: 10,
+                classes: 0x3ffff,
+                players: u32::MAX,
+            },
             10 => Op::Patrol {
                 tol: 2,
                 timeout: 0,
@@ -10246,7 +10294,15 @@ mod miss009 {
     /// ticks, rest 1500.
     fn fishers(state: u32) -> Op {
         match state {
-            0 => Op::Custom(|scene, _| if scene.brain_draw() & 1 != 0 { 5 } else { 6 }),
+            0 => Op::Custom(|scene, k| {
+                // 0x4652fd: classes 0x3ffff.
+                scene.behave(k, 0, 0x3ffff, u32::MAX, u32::MAX);
+                if scene.brain_draw() & 1 != 0 {
+                    5
+                } else {
+                    6
+                }
+            }),
             5 => Op::Gather {
                 next: 15,
                 area: (10, 20, 20, 20),
@@ -11052,6 +11108,15 @@ mod miss010 {
     /// watching its home (5), else watching wider waters (10).
     fn choose() -> Op {
         Op::Custom(|scene, k| {
+            // The barbarians' patrols give classes 0x3ffff (0x468344,
+            // 0x46860e), the Persians' the default (0x469580, 0x4697d0,
+            // 0x469a80).
+            let classes = if scene.fleet_group(k) == Some(0) {
+                0x3ffff
+            } else {
+                0xfff_ffff
+            };
+            scene.behave(k, 0, classes, u32::MAX, u32::MAX);
             if count(scene, k, strength(k)) + 1 < var(scene, k, N) {
                 5
             } else {
@@ -11209,7 +11274,12 @@ mod miss010 {
         ];
         const ROUND: &[(i32, i32, u32)] = &[(51, 23, 750), (56, 28, 1000), (54, 16, 750)];
         match state {
-            0 => Op::Behave { next: 10 },
+            // 0x46897b: classes 0x3ffff.
+            0 => Op::BehaveWith {
+                next: 10,
+                classes: 0x3ffff,
+                players: u32::MAX,
+            },
             30 => Op::Attack {
                 next: 0,
                 failed: 0,
@@ -11232,7 +11302,12 @@ mod miss010 {
     /// 7500 ticks, rest 1500.
     fn fishers(state: u32) -> Op {
         match state {
-            0 => Op::Behave { next: 5 },
+            // 0x468b9f: classes 0x3ffff.
+            0 => Op::BehaveWith {
+                next: 5,
+                classes: 0x3ffff,
+                players: u32::MAX,
+            },
             5 => Op::Gather {
                 next: 15,
                 area: (0, 0, 20, 30),
@@ -11981,7 +12056,12 @@ mod miss011 {
         const W: &[Event] = &[zone((49, 12, 15, 6)), attacked(250)];
         const ROUND: &[(i32, i32, u32)] = &[(50, 14, 750), (54, 14, 750), (59, 14, 750)];
         match state {
-            0 => Op::Behave { next: 5 },
+            // 0x46bc00: classes 0x3ffff.
+            0 => Op::BehaveWith {
+                next: 5,
+                classes: 0x3ffff,
+                players: u32::MAX,
+            },
             5 => Op::Patrol {
                 tol: 2,
                 timeout: 5,
@@ -12008,7 +12088,12 @@ mod miss011 {
             events: &[],
         };
         match state {
-            0 => Op::Behave { next: 5 },
+            // 0x46bd33: classes 0x3ffff.
+            0 => Op::BehaveWith {
+                next: 5,
+                classes: 0x3ffff,
+                players: u32::MAX,
+            },
             5 | 11 => Op::Gather {
                 next: state + 2,
                 area: AREA,
@@ -12060,7 +12145,12 @@ mod miss011 {
         const ROUND: &[(i32, i32, u32)] =
             &[(49, 17, 500), (56, 18, 750), (62, 16, 500), (56, 18, 875)];
         match state {
-            0 => Op::Behave { next: 5 },
+            // 0x46bf30: classes 0x3ffff.
+            0 => Op::BehaveWith {
+                next: 5,
+                classes: 0x3ffff,
+                players: u32::MAX,
+            },
             5 => Op::Custom(|scene, k| if strong(scene, k) { 10 } else { MARCH }),
             MARCH => Op::Move {
                 tol: 2,
@@ -12096,7 +12186,12 @@ mod miss011 {
         const W: &[Event] = &[WEST_COAST[0], WEST_COAST[1], attacked(250)];
         const ROUND: &[(i32, i32, u32)] = &[(6, 28, 750), (11, 29, 750)];
         match state {
-            0 => Op::Behave { next: 5 },
+            // 0x46c3e0: classes 0x3ffff.
+            0 => Op::BehaveWith {
+                next: 5,
+                classes: 0x3ffff,
+                players: u32::MAX,
+            },
             5 => Op::Patrol {
                 tol: 2,
                 timeout: 5,
@@ -12128,6 +12223,8 @@ mod miss011 {
             &[(14, 21, 500), (15, 26, 750), (17, 31, 500), (15, 26, 875)];
         match state {
             0 => Op::Custom(|scene, k| {
+                // 0x46c590: classes 0x3ffff.
+                scene.behave(k, 0, 0x3ffff, u32::MAX, u32::MAX);
                 let ticks = (scene.brain_draw() % 4 + [10, 8, 6][difficulty()]) * 1500;
                 set_var(scene, k, 0, ticks);
                 5
@@ -12178,7 +12275,12 @@ mod miss011 {
     fn sentry(state: u32, post: (i32, i32)) -> Op {
         const W: &[Event] = &[zone((5, 7, 9, 7)), attacked(0)];
         match state {
-            0 => Op::Behave { next: 5 },
+            // 0x46c8d6, 0x46ca96, 0x46cc56, 0x46ce16: classes 0x3ffff.
+            0 => Op::BehaveWith {
+                next: 5,
+                classes: 0x3ffff,
+                players: u32::MAX,
+            },
             5 => Op::Move {
                 tol: 2,
                 ok: 0,

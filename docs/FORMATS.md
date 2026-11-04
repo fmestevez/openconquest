@@ -7171,11 +7171,34 @@ with 1; each order's maker, 0x4ccc30, 0x4d1ce0, 0x4d6a90, 0x4c8a80,
 0x4cbcf0, 0x4da550, 0x4db9e0, ends a block of another kind and makes a
 new one, rewriting one of its own kind); the gather zones (0x4c6100 a
 new escort with -1s when `+0x14` is 0, 0x4c618a; notice 300 the group's,
-zeroes when never given, after the held command or next deposit). The brains' 0x4797e0 call sites: 137 with
-classes 0xfffffff, players -1, third -1; 19 classes 0x3ffff; 6 players
-0x10020; 3 with `ecx` (gather_escort_spec). Ported: 0x4c4350 for the
-brains' `Op::Behave` (the 137 sites' masks for every one), the move
-order's join and pass. Ported since: the computers' 0x482eb0 and
+zeroes when never given, after the held command or next deposit). The brains' 0x4797e0 call sites
+(`(group, member, p3, classes, players, third)`, stored at member
+`+0x28`, `+0x2c`, `+0x30`): 137 with classes 0xfffffff, players -1,
+third -1; 3 pushing `ecx`, which holds -1 there (0x4652fd: `or ecx, -1`
+at 0x46523c; 0x47bd7e, 0x47beeb in the repair members 0x47bcd0 /
+0x47be40: 0x47bd11, 0x47be7c), so 0x47bd7e and 0x47beeb are the default
+and 0x4652fd classes 0x3ffff; 20 with classes 0x3ffff, players -1, all
+in the barbarians' members of miss008-miss011 (0x4615e1 0x461480,
+0x4618b0 0x461720, 0x461b0f 0x461a40, 0x464c32 0x464b20, 0x464ed6
+0x464da0, 0x46510b 0x465010, 0x4652fd 0x465200, 0x468344 0x468240,
+0x46860e 0x4684e0, 0x46897b 0x4687a0, 0x468b9f 0x468ad0, 0x46bc00
+0x46bb30, 0x46bd33 0x46bce0, 0x46bf30 0x46be60, 0x46c3e0 0x46c310,
+0x46c590 0x46c4c0, 0x46c8d6, 0x46ca96, 0x46cc56, 0x46ce16 the sentries
+0x46c880-0x46cdc0); 6 with players 0x10020, classes 0xfffffff: miss004's
+0x451938 0x451890, 0x451b06 0x451a60, 0x451d33 0x451c60, 0x452973
+0x4528a0, and its start's 0x45431d / 0x45442b for the members (0, 7) and
+(2, 5), which never run and hold no ships (their cells, (8, 2), (10, 8),
+(7, 13) and (7, 22), (7, 27), have none at the start; nothing joins
+them), so the port leaves them out. Every site is in its member's state
+0 (with the call before the state's other work), but 0x46510b (miss009's
+south-eastern guard, before its switch: a zone of 0x5b24b0 with the
+player in it and the state not 10, then state 10) and the case 0x32 of
+miss006's raiders (0x456580, 0x456e80). Ported: 0x4c4350 for the brains'
+`Op::Behave` (default masks) and `Op::BehaveWith` (a site's own), every
+site above by its masks, and the move order's join and pass. (Where a
+member only sets its state, 0x479750, the port's `Op::Goto`; miss004's
+and miss005's members' "not strong enough" branches and miss006's
+raiders' had been written as behaviour sends.) Ported since: the computers' 0x482eb0 and
 0x4c5b30 (for the computers' flotillas; a brain fleet's new block is
 not, brain.rs), the gather zones' sends (gather.rs: a brain's fleet's
 `+0x14` its behaviour given, a computer's always, a human's never), and
@@ -7188,8 +7211,7 @@ the classes (`+0x490`) and the kinds (`+0x494`), sets every unit group
 at will (0x4469a0) and `+0x498 = 0` (ported: `Scene::fort_command`).
 The computers' attack zone's (0x4d6960's join, 0x4d6cd0's pass) and
 the human's attack zone's (0x49da43) are ported (above). Not ported:
-the 28 other sites' masks (listed at `Op::Behave`), and the other fleet
-orders' calls of 0x4c42f0 (0x4c449b, 0x4cbcb7, 0x4cde70, 0x4cf296,
+the other fleet orders' calls of 0x4c42f0 (0x4c449b, 0x4cbcb7, 0x4cde70, 0x4cf296,
 0x4d02bb, 0x4d1f8a, 0x4d4f84, 0x4d7966, 0x4d8185, 0x4d8c94, 0x4da1e2,
 0x4db1ec, 0x4dc2fa; not read).
 

@@ -37,7 +37,8 @@ are in `story.rs`.
   original's p4), Gather on (`empty` in `fleet_step`); `gate` holds a
   member whose own code tests its ships first (miss008's strike).
 - A program is `fn(state: u32) -> Op`. `Op` is one of the original's
-  primitives: `Behave`, `Wait`, `WaitVar`, `Watch`, `Move`, `Gather`,
+  primitives: `Behave` (default masks; `BehaveWith` for a site's own,
+  0x4797e0), `Goto` (0x479750 alone), `Wait`, `WaitVar`, `Watch`, `Move`, `Gather`,
   `Patrol`, `Attack`, `Build`, or `Custom(fn(&mut Scene, usize) -> u32)` for
   the member-specific code between primitives (returns the next state);
   `Branch { test, yes, no }` for a member's own test before a primitive

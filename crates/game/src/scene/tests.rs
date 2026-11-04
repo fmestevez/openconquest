@@ -13828,3 +13828,78 @@ fn brain_full_town_order_goes_through_the_land_fleet() {
         .all(|e| matches!(e.job, Job::Ask { .. }) || e.prio == 0));
     assert_eq!(scene.brain_order(k, 1, 0x10, None), None, "not ended");
 }
+
+/// The brains' behaviour sites with their own masks (0x4797e0): the
+/// barbarians' fleets of miss008-miss011 give classes 0x3ffff, miss004's
+/// Persian posts and raiders players 0x10020, the rest the default, at
+/// each member's first turn (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brain_behaviour_masks() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    const ALL: u32 = 0xfff_ffff;
+    const NONE: u32 = u32::MAX;
+    // (member, (players, classes, third)).
+    type Want = ((u8, usize), (u32, u32, u32));
+    let cases: &[(&str, &[Want])] = &[
+        (
+            "miss004",
+            &[
+                ((0, 0), (NONE, ALL, NONE)),
+                ((0, 2), (0x10020, ALL, NONE)),
+                ((0, 3), (0x10020, ALL, NONE)),
+                ((0, 4), (0x10020, ALL, NONE)),
+                ((2, 2), (0x10020, ALL, NONE)),
+            ],
+        ),
+        (
+            "miss008",
+            &[
+                ((0, 4), (NONE, 0x3ffff, NONE)),
+                ((0, 5), (NONE, 0x3ffff, NONE)),
+                ((0, 6), (NONE, 0x3ffff, NONE)),
+            ],
+        ),
+        (
+            "miss010",
+            &[
+                ((0, 4), (NONE, 0x3ffff, NONE)),
+                ((0, 5), (NONE, 0x3ffff, NONE)),
+                ((0, 6), (NONE, 0x3ffff, NONE)),
+                ((0, 7), (NONE, 0x3ffff, NONE)),
+                ((1, 5), (NONE, ALL, NONE)),
+                ((1, 8), (NONE, ALL, NONE)),
+            ],
+        ),
+        (
+            "miss011",
+            &[
+                ((0, 1), (NONE, 0x3ffff, NONE)),
+                ((0, 2), (NONE, 0x3ffff, NONE)),
+                ((0, 3), (NONE, 0x3ffff, NONE)),
+                ((0, 5), (NONE, 0x3ffff, NONE)),
+                ((0, 6), (NONE, 0x3ffff, NONE)),
+                ((0, 7), (NONE, 0x3ffff, NONE)),
+                ((0, 10), (NONE, 0x3ffff, NONE)),
+            ],
+        ),
+    ];
+    for &(name, members) in cases {
+        let mut scene = Scene::load(&data, &mut caches, name).unwrap();
+        // Every member has had its first turn (5 x (g + m) mod 50).
+        for _ in 0..60 {
+            scene.update(0.04, &data, &mut caches);
+        }
+        for &((g, m), want) in members {
+            let k = scene.member_fleet(g, m).unwrap();
+            assert_eq!(
+                scene.brain.as_ref().unwrap().fleets[k].behaviour,
+                Some(want),
+                "{name} ({g}, {m})"
+            );
+        }
+    }
+}
