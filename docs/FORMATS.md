@@ -7199,8 +7199,16 @@ site above by its masks, and the move order's join and pass. (Where a
 member only sets its state, 0x479750, the port's `Op::Goto`; miss004's
 and miss005's members' "not strong enough" branches and miss006's
 raiders' had been written as behaviour sends.) Ported since: the computers' 0x482eb0 and
-0x4c5b30 (for the computers' flotillas; a brain fleet's new block is
-not, brain.rs), the gather zones' sends (gather.rs: a brain's fleet's
+0x4c5b30 (for the computers' flotillas, and for a brain fleet's new
+block, `brain_block`: the campaign's mission opener 0x537f60 gives every
+player but the human's side 3, 0x5381f2 (the human's kind 2 side 1), so
+0x4a1150 sends for the brains' groups too; the kinds a brain's fleet
+gives, 100 move 0x4ccc30, 0x78 gather 0x4c8a80, 0x70 attack 0x4d6a90,
+0x82 repair 0x4cdf80, 0xbe treasure 0x4da550, 0x8c found 0x4cbcf0, each
+rewriting a block of its kind (and of its second word, 100/1, 0x78/0x3d,
+0x70/0x21, 0xbe/0x79, which only the makers write in the routines read)
+and ending one of another kind; a status report never ends one,
+0x4ccf60), the gather zones' sends (gather.rs: a brain's fleet's
 `+0x14` its behaviour given, a computer's always, a human's never), and
 for the computers the case 300 of the guard, attack, founding, dock and
 treasure blocks and the move's join and pass (above). A fort of a computer's forts flotilla (role

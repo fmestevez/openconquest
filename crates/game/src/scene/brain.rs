@@ -249,6 +249,11 @@ pub struct Fleet {
     /// until the first.
     #[serde(default)]
     pub behaviour: Option<(u32, u32, u32)>,
+    /// The group's task block (`+0x25`): the fleet order it was made for
+    /// (100 move, 0x78 gather, 0x70 attack, 0x82 repair, 0xbe treasure,
+    /// 0x8c found), 0 none (`brain_block`).
+    #[serde(default)]
+    pub block: u32,
     /// The member's town order sent (0x47b130 with `+0x10` 1, set at its
     /// first call, cleared with the state by 0x479750): its later calls
     /// read the order's state.
@@ -470,6 +475,7 @@ impl Fleet {
             elapsed: 0,
             span: 0,
             behaviour: None,
+            block: 0,
             ordered: false,
             build: None,
         }
@@ -1702,6 +1708,7 @@ impl Scene {
         // dock pick (args[1] == 0, args[2] >= 0) before `+0x21` is written,
         // so on the player's fleet 0, then `+0x21` = yard, `+0x18` (the
         // fleet a mended ship is handed to) 0, `+0xc` 0.
+        self.brain_block(k, 0x82);
         self.end_zone(super::gather::ZoneGroup::Brain(k));
         self.brain.as_mut().unwrap().fleets[k].repair = Some(RepairOrder::default());
         self.brain.as_mut().unwrap().fleets[k].move_order = None;
@@ -1995,6 +2002,39 @@ impl Scene {
         }
     }
 
+    /// A fleet order of kind `code` (100, 0x78, 0x70, 0x82, 0xbe, 0x8c)
+    /// reaches fleet `k`'s group: its handler (0x4ccc30, 0x4c8a80,
+    /// 0x4d6a90, 0x4cdf80, 0x4da550, 0x4cbcf0) ends a block of another kind (0x4a1c60) and
+    /// makes a new one, rewriting one of its own kind (the kind and its
+    /// second word, which only the maker writes: 100/1, 0x78/0x3d,
+    /// 0x70/0x21, 0xbe/0x79; 0x82 and 0x8c the kind alone). A new block makes the
+    /// notices (0x4a1150) and, the brains' players being side 3 (the
+    /// campaign's 0x537f60 gives every player but the human's 3,
+    /// 0x5381f2), sends every ship of the group `#` sub 1 with the
+    /// group's `+0x19`, `+0x1d`, `+0x21` (0x4c5b30 -> 0x4c4230, queued:
+    /// zeroes when no behaviour was given). Nothing else ends a brain
+    /// fleet's block in the port. (Not read: other writers of the
+    /// blocks' second words than their makers.)
+    pub(super) fn brain_block(&mut self, k: usize, code: u32) {
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        if f.block == code {
+            return;
+        }
+        f.block = code;
+        let (players, classes, third) = f.behaviour.unwrap_or((0, 0, 0));
+        for ship in self.fleet_ships(k) {
+            if self.object_index(ship).is_some() {
+                self.post(super::Order::BehaviourCommand {
+                    ship,
+                    sub: 1,
+                    players,
+                    classes,
+                    third,
+                });
+            }
+        }
+    }
+
     /// Fleet order 100 (0x479870 -> 0x4a09d0 -> 0x4ccc30): the fleet's
     /// move block is made (0x4cc500; any other task ended, 0x4a1c60) or,
     /// a move already, rewritten, keeping its ships' cells; then each ship
@@ -2007,6 +2047,7 @@ impl Scene {
     /// `tol` is the order's tolerance (payload `+0xc`, block `+0x18`),
     /// read by its state (0x4ccf60).
     pub(super) fn fleet_move(&mut self, k: usize, to: (i32, i32), tol: i32) {
+        self.brain_block(k, 100);
         self.end_zone(super::gather::ZoneGroup::Brain(k));
         let f = &mut self.brain.as_mut().unwrap().fleets[k];
         f.repair = None;
@@ -2250,6 +2291,7 @@ impl Scene {
     /// gather zone over `area`, flags 0 (0x47a570's argument 11 is 0 in
     /// every mission), no port list, no route, no key flags.
     fn fleet_gather(&mut self, k: usize, area: Cells, resource: Resource) {
+        self.brain_block(k, 0x78);
         self.brain.as_mut().unwrap().fleets[k].move_order = None;
         let ships = self.fleet_ships(k);
         self.start_zone(
@@ -2263,6 +2305,8 @@ impl Scene {
     }
 
     fn fleet_attack(&mut self, k: usize, (x, y, w, h): Cells) {
+        // Fleet order 0x70 (0x479a40 -> 0x4d6a90).
+        self.brain_block(k, 0x70);
         self.brain.as_mut().unwrap().fleets[k].move_order = None;
         self.end_zone(super::gather::ZoneGroup::Brain(k));
         let t = TILE_SIZE as f32;
@@ -6429,6 +6473,8 @@ mod miss005 {
             // The landing: a medium fort (0x47b000, order 0x8c, its 1 x 1
             // area written into `+0x40` by 0x479af0).
             45 => Op::Custom(|scene, k| {
+                // Fleet order 0x8c (0x4cbcf0, its block 0x4cb000).
+                scene.brain_block(k, 0x8c);
                 let west = k == WEST;
                 let at = if west { (8, 20) } else { (19, 16) };
                 scene.brain.as_mut().unwrap().fleets[k].last_area = (at.0, at.1, 1, 1);
@@ -8236,6 +8282,7 @@ mod miss007 {
             // the treasure command goes through 0x520cc0 to the next tick;
             // here it is given at once, its answer picking the ship.)
             15 => Op::Custom(|scene, k| {
+                scene.brain_block(k, 0xbe);
                 let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
                 scene.brain.as_mut().unwrap().fleets[k].last_area = (0, 0, w, h);
                 match scene.loose_treasure(SWORD) {

@@ -1996,6 +1996,64 @@ fn fleet_behaviour_command() {
     );
 }
 
+/// A brain fleet's new block (0x4a1150 -> 0x4c5b30): a fleet order of
+/// another kind than its block sends each ship `#` sub 1 with the group's
+/// masks, zeroes when never given; one of the same kind rewrites the block
+/// and sends nothing (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brain_new_block_behaviour() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    for _ in 0..5 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    let ship = scene.brain.as_ref().unwrap().fleets[0].ships[0];
+    let i = scene.object_index(ship).unwrap();
+    let reset = |scene: &mut Scene| {
+        scene.objects[i].ship.as_mut().unwrap().behaviour = crate::objects::Behaviour::default();
+    };
+    let b = |s: &Scene| s.objects[i].ship.as_ref().unwrap().behaviour;
+    let t = TILE_SIZE as f32;
+    let to = (
+        (scene.objects[i].x / t) as i32,
+        (scene.objects[i].y / t) as i32,
+    );
+    {
+        let f = &mut scene.brain.as_mut().unwrap().fleets[0];
+        f.behaviour = Some((0x10020, 0x3ffff, u32::MAX));
+        f.block = 0x78;
+    }
+    reset(&mut scene);
+    scene.fleet_move(0, to, 2);
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[0].block, 100);
+    scene.deliver(&data, &mut caches);
+    let got = b(&scene);
+    assert!(got.guard);
+    assert_eq!((got.players, got.classes), (0x10020, 0x3ffff));
+    // The same kind: rewritten, nothing sent.
+    reset(&mut scene);
+    scene.fleet_move(0, to, 2);
+    scene.deliver(&data, &mut caches);
+    assert!(!b(&scene).guard);
+    // Never given a behaviour: the group's zeroes.
+    {
+        let f = &mut scene.brain.as_mut().unwrap().fleets[0];
+        f.behaviour = None;
+        f.block = 0;
+    }
+    reset(&mut scene);
+    scene.objects[i].ship.as_mut().unwrap().behaviour.players = 7;
+    scene.fleet_move(0, to, 2);
+    scene.deliver(&data, &mut caches);
+    let got = b(&scene);
+    assert!(got.guard);
+    assert_eq!((got.players, got.classes), (0, 0));
+}
+
 /// A boat hunts a leviathan and brings it home for 5000 amber and 2500
 /// fish; the zone is then empty (needs `OPENCONQUEST_DATA`).
 #[test]
