@@ -7276,9 +7276,115 @@ battle.rs `zone_target`). What is read of it:
   0x4d58b0). `+8` grows by the tick.
 - 0x4d63d0: as 0x4d70d0, the target by the block's `+0x3b`, `+0x3d`,
   `+0x41`.
-Not decoded (not read): 0x4cd300, 0x4d49f0, 0x4d0f40, 0x4d5100, 0x4d59f0, 0x4d5360,
-0x4d43b0, 0x4d5560, 0x4d4d60, 0x4d4ab0, 0x4d5970, 0x4d58b0, 0x4cc590 and
-the notices 0x4d4e50, and which arguments the human's 0x49d9d0 passes.
+The rest, read (decomp `humanblock*.c`):
+- The caller is 0x49d790 case 10 (the interface's fleet commands; the
+  address 0x49d9d0 lies in it): fifteen dwords zeroed, `[0..3]` the
+  payload's rect `{x, y, w, h}` (shorts at `+1`, `+5`), `[8]` 0x4a2f10's
+  players (`+0x3d`), `[9]` -1 (`+0x41`, classes), `[10]` -1 (`+0x3b`,
+  0x4d6640's kind), `[4]` (no cell mask), `[5]`, `[6]` (no ids) and `[7]`
+  (`+0x37`) 0.
+- Block fields: `+0x23/+0x25` the goal cell (shorts), `+0x27/+0x29` the
+  formation's cell, `+0x2b` the targets (0x20-byte records `{object, id,
+  class +0x50, strength, vt+0x10 & 0xffff, x, y, +0x64}`), `+0x33` the
+  slots (0x18 bytes `{ship, id, target, target id, x, y}`, kept by id:
+  0x4d4b10 rewrites or appends, 0x4d4bd0 finds and may remove), `+0x45`
+  the time of the next re-plan, `+0x51..+0x57` never non-zero here (only
+  0x4d4260 writes them, after requiring them non-zero), so 0x4d4260
+  returns at once.
+- 0x4cd300 (block `{0x70, 0x20}`: rect `+0xc`, mask `+0x1c`, players
+  `+0x3d`): the rect's cells within the map, row by row, a cell masked
+  -1 skipped; the cell's object at cell `+0xc`, else `+4`, else `+0x10`
+  (the cell record base `+8`): its player (`+0x54 x 4 + +0x55`) in the
+  players and at war (0x4efe20 < 0); a ship skipped on the cell it has
+  reserved (`+0x5ab`, 0x4cd549); classes 0x32/0x33 and the parent of a 0x1f7 (0x415df0,
+  0x415db0) once; strength a ship's `+0x479`, 0x34-0x36 the sum of
+  0x446710 over the 12 slots of `+0x4d0`, 0x3f-0x41 those of `+0x20c`,
+  others 0; listed when vt+0x28 gives its cell. 0x4d49f0 merges by id.
+- 0x4d5850: 0x4d5360 (a slot for each ship of the group that is a ship,
+  its cell) and, with any, 0x4d43b0: non-zero, 0x4d5560 and mode 2; zero,
+  mode 1.
+- 0x4d43b0: no targets, goal `(-1, -1)`, 0. Two or more: draws `a = %3 +
+  1`, `b = %3 + 1` of the navy's generator and 0x4cd120(list, n, `b x 10
+  << 16 | a`) puts one first: weights by `a` (1 strength, 2 `+0x64`, 3
+  both); `b` 1 the greatest (the first of equals), 2 a draw `% n`, 3
+  five roulette draws `% sum` (a sum 0: one draw `% n`) keeping the
+  greatest weight hit; index 0 kept, else swapped to the front (a failure
+  is goal -1, 0). The first target's cell the goal when water (0x4999e0);
+  else from the group's centre (0x4c56e0: the mean cell of the group's
+  ships, `+0x5a3/+0x5a7`, and its 0x50e600-kind-0x32 objects at
+  `+0x74/+0x78` weighing 2; that mean refused by 0x499990 with such an
+  object in the group, the ship nearest it by `|dx| + |dy|`) the route 0x4d0e70 (on the shallow grid 0x5c93bc: the
+  start closed none; the goal closed 0x55ba50, else 0x55ca10), its last water step the
+  goal; none, 0. Then the formation 0x4d5100 about the goal with slot
+  class 6. Every ship more than 6 (0x557440) from its slot: the centre's
+  route to the goal (0x4d58b0: 0x55ba50; 11 or more steps, its 7th step,
+  1; fewer, 2) and a class-0 formation there sent (0x4d59f0: slots kept,
+  0x4cf070 each), `+0x27` that cell, `+0x21 = 10`, `+0x45 = now + 300 x`
+  the planner's value; returns 0 (approach). Else each slot takes the
+  class-6 cell, the count of slots (plus one for each whose cell's sum of
+  player `+0x3c` grids of players at war is above the ship's `+0x479`,
+  when player `+0x40` is set), `+0x21 = 0xb`.
+- 0x4d5100: a 0x24-byte record per slot (cell, `+8` the class, `+0x10`
+  ship, `+0x14` id, `+0x30` 1 for deep `+0x592`) to 0x5614e0 with the
+  grids by draught (0x4d50b0), with player `+0x40` the per-cell sum of the
+  `+0x3c` grids of players at war as the third grid; the planner's value
+  returned (0x55f870: the greatest goal-flood value at a ship's cell; it
+  then marks each ship 1-3 by thirds), negative clears the count.
+- 0x4d5560: the targets listed again (0x4d4860 with no ids) and checked
+  (0x4d5430: each, newest first, kept with fresh fields when it exists,
+  0x51f1f0, and is at war or its player is in the group's `+0x19`; else
+  removed); then 0x561a30 deals the targets' cells to the slots' ships
+  (below); each ship given the target of its cell: slot `+8`, and a ship
+  of class 0xd2 moved there (0x4cf070), the others `+0xc` the target id
+  and 0x4d0140 at it (players `+0x3d`, 7). Returns -1.
+- 0x561a30(W, H, cells, n, ships, m): `k = min(n, m)`; 1: every ship the
+  first cell. Else the cells copied with their 0x557440 distance from the
+  first and sorted on it (0x58791f, the C library's qsort, comparing
+  with 0x561f20: equal distances in that sort's order, not decoded); the first `k` cells' sums and
+  the ships' sums halved (an odd sum rounded up when its half is below
+  the first cell's coordinate, sic: halved, not averaged); quotas: the
+  first `(2m - 1) / k`, each next `(r / 2 + r) / left`, the remainder to
+  the last; each cell's key 0x5574d0 along `(dir(cells' point -> ships'
+  point) - 4) & 7` and distance from the ships' point, each ship's key
+  along `dir(ships' point -> cells' point)`; cells bubble-sorted by key
+  (the farther on a tie), ships by key (the nearer the current cell on a
+  tie, the current cell stepping on by the quotas); then ship i the cell
+  its quota run reaches.
+- 0x4d61d0 (each tick; `+8` the ticks since): with no notice acted on
+  and `+8` over 70, `+8 = 0` and each ship of the group (as above), then
+  in mode 1 0x4d5a80 (nothing under 2 slots): the flood 0x558fa0 on the
+  shallow grid from the formation's cell `+0x27` (limit 5000) read at the
+  ships' cells, slots newest first: `lo`, `hi` and the ship at `lo` (the
+  first of equals in that order). Under 2 ships placed: 0x4d5560 (mode 2
+  if non-zero), then with the formation's cell the goal 0x4d5560 again.
+  Else `far = |flood(+0x27) - hi| / 2`, `half = (hi - lo) / 2`. The
+  formation's cell the goal and `far` at most 9: 0x4d5560 (mode 2).
+  Else, `half` 0 nothing; 0x4d5970(ships, half) (ships 1-5: half over 3;
+  6-9: over 4; more: ships below half / 2) true: at `+0x21 = 0xb` or with
+  `+0x45` past, a class-0 formation about the lead ship's cell, its
+  slots' flood spread halved; that not 0x4d5970-wide and 0x4d58b0(lead,
+  goal) 1, a class-0 formation at the route's 7th step sent, `+0x27`
+  there, `+0x45 = now + 300 x value`; otherwise `+0x21 = 10`. False:
+  0x4d58b0(lead, goal) 1, the formation there sent, `+0x21 = 10`,
+  `+0x45`; 2, 0x4d5560 (mode 2); 0 nothing.
+- 0x4d4e50 (newest first, each removed; the ship by 0x4cc590, a notice of
+  a ship not in the group dropped but 0x137): 300 a ship joined: mode 1
+  with no slots 0x4d5850, mode 1 or 3 with slots a slot drawn `% count`
+  (navy generator) whose ship is sent to its cell (0x4cf070; that
+  slot's ship, not the one joining), mode 2 0x4d60c0 with the ship; then `#` sub 1 with the
+  group's three (0x4c42f0). 0x136 (at its move goal): mode 1 and
+  0x4d4d60 == 100 (the slots whose cell lies within 1 of the goal in x
+  and y, in percent; 100 also when all but one are, for 4-9 ships), then
+  0x4d5560, mode 2. 0x137 (left): its slot and target entries removed.
+  0x13a: its target entry removed, the area's target (0x4d6640) attacked
+  (0x4d0140) by the ship.
+Not decoded: the writer of player `+0x40` and of the `+0x3c` grids (the
+threat grid and count above); what cell slot `+4` holds; the planner
+0x560100 for slot classes above 0 (0x560f80's start ring `2c / 3` and
+`c <= d < 11`, the classes' buckets 0-9) and its value (the port's
+`formation::plan` is class 0 and gives none); the sender of 0x13a; the order
+0x58791f's qsort leaves equal distances in. The block is not ported
+until these are.
 
 A fort of the forts' flotilla takes the `#` too (below).
 
