@@ -5304,6 +5304,14 @@ fn boarders_hook_and_lie_alongside() {
                     assert_eq!(grapple(&restored, mine), Some(g));
                     assert!(grapple(&restored, other).is_some());
                 }
+                // The boarding lasts till its way back is done (0x4b6b87).
+                if g.stage == GrappleStage::Leave {
+                    let s = scene.objects[scene.object_index(mine).unwrap()]
+                        .ship
+                        .as_ref()
+                        .unwrap();
+                    assert!(matches!(s.task, Some(Task::Board { .. })));
+                }
                 if g.stage == GrappleStage::Plank && lying.is_none() {
                     let pos = |id| {
                         let o = &scene.objects[scene.object_index(id).unwrap()];
@@ -5319,6 +5327,13 @@ fn boarders_hook_and_lie_alongside() {
             None => {}
         }
     }
+    // Done: the task ended (8 / 0x90) and the board's time now (0x4b6bee).
+    let s = scene.objects[scene.object_index(mine).unwrap()]
+        .ship
+        .as_ref()
+        .unwrap();
+    assert!(s.task.is_none());
+    assert_eq!(s.board_wait, scene.ticks);
     assert!(hook.is_some() && roped, "a hook flew on its line");
     let order: Vec<GrappleStage> = stages.iter().map(|s| s.0).collect();
     use GrappleStage::*;
@@ -5496,6 +5511,50 @@ fn rammer_charges_strikes_and_backs_off() {
         (cell.0 as f32 * 64.0 + 32.0, cell.1 as f32 * 64.0 + 32.0)
     );
     assert!(o.ship.as_ref().unwrap().task.is_none());
+    // State 6 done (0x4c2b46): the ram's time now, the board's zeroed
+    // (0x4b8d10).
+    let s = o.ship.as_ref().unwrap();
+    assert_eq!((s.ram_wait, s.board_wait), (scene.ticks, 0));
+}
+
+/// A rammer alongside whose contact is refused (0x4c1760: the prey in
+/// another's) lying still stays in state 2 for its next look, and refused
+/// again goes back to state 1 with its move stopped (0x4c2230; needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn rammer_refused_lying_still() {
+    let Some((data, mut caches, mut scene, mine, other, _)) = closing_pair(1, 0) else {
+        return;
+    };
+    scene.order_close(mine, other, false).unwrap();
+    // The prey's own ram holds its contact.
+    let p = scene.object_index(other).unwrap();
+    scene.objects[p].ship.as_mut().unwrap().ram_run = Some(objects::RamRun {
+        target: 0,
+        stage: objects::RamStage::Charge,
+        home: (0.0, 0.0),
+        ticks: 0,
+        clock: 0.0,
+        frames: 0,
+    });
+    let k = scene.object_index(mine).unwrap();
+    let mut waited = None;
+    for t in 0..20 {
+        scene.ticks += 1;
+        scene.run_closing(&data, &mut caches);
+        let s = scene.objects[k].ship.as_ref().unwrap();
+        assert!(s.ram_run.is_none(), "no charge while refused");
+        let c = s.closing.unwrap();
+        if c.contact_wait && waited.is_none() {
+            waited = Some(t);
+        }
+        if waited.is_some_and(|w| t == w + 1) {
+            assert!(!c.contact_wait);
+            assert!(s.path.is_empty(), "the move stopped (8 / 0x80)");
+            return;
+        }
+    }
+    panic!("never asked for the contact");
 }
 
 type ClosingPair = (GameData, Caches, Scene, u32, u32, (i32, i32));
@@ -5607,6 +5666,7 @@ fn prey_gone_ends_with_a_notice() {
             plan_from: (0, 0),
             plan_goal: (0, 0),
             first_plan: true,
+            contact_wait: false,
         });
         scene.ticks += 1;
         scene.run_closing(&data, &mut caches);

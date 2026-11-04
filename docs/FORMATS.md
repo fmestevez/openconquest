@@ -2183,9 +2183,8 @@ steps the way a tick as the move tick does (`sail::next_way`, the wind
 always, no lime). The charge, the hook and what follows
 are the port's grapple.rs; the bow is looked for from the tick after the
 charge starts. Not ported: the 0x4a6150 wait counter's part (`+0x591`
-and 150: the port's mover's own), the rammer's state 1 reservation and
-its state 6 turn when 0x4c1760 refuses. What they
-do (0x4c2230 states 1 / 2, alongside, 0x4c1f60 giving 2): `+0x6aa` the
+and 150: the port's mover's own). The rammer's contact (0x4c2230 states
+1 / 2, alongside, 0x4c1f60 giving 2): `+0x6aa` the
 goal cell, `+0x6a0 = 1`; in state 1 `+0x6ae` = its own cell when that
 cell's slot holds it, else 0x49a450 (the cell about its own whose slot
 holds it, by the grid's offset list; none: stay in state 1 this tick),
@@ -2203,7 +2202,21 @@ under-way frames run backwards); at the middle `+0x6ae`
 released (0x4a3970) unless its own cell or `+0x5ab`, 0x13d to its player
 (0x4a1880 with `+0x6cb`), commands back (0x4b3850), 0x4b8d10, `+0x696 =
 1`, state 1, 8 / 0x90, the prey `+0x6cf` and `+0x6cb` cleared, `+0x704`
-now. The port's `start_ram` returns doing nothing when refused.
+now. 0x4b8d10 frees `+0x6df` and zeroes `+0x696..+0x712` (so `+0x708`,
+the board's time, too). 0x4c1760 grants the contact unless the prey's
+`+0x8e6` or its own is set, the prey lacks `+0x261 & 0x1000` or it has
+`+0x25c`; it also answers 1 for the contact already made between the
+two (its side 2). State 3 (the impact, 0x4b37d0 there too) ends in
+state 6 as well, `+0x6e4` its own heading (lying in its cell) or back
+toward `+0x6ae`, `+0x59b = 0`, so every ram ends at state 6's end: 0x13d
+and the task stopped. The port (closing.rs `ram_contact`, grapple.rs
+`ram_granted`, `ram_done`): the state 2 wait is `Closing::contact_wait`,
+8 / 0x80 the move's route cleared, state 6 `RamStage::Back` to the cell's
+middle (a refused one naming no prey), and its end the notice, the
+times and the task's end. Not ported: the reservation `+0x6ae` and its
+release (the port keeps no slots between ticks), state 2's release with
+`+0x6a2` below 0 (its setter not traced), the commands held by 0x4b37d0
+during states 3 and 6 (the port lets orders through).
 
 The search mode and other prey. 0x4aa840 sets `+0x6a1 = 2` (search:
 0x4c3000, 0x4b5ca0, 0x4b7eb0) only when its record's second byte
@@ -2312,12 +2325,12 @@ block, the record's prey, 1) below 0 or 0x4cfad0 sends it again
 and `+0xc` in `+0x48`). The gather zone (0x4c9e30) and the move
 (0x4cc6a0) read none. Ported (`Scene::post_notice`: gather zones, human
 attack groups and the computers' flotillas with a block,
-`Computer::post_notice`): every sender but the rammer's state 6 (the
-port's ram run, grapple.rs, ends otherwise), the attack's only for a
+`Computer::post_notice`): every sender (the rammer's state 6 as the
+port's `RamStage::Back` ends, `ram_done`), the attack's only for a
 target gone from the map (the port also ends an attack on a target no
 longer an enemy, posting nothing); the human block's and the computers'
 attack zone's cases. The boarder's end posts as the port's leave stage
-ends (the task itself ends with the fight, `board_end`). The boarder
+ends, the task with it (event 8 0x90, `+0x708` now). The boarder
 closing in, a prey within reach but not at war: nothing (0x4b5df0 state
 1); the rammer's look finds the prey only at war (0x4b8d80). Not ported:
 0x4d0210's and 0x4d1ea0's cases (the port keeps no notices for those

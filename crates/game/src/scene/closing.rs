@@ -169,6 +169,7 @@ impl Scene {
                     plan_from: own,
                     plan_goal: own,
                     first_plan: true,
+                    contact_wait: false,
                 });
             }
             let near = s.closing.unwrap().near;
@@ -445,20 +446,25 @@ impl Scene {
         let own = self.cell_of_object(i);
         let b = (own.0 - BOX / 2, own.1 - BOX / 2, BOX, BOX);
         let Some((reach, region)) = self.ram_look(i, ti, b) else {
-            self.closing_mut(i).near = false;
+            let c = self.closing_mut(i);
+            c.near = false;
+            c.contact_wait = false;
             return;
         };
         let (alongside, goal) = self.ram_goal(i, ti);
         if !reach {
             if self.closing_plan(i, goal, Some(&region)) == Planned::NoRoute {
-                self.closing_mut(i).near = false;
+                let c = self.closing_mut(i);
+                c.near = false;
+                c.contact_wait = false;
             }
             return;
         }
         if alongside == 2 {
-            self.start_ram(i, ti);
+            self.ram_contact(i, ti);
             return;
         }
+        self.closing_mut(i).contact_wait = false;
         let w = self.nav.width as i32;
         self.closing_mut(i).contact = w * goal.1 + goal.0;
         let planned = self.closing_plan(i, goal, Some(&region));
@@ -471,6 +477,62 @@ impl Scene {
             return;
         }
         self.closing_mut(i).near = false;
+    }
+
+    /// The rammer alongside asks for the contact (0x4c2230 states 1 and
+    /// 2). In state 1 `+0x6ae` is the cell whose slot holds it: its own,
+    /// else the one about it it has reserved (0x49a450 over the grid's
+    /// offset list); none, it stays in state 1 this tick. Then state 2 and
+    /// 0x4c1760: granted, the charge (`start_ram`). Refused (`ram_granted`):
+    /// in state 2 already, state 1 and the move stopped (event 8 0x80);
+    /// else not between cells (`+0x596` not 1) it stays in state 2 to ask
+    /// at its next look; between cells with its picture at its cell's
+    /// middle, state 1 and the move stopped; else its commands held
+    /// (0x4b37d0), its back-off heading the opposite of its own (0x4a34f0)
+    /// and state 6 (`RamStage::Back` to its cell's middle), lying still
+    /// (move state 0). (Not ported: the reservation itself, the port keeps
+    /// no slots between ticks; state 2's release with `+0x6a2` below 0,
+    /// whose setter is not traced.)
+    fn ram_contact(&mut self, i: usize, ti: usize) {
+        let waiting = self.closing_mut(i).contact_wait;
+        if !waiting {
+            let own = self.cell_of_object(i);
+            let reserved = self
+                .reserved_cell(i)
+                .is_some_and(|c| (c.0 - own.0).abs() <= 1 && (c.1 - own.1).abs() <= 1);
+            if self.slot_holder(own) != Some(i) && !reserved {
+                return;
+            }
+        }
+        if self.ram_granted(i, ti) {
+            self.closing_mut(i).contact_wait = false;
+            self.start_ram(i, ti);
+            return;
+        }
+        let home = Self::cell_middle(self.cell_of_object(i));
+        let between = self.objects[i].ship.as_ref().unwrap().between.get();
+        if !waiting && !between {
+            self.closing_mut(i).contact_wait = true;
+            return;
+        }
+        self.closing_mut(i).contact_wait = false;
+        if waiting || (self.objects[i].x, self.objects[i].y) == home {
+            self.objects[i].ship.as_mut().unwrap().path.clear();
+            return;
+        }
+        // No contact made: the run names no prey (`+0x8e6` stays 0), the
+        // prey free of it.
+        let s = self.objects[i].ship.as_mut().unwrap();
+        s.path.clear();
+        s.move_state = 0;
+        s.ram_run = Some(objects::RamRun {
+            target: 0,
+            stage: objects::RamStage::Back,
+            home,
+            ticks: 0,
+            clock: 0.0,
+            frames: 0,
+        });
     }
 
     /// The rammer's look (0x4b8d80) through box `(x, y, w, h)`: its corner

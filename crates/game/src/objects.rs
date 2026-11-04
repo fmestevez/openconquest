@@ -531,6 +531,11 @@ pub struct Closing {
     pub plan_from: (i32, i32),
     pub plan_goal: (i32, i32),
     pub first_plan: bool,
+    /// The rammer's contact asked for and refused while not between
+    /// cells (0x4c2230 state 2, `+0x6a9` 2): asked again at its next
+    /// look.
+    #[serde(default)]
+    pub contact_wait: bool,
 }
 
 /// A ship's leviathan hunt, a game tick at a time (see `Ship::hunt`).

@@ -1755,7 +1755,6 @@ impl Scene {
         };
         let (sure_a, sure_t) = (sure(&self.objects[i]), sure(&self.objects[ti]));
         let (by_a, by_t) = (self.objects[i].owner, self.objects[ti].owner);
-        self.objects[i].ship.as_mut().unwrap().task = None;
         if !won {
             if sure_a {
                 self.hit(a, blow as f32 / 15.0, by_t, data, caches);

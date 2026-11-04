@@ -684,8 +684,17 @@ impl Scene {
                     s.grapple = None;
                     // The boarder's state 6 done (0x4b6b87): notice 0x13c
                     // with the prey to its group (0x4a1900), after a fight
-                    // or a call-off alike.
+                    // or a call-off alike; its commands back (0x4b3850),
+                    // `+0x25d &= ~0x10`, the board's time `+0x708` now
+                    // (0x4b6bee) and event 8 0x90, which ends the boarding
+                    // and its move.
                     if g.boarder {
+                        s.board_wait = self.ticks;
+                        if matches!(s.task, Some(Task::Board { target, .. }) if target == g.with) {
+                            s.task = None;
+                            s.closing = None;
+                            s.path.clear();
+                        }
                         self.post_notice(id, 0x13c, g.with);
                     }
                     return;
@@ -819,12 +828,44 @@ impl Scene {
         out
     }
 
-    /// Rammer `i` next to its prey `ti` charges it, if neither is busy with
-    /// another ship (0x4c1760).
-    pub(super) fn start_ram(&mut self, i: usize, ti: usize) {
-        if self.in_contact(i) || self.in_contact(ti) {
-            return;
+    /// Rammer `i`'s state 6 done, at its cell's middle (0x4c2230 at
+    /// 0x4c2b46): notice 0x13d with its prey (`+0x6cb`) to its group
+    /// (0x4a1880), its commands back (0x4b3850), `+0x696..+0x712` zeroed
+    /// (0x4b8d10: the board's time `+0x708` too), the ram's time `+0x704`
+    /// now, and the event 8 0x90 that ends the ram and its move. (Not
+    /// ported: the release of the reserved cell `+0x6ae`, 0x4a3970; the
+    /// port keeps no slots between ticks.)
+    fn ram_done(&mut self, i: usize) {
+        let (id, now) = (self.objects[i].id, self.ticks);
+        let s = self.objects[i].ship.as_mut().unwrap();
+        // The prey the order named (`+0x6cb`); a refused run names none.
+        let mut prey = s.ram_run.map_or(0, |r| r.target);
+        s.ram_run = None;
+        s.ram_wait = now;
+        s.board_wait = 0;
+        if let Some(Task::Ram { target }) = s.task {
+            prey = target;
+            s.task = None;
+            s.closing = None;
+            s.path.clear();
         }
+        self.post_notice(id, 0x13d, prey);
+    }
+
+    /// Whether rammer `i` is granted the contact with its prey `ti`
+    /// (0x4c1760): neither in a contact (`+0x8e6`), the prey taking one
+    /// (`+0x261 & 0x1000`) and the rammer under no status (`+0x25c`: the
+    /// siren's song).
+    pub(super) fn ram_granted(&self, i: usize, ti: usize) -> bool {
+        !self.in_contact(i)
+            && !self.in_contact(ti)
+            && self.takes_contact(ti)
+            && !self.charmed.contains_key(&self.objects[i].id)
+    }
+
+    /// Rammer `i`, granted the contact (`ram_granted`), charges its prey
+    /// `ti` (0x4c2230 state 2).
+    pub(super) fn start_ram(&mut self, i: usize, ti: usize) {
         let home = Self::cell_middle(self.cell_of_object(i));
         let (target, to) = (
             self.objects[ti].id,
@@ -1032,7 +1073,7 @@ impl Scene {
                     o.x = step(o.x, r.home.0);
                     o.y = step(o.y, r.home.1);
                     if (o.x, o.y) == r.home {
-                        o.ship.as_mut().unwrap().ram_run = None;
+                        self.ram_done(i);
                         return None;
                     }
                 }
