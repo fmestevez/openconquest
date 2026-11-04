@@ -167,9 +167,18 @@ pub enum Op {
         ticks: u32,
         events: &'static [Event],
     },
-    /// The builder fleet builds the ship asked for longest ago, for the
-    /// fleet that asked (0x47b130): `next` once it is launched.
+    /// The yard's pick and order (states 0 or 5, then 10, of 0x44a4e0,
+    /// 0x44bba0, 0x44cbd0, 0x44ed00, 0x44f1e0, 0x452c60, 0x453030,
+    /// 0x454f60, 0x455b80, 0x458990, 0x459400, 0x45a270, 0x45e510): on
+    /// one turn the first member of its group, in
+    /// member order, whose request slot is taken (0xc8 + type); from the
+    /// next its ship ordered for it (0x47b130 code 0x50 + type, flag
+    /// 0x400, dword 7 the member) until the order ends; `next` once it is
+    /// launched. The slot stays taken (`build`) until `Release`.
     Build { next: u32 },
+    /// The yard's slot let go (state 0xc: the slot and the served member
+    /// -1), then `next`.
+    Release { next: u32 },
     /// A step of the mission's own.
     Custom(fn(&mut Scene, usize) -> u32),
     /// A member's own test before a primitive in the same state: `yes`
@@ -259,7 +268,9 @@ pub struct Fleet {
     /// read the order's state.
     #[serde(default)]
     pub ordered: bool,
-    /// The request `Op::Build` took (fleet, type), until its order ends.
+    /// The request `Op::Build` took (fleet, type): the yard's member
+    /// served (brain `+0x108` and the like), held from its pick until the
+    /// yard's wait after the ship is over (`Op::Release`, state 0xc).
     #[serde(default)]
     pub build: Option<(usize, u8)>,
 }
@@ -971,6 +982,10 @@ impl Scene {
         if brain.requests.iter().any(|r| r.0 == k)
             || brain.building.iter().any(|b| b.2 == k)
             || brain.served == Some(k)
+            || brain
+                .fleets
+                .iter()
+                .any(|f| f.build.is_some_and(|b| b.0 == k))
         {
             return;
         }
@@ -1075,7 +1090,7 @@ impl Scene {
         None
     }
 
-    fn fleet_step(&mut self, k: usize, program: Program, groups: &[u8], tick: u32) {
+    pub(super) fn fleet_step(&mut self, k: usize, program: Program, groups: &[u8], tick: u32) {
         let f = &self.brain.as_ref().unwrap().fleets[k];
         let (state, started, since) = (f.state, f.started, f.since);
         let mut op = program(state);
@@ -1329,32 +1344,34 @@ impl Scene {
                 }
             }
             Op::Build { next } => {
-                let f = &self.brain.as_ref().unwrap().fleets[k];
-                match f.build {
-                    None if !started => {
-                        if !self.fleet_build(k, groups) {
-                            // Nothing asked for: try again next turn.
-                            self.brain.as_mut().unwrap().fleets[k].started = false;
-                        }
+                let brain = self.brain.as_ref().unwrap();
+                match brain.fleets[k].build {
+                    None => {
+                        // The pick (state 0 or 5); nothing asked for: the
+                        // same next turn.
+                        self.fleet_build(k, groups);
                     }
-                    Some((fleet, kind)) => {
-                        // The order's later calls (0x47b130): ended, the
-                        // request is served.
+                    Some((fleet, kind)) if brain.requests.contains(&(fleet, kind)) => {
+                        // State 10: the order sent at its first call, its
+                        // end read at the later ones (0x47b130).
                         if self.fleet_build_for(k, fleet, kind) {
                             let brain = self.brain.as_mut().unwrap();
-                            brain.fleets[k].build = None;
                             if let Some(r) = brain.requests.iter().position(|&r| r == (fleet, kind))
                             {
                                 brain.requests.remove(r);
                             }
                         }
                     }
-                    None => {
+                    Some(_) => {
                         if !self.fleet_building(k) {
                             self.set_state(k, next);
                         }
                     }
                 }
+            }
+            Op::Release { next } => {
+                self.brain.as_mut().unwrap().fleets[k].build = None;
+                self.set_state(k, next);
             }
             Op::Branch { .. } => {}
             Op::Custom(step) => {
@@ -1369,20 +1386,26 @@ impl Scene {
         }
     }
 
-    /// The builder fleet `k` takes the oldest request of its group and
-    /// orders its ship (`fleet_build_for`). False if there is none. (The
-    /// pick is the port's: each mission's yard picks by its own slots.)
-    fn fleet_build(&mut self, k: usize, groups: &[u8]) -> bool {
+    /// The yard fleet `k` picks the request of the first member of its
+    /// group, in member order (the loops over its slots, the first taken
+    /// one kept: 0x44a4e0 `+0x114`, 0x44bba0 `+0x13c`, 0x44cbd0 `+0x118`,
+    /// 0x44ed00 `+0x124`, 0x44f1e0 `+0x148`, 0x452c60 `+0x148`, 0x453030
+    /// `+0x160`, 0x454f60 `+0x120`, 0x455b80 `+0x130`). False if there is
+    /// none. (Each yard's types: a slot of another type is cleared at the
+    /// order's turn and the yard goes back to state 0 a turn later; no
+    /// member of miss001-miss005 asks one, so the port has no such path.)
+    pub(super) fn fleet_build(&mut self, k: usize, groups: &[u8]) -> bool {
+        let defs = mission_fleets(&self.brain.as_ref().unwrap().mission).unwrap_or(&[]);
         let brain = self.brain.as_ref().unwrap();
         let Some(&(fleet, kind)) = brain
             .requests
             .iter()
-            .find(|&&(f, _)| groups.get(f) == groups.get(k))
+            .filter(|&&(f, _)| groups.get(f) == groups.get(k))
+            .min_by_key(|&&(f, _)| defs.get(f).map(|d| d.member))
         else {
             return false;
         };
         self.brain.as_mut().unwrap().fleets[k].build = Some((fleet, kind));
-        self.fleet_build_for(k, fleet, kind);
         true
     }
 
@@ -3227,10 +3250,12 @@ mod miss001 {
         const REST: [u32; 3] = [2000, 1750, 1000];
         match state {
             0 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            11 => Op::Wait {
+                next: 12,
                 ticks: REST[difficulty()],
             },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
@@ -3506,10 +3531,12 @@ mod miss002 {
         const REST: [u32; 3] = [2000, 1750, 1000];
         match state {
             0 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            11 => Op::Wait {
+                next: 12,
                 ticks: REST[difficulty()],
             },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
@@ -3524,10 +3551,12 @@ mod miss002 {
                 }
             }),
             1 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            11 => Op::Wait {
+                next: 12,
                 ticks: 500,
             },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
@@ -4019,6 +4048,8 @@ mod miss003 {
         // (0x5ae860, 0x5ae8c0), and the barbarian yard's rest (0x5ae884).
         const PERSIAN_WAIT: [u32; 3] = [9, 7, 5];
         const BARBARIAN_WAIT: [u32; 3] = [11, 9, 7];
+        // Not ported: the yard draws its rest, the table plus (rand % n) x
+        // 25 (0x44f1e0, 0x453030, 0x454f60; docs/FORMATS.md).
         const YARD_REST: [u32; 3] = [1000, 750, 500];
         let (a, b) = (scene.brain_draw() % 4, scene.brain_draw() % 4);
         if let Some(br) = scene.brain.as_mut() {
@@ -4121,10 +4152,12 @@ mod miss003 {
                 }
             }),
             1 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            11 => Op::Wait {
+                next: 12,
                 ticks: 1000,
             },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
@@ -4243,7 +4276,9 @@ mod miss003 {
     fn barbarian_yard(state: u32) -> Op {
         match state {
             0 => Op::Build { next: 11 },
-            _ => Op::WaitVar { next: 0, var: 0 },
+            11 => Op::WaitVar { next: 12, var: 0 },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
@@ -4567,6 +4602,8 @@ mod miss004 {
         // (fewer than three) and the northern raiders' first wait
         // (`+0x114` = 0x8ca at message 2; drawn anew only once a sweep is
         // over, 0x451c60 state 0x50).
+        // Not ported: the yard draws its rest, the table plus (rand % n) x
+        // 25 (0x44f1e0, 0x453030, 0x454f60; docs/FORMATS.md).
         const YARD_REST: [u32; 3] = [1500, 1000, 750];
         if let Some(br) = scene.brain.as_mut() {
             br.fields[WAIT] = 2250;
@@ -4663,17 +4700,21 @@ mod miss004 {
                 }
             }),
             1 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            11 => Op::Wait {
+                next: 12,
                 ticks: 2000,
             },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
     fn yard_var(state: u32) -> Op {
         match state {
             0 => Op::Build { next: 11 },
-            _ => Op::WaitVar { next: 0, var: 0 },
+            11 => Op::WaitVar { next: 12, var: 0 },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
@@ -5545,6 +5586,8 @@ mod miss005 {
         // the sizes their records compare with (at least 3, fewer than 2),
         // and the Persian raiders' (their waits are drawn in their state
         // 0; the brain draws nothing at the start).
+        // Not ported: the yard draws its rest, the table plus (rand % n) x
+        // 25 (0x44f1e0, 0x453030, 0x454f60; docs/FORMATS.md).
         const YARD_REST: [u32; 3] = [1500, 1000, 750];
         if let Some(br) = scene.brain.as_mut() {
             br.fleets[0].vars[0] = YARD_REST[difficulty()];
@@ -5557,7 +5600,9 @@ mod miss005 {
     fn yard_var(state: u32) -> Op {
         match state {
             0 => Op::Build { next: 11 },
-            _ => Op::WaitVar { next: 0, var: 0 },
+            11 => Op::WaitVar { next: 12, var: 0 },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
@@ -5572,10 +5617,12 @@ mod miss005 {
                 }
             }),
             1 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            11 => Op::Wait {
+                next: 12,
                 ticks: 1250,
             },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
@@ -6822,10 +6869,12 @@ mod miss006 {
                 }
             }),
             1 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            11 => Op::Wait {
+                next: 12,
                 ticks: 500,
             },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
@@ -6840,20 +6889,24 @@ mod miss006 {
                 }
             }),
             1 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            11 => Op::Wait {
+                next: 12,
                 ticks: 750,
             },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
     fn yard_1000(state: u32) -> Op {
         match state {
             0 => Op::Build { next: 11 },
-            _ => Op::Wait {
-                next: 0,
+            11 => Op::Wait {
+                next: 12,
                 ticks: 1000,
             },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 
@@ -8023,7 +8076,9 @@ mod miss007 {
                 scene.brain.as_mut().unwrap().fleets[k].vars[0] = wait;
                 12
             }),
-            _ => Op::WaitVar { next: 0, var: 0 },
+            12 => Op::WaitVar { next: 13, var: 0 },
+            // State 0xc.
+            _ => Op::Release { next: 0 },
         }
     }
 

@@ -6413,9 +6413,32 @@ ticks (0x47a3b0) to 0xc; 0xc the slot and `+0x11c` cleared (-1), state 0.
 The port: `Brain::served` holds the member from the pick until 0xc, its
 `ask_for_ships` asking nothing meanwhile; the order is tried again each
 turn while it cannot be paid or no yard is free (as `Op::Build`), and
-ends with the ship launched. The port's other yards (`Op::Build`) take the
-oldest request of their group they can pay for and hold the slot while it
-waits or its ship is being built.
+ends with the ship launched. The other yards of miss001-miss007 are made
+the same way: miss001 0x44a4e0 (slots `+0x114`, 6; types 0, 1, 2, 5, 6),
+miss002 0x44bba0 (`+0x13c`, 9; 1, 2, 5, 6) and 0x44cbd0 (`+0x118`, 9;
+order 0xf0 at state 0, then 5; 0-6 and 0x34), miss003 0x44ed00
+(`+0x124`, 6; 0xf0 first; 0-6, 0x34) and 0x44f1e0 (`+0x148`, 5; 1, 2,
+3, 5, 6), miss004 0x452c60 (`+0x148`, 6; 0xf0 first; 0-6) and 0x453030
+(`+0x160`, 4; 1, 2, 3, 5, 6), miss005 0x454f60 (`+0x120`, 4; 0-3, 5, 6)
+and 0x455b80 (`+0x130`, 8; code 1 first; 0-6), miss006 0x458990
+(`+0x118`, 4), 0x459400 (`+0x128`, 8), 0x45a270 (`+0x148`, 8), miss007
+0x45e510 (words `+0x123`, 6): the pick (state 0, or 5) the first slot
+taken in member order, on a turn of its own (0x479750 to 10); 10 the
+order from the next turn until it ends (to 0xb); 0xb the wait; 0xc the
+slot and the served member -1, to 0 (0x45e510 falls through to 0 the same
+turn). Ported (`Op::Build`, `Op::Release`, the yard's `build` holding the
+member's slot from the pick to 0xc, `ask_for_ships` asking nothing
+meanwhile); the port's order still ends with the ship launched. No member
+of these missions asks a type its yard has no case for (cleared at 10,
+back to 0 a turn later), so that path is not in the port. Not ported:
+the rests drawn by the yards (0x44f1e0 at every state-0 turn `0x5ae884[d]
++ (rand % 31) x 25`; 0x453030 `0x5aef98[d] + (rand % 61) x 25` and
+0x454f60 `0x5af8e8[d] + (rand % 41) x 25` while `+0x110` / `+0x118` is 0,
+zeroed at 0xc; 0x458990 `+0x108`; 0x45e510 draws `(rand % 31 + 40) x 25`
+at every 0xb turn, the wait reading only the first), the port keeping its
+fixed rests and one draw: their initial values (the brains' constructors)
+are not read; miss007's barbarian yards (0x45ca00, each serving member
+`m + 5`) are the port's own `yard`.
 0x4a8620(player, &n, ship mask, building mask) walks the player's list
 (`+0xbb8`): 0x50e600 sorts each by class (200-211 ship 200, 0x32-0x4a
 building 0x32, 500-510 500, 400-403 400, 700-706 700, else 0); a ship

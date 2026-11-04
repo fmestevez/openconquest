@@ -2054,6 +2054,50 @@ fn brain_new_block_behaviour() {
     assert_eq!((got.players, got.classes), (0, 0));
 }
 
+/// A yard picks the request of its group's first member in member order,
+/// not the oldest (0x44a4e0's loop over `+0x114`), on a turn of its own;
+/// the member's slot stays taken until the yard's state 0xc (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn brain_yard_pick() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    let groups = [0u8; 5];
+    {
+        let br = scene.brain.as_mut().unwrap();
+        // The raiders (member 4) asked first, the coastguard (1) after.
+        br.requests = vec![(4, 6), (1, 2)];
+    }
+    assert!(scene.fleet_build(0, &groups));
+    let br = scene.brain.as_ref().unwrap();
+    assert_eq!(br.fleets[0].build, Some((1, 2)));
+    // Its slot held: the coastguard asks nothing more meanwhile.
+    scene.brain.as_mut().unwrap().requests.retain(|r| r.0 != 1);
+    let def = &crate::scene::brain::mission_fleets("miss001").unwrap()[1];
+    scene.ask_for_ships(1, def);
+    assert!(scene
+        .brain
+        .as_ref()
+        .unwrap()
+        .requests
+        .iter()
+        .all(|r| r.0 != 1));
+    // State 0xc lets it go.
+    scene.brain.as_mut().unwrap().fleets[0].state = 12;
+    scene.fleet_step(
+        0,
+        |_| crate::scene::brain::Op::Release { next: 0 },
+        &groups,
+        0,
+    );
+    let br = scene.brain.as_ref().unwrap();
+    assert_eq!((br.fleets[0].build, br.fleets[0].state), (None, 0));
+}
+
 /// A boat hunts a leviathan and brings it home for 5000 amber and 2500
 /// fish; the zone is then empty (needs `OPENCONQUEST_DATA`).
 #[test]
