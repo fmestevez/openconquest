@@ -687,9 +687,11 @@ Combat tables:
   4-8.
 - 0x597cfc: nine u32, the full condition of each weapon kind (2860 ...
   9100); weapon conditions are stored as a percentage of it (0x4be110).
-- Ramming odds (0x4ba950): for each ship, crew quality (0x598054, nine
-  u32: 100 110 117 / 125 135 145 / 160 175 200 by crew type and the
-  player's level for it) x ramming power of the ship type (0x598024: boat
+- Ramming odds (0x4ba950, read by the attack's pickers 0x4baae0 /
+  0x4bad90; port `combat::ram_odds`): for each ship, ram quality
+  (0x598054, nine u32: 100 110 117 / 125 135 145 / 160 175 200 by its
+  ram kind `+0x27b` x 3 + the player's level in it, `+0x67 + kind`) x
+  ramming power of the ship type (0x598024: boat
   10, merchant 12, royal 100, bomber 60, boarder 30, rammer 140, ship killer
   20, men killer 40, fire ship 10, quick lime 10, fire rammer 190, ship of
   the dead 10) x an angle factor (0x598078 for the rammer: 90 55 20;
@@ -697,8 +699,9 @@ Combat tables:
   same heading, 2 opposite, 0 any other) x the type's full hull / 100
   (0x5c76b0, filled by 0x4ac210 from the ship constructor as 0x5bb4b0[t] x
   650: 18200 58500 65000 78000 42250 45500 23400 23400 42250 48750 71500
-  78000), over 2500. Rammers (type 5) get x1.5. The result is attacker x
-  100 / defender, capped at 200 (200 against nothing).
+  78000), over 2500, in integers: `Q x P / P' x (F x H / 100) / 2500`.
+  Rammers (type 5) get x 15 / 10. The result is attacker x 100 /
+  defender, capped at 200 (200 against nothing).
 - Effects are BOMB sequences (`BOMB%C%1d%1d`): e.g. BOMBA20 hit, BOMBA50
   splash, BOMBG10 explosion; FIRE0-2 and SMOKE0-2 for burning.
 - The random generator is the usual LCG `x * 0x41c64e6d + 0x3039`, using
@@ -7125,13 +7128,56 @@ ships, the target is looked for again: none, the notices freed
 at each tick); else `+8 = 0` and each ship sent the three if its masks
 differ, made to forget a blow (0x4cf760), then a draw of the navy's
 generator `% 100`: with flags `>> 16` 1 above 60 (2: above 30) nothing
-more; a phantom (`+0x253`) nothing more; else sent at the target as by
-the order. Not ported: the pickers for boarding and ramming (0x4baae0,
-0x4bad90, by `+0x261 & 0x1000` and kinds 10 / 11, to 0x4d0190 /
-0x4d01d0) and `+0x25d == 0x10`, not decoded: such ships are sent at the
-target; notice 0x13a (sender not traced); command 0x16 with target 0
-(a join with none: not sent); which of two ships in a cell holds
-`+0xc`. A rewrite of the block (the same kind) keeps the notices freed;
+more; a phantom (`+0x253`) nothing more; one on a boarding or a ram
+(`+0x25d == 0x10`, the task 0x4aa840) nothing more; one that takes a
+contact (`+0x261 & 0x1000`) looks about it for a boarding or a ram
+(below) and, with a find, is sent to board it (0x4d0190: command 0x17
+`{id, 0x45}`) when its boarding odds are 101 or more, else to ram it
+(0x4d01d0: command 0x18) when its ramming odds are; else, and without
+the contact, sent at the target as by the order. Not ported: notice
+0x13a (sender not traced); command 0x16 with target 0 (a join with
+none: not sent; 0x4ab3f0 keeps such a record, 0x4ac050 finding nothing,
+but what the pending group's turn in 0x4abe50 does to the ship's
+running task is not traced); which of two ships in a cell holds `+0xc`.
+
+`+0x261 & 0x1000` (taking a contact) is set on every finished ship
+(0x4e6930: all bits but 11 for types 0 and 1, but 8 for the rest); off
+on one being built (0x2000 alone, 0x4dfe4d), held (0x4b3882, 0x4defda),
+and on the prey of a boarding or a ram while its contact machine runs
+(0x4c3410 clears it at 0x4c3543, 0x4c3ec0 at 0x4c3eef; 0x4c3af4,
+0x4c3f19 and 0x4c40e4 set it again).
+
+The pickers (0x4d6cd0 calls them with reach 2, the block's flags' low
+16 bits as the mode, 0 from every computer task, and whether the ship
+is in the area, which only matters for reach below 2): 0x4bad90 for
+types 10 and 11, else 0x4baae0. A find in either is a cell's occupant
+(`+0xc`) that is a ship (0x50e600 200) other than the picker, either of
+side 2 (`+0x57`) not of class 0x1fb or of another nation or slot at war
+(0x4efe20 < 0), whose player bit is in the picker's players (`+0x689`);
+its boarding odds 0x4ba900 (the picker's `+0x53c` x 100, x 120 for a
+boarder, type 4, / the find's, at most 200; 0 with none of its own, 200
+against none) and ramming odds 0x4ba950 (see "Ramming odds"). Of
+several, for each odds the first greatest (0x4ba810 mode 0; mode 1,
+three draws of 0x4a2540 over the odds the ring weighs, x 1 / (5 x ring
++ 1), the greatest of the three kept, is not used here).
+- 0x4baae0: the cells within `reach` of the picker's (types 10 and 11
+  with reach below 2: 2, or 3 inside the area), clipped to the map, row
+  by row. One find: its two odds, but only its id for the boarding (the
+  ramming id stays 0, so a lone find better rammed gives nothing).
+  Ramming odds above the boarding's: the ram (boarding odds 0), else
+  the boarding (ramming 0).
+- 0x4bad90, reach below 4: the rings 1 to reach about the picker's cell
+  (0x597928: 8 cells, 0x59794c: 16, 0x597990: 24; `(dx, dy)` shorts row
+  by row), within the map, each on its own: a find with either odds
+  above 100 gives the ram when the boarding's are below the ramming's,
+  else the boarding; a later ring's replaces an earlier's. Reach 4 and
+  over (not ported, not called so here): the square as 0x4baae0's, its
+  finds needing `+0x261 & 0x1000`, not the players.
+
+Port: computer.rs `attack_pass`, `closing_in` (the port's ship with a
+`Task::Board` or `Task::Ram`: its loading, also 0x10, is not told
+apart), `takes_contact`, `close_pick`, `board_odds`, `ram_odds`
+(`combat::ram_odds`). A rewrite of the block (the same kind) keeps the notices freed;
 a block of another kind makes them again (0x4a1150). The status the
 tasks read (0x4d70d0) is still the port's own test (`Scene::report`).
 

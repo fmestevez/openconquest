@@ -4975,8 +4975,9 @@ impl Scene {
     /// The attack block's pass (0x4d6cd0, from the navy's tick 0x4c4f40,
     /// each game tick). With notices, they are read newest first
     /// (0x4d6960): a ship that joined (300) and is in the flotilla is sent
-    /// at the target (0x4d0140; not with none: not decoded, command 0x16
-    /// with target 0) and the group's three (0x4c42f0). (Not ported:
+    /// at the target (0x4d0140; not with none: command 0x16 with target 0,
+    /// whose record 0x4ab3f0 keeps, 0x4ac050 finding nothing, after the
+    /// pending group's turn in 0x4abe50: not traced) and the group's three (0x4c42f0). (Not ported:
     /// notice 0x13a, the target looked for again when it is the block's,
     /// whose sender is not traced.) When none was read, group `+8` is
     /// over the period (0x5a, but for a computer's side 3 or 4 outside the
@@ -4989,10 +4990,14 @@ impl Scene {
     /// set); with a blow marked made to forget it (0x4cf760; the report
     /// 0x4a21c0 not ported); then a draw of the navy's generator `% 100`
     /// and, the block's flags `+0x2c >> 16` 1, above 60 nothing more (2:
-    /// above 30); a phantom (`+0x253`) nothing more; else (not ported:
-    /// with `+0x261 & 0x1000`, the boarding and ramming pickers 0x4baae0
-    /// and 0x4bad90 for kinds 10 and 11, whose finds go to 0x4d0190 /
-    /// 0x4d01d0, and `+0x25d == 0x10` ending there: not decoded) sent at
+    /// above 30); a phantom (`+0x253`) nothing more; one boarding or ramming
+    /// (`+0x25d == 0x10`, `closing_in`) nothing more; one that takes a
+    /// contact (`+0x261 & 0x1000`, `takes_contact`) looks about it
+    /// (`close_pick`: 0x4bad90 for kinds 10 and 11, else 0x4baae0, both
+    /// with reach 2 and the flags' low half, 0, as the mode) and with a
+    /// find whose boarding odds are 101 or more is sent to board it
+    /// (0x4d0190, command 0x17), else with ramming odds 101 or more to ram
+    /// it (0x4d01d0, command 0x18); else, and without the contact, sent at
     /// the target as at the order (`attack_one`). Then `+8` grows by the
     /// tick.
     ///
@@ -5062,11 +5067,226 @@ impl Scene {
                     {
                         continue;
                     }
+                    if self.closing_in(i) {
+                        continue;
+                    }
+                    if self.takes_contact(i) {
+                        let (pick, board, ram) = self.close_pick(i);
+                        if pick != 0 && (board >= 0x65 || ram >= 0x65) {
+                            self.post(Order::Close {
+                                ship: id,
+                                target: pick,
+                                board: board >= 0x65,
+                            });
+                            continue;
+                        }
+                    }
                     self.attack_one(i, target, &mut cell);
                 }
             }
         }
         ai.flotillas[f].elapsed += 1;
+    }
+
+    /// Whether ship `i` is on a boarding or a ram (`+0x25d == 0x10`: the
+    /// task 0x4aa840 runs for commands 0x17 and 0x18, the port's
+    /// `Task::Board` / `Task::Ram`; its loading, 0x1f sub 2, and the fire
+    /// task's bit 0x100 beside it are not told apart here).
+    fn closing_in(&self, i: usize) -> bool {
+        self.objects[i]
+            .ship
+            .as_ref()
+            .is_some_and(|s| matches!(s.task, Some(Task::Board { .. } | Task::Ram { .. })))
+    }
+
+    /// Whether ship `i` takes a contact (`+0x261 & 0x1000`): every
+    /// finished ship has it (0x4e6930); it is off while the ship is being
+    /// built (`+0x261 = 0x2000`, 0x4dfe4d), its commands held by a hunt or
+    /// a landing (0x4b37d0 / 0x4b3882, 0x4defda), and while it is the
+    /// prey of a boarding or a ram (0x4c3410 clears it at 0x4c3543,
+    /// 0x4c3ec0 at 0x4c3eef; 0x4c3af4, 0x4c3f19 and 0x4c40e4 set it
+    /// again: the port's boarded ship's grapple and a ram run at it).
+    fn takes_contact(&self, i: usize) -> bool {
+        let id = self.objects[i].id;
+        let Some(s) = self.objects[i].ship.as_ref() else {
+            return false;
+        };
+        !self.being_built(id)
+            && !self.hunt_holds(id)
+            && !self.landing_holds(id)
+            && !s.grapple.as_ref().is_some_and(|g| !g.boarder)
+            && !self.objects.iter().any(|p| {
+                p.ship
+                    .as_ref()
+                    .and_then(|ps| ps.ram_run)
+                    .is_some_and(|r| r.target == id)
+            })
+    }
+
+    /// Ship `i`'s odds of boarding ship `k` (0x4ba900): its boarding
+    /// strength (`+0x53c`) x 100 (a boarder's, type 4, x 120) / `k`'s, at
+    /// most 200; 0 with none of its own, 200 against none.
+    fn board_odds(&self, i: usize, k: usize) -> u8 {
+        let mine = self.boarding_strength(i) as i64;
+        if mine == 0 {
+            return 0;
+        }
+        let his = self.boarding_strength(k) as i64;
+        if his == 0 {
+            return 200;
+        }
+        let per = if self.objects[i].ship.as_ref().is_some_and(|s| s.kind == 4) {
+            120
+        } else {
+            100
+        };
+        (mine * per / his).min(200) as u8
+    }
+
+    /// Ship `i`'s odds of ramming ship `k` (0x4ba950, `combat::ram_odds`).
+    fn ram_odds(&self, i: usize, k: usize) -> u8 {
+        let rammer = |j: usize| {
+            let o = &self.objects[j];
+            let s = o.ship.as_ref().unwrap();
+            crate::combat::Rammer {
+                kind: s.kind,
+                ram: s.ram,
+                level: self.levels_of(o.owner).ram_kinds[s.ram.min(2) as usize],
+                heading: s.heading,
+                speed: 0.0,
+                rigging: 0,
+            }
+        };
+        crate::combat::ram_odds(&rammer(i), &rammer(k)) as u8
+    }
+
+    /// The find of ship `i` for a boarding or a ram, as the attack pass
+    /// calls the pickers (reach 2, mode 0): `(id, boarding odds, ramming
+    /// odds)`, the odds not taken 0; id 0 for none.
+    ///
+    /// A find (both pickers): a cell's occupant (`+0xc`) that is a ship
+    /// (0x50e600 200) other than `i`, a monster (side `+0x57` 2) not of
+    /// class 0x1fb or another player's at war with `i`'s (0x4efe20 < 0:
+    /// the port's players are all at war), whose player bit is in `i`'s
+    /// players (`+0x689`); its odds by 0x4ba900 and 0x4ba950. Several:
+    /// for each odds the first greatest (0x4ba810 mode 0).
+    ///
+    /// 0x4baae0 (other kinds): the cells within 2 of `i`'s, clipped to the
+    /// map, row by row; one find gives its two odds but only its id for
+    /// boarding (the ramming id stays 0); the ramming odds above the
+    /// boarding's give the ram, else the boarding.
+    ///
+    /// 0x4bad90 (kinds 10 and 11, reach below 4): the rings 1 and 2 about
+    /// `i`'s cell (0x597928, 8 cells; 0x59794c, 16; row by row), within
+    /// the map, each on its own: with a find whose either odds pass 100,
+    /// the boarding's below the ramming's gives the ram, else the
+    /// boarding, and a later ring's replaces an earlier's. (Not ported:
+    /// its reach 4 and over, a square whose finds need `+0x261 & 0x1000`,
+    /// and 0x4ba810's mode 1, three draws of 0x4a2540 over the odds
+    /// weighed by the ring: the attack pass asks for neither.)
+    fn close_pick(&self, i: usize) -> (u32, u8, u8) {
+        const RINGS: [&[(i32, i32)]; 2] = [
+            &[
+                (-1, -1),
+                (0, -1),
+                (1, -1),
+                (-1, 0),
+                (1, 0),
+                (-1, 1),
+                (0, 1),
+                (1, 1),
+            ],
+            &[
+                (-2, -2),
+                (-1, -2),
+                (0, -2),
+                (1, -2),
+                (2, -2),
+                (-2, -1),
+                (2, -1),
+                (-2, 0),
+                (2, 0),
+                (-2, 1),
+                (2, 1),
+                (-2, 2),
+                (-1, 2),
+                (0, 2),
+                (1, 2),
+                (2, 2),
+            ],
+        ];
+        type Find = (u32, u8, u8);
+        let me = &self.objects[i];
+        let Some(s) = me.ship.as_ref() else {
+            return (0, 0, 0);
+        };
+        let (cx, cy) = self.cell_of(i);
+        let (w, h) = self.map_cells();
+        let occupants = self.cell_occupants(
+            ((cx - 2).max(0), (cy - 2).max(0)),
+            ((cx + 3).min(w), (cy + 3).min(h)),
+        );
+        let find = |cell: (i32, i32)| -> Option<Find> {
+            let &(_, k) = occupants.iter().find(|o| o.0 == cell)?;
+            let o = &self.objects[k];
+            if k == i || o.ship.is_none() {
+                return None;
+            }
+            let owner = o.owner?;
+            let monster = Self::side_of(o) == 2 && o.record.class_id != 0x1fb;
+            if !monster && me.owner == Some(owner) {
+                return None;
+            }
+            if s.behaviour.players & 1 << ((owner.1 + owner.0 * 4) & 0x1f) == 0 {
+                return None;
+            }
+            Some((o.id, self.board_odds(i, k), self.ram_odds(i, k)))
+        };
+        let best = |finds: &[Find], odds: fn(&Find) -> u8| {
+            let mut b = 0;
+            for (n, f) in finds.iter().enumerate() {
+                if odds(f) > odds(&finds[b]) {
+                    b = n;
+                }
+            }
+            b
+        };
+        let pick = |finds: &[Find], one_ram_id: bool| {
+            if let [f] = finds {
+                (f.0, f.1, if one_ram_id { f.0 } else { 0 }, f.2)
+            } else {
+                let (b, r) = (best(finds, |f| f.1), best(finds, |f| f.2));
+                (finds[b].0, finds[b].1, finds[r].0, finds[r].2)
+            }
+        };
+        if !matches!(s.kind, 10 | 11) {
+            let finds: Vec<Find> = (cy - 2..cy + 3)
+                .flat_map(|y| (cx - 2..cx + 3).map(move |x| (x, y)))
+                .filter_map(find)
+                .collect();
+            if finds.is_empty() {
+                return (0, 0, 0);
+            }
+            let (bid, b, rid, r) = pick(&finds, false);
+            return if r <= b { (bid, b, 0) } else { (rid, 0, r) };
+        }
+        let mut out = (0, 0, 0);
+        for ring in RINGS {
+            let finds: Vec<Find> = ring
+                .iter()
+                .map(|&(dx, dy)| (cx + dx, cy + dy))
+                .filter(|&(x, y)| x >= 0 && y >= 0 && x < w && y < h)
+                .filter_map(find)
+                .collect();
+            if finds.is_empty() {
+                continue;
+            }
+            let (bid, b, rid, r) = pick(&finds, true);
+            if b > 100 || r > 100 {
+                out = if b < r { (rid, 0, r) } else { (bid, b, 0) };
+            }
+        }
+        out
     }
 
     /// The ports of flotilla `f`'s base town for its gather zone
@@ -7637,6 +7857,113 @@ mod tests {
         assert!(!ai.flotillas[g].no_notices);
         ai.join(g, idb);
         assert_eq!(ai.flotillas[g].joined, [(idb, 0x6e)]);
+        scene.computers.players[0] = ai;
+    }
+
+    /// The attack pass's boarding and ramming (0x4d6cd0 with 0x4baae0,
+    /// 0x4bad90): a ship with a foe beside it that it outnumbers is sent
+    /// to board it (command 0x17); a rammer is sent to ram only by the
+    /// ring picker of kinds 10 and 11, 0x4baae0 giving no id for the ram
+    /// of a lone find, so the other kinds attack as at the order.
+    #[test]
+    fn computer_attack_pass_boards_and_rams() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        for _ in 0..1500 {
+            scene.update(0.1, &data, &mut caches);
+        }
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let owner = scene.computers.players[0].owner;
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(2)
+            .collect();
+        let (a, foe) = (ships[0], ships[1]);
+        scene.objects[a].owner = Some(owner);
+        scene.objects[foe].owner = Some(human);
+        let (ida, idf) = (scene.objects[a].id, scene.objects[foe].id);
+        let (fx, fy) = scene.cell_of(foe);
+        let t = TILE_SIZE as f32;
+        scene.objects[a].cell = None;
+        scene.objects[a].x = (fx + 1) as f32 * t + t / 2.0;
+        scene.objects[a].y = fy as f32 * t + t / 2.0;
+        {
+            let s = scene.objects[a].ship.as_mut().unwrap();
+            s.kind = 2;
+            s.crew.squads = [3, 0, 0];
+            s.task = None;
+            s.behaviour.players = u32::MAX;
+        }
+        scene.objects[foe].ship.as_mut().unwrap().crew.squads = [0; 3];
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        ai.difficulty = 1;
+        for fl in &mut ai.flotillas {
+            fl.ships.retain(|&x| x != ida && x != idf);
+        }
+        let g = ai.by_role[GUARD as usize];
+        ai.flotillas[g].ships = vec![ida];
+        ai.flotillas[g].block = 0x70;
+        ai.flotillas[g].order = FleetOrder::Attack((fx, fy, 1, 1));
+        // No crew against some: odds 200 for boarding, so the board.
+        assert!(scene.boarding_strength(a) > 0);
+        assert_eq!(scene.close_pick(a), (idf, 200, 0));
+        let pass = |scene: &mut Scene, ai: &mut Computer| {
+            scene.outbox.clear();
+            ai.flotillas[g].elapsed = 0x79;
+            scene.attack_pass(ai, g);
+            assert_eq!(ai.flotillas[g].target, idf);
+            scene.outbox.clone()
+        };
+        let sent = pass(&mut scene, &mut ai);
+        assert!(sent.iter().any(|o| matches!(*o,
+            Order::Close { ship, target, board: true } if ship == ida && target == idf)));
+        // On the boarding (`+0x25d == 0x10`) it is left to it.
+        scene.objects[a].ship.as_mut().unwrap().task = Some(Task::Board {
+            target: idf,
+            thrown: None,
+            hooking: false,
+        });
+        let sent = pass(&mut scene, &mut ai);
+        assert!(!sent.iter().any(|o| o.ship() == Some(ida)
+            && matches!(
+                o,
+                Order::Close { .. } | Order::Attack { .. } | Order::Move { .. }
+            )));
+        // A rammer with no crew across a boat's bow: ram odds 200
+        // (0x4ba950), board 0; a lone find gives no ram id (0x4baae0).
+        {
+            let s = scene.objects[a].ship.as_mut().unwrap();
+            s.task = None;
+            s.kind = 5;
+            s.crew.squads = [0; 3];
+            s.heading = 0;
+        }
+        {
+            let s = scene.objects[foe].ship.as_mut().unwrap();
+            s.kind = 0;
+            s.crew.squads = [3, 0, 0];
+            s.heading = 2;
+        }
+        assert_eq!(scene.close_pick(a), (0, 0, 200));
+        let sent = pass(&mut scene, &mut ai);
+        assert!(!sent.iter().any(|o| matches!(o, Order::Close { .. })));
+        assert!(sent.iter().any(|o| match *o {
+            Order::Attack { ship, target } => ship == ida && target == idf,
+            Order::Move { ship, .. } => ship == ida,
+            _ => false,
+        }));
+        // The fire rammer's rings (0x4bad90) give it: sent to ram.
+        scene.objects[a].ship.as_mut().unwrap().kind = 10;
+        assert_eq!(scene.close_pick(a), (idf, 0, 200));
+        let sent = pass(&mut scene, &mut ai);
+        assert!(sent.iter().any(|o| matches!(*o,
+            Order::Close { ship, target, board: false } if ship == ida && target == idf)));
+        // Not its players' (`+0x689`): no find.
+        scene.objects[a].ship.as_mut().unwrap().behaviour.players = 0;
+        assert_eq!(scene.close_pick(a), (0, 0, 0));
         scene.computers.players[0] = ai;
     }
 

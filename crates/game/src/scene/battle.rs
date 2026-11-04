@@ -285,7 +285,7 @@ impl Scene {
     /// 0x410150; lairs, 0x414e20; the jam, 0x415c10; the port's other
     /// monsters, whose constructors were not all read), 1 a player's, 0
     /// none.
-    fn side_of(o: &MapObject) -> u8 {
+    pub(super) fn side_of(o: &MapObject) -> u8 {
         if matches!(o.class, ObjectClass::Barbarian(_)) || o.owner == Some(combat::MONSTERS) {
             2
         } else if o.owner.is_some() {

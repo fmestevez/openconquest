@@ -564,6 +564,31 @@ pub fn ram_blows(a: Rammer, t: Rammer, angle: usize) -> (f32, f32) {
     )
 }
 
+/// The odds of `a` ramming `t` as the attack's picker weighs them
+/// (0x4ba950): each side's ram quality (0x598054) x its power over the
+/// other's (0x598024), x (its angle factor, 0x598078 for `a` and 0x598084
+/// for `t`, by 0x4c19b0 of `a`'s heading on `t`'s, x its type's full hull
+/// 0x5c76b0 / 100), over 2500, in integers; a rammer's (type 5) x 15 /
+/// 10. Then `a`'s x 100 / `t`'s, at most 200 (200 when `t`'s is 0).
+pub fn ram_odds(a: &Rammer, t: &Rammer) -> u32 {
+    let angle = ram_angle(a.heading, t.heading);
+    let power = |k: u8| RAM_POWER[k as usize % 12] as i64;
+    let side = |r: &Rammer, other: &Rammer, factor: u32| {
+        RAM_QUALITY[r.quality()] as i64 * power(r.kind) / power(other.kind)
+            * (factor as i64 * hull_points(r.kind) as i64 / 100)
+            / 2500
+    };
+    let mut att = side(a, t, RAM_ANGLE_ATTACK[angle]);
+    if a.kind == 5 {
+        att = att * 15 / 10;
+    }
+    let def = side(t, a, RAM_ANGLE_DEFENCE[angle]);
+    if def == 0 {
+        return 200;
+    }
+    (att * 100 / def).min(200) as u32
+}
+
 /// The angle class between the rammer's and the rammed ship's headings
 /// (0x4c19b0): 1 the same way, 2 opposite (head on), 0 crossing at any
 /// other angle.
@@ -1823,6 +1848,28 @@ mod tests {
         assert_eq!(ram_angle(0, 4), 2, "head on");
         assert_eq!(ram_angle(7, 3), 2);
         assert_eq!(ram_angle(3, 3), 1, "from behind");
+    }
+
+    #[test]
+    fn ram_odds_as_the_picker_weighs_them() {
+        // 0x4ba950, worked by hand from 0x598054, 0x598024, 0x598078,
+        // 0x598084 and 0x5c76b0.
+        let ship = |kind, heading| Rammer {
+            kind,
+            ram: 0,
+            level: 0,
+            heading,
+            speed: 0.0,
+            rigging: 0,
+        };
+        // Royal on royal head on: 100 x 13000 / 2500 = 520 each, 100.
+        assert_eq!(ram_odds(&ship(2, 0), &ship(2, 4)), 100);
+        // A boat on a royal the same way: 40 against 3120, 1.
+        assert_eq!(ram_odds(&ship(0, 0), &ship(2, 0)), 1);
+        // Rammer on rammer head on: 364 x 1.5 = 546 against 364, 150.
+        assert_eq!(ram_odds(&ship(5, 0), &ship(5, 4)), 150);
+        // Crossing a boat's bow: capped at 200.
+        assert_eq!(ram_odds(&ship(5, 0), &ship(0, 2)), 200);
     }
 
     #[test]
