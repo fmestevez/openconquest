@@ -1408,8 +1408,8 @@ pub enum Upgrade {
     Speed,
     /// The workshop's damage level for item group 0 (marines), 1 (medium
     /// weapons, items 3-5) or 2 (strong weapons, 6-8): player bytes
-    /// +0x9c + group, read by the damage routine 0x4bb670 as the column
-    /// level of every item in the group.
+    /// +0x9c + group, read by the dock fitter 0x4bb670 (0x4bb490) as the
+    /// column level of every item in the group.
     Arms(u8),
     /// The workshop's rate of fire level per group (+0x8e, table 0x597a3c).
     Rate(u8),
@@ -1779,8 +1779,8 @@ impl Effect {
     }
 }
 
-/// The original's random generator (0x4bb670): a 32-bit LCG whose high
-/// half is used.
+/// The original's random generator (as 0x4bb670 draws it): a 32-bit LCG
+/// whose high half is used.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Rng(pub u32);
 

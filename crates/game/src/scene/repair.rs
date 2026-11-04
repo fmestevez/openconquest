@@ -788,16 +788,24 @@ impl Scene {
 
     /// The refits at a full hull (0x4b1fc0 at 0x4b2276): a boat (type 0)
     /// without its item 3, a merchant (1) without its item 4, gets one
-    /// whole (0x4bd920 with 100). The `eax` 0x4b22f7 tests against 0x100
-    /// and 0x200 is the type byte zero-extended (0x4b227c), so types 8-11
-    /// get none. (Not ported: types 2-7 at a dock, class 0x3b, fitted by
-    /// 0x4bbca0 with the free weapon room 0x4be800(5, 0xff); its fitter
-    /// 0x4bb670, with 0x4bb490, 0x4bb620 and 0x43da20, is not decoded.)
+    /// whole (0x4bd920 with 100); types 2-7 in contact with their yard or
+    /// dock (`+0x8e6`, its `+5`) are fitted by 0x4bbca0 (`dock_refit`)
+    /// with the free room 0x4be800(5, 0xff). The `eax` 0x4b22f7 tests
+    /// against 0x100 and 0x200 is the type byte zero-extended (0x4b227c),
+    /// so types 8-11 get none.
     fn dock_refits(&mut self, i: usize) {
         let o = &mut self.objects[i];
         let item = match o.ship.as_ref().map(|s| s.kind) {
             Some(0) => 3,
             Some(1) => 4,
+            Some(2..=7) => {
+                let dock = o.ship.as_ref().and_then(|s| s.landing.as_ref()?.dock);
+                if let Some(dock) = dock {
+                    let room = free_room(o);
+                    self.dock_refit(i, dock, room);
+                }
+                return;
+            }
             _ => return,
         };
         let Some(c) = o.combat.as_mut() else {
@@ -808,5 +816,270 @@ impl Scene {
             // The new unit's condition is 100 (`units` fills it whole).
             o.units();
         }
+    }
+
+    /// A ship of type 2-7 fitted at a dock (0x4bbca0, `room` its free
+    /// room): only at a dock (class 0x3b) whose town (`+0x1c8`, 0x51f1f0)
+    /// is found. Each item 0-8 the town may have made (0x43da20 `town, 1,
+    /// 1, 0, item, 0, 1, 0, 1`: `town_may_make`) is offered `room` times
+    /// (items 6-8 `room / 2`), each whole (100); the type's weights of the
+    /// three values (2: 100, 60, 80; 3: 100, 10, 30; 4: 0, 50, 100; 5 and
+    /// 6: 100, 50, 0; 7: 0, 100, 50) pick the units (0x4bb670 with 5
+    /// tries, `fit_units`). Their price, `0x597164[item / 3]` amber and
+    /// `0x597170[item]` fish each: short of the amber (`+0x20`) or of the
+    /// fish in hundreds (0x4a8b70, `+0x2c / 100`), a computer's ship (side
+    /// 3 or 4) is fitted free and any other not at all; else the amber
+    /// and the fish are paid (0x4a8d60, 0x4a8be0: the fish as the table
+    /// has it, not in hundreds). Each unit is added with its condition
+    /// (0x4bd920). Returns the units fitted.
+    pub(super) fn dock_refit(&mut self, k: usize, dock: u32, room: i32) -> u32 {
+        let kind = self.objects[k].ship.as_ref().map_or(0, |s| s.kind);
+        let Some(d) = self.object_index(dock) else {
+            return 0;
+        };
+        if !(2..=7).contains(&kind) || room == 0 {
+            return 0;
+        }
+        if self.objects[d].class != ObjectClass::Building(DOCK) {
+            return 0;
+        }
+        let Some(town) = self.home_settlement(d) else {
+            return 0;
+        };
+        let mut offer: [Vec<u32>; 9] = Default::default();
+        for (item, o) in offer.iter_mut().enumerate() {
+            if self.town_may_make(town, item as u8) {
+                let n = if item > 5 { room / 2 } else { room };
+                *o = vec![100; n.max(0) as usize];
+            }
+        }
+        let weights = match kind {
+            2 => [100, 60, 80],
+            3 => [100, 10, 30],
+            4 => [0, 50, 100],
+            5 | 6 => [100, 50, 0],
+            _ => [0, 100, 50],
+        };
+        let owner = self.objects[k].owner;
+        let levels = self.levels_of(owner).arms;
+        let out = self.fit_units(k, &offer, room, weights, 5, levels);
+        let (mut amber, mut fish) = (0i64, 0i64);
+        for (item, &n) in out.iter().enumerate() {
+            let (a, f) = crate::combat::item_cost(item as u8);
+            amber += a as i64 * n as i64;
+            fish += (f / 100) as i64 * n as i64;
+        }
+        let Some(owner) = owner else {
+            return 0;
+        };
+        let (have_amber, have_fish) = self.funds(owner);
+        if (have_amber as i64) < amber || ((have_fish / 100) as i64) < fish {
+            if !self.side_computer(Some(owner)) {
+                return 0;
+            }
+        } else {
+            self.earn(owner, -amber, -fish);
+        }
+        let o = &mut self.objects[k];
+        o.units();
+        let mut fitted = 0;
+        for (item, &n) in out.iter().enumerate() {
+            for &cond in &offer[item][..n] {
+                if item < 3 {
+                    o.ship.as_mut().unwrap().crew.squads[item] += 1;
+                } else if let Some(c) = o.combat.as_mut() {
+                    c.weapons.push(item as u8);
+                }
+                o.ship.as_mut().unwrap().conditions[item].push(cond as u8);
+                fitted += 1;
+            }
+        }
+        fitted
+    }
+
+    /// Whether town `town` may have `item` made, the price aside (0x43da20
+    /// with `param_3` 0): it stands (`+0xa4` 1; a town, class 0x33, also
+    /// while it goes up, `+0xa4` 0; not mended, 2, nor asleep), then case
+    /// 1 for its own player (`can_make_by`).
+    pub(super) fn town_may_make(&self, town: u32, item: u8) -> bool {
+        let Some(t) = self.object_index(town) else {
+            return false;
+        };
+        let o = &self.objects[t];
+        let Some(owner) = o.owner else {
+            return false;
+        };
+        let standing = !self.mending.contains(&town)
+            && o.asleep.is_none()
+            && (self.construction_at(town).is_none() || o.class == ObjectClass::Building(TOWN));
+        standing && self.can_make_by(town, owner, item)
+    }
+
+    /// The fitter 0x4bb670 (ship `k`, its own random numbers `+0x18`):
+    /// the units of `offer` (by item, each its condition) to take into
+    /// `room` places, `tries` times at random, the best by `weights` of
+    /// the three values kept. `full` is the last weight of 100 (0 without
+    /// one), `partial` whether one lies between 0 and 100. From the first
+    /// item offered to one past the last (`end`): without `partial` and
+    /// with `full` 2 `end` is at most 3; a half (`room / 2`) of 0 makes
+    /// `end` 6. A try: with a half and `end` past 6, `r = draw % (half +
+    /// 1)` heavy units (items 6 to `end`, 2 places each, `room - 2r`
+    /// left), each picked at random by its score (`unit_score` at the
+    /// player's level `+0x9e`), stopping when none scores; then while
+    /// places are left, a unit of the items below 6 by score (levels
+    /// `+0x9c + item / 3`). The try's values (`unit_score` of each unit
+    /// taken, unweighted, per value) replace the best's when better:
+    /// without `partial` the `full` value higher, else the weighted gain
+    /// above 0. Returns the best try's units by item.
+    fn fit_units(
+        &mut self,
+        k: usize,
+        offer: &[Vec<u32>; 9],
+        room: i32,
+        weights: [i32; 3],
+        tries: u32,
+        levels: [u8; 3],
+    ) -> [usize; 9] {
+        let mut full = 0usize;
+        let mut partial = false;
+        for (c, &w) in weights.iter().enumerate() {
+            if w == 100 {
+                full = c;
+            }
+            if w > 0 && w < 100 {
+                partial = true;
+            }
+        }
+        let mut out = [0; 9];
+        let Some(first) = offer.iter().position(|o| !o.is_empty()) else {
+            return out;
+        };
+        let mut end = offer.iter().rposition(|o| !o.is_empty()).unwrap() + 1;
+        let half = room / 2;
+        if !partial && full == 2 {
+            end = end.min(3);
+        }
+        if half == 0 {
+            end = 6;
+        }
+        let score = |item: usize, n: usize, weighted: bool, value: usize| {
+            unit_score(
+                item,
+                levels[item / 3],
+                offer[item][n],
+                weighted,
+                value,
+                weights,
+            )
+        };
+        // A unit of items `from..to` picked by its score (one draw); false
+        // when none scores.
+        let pick = |scene: &mut Self, picks: &mut [usize; 9], from: usize, to: usize| {
+            let total: u32 = (from..to)
+                .filter(|&i| offer[i].len() > picks[i])
+                .map(|i| score(i, picks[i], partial, full))
+                .sum();
+            if total == 0 {
+                return false;
+            }
+            let p = scene.ship_draw(k) % total;
+            let mut sum = 0;
+            for i in from..to {
+                if offer[i].len() > picks[i] {
+                    sum += score(i, picks[i], partial, full);
+                    if p < sum {
+                        picks[i] += 1;
+                        break;
+                    }
+                }
+            }
+            true
+        };
+        let mut best = [0i64; 3];
+        let mut best_picks = [0usize; 9];
+        for _ in 0..tries {
+            let mut picks = [0usize; 9];
+            let mut left = room;
+            if half != 0 && end >= 7 {
+                let r = self.ship_draw(k) % (half as u32 + 1);
+                left = room - 2 * r as i32;
+                for _ in 0..r {
+                    if !pick(self, &mut picks, 6, end) {
+                        break;
+                    }
+                }
+            }
+            let cap = end.min(6);
+            while left > 0 && first < cap {
+                if !pick(self, &mut picks, first, cap) {
+                    break;
+                }
+                left -= 1;
+            }
+            let mut cur = [0i64; 3];
+            for (i, &n) in picks.iter().enumerate().take(end).skip(first) {
+                for u in 0..n {
+                    for (c, v) in cur.iter_mut().enumerate() {
+                        *v += score(i, u, false, c) as i64;
+                    }
+                }
+            }
+            let better = if !partial {
+                best[full] < cur[full]
+            } else {
+                (0..3)
+                    .map(|c| (cur[c] - best[c]) * weights[c] as i64)
+                    .sum::<i64>()
+                    > 0
+            };
+            if better {
+                if !partial {
+                    best[full] = cur[full];
+                } else {
+                    best = cur;
+                }
+                best_picks = picks;
+            }
+        }
+        out[first..end].copy_from_slice(&best_picks[first..end]);
+        out
+    }
+}
+
+/// A ship's free room for units (0x4be800 with 5, 0xff): its type's room
+/// (0x597ae4) less each unit it carries, items 0-8 (0x4be780 with 0),
+/// by its places (0x597cf0: 1, heavy weapons 6-8 2), at least 0; none
+/// for types 10 and 11.
+fn free_room(o: &crate::objects::MapObject) -> i32 {
+    let kind = o.ship.as_ref().map_or(0, |s| s.kind) as usize;
+    if kind == 10 || kind == 11 {
+        return 0;
+    }
+    let used: i32 = o
+        .unit_counts()
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| n as i32 * if i >= 6 { 2 } else { 1 })
+        .sum();
+    (crate::combat::MIN_POWER[kind % 12] as i32 - used).max(0)
+}
+
+/// A unit's score to the fitter (0x4bb490): its item's three values A, B
+/// and C at `level` (0x597d2c) times its condition over the item's reload
+/// at that level (0x5c76e0[item x 3 + level]); `weighted`, their sum each
+/// by its weight / 100, else value `value` alone (none past 2).
+fn unit_score(item: usize, level: u8, cond: u32, weighted: bool, value: usize, w: [i32; 3]) -> u32 {
+    let mut power = crate::info_panel::POWER[item]
+        .iter()
+        .map(|v| v[level.min(2) as usize]);
+    let reload = crate::combat::reload_ticks(item as u8, level);
+    let of = |t: u32| t * cond / reload;
+    if weighted {
+        power
+            .zip(w)
+            .map(|(t, w)| (of(t) as i32 * w) / 100)
+            .sum::<i32>() as u32
+    } else {
+        power.nth(value).map_or(0, of)
     }
 }

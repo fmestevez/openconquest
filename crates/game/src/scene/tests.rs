@@ -15430,3 +15430,92 @@ fn temple_casts_wind_big_reef_and_areas() {
         );
     }
 }
+
+/// A ship of type 2-7 whole at a dock is fitted (0x4bbca0): each item its
+/// town may have made offered to its free room, the units picked by the
+/// type's weights in 5 tries of its own random numbers (0x4bb670, scored
+/// by 0x4bb490), paid 0x597164[item / 3] amber and 0x597170[item] fish
+/// each (needs `OPENCONQUEST_DATA`).
+#[test]
+fn docks_fit_units_by_the_types_weights() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.permits = crate::permits::Permits::ALL;
+    let human = scene.human.unwrap();
+    let owner = (human.nation, human.slot);
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let dock = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .unwrap()
+        .id;
+    let d = scene.object_index(dock).unwrap();
+    scene.objects[d].class = ObjectClass::Building(economy::DOCK);
+    let town = scene.home_settlement(d).unwrap();
+    // Nothing made at a town without a workshop: nothing fitted.
+    let k = scene.object_index(ship).unwrap();
+    let bare = |scene: &mut Scene, kind: u8, seed: u32| {
+        let o = &mut scene.objects[k];
+        let s = o.ship.as_mut().unwrap();
+        s.kind = kind;
+        s.crew.squads = [0; 3];
+        s.conditions = Default::default();
+        s.lcg = Some(seed);
+        o.combat.as_mut().unwrap().weapons.clear();
+    };
+    bare(&mut scene, 3, 12345);
+    assert_eq!(scene.dock_refit(k, dock, 7), 0);
+    // The other building made the town's workshop (no smithy: no items 2
+    // and 5), the arming for heavy weapons.
+    let shop = (0..scene.objects.len())
+        .find(|&i| {
+            i != d
+                && scene.objects[i].id != town
+                && matches!(scene.objects[i].class, ObjectClass::Building(_))
+        })
+        .unwrap();
+    scene.objects[shop].class = ObjectClass::Building(WORKSHOP);
+    let id = scene.objects[shop].id;
+    scene.towns.lists.entry(town).or_default().push(id);
+    scene.towns.of.insert(id, town);
+    let mut levels = scene.levels_of(Some(owner));
+    levels.weapons = 1;
+    scene.levels.insert(owner, levels);
+    let may: Vec<u8> = (0..9).filter(|&i| scene.town_may_make(town, i)).collect();
+    assert_eq!(may, [0, 1, 3, 4, 6, 7, 8]);
+    let units = |scene: &Scene| scene.objects[k].unit_counts();
+    // Type 3 (100, 10, 30), room 7, seed 12345: one each of items 4 and
+    // 6-8, for 50 + 3 x 70 amber.
+    scene.amber = 1000;
+    scene.fish = 1000;
+    assert_eq!(scene.dock_refit(k, dock, 7), 4);
+    assert_eq!(units(&scene), [0, 0, 0, 0, 1, 0, 1, 1, 1]);
+    assert_eq!((scene.amber, scene.fish), (1000 - 260, 1000));
+    assert_eq!(
+        scene.objects[k].ship.as_ref().unwrap().conditions[6],
+        vec![100]
+    );
+    // Type 4 (0, 50, 100), room 4, seed 777: items 0, 1 and 7, for 130
+    // amber and 2 + 2 fish (taken as the table has it, not in hundreds).
+    bare(&mut scene, 4, 777);
+    assert_eq!(scene.dock_refit(k, dock, 4), 3);
+    assert_eq!(units(&scene), [1, 1, 0, 0, 0, 0, 0, 1, 0]);
+    assert_eq!((scene.amber, scene.fish), (740 - 130, 1000 - 4));
+    // Short of the fish in hundreds the human's ship gets nothing.
+    bare(&mut scene, 4, 777);
+    scene.fish = 399;
+    assert_eq!(scene.dock_refit(k, dock, 4), 0);
+    assert_eq!(units(&scene), [0; 9]);
+    assert_eq!(scene.amber, 610);
+}

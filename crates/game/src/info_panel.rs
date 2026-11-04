@@ -336,7 +336,7 @@ pub fn big_picture(e: &Entry, nation3: bool) -> Option<String> {
 /// 0x597d2c: per item three values (hull damage A, crew damage B, boarding
 /// C) at three levels.
 #[rustfmt::skip]
-const POWER: [[[u32; 3]; 3]; 12] = [
+pub(crate) const POWER: [[[u32; 3]; 3]; 12] = [
     [[5, 7, 10], [45, 56, 68], [35, 44, 52]],
     [[7, 9, 12], [25, 31, 38], [68, 85, 102]],
     [[3, 5, 7], [5, 8, 11], [100, 125, 150]],

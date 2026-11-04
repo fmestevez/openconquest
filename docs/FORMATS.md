@@ -613,7 +613,7 @@ Combat tables:
   groups (W = marines 0-2, M = light weapons 3-5, S = heavy weapons 6-8);
   the levels are player bytes +0x8e+group (first kind), +0x95+group
   (second) and +0x9c+group (third). The third is the damage level: the
-  damage routine 0x4bb670 calls 0x4bb490 for item i with level byte
+  dock's fitter 0x4bb670 scores item i by 0x4bb490 with level byte
   +0x9c + i/3, which picks the A, B and C columns of the item's row. Its
   buttons are 0x3f, 0x42, 0x45 (`CBUT_UPGARMINGW1`, `M1`, `S1`), costing
   1500/1700, 1700/1800, 1800/2600 amber (0x597254; the following values
@@ -4406,14 +4406,63 @@ is dropped.
 The port runs it at the game tick (`Scene::step_dock_repairs`, the
 landing's `Landing` with its `dock` contact; `in_dock` is the contact).
 Not ported: the sale; notice 0x143 (the port's zones take none); the
-dock's message 0x2874, which sends its ship 0xcb9; the fitting of types
-2-7 (0x4bbca0: the dock's town by 0x51f1f0, each item 0-8 that
-0x43da20(town, 1, 1, 0, item, 0, 1, 0, 1) allows offered room times
-(items 6-8 half), weights by type (2: 100, 60, 80; 3: 100, 10, 30; 4: 0,
-50, 100; 5, 6: 100, 50, 0; 7: 0, 100, 50), the fitter 0x4bb670 with 5
-tries drawing the ship's generator and scoring by 0x4bb490, the units'
-price paid, or for a side 3 / 4 player free when short, another player
-getting none; not decoded: 0x4bb490, 0x4bb620 and the fitter's loops).
+dock's message 0x2874, which sends its ship 0xcb9.
+
+**The fitting of types 2-7** (0x4bbca0(ship, dock, room), from 0x4b22f0
+in state 4 at a full hull with the contact `+0x8e6` and its dock `+5`;
+`Scene::dock_refit`). The room is 0x4be800(5, 0xff): the type's room
+0x597ae4 less each unit aboard, items 0-8 (0x4be780 with 0; its sum is
+left in `eax`, which Ghidra drops), times its places 0x597cf0 (bytes 1,
+1, 1, 1, 1, 1, 2, 2, 2), at least 0. Nothing without a type 2-7, a dock,
+a room, a dock of class 0x3b or its town (`+0x1c8` by 0x51f1f0). Each
+item 0-8 for which 0x43da20(town, 1, 1, 0, item, 0, 1, 0, 1) is 0 is
+offered `room` times (items 6-8 `room / 2`), each at 100. 0x43da20 with
+these arguments (kind 1, an item; count 1; `param_3` 0: neither the price
+nor a busy shop tested): the town in state `+0xa4` 1, or a town (class
+0x33) in state 0, else -5; then the item's permission (bit item / 3 +
+0xf of player `+0x45`), the arming `+0xa3 >= item / 3`, a workshop
+(`+0x1fc`) and for items 2 and 5 a smithy (`+0x200`), 0, else -5. The
+weights of the three values A, B, C by type: 2: 100, 60, 80; 3: 100, 10,
+30; 4: 0, 50, 100; 5, 6: 100, 50, 0; 7: 0, 100, 50. The fitter
+0x4bb670(ship, offer, out, room, weights, 5) chooses; the price is
+0x597164[item / 3] amber (30, 50, 70) and 0x597170[item] fish (2, 2, 3,
+then 0) each. Short of the amber (0x4a8ce0, `+0x20`) or of the fish in
+hundreds (0x4a8b70, `+0x2c / 100`), a side 3 or 4 player (game `+0x1a1d`)
+is fitted free and any other not at all; else 0x4a8d60 takes the amber
+and 0x4a8be0 the fish as summed, not in hundreds (both floored at 0).
+Each unit chosen is added with its condition (0x4bd920).
+
+The offer (and the out list) is nine dword counts, then per item at
+`+0x24 + item x 0x8f` eleven 13-byte entries: a dword, the item byte, the
+condition dword (`+5`), the entry's index (`+9`); 0x4bb620 fills a
+default one (counts 11, conditions 100) only when the fitter is handed
+none, never from 0x4bbca0.
+
+The score 0x4bb490(item, level, offer, n, weighted, value, weights) of
+the item's entry `n`: with T_c = 0x597d2c[item x 9 + c x 3 + level] (A,
+B, C) and the reload 0x5c76e0[item x 3 + level] (6000 / rate), weighted
+the sum over c of `T_c x cond / reload x w_c / 100` (each term's
+divisions in that order, integers), else `T_value x cond / reload`
+(value 0-2, other values 0).
+
+The fitter 0x4bb670 (the ship's generator `+0x18`, high 16 bits): `full`
+the last weight of 100 (0 without), `partial` whether one lies strictly
+between 0 and 100; `first` the first item offered, `end` one past the
+last (nothing offered: none). Without `partial` and with `full` 2, `end`
+is at most 3; `half = room / 2`, and a half of 0 makes `end` 6. Five
+tries, each from no units: with a half and `end` above 6, `r = draw %
+(half + 1)` heavy units, `room - 2r` places left, each unit picked among
+items 6 to `end` still offered (offer count above the units taken) by
+`draw % total` against the running sum of their scores (`weighted` =
+`partial`, `value` = `full`, level player `+0x9e`), the first whose sum
+passes it, stopping (places not given back) when the total is 0; then
+while places are left and `first < min(end, 6)`, a unit the same way of
+the items `first..min(end, 6)` (level `+0x9c + item / 3`), one place
+each. The try's values `cur_c` (each unit's unweighted score for value c,
+items `first..end`) replace the best when, without `partial`,
+`best[full] < cur[full]` (only that value kept), else when
+`sum (cur_c - best_c) x w_c > 0`; the best starts at 0 with no units.
+The best try's units go out (entries copied from the offer).
 
 ## Units' conditions
 
