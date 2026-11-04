@@ -1070,7 +1070,8 @@ fn behaviour_menu(scene: &Scene, obj: &MapObject) -> Menu {
     toggle(8, PATROL, true, patrolling);
     let zone = |attack| matches!(ship.task, Some(crate::objects::Task::Zone { attack: a, .. }) if a == attack);
     toggle(9, GUARD_ZONE, obj.is_armed(), zone(false));
-    toggle(10, ATTACK_ZONE, obj.is_armed(), zone(true));
+    let attacking = zone(true) || scene.ship_attack(obj.id).is_some();
+    toggle(10, ATTACK_ZONE, obj.is_armed(), attacking);
     let escorting = matches!(ship.task, Some(crate::objects::Task::Convoy { .. }));
     toggle(4, CONVOY, true, escorting);
     menu

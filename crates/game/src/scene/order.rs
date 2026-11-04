@@ -107,6 +107,14 @@ pub enum Order {
         x: i32,
         y: i32,
     },
+    /// The human's attack zone with `ships` selected (0x49d790 case 10):
+    /// the selection's group given the attack block over the rectangle
+    /// dragged between `a` and `b` (`human_attack`).
+    AttackZone {
+        ships: Vec<u32>,
+        a: (f32, f32),
+        b: (f32, f32),
+    },
     /// The human's gather click on a deposit with `ships` selected
     /// (0x49d3c0): a gather zone of the 3 x 3 cells about it. `keys`: the
     /// click's key flags (Sinput, the mouse message's `+0x14`: 4 Shift, 8
@@ -426,7 +434,8 @@ impl Scene {
             Order::GatherAt { .. }
             | Order::GatherArea { .. }
             | Order::GatherZone { .. }
-            | Order::ZoneWaypoint { .. } => {}
+            | Order::ZoneWaypoint { .. }
+            | Order::AttackZone { .. } => {}
             Order::Behaviour { .. } | Order::LoadCrew { .. } | Order::LoadObject { .. } => {}
             Order::Stop { id } => self.leave_zones(&[*id]),
             o => {
@@ -652,27 +661,16 @@ impl Scene {
             }
             Scout { ship, x, y } => done(self.order_scout(ship, x, y)),
             Patrol { ship, x, y } => done(self.order_patrol(ship, x, y)),
-            Zone { ship, a, b, attack } => {
-                // The human's attack zone (0x49d9d0) first gives the group
-                // its behaviour (0x49da43: 0x4c4350 with `{0, 0x4a2f10's
-                // players, -1, -1}`), command `#` sub 1 to each ship
-                // (0x4c42f0, queued). 0x4a2f10: every player bit but its
-                // own and those of players 0-19 not at war with it
-                // (0x4efe20 >= 0; the port's players are all at war).
-                if attack {
-                    let owner = self.object_index(ship).and_then(|i| self.objects[i].owner);
-                    if let Some((nation, slot)) = owner {
-                        self.post(BehaviourCommand {
-                            ship,
-                            sub: 1,
-                            players: !(1 << ((slot + nation * 4) & 0x1f)),
-                            classes: u32::MAX,
-                            third: u32::MAX,
-                        });
-                    }
-                }
-                done(self.order_zone(ship, a, b, attack))
-            }
+            // An attack zone given to one ship (an outbox of an older
+            // save) is its group's.
+            Zone {
+                ship,
+                a,
+                b,
+                attack: true,
+            } => done(self.order_attack_zone(&[ship], a, b)),
+            Zone { ship, a, b, attack } => done(self.order_zone(ship, a, b, attack)),
+            AttackZone { ref ships, a, b } => done(self.order_attack_zone(ships, a, b)),
             GatherZone {
                 ship,
                 a,

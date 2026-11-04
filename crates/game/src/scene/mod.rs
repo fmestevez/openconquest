@@ -471,6 +471,9 @@ pub struct Scene {
     /// The groups' gather zones (fleet order 0x78, `gather`), in the
     /// order the navy's tick runs them.
     pub gather_zones: Vec<gather::GatherZone>,
+    /// The human groups running the attack block (0x49d790 case 10,
+    /// `human_attack`), in the order the navy's tick runs them.
+    pub human_attacks: Vec<human_attack::HumanAttack>,
     /// The last human group's serial number.
     pub zone_serial: u32,
     /// The navy's generator (`[0x5c7504] +0x18`), until its first draw.
@@ -567,6 +570,7 @@ mod flyers;
 mod fort;
 mod gather;
 mod grapple;
+mod human_attack;
 mod order;
 mod placement;
 mod script;
@@ -586,6 +590,7 @@ pub use flyers::{Flyer, Nest};
 pub use gather::GatherZone;
 pub use halt::Batch;
 pub use hazards::Hazard;
+pub use human_attack::HumanAttack;
 pub use leviathan::Leviathan;
 pub use load::{Cargo, Entry, LoadLink};
 pub use order::{Order, TickOrder};
@@ -848,6 +853,7 @@ impl Scene {
             tick_orders: BTreeMap::new(),
             outbox: Vec::new(),
             gather_zones: Vec::new(),
+            human_attacks: Vec::new(),
             zone_serial: 0,
             navy_lcg: None,
             ticks: 0,
@@ -1121,6 +1127,7 @@ impl Scene {
             tick_orders: self.tick_orders.clone(),
             outbox: self.outbox.clone(),
             gather_zones: self.gather_zones.clone(),
+            human_attacks: self.human_attacks.clone(),
             zone_serial: self.zone_serial,
             navy_lcg: self.navy_lcg,
             ticks: self.ticks,
@@ -1292,6 +1299,7 @@ impl Scene {
         scene.tick_orders = save.tick_orders.clone();
         scene.outbox = save.outbox.clone();
         scene.gather_zones = save.gather_zones.clone();
+        scene.human_attacks = save.human_attacks.clone();
         scene.zone_serial = save.zone_serial;
         scene.navy_lcg = save.navy_lcg;
         scene.ticks = save.ticks;
@@ -2516,6 +2524,7 @@ impl Scene {
             // zones hear their ships' notices and plan again. (Not settled:
             // whether before or after the ships' own ticks.)
             self.run_gather_zones();
+            self.run_human_attacks();
             self.run_jam_attacks();
             self.run_brain();
             self.step_fort_draws();

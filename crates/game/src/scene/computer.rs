@@ -1650,50 +1650,64 @@ impl Scene {
     pub(super) fn strength(&self, i: usize) -> i32 {
         use crate::object_info::cache;
         let o = &self.objects[i];
-        let levels = self.levels_of(o.owner);
         if let Some(s) = o.ship.as_ref() {
-            let units = o.unit_conditions();
-            let fire: u32 = units
-                .iter()
-                .enumerate()
-                .filter(|(_, u)| !u.is_empty())
-                .map(|(k, u)| {
-                    let n = u.len() as u32;
-                    let mean = u.iter().map(|&c| c as u32).sum::<u32>() / n;
-                    cache(k as u8, levels.arms_for(k as u8)) * n * mean / 100
-                })
-                .sum::<u32>()
-                / 100;
             let armour = match s.armour {
                 1 => 40,
                 2 => 70,
                 _ => 0,
             };
-            return (self.boarding_strength(i) / 10 + armour + fire) as i32;
+            return self.boarding_strength(i) as i32 / 10 + armour + self.fire_power(i);
         }
         match o.class {
-            ObjectClass::Building(0x34..=0x36) => {
-                let flame = self.flame_of(o.owner) > 0.0;
-                let places = o.fort_places();
-                let sum: u32 = (0..9u8)
-                    .map(|k| {
-                        let a = cache(k, levels.arms_for(k));
-                        let p: u32 = places[k as usize].iter().map(|&c| c as u32 * a / 100).sum();
-                        if flame {
-                            p * 150 / 100
-                        } else {
-                            p
-                        }
-                    })
-                    .sum();
-                (sum / 10) as i32
-            }
+            ObjectClass::Building(0x34..=0x36) => self.units_fire(i) / 10,
             ObjectClass::HarpyNest => cache(4, 1) as i32 * 20,
             ObjectClass::Monster(0x1f4) => cache(4, 0) as i32 / 10,
             ObjectClass::Monster(0x1fa) => 0x2260,
             ObjectClass::Monster(0x1fb) => 5000,
             _ => 0,
         }
+    }
+
+    /// A ship's fire power (`+0x479`, 0x4bc360): each item's A x 15 x
+    /// count x mean condition / 100, summed / 100.
+    pub(super) fn fire_power(&self, i: usize) -> i32 {
+        use crate::object_info::cache;
+        let o = &self.objects[i];
+        let levels = self.levels_of(o.owner);
+        let fire: u32 = o
+            .unit_conditions()
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| !u.is_empty())
+            .map(|(k, u)| {
+                let n = u.len() as u32;
+                let mean = u.iter().map(|&c| c as u32).sum::<u32>() / n;
+                cache(k as u8, levels.arms_for(k as u8)) * n * mean / 100
+            })
+            .sum::<u32>();
+        (fire / 100) as i32
+    }
+
+    /// A fort's units' fire: 0x446710 over its unit groups (`+0x4d0`, a
+    /// barbarian fort's `+0x20c`), x 1.5 under the Flame.
+    pub(super) fn units_fire(&self, i: usize) -> i32 {
+        use crate::object_info::cache;
+        let o = &self.objects[i];
+        let levels = self.levels_of(o.owner);
+        let flame = self.flame_of(o.owner) > 0.0;
+        let places = o.fort_places();
+        let sum: u32 = (0..9u8)
+            .map(|k| {
+                let a = cache(k, levels.arms_for(k));
+                let p: u32 = places[k as usize].iter().map(|&c| c as u32 * a / 100).sum();
+                if flame {
+                    p * 150 / 100
+                } else {
+                    p
+                }
+            })
+            .sum();
+        sum as i32
     }
 
     /// Asks each other flotilla whether it can help fleet `f` against
@@ -4867,8 +4881,22 @@ impl Scene {
     /// an object already in it skipped. An object of class 0x46-0x48
     /// marks the index it went in at (not moved by later insertions).
     /// The id of the entry marked, else of the first; 0 when none.
-    fn zone_foe(&self, ai: &Computer, f: usize, (x0, y0, aw, ah): Cells) -> u32 {
+    fn zone_foe(&self, ai: &Computer, f: usize, area: Cells) -> u32 {
         let (players, classes, _) = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
+        self.area_foe(ai.owner, players, classes, area)
+            .map_or(0, |k| self.objects[k].id)
+    }
+
+    /// 0x4d6640 for a group of `owner`'s with players `players` (group
+    /// `+0x19`) and classes `classes` (`+0x1d`) over `area` (`zone_foe`):
+    /// the object picked, by index.
+    pub(super) fn area_foe(
+        &self,
+        owner: (u32, u32),
+        players: u32,
+        classes: u32,
+        (x0, y0, aw, ah): Cells,
+    ) -> Option<usize> {
         let (w, h) = self.map_cells();
         let (x1, y1) = ((x0 + aw).min(w), (y0 + ah).min(h));
         let occupants = self.cell_occupants((x0.max(0), y0.max(0)), (x1, y1));
@@ -4877,10 +4905,10 @@ impl Scene {
         let mut marked: Option<usize> = None;
         for &(_, k) in &occupants {
             let o = &self.objects[k];
-            let Some(owner) = o.owner else {
+            let Some(o_owner) = o.owner else {
                 continue;
             };
-            if players & 1 << ((owner.1 + owner.0 * 4) & 0x1f) == 0 || owner == ai.owner {
+            if players & 1 << ((o_owner.1 + o_owner.0 * 4) & 0x1f) == 0 || o_owner == owner {
                 continue;
             }
             let class =
@@ -4902,9 +4930,9 @@ impl Scene {
             n = (n + 1).min(10);
         }
         if n == 0 {
-            return 0;
+            return None;
         }
-        list[marked.unwrap_or(0)].1
+        Some(list[marked.unwrap_or(0)].0)
     }
 
     /// The cells from `(x0, y0)` to before `(x1, y1)`, row by row, each
@@ -4914,7 +4942,7 @@ impl Scene {
     /// hidden), as a fort's group scan takes them (`group_cells` slot 0).
     /// (Not decoded: which of two ships in one cell holds it; the first
     /// listed here.)
-    fn cell_occupants(
+    pub(super) fn cell_occupants(
         &self,
         (x0, y0): (i32, i32),
         (x1, y1): (i32, i32),
@@ -5087,7 +5115,7 @@ impl Scene {
     /// task 0x4aa840 runs for commands 0x17 and 0x18, the port's
     /// `Task::Board` / `Task::Ram`; its loading, 0x1f sub 2, and the fire
     /// task's bit 0x100 beside it are not told apart here).
-    fn closing_in(&self, i: usize) -> bool {
+    pub(super) fn closing_in(&self, i: usize) -> bool {
         self.objects[i]
             .ship
             .as_ref()
@@ -8052,11 +8080,10 @@ mod tests {
         scene.objects[i].ship.as_mut().unwrap().behaviour = Default::default();
         let (x, y) = (scene.objects[i].x, scene.objects[i].y);
         let _ = scene.apply(
-            &Order::Zone {
-                ship: id,
+            &Order::AttackZone {
+                ships: vec![id],
                 a: (x - 64.0, y - 64.0),
                 b: (x + 64.0, y + 64.0),
-                attack: true,
             },
             &data,
             &mut caches,

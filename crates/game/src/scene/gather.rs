@@ -227,6 +227,7 @@ impl Scene {
         }
         self.gather_zones
             .retain(|z| !(matches!(z.group, ZoneGroup::Human(_)) && z.ships.is_empty()));
+        self.leave_attacks(ids);
     }
 
     /// Ends the gather zone of `group` (its task replaced, 0x4a1c60).
@@ -238,13 +239,16 @@ impl Scene {
     /// 0x4a1340); nothing without one.
     pub(super) fn post_notice(&mut self, id: u32, code: u32, class: u32) {
         let tick = self.ticks;
+        let notice = Notice {
+            code,
+            tick,
+            ship: id,
+            class,
+        };
         if let Some(z) = self.ship_zone(id) {
-            self.gather_zones[z].notices.push(Notice {
-                code,
-                tick,
-                ship: id,
-                class,
-            });
+            self.gather_zones[z].notices.push(notice);
+        } else if let Some(z) = self.ship_attack(id) {
+            self.human_attacks[z].notices.push(notice);
         }
     }
 

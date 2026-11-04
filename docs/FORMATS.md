@@ -7387,8 +7387,8 @@ behaviour first (0x49da43: 0x4c4350 `{0, 0x4a2f10(player), -1, -1}`;
 0x4a2f10 every player bit but its own and those of players 0-19 not at
 war with it): command `#` sub 1 to each ship, queued (order.rs `Zone`).
 Its block (0x4d5f50, `{0x70, 0x20}`, tick 0x4d61d0, status 0x4d63d0) is
-not ported: the port's ships run their own zone task (`Task::Zone`,
-battle.rs `zone_target`). What is read of it:
+ported (scene/human_attack.rs, `Order::AttackZone`: the selection's group,
+`Scene::human_attacks`). What is read of it:
 - 0x4d5f50: a block of another kind freed (0x4a1c60); none, 0x4d4c30
   makes one (0x65 bytes zeroed; `{0x70, 0x20, now}`, then as below
   without `+0x21`, and the notices 0x4a1150; failing, 0); else the block
@@ -7460,9 +7460,9 @@ The rest, read (decomp `humanblock*.c`):
   else from the group's centre (0x4c56e0: the mean cell of the group's
   ships, `+0x5a3/+0x5a7`, and its 0x50e600-kind-0x32 objects at
   `+0x74/+0x78` weighing 2; that mean refused by 0x499990 with such an
-  object in the group, the ship nearest it by `|dx| + |dy|`) the route 0x4d0e70 (on the shallow grid 0x5c93bc: the
+  object in the group, the last ship within `W + H` of it by `|dx| + |dy|`, below) the route 0x4d0e70 (on the shallow grid 0x5c93bc: the
   start closed none; the goal closed 0x55ba50, else 0x55ca10), its last water step the
-  goal; none, 0. Then the formation 0x4d5100 about the goal with slot
+  goal; none, 0. Then the formation 0x4d5100 about the first target's cell with slot
   class 6. Every ship more than 6 (0x557440) from its slot: the centre's
   route to the goal (0x4d58b0: 0x55ba50; 11 or more steps, its 7th step,
   1; fewer, 2) and a class-0 formation there sent (0x4d59f0: slots kept,
@@ -7555,9 +7555,55 @@ The rest, read (decomp `humanblock*.c`):
 Settled since: the planner's slot classes, third grid and value
 (`formation::plan_records`), the threat grids (above: player `+0x40`
 never set), cell `+4` (the occupant slot), 0x58791f's order
-(`crt_qsort`) and 0x561a30 (`deal_cells`). Not decoded: the sender of
-0x13a. The block itself is not ported yet (its routines are read: the
-port's ships still run `Task::Zone`).
+(`crt_qsort`) and 0x561a30 (`deal_cells`). Read in porting it:
+- 0x4d4860's area path appends each of 0x4cd300's records to the targets
+  (0x5577d0, 0x4d497b) and only then merges it by id (0x4d49f0: the first
+  entry of its id rewritten), so each relisting (0x4d5560) lists a target
+  again: duplicates pile up while it lives. (0x4d49f0's own append copies
+  from its second argument's slot, `[ebp + 0xc]`, the fields a dword
+  off: reached only on the ids path, args[5], which the human never
+  gives.)
+- 0x4d43b0 forms the class-6 formation about the first target's cell
+  (`local_8`, `local_c`), not about the goal, and writes that cell to
+  `+0x27`; with every ship more than 6 away and 0x4d58b0 not 1 (fewer
+  than 11 route entries, or none) it does nothing more (`+0x21` kept).
+- 0x4d0e70: a closed goal 0x55ba50 with heading 0, tolerance 1; else
+  0x55ca10. 0x4d58b0: 0x55ba50 heading 0, tolerance 0; the 7th entry is
+  bytes `+0x1e / +0x20` of the 5-byte entries.
+- 0x4d5100 reads the slots (`+0x33`), not the group's ships: a slot whose
+  ship pointer is null is passed over.
+- 0x4c56e0: the mean cell is refused (0x499990) only with a kind-0x32
+  object in the group; then the ship taken is the last with `|dx| + |dy|
+  < W + H` (the bound is never lowered: always the last ship). Without
+  one the mean is returned whatever its cell.
+- 0x4d6640 (0x4d60c0, 0x13a, the status) reads the group's `+0x19` and
+  `+0x1d`; its second argument (`+0x3b`) is unused.
+- 0x4d4e50: 0x136's 0x4d5560 assigns its -1 to the count (not added).
+- 0x4d60c0 sends a ship when `+0x25d` has neither 0x100 nor 0x10, or with
+  0x100 alone and fire state `+0x5d1` 2, or 1 with no position byte
+  (`+0x645`, `+0x657`, `+0x669`, `+0x67b`) 3.
+- Objects' `+0x64` (the weight of 0x4cd120's modes 2 and 3) is written by
+  the navy as it takes an object on (0x4a8150, players 0-20): a ship
+  0x59b3b8[class - 200] (230, 300, 330, 340, 240, 210, 150, 140, 300,
+  350, 350, 350), the Argo (`+0x259`) [0x59b3e8] 500; classes 0x32-0x4a
+  (0x50e600's kind 0x32) 0x59b3f0[class - 0x32] (120, 150, 300, 400,
+  500, 500, 500, 650, 750, 750, 300, 750, 750, 800, 900, 1000, 400, 300,
+  400, 200, 330, 300, 300, 0, -1); the base constructor 0x50b960 zeroes
+  it. (Its other writers in the listing were not traced.)
+- 0x4cd300's strength is a ship's `+0x479` alone and a fort's 0x446710
+  sum not divided by 10; 0x4d5430 then refreshes it with 0x50ea70.
+- A sunk ship leaves its group (0x4a8410, the Navy's message 0x83, ->
+  0x49bef0), posting 0x137.
+Ported: all of the above (`order_attack_zone`, `run_human_attacks`).
+Not ported: 0x4d60c0's fire-state cases (the port keeps no fire states:
+a ship on a fire task is left to it); fireballs and tornadoes holding
+cell `+0xc` (not objects in the port); the `+0x5ab` skip (the port's
+occupants hold only the cells the ships are in); nature objects' player
+in 0x4cd300's and 0x4d5430's tests (the port's ownerless creatures are
+no player's, as in 0x4d6640's port). Not decoded: the sender of 0x13a
+(its case is ported). The status 0x4d63d0 is ported, its readers (the
+tasks' 0x4a0d80) hold brains' and computers' groups only. The port's
+per-ship `Task::Zone` stays for the guard zone.
 
 A fort of the forts' flotilla takes the `#` too (below).
 

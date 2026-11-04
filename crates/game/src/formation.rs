@@ -458,8 +458,6 @@ pub fn cells_apart(a: (i32, i32), b: (i32, i32)) -> i32 {
 /// whose quota the pass has reached first on a tie. Then the ships in
 /// that order fill the cells' quotas in order. `None` for no cells or no
 /// ships (the original divides by zero).
-// Its caller, 0x4d5560 of the human's attack-zone block, is not ported.
-#[allow(dead_code)]
 pub fn deal_cells(cells: &[(i32, i32)], ships: &[(i32, i32)]) -> Option<Vec<(i32, i32)>> {
     let (n, m) = (cells.len(), ships.len());
     let k = n.min(m);

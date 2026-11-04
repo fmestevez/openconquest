@@ -103,6 +103,9 @@ pub struct SaveGame {
     /// The groups' gather zones.
     #[serde(default)]
     pub gather_zones: Vec<crate::scene::GatherZone>,
+    /// The human groups' attack blocks.
+    #[serde(default)]
+    pub human_attacks: Vec<crate::scene::HumanAttack>,
     #[serde(default)]
     pub zone_serial: u32,
     /// The navy's generator.

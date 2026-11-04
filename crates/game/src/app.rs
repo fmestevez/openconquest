@@ -6691,6 +6691,10 @@ impl App {
         {
             let attack = cmd == crate::commands::ATTACK_ZONE;
             let order = match (self.world_at(from), self.world_at(to)) {
+                (Some(a), Some(b)) if attack => {
+                    let ships = self.selection();
+                    self.issue(Order::AttackZone { ships, a, b }).map(|_| ())
+                }
                 (Some(a), Some(b)) => self.order_each(|ship| Order::Zone { ship, a, b, attack }),
                 _ => Err("Drag a rectangle around the zone".into()),
             };
