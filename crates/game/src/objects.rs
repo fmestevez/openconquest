@@ -704,6 +704,10 @@ pub struct Landing {
     pub plank_at: (f32, f32),
     /// Seconds owed to the next tick.
     pub clock: f32,
+    /// At a dock (the repair order's machine, 0x4b2420): the dock it is in
+    /// contact with (`+0x8e6`, the dock's occupant `+0x1e0` the ship).
+    #[serde(default)]
+    pub dock: Option<u32>,
 }
 
 fn landing_line() -> bool {

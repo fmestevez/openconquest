@@ -904,12 +904,13 @@ impl Scene {
 
     /// Whether ship `i` lies in a dock being mended (state 2).
     pub(super) fn in_dock(&self, i: usize) -> bool {
-        match self.objects[i].ship.as_ref().and_then(|s| s.task) {
-            Some(Task::Repair { dock }) => self
-                .object_index(dock)
-                .is_some_and(|d| self.alongside(i, d)),
-            _ => false,
-        }
+        // In contact with its dock (`+0x8e6`, from the repair machine's
+        // close-in to its backing out, 0x4b2420).
+        self.objects[i]
+            .ship
+            .as_ref()
+            .and_then(|s| s.landing.as_ref())
+            .is_some_and(|l| l.dock.is_some())
     }
 
     /// Buildings limed now: their work stands still (school 0x432210,

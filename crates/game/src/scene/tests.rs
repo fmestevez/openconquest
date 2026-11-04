@@ -5900,7 +5900,9 @@ fn brains_mend_their_prizes() {
     let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
     assert!(scene.brain.is_some());
     let human = scene.human.map(|h| (h.nation, h.slot));
-    // One of the computer's buildings stands in for a dock.
+    // One of the computer's buildings stands in for a dock, put west of
+    // the ship's cell and facing east, so its berth (0x4b23a0) is that
+    // cell.
     let b = scene
         .objects
         .iter()
@@ -5911,6 +5913,16 @@ fn brains_mend_their_prizes() {
         })
         .expect("a computer building");
     let owner = scene.objects[b].owner.unwrap();
+    let (sx, sy) = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .map(|o| ((o.x / 64.0).floor() as i32, (o.y / 64.0).floor() as i32))
+        .unwrap();
+    let o = &mut scene.objects[b];
+    o.record.fields.resize(o.record.fields.len().max(11), 0);
+    o.record.fields[10] = 0;
+    o.cell = Some((sx - 1, sy));
     scene.objects[b].class = ObjectClass::Building(economy::DOCK);
     let ship = scene
         .objects
@@ -7221,6 +7233,109 @@ fn docks_mend_in_steps() {
     run(&mut scene, &mut caches, 9);
     assert_eq!(state(&scene).0, start + 6500 + 3250);
     assert_eq!(scene.amber, 0);
+}
+
+/// The repair order's machine (0x4b2420): at its dock's berth the ship
+/// closes in (state 2), furls (8), is mended (4) with its first step 9
+/// ticks after it is furled (`+0x751` = now at 0x4b263f), backs out (3)
+/// and is done; the dock takes one ship at a time (vt+0xb0 0x40dfe0,
+/// `+0x1e0`); a boat whole again gets its item 3 back (0x4bd920) (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn dock_machine_enters_mends_and_backs_out() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.amber = 10_000;
+    let ships: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| scene.is_own(o) && o.ship.is_some())
+        .map(|o| o.id)
+        .take(2)
+        .collect();
+    assert_eq!(ships.len(), 2);
+    let (ship, other) = (ships[0], ships[1]);
+    let full = combat::hull_points(0) as i64;
+    for id in [ship, other] {
+        let k = scene.object_index(id).unwrap();
+        let o = &mut scene.objects[k];
+        o.ship.as_mut().unwrap().kind = 0;
+        let c = o.combat.as_mut().unwrap();
+        c.max_hull = combat::hull_strength(0);
+        c.hull = (full / 2) as f32 / 15.0;
+        c.weapons.clear();
+    }
+    let dock = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .unwrap()
+        .id;
+    let d = scene.object_index(dock).unwrap();
+    scene.objects[d].class = ObjectClass::Building(economy::DOCK);
+    scene.order_repair(ship, dock).unwrap();
+    let state = |scene: &Scene, id| {
+        let k = scene.object_index(id).unwrap();
+        let s = scene.objects[k].ship.as_ref().unwrap();
+        s.landing.as_ref().map(|l| l.state)
+    };
+    // Sail to the berth and enter.
+    for _ in 0..50 * 120 {
+        if state(&scene, ship).is_some() {
+            break;
+        }
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert_eq!(state(&scene, ship), Some(2));
+    assert!(scene.in_dock(scene.object_index(ship).unwrap()));
+    // The dock holds it: the other, sent now, waits for the berth.
+    scene.order_repair(other, dock).unwrap();
+    let mut seen = vec![2];
+    let mut furled = None;
+    let mut first_step = None;
+    let hull = |scene: &Scene| {
+        let k = scene.object_index(ship).unwrap();
+        (scene.objects[k].combat.as_ref().unwrap().hull * 15.0).round() as i64
+    };
+    for _ in 0..2000 {
+        let before = hull(&scene);
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let Some(st) = state(&scene, ship) else {
+            break;
+        };
+        if seen.last() != Some(&st) {
+            seen.push(st);
+            if st == 4 {
+                furled = Some(scene.ticks);
+            }
+        }
+        if first_step.is_none() && hull(&scene) > before {
+            first_step = Some(scene.ticks);
+        }
+        assert_ne!(state(&scene, other), Some(2), "one ship at a time");
+    }
+    assert_eq!(seen, [2, 8, 4, 3]);
+    assert_eq!(first_step.unwrap() - furled.unwrap(), 9);
+    let k = scene.object_index(ship).unwrap();
+    let o = &scene.objects[k];
+    let s = o.ship.as_ref().unwrap();
+    assert!(s.task.is_none() && s.landing.is_none());
+    assert_eq!(hull(&scene), full);
+    assert_eq!(o.combat.as_ref().unwrap().weapons, [3], "the boat's item 3");
+    assert!(!scene.in_dock(k));
+    // Then the other gets its turn.
+    for _ in 0..50 * 120 {
+        if state(&scene, other).is_some() {
+            break;
+        }
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert_eq!(state(&scene, other), Some(2));
 }
 
 /// The Golden Fleece and Argus mend the hull in whole steps (0x4b98b0):

@@ -4277,15 +4277,66 @@ full / 0x59b388[type]` (capped at full) and pays all its amber; else the
 step for the price. Then the units, items 9 down to 0, each below 100
 made whole while its cost is held. Every step ends with 0x4bee60 and
 0x4be030; a full hull ends it (state 3) after the refits below. The dock
-gone (`+0x8e6` 0) or a stop (`+0x73a` < 0) ends it at once. The port
-(`Scene::step_dock_repairs`, `Ship::dock_step`) starts the clock as the
-ship lies alongside. Not ported: the dock machine's entry and exit
-(0x4b17e0, 0x4b89b0, 0x4b1d40), so its first step is 9 ticks after the
-ship is alongside rather than after the sail is furled; item 9 (the
-unique ships' own); the refits at full hull (kinds 0 and 1 slot 3 / 4
-when empty, 0x4bd920 with 100; kinds 2-7 0x4bbca0 with the dock and
-0x4be800(5, -1); else `eax` 0x100 / 0x200 slots 9 / 10, at
-0x4b22f7-0x4b2321; not read: 0x4bbca0, and what `eax` holds there).
+gone (`+0x8e6` 0) or a stop (`+0x73a` < 0) ends it at once. The units
+run items 9 down to 0 (`+0x292` down; item 9's price is 0x597164[3] = 2,
+the dword past the table), but item 9, the unique ships' own, is never
+worn (0x4be110 wears items 3-8). At the full hull, before the end: a boat
+(type 0) without its item 3, a merchant (1) without its item 4, gets one
+whole (0x4bd920 with 100); types 2-7 at a dock (class 0x3b) are fitted by
+0x4bbca0(dock, 0x4be800(5, 0xff), the free weapon room); the `eax` the
+code tests against 0x100 and 0x200 at 0x4b22f7 (slots 9 / 10) is the
+type byte zero-extended (0x4b227c), so those branches never run and
+types 8-11 get nothing.
+
+**The repair order's machine** (0x4b2420, `+0x755`, run by 0x4b17b0 for
+task `+0x72f` 1 with `+0x730` 1). The order (0x4aa990, kind 1): the
+berth `+0x756` = 0x4b23a0(`+0x82c`): the object in that cell's slot, a
+yard or dock (class 0x3a or 0x3b, vtables 0x595e98 and 0x59b4c4) of the
+ship's own player, its berth (vt+0xb8, 0x40e050); else -1 and the order
+is dropped.
+
+- **1**: off the berth it is sent there again (0x4a6270). There, lying
+  still (`+0x58c` 0): no object at `+0x73c`, the order is done (message
+  8, 0xa0) with notice 0x143 (0x4a1b80); not its player's yard or dock,
+  notice 0x143 and it stays. The dock taking a ship (vt+0xb0, 0x40dfe0:
+  facing `+0x1dc >= 0`, `+0xa4 == 1`, with `+0x1d8 & 0x10` a town
+  `+0x1c8`, and no ship in it, `+0x1e0` 0) and the ship in no contact:
+  `+0x749 == 3` is the sale (`+0x251 = 2`, task 5); else the close-in
+  0x4b17e0 and, when it gives 1, the contact `+0x8e6` {0x32, 5, dock id,
+  dock}, 0x4b3970(1) sends 0xcb7 (the dock's `+0x1e0` = the ship),
+  `+0x751` = `+0x74d` = 0, state 2, commands held (0x4b37d0 with 0x2000),
+  `+0x25d |= 0x20`.
+- **0x4b17e0**: `+0x76d` = 0x59791d[from the ship's cell to `+0x73c`];
+  east or west a line (0x4b5220, points `+0x75e`) from the hull to its
+  cell's middle moved 0x59a7c8[type] = 10 across (0x59a7cc 0), side-on 2
+  or 6; north or south 0x59a82c = 13 (0x59a828 0), side-on 0 or 4; the
+  heading fewer turns away (0x4b5390, the second on a tie) `+0x76a`, its
+  way `+0x76c`, a turning hull below frame 0x20 on `h x 3 + 0x20`.
+  Slanting: `+0x76c` 0, the line freed, 0 (state 1 again next tick).
+- **2** (0x4b1c60 -> 0x4b1a90): at the line's end (or back at its
+  start): called off, 0xcb8 to the dock, the contact freed, the line
+  freed, the hull `h x 4`, `+0x25b` 0, 0x4b3850 and message 8 (0xa0);
+  else state 8 with the contact, 3 without.
+- **8** (0x4b89b0, no stop test): the furling; furled, state 4 with
+  `+0x751` = now and `+0x25b` 5.
+- **4** (0x4b1fc0, above); its end sets `+0x751` = `+0x75e`, state 3.
+- **3** (0x4b1d40, as the landing's): out, 0xcb8 and the contact freed;
+  then 0x4b3850, message 8 (0x20), 0x4b46f0(ship, 'Q' = 81), notice
+  0x134 (0x4a1690) and 0x4b6d60 (0x5d98).
+- A stop (0x4abc60): in state 1 it clears `+0x25d & 0x20` (the order is
+  dropped), else `+0x73a` = 0xff.
+
+The port runs it at the game tick (`Scene::step_dock_repairs`, the
+landing's `Landing` with its `dock` contact; `in_dock` is the contact).
+Not ported: the sale; notice 0x143 (the port's zones take none); the
+dock's message 0x2874, which sends its ship 0xcb9; the fitting of types
+2-7 (0x4bbca0: the dock's town by 0x51f1f0, each item 0-8 that
+0x43da20(town, 1, 1, 0, item, 0, 1, 0, 1) allows offered room times
+(items 6-8 half), weights by type (2: 100, 60, 80; 3: 100, 10, 30; 4: 0,
+50, 100; 5, 6: 100, 50, 0; 7: 0, 100, 50), the fitter 0x4bb670 with 5
+tries drawing the ship's generator and scoring by 0x4bb490, the units'
+price paid, or for a side 3 / 4 player free when short, another player
+getting none; not decoded: 0x4bb490, 0x4bb620 and the fitter's loops).
 
 ## Units' conditions
 

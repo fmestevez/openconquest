@@ -2023,19 +2023,10 @@ impl Scene {
                 .flatten()
                 .collect();
             let deep = objects::deep_draught(ship.kind);
-            // Bound for a dock, another free cell of its berth ring.
-            let berth = match ship.task {
-                Some(Task::Repair { dock }) if retarget => self.object_index(dock).and_then(|d| {
-                    self.beside_cells(d, (x, y))
-                        .into_iter()
-                        .find(|&(bx, by)| !others.contains(&cell_of(bx, by)))
-                }),
-                _ => None,
-            };
-            let route = if let Some((bx, by)) = berth {
-                self.plan_route_avoiding(i, (x, y), bx, by, &others)
-                    .or(Some(VecDeque::new()))
-            } else if retarget {
+            // Bound for a dock it waits for the one berth (0x4b2420 state
+            // 1 sends it there again).
+            let docking = matches!(ship.task, Some(Task::Repair { .. }));
+            let route = if retarget && !docking {
                 let free = (1..=8).find_map(|r: i32| {
                     let mut ring: Vec<(i32, i32)> = (-r..=r)
                         .flat_map(|dx| (-r..=r).map(move |dy| (cell.0 + dx, cell.1 + dy)))

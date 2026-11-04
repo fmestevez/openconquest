@@ -17,7 +17,7 @@ use crate::objects::Landing;
 
 /// The direction of the cell `(dx, dy)` away (0x59791d, index `5 + dx x 4
 /// + dy`); 0xff for the cell itself.
-const NEIGHBOUR_DIR: [u8; 11] = [3, 4, 5, 0xff, 2, 0xff, 6, 0xff, 1, 0, 7];
+pub(super) const NEIGHBOUR_DIR: [u8; 11] = [3, 4, 5, 0xff, 2, 0xff, 6, 0xff, 1, 0, 7];
 
 /// The party's start from the walkway's top-left, by direction
 /// (0x59a188, 8 bytes a direction).
@@ -35,7 +35,7 @@ const PARTY_FROM: [(i32, i32); 8] = [
 /// The hull's frame delay (`+0x7d` = 2, set at the ship's creation,
 /// 0x4dfe00, and by 0x4dec40 / 0x4e0160; 0x4a3150 restores it): a hull
 /// step once more than 2 ticks have passed.
-const HULL_DELAY: u32 = 2;
+pub(super) const HULL_DELAY: u32 = 2;
 
 /// The shadow colour of the party's picture (0x50e130(0, 1, 0x2a)).
 pub const PARTY_SHADE: u8 = 0x2a;
@@ -166,7 +166,8 @@ impl Scene {
         l.hull_ticks += 1;
         let hull_step = l.hull_ticks > HULL_DELAY;
         let kind = s.kind as usize % 12;
-        match l.state {
+        let state = l.state;
+        match state {
             // 0x4b2a40 -> 0x4b1a90.
             2 => {
                 if self.close_in_step(k, &mut l) {
@@ -188,16 +189,8 @@ impl Scene {
             8 => {
                 if l.abort {
                     l.state = 3;
-                } else if hull_step {
-                    l.hull_ticks = 0;
-                    l.furl = l.furl.max(0) + 1;
-                    if l.furl >= 4 {
-                        l.furl = 3;
-                        l.state = 4;
-                    }
-                    let s = self.objects[k].ship.as_mut().unwrap();
-                    s.rotation = None;
-                    s.furl = l.furl as f32 + 0.5;
+                } else if self.furl_step(k, &mut l, hull_step) {
+                    l.state = 4;
                 }
             }
             // 0x4b2d50 -> 0x4b2b00: the walkway (slot 1, picture 0x3e6 set
@@ -283,43 +276,75 @@ impl Scene {
             // unfurls a frame; below 1 it lies in its cell's middle, the
             // hull on its heading's first frame, and the order is done
             // (0x4b3850, message 8).
-            3 if hull_step => {
-                l.hull_ticks = 0;
-                l.back -= 2;
-                if l.furl > 0 {
-                    l.furl -= 1;
-                }
-                let o = &mut self.objects[k];
-                let s = o.ship.as_mut().unwrap();
-                if l.furl >= 0 {
-                    s.furl = l.furl as f32 + 0.5;
-                }
-                if l.back < 1 {
-                    let (cx, cy) = ((o.x / t).floor(), (o.y / t).floor());
-                    (o.x, o.y) = (cx * t + t / 2.0, cy * t + t / 2.0);
-                    let s = o.ship.as_mut().unwrap();
-                    s.furl = 0.0;
-                    s.rotation = None;
-                    s.landing = None;
-                    s.task = None;
-                    s.close_in = objects::CloseIn {
-                        dir: l.dir,
-                        group: l.group.unwrap_or(0),
-                        face: l.face,
-                        turn: l.turn,
-                        count: l.count,
-                    };
-                    return;
-                }
-                if l.line && l.back < l.count {
-                    (o.x, o.y) = line_point(l.from, l.to, l.back);
-                }
+            3 if self.back_out_step(k, &mut l, hull_step) => {
+                self.objects[k].ship.as_mut().unwrap().task = None;
+                return;
             }
             _ => {}
         }
         if let Some(s) = self.objects[k].ship.as_mut() {
             s.landing = Some(l);
         }
+    }
+
+    /// 0x4b89b0: the sail furls, from `h x 8 + 0x58` a frame a hull step;
+    /// on the fourth (`+ 0x5c`) it stays at `+ 0x5b`, furled (`+0x25b` =
+    /// 5): true then.
+    pub(super) fn furl_step(&mut self, k: usize, l: &mut Landing, hull_step: bool) -> bool {
+        if !hull_step {
+            return false;
+        }
+        l.hull_ticks = 0;
+        l.furl = l.furl.max(0) + 1;
+        let done = l.furl >= 4;
+        if done {
+            l.furl = 3;
+        }
+        let s = self.objects[k].ship.as_mut().unwrap();
+        s.rotation = None;
+        s.furl = l.furl as f32 + 0.5;
+        done
+    }
+
+    /// 0x4b1d40: a hull step backs it two points of its line (`+0x751`)
+    /// and unfurls a frame; below 1 it lies in its cell's middle, the hull
+    /// on its heading's first frame (`+0x25b` 0), the line freed and its
+    /// close-in's fields kept: true then, the machine gone.
+    pub(super) fn back_out_step(&mut self, k: usize, l: &mut Landing, hull_step: bool) -> bool {
+        if !hull_step {
+            return false;
+        }
+        let t = TILE_SIZE as f32;
+        l.hull_ticks = 0;
+        l.back -= 2;
+        if l.furl > 0 {
+            l.furl -= 1;
+        }
+        let o = &mut self.objects[k];
+        let s = o.ship.as_mut().unwrap();
+        if l.furl >= 0 {
+            s.furl = l.furl as f32 + 0.5;
+        }
+        if l.back < 1 {
+            let (cx, cy) = ((o.x / t).floor(), (o.y / t).floor());
+            (o.x, o.y) = (cx * t + t / 2.0, cy * t + t / 2.0);
+            let s = o.ship.as_mut().unwrap();
+            s.furl = 0.0;
+            s.rotation = None;
+            s.landing = None;
+            s.close_in = objects::CloseIn {
+                dir: l.dir,
+                group: l.group.unwrap_or(0),
+                face: l.face,
+                turn: l.turn,
+                count: l.count,
+            };
+            return true;
+        }
+        if l.line && l.back < l.count {
+            (o.x, o.y) = line_point(l.from, l.to, l.back);
+        }
+        false
     }
 
     /// 0x4b2ff0: towards the cell `land` (`+0x740` for a settlement, the
@@ -333,7 +358,7 @@ impl Scene {
     /// (2 or 6 across, 0 or 4 up and down) the one fewer turns away
     /// (0x4b5390, the second on a tie), a hull rotation a tick (frame
     /// `h x 3 + 0x20` first).
-    fn close_in(&mut self, k: usize, land: (i32, i32)) -> Landing {
+    pub(super) fn close_in(&mut self, k: usize, land: (i32, i32)) -> Landing {
         let t = TILE_SIZE as f32;
         let o = &self.objects[k];
         let s = o.ship.as_ref().unwrap();
@@ -368,6 +393,7 @@ impl Scene {
             porters: None,
             plank_at: (0.0, 0.0),
             clock: 0.0,
+            dock: None,
         };
         // No shore group (0x4b3770 < 0): it returns before the line,
         // keeping the direction, group, heading, way and point count of
@@ -385,6 +411,76 @@ impl Scene {
         }
         let kind = s.kind as usize % 12;
         let d = trade::APPROACH[dir as usize / 2][kind][g as usize] as f32;
+        self.close_in_line(k, &mut l, here, dir, d);
+        l
+    }
+
+    /// 0x4b17e0: a ship at a dock's berth closes in on the dock's cell
+    /// `dock_cell` (`+0x73c`), its direction by 0x59791d (`+0x76d`):
+    /// across (east, west) 10 pixels (0x59a7c8; 0x59a7cc 0), up or down
+    /// 13 (0x59a82c; 0x59a828 0), alike for every type, turning side-on.
+    /// Slanting (or further off) no line (`+0x76c` 0, the line freed) and
+    /// `None`: the machine stays in state 1.
+    pub(super) fn dock_close_in(&mut self, k: usize, dock_cell: (i32, i32)) -> Option<Landing> {
+        let t = TILE_SIZE as f32;
+        let o = &self.objects[k];
+        let s = o.ship.as_ref().unwrap();
+        let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let (dx, dy) = (dock_cell.0 - here.0, dock_cell.1 - here.1);
+        // Not decoded: cells further off read 0x59791d out of its table
+        // (a berth, 0x40e050, is always a step from the dock's cell).
+        let dir = if dx.abs() <= 1 && dy.abs() <= 1 {
+            NEIGHBOUR_DIR[(5 + dx * 4 + dy) as usize]
+        } else {
+            0xff
+        };
+        if dir == 0xff || dir % 2 == 1 {
+            self.objects[k].ship.as_mut().unwrap().close_in.turn = 0;
+            return None;
+        }
+        let kept = s.close_in;
+        let mut l = Landing {
+            state: 2,
+            abort: false,
+            dir: kept.dir,
+            group: Some(kept.group),
+            walk_dir: dir,
+            line: false,
+            from: (o.x, o.y),
+            to: (o.x, o.y),
+            count: kept.count,
+            at: 0,
+            back: 0,
+            face: kept.face,
+            turn: kept.turn,
+            furl: -1,
+            hull_ticks: 0,
+            plank: None,
+            porters: None,
+            plank_at: (0.0, 0.0),
+            clock: 0.0,
+            dock: None,
+        };
+        let d = if dir % 4 == 0 { 10.0 } else { 13.0 };
+        self.close_in_line(k, &mut l, here, dir, d);
+        Some(l)
+    }
+
+    /// The line of a close-in straight across (0x4b2ff0, 0x4b17e0): from
+    /// where the hull is to the middle of its cell `here` moved `d` pixels
+    /// in direction `dir` (0x4b5220, its points `+0x75e`), and of the two
+    /// side-on headings (2 or 6 across, 0 or 4 up and down) the one fewer
+    /// turns away (0x4b5390, the second on a tie), a hull rotation a tick
+    /// (frame `h x 3 + 0x20` first).
+    pub(super) fn close_in_line(
+        &mut self,
+        k: usize,
+        l: &mut Landing,
+        here: (i32, i32),
+        dir: u8,
+        d: f32,
+    ) {
+        let t = TILE_SIZE as f32;
         let (ux, uy) = walk_path::DIRS[dir as usize];
         let mid = (here.0 as f32 * t + t / 2.0, here.1 as f32 * t + t / 2.0);
         l.to = (mid.0 + ux as f32 * d, mid.1 + uy as f32 * d);
@@ -432,14 +528,13 @@ impl Scene {
         if l.turn != 0 && s.rotation.is_none() {
             s.rotation = Some(s.heading as u8 * 3);
         }
-        l
     }
 
     /// 0x4b1a90, a tick: a point along the line (two back once called
     /// off) and a hull rotation the way it turns (called off, the turn
     /// stops on its rotation's heading); true once at the line's end and
     /// turned, or back at its start.
-    fn close_in_step(&mut self, k: usize, l: &mut Landing) -> bool {
+    pub(super) fn close_in_step(&mut self, k: usize, l: &mut Landing) -> bool {
         if l.abort {
             l.at = if l.at > 1 { l.at - 2 } else { 0 };
         } else {

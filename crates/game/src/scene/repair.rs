@@ -3,8 +3,8 @@
 
 use openconquest_formats::ObjectClass;
 
-use super::Scene;
-use crate::economy::{DOCK, SETTLEMENT, TOWN};
+use super::{Scene, TILE_SIZE};
+use crate::economy::{DOCK, SETTLEMENT, SHIPYARD, TOWN};
 use crate::objects::Task;
 
 /// A settlement mends a building (message 0x1389, 0x425100) a hundredth of
@@ -98,13 +98,17 @@ pub(super) fn structure_percent(c: &crate::combat::Combatant) -> u32 {
 }
 
 impl Scene {
-    /// Orders own ship `ship` to sail to own dock `dock` and be repaired.
+    /// Orders own ship `ship` to sail to own dock `dock` and be repaired
+    /// (the order 0x4aa990, kind 1): the berth `+0x756` is 0x4b23a0's, the
+    /// berth (vt+0xb8, 0x40e050) of a yard or dock (class 0x3a or 0x3b) of
+    /// the ship's own player in the cell; else the order is dropped.
     pub fn order_repair(&mut self, ship: u32, dock: u32) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let d = self.object_index(dock).ok_or("Choose one of your docks")?;
-        // A dock of the ship's own player.
-        if self.objects[d].class != ObjectClass::Building(DOCK)
-            || self.objects[d].owner != self.objects[i].owner
+        if !matches!(
+            self.objects[d].class,
+            ObjectClass::Building(SHIPYARD | DOCK)
+        ) || self.objects[d].owner != self.objects[i].owner
             || self.construction_at(dock).is_some()
         {
             return Err("Choose one of your docks".into());
@@ -118,14 +122,37 @@ impl Scene {
         if c.hull >= c.max_hull && !worn {
             return Err("The ship needs no repair".into());
         }
-        // It sails alongside the dock (a water cell touching it).
+        let berth = self.berth_cell(d).ok_or("Choose one of your docks")?;
+        let t = TILE_SIZE as f32;
+        let (bx, by) = (berth.0 as f32 * t + t / 2.0, berth.1 as f32 * t + t / 2.0);
         let path = self
-            .route_beside(i, d)
+            .plan_route(i, bx, by)
             .ok_or("The ship cannot reach that dock")?;
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
         s.path = path;
         s.task = Some(Task::Repair { dock });
+        s.dock_step = None;
         Ok(())
+    }
+
+    /// Whether yard or dock `d` takes a ship in (its vt+0xb0, 0x40dfe0): a
+    /// facing (`+0x1dc >= 0`), standing idle (`+0xa4 == 1`: not going up,
+    /// mended or asleep), its town (`+0x1d8 & 0x10` with `+0x1c8`, set for
+    /// yards and docks) and no ship in it (`+0x1e0`, set by 0xcb7 as one
+    /// enters, cleared by 0xcb8 as it leaves).
+    pub(super) fn dock_free(&self, d: usize) -> bool {
+        let id = self.objects[d].id;
+        self.berth_cell(d).is_some()
+            && self.construction_at(id).is_none()
+            && !self.mending.contains(&id)
+            && self.objects[d].asleep.is_none()
+            && self.home_settlement(d).is_some()
+            && !self.objects.iter().any(|o| {
+                o.ship
+                    .as_ref()
+                    .and_then(|s| s.landing.as_ref())
+                    .is_some_and(|l| l.dock == Some(id))
+            })
     }
 
     /// Has settlement or town `site` mend own building `target`.
@@ -530,94 +557,229 @@ impl Scene {
         }
     }
 
-    /// A game tick of the ships mended at their docks (0x4b1fc0, the dock
-    /// machine's state 4, entered with `+0x751` = now, 0x4b263f; the port
-    /// enters it once alongside). Every 9 ticks (`now - +0x751 < 9`
-    /// returns): the step `min(full - hull, full x 10 / 100)` costs
-    /// `0x59b388[type] x step / full` amber; short of it a computer
-    /// player's ship (side 3 or 4) is done unmended, any other gets
-    /// `amber x full / 0x59b388[type]` (to full) for all its amber; then
-    /// each worn unit, items down from the last, is made whole for
-    /// `0x597164[item / 3] x (100 - condition) x 9 / 1000` while the amber
-    /// lasts; the stats refresh 0x4bee60 at every step, and the full hull
-    /// ends it. The dock gone (`+0x8e6` 0) ends it at once.
+    /// The repair order's machine at the ship tick (0x4b2420, `+0x755`;
+    /// 0x4b17b0 runs it for task `+0x72f` 1):
+    ///
+    /// - **1**: off the berth `+0x756` it is sent there again (0x4a6270);
+    ///   there, lying still (`+0x58c` 0): the dock gone, the order is done
+    ///   (message 8); not a yard or dock of its player, it waits (notice
+    ///   0x143, 0x4a1b80; not ported: the port's zones take none); the dock
+    ///   free (vt+0xb0, `dock_free`), the close-in (0x4b17e0): in contact
+    ///   (`+0x8e6`, 0xcb7 to the dock), commands held (0x4b37d0), state 2.
+    /// - **2** (0x4b1c60 -> 0x4b1a90): a point of the line a tick and a
+    ///   hull rotation; at its end (or back at its start) called off it
+    ///   leaves the dock (0xcb8), lies on its heading's frame and the order
+    ///   is done (0x4b3850, message 8), else state 8 (3 without the dock).
+    /// - **8** (0x4b89b0, no stop test): the sail furls; furled, state 4
+    ///   with `+0x751` = now.
+    /// - **4** (0x4b1fc0): mended in steps (`dock_repair_step`); done,
+    ///   `+0x751` = the line's points, state 3.
+    /// - **3** (0x4b1d40): it backs out; out, the dock left (0xcb8), the
+    ///   commands back (0x4b3850), the order done (message 8), a move off
+    ///   the berth (0x4b46f0 with 'Q'), notice 0x134 (0x4a1690) and the
+    ///   brains' 0x5d98 (0x4b6d60).
+    ///
+    /// (Not ported: the sale, `+0x749 == 3`, `+0x251 = 2` and task 5; the
+    /// dock's 0x2874 that sends its ship 0xcb9.)
     pub(super) fn step_dock_repairs(&mut self) {
-        let now = self.ticks;
-        for s in self.objects.iter_mut().filter_map(|o| o.ship.as_mut()) {
-            if !matches!(s.task, Some(Task::Repair { .. })) {
-                s.dock_step = None;
-            }
-        }
-        let ships: Vec<(usize, u32)> = self
-            .objects
-            .iter()
-            .enumerate()
-            .filter_map(|(i, o)| match o.ship.as_ref()?.task? {
-                Task::Repair { dock } => Some((i, dock)),
-                _ => None,
-            })
-            .collect();
-        let mut done = Vec::new();
-        for (i, dock) in ships {
-            let id = self.objects[i].id;
-            let Some(d) = self.object_index(dock) else {
-                done.push(id);
-                continue;
-            };
-            let s = self.objects[i].ship.as_ref().unwrap();
-            let Some(last) = s.dock_step else {
-                if self.alongside(i, d) {
-                    self.objects[i].ship.as_mut().unwrap().dock_step = Some(now);
-                }
-                continue;
-            };
-            if now.wrapping_sub(last) < DOCK_TICKS {
-                continue;
-            }
-            let (Some(owner), Some(c)) = (self.objects[i].owner, self.objects[i].combat.as_ref())
-            else {
-                done.push(id);
-                continue;
-            };
-            let kind = s.kind as usize % 12;
-            let mut hull = (c.hull * 15.0).round() as i64;
-            self.objects[i].ship.as_mut().unwrap().dock_step = Some(now);
-            let full = crate::combat::hull_points(kind as u8) as i64;
-            let step = (full - hull).min(full * 10 / 100);
-            let price = DOCK_REPAIR_PRICE[kind] as i64 * step / full;
-            let amber = self.funds(owner).0 as i64;
-            if amber < price {
-                if self.side_computer(Some(owner)) {
-                    done.push(id);
-                    continue;
-                }
-                hull = (hull + amber * full / DOCK_REPAIR_PRICE[kind] as i64).min(full);
-                self.earn(owner, -amber, 0);
-            } else {
-                hull += step;
-                self.earn(owner, -price, 0);
-            }
-            self.objects[i].combat.as_mut().unwrap().hull = hull as f32 / 15.0;
-            self.mend_units(i, owner);
-            self.refresh_stats(id);
-            if hull == full {
-                done.push(id);
-            }
-        }
-        // A brain's ship mended sails out and joins its member (0x5d98).
-        for &id in &done {
-            self.brain_repaired(id);
-            self.brain_mended(id);
-        }
-        for id in done {
-            if let Some(i) = self.object_index(id) {
-                if let Some(s) = self.objects[i].ship.as_mut() {
-                    if matches!(s.task, Some(Task::Repair { .. })) {
-                        s.task = None;
-                    }
+        for o in self.objects.iter_mut() {
+            if let Some(s) = o.ship.as_mut() {
+                if !matches!(s.task, Some(Task::Repair { .. })) {
                     s.dock_step = None;
                 }
             }
+        }
+        let ids: Vec<u32> = self
+            .objects
+            .iter()
+            .filter(|o| {
+                o.ship
+                    .as_ref()
+                    .is_some_and(|s| matches!(s.task, Some(Task::Repair { .. })))
+            })
+            .map(|o| o.id)
+            .collect();
+        for id in ids {
+            if let Some(k) = self.object_index(id) {
+                self.dock_tick(k);
+            }
+        }
+    }
+
+    /// Ship `k`'s repair order at its tick (0x4b2420).
+    fn dock_tick(&mut self, k: usize) {
+        let t = TILE_SIZE as f32;
+        let id = self.objects[k].id;
+        let o = &self.objects[k];
+        let s = o.ship.as_ref().unwrap();
+        let Some(Task::Repair { dock }) = s.task else {
+            return;
+        };
+        let Some(mut l) = s.landing.clone() else {
+            if !s.path.is_empty() || s.move_state != 0 {
+                return;
+            }
+            let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+            let Some(d) = self.object_index(dock) else {
+                self.objects[k].ship.as_mut().unwrap().task = None;
+                return;
+            };
+            let Some(berth) = self.berth_cell(d) else {
+                return;
+            };
+            if here != berth {
+                let (bx, by) = (berth.0 as f32 * t + t / 2.0, berth.1 as f32 * t + t / 2.0);
+                if let Some(path) = self.plan_route(k, bx, by) {
+                    self.objects[k].ship.as_mut().unwrap().path = path;
+                }
+                return;
+            }
+            let dk = &self.objects[d];
+            if dk.owner != self.objects[k].owner
+                || !matches!(dk.class, ObjectClass::Building(SHIPYARD | DOCK))
+            {
+                return;
+            }
+            let Some(cell) = dk.cell else {
+                return;
+            };
+            if !self.dock_free(d) {
+                return;
+            }
+            if let Some(mut l) = self.dock_close_in(k, cell) {
+                l.dock = Some(dock);
+                let s = self.objects[k].ship.as_mut().unwrap();
+                s.landing = Some(l);
+                s.dock_step = None;
+            }
+            return;
+        };
+        l.hull_ticks += 1;
+        let hull_step = l.hull_ticks > super::landing::HULL_DELAY;
+        let contact = l.dock.is_some_and(|d| self.object_index(d).is_some());
+        let state = l.state;
+        match state {
+            2 => {
+                if self.close_in_step(k, &mut l) {
+                    if l.abort {
+                        let s = self.objects[k].ship.as_mut().unwrap();
+                        s.furl = 0.0;
+                        s.rotation = None;
+                        s.landing = None;
+                        s.task = None;
+                        s.close_in.face = l.face;
+                        s.close_in.turn = l.turn;
+                        s.close_in.count = l.count;
+                        return;
+                    }
+                    l.state = if contact { 8 } else { 3 };
+                }
+            }
+            8 => {
+                if self.furl_step(k, &mut l, hull_step) {
+                    l.state = 4;
+                    let now = self.ticks;
+                    self.objects[k].ship.as_mut().unwrap().dock_step = Some(now);
+                }
+            }
+            4 => {
+                let done = if !contact || l.abort {
+                    self.refresh_stats(id);
+                    true
+                } else {
+                    self.dock_repair_step(k)
+                };
+                if done {
+                    l.back = l.count;
+                    l.state = 3;
+                    self.objects[k].ship.as_mut().unwrap().dock_step = None;
+                }
+            }
+            3 if self.back_out_step(k, &mut l, hull_step) => {
+                self.objects[k].ship.as_mut().unwrap().task = None;
+                self.off_the_berth(k, b'Q');
+                self.brain_repaired(id);
+                self.brain_mended(id);
+                return;
+            }
+            _ => {}
+        }
+        if let Some(s) = self.objects[k].ship.as_mut() {
+            s.landing = Some(l);
+        }
+    }
+
+    /// A step of the mending at a dock (0x4b1fc0, state 4; `+0x751` the
+    /// last step's tick): every 9 ticks (`now - +0x751 < 9` returns) the
+    /// step `min(full - hull, full x 10 / 100)` costs `0x59b388[type] x
+    /// step / full` amber; short of it a computer player's ship (side 3
+    /// or 4) is done unmended, any other gets `amber x full /
+    /// 0x59b388[type]` (to full) for all its amber; then each worn unit,
+    /// items 9 down to 0, is made whole for `0x597164[item / 3] x (100 -
+    /// condition) x 9 / 1000` while the amber lasts (item 9, the unique
+    /// ships' own, is never worn: 0x4be110 wears items 3-8); the stats
+    /// refresh 0x4bee60 at every step. At a full hull the refits
+    /// (`dock_refits`) and done: true.
+    fn dock_repair_step(&mut self, i: usize) -> bool {
+        let now = self.ticks;
+        let id = self.objects[i].id;
+        let s = self.objects[i].ship.as_ref().unwrap();
+        let last = s.dock_step.unwrap_or(now);
+        if now.wrapping_sub(last) < DOCK_TICKS {
+            return false;
+        }
+        let (Some(owner), Some(c)) = (self.objects[i].owner, self.objects[i].combat.as_ref())
+        else {
+            return true;
+        };
+        let kind = s.kind as usize % 12;
+        let mut hull = (c.hull * 15.0).round() as i64;
+        self.objects[i].ship.as_mut().unwrap().dock_step = Some(now);
+        let full = crate::combat::hull_points(kind as u8) as i64;
+        let step = (full - hull).min(full * 10 / 100);
+        let price = DOCK_REPAIR_PRICE[kind] as i64 * step / full;
+        let amber = self.funds(owner).0 as i64;
+        if amber < price {
+            if self.side_computer(Some(owner)) {
+                return true;
+            }
+            hull = (hull + amber * full / DOCK_REPAIR_PRICE[kind] as i64).min(full);
+            self.earn(owner, -amber, 0);
+        } else {
+            hull += step;
+            self.earn(owner, -price, 0);
+        }
+        self.objects[i].combat.as_mut().unwrap().hull = hull as f32 / 15.0;
+        self.mend_units(i, owner);
+        let whole = hull == full;
+        if whole {
+            self.dock_refits(i);
+        }
+        self.refresh_stats(id);
+        whole
+    }
+
+    /// The refits at a full hull (0x4b1fc0 at 0x4b2276): a boat (type 0)
+    /// without its item 3, a merchant (1) without its item 4, gets one
+    /// whole (0x4bd920 with 100). The `eax` 0x4b22f7 tests against 0x100
+    /// and 0x200 is the type byte zero-extended (0x4b227c), so types 8-11
+    /// get none. (Not ported: types 2-7 at a dock, class 0x3b, fitted by
+    /// 0x4bbca0 with the free weapon room 0x4be800(5, 0xff); its fitter
+    /// 0x4bb670, with 0x4bb490, 0x4bb620 and 0x43da20, is not decoded.)
+    fn dock_refits(&mut self, i: usize) {
+        let o = &mut self.objects[i];
+        let item = match o.ship.as_ref().map(|s| s.kind) {
+            Some(0) => 3,
+            Some(1) => 4,
+            _ => return,
+        };
+        let Some(c) = o.combat.as_mut() else {
+            return;
+        };
+        if !c.weapons.contains(&item) {
+            c.weapons.push(item);
+            // The new unit's condition is 100 (`units` fills it whole).
+            o.units();
         }
     }
 }
