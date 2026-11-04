@@ -845,7 +845,10 @@ impl Scene {
             // whose wreck gives `+0x7f` 0xff). (Not decoded: a land
             // creature struck by a shot following it gets 0x138e with
             // `+0x15` unwritten, 0x496ca5-0x496cef, a byte left on the
-            // stack; the port keeps the shot's player.)
+            // stack: its caller 0x4974d0 (states 2, 3) calls only
+            // __setjmp3 before it, which writes no stack, so the byte is
+            // what calls before 0x4974d0's left there, at run time; the
+            // port keeps the shot's player.)
             let by = s.by.filter(|_| !self.in_dock(i));
             // A harpy or dragon shot down is reported to no one (0x420670
             // takes its life down to 0 and calls nothing that reports).

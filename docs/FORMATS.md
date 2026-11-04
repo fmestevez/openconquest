@@ -6648,7 +6648,11 @@ The killer each caller of 0x50e750 passes:
   down are reported to no one: 0x420670 takes their life to 0 and
   reports nothing. Not decoded: a land creature struck by a shot
   following it (0x4967b0, 0x496ca5-0x496cef) gets message 0x138e with
-  `+0x15` unwritten, a stack leftover; one struck by a projectile landing
+  `+0x15` unwritten, a stack leftover (`ebp - 0x27` of 0x4967b0; its only
+  caller, 0x4974d0 at 0x49785c for the shot's states 2 and 3, calls only
+  __setjmp3, 0x587388, before it, which writes nothing on the stack, so
+  the byte is what was left there before 0x4974d0 was called: run-time
+  state, not settled by the code); one struck by a projectile landing
   on its cell (0x498240) gets the shooter's (the port gives the shot's
   player in both).
 - **Lightning** (0xda93, the message's `+0x18` = the bolt's `+0x75`, the
