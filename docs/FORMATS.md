@@ -7796,6 +7796,30 @@ the at-will test (`Behaviour::may_pick`); not ported: the search's
 geometry by weapon position (0x4bfc60's square, 0x4c0cd0's arcs
 0x4bf5f0, 0x4e8af0's draws), so a partial positions mask counts as all;
 the fire state is kept but not read.
+
+**The ship's fire state `+0x5d1`** (byte; 0 from 0x4dc3f0, copied whole
+by the save and load at 0x4e14f7 / 0x4e2351). Writers: 0x4a9e30 at
+0x4aa200 (a behaviour record: 4 unless it is non-zero with `+0x25d &
+0x100`); 0x4ab3f0 (a fire record: kind 2 at 0x4ab4ed, 2; kind 1 at
+0x4ab5d8-0x4ab60c, 1, with the position's target `+0x63c`, its id
+`+0x640`, `+0x645` 1; kind 3 at 0x4ab691, 3, the attack); the task
+wind-down 0x4abc60 at 0x4abdeb and the stop at 0x4aa7b2 (`+0x818 &
+0x100`), each with any of guard, ram, board on (`+0x684`): 2 and `+0x25d
+|= 0x100`; 0x4abe00 (unless 2: 1, and each position in state 3 with a
+target back to 1); the leviathan hunt's 0x4ac5d0 callers at 0x4acc61 /
+0x4acf3a: 1; 0x4c09c0 at 0x4c0a3e (its target's 0x4b9140 passing, after
+event 8 / 0x80): 1; 0x4c1240 (states 1 and 4: 0x4bfc60's search finding
+one): 3. Readers: 0x4c1240, the ship's fire pass from the tick (0x4abba0:
+the tick `(now ^ +0x4c) & 3` 0, 0x4e6700(0x15) or a type above 1 with
+0x4e66c0, `+0x25d & 0x100` or `+0x684`, `+0x251` 0, no status `+0x25c`,
+and 0x4bf9b0's mask non-zero, its low 4 bits passed): 1 / 4 the search 0x4bfc60, 2 0x4c0eb0, 3 0x4c09c0;
+0x4bf9b0 (which weapons are ready: in 1, 3, 4 a group's only with its
+position's target `+0x63c` or guard on, in 2 every group; then ram and
+board each 50 ticks); 0x4abe00, 0x4ab3f0 (at 0x4ab4d7), 0x4a9e30 and
+0x4d60c0. Not ported: the fire pass these drive (0x4bf9b0, 0x4c1240,
+0x4bfc60, 0x4c0eb0, 0x4c09c0; the port's `battle.rs` fire is its own
+model), so neither the state nor 0x4d60c0's cases on it; what 0x4c0eb0
+and 0x4c09c0 do is not read.
 Who sends `#` (0x4c42f0, `{sub, +1, +5, +9, 0.., +0x15 0xff}`, queued:
 it reaches the ship at the next tick): 0x4c4350 (fleet order 0x72, from
 the brains' 0x4797e0 and the computers' 0x482eb0; the interface's attack
