@@ -2066,8 +2066,44 @@ plans the leviathan hunt's look (sub-code 10, size 5) so
 a size of 11, writing 121 shorts into a 25-short stack buffer (undefined;
 who sets sub-code 11 and `+0x6a1 = 2` not traced); the boarder's and
 rammer's closing-in (0x4b7f10, 0x4b8d80, 0x4c1f60: the port's own chase
-stands until they are ported together; 0x4c1f60's 0x4c13b0 / 0x4a68b0
-not read).
+stands until they are ported together, `Scene::run_contact`). What is
+read of them:
+- 0x4b7f10 (ship, size, prey, prey id, .., reach): the box of `size / 2`
+  about its cell (or, under way into `+0x5b6` with `+0x596` set and move
+  state 4 or 5, that cell), clipped to the map; the region's shorts
+  0x499990(cell, `+0x592`) 0 open, -1 closed, and closed where a ship
+  (0x50e600 200) other than itself lies, but on its own `+0x5ab` or the
+  prey (pointer and id). The prey in the box: a building (0x50e600
+  0x32) its cell by vt+0xb8, its reach zeroed for classes 0x39, 0x3a and
+  (reach 1) 0x3b, and for classes 0x34-0x36, 0x3f-0x41 (bits 0xe01c)
+  `+0x594 = 1` and the cell `+0x74 / +0x78`; a ship its cell, or, on
+  the cell it is under way to (its `+0x5ab`), that cell kept apart with
+  its distance in the box; the distance the larger axis, kept when
+  within `size / 2` on both.
+  Not in the box: 0xff. Within reach: `+0x6aa` = W x the box's end row +
+  its end column (as the disassembly at 0x4b83bf has it), 1. Else a plan
+  0x4a6270 mode 6 to the chosen cell (the nearer of the two, the
+  prey's own on a tie) through the region, 0. Its search mode
+  (`+0x6a1 == 2`) lists the box's occupants into 0x5c79c8 (at most 50),
+  sorts them (0x4b7f00, not read) and takes the first if a ship.
+- 0x4b8d80 (the rammer's, region in the caller's buffer): the box
+  `param_4`, clipped; cells 0x499990 as above; closed where a ship lies
+  still (`+0x58c` 0) other than itself and the prey and not on its own
+  or the cell's ship's `+0x5ab`, and where a ship lies, a corner of its
+  own cell 0x499ca0 refuses when its heading `+0x5af` is below 1; the
+  prey (a monster not of class 0x1fb, or another nation or slot at
+  war) found: the region filled (goal its cell, active), and 1 when
+  0x557480 to it is within `param_1` and its corner not refused.
+- 0x4c1f60 (rammer, prey): from its cell (or `+0x5b6`'s, 0x4e0b50 0)
+  the prey's cell and, under way (state 4 / 5, `+0x5ab` set), the cell
+  it goes to: the goal the one nearer (0x557440), 0x4c13b0 choosing
+  when both are at 1, the prey's own on a tie; 2 (alongside) at
+  distance 0 or 1 when 0x4e0b50 gave 0, else at 0, or at 1 with
+  0x4a68b0, facing it (0x59791d by the offset = `+0x5af`) or in move
+  state 3; also 2 lying still (state 0) at 1 facing it; else 1; 0 for a
+  prey that is no ship.
+Not read: 0x4c13b0, 0x4a68b0, 0x4b7f00, 0x557480, and the callers' use
+of the returns and `+0x6aa` (0x4b5df0 state 1, 0x4c2230 states 1 and 2).
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
