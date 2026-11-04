@@ -7060,19 +7060,25 @@ block, `+0x2d`), from the block's case 300: guard 0x4d1ea0, attack
 0x4da0a0, the gather zone 0x4c9e30, the move 0x4cc6a0 (only a join
 0x4cc650 sends to the order's cell). Ported (computer.rs
 `flotilla_behave`, `new_block`, `read_joins`): every site, the blocks'
-sends, the joins' (read at the computer's tick, not the navy's). Not
-ported: the move's join and its pass (0x4ccd80, every 100 ticks of group
-`+8`, each ship whose `+0x689 / +0x68d` differ) for the computers'
-moves, which plan no formation in the port; the attack zone's pass
-(0x4d6cd0) and its own end (0x4d6520 when 0x4d6640 finds no target,
-freeing `+0x2d`): the port's block stays until an order of another kind.
-A ship joining a computer's flotilla during its move (the reserve's and
-spare's state 5) is therefore listed (`Computer::uncovered`) and keeps
-the port's older test (on guard, sparing `update_spared`'s players)
-until a `#` reaches it; every other computer ship picks by its masks.
-Whether a fort of the forts' flotilla (role 1, a navy group) takes the
-`#` the port sends only to ships: not decoded (0x520cc0's '#' to a
-building).
+sends, the joins' (read at the computer's tick, not the navy's). The
+computers' moves (0x483760, from tasks 4, 5, 0xb and 0xd: order 100
+`{x + w / 2, y + h / 2, flags +0x154, tolerance w / 2, at least 1}` to
+the middle of the flotilla's zone) go through the move order as the
+brains' do (computer.rs `flotilla_move`: 0x4ccc30, the formation
+0x4cc970 or else 0x4cc650 to each ship), and its pass
+(`flotilla_move_pass`, 0x4ccd80 from the navy's tick: the joins 0x4cc6a0
+newest first, each planning the formation anew and, only when that
+sends none, sending the join to the order's cell with the group's three;
+then, none heard and group `+8` over 100, `+8` zeroed and each ship
+sent the three when its `+0x689 / +0x68d` differ, made to forget a
+blow (0x4cf760; the report 0x4a21c0 not ported) and, lying still more
+than a cell off its cell, sent there again; `+8` grows by the tick).
+Group `+8` (`Flotilla::elapsed`) is the move's and the attack's; the
+gather zone keeps its own (not ported: that it is one counter carried
+from block to block). Not ported: the attack zone's pass (0x4d6cd0) and
+its own end (0x4d6520 when 0x4d6640 finds no target, freeing `+0x2d`):
+the port's block stays until an order of another kind. A fort of the
+forts' flotilla takes the `#` too (below).
 
 **Ships' behaviour and masks.** The constructor (0x4dc3f0) zeroes
 `+0x5d1..+0x695`: guard, ram and board off (`+0x684`), the positions
@@ -7133,7 +7139,7 @@ order's join and pass. Ported since: the computers' 0x482eb0 and
 not, brain.rs), the gather zones' sends (gather.rs: a brain's fleet's
 `+0x14` its behaviour given, a computer's always, a human's never), and
 for the computers the case 300 of the guard, attack, founding, dock and
-treasure blocks (above). A fort of a computer's forts flotilla (role
+treasure blocks and the move's join and pass (above). A fort of a computer's forts flotilla (role
 1) takes the `#` too: 0x4c42f0 and 0x4c4230 send to every member of the
 group's `+0x31` list with no class test, and the fort's case 0x23
 (0x419f80, sub 1) stores the players without its own bit (`+0x48c`),

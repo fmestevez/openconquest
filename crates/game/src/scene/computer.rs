@@ -115,13 +115,6 @@ pub struct Computer {
     /// (see `Scene::update_spared`).
     #[serde(default)]
     spared: u32,
-    /// Ships that joined a flotilla during its move (block 100) and have
-    /// had no `#` since: the move order's join and pass (0x4cc6a0,
-    /// 0x4ccd80) are not ported for the computers' flotillas, so these
-    /// keep the old rule (on guard, sparing `spared`; see
-    /// `Scene::picks_at_will`).
-    #[serde(default)]
-    uncovered: Vec<u32>,
     /// +0xe14: when a fleet last got help.
     helped_at: u32,
     /// Role flotillas: +0x30 manager, +0x34 forts, +0x3c commander, +0x40
@@ -258,6 +251,14 @@ pub struct Flotilla {
     /// -> notice 300, 0x4a1340), with the block they were posted to.
     #[serde(default)]
     joined: Vec<(u32, u32)>,
+    /// The move block (fleet order 100, 0x4ccc30: its cell, tolerance
+    /// and the ships' cells in the formation), while the block is a move.
+    #[serde(default)]
+    move_order: Option<super::brain::MoveOrder>,
+    /// Group `+8`: ticks towards its block's pass (0x4ccd80, 0x4d6cd0),
+    /// grown by each pass, zeroed by its re-plan.
+    #[serde(default)]
+    elapsed: u32,
 }
 
 /// A letter between flotillas (0xd4 bytes, `Plr_mail.cpp`).
@@ -984,13 +985,15 @@ impl Scene {
         if self.owned(owner).is_empty() {
             return;
         }
+        // The navy's tick (0x4c4f40) for the flotillas' blocks: a move's
+        // pass (0x4ccd80), else the notices of the joins.
         for f in 0..ai.flotillas.len() {
-            self.read_joins(ai, f);
+            if ai.flotillas[f].block == 100 && ai.flotillas[f].move_order.is_some() {
+                self.flotilla_move_pass(ai, f);
+            } else {
+                self.read_joins(ai, f);
+            }
         }
-        ai.uncovered.retain(|&id| {
-            self.object_index(id)
-                .is_some_and(|i| self.objects[i].owner == Some(owner))
-        });
         for f in 0..ai.flotillas.len() {
             self.flotilla_turn(ai, f, now);
         }
@@ -1393,7 +1396,7 @@ impl Scene {
         let b = (ai.players(), u32::MAX, third);
         ai.flotillas[f].behaviour = Some(b);
         for id in ai.flotillas[f].ships.clone() {
-            self.send_behaviour(ai, id, b);
+            self.send_behaviour(id, b);
         }
     }
 
@@ -1402,13 +1405,7 @@ impl Scene {
     /// (0x419f80 case 0x23 sub 1: the players without its own, the
     /// classes and the kinds stored, every unit group at will, `+0x498`
     /// 0; `Scene::fort_command`).
-    fn send_behaviour(
-        &mut self,
-        ai: &mut Computer,
-        id: u32,
-        (players, classes, third): (u32, u32, u32),
-    ) {
-        ai.uncovered.retain(|&x| x != id);
+    fn send_behaviour(&mut self, id: u32, (players, classes, third): (u32, u32, u32)) {
         self.post(Order::BehaviourCommand {
             ship: id,
             sub: 1,
@@ -1431,9 +1428,10 @@ impl Scene {
         }
         ai.flotillas[f].block = code;
         ai.flotillas[f].joined.clear();
+        ai.flotillas[f].move_order = None;
         let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
         for id in ai.flotillas[f].ships.clone() {
-            self.send_behaviour(ai, id, b);
+            self.send_behaviour(id, b);
         }
     }
 
@@ -1443,10 +1441,7 @@ impl Scene {
     /// (0x4c9e30, which sends the group's behaviour); the guard (0x4d1ea0),
     /// attack (0x4d6960), founding (0x4cba10), dock (0x4db110) and
     /// treasure (0x4da0a0) blocks send it `#` sub 1 with the group's
-    /// three. The move's join (0x4cc6a0: the formation planned again, the
-    /// three only to a ship 0x4cc650 sends) is not ported for the
-    /// computers' moves, which plan no formation: the ship is listed in
-    /// `uncovered` instead.
+    /// three. (The move's are its pass's, `flotilla_move_pass`.)
     fn read_joins(&mut self, ai: &mut Computer, f: usize) {
         let block = ai.flotillas[f].block;
         let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
@@ -1467,26 +1462,9 @@ impl Scene {
                         });
                     }
                 }
-                100 => {
-                    if !ai.uncovered.contains(&id) {
-                        ai.uncovered.push(id);
-                    }
-                }
-                _ => self.send_behaviour(ai, id, b),
+                _ => self.send_behaviour(id, b),
             }
         }
-    }
-
-    /// Whether `me` is a computer player's ship its flotilla's behaviour
-    /// has not reached (`Computer::uncovered`).
-    pub(super) fn computer_uncovered(&self, me: &crate::objects::MapObject) -> bool {
-        me.ship.is_some()
-            && me.owner.is_some_and(|o| {
-                self.computers
-                    .players
-                    .iter()
-                    .any(|c| c.owner == o && c.uncovered.contains(&me.id))
-            })
     }
 
     /// Whether ship `me` holds its fire on `o` (see `update_spared`).
@@ -4607,12 +4585,188 @@ impl Scene {
         Some(found[ai.pick(&weights)].1)
     }
 
-    /// Order 100: the flotilla sails to its zone's middle.
+    /// Order 100 (0x483760): the flotilla sails to its zone's middle,
+    /// `{x + w / 2, y + h / 2, flags +0x154, tolerance w / 2 (at least
+    /// 1)}`, through the move order (`flotilla_move`).
     fn move_to_zone(&mut self, ai: &mut Computer, f: usize) {
         let z = ai.flotillas[f].zone;
         let to = (z.0 + z.2 / 2, z.1 + z.3 / 2);
         ai.flotillas[f].order = FleetOrder::Move(to);
-        self.give_order(ai, f);
+        self.new_block(ai, f, 100);
+        self.end_zone(super::gather::ZoneGroup::Computer(ai.id(), f));
+        self.flotilla_move(ai, f, to, (z.2 / 2).max(1));
+    }
+
+    /// Fleet order 100 (0x4a09d0 -> 0x4ccc30) to flotilla `f`: the move
+    /// block made (any other ended, `new_block`) or, a move already,
+    /// rewritten, keeping its ships' cells; then each ship given its cell
+    /// of the formation about `to` (0x4cc970, `flotilla_formation`), or,
+    /// when that sends none, each ship of the list sent to `to` by
+    /// 0x4cc650 (command 0x14, priority byte 0xff: the ship's kept).
+    fn flotilla_move(&mut self, ai: &mut Computer, f: usize, to: (i32, i32), tol: i32) {
+        let order = ai.flotillas[f]
+            .move_order
+            .get_or_insert_with(Default::default);
+        order.to = to;
+        order.tol = tol;
+        if self.flotilla_formation(ai, f) == 0 {
+            let t = TILE_SIZE as f32;
+            let (x, y) = (to.0 as f32 * t + t / 2.0, to.1 as f32 * t + t / 2.0);
+            for id in ai.flotillas[f].ships.clone() {
+                if self.object_index(id).is_some() {
+                    self.post(Order::MoveKeep { ship: id, x, y });
+                }
+            }
+        }
+    }
+
+    /// 0x4cc970 for flotilla `f`: its ships each given its cell of the
+    /// formation about the block's cell (one ship, the cell itself; more,
+    /// the planner `formation::plan` over the ships' grids by draught),
+    /// noted in the block (0x4cc7d0) and sent there (0x4cc8c0 ->
+    /// 0x4cf070, command 0x14 priority 0). Returns the ships sent: 0 with
+    /// none, or when the planner gives no cells.
+    fn flotilla_formation(&mut self, ai: &mut Computer, f: usize) -> usize {
+        let t = TILE_SIZE as f32;
+        let Some(to) = ai.flotillas[f].move_order.as_ref().map(|o| o.to) else {
+            return 0;
+        };
+        let ships: Vec<(u32, crate::formation::Ship)> = ai.flotillas[f]
+            .ships
+            .iter()
+            .filter_map(|&id| {
+                let o = &self.objects[self.object_index(id)?];
+                let s = o.ship.as_ref()?;
+                Some((
+                    id,
+                    crate::formation::Ship {
+                        x: (o.x / t).floor() as i32,
+                        y: (o.y / t).floor() as i32,
+                        shallow: !crate::objects::deep_draught(s.kind),
+                    },
+                ))
+            })
+            .collect();
+        let cells = match ships.len() {
+            0 => return 0,
+            1 => vec![to],
+            _ => {
+                let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+                let grid = |deep: bool| -> Vec<i16> {
+                    (0..h)
+                        .flat_map(|y| (0..w).map(move |x| (x, y)))
+                        .map(|(x, y)| if self.nav.passable(x, y, deep) { 0 } else { -1 })
+                        .collect()
+                };
+                let list: Vec<_> = ships.iter().map(|s| s.1).collect();
+                match crate::formation::plan(&grid(true), &grid(false), (w, h), to, &list) {
+                    Ok(c) => c,
+                    Err(_) => return 0,
+                }
+            }
+        };
+        let order = ai.flotillas[f].move_order.as_mut().unwrap();
+        for (&(id, _), &cell) in ships.iter().zip(&cells) {
+            match order.slots.iter_mut().find(|s| s.0 == id) {
+                Some(s) => s.1 = cell,
+                None => order.slots.push((id, cell)),
+            }
+        }
+        let mut sent = 0;
+        for ((id, _), cell) in ships.into_iter().zip(cells) {
+            let (x, y) = (cell.0 as f32 * t + t / 2.0, cell.1 as f32 * t + t / 2.0);
+            self.post(Order::Move { ship: id, x, y });
+            sent += 1;
+        }
+        sent
+    }
+
+    /// The move block's pass (0x4ccd80, from the navy's tick 0x4c4f40,
+    /// each game tick): first the notices, newest first (0x4cc6a0): each
+    /// ship that joined (300) and is in the flotilla has the whole
+    /// formation planned anew (0x4cc970), or, when that sends none, is
+    /// sent to the order's cell itself (0x4cc650, priority kept) and then
+    /// the group's behaviour (0x4c42f0; zeroes when never given). When
+    /// none was heard and group `+8` is over 100, `+8` goes back to 0 and
+    /// each ship of the flotilla: sent the group's behaviour again when
+    /// its `+0x689 / +0x68d` are not the group's `+0x19 / +0x1d` (group
+    /// `+0x14` set); with a blow marked (`+0x691`) made to forget it
+    /// (0x4cf760, command 0x28 sub 4; not ported: the blow's report to the
+    /// player, 0x4a21c0, which the port makes as it lands); lying still
+    /// (`+0x58c` 0) more than a cell off its cell in the block (in x or
+    /// y; the order's cell without one), sent there again (0x4cf070).
+    /// Then `+8` grows by the tick.
+    fn flotilla_move_pass(&mut self, ai: &mut Computer, f: usize) {
+        let t = TILE_SIZE as f32;
+        let Some(order) = ai.flotillas[f].move_order.clone() else {
+            return;
+        };
+        let block = ai.flotillas[f].block;
+        let mut heard = 0;
+        for (id, at) in std::mem::take(&mut ai.flotillas[f].joined)
+            .into_iter()
+            .rev()
+        {
+            if at != block
+                || !ai.flotillas[f].ships.contains(&id)
+                || self.object_index(id).is_none()
+            {
+                continue;
+            }
+            heard = self.flotilla_formation(ai, f);
+            if heard == 0 {
+                let (x, y) = (
+                    order.to.0 as f32 * t + t / 2.0,
+                    order.to.1 as f32 * t + t / 2.0,
+                );
+                self.post(Order::MoveKeep { ship: id, x, y });
+                let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
+                self.send_behaviour(id, b);
+                heard += 1;
+            }
+        }
+        let fl = &ai.flotillas[f];
+        if heard == 0 && fl.elapsed > 100 {
+            let order = fl.move_order.clone().unwrap();
+            let behaviour = fl.behaviour;
+            ai.flotillas[f].elapsed = 0;
+            for id in ai.flotillas[f].ships.clone() {
+                let Some(i) = self.object_index(id) else {
+                    continue;
+                };
+                let Some(s) = self.objects[i].ship.as_ref() else {
+                    continue;
+                };
+                if let Some(b @ (players, classes, _)) = behaviour {
+                    if s.behaviour.players != players || s.behaviour.classes != classes {
+                        self.send_behaviour(id, b);
+                    }
+                }
+                let s = self.objects[i].ship.as_ref().unwrap();
+                let (blow, still) = (s.blow.is_some(), s.move_state == 0);
+                if blow {
+                    self.post(Order::ClearBlow { ship: id });
+                }
+                if !still {
+                    continue;
+                }
+                let o = &self.objects[i];
+                let cell = order
+                    .slots
+                    .iter()
+                    .find(|s| s.0 == id)
+                    .map_or(order.to, |s| s.1);
+                let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+                if (here.0 - cell.0).abs() > 1 || (here.1 - cell.1).abs() > 1 {
+                    self.post(Order::Move {
+                        ship: id,
+                        x: cell.0 as f32 * t + t / 2.0,
+                        y: cell.1 as f32 * t + t / 2.0,
+                    });
+                }
+            }
+        }
+        ai.flotillas[f].elapsed += 1;
     }
 
     /// Gives the flotilla's order to its ships. A gather order is the
@@ -6999,8 +7153,9 @@ mod tests {
     /// flotilla has no block; its guard block's notice 300 (0x4d1ea0) or
     /// its task's order 0x72 (0x482eb0) turns guard on with players
     /// +0xe18 and classes -1, ram and board with third -1, not with the
-    /// reserve's 0x1ffffff. Then it picks at will by those masks; a ship
-    /// joining a move is left to the old rule (`uncovered`).
+    /// reserve's 0x1ffffff. Then it picks at will by those masks. A ship
+    /// joining a move is given its cell, and the masks at the move's
+    /// pass.
     #[test]
     fn computer_ships_take_their_flotillas_behaviour() {
         let Some(data) = data() else {
@@ -7086,17 +7241,44 @@ mod tests {
         scene.new_block(&mut ai, r, 200);
         scene.deliver(&data, &mut caches);
         assert!(scene.objects[i].ship.as_ref().unwrap().behaviour.guard);
-        // Joining the move: left to the old rule until a `#` comes.
+        // Joining the move (0x4cc6a0): the formation planned anew sends
+        // it its cell in the formation, and no `#`; the pass past
+        // 100 ticks (0x4ccd80) sends the group's masks to a ship whose
+        // masks are not the group's, and `+8` starts again.
         reset(&mut scene, &mut ai);
-        ai.flotillas[r].block = 100;
+        ai.flotillas[r].block = 0;
+        scene.new_block(&mut ai, r, 100);
+        let t = TILE_SIZE as f32;
+        let here = (
+            (scene.objects[i].x / t).floor() as i32,
+            (scene.objects[i].y / t).floor() as i32,
+        );
+        ai.flotillas[r].move_order = Some(crate::scene::brain::MoveOrder {
+            to: here,
+            tol: 1,
+            ..Default::default()
+        });
+        ai.flotillas[r].elapsed = 0;
         ai.join(r, id);
-        scene.read_joins(&mut ai, r);
-        assert!(ai.uncovered.contains(&id));
-        scene.computers.players[0] = ai;
-        assert!(scene.picks_at_will(&scene.objects[i], &scene.objects[foe]));
-        let mut ai = std::mem::take(&mut scene.computers.players[0]);
-        scene.flotilla_behave(&mut ai, r, 0x1ff_ffff);
-        assert!(!ai.uncovered.contains(&id));
+        scene.flotilla_move_pass(&mut ai, r);
+        assert!(scene
+            .outbox
+            .iter()
+            .any(|o| matches!(o, Order::Move { ship, .. } if *ship == id)));
+        assert!(!scene
+            .outbox
+            .iter()
+            .any(|o| matches!(o, Order::BehaviourCommand { ship, .. } if *ship == id)));
+        let slots = &ai.flotillas[r].move_order.as_ref().unwrap().slots;
+        assert!(slots.iter().any(|s| s.0 == id));
+        scene.deliver(&data, &mut caches);
+        assert!(!scene.objects[i].ship.as_ref().unwrap().behaviour.guard);
+        ai.flotillas[r].elapsed = 101;
+        scene.flotilla_move_pass(&mut ai, r);
+        assert_eq!(ai.flotillas[r].elapsed, 1);
+        scene.deliver(&data, &mut caches);
+        let b = scene.objects[i].ship.as_ref().unwrap().behaviour;
+        assert!(b.guard && !b.ram && !b.board);
         scene.computers.players[0] = ai;
     }
 
