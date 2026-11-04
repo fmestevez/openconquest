@@ -682,6 +682,12 @@ impl Scene {
                 if slid && !furled {
                     s.furl = 0.0;
                     s.grapple = None;
+                    // The boarder's state 6 done (0x4b6b87): notice 0x13c
+                    // with the prey to its group (0x4a1900), after a fight
+                    // or a call-off alike.
+                    if g.boarder {
+                        self.post_notice(id, 0x13c, g.with);
+                    }
                     return;
                 }
             }

@@ -381,7 +381,8 @@ impl Scene {
     /// 0x4d4d60 at 100, 0x4d5560 and mode 2. 0x137 (left): its slot and
     /// its id's target entry removed. 0x13a: the target entry of its id
     /// (`rec[4]`) removed and the area's target (0x4d6640) attacked by the
-    /// ship (0x4d0140). (Not decoded: who posts 0x13a.) Returns what
+    /// ship (0x4d0140; 0x13a from 0x4c09c0, a target gone, and 0x4b6f20,
+    /// a prize taken); others (0x13c, 0x13d) dropped. Returns what
     /// 0x4d61d0 tests: the sum of the cases' counts, which 0x136's
     /// 0x4d5560 overwrites with its -1.
     fn ha_notices(&mut self, a: &mut HumanAttack) -> i32 {
@@ -1480,5 +1481,88 @@ mod tests {
         assert!(a.notices.is_empty());
         assert_eq!(a.slots.iter().map(|s| s.ship).collect::<Vec<_>>(), [id1]);
         assert_eq!(a.elapsed, 1);
+    }
+
+    /// A ship whose target is gone posts notice 0x13a with it (0x4c09c0,
+    /// 0x4a1800); the block (0x4d4e50) drops the target's entry and sends
+    /// the ship at the area's target (0x4d6640, 0x4d0140).
+    #[test]
+    fn target_gone_notice_retargets() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let foe_owner = (human.0 ^ 1, human.1);
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(3)
+            .collect();
+        let t = TILE_SIZE as f32;
+        let water = |scene: &Scene, c: (i32, i32)| {
+            scene.nav.is_sea(c.0, c.1) && scene.nav.passable(c.0, c.1, true)
+        };
+        let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+        let c0 = (3..h - 3)
+            .flat_map(|y| (3..w - 3).map(move |x| (x, y)))
+            .find(|&c| (-3..=3).all(|dy| (-3..=3).all(|dx| water(&scene, (c.0 + dx, c.1 + dy)))))
+            .unwrap();
+        let cells = [c0, (c0.0 + 2, c0.1), (c0.0 + 3, c0.1)];
+        let owners = [human, foe_owner, foe_owner];
+        for k in 0..3 {
+            let o = &mut scene.objects[ships[k]];
+            o.owner = Some(owners[k]);
+            o.x = cells[k].0 as f32 * t + t / 2.0;
+            o.y = cells[k].1 as f32 * t + t / 2.0;
+            let s = o.ship.as_mut().unwrap();
+            s.kind = 2;
+            s.argo = false;
+            s.move_state = 0;
+        }
+        let ids: Vec<u32> = ships.iter().map(|&i| scene.objects[i].id).collect();
+        let a = (cells[1].0 as f32 * t + 1.0, cells[1].1 as f32 * t + 1.0);
+        let b = (cells[2].0 as f32 * t + 1.0, cells[2].1 as f32 * t + 1.0);
+        scene.order_attack_zone(&ids[..1], a, b).unwrap();
+        let gone = scene.human_attacks[0].slots[0].target;
+        let other = if gone == ids[1] { ids[2] } else { ids[1] };
+        let k = scene.object_index(ids[0]).unwrap();
+        scene.objects[k].ship.as_mut().unwrap().task = Some(crate::objects::Task::Attack {
+            target: gone,
+            jam: None,
+            count: 0,
+        });
+        scene.objects.retain(|o| o.id != gone);
+        scene.run_combat(0.04, &data, &mut caches);
+        let k = scene.object_index(ids[0]).unwrap();
+        assert!(scene.objects[k].ship.as_ref().unwrap().task.is_none());
+        let n = scene.human_attacks[0].notices.last().copied().unwrap();
+        assert_eq!((n.code, n.ship, n.class), (0x13a, ids[0], gone));
+        scene.outbox.clear();
+        let listed = |scene: &Scene| {
+            scene.human_attacks[0]
+                .targets
+                .iter()
+                .filter(|t| t.id == gone)
+                .count()
+        };
+        let before = listed(&scene);
+        let heard = {
+            let mut a = scene.human_attacks[0].clone();
+            let heard = scene.ha_notices(&mut a);
+            scene.human_attacks[0] = a;
+            heard
+        };
+        assert_eq!(heard, 1);
+        // Its first entry dropped (0x4d4ab0 with 1).
+        assert_eq!(listed(&scene), before - 1);
+        assert_eq!(
+            scene.outbox,
+            [Order::Attack {
+                ship: ids[0],
+                target: other
+            }]
+        );
     }
 }

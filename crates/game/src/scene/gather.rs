@@ -236,7 +236,9 @@ impl Scene {
     }
 
     /// Posts a notice to ship `id`'s group (0x4a1430 / 0x4a1520 /
-    /// 0x4a1340); nothing without one.
+    /// 0x4a1340 / 0x4a1800 / 0x4a1880 / 0x4a1900: `{code, tick, ship
+    /// +0x60, ship id, rec[4], rec[5]}`, `class` rec[4]); nothing without
+    /// one.
     pub(super) fn post_notice(&mut self, id: u32, code: u32, class: u32) {
         let tick = self.ticks;
         let notice = Notice {
@@ -249,6 +251,12 @@ impl Scene {
             self.gather_zones[z].notices.push(notice);
         } else if let Some(z) = self.ship_attack(id) {
             self.human_attacks[z].notices.push(notice);
+        } else {
+            for ai in &mut self.computers.players {
+                if ai.post_notice(id, code, class) {
+                    break;
+                }
+            }
         }
     }
 

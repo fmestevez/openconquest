@@ -247,10 +247,15 @@ pub struct Flotilla {
     /// fleet order code it was made for, 0 none.
     #[serde(default)]
     block: u32,
-    /// Ships that joined while it had a block (0x483fb0 -> 0x4a0480 op 2
-    /// -> notice 300, 0x4a1340), with the block they were posted to.
-    #[serde(default)]
-    joined: Vec<(u32, u32)>,
+    /// The group's notices (`+0x2d`) as the port keeps them: `(ship,
+    /// block, code, rec[4])`, the block they were posted to. 300 a ship
+    /// that joined while it had a block (0x483fb0 -> 0x4a0480 op 2 ->
+    /// 0x4a1340, rec[4] 0); 0x13a a ship's target gone or prize taken
+    /// (0x4a1800: rec[4] its id); 0x13c / 0x13d a boarding or ram ended
+    /// (0x4a1900, 0x4a1880: rec[4] the prey). (Saves before the codes
+    /// hold `(ship, block)`, read as joins.)
+    #[serde(default, deserialize_with = "heard_compat")]
+    joined: Vec<Heard>,
     /// The move block (fleet order 100, 0x4ccc30: its cell, tolerance
     /// and the ships' cells in the formation), while the block is a move.
     #[serde(default)]
@@ -611,8 +616,25 @@ impl Computer {
         let fl = &mut self.flotillas[f];
         fl.ships.push(id);
         if fl.block != 0 && !fl.no_notices {
-            fl.joined.push((id, fl.block));
+            fl.joined.push((id, fl.block, 300, 0));
         }
+    }
+
+    /// Posts notice `code` of ship `id` (rec[4] `rec`) to its flotilla's
+    /// group when it has a block and its notices (0x49c020, 0x5577d0;
+    /// nothing with no list). Whether one took it.
+    pub(super) fn post_notice(&mut self, id: u32, code: u32, rec: u32) -> bool {
+        let Some(fl) = self
+            .flotillas
+            .iter_mut()
+            .find(|fl| fl.block != 0 && fl.ships.contains(&id))
+        else {
+            return false;
+        };
+        if !fl.no_notices {
+            fl.joined.push((id, fl.block, code, rec));
+        }
+        true
     }
 
     /// Makes a flotilla (0x483e10): its period 25-75 ticks.
@@ -1458,8 +1480,8 @@ impl Scene {
     fn read_joins(&mut self, ai: &mut Computer, f: usize) {
         let block = ai.flotillas[f].block;
         let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
-        for (id, at) in std::mem::take(&mut ai.flotillas[f].joined) {
-            if at != block || !ai.flotillas[f].ships.contains(&id) {
+        for (id, at, code, _) in std::mem::take(&mut ai.flotillas[f].joined) {
+            if code != 300 || at != block || !ai.flotillas[f].ships.contains(&id) {
                 continue;
             }
             match block {
@@ -4725,11 +4747,12 @@ impl Scene {
         };
         let block = ai.flotillas[f].block;
         let mut heard = 0;
-        for (id, at) in std::mem::take(&mut ai.flotillas[f].joined)
+        for (id, at, code, _) in std::mem::take(&mut ai.flotillas[f].joined)
             .into_iter()
             .rev()
         {
-            if at != block
+            if code != 300
+                || at != block
                 || !ai.flotillas[f].ships.contains(&id)
                 || self.object_index(id).is_none()
             {
@@ -5000,9 +5023,12 @@ impl Scene {
     /// (0x4d6960): a ship that joined (300) and is in the flotilla is sent
     /// at the target (0x4d0140; not with none: command 0x16 with target 0,
     /// whose record 0x4ab3f0 keeps, 0x4ac050 finding nothing, after the
-    /// pending group's turn in 0x4abe50: not traced) and the group's three (0x4c42f0). (Not ported:
-    /// notice 0x13a, the target looked for again when it is the block's,
-    /// whose sender is not traced.) When none was read, group `+8` is
+    /// pending group's turn in 0x4abe50: not traced) and the group's
+    /// three (0x4c42f0); a ship whose target is gone or that took a prize
+    /// (0x13a, from 0x4c09c0 and 0x4b6f20) and is in the flotilla: the
+    /// target looked for again (0x4d6640) when the notice names the
+    /// block's (`+0x1c`), then the ship sent at it if there is one, heard
+    /// either way; others (0x13c, 0x13d) are dropped. When none was read, group `+8` is
     /// over the period (0x5a, but for a computer's side 3 or 4 outside the
     /// campaign 0x78, 0x4b, 0x3c by its level `+0x1a31`) and the flotilla
     /// has ships, the target is looked for again (0x4d6640). None: the
@@ -5028,12 +5054,11 @@ impl Scene {
     /// (tasks 8, 9, 10 state 0xc: 0x47ed7b, 0x47e5e3, 0x47e992) sets to
     /// `(difficulty == 0) << 16` just before.
     fn attack_pass(&mut self, ai: &mut Computer, f: usize) {
-        let target = ai.flotillas[f].target;
         let block = ai.flotillas[f].block;
         let behaviour = ai.flotillas[f].behaviour;
         let mut heard = 0;
         if !ai.flotillas[f].no_notices {
-            for (id, at) in std::mem::take(&mut ai.flotillas[f].joined)
+            for (id, at, code, rec) in std::mem::take(&mut ai.flotillas[f].joined)
                 .into_iter()
                 .rev()
             {
@@ -5043,11 +5068,29 @@ impl Scene {
                 {
                     continue;
                 }
-                if target != 0 {
-                    self.post(Order::Attack { ship: id, target });
+                match code {
+                    300 => {
+                        let target = ai.flotillas[f].target;
+                        if target != 0 {
+                            self.post(Order::Attack { ship: id, target });
+                        }
+                        heard += 1;
+                        self.send_behaviour(id, behaviour.unwrap_or((0, 0, 0)));
+                    }
+                    0x13a => {
+                        if rec == ai.flotillas[f].target {
+                            if let FleetOrder::Attack(area) = ai.flotillas[f].order {
+                                ai.flotillas[f].target = self.zone_foe(ai, f, area);
+                            }
+                        }
+                        let target = ai.flotillas[f].target;
+                        if target != 0 {
+                            self.post(Order::Attack { ship: id, target });
+                        }
+                        heard += 1;
+                    }
+                    _ => {}
                 }
-                heard += 1;
-                self.send_behaviour(id, behaviour.unwrap_or((0, 0, 0)));
             }
         }
         let period = [0x78, 0x4b, 0x3c][ai.difficulty.min(2)];
@@ -6066,6 +6109,30 @@ pub(super) enum PartStep {
     /// clearing (0x428f20 at 0x4295cb).
     Berth,
     Failed,
+}
+
+/// A flotilla's notice: ship, block, code, rec[4].
+type Heard = (u32, u32, u32, u32);
+
+/// Reads a flotilla's notices, as saved with their codes or before them
+/// (`(ship, block)`, joins).
+fn heard_compat<'de, D>(d: D) -> Result<Vec<Heard>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Saved {
+        Join(u32, u32),
+        Coded(u32, u32, u32, u32),
+    }
+    Ok(Vec::<Saved>::deserialize(d)?
+        .into_iter()
+        .map(|h| match h {
+            Saved::Join(ship, block) => (ship, block, 300, 0),
+            Saved::Coded(ship, block, code, rec) => (ship, block, code, rec),
+        })
+        .collect())
 }
 
 /// The resource of an original resource class.
@@ -7815,6 +7882,14 @@ mod tests {
         scene.computers.players[0] = ai;
     }
 
+    /// A flotilla's notices load from saves before their codes as joins.
+    #[test]
+    fn notices_load_from_older_saves() {
+        let mut d = serde_json::Deserializer::from_str("[[7, 112], [8, 112, 314, 9]]");
+        let heard = heard_compat(&mut d).unwrap();
+        assert_eq!(heard, [(7, 0x70, 300, 0), (8, 0x70, 0x13a, 9)]);
+    }
+
     /// A computer's attack zone (0x4d6a90): the target found in the area
     /// (0x4d6640) and the flotilla's ships sent at it; at its pass
     /// (0x4d6cd0) with no target left the notices are freed (0x4d6520),
@@ -7876,6 +7951,30 @@ mod tests {
             idf
         };
         assert_eq!(scene.zone_foe(&ai, g, two), want);
+        // Notice 0x13a (0x4d6960): one naming another than the block's
+        // target sends the ship at the target; one naming it looks for
+        // the target again first (0x4d6640). Heard, the pass looks no
+        // further.
+        ai.flotillas[g].order = FleetOrder::Attack(two);
+        ai.flotillas[g].target = idf;
+        scene.objects[foe].owner = Some(owner);
+        for (named, sent) in [(idb, idf), (idf, idb)] {
+            scene.outbox.clear();
+            ai.flotillas[g].elapsed = 0x79;
+            assert!(ai.post_notice(ida, 0x13a, named));
+            scene.attack_pass(&mut ai, g);
+            assert_eq!(ai.flotillas[g].target, sent);
+            assert_eq!(
+                scene.outbox,
+                [Order::Attack {
+                    ship: ida,
+                    target: sent
+                }]
+            );
+            ai.flotillas[g].target = idf;
+        }
+        scene.objects[foe].owner = Some(human);
+        ai.flotillas[g].order = FleetOrder::Attack((fx, fy, 1, 1));
         scene.objects[b].owner = Some(owner);
         // Its own player's ship is no target: the pass past the period
         // finds none and frees the notices.
@@ -7900,7 +7999,7 @@ mod tests {
         scene.new_block(&mut ai, g, 0x6e);
         assert!(!ai.flotillas[g].no_notices);
         ai.join(g, idb);
-        assert_eq!(ai.flotillas[g].joined, [(idb, 0x6e)]);
+        assert_eq!(ai.flotillas[g].joined, [(idb, 0x6e, 300, 0)]);
         scene.computers.players[0] = ai;
     }
 

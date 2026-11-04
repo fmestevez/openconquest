@@ -5325,6 +5325,75 @@ fn closing_in_starts_within_two_cells() {
     }
 }
 
+/// A boarder or rammer sailing to a prey that is gone stops and posts
+/// notice 0x13c (0x4b5d10) or 0x13d (0x4c2ec0) with the prey to its group;
+/// the boarder only once it is in another cell than at its last plan
+/// (`+0x6c7`). A rammer within 2 of a prey not at war stops so too; a
+/// boarder keeps sailing (0x4b9140 has no war test).
+#[test]
+fn prey_gone_ends_with_a_notice() {
+    for board in [true, false] {
+        let Some((data, mut caches, mut scene, mine, other, _)) = closing_pair(4, 0) else {
+            return;
+        };
+        let k = scene.object_index(other).unwrap();
+        let at = (scene.objects[k].x, scene.objects[k].y);
+        scene.order_attack_zone(&[mine], at, at).unwrap();
+        scene.human_attacks[0].notices.clear();
+        scene.order_close(mine, other, board).unwrap();
+        scene.ticks += 1;
+        scene.run_closing(&data, &mut caches);
+        assert!(!closing_of(&scene, mine).near);
+        scene.objects.retain(|o| o.id != other);
+        scene.ticks += 1;
+        scene.run_closing(&data, &mut caches);
+        let i = scene.object_index(mine).unwrap();
+        if board {
+            // Still in the cell of its last plan: 0x4b9140 is not called.
+            assert!(scene.objects[i].ship.as_ref().unwrap().task.is_some());
+            scene.objects[i].x += TILE_SIZE as f32;
+            scene.ticks += 1;
+            scene.run_closing(&data, &mut caches);
+        }
+        assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
+        let n = scene.human_attacks[0].notices.clone();
+        let code = if board { 0x13c } else { 0x13d };
+        assert_eq!(
+            n.iter()
+                .map(|n| (n.code, n.ship, n.class))
+                .collect::<Vec<_>>(),
+            [(code, mine, other)]
+        );
+    }
+    // Not at war, 2 away: the rammer stops, the boarder closes in.
+    for board in [true, false] {
+        let Some((data, mut caches, mut scene, mine, other, _)) = closing_pair(2, 0) else {
+            return;
+        };
+        scene.order_close(mine, other, board).unwrap();
+        let k = scene.object_index(other).unwrap();
+        scene.objects[k].owner = scene.objects[scene.object_index(mine).unwrap()].owner;
+        let i = scene.object_index(mine).unwrap();
+        scene.objects[i].ship.as_mut().unwrap().closing = Some(objects::Closing {
+            target: other,
+            near: false,
+            from: None,
+            contact: -1,
+            planned: 0,
+            plan_from: (0, 0),
+            plan_goal: (0, 0),
+            first_plan: true,
+        });
+        scene.ticks += 1;
+        scene.run_closing(&data, &mut caches);
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        assert_eq!(s.task.is_some(), board);
+        if board {
+            assert!(s.closing.unwrap().near);
+        }
+    }
+}
+
 /// The boarder's look (0x4b7f10): a box of 5 about its cell; the prey 2
 /// away is moved to through it, 1 away is within reach with `+0x6aa` the
 /// cell one past the box's end corner (0x4b83bf), 3 away out of the box.

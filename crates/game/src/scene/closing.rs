@@ -125,15 +125,12 @@ impl Scene {
             let (Task::Ram { target } | Task::Board { target, .. }) = task else {
                 continue;
             };
-            let Some(ti) = self.object_index(target).filter(|&t| {
-                self.objects[t].ship.is_some()
-                    && Self::are_enemies(&self.objects[i], &self.objects[t])
-            }) else {
-                let s = self.objects[i].ship.as_mut().unwrap();
-                s.task = None;
-                s.closing = None;
-                continue;
-            };
+            // The prey as 0x4ac050 finds it (pointer and id): gone, the
+            // closing in loses it (0x4b7f10, 0x4b8d80) and the sailing
+            // ends the task with a notice (below).
+            let prey = self
+                .object_index(target)
+                .filter(|&t| self.objects[t].ship.is_some());
             // A boarder waits for its hook to land (0x4b5df0 state 7); one
             // lost (a save does not keep it) frees it.
             if let Task::Board {
@@ -155,12 +152,17 @@ impl Scene {
             // The order (0x4aa840): closing in if the prey is within half
             // the box (0x4abf60: 0x557440 from the ship's cell), else
             // sailing to it; the first plan at once.
-            let (own, prey) = (self.cell_of_object(i), self.cell_of_object(ti));
+            // (A prey gone before the port's first look counts as far.)
+            let own = self.cell_of_object(i);
+            let near = prey.is_some_and(|ti| {
+                let p = self.cell_of_object(ti);
+                walk_path::dist(own.0, own.1, p.0, p.1) <= BOX / 2
+            });
             let s = self.objects[i].ship.as_mut().unwrap();
             if s.closing.is_none_or(|c| c.target != target) {
                 s.closing = Some(Closing {
                     target,
-                    near: walk_path::dist(own.0, own.1, prey.0, prey.1) <= BOX / 2,
+                    near,
                     from: None,
                     contact: -1,
                     planned: 0,
@@ -170,19 +172,25 @@ impl Scene {
                 });
             }
             let near = s.closing.unwrap().near;
-            match (task, near) {
-                (Task::Board { .. }, false) => self.board_sail(i, ti),
-                (Task::Board { .. }, true) => {
-                    // 0x4b5df0 state 1: out of the box it sails to it
-                    // again; within reach it throws a hook (0x4b84b0).
-                    match self.board_look(i, ti) {
-                        BoardLook::Out => self.closing_mut(i).near = false,
-                        BoardLook::Closing => {}
-                        BoardLook::Reach => self.throw_hook(i, ti, data, caches),
+            match (task, near, prey) {
+                (Task::Board { .. }, false, _) => self.board_sail(i, prey),
+                // 0x4b5df0 state 1: out of the box (or gone) it sails to it
+                // again; within reach it throws a hook (0x4b84b0) at a
+                // prey at war, and waits by one that is not.
+                (Task::Board { .. }, true, None) => self.closing_mut(i).near = false,
+                (Task::Board { .. }, true, Some(ti)) => match self.board_look(i, ti) {
+                    BoardLook::Out => self.closing_mut(i).near = false,
+                    BoardLook::Closing => {}
+                    BoardLook::Reach => {
+                        if Self::are_enemies(&self.objects[i], &self.objects[ti]) {
+                            self.throw_hook(i, ti, data, caches);
+                        }
                     }
-                }
-                (_, false) => self.ram_sail(i, ti),
-                (_, true) => self.ram_close(i, ti),
+                },
+                (_, false, _) => self.ram_sail(i, prey),
+                // 0x4c2230: 0x4b8d80 does not find a prey gone.
+                (_, true, None) => self.closing_mut(i).near = false,
+                (_, true, Some(ti)) => self.ram_close(i, ti),
             }
         }
     }
@@ -273,13 +281,19 @@ impl Scene {
     /// (`+0x591`), 0x4b9140 with half the box: the prey within 2 of its
     /// cell (0x557480; vt+0x28 and 0x50ebf0 both give a ship's cell) and
     /// it closes in (`+0x6a1` 1); else it plans to the prey's cell
-    /// (0x4a6270 mode 5, tolerance 0) and keeps the cell.
-    fn board_sail(&mut self, i: usize, ti: usize) {
-        let (own, prey) = (self.cell_of_object(i), self.cell_of_object(ti));
+    /// (0x4a6270 mode 5, tolerance 0) and keeps the cell. No war test.
+    /// The prey gone: notice 0x13c and the task stopped.
+    fn board_sail(&mut self, i: usize, ti: Option<usize>) {
+        let own = self.cell_of_object(i);
         let s = self.objects[i].ship.as_ref().unwrap();
         if s.closing.unwrap().from == Some(own) && s.waited == 0.0 {
             return;
         }
+        let Some(ti) = ti else {
+            self.prey_lost(i, 0x13c);
+            return;
+        };
+        let prey = self.cell_of_object(ti);
         if walk_path::dist2(prey.0, prey.1, own.0, own.1) <= BOX / 2 {
             self.closing_mut(i).near = true;
             return;
@@ -290,10 +304,20 @@ impl Scene {
 
     /// The rammer sailing to its prey (`+0x6a1` 3, 0x4c2ec0): 0x4b9140 as
     /// the boarder's, every tick; within 2 it closes in, its next plan at
-    /// once (0x4c1370: `+0x593`).
-    fn ram_sail(&mut self, i: usize, ti: usize) {
-        let (own, prey) = (self.cell_of_object(i), self.cell_of_object(ti));
+    /// once (0x4c1370: `+0x593`), if the prey is at war (else, and with
+    /// the prey gone, notice 0x13d and the task stopped, 0x4abc60).
+    fn ram_sail(&mut self, i: usize, ti: Option<usize>) {
+        let own = self.cell_of_object(i);
+        let Some(ti) = ti else {
+            self.prey_lost(i, 0x13d);
+            return;
+        };
+        let prey = self.cell_of_object(ti);
         if walk_path::dist2(prey.0, prey.1, own.0, own.1) <= BOX / 2 {
+            if !Self::are_enemies(&self.objects[i], &self.objects[ti]) {
+                self.prey_lost(i, 0x13d);
+                return;
+            }
             let c = self.closing_mut(i);
             c.near = true;
             c.first_plan = true;
@@ -301,6 +325,20 @@ impl Scene {
         }
         self.closing_plan(i, prey, None);
         self.closing_mut(i).from = Some(own);
+    }
+
+    /// A boarding or ram given up while sailing to the prey: notice
+    /// `code` (0x13c the boarder's, 0x4a1900 from 0x4b5d10; 0x13d the
+    /// rammer's, 0x4a1880 from 0x4c2ec0) with the prey to the ship's
+    /// group, and the task stopped (the boarder's event 8, the rammer's
+    /// 0x4abc60).
+    fn prey_lost(&mut self, i: usize, code: u32) {
+        let id = self.objects[i].id;
+        let s = self.objects[i].ship.as_mut().unwrap();
+        let prey = s.closing.map_or(0, |c| c.target);
+        s.task = None;
+        s.closing = None;
+        self.post_notice(id, code, prey);
     }
 
     /// The boarder's look (0x4b7f10 with a box of 5 and a reach of 1, from
@@ -441,9 +479,9 @@ impl Scene {
     /// still (move state 0) on its own cell, but itself, the prey and on
     /// its own reserved cell, and a cell across a corner of its own while
     /// its heading (`+0x5af`, signed) is below 1 and 0x499ca0 refuses the
-    /// corner. The prey found: the region (goal its cell), and whether it
-    /// is within reach (0x557480 from the ship's cell) and not across a
-    /// refused corner.
+    /// corner. The prey found (only at war): the region (goal its cell),
+    /// and whether it is within reach (0x557480 from the ship's cell) and
+    /// not across a refused corner.
     pub(super) fn ram_look(
         &self,
         i: usize,
@@ -479,7 +517,7 @@ impl Scene {
                     if corner {
                         v = -1;
                     }
-                    if k == ti {
+                    if k == ti && Self::are_enemies(&self.objects[i], &self.objects[ti]) {
                         found = Some(c);
                         refused = corner;
                     }

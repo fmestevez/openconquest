@@ -2083,8 +2083,13 @@ prey's cell) is within 0x59aee8[type] / 2, else 3. The sizes 0x59aee8,
   1; else a plan 0x4a6270 mode 5 to it, 0. The boarder's 0x4b5d10 calls
   it only when its cell is not `+0x6c7` or `+0x591` is set; the rammer's
   0x4c2ec0 every tick; 0 keeps the cell in `+0x6c7`, 1 sets `+0x6a1` 1
-  (the rammer also `+0x593` = 1, by 0x4c1370). (Without the prey: notice
-  0x13c / 0x13d to the group.)
+  (the rammer also `+0x593` = 1, by 0x4c1370). 0x4b9140 has no war
+  test. The prey gone (0x4ac050 finds neither pointer nor id): the
+  boarder posts notice 0x13c (below) and stops (vt+4(8, 0): 0x4aa540 ->
+  0x4abc60); the rammer posts 0x13d and stops (0x4abc60), and so too
+  with the prey within 2 but not at war (a monster, `+0x57` 2, not of
+  class 0x1fb, counts at war; else the same player does not; else
+  0x4efe20 < 0).
 - 0x4a6270 modes 5 and 6 (6 passes the region): with `+0x593` 0x4a6330
   at once, else 0x4a6150: a plan when (`+0x591` changed, or the cell or
   the goal changed since the last, or move state 0) and not turning
@@ -2199,6 +2204,43 @@ released (0x4a3970) unless its own cell or `+0x5ab`, 0x13d to its player
 (0x4a1880 with `+0x6cb`), commands back (0x4b3850), 0x4b8d10, `+0x696 =
 1`, state 1, 8 / 0x90, the prey `+0x6cf` and `+0x6cb` cleared, `+0x704`
 now. The port's `start_ram` returns doing nothing when refused.
+
+**Prey notices** (0x4a1800 0x13a, 0x4a1880 0x13d, 0x4a1900 0x13c, after
+0x4a1700's 0x136 and 0x4a1770's 0x137): to the ship's group (0x49c020
+with its player and group id `+0x5c`) when it has one with a notice list
+(`+0x2d`), the record `{code, tick, ship +0x60, ship id, a, b}`:
+- 0x13c `{prey, 0x13c}`: the boarder sailing, its prey gone (0x4b5d10,
+  above); the boarder's state 6 done (0x4b6b87, its way back after the
+  fight or after a call-off through state 8), with 0x4b3850, `+0x25d &=
+  ~0x10` and vt+4(8, 0x90).
+- 0x13d `{prey, 0x13d}`: the rammer sailing, its prey gone or not at war
+  within 2 (0x4c2ec0, above); its state 6 turn done (0x4c2b46: `+0x696`
+  1, `+0x6cb` 0).
+- 0x13a: the capture (0x4b6f20 at 0x4b7105, neither side player 16) by
+  the taker, `{prize, 0x17}`; a ship's attack whose target is gone
+  (0x4c09c0: 0x4b9140 finds no object; vt+4(8, 0x180)), `{target, 0x16}`.
+Read by: the human's attack block (0x4d4e50: 0x13a, below; 0x13c and
+0x13d dropped); the computers' attack zone (0x4d6960: 0x13a from a ship
+in the group, the target looked for again (0x4d6640) when the record
+names the block's `+0x1c`, then the ship sent at it (0x4d0140, 7) if
+there is one, counted heard either way; others dropped); the fleet
+attack task (0x4d0210: 0x13a-0x13d, a ship in the group: 0x4cfa70(the
+block, the record's prey, 1) below 0 or 0x4cfad0 sends it again
+(0x4cfe40), else the block ends, 0x4a1c60); the guard (0x4d1ea0: 0x13a,
+0x13c, 0x13d, 0x4d1750 of the ship `>> 16` 2 zeroes that entry's `+8`
+and `+0xc` in `+0x48`). The gather zone (0x4c9e30) and the move
+(0x4cc6a0) read none. Ported (`Scene::post_notice`: gather zones, human
+attack groups and the computers' flotillas with a block,
+`Computer::post_notice`): every sender but the rammer's state 6 (the
+port's ram run, grapple.rs, ends otherwise), the attack's only for a
+target gone from the map (the port also ends an attack on a target no
+longer an enemy, posting nothing); the human block's and the computers'
+attack zone's cases. The boarder's end posts as the port's leave stage
+ends (the task itself ends with the fight, `board_end`). The boarder
+closing in, a prey within reach but not at war: nothing (0x4b5df0 state
+1); the rammer's look finds the prey only at war (0x4b8d80). Not ported:
+0x4d0210's and 0x4d1ea0's cases (the port keeps no notices for those
+blocks).
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
@@ -7385,8 +7427,8 @@ contact (`+0x261 & 0x1000`) looks about it for a boarding or a ram
 (below) and, with a find, is sent to board it (0x4d0190: command 0x17
 `{id, 0x45}`) when its boarding odds are 101 or more, else to ram it
 (0x4d01d0: command 0x18) when its ramming odds are; else, and without
-the contact, sent at the target as by the order. Not ported: notice
-0x13a (sender not traced); command 0x16 with target 0 (a join with
+the contact, sent at the target as by the order. Notice 0x13a: see
+**Prey notices**. Not ported: command 0x16 with target 0 (a join with
 none: not sent; 0x4ab3f0 keeps such a record, 0x4ac050 finding nothing,
 but what the pending group's turn in 0x4abe50 does to the ship's
 running task is not traced); which of two ships in a cell holds `+0xc`.
@@ -7660,8 +7702,8 @@ a ship on a fire task is left to it); fireballs and tornadoes holding
 cell `+0xc` (not objects in the port); the `+0x5ab` skip (the port's
 occupants hold only the cells the ships are in); nature objects' player
 in 0x4cd300's and 0x4d5430's tests (the port's ownerless creatures are
-no player's, as in 0x4d6640's port). Not decoded: the sender of 0x13a
-(its case is ported). The status 0x4d63d0 is ported, its readers (the
+no player's, as in 0x4d6640's port). 0x13a's senders: **Prey
+notices**. The status 0x4d63d0 is ported, its readers (the
 tasks' 0x4a0d80) hold brains' and computers' groups only. The port's
 per-ship `Task::Zone` stays for the guard zone.
 

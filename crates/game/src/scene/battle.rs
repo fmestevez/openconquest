@@ -6,6 +6,9 @@ use super::*;
 /// occupant, 1 `+0x10`, 2 `+0xc`; object index).
 type GroupCell = ((i32, i32), Vec<(u8, usize)>);
 
+/// Player 16 (`+0x24f` 0x10): its ships are not taken, nor do they take.
+const PLAYER_16: (u32, u32) = (4, 0);
+
 impl Scene {
     /// Whether two objects belong to different players. All players are
     /// treated as enemies of each other until diplomacy is implemented.
@@ -686,10 +689,19 @@ impl Scene {
                     Some(ti) => Some(ti),
                     None if at_jam => continue,
                     None => {
+                        let gone = self.object_index(t).is_none();
+                        let id = self.objects[i].id;
                         let ship = self.objects[i].ship.as_mut().unwrap();
                         if matches!(ship.task, Some(Task::Attack { .. })) {
                             ship.task = None;
                             ship.path.clear();
+                            // The target gone (0x4c09c0: 0x4b9140 finds no
+                            // object), the ship stops (event 8 0x180) and
+                            // posts notice 0x13a with it to its group
+                            // (0x4a1800, `{id, 0x16}`).
+                            if gone {
+                                self.post_notice(id, 0x13a, t);
+                            }
                         }
                         continue;
                     }
@@ -1789,7 +1801,14 @@ impl Scene {
             }
         }
         let owner = self.objects[i].owner;
+        let taken = owner != Some(PLAYER_16) && self.objects[ti].owner != Some(PLAYER_16);
         self.capture(t, owner, class, prize, data, caches);
+        // The taker posts notice 0x13a with its prize to its group
+        // (0x4b6f20 at 0x4b7105: 0x4a1800, `{prize, 0x17}`), but where
+        // player 16 is a side.
+        if taken {
+            self.post_notice(a, 0x13a, t);
+        }
     }
 
     /// A side routed in a boarding: its marines fall (but a boat's or
@@ -1847,7 +1866,6 @@ impl Scene {
         // sinks, put down to its taker (0x4b6f20 at 0x4b7169: `+0x251 =
         // 4`, `+0x7f` the taker's `+0x24f`; its sinking, 0x4dec40, reports
         // it), no 0x5d97.
-        const PLAYER_16: (u32, u32) = (4, 0);
         if owner == Some(PLAYER_16) || self.objects[i].owner == Some(PLAYER_16) {
             let hull = self.objects[i].combat.as_ref().map_or(0.0, |c| c.hull);
             self.strike(id, hull.max(0.0) + 1.0, false, owner, true, data, caches);
