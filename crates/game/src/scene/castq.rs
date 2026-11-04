@@ -332,6 +332,7 @@ impl Scene {
                 self.brain_brews
                     .push((t, owner, crate::magic::FLAME_BREW_SECONDS));
             }
+            self.temple_voice(t, temple, owner);
             return;
         }
         if kind == 13 {
@@ -341,8 +342,29 @@ impl Scene {
             }
             self.side_pays(owner, 0, d);
             self.wind.blow(0);
+            self.temple_voice(t, temple, owner);
             return;
         }
+        self.temple_cast(t, temple, owner, kind, cell, rect, ship, d, data, caches);
+        self.temple_voice(t, temple, owner);
+    }
+
+    /// The cast of a temple's spell kind (not the Flame nor the wind),
+    /// whether the price is met or not (0x42fa90 / 0x42faf0 check it).
+    #[allow(clippy::too_many_arguments)]
+    fn temple_cast(
+        &mut self,
+        t: u32,
+        temple: Temple,
+        owner: (u32, u32),
+        kind: u32,
+        cell: (i32, i32),
+        rect: Option<(i32, i32, i32, i32)>,
+        ship: Option<u32>,
+        d: u32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         let Some(idx) = cast_spell(kind) else {
             return;
         };
@@ -409,6 +431,26 @@ impl Scene {
                 self.brain_cast_drawn(spell, cell.0, cell.1, Some(owner), draw, data, caches);
             }
         }
+    }
+
+    /// A temple's voice after a cast (0x438300 at 0x438814, 0x439260 at
+    /// `switchD_0043992b_caseD_b`): the temple's player the viewing one
+    /// (game `+0x3212` / `+0x3213`), its nation's event (mode 2 at its
+    /// cell `+0x74` / `+0x78`): the sea temple's 0xf4, 0xf5, 0xf7, 0xf6
+    /// for nations 0-3, the war temple's 0xf8, 0xf9, 0xfb, 0xfa. The
+    /// command 0x22 plays it after every cast of codes 1-4, 0xd and 6-8,
+    /// 0xe, 0xf (the price met or not), after the wind and the Flame only
+    /// when they were paid.
+    fn temple_voice(&mut self, t: u32, temple: Temple, owner: (u32, u32)) {
+        let Some(k) = self.object_index(t) else {
+            return;
+        };
+        let (x, y) = (self.objects[k].x, self.objects[k].y);
+        let calls = match temple {
+            Temple::Sea => &super::halt::SEA_TEMPLE_CALLS,
+            Temple::War => &super::halt::WAR_TEMPLE_CALLS,
+        };
+        self.building_voice(Some(owner), calls, x, y);
     }
 
     /// The brains' Flames brewing at their war temples (0x439260: 250

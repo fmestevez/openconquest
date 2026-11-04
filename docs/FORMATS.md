@@ -7654,4 +7654,15 @@ codes 8 and 0xf (kinds 12 and 16) are code 0xe's (0x42faf0 takes spells 9,
 10 and 11; 0x42ef90's cases 8, 0xe and 0xf differ only in the spell
 checked, 9, 10, 11). Ported (`town_spell`, `spawn_big_reef`,
 `Weather::blow`). No sender asks kinds 8 and 13, nor the area for 12 and
-16.
+16. After the command the temple speaks when it is the viewing player's
+(game `+0x3212` / `+0x3213` its nation and slot): 0x50e570 mode 2 at its
+cell (`+0x74` / `+0x78`), event by nation 0-3 0xf4, 0xf5, 0xf7, 0xf6 for
+the sea temple (0x438814), 0xf8, 0xf9, 0xfb, 0xfa for the war temple
+(0x439260); its `SND_n` lists (dumped) are those of 248-251, none for
+nations 0 and 2. It speaks after every code 1-4, 0xd, 0x11 (sea) and 6-8,
+0xe, 0xf (war) whether 0x42fa90 / 0x42faf0 then find the price met or not,
+after 0xc and the Flame (sea 0x12, war 5) only when they were paid and
+started, and after a code neither switch lists (0x438589 index 3); not
+when the war temple is busy (`+0x10c`). Ported (`temple_voice`); the
+viewing player's own casts are not the temples' in the port (`cast_on`,
+`cast_area`).

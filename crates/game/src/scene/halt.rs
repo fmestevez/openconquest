@@ -54,6 +54,8 @@ const REPORT: &[&str] = &["re_o2a", "re_o4a", "re_o5a", "re_o6a"];
 pub(super) const SMITHY_CALLS: Calls = [&[], REPORT, &[], REPORT];
 pub(super) const STUDIO_CALLS: Calls = [&[], REPORT, &[], REPORT];
 pub(super) const WAR_TEMPLE_CALLS: Calls = [&[], REPORT, &[], REPORT];
+/// The Temple of the Sea's after a cast (244-247, 0x438300).
+pub(super) const SEA_TEMPLE_CALLS: Calls = [&[], REPORT, &[], REPORT];
 /// The sage school's (240-243).
 pub(super) const SCHOOL_CALLS: Calls = [
     &[],

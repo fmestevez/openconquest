@@ -9567,6 +9567,7 @@ fn building_calls_are_the_sound_entries() {
         (&STUDIO_CALLS, 236),
         (&SCHOOL_CALLS, 240),
         (&WAR_TEMPLE_CALLS, 248),
+        (&SEA_TEMPLE_CALLS, 244),
         (&FINISHED_CALLS, 188),
     ] {
         for (nation, add) in [0, 1, 3, 2].into_iter().enumerate() {
@@ -14196,11 +14197,30 @@ fn temple_casts_wind_big_reef_and_areas() {
     let (sea_id, war_id) = (scene.objects[sea].id, scene.objects[war].id);
     scene.earn(owner, 100_000, 100_000);
 
-    // Kind 13: the wind's price (400 amber, 1 fish), a calm.
+    // Kind 13: the wind's price (400 amber, 1 fish), a calm; no voice for
+    // a temple not the viewing player's.
     let funds = scene.funds(owner);
+    scene.sounds.clear();
     scene.town_spell(site, 13, (-1, -1), None, None, 0, &data, &mut caches);
     assert_eq!(scene.funds(owner), (funds.0 - 400, funds.1 - 100));
     assert_eq!((scene.wind.strength, scene.wind.direction), (0, u32::MAX));
+    assert!(scene.sounds.is_empty());
+    // The viewing player's temple speaks after the cast (0x438300 at
+    // 0x438814: its nation's event of 0xf4-0xf7, mode 2 at its cell).
+    let viewer = scene.human.map(|h| (h.nation, h.slot));
+    let h = scene.human.as_mut().unwrap();
+    (h.nation, h.slot) = owner;
+    scene.town_spell(site, 13, (-1, -1), None, None, 0, &data, &mut caches);
+    let calls = super::halt::SEA_TEMPLE_CALLS[owner.0 as usize];
+    let at = (scene.objects[sea].x, scene.objects[sea].y);
+    match scene.sounds.as_slice() {
+        [] => panic!("nation {} {:?}", owner.0, calls),
+        [(name, x, y)] => assert!(calls.contains(name) && (*x, *y) == at),
+        s => panic!("{s:?}"),
+    }
+    let h = scene.human.as_mut().unwrap();
+    (h.nation, h.slot) = viewer.unwrap();
+    scene.sounds.clear();
 
     // Kind 8 at 10 off: the big reef's price, a reef of class 0x259 of the
     // temple's draw's kind, cast (mode 1).
