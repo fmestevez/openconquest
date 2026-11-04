@@ -6405,6 +6405,29 @@ to the order's cell with priority byte 0xff (0x4cc650). The planner:
   routine goes on with a stack word it never wrote (`[esp+0x34]`,
   `[esp+0x24]`, a pointer); the port then sends every ship to the order's
   cell, as 0x4cc650 does on a failure.
+- Slot classes and the third grid (0x560100 with other callers than
+  0x4cc970; port `formation::plan_records`): a record (0x24 bytes `{x,
+  y, class +8, second +0xc, out x +0x18, y +0x1c, third +0x20}`) goes
+  into bucket `class` (below 1 counted 0; ships `+0xf0`, slots `+0x6c`,
+  11 buckets of `{count, count, list}` in the state). p1 serves the
+  records with `+0xc` 0; when no record has it, or p1 is null, p2 serves
+  all, and when all have it p2 is p1. With both, for classes 0-9 each
+  bucket's p2 ships get their slots first (0x560f80 on p2, marked in p1
+  and p2), then each bucket with p1 ships all of its slots on p1 after
+  those. 0x560f80 with class `c` walks rings from radius `2c / 3` to 10
+  and takes an open cell when `2r < 5` and `c <= r`, or `c <= d < 11`
+  (`d` the ring distance). 0x561360 reads the third grid (state `+0xc`,
+  0x5614e0's third argument; 0x4cc970 gives none) into the slot's `+8`:
+  of two slots alike in shape and distance the lower threat first, then
+  the lower centre flood. The whole-fleet move returns 0 and zeroes each
+  `+0x20`. 0x55f870 takes the median over every bucket's slots, sorts
+  and deals each bucket on its own (and the draught swaps per bucket),
+  and returns the greatest goal flood (`& 0x7fff`) at a dealt ship's
+  cell; each ship's `+0x20` is 1, 2 or 3 by the rank of its slot among
+  all slots by key (a stable insertion sort, before the swaps) against
+  `n / 3` and `(n - n / 3 + 1) / 2 + n / 3`. Bucket 10 (class 10) is
+  never planned and 0x55f870 then reads medians past its slots: not
+  decoded (the port refuses it; no caller gives it).
 The move's pass (0x4ccd80, the fleet tick 0x4c4f40 each game tick): when
 fleet `+8` (zero when the fleet is made, + `game +0xe2` each call) is over
 100 it is zeroed and every ship lying still (`+0x58c` 0) more than one

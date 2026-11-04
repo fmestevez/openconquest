@@ -353,14 +353,16 @@ fn along((ax, ay): (i32, i32), d: i32, (bx, by): (i32, i32)) -> i32 {
     (u >> 1) - (u >> 31)
 }
 
-/// A slot a ship may take (the planner's 0x18-byte record): its cell,
-/// sort key, ring distance from the goal, the centre flood's value there
-/// and whether it lies where a ship of the fleet would, the fleet moved
-/// whole.
+/// A slot a ship may take (the planner's 0x18-byte record): its cell, the
+/// threat grid's value there (`+8`, which 0x55f870 then overwrites with
+/// the sort key), ring distance from the goal, the centre flood's value
+/// there and whether it lies where a ship of the fleet would, the fleet
+/// moved whole.
 #[derive(Clone, Copy)]
 struct Slot {
     x: i32,
     y: i32,
+    threat: i32,
     key: i32,
     dist: i32,
     flood: i32,
@@ -377,21 +379,27 @@ struct Ring<'a> {
     size: (i32, i32),
     shape: &'a [(i32, i32)],
     centre_flood: &'a [i16],
+    /// The third grid (state `+0xc`): 0x4cc970 gives none.
+    threat: Option<&'a [i16]>,
 }
 
-/// 0x561360: slot `(x, y)` (index `i`, ring distance `d`) put in its place
-/// among `slots[start..]`, keeping at most `count`: one where a ship of
-/// the fleet would lie goes before another unless that one is two nearer;
-/// alike, the nearer first, then the lower centre flood.
+/// 0x561360: slot `(x, y)` (ring distance `d`) put in its place among
+/// `slots[start..]`, keeping at most `count`: one where a ship of the
+/// fleet would lie goes before another unless that one is two nearer;
+/// alike, the nearer first, then the lower threat, then the lower centre
+/// flood.
 fn add_slot(r: &Ring, slots: &mut Vec<Slot>, start: usize, count: usize, x: i32, y: i32, d: i32) {
     let (rx, ry) = (r.origin.0 - r.to.0 + x, r.origin.1 - r.to.1 + y);
     let shape = rx >= 0 && rx < r.size.0 && ry >= 0 && ry < r.size.1 && r.shape.contains(&(rx, ry));
-    let flood = r.centre_flood[(y * r.w + x) as usize] as i32;
+    let i = (y * r.w + x) as usize;
+    let threat = r.threat.map_or(0, |t| t[i] as i32);
+    let flood = r.centre_flood[i] as i32;
     let mut pos = start;
     while pos < slots.len() {
         let e = slots[pos];
         let before = if shape == e.shape {
-            d < e.dist || (d <= e.dist && flood < e.flood)
+            d < e.dist
+                || (d <= e.dist && ((threat == e.threat && flood < e.flood) || threat < e.threat))
         } else if !shape {
             d < e.dist - 1
         } else {
@@ -409,6 +417,7 @@ fn add_slot(r: &Ring, slots: &mut Vec<Slot>, start: usize, count: usize, x: i32,
             Slot {
                 x,
                 y,
+                threat,
                 key: 0,
                 dist: d,
                 flood,
@@ -418,23 +427,23 @@ fn add_slot(r: &Ring, slots: &mut Vec<Slot>, start: usize, count: usize, x: i32,
     }
 }
 
-/// 0x560f80 for class 0 (every ship of 0x4cc970's records): the open
-/// cells of `m` (still 0) in square rings about the goal, radius 0 to 10,
-/// each edge walked as the original does (the right side bottom to top,
-/// the top right to left, the left top to bottom, the bottom left to
-/// right; an edge past the map left out, the others cut to it), ring
-/// distance `(2r + offset) / 2`; within radius 2 any, beyond only those
-/// under 11.
-fn ring_slots(r: &Ring, m: &[i16], slots: &mut Vec<Slot>, start: usize, count: usize) {
+/// 0x560f80 for slot class `class`: the open cells of `m` (still 0) in
+/// square rings about the goal, from radius `2 * class / 3` to 10, each
+/// edge walked as the original does (the right side bottom to top, the
+/// top right to left, the left top to bottom, the bottom left to right;
+/// an edge past the map left out, the others cut to it), ring distance
+/// `d = (2r + offset) / 2`; taken when `2r < 5` and `class <= r`, or when
+/// `class <= d < 11`.
+fn ring_slots(r: &Ring, m: &[i16], class: i32, slots: &mut Vec<Slot>, start: usize, count: usize) {
     let (tx, ty) = r.to;
     let w = r.w;
-    let ok = |rad: i32, d: i32| (2 * rad < 5) || d < 11;
+    let ok = |rad: i32, d: i32| (2 * rad < 5 && class <= rad) || (class <= d && d < 11);
     let take = |slots: &mut Vec<Slot>, x: i32, y: i32, rad: i32, dist: i32| {
         if m[(y * w + x) as usize] == 0 && ok(rad, dist / 2) {
             add_slot(r, slots, start, count, x, y, dist / 2);
         }
     };
-    for rad in 0..=10 {
+    for rad in (class * 2) / 3..=10 {
         let two = 2 * rad;
         let mut left = (tx - rad).max(0);
         let mut top = (ty - rad).max(0);
@@ -496,6 +505,28 @@ pub struct Ship {
     pub shallow: bool,
 }
 
+/// A ship's record as 0x560100 reads it (0x24 bytes): its cell, its slot
+/// class (`+8`, below 1 counted 0) and `+0xc`, which puts it on the second
+/// grid when both are given.
+#[derive(Clone, Copy)]
+pub struct Rec {
+    pub x: i32,
+    pub y: i32,
+    pub class: i32,
+    pub second: bool,
+}
+
+/// What the planner gives: a cell for each record (`+0x18`, `+0x1c`), its
+/// value (0 when the fleet moved whole, else 0x55f870's: the greatest goal
+/// flood at a ship's cell) and each ship's third (`+0x20`: 0 when moved
+/// whole, else 1-3 by its slot's rank).
+#[derive(Debug, PartialEq)]
+pub struct Planned {
+    pub cells: Vec<(i32, i32)>,
+    pub value: i32,
+    pub thirds: Vec<u8>,
+}
+
 /// Why the planner gave no cells.
 #[derive(Debug, PartialEq)]
 pub enum Fail {
@@ -505,16 +536,16 @@ pub enum Fail {
     /// Not decoded: 0x55f870 found no direction from the fleet's centre
     /// toward the goal, or from the slots' middle back to the centre (all
     /// eight cells about it unreached), and goes on with a stack word it
-    /// never wrote (`[esp+0x34]`, `[esp+0x24]`).
+    /// never wrote (`[esp+0x34]`, `[esp+0x24]`); or a slot class of 10 or
+    /// more (bucket 10 is never planned, 0x560100 loops classes 0-9, and
+    /// 0x55f870 then reads medians past the slots it sorted).
     Unsettled,
 }
 
 /// The formation planner 0x560100 (through 0x5614e0, as 0x4cc970 calls
-/// it: no goal tolerance, the centre the ships' median): a cell for each
-/// of `ships` about `to`, on `deep` (0x5c9398) and `shallow` (0x5c93bc),
-/// `w` x `h`. Each ship keeps its place about the fleet's centre if every
-/// slot chosen lies where one of the ships would (the fleet moved whole);
-/// otherwise the slots are dealt out by 0x55f870.
+/// it: no goal tolerance, the centre the ships' median, every ship of
+/// class 0, no third grid): a cell for each of `ships` about `to`, on
+/// `deep` (0x5c9398) and `shallow` (0x5c93bc), `w` x `h`.
 pub fn plan(
     deep: &[i16],
     shallow: &[i16],
@@ -522,21 +553,69 @@ pub fn plan(
     to: (i32, i32),
     ships: &[Ship],
 ) -> Result<Vec<(i32, i32)>, Fail> {
-    let n = ships.len();
+    let recs: Vec<Rec> = ships
+        .iter()
+        .map(|s| Rec {
+            x: s.x,
+            y: s.y,
+            class: 0,
+            second: s.shallow,
+        })
+        .collect();
+    // 0x4cc970 hands over 0x5c9398 with a deep ship, 0x5c93bc with a
+    // shallow one.
+    let first = ships.iter().any(|s| !s.shallow).then_some(deep);
+    let second = ships.iter().any(|s| s.shallow).then_some(shallow);
+    plan_records(first, second, None, (w, h), to, &recs).map(|p| p.cells)
+}
+
+/// The formation planner 0x560100 (0x5614e0: the centre the records'
+/// median, no goal tolerance): a cell for each of `recs` about `to` on
+/// the grids `p1` and `p2` (each null in the original when not given),
+/// `w` x `h`, with `threat` the third grid (0x561360's tie). The records
+/// go into buckets by class (0-9); with both grids each bucket's
+/// second-grid ships get their slots first, on `p2`, marked taken in both
+/// grids, then each bucket's others on `p1` (0x560f80 with the class).
+/// Each ship keeps its place about the fleet's centre if every slot chosen
+/// lies where one of the ships would (the fleet moved whole, value 0);
+/// otherwise the slots are dealt out by 0x55f870.
+pub fn plan_records(
+    p1: Option<&[i16]>,
+    p2: Option<&[i16]>,
+    threat: Option<&[i16]>,
+    (w, h): (i32, i32),
+    to: (i32, i32),
+    recs: &[Rec],
+) -> Result<Planned, Fail> {
+    let n = recs.len();
     if n == 0 {
         return Err(Fail::Refused);
     }
-    let shallows = ships.iter().filter(|s| s.shallow).count();
-    let any_deep = shallows < n;
-    // p1 the deep ships' grid, p2 the shallow ones' (each null without
-    // such ships); one of them alone, both are it.
-    let mixed = any_deep && shallows > 0;
-    let mut p1: Vec<i16> = if any_deep { deep } else { shallow }.to_vec();
-    let mut p2: Vec<i16> = if mixed { shallow.to_vec() } else { p1.clone() };
+    if recs.iter().any(|r| r.class >= 10) {
+        return Err(Fail::Unsettled);
+    }
+    // The first grid's ships (`+0xc` 0), all when there is no second
+    // grid; none, or no first grid, the second serves all; all, the first.
+    let (mut g1, mut g2) = (p1, p2);
+    let mut firsts = if g2.is_some() {
+        recs.iter().filter(|r| !r.second).count()
+    } else {
+        n
+    };
+    if firsts == 0 || g1.is_none() {
+        g1 = g2;
+        firsts = n;
+    }
+    if firsts == n {
+        g2 = g1;
+    }
+    let mixed = firsts != n;
+    let mut p1: Vec<i16> = g1.ok_or(Fail::Refused)?.to_vec();
+    let mut p2: Vec<i16> = g2.ok_or(Fail::Refused)?.to_vec();
     // The centre: the median of the cells (the two middle ones' mean,
     // rounded down, for an even count).
-    let mut xs: Vec<i32> = ships.iter().map(|s| s.x).collect();
-    let mut ys: Vec<i32> = ships.iter().map(|s| s.y).collect();
+    let mut xs: Vec<i32> = recs.iter().map(|s| s.x).collect();
+    let mut ys: Vec<i32> = recs.iter().map(|s| s.y).collect();
     xs.sort();
     ys.sort();
     let (mut cx, mut cy) = if n % 2 == 0 {
@@ -620,7 +699,7 @@ pub fn plan(
     }
     let minx = xs[0];
     let miny = ys[0];
-    let shape: Vec<(i32, i32)> = ships.iter().map(|s| (s.x - minx, s.y - miny)).collect();
+    let shape: Vec<(i32, i32)> = recs.iter().map(|s| (s.x - minx, s.y - miny)).collect();
     // Floods from the (moved) centre; the goal keeps its closed value.
     let centre_flood = |m: &[i16]| -> Result<Vec<i16>, Fail> {
         let mut f = m.to_vec();
@@ -638,59 +717,87 @@ pub fn plan(
     } else {
         None
     };
-    let deep_count = if mixed { n - shallows } else { n } as i32;
-    let mut slots: Vec<Slot> = Vec::new();
-    let mut deep_only = 0i32;
+    // The buckets by class (state `+0xf0`): the ships in record order,
+    // and those of the first grid (all when not mixed).
+    let mut ships: [Vec<usize>; 10] = Default::default();
+    let mut firsts_of = [0usize; 10];
+    for (k, r) in recs.iter().enumerate() {
+        let c = r.class.max(0) as usize;
+        ships[c].push(k);
+        if !r.second || !mixed {
+            firsts_of[c] += 1;
+        }
+    }
+    let mut slots: [Vec<Slot>; 10] = Default::default();
+    let mut deep_only = [0i32; 10];
+    let mut whole = true;
     let mark = |m: &mut Vec<i16>, s: &Slot| {
         let i = at(s.x, s.y);
         m[i] = (m[i] as u16 | 0x8000) as i16;
     };
-    // The shallow ships' slots first, on their grid, marked taken in both.
-    if let Some(c2) = &c2 {
-        let ring = Ring {
-            w,
-            h,
-            to,
-            origin: (cx - minx, cy - miny),
-            size: (xs[n - 1] - minx + 1, ys[n - 1] - miny + 1),
-            shape: &shape,
-            centre_flood: c2,
-        };
-        ring_slots(&ring, &p2, &mut slots, 0, shallows);
-        if slots.len() != shallows {
-            return Err(Fail::Refused);
-        }
-        for s in &slots {
-            mark(&mut p1, s);
-            mark(&mut p2, s);
-        }
-    }
-    let ring = Ring {
+    let ring = |centre_flood| Ring {
         w,
         h,
         to,
         origin: (cx - minx, cy - miny),
         size: (xs[n - 1] - minx + 1, ys[n - 1] - miny + 1),
         shape: &shape,
-        centre_flood: &c1,
+        centre_flood,
+        threat,
     };
-    let from = slots.len();
-    ring_slots(&ring, &p1, &mut slots, from, n);
-    if slots.len() != n {
-        return Err(Fail::Refused);
-    }
-    for s in &slots[from..] {
-        mark(&mut p1, s);
-        if mixed && p2[at(s.x, s.y)] == -1 {
-            deep_only += 1;
+    // The second grid's ships' slots first, on their grid, marked taken
+    // in both.
+    if let Some(c2) = &c2 {
+        let ring = ring(c2);
+        for c in 0..10 {
+            let k = ships[c].len() - firsts_of[c];
+            if k == 0 {
+                continue;
+            }
+            ring_slots(&ring, &p2, c as i32, &mut slots[c], 0, k);
+            if slots[c].len() != k {
+                return Err(Fail::Refused);
+            }
+            for s in &slots[c] {
+                mark(&mut p1, s);
+                mark(&mut p2, s);
+                whole &= s.shape;
+                if p2[at(s.x, s.y)] == -1 {
+                    deep_only[c] += 1;
+                }
+            }
         }
     }
-    if slots.iter().all(|s| s.shape) {
-        return Ok(ships
-            .iter()
-            .map(|s| (to.0 - cx + s.x, to.1 - cy + s.y))
-            .collect());
+    let ring = ring(&c1);
+    for c in 0..10 {
+        if firsts_of[c] == 0 {
+            continue;
+        }
+        let from = slots[c].len();
+        let k = ships[c].len();
+        ring_slots(&ring, &p1, c as i32, &mut slots[c], from, k);
+        if slots[c].len() != k {
+            return Err(Fail::Refused);
+        }
+        for s in &slots[c][from..] {
+            mark(&mut p1, s);
+            whole &= s.shape;
+            if mixed && p2[at(s.x, s.y)] == -1 {
+                deep_only[c] += 1;
+            }
+        }
     }
+    if whole {
+        return Ok(Planned {
+            cells: recs
+                .iter()
+                .map(|s| (to.0 - cx + s.x, to.1 - cy + s.y))
+                .collect(),
+            value: 0,
+            thirds: vec![0; n],
+        });
+    }
+    let deep_left = firsts_of.map(|k| k as i32);
     deal(
         DealIn {
             w,
@@ -703,9 +810,10 @@ pub fn plan(
             shallow_grid: &p2,
             mixed,
         },
-        ships,
+        recs,
+        &ships,
         slots,
-        deep_count,
+        deep_left,
         deep_only,
     )
 }
@@ -722,30 +830,34 @@ struct DealIn<'a> {
     mixed: bool,
 }
 
-/// 0x55f870: the slots dealt out. The slots' median (the two middle
-/// ones' sum halved, an odd sum rounded toward the goal); the direction
-/// from the centre downhill on the goal flood (`toward`, a diagonal
-/// cell's value one more, the direction to the slots' median on a tie)
-/// and from
-/// the slots' median downhill on the centre flood (`back`). The slots are
-/// sorted by how far they lie along `back` turned about, the higher
-/// centre flood first on a tie; the ships by how far they lie along
-/// `toward` from the first centre, the lower goal flood first; the n-th
-/// ship takes the n-th slot. With both draughts a shallow ship's slot that
-/// only a deep one may take is swapped for the next it may, and a deep
-/// one takes the next deep-only slot while there are as many of those as
-/// deep ships left.
+/// 0x55f870: the slots dealt out. The slots' median, over every bucket
+/// (the two middle ones' sum halved, an odd sum rounded toward the goal);
+/// the direction from the centre downhill on the goal flood (`toward`, a
+/// diagonal cell's value one more, the direction to the slots' median on
+/// a tie) and from the slots' median downhill on the centre flood
+/// (`back`). In each bucket the slots are sorted by how far they lie along
+/// `back` turned about, the higher centre flood first on a tie; the ships
+/// by how far they lie along `toward` from the first centre, the lower
+/// goal flood first; the n-th ship takes the n-th slot. The value is the
+/// greatest goal flood at a ship's cell. With both grids a second-grid
+/// ship's slot that only a first-grid one may take is swapped for the
+/// next it may, and a first-grid one takes the next such slot while there
+/// are as many of those as first-grid ships left (per bucket). Each ship's
+/// third: its slot's rank among all the slots by key (the earlier on a
+/// tie, before the swaps), against `n / 3` and `((n - n / 3) + 1) / 2 + n
+/// / 3`.
 fn deal(
     d: DealIn,
-    ships: &[Ship],
-    mut slots: Vec<Slot>,
-    mut deep_left: i32,
-    mut deep_only: i32,
-) -> Result<Vec<(i32, i32)>, Fail> {
-    let n = slots.len();
+    recs: &[Rec],
+    ships: &[Vec<usize>; 10],
+    mut slots: [Vec<Slot>; 10],
+    mut deep_left: [i32; 10],
+    mut deep_only: [i32; 10],
+) -> Result<Planned, Fail> {
+    let n = recs.len();
     let at = |x: i32, y: i32| (y * d.w + x) as usize;
-    let mut sx: Vec<i32> = slots.iter().map(|s| s.x).collect();
-    let mut sy: Vec<i32> = slots.iter().map(|s| s.y).collect();
+    let mut sx: Vec<i32> = slots.iter().flatten().map(|s| s.x).collect();
+    let mut sy: Vec<i32> = slots.iter().flatten().map(|s| s.y).collect();
     sx.sort();
     sy.sort();
     let middle = if n % 2 == 0 {
@@ -786,68 +898,99 @@ fn deal(
     let toward = downhill(d.centre, dir_to(d.centre, middle), &gf).ok_or(Fail::Unsettled)?;
     let cf = |i: usize| d.centre_flood[i] as i32;
     let back = downhill(middle, dir_to(middle, d.centre), &cf).ok_or(Fail::Unsettled)?;
-    for s in &mut slots {
-        s.key = along(middle, (back - 4) & 7, (s.x, s.y));
-    }
-    // Bubble sorts, as the original's.
-    for i in (0..n.saturating_sub(1)).rev() {
-        for j in 0..=i {
-            let (a, b) = (slots[j], slots[j + 1]);
-            if b.key < a.key || (a.key == b.key && a.flood < b.flood) {
-                slots.swap(j, j + 1);
+    let mut order: [Vec<usize>; 10] = Default::default();
+    let mut value = 0;
+    for c in 0..10 {
+        let slots = &mut slots[c];
+        let m = slots.len();
+        if m == 0 {
+            continue;
+        }
+        for s in slots.iter_mut() {
+            s.key = along(middle, (back - 4) & 7, (s.x, s.y));
+        }
+        // Bubble sorts, as the original's.
+        for i in (0..m.saturating_sub(1)).rev() {
+            for j in 0..=i {
+                let (a, b) = (slots[j], slots[j + 1]);
+                if b.key < a.key || (a.key == b.key && a.flood < b.flood) {
+                    slots.swap(j, j + 1);
+                }
             }
         }
-    }
-    let mut order: Vec<usize> = (0..ships.len()).collect();
-    let key: Vec<i32> = ships
-        .iter()
-        .map(|s| along(d.centre0, toward, (s.x, s.y)))
-        .collect();
-    for i in (0..n.saturating_sub(1)).rev() {
-        for j in 0..=i {
-            let (a, b) = (order[j], order[j + 1]);
-            let (ga, gb) = (
-                gf(at(ships[a].x, ships[a].y)),
-                gf(at(ships[b].x, ships[b].y)),
-            );
-            if key[b] < key[a] || (key[a] == key[b] && gb < ga) {
-                order.swap(j, j + 1);
+        let order = &mut order[c];
+        *order = ships[c].clone();
+        let key = |k: usize| along(d.centre0, toward, (recs[k].x, recs[k].y));
+        let g = |k: usize| gf(at(recs[k].x, recs[k].y));
+        for i in (0..m.saturating_sub(1)).rev() {
+            for j in 0..=i {
+                let (a, b) = (order[j], order[j + 1]);
+                if key(b) < key(a) || (key(a) == key(b) && g(b) < g(a)) {
+                    order.swap(j, j + 1);
+                }
             }
         }
+        value = order.iter().map(|&k| g(k)).fold(value, i32::max);
     }
+    // The slots' ranks by key over every bucket (an insertion sort that
+    // keeps the earlier first on a tie).
+    let keys: Vec<i32> = slots.iter().flatten().map(|s| s.key).collect();
+    let mut rank: Vec<usize> = (0..keys.len()).collect();
+    rank.sort_by_key(|&g| keys[g]);
     if d.mixed {
         let closed = |s: &Slot| d.shallow_grid[at(s.x, s.y)] == -1;
-        for j in 0..n {
-            let deep = !ships[order[j]].shallow;
-            if closed(&slots[j]) {
-                if deep {
-                    deep_left -= 1;
-                    deep_only -= 1;
-                } else {
-                    let t = (j + 1..n)
-                        .find(|&t| !closed(&slots[t]))
-                        .ok_or(Fail::Refused)?;
-                    let s = slots.remove(t);
-                    slots.insert(j, s);
+        for c in 0..10 {
+            let (slots, order) = (&mut slots[c], &order[c]);
+            for j in 0..slots.len() {
+                let deep = !recs[order[j]].second;
+                if closed(&slots[j]) {
+                    if deep {
+                        deep_left[c] -= 1;
+                        deep_only[c] -= 1;
+                    } else {
+                        let t = (j + 1..slots.len())
+                            .find(|&t| !closed(&slots[t]))
+                            .ok_or(Fail::Refused)?;
+                        let s = slots.remove(t);
+                        slots.insert(j, s);
+                    }
+                } else if deep {
+                    if deep_left[c] <= deep_only[c] {
+                        let t = (j + 1..slots.len())
+                            .find(|&t| closed(&slots[t]))
+                            .ok_or(Fail::Refused)?;
+                        let s = slots.remove(t);
+                        slots.insert(j, s);
+                        deep_only[c] -= 1;
+                    }
+                    deep_left[c] -= 1;
                 }
-            } else if deep {
-                if deep_left <= deep_only {
-                    let t = (j + 1..n)
-                        .find(|&t| closed(&slots[t]))
-                        .ok_or(Fail::Refused)?;
-                    let s = slots.remove(t);
-                    slots.insert(j, s);
-                    deep_only -= 1;
-                }
-                deep_left -= 1;
             }
         }
     }
-    let mut out = vec![(0, 0); ships.len()];
-    for (j, &k) in order.iter().enumerate() {
-        out[k] = (slots[j].x, slots[j].y);
+    let third = n / 3;
+    let mut cells = vec![(0, 0); n];
+    let mut thirds = vec![0u8; n];
+    let mut g = 0;
+    for c in 0..10 {
+        for (j, &k) in order[c].iter().enumerate() {
+            cells[k] = (slots[c][j].x, slots[c][j].y);
+            let r = rank.iter().position(|&x| x == g).unwrap_or(rank.len());
+            thirds[k] = if r < third {
+                1
+            } else if r < (n - third).div_ceil(2) + third {
+                2
+            } else {
+                3
+            };
+            g += 1;
+        }
     }
-    Ok(out)
+    Ok(Planned {
+        cells,
+        value,
+        thirds,
+    })
 }
 
 #[cfg(test)]
@@ -891,5 +1034,50 @@ mod tests {
         ];
         let got = plan(&sea, &sea, (w, h), (10, 10), &ships).unwrap();
         assert_eq!(got, vec![(10, 10), (11, 10), (10, 11)]);
+    }
+
+    /// Slot class 6 (0x560f80 from ring 4): no slot within ring distance
+    /// 6 of the goal, none past 10, so none where the fleet would lie and
+    /// the slots are dealt (0x55f870): the value is the greatest goal
+    /// flood at a ship's cell, the thirds by slot rank.
+    #[test]
+    fn class_six_keeps_off() {
+        let (w, h) = (30, 30);
+        let sea = vec![0i16; 900];
+        let to = (15, 15);
+        let recs: Vec<Rec> = [(2, 2), (3, 2), (2, 3), (3, 3)]
+            .iter()
+            .map(|&(x, y)| Rec {
+                x,
+                y,
+                class: 6,
+                second: false,
+            })
+            .collect();
+        let got = plan_records(Some(&sea), None, None, (w, h), to, &recs).unwrap();
+        let mut g = sea.clone();
+        flood(&mut g, w, h, to, (w + h) * 2);
+        let most = recs
+            .iter()
+            .map(|r| g[(r.y * w + r.x) as usize] as i32 & 0x7fff)
+            .max()
+            .unwrap();
+        assert_eq!(got.value, most);
+        for (k, &(x, y)) in got.cells.iter().enumerate() {
+            let (dx, dy) = ((x - to.0).abs(), (y - to.1).abs());
+            // Ring distance: the ring's radius plus half the step along it.
+            let d = (2 * dx.max(dy) + dx.min(dy)) / 2;
+            assert!((6..11).contains(&d), "{:?} d {}", (x, y), d);
+            assert!(!got.cells[..k].contains(&(x, y)));
+        }
+        let mut t = got.thirds.clone();
+        t.sort();
+        assert_eq!(t, vec![1, 2, 2, 3]);
+        // The same fleet at class 0 moves whole: value 0, thirds 0.
+        let zero: Vec<Rec> = recs.iter().map(|r| Rec { class: 0, ..*r }).collect();
+        let got = plan_records(Some(&sea), None, None, (w, h), to, &zero).unwrap();
+        assert_eq!(got.value, 0);
+        assert_eq!(got.thirds, vec![0; 4]);
+        assert_eq!(got.cells, vec![(15, 15), (16, 15), (15, 16), (16, 16)]);
     }
 }
