@@ -1954,6 +1954,57 @@ fn at_will_ram_odds() {
     );
 }
 
+/// The pointer's board and ram (0x4e45c0 with 0x4e3580, 0x4e3800): a
+/// picker of type above 1, the board with marines or a hero who fights,
+/// at a ship taking a contact (not one being rammed) (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn may_close() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let ships: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| o.ship.is_some())
+        .map(|o| o.id)
+        .take(3)
+        .collect();
+    let [a, b, c] = ships[..] else {
+        panic!("three ships")
+    };
+    fn ship(scene: &mut Scene, id: u32) -> &mut crate::objects::Ship {
+        let k = scene.object_index(id).unwrap();
+        scene.objects[k].ship.as_mut().unwrap()
+    }
+    ship(&mut scene, a).kind = 2;
+    ship(&mut scene, a).crew.squads = [1, 0, 0];
+    ship(&mut scene, a).heroes.clear();
+    assert!(scene.may_close(a, b, true));
+    assert!(scene.may_close(a, b, false));
+    // No marines and no hero: no boarding, the ram still.
+    ship(&mut scene, a).crew.squads = [0, 0, 0];
+    assert!(!scene.may_close(a, b, true));
+    assert!(scene.may_close(a, b, false));
+    // A boat or merchant does neither.
+    ship(&mut scene, a).kind = 1;
+    assert!(!scene.may_close(a, b, false));
+    ship(&mut scene, a).kind = 2;
+    // A ship being rammed takes no contact (0x4c3ec0 clears `+0x1000`).
+    ship(&mut scene, c).ram_run = Some(crate::objects::RamRun {
+        target: b,
+        stage: crate::objects::RamStage::Charge,
+        home: (0.0, 0.0),
+        ticks: 0,
+        clock: 0.0,
+        frames: 0,
+    });
+    assert!(!scene.may_close(a, b, false));
+}
+
 /// The at-will look (0x4bf9b0): every fourth tick by the ship's id, a
 /// switch marked once more than 50 ticks have passed since its time, the
 /// time then set to now + 100 (needs `OPENCONQUEST_DATA`).

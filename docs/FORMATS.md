@@ -2216,7 +2216,11 @@ search modes are never run (not ported, none to port). The prey of
 those senders is always a ship: the player's board and ram need one
 (0x4e3580, 0x4e3800: 0x50e600 200, the picker not of type 0 or 1, the
 prey taking a contact, `+0x261 & 0x1000`; the board also 0x4e6700 for
-0x17), the computers' pickers list ships only (0x4baae0, 0x4bad90,
+0x17: `+0x261 & 0x10` and marines aboard, 0x4bc270(1) over items 0-2,
+or a hero who fights, 0x4b4dd0 > 0; the pointer 0x4e45c0 asks the
+board with `+0x261 & 0x10`, the ram with `& 8`; port
+`Scene::may_close`, the capability bits off while built or held by
+0x4b37d0), the computers' pickers list ships only (0x4baae0, 0x4bad90,
 below), and the at-will list 0x5c7d39 (at most 50, 0x4c0bc0 from the
 scan 0x4c0cd0; nothing while the picker has `+0x25d & 0x10`) takes
 ships (200) within the reach of the picker's cell (0x557480) with

@@ -6415,13 +6415,12 @@ impl App {
         let mut more = Vec::new();
         if enemy {
             // Only what the ship can do to it (0x4e45c0): fire if armed;
-            // board with marines aboard and ram, a warship at a ship
-            // (0x4e3580, 0x4e3800). The first of them is the default.
-            let warship = sh.kind >= 2;
+            // board and ram (`Scene::may_close`: 0x4e3580, 0x4e3800). The
+            // first of them is the default.
             let options = [
                 (P::Attack, s.is_armed()),
-                (P::Board, warship && t.ship.is_some() && sh.crew.count() > 0),
-                (P::Ram, warship && t.ship.is_some()),
+                (P::Board, self.scene.may_close(s.id, t.id, true)),
+                (P::Ram, self.scene.may_close(s.id, t.id, false)),
             ];
             let open: Vec<_> = options
                 .iter()

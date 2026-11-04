@@ -1465,6 +1465,30 @@ impl Scene {
         }
     }
 
+    /// Whether ship `ship` may board (`board`) or ram object `target`, as
+    /// the pointer's choice asks (0x4e45c0): with capability `+0x261 &
+    /// 0x10` (board) or `& 8` (ram), which a ship being built or with its
+    /// commands held (a hunt, a landing: 0x4b37d0) lacks; the board also
+    /// with marines aboard (0x4e6700 0x17: 0x4bc270(1), items 0-2) or a
+    /// hero who fights (0x4b4dd0); then the target a ship (0x50e600 200),
+    /// the picker of type neither 0 nor 1, and the target taking a contact
+    /// (`+0x261 & 0x1000`) (0x4e3580, 0x4e3800).
+    pub fn may_close(&self, ship: u32, target: u32, board: bool) -> bool {
+        let (Some(i), Some(t)) = (self.object_index(ship), self.object_index(target)) else {
+            return false;
+        };
+        let Some(s) = self.objects[i].ship.as_ref() else {
+            return false;
+        };
+        if self.being_built(ship) || self.hunt_holds(ship) || self.landing_holds(ship) {
+            return false;
+        }
+        if board && s.crew.count() == 0 && !s.heroes.iter().any(|&h| h != objects::ORPHEUS) {
+            return false;
+        }
+        self.objects[t].ship.is_some() && s.kind > 1 && self.takes_contact(t)
+    }
+
     /// Orders ship `ship` to ram or board the enemy ship `target`.
     pub fn order_close(&mut self, ship: u32, target: u32, board: bool) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
@@ -1474,7 +1498,8 @@ impl Scene {
             return Err("Choose an enemy ship".into());
         }
         let ship = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
-        if board && ship.crew.count() == 0 {
+        // 0x4e6700 0x17: marines aboard or a hero who fights.
+        if board && ship.crew.count() == 0 && !ship.heroes.iter().any(|&h| h != objects::ORPHEUS) {
             return Err("There is no crew to board with".into());
         }
         ship.path.clear();
