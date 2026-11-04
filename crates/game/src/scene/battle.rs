@@ -80,6 +80,7 @@ impl Scene {
         {
             return Err("Choose an enemy ship or building".into());
         }
+        let armed = self.objects[i].armed_positions();
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path.clear();
         ship.task = Some(Task::Attack {
@@ -87,6 +88,9 @@ impl Scene {
             jam: None,
             count: 0,
         });
+        // The ship's tick takes the attack's fire records (0x4ab3f0 kind
+        // 3 at every position, order 0x16 sub 7).
+        ship.take_attack(target, armed);
         Ok(())
     }
 
@@ -115,6 +119,7 @@ impl Scene {
         }
         let target = self.jam_first(jam).ok_or("No such target")?;
         let count = self.ticks;
+        let armed = self.objects[i].armed_positions();
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path.clear();
         ship.task = Some(Task::Attack {
@@ -122,6 +127,7 @@ impl Scene {
             jam: Some(jam),
             count,
         });
+        ship.take_attack(target, armed);
         Ok(())
     }
 
@@ -700,6 +706,9 @@ impl Scene {
                             // posts notice 0x13a with it to its group
                             // (0x4a1800, `{id, 0x16}`).
                             if gone {
+                                // Event 8 with 0x180 (0x4aa540): its 0x100
+                                // part is the stop's fire part.
+                                ship.fire_wind_down();
                                 self.post_notice(id, 0x13a, t);
                             }
                         }

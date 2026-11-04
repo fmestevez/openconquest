@@ -2256,7 +2256,15 @@ status (`+0x25c`), runs 0x4bf9b0: its tail, with a switch on, clears
 `+0x710` / `+0x711` and marks the ram (`+0x710 = 1`, bit 0x10) when
 now - `+0x704` > 50, setting `+0x704` = now + 100, and the board
 (`+0x711`, 0x20) by `+0x708` likewise; any bit (a loaded position too)
-calls 0x4c1240, whose fire states 1 and 4 run 0x4bfc60. There, with
+calls 0x4c1240, whose fire states 1 and 4 run 0x4bfc60 and 2 0x4c0eb0
+(the same box and listing, its cells' slots `+0x14`, `+0xc`, `+0x18`
+only and the classes mask `+0x68d` (0x50ebb0) always; state 3's 0x4c09c0
+reaches 0x4c0eb0 only after 0x4bf9b0 again, which clears the marks just
+set (their times now + 100), so it lists nothing). In 0x4bfc60 with
+guard on, an object is first matched against the positions' target ids
+(`+0x640 + 0x12k`, `local_5`), and while not all have been met (7, or
+0xf with four) it needs the classes mask too, the ram's and board's
+listing skipped with the rest (0x4c0034). There, with
 `+0x684 & 6`, the list 0x5c7d38 is emptied; the box is the range of the
 highest loaded position (0x5980f4[level x 4 + k]: 9, 9, 9, 13 at every
 level) or 4 (none, or 0), half of it about the cell, so never under the
@@ -7924,7 +7932,8 @@ positions in `+0x685`. Ported: the masks, records, `#` subs, 0x4e7220 and
 the at-will test (`Behaviour::may_pick`); not ported: the search's
 geometry by weapon position (0x4bfc60's square, 0x4c0cd0's arcs
 0x4bf5f0, 0x4e8af0's draws), so a partial positions mask counts as all;
-the fire state is kept, read only by the at-will ram and board (states 1 and 4, "The at-will ram and board").
+the fire state is kept, read by the at-will ram and board (states 1, 2 and 4, "The at-will ram and board"; the
+classes mask there below).
 
 **The ship's fire state `+0x5d1`** (byte; 0 from 0x4dc3f0, copied whole
 by the save and load at 0x4e14f7 / 0x4e2351). Writers: 0x4a9e30 at
@@ -7945,11 +7954,30 @@ and 0x4bf9b0's mask non-zero, its low 4 bits passed): 1 / 4 the search 0x4bfc60,
 0x4bf9b0 (which weapons are ready: in 1, 3, 4 a group's only with its
 position's target `+0x63c` or guard on, in 2 every group; then ram and
 board each 50 ticks); 0x4abe00, 0x4ab3f0 (at 0x4ab4d7), 0x4a9e30 and
-0x4d60c0. Not ported: the fire pass these drive (0x4bf9b0, 0x4c1240,
-0x4bfc60, 0x4c0eb0, 0x4c09c0; the port's `battle.rs` fire is its own
-model), so the state is read only by the at-will ram and board and
-0x4d60c0's cases on it are not ported; what 0x4c0eb0
-and 0x4c09c0 do is not read.
+0x4d60c0. The weapon positions' records (0x12 bytes from `+0x63c`,
+position k the items 3k..3k+2, a fourth for types 8 / 9): `+0x63c` the
+target, `+0x640` its id, `+0x644` its player code, `+0x645` the state,
+`+0x646` its class. 0x4ab3f0 kind 3 sets each position with a unit of
+its items aboard (or the fourth) to state 3 at the target and every
+other of positions 0-2 with a target not state 3 at it to 1; kind 1 the
+record's position alike with state 1, the others in 3 to 1. `+0x25d &
+0x100` (the fire task) is set only at 0x4aa7b8, 0x4ab580 and 0x4abdf2,
+cleared only at 0x4aa799 and 0x4abdd2. 0x4abc60's callers: the stop
+0x4aa540 (mask 0 at 0x4aa570, other bits left at 0x4aa7f5), 0x4abe50's
+deferral (0x4abefb) and the rammer's sail (0x4c2fee); 0x4aa540 with
+0x100 in its mask (0x4c09c0's 0x180) runs the same fire part alone.
+0x4ac5d0 sets positions 0 and 1 to its object (class 0x192), its second
+caller (0x4acf0f) all three first. Ported (`Ship::fire_wind_down`,
+`fire_reset`, `take_attack`, `objects::Aim`): 0x4a9e30, 0x4ab3f0 kind
+3 (the port's attacks, at a jam its member), the stop (`Scene::stop`,
+0x4abc60 whatever it calls off), the sail's and the boarder's prey lost
+(0x4abc60), 0x4c09c0's target gone (0x180), 0x4abe00 at the group's turn
+(`one_event_a_tick`, once a batch), the hunt's 0x4acc61. Not ported: the
+fire pass (0x4bf9b0, 0x4c1240, 0x4bfc60, 0x4c0eb0, 0x4c09c0, 0x4c0230;
+the port's `battle.rs` fire is its own model) and so its writes (0x4c1240's
+3, 0x4c09c0's 1 in reach); kind 1 and 2 records (the port's ships take no
+0x15); 0x4abe50's deferral; the hunt's second site (0x4acf3a, the
+port's hunt has one); 0x4d60c0's cases on the state.
 Who sends `#` (0x4c42f0, `{sub, +1, +5, +9, 0.., +0x15 0xff}`, queued:
 it reaches the ship at the next tick): 0x4c4350 (fleet order 0x72, from
 the brains' 0x4797e0 and the computers' 0x482eb0; the interface's attack

@@ -2255,6 +2255,11 @@ impl Scene {
                 self.cancel_build(i);
                 return;
             }
+            // 0x4abc60 runs whole whatever it calls off: its tail ends
+            // the fire task, guard, ram or board on giving fire state 2.
+            if let Some(ship) = self.objects[i].ship.as_mut() {
+                ship.fire_wind_down();
+            }
             // A landing is called off (0x4abc60: `+0x73a`), its order kept
             // till it has backed out.
             if self.stop_landing(i) {

@@ -339,6 +339,8 @@ impl Scene {
         let prey = s.closing.map_or(0, |c| c.target);
         s.task = None;
         s.closing = None;
+        // 0x4abc60's tail (the boarder's event 8 runs it through 0x4aa540).
+        s.fire_wind_down();
         self.post_notice(id, code, prey);
     }
 

@@ -507,6 +507,9 @@ pub struct Ship {
     /// after a ram, the boarder's way back (0x4b6bee) too.
     #[serde(default)]
     pub board_wait: u32,
+    /// `+0x25d & 0x100`, the fire task (`fire_task`).
+    #[serde(default)]
+    pub firing: bool,
 }
 
 /// A rammer's or boarder's way to its prey, a game tick at a time (see
@@ -876,11 +879,27 @@ pub struct Behaviour {
     /// `combat::class_bit`; 0x4bfc60 at 0x4bffb9).
     #[serde(default)]
     pub classes: u32,
-    /// `+0x5d1`, the fire state (0x4c1240: 1 and 4 search, 2 the point
-    /// target, 3 firing). The port's fire pass has no such states: kept
-    /// as the original writes it, read by the at-will look (`scene::at_will`).
+    /// `+0x5d1`, the fire state (0x4c1240: 1 and 4 the search 0x4bfc60,
+    /// 2 0x4c0eb0, 3 the attack 0x4c09c0). Kept as the original writes it
+    /// (see `Ship::fire_wind_down`, `Ship::fire_reset`, `Ship::take_attack`),
+    /// read by the at-will look (`scene::at_will`) and the attack zone's
+    /// sends (0x4d60c0); the port's fire itself is still its own model.
     #[serde(default)]
     pub fire_state: u8,
+    /// The weapon positions' records (0x12 bytes from `+0x63c`, position k
+    /// the items 3k..3k+2; a fourth, items 9-11, for types 8 and 9).
+    #[serde(default)]
+    pub aims: [Aim; 4],
+}
+
+/// A weapon position's record (`+0x63c + 0x12k`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Aim {
+    /// `+0x640`: its target's id, 0 for none (the pointer `+0x63c` is
+    /// looked up by it).
+    pub target: u32,
+    /// `+0x645`: its state (1 a target, 3 the attack).
+    pub state: u8,
 }
 
 /// A behaviour record (the ship's event 0x100, 0x4a9e30 kinds 4-11).
@@ -1051,11 +1070,81 @@ impl Ship {
         }
     }
 
-    /// `+0x25d & 0x100`, a fire task: 0x4ab3f0 sets it on taking the fire
-    /// records of an attack (orders 0x15 / 0x16, 0x4ab577-0x4ab589); the
-    /// port's attack task. (Where the original clears it is not traced.)
+    /// `+0x25d & 0x100`, a fire task: set only by 0x4ab3f0 on taking the
+    /// fire records (orders 0x15 / 0x16, 0x4ab580) and by the stop's
+    /// fire part (0x4aa7b8, 0x4abdf2, `fire_wind_down`); cleared only by
+    /// that (0x4aa799, 0x4abdd2).
     pub fn fire_task(&self) -> bool {
-        matches!(self.task, Some(Task::Attack { .. }))
+        self.firing
+    }
+
+    /// Weapon positions in play: 3, 4 for types 8 and 9 (`1 << type &
+    /// 0x300`).
+    pub fn positions(&self) -> usize {
+        if matches!(self.kind, 8 | 9) {
+            4
+        } else {
+            3
+        }
+    }
+
+    /// The stop's fire part (0x4abc60's tail at 0x4abdc0-0x4abdf8, and
+    /// 0x4aa540's for a stop with 0x100 in its mask, 0x4aa781-0x4aa7c4):
+    /// the fire task ends (`+0x25d &= ~0x100`), and with any of guard, ram
+    /// or board on (`+0x684`) the ship takes the fire state 2 and the fire
+    /// task again.
+    pub fn fire_wind_down(&mut self) {
+        self.firing = false;
+        let b = &mut self.behaviour;
+        if b.guard || b.ram || b.board {
+            b.fire_state = 2;
+            self.firing = true;
+        }
+    }
+
+    /// 0x4abe00, at the turn of the ship's pending order group (0x4ab720
+    /// at 0x4ab854, with the fire task on and `+0x251 == 0`): unless the
+    /// fire state is 2 it becomes 1, and each position with a target in
+    /// state 3 goes back to 1.
+    pub fn fire_reset(&mut self) {
+        if !self.firing {
+            return;
+        }
+        let n = self.positions();
+        let b = &mut self.behaviour;
+        if b.fire_state == 2 {
+            return;
+        }
+        b.fire_state = 1;
+        for a in &mut b.aims[..n] {
+            if a.target != 0 && a.state == 3 {
+                a.state = 1;
+            }
+        }
+    }
+
+    /// The attack's fire records taken (0x4ab3f0 kind 3, every position:
+    /// order 0x16 sub 7): each position `armed` (a unit of its items
+    /// aboard, `+0x289 + 3k..`, or the fourth) takes state 3 and the
+    /// target, and the fire state is 3; each other position with a target
+    /// not in state 3 at this one goes to 1. The fire task is on
+    /// (0x4ab580) whether a position took it or not.
+    pub fn take_attack(&mut self, target: u32, armed: [bool; 4]) {
+        let n = self.positions();
+        let b = &mut self.behaviour;
+        for (k, &on) in armed.iter().enumerate().take(n) {
+            if !on {
+                continue;
+            }
+            b.aims[k] = Aim { target, state: 3 };
+            b.fire_state = 3;
+            for (j, a) in b.aims[..3].iter_mut().enumerate() {
+                if j != k && a.target != 0 && (a.state != 3 || a.target != target) {
+                    a.state = 1;
+                }
+            }
+        }
+        self.firing = true;
     }
 
     /// 0x4e0b50, asked by every plan (0x4a6330): lying still, turning or
@@ -1495,6 +1584,23 @@ impl MapObject {
 
     pub fn is_armed(&self) -> bool {
         !self.shooters().is_empty()
+    }
+
+    /// The positions 0x4ab3f0 takes a fire record for: a unit of the
+    /// position's items aboard (`+0x289 + 3k`, `+0x28a + 3k`, `+0x28b +
+    /// 3k`: marines 0-2 by squad, weapons 3-8), and the fourth position
+    /// (k = 3, types 8 and 9) always.
+    pub fn armed_positions(&self) -> [bool; 4] {
+        let mut armed = [false, false, false, true];
+        let squads = self.ship.as_ref().map_or([0; 3], |s| s.crew.squads);
+        let weapons = self.combat.as_ref().map_or(&[][..], |c| &c.weapons[..]);
+        for (k, a) in armed.iter_mut().take(3).enumerate() {
+            *a = (3 * k as u8..3 * k as u8 + 3).any(|item| match item {
+                0..=2 => squads[item as usize] > 0,
+                _ => weapons.contains(&item),
+            });
+        }
+        armed
     }
 
     /// What fires from the object: its weapons, then (on ships) a shot for
@@ -2058,6 +2164,7 @@ pub fn resolve(
         closing: None,
         ram_wait: 0,
         board_wait: 0,
+        firing: false,
         cargo: 0.0,
         cargo_kind: None,
         task: None,

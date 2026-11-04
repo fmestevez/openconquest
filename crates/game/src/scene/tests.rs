@@ -2047,6 +2047,127 @@ fn at_will_timers() {
     assert_eq!(scene.objects[m].ship.as_ref().unwrap().board_wait, 0);
 }
 
+/// The fire state `+0x5d1` and the fire task `+0x25d & 0x100` as the
+/// original writes them: the attack's records (0x4ab3f0 kind 3: each armed
+/// position 3 at the target, the fire state 3), the group's turn
+/// (0x4abe00: 1, the positions back to 1), the stop's fire part (0x4abc60:
+/// the task ended, fire state 2 and the task again with a switch on)
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn fire_state_writers() {
+    use crate::objects::Aim;
+    use order::Order;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let human = scene.human.unwrap();
+    let mine = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let enemy = scene
+        .objects
+        .iter()
+        .find(|o| o.ship.is_some() && o.id != mine)
+        .unwrap()
+        .id;
+    scene
+        .objects
+        .retain(|o| o.ship.is_none() || o.id == mine || o.id == enemy);
+    let e = scene.object_index(enemy).unwrap();
+    scene.objects[e].owner = Some((1, (human.slot + 1) % 4));
+    let m = scene.object_index(mine).unwrap();
+    {
+        let c = scene.objects[m].combat.as_mut().unwrap();
+        c.weapons = vec![4, 4];
+        let s = scene.objects[m].ship.as_mut().unwrap();
+        s.kind = 3;
+        s.crew.squads = [0; 3];
+    }
+    let ship = |s: &Scene| s.objects[m].ship.clone().unwrap();
+    // The map's: on guard, fire state 4 (0x4e7220), no fire task.
+    assert_eq!(
+        (ship(&scene).behaviour.fire_state, ship(&scene).firing),
+        (4, false)
+    );
+    // An attack: position 1 (items 3-5) alone is armed.
+    scene.order_attack(mine, enemy).unwrap();
+    let b = ship(&scene).behaviour;
+    assert_eq!(b.fire_state, 3);
+    assert!(ship(&scene).firing);
+    let at = Aim {
+        target: enemy,
+        state: 3,
+    };
+    assert_eq!(b.aims, [Aim::default(), at, Aim::default(), Aim::default()]);
+    // A move at the group's turn: 0x4abe00 first.
+    scene.ticks = 100;
+    let (x, y) = (scene.objects[m].x, scene.objects[m].y);
+    let _ = scene.apply(
+        &Order::Move {
+            ship: mine,
+            x: x + 64.0,
+            y,
+        },
+        &data,
+        &mut caches,
+    );
+    let b = ship(&scene).behaviour;
+    assert_eq!(
+        (b.fire_state, b.aims[1]),
+        (
+            1,
+            Aim {
+                target: enemy,
+                state: 1
+            }
+        )
+    );
+    // The stop: guard on, so fire state 2 and the fire task kept.
+    scene.stop(mine);
+    assert_eq!(
+        (ship(&scene).behaviour.fire_state, ship(&scene).firing),
+        (2, true)
+    );
+    // In fire state 2 the group's turn leaves it.
+    scene.tick_orders.clear();
+    let _ = scene.apply(
+        &Order::Move {
+            ship: mine,
+            x: x + 64.0,
+            y,
+        },
+        &data,
+        &mut caches,
+    );
+    assert_eq!(ship(&scene).behaviour.fire_state, 2);
+    // With every switch off the stop ends the fire task, the state kept.
+    let s = scene.objects[m].ship.as_mut().unwrap();
+    (s.behaviour.guard, s.behaviour.ram, s.behaviour.board) = (false, false, false);
+    s.behaviour.fire_state = 1;
+    scene.stop(mine);
+    assert_eq!(
+        (ship(&scene).behaviour.fire_state, ship(&scene).firing),
+        (1, false)
+    );
+    // The at-will list: in fire state 2 (0x4c0eb0) the classes mask
+    // shuts a prey out; in 1 off guard (0x4bfc60) it does not.
+    let (mx, my) = (scene.objects[m].x, scene.objects[m].y);
+    scene.objects[e].x = mx + 64.0;
+    scene.objects[e].y = my;
+    let s = scene.objects[m].ship.as_mut().unwrap();
+    s.behaviour.classes = 0;
+    assert_eq!(scene.at_will_list(m, false), vec![e]);
+    assert!(scene.at_will_list(m, true).is_empty());
+    scene.objects[m].ship.as_mut().unwrap().behaviour.classes = !0;
+    assert_eq!(scene.at_will_list(m, true), vec![e]);
+}
+
 /// The ships' behaviour masks: the constructor's zeroes (0x4dc3f0), the
 /// map loader's 0x4e7220, the `#` command (0x4e2ba0 case 0x23 into
 /// 0x4a9e30), and the at-will pick reading players `+0x689`, classes

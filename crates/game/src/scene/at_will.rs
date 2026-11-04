@@ -47,12 +47,15 @@ impl Scene {
             let Some((ram, board)) = self.at_will_marks(i, now) else {
                 continue;
             };
-            // 0x4c1240: the search only in fire states 1 and 4.
+            // 0x4c1240: the search in fire states 1 and 4 (0x4bfc60) and
+            // 2 (0x4c0eb0); in 3 the attack (0x4c09c0) calls 0x4c0eb0 only
+            // after 0x4bf9b0 again, which has cleared the marks just set.
             let s = self.objects[i].ship.as_ref().unwrap();
-            if !(ram || board) || !matches!(s.behaviour.fire_state, 1 | 4) {
+            let state = s.behaviour.fire_state;
+            if !(ram || board) || !matches!(state, 1 | 2 | 4) {
                 continue;
             }
-            let list = self.at_will_list(i);
+            let list = self.at_will_list(i, state == 2);
             if list.is_empty() {
                 continue;
             }
@@ -133,8 +136,15 @@ impl Scene {
     /// (0x557480) and taking a contact (`+0x261 & 0x1000`); a human's
     /// ship (side 1 or 2, `game +0x1a1d`) with a route end (`+0x5b2`, its
     /// own cell once stopped) on the map only takes those within 5 of it.
-    /// At most 50.
-    fn at_will_list(&self, i: usize) -> Vec<usize> {
+    /// At most 50. The classes mask (`+0x68d`, 0x50ebb0) shuts out an
+    /// object too: always in fire state 2 (0x4c0eb0, `point`), and in 1
+    /// and 4 with guard on while not every position's target (`+0x640 +
+    /// 0x12k`) has been met earlier in the box (0x4bfc60's `local_5`, a
+    /// bit a position, against 7 or 0xf). (Not ported: 0x4bfc60's box is
+    /// its highest ready position's range, wider than the reach, and its
+    /// cells beyond the reach can meet those targets first; the ready
+    /// mask needs the fire pass's times, `+0x5e3`.)
+    pub(super) fn at_will_list(&self, i: usize, point: bool) -> Vec<usize> {
         let mut list = Vec::new();
         if self.closing_in(i) {
             return list;
@@ -152,6 +162,9 @@ impl Scene {
         };
         let end_index = w * end.1 + end.0;
         let route = human && end_index > 0 && end_index < w * h;
+        let positions = s.positions();
+        let full = (1u8 << positions) - 1;
+        let mut met = 0u8;
         let (x0, y0) = ((own.0 - REACH).max(0), (own.1 - REACH).max(0));
         let (x1, y1) = ((own.0 + REACH + 1).min(w), (own.1 + REACH + 1).min(h));
         for y in y0..y1 {
@@ -175,6 +188,16 @@ impl Scene {
                     continue;
                 };
                 if s.behaviour.players & 1 << ((slot + n * 4) & 0x1f) == 0 {
+                    continue;
+                }
+                if !point {
+                    for (k, a) in s.behaviour.aims[..positions].iter().enumerate() {
+                        if a.target == o.id {
+                            met |= 1 << k;
+                        }
+                    }
+                }
+                if (point || s.behaviour.guard && met != full) && !self.picks_at_will(me, o) {
                     continue;
                 }
                 if walk_path::dist2(own.0, own.1, x, y) > REACH {

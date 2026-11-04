@@ -553,7 +553,7 @@ impl Scene {
             _ => return None,
         };
         let i = self.object_index(ship)?;
-        let now = self.objects[i].ship.clone()?;
+        self.objects[i].ship.as_ref()?;
         let before = match self.tick_orders.get(&ship) {
             Some(TickOrder::Stopped) => return Some(Ok(0)),
             Some(TickOrder::Ran { rank: won, .. }) if *won < rank => return Some(Ok(0)),
@@ -562,7 +562,13 @@ impl Scene {
                 self.objects[i].ship = Some((*before).clone());
                 before
             }
-            None => Box::new(now),
+            None => {
+                // The group's turn: 0x4abe00 first (with the fire task on
+                // and afloat), whatever the order then does.
+                let s = self.objects[i].ship.as_mut().unwrap();
+                s.fire_reset();
+                Box::new(s.clone())
+            }
         };
         let r = self.apply_now(order, data, caches);
         if r.is_err() {

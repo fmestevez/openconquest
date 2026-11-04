@@ -360,6 +360,13 @@ impl Scene {
                 if self.leviathan_state(lev) == Some(SHOWING) {
                     to = if dist < 3 { (cx, cy) } else { (x, y) };
                     dist = walk_path::dist(cx, cy, to.0, to.1);
+                    // 0x4ac5d0: positions 0 and 1 take the leviathan
+                    // (`+0x63c`, `+0x640`, class 0x192 `+0x646`; their
+                    // states kept), then the fire state 1 (0x4acc61).
+                    let b = &mut self.objects[i].ship.as_mut().unwrap().behaviour;
+                    b.aims[0].target = lev;
+                    b.aims[1].target = lev;
+                    b.fire_state = 1;
                     self.hunt_fire(i, lev, dist, data, caches);
                 } else {
                     if let Some(k) = self.slot_ship((x, y)).filter(|&k| k != i) {
