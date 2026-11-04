@@ -4210,7 +4210,11 @@ impl Scene {
             let (Some(s), Some(c)) = (&self.objects[i].ship, &self.objects[i].combat) else {
                 continue;
             };
-            // Not while in a dock (state 2).
+            // The original passes over ships with `+0x251 == 2` (being
+            // built or sold, 0x486a08), not those docking. (Not ported: the
+            // port skips a ship under its repair order, as a new one would
+            // restart it where the original holds commands while docking,
+            // 0x4b37d0.)
             if matches!(s.task, Some(Task::Repair { .. })) {
                 continue;
             }

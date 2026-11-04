@@ -818,15 +818,15 @@ impl Scene {
             }
             return;
         }
-        // A ship not mended in a dock marks the blow and its giver
-        // (0x4bf3aa: `+0x691` 1, `+0x692` the shot's `+0xbe`). (Not
-        // decoded: `+0xbe` of a shot with no shooter, a volcano's or a
-        // fire ship's: left unmarked.)
+        // A ship marks the blow and its giver (0x4bf3aa: `+0x691` 1,
+        // `+0x692` the shot's `+0xbe`); 0x4bf170's only exception, `+0x251
+        // == 2` (being built, above, or sold), goes to 0x4b4000 first. A
+        // ship mended at a dock is not one: the dock machine leaves
+        // `+0x251` alone. (Not decoded: `+0xbe` of a shot with no shooter,
+        // a volcano's or a fire ship's: left unmarked.)
         if let (Some(i), Some(by)) = (target, s.shooter) {
-            if !self.in_dock(i) {
-                if let Some(sh) = self.objects[i].ship.as_mut() {
-                    sh.blow = Some(by);
-                }
+            if let Some(sh) = self.objects[i].ship.as_mut() {
+                sh.blow = Some(by);
             }
         }
         // The hull's share first, then the crew's and the weapons'
@@ -840,29 +840,25 @@ impl Scene {
             return;
         }
         if let Some(i) = target {
-            // The blow's giver: the player in the shot (`+0xb5`); none on
-            // a ship being mended in a dock (0x4bf170 hands it to 0x4b4000,
-            // whose wreck gives `+0x7f` 0xff). (Not decoded: a land
+            // The blow's giver: the player in the shot (`+0xb5`), at a dock
+            // too (none only with `+0x251 == 2`, 0x4bf170 handing it to
+            // 0x4b4000, whose wreck gives `+0x7f` 0xff). (Not decoded: a land
             // creature struck by a shot following it gets 0x138e with
             // `+0x15` unwritten, 0x496ca5-0x496cef, a byte left on the
             // stack: its caller 0x4974d0 (states 2, 3) calls only
             // __setjmp3 before it, which writes no stack, so the byte is
             // what calls before 0x4974d0's left there, at run time; the
             // port keeps the shot's player.)
-            let by = s.by.filter(|_| !self.in_dock(i));
+            let by = s.by;
             // A harpy or dragon shot down is reported to no one (0x420670
             // takes its life down to 0 and calls nothing that reports).
             let report = !matches!(self.objects[i].class, ObjectClass::Monster(0x1f8 | 0x1f9));
             // Fire first, judged on the hull before the blow (0x4bf1a0).
             let holder = self.objects[i].holds_units();
             let ship = self.objects[i].ship.is_some();
-            // Quick lime limes a ship before anything else, but one being
-            // mended in a dock, which it leaves untouched (0x4bf170: state 2
-            // goes to 0x4b4000).
+            // Quick lime limes a ship before anything else, one mended at a
+            // dock too (0x4bf170 spares only `+0x251 == 2`, handled above).
             if s.item == combat::QUICKLIME && ship {
-                if self.in_dock(i) {
-                    return;
-                }
                 self.lime(i, combat::LIME_TICKS);
             }
             self.ignite(i, s.item, s.flaming, s.damage, data, caches);
@@ -902,15 +898,15 @@ impl Scene {
         }
     }
 
-    /// Whether ship `i` lies in a dock being mended (state 2).
+    /// Whether ship `i` lies in a yard or dock under its repair order
+    /// (0x4b2420, from the close-in to the end of its backing out), off
+    /// its cell's ship slot (0x4a3970 on entering). Its contact (`+0x8e6`,
+    /// `Landing::dock`) may have gone meanwhile (0xcb9). It shields from
+    /// nothing in a blow: 0x4bf170 spares only `+0x251 == 2`.
     pub(super) fn in_dock(&self, i: usize) -> bool {
-        // In contact with its dock (`+0x8e6`, from the repair machine's
-        // close-in to its backing out, 0x4b2420).
-        self.objects[i]
-            .ship
-            .as_ref()
-            .and_then(|s| s.landing.as_ref())
-            .is_some_and(|l| l.dock.is_some())
+        self.objects[i].ship.as_ref().is_some_and(|s| {
+            s.landing.is_some() && matches!(s.task, Some(crate::objects::Task::Repair { .. }))
+        })
     }
 
     /// Buildings limed now: their work stands still (school 0x432210,

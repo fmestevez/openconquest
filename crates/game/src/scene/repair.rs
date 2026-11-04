@@ -155,6 +155,20 @@ impl Scene {
             })
     }
 
+    /// Yard or dock `dock` lets its ship go (0x4e7640 on 0x2874 {its
+    /// town}: 0xcb9 to `+0x1e0`, then `+0x1e0 = 0`): the ship frees its
+    /// contact `+0x8e6` (0x4dccc5 -> 0x4e06a0), so its repair machine
+    /// goes on without the dock (state 2 ends in 3, state 4 at once).
+    pub(super) fn dock_lets_go(&mut self, dock: u32) {
+        for o in self.objects.iter_mut() {
+            if let Some(l) = o.ship.as_mut().and_then(|s| s.landing.as_mut()) {
+                if l.dock == Some(dock) {
+                    l.dock = None;
+                }
+            }
+        }
+    }
+
     /// Has settlement or town `site` mend own building `target`.
     pub fn order_mend(&mut self, site: u32, target: u32) -> Result<(), String> {
         let s = self.object_index(site).ok_or("No such building")?;
@@ -590,7 +604,8 @@ impl Scene {
     /// - **1**: off the berth `+0x756` it is sent there again (0x4a6270);
     ///   there, lying still (`+0x58c` 0): the dock gone, the order is done
     ///   (message 8); not a yard or dock of its player, it waits (notice
-    ///   0x143, 0x4a1b80; not ported: the port's zones take none); the dock
+    ///   0x143, 0x4a1b80; not ported: only the computer's dock block
+    ///   0x4db110 reads it, and the port has none); the dock
     ///   free (vt+0xb0, `dock_free`), the close-in (0x4b17e0): in contact
     ///   (`+0x8e6`, 0xcb7 to the dock), commands held (0x4b37d0), state 2.
     /// - **2** (0x4b1c60 -> 0x4b1a90): a point of the line a tick and a
@@ -606,8 +621,10 @@ impl Scene {
     ///   the berth (0x4b46f0 with 'Q'), notice 0x134 (0x4a1690) and the
     ///   brains' 0x5d98 (0x4b6d60).
     ///
-    /// (Not ported: the sale, `+0x749 == 3`, `+0x251 = 2` and task 5; the
-    /// dock's 0x2874 that sends its ship 0xcb9.)
+    /// The dock's 0xcb9 as its town falls is `dock_lets_go`. (Not ported:
+    /// the sale, `+0x749 == 3`, `+0x251 = 2` and task 5 0x4b4380, sent
+    /// only by the computer's dock block 0x4dbd90 through 0x4dbb40, which
+    /// the port does not have.)
     pub(super) fn step_dock_repairs(&mut self) {
         for o in self.objects.iter_mut() {
             if let Some(s) = o.ship.as_mut() {

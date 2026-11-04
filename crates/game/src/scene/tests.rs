@@ -9506,8 +9506,8 @@ fn quick_lime_figures() {
 
 /// A limed ship: a hit limes it 120 ticks (24 under its weapon shield),
 /// added up; it crawls, boards at half strength, will not take a fire
-/// order, shows no fire power, and comes clear when the time is out; a
-/// ship mended in a dock is untouched (needs `OPENCONQUEST_DATA`).
+/// order, shows no fire power, and comes clear when the time is out
+/// (needs `OPENCONQUEST_DATA`).
 #[test]
 fn quick_lime_blinds() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -15518,4 +15518,78 @@ fn docks_fit_units_by_the_types_weights() {
     assert_eq!(scene.dock_refit(k, dock, 4), 0);
     assert_eq!(units(&scene), [0; 9]);
     assert_eq!(scene.amber, 610);
+}
+
+/// A dock's town falling (0x2874 {town}) has the dock send its ship 0xcb9
+/// (0x4e7640): the ship lets its contact go and, mid-mending, backs out at
+/// once, its hull as it was (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_falling_town_lets_its_docks_ship_go() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.amber = 10_000;
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let full = combat::hull_points(2) as i64;
+    {
+        let k = scene.object_index(ship).unwrap();
+        let o = &mut scene.objects[k];
+        o.ship.as_mut().unwrap().kind = 2;
+        let c = o.combat.as_mut().unwrap();
+        c.max_hull = combat::hull_strength(2);
+        c.hull = (full / 2) as f32 / 15.0;
+    }
+    let dock = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .unwrap()
+        .id;
+    let d = scene.object_index(dock).unwrap();
+    scene.objects[d].class = ObjectClass::Building(economy::DOCK);
+    let town = scene.home_settlement(d).unwrap();
+    scene.order_repair(ship, dock).unwrap();
+    let state = |scene: &Scene| {
+        let k = scene.object_index(ship).unwrap();
+        let s = scene.objects[k].ship.as_ref().unwrap();
+        s.landing.as_ref().map(|l| l.state)
+    };
+    for _ in 0..50 * 120 {
+        if state(&scene) == Some(4) {
+            break;
+        }
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert_eq!(state(&scene), Some(4));
+    let hull = |scene: &Scene| {
+        let k = scene.object_index(ship).unwrap();
+        (scene.objects[k].combat.as_ref().unwrap().hull * 15.0).round() as i64
+    };
+    let before = hull(&scene);
+    scene.town_gone(town, &data, &mut caches);
+    let k = scene.object_index(ship).unwrap();
+    let s = scene.objects[k].ship.as_ref().unwrap();
+    assert_eq!(s.landing.as_ref().unwrap().dock, None, "the contact let go");
+    assert!(scene.in_dock(k), "still off its slot");
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    assert_eq!(state(&scene), Some(3));
+    assert_eq!(hull(&scene), before);
+    for _ in 0..2000 {
+        if state(&scene).is_none() {
+            break;
+        }
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let k = scene.object_index(ship).unwrap();
+    assert!(scene.objects[k].ship.as_ref().unwrap().task.is_none());
+    assert!(hull(&scene) < full);
 }

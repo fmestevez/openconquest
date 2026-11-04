@@ -466,11 +466,14 @@ impl Scene {
     /// 0x2874 {town} to each of its buildings (`+0x1d0`), which each
     /// handle in 0x427f50: the settlement link `+0x1c8` cleared; busy
     /// (`+0x10c`), order 10 to itself (`Scene::halt`); a reload contact
-    /// (`+0x104`) told 0x2876 and let go. (A port's ShipService first
-    /// sends 0xcb9 to `+0x1e0` and clears it: not ported, `+0x1e0` not
+    /// (`+0x104`) told 0x2876 and let go. A yard or dock (ShipService
+    /// 0x4e7640, from 0x421150 and 0x4e8660) first sends 0xcb9 to the
+    /// ship in it (`+0x1e0`) and clears it (`dock_lets_go`). (Not ported:
+    /// a fort's, 0x419f5a also calling 0x4e7640, whose `+0x1e0` is not
     /// decoded.)
     pub(super) fn town_gone(&mut self, town: u32, data: &GameData, caches: &mut Caches) {
         for id in self.town_falls(town) {
+            self.dock_lets_go(id);
             if self.busy(id) {
                 let _ = self.halt(id, data, caches);
             }

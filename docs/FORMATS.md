@@ -2756,8 +2756,8 @@ list and escorts).
   the port reports blows as they land instead) and sent command 0x28 sub
   4 (0x4cf760), which clears `+0x691`, `+0x692`, `+0x634` at the next
   tick, so the escorts of this pass still see it. The blow is marked by
-  0x4bf3aa for every shot landing on a ship (not one in a dock, state
-  `+0x251` 2, nor a hook of class 9 with `+0xed` 100): `+0x691` 1,
+  0x4bf3aa for every shot landing on a ship (not one with `+0x251` 2,
+  being built or sold: a ship mended at a dock is marked, nor a hook of class 9 with `+0xed` 100): `+0x691` 1,
   `+0x692` the shot's `+0xbe`, `+0x634` its cell (not decoded: `+0xbe`
   of a shot with no shooter; the port marks only shots with one). Ported
   since: 0x4c6100's behaviour command for a new escort (0x4c42f0 with
@@ -3718,8 +3718,8 @@ cleared on all 12 together. Who sets them:
   its whole order-10 chain, so a fort mending itself stops and ceases
   fire); with a reload contact `+0x104` sends 0x2876 {`+0x108`} and
   clears both; sets `+0xf8`; then LandObj 0x425990 as for any message.
-  A port (ShipService 0x4e7640) first sends 0xcb9 to its `+0x1e0` and
-  clears it. Nothing in the land fleet
+  A yard or dock (ShipService 0x4e7640) first sends 0xcb9 to the ship
+  in it, `+0x1e0`, and clears it (see the repair order's machine). Nothing in the land fleet
   sends 0x23, 0x15 or 0x16 (its 0x520cc0 codes: 0x1e, 0x20, 0x21, 0x22,
   0x28, 0x2d and 10). The navy's 0x4c5b30 (0x4a1150, a new group of a
   computer player, side 3 or 4) sends 0x23 sub 1 with the fleet's masks
@@ -3760,8 +3760,8 @@ creation record's `+0x1f`; not decoded, so the scan keeps the
 structure's own player's objects out), the
 state 2 of buildings 0x34-0x3e (a settlement's is its stock mending,
 0x441ba0, which the scan skips), a ship's reserved cell (the port's ships
-hold only the cell they are in), a port's 0xcb9 on 0x2874
-(`+0x1e0` not decoded), whether a navy group of a computer ever holds a fort (the
+hold only the cell they are in), a fort's 0xcb9 on 0x2874
+(its `+0x1e0` not decoded; yards' and docks' are ported), whether a navy group of a computer ever holds a fort (the
 port's flotillas hold ships), 0x43d300's test that the building is still
 the town's, the other 0x138e senders' `+0x16`. The brains' under-way
 passes count from the second pass after the one that started the
@@ -4403,10 +4403,39 @@ is dropped.
 - A stop (0x4abc60): in state 1 it clears `+0x25d & 0x20` (the order is
   dropped), else `+0x73a` = 0xff.
 
+A yard or dock (ShipService 0x4e7640, run by the yard's 0x421150 and
+the dock's 0x4e8660 handlers) on message 0x2874 whose `+0x14` is its town
+(`+0x1c8`: its town falling, 0x43bc30) sends 0xcb9 to the ship in it
+(`+0x1e0`) and clears `+0x1e0`, before 0x427f50; the ship on 0xcb9
+(0x4dccc5) frees its contact `+0x8e6` (0x4e06a0), so state 2 ends in 3,
+state 4 at once, and the back-out sends no 0xcb8.
+
+The sale (`+0x749 == 3`): `+0x749` is the order's `+0x834`, the first
+byte of ship command 0x1e (0x4e3055: byte 0 -> `+0x834`, dword 1 the
+dock, byte 5 -> `+0x838`). Only 0x4dbb40 sends a 3, when its block
+record's `+0x30` is 1 (else 0); it is called by the computer's dock block
+0x4dbd90 / 0x4dbb90 (navy 0x4c5097). The repair member's 0x4cd930 sends
+the block's `+0xc` (0 from 0x82); the human's go-to-dock sender is not
+read.
+Task 5 (0x4b4380, run by 0x4ab930 while `+0x251 == 2`): state 1 clears
+`+0x261`, `+0x25d`, lets the contact go (0x4b3970(0), 0x4b3930(0),
+0x523d80, 0x4e06a0), then state 7 (`+0x8c2` set) or 2; state 2 waits
+for 0x4b4220, then 0x4e1bb0(4) and a picture count `+0x45` 0x27 (heading
+0) or 0x4f (6), state 3; state 3 counts it down each tick and, at 0 (or
+below 0x28 for heading 6), credits the player 0x4e4ce0 amber (0x4a8de0)
+and 0x4e4c80 fish (0x4a8c30), then 0x50e830, 0x50e750, 0x4a3970,
+0x4a1bf0, 0x10a6 with `+0x252`, 0x4e4f20 and message 10 to itself.
+
 The port runs it at the game tick (`Scene::step_dock_repairs`, the
-landing's `Landing` with its `dock` contact; `in_dock` is the contact).
-Not ported: the sale; notice 0x143 (the port's zones take none); the
-dock's message 0x2874, which sends its ship 0xcb9.
+landing's `Landing` with its `dock` contact; `Scene::dock_lets_go` for
+0xcb9 from `Scene::town_gone`). `in_dock` is a ship under its repair
+order from the close-in to the end of the back-out, off its cell's slot;
+it shields from no blow (0x4bf170 spares only `+0x251 == 2`). Not
+ported: the sale (the port's computer dock order is `FleetOrder::Dock`,
+not the block 0x4dbd90; not decoded: which orders give the block record
+`+0x30` 1, and 0x4b4220, 0x4e1bb0, 0x4e4ce0, 0x4e4c80, 0x4b40d0 of the
+machine); notice 0x143, read only by that block (0x4db110 case 0x143);
+a fort's 0x4e7640 on 0x2874 (its `+0x1e0` not decoded).
 
 **The fitting of types 2-7** (0x4bbca0(ship, dock, room), from 0x4b22f0
 in state 4 at a full hull with the contact `+0x8e6` and its dock `+5`;
@@ -4976,7 +5005,8 @@ power x accuracy / 100 (power / 50 if none), x 1.5 with the Flame, x 1.5
 with Theseus (0x4c0230). It reloads 6000 / 55 ticks + rand % 30: items
 9-11 always take rate column 2 (0x4c06e0; 0x597a3c: Greek fire 50/70/80,
 quick lime 45/50/55, powder 60/80/80). It strikes the one object it lands
-on. On a ship (0x4bf170): a ship in a dock (state 2) is untouched; else,
+on. On a ship (0x4bf170): a ship with `+0x251` 2 (being built or sold;
+not one mended at a dock) is untouched; else,
 before anything, it is limed (0x4c4120: `+0x258`, start `+0x89`, 120 ticks
 added to `+0x8d`, 24 under its weapon shield, no cap), then the blow (a
 fifth under the shield, cut by the armour and the Armour of Ares) is
@@ -5220,7 +5250,13 @@ full, vtable +0x74 runs (a fort's 0x419910) and it stops. So a full
 repair takes 200 ticks and costs the building's price. Blows taken
 meanwhile lower the condition (0x423f9c). The port steps it at the game
 tick (`Scene::step_mending`, the tick and condition in `mend_steps`).
-Not ported: the notice 0x10a4 to `+0x130` (the panel's progress).
+With `+0xe0` set and `+0x130 >= 0` each step sends the menu (0x203f,
+0x80000003) notice 0x10a4 {+0x14 `100 - +0x120`, +0x18 0, +0x1a
+`+0x130`}; the menu 0x4f4cc0, for its page `+0x15c` equal to +0x18,
+keeps the byte at slot `+0x1a`'s `+0x3a` and redraws it (0x10a5 clears
+it). `+0x130` is -1 but for a fort mending itself (0x418dde: 4, the
+repair button), so only that button shows it: the port's
+`fort_mend_progress` on the fort's menu slot 4.
 
 Docks (`Shipserv.cpp`, 0x4e7640) serve ships alongside
 (reloading); a dock's own queue (0x416f90, every 25 ticks) builds ships.
@@ -7120,8 +7156,8 @@ The killer each caller of 0x50e750 passes:
   caster (0x405d2d; 0xff for nation 4 slot 1, 0x405fa0-0x405fbb); 0xff for
   the land creatures' and harpies' throws (0x4129f3, 0x42031b, 0x420550),
   the volcanoes and every 0x499410 shot. A ship is credited to it through
-  0x4bf170 -> 0x4be0c0 (`+0x7f`), but a ship being mended in a dock gets
-  0xff (0x4b4000); a building through `+0x1ac`, written only by the
+  0x4bf170 -> 0x4be0c0 (`+0x7f`), but a ship with `+0x251` 2 (being
+  built or sold) gets 0xff (0x4b4000); a building through `+0x1ac`, written only by the
   killing shot (0x4246b2); a gorgon, siren, sea creature and the
   leviathan through the record (0x4014d0, 0x403480, 0x490c70, 0x494090;
   the leviathan, category 400, counts nothing). Harpies and dragons shot
@@ -8148,7 +8184,11 @@ Gorgon's stare, which nothing casts.)
 **Worn crews** (0x486970): a warship (types 2-7) also goes to the reserve
 when its crew condition (0x4bc590: the mean of its items' mean conditions,
 `+0x419`; 0 with none) is under 35-65 (rolled after the hull's limit);
-ships in a dock (state 2) are left alone.
+ships with `+0x251` 2 (being built or sold, 0x486a08) are left alone.
+The port (`send_worn`) skips ships under a repair order instead: left,
+since sending one to the reserve then re-orders a repair the original
+holds (commands held by 0x4b37d0 while docking), which `order_repair`
+does not model.
 
 **Repairs** (order 96, part 0x3ec, 0x429f60): of the town's buildings
 (0x43fcb0) and forts and strongholds (types 0x1494, 0x1a6b: worn, vtable
