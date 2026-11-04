@@ -357,8 +357,9 @@ impl Scene {
     /// W x the end row + the end column); else a move (0x4a6270 mode 6)
     /// through the box to the nearer of the two cells, the prey's own on a
     /// tie, or to the one with a distance; with neither, none. (Its search
-    /// mode, `+0x6a1` 2, and its building prey are not the port's: it
-    /// boards ships only.)
+    /// mode, `+0x6a1` 2, is never set: no sender of event 0x10 gives
+    /// mode 2. Its building prey is not ported: every sender the port has
+    /// names a ship.)
     pub(super) fn board_look(&mut self, i: usize, ti: usize) -> BoardLook {
         let s2 = BOX / 2;
         let own = self.cell_of_object(i);

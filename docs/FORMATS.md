@@ -2065,8 +2065,8 @@ plans the leviathan hunt's look (sub-code 10, size 5) and the rammer's
 and boarder's closing in so (`Scene::plan_region`, hunt.rs, closing.rs).
 Not ported: the sub-code 11 looks (0x4aeb80, 0x4af640) and the boarder's
 search mode (0x4b7eb0) call with a size of 11, writing 121 shorts into a
-25-short stack buffer (undefined; who sets sub-code 11 and `+0x6a1 = 2`
-not traced).
+25-short stack buffer (undefined; who sets sub-code 11 not traced;
+`+0x6a1 = 2` is never set, below).
 
 **Rammers and boarders closing in.** The ship's tick (0x4abae6), while
 `+0x25d & 0x10` (set by the order 0x4aa840, with `+0x591 = 0`, `+0x593 =
@@ -2184,7 +2184,7 @@ always, no lime). The charge, the hook and what follows
 are the port's grapple.rs; the bow is looked for from the tick after the
 charge starts. Not ported: the 0x4a6150 wait counter's part (`+0x591`
 and 150: the port's mover's own), the rammer's state 1 reservation and
-its state 6 turn when 0x4c1760 refuses, and the search mode. What they
+its state 6 turn when 0x4c1760 refuses. What they
 do (0x4c2230 states 1 / 2, alongside, 0x4c1f60 giving 2): `+0x6aa` the
 goal cell, `+0x6a0 = 1`; in state 1 `+0x6ae` = its own cell when that
 cell's slot holds it, else 0x49a450 (the cell about its own whose slot
@@ -2204,6 +2204,31 @@ released (0x4a3970) unless its own cell or `+0x5ab`, 0x13d to its player
 (0x4a1880 with `+0x6cb`), commands back (0x4b3850), 0x4b8d10, `+0x696 =
 1`, state 1, 8 / 0x90, the prey `+0x6cf` and `+0x6cb` cleared, `+0x704`
 now. The port's `start_ram` returns doing nothing when refused.
+
+The search mode and other prey. 0x4aa840 sets `+0x6a1 = 2` (search:
+0x4c3000, 0x4b5ca0, 0x4b7eb0) only when its record's second byte
+(`+0x81d`, stored by the event 0x10 intake 0x4a9f2d) is 2, and every
+sender of event 0x10 gives 1: the commands board 0x17 (`{2, 1, id, ..,
+0xff}`), ram 0x18 (`{1, 1, ..}`) and load 0x1f sub 2 (`{3, 1, ..}`)
+(0x4e2ba0), and the at-will closing in 0x4c0b30 (`{1 ram / 2 board, 1,
+id, 0xff, 0x46 / 0x45}`, from 0x4bfc60 with `+0x684 & 6`); so the
+search modes are never run (not ported, none to port). The prey of
+those senders is always a ship: the player's board and ram need one
+(0x4e3580, 0x4e3800: 0x50e600 200, the picker not of type 0 or 1, the
+prey taking a contact, `+0x261 & 0x1000`; the board also 0x4e6700 for
+0x17), the computers' pickers list ships only (0x4baae0, 0x4bad90,
+below), and the at-will list 0x5c7d39 (at most 50, 0x4c0bc0 from the
+scan 0x4c0cd0; nothing while the picker has `+0x25d & 0x10`) takes
+ships (200) within the reach of the picker's cell (0x557480) with
+`+0x261 & 0x1000`, for a picker of side 1 or 2 (`+0x1a1d`) with a route
+end `+0x5b2` on the map only those within 5 of it. Not decoded: whether a campaign brain's
+command 0x17 / 0x18 ever names a building or a monster (the building
+branches of 0x4b7f10, 0x4b84b0 and 0x4b5df0 state 7 for classes
+0x34-0x36 and 0x39-0x3b, and 0x4c1f60's 0 for prey that is no ship,
+are read above but not ported); 0x4b7370 (`+0x696` 3, the load) is not
+ported. The port's own at-will ram and board (battle.rs, a guard with
+its ram or board switch at the ship it would fire at) stands in for
+0x4c0b30 (not ported).
 
 **Prey notices** (0x4a1800 0x13a, 0x4a1880 0x13d, 0x4a1900 0x13c, after
 0x4a1700's 0x136 and 0x4a1770's 0x137): to the ship's group (0x49c020
