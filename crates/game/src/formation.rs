@@ -353,6 +353,211 @@ fn along((ax, ay): (i32, i32), d: i32, (bx, by): (i32, i32)) -> i32 {
     (u >> 1) - (u >> 31)
 }
 
+/// The C library's `qsort` (0x58791f, Microsoft's): its order matters
+/// where keys are equal. Ranges of more than 8 elements are partitioned
+/// about the middle one (swapped to the front; from the left the first
+/// element above it, from the right the first below it, exchanged until
+/// they cross, then the pivot swapped to the crossing), the smaller side
+/// sorted first by a stack of ranges; ranges of 8 or fewer go to 0x587a73,
+/// which swaps the greatest (the first of equals) to the end, then the
+/// greatest of the rest, and so on.
+pub fn crt_qsort<T>(v: &mut [T], cmp: impl Fn(&T, &T) -> i32) {
+    let n = v.len();
+    if n < 2 {
+        return;
+    }
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    let (mut lo, mut hi) = (0usize, n - 1);
+    loop {
+        let size = hi - lo + 1;
+        let mut next = None;
+        if size <= 8 {
+            let mut h = hi;
+            while h > lo {
+                let mut max = lo;
+                for p in lo + 1..=h {
+                    if cmp(&v[p], &v[max]) > 0 {
+                        max = p;
+                    }
+                }
+                v.swap(max, h);
+                h -= 1;
+            }
+        } else {
+            v.swap(lo + size / 2, lo);
+            let (mut loguy, mut higuy) = (lo, hi + 1);
+            loop {
+                loop {
+                    loguy += 1;
+                    if loguy > hi || cmp(&v[loguy], &v[lo]) > 0 {
+                        break;
+                    }
+                }
+                loop {
+                    higuy -= 1;
+                    if higuy <= lo || cmp(&v[higuy], &v[lo]) < 0 {
+                        break;
+                    }
+                }
+                if higuy < loguy {
+                    break;
+                }
+                v.swap(loguy, higuy);
+            }
+            v.swap(lo, higuy);
+            // `higuy - 1 - lo < hi - loguy` in bytes: the left side the
+            // smaller, the right one is put by.
+            if ((higuy - lo) as isize) <= hi as isize - loguy as isize {
+                if loguy < hi {
+                    stack.push((loguy, hi));
+                }
+                if lo + 1 < higuy {
+                    next = Some((lo, higuy - 1));
+                }
+            } else {
+                if lo + 1 < higuy {
+                    stack.push((lo, higuy - 1));
+                }
+                if loguy < hi {
+                    next = Some((loguy, hi));
+                }
+            }
+        }
+        match next.or_else(|| stack.pop()) {
+            Some(r) => (lo, hi) = r,
+            None => return,
+        }
+    }
+}
+
+/// The cells between `a` and `b` (0x557440): the longer side and half the
+/// shorter, `(2 * long + short) / 2`.
+pub fn cells_apart(a: (i32, i32), b: (i32, i32)) -> i32 {
+    let (dx, dy) = ((b.0 - a.0).abs(), (b.1 - a.1).abs());
+    if dx >= dy {
+        (dy + 2 * dx) / 2
+    } else {
+        (dx + 2 * dy) / 2
+    }
+}
+
+/// 0x561a30: `cells` (targets' cells) dealt to `ships` (their cells), a
+/// cell for each ship. With one cell or one ship every ship takes the
+/// first cell. Else `k = min(cells, ships)`: the cells sorted by their
+/// distance (0x557440) from the first (`crt_qsort`), the first `k` kept;
+/// the cells' point the sum of their coordinates halved and the ships'
+/// point the sum of the ships' halved (sic: not averaged; an odd sum
+/// rounded up when its half lies below the first cell's coordinate);
+/// quotas of ships, the first cell's `(2m - 1) / k`, each next `(r / 2 +
+/// r) / left` of the `r` left, the last also the rest. Each cell's key is
+/// how far it lies (0x5574d0) along the direction from the ships' point
+/// to the cells' point turned about from the cells' point, each ship's
+/// along the direction from the ships' point to the cells' point: the
+/// cells bubble-sorted by key, the farther from the ships' point first on
+/// a tie (carrying their quotas); the ships by key, the nearer the cell
+/// whose quota the pass has reached first on a tie. Then the ships in
+/// that order fill the cells' quotas in order. `None` for no cells or no
+/// ships (the original divides by zero).
+// Its caller, 0x4d5560 of the human's attack-zone block, is not ported.
+#[allow(dead_code)]
+pub fn deal_cells(cells: &[(i32, i32)], ships: &[(i32, i32)]) -> Option<Vec<(i32, i32)>> {
+    let (n, m) = (cells.len(), ships.len());
+    let k = n.min(m);
+    if k == 0 {
+        return None;
+    }
+    if k == 1 {
+        return Some(vec![cells[0]; m]);
+    }
+    #[derive(Clone, Copy)]
+    struct Cell {
+        at: (i32, i32),
+        key: i32,
+        dist: i32,
+        far: i32,
+        quota: i32,
+    }
+    let mut recs: Vec<Cell> = cells
+        .iter()
+        .map(|&at| Cell {
+            at,
+            key: 0,
+            dist: cells_apart(cells[0], at),
+            far: 0,
+            quota: 0,
+        })
+        .collect();
+    crt_qsort(&mut recs, |a, b| a.dist - b.dist);
+    recs.truncate(k);
+    let half = |sum: i32, first: i32| {
+        if sum & 1 != 0 && sum / 2 < first {
+            (sum + 1) / 2
+        } else {
+            sum / 2
+        }
+    };
+    let point = |xs: &mut dyn Iterator<Item = (i32, i32)>| {
+        let (sx, sy) = xs.fold((0, 0), |(a, b), (x, y)| (a + x, b + y));
+        (half(sx, cells[0].0), half(sy, cells[0].1))
+    };
+    let at = point(&mut recs.iter().map(|c| c.at));
+    let from = point(&mut ships.iter().copied());
+    let m = m as i32;
+    recs[0].quota = (2 * m - 1) / k as i32;
+    let mut rest = m - recs[0].quota;
+    for (i, c) in recs.iter_mut().enumerate().skip(1) {
+        let left = (k - i) as i32;
+        c.quota = (rest / 2 + rest) / left;
+        rest -= c.quota;
+    }
+    recs[k - 1].quota += rest;
+    let toward = dir_to(from, at);
+    let back = dir_to(at, from);
+    for c in &mut recs {
+        c.key = along(at, (back - 4) & 7, c.at);
+        c.far = cells_apart(from, c.at);
+    }
+    for i in (0..k - 1).rev() {
+        for j in 0..=i {
+            let (a, b) = (recs[j], recs[j + 1]);
+            if b.key < a.key || (a.key == b.key && a.far < b.far) {
+                recs.swap(j, j + 1);
+            }
+        }
+    }
+    let key: Vec<i32> = ships.iter().map(|&s| along(from, toward, s)).collect();
+    let mut order: Vec<usize> = (0..ships.len()).collect();
+    for i in (0..ships.len() - 1).rev() {
+        let (mut c, mut left) = (0, recs[0].quota);
+        for j in 0..=i {
+            let (a, b) = (order[j], order[j + 1]);
+            if key[b] < key[a]
+                || (key[a] == key[b]
+                    && cells_apart(recs[c].at, ships[b]) < cells_apart(recs[c].at, ships[a]))
+            {
+                order.swap(j, j + 1);
+            }
+            left -= 1;
+            while left < 1 {
+                c += 1;
+                left = recs[c].quota;
+            }
+        }
+    }
+    let mut out = vec![(0, 0); ships.len()];
+    let (mut c, mut left) = (0, recs[0].quota);
+    for (j, &s) in order.iter().enumerate() {
+        out[s] = recs[c].at;
+        left -= 1;
+        // (After the last ship the original reads on past the cells.)
+        while left < 1 && j + 1 < order.len() {
+            c += 1;
+            left = recs[c].quota;
+        }
+    }
+    Some(out)
+}
+
 /// A slot a ship may take (the planner's 0x18-byte record): its cell, the
 /// threat grid's value there (`+8`, which 0x55f870 then overwrites with
 /// the sort key), ring distance from the goal, the centre flood's value
@@ -1034,6 +1239,36 @@ mod tests {
         ];
         let got = plan(&sea, &sea, (w, h), (10, 10), &ships).unwrap();
         assert_eq!(got, vec![(10, 10), (11, 10), (10, 11)]);
+    }
+
+    /// 0x58791f: equal keys of a short run end as 0x587a73 leaves them
+    /// (the first of the greatest to the end each pass); longer runs sort.
+    #[test]
+    fn crt_qsort_ties() {
+        let mut v = [(5, 0), (5, 1), (5, 2)];
+        crt_qsort(&mut v, |a, b| a.0 - b.0);
+        assert_eq!(v, [(5, 1), (5, 2), (5, 0)]);
+        let mut v = [(2, 0), (1, 1), (2, 2), (1, 3)];
+        crt_qsort(&mut v, |a, b| a.0 - b.0);
+        // Pass 1: the greatest first found (index 0) to the end; pass 2:
+        // of (1, 3), (1, 1), (2, 2) the 2 to the end; pass 3: equal, swap.
+        assert_eq!(v, [(1, 1), (1, 3), (2, 2), (2, 0)]);
+        let mut v: Vec<i32> = (0..200).map(|i| (i * 7919) % 101).collect();
+        crt_qsort(&mut v, |a, b| a - b);
+        assert!(v.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    /// 0x561a30: one cell for all; two ships to two cells by their keys
+    /// along the line between the halved sums (quotas 1 and 1).
+    #[test]
+    fn deal_cells_by_keys() {
+        let one = deal_cells(&[(4, 4), (9, 9)], &[(0, 0)]).unwrap();
+        assert_eq!(one, vec![(4, 4)]);
+        let got = deal_cells(&[(10, 2), (10, 0)], &[(0, 0), (0, 2)]).unwrap();
+        assert_eq!(got, vec![(10, 0), (10, 2)]);
+        assert_eq!(deal_cells(&[], &[(0, 0)]), None);
+        assert_eq!(cells_apart((0, 0), (3, 1)), 3);
+        assert_eq!(cells_apart((0, 0), (1, 4)), 4);
     }
 
     /// Slot class 6 (0x560f80 from ring 4): no slot within ring distance

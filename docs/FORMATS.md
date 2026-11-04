@@ -7392,7 +7392,16 @@ The rest, read (decomp `humanblock*.c`):
 - 0x4cd300 (block `{0x70, 0x20}`: rect `+0xc`, mask `+0x1c`, players
   `+0x3d`): the rect's cells within the map, row by row, a cell masked
   -1 skipped; the cell's object at cell `+0xc`, else `+4`, else `+0x10`
-  (the cell record base `+8`): its player (`+0x54 x 4 + +0x55`) in the
+  (the cell record base `+8`; read at 0x4cd4a2, 0x4cd4ad, 0x4cd4be: grid
+  `+0x14`, `+0xc`, `+0x18` + 0x18 a cell). Cell `+4` (grid `+0xc`) is
+  the cell's occupant slot: taken only when empty by 0x499800 (x, y) /
+  0x499830 (index) and cleared only by its holder by 0x499860 / 0x4998a0,
+  their callers a ship's placement and steps (0x4dc630, 0x4dfe00,
+  0x4e2180, 0x4a39b0, 0x4a3a70, 0x4b93f0), the land creatures' jam
+  0x1f7 (0x415ee0), 0x41d4a0 and LandObj's mending (0x425990); `+0xc`
+  (grid `+0x14`) is written by the harpies (0x41fbd0) and the temples'
+  war creatures (0x43aa10); `+0x10` (grid `+0x18`) by the sea monsters
+  (0x490d60, 0x491780). Its player (`+0x54 x 4 + +0x55`) in the
   players and at war (0x4efe20 < 0); a ship skipped on the cell it has
   reserved (`+0x5ab`, 0x4cd549); classes 0x32/0x33 and the parent of a 0x1f7 (0x415df0,
   0x415db0) once; strength a ship's `+0x479`, 0x34-0x36 the sum of
@@ -7422,12 +7431,33 @@ The rest, read (decomp `humanblock*.c`):
   class-6 cell, the count of slots (plus one for each whose cell's sum of
   player `+0x3c` grids of players at war is above the ship's `+0x479`,
   when player `+0x40` is set), `+0x21 = 0xb`.
-- 0x4d5100: a 0x24-byte record per slot (cell, `+8` the class, `+0x10`
-  ship, `+0x14` id, `+0x30` 1 for deep `+0x592`) to 0x5614e0 with the
-  grids by draught (0x4d50b0), with player `+0x40` the per-cell sum of the
-  `+0x3c` grids of players at war as the third grid; the planner's value
-  returned (0x55f870: the greatest goal-flood value at a ship's cell; it
-  then marks each ship 1-3 by thirds), negative clears the count.
+- 0x4d5100: a 0x24-byte record per ship of the group (cell, `+8` the
+  class, `+0x10` ship, `+0x14` id) to 0x5614e0 with the grids by draught
+  (0x4d50b0), with player `+0x40` the per-cell sum of the `+0x3c` grids
+  of players at war as the third grid; the planner's value returned
+  (0x55f870: the greatest goal-flood value at a ship's cell; it then
+  marks each ship 1-3 by thirds), negative clears the count. Its draught
+  flag is written after the record pointer has stepped on (0x4d51be `add
+  eax, 0x24`, then 0x4d51d5 / 0x4d51e6 `[eax + base + 0xc]`): ship i's
+  `+0x592 != 0` lands in record i + 1's `+0xc` (the planner's second
+  grid), record 0's stays 0; and the grids are the other way about from
+  0x4cc970's: p1 0x5c9398 when a ship has `+0x592` 0, p2 0x5c93bc when
+  one has it set. (`formation::plan_records` takes the records so.)
+- The threat grids: each player's `+0x3c` (game `+0x3c + 0xba0 p`) is a
+  W x H int grid made zeroed by 0x4a7fa0 (with `+0x40` set also the short
+  grid `+0x41`), freed by 0x4a85a0, saved and loaded whole (0x4a89e0: the
+  twenty 0xba0 records copied, then each grid present); 0x4a7f70 zeroes
+  the records and sets `+0x38 = 15`. A ship adds its stamp (`+0xf9`, a
+  `+0xf5` square, `+0xf5 = 2 +0x47d + 1`, 0x4e5410: its weapons' worth by
+  position, 0x4bf5f0, 0x5c75cc) / 100 about its cell (0x4e5680(1), after
+  taking the old one off) when its player's `+0x40` is set, `+0xe8` set
+  and `+0x38` ticks have passed (0x4e58a0 from the ship's tick 0x4dec40);
+  at its end 0x4e5680(0) takes it off. Nothing writes `+0x40` but those
+  two whole-record writers: no byte store at displacement 0x40 in the
+  listing is to anything but a stack frame, nor any in the functions that
+  address the player records (`[0x5c7508]`, stride 0xba0) at +0x40, +0x24
+  or +4. So `+0x40` stays 0: no third grid, no threat count, and the
+  stamps are never made.
 - 0x4d5560: the targets listed again (0x4d4860 with no ids) and checked
   (0x4d5430: each, newest first, kept with fresh fields when it exists,
   0x51f1f0, and is at war or its player is in the group's `+0x19`; else
@@ -7438,7 +7468,10 @@ The rest, read (decomp `humanblock*.c`):
 - 0x561a30(W, H, cells, n, ships, m): `k = min(n, m)`; 1: every ship the
   first cell. Else the cells copied with their 0x557440 distance from the
   first and sorted on it (0x58791f, the C library's qsort, comparing
-  with 0x561f20: equal distances in that sort's order, not decoded); the first `k` cells' sums and
+  with 0x561f20 `a +0xc - b +0xc`; Microsoft's: ranges over 8 split about
+  the middle element swapped to the front, the smaller side stacked;
+  ranges of 8 or fewer by 0x587a73, the first greatest swapped to the
+  end each pass; port `formation::crt_qsort`); the first `k` cells' sums and
   the ships' sums halved (an odd sum rounded up when its half is below
   the first cell's coordinate, sic: halved, not averaged); quotas: the
   first `(2m - 1) / k`, each next `(r / 2 + r) / left`, the remainder to
@@ -7447,7 +7480,10 @@ The rest, read (decomp `humanblock*.c`):
   along `dir(ships' point -> cells' point)`; cells bubble-sorted by key
   (the farther on a tie), ships by key (the nearer the current cell on a
   tie, the current cell stepping on by the quotas); then ship i the cell
-  its quota run reaches.
+  its quota run reaches. The quotas are set before the cells' key sort
+  and move with their cells. The ships' `+0x20` (their key) is then
+  zeroed for one fixed ship only (0x561eb9 reads the index left by the
+  sort). Port `formation::deal_cells`.
 - 0x4d61d0 (each tick; `+8` the ticks since): with no notice acted on
   and `+8` over 70, `+8 = 0` and each ship of the group (as above), then
   in mode 1 0x4d5a80 (nothing under 2 slots): the flood 0x558fa0 on the
@@ -7476,13 +7512,12 @@ The rest, read (decomp `humanblock*.c`):
   0x4d5560, mode 2. 0x137 (left): its slot and target entries removed.
   0x13a: its target entry removed, the area's target (0x4d6640) attacked
   (0x4d0140) by the ship.
-Not decoded: the writer of player `+0x40` and of the `+0x3c` grids (the
-threat grid and count above); what cell slot `+4` holds; the planner
-0x560100 for slot classes above 0 (0x560f80's start ring `2c / 3` and
-`c <= d < 11`, the classes' buckets 0-9) and its value (the port's
-`formation::plan` is class 0 and gives none); the sender of 0x13a; the order
-0x58791f's qsort leaves equal distances in. The block is not ported
-until these are.
+Settled since: the planner's slot classes, third grid and value
+(`formation::plan_records`), the threat grids (above: player `+0x40`
+never set), cell `+4` (the occupant slot), 0x58791f's order
+(`crt_qsort`) and 0x561a30 (`deal_cells`). Not decoded: the sender of
+0x13a. The block itself is not ported yet (its routines are read: the
+port's ships still run `Task::Zone`).
 
 A fort of the forts' flotilla takes the `#` too (below).
 
