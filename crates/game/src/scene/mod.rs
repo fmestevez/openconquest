@@ -539,6 +539,7 @@ pub struct Scene {
 }
 
 mod ai;
+mod at_will;
 mod battle;
 mod brain;
 mod castq;
@@ -2548,6 +2549,7 @@ impl Scene {
             self.run_leviathans(data, caches);
             self.run_hunts(data, caches);
             self.run_closing(data, caches);
+            self.run_at_will();
             self.run_landings(data, caches);
             // The commands of this tick reach their objects at the start
             // of the next, before anything runs (0x51fe20: 0x521570,

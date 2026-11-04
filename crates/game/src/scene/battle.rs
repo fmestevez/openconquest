@@ -790,25 +790,6 @@ impl Scene {
                 continue;
             }
             let Some(ti) = target else { continue };
-            // A guard set to ram or board goes in rather than firing.
-            if ordered.is_none() {
-                let target = self.objects[ti].id;
-                if let Some(ship) = self.objects[i].ship.as_mut() {
-                    let b = ship.behaviour;
-                    if b.ram || (b.board && ship.crew.count() > 0) {
-                        ship.task = Some(if b.ram {
-                            Task::Ram { target }
-                        } else {
-                            Task::Board {
-                                target,
-                                thrown: None,
-                                hooking: false,
-                            }
-                        });
-                        continue;
-                    }
-                }
-            }
             let d = dist(&self.objects[i], &self.objects[ti]);
             let (tx, ty) = (self.objects[ti].x, self.objects[ti].y);
             if d > range {

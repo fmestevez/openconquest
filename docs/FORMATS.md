@@ -2226,9 +2226,61 @@ command 0x17 / 0x18 ever names a building or a monster (the building
 branches of 0x4b7f10, 0x4b84b0 and 0x4b5df0 state 7 for classes
 0x34-0x36 and 0x39-0x3b, and 0x4c1f60's 0 for prey that is no ship,
 are read above but not ported); 0x4b7370 (`+0x696` 3, the load) is not
-ported. The port's own at-will ram and board (battle.rs, a guard with
-its ram or board switch at the ship it would fire at) stands in for
-0x4c0b30 (not ported).
+ported.
+
+**The at-will ram and board** (`+0x684 & 6`; port at_will.rs). In the
+ship's tick (0x4ab930), after its behaviour (`+0x25d & 0x10`), every
+fourth tick (`(clock +0xde ^ id +0x4c) & 3 == 0`) a ship that may fire
+(0x4e6700 0x15: `+0x261 & 0x800`, armed 0x4bc270(7), not limed `+0x258`)
+or, of type above 1, has its ram or board switch on and is type 2, 5
+or 6 (0x597a30) or carries a hero who fights (0x4e66c0, 0x4b4dd0), with
+`+0x25d & 0x100` or `+0x684`, afloat (`+0x251 == 0`) and under no
+status (`+0x25c`), runs 0x4bf9b0: its tail, with a switch on, clears
+`+0x710` / `+0x711` and marks the ram (`+0x710 = 1`, bit 0x10) when
+now - `+0x704` > 50, setting `+0x704` = now + 100, and the board
+(`+0x711`, 0x20) by `+0x708` likewise; any bit (a loaded position too)
+calls 0x4c1240, whose fire states 1 and 4 run 0x4bfc60. There, with
+`+0x684 & 6`, the list 0x5c7d38 is emptied; the box is the range of the
+highest loaded position (0x5980f4[level x 4 + k]: 9, 9, 9, 13 at every
+level) or 4 (none, or 0), half of it about the cell, so never under the
+reach 2; each cell's first held slot (`+0x14`, `+0xc`, `+0x18`, `+0x10`)
+not itself, an enemy (side 2 but 0x1fb, or 0x4efe20 < 0), its player
+bit in `+0x689`, there (vt+0x2c) and not a ship on its `+0x5ab` goes,
+with `+0x710` or `+0x711` set, to 0x4c0bc0 (reach 2): nothing while
+`+0x25d & 0x10`; a ship (0x50e600 200) within 2 (0x557480) taking a
+contact (`+0x261 & 0x1000`) is listed (0x5c7d39 pointer, 0x5c7e01 cell,
+at most 50), a picker of side 1 or 2 (`game +0x1a1d`) with `0 < +0x5b2
+< W x H` taking only those within 5 of that cell (`+0x5b2` the route's
+end, 0x4a6330; its own cell after a stop 0x4a38f0 or a route cleared
+0x4a5b70). Then with a list 0x4e8db0(0x32, `+0x684`) picks: boarding
+odds `+0x53c` x 100 / the prey's (200 at most, 200 against 0, 0 with 0
+of its own; 0 against a phantom `+0x253` and for a rammer at a fire
+rammer, types 5 and 10), the first greatest or an equal nearer
+(0x557440, from 10000); ramming odds (disassembly 0x4e8ed2-0x4e9075, in
+32-bit integers that wrap, on the picker's way `+0x59b` for both sides,
+`b` the angle class 0x4c19b0: 1 same heading, 2 opposite, 0 else): `Q x
+(0x598078[b] x H x way / 100) x (P / P') / 2500` against `Q' x
+(0x598084[b] x H' x way / 100) x P' / P / 2500` (Q 0x598054 by ram kind
+x 3 + the player's level, H 0x5c76b0, P 0x598024; the power ratio
+divided first), `x 100 /`, at most 200, 200 when the prey's is 0 (so
+lying still) or types 5 and 10; the first strictly greatest. The board
+counts only with `+0x684 & 4` and `+0x711`, the ram with `& 2` and
+`+0x710`; the ram if its odds pass the boarding's, else the board,
+needing 0x66; the list becomes that one (count 1), the result 2 or 4
+(else -1). 0x4c0b30 (count 1): the ram sends itself `{1, 1, id, 0xff,
+0x46}` (vt+4 event 0x10) and sets `+0x708` = now, the board `{2, 1, id,
+0xff, 0x45}` and `+0x704` = now. The intake 0x4a9f2d stores bytes 0-6
+(`+0x81c..+0x822`, the 0x46 / 0x45 dropped) and `+0x7d6 |= 0x10`; the
+order 0x4aa840 runs at the ship's next record pass (0x4ab8c9). The
+constructor zeroes `+0x696..+0x712` (0x4dc554). The port runs it a game
+tick at a time after the closing in, the order through the outbox
+(`Order::Close`, delivered next tick); the box's cells are those within
+2, the slots `+0x14` (`Scene::flyer_slot_held`) then `+0xc`
+(`slot_holder`); a route end is the route's last cell, else its own.
+Not ported: the gate's early returns `+0x257` (not decoded: no writer of
+a value but 0x4c133a's 0) and 0x4c3ca0 (`+0x25d & 2`: 0x4c3410 returns 1
+on the tick the boarded side's contact ends); `+0x25c` is the siren's
+song alone in the port.
 
 **Prey notices** (0x4a1800 0x13a, 0x4a1880 0x13d, 0x4a1900 0x13c, after
 0x4a1700's 0x136 and 0x4a1770's 0x137): to the ship's group (0x49c020
@@ -7855,7 +7907,7 @@ positions in `+0x685`. Ported: the masks, records, `#` subs, 0x4e7220 and
 the at-will test (`Behaviour::may_pick`); not ported: the search's
 geometry by weapon position (0x4bfc60's square, 0x4c0cd0's arcs
 0x4bf5f0, 0x4e8af0's draws), so a partial positions mask counts as all;
-the fire state is kept but not read.
+the fire state is kept, read only by the at-will ram and board (states 1 and 4, "The at-will ram and board").
 
 **The ship's fire state `+0x5d1`** (byte; 0 from 0x4dc3f0, copied whole
 by the save and load at 0x4e14f7 / 0x4e2351). Writers: 0x4a9e30 at
@@ -7878,7 +7930,8 @@ position's target `+0x63c` or guard on, in 2 every group; then ram and
 board each 50 ticks); 0x4abe00, 0x4ab3f0 (at 0x4ab4d7), 0x4a9e30 and
 0x4d60c0. Not ported: the fire pass these drive (0x4bf9b0, 0x4c1240,
 0x4bfc60, 0x4c0eb0, 0x4c09c0; the port's `battle.rs` fire is its own
-model), so neither the state nor 0x4d60c0's cases on it; what 0x4c0eb0
+model), so the state is read only by the at-will ram and board and
+0x4d60c0's cases on it are not ported; what 0x4c0eb0
 and 0x4c09c0 do is not read.
 Who sends `#` (0x4c42f0, `{sub, +1, +5, +9, 0.., +0x15 0xff}`, queued:
 it reaches the ship at the next tick): 0x4c4350 (fleet order 0x72, from

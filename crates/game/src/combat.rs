@@ -589,6 +589,36 @@ pub fn ram_odds(a: &Rammer, t: &Rammer) -> u32 {
     (att * 100 / def).min(200) as u32
 }
 
+/// The odds of `a` ramming `t` as the at-will pick weighs them (0x4e8db0,
+/// disassembly 0x4e8ed2-0x4e9075), on `a`'s way `+0x59b` for both sides,
+/// in 32-bit integers (products wrap): `a`'s ram quality (0x598054) x
+/// (its angle factor, 0x598078, x its type's full hull 0x5c76b0 x the way
+/// / 100) x (its power over `t`'s, 0x598024, divided first) / 2500; `t`'s
+/// quality x (its factor, 0x598084, x its hull x the way / 100) x its
+/// power / `a`'s / 2500; then `a`'s x 100 / `t`'s, at most 200 (200 when
+/// `t`'s is 0, or for a rammer at a fire rammer). No rammer's bonus, as
+/// 0x4ba950 has; a ship lying still (way 0) gets 200.
+pub fn at_will_ram_odds(a: &Rammer, t: &Rammer, way: i32) -> i32 {
+    let angle = ram_angle(a.heading, t.heading);
+    let power = |k: u8| RAM_POWER[k as usize % 12] as i32;
+    let hull = |k: u8| hull_points(k) as i32;
+    let quality = |r: &Rammer| RAM_QUALITY[r.quality()] as i32;
+    let strike = |factor: u32, k: u8| (factor as i32).wrapping_mul(hull(k)).wrapping_mul(way) / 100;
+    let att = quality(a)
+        .wrapping_mul(strike(RAM_ANGLE_ATTACK[angle], a.kind))
+        .wrapping_mul(power(a.kind) / power(t.kind))
+        / 2500;
+    let def = quality(t)
+        .wrapping_mul(strike(RAM_ANGLE_DEFENCE[angle], t.kind))
+        .wrapping_mul(power(t.kind))
+        / power(a.kind)
+        / 2500;
+    if (a.kind == 5 && t.kind == 10) || def == 0 {
+        return 200;
+    }
+    (att.wrapping_mul(100) / def).min(200)
+}
+
 /// The angle class between the rammer's and the rammed ship's headings
 /// (0x4c19b0): 1 the same way, 2 opposite (head on), 0 crossing at any
 /// other angle.

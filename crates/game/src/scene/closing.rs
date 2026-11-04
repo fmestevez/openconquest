@@ -208,7 +208,7 @@ impl Scene {
     /// Ship `k`'s reserved next cell (`+0x5ab`) as the port keeps it: the
     /// cell it is going into while between cells under way (move state 4
     /// or 5).
-    fn reserved_cell(&self, k: usize) -> Option<(i32, i32)> {
+    pub(super) fn reserved_cell(&self, k: usize) -> Option<(i32, i32)> {
         let s = self.objects[k].ship.as_ref()?;
         if matches!(s.move_state, 4 | 5) {
             s.under_way_into()
@@ -219,7 +219,7 @@ impl Scene {
 
     /// The ship holding a cell's slot (`grid + 0xc`): one in it, or one
     /// that has reserved it.
-    fn slot_holder(&self, cell: (i32, i32)) -> Option<usize> {
+    pub(super) fn slot_holder(&self, cell: (i32, i32)) -> Option<usize> {
         self.slot_ship(cell)
             .or_else(|| (0..self.objects.len()).find(|&k| self.reserved_cell(k) == Some(cell)))
     }

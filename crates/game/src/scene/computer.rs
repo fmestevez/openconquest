@@ -1206,7 +1206,7 @@ impl Scene {
             .any(|o| o.owner == Some(owner) && o.combat.is_some())
     }
 
-    fn is_human_id(&self, id: u32) -> bool {
+    pub(super) fn is_human_id(&self, id: u32) -> bool {
         self.human.is_some_and(|h| h.nation * 4 + h.slot == id)
             || self
                 .seats
@@ -5172,7 +5172,7 @@ impl Scene {
     /// prey of a boarding or a ram (0x4c3410 clears it at 0x4c3543,
     /// 0x4c3ec0 at 0x4c3eef; 0x4c3af4, 0x4c3f19 and 0x4c40e4 set it
     /// again: the port's boarded ship's grapple and a ram run at it).
-    fn takes_contact(&self, i: usize) -> bool {
+    pub(super) fn takes_contact(&self, i: usize) -> bool {
         let id = self.objects[i].id;
         let Some(s) = self.objects[i].ship.as_ref() else {
             return false;

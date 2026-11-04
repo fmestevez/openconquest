@@ -498,6 +498,15 @@ pub struct Ship {
     /// `Task::Board`; `scene::closing`).
     #[serde(default)]
     pub closing: Option<Closing>,
+    /// `+0x704`: the tick after which (and 50 more) 0x4bf9b0 marks the
+    /// ram switch for the at-will look (`scene::at_will`); 0x4c0b30 sets
+    /// it to now after a board, the rammer's way back (0x4c2b9d) too.
+    #[serde(default)]
+    pub ram_wait: u32,
+    /// `+0x708`: the board switch's, likewise; 0x4c0b30 sets it to now
+    /// after a ram, the boarder's way back (0x4b6bee) too.
+    #[serde(default)]
+    pub board_wait: u32,
 }
 
 /// A rammer's or boarder's way to its prey, a game tick at a time (see
@@ -864,7 +873,7 @@ pub struct Behaviour {
     pub classes: u32,
     /// `+0x5d1`, the fire state (0x4c1240: 1 and 4 search, 2 the point
     /// target, 3 firing). The port's fire pass has no such states: kept
-    /// as the original writes it, not read.
+    /// as the original writes it, read by the at-will look (`scene::at_will`).
     #[serde(default)]
     pub fire_state: u8,
 }
@@ -2042,6 +2051,8 @@ pub fn resolve(
         lcg: None,
         hunt: None,
         closing: None,
+        ram_wait: 0,
+        board_wait: 0,
         cargo: 0.0,
         cargo_kind: None,
         task: None,

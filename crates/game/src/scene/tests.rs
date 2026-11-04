@@ -326,6 +326,13 @@ fn warship_sinks_enemy() {
     scene.order_attack(mine, target).unwrap();
     let (mut flew, mut landed) = (false, false);
     for _ in 0..60 * 120 {
+        // The others kept from boarding or ramming us at will (the
+        // computer's `#` sets their switches): this is about the shots.
+        for o in &mut scene.objects {
+            if let Some(s) = o.ship.as_mut().filter(|_| o.id != mine) {
+                (s.behaviour.ram, s.behaviour.board) = (false, false);
+            }
+        }
         scene.update(1.0 / 60.0, &data, &mut caches);
         // Shots fly with their pictures and land with an impact a frame a
         // tick.
@@ -1882,19 +1889,111 @@ fn behaviours() {
             count: 0
         })
     );
-    // Set to ram, an idle guard rams instead of firing.
+    // Set to ram, it goes in at will at an enemy within 2 cells of it
+    // (0x4bf9b0, 0x4bfc60, 0x4c0bc0, 0x4e8db0, 0x4c0b30); further off it
+    // does not.
     let m = scene.object_index(mine).unwrap();
     scene.objects[m].ship.as_mut().unwrap().task = None;
+    scene.objects[m].ship.as_mut().unwrap().path.clear();
     scene
         .toggle_behaviour(mine, crate::commands::RAM_ATTACK)
         .unwrap();
     for _ in 0..50 * 3 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    assert!(!matches!(task(&scene, mine), Some(Task::Ram { .. })));
+    let (m, e) = (
+        scene.object_index(mine).unwrap(),
+        scene.object_index(enemy).unwrap(),
+    );
+    let (ex, ey) = (scene.objects[e].x, scene.objects[e].y);
+    let s = scene.objects[m].ship.as_mut().unwrap();
+    s.task = None;
+    s.path.clear();
+    scene.objects[m].x = ex - 128.0;
+    scene.objects[m].y = ey;
+    for _ in 0..50 * 5 {
         scene.update(0.02, &data, &mut caches);
         if matches!(task(&scene, mine), Some(Task::Ram { .. })) {
             break;
         }
     }
     assert!(matches!(task(&scene, mine), Some(Task::Ram { target }) if target == enemy));
+}
+
+/// The at-will pick's ramming odds (0x4e8db0 at 0x4e8ed2-0x4e9075), in
+/// 32-bit integers that wrap.
+#[test]
+fn at_will_ram_odds() {
+    use crate::combat::{at_will_ram_odds, Rammer};
+    let ship = |kind, heading| Rammer {
+        kind,
+        ram: 0,
+        level: 0,
+        heading,
+        speed: 0.0,
+        rigging: 0,
+    };
+    // Lying still: both sides 0, so 200.
+    assert_eq!(at_will_ram_odds(&ship(5, 0), &ship(2, 2), 0), 200);
+    // A rammer at a fire rammer: 200 whatever.
+    assert_eq!(at_will_ram_odds(&ship(5, 0), &ship(10, 2), 9000), 200);
+    // A boat (power 10) crossing a royal ship (100): 10 / 100 is 0.
+    assert_eq!(at_will_ram_odds(&ship(0, 0), &ship(2, 2), 9000), 0);
+    // A royal ship crossing a boat at way 9000: 100 x (90 x 65000 x 9000
+    // wrapped / 100) x (100 / 10) / 2500 against 100 x (4 x 18200 x 9000
+    // / 100) x 10 (wrapped) / 100 / 2500.
+    let att = 100i32
+        .wrapping_mul(90i32.wrapping_mul(65000).wrapping_mul(9000) / 100)
+        .wrapping_mul(10)
+        / 2500;
+    let def = (100i32 * (4 * 18200 * 9000 / 100)).wrapping_mul(10) / 100 / 2500;
+    assert_eq!(
+        at_will_ram_odds(&ship(2, 0), &ship(0, 2), 9000),
+        (att.wrapping_mul(100) / def).min(200)
+    );
+}
+
+/// The at-will look (0x4bf9b0): every fourth tick by the ship's id, a
+/// switch marked once more than 50 ticks have passed since its time, the
+/// time then set to now + 100 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn at_will_timers() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let mine = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    scene.objects.retain(|o| o.ship.is_none() || o.id == mine);
+    scene
+        .toggle_behaviour(mine, crate::commands::RAM_ATTACK)
+        .unwrap();
+    let m = scene.object_index(mine).unwrap();
+    let s = scene.objects[m].ship.as_mut().unwrap();
+    s.kind = 5;
+    s.behaviour.fire_state = 4;
+    let wait = |s: &Scene| s.objects[m].ship.as_ref().unwrap().ram_wait;
+    // The first tick past 50 whose low bits are the id's.
+    let first = (51..).find(|t| (t ^ mine) & 3 == 0).unwrap();
+    for t in 0..=first + 152 {
+        scene.ticks = t;
+        scene.run_at_will();
+        if t == first - 1 {
+            assert_eq!(wait(&scene), 0);
+        }
+        if t == first || t == first + 151 {
+            assert_eq!(wait(&scene), first + 100, "tick {t}");
+        }
+    }
+    assert_eq!(wait(&scene), first + 252);
+    assert_eq!(scene.objects[m].ship.as_ref().unwrap().board_wait, 0);
 }
 
 /// The ships' behaviour masks: the constructor's zeroes (0x4dc3f0), the

@@ -152,6 +152,21 @@ impl Scene {
     /// 12`) `+0x18`; fireballs (0x4060ec), harpies and dragons (0x41ff74,
     /// 0x4208a5) and tornadoes (0x43a9f6) `+0x14`. (Not decoded: whatever
     /// else may hold `+0x14` or `+0x18`, and the siren's slot.)
+    /// Whether a cell's `+0x14` slot holds anything: a fireball
+    /// (0x4060ec), a harpy or dragon (0x41ff74, 0x4208a5) or a tornado
+    /// (0x43a9f6). (Not decoded: whatever else may hold it.)
+    pub(super) fn flyer_slot_held(&self, (x, y): (i32, i32)) -> bool {
+        let t = TILE_SIZE as f32;
+        let cell_of = |px: f32, py: f32| ((px / t).floor() as i32, (py / t).floor() as i32);
+        self.objects.iter().any(|o| {
+            matches!(o.class, ObjectClass::Monster(0x1f8 | 0x1f9)) && cell_of(o.x, o.y) == (x, y)
+        }) || self.fireballs.iter().any(|f| f.cell == (x, y))
+            || self
+                .effects
+                .iter()
+                .any(|e| e.tornado.is_some() && cell_of(e.x, e.y) == (x, y))
+    }
+
     pub(super) fn cast_cell_check(
         &self,
         spell: Spell,
@@ -178,16 +193,7 @@ impl Scene {
                 .any(|o| o.class == ObjectClass::Monster(0x1fa) && cell_of(o.x, o.y) == (x, y))
                 || self.sea_monster_at((x, y), 0).is_some()
         };
-        let flying = || {
-            self.objects.iter().any(|o| {
-                matches!(o.class, ObjectClass::Monster(0x1f8 | 0x1f9))
-                    && cell_of(o.x, o.y) == (x, y)
-            }) || self.fireballs.iter().any(|f| f.cell == (x, y))
-                || self
-                    .effects
-                    .iter()
-                    .any(|e| e.tornado.is_some() && cell_of(e.x, e.y) == (x, y))
-        };
+        let flying = || self.flyer_slot_held((x, y));
         match spell {
             Spell::Reef | Spell::Whirlpool => {
                 if !layers() {
