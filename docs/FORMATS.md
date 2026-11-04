@@ -7177,16 +7177,55 @@ three draws of 0x4a2540 over the odds the ring weighs, x 1 / (5 x ring
 Port: computer.rs `attack_pass`, `closing_in` (the port's ship with a
 `Task::Board` or `Task::Ram`: its loading, also 0x10, is not told
 apart), `takes_contact`, `close_pick`, `board_odds`, `ram_odds`
-(`combat::ram_odds`). A rewrite of the block (the same kind) keeps the notices freed;
-a block of another kind makes them again (0x4a1150). The status the
-tasks read (0x4d70d0) is still the port's own test (`Scene::report`).
+(`combat::ram_odds`).
+
+A rewrite of the block (the same kind) keeps the notices freed; a block
+of another kind makes them again (0x4a1150). The status the tasks read
+(0x4d70d0, by 0x4a0d80 for `{0x70, 0x21}`; port `Scene::report`): six
+words zeroed; with no ships in the group `{0x1f5, .., result 1}`; else
+`+1` the ticks since the block's `+8`, each ship of the group's list
+that exists counted armed (`+2`: a ship, 0x50e600 200, of type neither 0
+nor 1, for which 0x4bc270(7) holds: types 8-11 always, the others with
+an item in a position `+0x289..+0x291`) or not (`+3`); then the area's
+target (0x4d6640): armed ships and a target, 500 (running); else 0x1f5
+(done), result 10 with armed ships, 1 without. Tasks 8, 9 and 10
+(0x47eb70, 0x47e3c0, 0x47e7c0 via 0x483730) read only the code.
 
 The human's attack zone (0x49d9d0) gives the selection's group its
 behaviour first (0x49da43: 0x4c4350 `{0, 0x4a2f10(player), -1, -1}`;
 0x4a2f10 every player bit but its own and those of players 0-19 not at
 war with it): command `#` sub 1 to each ship, queued (order.rs `Zone`).
-Its block (0x4d5f50, `{0x70, 0x20}`, tick 0x4d61d0) is not ported: the
-port's ships run their own zone task.
+Its block (0x4d5f50, `{0x70, 0x20}`, tick 0x4d61d0, status 0x4d63d0) is
+not ported: the port's ships run their own zone task (`Task::Zone`,
+battle.rs `zone_target`). What is read of it:
+- 0x4d5f50: a block of another kind freed (0x4a1c60); none, 0x4d4c30
+  makes one (0x65 bytes zeroed; `{0x70, 0x20, now}`, then as below
+  without `+0x21`, and the notices 0x4a1150; failing, 0); else the block
+  is rewritten: rect `+0xc..+0x18` = args[0..3], a copy of the W x H
+  shorts at args[4] in `+0x1c` when given, `+0x37` args[7], `+0x3b`
+  (short) args[10], `+0x3d` args[8], `+0x41` args[9], the mode `+0x20 =
+  1`, `+0x21 = 0xb`; 0x4d4860 lists the targets in `+0x2b` (a list of
+  0x20-byte records by 0x4d49f0: the args[5] ids given, each existing
+  with its id, class, strength 0x50ea70, vt+0x10, cell vt+0x28 and
+  `+0x64`; with none and a rect, 0x4cd300's); 0x4d41b0 counts the
+  group's ships of some strength into `+0x49` and sums their strengths
+  into `+0x4d`. Then 0x4d4260(0) (the formation's place `+0x51..+0x57`,
+  by 0x4d0f40, or with 1 the slots by 0x4d5100 / 0x4d59f0 and mode 3)
+  and 0x4d5850 (0x4d5360, 0x4d43b0, 0x4d5560).
+- 0x4d61d0, each tick: with no notice heard (0x4d4e50) and group `+8`
+  over 0x46, `+8 = 0` and each ship of the group: lying still (`+0x58c`
+  0) with a slot in `+0x33` (0x4d4bd0 by its id): mode 1 with the slot's
+  `+0x23` or `+0x25` -1, 0x4d5850; modes 1 and 3, more than a cell
+  (0x557440) from the slot's cell (`+0x10`, `+0x14`), a move there
+  (0x4cf070); mode 2 (still or not) 0x4d60c0 (the area's target,
+  0x4d6640, then 0x4cf070 or 0x4d0140); after the ships, mode 1 re-plans
+  the formation (0x4d5a80: 0x558fa0, 0x4d5100, 0x4d59f0, 0x4d5970,
+  0x4d58b0). `+8` grows by the tick.
+- 0x4d63d0: as 0x4d70d0, the target by the block's `+0x3b`, `+0x3d`,
+  `+0x41`.
+Not decoded (not read): 0x4cd300, 0x4d49f0, 0x4d0f40, 0x4d5100, 0x4d59f0, 0x4d5360,
+0x4d43b0, 0x4d5560, 0x4d4d60, 0x4d4ab0, 0x4d5970, 0x4d58b0, 0x4cc590 and
+the notices 0x4d4e50, and which arguments the human's 0x49d9d0 passes.
 
 A fort of the forts' flotilla takes the `#` too (below).
 

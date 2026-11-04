@@ -1604,11 +1604,6 @@ impl Scene {
             .collect()
     }
 
-    /// Foes and creatures in an area (the count 0x4a2390 can return).
-    fn foes_in(&self, owner: (u32, u32), rect: Cells) -> usize {
-        self.foes_at(owner, rect).count()
-    }
-
     fn foes_at(&self, owner: (u32, u32), (x, y, w, h): Cells) -> impl Iterator<Item = usize> + '_ {
         (0..self.objects.len()).filter(move |&i| {
             let o = &self.objects[i];
@@ -5580,7 +5575,28 @@ impl Scene {
                     .as_ref()
                     .is_none_or(|s| s.path.is_empty())
             }),
-            FleetOrder::Attack(area) => fl.ships.is_empty() || self.foes_in(ai.owner, area) == 0,
+            // The attack's status (0x4d70d0, by 0x4a0d80 for block
+            // `{0x70, 0x21}`): done (0x1f5) with no ships (result 1), or
+            // with no armed ship (result 1) or no target in the area
+            // (0x4d6640, result 10); else running (500). Armed: a ship
+            // (0x50e600 200) neither a boat nor a merchant for which
+            // 0x4bc270(7) holds: types 8-11 always, the others with a
+            // weapon in a position (`+0x289..+0x291`). (The results and
+            // the counts are not read by the tasks, only the code.)
+            FleetOrder::Attack(area) => {
+                fl.ships.is_empty()
+                    || !ships().any(|i| {
+                        self.objects[i].ship.as_ref().is_some_and(|s| {
+                            !matches!(s.kind, 0 | 1)
+                                && (matches!(s.kind, 8..=11)
+                                    || self.objects[i]
+                                        .combat
+                                        .as_ref()
+                                        .is_some_and(|c| !c.weapons.is_empty()))
+                        })
+                    })
+                    || self.zone_foe(ai, f, area) == 0
+            }
             FleetOrder::Found(ship, cell, _) => {
                 !fl.ships.contains(&ship)
                     || self.building_at(cell) && {
@@ -7964,6 +7980,55 @@ mod tests {
         // Not its players' (`+0x689`): no find.
         scene.objects[a].ship.as_mut().unwrap().behaviour.players = 0;
         assert_eq!(scene.close_pick(a), (0, 0, 0));
+        scene.computers.players[0] = ai;
+    }
+
+    /// The attack's status (0x4d70d0): running while an armed ship is in
+    /// the flotilla and a target in the area (0x4d6640); done with no
+    /// armed ship (boats and merchants never, types 8-11 always, others
+    /// by their weapons) or no target.
+    #[test]
+    fn computer_attack_status() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        for _ in 0..1500 {
+            scene.update(0.1, &data, &mut caches);
+        }
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let owner = scene.computers.players[0].owner;
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(2)
+            .collect();
+        let (a, foe) = (ships[0], ships[1]);
+        scene.objects[a].owner = Some(owner);
+        scene.objects[foe].owner = Some(human);
+        let ida = scene.objects[a].id;
+        scene.objects[a].ship.as_mut().unwrap().kind = 2;
+        scene.objects[a].combat.as_mut().unwrap().weapons = vec![0];
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        let g = ai.by_role[GUARD as usize];
+        ai.flotillas[g].ships = vec![ida];
+        ai.flotillas[g].behaviour = Some((u32::MAX, u32::MAX, u32::MAX));
+        let (fx, fy) = scene.cell_of(foe);
+        ai.flotillas[g].order = FleetOrder::Attack((fx, fy, 1, 1));
+        assert_eq!(scene.report(&ai, g), None);
+        // No weapon: unarmed, done; a fire rammer is armed without.
+        scene.objects[a].combat.as_mut().unwrap().weapons.clear();
+        assert_eq!(scene.report(&ai, g), Some(DONE));
+        scene.objects[a].ship.as_mut().unwrap().kind = 10;
+        assert_eq!(scene.report(&ai, g), None);
+        // A merchant never, even armed.
+        scene.objects[a].ship.as_mut().unwrap().kind = 1;
+        scene.objects[a].combat.as_mut().unwrap().weapons = vec![0];
+        assert_eq!(scene.report(&ai, g), Some(DONE));
+        // No target in the area.
+        scene.objects[a].ship.as_mut().unwrap().kind = 2;
+        scene.objects[foe].owner = Some(owner);
+        assert_eq!(scene.report(&ai, g), Some(DONE));
         scene.computers.players[0] = ai;
     }
 
