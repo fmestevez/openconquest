@@ -2830,8 +2830,15 @@ impl Scene {
             });
             if sliding {
                 ship.way = 0;
-                let mut budget = CLOSING_PACE * dt;
-                while budget > 0.0 {
+                // A game tick a call (0x4ac2d0's dispatch from the ship
+                // tick 0x4ab930, no frame test): the index `+0x78e` two
+                // points on along the line (0x4b5220, its count padded
+                // even), the picture set to that point while under the
+                // count; at or past it the index is left at the last point,
+                // the picture where it was (one short of the end when the
+                // line's length is odd), and the slide is done. Backing out
+                // the index goes down by 2 (to 0, the start, done there).
+                for _ in 0..ticks {
                     let Some(&(tx, ty)) = ship.path.front() else {
                         break;
                     };
@@ -2839,21 +2846,25 @@ impl Scene {
                         break;
                     }
                     let (dx, dy) = (tx - obj.x, ty - obj.y);
-                    let dist = (dx * dx + dy * dy).sqrt();
+                    let r = dx.abs().max(dy.abs()).round();
                     moved = true;
-                    if dist <= budget {
+                    let back = centre(tx) && centre(ty);
+                    let step = if back && ship.slide_end { 1.0 } else { 2.0 };
+                    let done = if back { r <= step } else { r < 2.0 };
+                    if back && done {
                         obj.x = tx;
                         obj.y = ty;
-                        budget -= dist;
+                    } else if !done {
+                        obj.x += dx / r * step;
+                        obj.y += dy / r * step;
+                    }
+                    ship.slide_end = !back && done;
+                    if done {
                         ship.path.pop_front();
-                        if centre(tx) && centre(ty) {
+                        if back {
                             ship.between.set(true);
                         }
                         ship.move_state = if ship.path.is_empty() { 0 } else { 3 };
-                    } else {
-                        obj.x += dx / dist * budget;
-                        obj.y += dy / dist * budget;
-                        budget = 0.0;
                     }
                 }
                 continue;
@@ -3279,13 +3290,6 @@ pub struct Battle {
     #[serde(default)]
     pub parties: Vec<landing::Party>,
 }
-
-/// World pixels a second a ship slides closing in on a shore or pier, or
-/// backing out. (Not decoded: the original steps two points of its
-/// Bresenham line, 0x4b5220, each call of 0x4b02a0, from case 10 of
-/// 0x4adef0 / 0x4b0590 / 0x4b0e40; how often the dispatch at 0x4ac34b
-/// runs them is not read. The port slides two pixels each 3 ticks.)
-const CLOSING_PACE: f32 = 2.0 / (3.0 * crate::clock::TICK);
 
 /// Seconds a ship takes to turn its hull one of 24 rotations: a frame of
 /// its picture (0x4a3320).

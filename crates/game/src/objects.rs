@@ -482,6 +482,10 @@ pub struct Ship {
     /// lies alongside, 0x4b263f; 0x4b1fc0 steps every 9).
     #[serde(default)]
     pub dock_step: Option<u32>,
+    /// Closed in on a shore or pier to the line's end: 0x4b02a0 left its
+    /// index `+0x78e` at the last point, the picture one before it.
+    #[serde(default)]
+    pub slide_end: bool,
     /// Its own random numbers (`+0x18`, the usual LCG), from its first
     /// draw (`Scene::ship_draw`).
     #[serde(default)]
@@ -2065,6 +2069,7 @@ pub fn resolve(
         heal_slots: Vec::new(),
         argus_count: 0,
         dock_step: None,
+        slide_end: false,
     });
     let combat = crate::combat::Combatant::from_record(rec, class);
     // Deposits: amber holds field 4 x 100 units; a negative amount starts

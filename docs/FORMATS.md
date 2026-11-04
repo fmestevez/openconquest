@@ -3798,15 +3798,25 @@ speed is saved with a game (`SPEED_GAME`).
   port's grapple); the refreshes under way other than blows and the song's
   end, the mending aboard (0x4b98b0, see "Healing aboard") and at a dock
   (0x4b1fc0); 0x4a6330's 0x4a3a70(1) when planning between
-  cells. Not decoded: the shore and pier slide's pace. 0x4b02a0 steps
-  `+0x78e` by 2 (back out: down by 2, to 0) along the line 0x4b5220 built
-  from the picture's top-left (Bresenham, an odd count padded with the
-  last point), the picture set to that point while under the count, done
-  at the end (idx count - 1, the picture left at the point before) once
-  `+0x79d`'s turn is over; it is called by case 10 of 0x4adef0, 0x4b0590
-  and 0x4b0e40 (from the dispatch at 0x4ac34b-0x4ac41b by `+0x772`) with
-  no frame test in the case; how often that dispatch runs is not read.
-  The port slides 2 pixels each 3 ticks (`CLOSING_PACE`).
+  cells.
+- The shore and pier slide: 0x4b02a0 steps `+0x78e` by 2 (back out:
+  down by 2 while above 1, else to 0) along the line 0x4b5220 built from
+  the picture's top-left (Bresenham, an odd count padded with the last
+  point), stamps `+0x79f` = now (read only by 0x4adef0's own states), sets
+  the picture to that point while under the count (backing out, done at
+  index 0 with the picture there), and at or past the count leaves the
+  index at count - 1 and the picture where it was (one point short of the
+  end when the line's length is odd), done once `+0x79d`'s turn is over.
+  Its only caller is 0x4b0470 (from case 10 of 0x4adef0, 0x4b0590 and
+  0x4b0e40), none of which tests the clock, and the dispatch 0x4ac2d0
+  (0x4ac34b-0x4ac41b by `+0x76e` and `+0x772`) runs from the ship tick
+  0x4ab930 at 0x4abb24 whenever `+0x25d & 0x40`, also without a clock
+  test: **two points a game tick**. So a backing out from a finished
+  slide first steps one point (count - 1 to count - 3), then two, its
+  last step one or two. The port (`Ship::slide_end`, the slide in
+  `Scene::update`) steps the straight close-ins (`approach`: across or up
+  and down, so no minor axis) two pixels a tick (a slanting one would
+  take its minor axis in proportion, not by 0x4b5220's rounding).
 
 - Construction: a building's construction picture plays once over the
   first entry of its class's cycle table (+0xc0, set by each constructor:

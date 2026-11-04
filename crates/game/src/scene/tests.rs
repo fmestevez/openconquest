@@ -7073,6 +7073,81 @@ fn worn_units_are_mended() {
     assert_eq!((units[0][0], units[6][0]), (52, 52));
 }
 
+/// Closing in on a shore or pier and backing out (0x4b02a0, called every
+/// tick): two points of the line a tick; at the line's end (13 points on,
+/// an odd length) it stops one short and is done the tick after; backing
+/// out it steps one point first, then two, done as it reaches its start
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn shore_slide_two_points_a_tick() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let t = TILE_SIZE as f32;
+    let k = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let ship = scene.objects[k].id;
+    let o = &mut scene.objects[k];
+    let (mx, my) = (
+        (o.x / t).floor() * t + t / 2.0,
+        (o.y / t).floor() * t + t / 2.0,
+    );
+    (o.x, o.y) = (mx, my);
+    let s = o.ship.as_mut().unwrap();
+    s.task = None;
+    s.way = 0;
+    s.path = [(mx + 13.0, my)].into();
+    let step = |scene: &mut Scene, caches: &mut Caches| {
+        let end = scene.ticks + 1;
+        while scene.ticks < end {
+            scene.update(crate::clock::TICK, &data, caches);
+        }
+        let o = &scene.objects[scene.object_index(ship).unwrap()];
+        (o.x - mx, o.ship.as_ref().unwrap().path.len())
+    };
+    let mut seen = Vec::new();
+    for _ in 0..7 {
+        seen.push(step(&mut scene, &mut caches));
+    }
+    assert_eq!(
+        seen,
+        [
+            (2.0, 1),
+            (4.0, 1),
+            (6.0, 1),
+            (8.0, 1),
+            (10.0, 1),
+            (12.0, 1),
+            (12.0, 0)
+        ]
+    );
+    let k = scene.object_index(ship).unwrap();
+    scene.objects[k].ship.as_mut().unwrap().path = [(mx, my)].into();
+    let mut seen = Vec::new();
+    for _ in 0..7 {
+        seen.push(step(&mut scene, &mut caches));
+    }
+    assert_eq!(
+        seen,
+        [
+            (11.0, 1),
+            (9.0, 1),
+            (7.0, 1),
+            (5.0, 1),
+            (3.0, 1),
+            (1.0, 1),
+            (0.0, 0)
+        ]
+    );
+}
+
 /// A dock mends a ship in steps (0x4b1fc0): every 9 ticks a tenth of the
 /// full hull for `0x59b388[type] x step / full` amber; short of it the
 /// human's ship gets what all its amber buys (needs `OPENCONQUEST_DATA`).
