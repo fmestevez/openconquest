@@ -1397,20 +1397,17 @@ impl Scene {
         }
     }
 
-    /// Command `#` sub 1 with `(players, classes, third)` to ship `id`
-    /// (0x4c42f0); none to a building (the forts' flotilla).
+    /// Command `#` sub 1 with `(players, classes, third)` to member `id`
+    /// (0x4c42f0, queued). A fort of the forts' flotilla takes it too
+    /// (0x419f80 case 0x23 sub 1: the players without its own, the
+    /// classes and the kinds stored, every unit group at will, `+0x498`
+    /// 0; `Scene::fort_command`).
     fn send_behaviour(
         &mut self,
         ai: &mut Computer,
         id: u32,
         (players, classes, third): (u32, u32, u32),
     ) {
-        if !self
-            .object_index(id)
-            .is_some_and(|i| self.objects[i].ship.is_some())
-        {
-            return;
-        }
         ai.uncovered.retain(|&x| x != id);
         self.post(Order::BehaviourCommand {
             ship: id,
@@ -7101,6 +7098,45 @@ mod tests {
         scene.flotilla_behave(&mut ai, r, 0x1ff_ffff);
         assert!(!ai.uncovered.contains(&id));
         scene.computers.players[0] = ai;
+    }
+
+    /// A fort of a computer's forts flotilla takes its `#` (0x4c42f0 to
+    /// every member; 0x419f80 case 0x23 sub 1): the players without its
+    /// own, the classes and the kinds stored, every group at will.
+    #[test]
+    fn computer_forts_take_their_flotillas_behaviour() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+        scene.ticks = super::super::order::HOLD;
+        let i = (0..scene.objects.len())
+            .find(|&i| matches!(scene.objects[i].class, ObjectClass::Building(0x34..=0x36)))
+            .unwrap();
+        let mut ai = Computer {
+            owner: (5, 0),
+            ..Default::default()
+        };
+        let f = ai.add_flotilla(1, 0);
+        ai.forts = f;
+        scene.objects[i].owner = Some(ai.owner);
+        let id = scene.objects[i].id;
+        ai.flotillas[f].ships.push(id);
+        scene.objects[i].combat.as_mut().unwrap().fire.cease();
+        ai.spared = 1 << 4;
+        scene.flotilla_behave(&mut ai, f, u32::MAX);
+        scene.deliver(&data, &mut caches);
+        let fire = &scene.objects[i].combat.as_ref().unwrap().fire;
+        assert!(fire.at_will);
+        assert_eq!(
+            fire.masks,
+            crate::combat::FortMasks {
+                players: !(1 << 4) & !(1 << 20),
+                classes: u32::MAX,
+                kinds: u32::MAX,
+            }
+        );
     }
 
     #[test]

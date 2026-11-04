@@ -7133,7 +7133,13 @@ order's join and pass. Ported since: the computers' 0x482eb0 and
 not, brain.rs), the gather zones' sends (gather.rs: a brain's fleet's
 `+0x14` its behaviour given, a computer's always, a human's never), and
 for the computers the case 300 of the guard, attack, founding, dock and
-treasure blocks (above). Not ported: the 28 other sites' masks (listed
+treasure blocks (above). A fort of a computer's forts flotilla (role
+1) takes the `#` too: 0x4c42f0 and 0x4c4230 send to every member of the
+group's `+0x31` list with no class test, and the fort's case 0x23
+(0x419f80, sub 1) stores the players without its own bit (`+0x48c`),
+the classes (`+0x490`) and the kinds (`+0x494`), sets every unit group
+at will (0x4469a0) and `+0x498 = 0` (ported: `Scene::fort_command`).
+Not ported: the 28 other sites' masks (listed
 at `Op::Behave`), the attack zone's, and the other fleet orders' calls
 of 0x4c42f0 (0x4c449b, 0x4cbcb7, 0x4cde70, 0x4cf296, 0x4d02bb, 0x4d1f8a,
 0x4d4f84, 0x4d6a65, 0x4d6e88, 0x4d7966, 0x4d8185, 0x4d8c94, 0x4da1e2,

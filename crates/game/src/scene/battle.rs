@@ -241,6 +241,20 @@ impl Scene {
     /// only, storing the masks as they come (`+0x1f8`, `+0x1fc`, `+0x200`
     /// from `+1`, `+5`, `+9`, 0x40f8e9).
     pub fn fort_order(&mut self, site: u32, sub: u8) -> Result<(), String> {
+        self.fort_command(site, sub, combat::FortMasks::PLAYER_BEHAVIOUR)
+    }
+
+    /// Command `#` (0x23) sub `sub` with the payload's masks (players
+    /// `+1`, classes `+5`, kinds `+9`) to fort or barbarian structure
+    /// `site` (0x419f80 case 0x23, 0x40ef70; see `fort_order`). Also what
+    /// a computer's forts flotilla sends its forts (0x4c42f0, 0x4c4230:
+    /// no class test, every member of the group).
+    pub(super) fn fort_command(
+        &mut self,
+        site: u32,
+        sub: u8,
+        payload: combat::FortMasks,
+    ) -> Result<(), String> {
         let i = self
             .object_index(site)
             .filter(|&i| self.objects[i].holds_units())
@@ -248,13 +262,12 @@ impl Scene {
         let fort = matches!(self.objects[i].class, ObjectClass::Building(0x34..=0x36));
         let owner = self.objects[i].owner;
         let c = self.objects[i].combat.as_mut().unwrap();
-        let behaviour = combat::FortMasks::PLAYER_BEHAVIOUR;
-        let masks = owner.map(|o| behaviour.stored(o));
+        let masks = owner.map(|o| payload.stored(o));
         match sub {
             1 => {
                 c.fire.masks = match masks {
                     Some(m) if fort => m,
-                    _ => behaviour,
+                    _ => payload,
                 };
                 c.fire.fire_at_will();
                 c.fire.aggressor = false;

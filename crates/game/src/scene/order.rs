@@ -630,6 +630,18 @@ impl Scene {
                 classes,
                 third,
             } => {
+                // A fort or barbarian structure: its own case 0x23
+                // (0x419f80, 0x40ef70).
+                if self.object_index(ship).is_some_and(|i| {
+                    self.objects[i].ship.is_none() && self.objects[i].holds_units()
+                }) {
+                    let masks = crate::combat::FortMasks {
+                        players,
+                        classes,
+                        kinds: third,
+                    };
+                    return done(self.fort_command(ship, sub, masks));
+                }
                 let s = self
                     .object_index(ship)
                     .and_then(|i| self.objects[i].ship.as_mut())
