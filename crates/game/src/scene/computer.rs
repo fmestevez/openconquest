@@ -259,6 +259,14 @@ pub struct Flotilla {
     /// grown by each pass, zeroed by its re-plan.
     #[serde(default)]
     elapsed: u32,
+    /// The attack block's target (`+0x1c`, 0x4d6640), 0 none.
+    #[serde(default)]
+    target: u32,
+    /// The group's notices (`+0x2d`) freed by the attack's end (0x4d6520)
+    /// while its block stays: no notice 300 is posted (0x4a1340) until a
+    /// block of another kind makes them again (0x4a1150).
+    #[serde(default)]
+    no_notices: bool,
 }
 
 /// A letter between flotillas (0xd4 bytes, `Plr_mail.cpp`).
@@ -602,7 +610,7 @@ impl Computer {
     fn join(&mut self, f: usize, id: u32) {
         let fl = &mut self.flotillas[f];
         fl.ships.push(id);
-        if fl.block != 0 {
+        if fl.block != 0 && !fl.no_notices {
             fl.joined.push((id, fl.block));
         }
     }
@@ -990,6 +998,8 @@ impl Scene {
         for f in 0..ai.flotillas.len() {
             if ai.flotillas[f].block == 100 && ai.flotillas[f].move_order.is_some() {
                 self.flotilla_move_pass(ai, f);
+            } else if ai.flotillas[f].block == 0x70 {
+                self.attack_pass(ai, f);
             } else {
                 self.read_joins(ai, f);
             }
@@ -1429,6 +1439,8 @@ impl Scene {
         ai.flotillas[f].block = code;
         ai.flotillas[f].joined.clear();
         ai.flotillas[f].move_order = None;
+        ai.flotillas[f].target = 0;
+        ai.flotillas[f].no_notices = false;
         let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
         for id in ai.flotillas[f].ships.clone() {
             self.send_behaviour(id, b);
@@ -1439,9 +1451,10 @@ impl Scene {
     /// the computer's tick; the original's navy reads them at its own).
     /// A ship still in it and the block the same: the gather zone hears it
     /// (0x4c9e30, which sends the group's behaviour); the guard (0x4d1ea0),
-    /// attack (0x4d6960), founding (0x4cba10), dock (0x4db110) and
-    /// treasure (0x4da0a0) blocks send it `#` sub 1 with the group's
-    /// three. (The move's are its pass's, `flotilla_move_pass`.)
+    /// founding (0x4cba10), dock (0x4db110) and treasure (0x4da0a0)
+    /// blocks send it `#` sub 1 with the group's three. (The move's and
+    /// the attack's are their passes', `flotilla_move_pass`,
+    /// `attack_pass`.)
     fn read_joins(&mut self, ai: &mut Computer, f: usize) {
         let block = ai.flotillas[f].block;
         let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
@@ -4793,9 +4806,267 @@ impl Scene {
             return;
         }
         self.end_zone(group);
+        if let FleetOrder::Attack(area) = order {
+            self.attack_zone(ai, f, area);
+            return;
+        }
         for id in ai.flotillas[f].ships.clone() {
             self.order_ship(ai, id, order);
         }
+    }
+
+    /// Fleet order 0x70 (0x483650 -> 0x4a09d0 -> 0x4d6a90), its block
+    /// `{0x70, 0x21}` made or rewritten (`new_block`; a rewrite leaves the
+    /// notices as they are): the target found in `area` (0x4d6640,
+    /// `zone_foe`) kept in the block (`+0x1c`); with one, each ship
+    /// of the flotilla with no strength (0x50ea70 0) sent to the target's
+    /// cell (0x51f1f0, its vt+0x28; 0x4cf070), the others to attack it
+    /// (0x4d0140: command 0x16). None: nothing.
+    fn attack_zone(&mut self, ai: &mut Computer, f: usize, area: Cells) {
+        let target = self.zone_foe(ai, f, area);
+        ai.flotillas[f].target = target;
+        if target == 0 {
+            return;
+        }
+        let mut cell = None;
+        for id in ai.flotillas[f].ships.clone() {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            self.attack_one(i, target, &mut cell);
+        }
+    }
+
+    /// Ship `i` of an attack block with target `target`: with no strength
+    /// (0x50ea70 0) sent to the target's cell, found the first time
+    /// (0x51f1f0: none, nothing), command 0x14 (0x4cf070); else command
+    /// 0x16 at it (0x4d0140 `{target, 7, 7, players}`).
+    fn attack_one(&mut self, i: usize, target: u32, cell: &mut Option<(i32, i32)>) {
+        let id = self.objects[i].id;
+        if self.strength(i) != 0 {
+            self.post(Order::Attack { ship: id, target });
+            return;
+        }
+        if cell.is_none() {
+            *cell = self.object_index(target).map(|t| self.cell_of(t));
+        }
+        let Some((x, y)) = *cell else {
+            return;
+        };
+        let t = TILE_SIZE as f32;
+        self.post(Order::Move {
+            ship: id,
+            x: x as f32 * t + t / 2.0,
+            y: y as f32 * t + t / 2.0,
+        });
+    }
+
+    /// The attack's target in `area` (0x4d6640): the area's cells, row by
+    /// row, within the map, each cell's occupant (`+0xc`) that is there
+    /// (vt+0x2c), of a player in the group's players (`+0x19`) and at war
+    /// with the computer (0x4efe20 < 0: the port's players are all at war,
+    /// so any other player), whose class passes the group's classes
+    /// (`+0x1d`, 0x50ebb0), listed by strength (0x50ea70): before the
+    /// first entry it is stronger than, else after the last, the list
+    /// held to 10 (an 11th entry past the count stays in the buffer) and
+    /// an object already in it skipped. An object of class 0x46-0x48
+    /// marks the index it went in at (not moved by later insertions).
+    /// The id of the entry marked, else of the first; 0 when none.
+    fn zone_foe(&self, ai: &Computer, f: usize, (x0, y0, aw, ah): Cells) -> u32 {
+        let (players, classes, _) = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
+        let (w, h) = self.map_cells();
+        let (x1, y1) = ((x0 + aw).min(w), (y0 + ah).min(h));
+        let occupants = self.cell_occupants((x0.max(0), y0.max(0)), (x1, y1));
+        let mut list = [(0usize, 0u32, 0i32); 12];
+        let mut n = 0;
+        let mut marked: Option<usize> = None;
+        for &(_, k) in &occupants {
+            let o = &self.objects[k];
+            let Some(owner) = o.owner else {
+                continue;
+            };
+            if players & 1 << ((owner.1 + owner.0 * 4) & 0x1f) == 0 || owner == ai.owner {
+                continue;
+            }
+            let class =
+                crate::combat::class_bit(o.record.class_id, o.ship.as_ref().map(|s| s.kind));
+            if classes & class == 0 {
+                continue;
+            }
+            let entry = (k, o.id, self.strength(k));
+            let preferred = matches!(o.record.class_id, 0x46..=0x48);
+            if list[..n].iter().any(|e| e.0 == k) {
+                continue;
+            }
+            let at = (0..n).find(|&e| entry.2 > list[e].2).unwrap_or(n);
+            list.copy_within(at..n, at + 1);
+            list[at] = entry;
+            if preferred {
+                marked = Some(at);
+            }
+            n = (n + 1).min(10);
+        }
+        if n == 0 {
+            return 0;
+        }
+        list[marked.unwrap_or(0)].1
+    }
+
+    /// The cells from `(x0, y0)` to before `(x1, y1)`, row by row, each
+    /// with its occupant (the cell's `+0xc`: a ship not in a dock, a
+    /// building on any cell of its footprint, a land creatures' jam as its
+    /// first member) that is there (vt+0x2c; the port: life left, not
+    /// hidden), as a fort's group scan takes them (`group_cells` slot 0).
+    /// (Not decoded: which of two ships in one cell holds it; the first
+    /// listed here.)
+    fn cell_occupants(
+        &self,
+        (x0, y0): (i32, i32),
+        (x1, y1): (i32, i32),
+    ) -> Vec<((i32, i32), usize)> {
+        let inside = |(x, y): (i32, i32)| x >= x0 && x < x1 && y >= y0 && y < y1;
+        let mut found: Vec<((i32, i32), usize)> = Vec::new();
+        let mut put = |cell: (i32, i32), k: usize| {
+            if inside(cell) && !found.iter().any(|c| c.0 == cell) {
+                found.push((cell, k));
+            }
+        };
+        let t = TILE_SIZE as f32;
+        for (k, o) in self.objects.iter().enumerate() {
+            if !o.combat.as_ref().is_some_and(|c| c.hull > 0.0)
+                || self.creature_hidden(o.id)
+                || self.shoal_gone(o.id)
+            {
+                continue;
+            }
+            match o.class {
+                ObjectClass::Ship => {
+                    if !self.in_dock(k) {
+                        put(((o.x / t).floor() as i32, (o.y / t).floor() as i32), k);
+                    }
+                }
+                ObjectClass::Building(_)
+                | ObjectClass::Barbarian(_)
+                | ObjectClass::Castle(_)
+                | ObjectClass::HarpyNest
+                | ObjectClass::CreatureSpawn
+                | ObjectClass::HeroHouse => {
+                    if let Some((bx, by)) = o.cell {
+                        let n = super::trade::building_cells(o);
+                        for y in by..by + n {
+                            for x in bx..bx + n {
+                                put((x, y), k);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for jam in &self.jams {
+            if let Some(k) = jam.members.first().and_then(|&m| self.object_index(m)) {
+                put(jam.cell, k);
+            }
+        }
+        found.sort_by_key(|&((x, y), _)| (y, x));
+        found
+    }
+
+    /// The attack block's pass (0x4d6cd0, from the navy's tick 0x4c4f40,
+    /// each game tick). With notices, they are read newest first
+    /// (0x4d6960): a ship that joined (300) and is in the flotilla is sent
+    /// at the target (0x4d0140; not with none: not decoded, command 0x16
+    /// with target 0) and the group's three (0x4c42f0). (Not ported:
+    /// notice 0x13a, the target looked for again when it is the block's,
+    /// whose sender is not traced.) When none was read, group `+8` is
+    /// over the period (0x5a, but for a computer's side 3 or 4 outside the
+    /// campaign 0x78, 0x4b, 0x3c by its level `+0x1a31`) and the flotilla
+    /// has ships, the target is looked for again (0x4d6640). None: the
+    /// notices are freed (0x4d6520), the block left as it is, so no join
+    /// is heard again and the area looked at again each tick. Else `+8`
+    /// goes back to 0 and each ship of the flotilla: sent the group's
+    /// three when its `+0x689 / +0x68d` are not the group's (`+0x14`
+    /// set); with a blow marked made to forget it (0x4cf760; the report
+    /// 0x4a21c0 not ported); then a draw of the navy's generator `% 100`
+    /// and, the block's flags `+0x2c >> 16` 1, above 60 nothing more (2:
+    /// above 30); a phantom (`+0x253`) nothing more; else (not ported:
+    /// with `+0x261 & 0x1000`, the boarding and ramming pickers 0x4baae0
+    /// and 0x4bad90 for kinds 10 and 11, whose finds go to 0x4d0190 /
+    /// 0x4d01d0, and `+0x25d == 0x10` ending there: not decoded) sent at
+    /// the target as at the order (`attack_one`). Then `+8` grows by the
+    /// tick.
+    ///
+    /// The flags are the flotilla's `+0x154`, which each attack's caller
+    /// (tasks 8, 9, 10 state 0xc: 0x47ed7b, 0x47e5e3, 0x47e992) sets to
+    /// `(difficulty == 0) << 16` just before.
+    fn attack_pass(&mut self, ai: &mut Computer, f: usize) {
+        let target = ai.flotillas[f].target;
+        let block = ai.flotillas[f].block;
+        let behaviour = ai.flotillas[f].behaviour;
+        let mut heard = 0;
+        if !ai.flotillas[f].no_notices {
+            for (id, at) in std::mem::take(&mut ai.flotillas[f].joined)
+                .into_iter()
+                .rev()
+            {
+                if at != block
+                    || !ai.flotillas[f].ships.contains(&id)
+                    || self.object_index(id).is_none()
+                {
+                    continue;
+                }
+                if target != 0 {
+                    self.post(Order::Attack { ship: id, target });
+                }
+                heard += 1;
+                self.send_behaviour(id, behaviour.unwrap_or((0, 0, 0)));
+            }
+        }
+        let period = [0x78, 0x4b, 0x3c][ai.difficulty.min(2)];
+        if heard == 0 && period < ai.flotillas[f].elapsed && !ai.flotillas[f].ships.is_empty() {
+            let FleetOrder::Attack(area) = ai.flotillas[f].order else {
+                return;
+            };
+            let target = self.zone_foe(ai, f, area);
+            ai.flotillas[f].target = target;
+            if target == 0 {
+                ai.flotillas[f].no_notices = true;
+                ai.flotillas[f].joined.clear();
+            } else {
+                ai.flotillas[f].elapsed = 0;
+                let level = u32::from(ai.difficulty == 0);
+                let mut cell = None;
+                for id in ai.flotillas[f].ships.clone() {
+                    let Some(i) = self.object_index(id) else {
+                        continue;
+                    };
+                    let Some(s) = self.objects[i].ship.as_ref() else {
+                        continue;
+                    };
+                    if let Some(b @ (players, classes, _)) = behaviour {
+                        if s.behaviour.players != players || s.behaviour.classes != classes {
+                            self.send_behaviour(id, b);
+                        }
+                    }
+                    if self.objects[i].ship.as_ref().unwrap().blow.is_some() {
+                        self.post(Order::ClearBlow { ship: id });
+                    }
+                    let roll = self.navy_draw() % 100;
+                    if (level == 1 && roll > 60) || (level == 2 && roll > 30) {
+                        continue;
+                    }
+                    if self.objects[i]
+                        .combat
+                        .as_ref()
+                        .is_some_and(|c| c.phantom > 0.0)
+                    {
+                        continue;
+                    }
+                    self.attack_one(i, target, &mut cell);
+                }
+            }
+        }
+        ai.flotillas[f].elapsed += 1;
     }
 
     /// The ports of flotilla `f`'s base town for its gather zone
@@ -4948,10 +5219,8 @@ impl Scene {
             }
             return;
         }
-        if !matches!(
-            order,
-            FleetOrder::Guard(_) | FleetOrder::Attack(_) | FleetOrder::Treasure(_)
-        ) {
+        // (The attack's ships are its pass's, `attack_pass`.)
+        if !matches!(order, FleetOrder::Guard(_) | FleetOrder::Treasure(_)) {
             return;
         }
         for id in ai.flotillas[f].ships.clone() {
@@ -7280,6 +7549,131 @@ mod tests {
         let b = scene.objects[i].ship.as_ref().unwrap().behaviour;
         assert!(b.guard && !b.ram && !b.board);
         scene.computers.players[0] = ai;
+    }
+
+    /// A computer's attack zone (0x4d6a90): the target found in the area
+    /// (0x4d6640) and the flotilla's ships sent at it; at its pass
+    /// (0x4d6cd0) with no target left the notices are freed (0x4d6520),
+    /// the block kept: a ship joining then hears nothing, until a block
+    /// of another kind makes the notices again (0x4a1150).
+    #[test]
+    fn computer_attack_zone_ends_without_target() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        for _ in 0..1500 {
+            scene.update(0.1, &data, &mut caches);
+        }
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let owner = scene.computers.players[0].owner;
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(3)
+            .collect();
+        let (a, b, foe) = (ships[0], ships[1], ships[2]);
+        scene.objects[a].owner = Some(owner);
+        scene.objects[b].owner = Some(owner);
+        scene.objects[foe].owner = Some(human);
+        let (ida, idb, idf) = (
+            scene.objects[a].id,
+            scene.objects[b].id,
+            scene.objects[foe].id,
+        );
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        for fl in &mut ai.flotillas {
+            fl.ships.retain(|&x| x != ida && x != idb && x != idf);
+        }
+        let g = ai.by_role[GUARD as usize];
+        ai.flotillas[g].ships = vec![ida];
+        ai.flotillas[g].block = 0;
+        ai.flotillas[g].behaviour = Some((u32::MAX, u32::MAX, u32::MAX));
+        let (fx, fy) = scene.cell_of(foe);
+        ai.flotillas[g].order = FleetOrder::Attack((fx, fy, 1, 1));
+        scene.outbox.clear();
+        scene.give_order(&mut ai, g);
+        assert_eq!(ai.flotillas[g].block, 0x70);
+        assert_eq!(ai.flotillas[g].target, idf);
+        assert!(scene.outbox.iter().any(|o| match *o {
+            Order::Attack { ship, target } => ship == ida && target == idf,
+            Order::Move { ship, .. } => ship == ida,
+            _ => false,
+        }));
+        // Of two, the stronger (0x50ea70); of equals, the first by row.
+        let t = TILE_SIZE as f32;
+        scene.objects[b].owner = Some(human);
+        scene.objects[b].x = (fx + 1) as f32 * t + t / 2.0;
+        scene.objects[b].y = fy as f32 * t + t / 2.0;
+        let two = (fx, fy, 2, 1);
+        let want = if scene.strength(b) > scene.strength(foe) {
+            idb
+        } else {
+            idf
+        };
+        assert_eq!(scene.zone_foe(&ai, g, two), want);
+        scene.objects[b].owner = Some(owner);
+        // Its own player's ship is no target: the pass past the period
+        // finds none and frees the notices.
+        scene.objects[foe].owner = Some(owner);
+        ai.flotillas[g].elapsed = 0x79;
+        scene.attack_pass(&mut ai, g);
+        assert_eq!(ai.flotillas[g].target, 0);
+        assert!(ai.flotillas[g].no_notices);
+        assert_eq!(ai.flotillas[g].block, 0x70);
+        assert_eq!(ai.flotillas[g].elapsed, 0x7a);
+        scene.outbox.clear();
+        ai.join(g, idb);
+        assert!(ai.flotillas[g].joined.is_empty());
+        scene.attack_pass(&mut ai, g);
+        assert!(!scene
+            .outbox
+            .iter()
+            .any(|o| matches!(o, Order::BehaviourCommand { ship, .. } if *ship == idb)));
+        // A rewrite keeps them freed; another kind makes them again.
+        scene.give_order(&mut ai, g);
+        assert!(ai.flotillas[g].no_notices);
+        scene.new_block(&mut ai, g, 0x6e);
+        assert!(!ai.flotillas[g].no_notices);
+        ai.join(g, idb);
+        assert_eq!(ai.flotillas[g].joined, [(idb, 0x6e)]);
+        scene.computers.players[0] = ai;
+    }
+
+    /// The human's attack zone first sends each ship `#` sub 1 with every
+    /// player but its own (0x49da43: 0x4c4350, 0x4a2f10), classes and
+    /// third -1: guard, ram and board on at the next tick.
+    #[test]
+    fn human_attack_zone_sends_the_behaviour() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+        scene.ticks = super::super::order::HOLD;
+        let human = scene.human.map_or((0, 0), |h| (h.nation, h.slot));
+        let i = (0..scene.objects.len())
+            .find(|&i| scene.objects[i].ship.is_some())
+            .unwrap();
+        scene.objects[i].owner = Some(human);
+        let id = scene.objects[i].id;
+        scene.objects[i].ship.as_mut().unwrap().behaviour = Default::default();
+        let (x, y) = (scene.objects[i].x, scene.objects[i].y);
+        let _ = scene.apply(
+            &Order::Zone {
+                ship: id,
+                a: (x - 64.0, y - 64.0),
+                b: (x + 64.0, y + 64.0),
+                attack: true,
+            },
+            &data,
+            &mut caches,
+        );
+        scene.deliver(&data, &mut caches);
+        let b = scene.objects[i].ship.as_ref().unwrap().behaviour;
+        assert!(b.guard && b.ram && b.board);
+        assert_eq!(b.players, !(1 << ((human.1 + human.0 * 4) & 0x1f)));
+        assert_eq!(b.classes, u32::MAX);
     }
 
     /// A fort of a computer's forts flotilla takes its `#` (0x4c42f0 to

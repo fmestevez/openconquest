@@ -652,7 +652,27 @@ impl Scene {
             }
             Scout { ship, x, y } => done(self.order_scout(ship, x, y)),
             Patrol { ship, x, y } => done(self.order_patrol(ship, x, y)),
-            Zone { ship, a, b, attack } => done(self.order_zone(ship, a, b, attack)),
+            Zone { ship, a, b, attack } => {
+                // The human's attack zone (0x49d9d0) first gives the group
+                // its behaviour (0x49da43: 0x4c4350 with `{0, 0x4a2f10's
+                // players, -1, -1}`), command `#` sub 1 to each ship
+                // (0x4c42f0, queued). 0x4a2f10: every player bit but its
+                // own and those of players 0-19 not at war with it
+                // (0x4efe20 >= 0; the port's players are all at war).
+                if attack {
+                    let owner = self.object_index(ship).and_then(|i| self.objects[i].owner);
+                    if let Some((nation, slot)) = owner {
+                        self.post(BehaviourCommand {
+                            ship,
+                            sub: 1,
+                            players: !(1 << ((slot + nation * 4) & 0x1f)),
+                            classes: u32::MAX,
+                            third: u32::MAX,
+                        });
+                    }
+                }
+                done(self.order_zone(ship, a, b, attack))
+            }
             GatherZone {
                 ship,
                 a,

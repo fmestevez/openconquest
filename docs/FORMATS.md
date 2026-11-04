@@ -7075,10 +7075,51 @@ blow (0x4cf760; the report 0x4a21c0 not ported) and, lying still more
 than a cell off its cell, sent there again; `+8` grows by the tick).
 Group `+8` (`Flotilla::elapsed`) is the move's and the attack's; the
 gather zone keeps its own (not ported: that it is one counter carried
-from block to block). Not ported: the attack zone's pass (0x4d6cd0) and
-its own end (0x4d6520 when 0x4d6640 finds no target, freeing `+0x2d`):
-the port's block stays until an order of another kind. A fort of the
-forts' flotilla takes the `#` too (below).
+from block to block).
+
+The computers' attack zone (0x483650, from tasks 8, 9 and 10 state 0xc,
+whose `+0x154` is set just before to `(difficulty == 0) << 16`
+(0x47ed7b, 0x47e5e3, 0x47e992): order 0x70 `{area, 0, 0, flags +0x154,
+players +0x14c, third +0x150, classes +0x148, .., -1}` -> 0x4d6a90,
+block `{0x70, 0x21}`, flags at `+0x2c`; computer.rs `attack_zone`,
+`zone_foe`, `attack_pass`). The target (0x4d6640, block `+0x1c`): the
+area's cells row by row within the map, each cell's occupant (`+0xc`)
+that is there (vt+0x2c), whose player bit (`+0x54 x 4 + +0x55`) is in the
+group's players and who is at war with the computer (0x4efe20 < 0),
+whose class passes the group's classes (0x50ebb0); a list of at most 10
+by strength (0x50ea70), each new one going before the first it is
+stronger than, else at the end, one already listed skipped; one of
+class 0x46-0x48 marks the index it went in at (later insertions do not
+move the mark). The id of the marked entry, else the first; 0 none. With
+a target each ship is sent at it (0x4d0140, command 0x16), or with no
+strength to its cell (0x51f1f0 / vt+0x28, 0x4cf070); none, nothing. The
+pass (0x4d6cd0, each tick): the notices newest first (0x4d6960: a join
+in the group sent at the target and the group's three); when none was
+read, group `+8` is over the period (0x5a; a computer's side 3 / 4
+outside the campaign: 0x78, 0x4b, 0x3c by its level) and the group has
+ships, the target is looked for again: none, the notices freed
+(0x4d6520), the block kept (so no join is heard, and the area is looked
+at each tick); else `+8 = 0` and each ship sent the three if its masks
+differ, made to forget a blow (0x4cf760), then a draw of the navy's
+generator `% 100`: with flags `>> 16` 1 above 60 (2: above 30) nothing
+more; a phantom (`+0x253`) nothing more; else sent at the target as by
+the order. Not ported: the pickers for boarding and ramming (0x4baae0,
+0x4bad90, by `+0x261 & 0x1000` and kinds 10 / 11, to 0x4d0190 /
+0x4d01d0) and `+0x25d == 0x10`, not decoded: such ships are sent at the
+target; notice 0x13a (sender not traced); command 0x16 with target 0
+(a join with none: not sent); which of two ships in a cell holds
+`+0xc`. A rewrite of the block (the same kind) keeps the notices freed;
+a block of another kind makes them again (0x4a1150). The status the
+tasks read (0x4d70d0) is still the port's own test (`Scene::report`).
+
+The human's attack zone (0x49d9d0) gives the selection's group its
+behaviour first (0x49da43: 0x4c4350 `{0, 0x4a2f10(player), -1, -1}`;
+0x4a2f10 every player bit but its own and those of players 0-19 not at
+war with it): command `#` sub 1 to each ship, queued (order.rs `Zone`).
+Its block (0x4d5f50, `{0x70, 0x20}`, tick 0x4d61d0) is not ported: the
+port's ships run their own zone task.
+
+A fort of the forts' flotilla takes the `#` too (below).
 
 **Ships' behaviour and masks.** The constructor (0x4dc3f0) zeroes
 `+0x5d1..+0x695`: guard, ram and board off (`+0x684`), the positions
@@ -7145,10 +7186,11 @@ group's `+0x31` list with no class test, and the fort's case 0x23
 (0x419f80, sub 1) stores the players without its own bit (`+0x48c`),
 the classes (`+0x490`) and the kinds (`+0x494`), sets every unit group
 at will (0x4469a0) and `+0x498 = 0` (ported: `Scene::fort_command`).
-Not ported: the 28 other sites' masks (listed
-at `Op::Behave`), the attack zone's, and the other fleet orders' calls
-of 0x4c42f0 (0x4c449b, 0x4cbcb7, 0x4cde70, 0x4cf296, 0x4d02bb, 0x4d1f8a,
-0x4d4f84, 0x4d6a65, 0x4d6e88, 0x4d7966, 0x4d8185, 0x4d8c94, 0x4da1e2,
+The computers' attack zone's (0x4d6960's join, 0x4d6cd0's pass) and
+the human's attack zone's (0x49da43) are ported (above). Not ported:
+the 28 other sites' masks (listed at `Op::Behave`), and the other fleet
+orders' calls of 0x4c42f0 (0x4c449b, 0x4cbcb7, 0x4cde70, 0x4cf296,
+0x4d02bb, 0x4d1f8a, 0x4d4f84, 0x4d7966, 0x4d8185, 0x4d8c94, 0x4da1e2,
 0x4db1ec, 0x4dc2fa; not read).
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
