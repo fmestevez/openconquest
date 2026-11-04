@@ -7888,8 +7888,7 @@ never set), cell `+4` (the occupant slot), 0x58791f's order
 - A sunk ship leaves its group (0x4a8410, the Navy's message 0x83, ->
   0x49bef0), posting 0x137.
 Ported: all of the above (`order_attack_zone`, `run_human_attacks`).
-Not ported: 0x4d60c0's fire-state cases (the port keeps no fire states:
-a ship on a fire task is left to it); fireballs and tornadoes holding
+Not ported: fireballs and tornadoes holding
 cell `+0xc` (not objects in the port); the `+0x5ab` skip (the port's
 occupants hold only the cells the ships are in); nature objects' player
 in 0x4cd300's and 0x4d5430's tests (the port's ownerless creatures are
@@ -7977,7 +7976,7 @@ fire pass (0x4bf9b0, 0x4c1240, 0x4bfc60, 0x4c0eb0, 0x4c09c0, 0x4c0230;
 the port's `battle.rs` fire is its own model) and so its writes (0x4c1240's
 3, 0x4c09c0's 1 in reach); kind 1 and 2 records (the port's ships take no
 0x15); 0x4abe50's deferral; the hunt's second site (0x4acf3a, the
-port's hunt has one); 0x4d60c0's cases on the state.
+port's hunt has one). 0x4d60c0's cases on it are ported (`ha_retarget`).
 Who sends `#` (0x4c42f0, `{sub, +1, +5, +9, 0.., +0x15 0xff}`, queued:
 it reaches the ship at the next tick): 0x4c4350 (fleet order 0x72, from
 the brains' 0x4797e0 and the computers' 0x482eb0; the interface's attack

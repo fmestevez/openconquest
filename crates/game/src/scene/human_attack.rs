@@ -978,17 +978,20 @@ impl Scene {
         a.strength = sum;
     }
 
-    /// 0x4d60c0 for ship `i`: one neither on a fire task (`+0x25d &
-    /// 0x100`) nor boarding or ramming (`& 0x10`) looks for the area's
-    /// target (0x4d6640 with the group's players and classes); found, a
-    /// ship of type 10 (`+0x25a`) is sent to its cell (0x4cf070), the
-    /// others attack it (0x4d0140); 1. (Not ported: the original sends a
-    /// ship on a fire task too in its fire state 2, or 1 with none of its
-    /// positions `+0x645 + 0x12k` in state 3: the port keeps no fire
-    /// states, so such a ship is left to its task.)
+    /// 0x4d60c0 for ship `i`: one not boarding or ramming (`+0x25d &
+    /// 0x10`) and off a fire task (`& 0x100`), or on one in fire state
+    /// 2, or 1 with none of its four position bytes (`+0x645`, `+0x657`,
+    /// `+0x669`, `+0x67b`) 3, looks for the area's target (0x4d6640 with
+    /// the group's players and classes); found, a ship of type 10
+    /// (`+0x25a`) is sent to its cell (0x4cf070), the others attack it
+    /// (0x4d0140); 1.
     fn ha_retarget(&mut self, a: &HumanAttack, i: usize) -> i32 {
         let s = self.objects[i].ship.as_ref().unwrap();
-        if s.fire_task() || self.closing_in(i) {
+        let b = &s.behaviour;
+        let free = !s.fire_task()
+            || b.fire_state == 2
+            || b.fire_state == 1 && b.aims.iter().all(|a| a.state != 3);
+        if !free || self.closing_in(i) {
             return 0;
         }
         let ship = self.objects[i].id;
@@ -1547,6 +1550,13 @@ mod tests {
                 .filter(|t| t.id == gone)
                 .count()
         };
+        // The target gone, event 8 0x180's fire part: on guard, so the
+        // fire task with fire state 2, which 0x4d60c0 sends on.
+        let fired = |scene: &Scene| {
+            let s = scene.objects[k].ship.as_ref().unwrap();
+            (s.firing, s.behaviour.fire_state)
+        };
+        assert_eq!(fired(&scene), (true, 2));
         let before = listed(&scene);
         let heard = {
             let mut a = scene.human_attacks[0].clone();
@@ -1564,5 +1574,16 @@ mod tests {
                 target: other
             }]
         );
+        // On a fire task in state 3, or 1 with a position in 3, not sent.
+        let send = |scene: &mut Scene, state: u8, aim: u8| {
+            let s = scene.objects[k].ship.as_mut().unwrap();
+            s.behaviour.fire_state = state;
+            s.behaviour.aims[2].state = aim;
+            let a = scene.human_attacks[0].clone();
+            scene.ha_retarget(&a, k)
+        };
+        assert_eq!(send(&mut scene, 3, 0), 0);
+        assert_eq!(send(&mut scene, 1, 3), 0);
+        assert_eq!(send(&mut scene, 1, 1), 1);
     }
 }
