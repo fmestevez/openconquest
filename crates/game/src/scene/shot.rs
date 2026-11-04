@@ -383,7 +383,7 @@ impl Scene {
         let d = ship.heading % 8;
         let (kind, state) = (ship.kind as usize, ship.move_state);
         // `+0x59b`, in 1/6000 pixel a tick (see `slipping`).
-        let way = (ship.velocity * crate::clock::TICK * 6000.0) as i64;
+        let way = ship.way as i64;
         let r = self.ship_draw(t);
         if hit {
             let (vx, vy) = super::walk_path::DIRS[d];

@@ -426,7 +426,7 @@ impl Scene {
         let Some(ship) = o.ship.as_ref() else {
             return false;
         };
-        let speed = ship.velocity * crate::clock::TICK * 6000.0;
+        let speed = ship.way as f32;
         if speed <= 0.0 {
             return false;
         }
@@ -496,7 +496,7 @@ impl Scene {
             let s = o.ship.as_mut().unwrap();
             let rotation = s.rotation.map_or(s.heading as i32 * 3, i32::from);
             s.path.clear();
-            s.velocity = 0.0;
+            s.way = 0;
             s.face = None;
             // The boarded ship is held (move state 6, 0x4c3410 after the
             // hook); the boarder at its hook cell lies still (0, 0x4a3560

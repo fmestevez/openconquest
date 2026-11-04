@@ -32,12 +32,12 @@ pub struct GorgonCycle {
 /// surfaces and sings once (her `SIRENA`, 163 frames a tick, at frame 45;
 /// 0x403ba0), then dives. Her song charms every ship within 7 cells (but
 /// Odysseus's) for 750 ticks more (0x4a7390): it sails for her cell, no
-/// faster than 7000 units, heading anew every 30 ticks, and adds her share
-/// (88 / the ships charmed, 22 from five) each tick, taking a blow of 300
+/// faster than 7000 units (its top speed set so, `sail::CHARMED_TOP`),
+/// heading anew every 30 ticks, and adds her share (88 / the ships
+/// charmed, 22 from five) each tick, taking a blow of 300
 /// at each thousand (0x4a74c0; a fourth with Argus, none shielded from
 /// magic).
 pub const SONG_CYCLE_FRAMES: u32 = 163;
-pub const CHARMED_SPEED: f32 = 7000.0 / 6000.0 / crate::clock::TICK;
 
 /// A ship under a siren's song.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

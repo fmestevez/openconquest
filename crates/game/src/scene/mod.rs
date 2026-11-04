@@ -552,6 +552,7 @@ mod leviathan;
 pub mod load;
 mod orders;
 pub mod repair;
+mod sail;
 mod sea_monster;
 mod sheep;
 mod shot;
@@ -2506,6 +2507,7 @@ impl Scene {
             self.update_sight();
         }
         // The brain runs every game tick (scaled to this update's length).
+        let ticks_before = self.ticks;
         self.brain_clock += dt;
         while self.brain_clock >= crate::clock::TICK {
             self.brain_clock -= crate::clock::TICK;
@@ -2637,6 +2639,41 @@ impl Scene {
                 taken.entry(cell_of(nx, ny)).or_insert(o.id);
             }
         }
+        // The cell after the one a ship has entered, reserved as it
+        // entered it (`+0x5ab`, 0x4a3f40), while still on its route.
+        for o in &self.objects {
+            let Some(s) = o.ship.as_ref() else {
+                continue;
+            };
+            let on_route = s
+                .path
+                .iter()
+                .take(2)
+                .any(|&(px, py)| Some(cell_of(px, py)) == s.ahead);
+            if let Some(a) = s.ahead.filter(|_| on_route) {
+                taken.entry(a).or_insert(o.id);
+            }
+        }
+        // The game ticks this update ran: ships move a tick at a time.
+        let ticks = self.ticks.wrapping_sub(ticks_before);
+        let width = self.grid.width as i32;
+        // The brake 0x4a2f60: move state 4 and `+0x284` (`sail::brake`).
+        let brake = |ship: &mut objects::Ship, at: (i32, i32), own: (i32, i32)| {
+            ship.move_state = 4;
+            match sail::brake(ship.way, at, own, ship.entering, ship.between.get(), width) {
+                Some(b) => ship.brake = b,
+                None => ship.ahead = None,
+            }
+        };
+        // Held one short of its goal (0x4a3f40 at 0x4a49f6-0x4a4a67): not
+        // between cells (`+0x596` 0), the next step refused and the goal 1
+        // away (0x557440): notice 0x136 with the goal.
+        let short = |ship: &objects::Ship, at: (i32, i32)| {
+            (!ship.between.get())
+                .then_some(ship.goal)
+                .flatten()
+                .filter(|g| walk_path::dist(g.0, g.1, at.0, at.1) == 1)
+        };
         // The original's move states (+0x58c): 0 lying still, 3 waiting at
         // a cell for the next (0x4a3560), 6 held by a boarding, ram or
         // dock; the rest under way (2 turning, 4 stopping, 5 sailing). A
@@ -2665,8 +2702,11 @@ impl Scene {
             .filter(|o| o.ship.as_ref().is_some_and(|s| s.stalled > 0.0))
             .map(|o| o.id)
             .collect();
-        // Ships under a siren's song go no faster than 7000 units (0x4a74c0).
-        let charmed: HashSet<u32> = self.charmed.keys().copied().collect();
+        // The ships' top speeds `+0x59f` (0x4bece0, 0x4a74c0).
+        let tops: HashMap<u32, i32> = (0..self.objects.len())
+            .filter(|&i| self.objects[i].ship.is_some())
+            .map(|i| (self.objects[i].id, self.ship_top(i)))
+            .collect();
         // Ships grappled, ramming or being rammed keep still (they are
         // moved by the boarding and the ram); a charging rammer may sail
         // into its target's cell.
@@ -2724,33 +2764,21 @@ impl Scene {
                 continue;
             }
             if held_still.contains(&obj.id) {
-                ship.velocity = 0.0;
+                ship.way = 0;
                 continue;
             }
-            // The wind speeds or slows the ship by its heading.
-            let merchant = cargo_capacity(ship.kind) > 0.0;
-            let rigging = obj
-                .owner
-                .and_then(|o| self.levels.get(&o))
-                .map_or(1.0, |l| combat::speed_factor(l.speed));
-            // Zetes's brothers carry his ship as if before the wind; the
-            // feather of Boreas speeds it.
-            let wind = if ship.has_hero(objects::ZETES) {
-                (0..8)
-                    .map(|h| self.wind.speed_factor(merchant, h))
-                    .fold(0.0, f32::max)
-            } else {
-                self.wind.speed_factor(merchant, ship.heading)
-            };
-            let feather = 1.0 + ship.feather_percent() as f32 / 100.0;
-            let (worn, worn_accel) = obj.combat.as_ref().map_or((1.0, 1.0), |c| {
-                combat::sailing_factors(c.hull, c.max_hull, ship.armour)
-            });
+            // What steps its way (`sail`): `+0x59f` by its type, its
+            // owner's rigging and its hull (0x4bece0; 7000 under a siren's
+            // song, 0x4a74c0), `+0x280` by its type (0x4a3a70), the wind
+            // on its heading (not with Zetes aboard, 0x4ba790 with 3) and
+            // lime (`+0x258`).
+            let top = tops.get(&obj.id).copied().unwrap_or(0);
+            let zetes = ship.has_hero(objects::ZETES);
+            let limed = obj.combat.as_ref().is_some_and(|c| c.lime > 0.0);
             // A ship first turns to its next course, through the hull's
             // rotations, then sails it.
             if !turn_ship(ship, obj.x, obj.y, dt) {
-                ship.velocity = 0.0;
-                // Turning (move state 2, 0x4a3320).
+                // Turning, its way kept (move state 2, 0x4a3320).
                 ship.move_state = 2;
                 continue;
             }
@@ -2773,101 +2801,73 @@ impl Scene {
             if ship.path.is_empty() && !(unloading && ship.move_state == 6) {
                 ship.move_state = 0;
             }
-            // It gathers way up to its speed, and loses it in time to stop
-            // where it is bound or before a turn of more than 45 degrees
-            // (0x4a3f40, 0x4a2f60).
-            let mut top = ship.speed * wind * rigging * worn * feather;
-            if charmed.contains(&obj.id) {
-                top = top.min(creatures::CHARMED_SPEED);
-            }
-            let accel = objects::ship_accel(ship.kind) * worn_accel * wind.max(0.1);
-            let ahead = {
-                let mut d = 0.0;
-                let mut from = (obj.x, obj.y);
-                let mut heading = None;
-                for &(px, py) in &ship.path {
-                    let (lx, ly) = (px - from.0, py - from.1);
-                    if lx.hypot(ly) > 0.5 {
-                        let h = heading_towards(lx, ly);
-                        if let Some(prev) = heading {
-                            let steps = (h as i32 - prev as i32).rem_euclid(8);
-                            if steps != 0 && steps != 1 && steps != 7 {
-                                break;
-                            }
-                        }
-                        heading = Some(h);
-                    }
-                    d += lx.hypot(ly);
-                    from = (px, py);
-                }
-                d
-            };
-            let resting = ship.velocity == 0.0;
-            let stopping = (2.0 * accel * ahead).sqrt().max(MIN_WAY);
-            let target = top.min(stopping);
-            let limed = obj.combat.as_ref().is_some_and(|c| c.lime > 0.0);
-            ship.velocity = if limed {
-                // Limed, each tick its way is halved after the cap
-                // (0x4a3f40): it crawls at about a tick's gain.
-                let tick = crate::clock::TICK;
-                ship.lime_clock += dt;
-                let mut v = ship.velocity;
-                while ship.lime_clock >= tick {
-                    ship.lime_clock -= tick;
-                    v = (v + accel * tick).min(target) / 2.0;
-                }
-                v.min(target)
-            } else if ship.velocity < target {
-                (ship.velocity + accel * dt).min(target)
-            } else {
-                target
-            };
-            // A diagonal step goes a third of the way on each axis for a
-            // half on one (0x4a3f40).
-            let diagonal = ship
-                .path
-                .front()
-                .is_some_and(|&(tx, ty)| (tx - obj.x).abs() > 0.5 && (ty - obj.y).abs() > 0.5);
-            let along = if diagonal { DIAGONAL_PACE } else { 1.0 };
-            let mut budget = ship.velocity * along * dt;
             // Closing in on a shore or pier, and backing out from it to its
             // cell's middle, it slides along a line of points at a steady
             // pace (0x4b02a0, state 0x13). Routes run between cell centres;
             // a point off them is a shore or pier closed in on.
             let centre = |v: f32| (v.rem_euclid(t) - t / 2.0).abs() < 0.5;
+            let resting = ship.way == 0;
             let sliding = ship.path.front().is_some_and(|&(tx, ty)| {
                 let (to_mid, at_mid) = (centre(tx) && centre(ty), centre(obj.x) && centre(obj.y));
                 cell_of(tx, ty) == cell_of(obj.x, obj.y)
                     && ((ship.path.len() == 1 && !to_mid) || (to_mid && !at_mid && resting))
             });
             if sliding {
-                ship.velocity = 0.0;
-                budget = CLOSING_PACE * dt;
+                ship.way = 0;
+                let mut budget = CLOSING_PACE * dt;
+                while budget > 0.0 {
+                    let Some(&(tx, ty)) = ship.path.front() else {
+                        break;
+                    };
+                    if cell_of(tx, ty) != cell_of(obj.x, obj.y) {
+                        break;
+                    }
+                    let (dx, dy) = (tx - obj.x, ty - obj.y);
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    moved = true;
+                    if dist <= budget {
+                        obj.x = tx;
+                        obj.y = ty;
+                        budget -= dist;
+                        ship.path.pop_front();
+                        if centre(tx) && centre(ty) {
+                            ship.between.set(true);
+                        }
+                        ship.move_state = if ship.path.is_empty() { 0 } else { 3 };
+                    } else {
+                        obj.x += dx / dist * budget;
+                        obj.y += dy / dist * budget;
+                        budget = 0.0;
+                    }
+                }
+                continue;
             }
-            let from_cell = cell_of(obj.x, obj.y);
-            // Held one short of its goal (0x4a3f40 at 0x4a49f6-0x4a4a67):
-            // not between cells (`+0x596` 0), the next step refused and
-            // the goal 1 away (0x557440): notice 0x136 with the goal. (The
-            // original also stops it there, 0x4a2f60 unless braking: not
-            // ported, the port's held ship keeps its route.)
-            let short = |ship: &objects::Ship, at: (i32, i32)| {
-                (!ship.between.get())
-                    .then_some(ship.goal)
-                    .flatten()
-                    .filter(|g| walk_path::dist(g.0, g.1, at.0, at.1) == 1)
-            };
-            while budget > 0.0 {
+            // Under way it moves a game tick at a time as the original's
+            // move tick 0x4a3f40 (`sail`): the way stepped, the picture
+            // moved along its heading and held at the route point.
+            for _ in 0..ticks {
                 let Some(&(tx, ty)) = ship.path.front() else {
                     break;
                 };
+                let here = cell_of(obj.x, obj.y);
+                let at = (obj.x.round() as i32, obj.y.round() as i32);
+                // Told to stop (1) and in its cell (`+0x596` 0), it brakes
+                // there (0x4a38f0), its extra cell released.
+                if ship.move_state == 1 && !ship.between.get() {
+                    ship.ahead = None;
+                    brake(ship, at, here);
+                }
                 let next = cell_of(tx, ty);
+                // At a route point (0, 2, 3, or held 6) the step to the
+                // next cell is asked for (0x4a3560 -> 0x4a3a70).
+                let asking = next != here && !matches!(ship.move_state, 1 | 4 | 5);
                 // A reef or whirlpool up there: 0x499aa0 refuses the step
                 // (nibble 1 of 4-6). With no ship there, one with Jason
                 // aboard sinks a whirlpool or medium reef (0x4a3a70 ->
                 // 0x4a7630: 0xda9f / 0xda9e) and steps in; others wait
                 // there as for any refused step.
                 let hazard = hazard_cells.get(&next).copied();
-                if next != cell_of(obj.x, obj.y) && hazard.is_some() && !taken.contains_key(&next) {
+                if asking && hazard.is_some() && !taken.contains_key(&next) {
                     if hazard == Some(true) && ship.has_hero(objects::JASON) {
                         jason_sinks.push(next);
                     } else {
@@ -2877,20 +2877,19 @@ impl Scene {
                         if last != Some(next) {
                             ship.waited += dt;
                         }
-                        ship.velocity = 0.0;
                         ship.move_state = if ship.stalled >= crate::clock::ticks(50) {
                             0
                         } else {
                             3
                         };
                         held.push((obj.id, next, false, false, 0));
-                        if let Some(g) = short(ship, from_cell) {
+                        if let Some(g) = short(ship, here) {
                             arrived.push((obj.id, g));
                         }
                         break;
                     }
                 }
-                if next != cell_of(obj.x, obj.y) {
+                if asking {
                     match taken.get(&next) {
                         Some(&other)
                             if other != obj.id && charging.get(&obj.id) != Some(&other) =>
@@ -2911,9 +2910,9 @@ impl Scene {
                             if last != Some(next) {
                                 ship.waited += dt;
                             }
-                            ship.velocity = 0.0;
-                            // Held at its cell (3) until 50 ticks without
-                            // a step lay it still (0, 0x4a3560).
+                            // Held at its cell (3), its way kept, until 50
+                            // ticks without a step lay it still (0,
+                            // 0x4a3560).
                             ship.move_state = if ship.stalled >= crate::clock::ticks(50) {
                                 0
                             } else {
@@ -2926,7 +2925,7 @@ impl Scene {
                                 idle.contains(&other),
                                 other,
                             ));
-                            if let Some(g) = short(ship, from_cell) {
+                            if let Some(g) = short(ship, here) {
                                 arrived.push((obj.id, g));
                             }
                             break;
@@ -2938,75 +2937,133 @@ impl Scene {
                             ship.waited = 0.0;
                             // The next cell reserved (`+0x5b6`,
                             // 0x4a3a70): under way (5, 0x4a3560), between
-                            // cells as it leaves its cell's middle; told
-                            // to stop it stays 1 till it crosses into it.
+                            // cells as it leaves its cell's middle.
                             ship.entering = next;
-                            if matches!(ship.move_state, 0 | 2 | 3) {
-                                ship.between.set(true);
+                            ship.between.set(true);
+                            ship.move_state = 5;
+                        }
+                    }
+                }
+                // The way stepped and the picture moved (0x4a3f40).
+                let (dx, dy) = (tx - obj.x, ty - obj.y);
+                let dir = if dx == 0.0 && dy == 0.0 {
+                    ship.heading
+                } else {
+                    heading_towards(dx, dy)
+                };
+                let sailing = sail::Sailing {
+                    top,
+                    accel: sail::accel(ship.kind),
+                    brake: ship.brake,
+                    wind: (!zetes).then(|| self.wind.speed_percent(ship.heading)),
+                    braking: ship.move_state == 4,
+                    limed,
+                };
+                let (way, cleared) = sail::next_way(ship.way, &sailing);
+                if cleared {
+                    ship.brake = 0;
+                }
+                ship.way = way;
+                let (d, rest) = sail::step(way, ship.way_rest, dir);
+                ship.way_rest = rest;
+                let point = (tx.round() as i32, ty.round() as i32);
+                if d != (0, 0) {
+                    let to = sail::clamp((at.0 + d.0, at.1 + d.1), point, dir);
+                    obj.x = to.0 as f32;
+                    obj.y = to.1 as f32;
+                    moved = true;
+                }
+                let now = (obj.x.round() as i32, obj.y.round() as i32);
+                // Its picture's centre before the step come into the cell
+                // it reserved (`+0x596` cleared): its move goal posts notice
+                // 0x136 (0x4a49af); then the next point's cell is asked for
+                // (0x4a3a70 with the route's next point), and refused, or
+                // the cell being its route's last, it brakes (0x4a2f60,
+                // unless braking). Not between cells and holding no further
+                // cell it asks again every tick (0x4a49f6).
+                let entered = ship.between.get() && here == ship.entering;
+                if entered {
+                    ship.between.set(false);
+                    ship.ahead = None;
+                    if ship.goal == Some(here) {
+                        arrived.push((obj.id, here));
+                    }
+                }
+                if !ship.between.get() && ship.ahead.is_none() {
+                    let last = ship.path.back().map(|&(lx, ly)| cell_of(lx, ly));
+                    let after = ship.path.get(1).map(|&(nx, ny)| cell_of(nx, ny));
+                    let granted = match after {
+                        _ if last == Some(here) => false,
+                        None => false,
+                        Some(c) if c == here => true,
+                        Some(c) => {
+                            let free = match taken.get(&c) {
+                                Some(&other) => {
+                                    other == obj.id || charging.get(&obj.id) == Some(&other)
+                                }
+                                None => true,
+                            };
+                            let free = free
+                                && match hazard_cells.get(&c).copied() {
+                                    None => true,
+                                    Some(sinkable) => {
+                                        let sinks = sinkable
+                                            && ship.has_hero(objects::JASON)
+                                            && !taken.contains_key(&c);
+                                        if sinks {
+                                            jason_sinks.push(c);
+                                        }
+                                        sinks
+                                    }
+                                };
+                            if free {
+                                taken.insert(c, obj.id);
+                                ship.ahead = Some(c);
+                                ship.entering = c;
                             }
-                            if ship.move_state != 1 {
-                                ship.move_state = 5;
+                            free
+                        }
+                    };
+                    if !granted {
+                        if ship.move_state != 4 {
+                            brake(ship, now, here);
+                        }
+                        if !entered {
+                            if let Some(g) = short(ship, here) {
+                                arrived.push((obj.id, g));
                             }
                         }
                     }
                 }
-                let (dx, dy) = (tx - obj.x, ty - obj.y);
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist <= budget {
-                    obj.x = tx;
-                    obj.y = ty;
-                    budget -= dist;
+                // At the route point (0x4a4a6c): between cells again; the
+                // last lays it still (0) with no way; any other has it
+                // about to step (3).
+                if now == point {
                     ship.path.pop_front();
-                    moved = true;
-                    // Into the cell it was entering, it is in it
-                    // (0x4a3f40: `+0x596` cleared); at a cell's middle
-                    // it is set to leave it (`+0x596` set again).
-                    if ship.between.get() && cell_of(tx, ty) == ship.entering {
-                        ship.between.set(false);
+                    ship.between.set(true);
+                    if ship.path.is_empty() {
+                        ship.move_state = 0;
+                        ship.way = 0;
+                        ship.ahead = None;
+                        break;
                     }
-                    if centre(tx) && centre(ty) {
-                        ship.between.set(true);
-                    }
-                    // At a route point: the last lays it still (0), any
-                    // other has it about to step (3, 0x4a3f40).
-                    ship.move_state = if ship.path.is_empty() { 0 } else { 3 };
-                    // A new course: under way, a ship bears off 45 degrees at
-                    // once; more, it stops and turns to it first (0x4a3560).
+                    ship.move_state = 3;
+                    // A new course: under way, a ship bears off 45 degrees
+                    // at once; more, or 45 with no way, it stops and turns
+                    // to it first (0x4a3560).
                     if let Some(&(nx, ny)) = ship.path.front() {
                         let (ex, ey) = (nx - obj.x, ny - obj.y);
                         let next = heading_towards(ex, ey);
                         if ex.hypot(ey) > 0.5 && next != ship.heading {
                             let steps = (next as i32 - ship.heading as i32).rem_euclid(8);
-                            if steps == 1 || steps == 7 {
+                            if (steps == 1 || steps == 7) && ship.way != 0 {
                                 ship.heading = next;
                             } else {
                                 break;
                             }
                         }
                     }
-                } else {
-                    obj.x += dx / dist * budget;
-                    obj.y += dy / dist * budget;
-                    budget = 0.0;
-                    if ship.between.get() && cell_of(obj.x, obj.y) == ship.entering {
-                        ship.between.set(false);
-                    }
                 }
-                moved = true;
-            }
-            // Come into a cell that is its move goal `+0x5b2`: notice 0x136
-            // with the goal (0x4a3f40 at 0x4a49af).
-            let now = cell_of(obj.x, obj.y);
-            if now != from_cell && ship.goal == Some(now) {
-                arrived.push((obj.id, now));
-            }
-            // Come into its route's last cell, it brakes to a stop there
-            // (4, 0x4a2f60 from 0x4a3f40).
-            let last = ship.path.back().map(|&(lx, ly)| cell_of(lx, ly));
-            // Told to stop (1), it brakes there once it has entered the
-            // cell (0x4a38f0: `+0x596 == 0`).
-            if matches!(ship.move_state, 1 | 5) && last == Some(cell_of(obj.x, obj.y)) {
-                ship.move_state = 4;
             }
         }
         for c in jason_sinks {
@@ -3084,6 +3141,10 @@ impl Scene {
                 let delay = 15 + self.gull_rng.next() % 7;
                 if s.rock_ticks > delay {
                     s.rock_ticks = 0;
+                    // Lying still its way halves a frame (0x4a3150).
+                    if s.way > 0 {
+                        s.way /= 2;
+                    }
                     if s.rock_back {
                         if s.rock == 0 {
                             s.rock_back = false;
@@ -3165,12 +3226,6 @@ pub struct Battle {
     #[serde(default)]
     pub parties: Vec<landing::Party>,
 }
-
-/// The least way a ship keeps while bound somewhere, in world pixels a
-/// second, so braking ends.
-const MIN_WAY: f32 = 10.0;
-/// A diagonal step's pace against a straight one's: 2 x sqrt(2) / 3.
-const DIAGONAL_PACE: f32 = 0.9428;
 
 /// World pixels a second a ship slides closing in on a shore or pier, or
 /// backing out: two points of its line a frame of its picture, every 3

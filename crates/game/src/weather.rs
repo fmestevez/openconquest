@@ -131,12 +131,13 @@ impl Wind {
         self.direction = value.wrapping_sub(1);
     }
 
-    /// Speed factor for a ship sailing on `heading` (0x4a68b0).
-    pub fn speed_factor(&self, merchant: bool, heading: usize) -> f32 {
-        let _ = merchant; // The two tables are identical.
+    /// The percentage of 0x597b2c for a ship sailing on `heading`, by the
+    /// angle 0x4e0100 folds to 0-4 (the merchants' rows, `+0x25a` 0 or 1,
+    /// are the same as the others').
+    pub fn speed_percent(&self, heading: usize) -> i32 {
         let diff = (self.direction as i32 - heading as i32).unsigned_abs();
         let angle = if diff > 4 { 8 - diff } else { diff };
-        SPEED[self.strength.min(10) as usize][angle as usize] as f32 / 100.0
+        SPEED[self.strength.min(10) as usize][angle as usize] as i32
     }
 
     /// The wind rose arrow: `None` for calm, else the `GAME_WIND_nn` frame
@@ -178,12 +179,12 @@ mod tests {
         let mut wind = Wind::new(1);
         wind.strength = 9;
         wind.direction = 2;
-        assert_eq!(wind.speed_factor(false, 2), 1.2);
-        assert_eq!(wind.speed_factor(false, 6), 0.4);
-        assert_eq!(wind.speed_factor(false, 1), wind.speed_factor(false, 3));
+        assert_eq!(wind.speed_percent(2), 120);
+        assert_eq!(wind.speed_percent(6), 40);
+        assert_eq!(wind.speed_percent(1), wind.speed_percent(3));
         assert_eq!(wind.rose_frame(), Some(18));
         wind.strength = 2;
-        assert_eq!(wind.speed_factor(true, 6), 0.6);
+        assert_eq!(wind.speed_percent(6), 60);
         assert_eq!(wind.rose_frame(), None);
     }
 

@@ -1478,10 +1478,15 @@ fn ship_sails_around_islands() {
     for _ in 0..(60 * 600) {
         scene.update(1.0 / 60.0, &data, &mut Caches::default());
         let o = &scene.objects[scene.object_index(id).unwrap()];
+        // A slanting step passes the corner of four cells, which reads as
+        // the one below and right of it (as the original's picture
+        // centre does).
+        let corner = o.x % t == 0.0 && o.y % t == 0.0;
         assert!(
-            scene
-                .nav
-                .is_water((o.x / t).floor() as i32, (o.y / t).floor() as i32),
+            corner
+                || scene
+                    .nav
+                    .is_water((o.x / t).floor() as i32, (o.y / t).floor() as i32),
             "ship ran aground at {}, {}",
             o.x,
             o.y
@@ -3880,13 +3885,16 @@ fn a_ship_between_cells_plans_from_the_cell_it_enters() {
     let (_, _, between, _, front) = ship(&scene);
     assert!(between);
     assert_eq!(front.map(|(x, y)| cell(x, y)), Some(entering));
-    // Crossing into it the flag goes.
+    // Crossing into it the flag goes, on the tick after: the move tick
+    // takes the cell from the picture before its step (0x4a4605).
     let mut crossed = false;
     for _ in 0..500 {
         scene.update(0.04, &data, &mut caches);
         let (here, _, between, _, _) = ship(&scene);
         if here == entering {
-            crossed = !between;
+            assert!(between);
+            scene.update(0.04, &data, &mut caches);
+            crossed = !ship(&scene).2;
             break;
         }
     }
@@ -5392,11 +5400,11 @@ fn rammer_looks_and_picks_its_goal() {
     s.move_state = 5;
     s.between.set(true);
     s.entering = (cell.0 + 1, cell.1);
-    s.velocity = 0.0;
+    s.way = 0;
     // Points (mx + 47, my - 47) and (mx + 47, my): 21 and 64 from the
     // prey's centre (0x557440).
     assert_eq!(scene.ram_goal(i, ti), (2, (cell.0 + 1, cell.1 - 1)));
-    scene.objects[ti].ship.as_mut().unwrap().velocity = 30.0;
+    scene.objects[ti].ship.as_mut().unwrap().way = 7200;
     assert_eq!(scene.ram_goal(i, ti), (2, (cell.0 + 1, cell.1)));
 }
 
@@ -5637,14 +5645,24 @@ fn harpy_strikes_and_goes_home() {
     assert!(home_again, "and went home to rest");
 }
 
-/// A wrecked hull sails at half speed, and armour slows a ship (0x4bece0).
+/// A wrecked hull sails at half speed (0x4bece0: `+0x59f` less half the
+/// percentage of hull lost); the rigging levels make 115 and 130 percent
+/// (0x4ac210).
 #[test]
-fn damage_and_armour_slow_ships() {
-    assert_eq!(combat::sailing_factors(100.0, 100.0, 0), (1.0, 1.0));
-    let (speed, accel) = combat::sailing_factors(0.0, 100.0, 0);
-    assert!((speed - 0.5).abs() < 1e-6 && (accel - 0.5).abs() < 1e-6);
-    let (speed, accel) = combat::sailing_factors(100.0, 100.0, 2);
-    assert!((speed - 0.9).abs() < 1e-6 && (accel - 0.65).abs() < 1e-6);
+fn damage_slows_ships() {
+    let full = combat::hull_points(0) as i32;
+    assert_eq!(super::sail::top_speed(0, 0, full), 60000);
+    assert_eq!(super::sail::top_speed(0, 0, 0), 30000);
+    // 10% lost: 60000 - 60000 x 10 / 200.
+    assert_eq!(super::sail::top_speed(0, 0, full * 9 / 10), 57000);
+    assert_eq!(
+        super::sail::top_speed(3, 1, combat::hull_points(3) as i32),
+        27600
+    );
+    assert_eq!(
+        super::sail::top_speed(5, 2, combat::hull_points(5) as i32),
+        78000
+    );
 }
 
 /// Merchants never fish a shoal that is diving, gone below or out of
@@ -7184,6 +7202,80 @@ fn idle_ships_make_way_at_the_dock() {
     }
 }
 
+/// Ships cross a cell in the original's ticks (0x4a3f40, 0x4a2f60): from
+/// rest at a cell's middle in a calm (60%), a boat (60000 / 1200) is in
+/// the middle of the next cell east in 35 ticks and north-east in 44, a
+/// merchant (56000 / 1120) in 37 and 46, braking from the tick after its
+/// centre crosses into the cell, by -540, -854, -511 and -794 (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn ships_cross_cells_in_the_original_ticks() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let id = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    scene.objects.retain(|o| o.ship.is_none() || o.id == id);
+    scene.wind.strength = 0;
+    let open = |s: &Scene, c: (i32, i32)| {
+        (-1..=1).all(|dx| (-1..=1).all(|dy| s.nav.is_water(c.0 + dx, c.1 + dy)))
+    };
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let t = TILE_SIZE as f32;
+    let start = {
+        let o = &scene.objects[scene.object_index(id).unwrap()];
+        ((o.x / t) as i32, (o.y / t) as i32)
+    };
+    let cell = (2..h - 2)
+        .flat_map(|y| (2..w - 2).map(move |x| (x, y)))
+        .filter(|&c| open(&scene, c) && open(&scene, (c.0 + 1, c.1 - 1)))
+        .min_by_key(|&c| walk_path::dist(c.0, c.1, start.0, start.1))
+        .unwrap();
+    let middle = |c: (i32, i32)| (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+    for (kind, heading, to, ticks, brake) in [
+        (0, 0, (1, 0), 35, -540),
+        (0, 1, (1, -1), 44, -854),
+        (1, 0, (1, 0), 37, -511),
+        (1, 1, (1, -1), 46, -794),
+    ] {
+        let i = scene.object_index(id).unwrap();
+        let o = &mut scene.objects[i];
+        (o.x, o.y) = middle(cell);
+        let s = o.ship.as_mut().unwrap();
+        s.kind = kind;
+        (s.heading, s.rotation, s.task) = (heading, None, None);
+        (s.way, s.way_rest, s.brake, s.ahead) = (0, 0, 0, None);
+        s.move_state = 3;
+        s.between.set(true);
+        s.path = [middle((cell.0 + to.0, cell.1 + to.1))]
+            .into_iter()
+            .collect();
+        assert_eq!(scene.ship_top(i), super::sail::base_top(kind, 0));
+        let mut n = 0;
+        loop {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            n += 1;
+            let k = scene.object_index(id).unwrap();
+            let s = scene.objects[k].ship.as_ref().unwrap();
+            if s.path.is_empty() {
+                assert_eq!((n, s.brake, s.move_state, s.way), (ticks, brake, 0, 0));
+                break;
+            }
+            assert!(n < ticks, "{kind} {heading}: {n}");
+        }
+        let o = &scene.objects[scene.object_index(id).unwrap()];
+        assert_eq!((o.x, o.y), middle((cell.0 + to.0, cell.1 + to.1)));
+    }
+}
+
 /// A ship under way about to leave its cell cannot be hooked (0x4b84b0,
 /// 0x4b5140); one lying still, or just entering its cell, can (needs
 /// `OPENCONQUEST_DATA`).
@@ -7207,7 +7299,7 @@ fn ships_slipping_away_cannot_be_hooked() {
         o.y = cy + t / 2.0;
         let s = o.ship.as_mut().unwrap();
         s.heading = heading;
-        s.velocity = velocity;
+        s.way = (velocity * crate::clock::TICK * 6000.0) as i32;
     };
     // 60 pixels a second is 2.4 a tick: 17 ticks cover 41 pixels.
     set(&mut scene, 40.0, 0, 60.0);
@@ -8532,8 +8624,11 @@ fn quick_lime_blinds() {
     let info = crate::object_info::of(&scene, &scene.objects[i]).unwrap();
     assert_eq!(info.fire, Some((0, 0)));
     assert_eq!(info.experience, None);
-    // It crawls: its way settles at a tick's gain.
-    let accel = objects::ship_accel(scene.objects[i].ship.as_ref().unwrap().kind);
+    // It crawls: halved each tick after the cap (0x4a3f40), its way
+    // settles at a tick's gain.
+    let kind = scene.objects[i].ship.as_ref().unwrap().kind;
+    let wind = (0..8).map(|h| scene.wind.speed_percent(h)).max().unwrap();
+    let accel = super::sail::accel(kind) * wind / 100;
     let to = scene.nav.nearest_water(
         (scene.objects[i].x / 64.0) as i32 + 6,
         (scene.objects[i].y / 64.0) as i32,
@@ -8541,16 +8636,13 @@ fn quick_lime_blinds() {
     let (x, y) = to.unwrap();
     let ok = scene.order_move(id, x as f32 * 64.0 + 32.0, y as f32 * 64.0 + 32.0);
     assert!(ok);
-    let mut v = 0.0f32;
+    let mut v = 0;
     for _ in 0..50 * 4 {
         scene.update(0.02, &data, &mut caches);
         let i = scene.object_index(id).unwrap();
-        v = v.max(scene.objects[i].ship.as_ref().unwrap().velocity);
+        v = v.max(scene.objects[i].ship.as_ref().unwrap().way);
     }
-    assert!(
-        v > 0.0 && v <= accel * crate::clock::TICK + 1e-3,
-        "crawls: {v}"
-    );
+    assert!(v > 0 && v <= accel, "crawls: {v}");
     for _ in 0..50 * 10 {
         scene.update(0.02, &data, &mut caches);
     }
@@ -10023,7 +10115,8 @@ fn shots_aim_at_ships_as_the_original() {
     };
     let set = |scene: &mut Scene, heading: usize, state: u8, velocity: f32| {
         let s = scene.objects[k].ship.as_mut().unwrap();
-        (s.heading, s.move_state, s.velocity, s.lcg) = (heading, state, velocity, Some(seed));
+        let way = (velocity * crate::clock::TICK * 6000.0) as i32;
+        (s.heading, s.move_state, s.way, s.lcg) = (heading, state, way, Some(seed));
     };
     // A hit lying still, heading 2 (north) on a type-0 hull.
     scene.objects[k].ship.as_mut().unwrap().kind = 0;

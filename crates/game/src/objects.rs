@@ -329,10 +329,22 @@ pub struct Ship {
     /// every 25 ticks (0x4a6150), keeping whatever route it had.
     #[serde(default)]
     pub pending: Option<(f32, f32)>,
-    /// How fast it is going now, in world pixels a second: it gathers way
-    /// up to its speed and loses it to stop where it is bound or to turn.
+    /// Its way (`+0x59b`), in the original's units of 1/6000 pixel a tick
+    /// straight on: stepped every tick under way by its acceleration or
+    /// brake and the wind (`scene::sail`, 0x4a3f40).
     #[serde(default)]
-    pub velocity: f32,
+    pub way: i32,
+    /// The way's units not yet moved (`+0x597`).
+    #[serde(default)]
+    pub way_rest: i32,
+    /// Its brake (`+0x284`, negative), set as it starts braking (0x4a2f60).
+    #[serde(default)]
+    pub brake: i32,
+    /// The cell after the one it has entered, reserved as it entered it
+    /// (`+0x5ab` at a cell, 0x4a3a70 from 0x4a3f40); released as it enters
+    /// the next or lies still.
+    #[serde(default)]
+    pub ahead: Option<(i32, i32)>,
     /// Its move state (+0x58c, 0x4a3f40): 0 lying still, 1 told to stop,
     /// 2 turning, 3 at a route point about to step, 4 braking to a stop in
     /// its cell, 5 under way between cells, 6 held by a boarding. Kept at
@@ -378,9 +390,6 @@ pub struct Ship {
     pub rock_ticks: u32,
     #[serde(default)]
     pub rock_clock: f32,
-    /// Seconds owed to the next tick of a limed ship's crawl.
-    #[serde(default)]
-    pub lime_clock: f32,
     /// Goods on board.
     pub cargo: f32,
     pub cargo_kind: Option<Resource>,
@@ -984,18 +993,12 @@ impl Ship {
         self.treasures.iter().any(|t| t.kind == kind)
     }
 
-    /// Whether hero `hero` (see `HERO_NAMES`) is aboard.
-    /// What the feathers of Boreas aboard add, in percent: each its
-    /// treasure amount, to the top speed (0x4bece0) and the ram's blow
-    /// (0x4c1c60).
-    pub fn feather_percent(&self) -> u32 {
-        self.treasures
-            .iter()
-            .filter(|t| t.kind == FEATHER)
-            .map(|t| t.amount)
-            .sum()
+    /// Its way in world pixels a second.
+    pub fn velocity(&self) -> f32 {
+        self.way as f32 / 6000.0 / crate::clock::TICK
     }
 
+    /// Whether hero `hero` (see `HERO_NAMES`) is aboard.
     pub fn has_hero(&self, hero: u8) -> bool {
         self.heroes.contains(&hero)
     }
@@ -1938,7 +1941,10 @@ pub fn resolve(
         remembered: Vec::new(),
         planned: 0.0,
         pending: None,
-        velocity: 0.0,
+        way: 0,
+        way_rest: 0,
+        brake: 0,
+        ahead: None,
         move_state: 0,
         between: std::cell::Cell::new(false),
         entering: (0, 0),
@@ -1954,7 +1960,6 @@ pub fn resolve(
         rock_back: false,
         rock_ticks: 0,
         rock_clock: 0.0,
-        lime_clock: 0.0,
         grapple: None,
         ram_run: None,
         landing: None,
@@ -2152,16 +2157,6 @@ const SHIP_SPEED: [u32; 12] = [150, 140, 100, 60, 90, 150, 120, 130, 90, 100, 12
 /// calm, up to 1.25 downwind; see `weather`): 400 units of 1/6000 pixel a
 /// tick (0x4a3f40 moves a straight step half a pixel per 3000 units).
 const SPEED_SCALE: f32 = 400.0 / 6000.0 / crate::clock::TICK;
-/// Acceleration by ship type (0x5bb510, x 8 units a tick, 0x4a3a70).
-const SHIP_ACCEL: [u32; 12] = [150, 140, 80, 40, 90, 120, 120, 130, 90, 100, 120, 100];
-
-/// How fast a ship of type `kind` gathers way, in world pixels a second
-/// per second (before the wind).
-pub fn ship_accel(kind: u8) -> f32 {
-    let tick = crate::clock::TICK;
-    SHIP_ACCEL[kind as usize % 12] as f32 * 8.0 / 6000.0 / (tick * tick)
-}
-
 /// The object panel picture (0x4f5800, 0x5004d0).
 fn picture(rec: &ObjectRecord) -> Option<(String, (u32, u32))> {
     let f = |i| rec.field(i).unwrap_or(0);

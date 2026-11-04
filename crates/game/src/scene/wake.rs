@@ -240,7 +240,7 @@ impl Scene {
         for o in &self.objects {
             let Some(s) = &o.ship else { continue };
             // In the original's units: 1/6000 pixel a tick.
-            let speed = (s.velocity * crate::clock::TICK * 6000.0) as i32;
+            let speed = s.way;
             // Only going faster than its type's threshold (0x5bb1f4).
             if s.path.is_empty()
                 || s.rotation.is_some()

@@ -1560,7 +1560,7 @@ impl Scene {
                 ram: sa.ram,
                 level: self.levels_of(a.owner).ram_kinds[sa.ram.min(2) as usize],
                 heading: sa.heading,
-                speed: sa.velocity.max(sa.speed),
+                speed: sa.velocity().max(sa.speed),
                 rigging: self.levels_of(a.owner).speed,
             },
             combat::Rammer {
@@ -1568,7 +1568,7 @@ impl Scene {
                 ram: st.ram,
                 level: self.levels_of(t.owner).ram_kinds[st.ram.min(2) as usize],
                 heading: st.heading,
-                speed: st.velocity,
+                speed: st.velocity(),
                 rigging: self.levels_of(t.owner).speed,
             },
             angle,

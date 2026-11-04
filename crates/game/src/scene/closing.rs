@@ -11,7 +11,7 @@
 use openconquest_formats::map::TILE_SIZE;
 
 use super::grapple::{bow_row, UNIT};
-use super::{walk_path, Caches, GameData, Region, Scene};
+use super::{sail, walk_path, Caches, GameData, Region, Scene};
 use crate::objects::{self, Closing, Task};
 
 /// The box a rammer or boarder closes in through, and twice the distance
@@ -551,12 +551,10 @@ impl Scene {
     }
 
     /// Whether ship `i` comes to its route point on this tick (0x4a68b0):
-    /// not under way (move state 4 or 5), yes; else its picture moved a
-    /// tick along its heading, half its way in the original's units on
-    /// each axis straight on, a third slanting, reaching or passing the
-    /// point on either axis it moves along. (The way is the port's
-    /// mover's, which gathers and loses it by its own rule: the original
-    /// steps `+0x59b` first by `+0x280` / `+0x284` and the wind, 0x597b2c.)
+    /// not under way (move state 4 or 5), yes; else its way stepped a
+    /// tick as the move tick steps it (`sail::next_way`, always by the
+    /// wind and not halved by lime) and its picture moved so along its
+    /// heading, reaching or passing the point on an axis it moves along.
     fn reaches_point(&self, i: usize) -> bool {
         let o = &self.objects[i];
         let s = o.ship.as_ref().unwrap();
@@ -566,14 +564,18 @@ impl Scene {
         let Some(&(tx, ty)) = s.path.front() else {
             return false;
         };
-        let (ux, uy) = UNIT[s.heading % 8];
-        let slant = if s.heading % 2 == 1 { 2.0 / 3.0 } else { 1.0 };
-        let step = s.velocity * crate::clock::TICK * slant;
-        if step <= 0.0 {
-            return false;
-        }
-        let (nx, ny) = (o.x + ux as f32 * step, o.y + uy as f32 * step);
-        (ux != 0 && (tx - nx) * ux as f32 <= 0.0) || (uy != 0 && (ty - ny) * uy as f32 <= 0.0)
+        let sailing = sail::Sailing {
+            top: self.ship_top(i),
+            accel: sail::accel(s.kind),
+            brake: s.brake,
+            wind: Some(self.wind.speed_percent(s.heading)),
+            braking: s.move_state == 4,
+            limed: false,
+        };
+        let (way, _) = sail::next_way(s.way, &sailing);
+        let at = (o.x.round() as i32, o.y.round() as i32);
+        let point = (tx.round() as i32, ty.round() as i32);
+        sail::reaches(at, point, s.heading, way, s.way_rest)
     }
 
     /// Which of `cells` (the prey's and the one it is going into, both 1
@@ -592,7 +594,6 @@ impl Scene {
     fn strike_from(&self, i: usize, ti: usize, cells: [(i32, i32); 2], from: (i32, i32)) -> bool {
         let (r, p) = (&self.objects[i], &self.objects[ti]);
         let (rs, ps) = (r.ship.as_ref().unwrap(), p.ship.as_ref().unwrap());
-        let units = |v: f32| (v * crate::clock::TICK * 6000.0) as i32;
         let middle = (from.0 * 64 + 32, from.1 * 64 + 32);
         let dp = if matches!(rs.move_state, 0 | 2 | 3) {
             0
@@ -604,13 +605,13 @@ impl Scene {
             2 | 6 => 2,
             _ => 3,
         };
-        let v = units(rs.velocity).max(0);
+        let v = rs.way.max(0);
         let v = if v == 0 { 1 } else { v };
         let per = |slant: bool| if slant { 9000 } else { 6000 };
         let t0 = dp * per(rs.heading % 2 == 1) / v;
         let row = strike_rows(ps.kind)[k];
         let bow = bow_row(rs.kind)[0].0 as i32;
-        let pv = units(ps.velocity);
+        let pv = ps.way;
         let (pux, puy) = UNIT[ps.heading % 8];
         let dist = cells.map(|c| {
             let (dx, dy) = (c.0 - from.0, c.1 - from.1);

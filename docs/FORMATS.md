@@ -510,8 +510,8 @@ Wind (WeatherClassTy, Weather.cpp; global object at 0x5c6a40):
   while it blows, the counter becomes period less counter. Then the old
   wind returns. In full (0x407a80): its value v gives strength 7 if v is
   not 0, else 0, and direction v - 1 (-1 for 0).
-- Ship speed (0x4a68b0, 0x4a3f40): base speed x 0x597b2c[(merchant ? 11 :
-  0) + strength][angle] / 100, where angle = |wind - heading| folded to 0-4
+- Ship speed (0x4a68b0, 0x4a3f40): top speed and step x 0x597b2c[(type
+  0 or 1 ? 11 : 0) + strength][angle] / 100 (see Times, "The move tick"), where angle = |wind - heading| folded to 0-4
   (0x4e0100). Calm 60%; strength 9: 120 100 80 60 40; strength 10 (storm
   only via the 5% jump): 125 67 28 46 62. Merchant and warship rows are
   identical.
@@ -2172,10 +2172,10 @@ these with `Ship::closing` (`+0x6a1`, `+0x6c7`, `+0x6aa`, the plan's
 record), for ship prey only (the port's rams and boardings): a ship's
 `+0x5ab` is the cell it is going into between cells in move state 4 or
 5 (`Ship::under_way_into`), and a slot holds a ship in it or one that
-has so reserved it. 0x4a68b0 and 0x4c13b0 run on the port's way
-(velocity x tick x 6000 in `+0x59b`'s units) and picture centre; the way
-is the port mover's own, so 0x4a68b0 moves it at the way it has rather
-than the original's stepped one. The charge, the hook and what follows
+has so reserved it. 0x4a68b0 and 0x4c13b0 run on the ship's way
+`+0x59b`, `+0x597` and picture centre as the mover keeps them; 0x4a68b0
+steps the way a tick as the move tick does (`sail::next_way`, the wind
+always, no lime). The charge, the hook and what follows
 are the port's grapple.rs; the bow is looked for from the tick after the
 charge starts. Not ported: the 0x4a6150 wait counter's part (`+0x591`
 and 150: the port's mover's own), the rammer's state 1 reservation and
@@ -2192,7 +2192,7 @@ fort it boards, 0x4b5df0 / 0x4b73a0; task step 0x11 with a contact,
 0x4adef0). A rammer from its contact on and a boarder at its hook cell go
 to 0 (0x4c2425, 0x4c29aa, 0x4a3560: their contact `+0x6a9` = 6). The
 port keeps the state at its moves' events: 2 while the hull turns, 5 once
-the next cell is reserved, 4 once in the route's last cell, 3 at a route
+the next cell is reserved, 4 as it brakes (0x4a2f60: entering the route's last cell or refused the cell after the one it enters), 3 at a route
 point and while a refused step holds it (0 after 50 ticks), 0 with no
 route or at its end. A stop (0x4a6330 with the stop flag; nothing on the
 tick it already re-planned) lays a ship turning or at a cell (2, 3) still
@@ -3631,14 +3631,54 @@ speed is saved with a game (`SPEED_GAME`).
 - A ship turns a rotation of 24 a frame (0x4a3320); under way it bears off
   45 degrees at once, more and it stops to turn (0x4a3560).
 - Ship speeds (0x4ac210, at start-up): top speed = 0x5bb4e0[type] x 400
-  (x 1.15 and x 1.3 with rigging 1 and 2), acceleration = 0x5bb510[type]
-  x 8, in units of 1/6000 pixel a tick: each tick (0x4a3f40) the velocity
-  grows by the acceleration up to the top speed, both scaled by the wind
-  table 0x597b2c, and the position by the velocity, a straight step half a
-  pixel per 3000 units and a diagonal a third on each axis. Before the end
-  of its way it brakes at v squared / (distance x 6000) (0x4a2f60).
-  Measured live: a boat 60000 / 1200, a merchant 56000 / 1120; a merchant
-  at 33600 made 4.8 pixels a tick.
+  (rows x 115 / 100 and x 130 / 100 for rigging 1 and 2, by the player
+  block's `+0x51`), acceleration = 0x5bb510[type] x 8, in units of 1/6000
+  pixel a tick. Measured live: a boat 60000 / 1200, a merchant 56000 /
+  1120; a merchant at 33600 made 4.8 pixels a tick.
+- `+0x59f` (0x4bece0, from the stats refresh 0x4bee60): `d = 100 - hull x
+  100 / full` (0x5c76b0), top less `top x d / 200`; `+0x280` the same
+  from the acceleration, then x 85 / 100 or x 65 / 100 for armour
+  (`+0x27a` 1 / 2). The armour's 95 / 90 percent and the feathers of
+  Boreas (`+0x489` kind 12, their amount in percent) go only on `+0x27c`,
+  which nothing reads for a ship: they do not change the sailing speed.
+  0x4a3a70 sets `+0x280` back to the plain 0x5bb510 x 8 on every step it
+  grants. Under a siren's song 0x4a74c0 sets `+0x59f` to 7000.
+- The move tick 0x4a3f40 (states 4, 5, 1, and 3 once 0x4a3560 grants the
+  step; 0 halves the way each rocking frame, 0x4a3150; 2 turns, the way
+  kept): angle = 0x4e0100(wind, heading), `W` = 0x597b2c[((type <= 1) x 11
+  + strength) x 5 + angle] (the rows are the same); with Zetes aboard
+  (0x4ba790 with 3) neither the cap nor the step is scaled. `v = W x a /
+  100 + +0x59b` (`a` = `+0x284` in state 4, else `+0x280`); state 4 and `v
+  < 1`: 0, `+0x284` 0; capped at `W x +0x59f / 100`; limed (`+0x258`) `v`
+  and the step halved; braking (step < 0) to a tenth of `+0x59f` (unscaled)
+  or under keeps the old way. Then `n = v + +0x597`, `+0x597 = n % 3000`,
+  `s = n / 3000` steps along the heading (0x5c4f4c: dx, dy shorts, 5-byte
+  rows): straight on `s x d / 2` pixels on its axis and the odd step's 3000
+  back into `+0x597`; slanting `s x d / 3` on both axes and `(s % 3) x
+  3000` back. The picture is held at the route point on the axes it moves
+  along (moving along x only, its y set to the point's).
+- After the step, with the cell of the picture's centre *before* it: just
+  entered (`+0x596` 1 and that cell `+0x5b6`): `+0x596` 0, the move goal
+  posts 0x136, the route's end cell brakes, else the next point's cell is
+  asked for (0x4a3a70 with index + 1, held in `+0x5ab`), and refused it
+  brakes; not between cells and holding none, it asks every tick (and the
+  goal 1 away posts 0x136). At the route point: `+0x596` 1; state 4 in the
+  route's end: state 0, way 0; else the next point, state 3.
+- The brake 0x4a2f60 (not in state 4): the distance the larger axis from
+  the centre to its own cell's middle, plus 64 when `+0x5b6` is its own
+  cell; between cells (another `+0x5b6`) it reads `+0x5b6`'s cell number
+  (y x width + x) x 64 + 32 for both axes (0x4a2fff); state 4, `+0x284 =
+  way x way / (distance x -6000)` (32 bits).
+- So, calm, from rest at a cell's middle: a boat is in the next cell's
+  middle east in 35 ticks, north-east in 44 (braking by -540 / -854); a
+  merchant in 37 and 46. The port's mover (`scene::sail`, `Scene::update`)
+  steps the way and the picture so a game tick at a time, with the look-
+  ahead cell reserved (`Ship::ahead`). Not ported: 0x4bece0's armoured or
+  damaged `+0x280` between a hull change and the next granted step; the
+  charm's 7000 kept after the song until the next stats refresh; the
+  look-ahead refusal's wait counting (`+0x591`); the closing-in branches
+  of the tick (`+0x25d & 0x10`, the port's grapple). The port's shore and
+  pier slide (0x4b02a0) keeps its own pace.
 
 - Construction: a building's construction picture plays once over the
   first entry of its class's cycle table (+0xc0, set by each constructor:
