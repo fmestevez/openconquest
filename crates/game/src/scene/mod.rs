@@ -2528,6 +2528,8 @@ impl Scene {
             self.run_jam_attacks();
             self.run_brain();
             self.step_fort_draws();
+            self.heal_aboard();
+            self.step_dock_repairs();
             for (class, cell) in std::mem::take(&mut self.pending_walkers) {
                 self.put_walker(walkers::NO_LAIR, class, cell, data, caches);
             }

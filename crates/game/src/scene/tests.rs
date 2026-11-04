@@ -5537,65 +5537,6 @@ fn battles_survive_a_save() {
     assert_eq!(restored.lightning.len(), 1);
 }
 
-/// The Golden Fleece mends 1% of the hull every 100 ticks, Argus every
-/// 50 (needs `OPENCONQUEST_DATA`).
-#[test]
-fn fleece_and_argus_mend() {
-    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
-        return;
-    };
-    let data = GameData::open(std::path::Path::new(&root)).unwrap();
-    let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
-    // By id: the objects are sorted again as creatures come out.
-    let id = scene
-        .objects
-        .iter()
-        .find(|o| scene.is_own(o) && o.ship.is_some())
-        .unwrap()
-        .id;
-    let i = scene.object_index(id).unwrap();
-    let max = scene.objects[i].combat.as_ref().unwrap().max_hull;
-    scene.objects[i].combat.as_mut().unwrap().hull = max / 2.0;
-    scene.objects[i]
-        .ship
-        .as_mut()
-        .unwrap()
-        .treasures
-        .push(objects::Treasure {
-            kind: 16,
-            param: 0,
-            amount: 10,
-        });
-    let seconds = 100.0 * crate::clock::TICK;
-    let mut t = 0.0;
-    while t < seconds {
-        scene.update(0.02, &data, &mut caches);
-        t += 0.02;
-    }
-    let i = scene.object_index(id).unwrap();
-    let hull = scene.objects[i].combat.as_ref().unwrap().hull;
-    assert!(
-        ((hull - max / 2.0) / max - 0.01).abs() < 0.002,
-        "{}",
-        (hull - max / 2.0) / max
-    );
-    scene.objects[i].ship.as_mut().unwrap().heroes.push(5);
-    let before = hull;
-    let mut t = 0.0;
-    while t < seconds {
-        scene.update(0.02, &data, &mut caches);
-        t += 0.02;
-    }
-    let i = scene.object_index(id).unwrap();
-    let hull = scene.objects[i].combat.as_ref().unwrap().hull;
-    assert!(
-        ((hull - before) / max - 0.03).abs() < 0.003,
-        "{}",
-        (hull - before) / max
-    );
-}
-
 /// A settlement mends a building's hull over 200 ticks for its price:
 /// half of a settlement's in 100 ticks for 200 amber (needs
 /// `OPENCONQUEST_DATA`).
@@ -7033,6 +6974,7 @@ fn worn_units_are_mended() {
         o.units().unwrap()[6] = vec![50];
         o.units().unwrap()[0] = vec![90];
         let c = o.combat.as_mut().unwrap();
+        c.max_hull = combat::hull_strength(3);
         c.hull = c.max_hull;
     }
     // A full hull: the ship is still taken in for its worn units. (The
@@ -7129,6 +7071,143 @@ fn worn_units_are_mended() {
     let k = scene.object_index(ship).unwrap();
     let units = scene.objects[k].unit_conditions();
     assert_eq!((units[0][0], units[6][0]), (52, 52));
+}
+
+/// A dock mends a ship in steps (0x4b1fc0): every 9 ticks a tenth of the
+/// full hull for `0x59b388[type] x step / full` amber; short of it the
+/// human's ship gets what all its amber buys (needs `OPENCONQUEST_DATA`).
+#[test]
+fn docks_mend_in_steps() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.amber = 10_000;
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let full = combat::hull_points(2) as i64;
+    {
+        let k = scene.object_index(ship).unwrap();
+        let o = &mut scene.objects[k];
+        o.ship.as_mut().unwrap().kind = 2;
+        let c = o.combat.as_mut().unwrap();
+        c.max_hull = combat::hull_strength(2);
+        c.hull = (full / 2) as f32 / 15.0;
+    }
+    let dock = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .unwrap()
+        .id;
+    let d = scene.object_index(dock).unwrap();
+    scene.objects[d].class = ObjectClass::Building(economy::DOCK);
+    scene.order_repair(ship, dock).unwrap();
+    let state = |scene: &Scene| {
+        let k = scene.object_index(ship).unwrap();
+        let o = &scene.objects[k];
+        (
+            (o.combat.as_ref().unwrap().hull * 15.0).round() as i64,
+            o.ship.as_ref().unwrap().dock_step,
+        )
+    };
+    for _ in 0..50 * 120 {
+        if state(&scene).1.is_some() {
+            break;
+        }
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let (start, step) = state(&scene);
+    assert_eq!(start, 32500);
+    let run = |scene: &mut Scene, caches: &mut Caches, n: u32| {
+        let end = scene.ticks + n;
+        while scene.ticks < end {
+            scene.update(crate::clock::TICK, &data, caches);
+        }
+    };
+    let t = step.unwrap();
+    let wait = t + 8 - scene.ticks;
+    run(&mut scene, &mut caches, wait);
+    assert_eq!(state(&scene).0, start);
+    let amber = scene.amber;
+    run(&mut scene, &mut caches, 1);
+    // 65000 x 10 / 100 for 800 x 6500 / 65000.
+    assert_eq!(state(&scene), (start + 6500, Some(t + 9)));
+    assert_eq!(amber - scene.amber, 80);
+    // 40 amber buys 40 x 65000 / 800.
+    scene.amber = 40;
+    run(&mut scene, &mut caches, 9);
+    assert_eq!(state(&scene).0, start + 6500 + 3250);
+    assert_eq!(scene.amber, 0);
+}
+
+/// The Golden Fleece and Argus mend the hull in whole steps (0x4b98b0):
+/// 1% of the full hull each time their own count passes 1000, the Fleece
+/// (10 a tick) every 100 ticks, Argus (20) every 50; nothing between, and
+/// nothing while turned to stone (0x4ab930 returns first, `+0x257`)
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn fleece_and_argus_mend_in_steps() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let k = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let ship = scene.objects[k].id;
+    let full = combat::hull_points(2) as i64;
+    {
+        let o = &mut scene.objects[k];
+        let s = o.ship.as_mut().unwrap();
+        s.kind = 2;
+        s.heroes = vec![5];
+        s.treasures = vec![crate::objects::Treasure {
+            kind: 16,
+            param: 0,
+            amount: 10,
+        }];
+        let c = o.combat.as_mut().unwrap();
+        c.max_hull = combat::hull_strength(2);
+        c.hull = (full / 2) as f32 / 15.0;
+    }
+    let hull = |scene: &Scene| {
+        let k = scene.object_index(ship).unwrap();
+        (scene.objects[k].combat.as_ref().unwrap().hull * 15.0).round() as i64
+    };
+    let run = |scene: &mut Scene, caches: &mut Caches, n: u32| {
+        let end = scene.ticks + n;
+        while scene.ticks < end {
+            scene.update(crate::clock::TICK, &data, caches);
+        }
+    };
+    let start = hull(&scene);
+    assert_eq!(start, 32500);
+    run(&mut scene, &mut caches, 49);
+    assert_eq!(hull(&scene), start);
+    run(&mut scene, &mut caches, 1);
+    assert_eq!(hull(&scene), start + 650, "Argus at 50");
+    run(&mut scene, &mut caches, 49);
+    assert_eq!(hull(&scene), start + 650);
+    run(&mut scene, &mut caches, 1);
+    assert_eq!(hull(&scene), start + 3 * 650, "the Fleece and Argus at 100");
+    // Turned to stone: no tick of the count, no mending.
+    let k = scene.object_index(ship).unwrap();
+    scene.objects[k].combat.as_mut().unwrap().stone = 1000.0;
+    run(&mut scene, &mut caches, 100);
+    assert_eq!(hull(&scene), start + 3 * 650);
 }
 
 /// Greek fire sets a ship ablaze from the flames' middle; they burn out on

@@ -450,10 +450,15 @@ pub struct Ship {
     /// weapons: missing ones are whole (`MapObject::units`).
     #[serde(default)]
     pub conditions: [Vec<u8>; 9],
-    /// The Cup's and the Fleece's healing counts (0x4b98b0): every 1000
-    /// heals a point.
+    /// Each treasure slot's healing count (slot `+0xc`) and whether the
+    /// slot mends (0x4b9740's class 1, a Cup or a Fleece, in its flags
+    /// `+8`; 4 when player 16 took it, 0x4bd262), by slot as `treasures`.
     #[serde(default)]
-    pub healing: [f32; 2],
+    pub heal_slots: Vec<HealSlot>,
+    /// Argus's healing count (hero slot `+0x10`, 0 as he comes aboard,
+    /// 0x4bd350).
+    #[serde(default)]
+    pub argus_count: u32,
     /// Lying grappled to another ship in a boarding (0x4b5df0 states 8,
     /// 10, 0xb, 3, 0xc and 6 for the boarder, 0x4c3410 for the boarded).
     #[serde(default)]
@@ -473,6 +478,10 @@ pub struct Ship {
     /// 0x4b3ab0); `None` once afloat.
     #[serde(default)]
     pub build: Option<Build>,
+    /// Mended at a dock: the tick of its last step (`+0x751`, set as it
+    /// lies alongside, 0x4b263f; 0x4b1fc0 steps every 9).
+    #[serde(default)]
+    pub dock_step: Option<u32>,
     /// Its own random numbers (`+0x18`, the usual LCG), from its first
     /// draw (`Scene::ship_draw`).
     #[serde(default)]
@@ -968,7 +977,58 @@ impl Behaviour {
     }
 }
 
+/// A treasure slot's healing (0x4b98b0): its count and its flag.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HealSlot {
+    pub count: u32,
+    pub mends: bool,
+}
+
 impl Ship {
+    /// Puts a treasure aboard in the next slot (0x4bd0c0): a Cup's or a
+    /// Fleece's count from 0 (0x4bd23e), its flags 0x4b9740's class, or
+    /// 4 for player 16's ship (`barbarian`).
+    pub fn add_treasure(&mut self, tr: Treasure, barbarian: bool) {
+        self.sync_heal_slots(barbarian);
+        self.treasures.push(tr);
+        self.heal_slots.push(HealSlot {
+            count: 0,
+            mends: !barbarian && matches!(tr.kind, 15 | 16),
+        });
+    }
+
+    /// Takes treasure slot `k` out, the slots after it moving down with
+    /// their counts (0x4bd4f0).
+    pub fn remove_treasure(&mut self, k: usize) -> Treasure {
+        if k < self.heal_slots.len() {
+            self.heal_slots.remove(k);
+        }
+        self.treasures.remove(k)
+    }
+
+    /// A hero comes aboard in the next slot (0x4bd350): Argus's count from
+    /// 0 (his rate 20).
+    pub fn add_hero(&mut self, hero: u8) {
+        if hero == 5 {
+            self.argus_count = 0;
+        }
+        self.heroes.push(hero);
+    }
+
+    /// Slots without their healing record (treasures set aboard with the
+    /// mission) get one as 0x4bd0c0 gives: count 0, the flag by the kind
+    /// and the owner.
+    pub fn sync_heal_slots(&mut self, barbarian: bool) {
+        self.heal_slots.truncate(self.treasures.len());
+        let have = self.heal_slots.len();
+        for tr in &self.treasures[have..] {
+            self.heal_slots.push(HealSlot {
+                count: 0,
+                mends: !barbarian && matches!(tr.kind, 15 | 16),
+            });
+        }
+    }
+
     /// `+0x25d & 0x100`, a fire task: 0x4ab3f0 sets it on taking the fire
     /// records of an attack (orders 0x15 / 0x16, 0x4ab577-0x4ab589); the
     /// port's attack task. (Where the original clears it is not traced.)
@@ -2002,7 +2062,9 @@ pub fn resolve(
                     c.iter().map(|&v| v.min(100) as u8).collect()
                 })
         }),
-        healing: [0.0; 2],
+        heal_slots: Vec::new(),
+        argus_count: 0,
+        dock_step: None,
     });
     let combat = crate::combat::Combatant::from_record(rec, class);
     // Deposits: amber holds field 4 x 100 units; a negative amount starts

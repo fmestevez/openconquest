@@ -685,7 +685,7 @@ impl Scene {
     /// Whether `owner` is a computer's player (side `game +0x1a1d` 3 or
     /// 4): not the human's, nor a seat's (1 local, 2 remote), nor player
     /// 16 (0).
-    fn side_computer(&self, owner: Option<(u32, u32)>) -> bool {
+    pub(super) fn side_computer(&self, owner: Option<(u32, u32)>) -> bool {
         let Some(o) = owner else {
             return false;
         };

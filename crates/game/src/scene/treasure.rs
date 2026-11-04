@@ -22,7 +22,7 @@ const HERO_REACH: f32 = 2.6;
 /// worn unit a point of its 100 (the Cup the marines, the Fleece every
 /// unit) and mends 1% of the hull (the Fleece and Argus).
 const HEAL_STEP: f32 = 1000.0;
-pub const ARGUS_RATE: f32 = 20.0;
+pub const ARGUS_RATE: u32 = 20;
 
 impl Scene {
     /// Sends own ship `ship` to take the treasure or the hero `target`.
@@ -105,51 +105,93 @@ impl Scene {
             }
         }
         self.deliver_treasures();
-        // Lasting gifts that mend the ship.
+        self.heal_forts(dt);
+    }
+
+    /// A game tick of 0x4b98b0 on every ship (the ship tick 0x4ab930 at
+    /// 0x4abbdb, while `+0x25d & 0x1000`, which 0x4ab9c6 sets when slot 0
+    /// or 1 mends or Argus is aboard; not on a ship sunk, being built,
+    /// `+0x251` 2, or turned to stone, `+0x257`, whose tick returns
+    /// first). Each treasure slot of a Cup (15) or a Fleece (16) adds its
+    /// amount to its own count, Argus 20 to his; `n` = count / 1000 heals
+    /// (the count kept modulo 1000): the Cup each worn unit of items 0-2 by
+    /// `n` (to 100), the Fleece every item's; the Fleece and Argus, while
+    /// `hull x 100 / full` is under 100, add `full x n / 100` to the hull
+    /// (to full). Anything healed runs the stats refresh 0x4bee60.
+    pub(super) fn heal_aboard(&mut self) {
+        let mut refresh = Vec::new();
         for o in &mut self.objects {
-            let (Some(s), Some(c)) = (o.ship.as_ref(), o.combat.as_ref()) else {
+            let barbarian = o.owner == Some((4, 0));
+            let (Some(s), Some(c)) = (o.ship.as_mut(), o.combat.as_ref()) else {
                 continue;
             };
-            let rate = |kind: u8| -> f32 {
-                s.treasures
-                    .iter()
-                    .filter(|tr| tr.kind == kind)
-                    .map(|tr| tr.amount as f32)
-                    .sum()
-            };
-            let ticks = dt / crate::clock::TICK;
-            let (cup, fleece) = (rate(15), rate(16));
-            let mut mend = fleece;
-            if s.heroes.contains(&5) {
-                mend += ARGUS_RATE;
+            if c.hull <= 0.0 || s.build.is_some() || c.stone > 0.0 {
+                continue;
             }
-            let rate = c.max_hull / 100.0 * mend * ticks / HEAL_STEP;
-            // The Cup heals the marines, the Fleece every unit (items 0-2
-            // and 0-8), a point each every 1000 of their count.
-            let mut heal = [0u32; 2];
-            if cup + fleece > 0.0 {
-                let s = o.ship.as_mut().unwrap();
-                for (k, r) in [cup, fleece].into_iter().enumerate() {
-                    s.healing[k] += r * ticks;
-                    heal[k] = (s.healing[k] / HEAL_STEP) as u32;
-                    s.healing[k] -= (heal[k] as f32) * HEAL_STEP;
+            s.sync_heal_slots(barbarian);
+            let argus = s.heroes.contains(&5);
+            if !argus && !s.heal_slots.iter().take(2).any(|h| h.mends) {
+                continue;
+            }
+            let full = crate::combat::hull_points(s.kind) as i64;
+            let hull0 = (c.hull * 15.0).round() as i64;
+            let mut hull = hull0;
+            // 0x4b9a2a / 0x4b9b2c: 1% of the full hull a heal, from below
+            // full only.
+            let mend = |hull: &mut i64, n: u32| {
+                if *hull * 100 / full < 100 {
+                    *hull = (*hull + full * n as i64 / 100).min(full);
+                    true
+                } else {
+                    false
+                }
+            };
+            let mut healed = false;
+            let mut points = [0u32; 9];
+            for (tr, slot) in s.treasures.iter().zip(s.heal_slots.iter_mut()) {
+                let items = match tr.kind {
+                    15 => 3,
+                    16 => 9,
+                    _ => continue,
+                };
+                slot.count += tr.amount;
+                let n = slot.count / 1000;
+                if n == 0 {
+                    continue;
+                }
+                slot.count %= 1000;
+                points[..items].iter_mut().for_each(|p| *p += n);
+                if tr.kind == 16 {
+                    healed |= mend(&mut hull, n);
                 }
             }
-            if heal != [0, 0] {
+            if argus {
+                s.argus_count += ARGUS_RATE;
+                let n = s.argus_count / 1000;
+                if n != 0 {
+                    s.argus_count %= 1000;
+                    healed |= mend(&mut hull, n);
+                }
+            }
+            if points != [0; 9] {
                 let units = o.units().unwrap();
-                for (k, u) in units.iter_mut().enumerate() {
-                    let points = heal[1] + if k < 3 { heal[0] } else { 0 };
-                    for c in u.iter_mut().filter(|c| **c < 100) {
-                        *c = (*c as u32 + points).min(100) as u8;
+                for (u, &p) in units.iter_mut().zip(&points) {
+                    for c in u.iter_mut().filter(|c| **c < 100 && p > 0) {
+                        *c = (*c as u32 + p).min(100) as u8;
+                        healed = true;
                     }
                 }
             }
-            let c = o.combat.as_mut().unwrap();
-            if rate > 0.0 && c.hull < c.max_hull {
-                c.hull = (c.hull + rate).min(c.max_hull);
+            if hull != hull0 {
+                o.combat.as_mut().unwrap().hull = hull as f32 / 15.0;
+            }
+            if healed {
+                refresh.push(o.id);
             }
         }
-        self.heal_forts(dt);
+        for id in refresh {
+            self.refresh_stats(id);
+        }
     }
 
     /// A fort storing a Cup of Asclepius or a Golden Fleece (0x419e00 sets
@@ -272,7 +314,7 @@ impl Scene {
                         .push("There is no room for the treasure".into());
                     return;
                 }
-                s.treasures.push(tr);
+                s.add_treasure(tr, owner == Some((4, 0)));
                 self.messages.push(format!("Taken aboard: {name}"));
             }
         }
@@ -397,8 +439,8 @@ impl Scene {
         if s.heroes.contains(&hero) || s.heroes.len() >= objects::hero_room(s.kind) {
             return;
         }
-        s.treasures.remove(k);
-        s.heroes.push(hero);
+        s.remove_treasure(k);
+        s.add_hero(hero);
         self.messages.push(format!(
             "{} comes aboard",
             objects::HERO_NAMES[hero as usize]
@@ -435,11 +477,12 @@ impl Scene {
                 .map(|(_, b)| b.id);
             let Some(site) = site else { continue };
             let s = self.objects[i].ship.as_mut().unwrap();
-            let (given, kept): (Vec<Treasure>, Vec<Treasure>) = s
-                .treasures
-                .drain(..)
-                .partition(|tr| matches!(tr.kind, 6 | 7 | 27));
-            s.treasures = kept;
+            let mut given = Vec::new();
+            for k in (0..s.treasures.len()).rev() {
+                if matches!(s.treasures[k].kind, 6 | 7 | 27) {
+                    given.insert(0, s.remove_treasure(k));
+                }
+            }
             for tr in given {
                 self.hand_over(owner, site, tr);
             }

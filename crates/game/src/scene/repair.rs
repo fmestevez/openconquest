@@ -475,29 +475,13 @@ impl Scene {
 
     pub(super) fn run_repairs(&mut self, dt: f32) {
         self.run_stock_repairs(dt);
-        let mut work: Vec<(u32, bool)> = self.mending.iter().map(|&id| (id, false)).collect();
-        for (i, o) in self.objects.iter().enumerate() {
-            let Some(Task::Repair { dock }) = o.ship.as_ref().and_then(|s| s.task) else {
-                continue;
-            };
-            // Mended once alongside the dock.
-            match self.object_index(dock) {
-                Some(d) if self.alongside(i, d) => work.push((o.id, true)),
-                Some(_) => {}
-                None => work.push((o.id, true)),
-            }
-        }
+        let work: Vec<u32> = self.mending.clone();
         let mut done = Vec::new();
-        for (id, is_ship) in work {
+        for id in work {
             let Some(i) = self.object_index(id) else {
                 done.push(id);
                 continue;
             };
-            let gone = is_ship
-                && !matches!(
-                    self.objects[i].ship.as_ref().and_then(|s| s.task),
-                    Some(Task::Repair { dock }) if self.object_index(dock).is_some()
-                );
             let (Some(owner), Some(c)) = (self.objects[i].owner, self.objects[i].combat.as_ref())
             else {
                 done.push(id);
@@ -506,66 +490,36 @@ impl Scene {
             // A limed building's mending stands still: no step, nothing
             // paid (0x425990 calls the step, vtable +0x70 = 0x425100, only
             // while +0x144 is 0).
-            if !is_ship && c.lime > 0.0 {
+            if c.lime > 0.0 {
                 continue;
             }
             // Never below what it has (a hull above full is left alone).
-            let (rate, price) = match self.objects[i].ship.as_ref().filter(|_| is_ship) {
-                Some(ship) => (
-                    c.max_hull * 0.1 / crate::clock::ticks(DOCK_TICKS),
-                    DOCK_REPAIR_PRICE[ship.kind as usize % 12] as f32 / c.max_hull.max(1.0),
-                ),
-                None => {
-                    let cost = match self.objects[i].class {
-                        ObjectClass::Building(class) => crate::economy::building_cost(class),
-                        _ => 0,
-                    };
-                    (
-                        c.max_hull / crate::clock::ticks(MEND_CYCLE),
-                        cost as f32 / c.max_hull.max(1.0),
-                    )
-                }
+            let cost = match self.objects[i].class {
+                ObjectClass::Building(class) => crate::economy::building_cost(class),
+                _ => 0,
             };
+            let (rate, price) = (
+                c.max_hull / crate::clock::ticks(MEND_CYCLE),
+                cost as f32 / c.max_hull.max(1.0),
+            );
             let heal = (rate * dt).min(c.max_hull - c.hull).max(0.0);
             let owed = self.repair_owed.entry(owner).or_default();
             *owed += heal * price;
             let pay = owed.floor() as u32;
             let (amber, _) = self.funds(owner);
-            if gone || pay > amber {
+            if pay > amber {
                 done.push(id);
                 continue;
             }
             *self.repair_owed.get_mut(&owner).unwrap() -= pay as f32;
             self.earn(owner, -(pay as i64), 0);
-            if is_ship {
-                self.mend_units(i, owner);
-            }
             let c = self.objects[i].combat.as_mut().unwrap();
             c.hull += heal;
             let whole = c.hull >= c.max_hull;
-            if !is_ship {
-                self.mend_fort_units(i, owner);
-            }
+            self.mend_fort_units(i, owner);
             if whole {
                 done.push(id);
             }
-        }
-        // A brain's ship mended sails out and joins its member (0x5d98).
-        let leaving: Vec<u32> = done
-            .iter()
-            .copied()
-            .filter(|&id| {
-                self.object_index(id).is_some_and(|i| {
-                    matches!(
-                        self.objects[i].ship.as_ref().and_then(|s| s.task),
-                        Some(Task::Repair { .. })
-                    )
-                })
-            })
-            .collect();
-        for id in leaving {
-            self.brain_repaired(id);
-            self.brain_mended(id);
         }
         for &id in &done {
             self.rearm_fort(id);
@@ -573,11 +527,95 @@ impl Scene {
         for id in done {
             self.mending.retain(|&m| m != id);
             self.unit_mends.retain(|m| m.site != id);
+        }
+    }
+
+    /// A game tick of the ships mended at their docks (0x4b1fc0, the dock
+    /// machine's state 4, entered with `+0x751` = now, 0x4b263f; the port
+    /// enters it once alongside). Every 9 ticks (`now - +0x751 < 9`
+    /// returns): the step `min(full - hull, full x 10 / 100)` costs
+    /// `0x59b388[type] x step / full` amber; short of it a computer
+    /// player's ship (side 3 or 4) is done unmended, any other gets
+    /// `amber x full / 0x59b388[type]` (to full) for all its amber; then
+    /// each worn unit, items down from the last, is made whole for
+    /// `0x597164[item / 3] x (100 - condition) x 9 / 1000` while the amber
+    /// lasts; the stats refresh 0x4bee60 at every step, and the full hull
+    /// ends it. The dock gone (`+0x8e6` 0) ends it at once.
+    pub(super) fn step_dock_repairs(&mut self) {
+        let now = self.ticks;
+        for s in self.objects.iter_mut().filter_map(|o| o.ship.as_mut()) {
+            if !matches!(s.task, Some(Task::Repair { .. })) {
+                s.dock_step = None;
+            }
+        }
+        let ships: Vec<(usize, u32)> = self
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| match o.ship.as_ref()?.task? {
+                Task::Repair { dock } => Some((i, dock)),
+                _ => None,
+            })
+            .collect();
+        let mut done = Vec::new();
+        for (i, dock) in ships {
+            let id = self.objects[i].id;
+            let Some(d) = self.object_index(dock) else {
+                done.push(id);
+                continue;
+            };
+            let s = self.objects[i].ship.as_ref().unwrap();
+            let Some(last) = s.dock_step else {
+                if self.alongside(i, d) {
+                    self.objects[i].ship.as_mut().unwrap().dock_step = Some(now);
+                }
+                continue;
+            };
+            if now.wrapping_sub(last) < DOCK_TICKS {
+                continue;
+            }
+            let (Some(owner), Some(c)) = (self.objects[i].owner, self.objects[i].combat.as_ref())
+            else {
+                done.push(id);
+                continue;
+            };
+            let kind = s.kind as usize % 12;
+            let mut hull = (c.hull * 15.0).round() as i64;
+            self.objects[i].ship.as_mut().unwrap().dock_step = Some(now);
+            let full = crate::combat::hull_points(kind as u8) as i64;
+            let step = (full - hull).min(full * 10 / 100);
+            let price = DOCK_REPAIR_PRICE[kind] as i64 * step / full;
+            let amber = self.funds(owner).0 as i64;
+            if amber < price {
+                if self.side_computer(Some(owner)) {
+                    done.push(id);
+                    continue;
+                }
+                hull = (hull + amber * full / DOCK_REPAIR_PRICE[kind] as i64).min(full);
+                self.earn(owner, -amber, 0);
+            } else {
+                hull += step;
+                self.earn(owner, -price, 0);
+            }
+            self.objects[i].combat.as_mut().unwrap().hull = hull as f32 / 15.0;
+            self.mend_units(i, owner);
+            self.refresh_stats(id);
+            if hull == full {
+                done.push(id);
+            }
+        }
+        // A brain's ship mended sails out and joins its member (0x5d98).
+        for &id in &done {
+            self.brain_repaired(id);
+            self.brain_mended(id);
+        }
+        for id in done {
             if let Some(i) = self.object_index(id) {
                 if let Some(s) = self.objects[i].ship.as_mut() {
                     if matches!(s.task, Some(Task::Repair { .. })) {
                         s.task = None;
                     }
+                    s.dock_step = None;
                 }
             }
         }

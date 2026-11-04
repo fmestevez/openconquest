@@ -946,7 +946,7 @@ impl Scene {
                     Payload::Ram(l)
                 }
                 Cargo::Treasure { index, .. } => {
-                    Payload::Treasure(s.treasures.remove(index as usize))
+                    Payload::Treasure(s.remove_treasure(index as usize))
                 }
                 Cargo::Hero(h) => {
                     s.heroes.retain(|&x| x != h);
@@ -1065,6 +1065,7 @@ impl Scene {
                 o.add_unit(k, c);
                 return;
             }
+            let barbarian = o.owner == Some((4, 0));
             let s = o.ship.as_mut().unwrap();
             let mut back = None;
             match payload {
@@ -1081,8 +1082,8 @@ impl Scene {
                     }
                     s.ram = l;
                 }
-                Payload::Treasure(tr) => s.treasures.push(tr),
-                Payload::Hero(h) => s.heroes.push(h),
+                Payload::Treasure(tr) => s.add_treasure(tr, barbarian),
+                Payload::Hero(h) => s.add_hero(h),
                 Payload::Goods(goods, amount) => {
                     s.cargo_kind = Some(goods);
                     s.cargo += amount;

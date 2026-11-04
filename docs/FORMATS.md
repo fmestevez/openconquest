@@ -3779,7 +3779,8 @@ speed is saved with a game (`SPEED_GAME`).
   0x4bd410), boarding (0x4b5df0, 0x4c3410), refits (0x4e72e0, 0x4e73c0),
   being built (0x4b3ab0), the loader 0x4dfa90 and message 0x8d1 at the
   start (0x4dc630). The port refreshes (`Scene::refresh_stats`, `Ship::
-  accel`) after a shared blow and a ram's, and when the siren's song ends.
+  accel`) after a shared blow and a ram's, when the siren's song ends, and
+  on mending aboard (0x4b98b0) and at a dock (0x4b1fc0).
 - The siren's song is such a status (0x4a7390: `+0x25c = 1`, `+0xb1` now,
   `+0xb5` the length): 0x4a74c0 sets `+0x59f = 7000` every tick before the
   move tick, so a refresh during the song changes nothing, and its end
@@ -3795,8 +3796,8 @@ speed is saved with a game (`SPEED_GAME`).
   step granted sets it to 0 (0x4a3c62).
 - Not ported: the closing-in branches of the tick (`+0x25d & 0x10`, the
   port's grapple); the refreshes under way other than blows and the song's
-  end (Argus's and the Fleece's mending 0x4b98b0, whose port is not the
-  original's steps of 1000); 0x4a6330's 0x4a3a70(1) when planning between
+  end, the mending aboard (0x4b98b0, see "Healing aboard") and at a dock
+  (0x4b1fc0); 0x4a6330's 0x4a3a70(1) when planning between
   cells. Not decoded: the shore and pier slide's pace. 0x4b02a0 steps
   `+0x78e` by 2 (back out: down by 2, to 0) along the line 0x4b5220 built
   from the picture's top-left (Bresenham, an odd count padded with the
@@ -4257,6 +4258,24 @@ for its type's price (0x59b388: 140, 280, 800, 910, 650, 560, 490, 420,
 420, 630, 420, 630) times the share mended, and worn units are made whole
 for `cost[kind / 3] x (100 - condition) x 9 / 1000`; short of amber, the
 human's ship gets what the amber buys, a computer player's stops.
+In integers (the dock machine's state 4, 0x4b2652; entered from state 8
+at 0x4b263f with `+0x751` = now): `now - +0x751 < 9` returns; else
+`+0x751` = now, step = min(full - hull, full x 10 / 100), price =
+0x59b388[type] x step / full; amber (0x4a8ce0) below the price: a side 3
+or 4 player's ship is done (state 3, out) unpaid, any other gets `amber x
+full / 0x59b388[type]` (capped at full) and pays all its amber; else the
+step for the price. Then the units, items 9 down to 0, each below 100
+made whole while its cost is held. Every step ends with 0x4bee60 and
+0x4be030; a full hull ends it (state 3) after the refits below. The dock
+gone (`+0x8e6` 0) or a stop (`+0x73a` < 0) ends it at once. The port
+(`Scene::step_dock_repairs`, `Ship::dock_step`) starts the clock as the
+ship lies alongside. Not ported: the dock machine's entry and exit
+(0x4b17e0, 0x4b89b0, 0x4b1d40), so its first step is 9 ticks after the
+ship is alongside rather than after the sail is furled; item 9 (the
+unique ships' own); the refits at full hull (kinds 0 and 1 slot 3 / 4
+when empty, 0x4bd920 with 100; kinds 2-7 0x4bbca0 with the dock and
+0x4be800(5, -1); else `eax` 0x100 / 0x200 slots 9 / 10, at
+0x4b22f7-0x4b2321; not read: 0x4bbca0, and what `eax` holds there).
 
 ## Units' conditions
 
@@ -8000,6 +8019,33 @@ aboard. Every 1000 of a count:
 
 So the Fleece mends 1% every 100 ticks (4 s) and Argus 1% every 50 ticks
 (2 s).
+
+In detail: each slot keeps its own count (slot `+0xc`, its rate `+0x10`;
+a hero slot's at `+0x10` / `+0x14`); `n` = count / 1000, and only when
+`n` is not 0 the count becomes count % 1000 and `n` is applied: units
+below 100 rise by `n`, capped at 100; the hull, only while `hull x 100 /
+full` (0x5c76b0) is under 100, gains `full x n / 100` (integers), then
+0x4be030 (the damaged look) and the cap at full. Anything healed (a unit
+or the hull) runs the stats refresh 0x4bee60 once at the end. A Cup's or
+Fleece's count starts at 0 as it is loaded (0x4bd0c0 at 0x4bd23e), Argus's
+as he boards (0x4bd350); a slot taken out moves the later ones down with
+their counts (0x4bd4f0, 0x4bd410).
+
+The ship tick 0x4ab930 calls it (0x4abbdb) while `+0x25d & 0x1000`, which
+it sets each tick (0x4ab9c6) when treasure slot 0 or 1 (`+0x491`,
+`+0x4a9`; no ship type has more than 2, 0x597afc: 1 1 2 1 1 1 1 1 0 0 0
+0) has flag 1 or Argus is aboard (0x4ba790). The slot's flags `+8` are
+0x4b9740's class (1 for kinds 15 and 16) as it is loaded, but 4 when
+player 16 loads it (0x4bd262): a barbarian's Cup or Fleece alone does not
+mend. The tick returns before the call on a ship sunk (`+0x251` 4, or by
+the blow 0x4befc0 / shot 0x4bf170 of that tick), being built or sold
+(`+0x251` 2), turned to stone (`+0x257`), and on the tick 0x4c3ca0
+returns non-zero (0x4c3410 state 6's end, the boarded ship let go). The
+port runs it at the game tick (`Scene::heal_aboard`, `Ship::heal_slots`,
+`argus_count`). Not ported: the bit is never cleared there (only
+0x4b37d0's hold zeroes `+0x25d`), so a ship that had Argus or a mending
+slot keeps mending after they leave (which matters only to a barbarian's
+Cup or Fleece); the skipped tick at 0x4c3410's end.
 
 ## Heroes and gifts in battle and under sail
 

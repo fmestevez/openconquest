@@ -1450,7 +1450,7 @@ impl Scene {
             let ship = obj.ship.as_mut().unwrap();
             if let Some(waiting) = self.site_heroes.get_mut(&site) {
                 while ship.heroes.len() < crate::objects::hero_room(kind) && !waiting.is_empty() {
-                    ship.heroes.push(waiting.remove(0));
+                    ship.add_hero(waiting.remove(0));
                     n += 1;
                 }
                 if waiting.is_empty() {
