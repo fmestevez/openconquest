@@ -2061,14 +2061,42 @@ look 0x4ac8d0 (box `size` about its centre, clipped to the map; grid
 one, not on this one's `+0x5ab`, not the target; goal the found cell;
 wait 0), 0x4b8493 in the boarder's closing-in 0x4b7f10 and 0x4c2666 /
 0x4c272e in the rammer 0x4c2230 (region filled by 0x4b8d80). The port
-plans the leviathan hunt's look (sub-code 10, size 5) so
-(`Scene::plan_region`, hunt.rs). Not ported: the sub-code 11 looks
-(0x4aeb80, 0x4af640) and the boarder's search mode (0x4b7eb0) call with
-a size of 11, writing 121 shorts into a 25-short stack buffer (undefined;
-who sets sub-code 11 and `+0x6a1 = 2` not traced); the boarder's and
-rammer's closing-in (0x4b7f10, 0x4b8d80, 0x4c1f60: the port's own chase
-stands until they are ported together, `Scene::run_contact`). What is
-read of them:
+plans the leviathan hunt's look (sub-code 10, size 5) and the rammer's
+and boarder's closing in so (`Scene::plan_region`, hunt.rs, closing.rs).
+Not ported: the sub-code 11 looks (0x4aeb80, 0x4af640) and the boarder's
+search mode (0x4b7eb0) call with a size of 11, writing 121 shorts into a
+25-short stack buffer (undefined; who sets sub-code 11 and `+0x6a1 = 2`
+not traced).
+
+**Rammers and boarders closing in.** The ship's tick (0x4abae6), while
+`+0x25d & 0x10` (set by the order 0x4aa840, with `+0x591 = 0`, `+0x593 =
+1`, `+0x57b = 0`, `+0x57f = 25`), runs its behaviour by `+0x696`: 1 the
+ram 0x4c1370, 2 the boarding 0x4b4da0, 3 0x4b7370; each by `+0x6a1`: 1
+closing in (0x4c2230, 0x4b5df0, 0x4b73a0), 2 search (0x4c3000, 0x4b5ca0,
+0x4b7eb0), 3 sailing to the prey (0x4c2ec0, 0x4b5d10). The order sets
+`+0x6a1` 1 when 0x4abf60 (0x557440 from the ship's `+0x5a3` to the
+prey's cell) is within 0x59aee8[type] / 2, else 3. The sizes 0x59aee8,
+0x5991c8 and 0x5991d4 are 5 for every type.
+- Sailing (`+0x6a1` 3): 0x4b9140(radius 0x5991d4 or 0x5991c8 >> 1 = 2,
+  -1, ...): the prey's cell (0x50ebf0; a ship's is vt+0x28, tolerance 0)
+  within 2 of the ship's cell by 0x557480 (2 across both axes counts 2):
+  1; else a plan 0x4a6270 mode 5 to it, 0. The boarder's 0x4b5d10 calls
+  it only when its cell is not `+0x6c7` or `+0x591` is set; the rammer's
+  0x4c2ec0 every tick; 0 keeps the cell in `+0x6c7`, 1 sets `+0x6a1` 1
+  (the rammer also `+0x593` = 1, by 0x4c1370). (Without the prey: notice
+  0x13c / 0x13d to the group.)
+- 0x4a6270 modes 5 and 6 (6 passes the region): with `+0x593` 0x4a6330
+  at once, else 0x4a6150: a plan when (`+0x591` changed, or the cell or
+  the goal changed since the last, or move state 0) and not turning
+  (state 2) and 25 ticks after `+0x57b`; then on the goal (or `+0x591`
+  150) event 8 0x80 and 3, else 0x4a6330 (2 is 0 unless `+0x5c7` is
+  0x32). Not planning: 0. 0x4a6330: 1 for its own cell, 0 for a cell
+  0x499990 refuses or a route of one cell (or 2), 0xff for no route; the
+  route's last cell is `+0x5b2`.
+- The boarder (0x4b5df0 state 1, 0x4b73a0 alike): 0x4b7f10(5, prey, its
+  id, `+0x6d3` (the prey's 0x50e600, unused), reach 1): below 0, state 1
+  and `+0x6a1` 3; 0 nothing; above 0, the prey a ship at war, a hook
+  (0x4b84b0; state 7).
 - 0x4b7f10 (ship, size, prey, prey id, .., reach): the box of `size / 2`
   about its cell (or, under way into `+0x5b6` with `+0x596` set and move
   state 4 or 5, that cell), clipped to the map; the region's shorts
@@ -2077,22 +2105,38 @@ read of them:
   prey (pointer and id). The prey in the box: a building (0x50e600
   0x32) its cell by vt+0xb8, its reach zeroed for classes 0x39, 0x3a and
   (reach 1) 0x3b, and for classes 0x34-0x36, 0x3f-0x41 (bits 0xe01c)
-  `+0x594 = 1` and the cell `+0x74 / +0x78`; a ship its cell, or, on
-  the cell it is under way to (its `+0x5ab`), that cell kept apart with
-  its distance in the box; the distance the larger axis, kept when
-  within `size / 2` on both.
+  `+0x594 = 1` and the cell `+0x74 / +0x78`; a ship on its own cell's
+  slot that cell, and its distance from the ship's own `+0x5a3` (the
+  larger axis) if within `size / 2` on both; on the slot of the cell it
+  is under way to (its `+0x5ab`) that cell kept apart, with its distance
+  from the box's middle by the box's row and column (counted from the
+  clipped corner), and the prey's own cell with its distance unbounded.
   Not in the box: 0xff. Within reach: `+0x6aa` = W x the box's end row +
-  its end column (as the disassembly at 0x4b83bf has it), 1. Else a plan
-  0x4a6270 mode 6 to the chosen cell (the nearer of the two, the
-  prey's own on a tie) through the region, 0. Its search mode
-  (`+0x6a1 == 2`) lists the box's occupants into 0x5c79c8 (at most 50),
-  sorts them (0x4b7f00, not read) and takes the first if a ship.
+  its end column (one past the end corner, as the disassembly at
+  0x4b83bf has it), 1; 0x4b84b0 writes the prey's cell over it for a
+  ship or building before reading it. Else a plan 0x4a6270 mode 6
+  through the region to the cell apart if nearer, else the prey's own;
+  with no distance for the prey's own, the cell apart; with neither,
+  none; 0. Its search mode (`+0x6a1 == 2`) lists the box's occupants
+  into 0x5c79c8 (at most 50), 0x4b7f00 (an empty function) and takes the
+  first if a ship.
+- The rammer (0x4c2230 states 1 and 2): `+0x6aa` = -1; 0x4b8d80(reach 1,
+  box (x - 2, y - 2, 5, 5) about `+0x5a3`). 0: the prey found, its goal
+  0x4c1f60 and a plan 0x4a6270 mode 6 to it through the region; no route
+  (or not found), state 1, `+0x6a1` 3, the contact released (0x4c1950).
+  1: 0x4c1f60 2 charges (state 1: `+0x6ae` its cell's reservation, state
+  2, 0x4c1760; state 2: 0x4c1870 the bow on the hull, the impact); 1:
+  `+0x6aa` the goal and the plan, kept if it planned and the route ends
+  there (`+0x5b2`) or it is under way (4, 5); else state 1, release,
+  `+0x6a1` 3.
 - 0x4b8d80 (the rammer's, region in the caller's buffer): the box
-  `param_4`, clipped; cells 0x499990 as above; closed where a ship lies
-  still (`+0x58c` 0) other than itself and the prey and not on its own
-  or the cell's ship's `+0x5ab`, and where a ship lies, a corner of its
-  own cell 0x499ca0 refuses when its heading `+0x5af` is below 1; the
-  prey (a monster not of class 0x1fb, or another nation or slot at
+  `param_4`, its corner clipped (none off the map), its far side `w`, `h`
+  on from the clipped corner, clipped; cells 0x499990 as above; where a
+  ship lies on its own cell (not its `+0x5ab`): closed if it lies still
+  (`+0x58c` 0), is not itself or the prey, and the cell is not the
+  rammer's `+0x5ab`; closed too, a corner of its own cell, when its
+  heading `+0x5af` (signed) is below 1 and 0x499ca0 refuses the corner;
+  the prey (a monster not of class 0x1fb, or another nation or slot at
   war) found: the region filled (goal its cell, active), and 1 when
   0x557480 to it is within `param_1` and its corner not refused.
 - 0x4c1f60 (rammer, prey): from its cell (or `+0x5b6`'s, 0x4e0b50 0)
@@ -2100,11 +2144,42 @@ read of them:
   it goes to: the goal the one nearer (0x557440), 0x4c13b0 choosing
   when both are at 1, the prey's own on a tie; 2 (alongside) at
   distance 0 or 1 when 0x4e0b50 gave 0, else at 0, or at 1 with
-  0x4a68b0, facing it (0x59791d by the offset = `+0x5af`) or in move
-  state 3; also 2 lying still (state 0) at 1 facing it; else 1; 0 for a
-  prey that is no ship.
-Not read: 0x4c13b0, 0x4a68b0, 0x4b7f00, 0x557480, and the callers' use
-of the returns and `+0x6aa` (0x4b5df0 state 1, 0x4c2230 states 1 and 2).
+  0x4a68b0, facing it (0x59791d by the offset from its own cell =
+  `+0x5af`; 2 off reads the bytes about the table: the vtable 0x597914
+  before it, 0xff after) or in move state 3; also 2 lying still (state
+  0) at 1 facing it; else 1; 0 for a prey that is no ship.
+- 0x4a68b0: out of move states 4 and 5, 1; else the way stepped a tick
+  (`+0x59b` by `+0x284` braking or `+0x280`, times 0x597b2c by the wind
+  / 100, capped by `+0x59f` likewise), `(+0xe2 x way + +0x597) / 3000`,
+  half of it on each axis straight on, a third slanting (none: 0); 1 if
+  the picture so moved reaches or passes the route point (`+0x5c2`
+  entry `+0x5be`) on either axis it moves along.
+- 0x4c13b0 (in the disassembly; Ghidra's is mangled): for the two cells
+  (prey's, the one it goes to; both 1 from the rammer's), direction `d`
+  from its cell by 0x59791d; the row 0x599688 + (k + the prey's type x
+  4) x 0x18, k by the prey's heading (0 / 4: 1 if the prey's row is not
+  above the rammer's, 2 / 6: 2, slanting: 3), six ints (x, y, way for a
+  straight `d`, then for a slanting one); the point the cell's middle +
+  the unit of `d` times (x, y); time `t0` (the rammer's 0x557440 to its
+  cell's middle, 0 in states 0, 2, 3) x 6000 (heading straight) or 9000
+  over `+0x59b` (0 counts 1), then per cell `(way - 0x599204[rammer's
+  type x 0x60] / 2)` likewise by `d` + `t0` (0 if the way is not above
+  0); the prey's centre carried on its heading by `t x +0x59b / 3000`
+  (32-bit) halved straight on or a third slanting; 1 (the cell it goes
+  to) if the first point's 0x557440 to it is not below the second's.
+The port (closing.rs, a game tick at a time, after the hunts) follows
+these with `Ship::closing` (`+0x6a1`, `+0x6c7`, `+0x6aa`, the plan's
+record), for ship prey only (the port's rams and boardings): a ship's
+`+0x5ab` is the cell it is going into between cells in move state 4 or
+5 (`Ship::under_way_into`), and a slot holds a ship in it or one that
+has so reserved it. 0x4a68b0 and 0x4c13b0 run on the port's way
+(velocity x tick x 6000 in `+0x59b`'s units) and picture centre; the way
+is the port mover's own, so 0x4a68b0 moves it at the way it has rather
+than the original's stepped one. The charge, the hook and what follows
+are the port's grapple.rs; the bow is looked for from the tick after the
+charge starts. Not ported: the 0x4a6150 wait counter's part (`+0x591`
+and 150: the port's mover's own), the rammer's state 1 reservation and
+its state 6 turn when 0x4c1760 refuses, and the search mode.
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to

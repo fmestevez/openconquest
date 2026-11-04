@@ -1483,6 +1483,7 @@ impl Scene {
             return Err("There is no crew to board with".into());
         }
         ship.path.clear();
+        ship.closing = None;
         ship.task = Some(if board {
             Task::Board {
                 target,
@@ -1527,82 +1528,11 @@ impl Scene {
         Ok(())
     }
 
-    /// Ships ordered to ram or board close in on their target to a
-    /// neighbouring cell (0x4b7f10, 0x4c1f60); there a rammer charges it
-    /// and a boarder throws hooks at it (see `grapple`).
+    /// Rammers and boarders in contact: grappled ships and ram runs (see
+    /// `grapple`); their closing in is `Scene::run_closing`.
     pub(super) fn run_contact(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         self.run_grapples(dt, data, caches);
         self.run_ram_runs(dt, data, caches);
-        let closing: Vec<u32> = self
-            .objects
-            .iter()
-            .filter(|o| {
-                o.ship.as_ref().is_some_and(|s| {
-                    s.grapple.is_none()
-                        && s.ram_run.is_none()
-                        && matches!(s.task, Some(Task::Ram { .. } | Task::Board { .. }))
-                })
-            })
-            .map(|o| o.id)
-            .collect();
-        for id in closing {
-            let Some(i) = self.object_index(id) else {
-                continue;
-            };
-            let task = self.objects[i].ship.as_ref().unwrap().task.unwrap();
-            let (Task::Ram { target } | Task::Board { target, .. }) = task else {
-                continue;
-            };
-            let Some(ti) = self.object_index(target).filter(|&t| {
-                self.objects[t].ship.is_some()
-                    && Self::are_enemies(&self.objects[i], &self.objects[t])
-            }) else {
-                self.objects[i].ship.as_mut().unwrap().task = None;
-                continue;
-            };
-            // A boarder waits for its hook to land (0x4b5df0 state 7); one
-            // lost (a save does not keep it) frees it.
-            if let Task::Board {
-                hooking: true,
-                thrown,
-                ..
-            } = task
-            {
-                if self.shots.iter().any(|s| s.rope == Some(id)) {
-                    self.objects[i].ship.as_mut().unwrap().path.clear();
-                    continue;
-                }
-                self.objects[i].ship.as_mut().unwrap().task = Some(Task::Board {
-                    target,
-                    thrown,
-                    hooking: false,
-                });
-            }
-            let (tx, ty) = (self.objects[ti].x, self.objects[ti].y);
-            // Ships touch from neighbouring cells: one ship to a cell.
-            let t = TILE_SIZE as f32;
-            let cell = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
-            let (a, b) = (cell(self.objects[i].x, self.objects[i].y), cell(tx, ty));
-            if (a.0 - b.0).abs() > 1 || (a.1 - b.1).abs() > 1 {
-                let ship = self.objects[i].ship.as_ref().unwrap();
-                let stale = ship
-                    .path
-                    .back()
-                    .is_none_or(|&(px, py)| ((px - tx).powi(2) + (py - ty).powi(2)).sqrt() > t);
-                if stale {
-                    if let Some(path) = self.plan_route_to_water(i, tx, ty) {
-                        self.objects[i].ship.as_mut().unwrap().path = path;
-                    }
-                }
-                continue;
-            }
-            self.objects[i].ship.as_mut().unwrap().path.clear();
-            match task {
-                Task::Ram { .. } => self.start_ram(i, ti),
-                Task::Board { .. } => self.throw_hook(i, ti, data, caches),
-                _ => {}
-            }
-        }
     }
 
     /// Ship `i` rams ship `ti` (0x4c1c60): both take blows by the closing

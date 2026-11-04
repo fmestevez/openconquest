@@ -37,7 +37,7 @@ const RECOIL: f32 = 4.0;
 
 /// The eight directions' steps on the grid (0x5c4f4c): 0 east,
 /// counter-clockwise.
-const UNIT: [(i32, i32); 8] = [
+pub(super) const UNIT: [(i32, i32); 8] = [
     (1, 0),
     (1, -1),
     (0, -1),
@@ -260,7 +260,7 @@ const BOW: [[(u8, u8); 24]; 5] = [
     ],
 ];
 
-fn bow_row(kind: u8) -> &'static [(u8, u8); 24] {
+pub(super) fn bow_row(kind: u8) -> &'static [(u8, u8); 24] {
     &BOW[match kind % 12 {
         0 => 0,
         1 => 1,
@@ -271,13 +271,13 @@ fn bow_row(kind: u8) -> &'static [(u8, u8); 24] {
 }
 
 impl Scene {
-    fn cell_of_object(&self, k: usize) -> (i32, i32) {
+    pub(super) fn cell_of_object(&self, k: usize) -> (i32, i32) {
         let t = TILE_SIZE as f32;
         let o = &self.objects[k];
         ((o.x / t).floor() as i32, (o.y / t).floor() as i32)
     }
 
-    fn cell_middle((cx, cy): (i32, i32)) -> (f32, f32) {
+    pub(super) fn cell_middle((cx, cy): (i32, i32)) -> (f32, f32) {
         let t = TILE_SIZE as f32;
         (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0)
     }
@@ -327,7 +327,12 @@ impl Scene {
     /// across a corner, not when the two cells beside it hold ships lying
     /// against each other.
     fn corner_free(&self, i: usize, t: usize) -> bool {
-        let (a, b) = (self.cell_of_object(i), self.cell_of_object(t));
+        self.corner_free_cells(self.cell_of_object(i), self.cell_of_object(t))
+    }
+
+    /// The same for neighbouring cells `a` and `b` (0x499ca0 with the
+    /// direction of `b` from `a`).
+    pub(super) fn corner_free_cells(&self, a: (i32, i32), b: (i32, i32)) -> bool {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
         if dx == 0 || dy == 0 {
             return true;
@@ -819,12 +824,15 @@ impl Scene {
             self.objects[ti].id,
             (self.objects[ti].x, self.objects[ti].y),
         );
+        let now = self.ticks;
         let s = self.objects[i].ship.as_mut().unwrap();
         s.ram_run = Some(RamRun {
             target,
             stage: RamStage::Charge,
             home,
-            ticks: 0,
+            // The charge's tick: the bow is looked at from the next on
+            // (0x4c2230: 0x4c1870 in state 2 only).
+            ticks: now,
             clock: 0.0,
             frames: 0,
         });
@@ -924,7 +932,7 @@ impl Scene {
         };
         let to = (self.objects[ti].x, self.objects[ti].y);
         let arrived = self.objects[i].ship.as_ref().unwrap().path.is_empty();
-        if !(arrived || self.bow_touches(i, ti)) {
+        if r.ticks == self.ticks || !(arrived || self.bow_touches(i, ti)) {
             let s = self.objects[i].ship.as_mut().unwrap();
             if s.path
                 .back()

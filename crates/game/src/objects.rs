@@ -467,6 +467,34 @@ pub struct Ship {
     /// 0x4aeef0; `scene::hunt`).
     #[serde(default)]
     pub hunt: Option<Hunt>,
+    /// Closing in on the prey of a ram or boarding (`Task::Ram`,
+    /// `Task::Board`; `scene::closing`).
+    #[serde(default)]
+    pub closing: Option<Closing>,
+}
+
+/// A rammer's or boarder's way to its prey, a game tick at a time (see
+/// `Ship::closing`): set as the order is taken (0x4aa840).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Closing {
+    /// The prey it was set for.
+    pub target: u32,
+    /// `+0x6a1`: closing in about it (1), else sailing to it (3).
+    pub near: bool,
+    /// The cell its last plan sailing to it set out from (`+0x6c7`).
+    pub from: Option<(i32, i32)>,
+    /// `+0x6aa`, a cell as `W x y + x` (-1 none): the rammer's goal once
+    /// within reach and not alongside; the boarder's prey within reach,
+    /// the cell one past the end corner of its look's box (0x4b83bf; the
+    /// hook's 0x4b84b0 writes the prey's cell over it before reading it).
+    pub contact: i32,
+    /// The route's last plan (0x4a6150, 0x4a6100): its tick (`+0x57b`),
+    /// the ship's cell and the goal then (`+0x573`, `+0x56b`); the first
+    /// is made at once (`+0x593`).
+    pub planned: u32,
+    pub plan_from: (i32, i32),
+    pub plan_goal: (i32, i32),
+    pub first_plan: bool,
 }
 
 /// A ship's leviathan hunt, a game tick at a time (see `Ship::hunt`).
@@ -694,6 +722,7 @@ pub struct RamRun {
     pub stage: RamStage,
     /// The middle of the cell it charged from.
     pub home: (f32, f32),
+    /// The tick it set off on while charging; then ticks into the stage.
     pub ticks: u32,
     pub clock: f32,
     /// The impact picture's length in ticks.
@@ -1933,6 +1962,7 @@ pub fn resolve(
         build: None,
         lcg: None,
         hunt: None,
+        closing: None,
         cargo: 0.0,
         cargo_kind: None,
         task: None,

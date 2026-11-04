@@ -5266,6 +5266,148 @@ fn rammer_charges_strikes_and_backs_off() {
     assert!(o.ship.as_ref().unwrap().task.is_none());
 }
 
+type ClosingPair = (GameData, Caches, Scene, u32, u32, (i32, i32));
+
+/// Miss000 with a ship of the player's and an enemy `(dx, dy)` off it in
+/// open water (`boarding_pair`); `None` without `OPENCONQUEST_DATA`.
+fn closing_pair(dx: i32, dy: i32) -> Option<ClosingPair> {
+    let root = std::env::var_os("OPENCONQUEST_DATA")?;
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let (mine, other, cell) = boarding_pair(&mut scene, dx, dy);
+    Some((data, caches, scene, mine, other, cell))
+}
+
+fn closing_of(scene: &Scene, id: u32) -> objects::Closing {
+    let k = scene.object_index(id).unwrap();
+    scene.objects[k].ship.as_ref().unwrap().closing.unwrap()
+}
+
+/// The order closes in when the prey is within 2 of the ship's cell by
+/// 0x557440 (0x4aa840 with 0x4abf60), else sails; sailing, it closes in
+/// within 2 by 0x557480 (0x4b9140), which takes 2 cells across both
+/// axes as 2: the first tick only switches, the plan at once on the next
+/// (0x4c2ec0, 0x4b5d10, 0x4c1370's `+0x593`).
+#[test]
+fn closing_in_starts_within_two_cells() {
+    for board in [false, true] {
+        let Some((data, mut caches, mut scene, mine, other, cell)) = closing_pair(2, 2) else {
+            return;
+        };
+        scene.order_close(mine, other, board).unwrap();
+        scene.ticks += 1;
+        scene.run_closing(&data, &mut caches);
+        let c = closing_of(&scene, mine);
+        assert!(c.near && c.first_plan, "{c:?}");
+        let k = scene.object_index(mine).unwrap();
+        assert!(scene.objects[k].ship.as_ref().unwrap().path.is_empty());
+        scene.ticks += 1;
+        scene.run_closing(&data, &mut caches);
+        let s = scene.objects[k].ship.as_ref().unwrap();
+        let t = TILE_SIZE as f32;
+        let end = s
+            .path
+            .back()
+            .map(|&(x, y)| ((x / t) as i32, (y / t) as i32));
+        // The route through the box runs into the prey's cell.
+        assert_eq!(end, Some((cell.0 + 2, cell.1 + 2)));
+        assert!(!closing_of(&scene, mine).first_plan);
+    }
+}
+
+/// The boarder's look (0x4b7f10): a box of 5 about its cell; the prey 2
+/// away is moved to through it, 1 away is within reach with `+0x6aa` the
+/// cell one past the box's end corner (0x4b83bf), 3 away out of the box.
+#[test]
+fn boarder_looks_through_its_box() {
+    let Some((data, mut caches, mut scene, mine, other, cell)) = closing_pair(2, 0) else {
+        return;
+    };
+    scene.order_close(mine, other, true).unwrap();
+    scene.ticks += 1;
+    scene.run_closing(&data, &mut caches);
+    let (i, ti) = (
+        scene.object_index(mine).unwrap(),
+        scene.object_index(other).unwrap(),
+    );
+    assert_eq!(closing_of(&scene, mine).contact, -1);
+    assert_eq!(scene.board_look(i, ti), closing::BoardLook::Closing);
+    let t = TILE_SIZE as f32;
+    scene.objects[ti].x -= t;
+    assert_eq!(scene.board_look(i, ti), closing::BoardLook::Reach);
+    let w = scene.nav.width as i32;
+    assert_eq!(
+        closing_of(&scene, mine).contact,
+        w * (cell.1 + 3) + cell.0 + 3
+    );
+    scene.objects[ti].x += 2.0 * t;
+    assert_eq!(scene.board_look(i, ti), closing::BoardLook::Out);
+}
+
+/// The rammer's look (0x4b8d80) and goal (0x4c1f60): the prey 2 away is
+/// found in the box of 5 about it, out of reach, its goal the prey's
+/// cell (1); 1 away and lying still it is alongside (2: 0x4a68b0 gives 1
+/// out of move states 4 and 5). Under way into a cell 1 away as its own,
+/// 0x4c13b0 chooses by where the prey will be: lying still (no way) the
+/// prey's cell, at 30 pixels a second (7200 of the original's units) the
+/// one it goes into.
+#[test]
+fn rammer_looks_and_picks_its_goal() {
+    let Some((_data, _caches, mut scene, mine, other, cell)) = closing_pair(2, 0) else {
+        return;
+    };
+    let (i, ti) = (
+        scene.object_index(mine).unwrap(),
+        scene.object_index(other).unwrap(),
+    );
+    let (reach, region) = scene
+        .ram_look(i, ti, (cell.0 - 2, cell.1 - 2, 5, 5))
+        .unwrap();
+    assert!(!reach);
+    assert_eq!(
+        (region.x0, region.y0, region.w, region.h, region.goal),
+        (cell.0 - 2, cell.1 - 2, 5, 5, (4, 2))
+    );
+    assert_eq!(scene.ram_goal(i, ti), (1, (cell.0 + 2, cell.1)));
+    let t = TILE_SIZE as f32;
+    scene.objects[ti].x -= t;
+    assert!(
+        scene
+            .ram_look(i, ti, (cell.0 - 2, cell.1 - 2, 5, 5))
+            .unwrap()
+            .0
+    );
+    assert_eq!(scene.ram_goal(i, ti), (2, (cell.0 + 1, cell.1)));
+    // The prey (type 4) in the cell north-east, going south into the cell
+    // east; the rammer (type 0) lying still facing east.
+    scene.objects[i].ship.as_mut().unwrap().kind = 0;
+    let (mx, my) = (cell.0 as f32 * t + t / 2.0, cell.1 as f32 * t + t / 2.0);
+    let o = &mut scene.objects[ti];
+    (o.x, o.y) = (mx + t, my - t + 8.0);
+    let s = o.ship.as_mut().unwrap();
+    s.kind = 4;
+    s.heading = 6;
+    s.move_state = 5;
+    s.between.set(true);
+    s.entering = (cell.0 + 1, cell.1);
+    s.velocity = 0.0;
+    // Points (mx + 47, my - 47) and (mx + 47, my): 21 and 64 from the
+    // prey's centre (0x557440).
+    assert_eq!(scene.ram_goal(i, ti), (2, (cell.0 + 1, cell.1 - 1)));
+    scene.objects[ti].ship.as_mut().unwrap().velocity = 30.0;
+    assert_eq!(scene.ram_goal(i, ti), (2, (cell.0 + 1, cell.1)));
+}
+
+/// The tables 0x4c13b0 reads: the bow's x at rotation 0 by type (0x599204,
+/// a short every 0x60 bytes).
+#[test]
+fn strike_bows_are_the_originals() {
+    let bows: Vec<u8> = (0..12).map(|k| grapple::bow_row(k)[0].0).collect();
+    assert_eq!(bows, [56, 64, 79, 79, 72, 72, 72, 72, 72, 72, 66, 72]);
+}
+
 /// A game saved mid-battle keeps the shots in flight and the spells
 /// under way (needs `OPENCONQUEST_DATA`).
 #[test]

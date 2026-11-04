@@ -538,6 +538,7 @@ mod ai;
 mod battle;
 mod brain;
 mod castq;
+mod closing;
 mod computer;
 mod creatures;
 mod dig;
@@ -2540,6 +2541,7 @@ impl Scene {
             self.run_hazard_cycles(data, caches);
             self.run_leviathans(data, caches);
             self.run_hunts(data, caches);
+            self.run_closing(data, caches);
             self.run_landings(data, caches);
             // The commands of this tick reach their objects at the start
             // of the next, before anything runs (0x51fe20: 0x521570,
