@@ -108,6 +108,16 @@ pub enum Op {
     Wait { next: u32, ticks: u32 },
     /// Wait as many ticks as the fleet's variable `var` holds.
     WaitVar { next: u32, var: usize },
+    /// Wait (0x47a3b0) given a span `draw` works out anew at every turn
+    /// (0x45e510 state 0xb draws it from the brain's random source each
+    /// time): the first turn's span is kept in the fleet's variable `var`
+    /// (0x47a3b0 keeps p5 at its first call, member `+0x14`); at the later
+    /// ones `next` once it is up, if that turn's span is not 0.
+    WaitDrawn {
+        next: u32,
+        var: usize,
+        draw: fn(&mut Scene) -> u32,
+    },
     /// Wait (0x47a3b0 given events): `next` after `ticks`, unless an
     /// event fires first.
     Watch {
@@ -176,6 +186,13 @@ pub enum Op {
     /// 0x400, dword 7 the member) until the order ends; `next` once it is
     /// launched. The slot stays taken (`build`) until `Release`.
     Build { next: u32 },
+    /// `Build`, the yard's rest set by `rest` first at each turn of its
+    /// pick (state 0: 0x44f1e0, 0x453030, 0x454f60, 0x458990 draw it
+    /// there).
+    BuildRest {
+        next: u32,
+        rest: fn(&mut Scene, usize),
+    },
     /// The yard's slot let go (state 0xc: the slot and the served member
     /// -1), then `next`.
     Release { next: u32 },
@@ -547,7 +564,7 @@ thread_local! {
 }
 
 /// The difficulty of the brain running (indexes the per-difficulty tables).
-fn difficulty() -> usize {
+pub(super) fn difficulty() -> usize {
     LEVEL.with(|l| l.get())
 }
 
@@ -574,6 +591,14 @@ struct Mission {
 /// A mission's fleets as it defines them.
 pub(super) fn mission_fleets(name: &str) -> Option<&'static [FleetDef]> {
     mission(name).map(|m| m.fleets)
+}
+
+/// Runs mission `name`'s bookkeeping for fleet `k`'s turn, if it has any.
+#[cfg(test)]
+pub(super) fn mission_turn(name: &str, scene: &mut Scene, k: usize) {
+    if let Some(turn) = mission(name).and_then(|m| m.turn) {
+        turn(scene, k);
+    }
 }
 
 fn mission(name: &str) -> Option<Mission> {
@@ -1138,6 +1163,15 @@ impl Scene {
                     self.set_state(k, next);
                 }
             }
+            Op::WaitDrawn { next, var, draw } => {
+                let span = draw(self);
+                let f = &mut self.brain.as_mut().unwrap().fleets[k];
+                if !started {
+                    f.vars[var] = span;
+                } else if span != 0 && elapsed >= f.vars[var] {
+                    self.set_state(k, next);
+                }
+            }
             Op::Watch {
                 next,
                 ticks,
@@ -1343,12 +1377,15 @@ impl Scene {
                     self.set_state(k, next);
                 }
             }
-            Op::Build { next } => {
+            Op::Build { next } | Op::BuildRest { next, .. } => {
                 let brain = self.brain.as_ref().unwrap();
                 match brain.fleets[k].build {
                     None => {
                         // The pick (state 0 or 5); nothing asked for: the
                         // same next turn.
+                        if let Op::BuildRest { rest, .. } = op {
+                            rest(self, k);
+                        }
                         self.fleet_build(k, groups);
                     }
                     Some((fleet, kind)) if brain.requests.contains(&(fleet, kind)) => {
@@ -4045,16 +4082,13 @@ mod miss003 {
         scene.add_deposit(0x190, (34, 11, 1, 1), data, caches);
         scene.add_deposit(0x191, (25, 15, 2, 2), data, caches);
         // The raids' waits, in 1500-tick units plus up to three more
-        // (0x5ae860, 0x5ae8c0), and the barbarian yard's rest (0x5ae884).
+        // (0x5ae860, 0x5ae8c0). The barbarian yard's rest starts at 0
+        // (`+0x13c`, 0x44fd90) and is drawn at its turns (`yard_rest`).
         const PERSIAN_WAIT: [u32; 3] = [9, 7, 5];
         const BARBARIAN_WAIT: [u32; 3] = [11, 9, 7];
-        // Not ported: the yard draws its rest, the table plus (rand % n) x
-        // 25 (0x44f1e0, 0x453030, 0x454f60; docs/FORMATS.md).
-        const YARD_REST: [u32; 3] = [1000, 750, 500];
         let (a, b) = (scene.brain_draw() % 4, scene.brain_draw() % 4);
         if let Some(br) = scene.brain.as_mut() {
             br.fleets[2].vars = [(a + PERSIAN_WAIT[difficulty()]) * 1500, 2, 0, 0];
-            br.fleets[6].vars[0] = YARD_REST[difficulty()];
             br.fleets[10].vars = [(b + BARBARIAN_WAIT[difficulty()]) * 1500, 0, 0, 0];
         }
     }
@@ -4273,11 +4307,22 @@ mod miss003 {
         }
     }
 
+    /// The barbarian yard's rest (0x44f1e0 state 0): drawn anew at every
+    /// turn of its pick, `0x5ae884[difficulty] + (rand % 31) x 25`.
+    fn yard_rest(scene: &mut Scene, k: usize) {
+        const REST: [u32; 3] = [1000, 750, 500];
+        let rest = REST[difficulty()] + scene.brain_draw() % 31 * 25;
+        scene.brain.as_mut().unwrap().fleets[k].vars[0] = rest;
+    }
+
     fn barbarian_yard(state: u32) -> Op {
         match state {
-            0 => Op::Build { next: 11 },
+            0 => Op::BuildRest {
+                next: 11,
+                rest: yard_rest,
+            },
             11 => Op::WaitVar { next: 12, var: 0 },
-            // State 0xc.
+            // State 0xc (it zeroes the rest too, drawn anew at state 0).
             _ => Op::Release { next: 0 },
         }
     }
@@ -4598,17 +4643,15 @@ mod miss004 {
         scene.add_deposit(0x190, (30, 24, 1, 1), data, caches);
         scene.add_deposit(0x190, (33, 26, 1, 1), data, caches);
         scene.add_deposit(0x191, (42, 16, 2, 2), data, caches);
-        // The barbarian yard's rest (0x5aef98), when raiders fall back
+        // The barbarian yard's first rest (`+0x110` = 0x8ca, 0x453b00;
+        // drawn anew once it is spent, `yard_rest`), when raiders fall back
         // (fewer than three) and the northern raiders' first wait
         // (`+0x114` = 0x8ca at message 2; drawn anew only once a sweep is
         // over, 0x451c60 state 0x50).
-        // Not ported: the yard draws its rest, the table plus (rand % n) x
-        // 25 (0x44f1e0, 0x453030, 0x454f60; docs/FORMATS.md).
-        const YARD_REST: [u32; 3] = [1500, 1000, 750];
         if let Some(br) = scene.brain.as_mut() {
             br.fields[WAIT] = 2250;
             br.fleets[NORTH_RAIDERS].vars[1] = 2;
-            br.fleets[7].vars[0] = YARD_REST[difficulty()];
+            br.fleets[7].vars[0] = 2250;
             br.fleets[10].vars = [7500, 3, 0, 0];
             br.fleets[SOUTH_RAIDERS].vars[1] = 2;
         }
@@ -4709,12 +4752,30 @@ mod miss004 {
         }
     }
 
+    /// The barbarian yard's rest (0x453030 state 0): drawn when it has none
+    /// (`+0x110` 0), `0x5aef98[difficulty] + (rand % 61) x 25`.
+    fn yard_rest(scene: &mut Scene, k: usize) {
+        const REST: [u32; 3] = [1500, 1000, 750];
+        if scene.brain.as_ref().unwrap().fleets[k].vars[0] == 0 {
+            let rest = REST[difficulty()] + scene.brain_draw() % 61 * 25;
+            scene.brain.as_mut().unwrap().fleets[k].vars[0] = rest;
+        }
+    }
+
     fn yard_var(state: u32) -> Op {
         match state {
-            0 => Op::Build { next: 11 },
+            0 => Op::BuildRest {
+                next: 11,
+                rest: yard_rest,
+            },
             11 => Op::WaitVar { next: 12, var: 0 },
-            // State 0xc.
-            _ => Op::Release { next: 0 },
+            // State 0xc: the slot let go and the rest spent (+0x110 0).
+            _ => Op::Custom(|scene, k| {
+                let f = &mut scene.brain.as_mut().unwrap().fleets[k];
+                f.vars[0] = 0;
+                f.build = None;
+                0
+            }),
         }
     }
 
@@ -5581,28 +5642,43 @@ mod miss005 {
         scene.add_deposit(0x190, (13, 34, 1, 1), data, caches);
         scene.add_deposit(0x190, (35, 26, 1, 1), data, caches);
         scene.add_deposit(0x191, (18, 33, 2, 2), data, caches);
-        // The barbarian yard's rest (0x5af8e8); the barbarian raiders'
-        // wait (0x5afbd8, 15000 in the exe, drawn anew in their state 0),
-        // the sizes their records compare with (at least 3, fewer than 2),
-        // and the Persian raiders' (their waits are drawn in their state
-        // 0; the brain draws nothing at the start).
-        // Not ported: the yard draws its rest, the table plus (rand % n) x
-        // 25 (0x44f1e0, 0x453030, 0x454f60; docs/FORMATS.md).
-        const YARD_REST: [u32; 3] = [1500, 1000, 750];
+        // The barbarian raiders' wait (0x5afbd8, 15000 in the exe, drawn
+        // anew in their state 0), the sizes their records compare with (at
+        // least 3, fewer than 2), and the Persian raiders' (their waits are
+        // drawn in their state 0; the brain draws nothing at the start).
+        // The barbarian yard's rest starts at 0 (`+0x118`, 0x457950) and is
+        // drawn at its first turn (`yard_rest`).
         if let Some(br) = scene.brain.as_mut() {
-            br.fleets[0].vars[0] = YARD_REST[difficulty()];
             br.fleets[RAIDERS].vars = [15000, 3, 1, 0];
             br.fleets[10].vars = [0, 5, 0, 2];
             br.fleets[11].vars = [0, 3, 0, 1];
         }
     }
 
+    /// The barbarian yard's rest (0x454f60 state 0): drawn when it has none
+    /// (`+0x118` 0), `0x5af8e8[difficulty] + (rand % 41) x 25`.
+    fn yard_rest(scene: &mut Scene, k: usize) {
+        const REST: [u32; 3] = [1500, 1000, 750];
+        if scene.brain.as_ref().unwrap().fleets[k].vars[0] == 0 {
+            let rest = REST[difficulty()] + scene.brain_draw() % 41 * 25;
+            scene.brain.as_mut().unwrap().fleets[k].vars[0] = rest;
+        }
+    }
+
     fn yard_var(state: u32) -> Op {
         match state {
-            0 => Op::Build { next: 11 },
+            0 => Op::BuildRest {
+                next: 11,
+                rest: yard_rest,
+            },
             11 => Op::WaitVar { next: 12, var: 0 },
-            // State 0xc.
-            _ => Op::Release { next: 0 },
+            // State 0xc: the slot let go and the rest spent (+0x118 0).
+            _ => Op::Custom(|scene, k| {
+                let f = &mut scene.brain.as_mut().unwrap().fleets[k];
+                f.vars[0] = 0;
+                f.build = None;
+                0
+            }),
         }
     }
 
@@ -6688,7 +6764,7 @@ mod miss006 {
             group: 0,
             member: 0,
             cells: &[(1, 50, 1, 1)],
-            program: yard_1000,
+            program: barbarian_yard,
             wants: &[],
         },
         FleetDef {
@@ -6898,15 +6974,31 @@ mod miss006 {
         }
     }
 
-    fn yard_1000(state: u32) -> Op {
+    /// The barbarian yard's rest (0x458990 state 0): drawn when it has none
+    /// (`+0x108` 0, as it starts: 0x45b280), `(0x5b0438[difficulty] +
+    /// rand % 31) x 25`.
+    fn yard_rest(scene: &mut Scene, k: usize) {
+        const REST: [u32; 3] = [40, 30, 20];
+        if scene.brain.as_ref().unwrap().fleets[k].vars[0] == 0 {
+            let rest = (REST[difficulty()] + scene.brain_draw() % 31) * 25;
+            scene.brain.as_mut().unwrap().fleets[k].vars[0] = rest;
+        }
+    }
+
+    fn barbarian_yard(state: u32) -> Op {
         match state {
-            0 => Op::Build { next: 11 },
-            11 => Op::Wait {
-                next: 12,
-                ticks: 1000,
+            0 => Op::BuildRest {
+                next: 11,
+                rest: yard_rest,
             },
-            // State 0xc.
-            _ => Op::Release { next: 0 },
+            11 => Op::WaitVar { next: 12, var: 0 },
+            // State 0xc: the slot let go and the rest spent (`+0x108` 0).
+            _ => Op::Custom(|scene, k| {
+                let f = &mut scene.brain.as_mut().unwrap().fleets[k];
+                f.vars[0] = 0;
+                f.build = None;
+                0
+            }),
         }
     }
 
@@ -7723,8 +7815,9 @@ mod miss007 {
     const KILLER: u8 = 6;
 
     /// Fleet variables: 0 the size it wants before raiding, 1 the ticks of
-    /// patrolling before that (7500), 2 the ship asked of its yard (type +
-    /// 1, 0 none), 3 the size at which a raid is called off (2).
+    /// patrolling before that (7500), 2 its yard's slot (`+0x109` + 4 x
+    /// yard: 0xc8 + the type asked high, the yard's rest after it low; 0
+    /// none), 3 the size at which a raid is called off (2).
     const TARGET: usize = 0;
     const PATIENCE: usize = 1;
     const ASKED: usize = 2;
@@ -7959,41 +8052,62 @@ mod miss007 {
         }
         let d = difficulty() as u32;
         let n = scene.fleet_types(k);
-        // Barbarian fleets ask their yard for one ship at a time.
-        let ask = |r: u32| -> Option<(usize, u8, (u32, u32))> {
+        // Barbarian fleets ask their yard for one ship at a time, at the
+        // start of each turn (0x45cbf0, 0x45d0b0, 0x45d640, 0x45dbd0): with
+        // fewer ships than they want and their slot free, the type and the
+        // yard's rest after it, `(rand % 61 + 60 or 70) x 25`, from one
+        // draw (a draw before it thrown away, but member 10's); else how
+        // many they want anew, `rand % (d + span) + base`.
+        // (ships it has, the type, the rest's base, two draws, (span, base))
+        type Ask = (usize, u8, u32, bool, (u32, u32));
+        let ask = |r: u32| -> Option<Ask> {
             match k {
                 6 => Some((
                     n[ROYAL as usize] + n[KILLER as usize],
                     if r % (d + 1) != 0 { ROYAL } else { KILLER },
+                    60,
+                    true,
                     (2, 3),
                 )),
                 7 => Some((
                     n[ROYAL as usize] + n[KILLER as usize],
                     if r % (d + 1) < 2 { KILLER } else { ROYAL },
+                    70,
+                    true,
                     (1, 4),
                 )),
                 8 => Some((
                     n[ROYAL as usize] + n[BOMBER as usize] + n[KILLER as usize],
                     if r % (d + 1) == 2 { BOMBER } else { ROYAL },
+                    70,
+                    true,
                     (2, 3),
                 )),
                 9 => Some((
                     n[ROYAL as usize] + n[BOMBER as usize],
                     if r % (d + 1) == 2 { BOMBER } else { ROYAL },
+                    70,
+                    true,
                     (2, 3),
                 )),
-                10 => Some((n[KILLER as usize], KILLER, (3, 4))),
+                10 => Some((n[KILLER as usize], KILLER, 70, false, (3, 4))),
                 _ => None,
             }
         };
-        let r = scene.brain_draw();
-        if let Some((have, kind, (span, base))) = ask(r) {
-            let brain = scene.brain.as_mut().unwrap();
-            let f = &mut brain.fleets[k];
+        if let Some((have, _, _, twice, (span, base))) = ask(0) {
+            let f = &scene.brain.as_ref().unwrap().fleets[k];
             if (have as u32) < f.vars[TARGET] && f.vars[ASKED] == 0 {
-                f.vars[ASKED] = kind as u32 + 1;
+                if twice {
+                    scene.brain_draw();
+                }
+                let r = scene.brain_draw();
+                let (_, kind, rest, _, _) = ask(r).unwrap();
+                // The slot: the code (0xc8 + type) high, the rest low.
+                scene.brain.as_mut().unwrap().fleets[k].vars[ASKED] =
+                    ((0xc8 + kind as u32) << 16) | ((r % 61 + rest) * 25);
             } else {
-                f.vars[TARGET] = brain.rng.next() % (d + span) + base;
+                let r = scene.brain_draw();
+                scene.brain.as_mut().unwrap().fleets[k].vars[TARGET] = r % (d + span) + base;
             }
             return;
         }
@@ -8034,7 +8148,9 @@ mod miss007 {
     }
 
     /// A barbarian yard (0x45ca00): builds what its fleet (k + 5) asked
-    /// for, waits (60 or 70 + rand 61) x 25 ticks, then takes the next.
+    /// for (the high word of its slot, `+0x109` + 4k), rests as long as
+    /// the fleet asked (the low word, drawn by the fleet: `turn`), then
+    /// lets the slot go and takes the next.
     fn yard(state: u32) -> Op {
         match state {
             0 => Op::Custom(|scene, k| {
@@ -8049,12 +8165,10 @@ mod miss007 {
                 if asked == 0 {
                     return 0;
                 }
-                if !scene.fleet_build_for(k, k + 5, asked as u8 - 1) {
+                if !scene.fleet_build_for(k, k + 5, ((asked >> 16) - 0xc8) as u8) {
                     return 10;
                 }
-                let base = if k == 1 { 60 } else { 70 };
-                let wait = (scene.brain_draw() % 61 + base) * 25;
-                scene.brain.as_mut().unwrap().fleets[k].vars[0] = wait;
+                scene.brain.as_mut().unwrap().fleets[k].vars[0] = asked & 0xffff;
                 11
             }),
             11 => Op::Custom(|scene, k| if scene.fleet_building(k) { 11 } else { 12 }),
@@ -8067,16 +8181,16 @@ mod miss007 {
     }
 
     /// The Persians' yard (0x45e510): builds the members' requests one at a
-    /// time, resting (40 + rand 31) x 25 ticks after each.
+    /// time, resting `(40 + rand % 31) x 25` ticks after each (state 0xb:
+    /// the draw made at every turn of the rest, the first one's kept).
     fn persian_yard(state: u32) -> Op {
         match state {
             0 => Op::Build { next: 11 },
-            11 => Op::Custom(|scene, k| {
-                let wait = (scene.brain_draw() % 31 + 40) * 25;
-                scene.brain.as_mut().unwrap().fleets[k].vars[0] = wait;
-                12
-            }),
-            12 => Op::WaitVar { next: 13, var: 0 },
+            11 => Op::WaitDrawn {
+                next: 12,
+                var: 0,
+                draw: |scene| (scene.brain_draw() % 31 + 40) * 25,
+            },
             // State 0xc.
             _ => Op::Release { next: 0 },
         }

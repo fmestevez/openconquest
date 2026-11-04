@@ -5727,9 +5727,11 @@ miss007 (0x45f770):
   launch they wait the request's ticks, then clear it.
 - **The barbarians' fleets.** Fleets 6-10 (0x45cbf0, 0x45d0b0, 0x45d640,
   0x45dbd0) ask for royal ships, bombers or ship killers (codes 0xca, 0xcb,
-  0xce) while short of a target size. The target is re-rolled every turn
-  otherwise: `rand(difficulty + 2..3) + 3..4`. The wait is `(60 or 70 +
-  rand 61) x 25` ticks.
+  0xce) while short of a target size and their slot free, at the start of
+  each turn: two draws (the first thrown away; one for member 10), the
+  type and the yard's wait `(rand % 61 + 60 or 70) x 25` from the second
+  (60 for member 6). Otherwise one draw re-rolls the target:
+  `rand % (difficulty + 1..3) + 3..4`.
 - **Patrols and raids.** Each fleet patrols its round (0x5b0ea0 and the
   like) with events: the player in its zone (attack it 1500 ticks); size
   at least the target after 7500 ticks (raid); fired on (answer 375). The
@@ -6469,15 +6471,25 @@ turn). Ported (`Op::Build`, `Op::Release`, the yard's `build` holding the
 member's slot from the pick to 0xc, `ask_for_ships` asking nothing
 meanwhile); the port's order still ends with the ship launched. No member
 of these missions asks a type its yard has no case for (cleared at 10,
-back to 0 a turn later), so that path is not in the port. Not ported:
-the rests drawn by the yards (0x44f1e0 at every state-0 turn `0x5ae884[d]
-+ (rand % 31) x 25`; 0x453030 `0x5aef98[d] + (rand % 61) x 25` and
-0x454f60 `0x5af8e8[d] + (rand % 41) x 25` while `+0x110` / `+0x118` is 0,
-zeroed at 0xc; 0x458990 `+0x108`; 0x45e510 draws `(rand % 31 + 40) x 25`
-at every 0xb turn, the wait reading only the first), the port keeping its
-fixed rests and one draw: their initial values (the brains' constructors)
-are not read; miss007's barbarian yards (0x45ca00, each serving member
-`m + 5`) are the port's own `yard`.
+back to 0 a turn later), so that path is not in the port. The rests,
+from the brain's random source (`+0x18`): 0x44f1e0 draws `+0x13c =
+0x5ae884[d] + (rand % 31) x 25` (1000, 750, 500) at every state-0 turn;
+0x453030 `+0x110 = 0x5aef98[d] + (rand % 61) x 25` (1500, 1000, 750),
+0x454f60 `+0x118 = 0x5af8e8[d] + (rand % 41) x 25` (1500, 1000, 750) and
+0x458990 `+0x108 = (0x5b0438[d] + rand % 31) x 25` (40, 30, 20) only at a
+state-0 turn with the field 0, zeroed at 0xc (and at 10 for a dropped
+type, 0x454f60 / 0x458990). The constructors start them at 0 (0x44fd90,
+0x457950, 0x45b280) but miss004's at 0x8ca (0x453b00: the first rest is
+2250, undrawn). 0x45e510 calls 0x47a3b0 with `(rand % 31 + 40) x 25`
+drawn at every 0xb turn; 0x47a3b0 keeps p5 as the span at its first call
+and later only tests it for 0, so the first draw is the rest and every
+waiting turn draws once more. Ported (`Op::BuildRest`, `Op::WaitDrawn`,
+the yards' state 0xc zeroing the rest). miss007's barbarian yards
+(0x45ca00, member m serving m + 5): the slot `+0x109 + 4m` holds code
+`0xc8 + type` high and the rest low, written by the fleet (below); 0 to 10
+once the high word is not 0xffff, 10 the order for m + 5, 0xb the low
+word's wait, 0xc the slot 0xffff0000. Ported (`miss007::yard`, the slot in
+the fleet's variable 2, 0 for none).
 0x4a8620(player, &n, ship mask, building mask) walks the player's list
 (`+0xbb8`): 0x50e600 sorts each by class (200-211 ship 200, 0x32-0x4a
 building 0x32, 500-510 500, 400-403 400, 700-706 700, else 0); a ship

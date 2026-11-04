@@ -2098,6 +2098,151 @@ fn brain_yard_pick() {
     assert_eq!((br.fleets[0].build, br.fleets[0].state), (None, 0));
 }
 
+/// The barbarian yards' rests, drawn from the brain's random source at
+/// their state 0: miss003's at every turn (0x44f1e0, 0x5ae884 + (r % 31) x
+/// 25), miss004's, miss005's and miss006's only when spent (0x453030
+/// 0x5aef98 + (r % 61) x 25, first 2250; 0x454f60 0x5af8e8 + (r % 41) x
+/// 25; 0x458990 (0x5b0438 + r % 31) x 25) and zeroed at state 0xc (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn brain_yard_rests() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let d = super::brain::difficulty();
+    // (mission, yard, first rest, its rest from a draw, redrawn every turn)
+    type Rest = fn(u32, usize) -> u32;
+    let cases: [(&str, usize, Option<u32>, Rest, bool); 4] = [
+        (
+            "miss003",
+            6,
+            None,
+            |r, d| [1000, 750, 500][d] + r % 31 * 25,
+            true,
+        ),
+        (
+            "miss004",
+            7,
+            Some(2250),
+            |r, d| [1500, 1000, 750][d] + r % 61 * 25,
+            false,
+        ),
+        (
+            "miss005",
+            0,
+            None,
+            |r, d| [1500, 1000, 750][d] + r % 41 * 25,
+            false,
+        ),
+        (
+            "miss006",
+            0,
+            None,
+            |r, d| ([40, 30, 20][d] + r % 31) * 25,
+            false,
+        ),
+    ];
+    for (mission, k, first, rest, every) in cases {
+        let mut scene = Scene::load(&data, &mut caches, mission).unwrap();
+        let defs = super::brain::mission_fleets(mission).unwrap();
+        let groups: Vec<u8> = defs.iter().map(|f| f.group).collect();
+        let program = defs[k].program;
+        {
+            let br = scene.brain.as_mut().unwrap();
+            br.requests.clear();
+            br.fleets[k].state = 0;
+            br.fleets[k].build = None;
+        }
+        if let Some(v) = first {
+            assert_eq!(scene.brain.as_ref().unwrap().fleets[k].vars[0], v);
+        } else {
+            assert_eq!(scene.brain.as_ref().unwrap().fleets[k].vars[0], 0);
+        }
+        for turn in 0..3 {
+            let mut rng = scene.brain.as_ref().unwrap().rng.clone();
+            let before = scene.brain.as_ref().unwrap().fleets[k].vars[0];
+            scene.fleet_step(k, program, &groups, turn);
+            let br = scene.brain.as_ref().unwrap();
+            let want = if every || before == 0 {
+                rest(rng.next(), d)
+            } else {
+                before
+            };
+            assert_eq!(br.fleets[k].vars[0], want, "{mission} turn {turn}");
+            assert_eq!(br.rng.0, rng.0, "{mission} turn {turn}: draws");
+        }
+        if !every {
+            // State 0xc spends it.
+            scene.brain.as_mut().unwrap().fleets[k].state = 12;
+            scene.fleet_step(k, program, &groups, 10);
+            let br = scene.brain.as_ref().unwrap();
+            assert_eq!((br.fleets[k].state, br.fleets[k].vars[0]), (0, 0));
+        }
+    }
+}
+
+/// miss007's yards: the Persians' rest is drawn at every turn of it, the
+/// first one kept (0x45e510 state 0xb, 0x47a3b0); a barbarian fleet asks
+/// its yard with a draw thrown away, the type and the yard's rest from the
+/// next (0x45cbf0), else wants anew from one draw (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn miss007_yard_rests() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    let d = super::brain::difficulty() as u32;
+    let defs = super::brain::mission_fleets("miss007").unwrap();
+    let groups: Vec<u8> = defs.iter().map(|f| f.group).collect();
+    let persian = (0..defs.len())
+        .find(|&k| defs[k].group == 1 && defs[k].member == 0)
+        .unwrap();
+    scene.brain.as_mut().unwrap().fleets[persian].state = 11;
+    let mut rng = scene.brain.as_ref().unwrap().rng.clone();
+    let first = (rng.next() % 31 + 40) * 25;
+    for tick in 0..first {
+        scene.fleet_step(persian, defs[persian].program, &groups, tick);
+        let br = scene.brain.as_ref().unwrap();
+        let f = &br.fleets[persian];
+        assert_eq!((f.vars[0], f.state), (first, 11));
+        if tick > 0 {
+            rng.next();
+        }
+        assert_eq!(br.rng.0, rng.0);
+    }
+    scene.fleet_step(persian, defs[persian].program, &groups, first);
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[persian].state, 12);
+
+    // Fleet 6 wants three ships and has none: it asks yard 1.
+    {
+        let f = &mut scene.brain.as_mut().unwrap().fleets[6];
+        f.vars[0] = 3;
+        f.vars[2] = 0;
+    }
+    let mut rng = scene.brain.as_ref().unwrap().rng.clone();
+    rng.next();
+    let r = rng.next();
+    let kind = if r % (d + 1) != 0 { 2 } else { 6 };
+    super::brain::mission_turn("miss007", &mut scene, 6);
+    let br = scene.brain.as_ref().unwrap();
+    assert_eq!(
+        br.fleets[6].vars[2],
+        ((0xc8 + kind) << 16) | ((r % 61 + 60) * 25)
+    );
+    assert_eq!(br.rng.0, rng.0);
+    // Asked already: how many it wants, drawn anew from one draw.
+    let r = rng.next();
+    super::brain::mission_turn("miss007", &mut scene, 6);
+    let br = scene.brain.as_ref().unwrap();
+    assert_eq!(br.fleets[6].vars[0], r % (d + 2) + 3);
+    assert_eq!(br.rng.0, rng.0);
+}
+
 /// A boat hunts a leviathan and brings it home for 5000 amber and 2500
 /// fish; the zone is then empty (needs `OPENCONQUEST_DATA`).
 #[test]
@@ -9063,9 +9208,10 @@ fn repair_members_as_the_original() {
         let brain = scene.brain.as_ref().unwrap();
         match mission {
             // The barbarian yard's rest and the raids' waits land on their
-            // members: miss003's yard (1, 0) rests 750 on normal.
+            // members: miss003's yard (1, 0) has no rest until its first
+            // turn draws one (`+0x13c` 0, 0x44fd90).
             "miss003" => {
-                assert_eq!(brain.fleets[6].vars[0], 750);
+                assert_eq!(brain.fleets[6].vars[0], 0);
                 assert!(brain.fleets[10].vars[0] >= 9 * 1500);
             }
             "miss004" => {
