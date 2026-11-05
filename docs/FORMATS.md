@@ -10470,13 +10470,43 @@ mode 6 at least 1); taken, yes (0x158c1 to the treasure), 0x4b6e80(entry,
 marks with the port's ship states as `replan` (the group `+0x5e` not
 kept: every ship another group's) and its draw on the scene's generator;
 the route to `+0x792` the port's plain plan (once more when lying short
-of it). Not ported: the hero's house sequence (0x4ba6b0 the house's
-0x24af0 answer, 0x4ba3f0 the item check (kind 0x12 + hero), 0x4ba2a0 the
-viewer's voice by hero 0xfc-0x10d, 0x4bd350 at the party's half,
-0x4ba7d0 -> 0x24af1 (taken, state 4, its pictures), 0x4b6df0 message
-0x5d99, 0x4bd500 the item removed): the port's reach stand-in; the
-notices' texts; 0x4b6e80's 0x5d94 for the party's take; who puts the
-house back in state 1 after the take (its 500-tick fade and 0x138b).
+of it).
+The hero's house (vtable 0x595e98, 0x421150; `+0x1e4` the hero, record
+field 22; `+0x1e8` taken, `+0x1ec` its tick): 0x24af0 answers the hero,
+or 0xff once taken; 0x24aef 1 while not taken; 0x24af1 taken 1, state
+`+0xa4` 4, the tick the map's `+0xde`, pictures reloaded (vt+0x38,
+0x422e30 `%sSPR_%1u%1u%1u`: `HHOUSE<hero>SPR_043`, standing `_013`); its
+tick (message 0) runs only taken and in state 1: 500 ticks after the
+take vt+4(0x138b), else `+0xa8 = 100 - (now - t) x 100 / 500`. The take
+(0x4b0e40 by `+0x76e` 0x49): **12** at the walkway's last frame 0x4ba6b0
+(the land cell's `+0xc` object the house by id `+0x77e`; its 0x24af0
+answer into `+0x78a`, which held the house until then; then 0x4ba3f0:
+the first treasure slot of kind 0x12 + hero, none with nothing aboard,
+and the hero not 0xff): yes, 0x4ba2a0(hero, 1), step 6 with the party
+picture (`+0x76` 8); no, step 14 and 0x4ba2a0(`+0x78a`, 0). 0x4ba2a0:
+the viewer's ship only (`+0x24f` against game `+0x3213 + 4 x +0x3212`),
+0x50e570 mode 2 at the ship's cell, yes / no by hero 0 0xfc / 0xfd
+(`ja1` / `ja4`), 1 0x102 / 0x103 (`th4` / `th1`), 2 0x100 / 0x101 (`or3`
+/ `or1`), 3 0xfe / 0xff (`ze3` / `ze1`), 4 0x104 / 0x105 (`he2` / `he4`),
+5 0x106 / 0x107 (`ar2` / `ar4`), 6 0x108 / 0x109 (`at1` / `at4`), 7
+0x10a / 0x10b (`od5` / `od1`), 8 0x10c / 0x10d (`pe6` / `pe1`), any
+other none. **6** at half the party's frames, no party: 0x4bd350(hero,
+owner) with a hero place free (0x4be800 mode 7); aboard, 0x4ba7d0 sends
+the house 0x24af1 (map vt+0x18 {.., id, 4, 0x24af1}), 0x4b6df0 message
+0x5d99 {ship id, class, `+0x54`, `+0x55`, cell, group, hero} to the
+owner's player object (type 2), and the item 0x4ba3f0 finds out by
+0x4bd500 (not dropped); step 14 either way. The port (`Task::Take`'s
+`hero`, `Scene::house_answer`, `hero_voice`, `hero_boards`,
+`house_taken`, `taken_houses` kept in the save): the house sailed to its
+berth (`vt_berth`, the record's field 10 facing: the constructor
+0x420fd0 sets `+0x1d8` 0xa) with its cell the land cell, all the above;
+the order's own refusal of a ship without a hero place kept (the click's
+0x4e6700 room test, mode 6 or 7), its item refusal gone. Not ported:
+0x5d99 (the judge counts the heroes aboard), the notices' texts;
+0x4b6e80's 0x5d94 for the party's take; a berth of (-1, -1) (no facing:
+the port's route fails); who puts the house in state 1 after the take
+(not decoded: 0x24af1 sets 4 and nothing read sets 1, so the 500-tick
+fade and 0x138b never run from the take; the port's house stands taken).
 
 **Spells.** Order 117's studies 33 and 34 have the Temple of the Sea or
 of War learn its next spell (1000 amber; 100 ticks for a computer,

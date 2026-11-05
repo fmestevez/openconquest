@@ -1497,6 +1497,10 @@ pub enum Task {
         /// `Ship::landing`), 5 backed out, lying with nothing more to do.
         #[serde(default)]
         step: u8,
+        /// A hero's house: its 0x24af0 answer at the walkway's last frame
+        /// (`+0x78a`, 0x4ba6b0): the hero, or 0xff once taken.
+        #[serde(default)]
+        hero: Option<u8>,
     },
     /// Sail alongside own port, shipyard, dock or ship `target` and reload
     /// there (Reload Object; see `scene::load`).
@@ -2122,8 +2126,7 @@ pub fn resolve(
             )
         }
         ObjectClass::HeroHouse => {
-            let name = format!("HHOUSE{}SPR_013", f(22).min(8));
-            let frames = composite_frames(data, caches, &name, 0..usize::MAX)?;
+            let frames = hero_house_frames(data, caches, f(22).min(8) as u8, 1)?;
             // A land building (0x422e30): its cycle 50, 75, 75, 57 ticks
             // (0x595e80, constructor 0x420fd0), standing 75.
             let frame_ms = building_frame_ms(frames.len());
@@ -2768,6 +2771,20 @@ impl BuildingState {
         let level = (percent.floor() * 2.0 / 67.0).ceil() as u32;
         Self::Standing(level.clamp(1, 3))
     }
+}
+
+/// A hero's house's picture in state `state` (0x422e30
+/// `%sSPR_%1u%1u%1u`: the prefix `HHOUSE<hero>`, the nation digit and the
+/// state, then the damage digit; standing 1, taken 4 by message 0x24af1):
+/// `HHOUSE<hero>SPR_0<state>3`.
+pub fn hero_house_frames(
+    data: &GameData,
+    caches: &mut Caches,
+    hero: u8,
+    state: u8,
+) -> Result<Vec<Vec<Layer>>> {
+    let name = format!("HHOUSE{hero}SPR_0{state}3");
+    composite_frames(data, caches, &name, 0..usize::MAX)
 }
 
 /// Frames of a building record drawn in `state`.

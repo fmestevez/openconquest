@@ -384,6 +384,9 @@ pub struct Scene {
     pub had_argo: bool,
     /// One of the player's buildings has woken (0x5d9a).
     pub woken: bool,
+    /// Heroes' houses taken (0x24af1: `+0x1e8`, state 4) and the tick
+    /// (`+0x1ec`).
+    pub taken_houses: Vec<(u32, u32)>,
     /// The lime's whitening as colour to colour (`render::LIME` through
     /// the palette, its first entry for each colour).
     pub lime_remap: std::collections::HashMap<u32, u32>,
@@ -927,6 +930,7 @@ impl Scene {
             joined: Vec::new(),
             had_argo: false,
             woken: false,
+            taken_houses: Vec::new(),
             lime_remap: {
                 let mut map = std::collections::HashMap::new();
                 for (i, &to) in crate::render::LIME.iter().enumerate() {
@@ -1205,6 +1209,7 @@ impl Scene {
             joined: self.joined.clone(),
             had_argo: self.had_argo,
             woken: self.woken,
+            taken_houses: self.taken_houses.clone(),
             dug: self
                 .dug
                 .iter()
@@ -1380,6 +1385,12 @@ impl Scene {
         scene.joined = save.joined.clone();
         scene.had_argo = save.had_argo;
         scene.woken = save.woken;
+        scene.taken_houses = save.taken_houses.clone();
+        for &(id, _) in &save.taken_houses {
+            if let Some(g) = scene.object_index(id) {
+                scene.show_house_taken(g, data, caches);
+            }
+        }
         scene.strait_struck = save.strait_struck;
         scene.sold = save.sold.clone();
         scene.selling = save.selling.clone();

@@ -10,11 +10,20 @@ use crate::assets::GameData;
 use crate::magic::Spell;
 use crate::objects::{self, Caches, Task, Treasure};
 
-/// How near (cells) a ship must come to a hero's house to take the hero:
-/// the port's stand-in, not ported (the original sails to the house's
-/// berth and lands a party for the hero, 0x4ac2d0 sub-code 10 with
-/// 0x4ba6b0 and 0x4bd350; see "The land take" in FORMATS.md).
-const HERO_REACH: f32 = 2.6;
+/// The heroes' voices at their house (0x4ba2a0, mode 2), by hero: yes
+/// (0xfc, 0x102, 0x100, 0xfe, 0x104, 0x106, 0x108, 0x10a, 0x10c) and no
+/// (each one more), their `SND_<n>` samples.
+const HERO_VOICES: [(&str, &str); 9] = [
+    ("ja1", "ja4"),
+    ("th4", "th1"),
+    ("or3", "or1"),
+    ("ze3", "ze1"),
+    ("he2", "he4"),
+    ("ar2", "ar4"),
+    ("at1", "at4"),
+    ("od5", "od1"),
+    ("pe6", "pe1"),
+];
 /// What heals aboard (0x4b98b0, a tick at a time): each Cup of Asclepius
 /// and Golden Fleece adds its treasure amount (field 8: 40 and 10 in the
 /// campaign) and Argus 20 (0x4bd36a) to a count; every 1000 heals each
@@ -33,21 +42,12 @@ impl Scene {
         let kind = self.objects[i].ship.as_ref().ok_or("Not a ship")?.kind;
         match self.objects[t].class {
             ObjectClass::Treasure => {}
+            // The hero's item is asked for at the house (0x4ba3f0 at the
+            // walkway's last frame, the hero's "no" voice without it).
             ObjectClass::HeroHouse => {
-                let hero = self.objects[t].record.field(22).unwrap_or(0).min(8) as u8;
                 let ship = self.objects[i].ship.as_ref().unwrap();
                 if objects::hero_room(kind) <= ship.heroes.len() {
                     return Err("Only warships with room for heroes can take them".into());
-                }
-                if !ship
-                    .treasures
-                    .iter()
-                    .any(|tr| objects::treasure_hero(tr.kind) == Some(hero))
-                {
-                    return Err(format!(
-                        "{} will only come for his magic item",
-                        objects::HERO_NAMES[hero as usize]
-                    ));
                 }
             }
             _ => return Err("Choose a treasure or a hero's house".into()),
@@ -55,8 +55,8 @@ impl Scene {
         // 0x4aab00 / 0x4af940: a treasure on a cell 0x499990(cell, 0)
         // takes is sailed to (`+0x792` = `+0x797` its cell, `+0x7c2` the
         // box); one on land to the sea cell 0x55a890 picks (`land_take`),
-        // the wait `+0x591` set 0 first. (The hero's house: the port's
-        // stand-in, sailing to the water nearest it.)
+        // the wait `+0x591` set 0 first; the hero's house to its berth
+        // (vt+0xb8, 0x40e050), its own cell the land cell.
         let w = TILE_SIZE as f32;
         let mid = |(cx, cy): (i32, i32)| ((cx as f32 + 0.5) * w, (cy as f32 + 0.5) * w);
         let treasure = self.objects[t].class == ObjectClass::Treasure;
@@ -81,8 +81,13 @@ impl Scene {
                 }
             }
             None => {
-                let (x, y) = (self.objects[t].x, self.objects[t].y);
-                self.plan_route_to_water(i, x, y)
+                let e = self.vt_berth(t);
+                land = Some((e, site));
+                if e == self.cell_of(i) {
+                    Some(Default::default())
+                } else {
+                    self.plan_route(i, mid(e).0, mid(e).1)
+                }
             }
         }
         .ok_or("The ship cannot sail there")?;
@@ -94,6 +99,9 @@ impl Scene {
             land,
             site,
             step: 0,
+            // `+0x78a` the house itself till 0x4ba6b0 answers: no voice,
+            // as 0xff.
+            hero: (!treasure).then_some(0xff),
         });
         Ok(())
     }
@@ -316,13 +324,10 @@ impl Scene {
     /// in that cell (0x4ac490: 0x4b8d40 clears the task, taken or not).
     /// The treasure gone first (0x51f1f0 failing), the ship posts notice
     /// 0x138 to its group every tick (0x4ad9b4, 0x4a1430) and the order
-    /// stays. A treasure on land or a hero: the port's stand-in, the take
-    /// once near (not ported: the landing party of sub-code 10, 0x4b0e40
-    /// -> 0x4b2d60 kind 3 -> 0x421f00 -> message 0xda9d to the ship).
-    /// Treasures for the settlement are handed over at own settlements
-    /// and towns; the Golden Fleece and Argus mend their ships.
+    /// stays. A treasure on land or a hero's house: the landing of
+    /// sub-code 10 (`land_take_tick`). The Golden Fleece and Argus mend
+    /// their ships.
     pub(super) fn run_treasures(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
-        let t = TILE_SIZE as f32;
         let takers: Vec<_> = self
             .objects
             .iter()
@@ -333,6 +338,7 @@ impl Scene {
                     land,
                     site,
                     step,
+                    ..
                 } => Some((o.id, target, at, land, site, step)),
                 _ => None,
             })
@@ -351,31 +357,16 @@ impl Scene {
                 } else if self.object_index(target).is_none() {
                     self.post_notice(ship, 0x138, 0);
                 }
-                continue;
-            }
-            let Some(g) = self.object_index(target) else {
-                self.objects[i].ship.as_mut().unwrap().task = None;
-                continue;
-            };
-            // The hero's house: the port's stand-in.
-            let (o, goal) = (&self.objects[i], &self.objects[g]);
-            let d = ((o.x - goal.x).powi(2) + (o.y - goal.y).powi(2)).sqrt();
-            let idle = o.ship.as_ref().unwrap().path.is_empty();
-            if d <= HERO_REACH * t {
-                self.take_hero(i, g);
-            } else if idle {
-                self.messages
-                    .push("The ship could not get near enough".into());
-                self.objects[i].ship.as_mut().unwrap().task = None;
             }
         }
         self.heal_forts(dt);
     }
 
-    /// A take of a treasure on land, a tick (0x4ac2d0, class 700). Sub-code
-    /// 9 (`step` 0): sailing to the sea cell `e`; there, lying still
-    /// (0x4ad680 giving 2, `+0x58c` 0), with nothing standing on the land
-    /// cell `l` (`+0xc`) sub-code 10 step 1, else 0x4af940 picks the cells
+    /// A take of a treasure on land or a hero's house, a tick (0x4ac2d0,
+    /// class 700 / 0x49). Sub-code 9 (`step` 0): sailing to the sea cell
+    /// `e`; there, lying still (0x4ad680 giving 2, `+0x58c` 0), with
+    /// nothing standing on the land cell `l` (`+0xc`; the house: the house
+    /// itself there) sub-code 10 step 1, else 0x4af940 picks the cells
     /// again. Step 1 (0x4b0e40): the treasure gone, the order ends
     /// (0x4b8d40); else the close-in (`take_close_in`) asked each tick
     /// till it holds, the commands held (0x4b37d0) and the landing's
@@ -429,7 +420,10 @@ impl Scene {
                     }
                     return;
                 }
-                if !self.standing_at(l) {
+                // The house: its cell's slot holding it (the port's house
+                // always stands on its cell); a treasure: nothing there.
+                let house = self.objects[g].class == ObjectClass::HeroHouse;
+                if house || !self.standing_at(l) {
                     set(self, (e, l), 1);
                 } else if let Some(cells) = self.land_take(i, self.cell_of(g)) {
                     set(self, cells, 0);
@@ -781,27 +775,130 @@ impl Scene {
         }
     }
 
-    /// Ship `i` takes the hero from house `g`, giving up the hero's item.
-    fn take_hero(&mut self, i: usize, g: usize) {
-        let hero = self.objects[g].record.field(22).unwrap_or(0).min(8) as u8;
-        let s = self.objects[i].ship.as_mut().unwrap();
-        s.task = None;
-        let Some(k) = s
-            .treasures
+    /// Ship `k`'s take is of a hero's house (`+0x76e` 0x49).
+    pub(super) fn house_take(&self, k: usize) -> bool {
+        matches!(
+            self.objects[k].ship.as_ref().and_then(|s| s.task),
+            Some(Task::Take { hero: Some(_), .. })
+        )
+    }
+
+    /// 0x4ba6b0 at the walkway's last frame: the object on the land cell
+    /// (`+0x797`'s slot `+0xc`) must be the house (class 0x49, id
+    /// `+0x77e`); its answer to 0x24af0 (0x421150: the hero `+0x1e4`, or
+    /// 0xff once taken) into `+0x78a`; then true when the hero is not
+    /// 0xff and his item is aboard (0x4ba3f0).
+    pub(super) fn house_answer(&mut self, k: usize) -> bool {
+        let Some(Task::Take {
+            target,
+            land: Some((_, l)),
+            ..
+        }) = self.objects[k].ship.as_ref().and_then(|s| s.task)
+        else {
+            return false;
+        };
+        let Some(g) = self
+            .object_index(target)
+            .filter(|&g| self.objects[g].class == ObjectClass::HeroHouse)
+            .filter(|&g| self.objects[g].cell == Some(l))
+        else {
+            return false;
+        };
+        let answer = if self.taken_houses.iter().any(|&(id, _)| id == target) {
+            0xff
+        } else {
+            self.objects[g].record.field(22).unwrap_or(0) as u8
+        };
+        let s = self.objects[k].ship.as_mut().unwrap();
+        if let Some(Task::Take { hero, .. }) = s.task.as_mut() {
+            *hero = Some(answer);
+        }
+        Self::hero_item(s, answer).is_some() && answer != 0xff
+    }
+
+    /// 0x4ba3f0(hero, 0): the first treasure slot of hero `hero`'s item
+    /// (kind 0x12 + hero; none for another hero or with nothing aboard).
+    fn hero_item(s: &objects::Ship, hero: u8) -> Option<usize> {
+        s.treasures
             .iter()
             .position(|tr| objects::treasure_hero(tr.kind) == Some(hero))
+    }
+
+    /// 0x4ba2a0(`+0x78a`, ok): for the viewer's ship only (`+0x24f`
+    /// against the game's `+0x3213 + 4 x +0x3212`), the hero's yes or no
+    /// (`HERO_VOICES`), mode 2 at the ship's cell; any other answer (0xff,
+    /// or the house itself before 0x4ba6b0's) none.
+    pub(super) fn hero_voice(&mut self, k: usize, ok: bool) {
+        let o = &self.objects[k];
+        let Some(Task::Take {
+            hero: Some(hero), ..
+        }) = o.ship.as_ref().and_then(|s| s.task)
         else {
             return;
         };
-        if s.heroes.contains(&hero) || s.heroes.len() >= objects::hero_room(s.kind) {
+        let Some(&(yes, no)) = HERO_VOICES.get(hero as usize) else {
+            return;
+        };
+        if o.owner.is_none() || o.owner != self.human.map(|h| (h.nation, h.slot)) {
             return;
         }
-        s.remove_treasure(k);
+        let (x, y) = (o.x, o.y);
+        self.sounds.push((if ok { yes } else { no }, x, y));
+    }
+
+    /// Step 6 at half the party's frames for the hero's house: 0x4bd350
+    /// takes hero `+0x78a` aboard with a hero place free (0x4be800 mode 7:
+    /// 0x597b08[type] less the heroes aboard; Argus's count from 0);
+    /// aboard, 0x4ba7d0 sends the house 0x24af1 (`house_taken`), 0x4b6df0
+    /// message 0x5d99 to the owner's player (not ported: the judge counts
+    /// the heroes aboard), and the hero's item 0x4ba3f0 finds is taken
+    /// out (0x4bd500, not dropped).
+    pub(super) fn hero_boards(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
+        let Some(Task::Take {
+            target,
+            hero: Some(hero),
+            ..
+        }) = self.objects[k].ship.as_ref().and_then(|s| s.task)
+        else {
+            return;
+        };
+        let s = self.objects[k].ship.as_mut().unwrap();
+        if objects::hero_room(s.kind) as i32 - (s.heroes.len() as i32) < 1 {
+            return;
+        }
         s.add_hero(hero);
-        self.messages.push(format!(
-            "{} comes aboard",
-            objects::HERO_NAMES[hero as usize]
-        ));
+        self.house_taken(target, data, caches);
+        let s = self.objects[k].ship.as_mut().unwrap();
+        if let Some(idx) = Self::hero_item(s, hero) {
+            s.remove_treasure(idx);
+        }
+        if let Some(name) = objects::HERO_NAMES.get(hero as usize) {
+            self.messages.push(format!("{name} comes aboard"));
+        }
+    }
+
+    /// The house `id` taken (0x421150 message 0x24af1): taken `+0x1e8` 1,
+    /// state `+0xa4` 4, the tick `+0x1ec` the map's `+0xde`, its pictures
+    /// reloaded (vt+0x38, 0x422e30: `HHOUSE<hero>SPR_043`). Its tick then
+    /// runs only in state 1 (not decoded: what sets it, for the 500-tick
+    /// fade and 0x138b), so the house stands taken.
+    pub(super) fn house_taken(&mut self, id: u32, data: &GameData, caches: &mut Caches) {
+        let Some(g) = self.object_index(id) else {
+            return;
+        };
+        self.taken_houses.retain(|&(h, _)| h != id);
+        self.taken_houses.push((id, self.ticks));
+        self.show_house_taken(g, data, caches);
+    }
+
+    /// A taken house's picture (state 4).
+    pub(super) fn show_house_taken(&mut self, g: usize, data: &GameData, caches: &mut Caches) {
+        let hero = self.objects[g].record.field(22).unwrap_or(0).min(8) as u8;
+        if let Ok(frames) = objects::hero_house_frames(data, caches, hero, 4) {
+            if !frames.is_empty() {
+                self.objects[g].frames = frames;
+            }
+        }
     }
 
     /// 0x4a8fa0: goods of deposit class `class` credited to `owner`:

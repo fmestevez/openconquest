@@ -413,7 +413,8 @@ impl Scene {
     }
 
     /// A tick of the take's landing (0x4b0e40 past step 1; the landing's
-    /// `state` its step `+0x77d`) for a treasure on land at `site`: true
+    /// `state` its step `+0x77d`) for a treasure on land at `site` or a
+    /// hero's house (`Scene::house_answer`, `Scene::hero_boards`): true
     /// once backed out (the order left in step 5) or called off on its
     /// slide (the order ends, message 8); `None` if the ship went.
     pub(super) fn take_landing_tick(
@@ -479,8 +480,16 @@ impl Scene {
                     let n = self.landing_art[l.walk_dir as usize % 8][0].len() as i32;
                     if n <= f + 1 {
                         l.plank = Some(n - 1);
-                        l.porters = Some(0);
-                        l.state = 6;
+                        // The hero's house (`+0x76e` 0x49): 0x4ba6b0
+                        // first; refused, step 14 and the "no" voice.
+                        if !self.house_take(k) || self.house_answer(k) {
+                            self.hero_voice(k, true);
+                            l.porters = Some(0);
+                            l.state = 6;
+                        } else {
+                            l.state = 14;
+                            self.hero_voice(k, false);
+                        }
                     } else {
                         l.plank = Some(f + 1);
                     }
@@ -497,7 +506,13 @@ impl Scene {
                 } else {
                     let half = self.landing_art[l.dir as usize % 8][1].len() as i32 / 2;
                     let f = l.porters.unwrap_or(0) + 1;
-                    if half <= f {
+                    if half <= f && self.house_take(k) {
+                        // The hero's house: no party, the hero aboard
+                        // (0x4bd350 ...), step 14.
+                        l.porters = None;
+                        l.state = 14;
+                        self.hero_boards(k, data, caches);
+                    } else if half <= f {
                         let (dx, dy) = PARTY_FROM[l.dir as usize % 8];
                         let at = (
                             l.plank_at.0.round() as i32 + dx,

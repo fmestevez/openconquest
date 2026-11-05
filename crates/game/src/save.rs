@@ -132,6 +132,8 @@ pub struct SaveGame {
     #[serde(default)]
     pub woken: bool,
     #[serde(default)]
+    pub taken_houses: Vec<(u32, u32)>,
+    #[serde(default)]
     pub dug: Vec<(u32, u32, u32, u8, u8)>,
     #[serde(default)]
     pub strait_struck: bool,

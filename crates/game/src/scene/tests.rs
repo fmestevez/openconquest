@@ -3189,15 +3189,69 @@ fn treasures_and_heroes() {
         .find(|o| o.class == ObjectClass::HeroHouse && o.record.field(22) == Some(1))
         .unwrap()
         .id;
+    // To the house's berth (0x40e050), its cell the land cell; the
+    // landing's walkway asks the house (0x4ba6b0) and the clew (0x4ba3f0),
+    // Theseus says yes (0x102, `th4`) and boards at half the party's
+    // frames (0x4bd350), the house taken (0x24af1) and the clew out.
     scene.order_take(ship, house).unwrap();
-    for _ in 0..50 * 300 {
-        scene.update(0.02, &data, &mut caches);
-        if !s(&scene).heroes.is_empty() {
-            break;
+    let h = scene.object_index(house).unwrap();
+    let Some(Task::Take {
+        land: Some((e, l)),
+        hero: Some(0xff),
+        ..
+    }) = s(&scene).task
+    else {
+        panic!("not a house take: {:?}", s(&scene).task);
+    };
+    assert_eq!(l, scene.objects[h].cell.unwrap());
+    assert_eq!(e, scene.vt_berth(h));
+    let run = |scene: &mut Scene, caches: &mut Caches| {
+        let mut voices = Vec::new();
+        for _ in 0..20000 {
+            scene.update(0.04, &data, caches);
+            let k = scene.object_index(ship).unwrap();
+            scene.objects[k].combat.as_mut().unwrap().hull = 1000.0;
+            voices.extend(scene.sounds.drain(..).map(|v| v.0));
+            if matches!(s(scene).task, Some(Task::Take { step: 5, .. })) {
+                return voices;
+            }
         }
-    }
+        panic!("the landing never backed out: {:?}", s(scene).task);
+    };
+    let voices = run(&mut scene, &mut caches);
     assert_eq!(s(&scene).heroes, vec![crate::objects::THESEUS]);
     assert!(!s(&scene).has_treasure(19), "the clew stays with Theseus");
+    assert!(voices.contains(&"th4"), "{voices:?}");
+    assert!(matches!(
+        s(&scene).task,
+        Some(Task::Take { hero: Some(1), .. })
+    ));
+    assert_eq!(scene.taken_houses.len(), 1);
+    assert_eq!(scene.taken_houses[0].0, house);
+    // Taken, the house answers 0xff: another clew brings nobody, no voice.
+    let k = scene.object_index(ship).unwrap();
+    scene.objects[k]
+        .ship
+        .as_mut()
+        .unwrap()
+        .treasures
+        .push(crate::objects::Treasure {
+            kind: 19,
+            param: 0,
+            amount: 0,
+        });
+    scene.order_take(ship, house).unwrap();
+    let voices = run(&mut scene, &mut caches);
+    assert_eq!(s(&scene).heroes, vec![crate::objects::THESEUS]);
+    assert!(s(&scene).has_treasure(19));
+    assert!(!voices.iter().any(|v| *v == "th1" || *v == "th4"));
+    assert!(matches!(
+        s(&scene).task,
+        Some(Task::Take {
+            hero: Some(0xff),
+            ..
+        })
+    ));
 }
 
 /// A take order to a treasure on land (0x4af940 -> 0x55a890): the ship
