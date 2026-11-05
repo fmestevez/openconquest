@@ -5686,6 +5686,39 @@ tick at a time by 0x41fbd0, moved by 0x41e4b0):
   0 or 1 (a frame a tick), except 2 for a harpy waiting. Take-off and
   landing play 35 frames for a harpy and 20 for a dragon.
 
+**Decoded, not ported** (the port's flyers run in seconds on the scene's
+generator, step in straight lines and keep none of what follows).
+HarpyClassTy's vtable is 0x595e00 (constructor 0x41dde0: side 2, nation 4,
+state `+0x88` 0xff): +0 0x4207b0, +4 0x420670 (a shot, 0x138e), +0xc
+0x41df70, +0x10 0x41de30 (`hp x 100 / max`), +0x1c 0x41e0f0 (speed `0x1900
+/ (frames x delay[3])`), +0x2c 0x41de90 (a dragon in state 1 cannot be
+targeted). Created (message 2): generator `+0x18 = game +0x2ee5 x id`,
+hp `+0x89` 200000 (harpy) or 250000 (dragon), state 0 (a random odd
+heading on the map). A tick (message 0) runs 0x41fbd0 (states) then
+0x41e4b0 (a frame when `now >= +0x81 + delay`; in flight the position is
+`from + (to - from) x frame / (frames - 1)`, so a step lasts the flying
+picture's frame count in ticks). States 0x41f680: rest 1 draws `+0xe8 =
+now + r % 50` (a harpy's idle picture, again after each) and `+0xec = now
++ r % (1100 - 100 x field 11)`; it ends early when hit (`+0xca`), told of
+a target (`+0xce`), orphaned or at 0 hp. Each leg (state 3) draws its
+cell by 0x41e840 (`t = r % total + 1`; homing only when off both the
+nest's row and column, weight 100) and its flap-sound time `now + (r % 41
++ 60) x 375 / 100`, and flies a turning route 0x55c3d0 (from its heading,
+one heading change a cell, tried both ways round, off-map penalty);
+route cells are entered only if the flyer slot is free and no other
+flyer is bound there (0x41ee20), else it hovers (delay index 4) and
+re-picks. At each cell 0x41efb0 (a harpy: a ship of nation other than 4
+without Orpheus, a town 0x1491, a fort 0x1494; a dragon: the nest's
+attacker, else one cell in three after it has seen an object); the strike
+0x41f1c0 picks the target (harpy: the last in scan order, skipping phantom
+ships and buildings with vt+0xa4) or the dragon's sowing cell (weight 50
+next to a building on landscape 8, else 0; one draw), turning to it
+first. Damage: 0x138e takes the blow (1 in 7 a cry), 0xda93 a quarter (on
+its cell: gone), 0xda96 and 0x158bf the amount; the nest's hit sends
+0xdaf7 (chase the shooter; 0xdaf8 clears it 3000 ticks later), its fall
+0xdaf9 (hp falls to 0 over 1000 ticks). Not decoded: 0x42ebf0's terrain
+bits, the targets' vt+0x2c and vt+0xa4.
+
 ## Land creatures
 
 Lairs (`CreaturesFlatClassTy`, 0x414f00) send out another creature once
