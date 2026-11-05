@@ -401,9 +401,9 @@ impl Scene {
     /// dragon's 0x41df70 (`Scene::flyer_aim`), the gorgon's 0x402da0
     /// (`Scene::gorgon_aim`), the siren's 0x4048f0 (`Scene::siren_aim`),
     /// each drawing from the
-    /// target's own generator. Returns the positions fired. (Not
-    /// decoded: the hero's house's vtable.
-    /// A position's target gone, the original's pointer
+    /// target's own generator; the hero's house's vtable 0x595e98 has
+    /// 0x423520 too (`shot::aims_as_building`). Returns the positions
+    /// fired. (A position's target gone, the original's pointer
     /// dangles: the port skips it.)
     #[allow(clippy::needless_range_loop)]
     pub(super) fn fire_items(
@@ -525,11 +525,7 @@ impl Scene {
                     _ if self.objects[t].ship.is_some() => Some(self.ship_aim(t, hit)),
                     ObjectClass::Monster(0x1f4..=0x1f6) => self.walker_aim(tid, hit),
                     ObjectClass::Monster(0x1f8 | 0x1f9) => self.flyer_aim(tid, hit),
-                    ObjectClass::Building(_)
-                    | ObjectClass::Barbarian(_)
-                    | ObjectClass::Castle(_)
-                    | ObjectClass::CreatureSpawn
-                    | ObjectClass::HarpyNest => Some(self.building_aim(t, hit)),
+                    c if super::shot::aims_as_building(c) => Some(self.building_aim(t, hit)),
                     ObjectClass::Monster(0x1fb) => match self.sea_monster_aim(t, hit) {
                         Some(p) if self.ship_solid_at(i, (p.0 as f32, p.1 as f32)) => continue,
                         p => p,

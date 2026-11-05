@@ -1413,13 +1413,30 @@ impl Scene {
     /// T[heading].x`, `+0xb8 - h + T[heading].y` (`THROW_FROM`), `w` and
     /// `h` its picture's size (`+0x61` / `+0x65`, from the sequence's
     /// `+0x29` / `+0x2b`, 0x5463bf: its first frame's width and height,
-    /// 0x554bf0). At a building 0x423520, at a harpy nest 0x41cef0
-    /// (`Scene::building_aim`), at a barbarian structure 0x423520 too
-    /// (vtable 0x594920 +0xc), from its building generator. (Not
-    /// decoded: the aim at castles, lairs and heroes' houses, 0x423520
-    /// too, but from generators their own code draws elsewhere, not read:
-    /// castles 0x410e6e / 0x410ed8, lairs 0x415337 / 0x4156a8; a throw at
-    /// one aims as the port's other shots.)
+    /// 0x554bf0). At a building, barbarian structure, castle, lair or
+    /// hero's house 0x423520, at a harpy nest 0x41cef0 (`throw_aim`).
+    /// Where a land creature's throw at object `t` aims, by the hit byte:
+    /// its vt+0xc, a ship's 0x4e07c0 (`Scene::ship_aim`), a building's,
+    /// barbarian structure's, castle's, lair's or hero's house's 0x423520
+    /// and a harpy nest's 0x41cef0 (`Scene::building_aim`), each from the
+    /// target's generator `+0x18`: the castle's is drawn by its own code
+    /// only at message 2 (0x410e6e / 0x410ed8, `start_castles`) and in
+    /// casting, a lair's every tick (0x415337) and for a creature's cell
+    /// (0x4156a8), a lair seeding it `[game +0x2ee5] x id` itself
+    /// (0x414f00, no asleep look), the hero's house none of its own
+    /// (0x421150 runs 0x4e7640 -> 0x427f50 only). (Others: not decoded,
+    /// none.)
+    pub(super) fn throw_aim(&mut self, t: usize, strikes: bool) -> Option<(i32, i32)> {
+        let o = &self.objects[t];
+        if o.ship.is_some() {
+            Some(self.ship_aim(t, strikes))
+        } else if super::shot::aims_as_building(o.class) {
+            Some(self.building_aim(t, strikes))
+        } else {
+            None
+        }
+    }
+
     fn throw_step(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
         let Some(i) = self.object_index(self.walkers[k].id) else {
@@ -1471,19 +1488,9 @@ impl Scene {
         let strikes = !(d > 1 && w.draw() % (8 - d) == 0);
         w.thrown = true;
         let (shooter, pct, (x, y), heading) = (w.id, w.pct, w.pos, w.heading as usize);
-        let to = self.object_index(target).and_then(|t| {
-            let o = &self.objects[t];
-            if o.ship.is_some() {
-                Some(self.ship_aim(t, strikes))
-            } else if matches!(
-                o.class,
-                ObjectClass::Building(_) | ObjectClass::Barbarian(_) | ObjectClass::HarpyNest
-            ) {
-                Some(self.building_aim(t, strikes))
-            } else {
-                None
-            }
-        });
+        let to = self
+            .object_index(target)
+            .and_then(|t| self.throw_aim(t, strikes));
         let (pw, ph) = self.objects[i]
             .frames
             .first()

@@ -1095,7 +1095,8 @@ impl Scene {
     /// the same way: under the magic shield (`+0x15c`) x 20 / 100 for a
     /// fireball (kind 10), else x 100 / 150 if flaming; under the weapon
     /// shield (`+0x17c`) x 20 / 100 more. A barbarian structure's units
-    /// take theirs uncut (0x40e0f0).
+    /// take theirs uncut (0x40e0f0), its rest, written back to the
+    /// message's `+9`, cut by the same 0x423d60 (0x4e7550 -> 0x427bb0).
     /// `by`: the player who dealt it (see `strike`); `shooter`: who fired
     /// it (message 0x138e `+0x16`), for a fort firing on aggressors.
     #[allow(clippy::too_many_arguments)]

@@ -495,6 +495,24 @@ impl Scene {
     }
 }
 
+/// Whether an object of `class` aims as a building (vt+0xc 0x423520,
+/// `Scene::building_aim`): the 18 building vtables (towns, works, forts,
+/// docks and yards, temples), the barbarian structures' 0x594920, the
+/// castles' 0x5949fc, the lairs' 0x5953f0-0x595600 and the hero's house's
+/// 0x595e98 (dumped), each from its building generator `+0x18`; a harpy
+/// nest's 0x41cef0 (0x595d50) the same way with its own hit.
+pub(super) fn aims_as_building(class: ObjectClass) -> bool {
+    matches!(
+        class,
+        ObjectClass::Building(_)
+            | ObjectClass::Barbarian(_)
+            | ObjectClass::Castle(_)
+            | ObjectClass::CreatureSpawn
+            | ObjectClass::HeroHouse
+            | ObjectClass::HarpyNest
+    )
+}
+
 /// The 16 directions (0x497e50): 0 east, counter-clockwise.
 fn direction(dx: f32, dy: f32) -> usize {
     let a = (-dy).atan2(dx).rem_euclid(std::f32::consts::TAU);
@@ -938,6 +956,8 @@ impl Scene {
                 // firing.) Castles reach it through 0x4105c0 and 0x427bb0,
                 // lairs straight (vt+0x4c 0x414ef0 jumps to it); a harpy
                 // nest takes its blow whole on arrival (vt+4 0x41d300).
+                // (Forts' and barbarian structures' rests are cut in
+                // `fort_blow`.)
                 let mut damage = s.damage;
                 let o = &self.objects[i];
                 if matches!(

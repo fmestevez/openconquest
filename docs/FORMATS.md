@@ -5171,7 +5171,11 @@ shield, sets `+0x15c` and adds to `+0x168`, sound 0x57. The fire check at
 0x4240e3 reads `+0x15c`, the lime's 200 / 40 ticks `+0x17c`.) The
 weapons (items 3-8) take the share, the marines (0-2) `0x4ac1b0(kind,
 the shooter's level, share)`. Barbarian structures (0x40e0f0) share
-`blow x load / (load + 80)` with no cuts, the marines through 0x40ff00.
+`blow x load / (load + 80)` with no cuts, the marines through 0x40ff00,
+skipping kind 9 (the hook) as the fort; the rest is written back to the
+message's `+9` and 0x4e7550 -> 0x427bb0 hands it to 0x423d60, which cuts
+it as a fort's rest (magic shield, then weapon shield). The port:
+`Scene::fort_blow` (test `a_blow_on_a_shielded_barbarian_structure`).
 
 **State 2 is the fall, not the mending.** 0x423d60 on 0x138b (the fall,
 posted by itself when a blow 0x138e reaches the life) sets `+0xa4` 2,
@@ -6639,11 +6643,20 @@ burning blow's fire (below) and the fall's rubble, two a cell
 and barbarians' draws (the unit lists' generators set by
 `building_rng`, which `step_fort_draws` runs first) and the aim, the
 fire's draw and the rubble's (below, `scene/burning.rs`). Not ported:
-the sea temple's (the port's casts name no temple), and the aim at
-castles, lairs and heroes' houses (0x423520 too, but their classes
-draw their generators elsewhere, not read: castles 0x410e6e /
-0x410ed8, lairs 0x415337 / 0x4156a8). (0x430449 is a reef's, 0x4300a0,
-not a building's.)
+the sea temple's (the port's casts name no temple). Castles, lairs and
+heroes' houses aim as buildings too (vt+0xc 0x423520 in their vtables
+0x5949fc, 0x5953f0-0x595600 and 0x595e98, dumped) from the same
+generator: a castle's seeded by 0x427f50 (0x410ca0 runs it at message
+2) and drawn by its own code at message 2 (0x410e6e the first cast for
+a record type below 2, 0x410ed8 the ambient sound, `start_castles`) and
+in casting; a lair seeds it itself (0x414f00 message 2, `[game +0x2ee5]
+x id` unless loading a save, no asleep look) and draws it every tick
+(0x415337) and for the cell its creature goes to (0x4156a8); the hero's
+house (0x421150 -> 0x4e7640 -> 0x427f50) never draws it. Ships' shots
+and land creatures' throws aim at all of them by `building_aim`
+(`shot::aims_as_building`, `Scene::throw_aim`; test
+`throws_at_castles_lairs_and_houses_aim_as_buildings`). (0x430449 is a
+reef's, 0x4300a0, not a building's.)
 
 
 **A building's fire** (LandObjClassTy's drain 0x423d60, blow 0x138e,
@@ -9419,12 +9432,14 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   (dumped from the vtables the constructors store): a ship's 0x4e07c0
   (vtable 0x59b48c), every building's 0x423520 (the 18 vtables of the
   towns, works, forts, docks and yards, temples, castles 0x5949fc,
-  lairs 0x5953f0-0x595600 and barbarian structures 0x594920), a harpy
+  lairs 0x5953f0-0x595600, barbarian structures 0x594920 and the hero's
+  house 0x595e98), a harpy
   nest's 0x41cef0 (0x595d50), a harpy's or dragon's 0x41df70
   (0x595e00), a jam's 0x415ce0 (0x5956b0), a land creature's 0x411bb0
   (0x5953a8), a leviathan's 0x495b40 (0x597544). The pass's shot flies
-  to a ship's (`Scene::ship_aim`), a building's, castle's, lair's or
-  nest's (`Scene::building_aim`) point, each drawn from the target's own
+  to a ship's (`Scene::ship_aim`), a building's, barbarian structure's,
+  castle's, lair's, hero's house's or nest's (`Scene::building_aim`)
+  point, each drawn from the target's own
   generator after the hit roll and before the shooter's reload draw
   (test `item_shot_flies_to_the_targets_aim_point`). A land creature's
   0x411bb0: from its place `+0xb4 / +0xb8` less its picture's offset

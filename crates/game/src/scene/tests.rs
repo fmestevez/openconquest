@@ -9195,6 +9195,125 @@ fn shots_on_castles_and_lairs() {
     }
 }
 
+/// A land creature's throw and a ship's shot at a castle, lair or hero's
+/// house aim at its vt+0xc 0x423520 (vtables 0x5949fc, 0x5953f0, 0x595e98,
+/// dumped): two draws of its generator `+0x18`, a hit `w / 3 + (r1 % w) /
+/// 3`, `h / 3 + (r2 % h) / 3` from its picture's top left, a miss a
+/// corner `(r1 & 1) w`, `(r2 & 1) h`, clamped to the map (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn throws_at_castles_lairs_and_houses_aim_as_buildings() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for (mission, class) in [
+        ("miss009", ObjectClass::Castle(0x43)),
+        ("miss000", ObjectClass::CreatureSpawn),
+        ("miss003", ObjectClass::HeroHouse),
+    ] {
+        let mut scene = Scene::load(&data, &mut caches, mission).unwrap();
+        scene.brain = None;
+        let t = scene.objects.iter().position(|o| o.class == class).unwrap();
+        assert!(super::shot::aims_as_building(class));
+        let id = scene.objects[t].id;
+        let o = &scene.objects[t];
+        let l = &o.frames[0][0];
+        let (left, top) = crate::render::layer_origin(o, l);
+        let (w, h) = (l.image.width as i32, l.image.height as i32);
+        for v in [1u32, 0x1234_5678, 0xdead_beef] {
+            for hit in [true, false] {
+                scene.building_lcgs.insert(id, v);
+                let mut r = crate::combat::Rng(v);
+                let (r1, r2) = (r.next() as i32, r.next() as i32);
+                let want = if hit {
+                    (left + w / 3 + (r1 % w) / 3, top + h / 3 + (r2 % h) / 3)
+                } else {
+                    (left + (r1 & 1) * w, top + (r2 & 1) * h)
+                };
+                // Clamped to the map.
+                let (mw, mh) = scene.map_size();
+                let cap = |v: i32, n: u32| v.clamp(0, n as i32 * 64 - 1);
+                let want = (cap(want.0, mw), cap(want.1, mh));
+                assert_eq!(scene.throw_aim(t, hit), Some(want), "{mission}");
+                assert_eq!(scene.building_lcgs[&id], r.0, "{mission}");
+            }
+        }
+    }
+}
+
+/// A blow on a barbarian structure (0x40e0f0): its units take their share
+/// of the blow uncut, the rest written back (`+9`) and posted on through
+/// 0x4e7550 -> 0x427bb0 to LandObj's drain 0x423d60, which cuts it under
+/// the magic shield (`+0x15c`: x 100 / 150 flaming, x 20 / 100 a
+/// fireball) and then the weapon shield (`+0x17c`, x 20 / 100). miss001's
+/// structures (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_blow_on_a_shielded_barbarian_structure() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let blow = 3000u32;
+    let fireball = super::shot::FIREBALL;
+    for (magic, weapons, item, flaming) in [
+        (false, false, 6, true),
+        (true, false, 6, false),
+        (true, false, 6, true),
+        (true, false, fireball, true),
+        (false, true, 6, false),
+        (true, true, 6, true),
+        (true, true, fireball, true),
+    ] {
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+        scene.brain = None;
+        let k = scene
+            .objects
+            .iter()
+            .position(|o| matches!(o.class, ObjectClass::Barbarian(_)) && o.holds_units())
+            .unwrap();
+        let id = scene.objects[k].id;
+        let class = scene.objects[k].record.class_id;
+        let c = scene.objects[k].combat.as_mut().unwrap();
+        (c.max_hull, c.hull) = (1e6, 1e6);
+        c.protect_magic = if magic { 10.0 } else { 0.0 };
+        c.protect_weapons = if weapons { 10.0 } else { 0.0 };
+        let share = combat::fort_share(class, &c.weapons, blow);
+        assert_ne!(share, 0);
+        let mut rest = blow - share;
+        if magic {
+            if item == fireball {
+                rest = rest * 20 / 100;
+            } else if flaming {
+                rest = rest * 100 / 150;
+            }
+        }
+        if weapons {
+            rest = rest * 20 / 100;
+        }
+        scene.fort_blow(
+            id,
+            blow as f32 / 15.0,
+            0.0,
+            item,
+            flaming,
+            None,
+            None,
+            &data,
+            &mut caches,
+        );
+        let k = scene.object_index(id).unwrap();
+        let h = scene.objects[k].combat.as_ref().unwrap().hull;
+        assert!(
+            ((1e6 - h) * 15.0 - rest as f32).abs() < 1.0,
+            "{magic} {weapons} {item} {flaming}: {} not {rest} (share {share})",
+            (1e6 - h) * 15.0
+        );
+    }
+}
+
 /// A shot on a town under its magic shield (`+0x15c`, 0x423d60): a
 /// flaming blow cut to 100 / 150, another whole (needs
 /// `OPENCONQUEST_DATA`).
