@@ -644,15 +644,7 @@ impl Scene {
                 self.fort_blow(id, b as f32 / 15.0, 0.0, 4, false, None, None, data, caches);
             }
         } else if landobj {
-            self.strike(
-                id,
-                fifth(blow) as f32 / 15.0,
-                false,
-                None,
-                true,
-                data,
-                caches,
-            );
+            self.strike(id, fifth(blow) as f32 / 15.0, None, true, data, caches);
         }
     }
 

@@ -732,7 +732,7 @@ impl Scene {
                 if let Some(s) = self.objects[i].ship.as_mut() {
                     s.build = None;
                 }
-                self.strike(id, 0.0, false, None, true, data, caches);
+                self.strike(id, 0.0, None, true, data, caches);
                 return;
             }
         }

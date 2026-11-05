@@ -623,7 +623,7 @@ mod data_tests {
         let raze = |scene: &mut crate::scene::Scene, caches: &mut Caches, site: u32| {
             let s = scene.object_index(site).unwrap();
             let hull = scene.objects[s].combat.as_ref().unwrap().hull;
-            scene.strike(site, hull + 1.0, false, None, true, &data, caches);
+            scene.strike(site, hull + 1.0, None, true, &data, caches);
         };
         // Another settlement of its player falls: nothing changes.
         let f = scene.object_index(fort).unwrap();

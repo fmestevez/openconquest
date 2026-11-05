@@ -551,7 +551,7 @@ impl Scene {
             let k = self.object_index(id);
             let ship = k.is_some_and(|k| self.objects[k].ship.is_some());
             let by = if ship { None } else { caster };
-            self.strike(id, blow, false, by, true, data, caches);
+            self.strike(id, blow, by, true, data, caches);
         }
         // A land creatures' jam in the 3 x 3 passes the blow on to each of
         // its members (CyclopsJamClassTy 0x415ee0, 0x4161a0), each judging

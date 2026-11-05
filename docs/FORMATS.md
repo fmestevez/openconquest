@@ -6536,11 +6536,22 @@ ram's stepped by 0x4c2230 state 3 with 0x4e0470 (hull less 0x46, read
 before that step's 0x4df6e0), the fight by 0x4e04a0 (less 0x47). The
 volcano's eruption `VOLCANOERAPTION` is its layer 1 (0x445e20), set by
 0x445630 at each step to layer 0's depth less 2. The port:
-`FxDepth::Layer` on the rammer, the boarder, the volcano. Not decoded
-(drawn over the list): the hit and splash pictures the port shows for
-blows without a shot (`Scene::strike` from rams, hazards and the like:
-which original object, if any, shows them). A yard's ship being built is
-not an effect in the port. Not decoded: when 0x4e0470 / 0x4e04a0 run against 0x4df6e0
+`FxDepth::Layer` on the rammer, the boarder, the volcano. A blow without
+a shot shows no picture and no sound at the struck object: a ship's
+blows are code 4 (0x4a9e30 records it, `+0x7d6` bit 4), taken in its
+tick 0x4ab930 by 0x4befc0, whose 0x4be0c0 / 0x4be030 change only the
+hull's own damage picture (`+0x74`, 0x4e1bb0) and, being built, layer 4
+(0x4e0d00); its 0x4dc630 turns the stare's 0x158bf, the bite's 0xf166
+and the waterspout's 0xda96 into code 4 and the reef's 0xda94 and
+whirlpool's 0xda95 into the wreck 0x200, making nothing; a building's
+0x138e (0x423d60) makes only its fires (layers 3-6), a land creature's
+(0x413ad0) nothing. The senders make none at the struck object either:
+the ram 0x4c1c60 / 0x4c1ad0 (its picture the rammer's `BOMBH30` above),
+boarding 0x4b5b00 / 0x4b5df0 / 0x4c3410 (`ABORD_`), the bite 0x490830
+(the monster's own frames), the stare 0x401f70, the charm 0x4a74c0, the
+waterspout 0x43a6c0. The port's `Scene::strike` draws nothing (it drew
+`BOMBG10` / `BOMBG20` at a random spot with `hitmed` / `splash1`). A
+yard's ship being built is not an effect in the port. Not decoded: when 0x4e0470 / 0x4e04a0 run against 0x4df6e0
 (before the first, a walkway's 0x3e6 and a gangway's 0x3de; for the
 ram's blow, read: before); which
 leviathan states take 0x4e85; what building layer 2 (0xc453) and ship

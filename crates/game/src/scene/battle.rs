@@ -1226,7 +1226,7 @@ impl Scene {
         if let Some(t) = self.object_index(target) {
             self.fort_aggressed(t, item, shooter);
         }
-        self.strike(target, hull, false, by, true, data, caches);
+        self.strike(target, hull, by, true, data, caches);
     }
 
     /// Takes `points` off the weapons of ship `target` (0x4be110); those
@@ -1289,7 +1289,7 @@ impl Scene {
                 if let Some(s) = self.objects[t].ship.as_mut() {
                     s.build = None;
                 }
-                self.strike(target, 0.0, false, by, true, data, caches);
+                self.strike(target, 0.0, by, true, data, caches);
             }
             return;
         }
@@ -1301,8 +1301,8 @@ impl Scene {
         self.refresh_stats(target);
     }
 
-    /// Deals `damage` to the hull of `target`, with a hit (or splash) effect;
-    /// a sunk ship is removed and a destroyed building left in ruins.
+    /// Deals `damage` to the hull of `target`; a sunk ship is removed and a
+    /// destroyed building left in ruins.
     pub(super) fn hit(
         &mut self,
         target: u32,
@@ -1343,7 +1343,7 @@ impl Scene {
             );
             return;
         }
-        self.strike(target, damage, true, by, true, data, caches);
+        self.strike(target, damage, by, true, data, caches);
     }
 
     /// Whether a blow (message 0x138e) on `target` is dropped: the town's
@@ -1358,8 +1358,18 @@ impl Scene {
             && self.construction_at(target).is_some()
     }
 
-    /// The same, showing the hit or splash only if `show` (a shot shows
-    /// its own). `by` is the player who dealt the blow: the one the
+    /// The same, with no picture or sound at the blow: a blow is a message
+    /// to the struck object (a ship's code 4, 0x4a9e30, taken in its tick
+    /// 0x4ab930 by 0x4befc0, which changes only the hull's own damage
+    /// picture, 0x4be030 -> 0x4e1bb0; a building's or land creature's
+    /// 0x138e, 0x423d60 / 0x413ad0, a building's fires its only
+    /// pictures), and the senders without a shot make none at the struck
+    /// object (ram 0x4c1c60 / 0x4c1ad0, boarding 0x4b5b00 / 0x4b5df0 /
+    /// 0x4c3410, a sea monster's bite 0x490830 and 0xf166, the Gorgon's
+    /// stare 0x401f70 and 0x158bf, the charm 0x4a74c0, the waterspout
+    /// 0x43a6c0 and 0xda96, reefs and whirlpools 0xda94 / 0xda95): their
+    /// own pictures are the ram's splinters, the boarding fight, the
+    /// monster's strike. `by` is the player who dealt the blow: the one the
     /// statistics take for the killer (a ship's sinking blow keeps its
     /// giver, `+0x80b` to `+0x7f`, 0x4befc0, 0x4be0c0, and the death
     /// reports it to 0x50e750); `None` for none (0xff). Unless `report`,
@@ -1369,7 +1379,6 @@ impl Scene {
         &mut self,
         target: u32,
         damage: f32,
-        show: bool,
         by: Option<Owner>,
         report: bool,
         data: &GameData,
@@ -1383,8 +1392,6 @@ impl Scene {
             self.last_attack = Some((self.objects[ti].x, self.objects[ti].y));
         }
         let (tx, ty) = (self.objects[ti].x, self.objects[ti].y);
-        let jitter = |rng: &mut Rng| (rng.next() % 33) as f32 - 16.0;
-        let (fx, fy) = (tx + jitter(&mut self.rng), ty + jitter(&mut self.rng));
         // The Gorgon takes any blow herself (vt+4 0x4014d0, no hit shown).
         if self.gorgons.contains_key(&target) {
             self.gorgon_struck(target, damage, by, None);
@@ -1399,16 +1406,6 @@ impl Scene {
         // queues message 0x138e; 0x413ad0).
         if self.walkers.iter().any(|w| w.id == target) {
             self.walker_struck(target, damage, by);
-            if show {
-                let name = if damage > 0.0 {
-                    combat::FX_HIT
-                } else {
-                    combat::FX_SPLASH
-                };
-                self.spawn_effect(data, caches, name, fx, fy);
-                self.sounds
-                    .push((if damage > 0.0 { "hitmed" } else { "splash1" }, fx, fy));
-            }
             return;
         }
         let Some(c) = self.objects[ti].combat.as_mut() else {
@@ -1431,16 +1428,6 @@ impl Scene {
         }
         let c = self.objects[ti].combat.as_mut().unwrap();
         let destroyed = c.hull <= 0.0 && !monster;
-        if show {
-            let name = if damage > 0.0 {
-                combat::FX_HIT
-            } else {
-                combat::FX_SPLASH
-            };
-            self.spawn_effect(data, caches, name, fx, fy);
-            self.sounds
-                .push((if damage > 0.0 { "hitmed" } else { "splash1" }, fx, fy));
-        }
         let is_building = self.objects[ti].ship.is_none();
         if destroyed {
             if report {
@@ -2006,7 +1993,7 @@ impl Scene {
         // it), no 0x5d97.
         if owner == Some(PLAYER_16) || self.objects[i].owner == Some(PLAYER_16) {
             let hull = self.objects[i].combat.as_ref().map_or(0.0, |c| c.hull);
-            self.strike(id, hull.max(0.0) + 1.0, false, owner, true, data, caches);
+            self.strike(id, hull.max(0.0) + 1.0, owner, true, data, caches);
             return;
         }
         // The prize is reported destroyed by its taker before it changes

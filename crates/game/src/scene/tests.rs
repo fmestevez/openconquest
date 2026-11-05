@@ -6084,6 +6084,36 @@ fn rammer_charges_strikes_and_backs_off() {
     assert_eq!((s.ram_wait, s.board_wait), (scene.ticks, 0));
 }
 
+/// A blow without a shot (a ram's 0x4c1ad0, a bite's 0xf166, a stare's
+/// 0x158bf, a waterspout's 0xda96, a reef's 0xda94: all a ship's code 4,
+/// 0x4a9e30 -> 0x4befc0) makes no picture or sound at the struck ship,
+/// nor does a wreck at nothing (needs `OPENCONQUEST_DATA`).
+#[test]
+fn blows_without_a_shot_show_nothing() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let (_, other, _) = boarding_pair(&mut scene, 1, 0);
+    let hull = |s: &Scene| {
+        s.objects[s.object_index(other).unwrap()]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hull
+    };
+    let before = hull(&scene);
+    let effects = scene.effects.len();
+    scene.sounds.clear();
+    scene.share_blow(other, 1.0, None, &data, &mut caches);
+    scene.hit(other, 0.0, None, &data, &mut caches);
+    assert!(hull(&scene) < before, "the blow struck");
+    assert_eq!(scene.effects.len(), effects);
+    assert!(scene.sounds.is_empty());
+}
+
 /// A rammer alongside whose contact is refused (0x4c1760: the prey in
 /// another's) lying still stays in state 2 for its next look, and refused
 /// again goes back to state 1 with its move stopped (0x4c2230; needs

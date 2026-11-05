@@ -923,7 +923,7 @@ impl Scene {
         if let Some(i) = target.filter(|_| s.volcanic) {
             let report = !matches!(self.objects[i].class, ObjectClass::Monster(0x1f8 | 0x1f9));
             self.ignite(i, s.item, s.flaming, s.damage, data, caches);
-            self.strike(s.target, s.damage, false, None, report, data, caches);
+            self.strike(s.target, s.damage, None, report, data, caches);
             self.wound(s.target, s.wounds);
             self.wear(s.target, s.wear);
             return;
@@ -984,7 +984,7 @@ impl Scene {
                         damage *= cut as f32 / blow as f32;
                     }
                 }
-                self.strike(s.target, damage, false, by, report, data, caches);
+                self.strike(s.target, damage, by, report, data, caches);
                 self.wound(s.target, s.wounds);
                 self.wear(s.target, s.wear);
             }
