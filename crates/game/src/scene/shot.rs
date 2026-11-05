@@ -849,6 +849,13 @@ impl Scene {
             self.flyer_struck(id, s.damage);
             return;
         }
+        // The Gorgon takes the blow herself (vt+4 0x4014d0): no fire, no
+        // hit shown; the shooter may become her target.
+        if let Some(i) = target.filter(|&i| self.gorgons.contains_key(&self.objects[i].id)) {
+            let id = self.objects[i].id;
+            self.gorgon_struck(id, s.damage, s.by, s.shooter);
+            return;
+        }
         // A harpy nest standing sends its creature after the shooter
         // (0x41d300), judged on its life before the blow.
         if target.is_some_and(|i| self.objects[i].class == ObjectClass::HarpyNest) {

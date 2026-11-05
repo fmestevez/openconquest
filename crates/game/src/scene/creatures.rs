@@ -8,26 +8,6 @@ use openconquest_formats::ObjectClass;
 
 use super::{Caches, GameData, Scene};
 
-/// The Gorgon (MedusaClassTy, gorgona.cpp): she rests 200-500 ticks, rises
-/// (`GORG1`, 30 frames a tick), stares 1-3 times (`GORG2`, 28 frames, at
-/// frame 13) over the 3, 5 then 7 cells square about her, and sinks
-/// (`GORG3`, 30; `GORG4`, 21; 0x401f70, 0x4019d0). Each stare turns every
-/// ship there to stone for 150 ticks more and strikes it with 88000 shared
-/// out (22000 from five ships; message 0x158bf, 0x4dc630); Perseus and a
-/// magic shield keep it off, the mirror shield cuts the blow by its
-/// share.
-const GORGON_STARE: [u32; 3] = [1, 2, 3];
-
-/// A Gorgon's cycle: seconds until her next stare, and the stares left in
-/// this rising (0 resting), and how many she has made.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub struct GorgonCycle {
-    next: f32,
-    left: u32,
-    made: u32,
-    /// Seconds she stays up sinking after her last stare.
-    shown: f32,
-}
 /// A siren (SirenaClassTy, sirena.cpp) hides 250-1000 ticks (0x403650),
 /// surfaces and sings once (her `SIRENA`, 163 frames a tick, at frame 45;
 /// 0x403ba0), then dives. Her song charms every ship within 7 cells (but
@@ -51,11 +31,8 @@ pub struct Charm {
     clock: f32,
 }
 
-/// Treasure kind of the mirror shield of Athena, and the heroes who resist
-/// the Gorgon and sirens.
-const MIRROR_SHIELD: u8 = 14;
+/// The hero who resists the sirens.
 const ODYSSEUS: u8 = 7;
-const PERSEUS: u8 = 8;
 
 impl Scene {
     pub(super) fn run_creatures(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
@@ -64,7 +41,6 @@ impl Scene {
         for c in self.objects.iter_mut().filter_map(|o| o.combat.as_mut()) {
             c.stone = (c.stone - dt).max(0.0);
         }
-        self.run_gorgons(dt, data, caches);
         self.run_sea_monsters(dt, data, caches);
         self.run_sirens(dt, data, caches);
     }
@@ -176,95 +152,10 @@ impl Scene {
         }
     }
 
-    /// The Gorgons rest, rise, stare and sink.
-    fn run_gorgons(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
-        let t = TILE_SIZE as f32;
-        let ticks = crate::clock::ticks;
-        let gorgons: Vec<(u32, (i32, i32))> = self
-            .objects
-            .iter()
-            .filter(|o| o.class == ObjectClass::Monster(0x1fa))
-            .map(|o| (o.id, ((o.x / t).floor() as i32, (o.y / t).floor() as i32)))
-            .collect();
-        for (id, cell) in gorgons {
-            let rest = |rng: &mut crate::combat::Rng| ticks(200 + rng.next() % 301 + 30 + 13);
-            let first = rest(&mut self.rng);
-            let mut g = *self.gorgons.entry(id).or_insert(GorgonCycle {
-                next: first,
-                left: 0,
-                made: 0,
-                shown: 0.0,
-            });
-            g.next -= dt;
-            g.shown = (g.shown - dt).max(0.0);
-            if g.next > 0.0 {
-                self.gorgons.insert(id, g);
-                continue;
-            }
-            if g.left == 0 {
-                g.left = 1 + self.rng.next() % 3;
-                g.made = 0;
-            }
-            // A stare.
-            let half = GORGON_STARE[(g.made as usize).min(2)] as i32;
-            let caught: Vec<u32> = self
-                .objects
-                .iter()
-                .filter(|o| {
-                    let (ox, oy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
-                    (ox - cell.0).abs() <= half && (oy - cell.1).abs() <= half && o.ship.is_some()
-                })
-                .map(|o| o.id)
-                .collect();
-            let blow = if caught.len() < 5 {
-                88_000.0 / caught.len().max(1) as f32
-            } else {
-                22_000.0
-            } / 15.0;
-            for ship in &caught {
-                let Some(i) = self.object_index(*ship) else {
-                    continue;
-                };
-                let o = &self.objects[i];
-                let s = o.ship.as_ref().unwrap();
-                let warded = o.combat.as_ref().is_some_and(|c| c.protect_magic > 0.0);
-                if s.has_hero(PERSEUS) || warded {
-                    continue;
-                }
-                let mirror = s
-                    .treasures
-                    .iter()
-                    .find(|t| t.kind == MIRROR_SHIELD)
-                    .map_or(0, |t| if t.amount > 0 { t.amount.min(100) } else { 100 });
-                if let Some(c) = self.objects[i].combat.as_mut() {
-                    c.stone += ticks(150);
-                }
-                let hurt = blow * (100 - mirror) as f32 / 100.0;
-                self.share_blow(*ship, hurt, None, data, caches);
-            }
-            if !caught.is_empty() {
-                self.messages
-                    .push("The Gorgon's stare turns ships to stone".into());
-            }
-            g.made += 1;
-            g.left -= 1;
-            if g.left == 0 {
-                g.shown = ticks(28 - 13 + 30 + 21);
-            }
-            g.next = if g.left > 0 {
-                ticks(28)
-            } else {
-                // Sinking, resting, rising, and into the first stare.
-                ticks(28 - 13 + 30 + 21) + rest(&mut self.rng)
-            };
-            self.gorgons.insert(id, g);
-        }
-    }
-
     /// Whether a siren or the Gorgon is under the water now: a siren from
     /// the end of her picture until 45 frames before her next song
-    /// (0x403650 hides her picture at state 0), the Gorgon from the end of
-    /// her sinking until 43 ticks before her next stare.
+    /// (0x403650 hides her picture at state 0), the Gorgon while she shows
+    /// no picture (from resting, 0x4019d0(0), until she rises).
     pub fn creature_hidden(&self, id: u32) -> bool {
         let ticks = crate::clock::ticks;
         if let Some(&left) = self.siren_songs.get(&id) {
@@ -272,7 +163,7 @@ impl Scene {
             return !up && left > ticks(45);
         }
         if let Some(g) = self.gorgons.get(&id) {
-            return g.left == 0 && g.shown <= 0.0 && g.next > ticks(43);
+            return !g.picture;
         }
         self.sea_monster_hidden(id)
     }

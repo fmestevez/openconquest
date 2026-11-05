@@ -3098,8 +3098,11 @@ fn treasures_and_heroes() {
     assert!(!s(&scene).has_treasure(19), "the clew stays with Theseus");
 }
 
-/// The Gorgon turns ships in her area to stone (not Perseus's), and a siren
-/// draws ships towards her (needs `OPENCONQUEST_DATA`).
+/// The Gorgon rests, rises and stares tick by tick as the original's
+/// (0x401f70, 0x4019d0): her ships beside her turn to stone (not
+/// Perseus's) at frame 13 of `GORG2`; her aim point (0x402da0); shot down
+/// she dies and goes. A siren draws ships towards her (needs
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn gorgon_and_siren() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -3161,7 +3164,6 @@ fn gorgon_and_siren() {
     let (mut scene, ships, _) = setup("battle17", 0x1fa, &mut caches);
     let i = scene.object_index(ships[1]).unwrap();
     scene.objects[i].ship.as_mut().unwrap().heroes.push(8); // Perseus
-                                                            // Her blow would sink them; she rests up to 500 ticks before rising.
     for &id in &ships {
         let i = scene.object_index(id).unwrap();
         let c = scene.objects[i].combat.as_mut().unwrap();
@@ -3174,9 +3176,45 @@ fn gorgon_and_siren() {
             .unwrap()
             .stone
     };
-    let (mut stoned, mut perseus) = (false, false);
-    // Held where they were put (sharing a cell, they would make room for
-    // each other and sail off).
+    let gorgon = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Monster(0x1fa))
+        .unwrap()
+        .id;
+    // Made resting (0x4019d0(0)): her rest the first draw of her own
+    // generator, seeded [game +0x2ee5] x id, `r % 301 + 200` ticks.
+    let g = scene.gorgons[&gorgon].clone();
+    let seed = scene.game_seed().wrapping_mul(gorgon);
+    let r = seed.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039) >> 16;
+    assert_eq!((g.state, g.rest, g.since), (0, r % 301 + 200, 0));
+    assert_eq!(g.hp, 150_000);
+    assert!(scene.creature_hidden(gorgon));
+    // She rises at the tick her rest ends, a GORG1 frame a tick (30).
+    let tick = |scene: &mut Scene, caches: &mut Caches| {
+        scene.update(crate::clock::TICK, &data, caches);
+    };
+    while scene.ticks < g.rest - 1 {
+        tick(&mut scene, &mut caches);
+    }
+    assert_eq!(scene.gorgons[&gorgon].state, 0);
+    tick(&mut scene, &mut caches);
+    let rose = scene.ticks;
+    assert_eq!(scene.gorgons[&gorgon].state, 1);
+    assert!(!scene.creature_hidden(gorgon));
+    // The two ships beside her new cell.
+    let cell = scene.gorgons[&gorgon].cell;
+    let near: Vec<(i32, i32)> = (-1..=1)
+        .flat_map(|dx| (-1..=1).map(move |dy| (cell.0 + dx, cell.1 + dy)))
+        .filter(|&c| c != cell && scene.nav.nearest_water(c.0, c.1) == Some(c))
+        .take(2)
+        .collect();
+    assert_eq!(near.len(), 2);
+    for (&id, &c) in ships.iter().zip(&near) {
+        let i = scene.object_index(id).unwrap();
+        scene.objects[i].x = c.0 as f32 * t + t / 2.0;
+        scene.objects[i].y = c.1 as f32 * t + t / 2.0;
+    }
     let held: Vec<(f32, f32)> = ships
         .iter()
         .map(|&id| {
@@ -3184,21 +3222,55 @@ fn gorgon_and_siren() {
             (o.x, o.y)
         })
         .collect();
-    for _ in 0..50 * 60 {
-        scene.update(0.02, &data, &mut caches);
+    // Her first stare at frame 13 of GORG2: 30 + 13 ticks after rising.
+    while stone(&scene, ships[0]) == 0.0 {
+        tick(&mut scene, &mut caches);
         for (&id, &(x, y)) in ships.iter().zip(&held) {
             let i = scene.object_index(id).unwrap();
             (scene.objects[i].x, scene.objects[i].y) = (x, y);
             scene.objects[i].ship.as_mut().unwrap().path.clear();
         }
-        stoned |= stone(&scene, ships[0]) > 0.0;
-        perseus |= stone(&scene, ships[1]) > 0.0;
-        if stoned {
-            break;
-        }
+        assert!(scene.ticks < rose + 60, "turned to stone");
     }
-    assert!(stoned, "turned to stone");
-    assert!(!perseus, "Perseus is safe");
+    assert_eq!(scene.ticks - rose, 43);
+    assert_eq!(scene.gorgons[&gorgon].state, 2);
+    assert_eq!(stone(&scene, ships[1]), 0.0, "Perseus is safe");
+    // The shot's aim (0x402da0): two draws of her generator, x first.
+    let mut g = scene.gorgons[&gorgon].clone();
+    let at = scene.gorgon_aim(gorgon, true).unwrap();
+    let (w, h) = {
+        let o = &scene.objects[scene.object_index(gorgon).unwrap()];
+        let l = &o.frames[0][0];
+        (l.image.width as i32, l.image.height as i32)
+    };
+    let x = g.rng.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039);
+    let y = x.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039);
+    g.rng = y;
+    let (px, py) = (64 * g.cell.0 - (w - 64) / 2, 64 * g.cell.1 - (h - 64) / 2);
+    assert_eq!(
+        at,
+        (
+            px + ((x >> 16) % 21) as i32 + 20,
+            py + ((y >> 16) & 15) as i32 + 20
+        )
+    );
+    // Shot down while up: her kill is reported at the blow (0x4014d0),
+    // she dies (GORG4, the Gorgon's head laid) and goes after one more
+    // rest.
+    scene.gorgon_struck(gorgon, 150_000.0 / 15.0, None, Some(ships[0]));
+    assert_eq!(scene.gorgons[&gorgon].hp, 0);
+    assert_eq!(scene.gorgons[&gorgon].target, None);
+    let mut died = false;
+    while scene.object_index(gorgon).is_some() {
+        tick(&mut scene, &mut caches);
+        died |= scene.gorgons.get(&gorgon).is_some_and(|g| g.state == 4);
+        assert!(scene.ticks < rose + 1000, "she never went");
+    }
+    assert!(died);
+    assert!(scene
+        .objects
+        .iter()
+        .any(|o| o.treasure.is_some_and(|tr| tr.kind == 17)));
 
     let (mut scene, ships, (sx, sy)) = setup("battle08", 0x1fd, &mut caches);
     let dist = |s: &Scene| {
@@ -11887,7 +11959,8 @@ fn order_10_silences_a_fort() {
 
 /// Lightning on the Gorgon (0x402ab8) and a siren (0x404505): resting under
 /// water (no picture) they are left whole; up, struck one cell off they
-/// are killed, put down to the caster once; the Gorgon's sound event 116
+/// are killed, put down to the caster once (the Gorgon when she goes, at
+/// the end of her next rest, 0x401f70); the Gorgon's sound event 116
 /// (`hitmed`), the siren's 117 has none. Needs `OPENCONQUEST_DATA`.
 #[test]
 fn lightning_on_gorgon_and_siren() {
@@ -11943,11 +12016,24 @@ fn lightning_on_gorgon_and_siren() {
             assert!(n < 2000, "she never came up");
         }
         scene.sounds.clear();
+        // She may have hopped a cell before rising.
+        let (cx, cy) = cell(&scene);
+        let (x, y) = at((cx + 1, cy));
         scene.lightning_strike(x, y, human, &data, &mut caches);
         assert!(life(&scene).is_none_or(|h| h <= 0.0));
-        assert_eq!(killed(&scene), 1);
         assert_eq!(scene.sounds.iter().any(|s| s.0 == "hitmed"), sound);
         scene.lightning_strike(x, y, human, &data, &mut caches);
+        if class == 0x1fa {
+            // Reported as she goes: cut short, sinking, dying (`GORG4`)
+            // and resting once more.
+            assert_eq!(killed(&scene), 0);
+            let mut n = 0;
+            while scene.object_index(id).is_some() {
+                scene.update(crate::clock::TICK, &data, &mut caches);
+                n += 1;
+                assert!(n < 2000, "she never went");
+            }
+        }
         assert_eq!(killed(&scene), 1);
     }
 }

@@ -1325,6 +1325,11 @@ impl Scene {
         let (tx, ty) = (self.objects[ti].x, self.objects[ti].y);
         let jitter = |rng: &mut Rng| (rng.next() % 33) as f32 - 16.0;
         let (fx, fy) = (tx + jitter(&mut self.rng), ty + jitter(&mut self.rng));
+        // The Gorgon takes any blow herself (vt+4 0x4014d0, no hit shown).
+        if self.gorgons.contains_key(&target) {
+            self.gorgon_struck(target, damage, by, None);
+            return;
+        }
         // A land creature takes its blows at its next tick (0x4139e0
         // queues message 0x138e; 0x413ad0).
         if self.walkers.iter().any(|w| w.id == target) {

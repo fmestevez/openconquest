@@ -388,14 +388,15 @@ impl Scene {
                 // in the 3 x 3, whatever their shield, life to 0 with the
                 // caster as killer, unless resting under water (no
                 // picture). The gorgon's own sound, event 116 (`hitmed`);
-                // the siren's 117 has no entry.
+                // the siren's 117 has no entry. The gorgon is cut short
+                // and goes at the end of her next rest (`gorgon_lightning`).
                 ObjectClass::Monster(0x1fa | 0x1fd) => {
                     if self.creature_hidden(o.id) {
                         0.0
+                    } else if self.gorgons.contains_key(&o.id) {
+                        gorgons.push((o.id, o.x, o.y));
+                        0.0
                     } else {
-                        if o.class == ObjectClass::Monster(0x1fa) {
-                            gorgons.push((o.x, o.y));
-                        }
                         c.hull
                     }
                 }
@@ -408,8 +409,9 @@ impl Scene {
                 blows.push((o.id, blow));
             }
         }
-        for (x, y) in gorgons {
+        for (id, x, y) in gorgons {
             self.sounds.push(("hitmed", x, y));
+            self.gorgon_lightning(id, caster);
         }
         for (id, blow) in blows {
             // 0xda93 heeds no sleep: struck straight (not through the

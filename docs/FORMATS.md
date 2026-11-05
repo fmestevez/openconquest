@@ -5666,14 +5666,60 @@ lies in the wreckage", which nothing in 0x491ed0 or 0x520c70 sends). With
 `free`, 0x402ee0 refuses a cell whose leviathan slot (`+0x10`) holds one
 showing a picture (its vt +0x30, 0x496040: `+0x189`).
 
-The Gorgon (MedusaClassTy, `gorgona.cpp`) rests 200-500 ticks (0x4019d0),
-rises (`GORG1`, 30 frames), stares 1-3 times (`GORG2`, 28 frames, at
-frame 13; 0x401f70) over the 3, 5 and 7 cells square about her, and sinks
-(`GORG3`, 30; `GORG4`, 21). Each stare sends every ship there message
-0x158bf with 88000 / the ships (22000 from five) and 150: unless it has
-hero 8 (Perseus) or a magic shield, the ship turns to stone for 150 ticks
-more (`+599`, `+0xa1`, `+0xa5`; freed at 0x4df260) and takes the blow (type
-0x1fa), cut by a mirror shield's share (cargo item 0xe).
+The Gorgon (MedusaClassTy, `gorgona.cpp`, class 0x1fa, vtable 0x594340,
+constructor 0x401000: life `+0x78` 150000, side `+0x57` 2) runs her tick
+(message 0, 0x401f70) every game tick: the state's code, then a step of
+her picture (0x4013b0: when `+0x94 + delay <= now`, delay `+0x98` 1, 3
+dying, 0 when cut short `+0xac`, frame `+0x45` drawn and the next readied;
+past the last, the first again and a loop more `+0xa4`). Her generator
+`+0x18` is seeded `[game +0x2ee5] x id` (message 2, 0x402360), her cell
+fields 5, 6, her area that cell -/+ fields 7, 8 clipped to the map (either
+below 1: the whole map), her treasures field 10 and two entries at 11-20;
+a cell 0x402ee0 refuses removes her. She starts resting. States (entered
+by 0x4019d0, which zeroes `+0xa4` and sets `+0x9c = now`):
+
+- **0 rest**: no picture, `r % 301 + 200` ticks (`+0xa0`). At its end:
+  with no life she goes (her kill reported to `+0xb4` if set, her slot
+  cleared, message 10; state 5); else she hops (0x401780) to a cell of
+  the 3 x 3 about her (her own too, columns then rows) within her area
+  that 0x402ee0 lets her into (landscape nibbles up to 7 and 3, no ship,
+  nothing on the third place but a treasure while she carries fewer than
+  `[0x5c1136]` = 2, no leviathan showing, her slot `+0x18` free): weight
+  100 on a treasure else 10; with a target (`+0xb8`, 0x401600) `100 /
+  distance` (0x557440, 1 at 0) and 1000 more on the heading towards it
+  (0x48f100); picked by 0x404730 (one entry no draw, else `r % (sum + 1)`
+  against the running sums). A hop -> 1, none -> 0 again.
+- **1 rise**: `GORG1` (30 frames) once (sound event 94).
+- **2 stare**: `r % 3 + 1` loops of `GORG2` (28 frames; none with no life
+  or cut short: straight to 3), taking the treasure on her cell with room.
+  As frame 13 is drawn (latch `+0x7c`), loop 0, 1, 2 stares over the 3, 5,
+  7 cells square about her (sound event 127): every map cell's occupant
+  `+0xc` of side 1 (a ship but on the cell it steps into), columns then
+  rows, gets message 0x158bf with 88000 / their number (22000 from five),
+  150 and her id. A ship (0x4dc630) with hero 8 (Perseus) or a magic
+  shield is spared; else it turns to stone for 150 ticks more (`+599`,
+  `+0xa1`, `+0xa5`; freed at 0x4df260) and takes the blow (type 0x1fa),
+  cut by a mirror shield's share (cargo item 0xe). With no life or cut
+  short the loop playing is the last.
+- **3 sink**: `GORG3` (30) once; then life left -> 0, none -> 4.
+- **4 death**: `GORG4` (21, 3 ticks a frame) once (sound event 105); her
+  cell gets the Gorgon's head (treasure kind 17) and what she carried
+  (0x520c70); then 0, whose end removes her.
+
+Struck (vt+4, 0x4014d0) in states 1-4: the blow comes off her life (down
+to 0; a blow leaving 0 reports her kill at once, 0x50e750); with no target
+and life left a ship or building that struck her becomes it, one outside
+her area widening it to the square of half-side one more than its
+distance about her (0x4016b0); sound event 116 (`hitmed`). Lightning
+(0xda93, her picture shown): life 0, cut short, the caster her killer.
+Shot at in states 1-3 only (vt+0x2c, 0x404690); her aim point 0x402da0.
+The port: `scene::gorgon`. Not decoded: the names of sound events 94, 105
+and 127; the buildings' handlers of 0x158bf (the fort's 0x41a041), so a
+building stared at counts in the share but takes nothing; the treasure's
+own test 0x407950 on pickup. Not ported: tornadoes (0xda96) and reefs or
+whirlpools (0xda94, 0xda95) on her (the port's strike ships only); her
+pixel test 0x402d10; her save record (0x8cf: the port saves its own
+state).
 
 A siren (SirenaClassTy, `sirena.cpp`) hides 250-1000 ticks (0x403650),
 surfaces and sings as her `SIRENA` passes frame 45 (0x403ba0), then dives.
@@ -7732,7 +7778,7 @@ The killer each caller of 0x50e750 passes:
   blow that leaves the life at or below 0 (0x490c70, 0x4014d0, 0x403480,
   0x494090 test the life after the blow, not before): a dead sea creature
   struck again before its tick removes it is counted again. The port
-  removes gorgons and sirens at once, so only the sea creature repeats.
+  removes sirens at once, so only the sea creature and gorgon repeat.
 
 A building's `+0x1ac` is never stale: each writer (0x4246b2, 0x426f37,
 0x428633 / 0x428740, 0x4158d9 / 0x4159d0 / 0x4159aa, 0x427472) is followed
@@ -7744,10 +7790,11 @@ fight is won (0x4a91a0 at 0x4b6559), in both cases.
 
 The port: a build called off reports -1 (`scene::yard`), the misplaced
 mission ships are removed at load, player 16's prize sinks at once put down
-to its taker. Not ported: ship sales (the port has none); the gorgon's and
-siren's removal waiting for their tick (the port removes them at the
-killing blow, reported once with its giver, the caster for lightning and
-tornadoes; so a shot on one already dead is never reported again); the
+to its taker. The gorgon is ported so (`scene::gorgon`): every blow
+leaving her at 0 reported at once, lightning's caster when she goes. Not
+ported: ship sales (the port has none); the siren's removal waiting for
+her tick (the port removes her at the killing blow, reported once with
+its giver, the caster for lightning and tornadoes); the
 order in which mission records reach message 2 (the port's list order).
 
 Some objects are created by the scripts at the start: 0x411010 (world,
@@ -8753,20 +8800,21 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   0 and 1 0x595ae0 `{x, y}`, 2 0x595ae0[frame `+0x45`], 6
   0x595ae8[frame], else (0x28, 0x28), from the picture's top left; a miss
   `(r1 & 1) +0x61`, `(r2 & 1) +0x65`, its own generator; clamped) is
-  ported (`Scene::flyer_aim`). Decoded, not ported: the gorgon's 0x402da0
+  ported (`Scene::flyer_aim`), as is the gorgon's 0x402da0
   (vtable 0x594340, constructor 0x401033; no picture `+0x11c`: its cell
   `+0x114 / +0x118` x 64 + 32; a hit `20 + r % 21`, `20 + (r & 15)`, a miss
-  `10 + r % 51`, `60 + r % 11`, from the picture's top left) and the
+  `10 + r % 51`, `60 + r % 11`, from the picture's top left, its own
+  generator; `Scene::gorgon_aim`). Decoded, not ported: the
   siren's 0x4048f0 (vtable 0x594378, constructor 0x40306e; no picture
   `+0x164`: its cell `+0xbc / +0xc0` x 64 + 32; a hit `30 + (r & 7)` each
-  way, a miss `r % 61`, `40 + r % 24`): the port's gorgons and
+  way, a miss `r % 61`, `40 + r % 24`): the port's
   sirens keep no such state, frame, picture or generator. A roll that misses
   a building leaves its chance as the hit byte (0x4bf7f0 returns it), so
   only a chance of 0 takes the corner. Not decoded: a barbarian
   structure's generator (its handler 0x40ef70 does not seed `+0x18` at
   message 2 as 0x427f50 does) and the hero's house's vtable (type
-  0x1a6d); not ported: the gorgon's and siren's
-  (above): shots at these fly to the target as before. 0x4c07c0 with no position in
+  0x1a6d); not ported: the siren's
+  (above): shots at her fly to the target as before. 0x4c07c0 with no position in
   state 3 (its id and player uninitialised; the port does nothing); a
   position's target gone, its pointer dangling (the port skips it);
   0x50ebf0's families with no cell (400 a leviathan, 700, the jam 0x1f7

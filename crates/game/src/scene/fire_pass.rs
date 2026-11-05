@@ -397,14 +397,14 @@ impl Scene {
     /// (`Scene::walker_aim`), a jam's 0x415ce0 (`Scene::jam_aim`; a jam
     /// on a list is the jam, the port's shot going to its first member),
     /// a leviathan's 0x495b40 (`Scene::leviathan_point`), a harpy's or
-    /// dragon's 0x41df70 (`Scene::flyer_aim`), each drawing from the
+    /// dragon's 0x41df70 (`Scene::flyer_aim`), the gorgon's 0x402da0
+    /// (`Scene::gorgon_aim`), each drawing from the
     /// target's own generator. Returns the positions fired. (Not
     /// decoded: a barbarian structure's generator, which its handler
     /// 0x40ef70 does not seed at message 2, and the hero's house's vtable;
-    /// not ported: the gorgon's 0x402da0
-    /// and the siren's 0x4048f0, whose state, frame, picture and generator
-    /// the port's creatures do not keep: these fly to the
-    /// target as before. A position's target gone, the original's pointer
+    /// not ported: the siren's 0x4048f0, whose state, frame, picture and generator
+    /// the port's siren does not keep: she is shot as before
+    /// at her place. A position's target gone, the original's pointer
     /// dangles: the port skips it.)
     #[allow(clippy::needless_range_loop)]
     pub(super) fn fire_items(
@@ -521,6 +521,7 @@ impl Scene {
                 let to = match self.objects[t].class {
                     _ if jam.is_some() => jam.and_then(|j| self.jam_aim(j, hit)),
                     _ if self.leviathans.contains_key(&tid) => self.leviathan_point(tid, hit),
+                    _ if self.gorgons.contains_key(&tid) => self.gorgon_aim(tid, hit),
                     _ if self.objects[t].ship.is_some() => Some(self.ship_aim(t, hit)),
                     ObjectClass::Monster(0x1f4..=0x1f6) => self.walker_aim(tid, hit),
                     ObjectClass::Monster(0x1f8 | 0x1f9) => self.flyer_aim(tid, hit),
@@ -825,6 +826,9 @@ impl Scene {
         // its life not looked at.
         let there = if matches!(o.class, ObjectClass::Monster(0x1f8 | 0x1f9)) {
             self.flyer_there(o.id)
+        } else if self.gorgons.contains_key(&o.id) {
+            // The Gorgon rising, staring or sinking (0x404690).
+            self.gorgon_up(o.id)
         } else {
             o.combat.as_ref().is_some_and(|c| c.hull > 0.0)
         };

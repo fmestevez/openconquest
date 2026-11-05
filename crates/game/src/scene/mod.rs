@@ -505,8 +505,8 @@ pub struct Scene {
     pub siren_songs: HashMap<u32, f32>,
     /// Seconds each siren stays up after her song (not saved).
     pub siren_shown: HashMap<u32, f32>,
-    /// Each Gorgon's cycle (not saved).
-    pub gorgons: HashMap<u32, creatures::GorgonCycle>,
+    /// Each Gorgon (MedusaClassTy).
+    pub gorgons: HashMap<u32, gorgon::Gorgon>,
     /// Each sea monster's seconds to its next bite and step (not saved).
     /// Sea monsters' states (umonster.cpp).
     pub sea_monster_states: HashMap<u32, sea_monster::SeaMonster>,
@@ -585,6 +585,7 @@ mod fireball;
 mod flyers;
 mod fort;
 mod gather;
+mod gorgon;
 mod grapple;
 mod human_attack;
 mod order;
@@ -1080,6 +1081,7 @@ impl Scene {
             scene.towns_start();
         }
         scene.start_nests(data, caches);
+        scene.start_gorgons(data, caches);
         for i in 0..scene.objects.len() {
             scene.refresh_amber(i, data, caches);
         }
@@ -1217,7 +1219,7 @@ impl Scene {
                 charmed: self.charmed.iter().map(|(k, v)| (*k, v.clone())).collect(),
                 siren_songs: self.siren_songs.iter().map(|(k, v)| (*k, *v)).collect(),
                 siren_shown: self.siren_shown.iter().map(|(k, v)| (*k, *v)).collect(),
-                gorgons: self.gorgons.iter().map(|(k, v)| (*k, *v)).collect(),
+                gorgons: self.gorgons.iter().map(|(k, v)| (*k, v.clone())).collect(),
                 sea_monsters: Vec::new(),
                 sea_monster_states: self
                     .sea_monster_states
@@ -1429,7 +1431,7 @@ impl Scene {
         scene.charmed = b.charmed.iter().cloned().collect();
         scene.siren_songs = b.siren_songs.iter().copied().collect();
         scene.siren_shown = b.siren_shown.iter().copied().collect();
-        scene.gorgons = b.gorgons.iter().copied().collect();
+        scene.gorgons = b.gorgons.iter().cloned().collect();
         scene.sea_monster_states = b.sea_monster_states.iter().cloned().collect();
         scene.wizards = b.wizards.iter().cloned().collect();
         scene.parties = b.parties.clone();
@@ -2487,6 +2489,7 @@ impl Scene {
         if let Some(f) = self
             .hazard_frame(obj.id)
             .or_else(|| self.leviathan_frame(obj.id))
+            .or_else(|| self.gorgon_frame(obj.id))
         {
             if let Some(layers) = obj.frames.get(f as usize).or(obj.frames.last()) {
                 return layers;
@@ -2593,6 +2596,7 @@ impl Scene {
             }
             self.tick_walkers(data, caches);
             self.tick_flyers(data, caches);
+            self.tick_gorgons(data, caches);
             self.run_computers();
             self.run_brain_lands();
             self.run_town_links();
@@ -3344,7 +3348,7 @@ pub struct Battle {
     #[serde(default)]
     pub siren_shown: Vec<(u32, f32)>,
     #[serde(default)]
-    pub gorgons: Vec<(u32, creatures::GorgonCycle)>,
+    pub gorgons: Vec<(u32, gorgon::Gorgon)>,
     /// Unused: kept for older saves.
     #[serde(default)]
     pub sea_monsters: Vec<(u32, (f32, f32))>,
