@@ -1330,6 +1330,11 @@ impl Scene {
             self.gorgon_struck(target, damage, by, None);
             return;
         }
+        // The siren too (vt+4 0x403480).
+        if self.sirens.contains_key(&target) {
+            self.siren_struck(target, damage, by);
+            return;
+        }
         // A land creature takes its blows at its next tick (0x4139e0
         // queues message 0x138e; 0x413ad0).
         if self.walkers.iter().any(|w| w.id == target) {

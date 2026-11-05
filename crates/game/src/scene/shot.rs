@@ -856,6 +856,12 @@ impl Scene {
             self.gorgon_struck(id, s.damage, s.by, s.shooter);
             return;
         }
+        // The siren too (vt+4 0x403480), no fire, no hit shown.
+        if let Some(i) = target.filter(|&i| self.sirens.contains_key(&self.objects[i].id)) {
+            let id = self.objects[i].id;
+            self.siren_struck(id, s.damage, s.by);
+            return;
+        }
         // A harpy nest standing sends its creature after the shooter
         // (0x41d300), judged on its life before the blow.
         if target.is_some_and(|i| self.objects[i].class == ObjectClass::HarpyNest) {

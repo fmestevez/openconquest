@@ -188,10 +188,10 @@ impl Scene {
         // moves 0x490d60 / 0x491780 write it, only its end 0x491ed0
         // clears it).
         let gorgon = || {
-            self.objects
-                .iter()
-                .any(|o| o.class == ObjectClass::Monster(0x1fa) && cell_of(o.x, o.y) == (x, y))
-                || self.sea_monster_at((x, y), 0).is_some()
+            self.objects.iter().any(|o| {
+                matches!(o.class, ObjectClass::Monster(0x1fa | 0x1fd))
+                    && cell_of(o.x, o.y) == (x, y)
+            }) || self.sea_monster_at((x, y), 0).is_some()
         };
         let flying = || self.flyer_slot_held((x, y));
         match spell {

@@ -499,12 +499,10 @@ pub struct Scene {
     /// Buildings being mended: the last step's tick (`+0x124`) and the
     /// condition (`+0xa8`, 0x425100).
     pub mend_steps: std::collections::BTreeMap<u32, (u32, u32)>,
-    /// Ships under a siren's song (not saved), and seconds until each
-    /// siren sings.
+    /// Ships under a siren's song.
     pub charmed: HashMap<u32, creatures::Charm>,
-    pub siren_songs: HashMap<u32, f32>,
-    /// Seconds each siren stays up after her song (not saved).
-    pub siren_shown: HashMap<u32, f32>,
+    /// Each siren (SirenaClassTy).
+    pub sirens: HashMap<u32, siren::Siren>,
     /// Each Gorgon (MedusaClassTy).
     pub gorgons: HashMap<u32, gorgon::Gorgon>,
     /// Each sea monster's seconds to its next bite and step (not saved).
@@ -592,6 +590,7 @@ mod order;
 mod placement;
 mod script;
 mod seats;
+mod siren;
 mod spells;
 mod stats;
 mod story;
@@ -862,8 +861,7 @@ impl Scene {
             lightning: Vec::new(),
             sight_points: Vec::new(),
             charmed: HashMap::new(),
-            siren_songs: HashMap::new(),
-            siren_shown: HashMap::new(),
+            sirens: HashMap::new(),
             gorgons: HashMap::new(),
             sea_monster_states: HashMap::new(),
             mending: Vec::new(),
@@ -1217,8 +1215,7 @@ impl Scene {
                 lightning_by: self.lightning.iter().map(|l| l.3).collect(),
                 sight_points: self.sight_points.clone(),
                 charmed: self.charmed.iter().map(|(k, v)| (*k, v.clone())).collect(),
-                siren_songs: self.siren_songs.iter().map(|(k, v)| (*k, *v)).collect(),
-                siren_shown: self.siren_shown.iter().map(|(k, v)| (*k, *v)).collect(),
+                sirens: self.sirens.iter().map(|(k, v)| (*k, v.clone())).collect(),
                 gorgons: self.gorgons.iter().map(|(k, v)| (*k, v.clone())).collect(),
                 sea_monsters: Vec::new(),
                 sea_monster_states: self
@@ -1429,8 +1426,7 @@ impl Scene {
             .collect();
         scene.sight_points = b.sight_points.clone();
         scene.charmed = b.charmed.iter().cloned().collect();
-        scene.siren_songs = b.siren_songs.iter().copied().collect();
-        scene.siren_shown = b.siren_shown.iter().copied().collect();
+        scene.sirens = b.sirens.iter().cloned().collect();
         scene.gorgons = b.gorgons.iter().cloned().collect();
         scene.sea_monster_states = b.sea_monster_states.iter().cloned().collect();
         scene.wizards = b.wizards.iter().cloned().collect();
@@ -2490,6 +2486,7 @@ impl Scene {
             .hazard_frame(obj.id)
             .or_else(|| self.leviathan_frame(obj.id))
             .or_else(|| self.gorgon_frame(obj.id))
+            .or_else(|| self.siren_frame(obj.id))
         {
             if let Some(layers) = obj.frames.get(f as usize).or(obj.frames.last()) {
                 return layers;
@@ -3344,9 +3341,7 @@ pub struct Battle {
     #[serde(default)]
     pub charmed: Vec<(u32, creatures::Charm)>,
     #[serde(default)]
-    pub siren_songs: Vec<(u32, f32)>,
-    #[serde(default)]
-    pub siren_shown: Vec<(u32, f32)>,
+    pub sirens: Vec<(u32, siren::Siren)>,
     #[serde(default)]
     pub gorgons: Vec<(u32, gorgon::Gorgon)>,
     /// Unused: kept for older saves.

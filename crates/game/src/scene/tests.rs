@@ -3101,7 +3101,9 @@ fn treasures_and_heroes() {
 /// The Gorgon rests, rises and stares tick by tick as the original's
 /// (0x401f70, 0x4019d0): her ships beside her turn to stone (not
 /// Perseus's) at frame 13 of `GORG2`; her aim point (0x402da0); shot down
-/// she dies and goes. A siren draws ships towards her (needs
+/// she dies and goes. A siren (0x403ba0, 0x403650) rests, surfaces and
+/// sings at frame 45 of `SIRENA`, charming ships towards her (0x4a7390);
+/// her aim point (0x4048f0); shot down she dies and goes (needs
 /// `OPENCONQUEST_DATA`).
 #[test]
 fn gorgon_and_siren() {
@@ -3277,35 +3279,95 @@ fn gorgon_and_siren() {
         let o = &s.objects[s.object_index(ships[0]).unwrap()];
         ((o.x - sx).powi(2) + (o.y - sy).powi(2)).sqrt()
     };
-    // She sings within 250-1000 ticks of surfacing and the ship heads
-    // for her.
-    let before = dist(&scene);
-    let mut charmed = false;
     let siren = scene
         .objects
         .iter()
         .find(|o| o.class == ObjectClass::Monster(0x1fd))
         .unwrap()
         .id;
-    scene.update(0.02, &data, &mut caches);
-    assert!(scene.creature_hidden(siren), "she starts under the water");
-    for _ in 0..50 * 45 {
-        scene.update(0.02, &data, &mut caches);
-        if !charmed && scene.charmed.contains_key(&ships[0]) {
-            assert!(!scene.creature_hidden(siren), "she is up when she sings");
-        }
-        charmed |= scene.charmed.contains_key(&ships[0]);
-        if charmed && dist(&scene) < before {
-            break;
-        }
+    // Made hidden (0x403650(0)): her rest the first draw of her own
+    // generator, seeded [game +0x2ee5] x id, `r % 751 + 250` ticks.
+    let s0 = scene.sirens[&siren].clone();
+    let seed = scene.game_seed().wrapping_mul(siren);
+    let r = seed.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039) >> 16;
+    assert_eq!((s0.state, s0.rest, s0.since), (0, r % 751 + 250, 0));
+    assert_eq!(s0.hp, 100_000);
+    assert!(scene.creature_hidden(siren));
+    // Hidden she takes no blow (0x403480).
+    scene.siren_struck(siren, 1000.0, None);
+    assert_eq!(scene.sirens[&siren].hp, 100_000);
+    while scene.ticks < s0.rest - 1 {
+        tick(&mut scene, &mut caches);
     }
-    assert!(charmed, "the siren sang");
+    assert_eq!(scene.sirens[&siren].state, 0);
+    tick(&mut scene, &mut caches);
+    let rose = scene.ticks;
+    assert_eq!(scene.sirens[&siren].state, 1);
+    assert!(!scene.creature_hidden(siren));
+    let before = dist(&scene);
+    // Her song as frame 45 of SIRENA is about to be drawn: frames 0-10
+    // and 11-44 two ticks each, the first of each state at once.
+    let mut n = 0;
+    while !scene.charmed.contains_key(&ships[0]) {
+        let (cx, cy) = scene.sirens[&siren].cell;
+        n = scene
+            .cell_occupants((cx - 7, cy - 7), (cx + 8, cy + 8))
+            .len()
+            .min(50) as u32;
+        tick(&mut scene, &mut caches);
+        assert!(scene.ticks < rose + 200, "she never sang");
+    }
+    assert_eq!(scene.ticks - rose, 88);
+    assert_eq!(scene.sirens[&siren].state, 2);
+    let c = &scene.charmed[&ships[0]];
+    assert_eq!(c.share, if n < 5 { 88 / n } else { 22 });
+    let left = c.left;
+    assert!((crate::clock::ticks(749)..=crate::clock::ticks(750)).contains(&left));
+    // One song a surfacing.
+    for _ in 0..20 {
+        tick(&mut scene, &mut caches);
+    }
+    assert!(scene.charmed[&ships[0]].left < left);
+    // The shot's aim (0x4048f0): two draws of her generator, x first.
+    let g = scene.sirens[&siren].clone();
+    let at = scene.siren_aim(siren, true).unwrap();
+    let i = scene.object_index(siren).unwrap();
+    let (px, py) = scene.picture_corner(i, g.cell);
+    let x = g.rng.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039);
+    let y = x.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039);
+    assert_eq!(
+        at,
+        (
+            px + ((x >> 16) & 7) as i32 + 30,
+            py + ((y >> 16) & 7) as i32 + 30
+        )
+    );
+    // Drawn towards her.
+    for _ in 0..300 {
+        tick(&mut scene, &mut caches);
+    }
     assert!(
         dist(&scene) < before,
         "drawn towards the siren: {} -> {}",
         before,
         dist(&scene)
     );
+    // Shot down while up: her kill reported at the blow, she dives, dies
+    // (114-162) and goes after one more rest.
+    while !scene.siren_up(siren) {
+        tick(&mut scene, &mut caches);
+    }
+    scene.siren_struck(siren, 100_000.0 / 15.0, None);
+    assert_eq!(scene.sirens[&siren].hp, 0);
+    let mut died = false;
+    let start = scene.ticks;
+    while scene.object_index(siren).is_some() {
+        tick(&mut scene, &mut caches);
+        died |= scene.sirens.get(&siren).is_some_and(|s| s.state == 4);
+        assert!(scene.ticks < start + 2000, "she never went");
+    }
+    assert!(died);
+    assert!(!scene.sirens.contains_key(&siren));
 }
 
 /// The crew's experience (`+0x544`): a map ship's is its record's byte
@@ -11959,8 +12021,8 @@ fn order_10_silences_a_fort() {
 
 /// Lightning on the Gorgon (0x402ab8) and a siren (0x404505): resting under
 /// water (no picture) they are left whole; up, struck one cell off they
-/// are killed, put down to the caster once (the Gorgon when she goes, at
-/// the end of her next rest, 0x401f70); the Gorgon's sound event 116
+/// are killed, put down to the caster once when she goes, at the end of
+/// her next rest (0x401f70, 0x403ba0); the Gorgon's sound event 116
 /// (`hitmed`), the siren's 117 has none. Needs `OPENCONQUEST_DATA`.
 #[test]
 fn lightning_on_gorgon_and_siren() {
@@ -12023,16 +12085,14 @@ fn lightning_on_gorgon_and_siren() {
         assert!(life(&scene).is_none_or(|h| h <= 0.0));
         assert_eq!(scene.sounds.iter().any(|s| s.0 == "hitmed"), sound);
         scene.lightning_strike(x, y, human, &data, &mut caches);
-        if class == 0x1fa {
-            // Reported as she goes: cut short, sinking, dying (`GORG4`)
-            // and resting once more.
-            assert_eq!(killed(&scene), 0);
-            let mut n = 0;
-            while scene.object_index(id).is_some() {
-                scene.update(crate::clock::TICK, &data, &mut caches);
-                n += 1;
-                assert!(n < 2000, "she never went");
-            }
+        // Reported as she goes: cut short, sinking, dying (`GORG4`,
+        // `SIRENA` 114-162) and resting once more (0x401f70, 0x403ba0).
+        assert_eq!(killed(&scene), 0);
+        let mut n = 0;
+        while scene.object_index(id).is_some() {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            n += 1;
+            assert!(n < 2000, "she never went");
         }
         assert_eq!(killed(&scene), 1);
     }

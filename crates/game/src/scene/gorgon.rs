@@ -11,8 +11,12 @@
 use openconquest_formats::map::TILE_SIZE;
 use openconquest_formats::ObjectClass;
 
+use super::siren::SIREN;
 use super::{Caches, GameData, Owner, Scene};
 use crate::objects::{self, Treasure};
+
+/// An area of cells, inclusive: x0, x1, y0, y1.
+pub(super) type Area = (i32, i32, i32, i32);
 
 /// Her record class.
 pub const GORGON: u32 = 0x1fa;
@@ -73,13 +77,19 @@ pub struct Gorgon {
 impl Gorgon {
     /// Her generator's draw (`+0x18`).
     fn draw(&mut self) -> u32 {
-        self.rng = self.rng.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039);
-        self.rng >> 16
+        lcg(&mut self.rng)
     }
 
     fn inside(&self, (x, y): (i32, i32)) -> bool {
         (self.area.0..=self.area.1).contains(&x) && (self.area.2..=self.area.3).contains(&y)
     }
+}
+
+/// A creature's own generator (`+0x18`): `s = s x 0x41c64e6d + 0x3039`,
+/// the draw its high half.
+pub(super) fn lcg(rng: &mut u32) -> u32 {
+    *rng = rng.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039);
+    *rng >> 16
 }
 
 /// 0x48f100: the heading of `a` seen from `b` (east 0, counter-clockwise
@@ -107,12 +117,12 @@ fn distance(a: (i32, i32), b: (i32, i32)) -> i32 {
 
 /// 0x404730: a pick by weight; one entry is 0 with no draw, else one draw
 /// `t = r % (sum + 1)` and the first entry whose running sum reaches `t`.
-fn pick(weights: &[u32], g: &mut Gorgon) -> usize {
+pub(super) fn pick(weights: &[u32], rng: &mut u32) -> usize {
     if weights.len() == 1 {
         return 0;
     }
     let sum: u32 = weights.iter().sum();
-    let t = g.draw() % (sum + 1);
+    let t = lcg(rng) % (sum + 1);
     let mut acc = 0;
     for (k, &w) in weights.iter().enumerate() {
         acc += w;
@@ -124,64 +134,86 @@ fn pick(weights: &[u32], g: &mut Gorgon) -> usize {
 }
 
 impl Scene {
-    /// Message 2 (0x402360) for each Gorgon of the map: her generator
-    /// seeded `[game +0x2ee5] x id`, her cell fields 5, 6, her treasures
-    /// (field 10 the count, 11-20 two entries of the treasure record's
-    /// fields 4-8), her area her cell -/+ fields 7, 8 clipped to the map
-    /// (either below 1: the whole map), resting (state 0). A cell 0x402ee0
-    /// refuses (not strict): removed (message 10), state 5.
+    /// Message 2 for each Gorgon (0x402360) and siren (0x403f60) of the
+    /// map, in the objects' order: her generator seeded `[game +0x2ee5] x
+    /// id`, placed (`creature_start`), resting (state 0).
     pub(super) fn start_gorgons(&mut self, data: &GameData, caches: &mut Caches) {
         let ids: Vec<u32> = self
             .objects
             .iter()
-            .filter(|o| o.class == ObjectClass::Monster(GORGON))
+            .filter(|o| matches!(o.class, ObjectClass::Monster(GORGON | SIREN)))
             .map(|o| o.id)
             .collect();
-        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
         for id in ids {
-            let i = self.object_index(id).unwrap();
-            let fields = self.objects[i].record.fields.clone();
-            let f = |k: usize| fields.get(k).copied().unwrap_or(0) as i32;
-            let cell = (f(5), f(6));
+            if self.objects[self.object_index(id).unwrap()].class == ObjectClass::Monster(SIREN) {
+                self.start_siren(id, data, caches);
+                continue;
+            }
+            // Her area: either field below 1, the whole map.
+            let Some((cell, area)) = self.creature_start(id, CARRIES, 1) else {
+                continue;
+            };
             let mut g = Gorgon {
                 rng: self.game_seed().wrapping_mul(id),
                 hp: GORGON_HP,
                 cell,
+                area,
                 ..Default::default()
             };
-            let carried = (f(10).max(0) as usize).min(CARRIES);
-            for k in 0..carried {
-                let e = |j: usize| f(11 + 5 * k + j) as u32;
-                let tr = Treasure {
-                    kind: e(0) as u8,
-                    param: e(3),
-                    amount: e(4),
-                };
-                self.held.push((id, tr));
-            }
-            if !self.gorgon_may_be(id, cell, false, false) {
-                // Removal (0x542670, code 10).
-                self.held.retain(|h| h.0 != id);
-                self.objects.remove(i);
-                continue;
-            }
-            g.area = if f(7) < 1 || f(8) < 1 {
-                (0, w - 1, 0, h - 1)
-            } else {
-                (
-                    (cell.0 - f(7)).max(0),
-                    (cell.0 + f(7)).min(w - 1),
-                    (cell.1 - f(8)).max(0),
-                    (cell.1 + f(8)).min(h - 1),
-                )
-            };
-            let t = TILE_SIZE as f32;
-            self.objects[i].x = cell.0 as f32 * t + t / 2.0;
-            self.objects[i].y = cell.1 as f32 * t + t / 2.0;
+            let i = self.object_index(id).unwrap();
             self.sync_gorgon_hull(i, g.hp);
             self.set_gorgon_state(i, &mut g, 0, data, caches);
             self.gorgons.insert(id, g);
         }
+    }
+
+    /// Message 2's part shared by the Gorgon (0x402360) and the siren
+    /// (0x403f60): her cell fields 5, 6, her treasures (field 10 the
+    /// count, 11-20 two entries of the treasure record's fields 4-8), her
+    /// area her cell -/+ fields 7, 8 clipped to the map (either below
+    /// `least`: the whole map). A cell 0x402ee0 refuses (not strict):
+    /// removed (message 10, 0x542670), `None`.
+    pub(super) fn creature_start(
+        &mut self,
+        id: u32,
+        cap: usize,
+        least: i32,
+    ) -> Option<((i32, i32), Area)> {
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        let i = self.object_index(id)?;
+        let fields = self.objects[i].record.fields.clone();
+        let f = |k: usize| fields.get(k).copied().unwrap_or(0) as i32;
+        let cell = (f(5), f(6));
+        let carried = (f(10).max(0) as usize).min(cap);
+        for k in 0..carried {
+            let e = |j: usize| f(11 + 5 * k + j) as u32;
+            let tr = Treasure {
+                kind: e(0) as u8,
+                param: e(3),
+                amount: e(4),
+            };
+            self.held.push((id, tr));
+        }
+        if !self.may_hold(id, cell, false, false) {
+            // Removal (0x542670, code 10).
+            self.held.retain(|h| h.0 != id);
+            self.objects.remove(i);
+            return None;
+        }
+        let area = if f(7) < least || f(8) < least {
+            (0, w - 1, 0, h - 1)
+        } else {
+            (
+                (cell.0 - f(7)).max(0),
+                (cell.0 + f(7)).min(w - 1),
+                (cell.1 - f(8)).max(0),
+                (cell.1 + f(8)).min(h - 1),
+            )
+        };
+        let t = TILE_SIZE as f32;
+        self.objects[i].x = cell.0 as f32 * t + t / 2.0;
+        self.objects[i].y = cell.1 as f32 * t + t / 2.0;
+        Some((cell, area))
     }
 
     /// The port keeps her life as her object's hull, a fifteenth of it.
@@ -197,8 +229,8 @@ impl Scene {
     /// with `room`, an object exactly of its base class (a treasure,
     /// 0x50e600), and no leviathan showing a picture in `+0x10` (vt+0x30);
     /// then her slot `+0x18` empty or hers (another Gorgon, a siren, a sea
-    /// monster).
-    fn gorgon_may_be(&self, id: u32, c: (i32, i32), strict: bool, room: bool) -> bool {
+    /// monster). The siren's the same (her `+0x18` too).
+    pub(super) fn may_hold(&self, id: u32, c: (i32, i32), strict: bool, room: bool) -> bool {
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
         if c.0 < 0 || c.1 < 0 || c.0 >= w || c.1 >= h {
             return false;
@@ -227,22 +259,29 @@ impl Scene {
             .gorgons
             .iter()
             .any(|(&o, g)| o != id && g.state < 5 && g.cell == c && self.object_index(o).is_some());
-        let siren = (0..self.objects.len()).any(|k| {
-            self.objects[k].class == ObjectClass::Monster(0x1fd) && self.cell_of_object(k) == c
-        });
+        let siren = self
+            .sirens
+            .iter()
+            .any(|(&o, s)| o != id && s.state < 5 && s.cell == c && self.object_index(o).is_some());
         !other && !siren && self.sea_monster_at(c, 0).is_none()
     }
 
-    /// Each Gorgon's tick (message 0, 0x401f70), in the objects' order.
+    /// Each Gorgon's tick (message 0, 0x401f70) and each siren's
+    /// (0x403ba0), in the objects' order.
     pub(super) fn tick_gorgons(&mut self, data: &GameData, caches: &mut Caches) {
         let ids: Vec<u32> = self
             .objects
             .iter()
-            .filter(|o| self.gorgons.contains_key(&o.id))
+            .filter(|o| self.gorgons.contains_key(&o.id) || self.sirens.contains_key(&o.id))
             .map(|o| o.id)
             .collect();
         self.gorgons.retain(|id, _| ids.contains(id));
+        self.sirens.retain(|id, _| ids.contains(id));
         for id in ids {
+            if self.sirens.contains_key(&id) {
+                self.tick_siren(id, data, caches);
+                continue;
+            }
             let Some(mut g) = self.gorgons.remove(&id) else {
                 continue;
             };
@@ -372,21 +411,7 @@ impl Scene {
                 }
                 self.gorgon_picture(i, g, data, caches);
                 self.gorgon_step(g);
-                // With room she takes the treasure on her cell's third
-                // place (0x158c1 to it, its five dwords kept). (Not
-                // ported, as for the leviathan: the treasure's own test
-                // 0x407950, its `+0xa4` 1 or 2.)
-                if self.held.iter().filter(|h| h.0 == id).count() < CARRIES {
-                    if let Some(k) = self
-                        .third_place_object(g.cell)
-                        .filter(|&k| self.objects[k].class == ObjectClass::Treasure)
-                    {
-                        if let Some(tr) = self.objects[k].treasure {
-                            self.objects.remove(k);
-                            self.held.push((id, tr));
-                        }
-                    }
-                }
+                self.pick_up_treasure(id, g.cell, CARRIES);
             }
             3 => {
                 g.state = 3;
@@ -410,18 +435,51 @@ impl Scene {
                     amount: 0,
                 };
                 self.place_treasure(head, px, py, data, caches);
-                let (kept, dropped): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held)
-                    .into_iter()
-                    .partition(|h| h.0 != id);
-                self.held = kept;
-                for (_, tr) in dropped {
-                    self.place_treasure(tr, px, py, data, caches);
-                }
+                self.drop_carried(id, px, py, data, caches);
             }
             _ => {
                 g.state = s;
                 g.cut = false;
             }
+        }
+    }
+
+    /// Entering the state that takes treasures (the Gorgon's 2, the
+    /// siren's 2): with fewer than `cap` carried she takes the treasure on
+    /// her cell's third place (0x158c1 to it, its five dwords kept). (Not
+    /// ported, as for the leviathan: the treasure's own test 0x407950, its
+    /// `+0xa4` 1 or 2.)
+    pub(super) fn pick_up_treasure(&mut self, id: u32, cell: (i32, i32), cap: usize) {
+        if self.held.iter().filter(|h| h.0 == id).count() >= cap {
+            return;
+        }
+        if let Some(k) = self
+            .third_place_object(cell)
+            .filter(|&k| self.objects[k].class == ObjectClass::Treasure)
+        {
+            if let Some(tr) = self.objects[k].treasure {
+                self.objects.remove(k);
+                self.held.push((id, tr));
+            }
+        }
+    }
+
+    /// Dying: each treasure she carried laid on her cell (0x520c70), none
+    /// carried after.
+    pub(super) fn drop_carried(
+        &mut self,
+        id: u32,
+        px: f32,
+        py: f32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        let (kept, dropped): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held)
+            .into_iter()
+            .partition(|h| h.0 != id);
+        self.held = kept;
+        for (_, tr) in dropped {
+            self.place_treasure(tr, px, py, data, caches);
         }
     }
 
@@ -536,7 +594,7 @@ impl Scene {
         for di in 0..3 {
             for dj in 0..3 {
                 let c = (g.cell.0 - 1 + di, g.cell.1 - 1 + dj);
-                if !g.inside(c) || !self.gorgon_may_be(id, c, true, room) {
+                if !g.inside(c) || !self.may_hold(id, c, true, room) {
                     continue;
                 }
                 let w = match target {
@@ -567,7 +625,7 @@ impl Scene {
         if cells.is_empty() {
             return false;
         }
-        g.cell = cells[pick(&weights, g)];
+        g.cell = cells[pick(&weights, &mut g.rng)];
         let t = TILE_SIZE as f32;
         self.objects[i].x = g.cell.0 as f32 * t + t / 2.0;
         self.objects[i].y = g.cell.1 as f32 * t + t / 2.0;
@@ -692,17 +750,13 @@ impl Scene {
     pub(super) fn gorgon_aim(&mut self, id: u32, hit: bool) -> Option<(i32, i32)> {
         let i = self.object_index(id)?;
         let t = TILE_SIZE as i32;
-        let (w, h) = self.objects[i]
-            .frames
-            .first()
-            .and_then(|f| f.first())
-            .map_or((t, t), |l| (l.image.width as i32, l.image.height as i32));
+        let cell = self.gorgons.get(&id)?.cell;
+        let (px, py) = self.picture_corner(i, cell);
         let g = self.gorgons.get_mut(&id)?;
         let (cx, cy) = g.cell;
         if !g.picture {
             return Some((cx * t + t / 2, cy * t + t / 2));
         }
-        let (px, py) = (t * cx - (w - t) / 2, t * cy - (h - t) / 2);
         Some(if hit {
             let x = g.draw() % 21 + 20;
             (px + x as i32, py + (g.draw() & 15) as i32 + 20)
@@ -710,5 +764,17 @@ impl Scene {
             let x = g.draw() % 51 + 10;
             (px + x as i32, py + (g.draw() % 11) as i32 + 60)
         })
+    }
+
+    /// Her picture's top left, centred on her cell (as 0x401110 and
+    /// 0x403110 place it).
+    pub(super) fn picture_corner(&self, i: usize, (cx, cy): (i32, i32)) -> (i32, i32) {
+        let t = TILE_SIZE as i32;
+        let (w, h) = self.objects[i]
+            .frames
+            .first()
+            .and_then(|f| f.first())
+            .map_or((t, t), |l| (l.image.width as i32, l.image.height as i32));
+        (t * cx - (w - t) / 2, t * cy - (h - t) / 2)
     }
 }

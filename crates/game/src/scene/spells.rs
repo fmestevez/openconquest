@@ -299,6 +299,7 @@ impl Scene {
         };
         let mut blows: Vec<(u32, f32)> = Vec::new();
         let mut gorgons = Vec::new();
+        let mut sirens = Vec::new();
         for o in &self.objects {
             let Some(c) = o.combat.as_ref() else { continue };
             let (ox, oy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
@@ -388,8 +389,9 @@ impl Scene {
                 // in the 3 x 3, whatever their shield, life to 0 with the
                 // caster as killer, unless resting under water (no
                 // picture). The gorgon's own sound, event 116 (`hitmed`);
-                // the siren's 117 has no entry. The gorgon is cut short
-                // and goes at the end of her next rest (`gorgon_lightning`).
+                // the siren's 117 has no entry. Each is cut short and goes
+                // at the end of her next rest (`gorgon_lightning`,
+                // `siren_lightning`).
                 ObjectClass::Monster(0x1fa | 0x1fd) => {
                     if self.creature_hidden(o.id) {
                         0.0
@@ -397,7 +399,10 @@ impl Scene {
                         gorgons.push((o.id, o.x, o.y));
                         0.0
                     } else {
-                        c.hull
+                        if self.sirens.contains_key(&o.id) {
+                            sirens.push(o.id);
+                        }
+                        0.0
                     }
                 }
                 // A landing party (0x4227c5): removed, reported to the
@@ -412,6 +417,9 @@ impl Scene {
         for (id, x, y) in gorgons {
             self.sounds.push(("hitmed", x, y));
             self.gorgon_lightning(id, caster);
+        }
+        for id in sirens {
+            self.siren_lightning(id, caster);
         }
         for (id, blow) in blows {
             // 0xda93 heeds no sleep: struck straight (not through the

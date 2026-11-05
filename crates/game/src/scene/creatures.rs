@@ -4,29 +4,17 @@
 //! them in `combat::creature_weapons`.
 
 use openconquest_formats::map::TILE_SIZE;
-use openconquest_formats::ObjectClass;
 
 use super::{Caches, GameData, Scene};
-
-/// A siren (SirenaClassTy, sirena.cpp) hides 250-1000 ticks (0x403650),
-/// surfaces and sings once (her `SIRENA`, 163 frames a tick, at frame 45;
-/// 0x403ba0), then dives. Her song charms every ship within 7 cells (but
-/// Odysseus's) for 750 ticks more (0x4a7390): it sails for her cell, no
-/// faster than 7000 units (its top speed set so, `sail::CHARMED_TOP`),
-/// heading anew every 30 ticks, and adds her share (88 / the ships
-/// charmed, 22 from five) each tick, taking a blow of 300
-/// at each thousand (0x4a74c0; a fourth with Argus, none shielded from
-/// magic).
-pub const SONG_CYCLE_FRAMES: u32 = 163;
 
 /// A ship under a siren's song.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Charm {
     pub cell: (i32, i32),
-    share: u32,
+    pub(super) share: u32,
     acc: u32,
     /// Seconds of song left, and until it heads for her anew.
-    left: f32,
+    pub(super) left: f32,
     replan: f32,
     clock: f32,
 }
@@ -42,66 +30,44 @@ impl Scene {
             c.stone = (c.stone - dt).max(0.0);
         }
         self.run_sea_monsters(dt, data, caches);
-        self.run_sirens(dt, data, caches);
+        self.run_charms(dt, data, caches);
     }
 
-    /// Sirens sing; their songs draw ships in and wear them down.
-    fn run_sirens(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+    /// A siren's song (message 0x15ca7: `ticks`, the share, her cell)
+    /// heard by object `id`: a ship without hero 7 (Odysseus) is charmed
+    /// (0x4a7390): already, the song's length grows by `ticks` and the
+    /// share and cell are the new ones; else it starts now with nothing
+    /// added up yet. Under it the ship heads for her cell every 30 ticks,
+    /// no faster than 7000 units (`sail::CHARMED_TOP`), and adds the share
+    /// each tick, taking a blow of 300 at each thousand (0x4a74c0; a
+    /// fourth with Argus, none shielded from magic).
+    pub(super) fn song_heard(&mut self, id: u32, ticks: u32, share: u32, cell: (i32, i32)) {
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        if !self.objects[i]
+            .ship
+            .as_ref()
+            .is_some_and(|s| !s.has_hero(ODYSSEUS))
+        {
+            return;
+        }
+        let c = self.charmed.entry(id).or_insert(Charm {
+            cell,
+            share,
+            acc: 0,
+            left: 0.0,
+            replan: 0.0,
+            clock: 0.0,
+        });
+        (c.cell, c.share) = (cell, share);
+        c.left += crate::clock::ticks(ticks);
+    }
+
+    /// The charmed ships (0x4a74c0).
+    fn run_charms(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         let t = TILE_SIZE as f32;
         let tick = crate::clock::TICK;
-        let sirens: Vec<(u32, (i32, i32))> = self
-            .objects
-            .iter()
-            .filter(|o| o.class == ObjectClass::Monster(0x1fd))
-            .map(|o| (o.id, ((o.x / t).floor() as i32, (o.y / t).floor() as i32)))
-            .collect();
-        for (id, cell) in sirens {
-            let first = crate::clock::ticks(250 + self.rng.next() % 751 + 45);
-            if let Some(v) = self.siren_shown.get_mut(&id) {
-                *v = (*v - dt).max(0.0);
-            }
-            let left = self.siren_songs.entry(id).or_insert(first);
-            *left -= dt;
-            if *left > 0.0 {
-                continue;
-            }
-            // The next song: the rest of her picture, a dive, a surfacing.
-            *left = crate::clock::ticks(SONG_CYCLE_FRAMES - 45 + 250 + self.rng.next() % 751 + 45);
-            self.siren_shown
-                .insert(id, crate::clock::ticks(SONG_CYCLE_FRAMES - 45));
-            let heard: Vec<u32> = self
-                .objects
-                .iter()
-                .filter(|o| {
-                    let (ox, oy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
-                    (ox - cell.0).abs() <= 7
-                        && (oy - cell.1).abs() <= 7
-                        && o.ship.as_ref().is_some_and(|s| !s.has_hero(ODYSSEUS))
-                })
-                .map(|o| o.id)
-                .collect();
-            if heard.is_empty() {
-                continue;
-            }
-            let share = if heard.len() < 5 {
-                88 / heard.len() as u32
-            } else {
-                22
-            };
-            for ship in heard {
-                let c = self.charmed.entry(ship).or_insert(Charm {
-                    cell,
-                    share,
-                    acc: 0,
-                    left: 0.0,
-                    replan: 0.0,
-                    clock: 0.0,
-                });
-                (c.cell, c.share) = (cell, share);
-                c.left += crate::clock::ticks(750);
-            }
-            self.messages.push("A siren sings".into());
-        }
         // The charmed: a tick at a time.
         let ids: Vec<u32> = self.charmed.keys().copied().collect();
         for id in ids {
@@ -152,15 +118,12 @@ impl Scene {
         }
     }
 
-    /// Whether a siren or the Gorgon is under the water now: a siren from
-    /// the end of her picture until 45 frames before her next song
-    /// (0x403650 hides her picture at state 0), the Gorgon while she shows
-    /// no picture (from resting, 0x4019d0(0), until she rises).
+    /// Whether a siren or the Gorgon is under the water now: while she
+    /// shows no picture (from resting, 0x4019d0(0) / 0x403650(0), until
+    /// she rises).
     pub fn creature_hidden(&self, id: u32) -> bool {
-        let ticks = crate::clock::ticks;
-        if let Some(&left) = self.siren_songs.get(&id) {
-            let up = self.siren_shown.get(&id).copied().unwrap_or(0.0) > 0.0;
-            return !up && left > ticks(45);
+        if let Some(s) = self.sirens.get(&id) {
+            return !s.picture;
         }
         if let Some(g) = self.gorgons.get(&id) {
             return !g.picture;

@@ -5196,8 +5196,7 @@ points `+0xb0 x cond / 100` (unsigned), else cond and hit points 1 and
   shield or not: with a picture (not resting under water) life 0, the
   current picture cut short (`+0xac` / `+0x12c`), killer the caster; the
   gorgon's sound event 116 (`hitmed`), the siren's 117 (no entry). They
-  are reported and removed at their next state-0 tick (the port removes
-  them at the blow);
+  are reported and removed at their next state-0 tick;
 - harpy and dragon (0x420cd8): on their own cell removed and reported to
   the caster; else `life -= life x 25 / 100` (the current life, signed),
   reported only at 0;
@@ -5722,14 +5721,59 @@ whirlpools (0xda94, 0xda95) on her (the port's strike ships only); her
 pixel test 0x402d10; her save record (0x8cf: the port saves its own
 state).
 
-A siren (SirenaClassTy, `sirena.cpp`) hides 250-1000 ticks (0x403650),
-surfaces and sings as her `SIRENA` passes frame 45 (0x403ba0), then dives.
-Her song (message 0x15ca7, 750 and a share: 88 / the ships, 22 from five)
-reaches every object within 7 cells; a ship without hero 7 (Odysseus) is
-charmed for 750 ticks more (0x4a7390): it heads for her cell every 30
-ticks, no faster than 7000 units, and adds the share each tick, taking a
-blow of 300 (type 0x1fd) at each thousand (0x4a74c0; three quarters off
-with hero 5, none on a ship shielded from magic).
+A siren (SirenaClassTy, `sirena.cpp`, class 0x1fd, vtable 0x594378,
+constructor 0x403050: life `+0xb8` 100000, killer `+0x138` -1). Message 2
+(0x403f60) seeds her generator `+0x18` as the Gorgon's (`[game +0x2ee5] x
+id`), puts her on cell fields 5, 6 (0x402ee0 not strict refusing: removed,
+state 5), with fields 10-20 her treasures (2 at most, `[0x5c113a]`) and
+her area her cell -/+ fields 7, 8 clipped (either **below 0**: the whole
+map; the Gorgon's below 1), hidden (state 0). Her tick (message 0,
+0x403ba0) runs the state's code; a state is entered by 0x403650 (run not
+done `+0x128`, start `+0x120` now). One picture, `SIRENA` (163 frames):
+state 1 frames 0-10, 2 11-100, 3 101-113, 4 114-162, from the first, a
+frame every 2 ticks (3 dying; 0 cut short by a spell), the step 0x403360
+drawing when `last + delay <= now` and past the last frame starting over
+with the run done.
+- **0 hidden**: no picture; rest `+0x124` = `r % 751 + 250` (a draw). At
+  its end: life below 1, reported to her killer if set (0x50e750), slot
+  cleared, removed (state 5); else the hop 0x403520: the 3 x 3 about her
+  (her own cell too, columns then rows) within her area that 0x402ee0
+  takes strictly and never onto a treasure, each weighing 1, one picked
+  by 0x404730 (no draw with one, else `r % (n + 1)`, the first twice as
+  likely): moved -> 1, none -> 0 again.
+- **1 surface** (sound event 95): frames 0-10 once, then 2.
+- **2 sing**: with life and not cut short, frames 11-100 once, taking the
+  treasure on her cell (as the leviathan's, cap 2); else straight to 3.
+  As frame 45 is about to be drawn (a latch `+0x114`: once a surfacing)
+  she sings (sound event 128): every object in the ship slot `+0xc` of
+  each map cell within 7 either way (columns then rows, 50 at most), of
+  **any side**, gets message 0x15ca7 with 750 ticks, a share of 88 / their
+  number (22 from five), her cell and her id. Then 3.
+- **3 dive**: frames 101-113 once; then life left -> 0, none -> 4.
+- **4 death** (sound event 106): frames 114-162 once, 3 ticks a frame; her
+  cell gets what she carried (0x520c70, no head); then 0, whose end
+  removes her.
+
+A ship without hero 7 (Odysseus) takes the song as a status (0x4a7390):
+already under it, its length `+0xb5` grows by 750 and the share `+0xc9`
+and cell `+0xad` are the new ones; else it starts now (`+0xb1`) with 750
+and nothing added up (`+0xc5` 0). Under it (0x4a74c0) it heads for her
+cell every 30 ticks, no faster than 7000 units, and adds the share each
+tick, taking a blow of 300 (type 0x1fd) at each thousand (three quarters
+off with hero 5, none on a ship shielded from magic).
+
+Struck (vt+4, 0x403480) in states 1-3 only: the blow comes off her life
+(down to 0; a blow leaving 0 reports her kill at once, 0x50e750; sound
+event 117); no target. Lightning (0xda93, her picture shown): life 0, cut
+short, the caster her killer. Shot at in states 1-3 (vt+0x2c, 0x404690);
+her aim point 0x4048f0 (no picture: her cell's centre; else from her
+picture's top left, a hit `30 + (r & 7)` each way, a miss `r % 61`, `40 +
+r % 24`, x drawn first). The port: `scene::siren` (ticked with the Gorgons
+in the objects' order). Not decoded: the names of sound events 95, 106,
+117 and 128; the buildings' handlers of 0x15ca7, so a building sung to
+counts in the share but takes nothing. Not ported: tornadoes (0xda96) and
+reefs or whirlpools (0xda94, 0xda95) on her; her pixel test 0x404800 and
+the mask `SIRMSK`; her save record (0x8cf: the port saves its own state).
 
 Harpy nests (0x41d4a0) send out a new creature 55500 - 6000 x field 10
 game ticks after the last fell. A harpy (0x41fbd0, state 5) strikes at
@@ -7790,8 +7834,8 @@ The killer each caller of 0x50e750 passes:
 - Sea creatures, gorgons, sirens and the leviathan report on **every**
   blow that leaves the life at or below 0 (0x490c70, 0x4014d0, 0x403480,
   0x494090 test the life after the blow, not before): a dead sea creature
-  struck again before its tick removes it is counted again. The port
-  removes sirens at once, so only the sea creature and gorgon repeat.
+  struck again before its tick removes it is counted again, as in the
+  port.
 
 A building's `+0x1ac` is never stale: each writer (0x4246b2, 0x426f37,
 0x428633 / 0x428740, 0x4158d9 / 0x4159d0 / 0x4159aa, 0x427472) is followed
@@ -7803,11 +7847,10 @@ fight is won (0x4a91a0 at 0x4b6559), in both cases.
 
 The port: a build called off reports -1 (`scene::yard`), the misplaced
 mission ships are removed at load, player 16's prize sinks at once put down
-to its taker. The gorgon is ported so (`scene::gorgon`): every blow
-leaving her at 0 reported at once, lightning's caster when she goes. Not
-ported: ship sales (the port has none); the siren's removal waiting for
-her tick (the port removes her at the killing blow, reported once with
-its giver, the caster for lightning and tornadoes); the
+to its taker. The gorgon and the siren are ported so (`scene::gorgon`,
+`scene::siren`): every blow leaving her at 0 reported at once,
+lightning's caster when she goes. Not ported: ship sales (the port has
+none); the
 order in which mission records reach message 2 (the port's list order).
 
 Some objects are created by the scripts at the start: 0x411010 (world,
@@ -8817,17 +8860,15 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   (vtable 0x594340, constructor 0x401033; no picture `+0x11c`: its cell
   `+0x114 / +0x118` x 64 + 32; a hit `20 + r % 21`, `20 + (r & 15)`, a miss
   `10 + r % 51`, `60 + r % 11`, from the picture's top left, its own
-  generator; `Scene::gorgon_aim`). Decoded, not ported: the
-  siren's 0x4048f0 (vtable 0x594378, constructor 0x40306e; no picture
-  `+0x164`: its cell `+0xbc / +0xc0` x 64 + 32; a hit `30 + (r & 7)` each
-  way, a miss `r % 61`, `40 + r % 24`): the port's
-  sirens keep no such state, frame, picture or generator. A roll that misses
+  generator; `Scene::gorgon_aim`), and the siren's 0x4048f0 (vtable
+  0x594378, constructor 0x40306e; no picture `+0x164`: its cell `+0xbc /
+  +0xc0` x 64 + 32; a hit `30 + (r & 7)` each way, a miss `r % 61`, `40 +
+  r % 24`; `Scene::siren_aim`). A roll that misses
   a building leaves its chance as the hit byte (0x4bf7f0 returns it), so
   only a chance of 0 takes the corner. Not decoded: a barbarian
   structure's generator (its handler 0x40ef70 does not seed `+0x18` at
   message 2 as 0x427f50 does) and the hero's house's vtable (type
-  0x1a6d); not ported: the siren's
-  (above): shots at her fly to the target as before. 0x4c07c0 with no position in
+  0x1a6d); not ported: 0x4c07c0 with no position in
   state 3 (its id and player uninitialised; the port does nothing); a
   position's target gone, its pointer dangling (the port skips it);
   0x50ebf0's families with no cell (400 a leviathan, 700, the jam 0x1f7

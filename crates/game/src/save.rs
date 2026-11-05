@@ -220,8 +220,8 @@ pub struct SaveGame {
     #[serde(default)]
     pub volcanoes: std::collections::HashMap<u32, crate::scene::volcano::Volcano>,
     /// What was under way in battle: shots in flight, fireballs, lightning
-    /// to strike, spells' sight, sirens' songs and charms, the Gorgons'
-    /// states and sea monsters' timing.
+    /// to strike, spells' sight, the sirens' and Gorgons' states, the ships
+    /// charmed and sea monsters' timing.
     #[serde(default)]
     pub battle: crate::scene::Battle,
     /// The play-through's id (game + 0x1a0d, the original's `ID_GAME`
