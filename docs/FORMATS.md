@@ -6536,8 +6536,9 @@ state 1 through 0x542ee0 /
 0x419f80 at 0x41a141, 0x41a113, 0x41a0e6; a town's by its own LoadImages
 0x43bd60 (vt+0x38), `TMSK_%1u%2u%1u%1u` at 0x43be6c: nation `+0x54`,
 class `+0x50`, 1, the same level, so `TMSK_15011`; ports, docks and the
-barbarian 0x40 by 0x4e7f90, `%sMSK_%1u%2u%1u%1u%1u` with the facing
-`+0x1dc`; castles by 0x4101d0, `%sMSK_%1u%1u` at 0x4102d9: prefix, 1,
+barbarian 0x40 (its 0x40e0d0 jumps there; 0x3f and 0x41 to 0x422e30) by
+0x4e7f90, `%sMSK_%1u%2u%1u%1u%1u` with the facing `+0x1dc` (below);
+castles by 0x4101d0, `%sMSK_%1u%1u` at 0x4102d9: prefix, 1,
 level, so `CSTLWARMSK_13`); and none of the four fire slots `+0x80..+0x8c` is
 taken (the loop at 0x424153 gives up at the first slot in use, so a
 fire is lit only where none burns, and always in slot 3, the last
@@ -6622,9 +6623,25 @@ drain 0x414ef0 jumps to 0x423d60) on `<CLPF|MNTF|AMZF>MSK_41<level>`
 (0x422e30, nation 4), the draw of their generator: the building one,
 seeded `[game +0x2ee5] x id` at message 2 (0x414f00; a save's from its
 record), drawn every tick by their tick and once per creature sent (see
-Lairs, below) and by the aim at them (0x423520, above). Not decoded:
-whether ports' and docks' drains reach 0x4240e0 (the port lights none on
-them); the classes with no mask resource would read a null mask in
+Lairs, below) and by the aim at them (0x423520, above). Ports (class
+0x39, vtable 0x596990, prefix `PT` 0x5ad098) drain by 0x4e7550 (the
+ShipServiceObj drain: 0x138b sends 0xcb9 to `+0x1e0`) -> 0x427bb0 ->
+0x423d60, shipyards and docks (0x3a, 0x3b, DockClassTy vtable 0x5957c0,
+prefix `DK` 0x5a2cf0) by 0x416340 (0x138a, the dock upgrade) -> 0x4e7550
+-> ...; both take the blow in by 0x423c30 (the dock's vt+4 0x4162f0
+calls it first), which queues 0x138e unless `+0xa4` is 2. So they burn
+the same, by the building generator `+0x18`, on the mask 0x4e7f90 loads
+in state 1 (0x4e80b5): prefix, nation `+0x54`, class `+0x50` (`%2u`),
+1, facing `+0x1dc`, level (edi, the picture's: 3 in states 0 and 3,
+else the condition's, at least 1), so `PTMSK_157101` (nation 1, facing
+0, level 1) and `DKMSK_<nation><58|59>1<facing><level>`.
+The test's state (0x42410e, `+0xa4 == 1`) holds for none going up (0),
+mended (2), sold (3) or asleep (0x10); nothing wakes an asleep building
+on a blow (0x423c30 and 0x423d60 do not touch 0x10), and none is hit:
+its hit test vt+8 0x423460 is false in 0xff and 0x10, so a shot lands
+elsewhere. Not decoded: whether the barbarians' drain 0x40e0f0 reaches
+0x4240e0 (the port's `building_mask` does not name 0x40's 0x4e7f90
+mask); the classes with no mask resource would read a null mask in
 0x557640, the port lights none on them; whether a killing blow's state is still 1
 at the fire test (the port lights none on a building its blow brought
 down); which of fire (depth - 3) and smoke (- 2) draws over the other

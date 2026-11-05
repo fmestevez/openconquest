@@ -132,10 +132,13 @@ impl Scene {
     /// top left at the hit point less half its width and four fifths of
     /// its height. Forts (their drain 0x4184f0 leaves 0x138e to 0x4e7550
     /// -> 0x427bb0 -> 0x423d60) and towns (0x43b290 leaves it to 0x423d60)
-    /// burn the same, on their own masks (`building_mask`). (Not decoded:
-    /// the classes with no mask resource would read a null mask in
-    /// 0x557640; the port lights none on them; nor ports and docks, whose
-    /// masks 0x4e7f90 loads. A hit point above or left of the picture
+    /// burn the same, on their own masks (`building_mask`), and so do
+    /// ports (drain 0x4e7550 -> 0x427bb0 -> 0x423d60), shipyards and docks
+    /// (0x416340 -> 0x4e7550 -> ...), on the masks 0x4e7f90 loads; their
+    /// blows come in by 0x423c30 (the dock's vt+4 0x4162f0 calls it), which
+    /// queues 0x138e unless the state is 2. (Not decoded: the classes with
+    /// no mask resource would read a null mask in 0x557640; the port
+    /// lights none on them. A hit point above or left of the picture
     /// reads before the mask: none here.) Castles burn the same (their
     /// drain 0x4105c0 -> 0x427bb0 -> 0x423d60) on `CSTLSEAMSK_1<level>` /
     /// `CSTLWARMSK_1<level>` (0x4101d0 at 0x4102d9, `%sMSK_%1u%1u`), the
@@ -158,7 +161,14 @@ impl Scene {
     ) {
         let o = &self.objects[i];
         let class = match o.class {
-            ObjectClass::Building(class) => class,
+            // The test wants `+0xa4` 1 (0x42410e): not going up (0), mended
+            // (2), sold (3) nor asleep (0x10). (An asleep building is never
+            // hit: its vt+8 0x423460 is false in 0x10, so no shot lands.)
+            ObjectClass::Building(class)
+                if self.standing(o.id) && !self.mending.contains(&o.id) =>
+            {
+                class
+            }
             // A castle stands in state 1 only: casting (4) it takes none.
             ObjectClass::Castle(class) if self.castle_standing(o.id) => class,
             ObjectClass::CreatureSpawn => o.record.class_id,
@@ -167,12 +177,7 @@ impl Scene {
         let Some(c) = o.combat.as_ref() else {
             return;
         };
-        if !flaming
-            || c.protect_magic > 0.0
-            || kind / 3 == 0
-            || by.is_none()
-            || self.construction_at(o.id).is_some()
-        {
+        if !flaming || c.protect_magic > 0.0 || kind / 3 == 0 || by.is_none() {
             return;
         }
         let Some((left, top)) = o
@@ -197,7 +202,8 @@ impl Scene {
         } else if o.class == ObjectClass::CreatureSpawn {
             lair_mask(data, class, level)
         } else {
-            building_mask(data, class, nation, level)
+            let facing = o.record.field(10).unwrap_or(0);
+            building_mask(data, class, nation, facing, level)
         };
         let Some(mask) = mask else {
             return;
@@ -417,7 +423,10 @@ impl Scene {
 /// blow changes the level; the forts' prefixes `FORTS`, `FORT`, `FORTB`,
 /// 0x41a0e6-0x41a141); a town's `TMSK_<nation><class>1<level>` (TownObj's
 /// own LoadImages 0x43bd60, the same level; its drain 0x43b290 leaves
-/// 0x138e to 0x423d60); none for classes without one.
+/// 0x138e to 0x423d60); a port's, shipyard's or dock's `PTMSK_` /
+/// `DKMSK_<nation><class>1<facing><level>` (0x4e7f90, its level
+/// likewise, the facing the record's field 10); none for classes
+/// without one.
 /// A castle's mask (0x4101d0 at 0x4102d9, `%sMSK_%1u%1u`, loaded in
 /// state 1): its prefix, 1, the damage level, so `CSTLWARMSK_13`.
 fn castle_mask(data: &GameData, class: u32, level: u32) -> Option<openconquest_formats::Mask> {
@@ -449,6 +458,7 @@ pub(super) fn building_mask(
     data: &GameData,
     class: u32,
     nation: u32,
+    facing: u32,
     level: u32,
 ) -> Option<openconquest_formats::Mask> {
     use openconquest_formats::ResourceKind;
@@ -456,10 +466,12 @@ pub(super) fn building_mask(
         // TownObj's own (0x43bd60, 0x43be6c): `TMSK_%1u%2u%1u%1u`, the
         // nation, the class `+0x50`, 1, the level.
         0x32 | 0x33 => format!("TMSK_{nation}{class:2}1{level}"),
-        // Ports and docks load theirs in 0x4e7f90 (`%sMSK_%1u%2u%1u%1u%1u`,
-        // with the facing `+0x1dc`); not decoded whether their drain
-        // reaches 0x4240e0.
-        0x39..=0x3b => return None,
+        // Ports, shipyards and docks load theirs in 0x4e7f90 in state 1
+        // (0x4e80b5, `%sMSK_%1u%2u%1u%1u%1u`): the prefix `+0xb8` (`PT`
+        // 0x5ad098, `DK` 0x5a2cf0), the nation, the class `+0x50`, 1, the
+        // facing `+0x1dc`, the level.
+        0x39 => format!("PTMSK_{nation}{class:2}1{facing}{level}"),
+        0x3a | 0x3b => format!("DKMSK_{nation}{class:2}1{facing}{level}"),
         _ => {
             let name =
                 objects::building_name(class, nation, 0, objects::BuildingState::Standing(3))?;
@@ -523,6 +535,7 @@ mod tests {
                     return false;
                 };
                 let nation = o.record.field(openconquest_formats::mission::field::NATION);
+                let facing = o.record.field(10).unwrap_or(0);
                 let land = o.cell.is_some_and(|(x, y)| {
                     let t = scene.cell_types[(y as u32 * scene.grid.width + x as u32) as usize];
                     t & 0xf == 8
@@ -533,7 +546,7 @@ mod tests {
                     && o.combat.is_some()
                     && o.asleep.is_none()
                     && land
-                    && building_mask(data, class, nation.unwrap_or(0), 3).is_some()
+                    && building_mask(data, class, nation.unwrap_or(0), facing, 3).is_some()
             });
             if let Some(i) = found {
                 return (scene, i);
@@ -563,7 +576,7 @@ mod tests {
             .record
             .field(openconquest_formats::mission::field::NATION)
             .unwrap();
-        let mask = building_mask(&data, class, nation, 3).unwrap();
+        let mask = building_mask(&data, class, nation, o.record.field(10).unwrap_or(0), 3).unwrap();
         let l = &o.frames[0][0];
         let (left, top) = crate::render::layer_origin(o, l);
         let stride = (mask.width + 7) & !7;
@@ -649,9 +662,11 @@ mod tests {
         assert!(scene.building_fires.is_empty());
     }
 
-    /// Towns read `TMSK_<nation><class>1<level>` (0x43bd60) and forts
-    /// `<FORTS|FORT|FORTB>MSK_<nation>1<level>` (0x422e30); a flaming blow
-    /// of kind 6 on a set bit with a draw 0 mod 3 lights FIRE2 on them.
+    /// Towns read `TMSK_<nation><class>1<level>` (0x43bd60), forts
+    /// `<FORTS|FORT|FORTB>MSK_<nation>1<level>` (0x422e30) and ports and
+    /// docks `<PT|DK>MSK_<nation><class>1<facing><level>` (0x4e7f90); a
+    /// flaming blow of kind 6 on a set bit with a draw 0 mod 3 lights FIRE2
+    /// on them, none while mended or asleep (`+0xa4` not 1, 0x42410e).
     #[test]
     fn towns_and_forts_take_fire() {
         let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -660,12 +675,22 @@ mod tests {
         let data = GameData::open(std::path::Path::new(&root)).unwrap();
         let mut caches = Caches::default();
         let named = |class, nation, level| {
-            building_mask(&data, class, nation, level).map(|m| (m.width, m.height))
+            building_mask(&data, class, nation, 0, level).map(|m| (m.width, m.height))
         };
         assert!(named(0x32, 1, 1).is_some() && named(0x33, 3, 3).is_some());
         assert!(named(0x34, 1, 2).is_some() && named(0x36, 3, 1).is_some());
-        assert_eq!(named(0x39, 1, 3), None);
-        for pick in [|c| matches!(c, 0x32 | 0x33), |c| matches!(c, 0x34..=0x36)] {
+        // Ports, shipyards and docks by facing (0x4e7f90).
+        for facing in [0, 2, 4, 6] {
+            for class in 0x39..=0x3b {
+                assert!(building_mask(&data, class, 1, facing, 1).is_some());
+            }
+        }
+        let picks: [fn(u32) -> bool; 3] = [
+            |c| matches!(c, 0x32 | 0x33),
+            |c| matches!(c, 0x34..=0x36),
+            |c| matches!(c, 0x39..=0x3b),
+        ];
+        for pick in picks {
             let (mut scene, i) = masked_building(&data, &mut caches, pick);
             let o = &scene.objects[i];
             let ObjectClass::Building(class) = o.class else {
@@ -675,7 +700,8 @@ mod tests {
                 .record
                 .field(openconquest_formats::mission::field::NATION)
                 .unwrap();
-            let mask = building_mask(&data, class, nation, 3).unwrap();
+            let mask =
+                building_mask(&data, class, nation, o.record.field(10).unwrap_or(0), 3).unwrap();
             let (left, top) = crate::render::layer_origin(o, &o.frames[0][0]);
             let stride = (mask.width + 7) & !7;
             let (mx, my) = (0..mask.height)
@@ -686,6 +712,15 @@ mod tests {
             let (id, by) = (o.id, Some(o.owner.unwrap_or((1, 0))));
             let seed = (1u32..).find(|&v| combat::Rng(v).next() % 3 == 0).unwrap();
             scene.building_lcgs.insert(id, seed);
+            // Mended (2) or asleep (0x10) it takes none, with no draw.
+            scene.mending.push(id);
+            scene.light_building(i, 6, true, hit, by, &data, &mut caches);
+            scene.mending.clear();
+            scene.objects[i].asleep = Some(0.0);
+            scene.light_building(i, 6, true, hit, by, &data, &mut caches);
+            scene.objects[i].asleep = None;
+            assert_eq!(scene.building_lcgs[&id], seed);
+            assert!(scene.building_fires.is_empty());
             scene.light_building(i, 6, true, hit, by, &data, &mut caches);
             assert_ne!(scene.building_lcgs[&id], seed);
             let f = &scene.building_fires[0];
