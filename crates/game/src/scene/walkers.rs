@@ -309,6 +309,16 @@ pub struct Throw {
 /// The `lair` of a creature no lair sent out.
 pub const NO_LAIR: u32 = u32::MAX;
 
+/// A lair (CreaturesFlatClassTy, 0x414f00): the original's fields.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Lair {
+    /// The creatures out (`+0x1d8`, up to 100; their count `+0x1cc`).
+    pub creatures: Vec<u32>,
+    /// The tick the last one went out (`+0x368`).
+    pub last: u32,
+}
+
 /// The creature class of a lair class.
 fn creature_of(lair: u32) -> u32 {
     match lair {
@@ -469,57 +479,159 @@ impl Walker {
 }
 
 impl Scene {
-    /// Lairs send out their creatures.
-    pub(super) fn run_lairs(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
-        let lairs: Vec<(u32, u32, f32, f32, u32, u32)> = self
+    /// Every lair with none yet (message 2, 0x414f00): its last
+    /// creature's tick (`+0x368`) now, none out (`+0x1cc`); its generator
+    /// is the building one (`Scene::building_draw`, seeded `[game +0x2ee5]
+    /// x id`). A save from before the lairs were kept counts the
+    /// creatures out of each.
+    pub(super) fn start_lairs(&mut self) {
+        let now = self.ticks;
+        let ids: Vec<u32> = self
             .objects
             .iter()
             .filter(|o| o.class == ObjectClass::CreatureSpawn)
-            .filter(|o| o.combat.as_ref().is_some_and(|c| c.hull > 0.0))
-            .map(|o| {
-                let f = |i| o.record.field(i).unwrap_or(0);
-                (o.id, o.record.class_id, o.x, o.y, f(8), f(9))
-            })
+            .map(|o| o.id)
+            .filter(|id| !self.lairs.contains_key(id))
             .collect();
-        for (id, class, x, y, max, speed) in lairs {
-            let out = self.walkers.iter().filter(|w| w.lair == id).count() as u32;
-            // Another comes out once (10 - field 9) x 20-25 ticks have
-            // passed since the last, drawn afresh at each look (0x414f00).
-            let ticks = (10 - speed.min(9)) * ((self.rng.next() % 21 + 80) * 25 / 100);
-            let clock = self.lair_clocks.entry(id).or_insert(0.0);
-            *clock += dt;
-            if out >= max || *clock <= crate::clock::ticks(ticks) {
-                continue;
-            }
-            *clock = 0.0;
-            self.spawn_walker(id, class, x, y, data, caches);
+        for id in ids {
+            let creatures = self
+                .walkers
+                .iter()
+                .filter(|w| w.lair == id && !w.gone)
+                .map(|w| w.id)
+                .collect();
+            self.lairs.insert(
+                id,
+                Lair {
+                    creatures,
+                    last: now,
+                },
+            );
         }
     }
 
-    pub(super) fn spawn_walker(
-        &mut self,
-        lair: u32,
-        lair_class: u32,
-        x: f32,
-        y: f32,
-        data: &GameData,
-        caches: &mut Caches,
-    ) {
-        let t = TILE_SIZE as f32;
-        let (lx, ly) = ((x / t) as i32, (y / t) as i32);
-        // A free land cell beside the lair (0x414f00 looks at the eight).
-        let taken = |s: &Scene, cx: i32, cy: i32| s.walker_at((cx, cy));
-        let cells: Vec<(i32, i32)> = (-1..=1)
-            .flat_map(|dy| (-1..=1).map(move |dx| (lx + dx, ly + dy)))
-            .filter(|&(cx, cy)| {
-                (cx, cy) != (lx, ly) && self.is_land(cx, cy) && !taken(self, cx, cy)
-            })
-            .collect();
+    /// The lairs a game tick (message 0, 0x414f00, before LandObj's
+    /// 0x425990): a draw of its generator every tick, then, standing
+    /// (`+0xa4` 1) with fewer out (`+0x1cc`) than record field 8
+    /// (`+0x1d0`), once `(10 - field 9) x ((r % 21 + 80) x 25 / 100) +
+    /// last` (unsigned) is below the tick, the last creature's tick is
+    /// now and a creature goes out (`lair_send`).
+    pub(super) fn tick_lairs(&mut self, data: &GameData, caches: &mut Caches) {
+        self.start_lairs();
+        let now = self.ticks;
+        let ids: Vec<u32> = self.lairs.keys().copied().collect();
+        for id in ids {
+            let Some(i) = self.object_index(id) else {
+                self.lairs.remove(&id);
+                continue;
+            };
+            let r = self.building_draw(i);
+            let o = &self.objects[i];
+            if o.combat.as_ref().is_none_or(|c| c.hull <= 0.0) {
+                continue;
+            }
+            let f = |n| o.record.field(n).unwrap_or(0);
+            let (max, speed) = (f(8), f(9));
+            let lair = &self.lairs[&id];
+            if (lair.creatures.len() as u32) < max
+                && 10u32
+                    .wrapping_sub(speed)
+                    .wrapping_mul((r % 21 + 80) * 25 / 100)
+                    .wrapping_add(lair.last)
+                    < now
+            {
+                self.lairs.get_mut(&id).unwrap().last = now;
+                self.lair_send(i, data, caches);
+            }
+        }
+    }
+
+    /// Lair `i` sends a creature out (0x414f00 message 0): the cells about
+    /// the lair's (record fields 4, 5), row by row from the north, each
+    /// from the west, but its own, on the map, its object slot empty or a
+    /// jam (0x1f7), its landscape's low nibble 8 (land), with no shore
+    /// (0x5acf13) on the side facing the lair (a cell to the south no
+    /// north edge, 1; to the north no south, 4; to the east no west, 8; to
+    /// the west no east, 2), nibble 5 not 1 and nibbles 6 and 7 0, and on
+    /// a jam's cell no member of it (0x415e40) on the half facing the
+    /// lair. With more than one, the cell straight south is dropped; one
+    /// draw `r % n` picks among them. The creature (record field 0 the
+    /// lair's creature class `+0x36c`, the lair's id, that half, and the
+    /// lair's cell for its walk grid, 0x411ce0) is made (message 0x1497)
+    /// and listed (`+0x1d8`, `+0x1cc` + 1). None free, nothing is drawn
+    /// or made.
+    fn lair_send(&mut self, i: usize, data: &GameData, caches: &mut Caches) {
+        let o = &self.objects[i];
+        let (id, class) = (o.id, o.record.class_id);
+        let (lx, ly) = (
+            o.record.field(4).unwrap_or(0) as i32,
+            o.record.field(5).unwrap_or(0) as i32,
+        );
+        // The walk grid's box about the lair (0x42e590, 6 more each way,
+        // kept on the map).
+        let (ox, oy, _, _) = self.walk_grid_box((lx, ly));
+        let (w, h) = (self.grid.width as i32, self.grid.height as i32);
+        // The half of cell (x, y) facing the lair.
+        let half = |s: &Scene, x: i32, y: i32| {
+            let e = s.tile_edges(x, y);
+            let hx = 2 * (x - ox) + i32::from(x < lx || (x == lx && e & 8 != 0));
+            let hy = 2 * (y - oy) + i32::from(y < ly || (y == ly && e & 1 != 0));
+            (hx, hy)
+        };
+        let mut cells = Vec::new();
+        for y in ly - 1..=ly + 1 {
+            for x in lx - 1..=lx + 1 {
+                if (x, y) == (lx, ly) || x < 0 || x >= w || y < 0 || y >= h {
+                    continue;
+                }
+                let jam = self.jams.iter().find(|j| j.cell == (x, y));
+                if jam.is_none() && self.cell_slot_taken((x, y)) {
+                    continue;
+                }
+                let c = self.cell_types[(y * w + x) as usize];
+                if c & 0xf != 8 {
+                    continue;
+                }
+                let e = self.tile_edges(x, y);
+                let shut = (y > ly && e & 1 != 0)
+                    || (y < ly && e & 4 != 0)
+                    || (x > lx && e & 8 != 0)
+                    || (x < lx && e & 2 != 0)
+                    || (c >> 20) & 0xf == 1
+                    || (c >> 24) & 0xf != 0
+                    || c >> 28 != 0;
+                if shut {
+                    continue;
+                }
+                if let Some(j) = jam {
+                    let at = half(self, x, y);
+                    let held = j
+                        .members
+                        .iter()
+                        .any(|&m| self.walkers.iter().any(|w| w.id == m && w.half == at));
+                    if held {
+                        continue;
+                    }
+                }
+                cells.push((x, y));
+            }
+        }
         if cells.is_empty() {
             return;
         }
-        let (cx, cy) = cells[self.rng.next() as usize % cells.len()];
-        self.put_walker(lair, creature_of(lair_class), (cx, cy), data, caches);
+        if cells.len() > 1 {
+            cells.retain(|&c| c != (lx, ly + 1));
+        }
+        let r = self.building_draw(i);
+        let (x, y) = cells[r as usize % cells.len()];
+        let at = half(self, x, y);
+        if let Some(k) = self.make_walker(id, creature_of(class), (lx, ly), Some(at), data, caches)
+        {
+            let wid = self.walkers[k].id;
+            if let Some(l) = self.lairs.get_mut(&id) {
+                l.creatures.push(wid);
+            }
+        }
     }
 
     /// The game's seed of the objects' own generators (`[game +0x2ee5]`,
@@ -549,10 +661,30 @@ impl Scene {
         &mut self,
         lair: u32,
         class: u32,
-        (cx, cy): (i32, i32),
+        cell: (i32, i32),
         data: &GameData,
         caches: &mut Caches,
     ) {
+        self.make_walker(lair, class, cell, None, data, caches);
+    }
+
+    /// A land creature of `class` made (message 2, 0x413d70) with its walk
+    /// grid about cell `about` (0x411ce0) on half `half` of it, or with
+    /// none (and no lair) on that cell's north-west half (0x411e7f). Its
+    /// index in the walkers.
+    fn make_walker(
+        &mut self,
+        lair: u32,
+        class: u32,
+        about: (i32, i32),
+        half: Option<(i32, i32)>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Option<usize> {
+        let grid = self.walk_grid_box(about);
+        let (ox, oy, _, _) = grid;
+        let half = half.unwrap_or((2 * (about.0 - ox), 2 * (about.1 - oy)));
+        let (cx, cy) = (ox + half.0 / 2, oy + half.1 / 2);
         let id = self.next_walker_id();
         let mut fields = vec![0u32; 8];
         fields[0] = class;
@@ -563,15 +695,16 @@ impl Scene {
             class_id: class,
             fields,
         };
-        if let Ok(Some(mut obj)) = objects::resolve(data, caches, &rec) {
-            let grid = self.walk_grid_box((cx, cy));
-            let (ox, oy, _, _) = grid;
+        let Ok(Some(mut obj)) = objects::resolve(data, caches, &rec) else {
+            return None;
+        };
+        {
             let life = FULL_LIFE[kind_of(class)];
             let mut w = Walker {
                 id,
                 lair,
                 grid: Some(grid),
-                half: (2 * (cx - ox), 2 * (cy - oy)),
+                half,
                 life,
                 pct: 100,
                 ..Walker::default()
@@ -592,6 +725,7 @@ impl Scene {
             self.walkers[k].draw();
             self.walker_picture_set(k, data, caches);
             self.walker_picture(k, data, caches);
+            Some(k)
         }
     }
 
@@ -890,16 +1024,10 @@ impl Scene {
         self.jams.iter().any(|j| j.cell == cell)
     }
 
-    fn is_land(&self, cx: i32, cy: i32) -> bool {
-        let (w, h) = self.map_size();
-        cx >= 0 && cy >= 0 && (cx as u32) < w && (cy as u32) < h && !self.nav.is_water(cx, cy)
-    }
-
     /// Lairs send out creatures; those removed (message 10 at the end of
     /// their dying picture or at lightning's kill, or gone otherwise) leave
     /// their jams (message 3: 0x187a0) and the map.
-    pub(super) fn run_walkers(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
-        self.run_lairs(dt, data, caches);
+    pub(super) fn run_walkers(&mut self) {
         let walkers = std::mem::take(&mut self.walkers);
         let (gone, kept): (Vec<Walker>, Vec<Walker>) = walkers.into_iter().partition(|w| {
             w.gone
@@ -913,6 +1041,11 @@ impl Scene {
         self.walkers = kept;
         for w in gone {
             self.jam_leave(w.jam, w.id);
+            // Its lair told (0x187a1): struck off its list, the ones after
+            // it closing up.
+            if let Some(l) = self.lairs.get_mut(&w.lair) {
+                l.creatures.retain(|&c| c != w.id);
+            }
             self.objects.retain(|o| o.id != w.id);
         }
     }
@@ -1780,5 +1913,75 @@ impl Scene {
         w.drawn = true;
         let (frame, count) = (w.frame, w.count.max(1));
         self.objects[i].progress = Some((frame.clamp(0, count - 1) as f32 + 0.5) / count as f32);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clock::TICK;
+    use crate::scene::gorgon::lcg;
+
+    /// miss000's lair, a game tick at a time: a draw of its generator
+    /// `[game +0x2ee5] x id` every tick, and once `(10 - field 9) x ((r %
+    /// 21 + 80) x 25 / 100) + last` is below the tick (fewer out than
+    /// field 8) a creature goes out onto one of the cells about it, picked
+    /// by one more draw, on the half facing the lair and listed by it
+    /// (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn a_lair_sends_its_creatures() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let k = scene
+            .objects
+            .iter()
+            .position(|o| o.class == ObjectClass::CreatureSpawn)
+            .unwrap();
+        let id = scene.objects[k].id;
+        let f = |n| scene.objects[k].record.field(n).unwrap();
+        let (lx, ly, max, speed) = (f(4) as i32, f(5) as i32, f(8), f(9));
+        assert_eq!(scene.lairs[&id].last, 0);
+        assert!(scene.lairs[&id].creatures.is_empty());
+        let mut r = scene.game_seed().wrapping_mul(id);
+        let (mut last, mut out) = (0u32, Vec::new());
+        while out.len() < max as usize && scene.ticks < 2000 {
+            scene.update(TICK, &data, &mut caches);
+            let now = scene.ticks;
+            let v = lcg(&mut r);
+            if (10 - speed) * ((v % 21 + 80) * 25 / 100) + last < now {
+                last = now;
+                lcg(&mut r);
+                out.push(now);
+                let l = &scene.lairs[&id];
+                assert_eq!((l.last, l.creatures.len()), (now, out.len()));
+                let w = scene
+                    .walkers
+                    .iter()
+                    .find(|w| w.id == *l.creatures.last().unwrap())
+                    .unwrap();
+                let (cx, cy) = w.cell();
+                assert!((cx - lx).abs() <= 1 && (cy - ly).abs() <= 1);
+                assert_ne!((cx, cy), (lx, ly));
+                assert_eq!(w.lair, id);
+                // The half facing the lair.
+                let (ox, oy, _, _) = scene.walk_grid_box((lx, ly));
+                assert_eq!(w.half.0 / 2 + ox, cx);
+                assert_eq!(w.half.1 / 2 + oy, cy);
+                if cx < lx {
+                    assert_eq!(w.half.0 % 2, 1);
+                }
+                if cy > ly {
+                    assert_eq!(w.half.1 % 2, 0);
+                }
+            }
+            assert_eq!(scene.building_lcgs[&id], r, "tick {now}");
+        }
+        assert_eq!((lx, ly, max, speed), (0, 1, 2, 2));
+        assert_eq!(out, [163, 329]);
     }
 }

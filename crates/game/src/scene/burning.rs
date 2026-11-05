@@ -140,11 +140,11 @@ impl Scene {
     /// drain 0x4105c0 -> 0x427bb0 -> 0x423d60) on `CSTLSEAMSK_1<level>` /
     /// `CSTLWARMSK_1<level>` (0x4101d0 at 0x4102d9, `%sMSK_%1u%1u`), the
     /// draw of their own generator (castle.rs), and only standing (state
-    /// 1): casting (4) takes none. (Not ported: the same test on lairs,
-    /// `<CLPF|MNTF|AMZF>MSK_41<level>` (0x422e30), whose generator the
-    /// port does not keep: seeded at message 2 by 0x414f00, one draw every
-    /// tick and one per creature sent, 0x414f00 message 0, and the aim at
-    /// them, 0x423520.)
+    /// 1): casting (4) takes none. Lairs burn the same (their drain
+    /// 0x414ef0 jumps to 0x423d60) on `<CLPF|MNTF|AMZF>MSK_41<level>`
+    /// (LandObj's 0x422e30, nation 4), the draw of their generator (the
+    /// building one, drawn too by their tick 0x414f00, walkers.rs, and the
+    /// aim at them 0x423520).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn light_building(
         &mut self,
@@ -161,6 +161,7 @@ impl Scene {
             ObjectClass::Building(class) => class,
             // A castle stands in state 1 only: casting (4) it takes none.
             ObjectClass::Castle(class) if self.castle_standing(o.id) => class,
+            ObjectClass::CreatureSpawn => o.record.class_id,
             _ => return,
         };
         let Some(c) = o.combat.as_ref() else {
@@ -193,6 +194,8 @@ impl Scene {
         };
         let mask = if matches!(o.class, ObjectClass::Castle(_)) {
             castle_mask(data, class, level)
+        } else if o.class == ObjectClass::CreatureSpawn {
+            lair_mask(data, class, level)
         } else {
             building_mask(data, class, nation, level)
         };
@@ -420,6 +423,22 @@ impl Scene {
 fn castle_mask(data: &GameData, class: u32, level: u32) -> Option<openconquest_formats::Mask> {
     use openconquest_formats::ResourceKind;
     let name = format!("{}MSK_1{level}", super::castle::prefix(class));
+    let lib = &data.objects;
+    let e = lib.find(&name, ResourceKind::Mask)?;
+    let bits = lib.read_entry(e).ok()?;
+    openconquest_formats::Mask::parse(&bits, e.width.into(), e.height.into()).ok()
+}
+
+/// A lair's mask (0x422e30: its prefix `+0xb8`, nation 4, 1, the damage
+/// level), so `CLPFMSK_413`.
+fn lair_mask(data: &GameData, class: u32, level: u32) -> Option<openconquest_formats::Mask> {
+    use openconquest_formats::ResourceKind;
+    let prefix = match class {
+        0x46 => "CLPF",
+        0x47 => "MNTF",
+        _ => "AMZF",
+    };
+    let name = format!("{prefix}MSK_41{level}");
     let lib = &data.objects;
     let e = lib.find(&name, ResourceKind::Mask)?;
     let bits = lib.read_entry(e).ok()?;
@@ -712,6 +731,54 @@ mod tests {
         assert_ne!(scene.building_lcgs[&id], seed);
         let f = &scene.building_fires[0];
         assert_eq!((f.building, f.size), (id, 2));
+        assert!(f.fire.is_some());
+    }
+
+    /// miss000's lair takes fire on its mask (`<prefix>MSK_413`, nation
+    /// 4) by a draw of its generator, none off it, with no draw (needs
+    /// `OPENCONQUEST_DATA`).
+    #[test]
+    fn a_lair_takes_fire() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        let i = scene
+            .objects
+            .iter()
+            .position(|o| o.class == ObjectClass::CreatureSpawn)
+            .unwrap();
+        let o = &scene.objects[i];
+        let mask = lair_mask(&data, o.record.class_id, 3).unwrap();
+        let (left, top) = crate::render::layer_origin(o, &o.frames[0][0]);
+        let stride = (mask.width + 7) & !7;
+        let (mx, my) = (0..mask.height)
+            .flat_map(|y| (0..mask.width).map(move |x| (x, y)))
+            .find(|&(x, y)| mask.bit((y * stride + x) as usize))
+            .unwrap();
+        let hit = (left + mx as i32, top + my as i32);
+        let id = o.id;
+        let seed = (1u32..).find(|&v| combat::Rng(v).next() % 3 == 0).unwrap();
+        scene.building_lcgs.insert(id, seed);
+        scene.light_building(
+            i,
+            6,
+            true,
+            (left - 1, top),
+            Some((1, 0)),
+            &data,
+            &mut caches,
+        );
+        assert_eq!(scene.building_lcgs[&id], seed);
+        assert!(scene.building_fires.is_empty());
+        scene.light_building(i, 6, true, hit, Some((1, 0)), &data, &mut caches);
+        let mut r = combat::Rng(seed);
+        r.next();
+        assert_eq!(scene.building_lcgs[&id], r.0);
+        let f = &scene.building_fires[0];
+        assert_eq!(f.building, id);
         assert!(f.fire.is_some());
     }
 

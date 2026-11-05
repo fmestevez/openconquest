@@ -5135,12 +5135,10 @@ and the fire test of 0x423d60, and no units' share. Harpy nests
 lime or fire, the nest's creature told (0xdaf7 with the shooter); at or
 over its life it falls (state 2, the kill to `+0x15`'s player, 0xdaf9).
 The hero's house (0x595e98) drops it (vt+4 0x421130 queues all but
-0x138e). The port: `land_shot` (scene/shot.rs). Not ported: the fire on
-castles and lairs (their masks `CSTLSEAMSK_1<level>`,
-`CSTLWARMSK_1<level>`, 0x4101d0 `%sMSK_%1u%1u`, and
-`<CLPF|MNTF|AMZF>MSK_41<level>`), whose draw is of their own generators
-(castle 0x410ca0 message 2 and 0x410790, lair 0x414f00 message 0), not
-kept by the port.
+0x138e). The port: `land_shot` (scene/shot.rs); the fire on castles
+(`CSTLSEAMSK_1<level>`, `CSTLWARMSK_1<level>`, 0x4101d0 `%sMSK_%1u%1u`)
+and lairs (`<CLPF|MNTF|AMZF>MSK_41<level>`) by their own generators
+(castle.rs, walkers.rs), see A building's fire.
 
 Spreading a share over units of a mask: points are `condition x
 0x597cfc[item] / 100` (copied to 0x5c7438 by 0x44788c), the total their
@@ -6275,9 +6273,34 @@ reads (the port takes the draw's).
 
 ## Land creatures
 
-Lairs (`CreaturesFlatClassTy`, 0x414f00) send out another creature once
-`(10 - field 9) x (20-25)` ticks have passed since the last, drawn afresh
-at each look, up to field 8 out. A creature's state `+0x154` is also
+Lairs (`CreaturesFlatClassTy`, 0x414f00). Message 2: the cell (record
+fields 4, 5: `+0x74`, `+0x78`), the most out (field 8, `+0x1d0`), the
+speed (field 9, `+0x1d4`), the generator `+0x18` seeded `[game +0x2ee5]
+x id` and the last creature's tick `+0x368` now (a save, field 7 = 2,
+restores the generator, the count `+0x1cc`, the list `+0x1d8` and
+`+0x368`). Message 0, each tick before LandObj's 0x425990: one draw r,
+always; then, standing (`+0xa4` 1) with `+0x1cc` below `+0x1d0` and
+`(10 - speed) x ((r % 21 + 80) x 25 / 100) + +0x368` (unsigned) below
+the tick, `+0x368` is the tick and the cells about the lair's are
+scanned, row by row from the north, each from the west: not its own, on
+the map, the cell's object slot empty or a jam (0x1f7), its landscape's
+low nibble 8, no shore (0x5acf13) on the side facing the lair (a cell
+south of it no bit 1, north no 4, east no 8, west no 2), nibble 5 not 1,
+nibbles 6 and 7 0, and on a jam's cell no member on the half facing the
+lair (0x415e40 with id 0). The half facing it, in the walk grid of the
+lair's cell (0x42e590, 6 more each way, kept on the map, doubled):
+`2 (x - origin)` + 1 for a cell west of the lair, or in its column with
+bit 8; `2 (y - origin)` + 1 for a cell north of it, or in its row with
+bit 1. With more than one, the cell straight south is dropped; a draw
+`r % n` picks one; message 0x1497 makes the creature with `{+0x36c (its
+class), 1, the lair's id, that half, the lair's cell}` (0x413d70: its
+grid about the lair's cell, 0x411ce0, the half kept; one with no lair
+and half 0 takes its own cell's north-west half, 0x411e7f), listed at
+`+0x1d8 + 4 x +0x1cc`, `+0x1cc` + 1. No cell free: nothing drawn or
+made, the time taken all the same. A creature removed (message 10) sends
+0x187a1: it is struck off the list, the rest closing up, `+0x1cc` - 1.
+The port: `Scene::tick_lairs` (scene/walkers.rs), a game tick at a time
+after the castles. A creature's state `+0x154` is also
 its picture's state digit (0x4111b0: `<CLP|MNT|AMZ>SPR_<state><heading>`,
 state 6 `<..>SPR_6`, the amazon's throw `AMZSPR_3<h><draw & 1>`): 0
 appearing, 1 standing, 2 walking, 3 throwing, 4 hit, 5 dying, 6 turning;
@@ -6575,14 +6598,12 @@ only 0x138a-0x138c and leaves the rest to 0x423d60; their generators are
 the kept ones (above). Castles burn the same (their drain 0x4105c0
 -> 0x427bb0 -> 0x423d60) on `CSTLSEAMSK_1<level>` / `CSTLWARMSK_1<level>`
 (0x4101d0 at 0x4102d9), their generator kept (castle.rs, below), only
-in state 1: casting (4) they take none. Not ported: lairs, whose drain
-reaches 0x423d60 too, because their generator's other draws are not the
-port's. A lair's is seeded `[game +0x2ee5] x
-id` at message 2 (0x414f00; a save's from its record), drawn every tick
-at message 0 for the next creature's time, and once more to pick the
-creature's cell among the free ones (0x414f00 after the scan); the
-port's `run_lairs` draws the scene's generator, with its own cells.
-It is drawn also by the aim at them (0x423520, above). Not decoded:
+in state 1: casting (4) they take none. Lairs burn the same (their
+drain 0x414ef0 jumps to 0x423d60) on `<CLPF|MNTF|AMZF>MSK_41<level>`
+(0x422e30, nation 4), the draw of their generator: the building one,
+seeded `[game +0x2ee5] x id` at message 2 (0x414f00; a save's from its
+record), drawn every tick by their tick and once per creature sent (see
+Lairs, below) and by the aim at them (0x423520, above). Not decoded:
 whether ports' and docks' drains reach 0x4240e0 (the port lights none on
 them); the classes with no mask resource would read a null mask in
 0x557640, the port lights none on them; whether a killing blow's state is still 1
@@ -8056,8 +8077,9 @@ drawn high in the frame, its shadow on the water below.
 
 Lairs (CreaturesFlatClassTy, handler 0x414f00; record field 8 the most
 creatures about, field 9 their speed) send a cyclops, minotaur or amazon
-(CyclopClassTy 0x1f4-0x1f6) onto a free land cell beside them every (10 -
-field 9) x 20-25 time units while fewer are out, to roam the island about
+(CyclopClassTy 0x1f4-0x1f6) onto a free land cell beside them once
+`(10 - field 9) x ((r % 21 + 80) x 25 / 100)` ticks have passed since the
+last, while fewer are out (see Land creatures), to roam the island about
 the lair. Their sprites are `CLPSPR_`/`MNTSPR_`/`AMZSPR_` + state +
 heading: 0 appearing (out of smoke), 1 standing, 2 walking, 3 throwing
 (the amazons' in two parts, `AMZSPR_3<heading><part>`), 4 hit, 5 dying, 6

@@ -411,10 +411,10 @@ pub struct Scene {
     /// Harpies and dragons out of their nests, and the nests' counts.
     pub flyers: Vec<flyers::Flyer>,
     pub nests: Vec<flyers::Nest>,
-    /// Cyclops, minotaurs and amazons out of their lairs, and the seconds
-    /// since each lair last sent one.
+    /// Cyclops, minotaurs and amazons out of their lairs, and the lairs
+    /// (0x414f00).
     pub walkers: Vec<walkers::Walker>,
-    pub lair_clocks: std::collections::BTreeMap<u32, f32>,
+    pub lairs: std::collections::BTreeMap<u32, walkers::Lair>,
     /// The land creatures' jams (CyclopsJamClassTy 0x1f7), one a cell
     /// they stand on.
     pub jams: Vec<walkers::Jam>,
@@ -620,7 +620,7 @@ pub use stats::Stats;
 pub use story::goal_name;
 pub use story::{Carry, Goal};
 pub use towns::Towns;
-pub use walkers::{anchor_walker_frames, walker_frame_ms, walker_sequence, Jam, Walker};
+pub use walkers::{anchor_walker_frames, walker_frame_ms, walker_sequence, Jam, Lair, Walker};
 pub use yard::ShipOrder;
 #[cfg(test)]
 mod tests;
@@ -937,7 +937,7 @@ impl Scene {
             jams: Vec::new(),
             throws: Vec::new(),
             fire_lists: Default::default(),
-            lair_clocks: Default::default(),
+            lairs: Default::default(),
             carried: Vec::new(),
             site_heroes: Default::default(),
             brain: None,
@@ -1086,6 +1086,7 @@ impl Scene {
         scene.start_nests(data, caches);
         scene.start_gorgons(data, caches);
         scene.start_castles(data, caches);
+        scene.start_lairs();
         for i in 0..scene.objects.len() {
             scene.refresh_amber(i, data, caches);
         }
@@ -1191,7 +1192,7 @@ impl Scene {
             nests: self.nests.clone(),
             walkers: self.walkers.clone(),
             jams: self.jams.clone(),
-            lair_clocks: self.lair_clocks.clone(),
+            lairs: self.lairs.clone(),
             volcanoes: self.volcanoes.clone(),
             brain_flames: self.brain_flames.iter().map(|(&k, &v)| (k, v)).collect(),
             brain_brews: self.brain_brews.clone(),
@@ -1383,7 +1384,7 @@ impl Scene {
         scene.nests = save.nests.clone();
         scene.walkers = save.walkers.clone();
         scene.jams = save.jams.clone();
-        scene.lair_clocks = save.lair_clocks.clone();
+        scene.lairs = save.lairs.clone();
         scene.volcanoes = save.volcanoes.clone();
         scene.brain_flames = save.brain_flames.iter().copied().collect();
         scene.brain_brews = save.brain_brews.clone();
@@ -2621,6 +2622,7 @@ impl Scene {
             self.tick_flyers(data, caches);
             self.tick_gorgons(data, caches);
             self.tick_castles(data, caches);
+            self.tick_lairs(data, caches);
             self.tick_statuses(data, caches);
             self.tick_building_statuses(data, caches);
             self.tick_ship_shields(data, caches);
@@ -2710,7 +2712,7 @@ impl Scene {
         self.run_fetches();
         self.run_loads();
         self.run_flyers(dt, data, caches);
-        self.run_walkers(dt, data, caches);
+        self.run_walkers();
         self.run_porters(dt, data, caches);
         self.run_furling(dt);
         self.run_rocking(dt);

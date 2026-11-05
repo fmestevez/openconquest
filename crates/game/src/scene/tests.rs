@@ -1812,6 +1812,10 @@ fn behaviours() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    // No lairs: their creatures would throw at the ships.
+    scene
+        .objects
+        .retain(|o| o.class != ObjectClass::CreatureSpawn);
     let human = scene.human.unwrap();
     let mine = scene
         .objects
@@ -1922,6 +1926,10 @@ fn behaviours() {
     let s = scene.objects[m].ship.as_mut().unwrap();
     s.task = None;
     s.path.clear();
+    // Lying still (way 0) its ram odds are 200 (0x4e8db0); way left over
+    // from the chase before would lower them.
+    s.way = 0;
+    s.way_rest = 0;
     scene.objects[m].x = ex - 128.0;
     scene.objects[m].y = ey;
     for _ in 0..50 * 5 {
@@ -2680,6 +2688,10 @@ fn leviathan_hunt() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    // No lairs: their creatures would throw at the ships.
+    scene
+        .objects
+        .retain(|o| o.class != ObjectClass::CreatureSpawn);
     let boat = scene
         .objects
         .iter()
@@ -2714,6 +2726,12 @@ fn leviathan_hunt() {
         }
     }
     assert_eq!((scene.amber, scene.fish), (amber + 5000, fish + 2500));
+    // Emptied, the shoal goes once its dive's wait is over (0x48dd80):
+    // at most its time up (33 + 3 x 60 + 33 ticks) and down (75) on.
+    let by = scene.ticks + 33 + 3 * 60 + 33 + 75;
+    while scene.object_index(zone).is_some() && scene.ticks < by {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
     assert!(scene.object_index(zone).is_none(), "the leviathan is gone");
 }
 
@@ -11911,7 +11929,7 @@ fn land_creatures_hit_and_die() {
             }
         }
         assert_eq!(gone_at, Some(last), "class {class:#x}");
-        scene.run_walkers(0.0, &data, &mut caches);
+        scene.run_walkers();
         assert!(scene.walkers.is_empty() && scene.jams.is_empty());
         assert!(scene.object_index(id).is_none());
     }

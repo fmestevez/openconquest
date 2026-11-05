@@ -124,7 +124,7 @@ impl Scene {
     }
 
     /// Ship `k`'s founding order at its tick (0x4b3370).
-    fn landing_tick(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
+    fn landing_tick(&mut self, mut k: usize, data: &GameData, caches: &mut Caches) {
         let t = TILE_SIZE as f32;
         let o = &self.objects[k];
         let s = o.ship.as_ref().unwrap();
@@ -251,12 +251,18 @@ impl Scene {
                             l.plank_at.0.round() as i32 + dx,
                             l.plank_at.1.round() as i32 + dy,
                         );
-                        let owner = self.objects[k].owner;
+                        let (owner, id) = (self.objects[k].owner, self.objects[k].id);
                         l.porters = None;
                         l.state = 7;
                         if let Some(owner) = owner {
                             self.make_party(owner, class, (cx, cy), at, data, caches);
                         }
+                        // A fort founded at once is placed among the
+                        // objects in painter's order: the ship found again.
+                        let Some(i) = self.object_index(id) else {
+                            return;
+                        };
+                        k = i;
                         // The crew gains 200 experience (0x4b4680, 0x4b35f4).
                         self.gain_experience(k, 200);
                     } else {
@@ -873,6 +879,10 @@ mod tests {
     fn founding(class: u32) -> Option<Founding> {
         let (data, mut caches) = open()?;
         let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        // No lairs: their creatures would throw at the boat.
+        scene
+            .objects
+            .retain(|o| o.class != ObjectClass::CreatureSpawn);
         let boat = scene
             .objects
             .iter()

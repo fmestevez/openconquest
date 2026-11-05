@@ -185,7 +185,7 @@ pub struct SaveGame {
     #[serde(default)]
     pub jams: Vec<crate::scene::Jam>,
     #[serde(default)]
-    pub lair_clocks: std::collections::BTreeMap<u32, f32>,
+    pub lairs: std::collections::BTreeMap<u32, crate::scene::Lair>,
     /// What was going on that the scene keeps besides: walkways and
     /// porters, flames, refits, the Flame, repairs owed, clocks.
     #[serde(default)]
