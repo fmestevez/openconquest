@@ -151,6 +151,7 @@ impl Scene {
                         frame_ms: crate::clock::TICK_MS as f32 * 2.0,
                         tornado: None,
                         site: Some(id),
+                        depth: crate::combat::FxDepth::Over,
                     });
                 }
             }

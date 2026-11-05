@@ -3,6 +3,7 @@
 use openconquest_formats::ObjectClass;
 
 use crate::assets::{rgb, GameData, Image, BLEND, SHADOW};
+use crate::combat::{Effect, FxDepth};
 use crate::objects::{Layer, MapObject};
 use crate::scene::{Scene, Seen};
 use crate::terrain::{resolve, MINIMAP_DIVISOR};
@@ -124,6 +125,11 @@ pub enum Slot {
     /// Gull `k` and its shadow.
     Gull(usize),
     GullShadow(usize),
+    /// Effect `k` (a landing shot's picture, a sinking hull, lightning, a
+    /// tornado), fireball `k` and shot `k` in flight.
+    Effect(usize),
+    Fireball(usize),
+    Shot(usize),
 }
 
 type Paint<'a> = Box<dyn Fn(&mut Frame, &Screen, &Camera, &[u32; 256]) + 'a>;
@@ -167,8 +173,8 @@ pub fn object_depth(obj: &MapObject, layers: &[Layer]) -> i32 {
     }
     match obj.class {
         // A ship's hull: `max(20000 - bottom, 10000)` each draw (0x4df6e0).
-        // (Not ported: from the sinking's frame 4 on 0x4f4c; the port's
-        // sinking hull is an effect.)
+        // (Sinking, from frame 4 on 0x4f4c: the port's sinking hull is
+        // an effect, `FxDepth::Sinking`.)
         ObjectClass::Ship => ground_depth(bottom()),
         // A LandObj's picture: the same at its message 2 (0x425990), then
         // kept (the port takes the picture now drawn).
@@ -204,11 +210,12 @@ pub fn object_depth(obj: &MapObject, layers: &[Layer]) -> i32 {
         ObjectClass::WhaleZone => ground_depth(bottom()),
         // Whirlpools and reefs 0x4ee8 (0x447ee0, 0x4306d0), kept.
         ObjectClass::Whirlpool | ObjectClass::Reef(_) => 0x4ee8,
-        // Lightning 0x3ed (0x42d480; 0x3f7 at `LTSPR`, 0x42cdf0, not
-        // ported).
+        // Lightning 0x3ed (0x42d480; 0x3f7 at its strike's `LTSPR`,
+        // 0x42cdf0: the port's lightning is effects, `FxDepth::Fixed`).
         ObjectClass::Weather(0x25b) => 0x3ed,
-        // A tornado moving: `max(0x26f0 - y, 1000)` (0x43a380). (Not
-        // ported: its first, `max(20000 - y, 10000)`, 0x43a240.)
+        // A tornado moving: `max(0x26f0 - y, 1000)` (0x43a380). (Its
+        // first, `max(20000 - y, 10000)`, 0x43a240: the port's tornado is
+        // an effect, `FxDepth::Tornado`.)
         ObjectClass::Weather(0x25c) => (0x26f0 - obj.y as i32).max(1000),
         // The Slight: `max(0x26c6 - 0x40 x cell row +0xc0, 1000)` (0x4059e0).
         ObjectClass::Weather(0x25d) => (0x26c6 - 0x40 * cell_row(obj)).max(1000),
@@ -227,6 +234,54 @@ pub fn object_depth(obj: &MapObject, layers: &[Layer]) -> i32 {
 /// `max(0x4de0 - the lower end's y, 10000)`.
 pub fn line_depth(y0: i32, y1: i32) -> i32 {
     (0x4de0 - y0.max(y1)).max(10000)
+}
+
+/// The bottom of `layers`' first picture drawn centred on `(x, y)`.
+fn centred_bottom(layers: &[Layer], y: f32) -> Option<i32> {
+    let l = layers.first()?;
+    let h = l.image.height as i32;
+    Some((y + l.dy as f32 - h as f32 / 2.0).round() as i32 + h)
+}
+
+/// Effect `fx`'s depth now, showing `layers`, `None` for one drawn over
+/// the list (not decoded).
+fn effect_depth(scene: &Scene, fx: &Effect, layers: &[Layer], time_ms: u64) -> Option<i32> {
+    let bottom = || centred_bottom(layers, fx.y).unwrap_or(fx.y as i32);
+    match &fx.depth {
+        FxDepth::Over => None,
+        FxDepth::Fixed(d) => Some(*d),
+        // 0x4df6e0 on a hull going down (`+0x74` 5): by its bottom to
+        // frame 3, 0x4f4c from frame 4.
+        FxDepth::Sinking => Some(match fx.step() {
+            0..=3 => ground_depth(bottom()),
+            _ => 0x4f4c,
+        }),
+        // 0x43a240 on its first frame, 0x43a380 at each step after.
+        FxDepth::Tornado => {
+            let y = fx.y.floor() as i32;
+            Some(match fx.tornado.as_ref().is_some_and(|t| t.frame == 0) {
+                true => ground_depth(y),
+                false => (0x26f0 - y).max(1000),
+            })
+        }
+        // 0x4965d0 runs from the tick after the landing (0x4974d0 case 4,
+        // before the frame's step): frame 0 keeps the flight's 10000.
+        FxDepth::Landed { .. } if fx.step() == 0 => Some(10000),
+        // Landed on an object: its depth as its hit test gave it (`+0x80`)
+        // less 10 (the port reads it at the first frame after the
+        // landing's, the object's depth as drawn then).
+        FxDepth::Landed { on: Some(id), hit } => {
+            let d = hit.get().or_else(|| {
+                let o = &scene.objects[scene.object_index(*id)?];
+                let d = object_depth(o, scene.frame_of(o, time_ms));
+                hit.set(Some(d));
+                Some(d)
+            })?;
+            Some(d - 10)
+        }
+        // In the water or on the ground: `max(0x4e16 - bottom, 10000)`.
+        FxDepth::Landed { on: None, .. } => Some((0x4e16 - bottom()).max(10000)),
+    }
 }
 
 /// Draws `layers` centred on world point `(x, y)`, each by its offset.
@@ -585,6 +640,69 @@ fn sprites<'a>(scene: &'a Scene, time_ms: u64) -> Vec<Sprite<'a>> {
             );
         }
     }
+    let t = TILE_SIZE as f32;
+    let in_sight = |x: f32, y: f32| {
+        scene.seen((x / t).floor() as i32, (y / t).floor() as i32) == Seen::InSight
+    };
+    // Effects with a decoded depth (`effect_depth`).
+    for (k, fx) in scene.effects.iter().enumerate() {
+        if !in_sight(fx.x, fx.y) {
+            continue;
+        }
+        let Some(layers) = fx.frame() else {
+            continue;
+        };
+        if let Some(depth) = effect_depth(scene, fx, layers, time_ms) {
+            push(
+                depth,
+                Slot::Effect(k),
+                Box::new(move |f, sc, cam, lut| draw_layers(f, sc, cam, lut, layers, fx.x, fx.y)),
+            );
+        }
+    }
+    // Fireballs (the Slight, 0x25d): `max(0x26c6 - 0x40 x cell row +0xc0,
+    // 1000)` (0x4059e0 at its first picture).
+    for (k, fb) in scene.fireballs.iter().enumerate() {
+        if scene.seen(fb.cell.0, fb.cell.1) != Seen::InSight {
+            continue;
+        }
+        if let Some((layers, left, top)) = fb.picture() {
+            push(
+                (0x26c6 - 0x40 * fb.cell.1).max(1000),
+                Slot::Fireball(k),
+                Box::new(move |f, sc, cam, lut| {
+                    for l in layers {
+                        draw_image(
+                            f,
+                            sc,
+                            cam,
+                            lut,
+                            &l.image,
+                            (left + l.dx as f32) as i32,
+                            (top + l.dy as f32) as i32,
+                        );
+                    }
+                }),
+            );
+        }
+    }
+    // Shots in flight: their picture (layer 0) made at 10000 (0x496190
+    // message 2) and kept while flying (0x4965d0 states 1-3 pass -1 for
+    // it). (A shot made anew has no layer 1: the shadow is only made by
+    // a save's restoring, 0x4990b0.)
+    for (k, s) in scene.shots.iter().enumerate() {
+        if !in_sight(s.x, s.y) {
+            continue;
+        }
+        if let Some(layer) = s.layer() {
+            let (x, y) = (s.x, s.y);
+            push(
+                10000,
+                Slot::Shot(k),
+                Box::new(move |f, sc, cam, lut| draw_centred(f, sc, cam, lut, &layer.image, x, y)),
+            );
+        }
+    }
     // The sprite manager's list (0x55d9d0): a slot made takes its depth
     // from the list's end, so it lands after its equals; 0x564970 draws
     // from the end down. Deepest first, and of equals the later made
@@ -620,46 +738,16 @@ pub fn draw_objects(
     for s in sprites(scene, time_ms) {
         (s.paint)(frame, screen, camera, lut);
     }
-    // Not ported: the effects' (sinking hulls, explosions, spells, the
-    // tornado, the volcano's, a yard's ship), fireballs' and shots'
-    // depths (0x4965d0's states; `+0x80` not decoded): drawn over the
-    // list.
+    // Not decoded: the other effects' depths (explosions without a shot,
+    // a ram's blow, the boarding fight, the volcano's eruption, a yard's
+    // ship): drawn over the list.
     let t = TILE_SIZE as f32;
     for fx in scene.effects.iter().filter(|fx| {
-        scene.seen((fx.x / t).floor() as i32, (fx.y / t).floor() as i32) == Seen::InSight
+        matches!(fx.depth, FxDepth::Over)
+            && scene.seen((fx.x / t).floor() as i32, (fx.y / t).floor() as i32) == Seen::InSight
     }) {
         if let Some(layers) = fx.frame() {
             draw_layers(frame, screen, camera, lut, layers, fx.x, fx.y);
-        }
-    }
-    // Fireballs over their cells.
-    for f in scene
-        .fireballs
-        .iter()
-        .filter(|f| scene.seen(f.cell.0, f.cell.1) == Seen::InSight)
-    {
-        if let Some((layers, left, top)) = f.picture() {
-            for l in layers {
-                draw_image(
-                    frame,
-                    screen,
-                    camera,
-                    lut,
-                    &l.image,
-                    (left + l.dx as f32) as i32,
-                    (top + l.dy as f32) as i32,
-                );
-            }
-        }
-    }
-    // Shots in flight.
-    for s in scene
-        .shots
-        .iter()
-        .filter(|s| scene.seen((s.x / t).floor() as i32, (s.y / t).floor() as i32) == Seen::InSight)
-    {
-        if let Some(layer) = s.layer() {
-            draw_centred(frame, screen, camera, lut, &layer.image, s.x, s.y);
         }
     }
 }

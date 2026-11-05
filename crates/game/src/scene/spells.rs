@@ -285,6 +285,8 @@ impl Scene {
                     frame_ms: (LIGHTNING_START as u64 * crate::clock::TICK_MS) as f32,
                     tornado: None,
                     site: None,
+                    // State 0 at 0x3ed (0x42d480).
+                    depth: crate::combat::FxDepth::Fixed(0x3ed),
                 });
             }
             Ok(_) => {}
@@ -315,7 +317,12 @@ impl Scene {
         for (x, y, water) in started {
             self.sounds.push(("molniya2", x, y));
             self.shake_ms = Some(0.0);
+            let n = self.effects.len();
             self.spawn_effect(data, caches, magic::fx_lightning(water), x, y);
+            // States 1 and 2 at 0x3f7 (0x42cdf0).
+            if let Some(fx) = self.effects.get_mut(n) {
+                fx.depth = crate::combat::FxDepth::Fixed(0x3f7);
+            }
         }
         let due: Vec<(f32, f32, Option<super::Owner>)> = self
             .lightning
@@ -765,6 +772,7 @@ impl Scene {
                     caster: master,
                 }),
                 site: None,
+                depth: crate::combat::FxDepth::Tornado,
             });
             self.sounds.push(("wind8", x, y));
             return Ok(());

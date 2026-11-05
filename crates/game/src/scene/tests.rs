@@ -18157,3 +18157,146 @@ fn flyers_place_shadow_and_pick_are_the_originals() {
         assert_eq!(crate::render::layer_origin(d, &l[1]), (x - 0x43, y - 0x92));
     }
 }
+
+/// The draw list's effects, shots and fireballs as the original's
+/// (miss003, needs `OPENCONQUEST_DATA`): a shot in flight at 10000
+/// (0x496190); its landing picture there on frame 0, then on a ship at
+/// the hull's depth less 10 (`+0x80`, 0x4965d0: over the hull), in the
+/// water at `max(0x4e16 - bottom, 10000)`; a sinking hull by its bottom
+/// to frame 3 and 0x4f4c from frame 4 (0x4df6e0); lightning at 0x3ed,
+/// its strike at 0x3f7 (0x42cdf0); a fireball at `max(0x26c6 - 0x40 x
+/// cell row, 1000)` (0x4059e0).
+#[test]
+fn effects_shots_and_fireballs_take_their_depths() {
+    use crate::combat::FxDepth;
+    use crate::render::{draw_order, ground_depth, Slot};
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    scene.brain = None;
+    scene.fog = false;
+    let depth_of = |scene: &Scene, slot: Slot| {
+        let order = draw_order(scene, 0);
+        order
+            .iter()
+            .position(|&(_, s)| s == slot)
+            .map(|k| (k, order[k].0))
+    };
+    let bottom_of = |fx: &combat::Effect| {
+        let l = &fx.frame().unwrap()[0];
+        let h = l.image.height as i32;
+        (fx.y + l.dy as f32 - h as f32 / 2.0).round() as i32 + h
+    };
+    let k = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+    let (id, x, y) = (scene.objects[k].id, scene.objects[k].x, scene.objects[k].y);
+    let fire = |scene: &mut Scene, strikes: bool, to: (f32, f32), caches: &mut Caches| {
+        scene.fire_shot(
+            super::shot::Firing {
+                item: 4,
+                letter: None,
+                flaming: false,
+                from: (x - 300.0, y),
+                target: id,
+                strikes,
+                damage: 0.0,
+                wounds: 0.0,
+                wear: 0.0,
+                rope: None,
+                shooter: None,
+                by: None,
+                to: Some(to),
+            },
+            &data,
+            caches,
+        );
+        scene.run_shots(crate::clock::TICK, &data, caches);
+    };
+    let land = |scene: &mut Scene, caches: &mut Caches| {
+        for _ in 0..500 {
+            if scene.shots.is_empty() {
+                break;
+            }
+            scene.run_shots(crate::clock::TICK, &data, caches);
+        }
+        assert!(scene.shots.is_empty());
+    };
+    // A shot in flight: 10000.
+    fire(&mut scene, true, (x, y), &mut caches);
+    assert_eq!(depth_of(&scene, Slot::Shot(0)).map(|d| d.1), Some(10000));
+    land(&mut scene, &mut caches);
+    // Landed on the ship: 10000 on frame 0, then the hull's less 10.
+    let e = scene.effects.len() - 1;
+    assert!(matches!(scene.effects[e].depth, FxDepth::Landed { on: Some(o), .. } if o == id));
+    assert_eq!(depth_of(&scene, Slot::Effect(e)).map(|d| d.1), Some(10000));
+    scene.effects[e].age_ms = scene.effects[e].frame_ms + 1.0;
+    let (hk, hull) = depth_of(&scene, Slot::Object(id)).unwrap();
+    let (fk, fd) = depth_of(&scene, Slot::Effect(e)).unwrap();
+    eprintln!("hull {hull}, its blow {fd}");
+    assert_eq!(fd, hull - 10);
+    assert!(fk > hk);
+    scene.effects.clear();
+    // In the water by the ship.
+    let t = TILE_SIZE as f32;
+    let to = [(-100.0, 0.0), (100.0, 0.0), (0.0, 100.0), (0.0, -100.0)]
+        .into_iter()
+        .map(|(dx, dy)| (x + dx, y + dy))
+        .find(|to| scene.nav.is_water((to.0 / t) as i32, (to.1 / t) as i32))
+        .expect("water by the ship");
+    fire(&mut scene, false, to, &mut caches);
+    land(&mut scene, &mut caches);
+    let fx = &mut scene.effects[0];
+    assert!(matches!(fx.depth, FxDepth::Landed { on: None, .. }));
+    fx.age_ms = fx.frame_ms + 1.0;
+    let bottom = bottom_of(&scene.effects[0]);
+    assert_eq!(
+        depth_of(&scene, Slot::Effect(0)).map(|d| d.1),
+        Some((0x4e16 - bottom).max(10000))
+    );
+    scene.effects.clear();
+    // A sinking hull: by its bottom on frame 3, 0x4f4c on frame 4.
+    let frames = objects::sequence_frames(&data, &mut caches, combat::FX_SINK).unwrap();
+    assert!(frames.len() > 4);
+    scene.effects.push(combat::Effect {
+        x,
+        y,
+        frames,
+        age_ms: 3.5 * 70.0,
+        follow: None,
+        life_ms: None,
+        frame_ms: 70.0,
+        tornado: None,
+        site: None,
+        depth: FxDepth::Sinking,
+    });
+    let bottom = bottom_of(&scene.effects[0]);
+    assert_eq!(
+        depth_of(&scene, Slot::Effect(0)).map(|d| d.1),
+        Some(ground_depth(bottom))
+    );
+    scene.effects[0].age_ms = 4.5 * 70.0;
+    assert_eq!(depth_of(&scene, Slot::Effect(0)).map(|d| d.1), Some(0x4f4c));
+    scene.effects.clear();
+    // Lightning: 0x3ed, then its strike's picture 0x3f7.
+    let (cx, cy) = ((x / t) as i32, (y / t) as i32);
+    scene.spawn_lightning(cx, cy, None, &data, &mut caches);
+    assert_eq!(depth_of(&scene, Slot::Effect(0)).map(|d| d.1), Some(0x3ed));
+    for _ in 0..1000 {
+        if scene.effects.len() > 1 {
+            break;
+        }
+        scene.run_lightning(crate::clock::TICK, &data, &mut caches);
+    }
+    assert_eq!(depth_of(&scene, Slot::Effect(1)).map(|d| d.1), Some(0x3f7));
+    scene.effects.clear();
+    scene.lightning.clear();
+    // A fireball over the ship's cell.
+    scene.spawn_fireball(cx, cy, None, &data, &mut caches);
+    assert!(scene.fireballs[0].picture().is_some());
+    assert_eq!(
+        depth_of(&scene, Slot::Fireball(0)).map(|d| d.1),
+        Some((0x26c6 - 0x40 * cy).max(1000))
+    );
+}

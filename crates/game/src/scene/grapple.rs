@@ -758,6 +758,7 @@ impl Scene {
                 frame_ms: crate::clock::TICK_MS as f32,
                 tornado: None,
                 site: None,
+                depth: crate::combat::FxDepth::Over,
             });
         }
         g
@@ -1028,6 +1029,7 @@ impl Scene {
                 frame_ms: crate::clock::TICK_MS as f32,
                 tornado: None,
                 site: None,
+                depth: crate::combat::FxDepth::Over,
             });
         }
         if let Some(t) = self.objects[ti].ship.as_mut() {

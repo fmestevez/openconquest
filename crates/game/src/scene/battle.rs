@@ -1494,6 +1494,7 @@ impl Scene {
                             frame_ms: crate::combat::FX_FRAME_MS,
                             tornado: None,
                             site: None,
+                            depth: crate::combat::FxDepth::Sinking,
                         }),
                         _ => self.spawn_effect(data, caches, combat::FX_SINK, tx, ty),
                     }
@@ -2111,6 +2112,7 @@ impl Scene {
                 },
                 tornado: None,
                 site: None,
+                depth: crate::combat::FxDepth::Over,
             }),
             Ok(_) => {}
             Err(e) => eprintln!("could not load effect {name}: {e:#}"),

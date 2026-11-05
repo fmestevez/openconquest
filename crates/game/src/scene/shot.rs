@@ -797,6 +797,10 @@ impl Scene {
                 frame_ms: crate::clock::TICK_MS as f32,
                 tornado: None,
                 site: None,
+                depth: crate::combat::FxDepth::Landed {
+                    on: target.map(|_| s.target),
+                    hit: std::cell::Cell::new(None),
+                },
             });
         }
         // Q, R and S only splash (events 305-308, only 305 recorded).

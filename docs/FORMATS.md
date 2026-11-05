@@ -6496,11 +6496,35 @@ order the original makes them (objects in the scene's order, each with
 its smoke, fire, glint, banner and shields; walkways; parties; lines;
 droplets; gulls), sorts it by depth deepest first, of equals the later
 made first (it keeps no history of depths set again, so equals stay in
-the order made). Not ported: the effects (a sinking hull, explosions,
-spells, the tornado, the volcano's flows, a yard's ship), fireballs and
-shots, drawn over the list (0x4965d0's states; a projectile's `+0x80`
-not decoded); a tornado's first depth (0x43a240); lightning's 0x3f7 at
-`LTSPR`. Not decoded: when 0x4e0470 / 0x4e04a0 run against 0x4df6e0
+the order made).
+
+Projectiles (bomb.cpp): a shot made anew (0x496190 message 2) has its
+picture, layer 0, at 10000 and no layer 1 (only a save's restoring,
+0x4990b0, makes layers 0 and 1 at 9; its line, layer 2, at 9 either
+way). Each tick 0x4965d0 sets the depths by state `+0xb0`: 0 nothing
+(layer 1, if any, `-1 - 1` = -2); 1-3 (flying; 0x4974d0 sets 2 / 3)
+layer 0 kept, layer 1 `max(0x4dce - bottom(0), 10000) - 1`; 4 (landed:
+0x4974d0 cases 2 / 3 call 0x498a50 with the kind and set 4, the first
+0x4965d0 of state 4 running on the next tick, before the frame's step,
+so frame 0 keeps 10000) by kind `+0x74`: 1, 3, 5, 6, 7 (on an object)
+layer 0 `+0x80 - 10`, layer 1 `+0x80 - 11`; 2, 4 (water, ground)
+`max(0x4e16 - bottom(0), 10000)`, layer 1 that less 1. `+0x80` is the
+4th argument the struck object's hit test (vt+8, called `(x, y, 1,
+&depth, 1)`) fills, 0x4967b0 / 0x4983d0 at the landing: its picture's
+depth (0x50d290 of layer 0, as the siren's 0x402d10), so the blow
+draws over the ship, building or creature it lands on. The port: shots
+in flight at 10000, their landing pictures `FxDepth::Landed` (the
+struck object's depth read at the first frame after the landing's).
+A sinking hull (0x4df6e0, `+0x74` 5): `max(20000 - bottom, 10000)` to
+frame 3, 0x4f4c from frame 4 (`FxDepth::Sinking`). Lightning: state 0's
+`LTSPR_0` at 0x3ed (0x42d480), 0x42cdf0 sets 0x3f7 with states 1 and 2's
+pictures. The tornado: 0x43a240 (its first picture) `max(20000 - y,
+10000)`, 0x43a380 at each frame's step `max(0x26f0 - y, 1000)`, `y` its
+place `+0x7d` (cell centre, 0x43aa10). The fireball (the Slight,
+0x4059e0): `max(0x26c6 - 0x40 x cell row +0xc0, 1000)`. Not decoded
+(drawn over the list): the other effects (shot-less hit and splash
+pictures of rams and hazards, the boarding fight `ABORD_`, a ram's
+`BOMBH30`, the volcano's eruption, a yard's ship). Not decoded: when 0x4e0470 / 0x4e04a0 run against 0x4df6e0
 (before the first, a walkway's 0x3e6 and a gangway's 0x3de); which
 leviathan states take 0x4e85; what building layer 2 (0xc453) and ship
 layer 4 (`+0x252`) show; the order of a ship's two shields at one depth

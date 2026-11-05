@@ -1771,6 +1771,35 @@ pub struct Effect {
     /// Shows the ship being built at this shipyard (its frame is set from
     /// the production's progress).
     pub site: Option<u32>,
+    /// Its place in the sprites' draw order (`render::sprites`).
+    pub depth: FxDepth,
+}
+
+/// An effect's depth in the sprites' list (smaller draws over greater).
+#[derive(Debug, Clone, Default)]
+pub enum FxDepth {
+    /// Not decoded: drawn over the list.
+    #[default]
+    Over,
+    /// Kept as set.
+    Fixed(i32),
+    /// A sinking hull (`+0x74` 5, 0x4df6e0): `max(20000 - bottom, 10000)`
+    /// to frame 3, 0x4f4c from frame 4.
+    Sinking,
+    /// A tornado (0x25c): `max(20000 - y, 10000)` on its first frame
+    /// (0x43a240), then `max(0x26f0 - y, 1000)` at each frame's step
+    /// (0x43a380), `y` its place (`+0x7d`).
+    Tornado,
+    /// A projectile's landing picture (state `+0xb0` 4, 0x4965d0): its
+    /// flight's 10000 (0x496190) on frame 0, then, landed on object `on`
+    /// (kinds 1, 3, 5, 6), the depth that object's hit test gave
+    /// (`+0x80`, 0x4967b0 / 0x4983d0 through vt+8) less 10, else (kinds 2,
+    /// 4) `max(0x4e16 - bottom, 10000)`. `hit` keeps the object's depth
+    /// once read.
+    Landed {
+        on: Option<u32>,
+        hit: std::cell::Cell<Option<i32>>,
+    },
 }
 
 /// A tornado (Tornado.cpp 0x43a380), a frame every 2 ticks: it rises
@@ -1800,6 +1829,14 @@ impl Effect {
     pub fn show_frame(&mut self, n: usize) {
         self.age_ms = n as f32 * self.frame_ms + 1.0;
         self.life_ms = Some(f32::MAX);
+    }
+
+    /// The frame it is on (`+0x45`), finished or not.
+    pub fn step(&self) -> usize {
+        match &self.tornado {
+            Some(t) => t.frame,
+            None => (self.age_ms / self.frame_ms) as usize,
+        }
     }
 
     /// The current frame, or `None` once the animation has finished.
