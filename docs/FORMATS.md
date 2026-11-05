@@ -971,9 +971,9 @@ shields' casting sound, 0x50e570(5, the cell `+0x74` / `+0x78`, 0x56
 weapon at 0x42719f / 0x57 magic at 0x427139), plays at every casting,
 on or off, before the flag's test; both events' `SND_` lists hold
 `prote3` alone (dumped). The phantom's 0xda97 (0x426f7b) plays nothing.
-The port plays `prote3` at the building's place (`Scene::protect`); the
-phantom's `prote1` there is the port's, not decoded (the cast's own
-sound in 0x42f580 not read).
+The port plays `prote3` at the building's place (`Scene::protect`). The
+phantom is silent: Magic.cpp 0x42f580 case 9 only checks (0x42ed40),
+pays (0x42f470) and posts 0xda97, none of which plays a sound.
 
 The shield sprites: layer 0xd (`PROTWSPR_64` for a
 building of size `+0x56` 1, else `_128`; 0x426484) and 0xc
@@ -5856,6 +5856,40 @@ flaming shots striking x 150 / 100 (0x4c0230). View, lightning and
 fireball casts add a sight point to
 the fog (dark.cpp 0x48b9e0: cell, player, radius 2, 3000 ticks), dropped
 when its time is up (0x48bae0).
+
+Lightning's states (`+0x74`, 0x42cdf0 sets the picture `LTSPR_<state>`,
+frame 0, a frame each `0x596160[state] / frames` ticks: 2, 33, 34):
+made by a cast (0x42d480 message 2, record field 4 = 1) it plays sound
+event 0x90 (144 `flash`) mode 4 at its cell and takes state 0
+(`LTSPR_0`, one frame, drawn at (x 64 + 15, y 64 - 481)); 2 ticks on,
+its frame past the last (0x42cfa0), event 0x91 (145 `molniya2`) mode 4
+at its cell, the screen shakes (0x55f450) and it takes state 1 (cell
+layer byte 0 or 1, water) or 2 (else), centred on the cell; the strike
+at frame 11 / 40 of that picture. The port plays both sounds and shows
+the second picture 2 ticks on (`Scene::spawn_lightning`,
+`run_lightning`); `LTSPR_0` and the shake are not ported.
+
+Magic.cpp 0x42f580(spell, object, x, y, draw, share), its cases: each
+first 0x42ed40(spell, 1, share) (a count `+0x10 + 4 spell`, else the
+permission bit and the price), then 0x42f470 (a count taken, else the
+price); none plays a sound itself. 1 reef / 0xc big reef: message 0x1a64
+{class 0x25a / 0x259, 2, field 4 mode 1, x, y, kind `draw % 3 + 1`}; 2
+whirlpool: 0x1a63 {600, 2, mode 1, x, y, the caster `slot + nation x
+4`}; 3 tornado: 0x1a68 {mode 1, caster, x, y}; 4 monster: 0x493780
+(nation, slot, kind `draw & 3` for nation 4 else the nation, x, y, 4,
+4); 5 view: 0x48b9e0 alone (silent); 6 lightning: 0x48b9e0, 0x1a66
+{1, x, y, caster}; 7 fireball: 0x48b9e0, 0x16e1 {nation, slot, x, y,
+0}; 9 phantom: 0xda97 to the object, 3000; 10 / 11 shields: 0xda9a,
+3000, type 1 / 2; 0xd: when the object is given and a count is held
+(0x42ed40 gives 0 for it otherwise), the count taken and 0x158bf {88000,
+0x96} to the object. No case 0 (wind) or 8 (flame): those are the
+temples' own. The castles' wizard (0x410b79) raises the count of his
+spell (3 or 7) and casts it with draw and share 0, so it is free: the
+tornado for the monsters, or the fireball with its sight point for
+them; the port's `castle_tick` does the same (`spawn_hazard`,
+`spawn_fireball`; the monsters' sight point is not kept, the port's fog
+being the human's alone). The tornado's rising (0x43a5d0 state 1) plays event
+0x9b (155 `wind8`) mode 5 at its cell.
 
 A sea monster (UMonsterClassTy, `umonster.cpp`) has 50000 x its record's
 percentage of strength (0x492360: max `+0x7c` field 5, now `+0x80` field

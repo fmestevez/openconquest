@@ -6,7 +6,7 @@ use openconquest_formats::ObjectClass;
 
 use super::Scene;
 use crate::assets::GameData;
-use crate::magic::{self, Spell};
+use crate::magic::Spell;
 use crate::objects::Caches;
 
 /// The integer root 0x557670 takes of a 64-bit square (0x5576d8, the cell
@@ -337,22 +337,12 @@ impl Scene {
                     self.earn(owner, -(amber as i64), -(fish as i64));
                 }
             }
-            let t = TILE_SIZE as f32;
-            let (x, y) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
             match spell {
-                Spell::ViewMap => {
-                    self.add_sight_point(cx, cy);
-                    self.sounds.push(("flash", x, y));
-                }
+                // 0x42f580 case 5: the sight point alone, silent.
+                Spell::ViewMap => self.add_sight_point(cx, cy),
                 Spell::Lightning => {
                     self.add_sight_point(cx, cy);
-                    let water = self.nav.is_water(cx, cy);
-                    self.spawn_effect(data, caches, magic::fx_lightning(water), x, y);
-                    self.sounds.push(("molniya2", x, y));
-                    // It strikes at frame 11 of its picture over water, 40
-                    // over land, a frame a tick (0x42cfa0).
-                    let at = if water { 11 } else { 40 };
-                    self.lightning.push((x, y, crate::clock::ticks(at), owner));
+                    self.spawn_lightning(cx, cy, owner);
                 }
                 // Magic.cpp 0x42f580 cases 1, 2, 4, 3: the record or the
                 // monster at the cell, fighting for the fort's player.

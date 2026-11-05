@@ -2469,16 +2469,9 @@ impl Scene {
         caches: &mut Caches,
     ) {
         use crate::magic::Spell;
-        let t = TILE_SIZE as f32;
-        let (x, y) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
         let water = self.nav.is_water(cx, cy);
         match spell {
-            Spell::Lightning => {
-                self.spawn_effect(data, caches, crate::magic::fx_lightning(water), x, y);
-                self.sounds.push(("molniya2", x, y));
-                let at = if water { 11 } else { 40 };
-                self.lightning.push((x, y, crate::clock::ticks(at), None));
-            }
+            Spell::Lightning => self.spawn_lightning(cx, cy, None),
             Spell::Fireball => self.spawn_fireball(cx, cy, owner, data, caches),
             Spell::Waterspout | Spell::Whirlpool | Spell::Reef | Spell::Monster if water => {
                 if let Err(e) = self.spawn_hazard_drawn(spell, (cx, cy), owner, draw, data, caches)

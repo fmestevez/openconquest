@@ -635,10 +635,13 @@ fn temple_magic() {
     assert!(scene.magic.knows(Spell::Whirlpool) && !scene.magic.knows(Spell::Reef));
     // View lets us see a far corner for 3000 ticks.
     let far = (scene.nav.width as i32 - 2, scene.nav.height as i32 - 2);
+    scene.sounds.clear();
     scene
         .cast_area(Spell::ViewMap, far.0, far.1, &data, &mut caches)
         .unwrap();
     assert_eq!(scene.seen(far.0, far.1), Seen::InSight);
+    // Silent (0x42f580 case 5: the sight point 0x48b9e0 alone).
+    assert!(scene.sounds.is_empty());
     for _ in 0..50 * 121 {
         scene.update(0.02, &data, &mut caches);
     }
@@ -826,9 +829,19 @@ fn war_magic() {
     // Lightning sinks it, shielded or not: asked whether it is shielded,
     // a ship goes down (0xda94).
     let (ex, ey) = cell(&scene, enemy);
+    scene.sounds.clear();
     scene
         .cast_area(Spell::Lightning, ex, ey, &data, &mut caches)
         .unwrap();
+    // Made, it plays event 0x90 (`flash`, 0x42d480); its state 0 lasts 2
+    // ticks, then event 0x91 (`molniya2`, 0x42cfa0) and its picture.
+    let heard = |s: &Scene, n: &str| s.sounds.iter().any(|x| x.0 == n);
+    assert!(heard(&scene, "flash") && !heard(&scene, "molniya2"));
+    let effects = scene.effects.len();
+    scene.update(0.06, &data, &mut caches);
+    assert!(!heard(&scene, "molniya2") && scene.effects.len() == effects);
+    scene.update(0.03, &data, &mut caches);
+    assert!(heard(&scene, "molniya2") && scene.effects.len() == effects + 1);
     // It strikes partway through its picture.
     assert!(scene.object_index(enemy).is_some(), "not yet");
     for _ in 0..50 * 2 {
@@ -17490,9 +17503,14 @@ fn building_statuses_in_game_ticks() {
     let site = scene.own_sites()[0];
     let i = scene.object_index(site).unwrap();
     let start = scene.ticks;
+    scene.sounds.clear();
     for s in [Spell::Phantom, Spell::ProtectWeapons, Spell::ProtectMagic] {
         scene.protect(s, i, &data, &mut caches);
     }
+    // The phantom is silent (0x42f580 case 9, 0x426f7b); each shield
+    // plays `prote3` (0x42719f, 0x427139).
+    let names: Vec<_> = scene.sounds.iter().map(|s| s.0).collect();
+    assert_eq!(names, ["prote3", "prote3"]);
     // A second phantom adds its 3000 ticks to the first's.
     scene.protect(Spell::Phantom, i, &data, &mut caches);
     scene.lime(i, combat::LIME_BUILDING_TICKS);

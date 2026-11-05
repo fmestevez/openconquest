@@ -2,6 +2,20 @@
 
 use super::*;
 
+/// Lightning's state 0 in ticks: `LTSPR_0`'s one frame over the cycle
+/// 0x596160[0] (0x42cdf0, 0x42cfa0).
+const LIGHTNING_START: u32 = 2;
+
+/// The frame of state 1 (over water) or 2 (over land) at which lightning
+/// strikes (0x42cfa0), a frame a tick.
+fn lightning_strike_frame(water: bool) -> u32 {
+    if water {
+        11
+    } else {
+        40
+    }
+}
+
 /// A shield's casting sound: events 0x56 and 0x57's `SND_` lists, both
 /// `prote3` alone (sounds.dkx).
 pub(super) const SHIELD_SOUND: &str = "prote3";
@@ -155,12 +169,9 @@ impl Scene {
             _ => (&mut c.phantom, &mut c.phantom_span),
         };
         *left = crate::combat::Combatant::extend_span(span, now, magic::PROTECTION_TICKS);
-        // The phantom's messages (LandObj 0xda97 at 0x426f7b, the ship's
-        // 0x4de378) play nothing; the port's `prote1` here is not decoded
-        // (the cast's own sound in 0x42f580 not read).
-        if spell == Spell::Phantom {
-            self.sounds.push(("prote1", x, y));
-        }
+        // The phantom plays nothing: Magic.cpp 0x42f580 case 9 only checks
+        // (0x42ed40), pays (0x42f470) and posts 0xda97, and its handlers
+        // (LandObj 0x426f7b, the ship's 0x4de378) play no sound.
     }
 
     /// Casts lightning, a fireball or the view on the map cell `(cx, cy)`.
@@ -176,25 +187,17 @@ impl Scene {
         let (x, y) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
         self.in_reach(spell, x, y)?;
         match spell {
+            // 0x42f580 case 5: only the sight point (0x48b9e0, which plays
+            // nothing).
             Spell::ViewMap => {
                 self.pay_spell(spell)?;
                 self.add_sight_point(cx, cy);
-                self.sounds.push(("flash", x, y));
             }
             Spell::Lightning => {
                 self.pay_spell(spell)?;
                 self.add_sight_point(cx, cy);
-                let t = TILE_SIZE as f32;
-                let water = self
-                    .nav
-                    .is_water((x / t).floor() as i32, (y / t).floor() as i32);
-                self.spawn_effect(data, caches, magic::fx_lightning(water), x, y);
-                self.sounds.push(("molniya2", x, y));
-                // It strikes at frame 11 of its picture over water, 40 over
-                // land, a frame a tick (0x42cfa0).
-                let at = if water { 11 } else { 40 };
                 let caster = self.human.map(|h| (h.nation, h.slot));
-                self.lightning.push((x, y, crate::clock::ticks(at), caster));
+                self.spawn_lightning(cx, cy, caster);
             }
             Spell::Fireball => {
                 // 0x42ef90 case 7: nothing at the cell's `+0x14`.
@@ -227,10 +230,42 @@ impl Scene {
         Ok(())
     }
 
+    /// Lightning made at cell `(cx, cy)` for `caster` (message 0x1a66 of
+    /// 0x42f580 case 6; LightningObjClassTy 0x42d480 message 2, a cast):
+    /// sound event 0x90 (`flash`), mode 4 at its cell, and state 0
+    /// (`LTSPR_0`, one frame over the cycle 0x596160[0] = 2 ticks, 0x42cdf0);
+    /// at its end (0x42cfa0) event 0x91 (`molniya2`), mode 4, and state 1
+    /// over water or 2 over land (`run_lightning`), which strikes at frame
+    /// 11 (cycle 33 over 33 frames) or 40 (34 over 68): a frame a tick.
+    pub(super) fn spawn_lightning(&mut self, cx: i32, cy: i32, caster: Option<super::Owner>) {
+        let t = TILE_SIZE as f32;
+        let (x, y) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
+        self.sounds.push(("flash", x, y));
+        let at = LIGHTNING_START + lightning_strike_frame(self.nav.is_water(cx, cy));
+        self.lightning.push((x, y, crate::clock::ticks(at), caster));
+    }
+
     /// Lightning cast and waiting for its picture to strike.
     pub(super) fn run_lightning(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+        let t = TILE_SIZE as f32;
+        let mut started = Vec::new();
         for l in &mut self.lightning {
+            let water = self
+                .nav
+                .is_water((l.0 / t).floor() as i32, (l.1 / t).floor() as i32);
+            // State 0 ends when its time left comes down to the strike's.
+            let start = crate::clock::ticks(lightning_strike_frame(water));
+            if l.2 > start && l.2 - dt <= start {
+                started.push((l.0, l.1, water));
+            }
             l.2 -= dt;
+        }
+        // State 0's end (0x42cfa0): event 0x91 (`molniya2`) mode 4 at its
+        // cell, and the picture of state 1 or 2 (0x42cdf0). The screen's
+        // shake there (0x55f450) is not ported, nor `LTSPR_0`'s picture.
+        for (x, y, water) in started {
+            self.sounds.push(("molniya2", x, y));
+            self.spawn_effect(data, caches, magic::fx_lightning(water), x, y);
         }
         let due: Vec<(f32, f32, Option<super::Owner>)> = self
             .lightning
