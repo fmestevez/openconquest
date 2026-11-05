@@ -2047,6 +2047,64 @@ fn at_will_timers() {
     assert_eq!(scene.objects[m].ship.as_ref().unwrap().board_wait, 0);
 }
 
+/// The weapons ready (0x4bf9b0): in fire states 1, 3 and 4 an item aboard
+/// once its time has come, with its position's target or guard on; in 2
+/// by its time alone; in 0 none (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ready_mask_as_0x4bf9b0() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let m = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    // Bowmen (item 0, position 0), a light catapult (3, position 1), a
+    // heavy one (6, position 2).
+    scene.objects[m].combat.as_mut().unwrap().weapons = vec![3, 6];
+    let s = scene.objects[m].ship.as_mut().unwrap();
+    s.kind = 4;
+    s.crew.squads = [1, 0, 0];
+    s.behaviour = Default::default();
+    s.fire_times = [0; 12];
+    s.fire_times[6] = 1001;
+    scene.ticks = 1000;
+    let mask = |scene: &mut Scene, state: u8| {
+        scene.objects[m].ship.as_mut().unwrap().behaviour.fire_state = state;
+        scene.ready_mask(m).mask
+    };
+    // No target and guard off: nothing.
+    assert_eq!(mask(&mut scene, 1), 0);
+    // Guard on: positions 0 and 1; the heavy catapult's time is to come.
+    scene.objects[m].ship.as_mut().unwrap().behaviour.guard = true;
+    assert_eq!(mask(&mut scene, 1), 0b011);
+    assert_eq!(mask(&mut scene, 4), 0b011);
+    let s = scene.objects[m].ship.as_ref().unwrap();
+    assert_eq!(
+        s.items_ready[..7],
+        [true, false, false, true, false, false, false]
+    );
+    assert_eq!(s.positions_ready, [true, true, false, false]);
+    scene.ticks = 1001;
+    assert_eq!(mask(&mut scene, 3), 0b111);
+    // A position's target in place of the guard.
+    let s = scene.objects[m].ship.as_mut().unwrap();
+    s.behaviour.guard = false;
+    s.behaviour.aims[2].target = 99;
+    assert_eq!(mask(&mut scene, 1), 0b100);
+    // State 2 by the times alone; 0 none.
+    assert_eq!(mask(&mut scene, 2), 0b111);
+    assert_eq!(mask(&mut scene, 0), 0);
+    assert_eq!(
+        scene.objects[m].ship.as_ref().unwrap().positions_ready,
+        [false; 4]
+    );
+}
+
 /// The fire state `+0x5d1` and the fire task `+0x25d & 0x100` as the
 /// original writes them: the attack's records (0x4ab3f0 kind 3: each armed
 /// position 3 at the target, the fire state 3), the group's turn

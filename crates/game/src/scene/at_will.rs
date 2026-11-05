@@ -12,11 +12,6 @@ use super::{walk_path, Scene};
 use crate::combat;
 use crate::objects;
 
-/// Ticks that must pass after a switch's time (`+0x704`, `+0x708`)
-/// before its next look (0x4bf9b0: more than 0x32).
-const LOOK_WAIT: u32 = 0x32;
-/// What 0x4bf9b0 sets the time to as it marks a switch: now + 100.
-const LOOK_AGAIN: u32 = 100;
 /// The reach 0x4bfc60 gives 0x4c0bc0 (0x557480 from the ship's cell).
 const REACH: i32 = 2;
 /// The human's prey must lie within this of its route's end (0x4c0bc0).
@@ -87,11 +82,11 @@ impl Scene {
     /// armed, not limed `+0x258`) or (type above 1) whose ram or board
     /// switch is on and is a royal ship, rammer or ship killer (0x597a30)
     /// or carries a hero who fights (0x4e66c0, 0x4b4dd0), afloat (`+0x251
-    /// == 0`) and under no status (`+0x25c`: the siren's song); then each
-    /// switch on whose time (ram `+0x704`, board `+0x708`) is more than 50
-    /// ticks past is marked and its time set to now + 100. (The gate's
-    /// other half, a position loaded, opens it too, but 0x4bfc60 then
-    /// lists nothing without a mark.)
+    /// == 0`) and under no status (`+0x25c`: the siren's song); then
+    /// 0x4bf9b0 (`Scene::ready_mask`) marks each switch on whose time (ram
+    /// `+0x704`, board `+0x708`) is more than 50 ticks past and sets its
+    /// time to now + 100, and its mask, a position loaded or a mark, opens
+    /// the gate (0x4bfc60 lists nothing without a mark).
     fn at_will_marks(&mut self, i: usize, now: u32) -> Option<(bool, bool)> {
         let id = self.objects[i].id;
         if (now ^ id) & 3 != 0 || self.being_built(id) {
@@ -110,17 +105,10 @@ impl Scene {
         if !fires && !fights {
             return None;
         }
-        let s = self.objects[i].ship.as_mut().unwrap();
-        let (mut ram, mut board) = (false, false);
-        if s.behaviour.ram && now.wrapping_sub(s.ram_wait) as i32 > LOOK_WAIT as i32 {
-            ram = true;
-            s.ram_wait = now + LOOK_AGAIN;
-        }
-        if s.behaviour.board && now.wrapping_sub(s.board_wait) as i32 > LOOK_WAIT as i32 {
-            board = true;
-            s.board_wait = now + LOOK_AGAIN;
-        }
-        Some((ram, board))
+        // 0x4bf9b0 (`Scene::ready_mask`): its mask, the marks among it,
+        // shuts the gate when 0.
+        let r = self.ready_mask(i);
+        (r.mask != 0).then_some((r.ram, r.board))
     }
 
     /// The ships ship `i` could ram or board at will (0x4bfc60 over its

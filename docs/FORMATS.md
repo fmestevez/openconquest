@@ -8057,11 +8057,40 @@ caller (0x4acf0f) all three first. Ported (`Ship::fire_wind_down`,
 0x4abc60 whatever it calls off), the sail's and the boarder's prey lost
 (0x4abc60), 0x4c09c0's target gone (0x180), 0x4abe00 at the group's turn
 (`one_event_a_tick`, once a batch), the hunt's 0x4acc61. Not ported: the
-fire pass (0x4bf9b0, 0x4c1240, 0x4bfc60, 0x4c0eb0, 0x4c09c0, 0x4c0230;
-the port's `battle.rs` fire is its own model) and so its writes (0x4c1240's
+fire pass (0x4c1240, 0x4bfc60, 0x4c0eb0, 0x4c09c0, 0x4c0230; the port's
+`battle.rs` fire is its own model) and so its writes (0x4c1240's
 3, 0x4c09c0's 1 in reach); kind 1 and 2 records (the port's ships take no
 0x15); 0x4abe50's deferral; the hunt's second site (0x4acf3a, the
 port's hunt has one). 0x4d60c0's cases on it are ported (`ha_retarget`).
+
+**The fire pass's reach and ready mask** (`scene::fire_pass`). A ship's
+items are its units by kind (`+0x289 + i`: marines 0-2 by squad, weapons
+3-8, the unique ships' 9-11); item i's next shot waits for the tick
+`+0x5e3 + 4i` (0 from the constructor). 0x4bf5f0(i, dx, dy), dx / dy the
+ship's cell less the target's: items 9 and 10 take item 1 at level 2,
+item 11 nothing; the others the range level of their position (player
+`+0x95 + i / 3`, 2 with hero 1 aboard, 0x4ba790); `s` half the aiming
+distance 0x598130[L x 12 + i] (9, 7, 7, 9, 9, 9, 13, 11, 11, 7, 9, 0 at
+every level), `a = s - dx`, `b = s - dy`, both at least 0, and the shape's
+byte at `b + (a + L x n) x n` not 0: items 0 and 2 0x59819c, 1 0x598290
+(7 x 7), 3 0x598324, 4 0x598418, 5 0x59850c (9 x 9), 6 0x598600 (13 x
+13), 7 0x5987fc, 8 0x598968 (11 x 11). Only the lower bounds are tested:
+with signed distances (0x4c0cd0) a target beyond a shape's side reads on
+into the next row, level or table (the port keeps the bytes 0x5980f4 to
+0x598ade, as far as a look's box reaches; the boxes 0x5980f4[L x 4 + k]
+are 9, 9, 13, 9). The leviathan hunt's items 3 and 4 use the same.
+0x4bf9b0 clears the positions' marks (`+0x62b`, 3 or 4); over the items
+(9, 11 for types 8 and 9) with a unit aboard: in fire states 1, 3, 4 an
+item is ready (`+0x613 + i` 1, its position's mark, bit k = i / 3) when
+`now - +0x5e3[i]` is not negative and its position has a target
+(`+0x63c`) or guard is on, else not (`+0x613` 0); in 2 by its time
+alone; in 0 none is looked at (`+0x613` kept). Then with ram or board on
+both marks `+0x710` / `+0x711` are cleared and each switch on with `now -
++0x704` (`+0x708`) above 0x32 marked (bit 0x10 / 0x20) and its time set
+to now + 100. The tick's gate (0x4abb39-0x4abba0) calls 0x4c1240 with the
+low 4 bits when the mask is not 0, then zeroes `+0x62b..+0x62e`
+(0x4abba5). Ported: 0x4bf5f0, 0x4bf9b0 (`Scene::reaches`,
+`Scene::ready_mask`; the gate's at-will half, `scene::at_will`).
 Who sends `#` (0x4c42f0, `{sub, +1, +5, +9, 0.., +0x15 0xff}`, queued:
 it reaches the ship at the next tick): 0x4c4350 (fleet order 0x72, from
 the brains' 0x4797e0 and the computers' 0x482eb0; the interface's attack

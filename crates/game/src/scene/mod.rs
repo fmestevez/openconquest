@@ -548,6 +548,7 @@ mod computer;
 mod creatures;
 mod dig;
 pub mod fire;
+mod fire_pass;
 mod gulls;
 mod halt;
 mod hazards;

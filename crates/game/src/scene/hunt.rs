@@ -36,82 +36,6 @@ const TURN_LAST: i32 = 0x37;
 /// draw `% 0x3c` ticks).
 const RELOAD_JITTER: u32 = 60;
 
-/// The cells items 3 and 4 reach (0x4bf5f0: 0x598324, 0x598418), by
-/// range level, rows by 4 less the distance across, columns by 4 less the
-/// distance down (half of 0x598130's 9 for both items).
-const REACH: [[[[u8; 9]; 9]; 3]; 2] = [
-    [
-        [
-            [0, 0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 1, 1, 1, 0, 0, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 1, 1, 1, 2, 1, 1, 1, 0],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 0, 0, 1, 1, 1, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        ],
-        [
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 2, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-        ],
-        [
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 2, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-        ],
-    ],
-    [
-        [
-            [0, 0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 1, 1, 1, 0, 0, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 1, 1, 1, 2, 1, 1, 1, 0],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 0, 0, 1, 1, 1, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        ],
-        [
-            [0, 0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 1, 1, 1, 0, 0, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 1, 1, 1, 2, 1, 1, 1, 0],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 0, 0, 1, 1, 1, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        ],
-        [
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 2, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [0, 1, 1, 1, 1, 1, 1, 1, 0],
-            [0, 0, 1, 1, 1, 1, 1, 0, 0],
-        ],
-    ],
-];
-
 /// What 0x4ac8d0 finds: nothing (0xff), the leviathan seen but not yet
 /// near enough or the ship under way (0), seen within reach (1).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -441,11 +365,7 @@ impl Scene {
         let Some(s) = self.objects[i].ship.as_ref() else {
             return;
         };
-        let (kind, theseus, atalanta) = (
-            s.kind,
-            s.has_hero(objects::THESEUS),
-            s.has_hero(objects::ATALANTA),
-        );
+        let (kind, atalanta) = (s.kind, s.has_hero(objects::ATALANTA));
         if let Some(c) = self.objects[i].combat.as_mut() {
             c.reloads.resize(shooters.len(), 0.0);
         }
@@ -463,18 +383,8 @@ impl Scene {
             if !loaded {
                 continue;
             }
-            let level = if theseus {
-                objects::HERO_LEVEL
-            } else {
-                levels.reach_for(item)
-            };
             let (dx, dy) = ((lc.0 - here.0).abs(), (lc.1 - here.1).abs());
-            let (row, col) = (4 - dx, 4 - dy);
-            if row < 0 || col < 0 {
-                continue;
-            }
-            let table = &REACH[(item - 3) as usize][level.min(2) as usize];
-            if table[row as usize][col as usize] == 0 {
+            if !self.reaches(i, item, dx, dy) {
                 continue;
             }
             // 0x4bf7f0 (ease 25, 0x598130's 9 for both items): a hit or

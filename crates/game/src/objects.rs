@@ -510,6 +510,18 @@ pub struct Ship {
     /// `+0x25d & 0x100`, the fire task (`fire_task`).
     #[serde(default)]
     pub firing: bool,
+    /// `+0x5e3 + 4i`: the tick item i's next shot may go at (0 from the
+    /// constructor 0x4dc3f0; 0x4c0230 sets it as the item fires).
+    #[serde(default)]
+    pub fire_times: [u32; 12],
+    /// `+0x613 + i`: item i ready, as 0x4bf9b0 last found it (only items
+    /// aboard are looked at; the others keep theirs).
+    #[serde(default)]
+    pub items_ready: [bool; 12],
+    /// `+0x62b + k`: position k has an item ready (0x4bf9b0; cleared after
+    /// the fire pass, 0x4abba5).
+    #[serde(default)]
+    pub positions_ready: [bool; 4],
 }
 
 /// A rammer's or boarder's way to its prey, a game tick at a time (see
@@ -2165,6 +2177,9 @@ pub fn resolve(
         ram_wait: 0,
         board_wait: 0,
         firing: false,
+        fire_times: [0; 12],
+        items_ready: [false; 12],
+        positions_ready: [false; 4],
         cargo: 0.0,
         cargo_kind: None,
         task: None,
