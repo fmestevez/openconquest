@@ -1581,10 +1581,31 @@ passed, or a ship whose contact is this one in its type 5, state 8 (0x4b37d0 hol
 sends 0x2875 (0x4b3930, a building) and goes to 4, lying linked; the
 contact gone: 12 (walkway up), 6 (sail out) and back to 1 with
 vt+4(8, 0x90). The port (`Scene::load_tick`, `load_look`) runs the order,
-the sailing and the look; at reach it links at once (`load_contact`).
-Not ported: 0x4b84b0's waits and hook, states 7-12 (the pull, furl and
-walkway before the link, and their ending), the building flag of the
-plan (no goal on land) and `+0x594`. A settlement's own
+the sailing and the look; at reach (`load_contact`) it keeps 0x4b84b0's
+two gates (called from state 1 with no enemy test, `param_3` 0): while
+the loader holds a contact (`Scene::in_contact`) or a ship target takes
+none (`Scene::takes_contact`) it waits in state 1, trying each tick;
+else it links at once.
+The hook decoded further: 0x4b84b0's shot carries a record {200, 3,
+ship, id}; as it flies 0x496f40 makes the shooter's contact type 300
+(the hook in the air, pointing at the bomb `+0xef`). Landing on a
+building (0x4967b0: class 0x45 at once, others once 0x49a270 passes) it sends
+the building 0x138e with the bomb's id for kind 9 (only while the hook's
+record `+0xef` lives); 0x423d60 on 0x138e kind 9 finds the bomb
+(0x51f1f0) and, with the building's `+0xa4` 1, calls 0x4bc140 on the
+shooter: holding the hook as its contact and vt+0xb0 of the building
+non-zero, the contact becomes {0x32, 4, building, its id}, 0x4b3970(1)
+sends 0xcb7 {building id, ship id}, the line moves to the ship (0x50ce10
+slot 2, `+0x8d2` from the bomb's `+0xfb`), and for 0x34-0x36 and
+0x39-0x3b `+0x6d7` is the anchor. A kind 9 landing in 0x4983d0 calls
+0x4e06a0 on the record's ship and clears the bomb's slot 2. 0x4b37d0 (state 7 to
+8) keeps `+0x25d` in `+0x69c`, clears it and ands `+0x261` with 0x2000;
+0x4b3930(1 / 0) sends 0x2875 / 0x2876 {building id, ship id}.
+Not ported: 0x4b84b0's reload wait (`now - +0x6be`) and hook, states
+7-12 (the pull, furl and walkway before the link, and their ending; the
+port's link still ends by `Scene::run_loads`' rule), the meaning of the
+building's `+0xa4` and vt+0xb0, the building flag of the plan (no goal
+on land) and `+0x594`. A settlement's own
 Reload Object (menu slot 1) does the same with one of its forts (0x441ba0
 case 0x1f, checked in 0xc452: one of its own buildings, its list
 `+0x1d0` of `+0x1c8`, of classes 0x34-0x36, while it is idle): there is no

@@ -7757,6 +7757,68 @@ fn ships_reload_from_each_other() {
     assert!(scene.load_link(b).is_none());
 }
 
+/// A loader within reach of a ship that takes no contact waits in state 1
+/// (0x4b84b0 gives 0 without the target's `+0x261` 0x1000) and is taken
+/// up once it takes one again (needs `OPENCONQUEST_DATA`).
+#[test]
+fn load_waits_for_a_ship_taking_contact() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let ships: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| scene.is_own(o) && o.ship.is_some() && o.combat.is_some())
+        .map(|o| o.id)
+        .collect();
+    let (a, b) = (ships[0], ships[1]);
+    let kb = scene.object_index(b).unwrap();
+    // Being built (`+0x261` 0x2000, 0x4dfe4d): no contact taken.
+    scene.objects[kb].ship.as_mut().unwrap().build = Some(crate::objects::Build {
+        yard: 0,
+        since: 0,
+        frame: 0,
+        cancelled: false,
+        price: (0, 0),
+        shown: true,
+        hits: [(0, 0); 4],
+        hit_count: 0,
+        pending_move: None,
+    });
+    let (i, tile) = (scene.object_index(a).unwrap(), TILE_SIZE as f32);
+    let anchor = scene.cell_of_object(kb);
+    let from = (scene.objects[i].x, scene.objects[i].y);
+    let (x, y) = scene
+        .beside_cells(kb, from)
+        .into_iter()
+        .find(|&(x, y)| {
+            let c = ((x / tile).floor() as i32, (y / tile).floor() as i32);
+            (c.0 - anchor.0).abs().max((c.1 - anchor.1).abs()) == 1
+                && !scene
+                    .objects
+                    .iter()
+                    .any(|o| o.id != a && o.ship.is_some() && (o.x - x).hypot(o.y - y) < 32.0)
+        })
+        .unwrap();
+    scene.objects[i].x = x;
+    scene.objects[i].y = y;
+    scene.objects[i].ship.as_mut().unwrap().path.clear();
+    scene.objects[i].ship.as_mut().unwrap().task = None;
+    scene.order_load(a, b).unwrap();
+    for _ in 0..3 {
+        scene.run_closing(&data, &mut caches);
+        assert!(scene.load_link(a).is_none());
+    }
+    assert!(scene.objects[i].ship.as_ref().unwrap().task.is_some());
+    scene.objects[kb].ship.as_mut().unwrap().build = None;
+    scene.run_closing(&data, &mut caches);
+    assert!(scene.load_link(a).is_some_and(|l| l.other == b));
+}
+
 /// A ship sent to reload sails alongside its port first and is taken up
 /// on arriving (needs `OPENCONQUEST_DATA`).
 #[test]
