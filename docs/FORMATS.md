@@ -8691,8 +8691,24 @@ one that started nothing; after one that started a part, only once woken
 and 3 ticks after it (0x42b94c-0x42b98d). A pass that runs first drops
 from the list (0x42b98d, before the queue walk 0x42ba2a) the members gone
 (0x51f1f0 finds none) or in `+0xa4` 2, 3 or 0xff, the others kept in
-order; between passes they stay (`Scene::brain_land_drop`; the
-computers' list, their bases' sites, not ported). Wakers: the walk itself for every
+order; between passes they stay (`Scene::brain_land_drop`; a
+computer's in `land_pass`). A computer's list is its towns, then its
+settlements, all of them (0x487230 joins each, 0x484000 to +0x30, the
+bases only the first 9), and a settlement new to it (0x488960, 0x5d95
+case 0, whichever base takes it; 0x49bd60 leaves one joined already); a
+computer's ask carries its base's town (+0x60, read when it asks,
+0x482f50, dword 6), which 0x42c050 puts in each part's dword 3 when the
+order has flag 8 (all the computer's: 0x88, 0xd8, 0x488). Every handler
+looks for dword 3 in the list (waiting 0x428a70, 0x428f20, 0x429ae0,
+0x429f60, 0x42a860; under way 0x428e10, 0x4297d0, 0x429e10, 0x42a2f0,
+0x42b080) and the casts (0x42a500) try the list: a waiting part whose town
+is not there spends a try (counted in a pass after one that started
+nothing, failing at 0; its last result +0x70 unwritten), one under way
+fails (+0x50 4); the berths' command (0x4295cb) goes to dword 3 as it is.
+The base keeps its town until the town's object is removed (LandObj
+0x425990 message 3 posts 0x5d9b, which clears +0x60 by 0x484b20 /
+0x482c50); not ported: the port clears it when the town is no longer the
+computer's (its ruins have no owner). Wakers: the walk itself for every
 entry it finds done or failed, 0x42c050 (an order put or refused), and the
 town at the end of each command it handles (0x441ba0 at 0x44393d; the port
 wakes at a part's start). A computer's parts send their town commands

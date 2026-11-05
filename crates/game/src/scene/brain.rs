@@ -2671,6 +2671,7 @@ impl Scene {
                 flags,
                 state: 0,
                 order: None,
+                town: None,
             },
         });
     }
@@ -2906,7 +2907,7 @@ impl Scene {
                     hold = true;
                 }
                 PartStep::Wait => last = -5,
-                PartStep::Refused | PartStep::Failed => {}
+                PartStep::Refused | PartStep::Failed | PartStep::Absent => {}
             }
         }
         match (hold, last) {
