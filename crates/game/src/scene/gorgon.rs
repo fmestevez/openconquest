@@ -624,13 +624,10 @@ impl Scene {
         // LandObj's lime: the 0x138e a fort posts is taken from its queue
         // (0x423c30) at its tick, after it.
         if landobj {
-            let add = crate::clock::ticks(fifth(STONE_TICKS as i32) as u32);
+            let (add, now) = (fifth(STONE_TICKS as i32) as u32, self.ticks);
             if let Some(c) = self.objects[k].combat.as_mut() {
-                if c.lime <= 0.0 {
-                    c.lime_total = 0.0;
-                }
-                c.lime += add;
-                c.lime_total += add;
+                c.lime = crate::combat::Combatant::extend_span(&mut c.lime_span, now, add);
+                c.lime_total = c.lime;
             }
         }
         if fort {

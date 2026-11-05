@@ -2113,11 +2113,61 @@ impl Scene {
         }
     }
 
+    /// A building's timed statuses run out in its tick (LandObj 0x425990
+    /// message 0), in this order: the phantom when its start `+0x13c` +
+    /// length `+0x140` is below the game tick `+0xde` (0x426071-0x426096);
+    /// the lime when `+0x14c + +0x150` is at most the tick (0x4262e3,
+    /// `+0x124` then set to `+0x14c`, the work's restart); the weapon
+    /// shield when `+0x184 + +0x188` is at most the tick and its sprite
+    /// (`+0x198`) is made (0x4265a4), and the magic shield likewise with
+    /// `+0x164 + +0x168` and `+0x174` (0x4267ed). The sprites are made in
+    /// the same tick before the test (0x4263ef, 0x4265ed) whenever
+    /// `+0x180` / `+0x160` are set, as the LandObj constructor 0x422cc0
+    /// sets them for every player's building, so a shield ends at its
+    /// length's tick.
+    pub(super) fn tick_building_statuses(&mut self) {
+        let now = self.ticks;
+        let mut cleared = Vec::new();
+        for o in &mut self.objects {
+            let Some(c) = o.combat.as_mut().filter(|_| o.ship.is_none()) else {
+                continue;
+            };
+            // Saves from before the ticks: what is left, from now.
+            for (left, span) in [
+                (c.phantom, &mut c.phantom_span),
+                (c.lime, &mut c.lime_span),
+                (c.protect_weapons, &mut c.weapon_span),
+                (c.protect_magic, &mut c.magic_span),
+            ] {
+                if left > 0.0 && span.is_none() {
+                    *span = Some((now, (left / crate::clock::TICK).round() as u32));
+                }
+            }
+            if c.phantom_span.is_some_and(|(at, len)| at + len < now) {
+                (c.phantom, c.phantom_span) = (0.0, None);
+            }
+            if let Some((_, len)) = c.lime_span.filter(|&(at, len)| at + len <= now) {
+                (c.lime, c.lime_total, c.lime_span) = (0.0, 0.0, None);
+                cleared.push((o.id, crate::clock::ticks(len)));
+            }
+            if c.weapon_span.is_some_and(|(at, len)| at + len <= now) {
+                (c.protect_weapons, c.weapon_span) = (0.0, None);
+            }
+            if c.magic_span.is_some_and(|(at, len)| at + len <= now) {
+                (c.protect_magic, c.magic_span) = (0.0, None);
+            }
+        }
+        self.lime_worn_off(cleared);
+    }
+
     /// Protections running out, and effects following their objects.
     pub(super) fn run_statuses(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         let wrecked: Vec<u32> = Vec::new();
         for o in &mut self.objects {
-            let Some(c) = o.combat.as_mut() else { continue };
+            // A building's run out in its tick (`tick_building_statuses`).
+            let Some(c) = o.combat.as_mut().filter(|_| o.ship.is_some()) else {
+                continue;
+            };
             c.protect_weapons = (c.protect_weapons - dt).max(0.0);
             c.protect_magic = (c.protect_magic - dt).max(0.0);
             c.phantom = (c.phantom - dt).max(0.0);

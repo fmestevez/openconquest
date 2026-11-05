@@ -219,7 +219,9 @@ pub const SHIELD_FACTOR: f32 = 0.2;
 /// Seconds a protection or phantom adds to what is left of it: 3000 ticks
 /// (Magic.cpp 0x42f580; the ship adds them up on messages 0xda97 and
 /// 0xda9a, 0x4dc630).
-pub const PROTECTION_SECONDS: f32 = 3000.0 * crate::clock::TICK;
+pub const PROTECTION_SECONDS: f32 = PROTECTION_TICKS as f32 * crate::clock::TICK;
+/// The same in game ticks.
+pub const PROTECTION_TICKS: u32 = 3000;
 
 /// A tornado's blow to a ship on each cell it comes to: 30000 in the
 /// original's units, a fifth of it on a ship shielded from magic (0x43a6c0,

@@ -12431,6 +12431,7 @@ fn gorgon_stare_on_buildings() {
     // Under a magic shield (`+0x15c`) a fifth of each.
     let c = scene.objects[k].combat.as_mut().unwrap();
     (c.hull, c.lime, c.lime_total, c.protect_magic) = (1e6, 0.0, 0.0, 100.0);
+    c.lime_span = None;
     stare(&mut scene, cell, &mut caches);
     let fifth = n as f32 * ((blow * 20 / 100) as f32 / 15.0);
     near(
@@ -12440,6 +12441,7 @@ fn gorgon_stare_on_buildings() {
     // Asleep (`+0xa4` 0x10): nothing.
     let c = scene.objects[k].combat.as_mut().unwrap();
     (c.hull, c.lime, c.lime_total, c.protect_magic) = (1e6, 0.0, 0.0, 0.0);
+    c.lime_span = None;
     scene.objects[k].asleep = Some(Default::default());
     stare(&mut scene, cell, &mut caches);
     assert_eq!(state(&scene, b), (1e6, 0.0, 0.0));
@@ -17469,4 +17471,77 @@ fn harpy_at_towns_and_forts_is_the_originals() {
         let hull = scene.objects[town].combat.as_ref().unwrap().hull;
         assert_eq!(hull, 1e9 - blow * cut);
     }
+}
+
+/// A building's phantom and shields run in game ticks from the casting
+/// (LandObj 0xda97, 0xda9a): the shields end at the tick their start +
+/// length reaches (0x4265a4, 0x4267ed), the phantom a tick later (below
+/// the tick, 0x426071), the lime likewise at its own (0x42631d) (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn building_statuses_in_game_ticks() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let site = scene.own_sites()[0];
+    let i = scene.object_index(site).unwrap();
+    let start = scene.ticks;
+    for s in [Spell::Phantom, Spell::ProtectWeapons, Spell::ProtectMagic] {
+        scene.protect(s, i, &data, &mut caches);
+    }
+    // A second phantom adds its 3000 ticks to the first's.
+    scene.protect(Spell::Phantom, i, &data, &mut caches);
+    scene.lime(i, combat::LIME_BUILDING_TICKS);
+    let span = |s: &Scene| {
+        let c = s.objects[s.object_index(site).unwrap()]
+            .combat
+            .clone()
+            .unwrap();
+        (c.phantom_span, c.weapon_span, c.magic_span, c.lime_span)
+    };
+    assert_eq!(
+        span(&scene),
+        (
+            Some((start, 6000)),
+            Some((start, 3000)),
+            Some((start, 3000)),
+            // Under the weapon shield (0x42405d).
+            Some((start, combat::LIME_BUILDING_TICKS[1]))
+        )
+    );
+    let on = |s: &Scene| {
+        let c = s.objects[s.object_index(site).unwrap()]
+            .combat
+            .clone()
+            .unwrap();
+        (
+            c.phantom > 0.0,
+            c.protect_weapons > 0.0,
+            c.protect_magic > 0.0,
+            c.lime > 0.0,
+        )
+    };
+    let run_to = |s: &mut Scene, t: u32, caches: &mut Caches| {
+        while s.ticks < t {
+            s.update(0.04, &data, caches);
+        }
+        assert_eq!(s.ticks, t);
+    };
+    let lime = combat::LIME_BUILDING_TICKS[1];
+    run_to(&mut scene, start + lime - 1, &mut caches);
+    assert_eq!(on(&scene), (true, true, true, true));
+    run_to(&mut scene, start + lime, &mut caches);
+    assert_eq!(on(&scene), (true, true, true, false));
+    run_to(&mut scene, start + 2999, &mut caches);
+    assert_eq!(on(&scene), (true, true, true, false));
+    run_to(&mut scene, start + 3000, &mut caches);
+    assert_eq!(on(&scene), (true, false, false, false));
+    run_to(&mut scene, start + 6000, &mut caches);
+    assert!(on(&scene).0, "the phantom at its last tick");
+    run_to(&mut scene, start + 6001, &mut caches);
+    assert!(!on(&scene).0);
 }

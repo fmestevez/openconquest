@@ -49,6 +49,22 @@ pub struct Combatant {
     /// Seconds left of protection from weapons and from magic.
     pub protect_weapons: f32,
     pub protect_magic: f32,
+    /// A building's phantom, weapon shield, magic shield and lime in game
+    /// ticks (LandObj): each its start tick and length, `+0x13c / +0x140`,
+    /// `+0x184 / +0x188`, `+0x164 / +0x168` and `+0x14c / +0x150`, the
+    /// length added to by each casting or blow (0xda97, 0xda9a, 0x42405d,
+    /// 0x158bf) and ended by its tick (0x425990, `Scene::tick_building_
+    /// statuses`). While one runs the seconds above hold its length (more
+    /// than 0, the flag the rest of the code reads); a ship counts its
+    /// seconds down instead.
+    #[serde(default)]
+    pub phantom_span: Option<(u32, u32)>,
+    #[serde(default)]
+    pub weapon_span: Option<(u32, u32)>,
+    #[serde(default)]
+    pub magic_span: Option<(u32, u32)>,
+    #[serde(default)]
+    pub lime_span: Option<(u32, u32)>,
     /// Each unit's condition in percent by its index in `weapons`, for
     /// forts and barbarian structures (their places' units, `+0x4d0` and
     /// `+0x20c`; record fields from 34). Missing ones are whole. Ships keep
@@ -65,6 +81,16 @@ pub struct Combatant {
 }
 
 impl Combatant {
+    /// Adds `len` ticks to a building's status `span` begun at `now` if
+    /// it is not running (LandObj 0xda97 at 0x426f7b, 0xda9a, 0x158bf: the
+    /// start the game tick `+0xde` and the length 0 when off, then the
+    /// length + `len`), and returns its flag in seconds: the length.
+    pub fn extend_span(span: &mut Option<(u32, u32)>, now: u32, len: u32) -> f32 {
+        let (_, l) = span.get_or_insert((now, 0));
+        *l += len;
+        crate::clock::ticks(*l)
+    }
+
     /// Ships and player buildings fight; other objects do not.
     pub fn from_record(rec: &ObjectRecord, class: ObjectClass) -> Option<Self> {
         let f = |i: usize| rec.fields.get(i).copied().unwrap_or(0);
@@ -128,6 +154,10 @@ impl Combatant {
             wounds: 0.0,
             protect_weapons: 0.0,
             protect_magic: 0.0,
+            phantom_span: None,
+            weapon_span: None,
+            magic_span: None,
+            lime_span: None,
             fire: FortFire::default(),
         })
     }

@@ -947,6 +947,40 @@ each from the layer's own top left), another player only the fire and
 smoke. The port draws so (`Scene::is_phantom`, `phantom_hidden`; the
 shields' sprites are not drawn by the port).
 
+A building's timed statuses are counted in game ticks, each a flag, a
+start and a length, the length added to by every casting or blow and
+the start the game tick `+0xde` when it was off: the phantom
+(`+0x134`, `+0x13c`, `+0x140`; 0xda97), the weapon shield (`+0x17c`,
+`+0x184`, `+0x188`; 0xda9a type 1, its sound 0x50e570(5, cell, 0x56)),
+the magic shield (`+0x15c`, `+0x164`, `+0x168`; 0xda9a type 2, sound
+0x57; it resets the weapon shield's frame time `+0x190`, not its own
+`+0x170`) and the lime (`+0x144`, `+0x14c`, `+0x150`; 0x42405d and the
+stare 0x158bf). The tick (0x425990 message 0) ends them in this order:
+the phantom when start + length is below the tick (0x426071); the lime
+when it is at most the tick (0x4262e3: `+0xf8` 1, `+0x1c4` 0, and with
+`+0x10c` the work's start `+0x124` set to the lime's start); the weapon
+shield when at most the tick and its sprite `+0x198` exists (0x4265a4),
+the magic shield likewise with its `+0x174` (0x4267ed). The sprites
+are made earlier in the same tick (0x4263ef, 0x4265ed) when the shield
+is on and `+0x180` / `+0x160` are set, which the LandObj constructor 0x422cc0 sets to 1 (the
+side-2 structure 0x420fd0 clears them, and `+0xd4`). The port keeps the
+spans in `Combatant::{phantom,weapon,magic,lime}_span` and ends them in
+`Scene::tick_building_statuses`, run once per game tick; saves from
+before start what was left at the first tick after loading.
+
+The shield sprites (not drawn by the port, which shows its protection
+aura for the remaining time instead): layer 0xd (`PROTWSPR_64` for a
+building of size `+0x56` 1, else `_128`; 0x426484) and 0xc
+(`PROTMSPR_*`, 0x42667f), depth the picture's `+0x19` less 5 / 4, made
+with frame `+0x18c` / `+0x16c` 0; while on, when the tick is more than
+1 past its time `+0x190` / `+0x170` the frame goes on by one and past
+the top it goes back to the bottom, from 0x595f90 (size 4: 14..43) or
+0x595f98 (else 14..44) for the weapon shield, 0x595fa0 (14..43) or
+0x595fa8 (13..40) for the magic one; once off it plays on to the
+sequence's count and the layer is removed (0x4264b3, 0x4266fc). Each
+step 0x50d660 places it at the picture's left + w / 2 - its w / 2 and
+top + h / 4 - its h / 2 (integer halves and quarter).
+
 The pointer still picks a hidden phantom ship or building: 0x49a580
 asks each occupant's vt+8, the ship's 0x4e06c0 (its hull sprite's rect
 and mask), a building's 0x423460 (castles 0x410420: the picture's rect,
@@ -956,7 +990,14 @@ it is hovered, shown and ordered against as when seen; the port's
 `hit_test` likewise ignores the phantom. Left out: a banner made anew
 by 0x4247b0 during the phantom is not ghosted or hidden until the
 phantom is cast again (no 0x50e460 / 0x50e350 there); the port ghosts
-or hides it with the building.
+or hides it with the building. The tick makes it anew (0x425bf4) when
+`+0xd8` is 0 and `+0xd4` set, and removes it (0x50cdb0(1)) when `+0xd8`
+is set and the state `+0xa4` is 2 or 3 or `+0xd4` is 0; message 2 makes
+it at 0x425e8d when `+0xdc` and `+0xd4`; message 3 removes it. So a
+building in state 2 or 3 with `+0xd4` set loses and regains it on
+alternate ticks, the regained one plain under the phantom. Not decoded:
+when `+0xd4` is cleared and set again and how the port's states map to
+2 and 3, needed before the port can model which banner is current.
 
 ## Control bar tabs and panels
 

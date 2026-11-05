@@ -2613,6 +2613,7 @@ impl Scene {
             self.tick_flyers(data, caches);
             self.tick_gorgons(data, caches);
             self.tick_statuses(data, caches);
+            self.tick_building_statuses();
             self.step_ship_fires();
             self.run_computers();
             self.run_brain_lands();

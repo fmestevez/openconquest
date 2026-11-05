@@ -979,8 +979,18 @@ impl Scene {
     /// Limes object `i` for `ticks` (`[unshielded, under its weapon
     /// shield]`), added to what it has (0x4c4120, 0x42405d).
     pub(super) fn lime(&mut self, i: usize, ticks: [u32; 2]) {
+        let ship = self.objects[i].ship.is_some();
+        let now = self.ticks;
         if let Some(c) = self.objects[i].combat.as_mut() {
-            let add = crate::clock::ticks(ticks[usize::from(c.protect_weapons > 0.0)]);
+            let n = ticks[usize::from(c.protect_weapons > 0.0)];
+            // A building's in game ticks from its first blow (`+0x14c`,
+            // `+0x150`).
+            if !ship {
+                c.lime = combat::Combatant::extend_span(&mut c.lime_span, now, n);
+                c.lime_total = c.lime;
+                return;
+            }
+            let add = crate::clock::ticks(n);
             if c.lime <= 0.0 {
                 c.lime_total = 0.0;
             }
@@ -1011,26 +1021,29 @@ impl Scene {
             .collect()
     }
 
-    /// Lime wears off (a ship 0x4df2d0, a building 0x425990). A building's
-    /// work then starts again from when the lime struck (`+0x124` set to
-    /// its start): what it had done before is lost and the limed time
-    /// counts.
+    /// A ship's lime wears off (0x4df2d0); a building's in its tick
+    /// (`tick_building_statuses`).
     pub(super) fn run_lime(&mut self, dt: f32) {
-        let mut cleared = Vec::new();
         for o in &mut self.objects {
-            let Some(c) = o.combat.as_mut() else { continue };
+            let Some(c) = o.combat.as_mut().filter(|_| o.ship.is_some()) else {
+                continue;
+            };
             if c.lime <= 0.0 {
                 continue;
             }
             c.lime -= dt;
             if c.lime <= 0.0 {
                 c.lime = 0.0;
-                if o.ship.is_none() {
-                    cleared.push((o.id, c.lime_total));
-                }
                 c.lime_total = 0.0;
             }
         }
+    }
+
+    /// The lime on buildings `cleared` wore off, each with its length in
+    /// seconds: the building's work then starts again from when the lime
+    /// struck (0x425990 sets `+0x124` to its start `+0x14c`): what it had
+    /// done before is lost and the limed time counts.
+    pub(super) fn lime_worn_off(&mut self, cleared: Vec<(u32, f32)>) {
         for (site, since) in cleared {
             // The temples' learning and the Flame likewise (0x438300,
             // 0x439260 run 0x427f50, ending with 0x425990, first); the

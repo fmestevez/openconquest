@@ -119,15 +119,25 @@ impl Scene {
             .as_ref()
             .is_none_or(|s| matches!(s.kind, 2..=5 | 9 | 11));
         let (x, y) = (self.objects[t].x, self.objects[t].y);
+        let ship = self.objects[t].ship.is_some();
+        let now = self.ticks;
         let c = self.objects[t].combat.as_mut().unwrap();
-        // Casting again adds to the time left.
-        let left = match spell {
-            Spell::ProtectWeapons => &mut c.protect_weapons,
-            Spell::ProtectMagic => &mut c.protect_magic,
-            _ => &mut c.phantom,
+        // Casting again adds to the time left; a building's in game ticks
+        // from the first casting (LandObj 0xda97, 0xda9a).
+        let (left, span) = match spell {
+            Spell::ProtectWeapons => (&mut c.protect_weapons, &mut c.weapon_span),
+            Spell::ProtectMagic => (&mut c.protect_magic, &mut c.magic_span),
+            _ => (&mut c.phantom, &mut c.phantom_span),
         };
-        *left = left.max(0.0) + magic::PROTECTION_SECONDS;
-        let left = *left;
+        let left = if ship {
+            *left = left.max(0.0) + magic::PROTECTION_SECONDS;
+            *left
+        } else {
+            *left = crate::combat::Combatant::extend_span(span, now, magic::PROTECTION_TICKS);
+            span.map_or(0.0, |(start, len)| {
+                crate::clock::ticks((start + len).saturating_sub(now))
+            })
+        };
         self.sounds.push(("prote1", x, y));
         if spell != Spell::Phantom {
             let name = magic::fx_protection(spell, large);
