@@ -87,11 +87,12 @@ impl Scene {
         if !matches!(self.objects[i].class, ObjectClass::Building(0x34..=0x36)) {
             return Err("Not a fort".into());
         }
-        if self.construction_at(site).is_some() || self.mending.contains(&site) {
-            return Ok(());
+        if self.construction_at(site).is_none() && !self.mending.contains(&site) {
+            self.mending.push(site);
+            self.begin_unit_mend(i);
         }
-        self.mending.push(site);
-        self.begin_unit_mend(i);
+        // Then its call (0x41bd2f, `fort_voice`).
+        self.fort_voice(site);
         Ok(())
     }
 
@@ -325,6 +326,8 @@ impl Scene {
         }
         self.fort_cast_check(site, spell, (cx, cy), target)?;
         if self.mending.contains(&site) || self.fort_spells(site).iter().all(|&n| n == 0) {
+            // Order 0x22 sent: its call whatever came of it (0x41bd2f).
+            self.fort_voice(site);
             return Ok(());
         }
         let s = spell as usize;
@@ -367,6 +370,7 @@ impl Scene {
         {
             self.held.remove(k);
         }
+        self.fort_voice(site);
         Ok(())
     }
 }
@@ -436,8 +440,25 @@ mod data_tests {
         c.hull = c.max_hull / 2.0;
         let r = menu(&scene)[4].unwrap();
         assert_eq!((r.command.0, r.enabled, r.progress), (0x14, true, None));
+        scene.sounds.clear();
         scene.fort_repair(fort).unwrap();
         assert!(scene.mending.contains(&fort));
+        // Its call after order 0x1e (0x41bd2f): the nation's list of
+        // events 216-219, at the fort.
+        let calls = super::super::halt::FORT_CALLS[scene.human.unwrap().nation as usize];
+        let called = |scene: &crate::scene::Scene| {
+            let o = &scene.objects[scene.object_index(fort).unwrap()];
+            match scene.sounds.as_slice() {
+                [] => calls.is_empty(),
+                [(n, x, y)] => calls.contains(n) && (*x, *y) == (o.x, o.y),
+                _ => false,
+            }
+        };
+        assert!(called(&scene));
+        // Order 0x23 (Guard) plays nothing.
+        scene.sounds.clear();
+        scene.fort_order(fort, 1).unwrap();
+        assert!(scene.sounds.is_empty());
         let m = menu(&scene);
         assert_eq!(m[4].unwrap().progress, Some(0.0));
         assert!(m[0..4].iter().flatten().all(|s| !s.enabled));
@@ -448,11 +469,19 @@ mod data_tests {
         // Limed while mending: 0x423a00 is skipped, Repair stays on.
         scene.objects[f].combat.as_mut().unwrap().lime = 100.0;
         assert!(menu(&scene)[4].unwrap().enabled);
-        // Its right click: order 10, the mending ended.
+        // Its right click: order 10, the mending ended, and its call.
+        scene.sounds.clear();
         scene.halt(fort, &data, &mut caches).unwrap();
         assert!(!scene.mending.contains(&fort));
+        assert!(called(&scene));
         // Limed and idle: every button off.
         assert!(menu(&scene).iter().flatten().all(|s| !s.enabled));
+        // Another player's fort: no call.
+        let owner = scene.objects[f].owner;
+        scene.objects[f].owner = owner.map(|(n, s)| (n, s + 1));
+        scene.sounds.clear();
+        scene.fort_repair(fort).unwrap();
+        assert!(scene.sounds.is_empty());
     }
 
     /// A fort's stored lightning (0x419f80 case 0x22, 0x42ef90, 0x42f580):

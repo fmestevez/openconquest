@@ -1066,14 +1066,35 @@ impl Scene {
     }
 
     /// Runs the shake on by `dt` seconds of real time (0x55f450 sleeps
-    /// to each step's end by timeGetTime, whatever the game's speed).
-    pub fn run_shake(&mut self, dt: f32) {
+    /// to each step's end by timeGetTime, whatever the game's speed);
+    /// whether it is still on. It runs inside the game's tick, so the game
+    /// waits for it: the caller runs no update while it is on. The time is
+    /// not made up after. The frame (0x5203c2) reads the time before the
+    /// tick, runs a tick when `(now - +0xe6) / period` is not 0 (`+0xe2`
+    /// set to 1 above that: one tick a frame, never more), and after it
+    /// sets `+0xe6 = now - (now - +0xe6 - period) % period` (0x52043c,
+    /// `idiv`: the remainder): the phase kept, whole periods behind
+    /// dropped. So the frame after the shake runs one tick at once, and the
+    /// next falls on the old phase. `speed` is the game seconds a real
+    /// second runs (none: the clock left alone, the network game's): the
+    /// tick clock (`brain_clock`, game seconds since the
+    /// last tick's time) is set so the next update, run with no time,
+    /// runs that one tick and keeps the phase.
+    pub fn run_shake(&mut self, dt: f32, speed: Option<f32>) -> bool {
         let total: u32 = LIGHTNING_SHAKE.iter().map(|s| s.2).sum();
-        if let Some(ms) = self.shake_ms.as_mut() {
-            *ms += dt * 1000.0;
-            if *ms >= total as f32 {
-                self.shake_ms = None;
-            }
+        let Some(ms) = self.shake_ms.as_mut() else {
+            return false;
+        };
+        *ms += dt * 1000.0;
+        if *ms < total as f32 {
+            return true;
         }
+        if let Some(speed) = speed {
+            let tick = crate::clock::TICK;
+            let behind = self.brain_clock + *ms / 1000.0 * speed;
+            self.brain_clock = tick + (behind - tick).rem_euclid(tick);
+        }
+        self.shake_ms = None;
+        false
     }
 }

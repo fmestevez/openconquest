@@ -858,12 +858,21 @@ fn war_magic() {
     // (0x55f450): 10 up for 50 ms, 5 down for 50, 3 up for 40.
     assert!(heard(&scene, "molniya2") && scene.effects.len() == effects + 1);
     assert_eq!(scene.shake_offset(), (0, -10));
-    scene.run_shake(0.05);
+    // The game waits for it (it runs inside the tick), then the frame
+    // after runs the tick that fell due at once, the 140 ms not made up
+    // and the tick's phase kept (0x5203c2, 0x52043c).
+    let (ticks, phase) = (scene.ticks, scene.brain_clock);
+    assert!(scene.run_shake(0.05, Some(1.0)));
     assert_eq!(scene.shake_offset(), (0, 5));
-    scene.run_shake(0.05);
+    assert!(scene.run_shake(0.05, Some(1.0)));
     assert_eq!(scene.shake_offset(), (0, -3));
-    scene.run_shake(0.04);
+    assert!(!scene.run_shake(0.04, Some(1.0)));
     assert!(scene.shake_ms.is_none() && scene.shake_offset() == (0, 0));
+    assert_eq!(scene.ticks, ticks);
+    scene.update(0.0, &data, &mut caches);
+    assert_eq!(scene.ticks, ticks + 1);
+    let tick = crate::clock::TICK;
+    assert!((scene.brain_clock - (phase + 0.14 - tick).rem_euclid(tick)).abs() < 1e-4);
     // It strikes partway through its picture.
     assert!(scene.object_index(enemy).is_some(), "not yet");
     for _ in 0..50 * 2 {
@@ -11482,6 +11491,7 @@ fn building_calls_are_the_sound_entries() {
         (&WAR_TEMPLE_CALLS, 248),
         (&SEA_TEMPLE_CALLS, 244),
         (&FINISHED_CALLS, 188),
+        (&FORT_CALLS, 216),
     ] {
         for (nation, add) in [0, 1, 3, 2].into_iter().enumerate() {
             let names = openconquest_formats::sound::sound_choices(archive, base + add).unwrap();

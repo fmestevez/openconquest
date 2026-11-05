@@ -214,12 +214,13 @@ impl Scene {
     /// noted; no worn test there.
     pub(super) fn self_mend(&mut self, id: u32) -> Result<(), String> {
         let i = self.object_index(id).ok_or("No such building")?;
-        if self.construction_at(id).is_some() || self.mending.contains(&id) {
-            return Ok(());
+        if self.construction_at(id).is_none() && !self.mending.contains(&id) {
+            self.mending.push(id);
+            self.begin_mend_steps(i);
+            self.begin_unit_mend(i);
         }
-        self.mending.push(id);
-        self.begin_mend_steps(i);
-        self.begin_unit_mend(i);
+        // A fort's call after it (0x41bd2f, `fort_voice`).
+        self.fort_voice(id);
         Ok(())
     }
 

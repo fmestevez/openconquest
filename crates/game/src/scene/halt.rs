@@ -63,6 +63,13 @@ pub(super) const SCHOOL_CALLS: Calls = [
     &[],
     &["re_o2a", "re_o4a", "re_o6a"],
 ];
+/// A fort's acknowledgment (216-219, 0x419f80 at 0x41bd2f).
+pub(super) const FORT_CALLS: Calls = [
+    &[],
+    &["re_o2a", "re_o4a", "re_o6a"],
+    &[],
+    &["re_o2a", "re_o4a", "re_o6a"],
+];
 /// A building finished (188-191, 0x4230f0).
 pub(super) const FINISHED_CALLS: Calls = [
     &[],
@@ -157,7 +164,12 @@ impl Scene {
                             self.building_voice(owner, &WAR_TEMPLE_CALLS, x, y);
                         }
                     }
-                    0x34..=0x36 => self.cease_fire(id),
+                    0x34..=0x36 => {
+                        self.cease_fire(id);
+                        // Its call after the order, even one that found
+                        // it under construction (`fort_voice`).
+                        self.building_voice(owner, &FORT_CALLS, x, y);
+                    }
                     _ => {}
                 }
             }
@@ -492,6 +504,25 @@ impl Scene {
             c.fire.cease();
             c.fire.aggressor = false;
         }
+    }
+
+    /// A fort's call after an order (0x419f80 message 0x280f, at
+    /// 0x41bd2f): orders 10 (stop), 0x15 / 0x16 (attack), 0x1e (repair)
+    /// and 0x22 (a spell, whatever its kind and whether it is cast) set
+    /// the flag `local_1c` 1; 0x23, 0x2d, 0x32 and the rest clear it. With
+    /// it set and the fort the local player's (`+0x54`, `+0x55` against
+    /// game `+0x3212`, `+0x3213`), event 0xd8 / 0xd9 / 0xdb / 0xda by its
+    /// nation 0-3, mode 2 at its cell (`+0x74`, `+0x78`). Not a fort,
+    /// nothing (a barbarian structure's 0x40ef70 has no call).
+    pub(super) fn fort_voice(&mut self, id: u32) {
+        let Some(o) = self.object_index(id).map(|i| &self.objects[i]) else {
+            return;
+        };
+        if !matches!(o.class, ObjectClass::Building(0x34..=0x36)) {
+            return;
+        }
+        let (owner, x, y) = (o.owner, o.x, o.y);
+        self.building_voice(owner, &FORT_CALLS, x, y);
     }
 
     /// A building's voice event for its owner when that is the viewing

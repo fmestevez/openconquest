@@ -7114,15 +7114,20 @@ impl App {
             // Multiplayer games run at one speed and do not pause, menus
             // open or not.
             self.run_turns(dt);
+            // The shake on real time; the turns are not held for it (the
+            // network paths' wait not decoded).
+            self.scene.run_shake(dt, None);
         } else if !self.briefing && !self.paused && self.menu.is_none() && self.ask.is_none() {
-            self.scene.update(
-                dt * self.settings.config.speed(),
-                &self.data,
-                &mut self.caches,
-            );
+            // The screen's shake (0x55f450) runs on real time inside the
+            // game's tick: the game waits for it, then runs the tick that
+            // fell due at once (`Scene::run_shake`).
+            let speed = self.settings.config.speed();
+            let shook = self.scene.shake_ms.is_some();
+            if !self.scene.run_shake(dt, Some(speed)) {
+                let dt = if shook { 0.0 } else { dt * speed };
+                self.scene.update(dt, &self.data, &mut self.caches);
+            }
         }
-        // The screen's shake runs on real time (0x55f450).
-        self.scene.run_shake(dt);
         self.play_scene_sounds();
         self.choose_music();
         self.choose_ambience();

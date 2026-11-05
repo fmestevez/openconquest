@@ -892,6 +892,17 @@ impl Scene {
         }
         self.amber -= cost;
         self.research.push((site, upgrade, level + 1, 0.0));
+        // Order 0x21 plays the building's call: the sage school's when it
+        // was idle (0x432210, `+0x10c` 0), the smithy's (0x434ed0) and the
+        // workshop's (0x436ee0) on every order but 0x3c.
+        let calls = match class {
+            WORKSHOP => &super::halt::STUDIO_CALLS,
+            economy::SMITHY => &super::halt::SMITHY_CALLS,
+            _ => &super::halt::SCHOOL_CALLS,
+        };
+        let o = &self.objects[i];
+        let (owner, x, y) = (o.owner, o.x, o.y);
+        self.building_voice(owner, calls, x, y);
         Ok(())
     }
 
@@ -941,6 +952,10 @@ impl Scene {
         batch.paid += cost;
         batch.ticks += (combat::refit_seconds(level) / crate::clock::TICK).round() as u32;
         self.refits.push((smithy, upgrade, level, 0.0));
+        // Order 0x20: the smithy's call (0x434ed0, every order but 0x3c).
+        let o = &self.objects[s];
+        let (owner, x, y) = (o.owner, o.x, o.y);
+        self.building_voice(owner, &super::halt::SMITHY_CALLS, x, y);
         Ok(())
     }
 
@@ -1160,6 +1175,13 @@ impl Scene {
         }
         self.amber -= amber;
         self.fish -= fish;
+        // Order 0x20 at a workshop: its call (0x436ee0, every order but
+        // 0x3c). The town's (0x441ba0) not read here.
+        let o = &self.objects[i];
+        if o.class == ObjectClass::Building(WORKSHOP) {
+            let (owner, x, y) = (o.owner, o.x, o.y);
+            self.building_voice(owner, &super::halt::STUDIO_CALLS, x, y);
+        }
         Ok(())
     }
 

@@ -264,6 +264,9 @@ impl Scene {
     /// the jam's first member (0x415df0): the port's pick gives that
     /// member (`Scene::jam_at`).
     pub fn fort_attack(&mut self, site: u32, target: u32, groups: u8, masks: combat::FortMasks) {
+        // A fort's call after the order (0x41bd2f; nothing below pushes a
+        // sound), whatever is found.
+        self.fort_voice(site);
         let Some(i) = self
             .object_index(site)
             .filter(|&i| self.objects[i].holds_units())

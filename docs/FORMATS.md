@@ -3689,6 +3689,21 @@ it.
   10000 0x418f60, a unit added 0x4193d0 while any group fires at will) and
   0x446960 (orders 0x15 / 0x16, a target; and a fort firing on aggressors
   when struck). See **Forts' fire** below for who sends them.
+  The fort's call (0x41bd2f): message 0x280f sets a flag 1 and its
+  switch clears it for orders 0x23, 0x2d, 0x32 and any not handled, so
+  orders 10, 0x15 / 0x16, 0x1e and 0x22 (every kind, cast or not) play
+  it, for the local player's fort (`+0x54`, `+0x55` against game
+  `+0x3212`, `+0x3213`): event 0xd8 / 0xd9 / 0xdb / 0xda by nation 0-3,
+  mode 2 at `+0x74`, `+0x78`; 216 and 219 have no entry, 217 and 218
+  `re_o2a re_o4a re_o6a`. Order 10 plays it even when LandObj removed a
+  fort under construction. The port: `Scene::fort_voice`, `FORT_CALLS`
+  (halt, `fort_attack`, `fort_repair`, `self_mend`, `fort_cast`).
+  The other calls' orders: the smithy (0x434ed0) and studio (0x436ee0)
+  on every 0x280f order but 0x3c (so research 0x21, the refit / weapons
+  batch 0x20 and 10); the sage school (0x432210) on 10 when busy and on
+  0x21 when idle (`+0x10c` 0, even an unknown kind). The port plays them
+  on its research start, refit and workshop training. Not read: the
+  town's (0x441ba0, `local_28`) orders other than 10.
 - A ship: 0x4e2ba0 case 10 is `vt+4(8, NULL)`, the stop event (0x4aa540),
   with no permission test; a ship being built has its build called off.
   ShipService 0x4e7640 takes order 0x32 only, GameObj 0x50c9e0 order 0x29
@@ -5879,12 +5894,21 @@ origin (0x55d650) to the saved one less |x|, |y|, marks the rectangle
 for redraw (0x55f7d0) and composes (0x564970); then sleeps until the
 running sum of the steps' milliseconds from timeGetTime (only when more
 than 2 are left), a failed Blt ending it. At the end the origin is put
-back. It runs inside the game's tick, so the game waits for it. The
-port draws the map view moved by the step for its real milliseconds
-(`Scene::shake_offset`, `run_shake`, `LIGHTNING_SHAKE`). Not decoded:
-what the composition 0x564970 draws with the moved origin over the
-Blt's picture (the port shows the Blt's move), and whether the game's
-clock makes up the 140 ms after (the port's game runs on through it).
+back. It runs inside the game's tick, so the game waits for it, and
+the time is not made up: the frame (0x5203c2) reads the time before the
+tick, runs one when `(now - +0xe6) / period` is not 0 (`+0xe2` 1 above
+that, never more than one tick a frame) and after it sets `+0xe6 = now -
+(now - +0xe6 - period) % period` (0x52043c, the `idiv` remainder): the
+phase kept, whole periods behind dropped. So the frame after the shake
+runs one tick at once and the next falls on the old phase. The port
+draws the map view moved by the step for its real milliseconds
+(`Scene::shake_offset`, `run_shake`, `LIGHTNING_SHAKE`) and runs no game
+update meanwhile; at its end the tick clock is set to one tick due plus
+the phase (`(phase + shake - period) mod period`), and an update with no
+time runs that tick. (The network game's turns are not held for it: its
+paths' wait not decoded.) Not decoded: what the composition 0x564970
+draws with the moved origin over the Blt's picture (the port shows the
+Blt's move).
 
 Magic.cpp 0x42f580(spell, object, x, y, draw, share), its cases: each
 first 0x42ed40(spell, 1, share) (a count `+0x10 + 4 spell`, else the
