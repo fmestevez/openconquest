@@ -596,6 +596,11 @@ pub struct Closing {
     /// look.
     #[serde(default)]
     pub contact_wait: bool,
+    /// The load's `+0x6c6`: 0xff when it was far at the order (0x4aa840),
+    /// so 0x4b9140 finds the target by id alone (0x4ac050 with -1); else
+    /// the target's player, whose list (0x4a8710) has lost fallen ruins.
+    #[serde(default)]
+    pub by_id: bool,
 }
 
 /// A ship's leviathan hunt, a game tick at a time (see `Ship::hunt`).
@@ -1401,6 +1406,10 @@ pub enum Task {
     /// Sail alongside own port, shipyard, dock or ship `target` and reload
     /// there (Reload Object; see `scene::load`).
     LoadAt { target: u32 },
+    /// Reload Object at own port, shipyard, dock or fort ruins `target`:
+    /// the closing in of the load (`+0x696` 3, 0x4b7370), which never
+    /// finds them (see `scene::closing`).
+    LoadRuins { target: u32 },
 }
 
 /// A ship being sold (task 5, 0x4b4380; `+0x755` its state): 1 just
@@ -1464,7 +1473,7 @@ impl Task {
             Task::Zone { .. } => 10,
             Task::Convoy { .. } => 11,
             Task::Take { .. } => 12,
-            Task::LoadAt { .. } => 13,
+            Task::LoadAt { .. } | Task::LoadRuins { .. } => 13,
             Task::Sell(_) => 14,
         }
     }

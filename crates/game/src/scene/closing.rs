@@ -12,7 +12,9 @@ use openconquest_formats::map::TILE_SIZE;
 
 use super::grapple::{bow_row, UNIT};
 use super::{sail, walk_path, Caches, GameData, Region, Scene};
+use crate::economy::{DOCK, PORT};
 use crate::objects::{self, Closing, Task};
+use openconquest_formats::ObjectClass;
 
 /// The box a rammer or boarder closes in through, and twice the distance
 /// it sails to before (0x59aee8, 0x5991c8 and 0x5991d4 by ship type: 5
@@ -100,7 +102,10 @@ impl Scene {
     pub(super) fn run_closing(&mut self, data: &GameData, caches: &mut Caches) {
         for o in &mut self.objects {
             if let Some(s) = o.ship.as_mut() {
-                if !matches!(s.task, Some(Task::Ram { .. } | Task::Board { .. })) {
+                if !matches!(
+                    s.task,
+                    Some(Task::Ram { .. } | Task::Board { .. } | Task::LoadRuins { .. })
+                ) {
                     s.closing = None;
                 }
             }
@@ -112,7 +117,10 @@ impl Scene {
                 o.ship.as_ref().is_some_and(|s| {
                     s.grapple.is_none()
                         && s.ram_run.is_none()
-                        && matches!(s.task, Some(Task::Ram { .. } | Task::Board { .. }))
+                        && matches!(
+                            s.task,
+                            Some(Task::Ram { .. } | Task::Board { .. } | Task::LoadRuins { .. })
+                        )
                 })
             })
             .map(|o| o.id)
@@ -122,6 +130,10 @@ impl Scene {
                 continue;
             };
             let task = self.objects[i].ship.as_ref().unwrap().task.unwrap();
+            if let Task::LoadRuins { target } = task {
+                self.load_ruins_tick(i, target);
+                continue;
+            }
             let (Task::Ram { target } | Task::Board { target, .. }) = task else {
                 continue;
             };
@@ -170,6 +182,7 @@ impl Scene {
                     plan_goal: own,
                     first_plan: true,
                     contact_wait: false,
+                    by_id: false,
                 });
             }
             let near = s.closing.unwrap().near;
@@ -194,6 +207,119 @@ impl Scene {
                 (_, true, Some(ti)) => self.ram_close(i, ti),
             }
         }
+    }
+
+    /// Ship `i`'s Reload Object at own ruins `target` (command 0x1f kind
+    /// 2: event 0x10 `{3, 1, id, 0xff}`, the order 0x4aa840, `+0x696` 3
+    /// run by 0x4b7370), a game tick at a time. The order finds the ruins
+    /// by id (0x4ac050 with -1) and measures (0x4abf60: 0x557440 to a
+    /// port's or dock's berth, vt+0xb8, else to the anchor `+0x74 /
+    /// +0x78`): within half the box (2) closing in (`+0x6a1` 1), keeping
+    /// the ruins' player in `+0x6c6`; else sailing (3) with `+0x6c6`
+    /// 0xff. Closing in (0x4b73a0 state 1) looks for them with 0x4b7f10
+    /// in the cells' object slots, which their fall emptied (0x423d60 on
+    /// 0x138b -> 0x499860): not in the box (0xff), so sailing again with
+    /// `+0x6c7` -1, and the contact (0x4b84b0) and 0x2875 are never
+    /// reached. Sailing (0x4b5d10) on a new cell or held up: 0x4b9140(2,
+    /// -1, `+0x6c6`, id) finds them by player (0x4a8710, a list that lost
+    /// them: notice 0x13c and the task stopped) or by id: 0x50ebf0 gives
+    /// the berth (vt+0xb8 for classes below 0x44); the berth and the
+    /// anchor (vt+0x28, 0x40dfa0) both within 2 (0x557480) closing in
+    /// again, else a plan (0x4a6270 mode 5) to the berth. So a ship far at
+    /// the order sails to the berth and then lies there, turning between
+    /// the two states, until the ruins are gone (removed, 0x4232ed: by id
+    /// not found, notice 0x13c) or another order; one near ends at once
+    /// with notice 0x13c.
+    fn load_ruins_tick(&mut self, i: usize, target: u32) {
+        let ruins = self.object_index(target);
+        let own = self.cell_of_object(i);
+        let s = self.objects[i].ship.as_mut().unwrap();
+        if s.closing.is_none_or(|c| c.target != target) {
+            // 0x4aa840: the ruins by id; gone, the order does nothing.
+            let Some(t) = ruins else {
+                s.task = None;
+                return;
+            };
+            let anchor = self.objects[t].cell.unwrap_or(own);
+            let at = match self.objects[t].class {
+                ObjectClass::Building(PORT | DOCK) => self.vt_berth(t),
+                _ => anchor,
+            };
+            let near = walk_path::dist(own.0, own.1, at.0, at.1) <= BOX / 2;
+            self.objects[i].ship.as_mut().unwrap().closing = Some(Closing {
+                target,
+                near,
+                from: None,
+                contact: -1,
+                planned: 0,
+                plan_from: own,
+                plan_goal: own,
+                first_plan: true,
+                contact_wait: false,
+                by_id: !near,
+            });
+        }
+        let s = self.objects[i].ship.as_ref().unwrap();
+        let c = s.closing.unwrap();
+        if c.near {
+            // 0x4b73a0 state 1: 0x4b7f10 does not find them (0xff).
+            let c = self.closing_mut(i);
+            c.near = false;
+            c.from = None;
+            return;
+        }
+        if c.from == Some(own) && s.waited == 0.0 {
+            return;
+        }
+        let Some(t) = ruins.filter(|_| c.by_id) else {
+            self.prey_lost(i, 0x13c);
+            return;
+        };
+        let berth = self.vt_berth(t);
+        let anchor = self.objects[t].cell.unwrap_or(berth);
+        if walk_path::dist2(berth.0, berth.1, own.0, own.1) <= BOX / 2
+            && walk_path::dist2(anchor.0, anchor.1, own.0, own.1) <= BOX / 2
+        {
+            self.closing_mut(i).near = true;
+            return;
+        }
+        self.closing_plan(i, berth, None);
+        self.closing_mut(i).from = Some(own);
+    }
+
+    /// A port's, yard's, dock's or fort's berth (vt+0xb8, 0x40e050): its
+    /// anchor a step toward its facing `+0x1dc` (0x5c4f4c), (-1, -1) for
+    /// none. A fort's facing is set as it is made (0x419f80 message 2):
+    /// 6 when the cell below its anchor is water (landscape low nibble 7
+    /// or 1), else 0 for the cell right, 4 left, 2 above; with none it is
+    /// kept (the record's field 10 when the class flag 8 is set, 0x4280f2;
+    /// else the constructor's -1, 0x427780).
+    pub(super) fn vt_berth(&self, t: usize) -> (i32, i32) {
+        let o = &self.objects[t];
+        if let (ObjectClass::Building(c), Some((x, y))) = (o.class, o.cell) {
+            if (0x34..=0x36).contains(&c) {
+                let (w, h) = (self.grid.width as i32, self.grid.height as i32);
+                let water = |cx: i32, cy: i32| {
+                    matches!(self.cell_types[(cy * w + cx) as usize] & 0xf, 7 | 1)
+                };
+                let facing = if y < h - 1 && water(x, y + 1) {
+                    Some(6)
+                } else if x < w - 1 && water(x + 1, y) {
+                    Some(0)
+                } else if x > 0 && water(x - 1, y) {
+                    Some(4)
+                } else if y > 0 && water(x, y - 1) {
+                    Some(2)
+                } else {
+                    None
+                };
+                if let Some(f) = facing {
+                    let (dx, dy) = UNIT[f];
+                    return (x + dx, y + dy);
+                }
+            }
+        }
+        self.berth_cell(t).unwrap_or((-1, -1))
     }
 
     fn closing_mut(&mut self, i: usize) -> &mut Closing {

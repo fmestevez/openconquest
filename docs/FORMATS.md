@@ -6975,9 +6975,44 @@ Their orders at ruins (the click 0x5180e0: mode 0xc order 0x1f `{id,
 - Load (0x1f kind 2): event 0x10 `{3, 1, id, 0xff}`; the order 0x4aa840
   finds the ruins by id (0x4ac050 with -1), measures (0x4abf60) and
   starts the closing in (`+0x696` 3: 0x4b7370 -> 0x4b73a0 -> 0x4b7f10
-  with the kept pointer `+0x6cf`, no look-up). Not decoded: what the
-  contact (0x4b84b0) and the ruins' 0x425990 on 0x2875 then do; the
-  port's `order_load` still refuses ruins.
+  with the kept pointer `+0x6cf`, no look-up). Near at the order
+  (0x4abf60 within 0x59aee8 / 2 = 2: 0x557440 to a port's or dock's
+  berth vt+0xb8, else to the anchor `+0x74 / +0x78`) it closes in
+  (`+0x6a1` 1) with `+0x6c6` the ruins' player; far, it sails (3) with
+  `+0x6c6` 0xff. Closing in (0x4b73a0 state 1) looks with 0x4b7f10(5,
+  pointer, id, .., 1) in the cells' object slots, which the fall
+  emptied: not in the box (0xff), so `+0x6a1` 3 and `+0x6c7` -1; the
+  contact 0x4b84b0 (the hook for a ship, or for a building the contact
+  whose state 3 sends 0x2875, 0x4b3930) and the ruins' 0x425990 on
+  0x2875 are never reached. Sailing (0x4b7370 -> 0x4b5d10, on a new cell
+  or held up): 0x4b9140(2, -1, `+0x6c6`, id) looks the ruins up by
+  `+0x6c6`: by player (0x4ac050 -> 0x4a8710) the list has lost them,
+  notice 0x13c `{id, 0x13c}` (0x4a1900) and the task stopped (vt+4(8,
+  0)); by id (-1, 0x51f1f0) found while they last (removed by message
+  10, 0x4232ed: then lost likewise): 0x50ebf0 gives the berth (vt+0xb8,
+  0x40e050, for building classes below 0x44 with the flag), and the
+  berth and the anchor (vt+0x28, 0x40dfa0) both within 2 (0x557480)
+  close in again (1), else a plan 0x4a6270 mode 5 to the berth. So a
+  ship far at the order sails to the berth and lies there, the two
+  states turning, never linked, until another order; one near ends at
+  once with notice 0x13c. The berth 0x40e050: anchor plus 0x5c4f4c's
+  step for the facing `+0x1dc` (-1, -1 below 0); a fort's facing
+  (0x419f80 message 2, after the weapons): 6 when the cell below its
+  anchor has landscape low nibble 7 or 1 (`grid + 8`), else 0 the cell
+  right, 4 left, 2 above (each inside the map), else kept (0x427780's
+  -1, or record field 10 with class flag 8). The port: `order_load`
+  takes own port, yard, dock and fort ruins as `Task::LoadRuins`,
+  `Scene::load_ruins_tick` (`Closing::by_id` the `+0x6c6` 0xff),
+  `Scene::vt_berth`. Tested on miss000.
+
+The click's refusals. The click (0x5180e0) sends the mode's command
+(0x518db0, modes 8, 10, 11, 12, 13, 15 by the selected ship) and shows
+no text; the ship's 0x4e2ba0 cases 0x15-0x18, 0x1e and 0x1f return
+silently when 0x4e6700 refuses or the target is not found, and their
+orders (0x4aa990, 0x4aab00, 0x4aa840) drop what they cannot do with
+no message (the only words are the prey notices to a group). The
+port's `App::act` (attack, board, ram, repair, unload, load) so shows
+none of the scene's refusal strings.
 
 A fort's attack at ruins. The fort's answer to the pointer (0x41bec0,
 in 0x419f80 on 0xc452) tests the bytes: an own object 5; standing, not

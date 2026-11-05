@@ -6622,9 +6622,13 @@ impl App {
                 Ok(())
             }
         };
-        if let Err(e) = result {
-            self.say(e);
-        }
+        // The original's click (0x5180e0) sends the mode's command
+        // (0x518db0) and shows nothing of its own; the ship's 0x4e2ba0
+        // cases 0x15-0x18, 0x1e and 0x1f drop a command 0x4e6700 refuses
+        // and their orders (0x4aa990, 0x4aab00, 0x4aa840, 0x446960) drop
+        // what they cannot do, all without a message. So a refusal says
+        // nothing.
+        let _ = result;
         self.cycle.set((None, 0));
     }
 

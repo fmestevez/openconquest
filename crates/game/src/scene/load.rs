@@ -225,12 +225,23 @@ impl Scene {
         let fits = other.ship.is_some()
             || matches!(other.class, ObjectClass::Building(PORT | SHIPYARD | DOCK))
             || matches!(other.class, ObjectClass::Building(c) if FORTS.contains(&c));
-        // Not decoded: the load at own ruins. Command 0x1f kind 2 sends
-        // event 0x10 {3, 1, id, 0xff}, whose order 0x4aa840 finds them by
-        // id (0x4ac050 with -1) and starts the closing in (0x4b7370,
-        // 0x4b73a0 -> 0x4b7f10 with the kept pointer, no look-up); what
-        // its contact (0x4b84b0) and the ruins' 0x425990 on 0x2875 do is
-        // not read, so the port refuses ruins as before.
+        // Own port, yard, dock or fort ruins (the pointer offers the load
+        // there, 0x4dd486): command 0x1f kind 2 sends event 0x10 {3, 1,
+        // id, 0xff} and the load's closing in (0x4aa840, 0x4b7370) never
+        // finds them (`Scene::load_ruins_tick`).
+        let ruins_owner = self.ruins.get(&target).and_then(|r| r.owner);
+        if self.fallen(target)
+            && fits
+            && ruins_owner.is_some()
+            && ruins_owner == self.objects[i].owner
+        {
+            self.loads.retain(|l| l.ship != ship);
+            let s = self.objects[i].ship.as_mut().unwrap();
+            s.path.clear();
+            s.task = Some(Task::LoadRuins { target });
+            s.closing = None;
+            return Ok(());
+        }
         if ship == target || !fits || other.owner != self.objects[i].owner {
             return Err("Choose your port, shipyard, dock, fort or another ship of yours".into());
         }

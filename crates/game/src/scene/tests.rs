@@ -6264,6 +6264,7 @@ fn prey_gone_ends_with_a_notice() {
             plan_goal: (0, 0),
             first_plan: true,
             contact_wait: false,
+            by_id: false,
         });
         scene.ticks += 1;
         scene.run_closing(&data, &mut caches);
@@ -7850,6 +7851,82 @@ fn repair_and_unload_at_own_ruins_are_dropped() {
     scene.objects[s].ship.as_mut().unwrap().cargo = 10.0;
     assert_eq!(scene.order_unload(ship, port), Err(String::new()));
     assert_eq!(scene.objects[s].ship.as_ref().unwrap().task, None);
+}
+
+/// The load at own port ruins (command 0x1f kind 2 -> 0x4aa840, the
+/// closing in 0x4b7370): far at the order, the ship sails to the berth
+/// (vt+0xb8) and lies there, the look (0x4b7f10) never finding the ruins
+/// in the emptied slots, so never linked; ordered again from there
+/// (near, `+0x6c6` the player, whose list lost them) it ends with notice
+/// 0x13c; tested on miss000 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_load_at_own_ruins_never_links() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let port = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.class == ObjectClass::Building(economy::PORT))
+        .unwrap()
+        .id;
+    // The own ship farthest from the port.
+    let pc = scene.objects[scene.object_index(port).unwrap()]
+        .cell
+        .unwrap();
+    let ship = scene
+        .objects
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind < 10))
+        .max_by_key(|&(k, _)| {
+            let c = scene.cell_of_object(k);
+            walk_path::dist(c.0, c.1, pc.0, pc.1)
+        })
+        .unwrap()
+        .1
+        .id;
+    scene.hit(port, f32::MAX, None, &data, &mut caches);
+    assert!(scene.fallen(port));
+    let s = scene.object_index(ship).unwrap();
+    let p = scene.object_index(port).unwrap();
+    let berth = scene.vt_berth(p);
+    assert_eq!(Some(berth), scene.berth_cell(p));
+    assert_eq!(scene.order_load(ship, port), Ok(()));
+    let task = Some(Task::LoadRuins { target: port });
+    assert_eq!(scene.objects[s].ship.as_ref().unwrap().task, task);
+    let mut lying = false;
+    for _ in 0..6000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let s = scene.object_index(ship).unwrap();
+        let sh = scene.objects[s].ship.as_ref().unwrap();
+        assert_eq!(sh.task, task);
+        assert!(scene.loads.iter().all(|l| l.ship != ship));
+        let Some(c) = sh.closing else {
+            continue;
+        };
+        assert!(c.by_id);
+        if c.near {
+            lying = true;
+            let own = scene.cell_of_object(s);
+            assert!(walk_path::dist2(berth.0, berth.1, own.0, own.1) <= 2);
+            break;
+        }
+    }
+    assert!(lying);
+    // From there: near at the order, then lost (notice 0x13c), task ended.
+    assert_eq!(scene.order_load(ship, port), Ok(()));
+    for _ in 0..3 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let s = scene.object_index(ship).unwrap();
+    let sh = scene.objects[s].ship.as_ref().unwrap();
+    assert_eq!(sh.task, None);
+    assert!(scene.loads.iter().all(|l| l.ship != ship));
 }
 
 /// A fort takes an attack at an enemy's ruins (0x41bec0 tests the kept
