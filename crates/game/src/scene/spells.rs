@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// A shield's casting sound: events 0x56 and 0x57's `SND_` lists, both
+/// `prote3` alone (sounds.dkx).
+pub(super) const SHIELD_SOUND: &str = "prote3";
+
 impl Scene {
     /// Whether the human player has a standing temple of `temple`.
     pub fn has_temple(&self, temple: Temple) -> bool {
@@ -132,22 +136,31 @@ impl Scene {
                 self.shield_cast(target, weapon);
             }
         }
+        // A shield's casting sound (mode 5 at its cell, event 0x56 weapon
+        // / 0x57 magic, both `SND_` lists `prote3` alone): a building's at
+        // every casting (0x42719f / 0x427139, before its flag's test), a
+        // ship's only cast while off (0x4de584 / 0x4de510, in the state
+        // below 2 branch).
+        if spell != Spell::Phantom && (off || !ship) {
+            self.sounds.push((SHIELD_SOUND, x, y));
+        }
         let now = self.ticks;
         let c = self.objects[t].combat.as_mut().unwrap();
         // Casting again adds to the length, in game ticks from the first
-        // casting (LandObj 0xda97, 0xda9a; the ship's 0xda9a); a ship's
-        // phantom still a countdown.
+        // casting (LandObj 0xda97, 0xda9a; the ship's 0xda97 at 0x4de378,
+        // 0xda9a).
         let (left, span) = match spell {
             Spell::ProtectWeapons => (&mut c.protect_weapons, &mut c.weapon_span),
             Spell::ProtectMagic => (&mut c.protect_magic, &mut c.magic_span),
             _ => (&mut c.phantom, &mut c.phantom_span),
         };
-        if ship && spell == Spell::Phantom {
-            *left = left.max(0.0) + magic::PROTECTION_SECONDS;
-        } else {
-            *left = crate::combat::Combatant::extend_span(span, now, magic::PROTECTION_TICKS);
+        *left = crate::combat::Combatant::extend_span(span, now, magic::PROTECTION_TICKS);
+        // The phantom's messages (LandObj 0xda97 at 0x426f7b, the ship's
+        // 0x4de378) play nothing; the port's `prote1` here is not decoded
+        // (the cast's own sound in 0x42f580 not read).
+        if spell == Spell::Phantom {
+            self.sounds.push(("prote1", x, y));
         }
-        self.sounds.push(("prote1", x, y));
     }
 
     /// Casts lightning, a fireball or the view on the map cell `(cx, cy)`.

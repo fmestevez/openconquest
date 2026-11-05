@@ -966,7 +966,14 @@ is on and `+0x180` / `+0x160` are set, which the LandObj constructor 0x422cc0 se
 side-2 structure 0x420fd0 clears them, and `+0xd4`). The port keeps the
 spans in `Combatant::{phantom,weapon,magic,lime}_span` and ends them in
 `Scene::tick_building_statuses`, run once per game tick; saves from
-before start what was left at the first tick after loading.
+before start what was left at the first tick after loading. The
+shields' casting sound, 0x50e570(5, the cell `+0x74` / `+0x78`, 0x56
+weapon at 0x42719f / 0x57 magic at 0x427139), plays at every casting,
+on or off, before the flag's test; both events' `SND_` lists hold
+`prote3` alone (dumped). The phantom's 0xda97 (0x426f7b) plays nothing.
+The port plays `prote3` at the building's place (`Scene::protect`); the
+phantom's `prote1` there is the port's, not decoded (the cast's own
+sound in 0x42f580 not read).
 
 The shield sprites: layer 0xd (`PROTWSPR_64` for a
 building of size `+0x56` 1, else `_128`; 0x426484) and 0xc
@@ -1041,7 +1048,21 @@ no stone or lime remap. The save (0x4e12e0) keeps both sprites' frame,
 place, delay and time. The port: `Scene::tick_ship_shields` after the
 buildings' statuses, the same `ShieldSprite`s, drawn after the ship;
 the save keeps no sprite, so a loaded ship's shield remakes its sprite
-at frame 0; the casting's event 0x50e570 is not ported; a treasure's
+at frame 0. The casting's event is pushed (x `+0x5a3`, y `+0x5a7`,
+then mode 5 last; event 0x56 at 0x4de584, 0x57 at 0x4de510) only in
+the state-below-2 branch, so a casting on a shield already on is
+silent; both lists are `prote3` alone, which the port plays at the
+ship. A ship's phantom (0xda97 at 0x4de378): off (`+0x253` 0), the
+flag 1, start `+0x81` the game tick, length `+0x85` 0 and 0x4df420(1);
+then every casting adds its length; no sound. 0x4dec40, while
+`+0x251` is below 3 (0 afloat, 1, 2 being built or sold; 4, sunk, is
+the only other value written), first ends the phantom (0x4df210 with
+`+0x253` set: tick - start >= length, unsigned -> start 0,
+0x4df420(0), length 0, flag 0), then `+0x257` (0x4df260) and `+0x258`
+(0x4df2d0), then the shields above, then `+0x25c` (0x4df320). The
+port keeps the phantom in `Combatant::phantom_span` and ends it first
+in `Scene::tick_ship_shields`; a sunk ship is taken out at its blow,
+so the `+0x251` test passes for every ship it sees; a treasure's
 shield on a ship goes through the same casting (its own route not
 read).
 
@@ -8203,8 +8224,11 @@ message 2).
   cell (`+0x74`, `+0x78`), on the map, row by row, sums the 3 x 3 about
   it, row by row, by the object in each cell's `+0xc` that is a
   player's (`+0x57` 1), not of nation 4 and there (vt+0x2c): a ship
-  (class 200-211) whose `+0x5ab` is not 0 (the cell index it is
-  entering, -1 when none) or a fort (0x34-0x36) adds `10 - d`, `d` that
+  (class 200-211) whose `+0x5ab` is not 0 (the cell it has reserved
+  ahead, as `y x width + x`: set by the step 0x4a3a70 at 0x4a3cb4 when
+  not its own cell, by 0x4a39b0 at 0x4a3a5d and by 0x4b96c4; -1 when
+  none, written by its other 19 writers (0x4a30db-0x4dfe7b); so only a
+  ship reserving cell (0, 0) is left out; the port's `Ship::ahead`) or a fort (0x34-0x36) adds `10 - d`, `d` that
   cell's distance from his (0x5576d8; below 0 beyond 10), any other
   building 0x32-0x3e 1; the sum so far is multiplied by 4 when the
   object's id (`+0x4c`) is the attacker's. Cells whose sum is not 0 are

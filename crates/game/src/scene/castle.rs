@@ -234,8 +234,10 @@ impl Scene {
     /// frame 7 the cast: each cell within `+0x1e4` across and `+0x1e8`
     /// down of his cell, on the map, weighs the 3 x 3 about it, row by
     /// row, by what lies on each (`cell_occupants`) of a player's
-    /// (`+0x57` 1) and not nation 4: a ship (class 200-211) with `+0x5ab` not 0
-    /// (the cell it is entering, -1 when none) or a fort (0x34-0x36) adds
+    /// (`+0x57` 1) and not nation 4: a ship (class 200-211) with `+0x5ab`
+    /// not 0 (the cell it has reserved ahead, `Ship::ahead`, as its index
+    /// `y x width + x`, -1 when none: only cell (0, 0) is left out) or a
+    /// fort (0x34-0x36) adds
     /// `10 - d` (`d` its cell's distance from his, 0x5576d8; it may go
     /// below 0), another building 0x32-0x3e 1; the sum so far times 4 on
     /// his attacker's cell (`+0x4c` = `+0x1f4`). The cells whose sum is not
@@ -282,11 +284,10 @@ impl Scene {
             }
             let d = super::fort::cell_distance((cx, cy), cell) as i32;
             let class = t.record.class_id;
-            // `+0x5ab` is a cell's index, so 0 only entering cell (0, 0).
-            let ship = (200..=211).contains(&class)
-                && t.ship
-                    .as_ref()
-                    .is_none_or(|s| s.under_way_into() != Some((0, 0)));
+            // `+0x5ab` holds the cell reserved ahead as `y x width + x`
+            // (0x4a3a70 at 0x4a3cb4, 0x4a39b0, 0x4b96c4) or -1 (none): 0
+            // only for cell (0, 0).
+            let ship = (200..=211).contains(&class) && t.ship.as_ref().is_none_or(weighed);
             let add = if ship || (0x34..=0x36).contains(&class) {
                 10 - d
             } else if (0x32..=0x3e).contains(&class) {
@@ -345,6 +346,12 @@ impl Scene {
 }
 
 /// `(1250 - 125 x level) x (r % 21 + 80) / 100` ticks (unsigned).
+/// Whether the wizard's weighing counts ship `s`: its `+0x5ab` not 0
+/// (0x4109dc), the reserved cell's index or -1.
+fn weighed(s: &crate::objects::Ship) -> bool {
+    s.ahead != Some((0, 0))
+}
+
 fn cast_wait(level: u32, r: u32) -> u32 {
     1250u32
         .wrapping_sub(125u32.wrapping_mul(level))
@@ -413,6 +420,14 @@ mod tests {
             .unwrap();
         scene.objects[s].x = 33.0 * t + t / 2.0;
         scene.objects[s].y = 4.0 * t + t / 2.0;
+        // The weighing leaves out only a ship whose `+0x5ab` is 0, one
+        // that has reserved cell (0, 0); none reserved (-1) counts.
+        let mut ship = scene.objects[s].ship.clone().unwrap();
+        assert!(ship.ahead.is_none() && weighed(&ship));
+        for (cell, counted) in [((1, 0), true), ((0, 1), true), ((0, 0), false)] {
+            ship.ahead = Some(cell);
+            assert_eq!(weighed(&ship), counted);
+        }
         let (mut states, mut casts) = (Vec::new(), Vec::new());
         while scene.ticks < 1200 {
             let before = scene.castles[&id].clone();

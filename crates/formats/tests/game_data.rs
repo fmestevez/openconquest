@@ -284,6 +284,10 @@ fn sounds_decode() {
     assert_eq!(choices(169), ["pit3"]);
     assert_eq!(choices(170), ["pit3"]);
     assert!(choices(168).is_empty() && choices(171).is_empty());
+    // The shields' castings (0xda9a: 0x4de584 / 0x4de510 on a ship,
+    // 0x42719f / 0x427139 on a building), events 0x56 and 0x57.
+    assert_eq!(choices(0x56), ["prote3"]);
+    assert_eq!(choices(0x57), ["prote3"]);
 }
 
 /// The videos parse and decode (Cinepak and Microsoft Video 1), with their

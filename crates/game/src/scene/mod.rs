@@ -2695,7 +2695,7 @@ impl Scene {
             c.flame += c.magic.take_flames() as f32 * crate::magic::FLAME_SECONDS;
         }
         self.seat_upkeep(dt, &limed);
-        self.run_statuses(dt, data, caches);
+        self.run_statuses(data, caches);
         self.run_fires(dt, data, caches);
         self.run_fireballs(dt, data, caches);
         self.run_lightning(dt, data, caches);

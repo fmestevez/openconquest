@@ -36,7 +36,8 @@ pub struct Combatant {
     /// Ticks it stays stone from then (`+0xa5`; 0 when not stone).
     #[serde(default)]
     pub stone_len: u32,
-    /// Seconds left invisible to other players (Phantom object).
+    /// Invisible to other players (the phantom) while above 0: its
+    /// length in seconds (`phantom_span`).
     #[serde(default)]
     pub phantom: f32,
     /// Seconds left limed by quick lime (a ship's `+0x258`, 0x4c4120; a
@@ -54,9 +55,11 @@ pub struct Combatant {
     /// `+0x184 / +0x188`, `+0x164 / +0x168` and `+0x14c / +0x150`, the
     /// length added to by each casting or blow (0xda97, 0xda9a, 0x42405d,
     /// 0x158bf) and ended by its tick (0x425990, `Scene::tick_building_
-    /// statuses`). While one runs the seconds above hold its length (more
-    /// than 0, the flag the rest of the code reads); a ship counts its
-    /// seconds down instead.
+    /// statuses`). A ship's phantom and shields likewise (`+0x81 / +0x85`,
+    /// `+0x91 / +0x95`, `+0x99 / +0x9d`; 0xda97, 0xda9a, ended by
+    /// 0x4dec40, `Scene::tick_ship_shields`). While one runs the seconds
+    /// above hold its length (more than 0, the flag the rest of the code
+    /// reads).
     #[serde(default)]
     pub phantom_span: Option<(u32, u32)>,
     #[serde(default)]

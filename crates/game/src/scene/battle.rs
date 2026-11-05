@@ -1977,7 +1977,7 @@ impl Scene {
         obj.owner = owner;
         // Its phantom ends (0x4b7016-0x4b7034: 0x4df420(0), `+0x253` 0).
         if let Some(c) = obj.combat.as_mut() {
-            c.phantom = 0.0;
+            (c.phantom, c.phantom_span) = (0.0, None);
         }
         if let Some(ship) = obj.ship.as_mut() {
             ship.crew = combat::Crew {
@@ -2134,16 +2134,10 @@ impl Scene {
     }
 
     /// Protections running out, and effects following their objects.
-    pub(super) fn run_statuses(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+    pub(super) fn run_statuses(&mut self, data: &GameData, caches: &mut Caches) {
+        // A building's run out in its tick (`tick_building_statuses`), a
+        // ship's in its (`tick_ship_shields`).
         let wrecked: Vec<u32> = Vec::new();
-        for o in &mut self.objects {
-            // A building's run out in its tick (`tick_building_statuses`),
-            // a ship's shields in its (`tick_ship_shields`).
-            let Some(c) = o.combat.as_mut().filter(|_| o.ship.is_some()) else {
-                continue;
-            };
-            c.phantom = (c.phantom - dt).max(0.0);
-        }
         for id in wrecked {
             self.hit(id, 0.0, None, data, caches);
         }

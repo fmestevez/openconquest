@@ -291,8 +291,14 @@ impl Scene {
         sprite.ship_place(at);
     }
 
-    /// The ships' shields in their tick (0x4dc630): 0x4dec40 ends them
-    /// (0x4def3d-0x4defaf, with the ship's mode `+0x251` at most 2), the
+    /// The ships' phantom and shields in their tick (0x4dc630): 0x4dec40
+    /// ends them while the ship's mode `+0x251` is below 3 (0 afloat, 1,
+    /// 2 being built or sold; 4, sunk, is the only other value written,
+    /// and the port takes a sunk ship out at its blow, so every ship here
+    /// passes). First the phantom (`+0x253` set, 0x4df210): the game tick
+    /// less its start `+0x81` at least its length `+0x85` (unsigned), its
+    /// start and length 0, 0x4df420(0) and `+0x253` 0; then (after the
+    /// statuses `+0x257` and `+0x258`) the
     /// weapon shield then the magic one, each on (state 2 or 3) when the
     /// game tick less its time is at least its length (unsigned), its
     /// state then 1; the magic one's end clears the weapon shield's
@@ -309,6 +315,7 @@ impl Scene {
             };
             // Saves from before the ticks: what is left, from now.
             for (left, span) in [
+                (c.phantom, &mut c.phantom_span),
                 (c.protect_weapons, &mut c.weapon_span),
                 (c.protect_magic, &mut c.magic_span),
             ] {
@@ -318,6 +325,9 @@ impl Scene {
             }
             let ended =
                 |s: Option<(u32, u32)>| s.is_some_and(|(at, len)| now.wrapping_sub(at) >= len);
+            if ended(c.phantom_span) {
+                (c.phantom, c.phantom_span) = (0.0, None);
+            }
             if ended(c.weapon_span) {
                 (c.protect_weapons, c.weapon_span) = (0.0, None);
             }
@@ -363,6 +373,7 @@ impl Scene {
 mod tests {
     use super::*;
     use crate::magic::Spell;
+    use crate::scene::spells::SHIELD_SOUND;
 
     #[test]
     fn a_buildings_shields_loop_and_play_out_as_its_tick_steps_them() {
@@ -404,8 +415,17 @@ mod tests {
         let pic = &o.frames[0][0];
         let (left, top) = crate::render::layer_origin(o, pic);
         let (w, h) = (pic.image.width as i32, pic.image.height as i32);
+        scene.sounds.clear();
         scene.protect(Spell::ProtectWeapons, i, &data, &mut caches);
         let start = scene.ticks;
+        // Event 0x56 at the building (0x42719f), `prote3`, at every
+        // casting, on or off.
+        let (sx, sy) = (scene.objects[i].x, scene.objects[i].y);
+        assert_eq!(scene.sounds, [(SHIELD_SOUND, sx, sy)]);
+        scene.protect(Spell::ProtectWeapons, i, &data, &mut caches);
+        assert_eq!(scene.sounds.len(), 2);
+        scene.objects[i].combat.as_mut().unwrap().weapon_span =
+            Some((start, crate::magic::PROTECTION_TICKS));
         let frames = objects::sequence_frames(&data, &mut caches, "PROTWSPR_64").unwrap();
         let (sw, sh) = (
             frames[0][0].image.width as i32,
@@ -481,7 +501,11 @@ mod tests {
         // The magic shield first: made at the casting, `_64` whatever the
         // ship, at frame 0 over the hull.
         let start = scene.ticks;
+        scene.sounds.clear();
         scene.protect(Spell::ProtectMagic, i, &data, &mut caches);
+        // Cast while off, event 0x57 at the ship (0x4de510): `prote3`.
+        let (sx, sy) = (scene.objects[i].x, scene.objects[i].y);
+        assert_eq!(scene.sounds, [(SHIELD_SOUND, sx, sy)]);
         let frames = objects::sequence_frames(&data, &mut caches, "PROTMSPR_64").unwrap();
         let (sw, sh) = (
             frames[0][0].image.width as i32,
@@ -498,6 +522,10 @@ mod tests {
         // round; the weapon one 0..44, then 14..44.
         scene.protect(Spell::ProtectWeapons, i, &data, &mut caches);
         let weapon_cast = scene.ticks;
+        // Cast again while on: the length grows, no sound (0x4de4cf).
+        scene.sounds.clear();
+        scene.protect(Spell::ProtectWeapons, i, &data, &mut caches);
+        assert!(scene.sounds.is_empty());
         let (mut magic, mut weapon) = (Vec::new(), Vec::new());
         for _ in 0..100 {
             tick(&mut scene, &mut caches);
@@ -539,5 +567,21 @@ mod tests {
             assert!(scene.ticks < start + crate::magic::PROTECTION_TICKS + 100);
         }
         assert!(scene.building_shields_on(id).is_empty());
+        // The phantom (0x4de378): its start the tick it was cast off, each
+        // casting adding 3000; it ends in the tick whose distance from the
+        // start reaches the length (0x4df210), before the shields.
+        let phantom = scene.ticks;
+        scene.protect(Spell::Phantom, i, &data, &mut caches);
+        tick(&mut scene, &mut caches);
+        scene.protect(Spell::Phantom, i, &data, &mut caches);
+        let c = scene.objects[i].combat.as_ref().unwrap();
+        assert_eq!(c.phantom_span, Some((phantom, 6000)));
+        while scene.ticks < phantom + 5999 {
+            tick(&mut scene, &mut caches);
+        }
+        assert!(scene.objects[i].combat.as_ref().unwrap().phantom > 0.0);
+        tick(&mut scene, &mut caches);
+        let c = scene.objects[i].combat.as_ref().unwrap();
+        assert!(c.phantom_span.is_none() && c.phantom == 0.0);
     }
 }
