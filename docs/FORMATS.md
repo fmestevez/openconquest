@@ -4945,9 +4945,16 @@ would bring to nothing (with both, both blows go). 0x4184f0 then gives
 the units the share `blow x load / (base + load + supplies)` (base
 0x595920 by class: 25, 30, 35; load as above, a byte; supplies `+0x4d4`,
 below) and takes it off the blow, which the structure takes afterwards
-(LandObj, a fifth under a magic shield). Under the shield (`+0x15c`) the
-units' share is cut to 20/100 for bomb kind 10 (the fireball) or to 100 /
-150 if flaming; `+0x17c` cuts it to 20/100 too (not identified). The
+(LandObj's drain 0x423d60, reached through 0x4e7550 and 0x427bb0, with
+the message written back, 0x55b440). Both cut the same way: under the
+magic shield (`+0x15c`) the units' share (0x4184f0) and the structure's
+rest (0x423d60) are cut to 20/100 for bomb kind 10 (the fireball), else to
+100 / 150 if flaming; then under the weapon shield (`+0x17c`) to 20/100,
+whatever the blow. (The shields on buildings: LandObj 0x425990 message
+0xda9a, spell type 1 from Magic.cpp 0x42f580 case 10, the weapon shield,
+sets `+0x17c` and adds to `+0x188`, sound 0x56; type 2, case 11, the magic
+shield, sets `+0x15c` and adds to `+0x168`, sound 0x57. The fire check at
+0x4240e3 reads `+0x15c`, the lime's 200 / 40 ticks `+0x17c`.) The
 weapons (items 3-8) take the share, the marines (0-2) `0x4ac1b0(kind,
 the shooter's level, share)`. Barbarian structures (0x40e0f0) share
 `blow x load / (load + 80)` with no cuts, the marines through 0x40ff00.
@@ -5338,7 +5345,9 @@ fifth under the shield, cut by the armour and the Armour of Ares) is
 shared out: the hull none (0x597fd8[13] = 0), the crew its share as is
 (0x4ac1b0: row 13 has no A), the weapons theirs. On a building, fort or
 stronghold (0x138e): the units their share as for any shot, the structure
-the rest whole (a fifth under its weapon shield `+0x17c`), and if it
+the rest whole (under its magic shield `+0x15c` 20/100 for a fireball,
+else 100 / 150 if flaming; then a fifth under its weapon shield
+`+0x17c`; 0x423d60), and if it
 stands it is limed (`+0x144`, 200 ticks added, 40 shielded). A limed ship
 (0x4df2d0 clears it when the time is out) takes no fire order (0x4e6700
 0x15/0x16) and does not fire, unless its ram or board switch is on and it

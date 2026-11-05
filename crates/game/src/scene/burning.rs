@@ -152,7 +152,7 @@ impl Scene {
             return;
         };
         if !flaming
-            || c.protect_weapons > 0.0
+            || c.protect_magic > 0.0
             || kind / 3 == 0
             || by.is_none()
             || self.construction_at(o.id).is_some()
@@ -510,8 +510,15 @@ mod tests {
         scene.light_building(i, 4, true, hit, by, &data, &mut caches);
         assert_ne!(scene.building_lcgs[&id], seed(false));
         assert!(scene.building_fires.is_empty());
-        // 0 mod 5: FIRE1.
+        // Under a magic shield (`+0x15c`): no draw, no fire.
         scene.building_lcgs.insert(id, seed(true));
+        scene.objects[i].combat.as_mut().unwrap().protect_magic = 10.0;
+        scene.light_building(i, 4, true, hit, by, &data, &mut caches);
+        assert_eq!(scene.building_lcgs[&id], seed(true));
+        assert!(scene.building_fires.is_empty());
+        scene.objects[i].combat.as_mut().unwrap().protect_magic = 0.0;
+        // 0 mod 5: FIRE1, a weapon shield (`+0x17c`) no matter.
+        scene.objects[i].combat.as_mut().unwrap().protect_weapons = 10.0;
         scene.light_building(i, 4, true, hit, by, &data, &mut caches);
         let f = &scene.building_fires[0];
         assert_eq!(f.size, 1);

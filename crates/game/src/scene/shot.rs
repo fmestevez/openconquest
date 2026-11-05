@@ -905,7 +905,29 @@ impl Scene {
                     s.target, s.damage, s.wounds, s.item, s.flaming, by, s.shooter, data, caches,
                 );
             } else {
-                self.strike(s.target, s.damage, false, by, report, data, caches);
+                // A building's drain (0x423d60) cuts the blow under its
+                // magic shield (`+0x15c`): a fireball's (kind 10) to
+                // 20 / 100, else a flaming one's to 100 / 150. (Its weapon
+                // shield's 20 / 100, `+0x17c`, is in the blow from the
+                // firing.)
+                let mut damage = s.damage;
+                let o = &self.objects[i];
+                if matches!(o.class, ObjectClass::Building(_))
+                    && o.combat.as_ref().is_some_and(|c| c.protect_magic > 0.0)
+                {
+                    let blow = (damage * 15.0) as u32;
+                    let cut = if s.item == FIREBALL {
+                        blow * 20 / 100
+                    } else if s.flaming {
+                        blow * 100 / 150
+                    } else {
+                        blow
+                    };
+                    if blow > 0 {
+                        damage *= cut as f32 / blow as f32;
+                    }
+                }
+                self.strike(s.target, damage, false, by, report, data, caches);
                 self.wound(s.target, s.wounds);
                 self.wear(s.target, s.wear);
             }

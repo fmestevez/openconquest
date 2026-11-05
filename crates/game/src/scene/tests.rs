@@ -8998,6 +8998,113 @@ fn forts_reload_with_settlements_and_ships() {
     assert_eq!(scene.objects[f].fort_places()[5], vec![70]);
 }
 
+/// A fort's blow under its shields (0x4184f0, then 0x423d60): the units'
+/// share and the structure's rest each cut under the magic shield
+/// (`+0x15c`) to 100 / 150 when flaming, under the weapon shield
+/// (`+0x17c`) to 20 / 100 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn forts_blows_under_shields() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    // A ballista's shot of 3500 (the original's); load 10 of 45: share
+    // 777, rest 2723.
+    let rest = 3500 - 3500 * 10 / 45;
+    for (magic, weapons, flaming, took) in [
+        (false, false, true, rest),
+        (true, false, false, rest),
+        (true, false, true, rest * 100 / 150),
+        (false, true, false, rest * 20 / 100),
+        (false, true, true, rest * 20 / 100),
+        (true, true, true, rest * 100 / 150 * 20 / 100),
+    ] {
+        let mut caches = Caches::default();
+        let (mut scene, fort, _) = own_fort(&data, &mut caches);
+        let f = scene.object_index(fort).unwrap();
+        let c = scene.objects[f].combat.as_mut().unwrap();
+        c.protect_magic = if magic { 10.0 } else { 0.0 };
+        c.protect_weapons = if weapons { 10.0 } else { 0.0 };
+        let h0 = c.hull;
+        scene.fort_blow(
+            fort,
+            3500.0 / 15.0,
+            0.0,
+            6,
+            flaming,
+            None,
+            None,
+            &data,
+            &mut caches,
+        );
+        let f = scene.object_index(fort).unwrap();
+        let h = scene.objects[f].combat.as_ref().unwrap().hull;
+        assert!(
+            (h0 - h - took as f32 / 15.0).abs() < 0.05,
+            "{magic} {weapons} {flaming}: {}",
+            (h0 - h) * 15.0
+        );
+    }
+}
+
+/// A shot on a town under its magic shield (`+0x15c`, 0x423d60): a
+/// flaming blow cut to 100 / 150, another whole (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn a_flaming_shot_on_a_magic_shielded_town() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    let town = scene
+        .objects
+        .iter()
+        .position(|o| matches!(o.class, ObjectClass::Building(0x32 | 0x33)))
+        .unwrap();
+    let id = scene.objects[town].id;
+    let blow = 3000u32;
+    for (flaming, took) in [(false, blow), (true, blow * 100 / 150)] {
+        let c = scene.objects[town].combat.as_mut().unwrap();
+        (c.max_hull, c.hull, c.protect_magic) = (1e6, 1e6, 10.0);
+        let to = scene.building_aim(town, true);
+        let o = &scene.objects[town];
+        scene.fire_shot(
+            super::shot::Firing {
+                item: 4,
+                letter: None,
+                flaming,
+                from: (o.x - 200.0, o.y),
+                target: id,
+                strikes: true,
+                damage: blow as f32 / 15.0,
+                wounds: 0.0,
+                wear: 0.0,
+                rope: None,
+                shooter: None,
+                by: None,
+                to: Some((to.0 as f32, to.1 as f32)),
+            },
+            &data,
+            &mut caches,
+        );
+        for _ in 0..500 {
+            if scene.shots.is_empty() {
+                break;
+            }
+            scene.run_shots(crate::clock::TICK, &data, &mut caches);
+        }
+        assert!(scene.shots.is_empty());
+        let hull = scene.objects[town].combat.as_ref().unwrap().hull;
+        assert!(
+            ((1e6 - hull) * 15.0 - took as f32).abs() < 2.0,
+            "{flaming}: {hull}"
+        );
+    }
+}
+
 /// A shot on a fort (0x4184f0): the units take `blow x load / (35 + load)`
 /// of a big fort's blow, the structure the rest; broken units are gone
 /// and each place fires by its units' mean condition (needs

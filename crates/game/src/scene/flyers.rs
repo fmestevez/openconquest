@@ -1514,8 +1514,8 @@ impl Scene {
         };
         // A settlement, town or fort takes the blow as any shot's
         // (message 0x138e): a fort shares it out on its units
-        // (`fort_blow`), the others' LandObj takes a fifth of it under a
-        // magic shield; it flies to the building's aim point (vt+0xc
+        // (`fort_blow`), the others' LandObj (0x423d60) takes a fifth of
+        // it under a weapon shield (`+0x17c`); it flies to the building's aim point (vt+0xc
         // 0x423520) as a hit.
         if self.town_or_fort(i) {
             let blow = crate::combat::hull_damage_at(4, 1) * 20.0;

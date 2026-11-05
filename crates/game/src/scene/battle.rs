@@ -1078,9 +1078,13 @@ impl Scene {
     /// marines it by the shot's B over its A (0x4ac1b0), each spread by
     /// `combat::fort_unit_blow`; the structure takes the rest. `damage` is
     /// the shot's blow (ours, a fifteenth of the original's), `lime` quick
-    /// lime's, which spares structures, in the units' points. Under a magic
-    /// shield (`+0x15c`) the structure takes a fifth and a fort's units a
-    /// fifth of a fireball's share and two thirds of a flaming shot's.
+    /// lime's, which spares structures, in the units' points. A fort's
+    /// units' share (0x4184f0) and then the structure's rest (LandObj's
+    /// drain 0x423d60, reached through 0x4e7550 and 0x427bb0) are each cut
+    /// the same way: under the magic shield (`+0x15c`) x 20 / 100 for a
+    /// fireball (kind 10), else x 100 / 150 if flaming; under the weapon
+    /// shield (`+0x17c`) x 20 / 100 more. A barbarian structure's units
+    /// take theirs uncut (0x40e0f0).
     /// `by`: the player who dealt it (see `strike`); `shooter`: who fired
     /// it (message 0x138e `+0x16`), for a fort firing on aggressors.
     #[allow(clippy::too_many_arguments)]
@@ -1104,7 +1108,7 @@ impl Scene {
         let Some(c) = o.combat.as_ref() else {
             return;
         };
-        let shielded = c.protect_weapons > 0.0;
+        let (magic_shield, weapon_shield) = (c.protect_magic > 0.0, c.protect_weapons > 0.0);
         let mut blow = if damage > 0.0 {
             (damage * 15.0) as u32
         } else {
@@ -1137,20 +1141,28 @@ impl Scene {
         }
         let c = self.objects[t].combat.as_ref().unwrap();
         let mut share = combat::fort_share(class, &c.weapons, blow);
-        let mut hull = if blow > 0 && damage > 0.0 {
-            damage * (blow - share) as f32 / blow as f32
+        let cut = |v: u32| {
+            let mut v = v;
+            if magic_shield {
+                if item == super::shot::FIREBALL {
+                    v = v * 20 / 100;
+                } else if flaming {
+                    v = v * 100 / 150;
+                }
+            }
+            if weapon_shield {
+                v = v * 20 / 100;
+            }
+            v
+        };
+        let rest = blow - share;
+        let hull = if blow > 0 && damage > 0.0 {
+            damage * cut(rest) as f32 / blow as f32
         } else {
             damage
         };
-        if shielded {
-            hull *= magic::SHIELD_FACTOR;
-            if (0x34..=0x36).contains(&class) {
-                if item == super::shot::FIREBALL {
-                    share = share * 20 / 100;
-                } else if flaming {
-                    share = share * 100 / 150;
-                }
-            }
+        if (0x34..=0x36).contains(&class) {
+            share = cut(share);
         }
         if share > 0 {
             let crew = (share as f32 * combat::crew_scale(item)) as u32;
