@@ -786,6 +786,12 @@ impl Scene {
             .filter(|f| !f.is_empty())
             .or_else(|| objects::sequence_frames(data, caches, &other).ok())
             .unwrap_or_default();
+        // The struck object's depth now: its hit test (vt+8, 0x4967b0 /
+        // 0x4983d0) writes it to the shot's `+0x80` at the landing.
+        let hit = target.map(|i| {
+            let o = &self.objects[i];
+            crate::render::object_depth(o, self.frame_of(o, self.drawn_ms.get()))
+        });
         if !frames.is_empty() {
             self.effects.push(Effect {
                 x: s.to.0,
@@ -797,10 +803,7 @@ impl Scene {
                 frame_ms: crate::clock::TICK_MS as f32,
                 tornado: None,
                 site: None,
-                depth: crate::combat::FxDepth::Landed {
-                    on: target.map(|_| s.target),
-                    hit: std::cell::Cell::new(None),
-                },
+                depth: crate::combat::FxDepth::Landed { hit },
             });
         }
         // Q, R and S only splash (events 305-308, only 305 recorded).

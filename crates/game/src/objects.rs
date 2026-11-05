@@ -159,6 +159,10 @@ pub struct MapObject {
     /// Unseen on the radar, unclickable, bannerless, blind, harmless and
     /// unharmed till it wakes.
     pub asleep: Option<f32>,
+    /// A LandObj's depth in the sprites' list, set once at its making
+    /// (0x425990 message 2: `max(20000 - bottom, 10000)` of the picture
+    /// it has then) and kept (`render::object_depth`).
+    pub made_depth: Option<i32>,
     /// Hull and weapons, for objects that can fight or be attacked.
     pub combat: Option<crate::combat::Combatant>,
     /// Owning player as `(nation, colour slot)`, for player-owned objects.
@@ -2354,7 +2358,7 @@ pub fn resolve(
         }),
         _ => None,
     };
-    Ok(Some(MapObject {
+    let mut obj = MapObject {
         id: rec.id,
         class,
         record: rec.clone(),
@@ -2393,7 +2397,10 @@ pub fn resolve(
         // first draw (0x4281de, 0x4422ad), which the scene takes
         // (`Scene::building_draw`).
         asleep: (matches!(class, ObjectClass::Building(_)) && f(4) == 3).then_some(0.0),
-    }))
+        made_depth: None,
+    };
+    obj.made_depth = crate::render::made_depth(&obj);
+    Ok(Some(obj))
 }
 
 /// Where a building's banner stands from the building's top left, by class

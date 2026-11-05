@@ -6474,7 +6474,9 @@ its flames (layer 5) less 0x48 (0x4e04d0), layer 6 less 0x49, its shields
 (7, 8) both less 0x4a (0x4e0f70, 0x4e11a0); a hook's line `max(0x4de0 -
 the lower end's y, 10000)` (0x4df0e0, a projectile's 0x4964c0); a LandObj
 (building, barbarian structure, castle, lair, the hero's house)
-`max(20000 - bottom, 10000)` at its message 2 (0x425990), kept, its banner
+`max(20000 - bottom, 10000)` at its message 2 (0x425990), kept (the
+port's `MapObject::made_depth`, from the picture it is made with: the
+map's, or a founded site's construction picture; kept in saves), its banner
 less 1 (0x4247b0); a nest `max(20000 - (top + h / 2), 10000)` (0x41d010);
 land creatures `max(20000 - +0xb8, 10000)` (their feet, 0x411520); a
 landing party `max(20000 - +0xa0a, 10000)` (0x421bb0); sheep `max(20000 -
@@ -6514,18 +6516,33 @@ layer 0 `+0x80 - 10`, layer 1 `+0x80 - 11`; 2, 4 (water, ground)
 depth (0x50d290 of layer 0, as the siren's 0x402d10), so the blow
 draws over the ship, building or creature it lands on. The port: shots
 in flight at 10000, their landing pictures `FxDepth::Landed` (the
-struck object's depth read at the first frame after the landing's).
+struck object's depth taken at the landing's tick, its picture as last
+drawn).
 A sinking hull (0x4df6e0, `+0x74` 5): `max(20000 - bottom, 10000)` to
 frame 3, 0x4f4c from frame 4 (`FxDepth::Sinking`). Lightning: state 0's
 `LTSPR_0` at 0x3ed (0x42d480), 0x42cdf0 sets 0x3f7 with states 1 and 2's
 pictures. The tornado: 0x43a240 (its first picture) `max(20000 - y,
 10000)`, 0x43a380 at each frame's step `max(0x26f0 - y, 1000)`, `y` its
-place `+0x7d` (cell centre, 0x43aa10). The fireball (the Slight,
-0x4059e0): `max(0x26c6 - 0x40 x cell row +0xc0, 1000)`. Not decoded
-(drawn over the list): the other effects (shot-less hit and splash
-pictures of rams and hazards, the boarding fight `ABORD_`, a ram's
-`BOMBH30`, the volcano's eruption, a yard's ship). Not decoded: when 0x4e0470 / 0x4e04a0 run against 0x4df6e0
-(before the first, a walkway's 0x3e6 and a gangway's 0x3de); which
+place `+0x7d` (cell centre, 0x43aa10); 0x43a380 steps at once while
+`+0x9d` is 0 (its first tick), then when `+0x81 + +0x7d` (2 ticks) is
+reached. The fireball (the Slight,
+0x4059e0): `max(0x26c6 - 0x40 x cell row +0xc0, 1000)`. A ship's
+layer 1 holds by `+0x75` (0x4e1dee, loaded with 0x50d080) the walkway
+`WMOST_` or, `+0x75` 0, a ram's blow `BOMBH30` (0x4e0340(7, 3, 0):
+`BOMB%C%1d%1d`, 'A' + 7); its layer 3 by `+0x76` (0x4e1eee) the boarding
+fight `ABORD_%1d%1d` (0x4b6c70: `1 - arg`, `+0x6e7`; `+0x76` 0 and 1),
+the gangway `WNOSIL_` and the others: both at their walkway depths, the
+ram's stepped by 0x4c2230 state 3 with 0x4e0470 (hull less 0x46, read
+before that step's 0x4df6e0), the fight by 0x4e04a0 (less 0x47). The
+volcano's eruption `VOLCANOERAPTION` is its layer 1 (0x445e20), set by
+0x445630 at each step to layer 0's depth less 2. The port:
+`FxDepth::Layer` on the rammer, the boarder, the volcano. Not decoded
+(drawn over the list): the hit and splash pictures the port shows for
+blows without a shot (`Scene::strike` from rams, hazards and the like:
+which original object, if any, shows them). A yard's ship being built is
+not an effect in the port. Not decoded: when 0x4e0470 / 0x4e04a0 run against 0x4df6e0
+(before the first, a walkway's 0x3e6 and a gangway's 0x3de; for the
+ram's blow, read: before); which
 leviathan states take 0x4e85; what building layer 2 (0xc453) and ship
 layer 4 (`+0x252`) show; the order of a ship's two shields at one depth
 (the port draws the weapon's under the magic's); whether a leviathan

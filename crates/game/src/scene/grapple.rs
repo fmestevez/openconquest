@@ -758,7 +758,13 @@ impl Scene {
                 frame_ms: crate::clock::TICK_MS as f32,
                 tornado: None,
                 site: None,
-                depth: crate::combat::FxDepth::Over,
+                // The boarder's layer 3 (`+0x76` 0 / 1, 0x4e1f03 /
+                // 0x4e1f1c: `ABORD_`), set by 0x4e04a0: its hull's depth
+                // less 0x47.
+                depth: crate::combat::FxDepth::Layer {
+                    on: self.objects[k].id,
+                    less: 0x47,
+                },
             });
         }
         g
@@ -1029,7 +1035,13 @@ impl Scene {
                 frame_ms: crate::clock::TICK_MS as f32,
                 tornado: None,
                 site: None,
-                depth: crate::combat::FxDepth::Over,
+                // The rammer's layer 1 (`+0x75` 0, 0x4e1e18: `BOMBH30`),
+                // stepped by 0x4c2230 state 3 with 0x4e0470: its hull's
+                // depth less 0x46.
+                depth: crate::combat::FxDepth::Layer {
+                    on: self.objects[i].id,
+                    less: 0x46,
+                },
             });
         }
         if let Some(t) = self.objects[ti].ship.as_mut() {

@@ -18331,12 +18331,17 @@ fn effects_shots_and_fireballs_take_their_depths() {
     land(&mut scene, &mut caches);
     // Landed on the ship: 10000 on frame 0, then the hull's less 10.
     let e = scene.effects.len() - 1;
-    assert!(matches!(scene.effects[e].depth, FxDepth::Landed { on: Some(o), .. } if o == id));
+    let hit = match scene.effects[e].depth {
+        FxDepth::Landed { hit } => hit,
+        _ => None,
+    };
     assert_eq!(depth_of(&scene, Slot::Effect(e)).map(|d| d.1), Some(10000));
     scene.effects[e].age_ms = scene.effects[e].frame_ms + 1.0;
     let (hk, hull) = depth_of(&scene, Slot::Object(id)).unwrap();
     let (fk, fd) = depth_of(&scene, Slot::Effect(e)).unwrap();
     eprintln!("hull {hull}, its blow {fd}");
+    // The hull's depth as it stood at the landing (unmoved since).
+    assert_eq!(hit, Some(hull));
     assert_eq!(fd, hull - 10);
     assert!(fk > hk);
     scene.effects.clear();
@@ -18350,7 +18355,7 @@ fn effects_shots_and_fireballs_take_their_depths() {
     fire(&mut scene, false, to, &mut caches);
     land(&mut scene, &mut caches);
     let fx = &mut scene.effects[0];
-    assert!(matches!(fx.depth, FxDepth::Landed { on: None, .. }));
+    assert!(matches!(fx.depth, FxDepth::Landed { hit: None }));
     fx.age_ms = fx.frame_ms + 1.0;
     let bottom = bottom_of(&scene.effects[0]);
     assert_eq!(
@@ -18401,4 +18406,121 @@ fn effects_shots_and_fireballs_take_their_depths() {
         depth_of(&scene, Slot::Fireball(0)).map(|d| d.1),
         Some((0x26c6 - 0x40 * cy).max(1000))
     );
+}
+
+/// The other layers' pictures in the draw list (needs `OPENCONQUEST_DATA`):
+/// a ram's blow on the rammer's layer 1, its hull's depth less 0x46
+/// (0x4e0470), the boarding fight on the boarder's layer 3, less 0x47
+/// (0x4e04a0); the volcano's eruption on its layer 1, layer 0's less 2
+/// (0x445630); a building's depth kept from its making whatever picture
+/// it shows later (0x425990 message 2); a tornado's first step on its
+/// first tick (0x43a380, `+0x9d` 0).
+#[test]
+fn layers_eruption_buildings_and_tornado_take_their_depths() {
+    use crate::combat::FxDepth;
+    use crate::render::{draw_order, ground_depth, Slot};
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    scene.brain = None;
+    scene.fog = false;
+    let depth_of = |scene: &Scene, slot: Slot| {
+        draw_order(scene, 0)
+            .iter()
+            .find(|&&(_, s)| s == slot)
+            .map(|&(d, _)| d)
+    };
+    let k = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+    let (id, x, y) = (scene.objects[k].id, scene.objects[k].x, scene.objects[k].y);
+    let hull = depth_of(&scene, Slot::Object(id)).unwrap();
+    for (name, less) in [("BOMBH30", 0x46), ("ABORD_00", 0x47)] {
+        let frames = objects::sequence_frames(&data, &mut caches, name).unwrap();
+        assert!(!frames.is_empty(), "{name}");
+        scene.effects.push(combat::Effect {
+            x,
+            y,
+            frames,
+            age_ms: 0.0,
+            follow: None,
+            life_ms: None,
+            frame_ms: 40.0,
+            tornado: None,
+            site: None,
+            depth: FxDepth::Layer { on: id, less },
+        });
+        let e = scene.effects.len() - 1;
+        assert_eq!(depth_of(&scene, Slot::Effect(e)), Some(hull - less));
+    }
+    scene.effects.clear();
+    // A building: the depth it was made with, kept when its picture
+    // moves.
+    let b = scene
+        .objects
+        .iter()
+        .position(|o| matches!(o.class, ObjectClass::Building(_)) && o.combat.is_some())
+        .unwrap();
+    let bid = scene.objects[b].id;
+    let made = depth_of(&scene, Slot::Object(bid)).unwrap();
+    let l = &scene.objects[b].frames[0][0];
+    let top = crate::render::layer_origin(&scene.objects[b], l).1;
+    assert_eq!(made, ground_depth(top + l.image.height as i32));
+    assert_eq!(scene.objects[b].made_depth, Some(made));
+    scene.objects[b].y += 100.0;
+    assert_eq!(depth_of(&scene, Slot::Object(bid)), Some(made));
+    scene.objects[b].y -= 100.0;
+    // A tornado: by its place on frame 0, its first step on its first
+    // tick, the next two ticks on.
+    let frames = objects::sequence_frames(&data, &mut caches, crate::magic::FX_TORNADO).unwrap();
+    scene.effects.push(combat::Effect {
+        x,
+        y,
+        frames,
+        age_ms: 0.0,
+        follow: None,
+        life_ms: None,
+        frame_ms: combat::FX_FRAME_MS,
+        tornado: Some(combat::Tornado::new(x, y, None)),
+        site: None,
+        depth: FxDepth::Tornado,
+    });
+    let tornado = |s: &Scene| {
+        s.effects
+            .iter()
+            .position(|fx| fx.tornado.is_some())
+            .unwrap()
+    };
+    let frame = |s: &Scene| s.effects[tornado(s)].tornado.as_ref().unwrap().frame;
+    let e = tornado(&scene);
+    let ty = scene.effects[e].y.floor() as i32;
+    assert_eq!(depth_of(&scene, Slot::Effect(e)), Some(ground_depth(ty)));
+    scene.run_hazards(crate::clock::TICK, &data, &mut caches);
+    assert_eq!(frame(&scene), 1);
+    assert_eq!(
+        depth_of(&scene, Slot::Effect(tornado(&scene))),
+        Some((0x26f0 - ty).max(1000))
+    );
+    scene.run_hazards(crate::clock::TICK, &data, &mut caches);
+    assert_eq!(frame(&scene), 1);
+    scene.run_hazards(crate::clock::TICK, &data, &mut caches);
+    assert_eq!(frame(&scene), 2);
+    // miss005's volcano: its eruption at its depth less 2.
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.fog = false;
+    let mut seen = false;
+    for _ in 0..10 * 60 * 25 {
+        scene.update(0.04, &data, &mut caches);
+        if let Some(e) = scene.effects.iter().position(|fx| fx.site.is_some()) {
+            let FxDepth::Layer { on, less: 2 } = scene.effects[e].depth else {
+                panic!("the eruption's depth");
+            };
+            let v = depth_of(&scene, Slot::Object(on)).unwrap();
+            assert_eq!(depth_of(&scene, Slot::Effect(e)), Some(v - 2));
+            seen = true;
+            break;
+        }
+    }
+    assert!(seen, "an eruption");
 }

@@ -151,7 +151,10 @@ impl Scene {
                         frame_ms: crate::clock::TICK_MS as f32 * 2.0,
                         tornado: None,
                         site: Some(id),
-                        depth: crate::combat::FxDepth::Over,
+                        // Its layer 1 (0x445e20 loads `VOLCANOERAPTION`
+                        // there), set at each step by 0x445630 to layer
+                        // 0's depth less 2.
+                        depth: crate::combat::FxDepth::Layer { on: id, less: 2 },
                     });
                 }
             }

@@ -163,6 +163,21 @@ fn cell_row(obj: &MapObject) -> i32 {
         .map_or((obj.y / TILE_SIZE as f32).floor() as i32, |c| c.1)
 }
 
+/// A LandObj's depth as made (0x425990 message 2): `max(20000 - bottom,
+/// 10000)` of its first picture then, kept for its life; `None` for other
+/// classes.
+pub fn made_depth(obj: &MapObject) -> Option<i32> {
+    matches!(
+        obj.class,
+        ObjectClass::Building(_)
+            | ObjectClass::Barbarian(_)
+            | ObjectClass::Castle(_)
+            | ObjectClass::HeroHouse
+            | ObjectClass::CreatureSpawn
+    )
+    .then(|| ground_depth(picture_bottom(obj, obj.frames.first().map_or(&[], |f| f))))
+}
+
 /// The depth of object `obj`'s picture `layers` (its main slot), by class
 /// (`specs/draw_order_spec.md`; FORMATS.md "The sprites' draw order").
 pub fn object_depth(obj: &MapObject, layers: &[Layer]) -> i32 {
@@ -177,12 +192,12 @@ pub fn object_depth(obj: &MapObject, layers: &[Layer]) -> i32 {
         // an effect, `FxDepth::Sinking`.)
         ObjectClass::Ship => ground_depth(bottom()),
         // A LandObj's picture: the same at its message 2 (0x425990), then
-        // kept (the port takes the picture now drawn).
+        // kept (`MapObject::made_depth`).
         ObjectClass::Building(_)
         | ObjectClass::Barbarian(_)
         | ObjectClass::Castle(_)
         | ObjectClass::HeroHouse
-        | ObjectClass::CreatureSpawn => ground_depth(bottom()),
+        | ObjectClass::CreatureSpawn => obj.made_depth.unwrap_or_else(|| ground_depth(bottom())),
         // A nest: `max(20000 - (top + height / 2), 10000)` on its picture
         // (0x41d010).
         ObjectClass::HarpyNest => layers.first().map_or(10000, |l| {
@@ -267,20 +282,16 @@ fn effect_depth(scene: &Scene, fx: &Effect, layers: &[Layer], time_ms: u64) -> O
         // 0x4965d0 runs from the tick after the landing (0x4974d0 case 4,
         // before the frame's step): frame 0 keeps the flight's 10000.
         FxDepth::Landed { .. } if fx.step() == 0 => Some(10000),
-        // Landed on an object: its depth as its hit test gave it (`+0x80`)
-        // less 10 (the port reads it at the first frame after the
-        // landing's, the object's depth as drawn then).
-        FxDepth::Landed { on: Some(id), hit } => {
-            let d = hit.get().or_else(|| {
-                let o = &scene.objects[scene.object_index(*id)?];
-                let d = object_depth(o, scene.frame_of(o, time_ms));
-                hit.set(Some(d));
-                Some(d)
-            })?;
-            Some(d - 10)
-        }
+        // Landed on an object: its depth as its hit test gave it at the
+        // landing (`+0x80`) less 10.
+        FxDepth::Landed { hit: Some(d) } => Some(d - 10),
         // In the water or on the ground: `max(0x4e16 - bottom, 10000)`.
-        FxDepth::Landed { on: None, .. } => Some((0x4e16 - bottom()).max(10000)),
+        FxDepth::Landed { hit: None } => Some((0x4e16 - bottom()).max(10000)),
+        // Another layer of an object: its depth less the layer's offset.
+        FxDepth::Layer { on, less } => {
+            let o = &scene.objects[scene.object_index(*on)?];
+            Some(object_depth(o, scene.frame_of(o, time_ms)) - less)
+        }
     }
 }
 
@@ -306,6 +317,7 @@ fn draw_layers(
 /// objects in the scene's order, each with its other layers, then the
 /// walkways, landing parties, lines, droplets and gulls.
 fn sprites<'a>(scene: &'a Scene, time_ms: u64) -> Vec<Sprite<'a>> {
+    scene.drawn_ms.set(time_ms);
     let mut out: Vec<Sprite<'a>> = Vec::new();
     let mut push =
         |depth: i32, slot: Slot, paint: Paint<'a>| out.push(Sprite { depth, slot, paint });
@@ -738,9 +750,8 @@ pub fn draw_objects(
     for s in sprites(scene, time_ms) {
         (s.paint)(frame, screen, camera, lut);
     }
-    // Not decoded: the other effects' depths (explosions without a shot,
-    // a ram's blow, the boarding fight, the volcano's eruption, a yard's
-    // ship): drawn over the list.
+    // Not decoded: the hit and splash pictures the port shows for blows
+    // without a shot (`Scene::strike`): drawn over the list.
     let t = TILE_SIZE as f32;
     for fx in scene.effects.iter().filter(|fx| {
         matches!(fx.depth, FxDepth::Over)

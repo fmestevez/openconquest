@@ -761,16 +761,7 @@ impl Scene {
                 follow: None,
                 life_ms: None,
                 frame_ms: crate::combat::FX_FRAME_MS,
-                tornado: Some(crate::combat::Tornado {
-                    clock: 0.0,
-                    frame: 0,
-                    phase: 1,
-                    moving: 0.0,
-                    hop: 0,
-                    from: (x, y),
-                    to: (x, y),
-                    caster: master,
-                }),
+                tornado: Some(crate::combat::Tornado::new(x, y, master)),
                 site: None,
                 depth: crate::combat::FxDepth::Tornado,
             });

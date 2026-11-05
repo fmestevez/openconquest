@@ -251,6 +251,9 @@ pub struct SavedObject {
     /// An asleep building's seconds to its next look (`+0x1c0`).
     #[serde(default)]
     pub asleep: Option<f32>,
+    /// A LandObj's depth as made (`MapObject::made_depth`).
+    #[serde(default)]
+    pub made_depth: Option<i32>,
 }
 
 impl SaveGame {

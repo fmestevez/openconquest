@@ -1768,8 +1768,8 @@ pub struct Effect {
     pub tornado: Option<Tornado>,
     /// Milliseconds a frame.
     pub frame_ms: f32,
-    /// Shows the ship being built at this shipyard (its frame is set from
-    /// the production's progress).
+    /// The object whose picture this is (the volcano's eruption): its
+    /// frame is set by that object's step.
     pub site: Option<u32>,
     /// Its place in the sprites' draw order (`render::sprites`).
     pub depth: FxDepth,
@@ -1791,15 +1791,16 @@ pub enum FxDepth {
     /// (0x43a380), `y` its place (`+0x7d`).
     Tornado,
     /// A projectile's landing picture (state `+0xb0` 4, 0x4965d0): its
-    /// flight's 10000 (0x496190) on frame 0, then, landed on object `on`
-    /// (kinds 1, 3, 5, 6), the depth that object's hit test gave
-    /// (`+0x80`, 0x4967b0 / 0x4983d0 through vt+8) less 10, else (kinds 2,
-    /// 4) `max(0x4e16 - bottom, 10000)`. `hit` keeps the object's depth
-    /// once read.
-    Landed {
-        on: Option<u32>,
-        hit: std::cell::Cell<Option<i32>>,
-    },
+    /// flight's 10000 (0x496190) on frame 0, then, landed on an object
+    /// (kinds 1, 3, 5, 6), `hit`: the depth that object's hit test gave
+    /// (`+0x80`, 0x4967b0 / 0x4983d0 through vt+8, at the landing's tick)
+    /// less 10, else (kinds 2, 4) `max(0x4e16 - bottom, 10000)`.
+    Landed { hit: Option<i32> },
+    /// A picture in another layer of object `on`: that object's depth
+    /// (its main slot, as drawn) less `less`. A ship's layer 1 (`+0x8c2`)
+    /// less 0x46 (0x4e0470), its layer 3 (`+0x8c6`) less 0x47 (0x4e04a0);
+    /// the volcano's layer 1 less 2 (0x445630).
+    Layer { on: u32, less: i32 },
 }
 
 /// A tornado (Tornado.cpp 0x43a380), a frame every 2 ticks: it rises
@@ -1822,6 +1823,24 @@ pub struct Tornado {
     /// Who cast it (`+0x75`, from the spell record's `+0x14`): its blows
     /// are put down to that player.
     pub caster: Option<(u32, u32)>,
+}
+
+impl Tornado {
+    /// One made at `(x, y)`, rising. Its first step comes on its first
+    /// tick (0x43a380 steps whenever `+0x9d` is 0, then each 2 ticks from
+    /// the last): a tick is already owed.
+    pub fn new(x: f32, y: f32, caster: Option<(u32, u32)>) -> Self {
+        Tornado {
+            clock: crate::clock::TICK,
+            frame: 0,
+            phase: 1,
+            moving: 0.0,
+            hop: 0,
+            from: (x, y),
+            to: (x, y),
+            caster,
+        }
+    }
 }
 
 impl Effect {

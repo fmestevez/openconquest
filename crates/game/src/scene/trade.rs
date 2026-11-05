@@ -2228,6 +2228,8 @@ impl Scene {
         if !frames.is_empty() {
             obj.frames = frames;
         }
+        // Its depth from the picture it is made with (0x425990 message 2).
+        obj.made_depth = crate::render::made_depth(&obj);
         // The building goes up as the work does.
         obj.progress = Some(0.0);
         if let Some(c) = obj.combat.as_mut() {

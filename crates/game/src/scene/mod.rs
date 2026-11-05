@@ -299,6 +299,9 @@ pub struct Scene {
     /// The minimap's first cell shown: it shows 24 x 24 cells and follows
     /// the view (Mapa.cpp 0x51b8c0).
     pub minimap_origin: std::cell::Cell<(i32, i32)>,
+    /// The animation time of the last draw (`render::sprites`): the
+    /// pictures objects show between draws, for a depth read in a tick.
+    pub drawn_ms: std::cell::Cell<u64>,
     /// Running one-shot animations (explosions, splashes).
     pub effects: Vec<Effect>,
     /// Projectiles in flight (not saved: a save lets them land at once).
@@ -814,6 +817,7 @@ impl Scene {
             minimap,
             minimap_size: (mw, mh),
             minimap_origin: Default::default(),
+            drawn_ms: Default::default(),
             effects: Vec::new(),
             shots: Vec::new(),
             fires: Vec::new(),
@@ -1131,6 +1135,7 @@ impl Scene {
                     dormant: o.dormant,
                     combat: o.combat.clone(),
                     asleep: o.asleep,
+                    made_depth: o.made_depth,
                 })
                 .collect(),
             ship_orders: self.ship_orders.clone(),
@@ -1279,6 +1284,9 @@ impl Scene {
             // it draws the first look again, `Scene::building_draw`).
             if obj.asleep.is_some() && s.asleep.is_some() {
                 obj.asleep = s.asleep;
+            }
+            if s.made_depth.is_some() {
+                obj.made_depth = s.made_depth;
             }
             scene.objects.push(obj);
         }
