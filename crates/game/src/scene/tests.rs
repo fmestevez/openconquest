@@ -15973,6 +15973,88 @@ fn sea_monster_aim_on_the_shooter_holds_fire() {
     }
 }
 
+/// A ship's item at a ship or a building (0x4c0230): the shot flies to
+/// the target's aim point (vt+0xc by the hit byte: a ship's 0x4e07c0, a
+/// building's 0x423520), one draw of a ship's own generator for a hit and
+/// two for a miss (a lone unit's roll short of 100), two of a building's
+/// either way (needs `OPENCONQUEST_DATA`).
+#[test]
+fn item_shot_flies_to_the_targets_aim_point() {
+    for building in [false, true] {
+        let Some((data, mut caches, mut scene, mine, other, _)) = closing_pair(2, 0) else {
+            return;
+        };
+        let target = if building {
+            let k = scene
+                .objects
+                .iter()
+                .position(|o| matches!(o.class, ObjectClass::Building(_)) && o.cell.is_some())
+                .unwrap();
+            let (bx, by) = scene.objects[k].cell.unwrap();
+            let m = scene.object_index(mine).unwrap();
+            let t = TILE_SIZE as f32;
+            scene.objects[m].x = (bx + 2) as f32 * t + t / 2.0;
+            scene.objects[m].y = by as f32 * t + t / 2.0;
+            scene.objects[k].id
+        } else {
+            other
+        };
+        let m = scene.object_index(mine).unwrap();
+        scene.objects[m].combat.as_mut().unwrap().weapons = vec![3];
+        let s = scene.objects[m].ship.as_mut().unwrap();
+        s.crew.squads = [0; 3];
+        s.behaviour.aims[1].target = target;
+        let t = scene.object_index(target).unwrap();
+        let seed = |scene: &mut Scene, v: u32| {
+            if building {
+                scene.building_lcgs.insert(target, v);
+            } else {
+                scene.objects[t].ship.as_mut().unwrap().lcg = Some(v);
+            }
+        };
+        let state = |scene: &Scene| {
+            if building {
+                scene.building_lcgs[&target]
+            } else {
+                scene.objects[t].ship.as_ref().unwrap().lcg.unwrap()
+            }
+        };
+        let aim = |scene: &mut Scene, hit: bool| {
+            if building {
+                scene.building_aim(t, hit)
+            } else {
+                scene.ship_aim(t, hit)
+            }
+        };
+        let mut seen = [false; 2];
+        for v in 1..40u32 {
+            seed(&mut scene, v);
+            let hit = aim(&mut scene, true);
+            let after_hit = state(&scene);
+            seed(&mut scene, v);
+            let miss = aim(&mut scene, false);
+            let after_miss = state(&scene);
+            seed(&mut scene, v);
+            let s = scene.objects[m].ship.as_mut().unwrap();
+            s.items_ready = [false; 12];
+            s.items_ready[3] = true;
+            s.fire_times = [0; 12];
+            s.lcg = Some(v.wrapping_mul(7919));
+            scene.shots.clear();
+            assert_ne!(scene.fire_items(m, 0b10, false, &data, &mut caches), 0);
+            let (to, id, _) = scene.shots[0].bound();
+            assert_eq!(id, target);
+            let to = (to.0 as i32, to.1 as i32);
+            let k = usize::from(to == hit && state(&scene) == after_hit);
+            assert!(k == 1 || (to == miss && state(&scene) == after_miss), "{v}");
+            seen[k] = true;
+        }
+        // A roll that misses a building keeps its chance as the hit byte
+        // (0x4bf7f0), so the hit's point.
+        assert_eq!(seen, [!building, true], "building {building}");
+    }
+}
+
 /// The fire pass on guard (0x4c1240 state 4 -> 0x4bfc60): an enemy in the
 /// box no position aims at goes on item 3's list (0x4c0cd0),
 /// the list is drawn (0x4e8af0 mode 10) and the item fires once from it

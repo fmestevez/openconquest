@@ -391,10 +391,16 @@ impl Scene {
     /// hit byte) is where the shot flies; a sea monster's (0x493350) on a
     /// solid pixel of the shooter's own picture (its vt+8 0x4e06c0 with
     /// `(x, y, 1, 0, 1)`) is not shot: no shot, no reload, the hit roll
-    /// already drawn. Returns the positions fired. (Not ported: the other
-    /// targets' aim points here, a ship's 0x4e07c0 and a building's
-    /// 0x423520, `Scene::ship_aim` / `building_aim`; a position's target
-    /// gone, the original's pointer dangles: the port skips it.)
+    /// already drawn. A ship's point is 0x4e07c0 (`Scene::ship_aim`), a
+    /// building's, castle's or lair's 0x423520 and a harpy nest's 0x41cef0
+    /// (`Scene::building_aim`), each drawing from the target's own
+    /// generator. Returns the positions fired. (Not decoded: a barbarian
+    /// structure's generator, which its handler 0x40ef70 does not seed at
+    /// message 2, and the hero's house's vtable; not ported: the harpy's
+    /// and dragon's 0x41df70, a jam's 0x415ce0, a leviathan's 0x495b40
+    /// and the gorgon's and siren's points: these fly to the target as
+    /// before. A position's target gone, the original's pointer dangles:
+    /// the port skips it.)
     #[allow(clippy::needless_range_loop)]
     pub(super) fn fire_items(
         &mut self,
@@ -492,19 +498,25 @@ impl Scene {
                 if counts[item] == 1 && accuracy != 100 && family != 0x32 {
                     accuracy = 0;
                 }
-                // The target's aim point (vt+0xc, by the hit byte): a sea
-                // monster's (0x493350) is not shot, no shot and no reload,
-                // when it falls on the shooter's own picture (vt+8
-                // 0x4e06c0 with `(x, y, 1, 0, 1)`); the shot flies to it.
-                let mut to = None;
-                if class == 0x1fb {
-                    if let Some(p) = self.sea_monster_aim(t, accuracy != 0) {
-                        if self.ship_solid_at(i, (p.0 as f32, p.1 as f32)) {
-                            continue;
-                        }
-                        to = Some(p);
-                    }
-                }
+                // The target's aim point (vt+0xc, by the hit byte), where
+                // the shot flies: a ship's 0x4e07c0, a building's 0x423520
+                // (a harpy nest's 0x41cef0), a sea monster's 0x493350,
+                // which is not shot, no shot and no reload, when it falls
+                // on the shooter's own picture (vt+8 0x4e06c0 with `(x, y,
+                // 1, 0, 1)`).
+                let hit = accuracy != 0;
+                let to = match self.objects[t].class {
+                    _ if self.objects[t].ship.is_some() => Some(self.ship_aim(t, hit)),
+                    ObjectClass::Building(_)
+                    | ObjectClass::Castle(_)
+                    | ObjectClass::CreatureSpawn
+                    | ObjectClass::HarpyNest => Some(self.building_aim(t, hit)),
+                    ObjectClass::Monster(0x1fb) => match self.sea_monster_aim(t, hit) {
+                        Some(p) if self.ship_solid_at(i, (p.0 as f32, p.1 as f32)) => continue,
+                        p => p,
+                    },
+                    _ => None,
+                };
                 let flaming = match it {
                     9 => {
                         blow = blow * 150 / 100;

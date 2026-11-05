@@ -8448,9 +8448,27 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   ..= w - 1` by `0 ..= h / 3` or `0 ..= w / 3` by `2h / 3 ..= h - 1`; any
   other state the rect's top left. Ported for the sea monster
   (`Scene::sea_monster_aim`, test `sea_monster_aim_is_the_originals`,
-  `sea_monster_aim_on_the_shooter_holds_fire`); the pass's other targets'
-  points (a ship's 0x4e07c0, a building's 0x423520) are not wired in the
-  pass yet. 0x4c07c0 with no position in
+  `sea_monster_aim_on_the_shooter_holds_fire`). The other vt+0xc slots
+  (dumped from the vtables the constructors store): a ship's 0x4e07c0
+  (vtable 0x59b48c), every building's 0x423520 (the 18 vtables of the
+  towns, works, forts, docks and yards, temples, castles 0x5949fc,
+  lairs 0x5953f0-0x595600 and barbarian structures 0x594920), a harpy
+  nest's 0x41cef0 (0x595d50), a harpy's or dragon's 0x41df70
+  (0x595e00), a jam's 0x415ce0 (0x5956b0), a land creature's 0x411bb0
+  (0x5953a8), a leviathan's 0x495b40 (0x597544). The pass's shot flies
+  to a ship's (`Scene::ship_aim`), a building's, castle's, lair's or
+  nest's (`Scene::building_aim`) point, each drawn from the target's own
+  generator after the hit roll and before the shooter's reload draw
+  (test `item_shot_flies_to_the_targets_aim_point`). A roll that misses
+  a building leaves its chance as the hit byte (0x4bf7f0 returns it), so
+  only a chance of 0 takes the corner. Not decoded: a barbarian
+  structure's generator (its handler 0x40ef70 does not seed `+0x18` at
+  message 2 as 0x427f50 does) and the hero's house's vtable (type
+  0x1a6d); not ported: the harpy's and dragon's 0x41df70, the jam's
+  0x415ce0, the leviathan's 0x495b40 (by state `+0x74` with its own
+  generator; the port's `leviathan_aim` has only the hit's showing
+  point) and the gorgon's and siren's (0x1fa, 0x1fd): shots at these fly
+  to the target as before. 0x4c07c0 with no position in
   state 3 (its id and player uninitialised; the port does nothing); a
   position's target gone, its pointer dangling (the port skips it);
   0x50ebf0's families with no cell (400 a leviathan, 700, the jam 0x1f7
