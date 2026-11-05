@@ -1237,6 +1237,108 @@ pub fn flood_back(m: &[i16], w: i32, h: i32, (x, y): (i32, i32)) -> Option<Vec<(
     }
 }
 
+/// The sea-to-land pick of 0x55a890 (its steps up to the choice; the
+/// route back to the start, only freed by its caller 0x4af940, is not
+/// made): over the ship's grid `m` (`w` x `h`) from the sea cell `s` to the
+/// land goal `g`, the sea cell to sail to and the land cell to land on.
+/// None when either end is off the grid, `s` is not open (0) or `g` is
+/// shut (-2 or less). A copy with 0 and -1 swapped opens the land; the
+/// sea flooded from `s` (0x557910, `2 (w + h)` generations), the goal
+/// reached gives `(g, g)`; else the land copy flooded from `g`, then rings
+/// `k` = 0, 1, .. about `g` (each side only when not clipped: the east
+/// column, the north row, the west column, the south row) until one
+/// holds no land cell reached; each reached land cell's straight
+/// neighbours (east, north, west, south) reached by sea are listed by
+/// 0x55a730, sorted by `sea + 4 x land` (on a tie the lesser land value
+/// first, then in order; the same pair not twice). The first pair
+/// `walk(land, g)` (the callback, 0x422a60) accepts is the pick.
+pub fn sea_land_pick(
+    m: &mut [i16],
+    w: i32,
+    h: i32,
+    s: (i32, i32),
+    g: (i32, i32),
+    mut walk: impl FnMut((i32, i32), (i32, i32)) -> bool,
+) -> Option<((i32, i32), (i32, i32))> {
+    let inside = |(x, y): (i32, i32)| (0..w).contains(&x) && (0..h).contains(&y);
+    if !inside(s) || !inside(g) {
+        return None;
+    }
+    let at = |(x, y): (i32, i32)| (y * w + x) as usize;
+    if m[at(s)] != 0 || m[at(g)] < -1 {
+        return None;
+    }
+    let mut c: Vec<i16> = m
+        .iter()
+        .map(|&v| match v {
+            0 => -1,
+            -1 => 0,
+            v => v,
+        })
+        .collect();
+    let full = (0, 0, w - 1, h - 1);
+    wave(m, w, full, s, g, (w + h) * 2, -1, 0, 0);
+    if m[at(g)] >= 1 {
+        return Some((g, g));
+    }
+    wave(&mut c, w, full, g, (-1, -1), (w + h) * 2, -1, 0, 0);
+    // {key, land value, sea cell, land cell}, as 0x55a730 keeps them.
+    type Pair = (i32, i32, (i32, i32), (i32, i32));
+    let mut list: Vec<Pair> = Vec::new();
+    let (gx, gy) = g;
+    let mut k = 0;
+    loop {
+        let (x0, x1) = ((gx - k).max(0), (gx + k).min(w - 1));
+        let (y0, y1) = ((gy - k).max(0), (gy + k).min(h - 1));
+        let mut cells = Vec::new();
+        if k <= x1 - gx {
+            cells.extend((y0..=y1).map(|y| (x1, y)));
+        }
+        if k <= gy - y0 {
+            cells.extend((x0..=x1).map(|x| (x, y0)));
+        }
+        if k <= gx - x0 {
+            cells.extend((y0..=y1).map(|y| (x0, y)));
+        }
+        if k <= y1 - gy {
+            cells.extend((x0..=x1).map(|x| (x, y1)));
+        }
+        let mut found = false;
+        for l in cells {
+            let lv = c[at(l)] as i32;
+            if lv <= 0 {
+                continue;
+            }
+            found = true;
+            for (dx, dy) in [(1, 0), (0, -1), (-1, 0), (0, 1)] {
+                let e = (l.0 + dx, l.1 + dy);
+                if !inside(e) || m[at(e)] <= 0 {
+                    continue;
+                }
+                let key = m[at(e)] as i32 + 4 * lv;
+                if list
+                    .iter()
+                    .any(|&(k2, _, e2, l2)| k2 == key && e2 == e && l2 == l)
+                {
+                    continue;
+                }
+                let n = list
+                    .iter()
+                    .position(|&(k2, lv2, _, _)| k2 > key || (k2 == key && lv2 > lv))
+                    .unwrap_or(list.len());
+                list.insert(n, (key, lv, e, l));
+            }
+        }
+        if !found {
+            break;
+        }
+        k += 1;
+    }
+    list.into_iter()
+        .find(|&(_, _, _, l)| walk(l, g))
+        .map(|(_, _, e, l)| (e, l))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -10,14 +10,10 @@ use crate::assets::GameData;
 use crate::magic::Spell;
 use crate::objects::{self, Caches, Task, Treasure};
 
-/// How near (cells) a ship must come to a treasure on land, and to a
-/// hero's house to take the hero: the port's stand-in, not ported (the
-/// original sails to the route's last sea cell, 0x4af940 -> 0x55a890,
-/// and lands a party for them: 0x4ac2d0 sub-code 10, 0x4b0e40 -> 0x4b2d60
-/// kind 3 -> 0x421f00 -> message 0xda9d, or 0x4bd350 for the house; what
-/// is decoded and what is still to read under "The land take" in
-/// FORMATS.md).
-const TAKE_REACH: f32 = 1.0;
+/// How near (cells) a ship must come to a hero's house to take the hero:
+/// the port's stand-in, not ported (the original sails to the house's
+/// berth and lands a party for the hero, 0x4ac2d0 sub-code 10 with
+/// 0x4ba6b0 and 0x4bd350; see "The land take" in FORMATS.md).
 const HERO_REACH: f32 = 2.6;
 /// What heals aboard (0x4b98b0, a tick at a time): each Cup of Asclepius
 /// and Golden Fleece adds its treasure amount (field 8: 40 and 10 in the
@@ -58,14 +54,31 @@ impl Scene {
         }
         // 0x4aab00 / 0x4af940: a treasure on a cell 0x499990(cell, 0)
         // takes is sailed to (`+0x792` = `+0x797` its cell, `+0x7c2` the
-        // box); one on land the ship comes as near as the route allows.
-        let at = (self.objects[t].class == ObjectClass::Treasure)
+        // box); one on land to the sea cell 0x55a890 picks (`land_take`),
+        // the wait `+0x591` set 0 first. (The hero's house: the port's
+        // stand-in, sailing to the water nearest it.)
+        let w = TILE_SIZE as f32;
+        let mid = |(cx, cy): (i32, i32)| ((cx as f32 + 0.5) * w, (cy as f32 + 0.5) * w);
+        let treasure = self.objects[t].class == ObjectClass::Treasure;
+        let at = treasure
             .then(|| self.cell_of(t))
             .filter(|&c| self.sea_cell(c, false));
+        let mut land = None;
+        let site = self.cell_of(t);
         let path = match at {
-            Some((cx, cy)) => {
-                let w = TILE_SIZE as f32;
-                self.plan_route(i, (cx as f32 + 0.5) * w, (cy as f32 + 0.5) * w)
+            Some(c) => self.plan_route(i, mid(c).0, mid(c).1),
+            None if treasure => {
+                self.objects[i].ship.as_mut().unwrap().waited = 0.0;
+                let cell = self.cell_of(t);
+                let (e, l) = self
+                    .land_take(i, cell)
+                    .ok_or("The ship cannot sail there")?;
+                land = Some((e, l));
+                if e == self.cell_of(i) {
+                    Some(Default::default())
+                } else {
+                    self.plan_route(i, mid(e).0, mid(e).1)
+                }
             }
             None => {
                 let (x, y) = (self.objects[t].x, self.objects[t].y);
@@ -75,8 +88,159 @@ impl Scene {
         .ok_or("The ship cannot sail there")?;
         let s = self.objects[i].ship.as_mut().unwrap();
         s.path = path;
-        s.task = Some(Task::Take { target, at });
+        s.task = Some(Task::Take {
+            target,
+            at,
+            land,
+            site,
+            step: 0,
+        });
         Ok(())
+    }
+
+    /// 0x4af940 for a treasure on land at `g`: the ship's grid (0x5c93bc,
+    /// 0x5c9398 by draught), every cell 0x499990(cell, 0) refuses that
+    /// holds an object (`+0xc`) less one, the ships about it laid on by
+    /// 0x4a4e20 (-2, no list), the treasure's cell -1, and 0x55a890 from
+    /// the ship's cell with 0x422a60 (`party_can_walk`): the sea cell
+    /// (`+0x792`) and the land cell (`+0x797`).
+    pub(super) fn land_take(
+        &mut self,
+        i: usize,
+        g: (i32, i32),
+    ) -> Option<((i32, i32), (i32, i32))> {
+        use std::collections::HashSet;
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        let here = self.cell_of(i);
+        let s = self.objects[i].ship.as_ref()?;
+        let deep = objects::deep_draught(s.kind);
+        let traps: HashSet<(i32, i32)> = self.hazard_cells().into_keys().collect();
+        let mut m: Vec<i16> = (0..w * h)
+            .map(|n| (n % w, n / w))
+            .map(|c| {
+                if self.nav.passable(c.0, c.1, deep) && !traps.contains(&c) {
+                    0
+                } else {
+                    -1
+                }
+            })
+            .collect();
+        // The cells' standing objects (`volcano.rs::standing_at`'s).
+        let mut standing: HashSet<(i32, i32)> = HashSet::new();
+        for o in &self.objects {
+            if let Some((x, y)) = o.cell {
+                if o.combat.as_ref().is_some_and(|c| c.hull <= 0.0) {
+                    continue;
+                }
+                let n = super::trade::building_cells(o);
+                for dy in 0..n {
+                    for dx in 0..n {
+                        standing.insert((x + dx, y + dy));
+                    }
+                }
+            }
+        }
+        for &(x, y) in &standing {
+            if (0..w).contains(&x) && (0..h).contains(&y) && !self.nav.is_sea(x, y) {
+                m[(y * w + x) as usize] -= 1;
+            }
+        }
+        // 0x4a4e20(ship, m, `+0x591`, -2, no list): the draw only when the
+        // wait is over 50 (on the scene's generator, as `replan`); hero 0
+        // aboard opens the whirlpools' and medium reefs' cells; within 3
+        // cells other ships closed by the plain rule (the group `+0x5e`
+        // not kept by the port, as in `replan`) and remembered, any other
+        // object closed; then the remembered cells whose ship still lies
+        // there.
+        let id = self.objects[i].id;
+        let wait = (s.waited / crate::clock::TICK) as u32;
+        let hero0 = s.heroes.contains(&0);
+        let impatient = wait > 50 && self.rng.next() % 30 + 50 < wait;
+        let under_way = |s: &objects::Ship| !s.path.is_empty() && s.stalled <= 0.0;
+        let mut remember = Vec::new();
+        for y in (here.1 - 3).max(0)..(here.1 + 4).min(h) {
+            for x in (here.0 - 3).max(0)..(here.0 + 4).min(w) {
+                let c = (x, y);
+                let n = (y * w + x) as usize;
+                if hero0
+                    && self.objects.iter().enumerate().any(|(k, o)| {
+                        matches!(o.class, ObjectClass::Whirlpool | ObjectClass::Reef(0x25a))
+                            && self.cell_of(k) == c
+                    })
+                {
+                    m[n] = 0;
+                    continue;
+                }
+                if let Some(k) = self.slot_ship(c).filter(|&k| self.objects[k].id != id) {
+                    let o = self.objects[k].ship.as_ref().unwrap();
+                    let still = o.path.is_empty()
+                        || o.stalled >= crate::clock::ticks(50)
+                        || o.grapple.is_some();
+                    if (impatient && !under_way(o)) || (!impatient && still) {
+                        m[n] = -2;
+                        remember.push(c);
+                    }
+                } else if c != here && standing.contains(&c) {
+                    m[n] = -2;
+                }
+            }
+        }
+        let lying: HashSet<(i32, i32)> = (0..self.objects.len())
+            .filter(|&k| self.objects[k].id != id)
+            .filter(|&k| self.objects[k].ship.as_ref().is_some_and(|s| !under_way(s)))
+            .map(|k| self.cell_of(k))
+            .collect();
+        let s = self.objects[i].ship.as_mut()?;
+        s.remembered.retain(|c| lying.contains(c));
+        for c in remember {
+            if !s.remembered.contains(&c) {
+                s.remembered.push(c);
+            }
+        }
+        for &(x, y) in &s.remembered {
+            if (0..w).contains(&x) && (0..h).contains(&y) && (x, y) != here {
+                m[(y * w + x) as usize] = -2;
+            }
+        }
+        if (0..w).contains(&g.0) && (0..h).contains(&g.1) {
+            m[(g.1 * w + g.0) as usize] = -1;
+        }
+        super::walk_path::sea_land_pick(&mut m, w, h, here, g, |l, g| self.party_can_walk(l, g))
+    }
+
+    /// The take party on the site `site` (0x421f00 kind 3): a treasure
+    /// there (class 700, 0x407950) asks ship `ship` (message 0xda9d,
+    /// 0x4de5ea): one used at once (0x4b9740 class 2) is taken through
+    /// 0x4b97d0, any other through 0x4bd0c0 while there is room aboard
+    /// (0x4be800 mode 6: 0x597afc[type] less the treasures aboard);
+    /// answered yes, 0x158c1 to the treasure. Else it stays.
+    pub(super) fn party_takes(
+        &mut self,
+        ship: u32,
+        site: (i32, i32),
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        let Some(i) = self.object_index(ship) else {
+            return;
+        };
+        let Some(g) = (0..self.objects.len()).find(|&g| {
+            self.objects[g].class == ObjectClass::Treasure
+                && self.objects[g].treasure.is_some()
+                && self.cell_of(g) == site
+        }) else {
+            return;
+        };
+        let kind = self.objects[g].treasure.unwrap().kind;
+        let Some(s) = self.objects[i].ship.as_ref() else {
+            return;
+        };
+        let room = super::chest::SINK_TREASURES
+            .get(s.kind as usize)
+            .map_or(0, |&n| n as i32 - s.treasures.len() as i32);
+        if Self::treasure_use(kind) & 2 != 0 || room >= 1 {
+            self.take_treasure(i, g, data, caches);
+        }
     }
 
     /// What kind of treasure `kind` is to a ship (0x4b9740): 2 used at
@@ -163,14 +327,24 @@ impl Scene {
             .objects
             .iter()
             .filter_map(|o| match o.ship.as_ref()?.task? {
-                Task::Take { target, at } => Some((o.id, target, at)),
+                Task::Take {
+                    target,
+                    at,
+                    land,
+                    site,
+                    step,
+                } => Some((o.id, target, at, land, site, step)),
                 _ => None,
             })
             .collect();
-        for (ship, target, at) in takers {
+        for (ship, target, at, land, site, step) in takers {
             let Some(i) = self.object_index(ship) else {
                 continue;
             };
+            if let Some((e, l)) = land {
+                self.land_take_tick(i, target, (e, l), site, step, data, caches);
+                continue;
+            }
             if let Some(c) = at {
                 if self.cell_of(i) == c {
                     self.objects[i].ship.as_mut().unwrap().task = None;
@@ -183,37 +357,104 @@ impl Scene {
                 self.objects[i].ship.as_mut().unwrap().task = None;
                 continue;
             };
+            // The hero's house: the port's stand-in.
             let (o, goal) = (&self.objects[i], &self.objects[g]);
             let d = ((o.x - goal.x).powi(2) + (o.y - goal.y).powi(2)).sqrt();
-            let hero = goal.class == ObjectClass::HeroHouse;
             let idle = o.ship.as_ref().unwrap().path.is_empty();
-            let take = |s: &Self| {
-                hero || s.takes_treasure(i, s.objects[g].treasure.map_or(0xff, |tr| tr.kind))
-            };
-            if d <= if hero { HERO_REACH } else { TAKE_REACH } * t {
-                if hero {
-                    self.take_hero(i, g);
-                } else {
-                    if take(self) {
-                        self.take_treasure(i, g, data, caches);
-                    }
-                    self.objects[i].ship.as_mut().unwrap().task = None;
-                }
+            if d <= HERO_REACH * t {
+                self.take_hero(i, g);
             } else if idle {
-                // Arrived as near as the sea allows.
-                if hero || d > 2.0 * t {
-                    self.messages
-                        .push("The ship could not get near enough".into());
-                    self.objects[i].ship.as_mut().unwrap().task = None;
-                } else {
-                    if take(self) {
-                        self.take_treasure(i, g, data, caches);
-                    }
-                    self.objects[i].ship.as_mut().unwrap().task = None;
-                }
+                self.messages
+                    .push("The ship could not get near enough".into());
+                self.objects[i].ship.as_mut().unwrap().task = None;
             }
         }
         self.heal_forts(dt);
+    }
+
+    /// A take of a treasure on land, a tick (0x4ac2d0, class 700). Sub-code
+    /// 9 (`step` 0): sailing to the sea cell `e`; there, lying still
+    /// (0x4ad680 giving 2, `+0x58c` 0), with nothing standing on the land
+    /// cell `l` (`+0xc`) sub-code 10 step 1, else 0x4af940 picks the cells
+    /// again. Step 1 (0x4b0e40): the treasure gone, the order ends
+    /// (0x4b8d40); else the close-in (`take_close_in`) asked each tick
+    /// till it holds, the commands held (0x4b37d0) and the landing's
+    /// steps (`take_landing_tick`). Backed out, it lies in step 5 with
+    /// nothing more to do; called off on its slide, the order ends. (The
+    /// port's route to `e` its plain plan, once more when it lies short of
+    /// it; 0x4ad680's re-plans and make-way not ported.)
+    #[allow(clippy::too_many_arguments)]
+    fn land_take_tick(
+        &mut self,
+        i: usize,
+        target: u32,
+        (e, l): ((i32, i32), (i32, i32)),
+        site: (i32, i32),
+        step: u8,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        let set = |s: &mut Self, land: ((i32, i32), (i32, i32)), step: u8| {
+            if let Some(Task::Take {
+                land: lc, step: st, ..
+            }) = s.objects[i].ship.as_mut().unwrap().task.as_mut()
+            {
+                *lc = Some(land);
+                *st = step;
+            }
+        };
+        let Some(g) = self.object_index(target) else {
+            if step == 0 || (step == 1 && self.objects[i].ship.as_ref().unwrap().landing.is_none())
+            {
+                self.objects[i].ship.as_mut().unwrap().task = None;
+                return;
+            }
+            if step == 5 {
+                return;
+            }
+            return self.take_landing_step(i, site, data, caches);
+        };
+        match step {
+            0 => {
+                let s = self.objects[i].ship.as_ref().unwrap();
+                if !s.path.is_empty() || s.move_state != 0 {
+                    return;
+                }
+                if self.cell_of(i) != e {
+                    let w = TILE_SIZE as f32;
+                    let to = ((e.0 as f32 + 0.5) * w, (e.1 as f32 + 0.5) * w);
+                    match self.plan_route(i, to.0, to.1) {
+                        Some(path) => self.objects[i].ship.as_mut().unwrap().path = path,
+                        None => self.objects[i].ship.as_mut().unwrap().task = None,
+                    }
+                    return;
+                }
+                if !self.standing_at(l) {
+                    set(self, (e, l), 1);
+                } else if let Some(cells) = self.land_take(i, self.cell_of(g)) {
+                    set(self, cells, 0);
+                }
+            }
+            1 if self.objects[i].ship.as_ref().unwrap().landing.is_none() => {
+                if let Some(lnd) = self.take_close_in(i, l) {
+                    self.objects[i].ship.as_mut().unwrap().landing = Some(lnd);
+                }
+            }
+            1 => self.take_landing_step(i, site, data, caches),
+            _ => {}
+        }
+    }
+
+    /// A tick of the take's landing past its close-in, the party's site
+    /// `site`.
+    fn take_landing_step(
+        &mut self,
+        i: usize,
+        site: (i32, i32),
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        self.take_landing_tick(i, site, data, caches);
     }
 
     /// A game tick of 0x4b98b0 on every ship (the ship tick 0x4ab930 at

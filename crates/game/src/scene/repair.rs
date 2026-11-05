@@ -997,7 +997,7 @@ impl Scene {
         let state = l.state;
         match state {
             2 => {
-                if self.close_in_step(k, &mut l) {
+                if self.close_in_step(k, &mut l, 1) {
                     if l.abort {
                         let s = self.objects[k].ship.as_mut().unwrap();
                         s.furl = 0.0;

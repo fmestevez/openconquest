@@ -1484,6 +1484,19 @@ pub enum Task {
         target: u32,
         #[serde(default)]
         at: Option<(i32, i32)>,
+        /// A treasure on land: the sea cell sailed to and the land cell
+        /// landed on (`+0x792`, `+0x797`, 0x4af940).
+        #[serde(default)]
+        land: Option<((i32, i32), (i32, i32))>,
+        /// The treasure's cell, the landing party's site (`+0x7c2`,
+        /// `+0x7c6`).
+        #[serde(default)]
+        site: (i32, i32),
+        /// The machine (`+0x772`, `+0x77d`): 0 sailing (sub-code 9), 1 the
+        /// landing's close-in asked each tick (sub-code 10 step 1; past it
+        /// `Ship::landing`), 5 backed out, lying with nothing more to do.
+        #[serde(default)]
+        step: u8,
     },
     /// Sail alongside own port, shipyard, dock or ship `target` and reload
     /// there (Reload Object; see `scene::load`).

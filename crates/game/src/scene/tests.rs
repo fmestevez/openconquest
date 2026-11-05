@@ -3200,6 +3200,94 @@ fn treasures_and_heroes() {
     assert!(!s(&scene).has_treasure(19), "the clew stays with Theseus");
 }
 
+/// A take order to a treasure on land (0x4af940 -> 0x55a890): the ship
+/// sails to a sea cell beside a land cell a party can walk from, closes
+/// in, lowers its walkway, lands a party (kind 3) that walks to the
+/// treasure and has it taken (message 0xda9d), and backs out, the order
+/// left in step 5 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_treasure_on_land_is_taken_by_a_landing_party() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    scene.brain = None;
+    let human = scene.human.unwrap();
+    let ship = scene.objects.iter().find(|o| o.ship.is_some()).unwrap().id;
+    scene.objects.retain(|o| o.ship.is_none() || o.id == ship);
+    let i = scene.object_index(ship).unwrap();
+    scene.objects[i].owner = Some((human.nation, human.slot));
+    scene.objects[i].ship.as_mut().unwrap().kind = 2;
+    let here = scene.cell_of(i);
+    // The nearest treasure on land that 0x55a890 finds a landing for,
+    // made amber.
+    let mut on_land: Vec<usize> = (0..scene.objects.len())
+        .filter(|&k| scene.objects[k].treasure.is_some())
+        .filter(|&k| !scene.sea_cell(scene.cell_of(k), false))
+        .collect();
+    let d = |c: (i32, i32)| (c.0 - here.0).pow(2) + (c.1 - here.1).pow(2);
+    on_land.sort_by_key(|&k| d(scene.cell_of(k)));
+    let k = on_land
+        .into_iter()
+        .find(|&k| scene.land_take(i, scene.cell_of(k)).is_some())
+        .expect("a treasure on land with a landing");
+    let site = scene.cell_of(k);
+    scene.objects[k].treasure = Some(crate::objects::Treasure {
+        kind: 1,
+        param: 0,
+        amount: 600,
+    });
+    let target = scene.objects[k].id;
+    scene.order_take(ship, target).unwrap();
+    let Some(Task::Take {
+        land: Some((e, l)), ..
+    }) = scene.objects[i].ship.as_ref().unwrap().task
+    else {
+        panic!("not a land take");
+    };
+    assert!(scene.nav.is_sea(e.0, e.1) && !scene.nav.is_sea(l.0, l.1));
+    assert_eq!(
+        (e.0 - l.0).abs() + (e.1 - l.1).abs(),
+        1,
+        "straight neighbours"
+    );
+    let amber = scene.amber;
+    let (mut landed, mut party) = (false, false);
+    for _ in 0..20000 {
+        scene.update(0.04, &data, &mut caches);
+        let k = scene.object_index(ship).unwrap();
+        // Kept afloat past the mission's forts.
+        scene.objects[k].combat.as_mut().unwrap().hull = 1000.0;
+        let s = scene.objects[k].ship.as_ref().unwrap();
+        landed |= s.landing.as_ref().is_some_and(|l| l.state == 6);
+        party |= scene.parties.iter().any(|p| p.take == Some(ship));
+        if matches!(s.task, Some(Task::Take { step: 5, .. })) {
+            break;
+        }
+    }
+    let k = scene.object_index(ship).unwrap();
+    assert!(
+        landed && party,
+        "landed {landed}, party {party}, treasure {:?}, amber {} {amber}",
+        scene.object_index(target),
+        scene.amber
+    );
+    assert_eq!(scene.cell_of(k), e);
+    assert!(!scene.landing_holds(ship));
+    // The party walks on to the treasure.
+    for _ in 0..5000 {
+        if scene.object_index(target).is_none() {
+            break;
+        }
+        scene.update(0.04, &data, &mut caches);
+    }
+    assert!(scene.object_index(target).is_none(), "taken at {site:?}");
+    assert_eq!(scene.amber, amber + 600);
+    assert!(scene.parties.is_empty());
+}
+
 /// A take order to a treasure on the sea ends with the ship in its cell
 /// (0x4ac490), taken or not: a ship with no room aboard (0x597afc 0 for
 /// type 9) leaves goods (kind 6, 0x4b9740 4) lying, and a full one too;

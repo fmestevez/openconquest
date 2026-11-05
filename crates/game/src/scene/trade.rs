@@ -3439,8 +3439,16 @@ pub(super) fn shore_group(grid: &openconquest_formats::MapGrid, x: i32, y: i32) 
     if x < 0 || y < 0 || x as u32 >= grid.width || y as u32 >= grid.height {
         return None;
     }
+    // 0x4b3770: the layer-0 short's high byte (the type) 7, 8 or 9, then
+    // the first of 0x5bb870's rows (13 bytes, 5 read) holding the low
+    // byte; the rows' zero padding makes variant 0 group 0.
     let cell = grid.get(0, x as u32, y as u32);
-    SHORE_GROUPS.iter().position(|g| g.contains(&cell.variant))
+    if !(7..=9).contains(&cell.tileset) {
+        return None;
+    }
+    SHORE_GROUPS
+        .iter()
+        .position(|g| cell.variant == 0 || g.contains(&cell.variant))
 }
 
 /// Shore tiles (layer 0 variants of island ground) in the groups the

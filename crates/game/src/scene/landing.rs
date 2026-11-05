@@ -62,6 +62,10 @@ pub struct Party {
     pub walking: bool,
     pub started: bool,
     pub arrived: bool,
+    /// Kind 3, a take's party (0x4b2d60 with `+0x25d & 0x40`): the ship's
+    /// id (record `+0x7d`), answered on the site by message 0xda9d.
+    #[serde(default)]
+    pub take: Option<u32>,
 }
 
 /// C's `v / 2^n` (truncating), as the original's shifts with the sign
@@ -170,7 +174,7 @@ impl Scene {
         match state {
             // 0x4b2a40 -> 0x4b1a90.
             2 => {
-                if self.close_in_step(k, &mut l) {
+                if self.close_in_step(k, &mut l, 1) {
                     if l.abort {
                         l.back = l.count;
                     }
@@ -255,7 +259,7 @@ impl Scene {
                         l.porters = None;
                         l.state = 7;
                         if let Some(owner) = owner {
-                            self.make_party(owner, class, (cx, cy), at, data, caches);
+                            self.make_party(owner, class, (cx, cy), at, None, data, caches);
                         }
                         // A fort founded at once is placed among the
                         // objects in painter's order: the ship found again.
@@ -353,6 +357,193 @@ impl Scene {
             (o.x, o.y) = line_point(l.from, l.to, l.back);
         }
         false
+    }
+
+    /// 0x4afe50(ship, 0), the take's close-in (sub-code 10 step 1) on the
+    /// land cell `land` (`+0x797`): the direction 0x59791d (`+0x7a3`,
+    /// `+0x79c`), the shore group 0x4b3770 (none: false, nothing kept);
+    /// slanting (or further off) the turn `+0x79d` 0, the hull picture on
+    /// its cell's middle (`+0x6d7`), false; straight, the founding's line
+    /// (0x599c44 / 0x59a1c8 / 0x599ee8 / 0x59a4c8[type x 12 + group]) and
+    /// side-on heading (`close_in_line`), true. The machine at step 10.
+    pub(super) fn take_close_in(&mut self, k: usize, land: (i32, i32)) -> Option<Landing> {
+        let t = TILE_SIZE as f32;
+        let o = &self.objects[k];
+        let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+        let (dx, dy) = (land.0 - here.0, land.1 - here.1);
+        // Not decoded: cells further off read 0x59791d out of its table
+        // (0x55a890 gives a straight neighbour).
+        let dir = if dx.abs() <= 1 && dy.abs() <= 1 {
+            NEIGHBOUR_DIR[(5 + dx * 4 + dy) as usize]
+        } else {
+            0xff
+        };
+        let g = trade::shore_group(&self.grid, land.0, land.1)? as u8;
+        if dir == 0xff || dir % 2 == 1 {
+            let o = &mut self.objects[k];
+            (o.x, o.y) = (here.0 as f32 * t + t / 2.0, here.1 as f32 * t + t / 2.0);
+            return None;
+        }
+        let kind = o.ship.as_ref().unwrap().kind as usize % 12;
+        let mut l = Landing {
+            state: 10,
+            abort: false,
+            dir,
+            group: Some(g),
+            walk_dir: dir,
+            line: false,
+            from: (o.x, o.y),
+            to: (o.x, o.y),
+            count: 0,
+            at: 0,
+            back: 0,
+            face: 0,
+            turn: 0,
+            furl: -1,
+            hull_ticks: 0,
+            plank: None,
+            porters: None,
+            plank_at: (0.0, 0.0),
+            clock: 0.0,
+            dock: None,
+        };
+        let d = trade::APPROACH[dir as usize / 2][kind][g as usize] as f32;
+        self.close_in_line(k, &mut l, here, dir, d);
+        Some(l)
+    }
+
+    /// A tick of the take's landing (0x4b0e40 past step 1; the landing's
+    /// `state` its step `+0x77d`) for a treasure on land at `site`: true
+    /// once backed out (the order left in step 5) or called off on its
+    /// slide (the order ends, message 8); `None` if the ship went.
+    pub(super) fn take_landing_tick(
+        &mut self,
+        mut k: usize,
+        site: (i32, i32),
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Option<bool> {
+        let s = self.objects[k].ship.as_ref().unwrap();
+        let mut l = s.landing.clone()?;
+        l.hull_ticks += 1;
+        let hull_step = l.hull_ticks > HULL_DELAY;
+        let kind = s.kind as usize % 12;
+        match l.state {
+            // 0x4b0470(0) -> 0x4b02a0: two points a tick and a turn; at
+            // the end and turned, step 11; called off and back at its
+            // start, the line freed, the hull on its heading's first frame
+            // (`+0x25b` 0), the commands back (0x4b3850) and message 8.
+            10 => {
+                if self.close_in_step(k, &mut l, 2) {
+                    if l.abort {
+                        let s = self.objects[k].ship.as_mut().unwrap();
+                        s.furl = 0.0;
+                        s.rotation = None;
+                        s.landing = None;
+                        s.task = None;
+                        return Some(true);
+                    }
+                    l.state = 11;
+                }
+            }
+            // 0x4b89b0; furled (`+0x25b` 5), the walkway (slot 1, 0x3e6)
+            // in the same tick, placed as the founding's, and step 12.
+            11 => {
+                if self.furl_step(k, &mut l, hull_step) {
+                    let o = &self.objects[k];
+                    let half = objects::SHIP_FRAME[kind] / 2.0;
+                    let off =
+                        unload::walkway_offset(kind, l.dir as usize, l.group.map(usize::from));
+                    l.plank_at = off.map_or((0.0, 0.0), |(dx, dy)| {
+                        (o.x - half + dx as f32, o.y - half + dy as f32)
+                    });
+                    l.plank = Some(0);
+                    l.back = 0;
+                    l.state = 12;
+                }
+            }
+            // A walkway frame a tick (delay 0); called off, down a frame a
+            // tick and at 0 step 5; at its last, the party's picture
+            // (slot 3, 0x3de) at the walkway's top-left and step 6.
+            12 => {
+                let f = l.plank.unwrap_or(0);
+                if l.abort {
+                    if f > 0 {
+                        l.plank = Some(f - 1);
+                    } else {
+                        l.plank = None;
+                        l.back = l.count;
+                        l.state = 5;
+                    }
+                } else {
+                    let n = self.landing_art[l.walk_dir as usize % 8][0].len() as i32;
+                    if n <= f + 1 {
+                        l.plank = Some(n - 1);
+                        l.porters = Some(0);
+                        l.state = 6;
+                    } else {
+                        l.plank = Some(f + 1);
+                    }
+                }
+            }
+            // Called off, step 14; else a party frame a tick (the map's
+            // `+0xe2`); at half its frames (`+0x49 / 2`) the party, kind 3,
+            // at its picture's top-left + 0x59a188[`+0x79c`] (0x4b2d60),
+            // and step 14.
+            6 => {
+                if l.abort {
+                    l.porters = None;
+                    l.state = 14;
+                } else {
+                    let half = self.landing_art[l.dir as usize % 8][1].len() as i32 / 2;
+                    let f = l.porters.unwrap_or(0) + 1;
+                    if half <= f {
+                        let (dx, dy) = PARTY_FROM[l.dir as usize % 8];
+                        let at = (
+                            l.plank_at.0.round() as i32 + dx,
+                            l.plank_at.1.round() as i32 + dy,
+                        );
+                        let (owner, id) = (self.objects[k].owner, self.objects[k].id);
+                        l.porters = None;
+                        l.state = 14;
+                        if let Some(owner) = owner {
+                            self.make_party(owner, 700, site, at, Some(id), data, caches);
+                        }
+                        k = self.object_index(id)?;
+                    } else {
+                        l.porters = Some(f);
+                    }
+                }
+            }
+            // The walkway down a frame a tick; below 0, step 5 from the
+            // line's end.
+            14 => {
+                let f = l.plank.unwrap_or(0) - 1;
+                if f < 0 {
+                    l.plank = None;
+                    l.back = l.count;
+                    l.state = 5;
+                } else {
+                    l.plank = Some(f);
+                }
+            }
+            // A hull step two points back, unfurling; at 0 the hull on its
+            // cell's middle, `+0x25b` 0, the commands back (0x4b3850).
+            5 => {
+                let kept = self.objects[k].ship.as_ref().unwrap().close_in;
+                if self.back_out_step(k, &mut l, hull_step) {
+                    let s = self.objects[k].ship.as_mut().unwrap();
+                    s.close_in = kept;
+                    if let Some(Task::Take { step, .. }) = s.task.as_mut() {
+                        *step = 5;
+                    }
+                    return Some(true);
+                }
+            }
+            _ => {}
+        }
+        self.objects[k].ship.as_mut().unwrap().landing = Some(l);
+        Some(false)
     }
 
     /// 0x4b2ff0: towards the cell `land` (`+0x740` for a settlement, the
@@ -542,11 +733,13 @@ impl Scene {
     /// off) and a hull rotation the way it turns (called off, the turn
     /// stops on its rotation's heading); true once at the line's end and
     /// turned, or back at its start.
-    pub(super) fn close_in_step(&mut self, k: usize, l: &mut Landing) -> bool {
+    /// The take's slide 0x4b02a0 is the same with two points a tick
+    /// (`n` 2).
+    pub(super) fn close_in_step(&mut self, k: usize, l: &mut Landing, n: i32) -> bool {
         if l.abort {
             l.at = if l.at > 1 { l.at - 2 } else { 0 };
         } else {
-            l.at += 1;
+            l.at += n;
         }
         let o = &mut self.objects[k];
         let s = o.ship.as_mut().unwrap();
@@ -589,12 +782,14 @@ impl Scene {
     /// opened, from its quarter to the goal's (0x55ca10, heading -1): none
     /// and it goes (message 10); each entry the quarter's centre, and the
     /// first leg.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn make_party(
         &mut self,
         owner: (u32, u32),
         class: u32,
         site: (i32, i32),
         at: (i32, i32),
+        take: Option<u32>,
         data: &GameData,
         caches: &mut Caches,
     ) {
@@ -612,9 +807,10 @@ impl Scene {
             walking: false,
             started: false,
             arrived: false,
+            take,
         };
         if self.party_on_site(&mut p) {
-            self.found_by_party(owner, class, site, data, caches);
+            self.party_done(&p, data, caches);
             return;
         }
         // The goal point: a settlement's 2 x 2 middle, else the cell's.
@@ -623,30 +819,7 @@ impl Scene {
         } else {
             (site.0 * 64 + 32, site.1 * 64 + 32)
         };
-        let (ox, oy, bw, bh) = self.region_box(site);
-        let (w, h) = (bw * 4, bh * 4);
-        let mut m = vec![0i16; (w * h) as usize];
-        for ry in 0..bh {
-            for rx in 0..bw {
-                let q = self.landing_quarters((ox + rx, oy + ry));
-                for (n, &v) in q.iter().enumerate() {
-                    let (x, y) = (rx * 4 + n as i32 % 4, ry * 4 + n as i32 / 4);
-                    m[(y * w + x) as usize] = v;
-                }
-            }
-        }
-        // The two cells opened (indices as written: off the grid they
-        // land elsewhere in it, or nowhere).
-        let mut open = |(cx, cy): (i32, i32)| {
-            for q in 0..16 {
-                let i = q % 4 + (cx - ox) * 4 + (q / 4 + (cy - oy) * 4) * w;
-                if let Some(c) = usize::try_from(i).ok().and_then(|i| m.get_mut(i)) {
-                    *c = 0;
-                }
-            }
-        };
-        open((tdiv(at.0, 64), tdiv(at.1, 64)));
-        open(site);
+        let (ox, oy, w, h, mut m) = self.party_grid(site, (tdiv(at.0, 64), tdiv(at.1, 64)));
         let s = (tdiv(at.0 - ox * 64, 16), tdiv(at.1 - oy * 64, 16));
         let g = (tdiv(goal.0 - ox * 64, 16), tdiv(goal.1 - oy * 64, 16));
         let Some(route) = walk_path::route_exact(&mut m, w, h, s, g, -1) else {
@@ -664,6 +837,63 @@ impl Scene {
             p.started = false;
         }
         self.parties.push(p);
+    }
+
+    /// The landing party's grid (0x42e720 with 4) over the land region of
+    /// `site` (0x42e590: origin and size in cells), the quarters of the
+    /// cells `from` and `site` opened (indices as written: off the grid
+    /// they land elsewhere in it, or nowhere): origin, width, height and
+    /// grid.
+    fn party_grid(&self, site: (i32, i32), from: (i32, i32)) -> (i32, i32, i32, i32, Vec<i16>) {
+        let (ox, oy, bw, bh) = self.region_box(site);
+        let (w, h) = (bw * 4, bh * 4);
+        let mut m = vec![0i16; (w * h) as usize];
+        for ry in 0..bh {
+            for rx in 0..bw {
+                let q = self.landing_quarters((ox + rx, oy + ry));
+                for (n, &v) in q.iter().enumerate() {
+                    let (x, y) = (rx * 4 + n as i32 % 4, ry * 4 + n as i32 / 4);
+                    m[(y * w + x) as usize] = v;
+                }
+            }
+        }
+        let mut open = |(cx, cy): (i32, i32)| {
+            for q in 0..16 {
+                let i = q % 4 + (cx - ox) * 4 + (q / 4 + (cy - oy) * 4) * w;
+                if let Some(c) = usize::try_from(i).ok().and_then(|i| m.get_mut(i)) {
+                    *c = 0;
+                }
+            }
+        };
+        open(from);
+        open(site);
+        (ox, oy, w, h, m)
+    }
+
+    /// 0x422a60(map, l, g), the land take's test: both cells within the
+    /// box of `g`'s land region (0x42e590), and an exact route (0x55ca10,
+    /// heading -1) on the party's grid with both cells' quarters opened
+    /// from quarter 2, 2 of `l` to that of `g`. No draws.
+    pub(super) fn party_can_walk(&self, l: (i32, i32), g: (i32, i32)) -> bool {
+        let (ox, oy, bw, bh) = self.region_box(g);
+        let within = |(x, y): (i32, i32)| (ox..ox + bw).contains(&x) && (oy..oy + bh).contains(&y);
+        if !within(l) || !within(g) {
+            return false;
+        }
+        let (ox, oy, w, h, mut m) = self.party_grid(g, l);
+        let q = |(x, y): (i32, i32)| ((x - ox) * 4 + 2, (y - oy) * 4 + 2);
+        walk_path::route_exact(&mut m, w, h, q(l), q(g), -1).is_some()
+    }
+
+    /// On the site (0x421f00): a founding party founds; a take's (kind 3)
+    /// asks its ship to take the treasure there.
+    fn party_done(&mut self, p: &Party, data: &GameData, caches: &mut Caches) {
+        match p.take {
+            Some(ship) => self.party_takes(ship, p.site, data, caches),
+            None => {
+                self.found_by_party(p.owner, p.class, p.site, data, caches);
+            }
+        }
     }
 
     /// 0x421ea0: on the site's cell (`+0xa26`).
@@ -685,7 +915,7 @@ impl Scene {
             p.walking = true;
             return false;
         }
-        self.found_by_party(p.owner, p.class, p.site, data, caches);
+        self.party_done(p, data, caches);
         true
     }
 
@@ -1091,7 +1321,7 @@ mod tests {
             (6, Some(0), kept.face, kept.turn)
         );
         assert_eq!((l.count, l.line), (23, false));
-        let steps = (1..).find(|_| scene.close_in_step(i, &mut l)).unwrap();
+        let steps = (1..).find(|_| scene.close_in_step(i, &mut l, 1)).unwrap();
         assert_eq!(steps, 23);
         let o = &scene.objects[i];
         assert_eq!((o.x, o.y), at);
