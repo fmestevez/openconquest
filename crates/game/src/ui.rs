@@ -1442,6 +1442,16 @@ impl GameView<'_> {
     ) {
         let screen = *screen;
         let lut = *lut;
+        // While the screen shakes (0x55f450) the view's picture is put
+        // `shake_offset` map pixels off its place (the Blt of layer 1's
+        // rectangle onto itself, moved).
+        let (dx, dy) = self.scene.shake_offset();
+        let shaken = crate::view::Camera {
+            x: camera.x - dx as f32,
+            y: camera.y - dy as f32,
+            ..*camera
+        };
+        let camera = &shaken;
         draw_world(frame, &screen, self.scene, camera, &lut);
         draw_objects(frame, &screen, self.scene, camera, &lut, self.time_ms);
         draw_fog(frame, &screen, self.scene, camera, &lut);

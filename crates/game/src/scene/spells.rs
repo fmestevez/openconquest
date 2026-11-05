@@ -6,6 +6,11 @@ use super::*;
 /// 0x596160[0] (0x42cdf0, 0x42cfa0).
 const LIGHTNING_START: u32 = 2;
 
+/// The screen's shake at lightning's state 0 end (0x42cfa0 calls 0x55f450
+/// on layer 1, the map view, with 3 steps): each step's offset of the view
+/// (x, y pixels) and its milliseconds of real time (timeGetTime, Sleep).
+pub const LIGHTNING_SHAKE: [(i32, i32, u32); 3] = [(0, -10, 50), (0, 5, 50), (0, -3, 40)];
+
 /// The frame of state 1 (over water) or 2 (over land) at which lightning
 /// strikes (0x42cfa0), a frame a tick.
 fn lightning_strike_frame(water: bool) -> u32 {
@@ -197,7 +202,7 @@ impl Scene {
                 self.pay_spell(spell)?;
                 self.add_sight_point(cx, cy);
                 let caster = self.human.map(|h| (h.nation, h.slot));
-                self.spawn_lightning(cx, cy, caster);
+                self.spawn_lightning(cx, cy, caster, data, caches);
             }
             Spell::Fireball => {
                 // 0x42ef90 case 7: nothing at the cell's `+0x14`.
@@ -221,12 +226,16 @@ impl Scene {
     }
 
     /// Makes the player's weapons stronger for a while.
-    /// It brews at the Temple of War `site`.
+    /// It brews at the Temple of War `site`. The war temple's code 5
+    /// (0x439260) plays only its voice once paid and started
+    /// (`temple_voice`); the brew's end plays nothing.
     pub fn cast_flame(&mut self, site: Option<u32>) -> Result<(), String> {
         self.pay_spell(Spell::Flame)?;
         let site = self.temple_site(Temple::War, site);
         self.magic.brew_flame(site);
-        self.sounds.push(("fireball", f32::NAN, f32::NAN));
+        if let (Some(t), Some(h)) = (site, self.human) {
+            self.temple_voice(t, Temple::War, (h.nation, h.slot));
+        }
         Ok(())
     }
 
@@ -237,10 +246,44 @@ impl Scene {
     /// at its end (0x42cfa0) event 0x91 (`molniya2`), mode 4, and state 1
     /// over water or 2 over land (`run_lightning`), which strikes at frame
     /// 11 (cycle 33 over 33 frames) or 40 (34 over 68): a frame a tick.
-    pub(super) fn spawn_lightning(&mut self, cx: i32, cy: i32, caster: Option<super::Owner>) {
+    ///
+    /// `LTSPR_0` is placed with its top-left at (x 64 + 15, y 64 - 481)
+    /// (0x42cdf0) and hidden by the fog of the lightning's own cell
+    /// (0x50d660), so it is drawn from the cell's centre, offset.
+    pub(super) fn spawn_lightning(
+        &mut self,
+        cx: i32,
+        cy: i32,
+        caster: Option<super::Owner>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
         let t = TILE_SIZE as f32;
         let (x, y) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
         self.sounds.push(("flash", x, y));
+        match objects::sequence_frames(data, caches, "LTSPR_0") {
+            Ok(mut frames) if !frames.is_empty() => {
+                for l in frames.iter_mut().flatten() {
+                    // The renderer centres an effect's layer on x + dx.
+                    l.dx = (cx * TILE_SIZE as i32 + 15 + l.image.width as i32 / 2) - x as i32;
+                    l.dy = (cy * TILE_SIZE as i32 - 481 + l.image.height as i32 / 2) - y as i32;
+                }
+                self.effects.push(Effect {
+                    x,
+                    y,
+                    frames,
+                    age_ms: 0.0,
+                    follow: None,
+                    life_ms: None,
+                    // Its frame over the cycle 0x596160[0], 2 ticks.
+                    frame_ms: (LIGHTNING_START as u64 * crate::clock::TICK_MS) as f32,
+                    tornado: None,
+                    site: None,
+                });
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("could not load effect LTSPR_0: {e:#}"),
+        }
         let at = LIGHTNING_START + lightning_strike_frame(self.nav.is_water(cx, cy));
         self.lightning.push((x, y, crate::clock::ticks(at), caster));
     }
@@ -261,10 +304,11 @@ impl Scene {
             l.2 -= dt;
         }
         // State 0's end (0x42cfa0): event 0x91 (`molniya2`) mode 4 at its
-        // cell, and the picture of state 1 or 2 (0x42cdf0). The screen's
-        // shake there (0x55f450) is not ported, nor `LTSPR_0`'s picture.
+        // cell, the screen's shake (0x55f450) and the picture of state 1
+        // or 2 (0x42cdf0).
         for (x, y, water) in started {
             self.sounds.push(("molniya2", x, y));
+            self.shake_ms = Some(0.0);
             self.spawn_effect(data, caches, magic::fx_lightning(water), x, y);
         }
         let due: Vec<(f32, f32, Option<super::Owner>)> = self
@@ -617,11 +661,16 @@ impl Scene {
         self.flame += self.magic.take_flames() as f32 * magic::FLAME_SECONDS;
     }
 
-    /// Calls up a strong wind towards `direction`.
+    /// Calls up a strong wind towards `direction`. The sea temple's code
+    /// 0xc (0x438300) pays and posts 0x186f to the weather (0x407a80
+    /// message 0x1103, which plays nothing), then plays only its voice
+    /// (`temple_voice`).
     pub fn cast_wind(&mut self, direction: u32) -> Result<(), String> {
         self.pay_spell(Spell::Wind)?;
         self.wind.force(direction);
-        self.sounds.push(("wind8", f32::NAN, f32::NAN));
+        if let (Some(t), Some(h)) = (self.temple_site(Temple::Sea, None), self.human) {
+            self.temple_voice(t, Temple::Sea, (h.nation, h.slot));
+        }
         Ok(())
     }
 
@@ -996,5 +1045,35 @@ impl Scene {
             }
         }
         cell
+    }
+}
+
+impl Scene {
+    /// The map view's offset while the screen shakes (0x55f450): the
+    /// step whose time holds the real milliseconds since it began.
+    pub fn shake_offset(&self) -> (i32, i32) {
+        let Some(ms) = self.shake_ms else {
+            return (0, 0);
+        };
+        let mut end = 0.0;
+        for (dx, dy, step) in LIGHTNING_SHAKE {
+            end += step as f32;
+            if ms < end {
+                return (dx, dy);
+            }
+        }
+        (0, 0)
+    }
+
+    /// Runs the shake on by `dt` seconds of real time (0x55f450 sleeps
+    /// to each step's end by timeGetTime, whatever the game's speed).
+    pub fn run_shake(&mut self, dt: f32) {
+        let total: u32 = LIGHTNING_SHAKE.iter().map(|s| s.2).sum();
+        if let Some(ms) = self.shake_ms.as_mut() {
+            *ms += dt * 1000.0;
+            if *ms >= total as f32 {
+                self.shake_ms = None;
+            }
+        }
     }
 }

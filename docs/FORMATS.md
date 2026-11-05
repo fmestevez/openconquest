@@ -5865,7 +5865,26 @@ at its cell, the screen shakes (0x55f450) and it takes state 1 (cell
 layer byte 0 or 1, water) or 2 (else), centred on the cell; the strike
 at frame 11 / 40 of that picture. The port plays both sounds and shows
 the second picture 2 ticks on (`Scene::spawn_lightning`,
-`run_lightning`); `LTSPR_0` and the shake are not ported.
+`run_lightning`), with `LTSPR_0` on layer 7 at that top-left (no
+0x50d1a0 call for state 0; 0x50d660 hides it on a cell the viewer's fog
+byte is 0, the lightning's cell) for its 2 ticks.
+
+The shake, 0x55f450(display, layer 1, 3, steps), called at 0x42d0ba
+with steps of (x, y, milliseconds): (0, -10, 50), (0, 5, 50),
+(0, -3, 40), then one more pass with (0, 0) ending it. Each pass Blts
+the layer's rectangle (0x55d440: its x, y, w, h) moved by the step (a
+negative offset takes the source that far in, a positive one puts the
+target that far in: the picture moves by (x, y)), sets the layer's
+origin (0x55d650) to the saved one less |x|, |y|, marks the rectangle
+for redraw (0x55f7d0) and composes (0x564970); then sleeps until the
+running sum of the steps' milliseconds from timeGetTime (only when more
+than 2 are left), a failed Blt ending it. At the end the origin is put
+back. It runs inside the game's tick, so the game waits for it. The
+port draws the map view moved by the step for its real milliseconds
+(`Scene::shake_offset`, `run_shake`, `LIGHTNING_SHAKE`). Not decoded:
+what the composition 0x564970 draws with the moved origin over the
+Blt's picture (the port shows the Blt's move), and whether the game's
+clock makes up the 140 ms after (the port's game runs on through it).
 
 Magic.cpp 0x42f580(spell, object, x, y, draw, share), its cases: each
 first 0x42ed40(spell, 1, share) (a count `+0x10 + 4 spell`, else the
@@ -9798,4 +9817,9 @@ after 0xc and the Flame (sea 0x12, war 5) only when they were paid and
 started, and after a code neither switch lists (0x438589 index 3); not
 when the war temple is busy (`+0x10c`). Ported (`temple_voice`); the
 viewing player's own casts are not the temples' in the port (`cast_on`,
-`cast_area`).
+`cast_area`), but its Flame and wind play the temple's voice alone as
+codes 5 and 0xc do (`cast_flame`, `cast_wind`): neither temple plays any
+other sound for them, the Flame's end (0x439260 message 0, `+0x110` 1)
+is silent, and the weather's 0x1103 (0x407a80, 0x4079a0) too. Not read:
+the interface's path from the panel's command (0x67 flame, 0x58 +
+direction wind) to command 0x22.

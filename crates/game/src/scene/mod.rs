@@ -516,6 +516,9 @@ pub struct Scene {
     /// Lightning cast: where, seconds until it strikes, and its caster
     /// (a player's spell; None the game's, as a brain casts).
     pub lightning: Vec<(f32, f32, f32, Option<Owner>)>,
+    /// The screen's shake after lightning (0x55f450): real milliseconds
+    /// since it began (`spells::LIGHTNING_SHAKE`; not saved).
+    pub shake_ms: Option<f32>,
     /// Fireballs over the map (not saved).
     pub fireballs: Vec<fireball::Fireball>,
     /// Seconds left of the player's Flame (stronger weapons).
@@ -864,6 +867,7 @@ impl Scene {
             fog: true,
             fireballs: Vec::new(),
             lightning: Vec::new(),
+            shake_ms: None,
             sight_points: Vec::new(),
             charmed: HashMap::new(),
             sirens: HashMap::new(),

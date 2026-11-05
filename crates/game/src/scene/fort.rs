@@ -342,7 +342,7 @@ impl Scene {
                 Spell::ViewMap => self.add_sight_point(cx, cy),
                 Spell::Lightning => {
                     self.add_sight_point(cx, cy);
-                    self.spawn_lightning(cx, cy, owner);
+                    self.spawn_lightning(cx, cy, owner, data, caches);
                 }
                 // Magic.cpp 0x42f580 cases 1, 2, 4, 3: the record or the
                 // monster at the cell, fighting for the fort's player.

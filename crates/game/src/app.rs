@@ -7121,6 +7121,8 @@ impl App {
                 &mut self.caches,
             );
         }
+        // The screen's shake runs on real time (0x55f450).
+        self.scene.run_shake(dt);
         self.play_scene_sounds();
         self.choose_music();
         self.choose_ambience();

@@ -2471,7 +2471,7 @@ impl Scene {
         use crate::magic::Spell;
         let water = self.nav.is_water(cx, cy);
         match spell {
-            Spell::Lightning => self.spawn_lightning(cx, cy, None),
+            Spell::Lightning => self.spawn_lightning(cx, cy, None, data, caches),
             Spell::Fireball => self.spawn_fireball(cx, cy, owner, data, caches),
             Spell::Waterspout | Spell::Whirlpool | Spell::Reef | Spell::Monster if water => {
                 if let Err(e) = self.spawn_hazard_drawn(spell, (cx, cy), owner, draw, data, caches)

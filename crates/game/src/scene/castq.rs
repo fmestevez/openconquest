@@ -441,7 +441,7 @@ impl Scene {
     /// command 0x22 plays it after every cast of codes 1-4, 0xd and 6-8,
     /// 0xe, 0xf (the price met or not), after the wind and the Flame only
     /// when they were paid.
-    fn temple_voice(&mut self, t: u32, temple: Temple, owner: (u32, u32)) {
+    pub(super) fn temple_voice(&mut self, t: u32, temple: Temple, owner: (u32, u32)) {
         let Some(k) = self.object_index(t) else {
             return;
         };

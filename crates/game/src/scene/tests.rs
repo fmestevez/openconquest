@@ -646,8 +646,11 @@ fn temple_magic() {
         scene.update(0.02, &data, &mut caches);
     }
     assert_ne!(scene.seen(far.0, far.1), Seen::InSight);
+    scene.sounds.clear();
     scene.cast_wind(6).unwrap();
     assert_eq!((scene.wind.strength, scene.wind.direction), (7, 6));
+    // The sea temple's code 0xc plays only its voice (0x438300).
+    assert!(!scene.sounds.iter().any(|s| s.0 == "wind8"));
     let i = scene.object_index(ship).unwrap();
     let (cx, cy) = (
         (scene.objects[i].x / 64.0) as i32,
@@ -830,6 +833,7 @@ fn war_magic() {
     // a ship goes down (0xda94).
     let (ex, ey) = cell(&scene, enemy);
     scene.sounds.clear();
+    let effects = scene.effects.len();
     scene
         .cast_area(Spell::Lightning, ex, ey, &data, &mut caches)
         .unwrap();
@@ -837,11 +841,29 @@ fn war_magic() {
     // ticks, then event 0x91 (`molniya2`, 0x42cfa0) and its picture.
     let heard = |s: &Scene, n: &str| s.sounds.iter().any(|x| x.0 == n);
     assert!(heard(&scene, "flash") && !heard(&scene, "molniya2"));
-    let effects = scene.effects.len();
+    // State 0's `LTSPR_0`, its top-left at (x 64 + 15, y 64 - 481)
+    // (0x42cdf0), one frame for 2 ticks.
+    assert_eq!(scene.effects.len(), effects + 1);
+    let fx = scene.effects.last().unwrap();
+    let l = &fx.frames[0][0];
+    let left = fx.x as i32 + l.dx - l.image.width as i32 / 2;
+    let top = fx.y as i32 + l.dy - l.image.height as i32 / 2;
+    assert_eq!((left, top), (ex * 64 + 15, ey * 64 - 481));
+    assert_eq!(fx.frame_ms, 80.0);
     scene.update(0.06, &data, &mut caches);
-    assert!(!heard(&scene, "molniya2") && scene.effects.len() == effects);
+    assert!(!heard(&scene, "molniya2") && scene.effects.len() == effects + 1);
+    assert_eq!(scene.shake_offset(), (0, 0));
     scene.update(0.03, &data, &mut caches);
+    // `LTSPR_0` gone, the second picture on, and the screen shaken
+    // (0x55f450): 10 up for 50 ms, 5 down for 50, 3 up for 40.
     assert!(heard(&scene, "molniya2") && scene.effects.len() == effects + 1);
+    assert_eq!(scene.shake_offset(), (0, -10));
+    scene.run_shake(0.05);
+    assert_eq!(scene.shake_offset(), (0, 5));
+    scene.run_shake(0.05);
+    assert_eq!(scene.shake_offset(), (0, -3));
+    scene.run_shake(0.04);
+    assert!(scene.shake_ms.is_none() && scene.shake_offset() == (0, 0));
     // It strikes partway through its picture.
     assert!(scene.object_index(enemy).is_some(), "not yet");
     for _ in 0..50 * 2 {
@@ -849,7 +871,10 @@ fn war_magic() {
     }
     assert!(scene.object_index(enemy).is_none(), "struck down");
     // Flame makes our weapons stronger for a while.
+    scene.sounds.clear();
     scene.cast_flame(None).unwrap();
+    // The war temple's code 5 plays only its voice (0x439260).
+    assert!(!scene.sounds.iter().any(|s| s.0 == "fireball"));
     // It brews at the temple first, 250 ticks.
     assert_eq!(scene.flame, 0.0);
     for _ in 0..50 * 11 {
