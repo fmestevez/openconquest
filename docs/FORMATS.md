@@ -944,8 +944,8 @@ sprite of at most 128 x 128 at the picture's top left, and the banners
 (`FLAGSPR_`) kind 0 as well (every sprite but `FIRE*` is): the owner
 sees picture and banner through a checkerboard (16-byte table rows,
 each from the layer's own top left), another player only the fire and
-smoke. The port draws so (`Scene::is_phantom`, `phantom_hidden`; the
-shields' sprites are not drawn by the port).
+smoke. The port draws so (`Scene::is_phantom`, `phantom_hidden`, the
+shields' sprites too).
 
 A building's timed statuses are counted in game ticks, each a flag, a
 start and a length, the length added to by every casting or blow and
@@ -968,8 +968,7 @@ spans in `Combatant::{phantom,weapon,magic,lime}_span` and ends them in
 `Scene::tick_building_statuses`, run once per game tick; saves from
 before start what was left at the first tick after loading.
 
-The shield sprites (not drawn by the port, which shows its protection
-aura for the remaining time instead): layer 0xd (`PROTWSPR_64` for a
+The shield sprites: layer 0xd (`PROTWSPR_64` for a
 building of size `+0x56` 1, else `_128`; 0x426484) and 0xc
 (`PROTMSPR_*`, 0x42667f), depth the picture's `+0x19` less 5 / 4, made
 with frame `+0x18c` / `+0x16c` 0; while on, when the tick is more than
@@ -979,7 +978,34 @@ the top it goes back to the bottom, from 0x595f90 (size 4: 14..43) or
 0x595fa8 (13..40) for the magic one; once off it plays on to the
 sequence's count and the layer is removed (0x4264b3, 0x4266fc). Each
 step 0x50d660 places it at the picture's left + w / 2 - its w / 2 and
-top + h / 4 - its h / 2 (integer halves and quarter).
+top + h / 4 - its h / 2 (integer halves and quarter). In full
+(0x4263ef-0x4265a4, the magic shield's 0x4265ed-0x4267ed alike): off,
+with the sprite made (`+0x194` / `+0x174`), it is removed when its frame
+is at least the sequence's count (the layer's `+0x49`), else it steps;
+on and not made with `+0x180` / `+0x160` set, it is made (0x50cbf0,
+0x50cf60(layer, 7, 0, name)) and placed at its frame; otherwise, made
+and the tick more than its time + 1, the time becomes the tick, the
+frame goes on by one and, while on, past the loop's top back to its
+bottom, then it is placed. So a frame lasts 2 ticks, and the frame equal
+to the count is set (shown as frame 0: 0x55ec70 takes it modulo the
+count) for the tick before the removal. The casting (0xda9a) with the
+shield off sets its frame to 0 and the weapon shield's time `+0x190` to
+the tick, for either shield (the magic shield's `+0x170` is left as it
+was). The sequences: `PROTWSPR_64` 59 frames of 80 x 80, `_128` 58 of
+128 x 128, `PROTMSPR_64` 56 of 64 x 64, `_128` 58 of 128 x 128, every
+frame one size. The hero's house (0x420fd0) clears `+0x180` / `+0x160`
+(and has both shields on for good); forts and barbarian structures tick
+by 0x419ba0 / 0x40eba0, which make no shield sprites (the strings'
+only other users are the ships', 0x4e0f30 and 0x4e1160); castles
+(0x410ca0 through 0x427f50), lairs (0x414f00) and the rest run 0x425990.
+The shields are not remapped by the lime (its 0x50df60 in 0x425990 is
+on layers 0 and 1 only). The port: `scene/shields.rs`, stepped in
+`Scene::tick_building_statuses` before each shield's end and drawn over
+the building's fire and banner, the magic shield's then the weapon
+shield's (depths less 4 and 5), ghosted or hidden with the phantom;
+saves do not keep the sprites' frames and times. A ship's shields keep
+the port's own aura (the ships' sprites, 0x4e0f30 / 0x4e1160, not
+decoded here).
 
 The pointer still picks a hidden phantom ship or building: 0x49a580
 asks each occupant's vt+8, the ship's 0x4e06c0 (its hull sprite's rect

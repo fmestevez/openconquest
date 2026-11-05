@@ -2124,11 +2124,13 @@ impl Scene {
     /// the same tick before the test (0x4263ef, 0x4265ed) whenever
     /// `+0x180` / `+0x160` are set, as the LandObj constructor 0x422cc0
     /// sets them for every player's building, so a shield ends at its
-    /// length's tick.
-    pub(super) fn tick_building_statuses(&mut self) {
+    /// length's tick; each sprite's step comes before its shield's test
+    /// (`tick_shield_sprite`).
+    pub(super) fn tick_building_statuses(&mut self, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
         let mut cleared = Vec::new();
-        for o in &mut self.objects {
+        for i in 0..self.objects.len() {
+            let o = &mut self.objects[i];
             let Some(c) = o.combat.as_mut().filter(|_| o.ship.is_none()) else {
                 continue;
             };
@@ -2150,9 +2152,13 @@ impl Scene {
                 (c.lime, c.lime_total, c.lime_span) = (0.0, 0.0, None);
                 cleared.push((o.id, crate::clock::ticks(len)));
             }
+            self.tick_shield_sprite(i, true, data, caches);
+            let c = self.objects[i].combat.as_mut().unwrap();
             if c.weapon_span.is_some_and(|(at, len)| at + len <= now) {
                 (c.protect_weapons, c.weapon_span) = (0.0, None);
             }
+            self.tick_shield_sprite(i, false, data, caches);
+            let c = self.objects[i].combat.as_mut().unwrap();
             if c.magic_span.is_some_and(|(at, len)| at + len <= now) {
                 (c.protect_magic, c.magic_span) = (0.0, None);
             }

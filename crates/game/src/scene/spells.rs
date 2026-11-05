@@ -129,6 +129,9 @@ impl Scene {
             Spell::ProtectMagic => (&mut c.protect_magic, &mut c.magic_span),
             _ => (&mut c.phantom, &mut c.phantom_span),
         };
+        // Cast while off, a building's shield sprite starts at frame 0
+        // (0xda9a).
+        let off = span.is_none();
         let left = if ship {
             *left = left.max(0.0) + magic::PROTECTION_SECONDS;
             *left
@@ -139,7 +142,12 @@ impl Scene {
             })
         };
         self.sounds.push(("prote1", x, y));
-        if spell != Spell::Phantom {
+        if !ship {
+            // A building's shields are drawn by its tick (`shields`).
+            if off && spell != Spell::Phantom {
+                self.shield_cast(target, spell == Spell::ProtectWeapons);
+            }
+        } else if spell != Spell::Phantom {
             let name = magic::fx_protection(spell, large);
             self.spawn_aura(data, caches, &name, target, left);
         }

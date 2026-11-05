@@ -332,6 +332,25 @@ pub fn draw_objects(
                 );
             }
         }
+        // A building's shields (layers 0xc and 0xd, depth the picture's
+        // less 4 and 5: over its fire and banner), from their top left;
+        // kind-0 sprites, ghosted or hidden with the phantom as the rest.
+        for (layers, left, top) in scene.building_shields_on(obj.id) {
+            for l in layers.iter().filter(|_| !hidden) {
+                draw_image_ghosted(
+                    frame,
+                    screen,
+                    camera,
+                    lut,
+                    &l.image,
+                    left + l.dx,
+                    top + l.dy,
+                    false,
+                    None,
+                    mask(&l.image),
+                );
+            }
+        }
     }
     // Walkways of unloading ships, and their porters.
     for p in &scene.planks {

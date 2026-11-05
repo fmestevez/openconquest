@@ -298,6 +298,8 @@ pub struct Scene {
     pub fires: Vec<fire::Fire>,
     /// Buildings' fires and smokes (`burning`).
     pub building_fires: Vec<burning::BuildingFire>,
+    /// Buildings' shield sprites (`shields`; not saved).
+    pub building_shields: Vec<shields::BuildingShields>,
     /// Volcanoes' sleep and eruptions.
     pub volcanoes: HashMap<u32, volcano::Volcano>,
     /// Where one of the player's objects last took a blow.
@@ -572,6 +574,7 @@ pub mod repair;
 mod sail;
 mod sea_monster;
 mod sheep;
+mod shields;
 mod shot;
 mod sight;
 mod sleep;
@@ -801,6 +804,7 @@ impl Scene {
             shots: Vec::new(),
             fires: Vec::new(),
             building_fires: Vec::new(),
+            building_shields: Vec::new(),
             volcanoes: HashMap::new(),
             last_attack: None,
             rng: Rng(0x1234_5678),
@@ -2613,7 +2617,7 @@ impl Scene {
             self.tick_flyers(data, caches);
             self.tick_gorgons(data, caches);
             self.tick_statuses(data, caches);
-            self.tick_building_statuses();
+            self.tick_building_statuses(data, caches);
             self.step_ship_fires();
             self.run_computers();
             self.run_brain_lands();
