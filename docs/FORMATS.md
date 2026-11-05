@@ -877,7 +877,18 @@ KSHIP, ...); 0x42d750 maps types to them. Hull costs (0x5961d8 amber,
 crews add to them (0x43e5c0).
 
 Palette index 0xfe in object sprites is a shadow: the destination pixel is
-remapped through a darkening table (0x5c1358).
+remapped through the shadow table 0x5c1358 (256 bytes of static data,
+palette index to index; `render::SHADOW_TABLE`, tested against the exe).
+A layer gets it from 0x50e050(layer, 0x5c1358) (0x55dd10: the sprite's
+`+0x63c`) and 0x50e130(layer, 1, colour, 0) (0x55dd40: the frame's table
+`+0x5c` 0, value `+0x60` the colour, count `+0x64` 1); the drawing
+(0x572585-0x57259e) uses the sprite's `+0x63c` for a frame with count 1
+and no table, and the blitter 0x57b7f0 draws the colour as
+`table[beneath]`. The colours set: 0xfe (objects), 0x26 (smoke, 0x4e292d,
+0x4e4ff3, 0x42097e, 0x425f52), 0xd (0x405a6a, 0x4062a5), 0x27 (0x406d5e,
+0x407449, 0x41c881), 0x2a (0x42230f), and some from a register. The port
+looks the palette index beneath up as for the flames' blend (the first
+index of the frame's colour, else the nearest).
 
 ## Control bar tabs and panels
 

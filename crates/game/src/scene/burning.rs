@@ -411,8 +411,8 @@ mod tests {
         Some(std::fs::read(path).unwrap())
     }
 
-    /// 0x5c1858 (the flames' blend) and 0x5c2480 (the ground's groups) as
-    /// the exe has them.
+    /// 0x5c1858 (the flames' blend), 0x5c1358 (the shadow table) and
+    /// 0x5c2480 (the ground's groups) as the exe has them.
     #[test]
     fn flame_blend_and_ground_groups_are_the_exes() {
         let Some(bytes) = exe() else {
@@ -420,6 +420,8 @@ mod tests {
         };
         let at = 0x5c1858 - 0x40_0000;
         assert_eq!(crate::render::FLAME_BLEND.concat(), bytes[at..at + 7 * 256]);
+        let at = 0x5c1358 - 0x40_0000;
+        assert_eq!(crate::render::SHADOW_TABLE, bytes[at..at + 256]);
         let at = 0x5c2480 - 0x40_0000;
         assert_eq!(GROUPS.concat(), bytes[at..at + 19 * 5]);
         assert_eq!(ground_group(0x01), 1);

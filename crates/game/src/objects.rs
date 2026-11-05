@@ -1855,7 +1855,8 @@ pub fn flyer_frames(data: &GameData, caches: &mut Caches, name: &str) -> Result<
     let mut frames = sequence_frames(data, caches, name)?;
     if let Ok(shadows) = sequence_frames(data, caches, &format!("{name}S")) {
         for (frame, shadow) in frames.iter_mut().zip(shadows) {
-            // The shadow sprites are drawn in one colour: darken instead.
+            // The shadow sprites are drawn in one colour: as a shadow (the
+            // shadow table, `render::SHADOW_TABLE`).
             let shadow = shadow.into_iter().map(|l| {
                 let img = &l.image;
                 let pixels = img

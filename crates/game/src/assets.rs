@@ -14,10 +14,9 @@ use openconquest_formats::{
 /// resolved every frame, so palette cycling (water, amber) can animate.
 pub const ANIMATED: u32 = 0x0100_0000;
 
-/// Marks a shadow pixel: the pixel underneath is darkened instead of
-/// overwritten. Object sprites use palette index 0xfe for this; the game
-/// remaps the destination through a darkening table (0x5c1358 in
-/// ANCIENT.EXE), which averages to about 3/4 brightness.
+/// Marks a shadow pixel: the pixel underneath is put through the shadow
+/// table (0x5c1358, `render::SHADOW_TABLE`) instead of overwritten.
+/// Object sprites use palette index 0xfe for this.
 pub const SHADOW: u32 = 0x0200_0000;
 /// Marks a flame pixel (low byte its palette index, 1-7) drawn through the
 /// flames' blend table with the pixel beneath (`render::FLAME_BLEND`).
