@@ -1433,7 +1433,9 @@ impl Scene {
 
     /// Whether building `id` is fallen (`+0xa4` 2) or sold (3, sold or
     /// being sold), the states 0x42c9a0 drops from a group's list and
-    /// 0x43d220 counts no town building in (with 0xff, not identified).
+    /// 0x43d220 counts no town building in (with 0xff: refused at its
+    /// creation, message 10 posted to remove it, 0x427f50 / 0x415102 /
+    /// 0x441ba0 at message 2; the port keeps no such building).
     pub(super) fn fallen_or_sold(&self, id: u32) -> bool {
         self.fallen(id) || self.sold.contains(&id) || self.selling.contains_key(&id)
     }

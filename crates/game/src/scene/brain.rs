@@ -1804,8 +1804,9 @@ impl Scene {
     /// and 0x440c60 with class 0x3b) are listed.
     /// With any, `+0x10` becomes the first and the fleet manager's
     /// generator is drawn for a random one, returned (0 with none). A
-    /// ship fleet holds no town, so it lists none. (Not identified: the
-    /// state 0xff.) The docks come in the town's list
+    /// ship fleet holds no town, so it lists none. (State 0xff: refused at
+    /// its creation and being removed, see `brain_land_drop`; the port
+    /// keeps no such building.) The docks come in the town's list
     /// order (`+0x1d0`). (Player 16 lists its class-0x40 buildings
     /// instead, never a repair member's.)
     fn repair_pick(&mut self, k: usize) -> u32 {
@@ -2712,9 +2713,9 @@ impl Scene {
     }
 
     /// The members of fleet `k`'s land fleet (its list `+0x2c`): the
-    /// member's buildings, in their order. (Not decoded: the pass's drop
-    /// of members in states `+0xa4` 2, 3 or 0xff; only the gone are left
-    /// out.)
+    /// member's buildings, in their order, less the gone (0x51f1f0 finds
+    /// none). The fallen and sold stay until the fleet's next pass drops
+    /// them (`brain_land_drop`).
     pub(super) fn brain_land_members(&self, k: usize) -> Vec<u32> {
         self.brain
             .as_ref()
@@ -2726,6 +2727,29 @@ impl Scene {
                     .filter(|&id| self.object_index(id).is_some())
                     .collect()
             })
+    }
+
+    /// The land fleet's pass drops from its list (0x42b98d, each pass that
+    /// runs, before its queue is walked) the members gone (0x51f1f0 finds
+    /// none) or in state `+0xa4` 2 (fallen), 3 (sold or being sold) or 0xff
+    /// (refused at its creation: the site check 0x4eb, a town's 0x4e9, or
+    /// no data, at message 2, 0x427f50 / 0x415102 / 0x441ba0, which then
+    /// posts message 10 to remove it; the port keeps no such building, so
+    /// it is among the gone), keeping the others' order.
+    pub(super) fn brain_land_drop(&mut self, k: usize) {
+        let Some(ships) = self
+            .brain
+            .as_ref()
+            .and_then(|b| b.fleets.get(k))
+            .map(|f| f.ships.clone())
+        else {
+            return;
+        };
+        let kept: Vec<u32> = ships
+            .into_iter()
+            .filter(|&id| self.object_index(id).is_some() && !self.fallen_or_sold(id))
+            .collect();
+        self.brain.as_mut().unwrap().fleets[k].ships = kept;
     }
 
     /// The player of fleet `k`'s land fleet (`+8`): its first member's.

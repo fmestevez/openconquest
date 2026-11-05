@@ -17773,3 +17773,26 @@ fn building_statuses_in_game_ticks() {
     run_to(&mut scene, start + 6001, &mut caches);
     assert!(!on(&scene).0);
 }
+
+/// A brain's land fleet keeps a sold member on its list until its next
+/// pass, which drops it (0x42b98d: gone, `+0xa4` 2, 3 or 0xff), the others
+/// kept in order (miss001 fleet 0). Needs `OPENCONQUEST_DATA`.
+#[test]
+fn brain_land_pass_drops_sold_members() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    let sites = scene.brain.as_ref().unwrap().fleets[0].ships.clone();
+    assert!(sites.len() >= 2);
+    let sold = sites[0];
+    scene.sold.push(sold);
+    assert_eq!(scene.brain_land_members(0), sites);
+    brain_pass(&mut scene, 0);
+    assert_eq!(
+        scene.brain.as_ref().unwrap().fleets[0].ships,
+        sites[1..].to_vec()
+    );
+}

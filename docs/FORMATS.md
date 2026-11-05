@@ -5211,7 +5211,14 @@ vt+0xb4 0x40e020 (a facing and state 1; `+0x10c` not read, so one being
 mended takes a ship or stays in a gather zone's list); 0x446d60's group
 scan (classes 0x32-0x3e in 2 skipped). The port had read these as the
 mending, and 0x446d60's as a settlement mending its stock (that is its
-job `+0x110` 2, in state 1). (Not identified: the state 0xff.)
+job `+0x110` 2, in state 1). State 0xff is a building refused at its
+creation: on message 2 (placement), with no data or its site check
+failing (0x5425d0 with 0x2f4 / 3 and 0x4eb, a town's 0x4e9), WorkLandObj
+0x427f50 (0x4284e5), the lairs (0x415209) and TownObj 0x441ba0
+(0x44259e) set `+0xa4` 0xff and post message 10 (0x541eb0; the lairs
+send it, 0x542670), which removes it; these three are the only stores
+of the constant 0xff there (the register stores not all read). The port keeps no such
+building, so its 0xff tests are the gone.
 
 The other classes' blows (vt+4 and the drain vt+0x4c, dumped from their
 vtables): castles (0x5949fc) queue it (0x423c30, not in state 2) and
@@ -7836,7 +7843,7 @@ Primitives not yet ported (the later brains use them):
   land fleet's list is its member's buildings, a town's docks those of
   its list `+0x1d0`, in its order; the update's ticks `game +0xe2` are taken as 1 a
   tick, as the wind's counter. Not decoded: the manager LCG's seed (0
-  here); the towns' states 2, 3 and 0xff (not dropped); what ship command 0x1e does with dock 0 or an
+  here); what ship command 0x1e does with dock 0 or an
   unhurt ship (the port's repair order refuses both); ship command 10
   after 0x134; 0x4c42f0; whether the navy's tick (0x49ad18) runs before or
   after the brain's; the 0x5d98 gate `+0x14`. The pass's blow reports are
@@ -8646,11 +8653,16 @@ tick; the town busy is, here, only its going up or being made a town.
 constructor 0x42b370). Fields: +0x14 the last pass started a part, +0x18
 "the previous pass started nothing", +0x1c the last pass's tick, +0x20 the
 next order id, +0x24 the priority threshold (0x7fff, changed only by a
-queued op-0x3f0 message, which no code builds), +0x28 woken, +0x30 the
+queued op-0x3f0 message, which no code builds), +0x28 woken, +0x2c the
+list (count +0xc), +0x30 the
 queue (0xe4-byte entries by priority, highest first, after their equals,
 compared unsigned: 0x42c430), +0x34 the orders. A pass runs 50 ticks after
 one that started nothing; after one that started a part, only once woken
-and 3 ticks after it (0x42b94c-0x42b98d). Wakers: the walk itself for every
+and 3 ticks after it (0x42b94c-0x42b98d). A pass that runs first drops
+from the list (0x42b98d, before the queue walk 0x42ba2a) the members gone
+(0x51f1f0 finds none) or in `+0xa4` 2, 3 or 0xff, the others kept in
+order; between passes they stay (`Scene::brain_land_drop`; the
+computers' list, their bases' sites, not ported). Wakers: the walk itself for every
 entry it finds done or failed, 0x42c050 (an order put or refused), and the
 town at the end of each command it handles (0x441ba0 at 0x44393d; the port
 wakes at a part's start). A computer's parts send their town commands

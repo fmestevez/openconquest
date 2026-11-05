@@ -2590,6 +2590,12 @@ impl Scene {
             return;
         }
         lf.last = now;
+        // 0x42b98d: the gone, fallen, sold and refused members are taken
+        // off the list. (Not ported: the computers' list, their bases'
+        // sites, read by their parts directly.)
+        if let LandHost::Brain(k) = host {
+            self.brain_land_drop(*k);
+        }
         lf.queue_order_parts();
         // B: the queue, by priority. Waiting tries and under-way waits
         // count down only in a pass after one that started nothing (+0x18).
