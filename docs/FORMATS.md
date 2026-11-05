@@ -6687,6 +6687,17 @@ miss011 (0x46e8e0; members 0x46b8d0-0x46e110):
   ticks); one fired on fights the attacker 1500 ticks and sets the other
   three on the same area (`+0x1c8`, state 0x28). Zone fights last 1500
   ticks, answering fire 375 (member 6: 250).
+  Member 5's patrol fires at will at its own yard 2 when it passes within
+  reach, as the original does: the yards are barbarian structures (class
+  0x40; 0x410150 makes them side 2, `+0x57`, nation 4, slot 1), the
+  ships side 1 (0x4dfa90, 0x4dfe00). The look 0x4bfc60
+  and the list 0x4c0cd0 take any side 2 object but the sea monster 0x1fb
+  without the player test (only another player's object needs 0x4efe20 <
+  0), then its player's bit in `+0x689`, which member 5 sets to all ones
+  (0x46c3d1: 0x4797e0 with players -1, classes 0x3ffff), alive (vt+0x2c,
+  0x40dfc0: state `+0xa4` not 0x10), and its class bit 0x2000 (0x50ed20
+  for 0x3f-0x41) in `+0x68d`. So yard 2 may fall before it builds for
+  members 5 and 6.
 - **The Persians.** The yard (0x46cf80, at (32, 17)) gives a one-off order
   of class 1, then serves its slots (boats to ship killers, 0xd2, 0xd3;
   0x34 gives town order 48, 0x47b130 code 0x30: one part, 0x3e9 class

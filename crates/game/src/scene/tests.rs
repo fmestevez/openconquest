@@ -6855,9 +6855,10 @@ fn miss011_brain_builds_its_fleets() {
     // The patrols of the north-east and the west coast, the raiders of
     // the west and the Persians' gatherers start with nothing. (The west
     // coast's yard at (8, 31) falls to its own patrol before it builds
-    // for the raiders: a barbarian structure is side 2, which 0x4bfc60 and
-    // 0x4c0cd0 pass for any ship, its player 16 in the patrol's players
-    // -1 and its class bit 0x2000 in the barbarians' classes 0x3ffff.)
+    // for the raiders, as in the original: a barbarian structure is side
+    // 2 (0x410150), which 0x4bfc60 and 0x4c0cd0 pass with no player test,
+    // its player's bit in the patrol's players -1 (0x46c3d1) and its
+    // class bit 0x2000 (0x50ed20) in the patrol's classes 0x3ffff.)
     assert!(
         [1, 5].iter().all(|&k| most[k] > 0),
         "the barbarian yards built for their fleets"
