@@ -272,6 +272,70 @@ pub struct Flotilla {
     /// block of another kind makes them again (0x4a1150).
     #[serde(default)]
     no_notices: bool,
+    /// Fleet order 200's block (0x4dafe0), while the block is a dock.
+    #[serde(default)]
+    dock_block: Option<DockBlock>,
+}
+
+/// Fleet order 200's block (`+0x25`, 0x65 bytes, 0x4dafe0: `+0` 200, `+4`
+/// 0x83, `+8` now, `+0xc` payload 0, `+0x1c` payload 3, unread here).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct DockBlock {
+    /// `+0x10` the dock (payload 1, 0 at the order), `+0x14` its berth's
+    /// cell index (`y x W + x`; 0 when cleared).
+    dock: u32,
+    berth: i32,
+    /// `+0x18` the fleet a mended ship is handed to (payload 2).
+    hand: i32,
+    /// `+0x20..+0x2c` the area (payload 5-8: the flotilla's zone).
+    area: Cells,
+    /// `+0x30` (payload 4): 1 to be sold, 2 to be mended.
+    mode: u32,
+    /// `+0x34` the ships' list (0x4dabd0, in order).
+    ships: Vec<DockRec>,
+    /// `+0x38` the docks' list (0x4dad30: by id, in order).
+    docks: Vec<u32>,
+}
+
+/// An entry of the dock block's ships' list (0x1c bytes, 0x4dabd0).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+struct DockRec {
+    ship: u32,
+    /// `+8` the dock, `+0xc` its berth's cell index.
+    dock: u32,
+    cell: i32,
+    /// `+0x10`, `+0x14` the cell it is sent to.
+    x: i32,
+    y: i32,
+    /// `+0x18`: 0 listed, 1 sent to its cell, 2 sent to the dock.
+    state: u32,
+}
+
+impl DockBlock {
+    /// 0x4dabd0: the entry of ship `ship` rewritten whole, or one added;
+    /// its index.
+    fn put(&mut self, r: DockRec) -> usize {
+        if let Some(k) = self.ships.iter().position(|e| e.ship == r.ship) {
+            self.ships[k] = r;
+            return k;
+        }
+        self.ships.push(r);
+        self.ships.len() - 1
+    }
+
+    /// 0x4dacc0: the index of ship `ship`'s entry, taken off with `take`.
+    fn find(&mut self, ship: u32, take: bool) -> Option<usize> {
+        let k = self.ships.iter().position(|e| e.ship == ship)?;
+        if take {
+            self.ships.remove(k);
+        }
+        Some(k)
+    }
+
+    /// 0x4dbaf0: the entries in state 2.
+    fn at_dock(&self) -> i32 {
+        self.ships.iter().filter(|e| e.state == 2).count() as i32
+    }
 }
 
 /// A letter between flotillas (0xd4 bytes, `Plr_mail.cpp`).
@@ -621,6 +685,19 @@ impl Computer {
         if fl.block != 0 && !fl.no_notices {
             fl.joined.push((id, fl.block, 300, 0));
         }
+    }
+
+    /// Ship `id` leaves flotilla `f` (0x49bef0), which posts notice 0x137
+    /// to its group's block if it has one (0x4a1770, before the removal).
+    fn leave(&mut self, f: usize, id: u32) {
+        let fl = &mut self.flotillas[f];
+        if !fl.ships.contains(&id) {
+            return;
+        }
+        if fl.block != 0 && !fl.no_notices {
+            fl.joined.push((id, fl.block, 0x137, 0));
+        }
+        fl.ships.retain(|&x| x != id);
     }
 
     /// Posts notice `code` of ship `id` (rec[4] `rec`) to its flotilla's
@@ -1002,13 +1079,18 @@ impl Scene {
     /// One tick of a computer player (message 0, 0x488960).
     fn computer_tick(&mut self, ai: &mut Computer) {
         let now = self.now();
-        // Ships sunk or taken leave their flotillas.
+        // Ships sunk or taken leave their flotillas (0x4a8410 ->
+        // 0x49bef0: notice 0x137).
         let owner = ai.owner;
-        for f in &mut ai.flotillas {
-            f.ships.retain(|&id| {
-                self.object_index(id)
-                    .is_some_and(|i| self.objects[i].owner == Some(owner))
-            });
+        for f in 0..ai.flotillas.len() {
+            for id in ai.flotillas[f].ships.clone() {
+                let here = self
+                    .object_index(id)
+                    .is_some_and(|i| self.objects[i].owner == Some(owner));
+                if !here {
+                    ai.leave(f, id);
+                }
+            }
         }
         self.computer_news(ai);
         for (target, shooter) in std::mem::take(&mut ai.attacks) {
@@ -1025,6 +1107,8 @@ impl Scene {
                 self.flotilla_move_pass(ai, f);
             } else if ai.flotillas[f].block == 0x70 {
                 self.attack_pass(ai, f);
+            } else if ai.flotillas[f].block == 200 && ai.flotillas[f].dock_block.is_some() {
+                self.dock_pass(ai, f);
             } else {
                 self.read_joins(ai, f);
             }
@@ -1464,6 +1548,7 @@ impl Scene {
         ai.flotillas[f].block = code;
         ai.flotillas[f].joined.clear();
         ai.flotillas[f].move_order = None;
+        ai.flotillas[f].dock_block = None;
         ai.flotillas[f].target = 0;
         ai.flotillas[f].no_notices = false;
         let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
@@ -4138,9 +4223,12 @@ impl Scene {
                         FleetOrder::Dock
                     };
                     self.give_order(ai, f);
-                } else if self.report(ai, f) == Some(DONE) {
-                    if ai.flotillas[f].task == 0xb {
-                        for id in std::mem::take(&mut ai.flotillas[f].ships) {
+                } else if let Some((0x1f5, result)) = self.dock_status(ai, f) {
+                    // The reserve hands its ships out only when the block
+                    // has no dock (0x47f460: result 10).
+                    if ai.flotillas[f].task == 0xb && result == 10 {
+                        for id in ai.flotillas[f].ships.clone() {
+                            ai.leave(f, id);
                             self.hand_ship(ai, id);
                         }
                     }
@@ -4242,7 +4330,7 @@ impl Scene {
                 _ => ai.roll(0x1a) + 0x32,
             };
             if hull < limit {
-                ai.flotillas[f].ships.retain(|&x| x != id);
+                ai.leave(f, id);
                 let r = ai.reserve;
                 ai.join(r, id);
             }
@@ -4825,6 +4913,532 @@ impl Scene {
         ai.flotillas[f].elapsed += 1;
     }
 
+    /// Fleet order 200 to flotilla `f` (0x4a09d0 -> 0x4db9e0) with mode
+    /// `mode` (payload 4: the reserve's 0x483820 2, the spares' 0x483900
+    /// 1): a block of another kind ended and a new one made (0x4dafe0),
+    /// one of the same kind rewritten, its lists and `+0x14` kept. The
+    /// payload: `[1]` 0 the dock, `[2]` the manager's fleet (AIPlayer
+    /// `+0x30`'s `+8`: the manager is made first, 0x487230, so fleet 0 of
+    /// the player's list, 0x49b990), `[5..8]` the flotilla's zone
+    /// (`+0x168`). Then the docks are listed (0x4db2e0), each ship listed
+    /// (0x4db660: none but the first entry counted, it returns), and the
+    /// ships not at the dock sent about the area's water cell (0x4daec0,
+    /// 0x4db720).
+    fn dock_order(&mut self, ai: &mut Computer, f: usize, mode: u32) {
+        let zone = ai.flotillas[f].zone;
+        let hand = ai.manager as i32;
+        let b = ai.flotillas[f]
+            .dock_block
+            .get_or_insert_with(Default::default);
+        b.dock = 0;
+        b.hand = hand;
+        b.area = zone;
+        b.mode = mode;
+        self.dock_list(ai, f);
+        let mut listed = 0;
+        for id in ai.flotillas[f].ships.clone() {
+            if self.object_index(id).is_none() {
+                continue;
+            }
+            let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+            let rec = DockRec {
+                ship: id,
+                ..Default::default()
+            };
+            if b.put(rec) != 0 {
+                listed += 1;
+            }
+        }
+        if listed < 1 {
+            return;
+        }
+        let c = self.dock_centre(ai.flotillas[f].dock_block.as_ref().unwrap().area);
+        let w = self.nav.width as i32;
+        self.dock_spread(ai, f, c % w, c / w);
+    }
+
+    /// 0x4db2e0: the block's docks. A dock in `+0x10` gone keeps the block
+    /// as it is 4 times in 5 (a draw of the player's generator, returning
+    /// 1); else, or the dock there, `+0x10` and `+0x14` are cleared. The
+    /// list (`+0x38`, never emptied) gets the docks of the towns of the
+    /// manager's land fleet (`+0x18`, a group of kind 0xb: 0x42cc40 ->
+    /// 0x42c9a0 with class 0x3b, its list the bases' sites, 0x487230: the
+    /// docks of each settlement or town's list `+0x1d0`, in order); with
+    /// none there, those of every cell's object (row by row): player 16's
+    /// class 0x40, or a dock (0x3b) of the player not asleep (vt+0x2c,
+    /// 0x40dfc0 in the dock's vtable 0x59b4c4). Then 0x4dadf0 takes the
+    /// gone off the list and gives the others' berths (vt+0xb8) from the
+    /// list's end: one dock, it is the block's; more (at most 10 read),
+    /// the one whose berth has the greatest positive value (the first on a
+    /// tie) of the wavefront 0x4a1e90 (the shallow grid, limit 5000) from
+    /// the area's cell (0x4daec0), entry `n - 1 - k` of the list for the
+    /// `k`-th berth; none positive, no dock. Returns the docks there.
+    /// (Not decoded: more than 10, which 0x4dadf0 writes past its caller's
+    /// 10 words; a dock with no facing, taken here as no berth; which
+    /// cells of a building hold it in their slot, taken as its anchor.)
+    fn dock_list(&mut self, ai: &mut Computer, f: usize) -> i32 {
+        use crate::economy::{SETTLEMENT, TOWN};
+        let w = self.nav.width as i32;
+        let b = ai.flotillas[f].dock_block.as_ref().unwrap();
+        if b.dock != 0 && self.object_index(b.dock).is_none() && ai.roll(5) != 0 {
+            return 1;
+        }
+        let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+        b.dock = 0;
+        b.berth = 0;
+        let mut found: Vec<u32> = Vec::new();
+        if b.hand >= 0 && b.hand as usize == ai.manager {
+            for site in ai.bases.iter().filter_map(|b| b.site) {
+                let Some(t) = self.object_index(site) else {
+                    continue;
+                };
+                if !matches!(
+                    self.objects[t].class,
+                    ObjectClass::Building(SETTLEMENT | TOWN)
+                ) {
+                    continue;
+                }
+                found.extend(
+                    self.town_buildings(site)
+                        .into_iter()
+                        .filter(|&d| self.objects[d].class == ObjectClass::Building(DOCK))
+                        .map(|d| self.objects[d].id),
+                );
+            }
+        }
+        if found.is_empty() {
+            let mut all: Vec<(i32, u32)> = self
+                .objects
+                .iter()
+                .filter(|o| match o.class {
+                    ObjectClass::Barbarian(0x40) => o.owner == Some((4, 0)),
+                    ObjectClass::Building(DOCK) => o.owner == Some(ai.owner) && o.asleep.is_none(),
+                    _ => false,
+                })
+                .filter_map(|o| o.cell.map(|(x, y)| (y * w + x, o.id)))
+                .collect();
+            all.sort_by_key(|a| a.0);
+            found = all.into_iter().map(|a| a.1).collect();
+        }
+        let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+        for id in found {
+            if !b.docks.contains(&id) {
+                b.docks.push(id);
+            }
+        }
+        // 0x4dadf0, from the list's end.
+        let mut berths: Vec<Option<i32>> = Vec::new();
+        for k in (0..b.docks.len()).rev() {
+            match self.object_index(b.docks[k]) {
+                Some(d) => berths.push(self.berth_cell(d).map(|(x, y)| y * w + x)),
+                None => {
+                    b.docks.remove(k);
+                }
+            }
+        }
+        let n = berths.len() as i32;
+        if n == 0 {
+            return 0;
+        }
+        if n == 1 {
+            b.dock = b.docks[0];
+            b.berth = berths[0].unwrap_or(0);
+            return 1;
+        }
+        let c = self.dock_centre(b.area);
+        let map = self.dock_wavefront(c);
+        let n = n.min(10);
+        let (mut pick, mut best) = (-1, 0);
+        for (k, berth) in berths.iter().take(n as usize).enumerate() {
+            let v = berth
+                .and_then(|c| map.get(c as usize).copied())
+                .unwrap_or(0) as i32;
+            if v > 0 && best < v {
+                pick = k as i32;
+                best = v;
+            }
+        }
+        if pick >= 0 {
+            let e = (n - pick - 1) as usize;
+            if let Some(&id) = b.docks.get(e) {
+                b.dock = id;
+                let d = self.object_index(id).unwrap();
+                b.berth = self.berth_cell(d).map_or(0, |(x, y)| y * w + x);
+            }
+        }
+        n
+    }
+
+    /// The wavefront 0x4a1e90 over the shallow grid (flag 0) from cell
+    /// index `c`, limit 5000; from a cell off the map the grid's copy as
+    /// it is (0x545e20 refuses it).
+    fn dock_wavefront(&self, c: i32) -> Vec<i16> {
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        if let Some(m) = self.nav.wavefront((c % w, c / w), false, 5000) {
+            return m;
+        }
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                if self.nav.passable(x, y, false) {
+                    0
+                } else {
+                    -1
+                }
+            })
+            .collect()
+    }
+
+    /// 0x4daec0: the area's middle cell (`(y + h / 2) x W + x + w / 2`)
+    /// when on the map and water (0x4999e0); else the first water cell of
+    /// the area (cut to the map), row by row; -1 when the cut area starts
+    /// off the map; none water, the middle.
+    fn dock_centre(&self, (x, y, aw, ah): Cells) -> i32 {
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        let mid = (ah / 2 + y) * w + aw / 2 + x;
+        if mid >= 0 && mid < w * h && self.nav.is_sea(mid % w, mid / w) {
+            return mid;
+        }
+        let (x0, y0) = (x.max(0), y.max(0));
+        let (x1, y1) = ((x + aw).min(w), (y + ah).min(h));
+        if x0 >= w || y0 >= h {
+            return -1;
+        }
+        for cy in y0..y1 {
+            for cx in x0..x1 {
+                if self.nav.is_sea(cx, cy) {
+                    return cy * w + cx;
+                }
+            }
+        }
+        mid
+    }
+
+    /// 0x4db720: the ships not at the dock sent about cell `(x, y)`. One
+    /// entry in the list: the flotilla's first ship listed in state 1 for
+    /// the cell, and sent there (0x4cf070) unless its entry is the first
+    /// (index 0); returns 1 when sent. More: the planner 0x5614e0 over a
+    /// record of each entry not in state 2 (its cell, class 0, `+0xc` 1
+    /// for a shallow draught) with the deep grid when one is deep and the
+    /// shallow one when one is shallow; planned, each listed in state 1
+    /// for its cell and sent there unless its entry is the first. Returns
+    /// 0 then.
+    fn dock_spread(&mut self, ai: &mut Computer, f: usize, x: i32, y: i32) -> i32 {
+        let t = TILE_SIZE as f32;
+        let go = |s: &mut Scene, id: u32, (x, y): (i32, i32)| {
+            s.post(Order::Move {
+                ship: id,
+                x: x as f32 * t + t / 2.0,
+                y: y as f32 * t + t / 2.0,
+            });
+        };
+        let Some(b) = ai.flotillas[f].dock_block.as_ref() else {
+            return 0;
+        };
+        let n = b.ships.len();
+        if n < 2 {
+            if n == 0 {
+                return 0;
+            }
+            let Some(&id) = ai.flotillas[f].ships.first() else {
+                return 0;
+            };
+            if self.object_index(id).is_none() {
+                return 0;
+            }
+            let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+            let k = b.put(DockRec {
+                ship: id,
+                x,
+                y,
+                state: 1,
+                ..Default::default()
+            });
+            if k != 0 {
+                go(self, id, (x, y));
+                return 1;
+            }
+            return 0;
+        }
+        let ships: Vec<(u32, (i32, i32), bool)> = b
+            .ships
+            .iter()
+            .filter(|e| e.state != 2)
+            .filter_map(|e| {
+                let i = self.object_index(e.ship)?;
+                let kind = self.objects[i].ship.as_ref()?.kind;
+                Some((
+                    e.ship,
+                    self.ship_cell(i),
+                    crate::objects::deep_draught(kind),
+                ))
+            })
+            .collect();
+        let recs: Vec<crate::formation::Rec> = ships
+            .iter()
+            .map(|s| crate::formation::Rec {
+                x: s.1 .0,
+                y: s.1 .1,
+                class: 0,
+                second: !s.2,
+            })
+            .collect();
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        let grid = |deep: bool| -> Vec<i16> {
+            (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .map(|(x, y)| if self.nav.passable(x, y, deep) { 0 } else { -1 })
+                .collect()
+        };
+        let (deep, shallow) = (grid(true), grid(false));
+        let p1 = ships.iter().any(|s| s.2).then_some(&deep[..]);
+        let p2 = ships.iter().any(|s| !s.2).then_some(&shallow[..]);
+        let Ok(planned) = crate::formation::plan_records(p1, p2, None, (w, h), (x, y), &recs)
+        else {
+            return 0;
+        };
+        if planned.value < 0 {
+            return 0;
+        }
+        for (s, &cell) in ships.iter().zip(&planned.cells) {
+            let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+            let k = b.put(DockRec {
+                ship: s.0,
+                x: cell.0,
+                y: cell.1,
+                state: 1,
+                ..Default::default()
+            });
+            if k != 0 {
+                go(self, s.0, cell);
+            }
+        }
+        0
+    }
+
+    /// 0x4dbb40: ship command 0x1e `{mode == 1 ? 3 : 0, dock, 0x50}`
+    /// (0x520cc0, delivered at the next tick): byte 0 3 the sale.
+    fn dock_go(&mut self, ship: u32, dock: u32, mode: u32) {
+        self.post(if mode == 1 {
+            Order::Sell { ship, dock }
+        } else {
+            Order::Repair { ship, dock }
+        });
+    }
+
+    /// 0x4dbb90: up to `n` of the entries not in state 2, the greatest
+    /// first by the wavefront 0x4a1e90 (the shallow grid, limit 5000)
+    /// from the dock's berth `+0x14` at their ships' cells (on a tie the
+    /// earlier entry first), listed in state 2 with the dock and its berth
+    /// and sent to the dock (0x4dbb40).
+    fn dock_send(&mut self, ai: &mut Computer, f: usize, n: i32) {
+        let b = ai.flotillas[f].dock_block.as_ref().unwrap();
+        let w = self.nav.width as i32;
+        let map = self.dock_wavefront(b.berth);
+        let mut sorted: Vec<(DockRec, i16)> = Vec::new();
+        for e in b.ships.iter().filter(|e| e.state != 2) {
+            let v = self
+                .object_index(e.ship)
+                .map(|i| {
+                    let (x, y) = self.ship_cell(i);
+                    map.get((y * w + x) as usize).copied().unwrap_or(0)
+                })
+                .unwrap_or(0);
+            let at = sorted.iter().position(|s| s.1 < v).unwrap_or(sorted.len());
+            sorted.insert(at, (*e, v));
+        }
+        let (dock, berth, mode) = (b.dock, b.berth, b.mode);
+        for (e, _) in sorted.into_iter().take(n.max(0) as usize) {
+            let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+            b.put(DockRec {
+                ship: e.ship,
+                dock,
+                cell: berth,
+                x: berth % w,
+                y: berth / w,
+                state: 2,
+            });
+            self.dock_go(e.ship, dock, mode);
+        }
+    }
+
+    /// 0x4db110: the block's notices, newest first, each taken off. 300 (a
+    /// ship joined) of a ship in the flotilla (0x4cc590): its entry made
+    /// anew (state 0) and, with docks (0x4db2e0), the ships sent about the
+    /// area again (0x4daec0, 0x4db720), whose result is kept; then the
+    /// group's behaviour (0x4c42f0). 0x134 (mended): its entry taken off
+    /// and, the ship in the flotilla, handed to fleet `+0x18` when above 0
+    /// (0x49bd60: never here, the manager's fleet being 0) and given ship
+    /// command 10 (the stop, `Order::Halt`). 0x137 (it left) and 0x144
+    /// (sold): its entry taken off. 0x143 (a dock not taking it), the ship
+    /// in the flotilla: every entry in state 2 back to 1, their count kept
+    /// (0x4db0b0), and the docks listed again. Returns the last kept.
+    fn dock_heard(&mut self, ai: &mut Computer, f: usize) -> i32 {
+        let block = ai.flotillas[f].block;
+        let mut r = 0;
+        for (id, at, code, _) in std::mem::take(&mut ai.flotillas[f].joined)
+            .into_iter()
+            .rev()
+        {
+            if at != block {
+                continue;
+            }
+            let here = ai.flotillas[f].ships.contains(&id) && self.object_index(id).is_some();
+            match code {
+                300 if here => {
+                    let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+                    b.put(DockRec {
+                        ship: id,
+                        ..Default::default()
+                    });
+                    if self.dock_list(ai, f) > 0 {
+                        let area = ai.flotillas[f].dock_block.as_ref().unwrap().area;
+                        let c = self.dock_centre(area);
+                        let w = self.nav.width as i32;
+                        r = self.dock_spread(ai, f, c % w, c / w);
+                    }
+                    let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
+                    self.send_behaviour(id, b);
+                }
+                0x134 => {
+                    let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+                    b.find(id, true);
+                    if here {
+                        // `+0x18 > 0` (0x49bd60) is never so here.
+                        self.post(Order::Halt { id });
+                    }
+                }
+                0x137 | 0x144 => {
+                    ai.flotillas[f].dock_block.as_mut().unwrap().find(id, true);
+                }
+                0x143 if here => {
+                    let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+                    r = 0;
+                    for e in b.ships.iter_mut().filter(|e| e.state == 2) {
+                        e.state = 1;
+                        r += 1;
+                    }
+                    self.dock_list(ai, f);
+                }
+                _ => {}
+            }
+        }
+        r
+    }
+
+    /// The dock block's tick (0x4dbd90, case 0xc8 of the navy's tick
+    /// 0x4c4f40's table 0x4c5118, each game tick): the notices heard
+    /// (0x4db110) and, when that gave 0 and group `+8` is over 0x5f, `+8`
+    /// back to 0 and, with ships: fewer than 2 entries in state 2 and
+    /// docks (0x4db2e0), the nearest `2 - n` sent to the dock (0x4dbb90);
+    /// then each ship of the flotilla: a blow marked (`+0x691`) forgotten
+    /// (0x4cf760, command 0x28 sub 4; the report 0x4a21c0 is the port's as
+    /// it lands); lying still (`+0x58c` 0) and listed, at distance `d`
+    /// (0x557440: `(least + 2 x most) / 2` of the cell steps) from its
+    /// entry's cell: below 2 and not in state 2, at 1 in state 1 sent to
+    /// its cell when free for its draught (0x499a40); else in state 1 sent
+    /// to its cell (0x4cf070), in state 2 to the dock again (0x4dbb40).
+    /// Then `+8` grows by the tick.
+    fn dock_pass(&mut self, ai: &mut Computer, f: usize) {
+        let heard = if ai.flotillas[f].joined.is_empty() {
+            0
+        } else {
+            self.dock_heard(ai, f)
+        };
+        if heard == 0 && ai.flotillas[f].elapsed > 0x5f {
+            ai.flotillas[f].elapsed = 0;
+            let ships = ai.flotillas[f].ships.clone();
+            if !ships.is_empty() {
+                let n = ai.flotillas[f].dock_block.as_ref().unwrap().at_dock();
+                if 2 - n > 0 && self.dock_list(ai, f) > 0 {
+                    self.dock_send(ai, f, 2 - n);
+                }
+                for id in ships {
+                    self.dock_pass_ship(ai, f, id);
+                }
+            }
+        }
+        ai.flotillas[f].elapsed += 1;
+    }
+
+    /// 0x4dbd90's step for ship `id` of flotilla `f`.
+    fn dock_pass_ship(&mut self, ai: &mut Computer, f: usize, id: u32) {
+        let t = TILE_SIZE as f32;
+        let Some(i) = self.object_index(id) else {
+            return;
+        };
+        let Some(s) = self.objects[i].ship.as_ref() else {
+            return;
+        };
+        let (blow, still, deep) = (
+            s.blow.is_some(),
+            s.move_state == 0,
+            crate::objects::deep_draught(s.kind),
+        );
+        if blow {
+            self.post(Order::ClearBlow { ship: id });
+        }
+        if !still {
+            return;
+        }
+        let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+        let Some(k) = b.find(id, false) else {
+            return;
+        };
+        let (e, dock, mode) = (b.ships[k], b.dock, b.mode);
+        let (x, y) = self.ship_cell(i);
+        let (dx, dy) = ((e.x - x).abs(), (e.y - y).abs());
+        let d = (dx.min(dy) + dx.max(dy) * 2) / 2;
+        let send = if d < 2 && e.state != 2 {
+            d == 1
+                && e.state == 1
+                && self.sea_cell((e.x, e.y), deep)
+                && self.slot_ship((e.x, e.y)).is_none()
+        } else {
+            if e.state == 2 {
+                self.dock_go(id, dock, mode);
+            }
+            e.state == 1
+        };
+        if send {
+            self.post(Order::Move {
+                ship: id,
+                x: e.x as f32 * t + t / 2.0,
+                y: e.y as f32 * t + t / 2.0,
+            });
+        }
+    }
+
+    /// The dock block's status (query 0xc9, 0x4a0ee0 for a block `{200,
+    /// 0x83}` -> 0x4dc050): no ships, done (0x1f5) with result 1; no dock
+    /// (`+0x10` 0), done with result 10; else each ship not listed is
+    /// listed (state 0) and the order runs (500); `None` without the
+    /// block (its reader's words are then not written).
+    fn dock_status(&mut self, ai: &mut Computer, f: usize) -> Option<(u32, u32)> {
+        let ships = ai.flotillas[f].ships.clone();
+        let b = ai.flotillas[f].dock_block.as_mut()?;
+        if ships.is_empty() {
+            return Some((0x1f5, 1));
+        }
+        if b.dock == 0 {
+            return Some((0x1f5, 10));
+        }
+        let mut n = 0;
+        for id in ships {
+            if self.object_index(id).is_none() {
+                continue;
+            }
+            n += 1;
+            if b.find(id, false).is_none() {
+                b.put(DockRec {
+                    ship: id,
+                    ..Default::default()
+                });
+            }
+        }
+        Some(if n != 0 { (500, 0) } else { (0x1f5, 1) })
+    }
+
     /// Gives the flotilla's order to its ships. A gather order is the
     /// flotilla's gather zone (fleet order 0x78 from 0x483090, key flags
     /// 0: its area, its class, flags `+0x154`, which only tasks 7-11 and
@@ -4851,6 +5465,15 @@ impl Scene {
         self.end_zone(group);
         if let FleetOrder::Attack(area) = order {
             self.attack_zone(ai, f, area);
+            return;
+        }
+        if let FleetOrder::Dock | FleetOrder::Sell = order {
+            let mode = if matches!(order, FleetOrder::Sell) {
+                1
+            } else {
+                2
+            };
+            self.dock_order(ai, f, mode);
             return;
         }
         for id in ai.flotillas[f].ships.clone() {
@@ -5571,24 +6194,8 @@ impl Scene {
                     y: y as f32 * t + t / 2.0,
                 });
             }
-            FleetOrder::Dock | FleetOrder::Sell => {
-                let dock = self
-                    .objects
-                    .iter()
-                    .find(|o| {
-                        o.owner == Some(ai.owner)
-                            && o.class == ObjectClass::Building(DOCK)
-                            && self.construction_at(o.id).is_none()
-                    })
-                    .map(|o| o.id);
-                if let Some(d) = dock {
-                    self.post(if matches!(order, FleetOrder::Sell) {
-                        Order::Sell { ship: id, dock: d }
-                    } else {
-                        Order::Repair { ship: id, dock: d }
-                    });
-                }
-            }
+            // The block's (`dock_order`).
+            FleetOrder::Dock | FleetOrder::Sell => {}
             FleetOrder::Treasure(area) => {
                 let f = ai.flotillas.iter().position(|fl| fl.ships.contains(&id));
                 self.hunt_treasure(ai, f, i, area)
@@ -5695,22 +6302,11 @@ impl Scene {
                         })
                     }
             }
-            FleetOrder::Dock => ships().all(|i| {
-                self.objects[i]
-                    .combat
-                    .as_ref()
-                    .is_none_or(|c| c.hull >= c.max_hull)
-                    && !matches!(
-                        self.objects[i].ship.as_ref().and_then(|s| s.task),
-                        Some(Task::Repair { .. })
-                    )
-            }),
-            FleetOrder::Sell => ships().all(|i| {
-                !matches!(
-                    self.objects[i].ship.as_ref().and_then(|s| s.task),
-                    Some(Task::Repair { .. } | Task::Sell(_))
-                )
-            }),
+            // The block's status (0x4dc050, `dock_status`): done with no
+            // ships or no dock.
+            FleetOrder::Dock | FleetOrder::Sell => {
+                fl.ships.is_empty() || fl.dock_block.as_ref().is_none_or(|b| b.dock == 0)
+            }
             FleetOrder::Treasure(area) => self.treasures_in(area).next().is_none(),
             FleetOrder::Gather(..) | FleetOrder::Guard(_) => false,
         };
@@ -7468,6 +8064,155 @@ mod tests {
         assert!(ai.flotillas[ai.reserve].ships.contains(&id));
     }
 
+    /// Fleet order 200's block (0x4db9e0, 0x4dbd90, 0x4db110, 0x4dc050):
+    /// the spares' order lists the town's dock (0x4db2e0: one, so it and
+    /// its berth), lists the ships and sends all but the first entry's
+    /// about the area (0x4db720); the tick sends the nearest two to the
+    /// dock for sale (0x4dbb90, 0x4dbb40 byte 0 3); 0x144 unlists one and
+    /// the next tick sends one more; 0x143 brings the docking back to
+    /// state 1 and is heard (no pass); 0x134 unlists and stops the ship;
+    /// the status is 500 with a dock, done with result 10 without.
+    #[test]
+    fn computer_dock_block() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        for _ in 0..1500 {
+            scene.update(0.1, &data, &mut caches);
+        }
+        let mut ai = std::mem::take(&mut scene.computers.players[0]);
+        let site = ai.bases[0].site.unwrap();
+        let yard = scene
+            .town_buildings(site)
+            .into_iter()
+            .find(|&d| scene.objects[d].class == ObjectClass::Building(DOCK))
+            .expect("a dock in the town");
+        let dock = scene.objects[yard].id;
+        let (bx, by) = scene.berth_cell(yard).unwrap();
+        let w = scene.nav.width as i32;
+        let ships: Vec<u32> = (0..scene.objects.len())
+            .filter(|&i| {
+                scene.objects[i].owner == Some(ai.owner)
+                    && scene.objects[i]
+                        .ship
+                        .as_ref()
+                        .is_some_and(|s| s.build.is_none() && s.landing.is_none())
+            })
+            .map(|i| scene.objects[i].id)
+            .take(3)
+            .collect();
+        assert_eq!(ships.len(), 3);
+        for fl in &mut ai.flotillas {
+            fl.ships.retain(|x| !ships.contains(x));
+        }
+        let f = ai.by_role[SPARE as usize];
+        ai.flotillas[f].ships = ships.clone();
+        ai.flotillas[f].zone = (bx - 3, by - 3, 7, 7);
+        ai.flotillas[f].order = FleetOrder::Sell;
+        scene.outbox.clear();
+        scene.give_order(&mut ai, f);
+        let b = ai.flotillas[f].dock_block.clone().unwrap();
+        assert_eq!(ai.flotillas[f].block, 200);
+        assert_eq!((b.dock, b.berth, b.mode), (dock, by * w + bx, 1));
+        assert_eq!(b.docks, [dock]);
+        let order: Vec<u32> = b.ships.iter().map(|e| e.ship).collect();
+        assert_eq!(order, ships);
+        let moved = |scene: &Scene, id: u32| {
+            scene
+                .outbox
+                .iter()
+                .any(|o| matches!(*o, Order::Move { ship, .. } if ship == id))
+        };
+        // Planned, all in state 1; the first entry's ship not sent.
+        if b.ships.iter().all(|e| e.state == 1) {
+            assert!(!moved(&scene, ships[0]));
+            assert!(moved(&scene, ships[1]) && moved(&scene, ships[2]));
+        }
+        // The pass: two sent to the dock, the nearest by the wavefront.
+        let sold = |scene: &Scene| -> Vec<u32> {
+            scene
+                .outbox
+                .iter()
+                .filter_map(|o| match *o {
+                    Order::Sell { ship, dock: d } if d == dock => Some(ship),
+                    _ => None,
+                })
+                .collect()
+        };
+        scene.outbox.clear();
+        ai.flotillas[f].elapsed = 0x5f;
+        scene.dock_pass(&mut ai, f);
+        assert!(sold(&scene).is_empty());
+        assert_eq!(ai.flotillas[f].elapsed, 0x60);
+        scene.dock_pass(&mut ai, f);
+        let map = scene.dock_wavefront(by * w + bx);
+        let value = |scene: &Scene, id: u32| {
+            let (x, y) = scene.ship_cell(scene.object_index(id).unwrap());
+            map[(y * w + x) as usize]
+        };
+        let first = sold(&scene);
+        assert_eq!(first.len(), 2);
+        let left = *ships.iter().find(|s| !first.contains(s)).unwrap();
+        assert!(first
+            .iter()
+            .all(|&s| value(&scene, s) >= value(&scene, left)));
+        let b = ai.flotillas[f].dock_block.as_ref().unwrap();
+        assert_eq!(b.at_dock(), 2);
+        let e = b.ships.iter().find(|e| e.ship == first[0]).unwrap();
+        assert_eq!((e.dock, e.cell, e.x, e.y), (dock, by * w + bx, bx, by));
+        assert_eq!(ai.flotillas[f].elapsed, 1);
+        // Sold: unlisted; at the next pass the last sent.
+        ai.post_notice(first[0], 0x144, 0);
+        scene.outbox.clear();
+        scene.dock_pass(&mut ai, f);
+        let b = ai.flotillas[f].dock_block.as_ref().unwrap();
+        assert!(b.ships.iter().all(|e| e.ship != first[0]));
+        ai.flotillas[f].elapsed = 0x60;
+        scene.dock_pass(&mut ai, f);
+        assert!(sold(&scene).contains(&left));
+        assert_eq!(ai.flotillas[f].dock_block.as_ref().unwrap().at_dock(), 2);
+        // A dock not taking it: back to state 1, heard, so no pass.
+        ai.post_notice(left, 0x143, 0);
+        ai.flotillas[f].elapsed = 0x60;
+        scene.outbox.clear();
+        scene.dock_pass(&mut ai, f);
+        assert_eq!(ai.flotillas[f].dock_block.as_ref().unwrap().at_dock(), 0);
+        assert!(sold(&scene).is_empty());
+        assert_eq!(ai.flotillas[f].elapsed, 0x61);
+        // Mended: unlisted and stopped.
+        ai.post_notice(left, 0x134, 0);
+        scene.outbox.clear();
+        scene.dock_pass(&mut ai, f);
+        assert!(ai.flotillas[f]
+            .dock_block
+            .as_mut()
+            .unwrap()
+            .find(left, false)
+            .is_none());
+        assert!(scene
+            .outbox
+            .iter()
+            .any(|o| matches!(*o, Order::Halt { id } if id == left)));
+        // The status lists it again; without a dock, done with 10.
+        assert_eq!(scene.dock_status(&mut ai, f), Some((500, 0)));
+        let b = ai.flotillas[f].dock_block.as_mut().unwrap();
+        assert!(b.find(left, false).is_some());
+        b.dock = 0;
+        assert_eq!(scene.dock_status(&mut ai, f), Some((0x1f5, 10)));
+        // A ship leaving posts 0x137, which unlists it.
+        ai.leave(f, first[1]);
+        scene.dock_heard(&mut ai, f);
+        assert!(ai.flotillas[f]
+            .dock_block
+            .as_mut()
+            .unwrap()
+            .find(first[1], false)
+            .is_none());
+        scene.computers.players[0] = ai;
+    }
+
     /// The temples' studies (order 117, studies 33/34) teach the computer
     /// spells, and its commander casts them when its town is under fire
     /// from many (letters 6 and 7, 0x488960, 0x482160).
@@ -8041,8 +8786,14 @@ mod tests {
         }
         let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
         let owner = scene.computers.players[0].owner;
+        // Two ships not on a berth being built.
         let ships: Vec<usize> = (0..scene.objects.len())
-            .filter(|&i| scene.objects[i].ship.is_some())
+            .filter(|&i| {
+                scene.objects[i]
+                    .ship
+                    .as_ref()
+                    .is_some_and(|s| s.build.is_none())
+            })
             .take(2)
             .collect();
         let (a, foe) = (ships[0], ships[1]);

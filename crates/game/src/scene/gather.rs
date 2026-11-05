@@ -1938,7 +1938,7 @@ impl Scene {
     }
 
     /// The cell a ship is in (`+0x5a3`, `+0x5a7`).
-    fn ship_cell(&self, i: usize) -> (i32, i32) {
+    pub(super) fn ship_cell(&self, i: usize) -> (i32, i32) {
         let t = TILE_SIZE as f32;
         (
             (self.objects[i].x / t).floor() as i32,

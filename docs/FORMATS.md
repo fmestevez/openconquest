@@ -4454,8 +4454,8 @@ condition x 0x597164[item / 3] (30, 50, 70) / 100; and 0x59b358[type]
 (200, 400, 1100, 1300, 900, 800, 700, 600, 600, 900, 600, 900) / 20.
 0x4e4c80: each unit's condition x 0x597170[item] (2, 2, 3, 0 ...).
 Another `+0x251 = 2` with task 5: the ship's message 0x248f (0x4dcf1b)
-with `+0x58c` 6 and a dock contact (its sender not found: the town sends
-0x248f to itself, 0x443fbb).
+with `+0x58c` 6 and a dock contact (its sender not found; see the
+block's notes below).
 
 Order 200's block (`+0x25`, 0x65 bytes): `+0` 200, `+4` 0x83, `+8` now,
 `+0xc` payload 0, `+0x10` the dock (payload 1), `+0x18` the land fleet
@@ -4476,6 +4476,84 @@ than 2 ships in state 2 and docks, 0x4dbb90 sends the nearest 2 - n (by
 lying still and listed, moved to its cell in state 1 (within 1 and
 0x499a40, or farther) or sent to the dock again in state 2.
 
+The block in full (0x4db9e0, 0x4dafe0 and the rest):
+- The maker: a block of another kind ended (0x4a1c60) and a new one
+  made zeroed (0x4dafe0, then 0x4a1150 the notices); one of order 200
+  rewritten in place, its lists `+0x34`, `+0x38` and `+0x14` kept. The
+  payload of 0x483820 / 0x483900: `[0]` flotilla `+0x154`, `[1]` 0, `[2]`
+  the `+8` (navy fleet) of AIPlayer `+0x30`'s flotilla, the manager, made
+  first (0x487230) so fleet 0 of the player's list (0x49b990 returns the
+  list index), `[3]` -1, `[4]` the mode, `[5..8]` the flotilla's zone
+  `+0x168..+0x174`. Then 0x4db2e0; 0x4db660 lists each ship (0x4dabd0
+  with state 0) and counts the entries whose index is not 0 (so a lone
+  ship counts 0, and the maker returns); then 0x4daec0 and 0x4db720.
+- Lists: 0x4dabd0(ship, id, dock, cell, x, y, state) rewrites the entry
+  of that id whole or appends one, returning its index; its callers that
+  move a ship (0x4db720) do so only when the index is not 0, so the first
+  entry's ship is never sent about the area. 0x4dacc0 finds by id
+  (taking it off with 1). 0x4dad30 appends a dock by id `{object, id,
+  cell, 0}`; the list is never emptied.
+- 0x4db2e0: `+0x10` set and gone (0x51f1f0): one draw of the player's
+  generator (`+0x18`, `(s >> 16) % 5`), not 0: returns 1 as it is; else,
+  or the dock there, `+0x10` and `+0x14` = 0. Fleet `+0x18` of kind 0xb
+  with a land fleet `+0x29` (the manager's: its list the bases' sites,
+  0x487230): 0x42cc40 (player 16 0x42c9a0 with 0x40) lists the docks of
+  its towns. None listed: every map cell's object slot (`grid + 0xc`, row
+  by row) of player 16 (`+0x54` 4, `+0x55` 0) of class 0x40, or of class
+  0x3b of the player whose vt+0x2c holds (0x40dfc0, `+0xa4 != 0x10`, in
+  the dock's vtable 0x59b4c4). Then 0x4dadf0 walks the list from its end,
+  taking off the gone and writing each other's berth (vt+0xb8) to the
+  caller's 10 words: 1 dock, `+0x10` it and `+0x14` its berth; more (at
+  most 10 read), the greatest positive value (strict, the first on a tie)
+  of the wavefront 0x4a1e90 (flag 0, the shallow grid; limit 5000) from
+  0x4daec0's cell at the berths, the `k`-th being list entry `n - k - 1`;
+  none positive leaves no dock but returns `n`. Not decoded: more than 10
+  docks (0x4dadf0 writes past the 10 words); a dock without facing (the
+  port takes no berth); which cells of a building hold it in their slot
+  (the port orders by the anchor cell).
+- 0x4daec0: the area's middle `(y + h / 2) x W + x + w / 2` if on the
+  map and water (0x4999e0); else the first water cell of the area cut to
+  the map, row by row; -1 if the cut area starts off the map; none, the
+  middle.
+- 0x4db720(x, y): fewer than 2 entries: with 1, the group's first ship
+  rewritten in state 1 for `(x, y)` and sent there (0x4cf070) if its
+  index is not 0, returning 1. More: a 0x24-byte record per entry not in
+  state 2 (cell, class 0, `+0xc` 1 for `+0x592 == 0`) to 0x5614e0 with
+  p1 0x4d50b0(1) (deep) when a ship is deep and p2 0x4d50b0(0) (shallow)
+  when one is shallow; not negative: each rewritten in state 1 for its
+  cell and sent there if its index is not 0. Returns 0.
+- 0x4dbb90(n): the entries not in state 2, by the wavefront (shallow,
+  from `+0x14`, 5000) at their ship's cell, the greatest first (inserted
+  before the first smaller: ties keep list order); the first `n`
+  rewritten `{dock, +0x14, +0x14 % W, +0x14 / W, 2}` and sent 0x4dbb40.
+- 0x4db110, newest first: 300 of a ship in the group (0x4cc590): its
+  entry rewritten in state 0; 0x4db2e0 > 0: the result of 0x4db720 about
+  0x4daec0's cell kept; then 0x4c42f0 (its behaviour). 0x134: unlisted;
+  in the group, `+0x18 > 0` would hand it on (0x49bd60), and ship command
+  10 (0x4e2ba0 case 10: event 8, the stop; `Order::Halt`). 0x137, 0x144:
+  unlisted. 0x143, in the group: 0x4db0b0 (every state 2 to 1, their
+  count kept), 0x4db2e0. Returns the last kept.
+- 0x4dbd90's distance is 0x557440: `(least + 2 x most) / 2` of `|dx|`,
+  `|dy|`; 0x499a40(x, y, draught) the cell's landscape (nibbles as the
+  berth's, nibble 1 3 closed when deep) and its slot empty.
+- The status (query 0xc9: 0x4838d0 / 0x4839b0 -> 0x4a0f60 -> 0x4a0ee0
+  for `{200, 0x83}` -> 0x4dc050): no ships 0x1f5 result 1; `+0x10` 0
+  0x1f5 result 10; else every ship not listed is listed (state 0), and
+  500 while any is a ship (0x50e600 200). Tasks 0xb and 0xd end state 10
+  on 0x1f5; 0xb hands its ships out (0x486910, each leaving with 0x137)
+  only on result 10, so with a dock it waits out its 6000-12000 ticks.
+- Notices: 0x134 0x4a1690 (back-out done), 0x143 0x4a1b80 (repair state
+  1 at the berth lying still: the berth's building slot empty, with the
+  order done by message 8; or not a yard or dock of its player, every
+  tick), 0x144 0x4a1bf0 (sale end), 0x137 0x4a1770 (0x49bef0, a ship
+  leaving a group with a block: sunk, 0x4a8410, or moved by 0x49bd60).
+- Not decoded: who sends ship message 0x248f (the sale started at
+  0x4dcf1b). The settlement's handler 0x441ba0 sends it from its order
+  0x34 (0x443f8b, the payload byte 0): 3 to itself (0x443fbb, Sell Town,
+  0x4f34c0), 1 to the object whose id is the payload's dword `+1`
+  (0x444220, through `+0x70` vt+0x18); who sends order 0x34 with byte 1
+  and a ship's id is not read.
+
 The port runs it at the game tick (`Scene::step_dock_repairs`, the
 landing's `Landing` with its `dock` contact; `Scene::dock_lets_go` for
 0xcb9 from `Scene::town_gone`). `in_dock` is a ship under its repair
@@ -4487,10 +4565,12 @@ refuses every ship command but the stop (`Scene::apply`), and takes no
 contact or fire at will. The sale is `Scene::order_sell` (command
 `Order::Sell`) and `Task::Sell` (`sale_tick`, `sale_value`), from the
 spares' `FleetOrder::Sell`; `being_built` is `+0x251 == 2` for both.
-Not ported: order 200's block itself (the port's computer sends every
-ship of the flotilla to its first dock at once, `FleetOrder::Dock` and
-`Sell`, not two at a time from the area, nor the queue's notices 0x134,
-0x137, 0x143, 0x144); the walkway's state 7 and a contact let go (a ship
+Order 200's block is `DockBlock` on the flotilla (`Scene::dock_order`,
+`dock_list`, `dock_centre`, `dock_spread`, `dock_send`, `dock_heard`,
+`dock_pass`, `dock_status`), its notices posted by the repair machine
+(0x134 at the back-out; 0x143 in state 1, see below), the sale (0x144) and
+a ship leaving a flotilla (0x137, `Computer::leave`); its details under
+**Order 200's block** below. The walkway's state 7 and a contact let go (a ship
 the dock takes has neither in the port); the furled turn (`+0x25b` 5,
 not reached); 0x50e830's viewer; message 0x248f's sale (its sender not
 found); a fort's 0x4e7640 on 0x2874 (its `+0x1e0` not decoded).

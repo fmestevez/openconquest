@@ -621,9 +621,9 @@ impl Scene {
     ///
     /// - **1**: off the berth `+0x756` it is sent there again (0x4a6270);
     ///   there, lying still (`+0x58c` 0): the dock gone, the order is done
-    ///   (message 8); not a yard or dock of its player, it waits (notice
-    ///   0x143, 0x4a1b80; not ported: only the computer's dock block
-    ///   0x4db110 reads it, and the port has none); the dock
+    ///   (message 8) and notice 0x143 posted (0x4a1b80); not a yard or
+    ///   dock of its player, it waits, posting 0x143 each tick (read by the
+    ///   computers' dock block, 0x4db110); the dock
     ///   free (vt+0xb0, `dock_free`), the close-in (0x4b17e0): in contact
     ///   (`+0x8e6`, 0xcb7 to the dock), commands held (0x4b37d0), state 2.
     /// - **2** (0x4b1c60 -> 0x4b1a90): a point of the line a tick and a
@@ -745,6 +745,8 @@ impl Scene {
                         self.earn(owner, amber, fish);
                     }
                     self.note_destroyed(k, owner);
+                    let id = self.objects[k].id;
+                    self.post_notice(id, 0x144, 0);
                     self.objects.remove(k);
                     return;
                 }
@@ -892,8 +894,11 @@ impl Scene {
                 return;
             }
             let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+            // The dock gone: the order done (message 8) and notice 0x143
+            // to the ship's group (0x4a1b80).
             let Some(d) = self.object_index(dock) else {
                 self.objects[k].ship.as_mut().unwrap().task = None;
+                self.post_notice(id, 0x143, 0);
                 return;
             };
             let Some(berth) = self.berth_cell(d) else {
@@ -907,9 +912,12 @@ impl Scene {
                 return;
             }
             let dk = &self.objects[d];
+            // Not a yard or dock of its player: it waits, notice 0x143 to
+            // its group each tick (0x4a1b80).
             if dk.owner != self.objects[k].owner
                 || !matches!(dk.class, ObjectClass::Building(SHIPYARD | DOCK))
             {
+                self.post_notice(id, 0x143, 0);
                 return;
             }
             let Some(cell) = dk.cell else {
@@ -990,6 +998,7 @@ impl Scene {
                 self.objects[k].ship.as_mut().unwrap().task = None;
                 self.off_the_berth(k, b'Q');
                 self.brain_repaired(id);
+                self.post_notice(id, 0x134, 0);
                 self.brain_mended(id);
                 return;
             }
