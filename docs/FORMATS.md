@@ -2341,8 +2341,26 @@ attack zone's cases. The boarder's end posts as the port's leave stage
 ends, the task with it (event 8 0x90, `+0x708` now). The boarder
 closing in, a prey within reach but not at war: nothing (0x4b5df0 state
 1); the rammer's look finds the prey only at war (0x4b8d80). Not ported:
-0x4d0210's and 0x4d1ea0's cases (the port keeps no notices for those
-blocks).
+0x4d0210's and 0x4d1ea0's cases, the port having neither block as the
+original keeps it: the fleet attack task (0x74, the human's commands
+0x15-0x18 through 0x49dda0 -> 0x4d04a0; no other sender) is per ship in
+the port, with no group or target list, and the computers' guard is
+their zone (`order_zone`), without the block's lists `+0x44`, `+0x48`,
+`+0x4c`. What they do: 0x4d0210's 0x13a-0x13d, the ship in the group:
+0x4cfa70(group, the record's `+0x10` (prey), 1) finds the entry of the
+block's target list `+0x30` whose `+4` is the prey and removes it (-1
+none); -1, or 0x4cfad0 true, sends the ship again (0x4cfe40), counted
+heard; else 0x4a1c60 ends the block. 0x4cfad0 walks the list's count:
+with the list empty of data the index is removed (count less 1); else,
+the block's target `+0xc` found (0x51f1f0), `+0x10` = its cell
+(0x50ebf0, x + y x width), and from the list's first entry (always
+element 0, 0x4cfb0d) `+0xc` = its `+4`, `+0x14` = its `+0xc`, `+0x18` 7,
+`+0x1c` = its `+0x10`; true if so. 0x4d1ea0's 0x13a, 0x13c, 0x13d (each
+heard notice counted): 0x4d1750(the record's ship id, mode 0) is the
+last entry with that `+4` of the lists `+0x44` (1), `+0x48` (2), `+0x4c`
+(4), the kind `<< 16` with the index (a later list's overriding; mode 1,
+the 0x137 case's, removes the entries, not read further); kind 2 zeroes that `+0x48`
+entry's `+8` and `+0xc`.
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
@@ -4322,7 +4340,9 @@ ram `0x42d940(level) x c x 75 / 10000` (25, 50), and the building `cost x
 condition x 75 / 10000` (0x425990), in integers, no goods. It is not
 destroyed: it goes to state 3, drawn as its building picture's last frame
 (0x422e30), keeping its owner and stock, with no menu and taking no orders.
-Only the human can sell (nothing else sends order 0x34). Sell Item and Sell
+Only the human can sell (nothing else sends order 0x34; byte 2 the
+stock pick, 0x4f73f5; byte 1 a building or docked ship clicked in the
+sell mode, below). Sell Item and Sell
 Town show only with permit bit 10 (player +0x46 bit 2) and are enabled
 while the settlement is built and idle; Sell Town also hides while a ship
 is taken up for loading (+0x1c8). No menu offers Sell Fish (0x7e).
@@ -4551,8 +4571,24 @@ The block in full (0x4db9e0, 0x4dafe0 and the rest):
   0x4dcf1b). The settlement's handler 0x441ba0 sends it from its order
   0x34 (0x443f8b, the payload byte 0): 3 to itself (0x443fbb, Sell Town,
   0x4f34c0), 1 to the object whose id is the payload's dword `+1`
-  (0x444220, through `+0x70` vt+0x18); who sends order 0x34 with byte 1
-  and a ship's id is not read.
+  (0x444220, through `+0x70` vt+0x18). Byte 1 is the human's map click
+  in the settlement's sell mode: Sell Item (command 0x12, 0x4f34c0) sets
+  the pointer's mode `+0xdd` 0x34 and `+0xef` the settlement; over an
+  object the settlement answers the pointer (0x441ba0 message 0xc452,
+  cursor 0x28) for an own object (`+0x57` 1, its player and slot), the
+  settlement standing (`+0xa4` 1, `+0x10c` 0): a building of class
+  0x32-0x3e in its list (`+0x1c8` count, `+0x1d0`) enabled (any other,
+  disabled); an object whose `+4` is 0x1488 (a ship: the test is a
+  yard's or dock's `+0x1e0`) disabled (`+0x1a |= 0x4000`) unless the settlement has a yard
+  or dock (`+0x20c` / `+0x210`) and one of its listed buildings, found,
+  standing (`+0xa4` 1), class 0x3a or 0x3b, holds it (`+0x1e0` the
+  ship's id); anything else cursor 5. The click (0x5180e0, the cursor
+  0x28, not disabled `+0xe6`, an own object) sends order 0x34 `{1, id
+  (dword at +1), 0}` to `+0xef` (0x518709). So the human sells a ship
+  lying in one of the settlement's yards or docks, or one of its
+  buildings, by clicking it in Sell Item mode. Not ported (the port's
+  sell mode takes the stock list only; the building's 0x248f, 0x425990,
+  and the ship's at 0x4dcf1b would be needed).
 
 The port runs it at the game tick (`Scene::step_dock_repairs`, the
 landing's `Landing` with its `dock` contact; `Scene::dock_lets_go` for
