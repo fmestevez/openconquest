@@ -221,13 +221,24 @@ pub fn draw_objects(
         // (0x50e460 with 0x5cdd2c), and for every other player hides them
         // (0x50e350: `+0x8d`, the sprite's flag 0x40000). The flames'
         // frames are of kind 1, which 0x57b7f0 draws without the mask.
-        let phantom = Scene::is_phantom_ship(obj);
-        if scene.phantom_hidden(obj) {
+        // A building with the phantom (`+0x134`): its tick (LandObj
+        // 0x425990 at 0x4260a0-0x4262e3) does the same to its picture
+        // (layer 0), banner (1) and shields (0xd, 0xc), the mask 0x80
+        // wide whatever the picture, for the player whose nation and slot
+        // are its `+0x54 / +0x55`; its fire and smoke (layers 3-10) are
+        // left as they are.
+        let phantom = Scene::is_phantom(obj);
+        let hidden = scene.phantom_hidden(obj);
+        let ship = obj.ship.is_some();
+        if hidden && ship {
             for (l, left, top) in scene.hunt_gear(obj) {
                 draw_image(frame, screen, camera, lut, &l.image, left, top);
             }
             continue;
         }
+        // The mask's width: a ship's picture's (`+0x61`), a building's
+        // 0x80.
+        let mask = |img: &Image| phantom.then_some(if ship { img.width } else { 0x80 });
         // Limed, its pictures and flames are whitened (0x4df510).
         let limed = obj
             .combat
@@ -235,11 +246,12 @@ pub fn draw_objects(
             .is_some_and(|c| c.lime > 0.0)
             .then_some(&scene.lime_remap);
         match limed {
+            _ if hidden => {}
             None if !phantom => draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y),
             _ => {
-                // Every sprite of a ship's picture has the picture's size
-                // (`+0x61`) and stands at its top left, so the ghost
-                // table's place is the sprite's own pixel.
+                // Every sprite of a ship's or building's picture has the
+                // picture's size (`+0x61`) and stands at its top left, so
+                // the ghost table's place is the sprite's own pixel.
                 for layer in scene.frame_of(obj, time_ms) {
                     let (left, top) = layer_origin(obj, layer);
                     draw_image_ghosted(
@@ -252,7 +264,7 @@ pub fn draw_objects(
                         top,
                         false,
                         limed,
-                        phantom,
+                        mask(&layer.image),
                     );
                 }
             }
@@ -305,7 +317,20 @@ pub fn draw_objects(
             let flag = &flags[(time_ms / FLAG_MS) as usize % flags.len()];
             let left = (obj.x - first.image.width as f32 / 2.0).round() as i32 + dx;
             let top = (obj.y - first.image.height as f32 / 2.0).round() as i32 + dy;
-            draw_image(frame, screen, camera, lut, flag, left, top);
+            if !hidden {
+                draw_image_ghosted(
+                    frame,
+                    screen,
+                    camera,
+                    lut,
+                    flag,
+                    left,
+                    top,
+                    false,
+                    None,
+                    mask(flag),
+                );
+            }
         }
     }
     // Walkways of unloading ships, and their porters.
@@ -629,7 +654,7 @@ fn draw_image_remapped(
     remap: Option<&std::collections::HashMap<u32, u32>>,
 ) {
     draw_image_ghosted(
-        frame, screen, camera, lut, img, left, top, as_shadow, remap, false,
+        frame, screen, camera, lut, img, left, top, as_shadow, remap, None,
     );
 }
 
@@ -649,19 +674,20 @@ pub const GHOST_TABLE: [u8; 0x800] = {
     t
 };
 
-/// Whether pixel `(x, y)` of a picture `width` wide shows through the
+/// Whether pixel `(x, y)` of a picture under a mask `width` wide shows through the
 /// ghost table: the drawing (0x572391-0x5723a4, 0x5725cc-0x5725df)
 /// passes the table with a row of `(width + 7) / 8` bytes and the
 /// pixel's place in the picture, and the blitter 0x57b7f0 (0x57b835-
 /// 0x57b84b) tests bit `0x80 >> (x & 7)` of byte `row x y + x / 8`.
-/// A ship's pictures (56 to 80 square) stay within the table.
+/// A ship's pictures (56 to 80 square, their own width) and a
+/// building's (at most 128 square, width 0x80) stay within the table.
 pub fn ghost_shows(width: u32, x: u32, y: u32) -> bool {
     let i = (width as usize).div_ceil(8) * y as usize + x as usize / 8;
     GHOST_TABLE[i] & (0x80 >> (x & 7)) != 0
 }
 
-/// `draw_image_remapped`, with `ghost` its pixels drawn only where the
-/// ghost table shows them ([`ghost_shows`], the picture's own width):
+/// `draw_image_remapped`, with `ghost` (the mask's width) its pixels drawn
+/// only where the ghost table shows them ([`ghost_shows`]):
 /// 0x57b7f0 on a frame of kind 0 (header byte 0xd & 3; 0x57c5df-
 /// 0x57c616) draws a pixel of the shadow colour through the shadow table
 /// whatever the mask, and the rest only on a set bit.
@@ -676,7 +702,7 @@ fn draw_image_ghosted(
     top: i32,
     as_shadow: bool,
     remap: Option<&std::collections::HashMap<u32, u32>>,
-    ghost: bool,
+    ghost: Option<u32>,
 ) {
     let scale = camera.scale(screen);
     let (vw, vh) = camera.view_size(screen);
@@ -737,7 +763,7 @@ fn draw_image_ghosted(
                         *d = lut[FLAME_BLEND[c - 1][under as usize] as usize];
                     }
                 }
-                Some(_) if ghost && !ghost_shows(img.width, ix, iy) => {}
+                Some(_) if ghost.is_some_and(|w| !ghost_shows(w, ix, iy)) => {}
                 Some(px) => {
                     let px = remap.and_then(|m| m.get(&px).copied()).unwrap_or(px);
                     *d = resolve(px, lut)
@@ -1785,5 +1811,143 @@ mod tests {
         assert_eq!(radar_scroll(0, 70, 9, 72, 128), 7);
         assert_eq!(radar_scroll(7, 3, 9, 72, 128), 3);
         assert_eq!(radar_scroll(40, 119, 9, 72, 128), 56);
+    }
+
+    /// A building with the phantom on miss000: its picture drawn through
+    /// the ghost table under a mask 0x80 wide for its owner (LandObj
+    /// 0x425990 at 0x4260a0), its banner ghosted too; nothing of either
+    /// for another player (0x50e350), off the radar, yet still picked by
+    /// the pointer (0x49a580: the building's vt+8 0x423460 and the ship's
+    /// 0x4e06c0 test no hidden flag). Every building picture is a single
+    /// kind-0 sprite of at most 128 x 128 at its top left.
+    #[test]
+    fn a_phantom_building_is_ghosted_for_its_owner_and_hidden_from_others() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = crate::objects::Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        for o in &scene.objects {
+            if let openconquest_formats::ObjectClass::Building(_) = o.class {
+                for f in &o.frames {
+                    assert_eq!(f.len(), 1);
+                    assert!(f[0].image.width <= 128 && f[0].image.height <= 128);
+                    assert_eq!((f[0].dx, f[0].dy), (0, 0));
+                }
+            }
+        }
+        let i = scene
+            .objects
+            .iter()
+            .position(|o| {
+                matches!(o.class, openconquest_formats::ObjectClass::Building(_))
+                    && scene.is_own(o)
+                    && o.banner.is_some()
+            })
+            .expect("a building of the player's with a banner");
+        let building = scene.objects.swap_remove(i);
+        let ship = scene
+            .objects
+            .iter()
+            .position(|o| o.ship.is_some() && scene.is_own(o))
+            .map(|k| scene.objects.swap_remove(k))
+            .expect("a ship of the player's");
+        scene.objects.clear();
+        scene.objects.push(building);
+        scene.gulls.clear();
+        scene.droplets.clear();
+        scene.fog = false;
+        let banner = scene.objects[0].banner.take();
+        let o = &scene.objects[0];
+        let layers: Vec<_> = scene.frame_of(o, 0).to_vec();
+        let (left, top) = layer_origin(o, &layers[0]);
+        let (w, h) = (layers[0].image.width, layers[0].image.height);
+        let screen = Screen::full(w + 20, h + 20);
+        let mut camera = Camera::new(crate::view::ScalePolicy {
+            fixed: Some(1.0),
+            integer: true,
+        });
+        camera.x = (left - 10) as f32;
+        camera.y = (top - 10) as f32;
+        let lut = palette_lut(&data, 0);
+        let draw = |scene: &Scene| {
+            const BACK: u32 = 0x0012_3456;
+            let mut px = vec![BACK; ((w + 20) * (h + 20)) as usize];
+            let mut frame = Frame {
+                pixels: &mut px,
+                width: w + 20,
+                height: h + 20,
+            };
+            draw_objects(&mut frame, &screen, scene, &camera, &lut, 0);
+            (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .filter(|&(x, y)| px[((y + 10) * (w + 20) + x + 10) as usize] != BACK)
+                .collect::<Vec<_>>()
+        };
+        let whole = draw(&scene);
+        assert!(!whole.is_empty());
+        scene.objects[0].combat.as_mut().unwrap().phantom = 30.0;
+        let ghost = draw(&scene);
+        assert!(!ghost.is_empty() && ghost.len() < whole.len());
+        let shadow = |x: u32, y: u32| layers[0].image.pixels[(y * w + x) as usize] == Some(SHADOW);
+        for &(x, y) in &whole {
+            assert_eq!(
+                ghost.contains(&(x, y)),
+                shadow(x, y) || ghost_shows(0x80, x, y),
+                "({x}, {y})"
+            );
+        }
+        // Its banner through the mask from the banner's own top left.
+        let (flags, dx, dy) = banner.clone().unwrap();
+        let flag = &flags[0];
+        scene.objects[0].banner = banner;
+        let flagged = draw(&scene);
+        let mut shown = 0;
+        for fy in 0..flag.height {
+            for fx in 0..flag.width {
+                let (x, y) = (fx as i32 + dx, fy as i32 + dy);
+                let solid = flag.pixels[(fy * flag.width + fx) as usize].is_some();
+                if !solid || x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+                    continue;
+                }
+                let (x, y) = (x as u32, y as u32);
+                let drawn = flagged.contains(&(x, y));
+                shown += usize::from(drawn);
+                if !ghost.contains(&(x, y)) {
+                    assert_eq!(drawn, ghost_shows(0x80, fx, fy), "flag ({fx}, {fy})");
+                }
+            }
+        }
+        assert!(shown > 0);
+        // Another player's: nothing drawn, off the radar, still picked.
+        let (bx, by) = whole[whole.len() / 2];
+        let (bx, by) = ((left + bx as i32) as f32, (top + by as i32) as f32);
+        let id = scene.objects[0].id;
+        let mut other = scene.human.unwrap();
+        other.slot = (other.slot + 1) % 4;
+        scene.human = Some(other);
+        assert!(scene.phantom_hidden(&scene.objects[0]));
+        assert!(draw(&scene).is_empty());
+        assert_eq!(hit_test(&scene, bx, by, 0), Some(id));
+        // A hidden phantom ship likewise.
+        scene.objects.clear();
+        scene.objects.push(ship);
+        scene.objects[0].combat.as_mut().unwrap().phantom = 30.0;
+        let o = &scene.objects[0];
+        assert!(scene.phantom_hidden(o));
+        let l = &scene.frame_of(o, 0)[0];
+        let (sl, st) = layer_origin(o, l);
+        let k = l
+            .image
+            .pixels
+            .iter()
+            .position(|p| p.is_some_and(|p| p != SHADOW))
+            .unwrap() as u32;
+        let (sx, sy) = (
+            sl + (k % l.image.width) as i32,
+            st + (k / l.image.width) as i32,
+        );
+        assert_eq!(hit_test(&scene, sx as f32, sy as f32, 0), Some(o.id));
     }
 }

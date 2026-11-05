@@ -920,8 +920,43 @@ Every ship sprite is of kind 0 and its picture's size (56 to 80
 square, so the mask stays within the table), so a ship's owner sees
 its hull through rows of alternating pixels (a 64-wide picture's two
 rows to a table row) and its flames whole (`render::GHOST_TABLE`,
-`ghost_shows`). Not decoded: a phantom building's ghosting (0x426105-
-0x42668d, width 0x80).
+`ghost_shows`).
+
+A building with the phantom (LandObj `+0x134`, set by 0xda97 at
+0x426f7b with its start `+0x13c` and length `+0x140`) does the same in
+its tick (0x425990): the phantom ends (0x426071-0x426096) when `+0x13c + +0x140` is below
+the game's tick `+0xde` (`+0x134` 0); then, with `+0x134` set and its
+applied flag `+0x138` clear (0x4260a0-0x426165), it sets `+0x138` and,
+for the player at this seat (0x5c7508 `+0x3212 / +0x3213` the
+building's nation and slot `+0x54 / +0x55`), puts the ghost table on
+layers 0 (the picture, `+0x7c`), 1 (the banner, `+0xd8`), 0xd (the
+weapon shield's `PROTWSPR`, `+0x198`) and 0xc (the magic shield's
+`PROTMSPR`, `+0x178`) that exist, 0x50e460(layer, 0x5cdd2c, 0x80): the
+mask 0x80 wide whatever the picture; for any other player it sends
+itself 0xd21 (radar icon off by 0x50de40 unless `+0xa4` is 0xff or
+0x10) and hides those layers (0x50e350(layer, 1)). With `+0x134` clear
+and `+0x138` set (0x4261dc-0x4262e3) it clears `+0x138` and undoes the
+same (0x50e460(layer, 0, 0); or 0xd20, 0x50da60, and 0x50e350(layer,
+0)). A shield sprite made while `+0x134` is set gets the same at once
+(0x426484-0x42648f, 0x42667e-0x426689). The fire and smoke layers
+(3-10) are left as they are. Every building picture is one kind-0
+sprite of at most 128 x 128 at the picture's top left, and the banners
+(`FLAGSPR_`) kind 0 as well (every sprite but `FIRE*` is): the owner
+sees picture and banner through a checkerboard (16-byte table rows,
+each from the layer's own top left), another player only the fire and
+smoke. The port draws so (`Scene::is_phantom`, `phantom_hidden`; the
+shields' sprites are not drawn by the port).
+
+The pointer still picks a hidden phantom ship or building: 0x49a580
+asks each occupant's vt+8, the ship's 0x4e06c0 (its hull sprite's rect
+and mask), a building's 0x423460 (castles 0x410420: the picture's rect,
+then for `+0xa4` 1 (castles also 4) its mask `+0xcc`), and neither they
+nor 0x49a580 and the cursor 0x5175b0 test the sprite's hidden flag, so
+it is hovered, shown and ordered against as when seen; the port's
+`hit_test` likewise ignores the phantom. Left out: a banner made anew
+by 0x4247b0 during the phantom is not ghosted or hidden until the
+phantom is cast again (no 0x50e460 / 0x50e350 there); the port ghosts
+or hides it with the building.
 
 ## Control bar tabs and panels
 

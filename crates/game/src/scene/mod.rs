@@ -1496,16 +1496,22 @@ impl Scene {
         }
     }
 
-    /// Whether `obj` is a ship with the phantom (`+0x253`).
-    pub fn is_phantom_ship(obj: &MapObject) -> bool {
-        obj.ship.is_some() && obj.combat.as_ref().is_some_and(|c| c.phantom > 0.0)
+    /// Whether `obj` is a ship (`+0x253`) or a building (LandObj
+    /// `+0x134`) with the phantom.
+    pub fn is_phantom(obj: &MapObject) -> bool {
+        (obj.ship.is_some() || matches!(obj.class, ObjectClass::Building(_)))
+            && obj.combat.as_ref().is_some_and(|c| c.phantom > 0.0)
     }
 
-    /// Whether `obj` is a ship with the phantom another player owns:
-    /// 0x4df380 hides its layers from the player at this seat (0x50e350)
-    /// and takes its radar icon off (0x50de40).
+    /// Whether `obj` is a ship or building with the phantom another
+    /// player owns: 0x4df380 (a ship) and LandObj 0x425990 at 0x42616a-
+    /// 0x4261cf (a building) hide its layers from the player at this seat
+    /// (0x50e350) and take its radar icon off (0x50de40, message 0xd21).
+    /// The pointer still picks it: 0x49a580 asks each occupant's vt+8
+    /// (a ship's 0x4e06c0, a building's 0x423460 or 0x410420), and none
+    /// tests the hidden flag.
     pub fn phantom_hidden(&self, obj: &MapObject) -> bool {
-        Self::is_phantom_ship(obj) && !self.is_own(obj)
+        Self::is_phantom(obj) && !self.is_own(obj)
     }
 
     /// The cells whose occupants the pointer at world pixel `(x, y)` tries
