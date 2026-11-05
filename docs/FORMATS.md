@@ -4017,7 +4017,9 @@ cleared on all 12 together. Who sets them:
   shot through its first member (0x415df0). The callers (0x41a96f fort,
   0x40f61d stronghold), each tick in state `+0xa4` 1 unlimed (`+0x144`
   0; the fort also `+0x1e4` 0), draw for each of the twelve groups from
-  the unit list's dword 0 (0 when made, 0x41a204 / 0x40f100): `s =
+  the unit list's dword 0 (0 when made, 0x41a204 / 0x40f100; then a
+  draw of the building generator at message 2, `r >> 16`, 0x41a895 /
+  0x40f5a5, but for a save's record type 2): `s =
   0xa70427df - s x 0x7f82434b`, passing `s >> 16` as `param_1`,
   `param_2` and `param_3` (the fort `+0x4a8` as `param_4`, the
   stronghold 0). The track 0x447400 walks the same cells and stops at
@@ -6617,15 +6619,31 @@ caster's draw (a reef's kind `r % 3 + 1`, a barbarian monster's `r &
 3`); the sea temple (0x438300) likewise for kinds 1-4, 0xd, 0x11 unless
 the order's byte `+0xd` gives it (0x438694); the war temple passes 0
 (0x439aa2). The town's draw at 0x441e9c runs before its seed, from 0,
-and leaves nothing. Also drawn: a burning blow's fire (below) and the
-fall's rubble, two a cell (0x4244a4, 0x4244cb). The
-port keeps the generators (`Scene::building_lcgs`, saved) and ports the
-first look, the fort's draws and the aim, the fire's draw and the
-rubble's (below, `scene/burning.rs`). Not ported: the sea temple's (the port's casts name no temple), and the aim at
-barbarian structures, castles, lairs and heroes' houses (0x423520 too,
-but their classes draw their generators elsewhere, not read: castles
-0x410e6e / 0x410ed8, lairs 0x415337 / 0x4156a8, barbarians
-0x4e8a5e-0x4e927a). (0x430449 is a reef's, 0x4300a0, not a building's.)
+and leaves nothing. A fort's draw at 0x41a895 is its unit list's
+generator: `[+0x4d0]` dword 0 = `r >> 16` (0 when the list is made,
+0x41a204), for any record type but a save's 2. Barbarian structures
+(0x3f-0x41) have the building generator the same way: their message 2
+(0x40ef70) sets the class fields, then runs 0x4e8660 -> 0x4e7640 ->
+0x427f50 (the seed, and the asleep look), then, with `+0xa4` not 0xff
+and the record type not 2, draws once at 0x40f5a5 for `[+0x20c]`
+dword 0 = `r >> 16` (0 at 0x40f100). Nothing else in Barb.cpp
+(0x40de20-0x40fc90) draws `+0x18`: 0x40e0f0's and 0x40ff00's draws are
+the store's (`[+0x20c]`), message 0's (0x40f62c) the unit list's. Their
+vtable 0x594920 has vt+0xc 0x423520 (the aim) and their blows reach the
+fire test, both drawing it. (The draws 0x4e8a5e-0x4e927a once given
+here as barbarians' are in 0x4e89e0, 0x4e8af0 and 0x4e8db0, which the
+ships' looks 0x4bfc60 / 0x4c0eb0 run on the ship.) Also drawn: a
+burning blow's fire (below) and the fall's rubble, two a cell
+(0x4244a4, 0x4244cb). The port keeps the generators
+(`Scene::building_lcgs`, saved) and ports the first look, the fort's
+and barbarians' draws (the unit lists' generators set by
+`building_rng`, which `step_fort_draws` runs first) and the aim, the
+fire's draw and the rubble's (below, `scene/burning.rs`). Not ported:
+the sea temple's (the port's casts name no temple), and the aim at
+castles, lairs and heroes' houses (0x423520 too, but their classes
+draw their generators elsewhere, not read: castles 0x410e6e /
+0x410ed8, lairs 0x415337 / 0x4156a8). (0x430449 is a reef's, 0x4300a0,
+not a building's.)
 
 
 **A building's fire** (LandObjClassTy's drain 0x423d60, blow 0x138e,
@@ -6756,10 +6774,9 @@ to 0x4e7f90 for class 0x40 (prefix `BARB` 0x5a2910 set at 0x40f014; the
 facing `+0x1dc` record field 10, loaded by 0x427f50 at 0x4280f2 as
 0x40f038 sets `+0x1d8` 0xa), `BARBMSK_464<1><facing><level>`, and to
 0x422e30 for 0x3f and 0x41, as lairs (`BARBSMSK_41<level>`,
-`BARBBMSK_41<level>`); `building_mask` names them. Not ported: their
-fire (the port's `light_building` leaves barbarians out), their
-generator `+0x18` not being decoded (0x40ef70 does not seed it at
-message 2); the classes with no mask resource would read a null mask in
+`BARBBMSK_41<level>`); `building_mask` names them. They burn as the
+others, by a draw of their building generator (0x427f50's seed, see
+the building's own generator), standing (state 1). Not ported: the classes with no mask resource would read a null mask in
 0x557640, the port lights none on them; whether a killing blow's state is still 1
 at the fire test (the port lights none on a building its blow brought
 down); which of fire (depth - 3) and smoke (- 2) draws over the other
@@ -9443,10 +9460,10 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   +0xc0` x 64 + 32; a hit `30 + (r & 7)` each way, a miss `r % 61`, `40 +
   r % 24`; `Scene::siren_aim`). A roll that misses
   a building leaves its chance as the hit byte (0x4bf7f0 returns it), so
-  only a chance of 0 takes the corner. Not decoded: a barbarian
-  structure's generator (its handler 0x40ef70 does not seed `+0x18` at
-  message 2 as 0x427f50 does) and the hero's house's vtable (type
-  0x1a6d); not ported: 0x4c07c0 with no position in
+  only a chance of 0 takes the corner. A barbarian structure is aimed at
+  by 0x423520 (vtable 0x594920 +0xc) from its building generator
+  (0x40ef70 runs 0x427f50's seed through 0x4e8660 -> 0x4e7640). Not
+  decoded: the hero's house's vtable (type 0x1a6d); not ported: 0x4c07c0 with no position in
   state 3 (its id and player uninitialised; the port does nothing); a
   position's target gone, its pointer dangling (the port skips it);
   0x50ebf0's families with no cell (400 a leviathan, 700, the jam 0x1f7

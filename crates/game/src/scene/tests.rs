@@ -1427,7 +1427,9 @@ fn buildings_fight() {
     let f = scene.object_index(fort_id).unwrap();
     scene.objects[f].combat.as_mut().unwrap().weapons.clear();
     scene.order_attack(ship_id, fort_id).unwrap();
-    for _ in 0..50 * 120 {
+    // (The fort's groups draw from their unit list's generator, seeded
+    // by message 2's draw (0x41a895), which moves the fight's course.)
+    for _ in 0..50 * 180 {
         scene.update(0.02, &data, &mut caches);
         if scene
             .object_index(fort_id)

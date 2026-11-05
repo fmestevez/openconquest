@@ -136,7 +136,9 @@ impl Scene {
     /// ports (drain 0x4e7550 -> 0x427bb0 -> 0x423d60), shipyards and docks
     /// (0x416340 -> 0x4e7550 -> ...), on the masks 0x4e7f90 loads; their
     /// blows come in by 0x423c30 (the dock's vt+4 0x4162f0 calls it), which
-    /// queues 0x138e unless the state is 2. (Not decoded: the classes with
+    /// queues 0x138e unless the state is 2. Barbarian structures too
+    /// (their drain 0x40e0f0 -> 0x4e7550 -> ...; vt+4 0x423c30), drawing
+    /// their building generator. (Not decoded: the classes with
     /// no mask resource would read a null mask in 0x557640; the port
     /// lights none on them. A hit point above or left of the picture
     /// reads before the mask: none here.) Castles burn the same (their
@@ -167,7 +169,9 @@ impl Scene {
             // sets `+0x10c` only), so a building being mended burns. (An
             // asleep building is never hit: its vt+8 0x423460 is false in
             // 0x10, so no shot lands.)
-            ObjectClass::Building(class) if self.standing(o.id) => class,
+            ObjectClass::Building(class) | ObjectClass::Barbarian(class) if self.standing(o.id) => {
+                class
+            }
             // A castle stands in state 1 only: casting (4) it takes none.
             ObjectClass::Castle(class) if self.castle_standing(o.id) => class,
             ObjectClass::CreatureSpawn => o.record.class_id,
@@ -478,10 +482,9 @@ pub(super) fn building_mask(
         // and 0x41 go to 0x422e30, as lairs (`BARBSMSK_41<level>`,
         // `BARBBMSK_41<level>`). Their blows reach the fire test: the
         // drain 0x40e0f0 writes the structure's rest back (0x55b440) and
-        // ends in 0x4e7550 -> 0x427bb0 -> 0x423d60. (Not ported: their
-        // fire, `light_building` leaving them out, for their generator
-        // `+0x18`, which 0x40ef70 does not seed at message 2, is not
-        // decoded.)
+        // ends in 0x4e7550 -> 0x427bb0 -> 0x423d60, the draw from their
+        // generator `+0x18`, the building one (0x427f50 seeds it through
+        // 0x40ef70 -> 0x4e8660 -> 0x4e7640).
         0x40 => format!("BARBMSK_{nation}{class:2}1{facing}{level}"),
         _ => {
             let name =
@@ -789,6 +792,66 @@ mod tests {
         let f = &scene.building_fires[0];
         assert_eq!((f.building, f.size), (id, 2));
         assert!(f.fire.is_some());
+    }
+
+    /// miss001's barbarian structures: their generator is the building
+    /// one, seeded `[game +0x2ee5] x id` by 0x427f50 (through 0x40ef70 ->
+    /// 0x4e8660 -> 0x4e7640), then drawn once for the unit list's
+    /// generator (0x40f5a5), which the first tick's steps start from;
+    /// each takes fire on its mask by a draw of it, none off the mask,
+    /// with no draw (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn barbarian_structures_draw_their_building_generator_and_burn() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+        let ks: Vec<usize> = (0..scene.objects.len())
+            .filter(|&k| matches!(scene.objects[k].class, ObjectClass::Barbarian(_)))
+            .collect();
+        assert!(ks.len() >= 2);
+        let game = scene.game_seed();
+        for &k in &ks {
+            assert!(!scene.building_lcgs.contains_key(&scene.objects[k].id));
+        }
+        scene.step_fort_draws();
+        for &k in &ks {
+            let id = scene.objects[k].id;
+            let mut r = combat::Rng(game.wrapping_mul(id));
+            let list = r.next();
+            assert_eq!(scene.building_lcgs[&id], r.0);
+            let c = scene.objects[k].combat.as_ref().unwrap();
+            let s = 0xa704_27df_u32.wrapping_sub(list.wrapping_mul(0x7f82_434b));
+            assert_eq!(c.fire.draws[0], s >> 16);
+        }
+        for &k in &ks {
+            let o = &scene.objects[k];
+            let ObjectClass::Barbarian(class) = o.class else {
+                unreachable!()
+            };
+            let facing = o.record.field(10).unwrap_or(0);
+            let mask = building_mask(&data, class, 4, facing, 3).unwrap();
+            let (left, top) = crate::render::layer_origin(o, &o.frames[0][0]);
+            let stride = (mask.width + 7) & !7;
+            let (mx, my) = (0..mask.height)
+                .flat_map(|y| (0..mask.width).map(move |x| (x, y)))
+                .find(|&(x, y)| mask.bit((y * stride + x) as usize))
+                .unwrap();
+            let id = o.id;
+            let seed = (1u32..).find(|&v| combat::Rng(v).next() % 3 == 0).unwrap();
+            scene.building_lcgs.insert(id, seed);
+            let off = (left - 1, top);
+            scene.light_building(k, 6, true, off, Some((1, 0)), &data, &mut caches);
+            assert_eq!(scene.building_lcgs[&id], seed);
+            assert!(!scene.building_fires.iter().any(|f| f.building == id));
+            let hit = (left + mx as i32, top + my as i32);
+            scene.light_building(k, 6, true, hit, Some((1, 0)), &data, &mut caches);
+            assert_ne!(scene.building_lcgs[&id], seed);
+            let f = scene.building_fires.iter().find(|f| f.building == id);
+            assert!(f.is_some_and(|f| f.size == 2 && f.fire.is_some()));
+        }
     }
 
     /// miss000's lair takes fire on its mask (`<prefix>MSK_413`, nation

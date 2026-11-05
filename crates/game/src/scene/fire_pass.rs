@@ -392,7 +392,8 @@ impl Scene {
     /// solid pixel of the shooter's own picture (its vt+8 0x4e06c0 with
     /// `(x, y, 1, 0, 1)`) is not shot: no shot, no reload, the hit roll
     /// already drawn. A ship's point is 0x4e07c0 (`Scene::ship_aim`), a
-    /// building's, castle's or lair's 0x423520 and a harpy nest's 0x41cef0
+    /// building's, barbarian structure's (vtable 0x594920), castle's or
+    /// lair's 0x423520 and a harpy nest's 0x41cef0
     /// (`Scene::building_aim`), a land creature's 0x411bb0
     /// (`Scene::walker_aim`), a jam's 0x415ce0 (`Scene::jam_aim`; a jam
     /// on a list is the jam, the port's shot going to its first member),
@@ -401,8 +402,7 @@ impl Scene {
     /// (`Scene::gorgon_aim`), the siren's 0x4048f0 (`Scene::siren_aim`),
     /// each drawing from the
     /// target's own generator. Returns the positions fired. (Not
-    /// decoded: a barbarian structure's generator, which its handler
-    /// 0x40ef70 does not seed at message 2, and the hero's house's vtable.
+    /// decoded: the hero's house's vtable.
     /// A position's target gone, the original's pointer
     /// dangles: the port skips it.)
     #[allow(clippy::needless_range_loop)]
@@ -526,6 +526,7 @@ impl Scene {
                     ObjectClass::Monster(0x1f4..=0x1f6) => self.walker_aim(tid, hit),
                     ObjectClass::Monster(0x1f8 | 0x1f9) => self.flyer_aim(tid, hit),
                     ObjectClass::Building(_)
+                    | ObjectClass::Barbarian(_)
                     | ObjectClass::Castle(_)
                     | ObjectClass::CreatureSpawn
                     | ObjectClass::HarpyNest => Some(self.building_aim(t, hit)),

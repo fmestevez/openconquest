@@ -417,11 +417,14 @@ impl Scene {
     /// nest's 0x41d715; the base constructor 0x50b960 left it 0); asleep
     /// (record type 3, state 0x10) its first draw sets the first look
     /// `r % 15` ticks on (`+0x1c0`, 0x4281de / 0x4422ad); a fort then
-    /// takes one more for its stock's first dword (FortressClassTy
-    /// 0x419f80 at 0x41a895, after 0x4e7640 has run 0x427f50). (The
-    /// town's draw at 0x441e9c comes before its seed, from the
+    /// takes one more, its unit list's generator (`[+0x4d0]` dword 0 =
+    /// `r >> 16`, FortressClassTy 0x419f80 at 0x41a895, after 0x4e7640
+    /// has run 0x427f50), and a barbarian structure likewise (its
+    /// 0x40ef70 runs 0x4e8660 -> 0x4e7640 -> 0x427f50, then `[+0x20c]`
+    /// dword 0 at 0x40f5a5; both for any record type but a save's 2).
+    /// (The town's draw at 0x441e9c comes before its seed, from the
     /// constructor's 0, and leaves nothing behind.)
-    fn building_rng(&mut self, k: usize) -> Rng {
+    pub(super) fn building_rng(&mut self, k: usize) -> Rng {
         let id = self.objects[k].id;
         if let Some(&v) = self.building_lcgs.get(&id) {
             return Rng(v);
@@ -431,8 +434,14 @@ impl Scene {
         if o.asleep.is_some() {
             o.asleep = Some(crate::clock::ticks(r.next() % 15));
         }
-        if matches!(o.class, ObjectClass::Building(0x34..=0x36)) {
-            r.next();
+        if matches!(
+            o.class,
+            ObjectClass::Building(0x34..=0x36) | ObjectClass::Barbarian(_)
+        ) {
+            let v = r.next();
+            if let Some(c) = o.combat.as_mut() {
+                c.fire.seed = v;
+            }
         }
         self.building_lcgs.insert(id, r.0);
         r

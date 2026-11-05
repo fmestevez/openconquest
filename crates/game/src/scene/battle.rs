@@ -619,12 +619,15 @@ impl Scene {
     /// Each standing, unlimed fort and barbarian structure steps its unit
     /// list's generator once for each of its twelve groups, every tick
     /// (0x41a96f, 0x40f61d: state `+0xa4` 1, `+0x144` 0; the fort also
-    /// `+0x1e4` 0, which only a saved record sets).
+    /// `+0x1e4` 0, which only a saved record sets), from the draw of its
+    /// own generator its message 2 put there (`Scene::building_rng`).
     pub(super) fn step_fort_draws(&mut self) {
-        for o in &mut self.objects {
-            if !o.holds_units() || o.progress.is_some() {
+        for k in 0..self.objects.len() {
+            if !self.objects[k].holds_units() || self.objects[k].progress.is_some() {
                 continue;
             }
+            self.building_rng(k);
+            let o = &mut self.objects[k];
             if let Some(c) = o.combat.as_mut().filter(|c| c.lime <= 0.0) {
                 c.fire.step_draws();
             }

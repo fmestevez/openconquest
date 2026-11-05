@@ -1414,11 +1414,12 @@ impl Scene {
     /// `h` its picture's size (`+0x61` / `+0x65`, from the sequence's
     /// `+0x29` / `+0x2b`, 0x5463bf: its first frame's width and height,
     /// 0x554bf0). At a building 0x423520, at a harpy nest 0x41cef0
-    /// (`Scene::building_aim`). (Not decoded: the aim at barbarian
-    /// structures, castles, lairs and heroes' houses, 0x423520 too, but
-    /// from generators their own code draws elsewhere, not read: castles
-    /// 0x410e6e / 0x410ed8, lairs 0x415337 / 0x4156a8, barbarians
-    /// 0x4e8a5e-0x4e927a; a throw at one aims as the port's other shots.)
+    /// (`Scene::building_aim`), at a barbarian structure 0x423520 too
+    /// (vtable 0x594920 +0xc), from its building generator. (Not
+    /// decoded: the aim at castles, lairs and heroes' houses, 0x423520
+    /// too, but from generators their own code draws elsewhere, not read:
+    /// castles 0x410e6e / 0x410ed8, lairs 0x415337 / 0x4156a8; a throw at
+    /// one aims as the port's other shots.)
     fn throw_step(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
         let Some(i) = self.object_index(self.walkers[k].id) else {
@@ -1474,7 +1475,10 @@ impl Scene {
             let o = &self.objects[t];
             if o.ship.is_some() {
                 Some(self.ship_aim(t, strikes))
-            } else if matches!(o.class, ObjectClass::Building(_) | ObjectClass::HarpyNest) {
+            } else if matches!(
+                o.class,
+                ObjectClass::Building(_) | ObjectClass::Barbarian(_) | ObjectClass::HarpyNest
+            ) {
                 Some(self.building_aim(t, strikes))
             } else {
                 None

@@ -191,7 +191,9 @@ pub struct FortFire {
     #[serde(default)]
     pub masks: FortMasks,
     /// The unit list's generator (`[+0x4d0]` / `[+0x20c]` dword 0: 0 when
-    /// the list is made, 0x41a204 / 0x40f100), stepped once a tick for
+    /// the list is made, 0x41a204 / 0x40f100; then message 2's draw of
+    /// the building generator, `r >> 16`, 0x41a895 / 0x40f5a5, set by
+    /// `Scene::building_rng`), stepped once a tick for
     /// each of the twelve groups while the structure stands, unlimed
     /// (0x41a97c / 0x40f62c: `s = 0xa70427df - s x 0x7f82434b`).
     #[serde(default)]
