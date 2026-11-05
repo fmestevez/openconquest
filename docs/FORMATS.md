@@ -8341,11 +8341,18 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   0x13a `{id, 0x16}` (0x4a1800). Found within the aim: 0x4c0230 of the
   positions in state 3. Then with guard on and not 7 fired, 0x4bf9b0 again
   (its marks just cleared) and, non-zero, 0x4c0eb0.
+- Greek fire's and quick lime's power (0x4bc360, after the nine items):
+  only a type 8 sets Greek fire's `+0x46d`, only a type 9 quick lime's
+  `+0x471` (any other type leaves both as they are), each the cache
+  0x5c765c / 0x5c7668 (0x5c75cc's rows 12 and 13, 0x4ac140: row 12's A
+  650 / 720 / 790, row 13 has no A so its B 200 / 240 / 280, x 1500 /
+  100) at the player's damage level `+0x9e`, x the hull `+0x271` / the
+  type's full hull: 0x5c76d0 and 0x5c76d4 are 0x5c76b0[8] and [9]
+  (0x4ac210: 0x5bb4b0[t] x 650 x 100 / 100, 65 x 650 and 75 x 650; no
+  other writer). Then `+0x47d = 3` and the total takes the Greek fire
+  power / 100 (on a type 9 the stale `+0x46d`'s).
 - Not decoded: a sea monster's target (0x1fb) is not shot when the
-  shooter's vt+8 takes the aim point `(x, y, 1, 0, 1)`; quick lime's and
-  Greek fire's power (0x4bc360: 0x5c765c / 0x5c7668 by the hull over
-  0x5c76d0 / 0x5c76d4; the port keeps Greek fire's cache whole and quick
-  lime's by the hull over its full hull); 0x4c07c0 with no position in
+  shooter's vt+8 takes the aim point `(x, y, 1, 0, 1)`; 0x4c07c0 with no position in
   state 3 (its id and player uninitialised; the port does nothing); a
   position's target gone, its pointer dangling (the port skips it);
   0x50ebf0's families with no cell (400 a leviathan, 700, the jam 0x1f7

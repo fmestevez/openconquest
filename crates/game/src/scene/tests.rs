@@ -3231,6 +3231,36 @@ fn gorgon_and_siren() {
     );
 }
 
+/// Greek fire's and quick lime's power (0x4bc360): rows 12 and 13 of the
+/// cache by the hull over 0x5c76b0[8] / [9], only on types 8 and 9 (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn greek_fire_and_lime_power() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let m = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let set = |scene: &mut Scene, kind: u8, hull: f32| {
+        scene.objects[m].ship.as_mut().unwrap().kind = kind;
+        scene.objects[m].combat.as_mut().unwrap().hull = hull;
+    };
+    let level = scene.levels_of(scene.objects[m].owner).arms_for(9);
+    assert_eq!(level, 0);
+    set(&mut scene, 8, combat::hull_strength(8));
+    assert_eq!(scene.item_power(m, 9), 650 * 15);
+    assert_eq!(scene.item_power(m, 10), 0);
+    set(&mut scene, 9, combat::hull_strength(9) / 2.0);
+    assert_eq!(scene.item_power(m, 10), 200 * 15 / 2);
+    assert_eq!(scene.item_power(m, 9), 0);
+}
+
 /// Quicklime kills crews without touching the hull; a fire rammer's barrel
 /// of powder goes off in the ram (needs `OPENCONQUEST_DATA`).
 #[test]
@@ -3265,8 +3295,9 @@ fn crews_under_fire() {
     scene.objects[m].combat.as_mut().unwrap().weapons = vec![combat::QUICKLIME];
     scene.objects[m].ship.as_mut().unwrap().crew.squads = [0; 3];
     // Items 9-11 are the fourth position's, which only types 8 and 9 have
-    // (0x4bf9b0 reads 11 items for them, 9 for the others).
-    scene.objects[m].ship.as_mut().unwrap().kind = 8;
+    // (0x4bf9b0 reads 11 items for them, 9 for the others); quick lime has
+    // power only on a type 9 (0x4bc360).
+    scene.objects[m].ship.as_mut().unwrap().kind = 9;
     let e = scene.object_index(enemy).unwrap();
     scene.objects[e].owner = Some((1, (human.slot + 1) % 4));
     scene.objects[e].x = mx + 100.0;

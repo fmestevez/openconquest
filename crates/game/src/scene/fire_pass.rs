@@ -279,20 +279,30 @@ impl Scene {
     /// Ship `i`'s fire power with item `item` (`+0x449 + 4i`, 0x4bc360),
     /// in the original's units: the cache 0x5c75cc[3i + L] (L the
     /// player's damage level of the item's position, `+0x9c + i / 3`) x
-    /// its units x their mean condition / 100. (Greek fire and quick lime,
-    /// items 9 and 10, are 0x5c765c / 0x5c7668 by the hull over 0x5c76d0 /
-    /// 0x5c76d4, not decoded: the port keeps Greek fire's cache whole and
-    /// quick lime's by the hull over its full hull, as before.)
+    /// its units x their mean condition / 100. Greek fire (item 9, `+0x46d`)
+    /// only on a type 8 and quick lime (item 10, `+0x471`) only on a type
+    /// 9: the cache's rows 12 and 13 (0x5c765c / 0x5c7668, L at `+0x9e`) x
+    /// the hull `+0x271` / the type's full hull (0x5c76d0 / 0x5c76d4, which
+    /// are 0x5c76b0[8] and [9], filled by 0x4ac210).
     pub(super) fn item_power(&self, i: usize, item: u8) -> u32 {
         let o = &self.objects[i];
         let level = self.levels_of(o.owner).arms_for(item);
         let cache = crate::object_info::cache(item, level);
         match item {
-            9 => cache,
-            10 => {
-                let c = o.combat.as_ref();
-                let (hull, full) = c.map_or((0.0, 1.0), |c| (c.hull.max(0.0), c.max_hull.max(1.0)));
-                (cache as f32 * hull / full) as u32
+            9 | 10 => {
+                let kind = item - 1;
+                if o.ship.as_ref().map(|s| s.kind) != Some(kind) {
+                    return 0;
+                }
+                // 0x597d2c's rows 12 (A) and 13 (no A: B), x 1500 / 100
+                // (0x4ac140).
+                const ROWS: [[u64; 3]; 2] = [[650, 720, 790], [200, 240, 280]];
+                let cache = ROWS[item as usize - 9][level.min(2) as usize] * 1500 / 100;
+                let hull = o
+                    .combat
+                    .as_ref()
+                    .map_or(0, |c| (c.hull.max(0.0) * 15.0) as u64);
+                (cache * hull / crate::combat::hull_points(kind) as u64) as u32
             }
             _ => {
                 let units = o.unit_conditions();
