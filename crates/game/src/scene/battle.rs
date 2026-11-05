@@ -9,15 +9,58 @@ type GroupCell = ((i32, i32), Vec<(u8, usize)>);
 /// Player 16 (`+0x24f` 0x10): its ships are not taken, nor do they take.
 const PLAYER_16: (u32, u32) = (4, 0);
 
+/// The game's alliance table (game `+0x2f45`, 20 x 20 bytes, row the
+/// first player id `nation * 4 + slot`): 1 where a player holds the other
+/// its ally. A new game zeroes it (0x4ec1a0, commands 0x100 / 0x10b /
+/// 0x10c) and a saved game reloads its `ALIANCES` chunk (0x4ed620, 400
+/// bytes); only a network game writes it (its set-up 0x532b20, which sets
+/// game `+0xd80` = 3; the diplomacy message 0x50f910 0x4e5 case 6, taken
+/// only with `+0xd80` = 3; its sync 0x536c3a). The port has no network
+/// game, so it stays all 0: every player at war with every other.
+const ALLIANCES: [[u8; 20]; 20] = [[0; 20]; 20];
+
 impl Scene {
-    /// Whether two objects belong to different players. All players are
-    /// treated as enemies of each other until diplomacy is implemented.
-    /// A building asleep is no one's enemy (0x40dfc0): nothing aims at it
-    /// and it aims at nothing.
+    /// 0x4efe20: player `p`'s standing with player `q` (ids `nation * 4 +
+    /// slot`), from the alliance table: 0 for the same player, -2 when
+    /// neither holds the other an ally, -1 when only `q` holds `p` one, 1
+    /// when only `p` holds `q` one, 2 when both do (any other byte 0).
+    /// Below 0 is war.
+    pub fn diplomacy(p: u8, q: u8) -> i32 {
+        if p == q {
+            return 0;
+        }
+        let at = |a: u8, b: u8| {
+            ALLIANCES
+                .get(a as usize)
+                .and_then(|r| r.get(b as usize))
+                .copied()
+                .unwrap_or(0)
+        };
+        match (at(p, q), at(q, p)) {
+            (0, 0) => -2,
+            (1, 0) => -1,
+            (0, 1) => 1,
+            (1, 1) => 2,
+            _ => 0,
+        }
+    }
+
+    /// The player id 0x4efe20 takes for an owner (`nation * 4 + slot`, a
+    /// byte: the object's `+0x54` * 4 + `+0x55`, a ship's `+0x24f`).
+    pub fn player_id((nation, slot): (u32, u32)) -> u8 {
+        (nation * 4 + slot) as u8
+    }
+
+    /// Whether `a` is at war with `b`: both owned, and 0x4efe20(`b`'s
+    /// player, `a`'s) < 0, as the fire pass's look 0x4bfc60 asks it (the
+    /// target's player first, the looker's `+0x24f` second). A building
+    /// asleep is no one's enemy (0x40dfc0): nothing aims at it and it aims
+    /// at nothing.
     pub fn are_enemies(a: &MapObject, b: &MapObject) -> bool {
         a.asleep.is_none()
             && b.asleep.is_none()
-            && matches!((a.owner, b.owner), (Some(x), Some(y)) if x != y)
+            && matches!((a.owner, b.owner), (Some(x), Some(y))
+                if Self::diplomacy(Self::player_id(y), Self::player_id(x)) < 0)
     }
 
     /// Whether `me`'s at-will search may pick `o`: a ship by its masks

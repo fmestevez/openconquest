@@ -16259,3 +16259,36 @@ fn a_settlement_sells_its_buildings_and_docked_ships() {
     assert!(scene.object_index(ship).is_none(), "sold");
     assert!(scene.funds(owner).0 > before.0);
 }
+
+/// War is 0x4efe20 on the players' ids: with the alliance table a game
+/// that is not a network one never fills (all 0), every two players are at
+/// war (-2) and a player is at peace with itself (0); miss011's barbarians
+/// (player 16) are at war with the human and every other player, and no
+/// one with their own side.
+#[test]
+fn players_are_at_war_but_with_themselves() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    assert_eq!(Scene::diplomacy(16, 0), -2);
+    assert_eq!(Scene::diplomacy(0, 16), -2);
+    assert_eq!(Scene::diplomacy(16, 16), 0);
+    assert_eq!(Scene::player_id((4, 0)), 16);
+    assert_eq!(Scene::player_id((4, 1)), 17);
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let scene = Scene::load(&data, &mut caches, "miss011").unwrap();
+    let awake: Vec<&MapObject> = scene
+        .objects
+        .iter()
+        .filter(|o| o.owner.is_some() && o.asleep.is_none())
+        .collect();
+    let barbarian = awake.iter().find(|o| o.owner == Some((4, 0))).unwrap();
+    let mine = awake.iter().find(|o| scene.is_own(o)).unwrap();
+    assert!(Scene::are_enemies(mine, barbarian) && Scene::are_enemies(barbarian, mine));
+    for a in &awake {
+        for b in &awake {
+            assert_eq!(Scene::are_enemies(a, b), a.owner != b.owner);
+        }
+    }
+}

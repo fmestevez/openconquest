@@ -8771,6 +8771,29 @@ Saved games (`demo.dkd`) add `DARK_MAP` (fog of war), `ALIANCES`,
 `NAME_PLAYERS`, `AI_PLAYERS`, `DIFFICULTY`, `SPEED_GAME`, `RND_INIT` and
 others.
 
+## Diplomacy (0x4efe20)
+
+Whether two players are at war is 0x4efe20(p, q) on player ids `nation * 4
++ slot` (a byte: an object's `+0x54` * 4 + `+0x55`, a ship's `+0x24f`;
+player 16 the barbarians' nation 4 slot 0, side-2 castles' 17). It reads
+the game's alliance table at `+0x2f45`, 20 x 20 bytes, row p column q:
+p = q gives 0; otherwise (t[p][q], t[q][p]) = (0, 0) gives -2, (1, 0) -1,
+(0, 1) 1, (1, 1) 2, anything else 0. Below 0 is war; callers pass the
+other's player first and their own second (the look 0x4bfc60: the
+target's id, then `+0x24f`).
+
+The table is zeroed by a new game (0x4ec1a0, commands 0x100 / 0x10b /
+0x10c) and by a load before its `ALIANCES` chunk (0x4ed620, 400 bytes, only
+in saved games: no mission, scenario or battle file has one; written by
+0x51156c). Only a network game writes it: its set-up 0x532b20 (which sets
+game `+0xd80` = 3) marks the allies chosen in the lobby, the message
+0x50f910 0x4e5 case 6 toggles t[p][q] (only with `+0xd80` = 3; case 9
+clears a leaving player's row and column) and 0x536c3a takes the host's
+copy. So in a campaign mission, scenario or custom game every two players
+are at war (-2). The port has no network game: `Scene::diplomacy` ports
+0x4efe20 over an all-0 table and `Scene::are_enemies` asks it (with the
+asleep test of 0x40dfc0). Not ported: the network writers.
+
 ## Healing aboard
 
 `0x4b98b0` runs on every ship each tick. Each item slot (`+0x489`, 0x18
