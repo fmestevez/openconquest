@@ -5951,20 +5951,55 @@ its size byte `+0xa0 + slot` is kind / 3 for kinds 0-8 (mask 0x1ff),
 else 2; the picture `FIRE<size>` (`FIRE%1u`, a sequence, type 7,
 0x50cf60), its delay `+0x7d` 1, time `+0x81` 0, frame `+0x45` 0; its
 top left the hit point less half the sequence's width and four fifths
-of its height (`x - w / 2`, `y - (4 h) / 5`). The fire stays until the
-building falls (0x138b, 0x4243a2: layers 3-10 removed, slots cleared)
-or is removed (message 3, 0x425990); no other LandObj code reads the
-slots, so a building burns once. Not decoded: who steps the fire's
-frames (no LandObj function reads the layer's `+0x7d` / `+0x81`, the
-vt+0x3c/0x40/0x44 slots of the 19 building vtables are 0x4230f0,
-0x4233f0 or 0x427b30, and 0x423410, none of which touches layers 3-10;
-the sprite layer 0x546480 sets no timer); how 0x55dd40's table
-0x5c1858 with value 1, count 7 maps the flames' colours; and the fall's
-rubble (0x527fe0 on the map's `+0x17b2`: the cell's high byte `kind x 3
-+ variant + 0x22`, kind and variant each `r % 3 + 1`, a draw each, per
-cell of the 1 x 1 or 2 x 2 site, and message 0x2f4 / 3 / 0xcc2), which
-is a terrain overlay not read here. Not ported (the port has no hit
-point, mask or bomb kind at the building's blow yet).
+of its height (`x - w / 2`, `y - (4 h) / 5`).
+
+The building's tick steps it (0x425990 message 0, while the state
+`+0xa4` is not 0xff, after the vt+0x4c drain and the layer-1 step): for
+each slot i 0-3, the fire `+0x80 + 4i` (layer i + 3), when its time
+`+0x81` + delay `+0x7d` <= the game tick (game `+0xde`): time = the tick,
+0x50d660 shows frame `+0x45` at its `+0x59`, `+0x5d` (hidden on a cell
+the viewer's fog byte is 0), frame + 1; at the sequence's count `+0x49`
+the layer is removed (0x50cdb0) and the slot freed, so a later flaming
+blow can light another fire (the lighting test reads only `+0x80..+0x8c`);
+else, from frame count - 14 on with the smoke slot `+0x90 + 4i` free, a
+smoke is started on layer i + 7: depth the main picture's `+0x19` less 2,
+drawn through 0x50e130(L, 1, 0x26, 0x5c1358) (colour 0x26 as shadow),
+`SMOKE<the fire's size byte +0xa0 + i>`, delay 1, time 0, frame 0, at x
+`fire.x + fire.w / 2 - smoke.w / 2`, y `fire.y + (3 fire.h) / 4 -
+smoke.h`. Then the smoke, re-read (a new one steps the same tick), steps
+the same way and is removed after its last frame. With delay 1 a frame a
+tick. The fall (0x138b, 0x4243a2: layers 3-10 removed, slots cleared) or
+removal (message 3, 0x425990) ends both early.
+
+The flames' colours: 0x55dd40 stores flag 0x100, table `+0x5c`, value
+`+0x60`, count `+0x64` on the frame; the blitter 0x57b7f0 draws a pixel
+of colour c with value <= c <= value + count - 1 as `table[(c - value) x
+256 + the screen pixel beneath]` (0x57b80f-0x57b82b, 0x57b9c1-0x57b9dd),
+the rest plain. So the fire's colours 1-7 blend with the ground beneath
+through row c - 1 of 0x5c1858, a static 7 x 256-byte table in the exe
+(no writer; rows 3 and 4 differ only at 186 and 191; dumped in the decode
+notes, `layers_spec.md`; a ship's fire uses it too, 0x4e2003).
+
+The fall's rubble is a terrain tile on map layer 5. For each cell i of
+the site (`+0x56`, 1 or 4: x + i % 2, y + i / 2) two draws of the
+building's generator give k = r % 3 + 1 (0x4244a4) and s = r % 3 + 1
+(0x4244cb), and 0x527fe0(the `b_MAPA` grid `+0x17b2`, x, y, k, s)
+writes, only on a cell whose landscape dword (`[0x5c74fc] + 8 + 24 x
+cell`) has layer 0 land (nibble 8) and layer 5 empty (nibble 0) and
+whose layer-0 variant is in one of the 19 groups of 0x5c2480 (0x527eb0:
+1 `01`, 2 `02-05`, 3 `06`, 4 `07-0a`, 5 `0b`, 6 `0c-0f`, 7 `10`, 8
+`11-14`, 9 `15`, 10 `16 17`, 11 `18 19`, 12 `1a 1b`, 13 `1c 1d`, 14 `1e
+1f`, 15 `20 21`, 16 `22-24`, 17 `25-29`, 18 `2a`, 19 `2b`), the layer-5
+cell {variant = the group, tile set `0x22 + 3k + s`} and sets the layer-5
+nibble to 2. Tile sets 0x26-0x2e are `b_vor1_s`, `_m`, `_b`, `b_vor2_s`,
+`_m`, `_b`, `b_vor3_s`, `b_vor2_m` (0x2d: the record's prefix as stored,
+class `o_vor3_m`), `b_vor3_b`, 19 tiles each: k picks the set, s the size,
+the ground's group the tile. The message 0xcc2 {x, y} goes to every mapa
+(class 0x2f4, 0x51cdd0 -> 0x519aa0), which clears the cell's square in
+its window and redraws its layers 0-7 in order (0x5199b0 -> 0x519750 /
+0x5198b0 through 0x545200), the ordinary terrain draw. Not ported (the
+port has no hit point, mask or bomb kind at the building's blow yet, nor
+fire, smoke or rubble layers).
 
 
 **The pointer on a jam.** The cursor (0x5175b0) asks the view (message
