@@ -10,8 +10,9 @@ use crate::assets::GameData;
 use crate::magic::Spell;
 use crate::objects::{self, Caches, Task, Treasure};
 
-/// How near (cells) a ship must come to take a treasure, and to a hero's
-/// house to take the hero.
+/// How near (cells) a ship must come to a treasure on land, and to a
+/// hero's house to take the hero: the port's stand-in, not decoded (the
+/// original lands a party for them: 0x4ac2d0 sub-code 10, 0x4b0e40).
 const TAKE_REACH: f32 = 1.0;
 const HERO_REACH: f32 = 2.6;
 /// What heals aboard (0x4b98b0, a tick at a time): each Cup of Asclepius
@@ -51,45 +52,148 @@ impl Scene {
             }
             _ => return Err("Choose a treasure or a hero's house".into()),
         }
-        let (x, y) = (self.objects[t].x, self.objects[t].y);
-        let path = self
-            .plan_route_to_water(i, x, y)
-            .ok_or("The ship cannot sail there")?;
+        // 0x4aab00 / 0x4af940: a treasure on a cell 0x499990(cell, 0)
+        // takes is sailed to (`+0x792` = `+0x797` its cell, `+0x7c2` the
+        // box); one on land the ship comes as near as the route allows.
+        let at = (self.objects[t].class == ObjectClass::Treasure)
+            .then(|| self.cell_of(t))
+            .filter(|&c| self.sea_cell(c, false));
+        let path = match at {
+            Some((cx, cy)) => {
+                let w = TILE_SIZE as f32;
+                self.plan_route(i, (cx as f32 + 0.5) * w, (cy as f32 + 0.5) * w)
+            }
+            None => {
+                let (x, y) = (self.objects[t].x, self.objects[t].y);
+                self.plan_route_to_water(i, x, y)
+            }
+        }
+        .ok_or("The ship cannot sail there")?;
         let s = self.objects[i].ship.as_mut().unwrap();
         s.path = path;
-        s.task = Some(Task::Take { target });
+        s.task = Some(Task::Take { target, at });
         Ok(())
     }
 
-    /// Ships that reach the treasure or hero they were sent for take it;
-    /// treasures for the settlement are handed over at own settlements and
-    /// towns; the Golden Fleece and Argus mend their ships.
+    /// What kind of treasure `kind` is to a ship (0x4b9740): 2 used at
+    /// once (amber, fish, the bursting spells: kinds 0-5, 8), 4 goods for
+    /// the settlement (6, 7, 27), 8 spells and heroes' items (9, 17-26),
+    /// 0x10 the barbarians' (10-14), 1 the healing ones (15, 16); 0 any
+    /// other.
+    pub(super) fn treasure_use(kind: u8) -> u8 {
+        match kind {
+            0..=5 | 8 => 2,
+            6 | 7 | 27 => 4,
+            9 | 17..=26 => 8,
+            10..=14 => 0x10,
+            15 | 16 => 1,
+            _ => 0,
+        }
+    }
+
+    /// Whether ship `i` takes a treasure of kind `kind` (0x4a5bc0): one
+    /// used at once always; any other with room aboard (0x4be800 mode 6:
+    /// 0x597afc[type] less the treasures aboard `+0x482`) and of a known
+    /// use.
+    pub(super) fn takes_treasure(&self, i: usize, kind: u8) -> bool {
+        let class = Self::treasure_use(kind);
+        if class & 2 != 0 {
+            return true;
+        }
+        let Some(s) = self.objects[i].ship.as_ref() else {
+            return false;
+        };
+        let room = super::chest::SINK_TREASURES
+            .get(s.kind as usize)
+            .map_or(0, |&n| n as i32 - s.treasures.len() as i32);
+        room >= 1 && class != 0
+    }
+
+    /// A ship has stepped into cell `c` (0x4a3f40 at 0x4a48d2, after the
+    /// chest, on every cell it comes into, whatever its order): a
+    /// treasure on the cell's slot (class 700, `+0xa4` not 5) is taken
+    /// when 0x4a5bc0 allows (`takes_treasure`): message 0x158c1 to it and
+    /// the ship's notice (0x4a1af0 used at once, through 0x4b97d0; else
+    /// 0x4a1a60, put aboard through 0x4bd0c0). (The treasure's state 5
+    /// not decoded: never set by the port.)
+    pub(super) fn ship_steps_on_treasure(
+        &mut self,
+        ship: u32,
+        c: (i32, i32),
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        let Some(i) = self.object_index(ship) else {
+            return;
+        };
+        if self.objects[i].ship.is_none() {
+            return;
+        }
+        let Some(g) = (0..self.objects.len()).find(|&g| {
+            self.objects[g].class == ObjectClass::Treasure
+                && self.objects[g].treasure.is_some()
+                && self.cell_of(g) == c
+        }) else {
+            return;
+        };
+        let kind = self.objects[g].treasure.unwrap().kind;
+        if self.takes_treasure(i, kind) {
+            self.take_treasure(i, g, data, caches);
+        }
+    }
+
+    /// The take orders (0x4ac2d0, class 700 / 0x49, sub-code 9: 0x4ad680
+    /// at step 1). A treasure on the sea is taken as the ship comes into
+    /// its cell (`ship_steps_on_treasure`); the order ends with the ship
+    /// in that cell (0x4ac490: 0x4b8d40 clears the task, taken or not).
+    /// The treasure gone first (0x51f1f0 failing), the ship posts notice
+    /// 0x138 to its group every tick (0x4ad9b4, 0x4a1430) and the order
+    /// stays. A treasure on land or a hero: the port's stand-in, the take
+    /// once near (not ported: the landing party of sub-code 10, 0x4b0e40
+    /// -> 0x4b2d60 kind 3 -> 0x421f00 -> message 0xda9d to the ship).
+    /// Treasures for the settlement are handed over at own settlements
+    /// and towns; the Golden Fleece and Argus mend their ships.
     pub(super) fn run_treasures(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         let t = TILE_SIZE as f32;
-        let takers: Vec<(u32, u32)> = self
+        let takers: Vec<_> = self
             .objects
             .iter()
             .filter_map(|o| match o.ship.as_ref()?.task? {
-                Task::Take { target } => Some((o.id, target)),
+                Task::Take { target, at } => Some((o.id, target, at)),
                 _ => None,
             })
             .collect();
-        for (ship, target) in takers {
-            let (Some(i), Some(g)) = (self.object_index(ship), self.object_index(target)) else {
-                if let Some(i) = self.object_index(ship) {
+        for (ship, target, at) in takers {
+            let Some(i) = self.object_index(ship) else {
+                continue;
+            };
+            if let Some(c) = at {
+                if self.cell_of(i) == c {
                     self.objects[i].ship.as_mut().unwrap().task = None;
+                } else if self.object_index(target).is_none() {
+                    self.post_notice(ship, 0x138, 0);
                 }
+                continue;
+            }
+            let Some(g) = self.object_index(target) else {
+                self.objects[i].ship.as_mut().unwrap().task = None;
                 continue;
             };
             let (o, goal) = (&self.objects[i], &self.objects[g]);
             let d = ((o.x - goal.x).powi(2) + (o.y - goal.y).powi(2)).sqrt();
             let hero = goal.class == ObjectClass::HeroHouse;
             let idle = o.ship.as_ref().unwrap().path.is_empty();
+            let take = |s: &Self| {
+                hero || s.takes_treasure(i, s.objects[g].treasure.map_or(0xff, |tr| tr.kind))
+            };
             if d <= if hero { HERO_REACH } else { TAKE_REACH } * t {
                 if hero {
                     self.take_hero(i, g);
                 } else {
-                    self.take_treasure(i, g, data, caches);
+                    if take(self) {
+                        self.take_treasure(i, g, data, caches);
+                    }
+                    self.objects[i].ship.as_mut().unwrap().task = None;
                 }
             } else if idle {
                 // Arrived as near as the sea allows.
@@ -98,7 +202,10 @@ impl Scene {
                         .push("The ship could not get near enough".into());
                     self.objects[i].ship.as_mut().unwrap().task = None;
                 } else {
-                    self.take_treasure(i, g, data, caches);
+                    if take(self) {
+                        self.take_treasure(i, g, data, caches);
+                    }
+                    self.objects[i].ship.as_mut().unwrap().task = None;
                 }
             }
         }
@@ -251,7 +358,6 @@ impl Scene {
         let cell = ((x / t) as i32, (y / t) as i32);
         let ship_id = self.objects[i].id;
         let name = objects::treasure_name(tr.kind);
-        self.objects[i].ship.as_mut().unwrap().task = None;
         if self.is_own(&self.objects[i]) {
             self.stats.treasures_found += 1;
             // Its crew cheers (events 168-171 by nation, 0x4a5bc0).
@@ -320,11 +426,6 @@ impl Scene {
             }
             _ => {
                 let s = self.objects[i].ship.as_mut().unwrap();
-                if s.treasures.len() >= objects::treasure_room(s.kind) {
-                    self.messages
-                        .push("There is no room for the treasure".into());
-                    return;
-                }
                 s.add_treasure(tr, owner == Some((4, 0)));
                 self.messages.push(format!("Taken aboard: {name}"));
             }

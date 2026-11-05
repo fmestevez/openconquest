@@ -10352,6 +10352,51 @@ target (ours the nearest no other ship of the flotilla is after, the
 take given at once, a refused one trying the next) and the block's
 lists and notices (0x137, 0x141, 0x142).
 
+**A ship's take** (event 0x40 class 700, the player's and the computer's
+alike). 0x4aab00 sets the gather task `+0x76e` 700, sub-code `+0x772` 9,
+step `+0x77d` 1, the treasure's id `+0x77e`, and asks 0x4af940 for the
+cells: a treasure on a cell 0x499990(cell, 0) takes (its cell `+0xa8`,
+`+0xac`) gives `+0x792` = `+0x797` = that cell; on land, a route
+(0x55a890 over the ship's grid, the treasure's cell opened) gives
+`+0x792` the route's last sea cell and `+0x797` the treasure's; no route,
+both its vt+0x28 cell. The box `+0x7c2`-`+0x7ce` is the treasure's cell.
+Each tick 0x4ac2d0 (class 700 / 0x49) runs sub-code 9, 0x4ad680: the
+treasure looked up by id; gone, notice 0x138 to the ship's group
+(0x4a1430) every tick and nothing else, the order staying; else a move
+(0x4a6270 mode 5) to `+0x792` (with 0x4af940 again when it is land, or
+when a ship of the player's lies there within 2 cells, asked to make way
+by 0x4b4b50 when its priority is lower), returning 2 once in that cell.
+Then, a sea treasure: the ship in `+0x792` ends the order (0x4ac490:
+0x4b8d40 zeroes the task, `+0x25d &= ~0x40`), taken or not; a land one,
+lying still (`+0x58c` 0) with no building on the cell, goes on to
+sub-code 10 (0x4b0e40: close in 0x4afe50, 0x4b0470, furl 0x4b89b0, the
+walkway 0x3e6 and the party 0x3de as the landing's, at half the party's
+frames 0x4b2d60 sends 0x1a67 a landing party of kind 3 for `+0x7c2`,
+whose 0x421f00 on the treasure's cell, 0x407950 passing (`+0xa4` 1 or
+2), sends 0xda9d to the ship (0x4de5ea: the take as below) and 0x158c1
+to the treasure when it answers yes; then the walkway up and back out,
+0x4b3850).
+
+The take itself is the ship's step (0x4a3f40 at 0x4a48d2, after the
+chest, on every cell it comes into whatever its order): 0x4a5bc0 takes
+a treasure on the cell (class 700, `+0xa4` not 5) by its use 0x4b9740
+(`+0xb0` kind): 2 for kinds 0-5 and 8 (used at once, 0x4b97d0; notice
+0x4a1af0), else room aboard needed (0x4be800 mode 6: 0x597afc[type]
+less `+0x482`, at least 1) and a use not 0 (4: 6, 7, 27; 8: 9, 17-26;
+0x10: 10-14; 1: 15, 16; aboard by 0x4bd0c0, notice 0x4a1a60); taken, the
+treasure gets 0x158c1. For the viewer's ship it plays the nation's event
+(`+0x54`: 0 0xa8, 1 0xa9, 2 0xab, 3 0xaa; mode 5). The port
+(`Scene::ship_steps_on_treasure`, `takes_treasure`, `run_treasures`):
+the step's take and the sea treasure's route and end as the original's
+(the route the port's plain plan to the cell; 0x4ad680's re-plans and
+make-way not ported). Not ported: the land treasure's landing party
+(sub-code 10; the port takes it once within a cell of the treasure or,
+the route done, two: a stand-in) and the hero's house (class 0x49, the
+same machine with 0x4bd350 at the party's half: the port's reach of 2.6
+cells, a stand-in); what 0x4b97d0 and 0x4bd0c0 do with each kind and the
+notices' texts (the port's messages are its own); the treasure's state
+5.
+
 **Spells.** Order 117's studies 33 and 34 have the Temple of the Sea or
 of War learn its next spell (1000 amber; 100 ticks for a computer,
 0x439260). When a town is hit (0x488960, message 0x5d9c) the shooter's

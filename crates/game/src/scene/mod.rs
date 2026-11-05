@@ -3321,6 +3321,7 @@ impl Scene {
         }
         for (id, c) in stepped_in {
             self.ship_steps_on_chest(id, c, data, caches);
+            self.ship_steps_on_treasure(id, c, data, caches);
         }
         for (id, (x, y)) in arrived {
             self.post_arrival(id, x, y);

@@ -1477,8 +1477,14 @@ pub enum Task {
         #[serde(default = "convoy_range")]
         range: u8,
     },
-    /// Sail to a treasure or a hero's house and take it.
-    Take { target: u32 },
+    /// Sail to a treasure or a hero's house and take it (event 0x40
+    /// class 700 or 0x49, 0x4aab00). `at`: a treasure lying on the sea,
+    /// its cell (`+0x792`, 0x4af940), where the order ends.
+    Take {
+        target: u32,
+        #[serde(default)]
+        at: Option<(i32, i32)>,
+    },
     /// Sail alongside own port, shipyard, dock or ship `target` and reload
     /// there (Reload Object; see `scene::load`).
     LoadAt { target: u32 },

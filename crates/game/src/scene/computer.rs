@@ -6329,7 +6329,7 @@ impl Scene {
             .iter()
             .filter_map(|&s| self.object_index(s))
             .filter_map(|k| match self.objects[k].ship.as_ref()?.task {
-                Some(Task::Take { target }) => Some(target),
+                Some(Task::Take { target, .. }) => Some(target),
                 _ => None,
             })
             .collect();

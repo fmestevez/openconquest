@@ -3109,37 +3109,72 @@ fn treasures_and_heroes() {
     let i = scene.object_index(ship).unwrap();
     scene.objects[i].owner = Some((human.nation, human.slot));
     scene.objects[i].ship.as_mut().unwrap().kind = 2; // a royal ship
-    let (sx, sy) = (scene.objects[i].x, scene.objects[i].y);
-    // Put a treasure right by the ship and take it.
+    let t = TILE_SIZE as f32;
+    let here = scene.cell_of(i);
+    // A sea cell two cells off the ship's: a treasure there is taken as
+    // the ship comes into its cell (0x4a3f40 -> 0x4a5bc0), whatever its
+    // order.
+    let there = [(2, 0), (-2, 0), (0, 2), (0, -2)]
+        .into_iter()
+        .map(|(dx, dy)| (here.0 + dx, here.1 + dy))
+        .find(|&c| scene.sea_cell(c, false) && scene.nav.passable(c.0, c.1, false))
+        .unwrap();
     let place = |scene: &mut Scene, kind: u8, amount: u32| {
-        let t = scene
+        let k = scene
             .objects
             .iter()
             .position(|o| o.treasure.is_some())
             .unwrap();
-        scene.objects[t].treasure = Some(crate::objects::Treasure {
+        scene.objects[k].treasure = Some(crate::objects::Treasure {
             kind,
             param: 0,
             amount,
         });
-        scene.objects[t].x = sx + 20.0;
-        scene.objects[t].y = sy;
-        scene.objects[t].id
+        scene.objects[k].x = (there.0 as f32 + 0.5) * t;
+        scene.objects[k].y = (there.1 as f32 + 0.5) * t;
+        scene.objects[k].cell = None;
+        scene.objects[k].id
+    };
+    // Sails into the cell: taken on the tick it comes in.
+    let sail = |scene: &mut Scene, caches: &mut Caches, target: u32| {
+        for _ in 0..3000 {
+            scene.update(0.04, &data, caches);
+            let k = scene.object_index(ship).unwrap();
+            if scene.object_index(target).is_none() {
+                assert_eq!(scene.cell_of(k), there, "taken on coming in");
+                return;
+            }
+        }
+        panic!("not taken");
     };
     let amber = scene.amber;
     let barrel = place(&mut scene, 1, 600);
     scene.order_take(ship, barrel).unwrap();
-    for _ in 0..50 {
-        scene.update(0.02, &data, &mut caches);
-    }
+    assert!(matches!(
+        scene.objects[i].ship.as_ref().unwrap().task,
+        Some(Task::Take { at: Some(c), .. }) if c == there
+    ));
+    sail(&mut scene, &mut caches, barrel);
     assert_eq!(scene.amber, amber + 600);
-    assert!(scene.object_index(barrel).is_none(), "taken");
-    // Ariadne's clew (Theseus's item) goes aboard.
-    let clew = place(&mut scene, 19, 0);
-    scene.order_take(ship, clew).unwrap();
-    for _ in 0..50 {
-        scene.update(0.02, &data, &mut caches);
+    // The order ends with the ship in the treasure's cell (0x4ac490).
+    let k = scene.object_index(ship).unwrap();
+    scene.update(0.04, &data, &mut caches);
+    assert!(scene.objects[k].ship.as_ref().unwrap().task.is_none());
+    // Back to its cell; then Ariadne's clew (Theseus's item) goes aboard
+    // a ship merely moving through.
+    let cell_mid = |c: (i32, i32)| ((c.0 as f32 + 0.5) * t, (c.1 as f32 + 0.5) * t);
+    let (bx, by) = cell_mid(here);
+    assert!(scene.order_move(ship, bx, by));
+    for _ in 0..3000 {
+        scene.update(0.04, &data, &mut caches);
+        if scene.cell_of(k) == here && scene.objects[k].ship.as_ref().unwrap().path.is_empty() {
+            break;
+        }
     }
+    let clew = place(&mut scene, 19, 0);
+    let (tx, ty) = cell_mid(there);
+    assert!(scene.order_move(ship, tx, ty));
+    sail(&mut scene, &mut caches, clew);
     let s = |scene: &Scene| {
         scene.objects[scene.object_index(ship).unwrap()]
             .ship
@@ -3163,6 +3198,74 @@ fn treasures_and_heroes() {
     }
     assert_eq!(s(&scene).heroes, vec![crate::objects::THESEUS]);
     assert!(!s(&scene).has_treasure(19), "the clew stays with Theseus");
+}
+
+/// A take order to a treasure on the sea ends with the ship in its cell
+/// (0x4ac490), taken or not: a ship with no room aboard (0x597afc 0 for
+/// type 9) leaves goods (kind 6, 0x4b9740 4) lying, and a full one too;
+/// amber (0x4b9740 2) is taken without room (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_treasure_needs_room_aboard() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    scene.brain = None;
+    let ship = scene.objects.iter().find(|o| o.ship.is_some()).unwrap().id;
+    scene.objects.retain(|o| o.ship.is_none() || o.id == ship);
+    let i = scene.object_index(ship).unwrap();
+    scene.objects[i].ship.as_mut().unwrap().kind = 9;
+    let t = TILE_SIZE as f32;
+    let here = scene.cell_of(i);
+    let there = [(2, 0), (-2, 0), (0, 2), (0, -2)]
+        .into_iter()
+        .map(|(dx, dy)| (here.0 + dx, here.1 + dy))
+        .find(|&c| scene.sea_cell(c, false) && scene.nav.passable(c.0, c.1, false))
+        .unwrap();
+    let k = scene
+        .objects
+        .iter()
+        .position(|o| o.treasure.is_some())
+        .unwrap();
+    scene.objects[k].treasure = Some(crate::objects::Treasure {
+        kind: 6,
+        param: 0,
+        amount: 0,
+    });
+    scene.objects[k].x = (there.0 as f32 + 0.5) * t;
+    scene.objects[k].y = (there.1 as f32 + 0.5) * t;
+    scene.objects[k].cell = None;
+    let goods = scene.objects[k].id;
+    scene.order_take(ship, goods).unwrap();
+    let done = |scene: &Scene| {
+        let s = scene.objects[scene.object_index(ship).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap();
+        s.task.is_none()
+    };
+    for _ in 0..3000 {
+        scene.update(0.04, &data, &mut caches);
+        if done(&scene) {
+            break;
+        }
+    }
+    assert!(done(&scene));
+    assert_eq!(scene.cell_of(scene.object_index(ship).unwrap()), there);
+    assert!(scene.object_index(goods).is_some(), "left lying");
+    assert!(scene.objects[scene.object_index(ship).unwrap()]
+        .ship
+        .as_ref()
+        .unwrap()
+        .treasures
+        .is_empty());
+    // 0x4a5bc0 alone: amber taken by the roomless ship, goods not.
+    let i = scene.object_index(ship).unwrap();
+    assert!(!scene.takes_treasure(i, 6));
+    assert!(scene.takes_treasure(i, 1));
+    assert!(!scene.takes_treasure(i, 28));
 }
 
 /// The Gorgon rests, rises and stares tick by tick as the original's
