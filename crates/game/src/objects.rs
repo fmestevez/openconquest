@@ -2189,6 +2189,19 @@ pub fn resolve(
                 },
             )
         }
+        // A sunken chest (0x2c1): its cell fields 4, 5, its kind 6, lying
+        // field 7 (the port's; the original saves its state, 0x405130).
+        ObjectClass::Other(0x2c1) => {
+            let cell = (f(4) as i32, f(5) as i32);
+            let frames = crate::scene::chest_frames(data, caches, f(6), f(7) == 1, cell);
+            (
+                CellCentre(f(4), f(5)),
+                Visual {
+                    frames,
+                    frame_ms: 2 * TICK_MS,
+                },
+            )
+        }
         _ => return Ok(None),
     };
     let banner = match class {

@@ -1433,7 +1433,17 @@ impl Scene {
             if report {
                 self.note_destroyed(ti, by);
             }
-            self.drop_held(target, data, caches);
+            // A ship's treasures stay aboard till its sinking's
+            // next-to-last frame (0x4e4f20, `sink_drop`).
+            let aboard: Vec<objects::Treasure> = if is_building {
+                self.drop_held(target, data, caches);
+                Vec::new()
+            } else {
+                let (aboard, kept): (Vec<_>, Vec<_>) =
+                    self.held.drain(..).partition(|h| h.0 == target);
+                self.held = kept;
+                aboard.into_iter().map(|h| h.1).collect()
+            };
             // A fort going up tells its town (0x4184f0, 0x2491); a
             // building gone leaves its town's list (the drain 0x427bb0,
             // 0x2874); a settlement or town gone tells its buildings.
@@ -1486,11 +1496,9 @@ impl Scene {
             // frame 0 and delay `+0x7d` 2), a frame each time more than 2
             // ticks have passed (0x4c12b0), gone past the last (message
             // 10). The port counts frame 0 from the sinking, the original
-            // from the hull picture's last step (`+0x81`). Not ported: at
-            // the next-to-last frame the sunken chest (0x4e4e30, a
-            // `SkarbClassTy` 0x2c1 worth half the hull's sale value) and
-            // the treasures aboard laid then (0x4e4f20; the port lays them
-            // at once, `drop_held`).
+            // from the hull picture's last step (`+0x81`). At the
+            // next-to-last frame the sunken chest (0x4e4e30) and the
+            // treasures aboard (0x4e4f20) are left (`sink_drop`).
             // A hull with no sinking picture shows nothing; a fallen
             // building only its ruins (0x423d60 on 0x138b: no blast).
             if let Some(ship) = self.objects[ti].ship.as_ref() {
@@ -1498,6 +1506,7 @@ impl Scene {
                 let frames =
                     objects::ship_sink_frames(data, caches, ship.kind, nation, ship.heading)
                         .unwrap_or_default();
+                self.sink_drop(ti, frames.len(), aboard);
                 if !frames.is_empty() {
                     self.effects.push(Effect {
                         x: tx,

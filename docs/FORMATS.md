@@ -917,7 +917,13 @@ Mode 1 composites exist for types 0-9 of nation 1, 0-7 and 10-11 of
 3, 1-3 and 5-6 of 4; with none 0x50d080 has no picture and
 nothing shows. The port (`objects::ship_sink_frames`, a frame per 3
 ticks) counts frame 0 from the sinking, not from the hull's last step
-`+0x81`; the chest and the treasures' timing below are not ported.
+`+0x81`. 0x4c12b0 steps when more than `+0x7d` (2) ticks have passed,
+adds 1 to the frame and returns 1 when count - frame is then 2, 2 when
+the frame reaches the count (taken back by one; message 10 follows):
+with fewer than 3 frames (or none) nothing is ever dropped. The port
+keeps the drop (`chest::SinkDrop`: the cell, half the sale value, the
+hull's type and the treasures taken off the ship) for 3 x (count - 2)
+ticks after the sinking (`Scene::sink_drop`, `run_sink_drops`).
 
 The sunken chest (`SkarbClassTy` 0x2c1, `andrey\ska`). 0x4c12b0 returns
 1 when its step leaves the frame at count - 2; the sinking ship then
@@ -934,8 +940,10 @@ bytes at `+0x485`): while any is left and fewer than 0x597afc[type]
 announces it (brains' message 0x5d94 with 0) and 0x4bd500(index 0, with
 1) takes the first out and lays it on the ship's cell (0x520c70); the
 records shift down, so the announced record is the one at i after the
-shifts. The port lays every held treasure at once at the sinking
-(`drop_held`), with a message of its own.
+shifts; the rest go down with the ship. The port lays them so
+(`run_sink_drops`, no message; `drop_held` stays for buildings and
+creatures). Not ported: the announcement 0x4b6e80 (brains' message
+0x5d94 with 0).
 
 The chest's handler 0x405230: message 2 (creation) takes the cell
 (`+0xb8`, `+0xbc`), value `+0xc0`, kind `+0x74`, its generator `+0x18`
@@ -946,7 +954,8 @@ event 0x58 (88, `wreck1`) mode 6 at the cell (0x4053f8). States
 (0x404e10, `+0xb4`; each a 0x50cbf0 layer at depth 0x4e82 and picture
 0x404af0 `SKARB<kind><0|1>`, placed at `cell x width - (picture width
 - 0x40) / 2`, likewise y, 0x404c90): 1 rising, `SKARB<k>0` backward from
-frame count - 2, one pass; 2 lying, `SKARB<k>1` forward, `r % 16 + 5`
+frame count - 2, one pass (past 0 the frame goes to count - 2 again and
+the pass is made); 2 lying, `SKARB<k>1` forward, `r % 16 + 5`
 passes (`r` the generator's LCG 0x41c64e6d / 0x3039, `>> 16 & 0xf`), 0
 if hurried; 3 sinking, `SKARB<k>0` forward, one pass; then the cell's
 slot cleared, message 10 and state 4. Frames step (0x404b50) when the
@@ -959,9 +968,30 @@ the local seat's, sound event by its `+0x54` (0 0xac, 1 0xad, 3 0xae,
 2 0xaf; mode 5) at its cell; then, the chest not in state 4, 0x4a8de0
 gives the ship's player the chest's `+0xc0` amber and posts 0x158c0.
 Saved with 0x8cf (record 0x6c bytes: kind 0x2c1, `+0x10` cell, `+0x18`
-the generator, ...; reloaded through 0x405130). Not ported: the chest
-(the port has no 0x2c1 object; `ObjectClass::Other(0x2c1)` only names
-it).
+the generator, ...; reloaded through 0x405130). Each state's entry
+(0x404e10) zeroes the passes and, for 1-3, loads the picture (0x404c90:
+first frame 0, last count - 1 at least 0, the frame count - 2 rising or
+the first, delay `+0x80` 2, last step `+0x7c` 0) and steps at once
+(0x404b50: the frame `+0x45` drawn, then moved; each wrap a pass);
+lying hurried has 0 passes and sinks at once (the loop in 0x404e10);
+any state past 3 clears `+0x90`. The tick 0x404f80: a state's passes
+made, the next; lying hurried, the passes are set to target - 1 before
+the step. A hurry (0xda93-0xda96, with a picture) sets `+0x90` and the
+target to 1. 0x48ec60(self, x, y, 1): landscape low nibble up to 7 and
+nibble 1 up to 0x30, the occupant slot `+0xc` empty (0x499900; the
+sinking ship left it at 0x4dec40 through 0x4a3970 / 0x4a3800, 0x4998a0),
+`+0x1c` empty, 0x403010, and the `+0x10` slot empty or itself. Every
+`SKARB<k><0|1>` (k 0, 2) is 33 frames of 64 x 64, so the picture's
+corner is the cell's; `SND_172` and `SND_175` are empty, `SND_173` and
+`SND_174` list `piw1a`, `piw3a`, `piw4a`. The port (`scene/chest.rs`):
+an `ObjectClass::Other(0x2c1)` object (record fields 4, 5 the cell, 6
+the kind, 7 lying) with its state in `Scene::chests` (saved), stepped in
+the game tick after the castles; the leviathans' 0x48ed40 also finds the
+`+0x10` slot taken by a chest. Not ported: the hurry's senders (no
+blow or spell of the port reaches a chest yet); 0x158c0 is posted
+(0x5405b0), taken at once here; the step into a cell on the boarding
+path (0x4a3f40 to 0x4a4d49) is not hooked; the monsters' 0x402ee0 test
+of a picture in the `+0x10` slot (vt +0x30) for a chest.
 
 The ghost table 0x5cdd2c (0x800 bytes of bss) is
 filled at start (0x519280 at 0x5193e5-0x51942b): 128 rows of 16

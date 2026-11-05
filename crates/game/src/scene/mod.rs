@@ -456,6 +456,10 @@ pub struct Scene {
     pub creature_clock: f32,
     /// The wizards' castles (castle.rs).
     pub castles: BTreeMap<u32, castle::Castle>,
+    /// The sunken chests (chest.rs).
+    pub chests: BTreeMap<u32, chest::Chest>,
+    /// What sinking ships will leave at their next-to-last frame.
+    pub sink_drops: Vec<chest::SinkDrop>,
     /// Big reefs a brain raises this tick: cell and kind (not saved: raised
     /// at once).
     pending_reefs: Vec<(i32, i32, u32)>,
@@ -570,7 +574,9 @@ mod battle;
 mod brain;
 mod burning;
 mod castle;
+pub(crate) mod chest;
 pub use burning::SavedBuildingFire;
+pub use chest::chest_frames;
 mod castq;
 mod closing;
 mod computer;
@@ -903,6 +909,8 @@ impl Scene {
             free_casts: Default::default(),
             creature_clock: 0.0,
             castles: BTreeMap::new(),
+            chests: BTreeMap::new(),
+            sink_drops: Vec::new(),
             pending_reefs: Vec::new(),
             pending_walkers: Vec::new(),
             pending_casts: Vec::new(),
@@ -1252,6 +1260,8 @@ impl Scene {
                     .collect(),
                 wizards: Vec::new(),
                 castles: self.castles.iter().map(|(k, v)| (*k, v.clone())).collect(),
+                chests: self.chests.iter().map(|(k, v)| (*k, v.clone())).collect(),
+                sink_drops: self.sink_drops.clone(),
                 parties: self.parties.clone(),
             },
             game_id: None,
@@ -1463,6 +1473,8 @@ impl Scene {
         scene.gorgons = b.gorgons.iter().cloned().collect();
         scene.sea_monster_states = b.sea_monster_states.iter().cloned().collect();
         scene.castles = b.castles.iter().cloned().collect();
+        scene.chests = b.chests.iter().cloned().collect();
+        scene.sink_drops = b.sink_drops.clone();
         scene.parties = b.parties.clone();
         scene.refresh_sight();
         if !save.start_sites.is_empty() {
@@ -2559,6 +2571,7 @@ impl Scene {
             .or_else(|| self.leviathan_frame(obj.id))
             .or_else(|| self.gorgon_frame(obj.id))
             .or_else(|| self.castle_frame(obj.id))
+            .or_else(|| self.chest_frame(obj.id))
             .or_else(|| self.siren_frame(obj.id))
         {
             if let Some(layers) = obj.frames.get(f as usize).or(obj.frames.last()) {
@@ -2671,6 +2684,8 @@ impl Scene {
             self.tick_flyers(data, caches);
             self.tick_gorgons(data, caches);
             self.tick_castles(data, caches);
+            self.run_sink_drops(data, caches);
+            self.tick_chests(data, caches);
             self.tick_lairs(data, caches);
             self.tick_statuses(data, caches);
             self.tick_building_statuses(data, caches);
@@ -2885,6 +2900,8 @@ impl Scene {
         let mut jason_sinks = Vec::new();
         // Ships at their move goal (notice 0x136, 0x4a3f40).
         let mut arrived: Vec<(u32, (i32, i32))> = Vec::new();
+        // Ships come into a cell (0x4a3f40 at 0x4a47c0: its chest).
+        let mut stepped_in: Vec<(u32, (i32, i32))> = Vec::new();
         let players: Vec<Option<(u32, u32)>> = self
             .human
             .iter()
@@ -3158,6 +3175,7 @@ impl Scene {
                 let entered = ship.between.get() && here == ship.entering;
                 if entered {
                     ship.between.set(false);
+                    stepped_in.push((obj.id, here));
                     ship.ahead = None;
                     if ship.goal == Some(here) {
                         arrived.push((obj.id, here));
@@ -3279,6 +3297,9 @@ impl Scene {
             let pushed = self.push_aside(still, mover);
             self.objects[m].ship.as_mut().unwrap().waited =
                 if pushed { after - before } else { after };
+        }
+        for (id, c) in stepped_in {
+            self.ship_steps_on_chest(id, c, data, caches);
         }
         for (id, (x, y)) in arrived {
             self.post_arrival(id, x, y);
@@ -3435,6 +3456,10 @@ pub struct Battle {
     pub wizards: Vec<(u32, script::Wizard)>,
     #[serde(default)]
     pub castles: Vec<(u32, castle::Castle)>,
+    #[serde(default)]
+    pub chests: Vec<(u32, chest::Chest)>,
+    #[serde(default)]
+    pub sink_drops: Vec<chest::SinkDrop>,
     #[serde(default)]
     pub parties: Vec<landing::Party>,
 }

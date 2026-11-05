@@ -18875,3 +18875,119 @@ fn layers_eruption_buildings_and_tornado_take_their_depths() {
     }
     assert!(seen, "an eruption");
 }
+
+/// A ship sunk leaves at its sinking's next-to-last frame (0x4c12b0
+/// returning 1, here 18 steps of 3 ticks) a chest worth half its sale
+/// value (0x4e4e30) and the first 0x597afc[type] treasures aboard
+/// (0x4e4f20); the chest rises (`SKARB<k>0` backward), lies `r % 16 + 5`
+/// passes of `SKARB<k>1` on its own generator and sinks; a ship stepping
+/// onto it takes its amber and sinks it, hurried (0x4a3f40, 0x405230)
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_sunk_ship_leaves_its_chest_and_treasures_at_its_next_to_last_frame() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let own: Vec<u32> = scene
+        .objects
+        .iter()
+        .filter(|o| scene.is_own(o) && o.ship.is_some())
+        .map(|o| o.id)
+        .collect();
+    let ship = own[0];
+    let k = scene.object_index(ship).unwrap();
+    scene.objects[k].ship.as_mut().unwrap().heading = 3;
+    let hull = scene.objects[k].ship.as_ref().unwrap().kind;
+    let t = TILE_SIZE as f32;
+    let (x, y) = (scene.objects[k].x, scene.objects[k].y);
+    let cell = ((x / t).floor() as i32, (y / t).floor() as i32);
+    let value = (scene.sale_value(k).0 / 2) as u32;
+    for amount in [100, 200, 300] {
+        let tr = objects::Treasure {
+            kind: 0,
+            param: 0,
+            amount,
+        };
+        scene.held.push((ship, tr));
+    }
+    let treasures = |s: &Scene| {
+        s.objects
+            .iter()
+            .filter(|o| o.class == ObjectClass::Treasure)
+            .count()
+    };
+    let before = treasures(&scene);
+    scene.strike(ship, 1.0e9, None, false, &data, &mut caches);
+    assert!(scene.held.iter().all(|h| h.0 != ship));
+    assert_eq!(treasures(&scene), before);
+    assert!(scene.messages.iter().all(|m| !m.contains("wreckage")));
+    let t0 = scene.ticks;
+    let tick = |s: &mut Scene, caches: &mut Caches| {
+        s.ticks += 1;
+        s.run_sink_drops(&data, caches);
+        s.tick_chests(&data, caches);
+    };
+    for _ in 0..3 * 18 - 1 {
+        tick(&mut scene, &mut caches);
+    }
+    assert!(scene.chests.is_empty());
+    scene.sounds.clear();
+    tick(&mut scene, &mut caches);
+    assert_eq!(scene.ticks, t0 + 54);
+    let cap = chest::SINK_TREASURES[hull as usize] as usize;
+    assert_eq!(treasures(&scene), before + cap.min(3));
+    assert_eq!(scene.chests.len(), 1);
+    let (&id, c) = scene.chests.iter().next().unwrap();
+    let kind = if matches!(hull, 4 | 8) { 2 } else { 0 };
+    assert_eq!((c.cell, c.value, c.kind, c.state), (cell, value, kind, 1));
+    let (cx, cy) = (cell.0 as f32 * t + t / 2.0, cell.1 as f32 * t + t / 2.0);
+    assert_eq!(scene.sounds, [("wreck1", cx, cy)]);
+    let rise = objects::sequence_frames(&data, &mut caches, &format!("SKARB{kind}0")).unwrap();
+    let n = rise.len() as i32;
+    // Every chest picture is 33 frames of 64 x 64: its corner the cell's.
+    for k in [0, 2] {
+        for p in 0..2 {
+            let f = objects::sequence_frames(&data, &mut caches, &format!("SKARB{k}{p}")).unwrap();
+            assert_eq!(f.len(), 33);
+            assert!(f
+                .iter()
+                .all(|l| (l[0].image.width, l[0].image.height) == (64, 64)));
+        }
+    }
+    assert_eq!((c.drawn, c.frame), (n - 2, n - 3));
+    let i = scene.object_index(id).unwrap();
+    let w = rise[0][0].image.width as i32;
+    let at = crate::render::layer_origin(&scene.objects[i], &scene.objects[i].frames[0][0]);
+    assert_eq!(at, (cell.0 * 64 - (w - 64) / 2, cell.1 * 64 - (w - 64) / 2));
+    // Rising: a frame every 2 ticks down to 0, then lying.
+    for _ in 0..2 * (n - 2) {
+        tick(&mut scene, &mut caches);
+    }
+    assert_eq!(scene.chests[&id].drawn, 0);
+    assert_eq!(scene.chests[&id].state, 1);
+    tick(&mut scene, &mut caches);
+    let seed = scene.objects_seed().wrapping_mul(id);
+    let r = seed.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039);
+    let c = &scene.chests[&id];
+    assert_eq!((c.state, c.drawn, c.target), (2, 0, (r >> 16 & 0xf) + 5));
+    // Another of the player's ships steps onto it: the amber, then it
+    // sinks a frame a tick.
+    let other = own[1];
+    let amber = scene.amber;
+    scene.sounds.clear();
+    scene.ship_steps_on_chest(other, cell, &data, &mut caches);
+    assert_eq!(scene.amber, amber + value);
+    let c = &scene.chests[&id];
+    assert_eq!((c.state, c.hurried, c.drawn), (3, true, 0));
+    assert_eq!(scene.sounds.len(), 1);
+    assert!(["piw1a", "piw3a", "piw4a"].contains(&scene.sounds[0].0));
+    for _ in 0..n {
+        tick(&mut scene, &mut caches);
+    }
+    assert!(scene.chests.is_empty());
+    assert!(scene.object_index(id).is_none());
+}

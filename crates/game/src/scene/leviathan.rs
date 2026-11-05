@@ -309,7 +309,13 @@ impl Scene {
     /// with a picture on its `+0x18` (0x403010, vt +0x30 0x493710; not
     /// ported: the gorgon's and siren's vt +0x30 there); no other leviathan
     /// in its slot.
-    fn leviathan_may_be(&self, who: Option<u32>, c: (i32, i32), free: bool, room: bool) -> bool {
+    pub(super) fn leviathan_may_be(
+        &self,
+        who: Option<u32>,
+        c: (i32, i32),
+        free: bool,
+        room: bool,
+    ) -> bool {
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
         if c.0 < 0 || c.1 < 0 || c.0 >= w || c.1 >= h {
             return false;
@@ -339,7 +345,8 @@ impl Scene {
                 return false;
             }
         }
-        self.leviathan_in(c).is_none_or(|id| Some(id) == who)
+        // The `+0x10` slot is the chests' too (0x405230).
+        self.leviathan_in(c).is_none_or(|id| Some(id) == who) && self.chest_at(c).is_none()
     }
 
     /// Message 2 (mode 0, a new one): amount field 4 x 100 (the object's
