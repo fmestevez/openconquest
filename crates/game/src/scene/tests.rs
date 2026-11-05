@@ -3176,7 +3176,7 @@ fn gorgon_and_siren() {
             .combat
             .as_ref()
             .unwrap()
-            .stone
+            .stone_len
     };
     let gorgon = scene
         .objects
@@ -3225,7 +3225,7 @@ fn gorgon_and_siren() {
         })
         .collect();
     // Her first stare at frame 13 of GORG2: 30 + 13 ticks after rising.
-    while stone(&scene, ships[0]) == 0.0 {
+    while stone(&scene, ships[0]) == 0 {
         tick(&mut scene, &mut caches);
         for (&id, &(x, y)) in ships.iter().zip(&held) {
             let i = scene.object_index(id).unwrap();
@@ -3236,7 +3236,11 @@ fn gorgon_and_siren() {
     }
     assert_eq!(scene.ticks - rose, 43);
     assert_eq!(scene.gorgons[&gorgon].state, 2);
-    assert_eq!(stone(&scene, ships[1]), 0.0, "Perseus is safe");
+    assert_eq!(stone(&scene, ships[1]), 0, "Perseus is safe");
+    // Stone from the stare's tick (`+0xa1`) for 150 ticks (`+0xa5`).
+    let k = scene.object_index(ships[0]).unwrap();
+    let since = scene.objects[k].combat.as_ref().unwrap().stone_since;
+    assert_eq!((since, stone(&scene, ships[0])), (scene.ticks, 150));
     // The shot's aim (0x402da0): two draws of her generator, x first.
     let mut g = scene.gorgons[&gorgon].clone();
     let at = scene.gorgon_aim(gorgon, true).unwrap();
@@ -3323,13 +3327,35 @@ fn gorgon_and_siren() {
     assert!(scene.sounds.iter().any(|s| s.0 == "sir1"));
     let c = &scene.charmed[&ships[0]];
     assert_eq!(c.share, if n < 5 { 88 / n } else { 22 });
-    let left = c.left;
-    assert!((crate::clock::ticks(749)..=crate::clock::ticks(750)).contains(&left));
+    // From her tick (`+0xb1`) for 750 (`+0xb5`); the ship, ticked after
+    // her, adds its first share (0x4a74c0) and heads for her cell at
+    // priority 50 (0x4ab250).
+    let sung = scene.ticks;
+    assert_eq!((c.since, c.len, c.acc), (sung, 750, c.share));
+    let share = c.share;
+    let k = scene.object_index(ships[0]).unwrap();
+    let sh = scene.objects[k].ship.as_ref().unwrap();
+    assert_eq!((sh.goal, sh.priority), (Some(c.cell), 50));
+    // A blow of 300 as the shares reach 1000, none before.
+    let hull = |s: &Scene| {
+        let k = s.object_index(ships[0]).unwrap();
+        s.objects[k].combat.as_ref().unwrap().hull
+    };
+    let h0 = hull(&scene);
+    // The n-th share is added at tick `sung + n - 1`.
+    let first = 1000_u32.div_ceil(share);
+    while scene.ticks < sung + first - 2 {
+        tick(&mut scene, &mut caches);
+        assert_eq!(hull(&scene), h0);
+    }
+    tick(&mut scene, &mut caches);
+    assert_eq!(hull(&scene), h0 - 300.0 / 15.0, "the song's blow");
+    assert_eq!(scene.charmed[&ships[0]].acc, first * share % 1000);
     // One song a surfacing.
     for _ in 0..20 {
         tick(&mut scene, &mut caches);
     }
-    assert!(scene.charmed[&ships[0]].left < left);
+    assert_eq!(scene.charmed[&ships[0]].len, 750);
     // The shot's aim (0x4048f0): two draws of her generator, x first.
     let g = scene.sirens[&siren].clone();
     let at = scene.siren_aim(siren, true).unwrap();
@@ -3363,13 +3389,24 @@ fn gorgon_and_siren() {
     assert_eq!(scene.sirens[&siren].hp, 0);
     let mut died = false;
     let start = scene.ticks;
+    let mut ends = None;
     while scene.object_index(siren).is_some() {
+        let end = scene.charmed.get(&ships[0]).map(|c| c.since + c.len);
         tick(&mut scene, &mut caches);
+        if let Some(end) = end.filter(|_| ends.is_none()) {
+            if !scene.charmed.contains_key(&ships[0]) {
+                // The song over at the ship's tick where `now - +0xb1 >=
+                // +0xb5` (0x4df320).
+                ends = Some((scene.ticks, end));
+            }
+        }
         died |= scene.sirens.get(&siren).is_some_and(|s| s.state == 4);
         assert!(scene.ticks < start + 2000, "she never went");
     }
     assert!(died);
     assert!(!scene.sirens.contains_key(&siren));
+    let (at, end) = ends.expect("the song ended");
+    assert_eq!(at, end);
 }
 
 /// The crew's experience (`+0x544`): a map ship's is its record's byte
@@ -8236,7 +8273,7 @@ fn fleece_and_argus_mend_in_steps() {
     assert_eq!(hull(&scene), start + 3 * 650, "the Fleece and Argus at 100");
     // Turned to stone: no tick of the count, no mending.
     let k = scene.object_index(ship).unwrap();
-    scene.objects[k].combat.as_mut().unwrap().stone = 1000.0;
+    scene.objects[k].combat.as_mut().unwrap().stone_len = 1000;
     run(&mut scene, &mut caches, 100);
     assert_eq!(hull(&scene), start + 3 * 650);
 }

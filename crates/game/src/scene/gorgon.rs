@@ -31,6 +31,8 @@ const HEAD: u8 = 17;
 /// Treasure kind of the mirror shield of Athena; Perseus (hero 8).
 const MIRROR_SHIELD: u8 = 14;
 const PERSEUS: u8 = 8;
+/// Ticks of stone a stare adds (0x402100: the record's `+0x18`).
+const STONE_TICKS: u32 = 150;
 
 /// A Gorgon: the original's fields, by offset.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -570,8 +572,14 @@ impl Scene {
                 .iter()
                 .find(|t| t.kind == MIRROR_SHIELD)
                 .map_or(0, |t| if t.amount > 0 { t.amount.min(100) } else { 100 });
+            // Not stone yet: from now (`+0x257`, `+0xa1`, `+0xa5` 0);
+            // either way 150 ticks more (`+0xa5`).
+            let now = self.ticks;
             if let Some(c) = self.objects[k].combat.as_mut() {
-                c.stone += crate::clock::ticks(150);
+                if c.stone_len == 0 {
+                    c.stone_since = now;
+                }
+                c.stone_len += STONE_TICKS;
             }
             let hurt = blow as f32 / 15.0 * (100 - mirror) as f32 / 100.0;
             self.share_blow(id, hurt, None, data, caches);

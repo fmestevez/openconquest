@@ -1692,7 +1692,7 @@ impl Scene {
     /// 0x4a51b0 with a tolerance of 1, the nearest reached cell within 1
     /// of it. A goal it cannot reach is planned again 25 ticks later,
     /// waited (`Scene::plan_pending`).
-    fn plan_route_order(
+    pub(super) fn plan_route_order(
         &self,
         i: usize,
         start: (f32, f32),
@@ -2594,6 +2594,7 @@ impl Scene {
             self.tick_walkers(data, caches);
             self.tick_flyers(data, caches);
             self.tick_gorgons(data, caches);
+            self.tick_statuses(data, caches);
             self.run_computers();
             self.run_brain_lands();
             self.run_town_links();
@@ -2838,7 +2839,7 @@ impl Scene {
                 _ => {}
             }
             // A ship turned to stone does not move.
-            if obj.combat.as_ref().is_some_and(|c| c.stone > 0.0) {
+            if obj.combat.as_ref().is_some_and(|c| c.stone_len > 0) {
                 continue;
             }
             if held_still.contains(&obj.id) {

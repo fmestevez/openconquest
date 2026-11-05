@@ -125,7 +125,7 @@ impl Scene {
             let (Some(s), Some(c)) = (o.ship.as_mut(), o.combat.as_ref()) else {
                 continue;
             };
-            if c.hull <= 0.0 || s.build.is_some() || c.stone > 0.0 {
+            if c.hull <= 0.0 || s.build.is_some() || c.stone_len > 0 {
                 continue;
             }
             s.sync_heal_slots(barbarian);

@@ -677,7 +677,7 @@ impl Scene {
             let c = self.objects[i].combat.as_mut().unwrap();
             // Limed, a fort or stronghold does not fire (0x419e00,
             // 0x40ef70).
-            if c.stone > 0.0 || c.lime > 0.0 {
+            if c.stone_len > 0 || c.lime > 0.0 {
                 continue;
             }
             let shooters = self.objects[i].shooters();

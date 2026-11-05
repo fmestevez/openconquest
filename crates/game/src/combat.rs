@@ -26,9 +26,16 @@ pub struct Combatant {
     /// `objects::Ship::conditions`).
     #[serde(default)]
     pub wounds: f32,
-    /// Seconds left turned to stone by the Gorgon: no moving, no firing.
+    /// Unused: kept for older saves (`stone_since`, `stone_len`).
     #[serde(default)]
     pub stone: f32,
+    /// The tick it was turned to stone by the Gorgon (`+0xa1`): no
+    /// moving, no firing.
+    #[serde(default)]
+    pub stone_since: u32,
+    /// Ticks it stays stone from then (`+0xa5`; 0 when not stone).
+    #[serde(default)]
+    pub stone_len: u32,
     /// Seconds left invisible to other players (Phantom object).
     #[serde(default)]
     pub phantom: f32,
@@ -116,6 +123,8 @@ impl Combatant {
             lime: 0.0,
             lime_total: 0.0,
             stone: 0.0,
+            stone_since: 0,
+            stone_len: 0,
             wounds: 0.0,
             protect_weapons: 0.0,
             protect_magic: 0.0,

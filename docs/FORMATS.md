@@ -5712,8 +5712,13 @@ by 0x4019d0, which zeroes `+0xa4` and sets `+0x9c = now`):
   `+0xc` of side 1 (a ship but on the cell it steps into), columns then
   rows, gets message 0x158bf with 88000 / their number (22000 from five),
   150 and her id. A ship (0x4dc630) with hero 8 (Perseus) or a magic
-  shield is spared; else it turns to stone for 150 ticks more (`+599`,
-  `+0xa1`, `+0xa5`; freed at 0x4df260) and takes the blow (type 0x1fa),
+  shield is spared; else it turns to stone for 150 ticks more (not yet
+  stone: `+0x257 = 1`, `+0xa1` now, `+0xa5` 0, the stone picture
+  0x4df510(1, 1), the commands saved 0x4b37d0 into `+0xd1` / `+0xd5`
+  keeping `+0x261 & 0x2000`; then `+0xa5 += 150` after the blow; freed in
+  the ship's tick when `now - +0xa1 >= +0xa5`, 0x4df260: 0x4df510(0, 1),
+  the commands back 0x4b3850; port `Combat::stone_since` / `stone_len`,
+  `Scene::tick_statuses`) and takes the blow (type 0x1fa),
   cut by a mirror shield's share (cargo item 0xe). With no life or cut
   short the loop playing is the last.
 - **3 sink**: `GORG3` (30) once; then life left -> 0, none -> 4.
@@ -5772,10 +5777,28 @@ with the run done.
 A ship without hero 7 (Odysseus) takes the song as a status (0x4a7390):
 already under it, its length `+0xb5` grows by 750 and the share `+0xc9`
 and cell `+0xad` are the new ones; else it starts now (`+0xb1`) with 750
-and nothing added up (`+0xc5` 0). Under it (0x4a74c0) it heads for her
-cell every 30 ticks, no faster than 7000 units, and adds the share each
-tick, taking a blow of 300 (type 0x1fd) at each thousand (three quarters
-off with hero 5, none on a ship shielded from magic).
+and nothing added up (`+0xc5` 0), its commands saved (0x4b37d0: `+0x261`
+into `+0xb9`, cleared; `+0x25d` into `+0xbd`, kept). Either way it sends
+itself the move event 0x80 to her cell (kind 0x17, priority `+0x19` 50),
+which 0x4ab720 / 0x4ab250 take without the capabilities (kind 0x17 with
+`+0x25c`). The ship's tick (0x4dc630 message 0) first frees stone
+(0x4df260, below) and ends the song (0x4df320: `now - +0xb1 >= +0xb5`),
+then takes its event (0x4ab720) and moves (0x4ab930): with `+0x25d &
+0x400` (set there from `+0x261 & 0x4000`) a charmed ship runs 0x4a74c0
+instead of the plain 0x4a3f40 (0x4abbc2). 0x4a74c0: `+0xc5 += +0xc9`; at
+1000 or more `+0xc5 %= 1000` and, unless shielded from magic (`+0x255`),
+a code-4 blow of 300 (type 0x1fd, player 0xff), `300 + 300 x -75 / 100`
+= 75 with hero 5 (0x4ba790(5)); the commands saved again if `+0x261 &
+0x4000` came back (setting `+0x25d |= 0x400`); `+0x59f = 7000`; `+0x261
+|= 0x4400` for the rest of the call; the move event 0x80 to her cell sent
+again when `+0xc1 - now > 30` unsigned, and as no code writes the ship's
+`+0xc1` (only 0x4df320's clear of `+0xa9..+0xcc`), on every tick; then
+0x4a3f40. So the n-th share is added n - 1 ticks after the song when the
+ship ticks after her, and the route to her cell is planned anew each
+tick, the wait 0. A ship turned to stone (`+0x25d` 0, `+0x261 &= 0x2000`)
+runs no 0x4a74c0: no shares, no blow, no new move; the song's time runs
+on. The port: `Scene::tick_statuses` (creatures.rs), each game tick after
+the creatures' ticks, the ships in the objects' order.
 
 Struck (vt+4, 0x403480) in states 1-3 only: the blow comes off her life
 (down to 0; a blow leaving 0 reports her kill at once, 0x50e750; sound
