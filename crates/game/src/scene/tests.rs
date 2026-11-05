@@ -4206,7 +4206,7 @@ fn fire_wizard() {
         .as_ref()
         .unwrap()
         .hull;
-    for _ in 0..50 * 25 {
+    for _ in 0..50 * 60 {
         scene.update(0.02, &data, &mut caches);
     }
     let after = scene

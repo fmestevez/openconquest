@@ -136,19 +136,15 @@ impl Scene {
     /// the classes with no mask resource would read a null mask in
     /// 0x557640; the port lights none on them; nor ports and docks, whose
     /// masks 0x4e7f90 loads. A hit point above or left of the picture
-    /// reads before the mask: none here. Not ported: the same test on
-    /// castles and lairs, which reach 0x423d60 too, with their masks
-    /// `CSTLSEAMSK_1<level>` / `CSTLWARMSK_1<level>` (0x4101d0 at
-    /// 0x4102d9, `%sMSK_%1u%1u`) and `<CLPF|MNTF|AMZF>MSK_41<level>`
-    /// (0x422e30): its draw is of their own generators, which the port
-    /// does not keep, their other draws being in routines the port models
-    /// on the scene's generator with its own timing (castle: seeded by
-    /// 0x427f50 at message 2, then 0x410ca0 draws the cast's time and the
-    /// sound's, and 0x410790 the sound's again, the cast's cell and the
-    /// next cast's time at frame 7 of the cast picture, state 4, which
-    /// itself bars the fire; lair: seeded at message 2 by 0x414f00, one
-    /// draw every tick and one per creature sent, 0x414f00 message 0;
-    /// both also drawn by the aim at them, 0x423520).)
+    /// reads before the mask: none here.) Castles burn the same (their
+    /// drain 0x4105c0 -> 0x427bb0 -> 0x423d60) on `CSTLSEAMSK_1<level>` /
+    /// `CSTLWARMSK_1<level>` (0x4101d0 at 0x4102d9, `%sMSK_%1u%1u`), the
+    /// draw of their own generator (castle.rs), and only standing (state
+    /// 1): casting (4) takes none. (Not ported: the same test on lairs,
+    /// `<CLPF|MNTF|AMZF>MSK_41<level>` (0x422e30), whose generator the
+    /// port does not keep: seeded at message 2 by 0x414f00, one draw every
+    /// tick and one per creature sent, 0x414f00 message 0, and the aim at
+    /// them, 0x423520.)
     #[allow(clippy::too_many_arguments)]
     pub(super) fn light_building(
         &mut self,
@@ -161,8 +157,11 @@ impl Scene {
         caches: &mut Caches,
     ) {
         let o = &self.objects[i];
-        let ObjectClass::Building(class) = o.class else {
-            return;
+        let class = match o.class {
+            ObjectClass::Building(class) => class,
+            // A castle stands in state 1 only: casting (4) it takes none.
+            ObjectClass::Castle(class) if self.castle_standing(o.id) => class,
+            _ => return,
         };
         let Some(c) = o.combat.as_ref() else {
             return;
@@ -192,7 +191,12 @@ impl Scene {
         else {
             unreachable!()
         };
-        let Some(mask) = building_mask(data, class, nation, level) else {
+        let mask = if matches!(o.class, ObjectClass::Castle(_)) {
+            castle_mask(data, class, level)
+        } else {
+            building_mask(data, class, nation, level)
+        };
+        let Some(mask) = mask else {
             return;
         };
         let (mx, my) = (hx - left, hy - top);
@@ -411,6 +415,17 @@ impl Scene {
 /// 0x41a0e6-0x41a141); a town's `TMSK_<nation><class>1<level>` (TownObj's
 /// own LoadImages 0x43bd60, the same level; its drain 0x43b290 leaves
 /// 0x138e to 0x423d60); none for classes without one.
+/// A castle's mask (0x4101d0 at 0x4102d9, `%sMSK_%1u%1u`, loaded in
+/// state 1): its prefix, 1, the damage level, so `CSTLWARMSK_13`.
+fn castle_mask(data: &GameData, class: u32, level: u32) -> Option<openconquest_formats::Mask> {
+    use openconquest_formats::ResourceKind;
+    let name = format!("{}MSK_1{level}", super::castle::prefix(class));
+    let lib = &data.objects;
+    let e = lib.find(&name, ResourceKind::Mask)?;
+    let bits = lib.read_entry(e).ok()?;
+    openconquest_formats::Mask::parse(&bits, e.width.into(), e.height.into()).ok()
+}
+
 pub(super) fn building_mask(
     data: &GameData,
     class: u32,
@@ -658,6 +673,46 @@ mod tests {
             assert_eq!((f.building, f.size), (id, 2));
             assert!(f.fire.is_some());
         }
+    }
+
+    /// miss009's war castle takes fire on its mask `CSTLWARMSK_13` by a
+    /// draw of its own generator while it stands (state 1), none while it
+    /// casts (4), with no draw (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn a_standing_castle_takes_fire() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss009").unwrap();
+        let i = scene
+            .objects
+            .iter()
+            .position(|o| o.class == ObjectClass::Castle(0x43))
+            .unwrap();
+        let mask = castle_mask(&data, 0x43, 3).unwrap();
+        let o = &scene.objects[i];
+        let (left, top) = crate::render::layer_origin(o, &o.frames[0][0]);
+        let stride = (mask.width + 7) & !7;
+        let (mx, my) = (0..mask.height)
+            .flat_map(|y| (0..mask.width).map(move |x| (x, y)))
+            .find(|&(x, y)| mask.bit((y * stride + x) as usize))
+            .unwrap();
+        let hit = (left + mx as i32, top + my as i32);
+        let id = o.id;
+        let seed = (1u32..).find(|&v| combat::Rng(v).next() % 3 == 0).unwrap();
+        scene.building_lcgs.insert(id, seed);
+        scene.castles.get_mut(&id).unwrap().state = 4;
+        scene.light_building(i, 6, true, hit, Some((1, 0)), &data, &mut caches);
+        assert_eq!(scene.building_lcgs[&id], seed);
+        assert!(scene.building_fires.is_empty());
+        scene.castles.get_mut(&id).unwrap().state = 1;
+        scene.light_building(i, 6, true, hit, Some((1, 0)), &data, &mut caches);
+        assert_ne!(scene.building_lcgs[&id], seed);
+        let f = &scene.building_fires[0];
+        assert_eq!((f.building, f.size), (id, 2));
+        assert!(f.fire.is_some());
     }
 
     /// The fall lays `b_vor<k>_<s|m|b>` on layer 5 with the ground's

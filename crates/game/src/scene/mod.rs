@@ -442,8 +442,8 @@ pub struct Scene {
     pub permits: crate::permits::Permits,
     /// Seconds since the mission began, for the creatures' rhythms.
     pub creature_clock: f32,
-    /// Wizards' casting.
-    pub wizards: BTreeMap<u32, script::Wizard>,
+    /// The wizards' castles (castle.rs).
+    pub castles: BTreeMap<u32, castle::Castle>,
     /// Big reefs a brain raises this tick: cell and kind (not saved: raised
     /// at once).
     pending_reefs: Vec<(i32, i32, u32)>,
@@ -554,6 +554,7 @@ mod at_will;
 mod battle;
 mod brain;
 mod burning;
+mod castle;
 pub use burning::SavedBuildingFire;
 mod castq;
 mod closing;
@@ -883,7 +884,7 @@ impl Scene {
             town_fish: BTreeMap::new(),
             free_casts: Default::default(),
             creature_clock: 0.0,
-            wizards: BTreeMap::new(),
+            castles: BTreeMap::new(),
             pending_reefs: Vec::new(),
             pending_walkers: Vec::new(),
             pending_casts: Vec::new(),
@@ -1084,6 +1085,7 @@ impl Scene {
         }
         scene.start_nests(data, caches);
         scene.start_gorgons(data, caches);
+        scene.start_castles(data, caches);
         for i in 0..scene.objects.len() {
             scene.refresh_amber(i, data, caches);
         }
@@ -1227,7 +1229,8 @@ impl Scene {
                     .iter()
                     .map(|(k, v)| (*k, v.clone()))
                     .collect(),
-                wizards: self.wizards.iter().map(|(k, v)| (*k, v.clone())).collect(),
+                wizards: Vec::new(),
+                castles: self.castles.iter().map(|(k, v)| (*k, v.clone())).collect(),
                 parties: self.parties.clone(),
             },
             game_id: None,
@@ -1433,7 +1436,7 @@ impl Scene {
         scene.sirens = b.sirens.iter().cloned().collect();
         scene.gorgons = b.gorgons.iter().cloned().collect();
         scene.sea_monster_states = b.sea_monster_states.iter().cloned().collect();
-        scene.wizards = b.wizards.iter().cloned().collect();
+        scene.castles = b.castles.iter().cloned().collect();
         scene.parties = b.parties.clone();
         scene.refresh_sight();
         if !save.start_sites.is_empty() {
@@ -2508,6 +2511,7 @@ impl Scene {
             .hazard_frame(obj.id)
             .or_else(|| self.leviathan_frame(obj.id))
             .or_else(|| self.gorgon_frame(obj.id))
+            .or_else(|| self.castle_frame(obj.id))
             .or_else(|| self.siren_frame(obj.id))
         {
             if let Some(layers) = obj.frames.get(f as usize).or(obj.frames.last()) {
@@ -2616,6 +2620,7 @@ impl Scene {
             self.tick_walkers(data, caches);
             self.tick_flyers(data, caches);
             self.tick_gorgons(data, caches);
+            self.tick_castles(data, caches);
             self.tick_statuses(data, caches);
             self.tick_building_statuses(data, caches);
             self.step_ship_fires();
@@ -2701,7 +2706,6 @@ impl Scene {
         self.run_treasures(dt, data, caches);
         self.run_creatures(dt, data, caches);
         self.run_lime(dt);
-        self.run_wizards(dt, data, caches);
         self.run_fetches();
         self.run_loads();
         self.run_flyers(dt, data, caches);
@@ -3373,8 +3377,11 @@ pub struct Battle {
     pub sea_monsters: Vec<(u32, (f32, f32))>,
     #[serde(default)]
     pub sea_monster_states: Vec<(u32, sea_monster::SeaMonster)>,
+    /// Unused: kept for older saves.
     #[serde(default)]
     pub wizards: Vec<(u32, script::Wizard)>,
+    #[serde(default)]
+    pub castles: Vec<(u32, castle::Castle)>,
     #[serde(default)]
     pub parties: Vec<landing::Party>,
 }

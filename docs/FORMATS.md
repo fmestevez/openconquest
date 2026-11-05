@@ -6479,22 +6479,17 @@ the nearest for one no index has (a darkened shadow). Forts and towns
 burn the same: a fort's drain 0x4184f0 reads 0x138e and leaves it in
 the queue for 0x4e7550 -> 0x427bb0 -> 0x423d60, a town's 0x43b290 takes
 only 0x138a-0x138c and leaves the rest to 0x423d60; their generators are
-the kept ones (above). Not ported: castles and lairs, whose drains reach
-0x423d60 too, because their generators' other draws are not the port's:
-a castle's is seeded by 0x427f50 at message 2 (0x410ca0 runs it for
-every message but 0xda96 on the sea castle), then 0x410ca0 draws the
-first cast's time (record field 4 below 2: `(1250 - 125 x field 22) x
-(r % 21 + 80) / 100`) and the sound's (`(r % 41 + 60) x 375 / 100`), and
-its tick 0x410790 draws the sound's again when due, and at frame 7 of
-its cast picture (state 4, entered from 1 by vt+0x38) the weighted
-cell's draw and the next cast's time; state 4 itself bars the fire (the
-test wants 1). The port's wizards (`run_wizards`) draw from the scene's
-generator, with no cast picture. A lair's is seeded `[game +0x2ee5] x
+the kept ones (above). Castles burn the same (their drain 0x4105c0
+-> 0x427bb0 -> 0x423d60) on `CSTLSEAMSK_1<level>` / `CSTLWARMSK_1<level>`
+(0x4101d0 at 0x4102d9), their generator kept (castle.rs, below), only
+in state 1: casting (4) they take none. Not ported: lairs, whose drain
+reaches 0x423d60 too, because their generator's other draws are not the
+port's. A lair's is seeded `[game +0x2ee5] x
 id` at message 2 (0x414f00; a save's from its record), drawn every tick
 at message 0 for the next creature's time, and once more to pick the
 creature's cell among the free ones (0x414f00 after the scan); the
 port's `run_lairs` draws the scene's generator, with its own cells.
-Both are drawn also by the aim at them (0x423520, above). Not decoded:
+It is drawn also by the aim at them (0x423520, above). Not decoded:
 whether ports' and docks' drains reach 0x4240e0 (the port lights none on
 them); the classes with no mask resource would read a null mask in
 0x557640, the port lights none on them; whether a killing blow's state is still 1
@@ -8124,20 +8119,67 @@ its inventory: the fire wizard gets scroll 13 and a disposable magic, the
 dragon the Golden Fleece (kind 16). 0x520c70 lays a treasure on a cell
 (miss010: 2000-2500 amber).
 
-The wizards (CastleClassTy, `Castle.cpp`; constructor 0x410ca0, per tick
-0x410790) cast real spells (0x42f580, with a free cast) on a cell chosen
-near the castle:
+The wizards (CastleClassTy, `Castle.cpp`, vtable 0x5949fc, handler
+0x410ca0, his tick 0x410790; ported in `scene/castle.rs`, a game tick at
+a time) cast real spells (0x42f580, free: the spell's count `+0x1b4
++0x10 + 4 x spell` raised by one first) on a cell chosen near the
+castle. The sea castle (0x42, the wind wizard; prefix `CSTLSEA`, offsets
+6, 12) casts spell 3 (`+0x1f0`), the waterspout; the war castle (0x43,
+the fire wizard; `CSTLWAR`, 4, 13) spell 7, the fireball (0x410ca0 at
+message 2).
 
-- **Which spell.** The sea castle (0x42, the wind wizard) casts spell 3, the
-  waterspout; the war castle (0x43, the fire wizard) spell 7, the fireball.
-- **Where.** A cell within fields 23 and 24 either way of the castle. Each
-  cell weighs the sum over the objects of a side within a cell of it: a
-  ship or a building 0x34-0x36 counts 10 less its distance from the castle,
-  any other building 1. The wizard's last attacker counts four times. The
-  pick is weighted random.
-- **When.** The castle's picture shows the cast at frame 7. The next comes
-  `(1250 - 125 x level) x (80 + rand(21)) / 100` ticks later, level being
-  field 22; at half that delay for 3000 ticks after he is attacked (+0x1f4).
+- **Generator.** His own (`+0x18`), seeded `[game +0x2ee5] x id` by
+  0x427f50 at message 2; 0x410ca0 passes every message to 0x427f50 first
+  but 0xda96 to the sea castle. Then at message 2 (state not 0xff) it
+  keeps record fields 22-24 (`+0x1e0` level, `+0x1e4` reach across,
+  `+0x1e8` down); a new record (field 4 below 2) draws the first cast's
+  tick `+0x1ec = now + (1250 - 125 x level) x (r % 21 + 80) / 100`
+  (unsigned; halved from now if `+0x1f4` is set), a saved one (field 4
+  2) takes `+0x1ec`, `+0x1f4`, `+0x1f8` from record `+0x1c4..+0x1cc`;
+  then every one draws the ambient sound's tick `+0x1fc = now + (r % 41 +
+  60) x 375 / 100`. The same generator is drawn by the aim at him
+  (0x423520) and the fire (0x4240e0).
+- **Tick.** Message 0: LandObj's (0x427f50 -> 0x425990, whose picture
+  step vt+0x3c 0x4230f0 runs first), then 0x410790: the attacker
+  (`+0x1f4`) is forgotten once `+0x1f8 + 3000 <= now`; at `+0x1fc` the
+  ambient sound 0x50e570(mode 5, cell, 0x8d sea / 0x8e war) and its next
+  tick drawn; before `+0x1ec` nothing more; standing (state `+0xa4` 1)
+  he turns to casting (4) and sets the picture (vt+0x38); casting, at
+  the picture's frame `+0x45` 7 (the frame about to be drawn) he casts.
+- **Picture.** vt+0x38 (0x4101d0): `<prefix>SPR_<state><level>`
+  (`%sSPR_%1u%1u`, level `ceil(+0xa8 x 2 / 67)` at least 1, 3 in states
+  0 and 3), its frame kept unless past the last (then 0), the step time
+  `+0x81` 0 and `+0xbc` 0 (a step at the next tick); in state 1 the mask
+  `<prefix>MSK_1<level>`. The cycle table `+0xc0` = 0x5949e8: 300, 20,
+  100, 75 ticks for states 0-3 and 64 (0x5949f8) for 4; a frame lasts
+  `cycle / n`. `CSTLWARSPR_1x` has 10 frames, `CSTLWARSPR_4x` 32,
+  `CSTLSEASPR_13` 1, `CSTLSEASPR_43` 41. A blow changing the level sets
+  it again (0x423d60). 0x4230f0 steps (`+0xbc` 0 or `now >= +0x81 +
+  delay`): the frame drawn and one added (0x427b30 -> 0x4233f0); past the
+  last, state 1 back to frame 0, state 4 to vt+0x48 (0x4106f0: with
+  `+0x1ec <= now`, the cast not made, the next cast's tick drawn as at a
+  cast) then state 1 at frame 0 with the picture set again. So a cast
+  picture entered at frame 7 or beyond (the standing loop's frame kept)
+  steps past 7 at once and casts nothing that round.
+- **Where.** Each cell within `+0x1e4` across and `+0x1e8` down of his
+  cell (`+0x74`, `+0x78`), on the map, row by row, sums the 3 x 3 about
+  it, row by row, by the object in each cell's `+0xc` that is a
+  player's (`+0x57` 1), not of nation 4 and there (vt+0x2c): a ship
+  (class 200-211) whose `+0x5ab` is not 0 (the cell index it is
+  entering, -1 when none) or a fort (0x34-0x36) adds `10 - d`, `d` that
+  cell's distance from his (0x5576d8; below 0 beyond 10), any other
+  building 0x32-0x3e 1; the sum so far is multiplied by 4 when the
+  object's id (`+0x4c`) is the attacker's. Cells whose sum is not 0 are
+  listed (x, y, sum) and the sums added (unsigned). With a total not 0:
+  one draw, and the first listed cell whose running sum (signed) is not
+  below `r % total`; the cast there, the cast sound 0x50e570(mode 1,
+  cell, 0x82 / 0x83), and the next cast's tick drawn as at message 2
+  (halved from now while attacked). With a total of 0 nothing (the
+  test runs again each tick while the frame is 7).
+- **Attacker.** The drain 0x4105c0 sets `+0x1f4` to a blow's shooter
+  (`+0x16`) and `+0x1f8` now (shot.rs `land_shot`).
+- **Sounds.** Events 0x8d, 0x8e, 0x82 and 0x83 have no `SND_n` list:
+  all four silent.
 
 Buildings, lairs, nests and monsters hold treasures in their records: a
 count, then five dwords per treasure like a treasure record's fields 4-8

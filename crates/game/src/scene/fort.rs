@@ -42,7 +42,7 @@ pub fn root(n: u64) -> u32 {
 }
 
 /// The cell distance from `a` to `b` (0x5576d8).
-fn cell_distance(a: (i32, i32), b: (i32, i32)) -> u32 {
+pub(super) fn cell_distance(a: (i32, i32), b: (i32, i32)) -> u32 {
     let (dx, dy) = ((a.0 - b.0) as i64, (a.1 - b.1) as i64);
     root((dx * dx + dy * dy) as u64)
 }
