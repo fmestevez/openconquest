@@ -5809,9 +5809,13 @@ to the building's aim point (vt+0xc 0x423520) as a hit, with no shooter;
 the building takes it as any shot's 0x138e (a fort's units their share,
 `fort_blow`; the others a fifth under a magic shield). The town state
 0xff of 0x43bfe0 is not identified (the port tests mending, 2, and
-selling or sold, 3). Not ported: the town's 0x138e handler 0x43b290
-dropping a blow on a town being built or upgraded (class 0x33, state 0),
-for every shooter.
+selling or sold, 3). The town's handler 0x43b290, on 0x138e, first
+reports the blow (0x5d9c to its player, when `+0x57` is 1 and
+0x541a30(0x1c57) is 0, in any state), then takes the message off the
+queue (0x55b500) when the town is class 0x33 in state `+0xa4` 0 (going
+up: an upgrade), so 0x423d60 never reads it: no hit, no fire, whoever
+dealt it; any other town's blow is left for 0x423d60
+(`Scene::blow_dropped`, in `hit` and a shot's landing).
 
 **Decoded, not ported**: the pixel hit test vt+8 0x41deb0 (picture 0's frame
 mask; a dragon in state 0 or 1 never hit); the sounds (events 0x5c,

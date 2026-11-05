@@ -807,6 +807,11 @@ impl Scene {
         if target.is_some_and(|i| self.being_sold(self.objects[i].id)) {
             return;
         }
+        // A town going up takes nothing: 0x43b290 drops the blow (0x138e)
+        // before 0x423d60 (no fire, no hit), whoever fired.
+        if target.is_some_and(|i| self.blow_dropped(self.objects[i].id)) {
+            return;
+        }
         // A ship being built keeps the hit for its tick (event 1, 0x4a9e30:
         // a fifth in a tick is dropped), where 0x4bf170 hands it to 0x4b4000
         // alone: no fire, lime, crew or weapon damage.

@@ -12895,6 +12895,70 @@ fn upgrade_keeps_the_condition_till_its_first_step() {
     assert!((c.hull / c.max_hull - want).abs() < 0.01);
 }
 
+/// A town going up (class 0x33, state `+0xa4` 0: an upgrade) takes no
+/// blow: 0x43b290 drops message 0x138e before 0x423d60, for a shot, a ram
+/// or a spell alike; standing, it takes them (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_town_going_up_takes_no_blow() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let town = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SETTLEMENT) && scene.is_own(o))
+        .unwrap()
+        .id;
+    scene.amber = 10_000;
+    scene.upgrade(town, &data, &mut caches).unwrap();
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let i = scene.object_index(town).unwrap();
+    assert_eq!(scene.objects[i].class, ObjectClass::Building(TOWN));
+    assert!(scene.construction_at(town).is_some());
+    let hull = |scene: &Scene| {
+        let i = scene.object_index(town).unwrap();
+        scene.objects[i].combat.as_ref().unwrap().hull
+    };
+    let before = hull(&scene);
+    assert!(before > 0.0);
+    // A ram's or a spell's blow (`hit`), and a shot's.
+    scene.hit(town, 5.0, None, &data, &mut caches);
+    assert_eq!(hull(&scene), before);
+    let (x, y) = (scene.objects[i].x, scene.objects[i].y);
+    scene.fire_shot(
+        super::shot::Firing {
+            item: combat::GREEK_FIRE,
+            letter: None,
+            flaming: true,
+            from: (x + 150.0, y),
+            target: town,
+            strikes: true,
+            damage: 5.0,
+            wounds: 0.0,
+            wear: 0.0,
+            rope: None,
+            shooter: None,
+            by: None,
+            to: None,
+        },
+        &data,
+        &mut caches,
+    );
+    for _ in 0..100 {
+        scene.run_shots(0.05, &data, &mut caches);
+    }
+    assert!(scene.shots.is_empty());
+    assert_eq!(hull(&scene), before);
+    assert!(scene.building_fires.iter().all(|f| f.building != town));
+    // Standing, the blow lands.
+    scene.constructions.retain(|c| c.site != town);
+    scene.hit(town, 5.0, None, &data, &mut caches);
+    assert!(hull(&scene) < before);
+}
+
 /// A cast whirlpool's cycle (Whirl.cpp 0x447ee0, 0x447b80): under the
 /// water 150-250 ticks, it rises (`whirl3`, `WHIRLSPR_0`, nibble 1 4),
 /// is up (`spider`) 125-250 ticks till its picture's last frame, sinks

@@ -1258,6 +1258,9 @@ impl Scene {
         {
             return;
         }
+        if self.blow_dropped(target) {
+            return;
+        }
         // A fort's or barbarian structure's every blow comes through
         // message 0x138e, its units taking their share: spells, tornadoes
         // and the like too, not only shots. (No shooter for a fort firing
@@ -1281,6 +1284,18 @@ impl Scene {
             return;
         }
         self.strike(target, damage, true, by, true, data, caches);
+    }
+
+    /// Whether a blow (message 0x138e) on `target` is dropped: the town's
+    /// handler 0x43b290 takes 0x138e off its queue (0x55b500) before the
+    /// building's own 0x423d60 reads it when the town (class 0x33) is in
+    /// state `+0xa4` 0, going up (an upgrade), whoever dealt it; any other
+    /// town, and every other message, is left for 0x423d60. (Its report
+    /// 0x5d9c, sent first in any state, is not changed here.)
+    pub(super) fn blow_dropped(&self, target: u32) -> bool {
+        self.object_index(target)
+            .is_some_and(|t| self.objects[t].class == ObjectClass::Building(TOWN))
+            && self.construction_at(target).is_some()
     }
 
     /// The same, showing the hit or splash only if `show` (a shot shows
