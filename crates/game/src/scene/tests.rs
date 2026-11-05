@@ -6742,6 +6742,38 @@ fn brain_mended_join_is_heard() {
     assert!(scene.brain.as_ref().unwrap().fleets[k].joined.is_empty());
 }
 
+/// A ship a brain member had built joins it heard as the original's: the
+/// navy's case 0x83 (0x49add9: 0x49bd60, then 0x4a1340) posts 300 only
+/// while the member has a block (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brain_built_ship_join_is_heard() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    let id = scene.objects.iter().find(|o| o.ship.is_some()).unwrap().id;
+    let k = scene.member_fleet(1, 4).unwrap();
+    let launch = |scene: &mut Scene, block: u32| {
+        let brain = scene.brain.as_mut().unwrap();
+        for f in &mut brain.fleets {
+            f.ships.retain(|&s| s != id);
+            f.joined.clear();
+        }
+        brain.fleets[k].block = block;
+        brain.building.push((7, 2, k));
+        scene.ship_launched(7, 2, id);
+        assert!(scene.brain.as_ref().unwrap().fleets[k].ships.contains(&id));
+    };
+    // No block: joined, nothing heard.
+    launch(&mut scene, 0);
+    assert!(scene.brain.as_ref().unwrap().fleets[k].joined.is_empty());
+    // A block (a move's, 100): its 300 heard.
+    launch(&mut scene, 100);
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[k].joined, [id]);
+}
+
 /// miss007's brain: the barbarian yards build for their own fleets, and
 /// the Persians' yard for its merchants and guards (needs
 /// `OPENCONQUEST_DATA`).

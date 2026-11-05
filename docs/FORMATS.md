@@ -9033,9 +9033,19 @@ join, 0x4a1340 posting it while the group has a block (its queue
 `+0x2d`, made by 0x4a1150, freed by 0x4a1c60): a brain's joins are
 0x479300 op 2 (0x4a0480: 0x49bd60, then 0x4a1340), for prizes to the
 repair members and mended ships to the members by type (above), none
-of them these, so in the ported missions nothing is lost (not read:
-whether a ship built for a member joins by a path that posts 300, the
-navy's case at 0x49add9, or 0x49c830 / 0x49d0d0). Their 300 cases do
+of them these. A ship built for a member joins the same way: the
+yard's 0x4dfe00, as the ship takes its berth (0x499a40), sends it at
+once (0x50e700 through 0x542630, a direct send, only for a member >= 0)
+`{0x203f, 3, 0x83, ship +0x14, member +0x18, player +0x1c}` to the
+navy, whose case 0x83 (0x49ab30 at 0x49add9; no ship, nothing) runs
+0x49bd60(ship, member) and, when that returns >= 0, 0x4a1340(player,
+member, ship): the 300, tick now, only while the member has a block
+(`ship_launched` -> `brain_heard_join`). (0x49c830, an area's ships of
+the player taken into a group, and 0x49d0d0, one group's ships passed to
+another, post it the same way; neither is a build.) A built ship
+reaching a founding or treasure member under its block is heard, but the
+block's work for it is not ported (the 300 waits in `joined` until a
+new block). Their 300 cases do
 the block's work first, then `#` sub 1: founding 0x4cba10 (0x4cb1a0:
 no route `+0x61`, a site by 0x4cb850 and 0x4cb0b0; with one, 0x4cea20
 / 0x4ceab0 and 0x4cb110 / 0x4cb5f0), treasure 0x4da0a0 (0x4d97c0 a

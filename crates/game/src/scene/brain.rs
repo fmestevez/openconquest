@@ -849,7 +849,11 @@ impl Scene {
     }
 
     /// A ship launched at `site`: if the brain ordered it, it joins the
-    /// fleet that asked.
+    /// fleet that asked. The yard's 0x4dfe00 sends it at once (0x50e700,
+    /// 0x542630: `{0x203f, 3, 0x83, ship, member, player}`, only for a
+    /// member >= 0) to the navy, whose case 0x83 (0x49ab30 at 0x49add9)
+    /// adds it to the member (0x49bd60) and, when that took, posts its
+    /// message 300 (0x4a1340), as a mended ship's join (`brain_heard_join`).
     pub(super) fn ship_launched(&mut self, site: u32, kind: u8, id: u32) {
         let Some(brain) = self.brain.as_ref() else {
             return;
@@ -872,6 +876,7 @@ impl Scene {
         if let Some(k) = k {
             let (_, _, fleet) = brain.building.remove(k);
             brain.fleets[fleet].ships.push(id);
+            self.brain_heard_join(fleet, id);
         }
     }
 
