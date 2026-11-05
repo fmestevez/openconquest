@@ -7774,6 +7774,108 @@ fn an_attack_at_ruins_is_taken_and_dropped() {
     assert_eq!(scene.objects[s].ship.as_ref().unwrap().task, None);
 }
 
+/// A ship's repair and unload at own ruins are dropped without a word:
+/// the repair's berth (0x4aa990 -> 0x4b23a0) reads the cell's object
+/// slot, which the fall emptied (0x423d60 -> 0x499860); the unload's port
+/// (0x4aab00 -> 0x4ac050) the player's list, which lost it; tested on
+/// miss000 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn repair_and_unload_at_own_ruins_are_dropped() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.brain = None;
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let own_of = |scene: &Scene, classes: &[u32]| {
+        scene
+            .objects
+            .iter()
+            .find(|o| {
+                scene.is_own(o)
+                    && matches!(o.class, ObjectClass::Building(c) if classes.contains(&c))
+            })
+            .map(|o| o.id)
+    };
+    let dock = own_of(&scene, &[economy::SHIPYARD, economy::DOCK]);
+    let port = own_of(&scene, &[economy::PORT]).unwrap();
+    for b in dock.into_iter().chain([port]) {
+        scene.hit(b, f32::MAX, None, &data, &mut caches);
+        assert!(scene.fallen(b));
+        let t = scene.object_index(b).unwrap();
+        assert!(scene.own_ruins(&scene.objects[t]));
+    }
+    if let Some(dock) = dock {
+        assert_eq!(scene.order_repair(ship, dock), Err(String::new()));
+    }
+    let s = scene.object_index(ship).unwrap();
+    scene.objects[s].ship.as_mut().unwrap().cargo = 10.0;
+    assert_eq!(scene.order_unload(ship, port), Err(String::new()));
+    assert_eq!(scene.objects[s].ship.as_ref().unwrap().task, None);
+}
+
+/// A fort takes an attack at an enemy's ruins (0x41bec0 tests the kept
+/// bytes; 0x446960 finds them by id) and keeps them as its groups'
+/// target, but never reaches them: 0x447400 passes over a building of
+/// classes 0x32-0x3e in state 2; tested on miss007 (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn a_fort_keeps_ruins_as_its_target_and_never_shoots() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    scene.brain = None;
+    let (f, fort, enemy) = scene
+        .objects
+        .iter()
+        .enumerate()
+        .find_map(|(f, o)| {
+            let fort = scene.is_own(o) && matches!(o.class, ObjectClass::Building(0x34..=0x36));
+            fort.then(|| {
+                scene.objects.iter().find(|e| {
+                    matches!(e.class, ObjectClass::Building(_))
+                        && e.combat.is_some()
+                        && Scene::are_enemies(o, e)
+                })
+            })
+            .flatten()
+            .map(|e| (f, o.id, e.id))
+        })
+        .unwrap();
+    // Brought within the fort's reach: a cell beside it.
+    let t = scene.object_index(enemy).unwrap();
+    let (x, y) = (scene.objects[f].x, scene.objects[f].y);
+    let tile = TILE_SIZE as f32;
+    let e = &mut scene.objects[t];
+    (e.x, e.y) = (x + 2.0 * tile, y);
+    e.cell = e.cell.map(|_| ((e.x / tile) as i32, (e.y / tile) as i32));
+    assert!(scene.fort_reaches(f, t));
+    scene.hit(enemy, f32::MAX, None, &data, &mut caches);
+    assert!(scene.fallen(enemy));
+    scene.order_attack(fort, enemy).unwrap();
+    for _ in 0..50 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    let f = scene.object_index(fort).unwrap();
+    assert!(scene.object_index(enemy).is_some(), "the ruins still lie");
+    let c = scene.objects[f].combat.as_ref().unwrap();
+    assert!(c.fire.targets.iter().all(|&t| t == enemy));
+    for k in 0..12 {
+        assert_eq!(scene.group_track(f, k, enemy), None);
+    }
+}
+
 /// Ships attacking a building stop once it falls to ruins (needs
 /// `OPENCONQUEST_DATA`).
 #[test]

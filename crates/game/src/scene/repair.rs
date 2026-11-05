@@ -123,6 +123,14 @@ impl Scene {
     fn send_to_dock(&mut self, ship: u32, dock: u32, sell: bool) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let d = self.object_index(dock).ok_or("Choose one of your docks")?;
+        // Own dock ruins (the repair pointer is offered there, 0x4dd486):
+        // command 0x1e finds them by id (0x4e2ba0, 0x51f1f0) and sends
+        // event 0x20, but the order's berth (0x4aa990 -> 0x4b23a0) reads
+        // the object slot of their cell, which the fall emptied (0x423d60
+        // on 0x138b -> 0x499860): -1, the order dropped, no notice.
+        if self.fallen(dock) {
+            return Err(String::new());
+        }
         if !matches!(
             self.objects[d].class,
             ObjectClass::Building(SHIPYARD | DOCK)
@@ -931,6 +939,14 @@ impl Scene {
                 if let Some(path) = self.plan_route(k, bx, by) {
                     self.objects[k].ship.as_mut().unwrap().path = path;
                 }
+                return;
+            }
+            // Fallen on the way: the fall emptied its cell's object slot
+            // (0x423d60 -> 0x499860), which is what 0x4b2420 reads at the
+            // berth: as gone, the order done and notice 0x143.
+            if self.fallen(dock) {
+                self.objects[k].ship.as_mut().unwrap().task = None;
+                self.post_notice(id, 0x143, 0);
                 return;
             }
             let dk = &self.objects[d];

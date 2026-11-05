@@ -3175,6 +3175,12 @@ impl Scene {
         if o.ship.as_ref().is_none_or(|s| s.cargo < 1.0) {
             return Err("The ship has nothing to unload".into());
         }
+        // Own port ruins (the pointer offers the unload there, 0x4dd486):
+        // 0x4aab00 looks the port up in the ship's player's list
+        // (0x4ac050), which lost it at the fall: dropped, no notice.
+        if self.fallen(port) {
+            return Err(String::new());
+        }
         // Unloading at a port goes out with 75 and is raised by one
         // (0x4d74a0's 0x1f, 0x4aac43).
         self.unload_event(i, p, 75)

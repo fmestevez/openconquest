@@ -1524,6 +1524,16 @@ impl Scene {
             .or_else(|| self.ruins.get(&obj.id).and_then(|r| r.owner))
     }
 
+    /// Whether `obj` is a fallen building's ruins whose kept bytes (`+0x54
+    /// / +0x55`, `kept_owner`) are the human player's.
+    pub fn own_ruins(&self, obj: &MapObject) -> bool {
+        obj.owner.is_none()
+            && match (self.human, self.ruins.get(&obj.id).and_then(|r| r.owner)) {
+                (Some(h), Some(owner)) => (h.nation, h.slot) == owner,
+                _ => false,
+            }
+    }
+
     /// Whether the human player owns `obj`.
     pub fn is_own(&self, obj: &MapObject) -> bool {
         match (self.human, obj.owner) {

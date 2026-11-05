@@ -6320,6 +6320,12 @@ impl App {
                 .is_some_and(|t| self.scene.fort_reaches(f, t)),
             None => true,
         };
+        // The fort's answer tests the bytes `+0x57`, `+0x54 / +0x55`
+        // (0x41bec0: 0x4efe20 < 0), which an enemy's ruins keep: its
+        // pointer offers the attack there too.
+        let fort_enemy = |o: &crate::objects::MapObject| {
+            enemy(o) || selected.is_some_and(|s| self.scene.ruins_enemy(s, o))
+        };
         let resource = |o: &crate::objects::MapObject| o.deposit.map(|d| d.resource);
         let water = self
             .cell_at(pos)
@@ -6334,7 +6340,7 @@ impl App {
                 // reaches the enemy.
                 Command::FIRE => (
                     P::Attack,
-                    !target.is_some_and(|o| enemy(o) && fort_reaches(o)),
+                    !target.is_some_and(|o| fort_enemy(o) && fort_reaches(o)),
                 ),
                 Command::RAM => (
                     P::Ram,
@@ -6434,7 +6440,7 @@ impl App {
                     .combat
                     .as_ref()
                     .is_some_and(|c| c.lime <= 0.0);
-            if ready && target.is_some_and(|o| enemy(o) && fort_reaches(o)) {
+            if ready && target.is_some_and(|o| fort_enemy(o) && fort_reaches(o)) {
                 return (P::Attack, false);
             }
         }
@@ -6518,16 +6524,20 @@ impl App {
             }
             more.extend(open);
         }
-        let own_dock = self.scene.is_own(t)
-            && t.class == openconquest_formats::ObjectClass::Building(economy::DOCK);
+        // A ship's answer over an own building (0x4dd486) tests no state:
+        // own port, dock, yard and fort ruins (their bytes kept) offer the
+        // modes standing ones do.
+        let own_t = self.scene.is_own(t) || self.scene.own_ruins(t);
+        let own_dock =
+            own_t && t.class == openconquest_formats::ObjectClass::Building(economy::DOCK);
         if own_dock {
             more.push((P::Repair, false));
         }
-        if self.scene.is_own(t) && is_load_target(&self.scene, t, Some(s)) && sh.kind < 10 {
+        if own_t && is_load_target(&self.scene, t, Some(s)) && sh.kind < 10 {
             more.push((P::Load, false));
         }
         let laden = sh.cargo >= 1.0;
-        let landing = self.scene.is_own(t)
+        let landing = own_t
             && matches!(
                 t.class,
                 openconquest_formats::ObjectClass::Building(

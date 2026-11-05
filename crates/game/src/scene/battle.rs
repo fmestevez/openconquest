@@ -113,8 +113,16 @@ impl Scene {
             {
                 return Err(String::new());
             }
-            if self.objects[t].combat.is_none()
-                || !Self::are_enemies(&self.objects[i], &self.objects[t])
+            // An enemy's ruins pass the answer's test of the kept bytes
+            // (0x41bec0), and the order takes them: 0x446960 finds them by
+            // id (0x51f1f0). Its groups then never shoot: their reach test
+            // 0x447400 passes over a building of classes 0x32-0x3e in
+            // state `+0xa4` 2, so the target is kept and nothing is shot
+            // at it (0x4469c0; the port's ruins are in no group's cells).
+            let ruins = self.ruins_enemy(&self.objects[i], &self.objects[t]);
+            if !ruins
+                && (self.objects[t].combat.is_none()
+                    || !Self::are_enemies(&self.objects[i], &self.objects[t]))
             {
                 return Err("Choose an enemy ship or building".into());
             }

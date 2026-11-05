@@ -6927,11 +6927,46 @@ or 1 with a byte of `+0x47f`-`+0x481`, else 0x100); dock 0x3b 0x101 |
 and 0x4b8cb0 true); a class whose 0x50e600 is 0xc8 0x101 if
 0x4e6700(0x1f, 0) allows, else mode 5; 0x3a and forts 0x101; else mode
 5. So own port, dock, yard and fort ruins offer, as standing ones, own
-first, then by the right button modes 0xf, 0xd and 0xc (reload). Not ported: those modes
-over own ruins (the port's `pointer_modes` offers them only over a
-standing building), and the orders they send at ruins (the ship's
-0x4e2ba0 case 0x1f -> message 0x10 `{3, id}` and its look-up of a
-fallen target) not decoded.
+first, then by the right button modes 0xf, 0xd and 0xc (reload); the
+port's `pointer_modes` offers them over own ruins (`Scene::own_ruins`).
+Their orders at ruins (the click 0x5180e0: mode 0xc order 0x1f `{id,
+2}`, 0xd 0x1f `{id, 1}`, 0xf 0x1e `{1, id}`; the ship's 0x4e2ba0):
+- Repair (0x1e): 0x51f1f0 finds the ruins by id, event 0x20 `{0x101,
+  cell}`; the order 0x4aa990 (kind 1) takes its berth from 0x4b23a0,
+  which reads the object slot (grid `+0xc`) of that cell, and the fall
+  emptied it (0x423d60 on 0x138b -> 0x499860, one cell or four by
+  `+0x56`): -1, the order dropped, no notice. A dock falling while a
+  ship sails to it: at the berth 0x4b2420 finds the slot empty, the
+  order done (message 8, 0xa0) with notice 0x143, as a dock gone. The
+  port: `send_to_dock` drops at ruins silently, `dock_tick` ends on a
+  fallen dock.
+- Unload (0x1f kind 1, cargo aboard): event 0x40 `{400, 0xc, id}`,
+  0x4aab00 looks the port up in the ship's player's list (0x4ac050),
+  which lost it: dropped, the old task kept, no notice
+  (`order_unload`).
+- Load (0x1f kind 2): event 0x10 `{3, 1, id, 0xff}`; the order 0x4aa840
+  finds the ruins by id (0x4ac050 with -1), measures (0x4abf60) and
+  starts the closing in (`+0x696` 3: 0x4b7370 -> 0x4b73a0 -> 0x4b7f10
+  with the kept pointer `+0x6cf`, no look-up). Not decoded: what the
+  contact (0x4b84b0) and the ruins' 0x425990 on 0x2875 then do; the
+  port's `order_load` still refuses ruins.
+
+A fort's attack at ruins. The fort's answer to the pointer (0x41bec0,
+in 0x419f80 on 0xc452) tests the bytes: an own object 5; standing, not
+limed, `+0x1e4` 0 and the cell seen, an object of `+0x57` 1 at war
+(0x4efe20 < 0) goes to the reach test (0x446800 over the groups with
+units: a cell test, no state), so an enemy's ruins in reach get the
+attack. Order 0x15 / 0x16: 0x446960 finds them by id (0x51f1f0) and
+sets the groups' target with bit 2. Each group's tick (0x4469c0) asks
+0x447400 whether the target is in reach: it looks for the id in the
+cells of the reach mask, passing over a building of classes 0x32-0x3e
+(mask 0x1fff) in state `+0xa4` 2; so the ruins are never in reach, the
+target is kept and nothing is shot at it (the scan, bit 1, as before).
+The port: the fort's pointer (`App::default_pointer`) and
+`Scene::order_attack` take an enemy's ruins (`ruins_enemy`); their
+groups never track them (the port's ruins have no `combat`, so are in
+no group's cells). Tested on miss000 (repair, unload) and miss007 (the
+fort).
 
 The pointer with nothing selected (0x5175b0, `[game+0x3221]` 0): over
 no object mode 0; over an object whose `+0x57` is 1 and `+0x54 /
