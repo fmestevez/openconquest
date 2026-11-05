@@ -83,5 +83,8 @@ paid for on every later call. Keep the context small:
   `cargo test --release -q NAME` for the tests you touch. Run the full
   checks (fmt, clippy, the whole suite) once, before the commit.
 - Do not start sub-agents of your own.
+- Stay small: one item, about 60 tool calls. Cost grows with every call,
+  so past that, commit a passing state (or nothing), write what is left in
+  your notes, and stop; a fresh agent continues more cheaply.
 - Keep notes and the final report short: what the original does (with
   addresses), what changed, what was left out.
