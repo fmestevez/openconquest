@@ -1567,7 +1567,12 @@ impl Scene {
     /// forts' 0xd2 (0x4dc2a0) blocks send it `#` sub 1 with the group's
     /// three. (The move's and
     /// the attack's are their passes', `flotilla_move_pass`,
-    /// `attack_pass`.)
+    /// `attack_pass`.) (Not ported: the work those 300 cases do first,
+    /// on lists the port's blocks do not keep: the guard's 0x4d1a50, or
+    /// 0x4d1080 with block `+0x24` 3 and `+0x38`, `+0x3c` set; the
+    /// founding's 0x4cb1a0, a site 0x4cb850 or a waypoint route `+0x61`;
+    /// the treasure's 0x4d97c0 target, else with `+0x28` listing 0x4d9920
+    /// and 0x4da3e0, else 0x4d9690 and 0x4d8b30.)
     fn read_joins(&mut self, ai: &mut Computer, f: usize) {
         let block = ai.flotillas[f].block;
         let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));

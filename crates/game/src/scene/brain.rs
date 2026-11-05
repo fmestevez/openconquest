@@ -1685,7 +1685,8 @@ impl Scene {
 
     /// A brain player's ship mended at a dock sails out (0x4b6d60, message
     /// 0x5d98) and joins the member its mission names for its type
-    /// (0x479300, op 2), leaving whatever fleet it was in.
+    /// (0x479300, op 2), leaving whatever fleet it was in; the member's
+    /// block hears it (message 300, 0x4a1340) as it hears a prize.
     pub(super) fn brain_mended(&mut self, id: u32) {
         let Some(brain) = self.brain.as_ref() else {
             return;
@@ -1751,6 +1752,7 @@ impl Scene {
         }
         if let Some(f) = brain.fleets.get_mut(into) {
             f.ships.push(id);
+            self.brain_heard_join(into, id);
         }
     }
 
@@ -1962,6 +1964,15 @@ impl Scene {
         if !f.ships.contains(&id) {
             f.ships.push(id);
         }
+        self.brain_heard_join(k, id);
+    }
+
+    /// Message 300 for ship `id` that joined brain fleet `k` (0x4a0480 op
+    /// 2: 0x49bd60, then 0x4a1340): `{300, tick, ship +0x60, ship id}`
+    /// appended to the group's queue `+0x2d`, which exists only while the
+    /// group has a block (made with it by 0x4a1150); with none nothing is
+    /// posted.
+    fn brain_heard_join(&mut self, k: usize, id: u32) {
         // Its gather zone hears it in its own list (`+0x2d`).
         let group = super::gather::ZoneGroup::Brain(k);
         if let Some(z) = self.gather_zones.iter().position(|z| z.group == group) {
@@ -1977,7 +1988,10 @@ impl Scene {
             });
             return;
         }
-        self.brain.as_mut().unwrap().fleets[k].joined.push(id);
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        if f.block != 0 {
+            f.joined.push(id);
+        }
     }
 
     /// Puts a leviathan zone (class 0x192, 0x4960b0) of `area` on the map:
@@ -2094,6 +2108,9 @@ impl Scene {
             return;
         }
         f.block = code;
+        // The old block's queue is freed with it (0x4a1c60) and a new one
+        // made (0x4a1150): the joins it had not heard are gone.
+        f.joined.clear();
         let (players, classes, third) = f.behaviour.unwrap_or((0, 0, 0));
         for ship in self.fleet_ships(k) {
             if self.object_index(ship).is_some() {

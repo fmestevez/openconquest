@@ -6694,6 +6694,54 @@ fn brains_mend_their_prizes() {
     );
 }
 
+/// A brain's mended ship joining its member (0x479300 op 2 -> 0x4a0480:
+/// 0x49bd60, then 0x4a1340) is heard by the member's block as message
+/// 300, only while the member has a block (its queue `+0x2d`); a new
+/// block of another kind drops what was not heard (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn brain_mended_join_is_heard() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    let ship = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+    let id = scene.objects[ship].id;
+    scene.objects[ship].owner = Some((3, 3));
+    scene.objects[ship].ship.as_mut().unwrap().kind = 2;
+    // Members (1, 4) and (1, 5) take player 15's warships (by a draw).
+    let into = |scene: &Scene| {
+        scene
+            .brain
+            .as_ref()
+            .unwrap()
+            .fleets
+            .iter()
+            .position(|f| f.ships.contains(&id))
+            .unwrap()
+    };
+    for f in &mut scene.brain.as_mut().unwrap().fleets {
+        f.block = 0;
+        f.joined.clear();
+    }
+    scene.brain_mended(id);
+    let k = into(&scene);
+    assert!(scene.brain.as_ref().unwrap().fleets[k].joined.is_empty());
+    // With a block (a move's, 100), the join is heard.
+    for f in &mut scene.brain.as_mut().unwrap().fleets {
+        f.block = 100;
+        f.ships.retain(|&s| s != id);
+    }
+    scene.brain_mended(id);
+    let k = into(&scene);
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[k].joined, [id]);
+    // A block of another kind: the queue made anew.
+    scene.brain_block(k, 0x70);
+    assert!(scene.brain.as_ref().unwrap().fleets[k].joined.is_empty());
+}
+
 /// miss007's brain: the barbarian yards build for their own fleets, and
 /// the Persians' yard for its merchants and guards (needs
 /// `OPENCONQUEST_DATA`).

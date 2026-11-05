@@ -2409,6 +2409,21 @@ last entry with that `+4` of the lists `+0x44` (1), `+0x48` (2), `+0x4c`
 (4), the kind `<< 16` with the index (a later list's overriding; mode 1,
 the 0x137 case's, removes the entries, not read further); kind 2 zeroes that `+0x48`
 entry's `+8` and `+0xc`.
+The two switches whole (records `{code, tick, ship +0x60, ship id,
+rec[4..]}`, newest first, each removed after its case; every other code
+dropped). 0x4d0210 (the queue walked while `+0x2d` is not null, the
+block possibly ended under it): 300, the ship in the group (0x4cc590):
+0x4cfad0 true sends it (0x4cfe40), then `#` sub 1 with the group's
+three (0x4c42f0); 0x136 only with a route `+0x61` (as the founding's,
+0x4cea20 / 0x4ce7c0; at the end 0x4d0030, else 0x4cfdf0 and 0x4cfc90,
+or 0x4d0090); 0x13a-0x13d as above (not read: who posts 0x13b). 0x4d1ea0 (a record whose ship is not in the group dropped
+first, but for 0x137): 300: with block `+0x24` 1 or 2, or 3 with
+`+0x38` or `+0x3c` 0, 0x4d1a50(ship, 0); with 3 and both set,
+0x4d1080(`+0x30`, ship); `+0x24` 0 nothing; then `#` sub 1 (0x4c42f0);
+0x136: 0x4d1750 mode 0 of kind bit 4 and 0x4d2200 true: `+0x29`
+steps 0-3 round, 0x4d2160 its corner of `+0xc` and 0x4d22f0 there;
+0x137 (rec[3]): 0x4d1750 mode 1 of kind 4 exactly: 0x4d25a0 with
+`+0xc` and 0x4d2110; 0x13a, 0x13c, 0x13d as above (rec[3] the ship).
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
@@ -9011,9 +9026,28 @@ codes before it; not read: other paths). Ported: the repair's
 (`run_repair_orders`, brains), the forts' block 0xd2 and its 300
 (`flotilla_turn`, `read_joins`; a new fort through `Computer::join`), and,
 before, the computers' guard, founding, treasure and dock, the human's
-attack. Not ported: the brains' founding (0x8c) and treasure (0xbe)
-blocks hear no notices in the port (no pass), so their 300's `#` is not
-sent; the fleet attack task's (the port keeps it per ship, no group: see
+attack. The brains' founding (0x8c, miss005's raiders (1, 6) and
+(1, 7)) and treasure (0xbe, miss007's (0, 11)) blocks hear no notices
+in the port (no pass); a 300 reaches them in the original only by a
+join, 0x4a1340 posting it while the group has a block (its queue
+`+0x2d`, made by 0x4a1150, freed by 0x4a1c60): a brain's joins are
+0x479300 op 2 (0x4a0480: 0x49bd60, then 0x4a1340), for prizes to the
+repair members and mended ships to the members by type (above), none
+of them these, so in the ported missions nothing is lost (not read:
+whether a ship built for a member joins by a path that posts 300, the
+navy's case at 0x49add9, or 0x49c830 / 0x49d0d0). Their 300 cases do
+the block's work first, then `#` sub 1: founding 0x4cba10 (0x4cb1a0:
+no route `+0x61`, a site by 0x4cb850 and 0x4cb0b0; with one, 0x4cea20
+/ 0x4ceab0 and 0x4cb110 / 0x4cb5f0), treasure 0x4da0a0 (0x4d97c0 a
+target not taken: 0x4d9690 and 0x4d8b30, counted; none, with `+0x28`
+listing, 0x4d9920 over `+0xc` and 0x4da3e0 on `+0x2c`'s first);
+founding's other cases 0x130 and 0x136, treasure's 0x137, 0x141,
+0x142 (`+0x34` 4). The computers' read of these 300s (`read_joins`)
+sends the `#` alone: the block's work is not ported (the port's
+founding and treasure orders keep no sites, routes or lists). Ported:
+a brain's mended ship's join posts 300 as a prize's
+(`brain_heard_join`), only with a block, and a new block of another
+kind drops the joins not heard (`brain_block`). Not ported: the fleet attack task's (the port keeps it per ship, no group: see
 "A ship's order at a jam"); the waypoint move, 0xa0, 0xaa, 0xb4 (not in
 the port).
 
