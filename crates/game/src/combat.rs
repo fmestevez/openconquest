@@ -1745,11 +1745,6 @@ pub const ARMOUR_CUT: [u16; 9] = [0, 7, 14, 20, 27, 33, 37, 44, 50];
 /// 0x598054: ram quality by kind and level.
 pub const RAM_QUALITY: [u16; 9] = [100, 110, 117, 125, 135, 145, 160, 175, 200];
 
-/// A heavy shot striking (`BOMB<letter><state>0`, see `scene::shot`),
-/// drawn where a sinking ship has no frames of its own and where a
-/// building falls. (A blow without a shot shows no hit or splash: see
-/// `Scene::strike`.)
-pub const FX_SINK: &str = "BOMBG10";
 pub const FX_FRAME_MS: f32 = 70.0;
 
 /// An animation at a world position: played once, or looped for a while

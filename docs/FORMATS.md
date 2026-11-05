@@ -716,7 +716,7 @@ Combat tables:
   Rammers (type 5) get x 15 / 10. The result is attacker x 100 /
   defender, capped at 200 (200 against nothing).
 - Effects are BOMB sequences (`BOMB%C%1d%1d`): e.g. BOMBA20 hit, BOMBA50
-  splash, BOMBG10 explosion; FIRE0-2 and SMOKE0-2 for burning.
+  splash, BOMBG10 explosion (a shot's landing); FIRE0-2 and SMOKE0-2 for burning.
 - The random generator is the usual LCG `x * 0x41c64e6d + 0x3039`, using
   the high 16 bits.
 
@@ -905,7 +905,19 @@ width `+0xbc`); for any other 0x50e350(layer, on) (`+0x8d`, the
 sprite's flag 0x40000: hidden) and, for layer 0, the radar icon off
 (0x50de40, message 0xd21) or back (0x50da60, 0xd20). Loading layer 0
 in the sinking mode (0x4e1bb0(0), `+0x74` 5) unghosts or shows it and
-clears `+0x253`. The ghost table 0x5cdd2c (0x800 bytes of bss) is
+clears `+0x253`. The sinking (0x4dec40 at state 4): `+0x74` 5,
+0x4e1bb0(0) loads `SHIP_<letter><+0x250>001` (0x4e0120 mode 1) as
+layer 0 with mask `1 << +0x5af` (`0x101 << +0x5af` while burning,
+`+0x8ca`; every mode 1 composite has 8 layers, one per heading), frame
+`+0x45` 0, delay `+0x7d` 2; 0x4c12b0 each tick steps a frame when more
+than 2 ticks passed since `+0x81` (0x4df6e0 first), at the next-to-last
+frame drops the treasure (0x4e4e30, message 0x16e2: a `SkarbClassTy`
+0x2c1) and the crew (0x4e4f20), past the last sends message 10 (gone).
+Mode 1 composites exist for types 0-9 of nation 1, 0-7 and 10-11 of
+3, 1-3 and 5-6 of 4; with none 0x50d080 has no picture and
+nothing shows. The port (`objects::ship_sink_frames`, a frame per 3
+ticks) counts frame 0 from the sinking, not from the hull's last step
+`+0x81`; the treasure at the sinking is not ported. The ghost table 0x5cdd2c (0x800 bytes of bss) is
 filled at start (0x519280 at 0x5193e5-0x51942b): 128 rows of 16
 bytes, 0xaa on an even row, 0x55 on an odd one. The drawing
 (0x572391-0x5723a4, 0x5725cc-0x5725df) passes the mask with a row of
@@ -7095,6 +7107,13 @@ building busy at its fall would offer the cancel in its ruins. Not
 decoded: whether anything clears `+0x10c` in state 2 and what the
 cancel does there; the port shows ruins no menu (`main_menu`).
 
+A building's fall (0x423d60 on 0x138b) shows no blast: the ruins
+picture (vtable +0x38, frame 0), its fires and smokes out, the rubble
+below and, while the site has cells (`+0x158`), its `+0x1a8` sound
+event through 0x50e570 mode 5 (4 `razru2`, 0x422dec; the castles
+0x410ca0 set 0x6c / 0x6d, whose `SND_` lists are empty). The port drew
+`BOMBG10` there (and at a ship with no sinking picture): gone.
+
 The fall's rubble is a terrain tile on map layer 5. For each cell i of
 the site (`+0x56`, 1 or 4: x + i % 2, y + i / 2) two draws of the
 building's generator give k = r % 3 + 1 (0x4244a4) and s = r % 3 + 1
@@ -7490,7 +7509,8 @@ high bit per name (0x80, 0xc0, 0xe0). `SOUNDLIST` lists the events.
 Interface sounds are played by event through 0x525370; positional ones
 through 0x50e570. A ship sinking (0x4dec40) plays event 3 (`deadsh`) if
 it was the viewing player's and event 319 (`deny`, despite its name a
-fanfare) if not. No sound was found for clicking an unavailable command.
+fanfare) if not. Nothing else plays at a sinking (the port's
+`wreck1`, event 88, is only played at 0x4053f8, mode 6; gone). No sound was found for clicking an unavailable command.
 An event's sound is picked by 0x554820(bank, event, 0) from its `SND_n`
 entry (the first with fewer than two names, else `rand() % count`); no
 entry or an empty one is silent. The creatures' (0x50e570 at their

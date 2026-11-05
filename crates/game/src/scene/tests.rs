@@ -17133,6 +17133,65 @@ fn docks_fit_units_by_the_types_weights() {
     assert_eq!(scene.amber, 610);
 }
 
+/// A ship sunk shows its hull's sinking picture at its heading, a frame
+/// every 3 ticks, and plays only `deadsh` (its own) (0x4dec40, 0x4e1bb0,
+/// 0x4c12b0); a building's fall shows no picture but its ruins and plays
+/// its `+0x1a8` event, `razru2` (0x423d60 on 0x138b) (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn a_sinking_and_a_fall_show_only_the_originals_pictures() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let k = scene.object_index(ship).unwrap();
+    let nation = scene.objects[k].record.fields[5];
+    let kind = scene.objects[k].ship.as_ref().unwrap().kind;
+    scene.objects[k].ship.as_mut().unwrap().heading = 3;
+    let (x, y) = (scene.objects[k].x, scene.objects[k].y);
+    scene.effects.clear();
+    scene.sounds.clear();
+    scene.strike(ship, 1.0e9, None, false, &data, &mut caches);
+    assert_eq!(scene.sounds, [("deadsh", x, y)]);
+    assert_eq!(scene.effects.len(), 1);
+    let fx = &scene.effects[0];
+    assert!(matches!(fx.depth, combat::FxDepth::Sinking));
+    assert_eq!(fx.frame_ms, 3.0 * crate::clock::TICK_MS as f32);
+    let want = objects::ship_sink_frames(&data, &mut caches, kind, nation, 3).unwrap();
+    assert_eq!(fx.frames.len(), 20);
+    for (f, w) in fx.frames.iter().zip(&want) {
+        assert_eq!(f.len(), 1);
+        assert!(std::rc::Rc::ptr_eq(&f[0].image, &w[0].image));
+    }
+    // A hull with no sinking picture (type 0 has none of nation 4) shows
+    // nothing.
+    assert!(objects::ship_sink_frames(&data, &mut caches, 0, 4, 0)
+        .unwrap()
+        .is_empty());
+    let building = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD))
+        .unwrap()
+        .id;
+    let b = scene.object_index(building).unwrap();
+    let (x, y) = (scene.objects[b].x, scene.objects[b].y);
+    scene.effects.clear();
+    scene.sounds.clear();
+    scene.strike(building, 1.0e9, None, false, &data, &mut caches);
+    assert!(scene.effects.is_empty());
+    assert_eq!(scene.sounds, [("razru2", x, y)]);
+}
+
 /// A dock's town falling (0x2874 {town}) has the dock send its ship 0xcb9
 /// (0x4e7640): the ship lets its contact go and, mid-mending, backs out at
 /// once, its hull as it was (needs `OPENCONQUEST_DATA`).
@@ -18471,7 +18530,7 @@ fn effects_shots_and_fireballs_take_their_depths() {
     );
     scene.effects.clear();
     // A sinking hull: by its bottom on frame 3, 0x4f4c on frame 4.
-    let frames = objects::sequence_frames(&data, &mut caches, combat::FX_SINK).unwrap();
+    let frames = objects::ship_sink_frames(&data, &mut caches, 0, 1, 0).unwrap();
     assert!(frames.len() > 4);
     scene.effects.push(combat::Effect {
         x,

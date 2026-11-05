@@ -2752,22 +2752,27 @@ fn sheep_frames(data: &GameData, caches: &mut Caches, count: u32) -> Result<Vec<
     Ok(frames)
 }
 
-/// A ship type's sinking (mode 1, 20 frames) or under-construction (mode
-/// 2, 80 frames: 40 lying east-west then 40 north-south) animation:
-/// `SHIP_<letter><hull nation>00<mode>`.
-pub fn ship_mode_frames(
+/// A ship's sinking (composite mode 1, `SHIP_<letter><hull nation>001`,
+/// 0x4e0120), its layer picked by the heading: 0x4dec40 sets `+0x74` 5
+/// and 0x4e1bb0(0) loads layer 0 with the mask `1 << +0x5af` (`0x101 <<
+/// +0x5af` while the ship burns, `+0x8ca`; every mode 1 composite has
+/// eight layers, one a heading, so the high byte picks nothing). Empty
+/// for a hull with no such composite: the original's picture is then
+/// missing and nothing is drawn.
+pub fn ship_sink_frames(
     data: &GameData,
     caches: &mut Caches,
     kind: u8,
     nation: u32,
-    mode: u32,
+    heading: usize,
 ) -> Result<Vec<Vec<Layer>>> {
     let letter = (b'A' + kind.min(25)) as char;
-    composite_frames(
+    composite_frames_with(
         data,
         caches,
-        &format!("SHIP_{letter}{nation}00{mode}"),
+        &format!("SHIP_{letter}{nation}001"),
         0..usize::MAX,
+        |k, _| k == heading,
     )
 }
 

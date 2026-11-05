@@ -1456,17 +1456,21 @@ impl Scene {
             }
             // Creatures die with their own cry (land creatures 0x413ad0:
             // events 100-102 by class; the harpy 0x41fb02 event 103; the
-            // sea's creatures events 105-107), buildings fall, ships wreck.
+            // sea's creatures events 105-107), buildings fall with their
+            // `+0x1a8` (event 4, 0x424492).
             let sound = match self.objects[ti].class {
-                ObjectClass::Monster(0x1f8) => "deadga1",
-                ObjectClass::Monster(0x1f9) => "dedr2",
-                ObjectClass::Monster(_) => "deamons",
-                _ if is_building => "razru2",
-                _ => "wreck1",
+                ObjectClass::Monster(0x1f8) => Some("deadga1"),
+                ObjectClass::Monster(0x1f9) => Some("dedr2"),
+                ObjectClass::Monster(_) => Some("deamons"),
+                _ if is_building => Some("razru2"),
+                _ => None,
             };
-            self.sounds.push((sound, tx, ty));
-            // A ship gone: a lament if it was the player's, a fanfare
-            // ("deny", event 319) if not (0x4dec40).
+            if let Some(sound) = sound {
+                self.sounds.push((sound, tx, ty));
+            }
+            // A ship gone plays only a lament if it was the player's
+            // (event 3) or a fanfare ("deny", event 319) if not (0x4dec40
+            // at its end, 0x50e570 mode 5); no other sound or picture.
             if !is_building {
                 let own = self.is_own(&self.objects[ti]);
                 self.sounds
@@ -1474,27 +1478,34 @@ impl Scene {
             }
             self.ship_orders.retain(|p| p.site != target);
             self.constructions.retain(|c| c.site != target);
-            match self.objects[ti].ship.as_ref().map(|sh| sh.kind) {
-                // Ships go down with the sinking animation of their hull.
-                Some(kind) => {
-                    let nation = self.objects[ti].record.fields.get(5).copied().unwrap_or(1);
-                    match objects::ship_mode_frames(data, caches, kind, nation, 1) {
-                        Ok(frames) if !frames.is_empty() => self.effects.push(Effect {
-                            x: tx,
-                            y: ty,
-                            frames,
-                            age_ms: 0.0,
-                            follow: None,
-                            life_ms: None,
-                            frame_ms: crate::combat::FX_FRAME_MS,
-                            tornado: None,
-                            site: None,
-                            depth: crate::combat::FxDepth::Sinking,
-                        }),
-                        _ => self.spawn_effect(data, caches, combat::FX_SINK, tx, ty),
-                    }
+            // Ships go down with the sinking picture of their hull at
+            // their heading (0x4dec40: `+0x74` 5, 0x4e1bb0(0), layer 0's
+            // frame 0 and delay `+0x7d` 2), a frame each time more than 2
+            // ticks have passed (0x4c12b0), gone past the last (message
+            // 10). The port counts frame 0 from the sinking, the original
+            // from the hull picture's last step (`+0x81`); the treasure
+            // dropped at the next-to-last frame (0x4e4e30) is not ported.
+            // A hull with no sinking picture shows nothing; a fallen
+            // building only its ruins (0x423d60 on 0x138b: no blast).
+            if let Some(ship) = self.objects[ti].ship.as_ref() {
+                let nation = self.objects[ti].record.fields.get(5).copied().unwrap_or(1);
+                let frames =
+                    objects::ship_sink_frames(data, caches, ship.kind, nation, ship.heading)
+                        .unwrap_or_default();
+                if !frames.is_empty() {
+                    self.effects.push(Effect {
+                        x: tx,
+                        y: ty,
+                        frames,
+                        age_ms: 0.0,
+                        follow: None,
+                        life_ms: None,
+                        frame_ms: (3 * crate::clock::TICK_MS) as f32,
+                        tornado: None,
+                        site: None,
+                        depth: crate::combat::FxDepth::Sinking,
+                    });
                 }
-                None => self.spawn_effect(data, caches, combat::FX_SINK, tx, ty),
             }
             let ruins = is_building
                 .then(|| {
