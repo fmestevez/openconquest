@@ -784,8 +784,10 @@ impl Scene {
         let full = Err("No room aboard".to_string());
         if self.is_fort(to) {
             // A unit if the fort has room for it and is not being mended
-            // (0x419390, 0x417ef0); a treasure into its store of one
-            // (0x424b30, 0x424af0: not while it is mended), barrels and
+            // (0x419390, 0x417ef0: `+0x10c` with job 0xff); a treasure
+            // into its store of one (0x424b30, 0x424af0: not in state
+            // `+0xa4` 2, 3 or 0xff, the fallen having no combat here; a
+            // fort being mended is in state 1 and takes it), barrels and
             // goods being credited; no heroes (its vtable +0x80 says no),
             // armour, rams or goods.
             let mending = self.mending.contains(&to);
@@ -802,7 +804,7 @@ impl Scene {
                     Ok(())
                 }
                 Cargo::Treasure { kind, .. } if kind >= 7 => {
-                    if mending || self.held_by(to).len() >= FORT_STORE {
+                    if self.held_by(to).len() >= FORT_STORE {
                         return Err("There is no room for the treasure".into());
                     }
                     Ok(())

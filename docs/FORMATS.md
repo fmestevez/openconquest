@@ -1587,8 +1587,8 @@ list); with a settlement the settlement's first unit goes in (0x446620
 index 0) and a unit coming out joins its stock with its condition
 (0x440d40); with a ship 0x4bc8c0 and 0x4bcd10 as at a port. A treasure goes
 into the fort's store through 0x424b30 (barrels and goods credited, the
-rest kept while there is room, 0x424af0: 1 for forts, none while it is
-mended, state `+0xa4` 2) and out of it to a settlement through 0x441480 or
+rest kept while there is room, 0x424af0: 1 for forts, none in state
+`+0xa4` 2 (fallen), 3 or 0xff) and out of it to a settlement through 0x441480 or
 to a ship through 0x4bc8c0, then 0x424cf0. A hero is refused (0x424ed0
 asks the fort's vtable +0x80, 0x40dec0: 0). Armour, rams and goods have no
 case.
@@ -5135,6 +5135,32 @@ weapons (items 3-8) take the share, the marines (0-2) `0x4ac1b0(kind,
 the shooter's level, share)`. Barbarian structures (0x40e0f0) share
 `blow x load / (load + 80)` with no cuts, the marines through 0x40ff00.
 
+**State 2 is the fall, not the mending.** 0x423d60 on 0x138b (the fall,
+posted by itself when a blow 0x138e reaches the life) sets `+0xa4` 2,
+`+0xa8` 1 (0x424301), reports the kill (0x50e750) and removes the layers;
+the nest's fall does the same (0x41d3e5, 0x41d470); no other code writes
+2. A repair (0x1389 to 0x423d60) only marks the building busy (`+0x10c`
+1, job `+0x110` 0xff, start `+0x114` the percent) in state 1, and a blow
+meanwhile is taken as any (0x423d60 on 0x138e: with `+0x10c` and job
+0xff it adds the percent lost to the start). Every building's intake
+vt+4 hands 0x138e to LandObj's 0x423c30, which queues it (0x5577d0) unless
+`+0xa4` is 2 (and 0x138b likewise): barbarian structures (vtable 0x594920),
+castles (0x5949fc), the port and yards (0x596990, 0x59b4c4), the
+workshops and temples (0x595fb0, 0x596060, 0x596df8, 0x596ef8 directly;
+0x596af0 0x431a80, 0x596c10 0x434910, 0x596cf8 0x4368d0 all but
+0x138a / 0x138c), lairs (0x414ed0), docks (0x4162f0) and forts (0x418f60,
+after its torch and armour); the town's own vt+4 0x43b190 queues 0x1389,
+0x138b-0x138e only outside state 2. The nest (0x41d300, state 1 only)
+and the hero's house (0x421130, drops 0x138e) do not reach it. So only a
+fallen building drops a blow, whole (no hit, lime, fire or units'
+share); its hit test vt+8 0x423460 is false in 0xff and 0x10 only, so a
+shot still lands on the fallen (by its box: the pixel mask only in state
+1). The port: a fallen building keeps no combat (its ruins), so every
+blow path (`hit`, `land_shot`, `fort_blow`, `strike`, the fire and the
+stare) does nothing on it, and a building being mended takes blows,
+fire and the stare as any. Not checked: the port's shots are aimed at
+their target and do not hit-test the ruins on their way.
+
 The other classes' blows (vt+4 and the drain vt+0x4c, dumped from their
 vtables): castles (0x5949fc) queue it (0x423c30, not in state 2) and
 drain it by 0x4105c0, which takes a fireball's (bomb kind 10) off the war
@@ -6052,8 +6078,8 @@ magic shield (`+0x15c`), less a stored mirror shield's percent
 0x416f90 and yards via 0x4e8660, port 0x4e7640, castles 0x410ca0, nests
 0x41d4a0, schools, smithies, studios and temples via 0x427f50, lairs
 0x414f00, towns 0x441ba0) to LandObj 0x425990 (0x426fec): unless gone
-(`+0xa4` 0xff), asleep (0x10), mended (2) or the cyclops lair (class
-0x46), it is limed for `+0x18` (150) ticks more (`+0x144` set, `+0x14c`
+(`+0xa4` 0xff), asleep (0x10), fallen (2) or the cyclops lair (class
+0x46; a building being mended is in state 1 and takes it), it is limed for `+0x18` (150) ticks more (`+0x144` set, `+0x14c`
 now and `+0x150` 0 when not limed yet, then `+0x150 +=`), then takes
 `+0x14` off its life (`+0xac`) whole, no units' share even for a
 barbarian stronghold, no hit shown (both a fifth under the magic shield):
@@ -6660,12 +6686,21 @@ in state 1 (0x4e80b5): prefix, nation `+0x54`, class `+0x50` (`%2u`),
 else the condition's, at least 1), so `PTMSK_157101` (nation 1, facing
 0, level 1) and `DKMSK_<nation><58|59>1<facing><level>`.
 The test's state (0x42410e, `+0xa4 == 1`) holds for none going up (0),
-mended (2), sold (3) or asleep (0x10); nothing wakes an asleep building
+fallen (2), sold (3) or asleep (0x10), and holds for a building being
+mended (state 1, see below); nothing wakes an asleep building
 on a blow (0x423c30 and 0x423d60 do not touch 0x10), and none is hit:
 its hit test vt+8 0x423460 is false in 0xff and 0x10, so a shot lands
-elsewhere. Not decoded: whether the barbarians' drain 0x40e0f0 reaches
-0x4240e0 (the port's `building_mask` does not name 0x40's 0x4e7f90
-mask); the classes with no mask resource would read a null mask in
+elsewhere. The barbarians' drain 0x40e0f0 reaches 0x4240e0: it writes
+the structure's rest back (0x55b440, the message kept) and ends in
+0x4e7550 -> 0x427bb0 -> 0x423d60. Their masks: vt+0x38 0x40e0d0 jumps
+to 0x4e7f90 for class 0x40 (prefix `BARB` 0x5a2910 set at 0x40f014; the
+facing `+0x1dc` record field 10, loaded by 0x427f50 at 0x4280f2 as
+0x40f038 sets `+0x1d8` 0xa), `BARBMSK_464<1><facing><level>`, and to
+0x422e30 for 0x3f and 0x41, as lairs (`BARBSMSK_41<level>`,
+`BARBBMSK_41<level>`); `building_mask` names them. Not ported: their
+fire (the port's `light_building` leaves barbarians out), their
+generator `+0x18` not being decoded (0x40ef70 does not seed it at
+message 2); the classes with no mask resource would read a null mask in
 0x557640, the port lights none on them; whether a killing blow's state is still 1
 at the fire test (the port lights none on a building its blow brought
 down); which of fire (depth - 3) and smoke (- 2) draws over the other

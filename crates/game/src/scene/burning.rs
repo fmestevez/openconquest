@@ -161,14 +161,13 @@ impl Scene {
     ) {
         let o = &self.objects[i];
         let class = match o.class {
-            // The test wants `+0xa4` 1 (0x42410e): not going up (0), mended
-            // (2), sold (3) nor asleep (0x10). (An asleep building is never
-            // hit: its vt+8 0x423460 is false in 0x10, so no shot lands.)
-            ObjectClass::Building(class)
-                if self.standing(o.id) && !self.mending.contains(&o.id) =>
-            {
-                class
-            }
+            // The test wants `+0xa4` 1 (0x42410e): not going up (0), fallen
+            // (2, 0x423d60 on 0x138b; the port's ruins keep no combat),
+            // sold (3) nor asleep (0x10). Being mended is state 1 (0x1389
+            // sets `+0x10c` only), so a building being mended burns. (An
+            // asleep building is never hit: its vt+8 0x423460 is false in
+            // 0x10, so no shot lands.)
+            ObjectClass::Building(class) if self.standing(o.id) => class,
             // A castle stands in state 1 only: casting (4) it takes none.
             ObjectClass::Castle(class) if self.castle_standing(o.id) => class,
             ObjectClass::CreatureSpawn => o.record.class_id,
@@ -472,6 +471,18 @@ pub(super) fn building_mask(
         // facing `+0x1dc`, the level.
         0x39 => format!("PTMSK_{nation}{class:2}1{facing}{level}"),
         0x3a | 0x3b => format!("DKMSK_{nation}{class:2}1{facing}{level}"),
+        // The barbarian structure 0x40 likewise (its vt+0x38 0x40e0d0
+        // jumps to 0x4e7f90 for class 0x40; prefix `BARB` 0x5a2910 set at
+        // 0x40f014, the facing record field 10 by 0x427f50 at 0x4280f2
+        // with `+0x1d8` 0xa), so `BARBMSK_464<1><facing><level>`; 0x3f
+        // and 0x41 go to 0x422e30, as lairs (`BARBSMSK_41<level>`,
+        // `BARBBMSK_41<level>`). Their blows reach the fire test: the
+        // drain 0x40e0f0 writes the structure's rest back (0x55b440) and
+        // ends in 0x4e7550 -> 0x427bb0 -> 0x423d60. (Not ported: their
+        // fire, `light_building` leaving them out, for their generator
+        // `+0x18`, which 0x40ef70 does not seed at message 2, is not
+        // decoded.)
+        0x40 => format!("BARBMSK_{nation}{class:2}1{facing}{level}"),
         _ => {
             let name =
                 objects::building_name(class, nation, 0, objects::BuildingState::Standing(3))?;
@@ -685,6 +696,15 @@ mod tests {
                 assert!(building_mask(&data, class, 1, facing, 1).is_some());
             }
         }
+        // Barbarian structures: 0x40 by facing (0x4e7f90), 0x3f and 0x41
+        // as lairs (0x422e30).
+        for level in 1..=3 {
+            for facing in [0, 2, 4, 6] {
+                assert!(building_mask(&data, 0x40, 4, facing, level).is_some());
+            }
+            assert!(building_mask(&data, 0x3f, 4, 0, level).is_some());
+            assert!(building_mask(&data, 0x41, 4, 0, level).is_some());
+        }
         let picks: [fn(u32) -> bool; 3] = [
             |c| matches!(c, 0x32 | 0x33),
             |c| matches!(c, 0x34..=0x36),
@@ -712,16 +732,17 @@ mod tests {
             let (id, by) = (o.id, Some(o.owner.unwrap_or((1, 0))));
             let seed = (1u32..).find(|&v| combat::Rng(v).next() % 3 == 0).unwrap();
             scene.building_lcgs.insert(id, seed);
-            // Mended (2) or asleep (0x10) it takes none, with no draw.
-            scene.mending.push(id);
-            scene.light_building(i, 6, true, hit, by, &data, &mut caches);
-            scene.mending.clear();
+            // Asleep (0x10) it takes none, with no draw.
             scene.objects[i].asleep = Some(0.0);
             scene.light_building(i, 6, true, hit, by, &data, &mut caches);
             scene.objects[i].asleep = None;
             assert_eq!(scene.building_lcgs[&id], seed);
             assert!(scene.building_fires.is_empty());
+            // Being mended it stands (`+0xa4` 1; the mending is `+0x10c`,
+            // 0x423d60 on 0x1389) and burns.
+            scene.mending.push(id);
             scene.light_building(i, 6, true, hit, by, &data, &mut caches);
+            scene.mending.clear();
             assert_ne!(scene.building_lcgs[&id], seed);
             let f = &scene.building_fires[0];
             assert_eq!((f.building, f.size), (id, 2));

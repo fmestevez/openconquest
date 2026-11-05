@@ -599,12 +599,12 @@ impl Scene {
     /// through 0x4e8660, the port 0x4e7640, the workshops, temples, castles
     /// and nests 0x427f50, the lairs 0x414f00, towns 0x441ba0) to LandObj
     /// 0x425990 (at 0x426fec): unless gone (`+0xa4` 0xff), asleep (0x10),
-    /// mended (2) or the cyclops lair (class 0x46), it is limed for
-    /// `+0x18` ticks more (`+0x144`, `+0x14c`, `+0x150`; a fifth under the
-    /// magic shield), then takes `+0x14` on its life whole (a fifth under
-    /// the shield), no units' share, no hit shown: below its life it is
-    /// taken off, else the life is 1 and it falls (0x138b), put down to
-    /// no one (`+0x1ac` not written).
+    /// fallen (2, the port's ruins: no combat) or the cyclops lair (class
+    /// 0x46), it is limed for `+0x18` ticks more (`+0x144`, `+0x14c`,
+    /// `+0x150`; a fifth under the magic shield), then takes `+0x14` on its
+    /// life whole (a fifth under the shield), no units' share, no hit
+    /// shown: below its life it is taken off, else the life is 1 and it
+    /// falls (0x138b), put down to no one (`+0x1ac` not written).
     fn stare_building(&mut self, id: u32, blow: i32, data: &GameData, caches: &mut Caches) {
         let Some(k) = self.object_index(id) else {
             return;
@@ -619,8 +619,7 @@ impl Scene {
         let shielded = c.protect_magic > 0.0;
         let fifth = |n: i32| if shielded { n * 20 / 100 } else { n };
         let fort = matches!(o.class, ObjectClass::Building(0x34..=0x36));
-        let landobj =
-            o.asleep.is_none() && !self.mending.contains(&id) && o.record.class_id != CYCLOPS_LAIR;
+        let landobj = o.asleep.is_none() && o.record.class_id != CYCLOPS_LAIR;
         // LandObj's lime: the 0x138e a fort posts is taken from its queue
         // (0x423c30) at its tick, after it.
         if landobj {

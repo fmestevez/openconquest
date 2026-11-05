@@ -9023,9 +9023,13 @@ fn forts_reload_with_settlements_and_ships() {
     scene.held.push((site, tr(11)));
     scene.held.push((site, tr(15)));
     let store = Cargo::Treasure { index: 0, kind: 11 };
+    // Being mended (state 1, `+0x10c`) the store takes it: 0x424af0
+    // refuses states `+0xa4` 2, 3 and 0xff only.
+    scene.mending.push(fort);
     scene
         .transfer(site, fort, store, &data, &mut caches)
         .unwrap();
+    scene.mending.clear();
     let second = Cargo::Treasure { index: 0, kind: 15 };
     assert!(scene
         .transfer(site, fort, second, &data, &mut caches)
@@ -12512,6 +12516,16 @@ fn gorgon_stare_on_buildings() {
     stare(&mut scene, cell, &mut caches);
     assert_eq!(state(&scene, b), (1e6, 0.0, 0.0));
     scene.objects[k].asleep = None;
+    // Being mended it stands (`+0xa4` 1, the mending `+0x10c`, 0x423d60 on
+    // 0x1389): limed and struck as any (0x426fec skips 0xff, 0x10 and the
+    // fallen, 2).
+    scene.mending.push(b);
+    stare(&mut scene, cell, &mut caches);
+    scene.mending.clear();
+    near(state(&scene, b), (1e6 - hurt, limed, limed));
+    let c = scene.objects[k].combat.as_mut().unwrap();
+    (c.hull, c.lime, c.lime_total) = (1e6, 0.0, 0.0);
+    c.lime_span = None;
     // Felled at its life: put down to no one, gone.
     scene.objects[k].combat.as_mut().unwrap().hull = blow as f32 / 15.0;
     stare(&mut scene, cell, &mut caches);
