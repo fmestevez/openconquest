@@ -16632,3 +16632,125 @@ fn harpy_hits_chase_and_aim_are_the_originals() {
     assert!(dying, "the dying picture played");
     assert!(scene.object_index(id).is_none(), "removed at its end");
 }
+
+/// A harpy at towns and forts as the original's: its leg weights count
+/// the marines of a side-1 neighbour's list (0x41e840): a ship's each
+/// squad once (0x4e3960, 0x4e5e40), a settlement's or town's stock
+/// (vt+0x5c 0x43bfe0 page 0) its items 0-2 each one more than their
+/// count, none while it is mended, a fort's (0x4179b0) each squad once
+/// while it stands; listing a town on its way up as an upgrade makes it
+/// whole (`+0xa8`). It stops at a town (0x41efb0) and takes it to strike
+/// (0x41f1c0, not with the phantom), and its shot gives the town the blow
+/// 20 x item 4's level-1, a fifth of it under a magic shield. Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn harpy_at_towns_and_forts_is_the_originals() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    let town = scene
+        .objects
+        .iter()
+        .position(|o| matches!(o.class, ObjectClass::Building(0x32 | 0x33)))
+        .unwrap();
+    let id = scene.objects[town].id;
+    let g = scene.garrison(id);
+    assert_eq!(scene.harpy_marines(town), 3 + g[0] + g[1] + g[2]);
+    scene.mending.push(id);
+    assert_eq!(scene.harpy_marines(town), 0);
+    scene.mending.clear();
+    // Upgrading: the list makes it whole.
+    scene.constructions.push(super::Construction {
+        site: id,
+        upgrade: true,
+        ..Default::default()
+    });
+    let max = scene.objects[town].combat.as_ref().unwrap().max_hull;
+    scene.objects[town].combat.as_mut().unwrap().hull = max / 2.0;
+    scene.harpy_marines(town);
+    assert_eq!(scene.objects[town].combat.as_ref().unwrap().hull, max);
+    scene.constructions.clear();
+    for j in 0..scene.objects.len() {
+        let o = &scene.objects[j];
+        let n: u32 = if o.ship.is_some() {
+            o.unit_conditions()[..3]
+                .iter()
+                .map(|u| u.len() as u32)
+                .sum()
+        } else if matches!(o.class, ObjectClass::Building(0x34..=0x36)) {
+            if scene.standing(o.id) {
+                o.fort_places()[..3].iter().map(|u| u.len() as u32).sum()
+            } else {
+                0
+            }
+        } else if matches!(o.class, ObjectClass::Building(0x32 | 0x33)) {
+            continue;
+        } else {
+            0
+        };
+        assert_eq!(scene.harpy_marines(j), n);
+    }
+    // The harpy beside the town, nothing else about: it looks and strikes.
+    scene.objects.retain(|o| {
+        o.id == id
+            || matches!(
+                o.class,
+                ObjectClass::Monster(0x1f8 | 0x1f9) | ObjectClass::HarpyNest
+            )
+    });
+    let town = scene.object_index(id).unwrap();
+    let slots = scene.slot_map();
+    let held = |c: (i32, i32)| slots.get(&c).and_then(|s| s.occupant);
+    let (&at, _) = slots
+        .iter()
+        .find(|(_, s)| matches!(s.occupant, Some(super::fire_pass::Held::Object(j)) if j == town))
+        .unwrap();
+    let beside = super::walk_path::DIRS
+        .iter()
+        .map(|d| (at.0 + d.0, at.1 + d.1))
+        .find(|&c| {
+            held(c).is_none()
+                && super::walk_path::DIRS.iter().all(|e| {
+                    !matches!(
+                        held((c.0 + e.0, c.1 + e.1)),
+                        Some(super::fire_pass::Held::Jam(..))
+                    ) && !matches!(
+                        held((c.0 + e.0, c.1 + e.1)),
+                        Some(super::fire_pass::Held::Object(j)) if j != town
+                    )
+                })
+        })
+        .expect("a cell beside the town with nothing else about");
+    scene.flyers[0].cell = beside;
+    scene.flyers[0].forced = None;
+    assert!(scene.flyer_look(0, 0x1f8));
+    assert!(scene.strike_pick(0, 0x1f8));
+    assert_eq!(scene.flyers[0].sub, id);
+    scene.objects[town].combat.as_mut().unwrap().phantom = 1.0;
+    scene.flyers[0].sub = 0;
+    assert!(!scene.strike_pick(0, 0x1f8));
+    assert_eq!(scene.flyers[0].sub, 0);
+    scene.objects[town].combat.as_mut().unwrap().phantom = 0.0;
+    // The blow: 20 x item 4's level-1, whole, then a fifth under a shield.
+    let blow = combat::hull_damage_at(4, 1) * 20.0;
+    for (shield, cut) in [(0.0, 1.0), (10.0, crate::magic::SHIELD_FACTOR)] {
+        let c = scene.objects[town].combat.as_mut().unwrap();
+        c.max_hull = 1e9;
+        c.hull = 1e9;
+        c.protect_weapons = shield;
+        scene.flyer_strikes(0, 0x1f8, id, (0, 0), &data, &mut caches);
+        for _ in 0..500 {
+            if scene.shots.is_empty() {
+                break;
+            }
+            scene.run_shots(crate::clock::TICK, &data, &mut caches);
+        }
+        assert!(scene.shots.is_empty());
+        let hull = scene.objects[town].combat.as_ref().unwrap().hull;
+        assert_eq!(hull, 1e9 - blow * cut);
+    }
+}

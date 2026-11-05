@@ -5694,10 +5694,18 @@ ba / 1000` (`+0xb6` the tick, `+0xba` the hp at the fall). The states
   off both the nest's row and column, the nest (weight 100); else each
   cell of the 13 x 13 mask at 0x595a30 (1s only) about it, on the map,
   within the nest's range and with its flyer slot free (0x406830): weight
-  1, 0xff beside the nest's attacker (`+0xd2`), plus 10 x the sum of (1 +
-  count) over the marine groups (kinds 0-2, 0x4e3960) of the side-1 ships
-  beside it (row by row, not on their `+0x5ab`). One draw, `t = r % total
-  + 1`, the first cell whose running sum reaches `t`. The route is
+  1, 0xff beside the nest's attacker (`+0xd2`), else plus 10 x `n` for
+  each side-1 ship (not on its `+0x5ab`), settlement or town (0x1491) or
+  fort (0x1494) beside it (row by row), `n` the sum of `1 + count` (`+8`)
+  over its list's entries of category 1 with item 0-2 (a list of 11
+  entries, 0x557770(0xdc)). A ship's list (0x4e3960 through 0x4e5e40)
+  has each marine squad alone with no count; a settlement's or town's
+  (vt+0x5c 0x43bfe0, page 0, nothing in states `+0xa4` 2, 3, 0xff; on its
+  way up as an upgrade, `+0xa4` 0 with `+0x23c`, it first sets its life
+  `+0xa8` to 100) its nine items' places with their stock counts, so 3 +
+  its marines; a fort's (vt+0x5c 0x4179b0, only in state `+0xa4` 1) each
+  squad of its places alone. One draw, `t = r % total + 1`, the first cell
+  whose running sum reaches `t`. The route is
   0x55c3d0 from its cell and heading (below); `+0x10d` = 1, the step from
   its cell's centre to entry 1's; entry 1 entered with another heading:
   state 4 first; else moving (`+0xe0` 1) if 0x41ee20 allows the cell, else
@@ -5716,10 +5724,14 @@ ba / 1000` (`+0xb6` the tick, `+0xba` the hp at the fall). The states
   x 8` (through the last frame when 0 is the shorter way), then back to
   the state it came from (3: moving or holding as 0x41ee20 says; 5; 6).
 - **5 strike.** 0x41f1c0 picks (none: state 3), turning first if its
-  heading differs. A harpy: the 8 cells about it row by row, the last
-  ship of a nation other than 4 without Orpheus (not a phantom, not under
-  way into the cell), the attacker before all; at frame 7, if the target
-  still is, the shot. A dragon: the empty cells about it that 0x42ebf0
+  heading differs. A harpy: the 8 cells about it row by row, passing
+  over a ship (200-211, `+0x253`) or building (0x32-0x3e, vt+0xa4
+  0x40dfd0 `+0x134`) with the phantom, the last ship of a nation other
+  than 4 without Orpheus (not under way into the cell) or settlement,
+  town or fort (any side; its list filled unused), the attacker before
+  all; at frame 7, if the target still is, the shot. Its look 0x41efb0
+  likewise stops at any settlement or town and at a fort without the
+  phantom (lists filled unused). A dragon: the empty cells about it that 0x42ebf0
   answers (0xf: low landscape nibble 8, no north or west shore, nibble 5
   not 1, nibbles 6 and 7 zero; 0x2c0: any cell whose low nibble is not 8;
   else 0), weight 0x32 on land after a building (0x32-0x3e) was met in the
@@ -5792,9 +5804,16 @@ in the data, 64 frames each (8 a heading). 0xda93 (a quarter; on its
 cell gone at once), 0xda96 and 0x158bf remove it at once through the
 battle code, as before.
 
-**Decoded, not ported**: a harpy's look and strike at a town (0x1491)
-or fort (0x1494 with vt+0xa4 0), and their garrison lists (vt+0x5c) in
-the leg's weights; the pixel hit test vt+8 0x41deb0 (picture 0's frame
+A harpy's shot at a settlement, town or fort carries the same blow,
+to the building's aim point (vt+0xc 0x423520) as a hit, with no shooter;
+the building takes it as any shot's 0x138e (a fort's units their share,
+`fort_blow`; the others a fifth under a magic shield). The town state
+0xff of 0x43bfe0 is not identified (the port tests mending, 2, and
+selling or sold, 3). Not ported: the town's 0x138e handler 0x43b290
+dropping a blow on a town being built or upgraded (class 0x33, state 0),
+for every shooter.
+
+**Decoded, not ported**: the pixel hit test vt+8 0x41deb0 (picture 0's frame
 mask; a dragon in state 0 or 1 never hit); the sounds (events 0x5c,
 0x5d, 0x72/0x73, 0x7d/0x7e, 0x88/0x89); the draw offsets and depth (the
 port draws at the place). Not decoded: the targets' vt+0x2c and vt+0xa4

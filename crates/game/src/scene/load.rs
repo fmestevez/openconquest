@@ -402,7 +402,7 @@ impl Scene {
     /// (all dimmed while the fort is being mended, `+0x10c` with `+0x110`
     /// 0xff), an empty place for each room left (0x5966d8 less the load),
     /// then its treasures (0x4237b0), or one empty treasure place.
-    fn fort_list(&self, i: usize) -> Vec<Entry> {
+    pub(super) fn fort_list(&self, i: usize) -> Vec<Entry> {
         let o = &self.objects[i];
         let mending = self.mending.contains(&o.id);
         let mut list = Vec::new();
@@ -529,7 +529,7 @@ impl Scene {
     /// armour and ram; from the eighth place its treasures and heroes and
     /// their empty places. The unique ships' weapons are locked, and all of
     /// the Argo's places (0x4e4120).
-    fn ship_list(&self, i: usize) -> Vec<Entry> {
+    pub(super) fn ship_list(&self, i: usize) -> Vec<Entry> {
         let o = &self.objects[i];
         let ship = o.ship.as_ref().unwrap();
         let kind = ship.kind as usize % 12;

@@ -1100,26 +1100,26 @@ impl Scene {
     /// 0x41e840: the cell a leg flies to. Homing, off both the nest's row
     /// and column: the nest (weight 100). Else each cell of the mask
     /// about it on the map, within the nest's range and with its flyer
-    /// slot free: weight 1, 0xff beside the attacker it chases, more by
-    /// 10 x the marines (each squad aboard counting one more) on the side-1
-    /// ships beside it (in their cells, not under way into them). One
-    /// draw, `r % total + 1`, the first cell whose running sum reaches it.
-    /// (Not ported: a town's or fort's garrison list, vt+0x5c, adding the
-    /// same way.)
+    /// slot free: weight 1, 0xff beside the attacker it chases, else more
+    /// by 10 x the marines (`harpy_marines`) of each side-1 ship beside it
+    /// (in its cell, not under way into it), settlement, town or fort.
+    /// One draw, `r % total + 1`, the first cell whose running sum reaches
+    /// it.
     fn flyer_leg(&mut self, k: usize) -> Option<(i32, i32)> {
         let f = &self.flyers[k];
+        let (cell, home, range, forced) = (f.cell, f.home, f.range, f.forced);
         let (w, h) = (self.grid.width as i32, self.grid.height as i32);
         let mut cells: Vec<((i32, i32), u32)> = Vec::new();
         if !f.has_nest || !f.homing || f.cell.0 == f.home.0 || f.cell.1 == f.home.1 {
             let slots = self.slot_map();
             for dy in -6..=6 {
                 for dx in -6..=6 {
-                    let c = (f.cell.0 + dx, f.cell.1 + dy);
+                    let c = (cell.0 + dx, cell.1 + dy);
                     if c.0 < 0 || c.0 >= w || c.1 < 0 || c.1 >= h {
                         continue;
                     }
-                    if (c.0 - f.home.0).abs() > f.range.0
-                        || (c.1 - f.home.1).abs() > f.range.1
+                    if (c.0 - home.0).abs() > range.0
+                        || (c.1 - home.1).abs() > range.1
                         || LEG_MASK[(dy + 6) as usize][(dx + 6) as usize] != 1
                         || !self.flyer_slot_free(k, c)
                     {
@@ -1141,30 +1141,20 @@ impl Scene {
                         if Self::side_of(o) != 1 {
                             continue;
                         }
-                        if f.forced == Some(o.id) {
+                        if forced == Some(o.id) {
                             weight = 0xff;
                             continue;
                         }
-                        let Some(s) = o.ship.as_ref() else {
-                            continue;
-                        };
-                        if self.reserved_cell(j) == Some(b) {
+                        if o.ship.is_some() && self.reserved_cell(j) == Some(b) {
                             continue;
                         }
-                        let n: u32 = s
-                            .crew
-                            .squads
-                            .iter()
-                            .filter(|&&n| n > 0)
-                            .map(|&n| 1 + n)
-                            .sum();
-                        weight += n * 10;
+                        weight += self.harpy_marines(j) * 10;
                     }
                     cells.push((c, weight));
                 }
             }
         } else {
-            cells.push((f.home, 100));
+            cells.push((home, 100));
         }
         if cells.is_empty() {
             return None;
@@ -1179,6 +1169,56 @@ impl Scene {
             }
         }
         cells.last().map(|c| c.0)
+    }
+
+    /// The marines in object `j`'s list, as 0x41e840 counts them: each
+    /// entry of category 1 (a unit) with item 0-2 counts 1 + its count
+    /// (`+8`). A ship lists each marine squad aboard alone, with no count
+    /// (0x4e3960 through 0x4e5e40). A settlement or town (class 0x1491)
+    /// lists its stock (vt+0x5c 0x43bfe0 page 0: its nine items' places
+    /// with their counts, so each of items 0-2 counts one more), none in
+    /// states `+0xa4` 2 (mended), 3 (sold) or 0xff; on its way up as an
+    /// upgrade (`+0xa4` 0 with `+0x23c`), 0x43bfe0 first makes its life
+    /// `+0xa8` whole. A fort (0x1494, vt+0x5c 0x4179b0) lists each squad of
+    /// its places alone, with no count, only while it stands (`+0xa4` 1).
+    /// Anything else lists nothing. (Not identified: the town state 0xff.)
+    pub(super) fn harpy_marines(&mut self, j: usize) -> u32 {
+        use crate::economy::{SETTLEMENT, TOWN};
+        let id = self.objects[j].id;
+        let list = match self.objects[j].class {
+            _ if self.objects[j].ship.is_some() => self.ship_list(j),
+            ObjectClass::Building(SETTLEMENT | TOWN) => {
+                if self.mending.contains(&id)
+                    || self.selling.contains_key(&id)
+                    || self.sold.contains(&id)
+                {
+                    return 0;
+                }
+                if self.construction_at(id).is_some_and(|c| c.upgrade) {
+                    if let Some(c) = self.objects[j].combat.as_mut() {
+                        c.hull = c.max_hull;
+                    }
+                }
+                self.load_list(id, None)
+            }
+            ObjectClass::Building(0x34..=0x36) => {
+                if !self.standing(id) || self.mending.contains(&id) {
+                    return 0;
+                }
+                self.fort_list(j)
+            }
+            _ => return 0,
+        };
+        list.iter()
+            .filter(|e| e.cat == super::load::UNIT && e.sub < 3)
+            .map(|e| 1 + e.count)
+            .sum()
+    }
+
+    /// Whether object `j` is a settlement, town (class 0x1491) or fort
+    /// (0x1494).
+    fn town_or_fort(&self, j: usize) -> bool {
+        matches!(self.objects[j].class, ObjectClass::Building(0x32..=0x36))
     }
 
     /// Whether ship `j` is one a harpy goes for (0x41efb0, 0x41f1c0): of a
@@ -1208,18 +1248,20 @@ impl Scene {
     }
 
     /// 0x41efb0, at each cell of a leg: the 3 x 3 about it (its own cell
-    /// too), row by row. A harpy stops at a ship it goes for; a dragon at
-    /// the attacker it chases, else at the first empty cell it could sow
-    /// on: none if no object came before it, else one time in three (a
-    /// draw). (Not ported: a harpy's town 0x1491 and fort 0x1494; the
-    /// objects' vt+0x2c, taken as 1.)
-    fn flyer_look(&mut self, k: usize, class: u32) -> bool {
+    /// too), row by row. A harpy stops at a ship it goes for, at any
+    /// settlement or town (0x1491) and at a fort (0x1494) without the
+    /// phantom (vt+0xa4, `+0x134`), whose lists it fills unused
+    /// (`harpy_marines`, for what that does to an upgrading town); a dragon
+    /// at the attacker it chases, else at the first empty cell it could
+    /// sow on: none if no object came before it, else one time in three (a
+    /// draw). (Not decoded: the objects' vt+0x2c, taken as 1.)
+    pub(super) fn flyer_look(&mut self, k: usize, class: u32) -> bool {
         let slots = self.slot_map();
-        let f = &self.flyers[k];
+        let (cell, forced) = (self.flyers[k].cell, self.flyers[k].forced);
         let mut seen = false;
         for dy in -1..=1 {
             for dx in -1..=1 {
-                let c = (f.cell.0 + dx, f.cell.1 + dy);
+                let c = (cell.0 + dx, cell.1 + dy);
                 match slots.get(&c).and_then(|s| s.occupant) {
                     None | Some(Held::Other) => {
                         if class == DRAGON && self.sow_ground(c) != 0 {
@@ -1231,10 +1273,21 @@ impl Scene {
                     }
                     Some(Held::Object(j)) | Some(Held::Jam(j, _)) => {
                         seen = true;
-                        if f.forced == Some(self.objects[j].id) {
+                        if forced == Some(self.objects[j].id) {
                             return true;
                         }
-                        if class == HARPY && self.harpy_prey(j) {
+                        if class != HARPY {
+                            continue;
+                        }
+                        if self.harpy_prey(j) {
+                            return true;
+                        }
+                        let o = &self.objects[j];
+                        let phantom = o.combat.as_ref().is_some_and(|c| c.phantom > 0.0);
+                        if matches!(o.class, ObjectClass::Building(0x32 | 0x33))
+                            || matches!(o.class, ObjectClass::Building(0x34..=0x36)) && !phantom
+                        {
+                            self.harpy_marines(j);
                             return true;
                         }
                     }
@@ -1250,9 +1303,12 @@ impl Scene {
     /// into `sub`, its heading into `e4`. A dragon picks an empty cell it
     /// could sow on: weight 0x32 on land (landscape nibble 8) after a
     /// building (classes 0x32-0x3e) was met in the scan, else 0; one draw,
-    /// by count if all weigh 0. (Not ported: a harpy's town and fort, and
-    /// the objects' vt+0x2c and vt+0xa4.)
-    fn strike_pick(&mut self, k: usize, class: u32) -> bool {
+    /// by count if all weigh 0. A harpy passes over the buildings
+    /// 0x32-0x3e with the phantom (vt+0xa4, `+0x134`), and takes a
+    /// settlement, town or fort as it takes a ship, filling its list
+    /// unused (`harpy_marines`). (Not decoded: the objects' vt+0x2c, taken
+    /// as 1.)
+    pub(super) fn strike_pick(&mut self, k: usize, class: u32) -> bool {
         let slots = self.slot_map();
         let w = self.grid.width as i32;
         let f = &self.flyers[k];
@@ -1261,6 +1317,7 @@ impl Scene {
         let mut best = 0;
         let (mut target, mut heading) = (f.sub, f.e4);
         let mut sow: Vec<(u32, u32)> = Vec::new();
+        let mut town_lists = Vec::new();
         for d in [
             (-1, -1),
             (0, -1),
@@ -1290,12 +1347,16 @@ impl Scene {
                         continue;
                     }
                     let phantom = o.combat.as_ref().is_some_and(|c| c.phantom > 0.0);
-                    if o.ship.is_some() && phantom {
+                    let structure = (0x32..=0x3e).contains(&o.record.class_id);
+                    if (o.ship.is_some() || structure) && phantom {
                         continue;
                     }
                     let score = if f.forced == Some(o.id) {
                         0xff
                     } else if self.harpy_prey(j) && self.reserved_cell(j) != Some(c) {
+                        0
+                    } else if self.town_or_fort(j) {
+                        town_lists.push(j);
                         0
                     } else {
                         continue;
@@ -1305,6 +1366,9 @@ impl Scene {
                     }
                 }
             }
+        }
+        for j in town_lists {
+            self.harpy_marines(j);
         }
         if class == HARPY {
             let f = &mut self.flyers[k];
@@ -1358,7 +1422,8 @@ impl Scene {
     /// dragon's less 0x43, 0x92). A harpy's at frame 7 flies to the prey's
     /// aim point as a hit (vt+0xc with 100), drawn as L (0xb), a sure
     /// shot carrying 20 x item 4's level-1 blow (the A x 15 cache's copy,
-    /// 0x5c73dc), shared out on the ship as any blow. A dragon's at frame
+    /// 0x5c73dc), shared out on a ship as any blow, taken by a settlement,
+    /// town or fort as any shot's (0x138e). A dragon's at frame
     /// 16 flies to the middle of its chosen cell, drawn as P (0xf), with
     /// no target and no blow; then its teeth are sown there by the cell's
     /// ground (0x42ebf0): on land (0xf) a cyclops, minotaur or amazon
@@ -1366,7 +1431,7 @@ impl Scene {
     /// 1, 0, 0, 0, x, y}`), on water (0x2c0) a sea monster of type `r & 3`
     /// for nation 4 slot 0 (0x493780(scene, 4, 0, r & 3, x, y, 4, 4)),
     /// else nothing. (Not ported: the sounds, events 0x7d / 0x7e.)
-    fn flyer_strikes(
+    pub(super) fn flyer_strikes(
         &mut self,
         k: usize,
         class: u32,
@@ -1424,6 +1489,43 @@ impl Scene {
         let Some(i) = self.object_index(prey) else {
             return;
         };
+        // A settlement, town or fort takes the blow as any shot's
+        // (message 0x138e): a fort shares it out on its units
+        // (`fort_blow`), the others' LandObj takes a fifth of it under a
+        // magic shield; it flies to the building's aim point (vt+0xc
+        // 0x423520) as a hit.
+        if self.town_or_fort(i) {
+            let blow = crate::combat::hull_damage_at(4, 1) * 20.0;
+            let o = &self.objects[i];
+            let warded =
+                !o.holds_units() && o.combat.as_ref().is_some_and(|c| c.protect_weapons > 0.0);
+            let damage = if warded {
+                blow * crate::magic::SHIELD_FACTOR
+            } else {
+                blow
+            };
+            let to = self.building_aim(i, true);
+            self.fire_shot(
+                super::shot::Firing {
+                    item: 4,
+                    letter: Some(11),
+                    flaming: false,
+                    from,
+                    target: prey,
+                    strikes: true,
+                    damage,
+                    wounds: 0.0,
+                    wear: 0.0,
+                    rope: None,
+                    shooter: None,
+                    by: None,
+                    to: Some((to.0 as f32, to.1 as f32)),
+                },
+                data,
+                caches,
+            );
+            return;
+        }
         let o = &self.objects[i];
         let (Some(s), Some(c)) = (&o.ship, &o.combat) else {
             return;
