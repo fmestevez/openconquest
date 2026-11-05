@@ -356,7 +356,8 @@ impl Scene {
                 g.state = 1;
                 g.picture = true;
                 self.gorgon_picture(i, g, data, caches);
-                // Not decoded: the name of sound event 94 (mode 5).
+                // Sound event 94 (`apmed3`), mode 5 at her cell.
+                self.sounds.push(("apmed3", px, py));
                 g.wanted = 1;
                 self.gorgon_step(g);
             }
@@ -399,7 +400,8 @@ impl Scene {
                 g.wanted = 1;
                 g.cut = false;
                 self.gorgon_step(g);
-                // Not decoded: the name of sound event 105 (mode 5).
+                // Sound event 105 (`deamons`), mode 5 at her cell.
+                self.sounds.push(("deamons", px, py));
                 // Her cell gets the Gorgon's head, then what she carried
                 // (0x520c70 each); none carried after.
                 let head = Treasure {
@@ -473,7 +475,11 @@ impl Scene {
     /// (Not decoded: the building's handlers of 0x158bf, the fort's
     /// 0x41a041 among them: a building counts but takes nothing here.)
     fn gorgon_stare(&mut self, g: &Gorgon, data: &GameData, caches: &mut Caches) {
-        // Not decoded: the name of sound event 127 (mode 5).
+        // Sound event 127 (`atmed1c`), mode 5 at her cell (0x402111).
+        let t = TILE_SIZE as f32;
+        let (cx, cy) = g.cell;
+        self.sounds
+            .push(("atmed1c", cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0));
         let half = g.loops + 1;
         let (x, y) = g.cell;
         let mut list: Vec<((i32, i32), usize)> = self

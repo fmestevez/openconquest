@@ -747,9 +747,15 @@ impl Scene {
     /// at the route's end another leg, or the landing at home.
     fn flyer_moving(&mut self, k: usize, class: u32, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
+        if self.flyers[k].flap <= now {
+            // The flap, event 0x88 harpy (`harpy2`) / 0x89 dragon
+            // (`disap1`), mode 5 at its cell.
+            let flap = if class == DRAGON { "disap1" } else { "harpy2" };
+            let (x, y) = centre(self.flyers[k].cell);
+            self.sounds.push((flap, x as f32, y as f32));
+        }
         let f = &mut self.flyers[k];
         if f.flap <= now {
-            // (Not ported: the flap sound, event 0x88 harpy / 0x89 dragon.)
             f.flap = (f.draw() % 41 + 60) * 375 / 100 + now;
         }
         let at = (f.pos.0.div_euclid(64), f.pos.1.div_euclid(64));
@@ -826,8 +832,12 @@ impl Scene {
                 f.heading = hd as u8;
                 f.state = APPEAR;
                 f.sub = 0;
-                // (Not ported: a harpy's sound, event 0x5c.)
                 self.flyer_picture(k, data, caches);
+                // A harpy's, event 0x5c (`app3`), mode 5 at its cell.
+                if self.flyer_class(k) == HARPY {
+                    let (x, y) = centre(self.flyers[k].cell);
+                    self.sounds.push(("app3", x as f32, y as f32));
+                }
             }
             REST => {
                 f.state = REST;
@@ -841,7 +851,11 @@ impl Scene {
             TAKE_OFF => {
                 f.state = TAKE_OFF;
                 f.sub = 0;
-                // (Not ported: a dragon's sound, event 0x5d.)
+                // A dragon's, event 0x5d (`app3`), mode 5 at its cell.
+                if self.flyer_class(k) == DRAGON {
+                    let (x, y) = centre(self.flyers[k].cell);
+                    self.sounds.push(("app3", x as f32, y as f32));
+                }
                 self.flyer_picture(k, data, caches);
             }
             FLY => {
@@ -1430,7 +1444,9 @@ impl Scene {
     /// (class 500 + its generator's `r % 3`, message 0x1497 with `{class,
     /// 1, 0, 0, 0, x, y}`), on water (0x2c0) a sea monster of type `r & 3`
     /// for nation 4 slot 0 (0x493780(scene, 4, 0, r & 3, x, y, 4, 4)),
-    /// else nothing. (Not ported: the sounds, events 0x7d / 0x7e.)
+    /// else nothing. First the sound, mode 5 at its cell: a harpy's event
+    /// 0x7d (`atgarp1`), a dragon's 0x7e (`dr1` or `dr3`, `rand() % 2`
+    /// by 0x554820).
     pub(super) fn flyer_strikes(
         &mut self,
         k: usize,
@@ -1440,6 +1456,13 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) {
+        let cry = if class == DRAGON {
+            ["dr1", "dr3"][self.gull_rng.next() as usize % 2]
+        } else {
+            "atgarp1"
+        };
+        let (x, y) = centre(self.flyers[k].cell);
+        self.sounds.push((cry, x as f32, y as f32));
         let (px, py) = self.flyers[k].pos;
         let (ox, oy) = if class == DRAGON {
             (0x43, 0x92)
@@ -1565,7 +1588,8 @@ impl Scene {
     /// A shot's blow on harpy or dragon `id` (vt+4 0x420670, message
     /// 0x138e, `damage` the shot's `[+9]` in hull units): less than its
     /// life, it takes it off and, a draw of its own generator `r % 7 ==
-    /// 0`, cries (not ported: events 0x72 harpy / 0x73 dragon); else its
+    /// 0`, cries (mode 5 at its cell: event 0x72 harpy, `hgar4` or
+    /// `hgar5` by `rand() % 2` (0x554820); 0x73 dragon, `hdr2`); else its
     /// life is 0, the tick head then setting its dying state (its picture,
     /// then removed). An orphan's decay start `+0xba` loses the blow too
     /// (0 if not less). Either way it has been hit since its rest began
@@ -1584,7 +1608,15 @@ impl Scene {
         };
         if dmg < hp {
             c.hull = (hp - dmg) as f32 / 15.0;
-            let _cry = self.flyers[k].draw() % 7 == 0;
+            if self.flyers[k].draw() % 7 == 0 {
+                let cry = if self.flyer_class(k) == DRAGON {
+                    "hdr2"
+                } else {
+                    ["hgar4", "hgar5"][self.gull_rng.next() as usize % 2]
+                };
+                let (x, y) = centre(self.flyers[k].cell);
+                self.sounds.push((cry, x as f32, y as f32));
+            }
         } else {
             c.hull = 0.0;
         }

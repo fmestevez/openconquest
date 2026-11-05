@@ -5689,11 +5689,12 @@ by 0x4019d0, which zeroes `+0xa4` and sets `+0x9c = now`):
   distance` (0x557440, 1 at 0) and 1000 more on the heading towards it
   (0x48f100); picked by 0x404730 (one entry no draw, else `r % (sum + 1)`
   against the running sums). A hop -> 1, none -> 0 again.
-- **1 rise**: `GORG1` (30 frames) once (sound event 94).
+- **1 rise**: `GORG1` (30 frames) once (sound event 94, `apmed3`).
 - **2 stare**: `r % 3 + 1` loops of `GORG2` (28 frames; none with no life
   or cut short: straight to 3), taking the treasure on her cell with room.
   As frame 13 is drawn (latch `+0x7c`), loop 0, 1, 2 stares over the 3, 5,
-  7 cells square about her (sound event 127): every map cell's occupant
+  7 cells square about her (sound event 127, `atmed1c`, once a stare
+  before the list, 0x402111): every map cell's occupant
   `+0xc` of side 1 (a ship but on the cell it steps into), columns then
   rows, gets message 0x158bf with 88000 / their number (22000 from five),
   150 and her id. A ship (0x4dc630) with hero 8 (Perseus) or a magic
@@ -5702,7 +5703,7 @@ by 0x4019d0, which zeroes `+0xa4` and sets `+0x9c = now`):
   cut by a mirror shield's share (cargo item 0xe). With no life or cut
   short the loop playing is the last.
 - **3 sink**: `GORG3` (30) once; then life left -> 0, none -> 4.
-- **4 death**: `GORG4` (21, 3 ticks a frame) once (sound event 105); her
+- **4 death**: `GORG4` (21, 3 ticks a frame) once (sound event 105, `deamons`); her
   cell gets the Gorgon's head (treasure kind 17) and what she carried
   (0x520c70); then 0, whose end removes her.
 
@@ -5713,8 +5714,8 @@ her area widening it to the square of half-side one more than its
 distance about her (0x4016b0); sound event 116 (`hitmed`). Lightning
 (0xda93, her picture shown): life 0, cut short, the caster her killer.
 Shot at in states 1-3 only (vt+0x2c, 0x404690); her aim point 0x402da0.
-The port: `scene::gorgon`. Not decoded: the names of sound events 94, 105
-and 127; the buildings' handlers of 0x158bf (the fort's 0x41a041), so a
+Her sounds are all 0x50e570 mode 5 at her cell (`+0x114`, `+0x118`).
+The port: `scene::gorgon`. Not decoded: the buildings' handlers of 0x158bf (the fort's 0x41a041), so a
 building stared at counts in the share but takes nothing; the treasure's
 own test 0x407950 on pickup. Not ported: tornadoes (0xda96) and reefs or
 whirlpools (0xda94, 0xda95) on her (the port's strike ships only); her
@@ -5896,8 +5897,7 @@ dealt it; any other town's blow is left for 0x423d60
 (`Scene::blow_dropped`, in `hit` and a shot's landing).
 
 **Decoded, not ported**: the pixel hit test vt+8 0x41deb0 (picture 0's frame
-mask; a dragon in state 0 or 1 never hit); the sounds (events 0x5c,
-0x5d, 0x72/0x73, 0x7d/0x7e, 0x88/0x89); the draw offsets and depth (the
+mask; a dragon in state 0 or 1 never hit); the draw offsets and depth (the
 port draws at the place). Not decoded: the targets' vt+0x2c and vt+0xa4
 (the port takes every object as targetable); a dragon's picture place
 before its first draw (states 0 and 1, not drawn), which its aim point
@@ -6522,6 +6522,19 @@ Interface sounds are played by event through 0x525370; positional ones
 through 0x50e570. A ship sinking (0x4dec40) plays event 3 (`deadsh`) if
 it was the viewing player's and event 319 (`deny`, despite its name a
 fanfare) if not. No sound was found for clicking an unavailable command.
+An event's sound is picked by 0x554820(bank, event, 0) from its `SND_n`
+entry (the first with fewer than two names, else `rand() % count`); no
+entry or an empty one is silent. The creatures' (0x50e570 at their
+cell): the Gorgon (mode 5) 94 `apmed3` rising, 105 `deamons` dying, 127
+`atmed1c` staring, 116 `hitmed` struck; the siren (mode 6) 95 `app3`
+surfacing, 106 `deamons` dying, 128 `sir1` singing, 117 none (no
+`SND_117`) struck. Harpies and dragons (mode 5, 0x41f680, 0x41fbd0,
+0x420670): appearing, a harpy's 0x5c (92 `app3`); taking off, a dragon's
+0x5d (93 `app3`); each wing flap, 0x88 (136 `harpy2`) / 0x89 (137
+`disap1`); striking, 0x7d (125 `atgarp1`) / 0x7e (126 `dr1` or `dr3`);
+struck and living, a draw `r % 7 == 0` of its own generator, 0x72 (114
+`hgar4` or `hgar5`) / 0x73 (115 `hdr2`); dying, 0x67 `deadga1` / 0x68
+`dedr2`.
 
 Units' voices come in groups of four events, one per nation, `base + [0, 1,
 3, 2][nation]`. Only nations 1 (Greeks) and 3 (Persians) are recorded, and

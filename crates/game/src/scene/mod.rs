@@ -3471,7 +3471,7 @@ pub enum SoundKind {
 /// disassembly; the names are those events' `SND_n` lists): placed as
 /// the voices but silent from 12 cells (`audio::placed_ambient`). Mode
 /// 5: events 85-87, 89, 92-94, 96, 99, 103, 105, 107, 110, 111, 114-116,
-/// 122, 125-127, 129, 133, 136, 149-155, 169, 170, 174, 274, event 1 (a
+/// 122, 125-127, 129, 133, 136, 137, 149-155, 169, 170, 174, 274, event 1 (a
 /// ship, 0x4e00bc) and a building's fall `+0x1a8` (event 4 by default,
 /// 0x422dec; 0x424492) and the land creatures' death (events 100-102,
 /// 0x413c66: the mode in `edi`, 5 from 0x413be7); mode 6: events 88, 95,
@@ -3483,7 +3483,7 @@ pub const AMBIENT_PLACED: &[&str] = &[
     "hgar4", "hgar5", "prote3", "spider", "riff1wav", "wind8", "shum2", "eject", "eject1", "apse",
     "atmons3", "kit4", "prote1", "piw1a", "piw3a", "piw4a", "pit3", "crw1a", "crw2a", "crw3a",
     "crw4a", "weter1a", "bildsh3", "razru2", "sir1", "wreck1", "bf1", "deafir1", "fireball",
-    "trea2", "whirl3", "deac1d", "destr1",
+    "trea2", "whirl3", "deac1d", "destr1", "disap1",
 ];
 
 /// The kind of scene sound `name`.
