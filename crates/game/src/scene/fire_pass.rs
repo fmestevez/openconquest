@@ -396,13 +396,14 @@ impl Scene {
     /// (`Scene::building_aim`), a land creature's 0x411bb0
     /// (`Scene::walker_aim`), a jam's 0x415ce0 (`Scene::jam_aim`; a jam
     /// on a list is the jam, the port's shot going to its first member),
-    /// a leviathan's 0x495b40 (`Scene::leviathan_point`), each drawing
-    /// from the target's own generator. Returns the positions fired. (Not
+    /// a leviathan's 0x495b40 (`Scene::leviathan_point`), a harpy's or
+    /// dragon's 0x41df70 (`Scene::flyer_aim`), each drawing from the
+    /// target's own generator. Returns the positions fired. (Not
     /// decoded: a barbarian structure's generator, which its handler
     /// 0x40ef70 does not seed at message 2, and the hero's house's vtable;
-    /// not ported: the harpy's and dragon's 0x41df70, the gorgon's 0x402da0
+    /// not ported: the gorgon's 0x402da0
     /// and the siren's 0x4048f0, whose state, frame, picture and generator
-    /// the port's flyers and creatures do not keep: these fly to the
+    /// the port's creatures do not keep: these fly to the
     /// target as before. A position's target gone, the original's pointer
     /// dangles: the port skips it.)
     #[allow(clippy::needless_range_loop)]
@@ -522,6 +523,7 @@ impl Scene {
                     _ if self.leviathans.contains_key(&tid) => self.leviathan_point(tid, hit),
                     _ if self.objects[t].ship.is_some() => Some(self.ship_aim(t, hit)),
                     ObjectClass::Monster(0x1f4..=0x1f6) => self.walker_aim(tid, hit),
+                    ObjectClass::Monster(0x1f8 | 0x1f9) => self.flyer_aim(tid, hit),
                     ObjectClass::Building(_)
                     | ObjectClass::Castle(_)
                     | ObjectClass::CreatureSpawn
@@ -819,10 +821,14 @@ impl Scene {
         if players & 1 << ((slot + n * 4) & 0x1f) == 0 {
             return false;
         }
-        if !o.combat.as_ref().is_some_and(|c| c.hull > 0.0)
-            || self.creature_hidden(o.id)
-            || self.shoal_gone(o.id)
-        {
+        // A harpy or dragon is there unless a dragon resting (0x41de90),
+        // its life not looked at.
+        let there = if matches!(o.class, ObjectClass::Monster(0x1f8 | 0x1f9)) {
+            self.flyer_there(o.id)
+        } else {
+            o.combat.as_ref().is_some_and(|c| c.hull > 0.0)
+        };
+        if !there || self.creature_hidden(o.id) || self.shoal_gone(o.id) {
             return false;
         }
         !(o.ship.is_some() && self.reserved_cell(k) == Some(cell))

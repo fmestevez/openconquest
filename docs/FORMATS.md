@@ -5766,18 +5766,41 @@ its shadow (0x43, 0xd5); not in states 0 and 1), depth `max(0x26d0 - y,
 1); index 4 also while holding. A step thus takes the flying picture's
 frame count in ticks.
 
-**Decoded, not ported** (part 2): the hits 0x420670 (0x138e: the blow, 1
-in 7 a cry, `+0xca`; an orphan's `+0xba` less the blow), 0xda93 (a quarter;
-on its cell: gone), 0xda96 and 0x158bf; the nest's 0xdaf7 (the shooter's
-id into `+0xd2`, the chase; 0xdaf8 clears it 3000 ticks after the nest's
-last hit), so `+0xce`, `+0xca` stay clear in the port; the shot 0x14ba as
-the original sends it (the port's `flyer_strikes` keeps its own blow and
-the dragon's sowing on the scene's generator), the aim point 0x41df70,
-vt+0x2c; a harpy's look and strike at a town (0x1491) or fort (0x1494 with
-vt+0xa4 0), and their garrison lists (vt+0x5c) in the leg's weights; the
-sounds (events 0x5c, 0x5d, 0x67/0x68, 0x7d/0x7e, 0x88/0x89); the draw
-offsets and depth (the port draws at the place). Not decoded: the
-targets' vt+0x2c and vt+0xa4 (the port takes every object as targetable).
+**Ported** (part 2, `scene/flyers.rs`, test
+`harpy_hits_chase_and_aim_are_the_originals`): a shot's blow (0x420670,
+message 0x138e, `[+9]`): less than its life it is taken off and the
+creature's own generator draws once (`r % 7 == 0` a cry, events 0x72
+harpy / 0x73 dragon, not played); else its life is 0, and the blow does
+not remove it: the tick head sets state 7 (cry 0x67 `deadga1` / 0x68
+`dedr2`, its dying picture, then message 10); an orphan's `+0xba` loses
+the blow (0 if not less); `+0xca` set either way; no hit shown, no death
+reported. Its nest standing (0x41d300, `+0xa4 == 1`), a blow less than
+its life sets `+0x1e8` 1, `+0x1ec` now and sends its last creature
+(`+0x1e4`) 0xdaf7 with the shooter's id (`[+0x16]`; not decoded for a
+shot with no shooter: the port sends none); 0x41d4a0's tick sends 0xdaf8
+(`+0xce`, `+0xd6` 0) once `+0x1ec + 3000 <= now`, clearing `+0x1e8`. The
+shot 0x14ba: a harpy's flies to the prey's vt+0xc as a hit (a ship's
+0x4e07c0), from the picture's corner + 0x27; a dragon's from its own
+corner (place less 0x43, 0x92) + 0x27 to the chosen cell's middle,
+letter 0xf, no target, no blow, then the sowing by 0x42ebf0: 0xf a land
+creature of class `500 + r % 3` (0x1497), 0x2c0 a sea monster of type `r
+& 3` for nation 4 slot 0 (0x493780), both drawn from the dragon's own
+generator. The aim point 0x41df70 (`Scene::flyer_aim`, in the fire
+pass) and vt+0x2c 0x41de90 (a dragon resting is not looked at; a flyer's
+life is not tested). The turning pictures `HRPSPR_4` and `DRGSPR_4` are
+in the data, 64 frames each (8 a heading). 0xda93 (a quarter; on its
+cell gone at once), 0xda96 and 0x158bf remove it at once through the
+battle code, as before.
+
+**Decoded, not ported**: a harpy's look and strike at a town (0x1491)
+or fort (0x1494 with vt+0xa4 0), and their garrison lists (vt+0x5c) in
+the leg's weights; the pixel hit test vt+8 0x41deb0 (picture 0's frame
+mask; a dragon in state 0 or 1 never hit); the sounds (events 0x5c,
+0x5d, 0x72/0x73, 0x7d/0x7e, 0x88/0x89); the draw offsets and depth (the
+port draws at the place). Not decoded: the targets' vt+0x2c and vt+0xa4
+(the port takes every object as targetable); a dragon's picture place
+before its first draw (states 0 and 1, not drawn), which its aim point
+reads (the port takes the draw's).
 
 ## Land creatures
 
@@ -8670,23 +8693,24 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   2's; any other (0, 0), not from the cell. Ported (`Scene::walker_aim`,
   `Scene::jam_aim`, `Scene::leviathan_point`; tests
   `land_creature_and_jam_aim_points`, `leviathan_point_is_the_originals`).
-  Decoded, not ported: the harpy's and dragon's 0x41df70 (picture `+0x74`;
-  a hit: the dragon, class 0x1f9, `+0x59 + 0x43`, `+0x5d + 0x3c`; a harpy
-  by state `+0x88`: 0 and 1 0x595ae0 `{x, y}`, 2 0x595ae0[frame `+0x45`],
-  6 0x595ae8[frame], else (0x28, 0x28), from the picture's top left; a
-  miss `(r1 & 1) +0x61`, `(r2 & 1) +0x65`; clamped), the gorgon's 0x402da0
+  The harpy's and dragon's 0x41df70 (picture `+0x74`; a hit: the dragon,
+  class 0x1f9, `+0x59 + 0x43`, `+0x5d + 0x3c`; a harpy by state `+0x88`:
+  0 and 1 0x595ae0 `{x, y}`, 2 0x595ae0[frame `+0x45`], 6
+  0x595ae8[frame], else (0x28, 0x28), from the picture's top left; a miss
+  `(r1 & 1) +0x61`, `(r2 & 1) +0x65`, its own generator; clamped) is
+  ported (`Scene::flyer_aim`). Decoded, not ported: the gorgon's 0x402da0
   (vtable 0x594340, constructor 0x401033; no picture `+0x11c`: its cell
   `+0x114 / +0x118` x 64 + 32; a hit `20 + r % 21`, `20 + (r & 15)`, a miss
   `10 + r % 51`, `60 + r % 11`, from the picture's top left) and the
   siren's 0x4048f0 (vtable 0x594378, constructor 0x40306e; no picture
   `+0x164`: its cell `+0xbc / +0xc0` x 64 + 32; a hit `30 + (r & 7)` each
-  way, a miss `r % 61`, `40 + r % 24`): the port's flyers, gorgons and
+  way, a miss `r % 61`, `40 + r % 24`): the port's gorgons and
   sirens keep no such state, frame, picture or generator. A roll that misses
   a building leaves its chance as the hit byte (0x4bf7f0 returns it), so
   only a chance of 0 takes the corner. Not decoded: a barbarian
   structure's generator (its handler 0x40ef70 does not seed `+0x18` at
   message 2 as 0x427f50 does) and the hero's house's vtable (type
-  0x1a6d); not ported: the harpy's, dragon's, gorgon's and siren's
+  0x1a6d); not ported: the gorgon's and siren's
   (above): shots at these fly to the target as before. 0x4c07c0 with no position in
   state 3 (its id and player uninitialised; the port does nothing); a
   position's target gone, its pointer dangling (the port skips it);

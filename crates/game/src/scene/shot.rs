@@ -834,6 +834,21 @@ impl Scene {
                 sh.blow = Some(by);
             }
         }
+        // A harpy or dragon takes the blow itself (vt+4 0x420670): no fire,
+        // no crew or weapons, no hit shown, no death reported; shot down,
+        // it falls by its own tick (its dying picture, then removed).
+        if let Some(i) =
+            target.filter(|&i| matches!(self.objects[i].class, ObjectClass::Monster(0x1f8 | 0x1f9)))
+        {
+            let id = self.objects[i].id;
+            self.flyer_struck(id, s.damage);
+            return;
+        }
+        // A harpy nest standing sends its creature after the shooter
+        // (0x41d300), judged on its life before the blow.
+        if target.is_some_and(|i| self.objects[i].class == ObjectClass::HarpyNest) {
+            self.nest_struck(s.target, s.damage, s.shooter);
+        }
         // The hull's share first, then the crew's and the weapons'
         // (0x4bf170).
         if let Some(i) = target.filter(|_| s.volcanic) {

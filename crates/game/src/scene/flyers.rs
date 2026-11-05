@@ -66,6 +66,46 @@ const LEG_MASK: [[u8; 13]; 13] = [
 /// The striking picture's frame at which the blow falls: 7 for a harpy,
 /// 16 for a dragon (0x41fbd0).
 const HARPY_BLOW_FRAME: i32 = 7;
+
+/// A harpy's aim offsets 0x595ae0 by frame `{x2, y2, x6, y6}` (taking off,
+/// landing; resting the first `{x2, y2}`), dumped from the exe.
+pub(super) const AIM_OFFSETS: [(i32, i32, i32, i32); 35] = [
+    (40, 116, 40, 40),
+    (40, 116, 40, 40),
+    (40, 116, 40, 40),
+    (40, 115, 40, 40),
+    (40, 114, 40, 40),
+    (40, 114, 40, 40),
+    (40, 113, 40, 40),
+    (40, 112, 40, 44),
+    (40, 111, 40, 48),
+    (40, 111, 40, 52),
+    (40, 112, 40, 57),
+    (40, 112, 40, 60),
+    (40, 107, 40, 64),
+    (40, 102, 40, 67),
+    (40, 99, 40, 70),
+    (40, 95, 40, 74),
+    (40, 92, 40, 77),
+    (40, 87, 40, 81),
+    (40, 83, 40, 85),
+    (40, 78, 40, 88),
+    (40, 75, 40, 91),
+    (40, 70, 40, 94),
+    (40, 66, 40, 97),
+    (40, 63, 40, 101),
+    (40, 54, 40, 105),
+    (40, 54, 40, 107),
+    (40, 50, 40, 110),
+    (40, 46, 40, 109),
+    (40, 41, 40, 111),
+    (40, 41, 40, 111),
+    (40, 40, 40, 112),
+    (40, 39, 40, 114),
+    (40, 39, 40, 115),
+    (40, 40, 40, 116),
+    (40, 40, 40, 116),
+];
 const DRAGON_BLOW_FRAME: i32 = 16;
 /// Harpies leave ships with Orpheus aboard alone (0x41efb0, 0x41f1c0), and
 /// their shots do Odysseus's ship no harm (0x4bf170).
@@ -203,6 +243,12 @@ pub struct Nest {
     pub delay: f32,
     /// Seconds until the next creature, while none is out.
     pub wait: Option<f32>,
+    /// The last creature it sent (`+0x1e4`), and the tick of its last
+    /// blow while a chase is on (`+0x1e8`, `+0x1ec`).
+    #[serde(default)]
+    pub creature: u32,
+    #[serde(default)]
+    pub hit_at: Option<u32>,
 }
 
 /// A cell's centre, world pixels.
@@ -409,6 +455,8 @@ impl Scene {
                 left,
                 delay,
                 wait: Some(0.0),
+                creature: 0,
+                hit_at: None,
             });
         }
         self.run_nests(0.0, data, caches);
@@ -437,7 +485,9 @@ impl Scene {
                         } else {
                             0x1f8
                         };
-                        self.spawn_flyer(class, id, x, y, data, caches);
+                        if let Some(c) = self.spawn_flyer(class, id, x, y, data, caches) {
+                            self.nests[k].creature = c;
+                        }
                     }
                 }
                 None => {}
@@ -458,7 +508,7 @@ impl Scene {
         y: f32,
         data: &GameData,
         caches: &mut Caches,
-    ) {
+    ) -> Option<u32> {
         let t = TILE_SIZE as f32;
         let id = self.objects.iter().map(|o| o.id).max().unwrap_or(0) + 1;
         let cell = ((x / t).floor() as i32, ((y - t / 2.0) / t).floor() as i32);
@@ -473,7 +523,7 @@ impl Scene {
             fields,
         };
         let Ok(Some(mut obj)) = objects::resolve(data, caches, &rec) else {
-            return;
+            return None;
         };
         let (cx, cy) = centre(cell);
         obj.x = cx as f32;
@@ -497,6 +547,7 @@ impl Scene {
         });
         let k = self.flyers.len() - 1;
         self.set_flyer_state(k, APPEAR, data, caches);
+        Some(id)
     }
 
     /// The nests' sending, and the creatures that fell or left leaving
@@ -521,6 +572,7 @@ impl Scene {
     /// Each creature's tick (message 0): its states (0x41fbd0), then its
     /// picture and place (0x41e4b0).
     pub(super) fn tick_flyers(&mut self, data: &GameData, caches: &mut Caches) {
+        self.tick_nests();
         for k in 0..self.flyers.len() {
             if self.flyers[k].gone || self.object_index(self.flyers[k].id).is_none() {
                 continue;
@@ -530,11 +582,12 @@ impl Scene {
         }
     }
 
-    /// A flyer's hp (`+0x89`): the port keeps it as its object's hull.
+    /// A flyer's hp (`+0x89`), in the original's points: the port keeps
+    /// it as its object's hull, a fifteenth of them.
     fn flyer_hp(&self, k: usize) -> u32 {
         self.object_index(self.flyers[k].id)
             .and_then(|i| self.objects[i].combat.as_ref())
-            .map_or(0, |c| c.hull.max(0.0) as u32)
+            .map_or(0, |c| (c.hull.max(0.0) * 15.0).round() as u32)
     }
 
     fn flyer_class(&self, k: usize) -> u32 {
@@ -578,7 +631,7 @@ impl Scene {
                 .object_index(f.id)
                 .and_then(|i| self.objects[i].combat.as_mut())
             {
-                c.hull = hp as f32;
+                c.hull = hp as f32 / 15.0;
             }
         }
         match self.flyers[k].state {
@@ -662,17 +715,10 @@ impl Scene {
                     HARPY_BLOW_FRAME
                 };
                 if f.frame == blow && !f.fired {
-                    // The shot leaves the picture's corner + 0x27 (picture
-                    // 0 at the place less 0x28, 0x78).
-                    let from = ((f.pos.0 - 1) as f32, (f.pos.1 - 0x51) as f32);
-                    let nest = f.nest;
                     if class == HARPY {
                         let prey = f.sub;
-                        if let Some(i) = self.object_index(prey) {
-                            let t = TILE_SIZE as f32;
-                            let o = &self.objects[i];
-                            let at = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
-                            self.flyer_strikes(class, prey, at, from, nest, data, caches);
+                        if self.object_index(prey).is_some() {
+                            self.flyer_strikes(k, class, prey, (0, 0), data, caches);
                             self.flyers[k].fired = true;
                         }
                     } else {
@@ -680,7 +726,7 @@ impl Scene {
                             let f = &self.flyers[k];
                             let d = DIRS[f.e4 as usize & 7];
                             let at = (f.cell.0 + d.0, f.cell.1 + d.1);
-                            self.flyer_strikes(class, 0, at, from, nest, data, caches);
+                            self.flyer_strikes(k, class, 0, at, data, caches);
                         }
                         self.flyers[k].fired = true;
                     }
@@ -869,7 +915,15 @@ impl Scene {
                 if f.state == DYING {
                     return;
                 }
-                // (Not ported: the cry, event 0x67 harpy / 0x68 dragon.)
+                // The cry, event 0x67 harpy / 0x68 dragon, at its cell.
+                let (x, y) = centre(f.cell);
+                let cry = if self.flyer_class(k) == DRAGON {
+                    "dedr2"
+                } else {
+                    "deadga1"
+                };
+                self.sounds.push((cry, x as f32, y as f32));
+                let f = &mut self.flyers[k];
                 f.state = DYING;
                 self.flyer_picture(k, data, caches);
             }
@@ -1299,40 +1353,77 @@ impl Scene {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// The shot of state 5 (message 0x14ba from 0x41fbd0), from its
+    /// picture's corner + 0x27 (picture 0 at the place less 0x28, 0x78; a
+    /// dragon's less 0x43, 0x92). A harpy's at frame 7 flies to the prey's
+    /// aim point as a hit (vt+0xc with 100), drawn as L (0xb), a sure
+    /// shot carrying 20 x item 4's level-1 blow (the A x 15 cache's copy,
+    /// 0x5c73dc), shared out on the ship as any blow. A dragon's at frame
+    /// 16 flies to the middle of its chosen cell, drawn as P (0xf), with
+    /// no target and no blow; then its teeth are sown there by the cell's
+    /// ground (0x42ebf0): on land (0xf) a cyclops, minotaur or amazon
+    /// (class 500 + its generator's `r % 3`, message 0x1497 with `{class,
+    /// 1, 0, 0, 0, x, y}`), on water (0x2c0) a sea monster of type `r & 3`
+    /// for nation 4 slot 0 (0x493780(scene, 4, 0, r & 3, x, y, 4, 4)),
+    /// else nothing. (Not ported: the sounds, events 0x7d / 0x7e.)
     fn flyer_strikes(
         &mut self,
+        k: usize,
         class: u32,
         prey: u32,
         at: (i32, i32),
-        from: (f32, f32),
-        nest: u32,
         data: &GameData,
         caches: &mut Caches,
     ) {
-        if class == 0x1f9 {
-            // A dragon sows its teeth on its chosen cell (0x41fbd0, state
-            // 5 at frame 16): on land they rise as a cyclops, a minotaur or
-            // an amazon (message 0x1497), on water as a sea monster
-            // (0x493780), both wild.
-            let t = TILE_SIZE as f32;
-            if self.nav.is_water(at.0, at.1) {
-                let wild = Some(crate::combat::MONSTERS);
-                let _ =
-                    self.spawn_hazard(crate::magic::Spell::Monster, at.0, at.1, wild, data, caches);
-            } else {
-                let lair = 0x46 + self.rng.next() % 3;
-                let (x, y) = (at.0 as f32 * t + t / 2.0, at.1 as f32 * t + t / 2.0);
-                self.spawn_walker(nest, lair, x, y, data, caches);
+        let (px, py) = self.flyers[k].pos;
+        let (ox, oy) = if class == DRAGON {
+            (0x43, 0x92)
+        } else {
+            (0x28, 0x78)
+        };
+        let from = ((px - ox + 0x27) as f32, (py - oy + 0x27) as f32);
+        if class == DRAGON {
+            let (cx, cy) = centre(at);
+            self.fire_shot_to(
+                super::shot::Firing {
+                    item: 4,
+                    letter: Some(15),
+                    flaming: false,
+                    from,
+                    target: 0,
+                    strikes: false,
+                    damage: 0.0,
+                    wounds: 0.0,
+                    wear: 0.0,
+                    rope: None,
+                    shooter: None,
+                    by: None,
+                    to: None,
+                },
+                (cx as f32, cy as f32),
+                data,
+                caches,
+            );
+            let t = self.sow_ground(at);
+            if t & 0xf != 0 {
+                let class = 500 + self.flyers[k].draw() % 3;
+                self.put_walker(super::walkers::NO_LAIR, class, at, data, caches);
+            } else if t & 0x2c0 != 0 {
+                let r = self.flyers[k].draw();
+                let _ = self.spawn_hazard_drawn(
+                    crate::magic::Spell::Monster,
+                    at,
+                    Some((4, 0)),
+                    Some(r),
+                    data,
+                    caches,
+                );
             }
             return;
         }
         let Some(i) = self.object_index(prey) else {
             return;
         };
-        // A harpy's strike (0x41fbd0, state 5 at frame 7): a sure shot,
-        // drawn as L, carrying 20 x item 4's level-1 blow (the A x 15
-        // cache's copy, 0x5c73dc), shared out on the ship as any blow.
         let o = &self.objects[i];
         let (Some(s), Some(c)) = (&o.ship, &o.combat) else {
             return;
@@ -1347,6 +1438,7 @@ impl Scene {
         let damage = sh.hull_part(blow);
         let wounds = sh.crew_part(blow) * 15.0;
         let wear = sh.weapons_part(blow) * 15.0;
+        let to = self.ship_aim(i, true);
         self.fire_shot(
             super::shot::Firing {
                 item: 4,
@@ -1361,10 +1453,150 @@ impl Scene {
                 rope: None,
                 shooter: None,
                 by: None,
-                to: None,
+                to: Some((to.0 as f32, to.1 as f32)),
             },
             data,
             caches,
         );
+    }
+
+    /// A shot's blow on harpy or dragon `id` (vt+4 0x420670, message
+    /// 0x138e, `damage` the shot's `[+9]` in hull units): less than its
+    /// life, it takes it off and, a draw of its own generator `r % 7 ==
+    /// 0`, cries (not ported: events 0x72 harpy / 0x73 dragon); else its
+    /// life is 0, the tick head then setting its dying state (its picture,
+    /// then removed). An orphan's decay start `+0xba` loses the blow too
+    /// (0 if not less). Either way it has been hit since its rest began
+    /// (`+0xca`). No hit shown and no death reported.
+    pub(super) fn flyer_struck(&mut self, id: u32, damage: f32) {
+        let Some(k) = self.flyers.iter().position(|f| f.id == id) else {
+            return;
+        };
+        let dmg = (damage.max(0.0) * 15.0).round() as u32;
+        let hp = self.flyer_hp(k);
+        let Some(c) = self
+            .object_index(id)
+            .and_then(|i| self.objects[i].combat.as_mut())
+        else {
+            return;
+        };
+        if dmg < hp {
+            c.hull = (hp - dmg) as f32 / 15.0;
+            let _cry = self.flyers[k].draw() % 7 == 0;
+        } else {
+            c.hull = 0.0;
+        }
+        let f = &mut self.flyers[k];
+        if !f.has_nest {
+            // Less than it, the blow comes off; else 0.
+            f.orphan_hp = f.orphan_hp.saturating_sub(dmg);
+        }
+        f.hit = true;
+    }
+
+    /// A blow on harpy nest `nest` while standing (0x41d300, message
+    /// 0x138e), before it is taken: one less than its life marks the
+    /// nest hit at this tick (`+0x1e8`, `+0x1ec`) and sends its last
+    /// creature (`+0x1e4`) message 0xdaf7 with the shooter's id (`[+0x16]`):
+    /// the creature chases it (`+0xce` 1, `+0xd2` the id). (Not decoded:
+    /// `[+0x16]` of a shot with no shooter: no chase is sent.)
+    pub(super) fn nest_struck(&mut self, nest: u32, damage: f32, shooter: Option<u32>) {
+        let Some(hull) = self
+            .object_index(nest)
+            .and_then(|i| self.objects[i].combat.as_ref())
+            .map(|c| c.hull)
+            .filter(|&h| h > 0.0)
+        else {
+            return;
+        };
+        let dmg = (damage.max(0.0) * 15.0).round() as u32;
+        if dmg >= (hull * 15.0).round() as u32 {
+            return;
+        }
+        let now = self.ticks;
+        let Some(n) = self.nests.iter_mut().find(|n| n.id == nest) else {
+            return;
+        };
+        n.hit_at = Some(now);
+        let creature = n.creature;
+        if let (Some(by), Some(f)) = (shooter, self.flyers.iter_mut().find(|f| f.id == creature)) {
+            f.forced = Some(by);
+        }
+    }
+
+    /// The nests' tick (0x41d4a0, message 0): 3000 ticks after a nest's
+    /// last blow its chase ends, message 0xdaf8 to its last creature
+    /// (`+0xce` and `+0xd6` cleared).
+    pub(super) fn tick_nests(&mut self) {
+        let now = self.ticks;
+        for k in 0..self.nests.len() {
+            let n = &mut self.nests[k];
+            if n.hit_at.is_some_and(|t| t.wrapping_add(3000) <= now) {
+                n.hit_at = None;
+                let creature = n.creature;
+                if let Some(f) = self.flyers.iter_mut().find(|f| f.id == creature) {
+                    f.forced = None;
+                    f.forced_done = false;
+                }
+            }
+        }
+    }
+
+    /// Whether flyer `id` can be taken (vt+0x2c, 0x41de90): not a dragon
+    /// resting (state 1); its life is not looked at.
+    pub(super) fn flyer_there(&self, id: u32) -> bool {
+        let class = self
+            .object_index(id)
+            .map(|i| self.objects[i].record.class_id);
+        !self
+            .flyers
+            .iter()
+            .any(|f| f.id == id && f.state == REST && class == Some(DRAGON))
+    }
+
+    /// The point a shot at harpy or dragon `id` flies to (vt+0xc,
+    /// 0x41df70, by the hit byte), from its picture's top left (picture 0
+    /// drawn at the place less 0x28, 0x78; a dragon's less 0x43, 0x92;
+    /// `+0x59`, `+0x5d`): a hit on a dragon (0x43, 0x3c); on a harpy by
+    /// state, 0 and 1 0x595ae0's first `{x, y}`, 2 its `{x2, y2}` and 6
+    /// its `{x6, y6}` at the frame (`+0x45`), any other (0x28, 0x28); a
+    /// miss two draws of its own generator, `(r & 1) x w`, `(r & 1) x h`
+    /// (the picture's `+0x61`, `+0x65`: the port takes its first frame's
+    /// size, as for the land creatures). Clamped to the map. (Not decoded:
+    /// a dragon's picture place before its first draw, states 0 and 1,
+    /// where it is not drawn: the port takes the draw's.)
+    pub(super) fn flyer_aim(&mut self, id: u32, hit: bool) -> Option<(i32, i32)> {
+        let i = self.object_index(id)?;
+        let k = self.flyers.iter().position(|f| f.id == id)?;
+        let class = self.objects[i].record.class_id;
+        let (w, h) = self.objects[i]
+            .frames
+            .first()
+            .and_then(|f| f.last())
+            .map_or((0, 0), |l| (l.image.width as i32, l.image.height as i32));
+        let f = &mut self.flyers[k];
+        let (ox, oy) = if class == DRAGON {
+            (0x43, 0x92)
+        } else {
+            (0x28, 0x78)
+        };
+        let (px, py) = (f.pos.0 - ox, f.pos.1 - oy);
+        let frame = f.frame.max(0) as usize;
+        let (x, y) = if !hit {
+            let x = (f.draw() & 1) as i32 * w;
+            (x, (f.draw() & 1) as i32 * h)
+        } else if class == DRAGON {
+            (0x43, 0x3c)
+        } else {
+            match f.state {
+                APPEAR | REST => (AIM_OFFSETS[0].0, AIM_OFFSETS[0].1),
+                TAKE_OFF => AIM_OFFSETS.get(frame).map_or((0, 0), |o| (o.0, o.1)),
+                LAND => AIM_OFFSETS.get(frame).map_or((0, 0), |o| (o.2, o.3)),
+                _ => (0x28, 0x28),
+            }
+        };
+        let (mw, mh) = self.map_size();
+        let cap = |v: i32, n: u32| if v < 0 { 0 } else { v.min(n as i32 * 64 - 1) };
+        Some((cap(px + x, mw), cap(py + y, mh)))
     }
 }

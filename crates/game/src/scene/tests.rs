@@ -4789,7 +4789,13 @@ fn kills_are_put_down_as_the_original() {
     for _ in 0..200 {
         scene.run_shots(0.04, &data, &mut caches);
     }
-    assert!(scene.object_index(dragon).is_none(), "the dragon fell");
+    // Its life 0, it falls by its own tick (state 7), not by the blow.
+    let k = scene.object_index(dragon).unwrap();
+    assert_eq!(
+        scene.objects[k].combat.as_ref().unwrap().hull,
+        0.0,
+        "the dragon fell"
+    );
     assert_eq!(scene.stats.monsters_killed.iter().sum::<u32>(), 0);
     // The human's lightning: an enemy ship wrecked counts nothing.
     let mut scene = fresh(&mut caches);
@@ -16472,8 +16478,9 @@ fn harpy_runs_the_original_tick() {
             .as_ref()
             .unwrap()
             .hull
+            * 15.0
     };
-    let full = hp(&scene) as u32;
+    let full = hp(&scene).round() as u32;
     tick(&mut scene, &mut caches);
     let start = scene.ticks;
     for _ in 0..250 {
@@ -16481,7 +16488,147 @@ fn harpy_runs_the_original_tick() {
     }
     assert!(!scene.flyers[0].has_nest);
     assert_eq!(
-        hp(&scene) as u32,
+        hp(&scene).round() as u32,
         full - (scene.ticks - start) * full / 1000
     );
+}
+
+/// A harpy's hits as the original's (0x420670, message 0x138e): a blow
+/// less than its life takes it off and draws once on its own generator
+/// (the one-in-seven cry), and marks it hit (`+0xca`); one as large sets
+/// its life to 0, and it is not removed by the blow but falls by its own
+/// tick, playing its dying state 7. A blow on its nest sends it after the
+/// shooter (0xdaf7), the chase ending 3000 ticks after the nest's last
+/// blow (0xdaf8). Its aim point (0x41df70) from its picture's top left
+/// and the table 0x595ae0 dumped from the exe; a dragon resting is not
+/// there (0x41de90). The turning pictures `HRPSPR_4` and `DRGSPR_4` are in
+/// the data. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn harpy_hits_chase_and_aim_are_the_originals() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for name in ["HRPSPR_4", "DRGSPR_4"] {
+        let frames = crate::objects::flyer_frames(&data, &mut caches, name).unwrap();
+        assert_eq!(frames.len(), 64, "{name}");
+    }
+    for h in [1, 3, 5, 7] {
+        for s in [2, 6] {
+            let name = format!("HRPSPR_{s}{h}");
+            let n = crate::objects::flyer_frames(&data, &mut caches, &name)
+                .unwrap()
+                .len();
+            assert!(n > 0 && n <= flyers::AIM_OFFSETS.len(), "{name} {n}");
+        }
+    }
+    let root_path = std::path::Path::new(&root);
+    if let Some(exe) = crate::assets::find_ci(root_path, "ancient.exe")
+        .ok()
+        .flatten()
+    {
+        let bytes = std::fs::read(exe).unwrap();
+        let at = 0x595ae0 - 0x40_0000;
+        let word =
+            |k: usize| i32::from_le_bytes(bytes[at + 4 * k..at + 4 * k + 4].try_into().unwrap());
+        for (k, o) in flyers::AIM_OFFSETS.iter().enumerate() {
+            assert_eq!(
+                *o,
+                (
+                    word(4 * k),
+                    word(4 * k + 1),
+                    word(4 * k + 2),
+                    word(4 * k + 3)
+                )
+            );
+        }
+    }
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    let tick = |s: &mut Scene, caches: &mut Caches| s.update(crate::clock::TICK, &data, caches);
+    while scene.flyers[0].state == 0 {
+        tick(&mut scene, &mut caches);
+    }
+    let (id, nest) = (scene.flyers[0].id, scene.flyers[0].nest);
+    let points = |s: &Scene, id: u32| {
+        (s.objects[s.object_index(id).unwrap()]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hull
+            * 15.0)
+            .round() as u32
+    };
+    // The aim point: resting, a hit at 0x595ae0's first (40, 116) from
+    // the picture's corner (the place less 0x28, 0x78); a miss two draws.
+    let f = scene.flyers[0].clone();
+    assert_eq!(scene.flyer_aim(id, true), Some((f.pos.0, f.pos.1 - 4)));
+    let mut rng = f.rng;
+    let mut draw = || {
+        rng = rng.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039);
+        rng >> 16
+    };
+    let i = scene.object_index(id).unwrap();
+    let body = scene.objects[i].frames[0].last().unwrap().image.clone();
+    let (w, h) = (body.width as i32, body.height as i32);
+    let (x, y) = ((draw() & 1) as i32 * w, (draw() & 1) as i32 * h);
+    assert_eq!(
+        scene.flyer_aim(id, false),
+        Some((f.pos.0 - 0x28 + x, f.pos.1 - 0x78 + y))
+    );
+    assert_eq!(scene.flyers[0].rng, rng);
+    assert!(scene.flyer_there(id));
+    scene.objects[i].record.class_id = 0x1f9;
+    assert!(!scene.flyer_there(id));
+    scene.objects[i].record.class_id = 0x1f8;
+    // The nest struck: the chase, cleared 3000 ticks after.
+    scene.nest_struck(nest, 10.0, Some(4242));
+    assert_eq!(scene.flyers[0].forced, Some(4242));
+    let hit = scene.ticks;
+    while scene.ticks < hit + 2999 && scene.object_index(id).is_some() {
+        tick(&mut scene, &mut caches);
+    }
+    {
+        let f = scene.flyers.iter().find(|f| f.id == id).unwrap();
+        assert_eq!(f.forced, Some(4242));
+        while scene.ticks < hit + 3000 {
+            tick(&mut scene, &mut caches);
+        }
+        let f = scene.flyers.iter().find(|f| f.id == id).unwrap();
+        assert_eq!(f.forced, None);
+        assert!(!f.forced_done);
+    }
+    // A blow less than its life: off it, one draw, hit.
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    while scene.flyers[0].state == 0 {
+        tick(&mut scene, &mut caches);
+    }
+    let id = scene.flyers[0].id;
+    let full = points(&scene, id);
+    assert_eq!(full, 200_000);
+    let rng = scene.flyers[0]
+        .rng
+        .wrapping_mul(0x41c6_4e6d)
+        .wrapping_add(0x3039);
+    scene.flyer_struck(id, 1500.0 / 15.0);
+    assert_eq!(points(&scene, id), full - 1500);
+    assert_eq!(scene.flyers[0].rng, rng);
+    assert!(scene.flyers[0].hit);
+    // Shot down: life 0, still there, falling by its own tick (state 7).
+    scene.flyer_struck(id, full as f32);
+    assert_eq!(points(&scene, id), 0);
+    assert_eq!(scene.flyers[0].rng, rng);
+    assert!(scene.object_index(id).is_some());
+    let mut dying = false;
+    for _ in 0..5000 {
+        tick(&mut scene, &mut caches);
+        match scene.flyers.iter().find(|f| f.id == id) {
+            Some(f) => dying |= f.state == 7,
+            None => break,
+        }
+    }
+    assert!(dying, "the dying picture played");
+    assert!(scene.object_index(id).is_none(), "removed at its end");
 }
