@@ -7,7 +7,7 @@ use crate::assets::GameData;
 use crate::combat::Upgrade;
 use crate::commands::Command;
 use crate::magic::{Spell, Temple};
-use crate::objects::{Caches, Resource};
+use crate::objects::{Caches, Resource, Task};
 
 use super::Scene;
 
@@ -496,10 +496,24 @@ impl Scene {
         if ship.is_some_and(|id| self.hunt_holds(id)) {
             return Err("The ship is hunting".into());
         }
-        // A landing ship holds them too (0x4b37d0, till 0x4b3850), but
+        // A landing ship holds them too (0x4b37d0, till 0x4b3850), and a
+        // ship under its repair order from the close-in to the end of the
+        // back-out (0x4b2420 state 1 -> 2 and 0x4b1d40 / 0x4b1c60), but
         // the stop (event 8), which calls the landing off (0x4abc60).
-        if ship.is_some_and(|id| self.landing_holds(id)) && !matches!(order, Order::Stop { .. }) {
-            return Err("The ship is landing".into());
+        if let Some(id) = ship.filter(|&id| self.landing_holds(id)) {
+            if !matches!(order, Order::Stop { .. }) {
+                let i = self.object_index(id).unwrap();
+                let docking = matches!(
+                    self.objects[i].ship.as_ref().and_then(|s| s.task),
+                    Some(Task::Repair { .. })
+                );
+                return Err(if docking {
+                    "The ship is docking"
+                } else {
+                    "The ship is landing"
+                }
+                .into());
+            }
         }
         if let Some(r) = self.one_event_a_tick(order, data, caches) {
             return r;

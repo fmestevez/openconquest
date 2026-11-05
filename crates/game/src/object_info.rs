@@ -210,8 +210,8 @@ fn ship(scene: &Scene, obj: &MapObject, info: &mut ObjectInfo) {
             crews += n * against_crews(item, level, power);
         }
         // Boarding strength (`+0x53c`, 0x4bee60) x 1000 / 1500, and the
-        // crew's experience (`+0x544` / 100 percent; none in a dock,
-        // state 2). Limed (`+600`), the fire shows nothing, the boarding
+        // crew's experience (`+0x544` / 100 percent; 0 while `+0x251` is
+        // 2, being built or sold). Limed (`+600`), the fire shows nothing, the boarding
         // x 1000 / 3000 and the experience not at all (0x4e51c0).
         let limed = obj.combat.as_ref().is_some_and(|c| c.lime > 0.0);
         let i = scene.object_index(obj.id).unwrap_or(0);

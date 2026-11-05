@@ -4210,12 +4210,10 @@ impl Scene {
             let (Some(s), Some(c)) = (&self.objects[i].ship, &self.objects[i].combat) else {
                 continue;
             };
-            // The original passes over ships with `+0x251 == 2` (being
-            // built or sold, 0x486a08), not those docking. (Not ported: the
-            // port skips a ship under its repair order, as a new one would
-            // restart it where the original holds commands while docking,
-            // 0x4b37d0.)
-            if matches!(s.task, Some(Task::Repair { .. })) {
+            // Ships with `+0x251 == 2` (being built or sold) are passed
+            // over (0x486a08); one docking goes to the reserve too, its
+            // commands held from the close-in (0x4b37d0).
+            if self.being_built(id) {
                 continue;
             }
             let hull = (c.hull * 100.0 / c.max_hull.max(1.0)) as u32;

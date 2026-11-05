@@ -401,7 +401,7 @@ Fillers:
   B / A` (0x4bc660, 0x4ac1b0), both x 100 / 1500; board power `+0x53c` x
   1000 / 1500 (/ 3000 and no fire power while blinded by quick lime,
   `+600`, set by 0x4c4120); unless blinded, experience `+0x544` / 100 of
-  100 (0 in a dock, state 2). Icons: treasures aboard (`+0x482`), the hero
+  100 (0 while `+0x251` is 2, being built or sold; 0x4e51c0). Icons: treasures aboard (`+0x482`), the hero
   `+0x4b5` or 9 with several (`+0x483`).
 - Buildings, castles, nests, lairs, heroes' houses (0x423990, also
   town.cpp 0x43c730): life `+0xa8`; the hero icon from `+0x1a0` (0x40df20,
@@ -4430,7 +4430,11 @@ The port runs it at the game tick (`Scene::step_dock_repairs`, the
 landing's `Landing` with its `dock` contact; `Scene::dock_lets_go` for
 0xcb9 from `Scene::town_gone`). `in_dock` is a ship under its repair
 order from the close-in to the end of the back-out, off its cell's slot;
-it shields from no blow (0x4bf170 spares only `+0x251 == 2`). Not
+it shields from no blow (0x4bf170 spares only `+0x251 == 2`). Its
+commands are held the same span (0x4b37d0 with 0x2000 in state 1, back
+by 0x4b3850 at the ends of states 2 and 3): `landing_holds`, which
+refuses every ship command but the stop (`Scene::apply`), and takes no
+contact or fire at will. Not
 ported: the sale (the port's computer dock order is `FleetOrder::Dock`,
 not the block 0x4dbd90; not decoded: which orders give the block record
 `+0x30` 1, and 0x4b4220, 0x4e1bb0, 0x4e4ce0, 0x4e4c80, 0x4b40d0 of the
@@ -8213,11 +8217,9 @@ Gorgon's stare, which nothing casts.)
 **Worn crews** (0x486970): a warship (types 2-7) also goes to the reserve
 when its crew condition (0x4bc590: the mean of its items' mean conditions,
 `+0x419`; 0 with none) is under 35-65 (rolled after the hull's limit);
-ships with `+0x251` 2 (being built or sold, 0x486a08) are left alone.
-The port (`send_worn`) skips ships under a repair order instead: left,
-since sending one to the reserve then re-orders a repair the original
-holds (commands held by 0x4b37d0 while docking), which `order_repair`
-does not model.
+ships with `+0x251` 2 (being built or sold, 0x486a08) are left alone;
+one docking goes too, its commands held from the close-in (0x4b37d0), so
+the reserve's dock order waits for the back-out (`send_worn`).
 
 **Repairs** (order 96, part 0x3ec, 0x429f60): of the town's buildings
 (0x43fcb0) and forts and strongholds (types 0x1494, 0x1a6b: worn, vtable

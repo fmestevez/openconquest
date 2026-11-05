@@ -7756,6 +7756,16 @@ fn dock_machine_enters_mends_and_backs_out() {
     }
     assert_eq!(state(&scene, ship), Some(2));
     assert!(scene.in_dock(scene.object_index(ship).unwrap()));
+    // Its commands are held from the close-in (0x4b37d0 with 0x2000).
+    let go = Order::Move {
+        ship,
+        x: 0.0,
+        y: 0.0,
+    };
+    assert!(scene.apply(&go, &data, &mut caches).is_err());
+    assert!(scene
+        .apply(&Order::Repair { ship, dock }, &data, &mut caches)
+        .is_err());
     // The dock holds it: the other, sent now, waits for the berth.
     scene.order_repair(other, dock).unwrap();
     let mut seen = vec![2];
