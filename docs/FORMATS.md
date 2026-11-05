@@ -3656,9 +3656,11 @@ cleared on all 12 together. Who sets them:
   10: every group ceases fire, `+0x498 = 0`. The masks are read by the
   groups' shot test (group vtable 0x5959ec slot 0, 0x41c4e0, the fort at
   group `+0x46`): the target's `+0x57` 1 (a player's object: ships,
-  players' buildings) with its player's bit in `+0x48c`, or 2 (the
-  monsters' side, set by the constructors of the barbarian structures
-  0x410150, the lairs 0x414e20, the jam 0x415c10, the medusa 0x401000,
+  players' buildings, barbarian structures: their constructor 0x40de20
+  sets side 1, nation 4) with its player's bit in `+0x48c`, or 2 (the
+  monsters' side, set by the constructors of the castles 0x410150
+  (`CastleClassTy`, vtable 0x5949fc; 0x427f50 then makes a side-2 class
+  0x42 / 0x43 nation 4, slot 1), the lairs 0x414e20, the jam 0x415c10, the medusa 0x401000,
   0x420fd0, 0x4056b0 and 0x447900), else nothing; its class bit in `+0x490`
   (0x50ed20 by 0x50e600's family: ship types bits 0-11, `1 << (class +
   0x38)` of classes 200-211; settlements and towns 0x1000, forts and
@@ -6689,17 +6691,19 @@ miss011 (0x46e8e0; members 0x46b8d0-0x46e110):
   ticks); one fired on fights the attacker 1500 ticks and sets the other
   three on the same area (`+0x1c8`, state 0x28). Zone fights last 1500
   ticks, answering fire 375 (member 6: 250).
-  Member 5's patrol fires at will at its own yard 2 when it passes within
-  reach, as the original does: the yards are barbarian structures (class
-  0x40; 0x410150 makes them side 2, `+0x57`, nation 4, slot 1), the
-  ships side 1 (0x4dfa90, 0x4dfe00). The look 0x4bfc60
-  and the list 0x4c0cd0 take any side 2 object but the sea monster 0x1fb
-  without the player test (only another player's object needs 0x4efe20 <
-  0), then its player's bit in `+0x689`, which member 5 sets to all ones
-  (0x46c3d1: 0x4797e0 with players -1, classes 0x3ffff), alive (vt+0x2c,
-  0x40dfc0: state `+0xa4` not 0x10), and its class bit 0x2000 (0x50ed20
-  for 0x3f-0x41) in `+0x68d`. So yard 2 may fall before it builds for
-  members 5 and 6.
+  Member 5's patrol (players -1, classes 0x3ffff: 0x46c3d1, 0x4797e0)
+  leaves its own yard 2 alone: the yards are barbarian structures (class
+  0x40), side 1 (`+0x57`) and nation 4 by their constructor 0x40de20
+  (Barb.cpp, vtable 0x594920; the factory 0x40fc90, class id 0x1a6b in
+  0x5c0f3c), and the load (slot 0 0x40ef70 -> 0x4e8660 -> 0x4e7640 ->
+  0x427f50) takes nation and slot from the record's `+8` / `+0xc` (fields
+  2 and 3: 4 and 0 in every barbarian record of the campaign and the
+  battles), overriding only a side-2 castle's (0x42 / 0x43: nation 4,
+  slot 1). Nothing else writes their `+0x57`. So they are player 16, and
+  the look 0x4bfc60 and the list 0x4c0cd0 (whose free pass is for side 2
+  but the sea monster 0x1fb) take them only as another player's object at
+  war (0x4efe20 < 0): not the barbarians' own ships. (0x410150, which an
+  earlier note gave as theirs, is the castles' constructor.)
 - **The Persians.** The yard (0x46cf80, at (32, 17)) gives a one-off order
   of class 1, then serves its slots (boats to ship killers, 0xd2, 0xd3;
   0x34 gives town order 48, 0x47b130 code 0x30: one part, 0x3e9 class

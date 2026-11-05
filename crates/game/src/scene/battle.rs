@@ -303,9 +303,12 @@ impl Scene {
         Ok(())
     }
 
-    /// An object's side (`+0x57`): 2 the monsters' (barbarian structures,
-    /// 0x410150; lairs, 0x414e20; the jam, 0x415c10; the port's other
-    /// monsters, whose constructors were not all read), 1 a player's, 0
+    /// An object's side (`+0x57`): 2 the monsters' (the castles, 0x410150,
+    /// which the load 0x427f50 makes nation 4 slot 1; lairs, 0x414e20; the
+    /// jam, 0x415c10; the port's other monsters, whose constructors were
+    /// not all read), 1 a player's (barbarian structures too: 0x40de20
+    /// makes them side 1, nation 4, and the load 0x427f50 keeps the
+    /// record's nation and slot, 4 and 0 in every mission: player 16), 0
     /// none.
     /// The player code an attack's record keeps of object `id` (0x4ab3f0,
     /// `+0x644`): -1 for side 2 (or none), else nation x 4 + slot.
@@ -329,7 +332,7 @@ impl Scene {
     }
 
     pub(super) fn side_of(o: &MapObject) -> u8 {
-        if matches!(o.class, ObjectClass::Barbarian(_)) || o.owner == Some(combat::MONSTERS) {
+        if o.owner == Some(combat::MONSTERS) {
             2
         } else if o.owner.is_some() {
             1
