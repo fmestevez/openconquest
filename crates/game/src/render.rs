@@ -903,6 +903,20 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
             }
         }
     }
+    // Then the pointer's cell's own slot: the Gorgon or a siren by her
+    // picture's rectangle and state (`Scene::lurker_at`); neither is picked
+    // otherwise.
+    let t = openconquest_formats::map::TILE_SIZE as i32;
+    if let Some(id) = scene.lurker_at((px.div_euclid(t), py.div_euclid(t)), px, py) {
+        return Some(id);
+    }
+    let walker = |o: &&crate::objects::MapObject| {
+        walker(o)
+            || matches!(
+                o.class,
+                openconquest_formats::ObjectClass::Monster(0x1fa | 0x1fd)
+            )
+    };
     // Ships, buildings and creatures: what can be selected or fought.
     if let Some(o) = visible().find(|o| !walker(o) && o.combat.is_some() && solid(o)) {
         return Some(o.id);

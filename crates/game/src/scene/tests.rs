@@ -12803,6 +12803,69 @@ fn gorgon_stare_on_buildings() {
     assert_eq!((got.hull, got.conditions), (e.hull, e.conditions));
 }
 
+/// The pointer picks the Gorgon and a siren by her picture's rectangle
+/// (0x402d10, 0x404800 from 0x49a580's last slot): nothing resting, then
+/// anywhere in the rectangle once up, a transparent corner too, and
+/// nothing past it. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn gorgon_and_siren_picked_by_rectangle() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for (mission, class) in [("battle17", 0x1fa), ("battle08", 0x1fd)] {
+        let mut scene = Scene::load(&data, &mut caches, mission).unwrap();
+        scene.fog = false;
+        let id = scene
+            .objects
+            .iter()
+            .find(|o| o.class == ObjectClass::Monster(class))
+            .unwrap()
+            .id;
+        let state = |scene: &Scene| match class {
+            0x1fa => scene.gorgons[&id].state,
+            _ => scene.sirens[&id].state,
+        };
+        let i = scene.object_index(id).unwrap();
+        let (cx, cy) = (scene.objects[i].x as i32, scene.objects[i].y as i32);
+        assert_eq!(state(&scene), 0);
+        assert_ne!(
+            crate::render::hit_test(&scene, cx as f32, cy as f32, 0),
+            Some(id)
+        );
+        while state(&scene) == 0 {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        for _ in 0..3 {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        let i = scene.object_index(id).unwrap();
+        let o = &scene.objects[i];
+        let layer = &scene.frame_of(o, 0)[0];
+        let (left, top) = crate::render::layer_origin(o, layer);
+        let (w, h) = (layer.image.width as i32, layer.image.height as i32);
+        let t = TILE_SIZE as i32;
+        let cell = match class {
+            0x1fa => scene.gorgons[&id].cell,
+            _ => scene.sirens[&id].cell,
+        };
+        // Points of her rectangle within her own cell: all hit, pixel or not.
+        let mut clear = false;
+        for y in top.max(cell.1 * t)..(top + h).min(cell.1 * t + t) {
+            for x in left.max(cell.0 * t)..(left + w).min(cell.0 * t + t) {
+                assert_eq!(scene.lurker_at(cell, x, y), Some(id), "{mission} {x},{y}");
+                clear |= !layer.image.is_solid(x - left, y - top);
+            }
+        }
+        assert!(clear, "{mission}: no clear pixel tried");
+        assert_eq!(scene.lurker_at(cell, left - 1, top), None);
+        assert_eq!(scene.lurker_at(cell, left, top + h), None);
+        let mid = (left + w / 2, top + h / 2);
+        assert_eq!(scene.lurker_at((cell.0 + 1, cell.1), mid.0, mid.1), None);
+    }
+}
+
 /// Lightning on the Gorgon (0x402ab8) and a siren (0x404505): resting under
 /// water (no picture) they are left whole; up, struck one cell off they
 /// are killed, put down to the caster once when she goes, at the end of

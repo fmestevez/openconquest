@@ -6153,9 +6153,6 @@ is 1 and it falls (0x138b), put down to no one. The port:
 `Scene::stare_building`. The port: `scene::gorgon`. Not decoded: the treasure's
 own test 0x407950 on pickup. Not ported: tornadoes (0xda96) and reefs or
 whirlpools (0xda94, 0xda95) on her (the port's strike ships only); her
-pixel test 0x402d10 (decoded: with her state `+0x110` not 0, 4 or 5 and
-her picture `+0x11c` made, a hit anywhere in its rectangle `+0x59`,
-`+0x5d`, `+0x61` x `+0x65`, no mask; the port tests her pixels); her
 save record (0x8cf: the port saves its own state).
 
 A siren (SirenaClassTy, `sirena.cpp`, class 0x1fd, vtable 0x594378,
@@ -6232,12 +6229,21 @@ smithies, studios, temples), towns 0x441ba0 and LandObj 0x425990 have no
 case for it, and the land creatures' jam 0x415ee0 hands only 0xda93,
 0xda96 and 0x187a2 to its members (the rest to 0x50c9e0, none); so any
 other occupant sung to counts in the share and takes nothing. Not ported: tornadoes (0xda96) and
-reefs or whirlpools (0xda94, 0xda95) on her; her pixel test 0x404800
-(decoded: with her state `+0x110` not 0, 4 or 5 and her picture `+0x164`
-made, her rectangle `+0x59`, `+0x5d`, `+0x61` x `+0x65`; the mask
-`SIRMSK` (`+0x84`, at the frame `+0x45`, clamped to its count less 1)
-only with a fifth argument not 0, which the pointer's pick 0x49a580
-does not pass; the port tests her pixels); her save record (0x8cf: the port saves its own state).
+reefs or whirlpools (0xda94, 0xda95) on her; her save record (0x8cf: the port saves its own state).
+
+The pointer picks the Gorgon and a siren only by 0x49a580's last try,
+the pointer's own cell's slot `+0x18` that holds her (0x402ee0 refuses
+a cell where another holds it), after everything else and only where
+the fog's second gate passed. Her vt+8 (the Gorgon's 0x402d10, the
+siren's 0x404800), with her state `+0x110` not 0, 4 or 5 and her
+picture (`+0x11c`, `+0x164`) made: with its third argument (the
+cursor's `+0xbd`) 0 a hit at once; else a hit anywhere in the picture's
+rectangle `+0x59 <= x <= +0x59 + +0x61 - 1`, `+0x5d <= y <= +0x5d +
++0x65 - 1`, no mask. The siren's also tests the bit of `SIRMSK` (`+0x84`,
+at the frame `+0x45`, clamped to its count less 1, 0x543240 /
+0x557640) only with a fifth argument not 0, which the pick passes as 0.
+The port: `Scene::lurker_at`, after `pick_cells` in `render::hit_test`,
+neither picked otherwise.
 
 Harpy nests (0x41d4a0) send out a new creature 55500 - 6000 x field 10
 game ticks after the last fell. A harpy (0x41fbd0, state 5) strikes at
@@ -6430,12 +6436,40 @@ shadow so (`Caches::shaded_frames`), and `render::layer_origin` takes a
 half pixel up (floor of v + 0.5) so a dragon's odd width stands alike
 left of the map's edge. Both layers' depth `max(0x26d0 - y, 1000)`
 is not ported: the port draws the flyers over everything, the shadow
-under the creature (which of two layers at one depth draws over is not
-decoded). A save restored makes the flyers' pictures and masks again
+under the creature (see **The sprites' draw order** below: of two layers
+at one depth, the one set to it last from a greater depth draws under). A save restored makes the flyers' pictures and masks again
 (`Scene::flyers_restored`; neither is saved). Not decoded: the targets' vt+0x2c and vt+0xa4
 (the port takes every object as targetable); a dragon's picture place
 before its first draw (states 0 and 1, not drawn), which its aim point
 reads (the port takes the draw's).
+
+**The sprites' draw order.** Every picture slot is a record (0xd4 bytes)
+of the sprite manager (count `+0x1a0`, records `+0x1a8`, by id `+0x1b0`,
+by depth `+0x1ac`); a new one (0x55d6e0) takes depth 0x7fffffff at the
+list's end, then its depth (the slot's `+0x19`: 0x50cbf0's second
+argument, 0x50d660's fifth when not -1, 0x55e7a0 -> 0x55d9d0) is filed by
+0x55d9d0, an insertion step keeping `+0x1ac` in rising depth (record
+dword 0x11): going down it passes the entries deeper than it, going up
+those shallower; at an equal depth it stops beside the equals, after
+them going down and before them going up (a record with flag 0x4000,
+the callback slots, the other way: its equals' flag 0x4000 is passed
+over by a plain record, and a 0x4000 record passes no equal); a depth
+set to what it is moves nothing (0x55d9d0). The composition 0x564970 copies the
+list in that order (`[+0x1a0]`, `[+0x1ac]`, the flags 8 / 0x40 kept)
+and draws from its end down to its start (0x564730 a picture, flag
+0x4000 its callback `+0xcc`): the deepest first, so a smaller depth
+draws over a greater, and of two at one depth the one later in the
+list (set to it last from a greater depth) under the other. The depths
+seen: flyers `max(0x26d0 - y, 1000)` (0x41e4b0), a siren `0x26c6 -
+0x40 x cell y` (`+0xc0`; at least 1000, 0x4059e0 state 1), sea monsters `20000 - +0x95`
+(at least 10000, 0x491830 / 0x491d50), a treasure `0x26d0 - (+0x5d +
++0x65)` (0x4068e0), a building's shields its picture's less 5 / 4,
+fire less 3 and smoke less 2, a ship's shields its hull's less 0x4a.
+Not ported: the port draws by a sort of its own (surface objects, then
+by the picture's bottom, the flyers over all) in `render::draw_objects`;
+to read before porting: every other class's main picture depth (ships'
+hull, buildings, towns, land creatures, wakes, gulls, the weather and
+the spells' pictures), each at its 0x50cbf0 / 0x50d660 calls.
 
 ## Land creatures
 

@@ -813,6 +813,42 @@ impl Scene {
             .is_some_and(|g| matches!(g.state, 1..=3))
     }
 
+    /// The Gorgon or siren the pointer at world pixel `(x, y)` picks in
+    /// cell `cell`'s slot (0x49a580's last try, the pointer's cell's slot
+    /// `+0x18`, by vt+8 with the main view's cursor `+0xbd` 1): the
+    /// Gorgon's 0x402d10 and the siren's 0x404800 with her state `+0x110`
+    /// not 0, 4 or 5 and her picture (`+0x11c`, `+0x164`) made, a hit
+    /// anywhere in its rectangle `+0x59 <= x < +0x59 + +0x61`, `+0x5d <= y
+    /// < +0x5d + +0x65` (the siren's `SIRMSK` only with a fifth argument,
+    /// which the pick passes as 0); the fog's gate before is the port's
+    /// sight.
+    pub fn lurker_at(&self, cell: (i32, i32), x: i32, y: i32) -> Option<u32> {
+        let up = |id: u32, state: u8, picture: bool| {
+            if matches!(state, 0 | 4 | 5) || !picture {
+                return false;
+            }
+            let Some(o) = self.object_index(id).map(|i| &self.objects[i]) else {
+                return false;
+            };
+            self.is_visible(o)
+                && self.frame_of(o, 0).iter().any(|layer| {
+                    let (left, top) = crate::render::layer_origin(o, layer);
+                    let (w, h) = (layer.image.width as i32, layer.image.height as i32);
+                    x >= left && x < left + w && y >= top && y < top + h
+                })
+        };
+        self.gorgons
+            .iter()
+            .find(|(&id, g)| g.cell == cell && up(id, g.state, g.picture))
+            .map(|(&id, _)| id)
+            .or_else(|| {
+                self.sirens
+                    .iter()
+                    .find(|(&id, s)| s.cell == cell && up(id, s.state, s.picture))
+                    .map(|(&id, _)| id)
+            })
+    }
+
     /// The frame she last drew.
     pub(super) fn gorgon_frame(&self, id: u32) -> Option<u32> {
         self.gorgons
