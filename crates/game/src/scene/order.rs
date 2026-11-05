@@ -532,6 +532,17 @@ impl Scene {
                 .into());
             }
         }
+        // A loader holds them from the hold to the end of its state 6
+        // (0x4b37d0 with 0x2000, 0x4b74fb till 0x4b3850), the stop
+        // (`Scene::stop`: released) and the reloading itself aside.
+        if ship.is_some_and(|id| self.load_holds(id))
+            && !matches!(
+                order,
+                Order::Stop { .. } | Order::LoadCrew { .. } | Order::LoadObject { .. }
+            )
+        {
+            return Err("The ship is reloading".into());
+        }
         if let Some(r) = self.one_event_a_tick(order, data, caches) {
             return r;
         }

@@ -496,7 +496,7 @@ impl Scene {
             .abs()
             .max((l.to.1 - l.from.1).abs())
             .round() as i32;
-        l.count = (major + 1 + 1) / 2 * 2;
+        l.count = (major + 1) | 1;
         l.line = true;
         let (a, b) = if dir % 4 == 0 { (2u8, 6u8) } else { (0, 4) };
         let s = self.objects[k].ship.as_mut().unwrap();
@@ -839,7 +839,8 @@ impl Scene {
 }
 
 /// Point `k` of a close-in line from `from` to `to` (0x4b5220: as many
-/// points as its longer side, padded to an even count; past the end, the
+/// a point a pixel of its longer side and the end, padded by one to an odd
+/// count; past the end, the
 /// end).
 pub(super) fn line_point(from: (f32, f32), to: (f32, f32), k: i32) -> (f32, f32) {
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
@@ -950,7 +951,7 @@ mod tests {
     }
 
     /// A founding ship's landing as 0x4b3370 runs it: the close-in a point
-    /// of its line a tick (the line's even count), the furling's four hull
+    /// of its line a tick (the line's odd count), the furling's four hull
     /// steps (every 3 ticks, the first at once after the close-in), the
     /// walkway a frame a tick (`AMOST_` 12 frames: 12 ticks), the party
     /// going down it to frame 0x17 (23 ticks), the party made and, for a
@@ -968,19 +969,20 @@ mod tests {
         let i = scene.object_index(boat).unwrap();
         assert_eq!(scene.objects[i].ship.as_ref().unwrap().landing, None);
         // The close-in to the shore south of it: 21 pixels (0x59a4c8 for
-        // a boat on group 0), 22 points.
-        assert_eq!(close, 22);
-        assert_eq!(span(&looks, 8), (start + 22, 10));
-        assert_eq!(span(&looks, 4), (start + 32, 1));
-        assert_eq!(span(&looks, 5), (start + 33, 12));
-        assert_eq!(span(&looks, 6), (start + 45, 23));
-        assert_eq!(span(&looks, 7), (start + 68, 11));
+        // a boat on group 0), 22 points padded to 23 (0x4b5220).
+        assert_eq!(close, 23);
+        assert_eq!(span(&looks, 8), (start + 23, 10));
+        assert_eq!(span(&looks, 4), (start + 33, 1));
+        assert_eq!(span(&looks, 5), (start + 34, 12));
+        assert_eq!(span(&looks, 6), (start + 46, 23));
+        assert_eq!(span(&looks, 7), (start + 69, 11));
         let (back, n) = span(&looks, 3);
-        assert_eq!((back, n), (start + 79, 31));
+        assert_eq!(back, start + 80);
+        assert_eq!(n, 31);
         // Paid and up as the party is made (its start on the site), the
         // tick the walkway starts up.
         let made = looks.iter().position(|l| l.3 == 1).unwrap();
-        assert_eq!(made, start + 68);
+        assert_eq!(made, start + 69);
         assert_eq!(looks[made - 1].4, 5000);
         assert_eq!(looks[made].4, 5000 - economy::building_cost(0x34));
         assert!(!looks[back + n].1, "the order done");
@@ -1068,9 +1070,9 @@ mod tests {
         let i = scene.object_index(boat).unwrap();
         let s = scene.objects[i].ship.as_ref().unwrap();
         assert_eq!(s.landing, None);
-        // The fort's landing: south (6) onto group 0, 22 points.
+        // The fort's landing: south (6) onto group 0, 22 points padded to 23.
         let kept = s.close_in;
-        assert_eq!((kept.dir, kept.group, kept.count), (6, 0, 22));
+        assert_eq!((kept.dir, kept.group, kept.count), (6, 0, 23));
         let t = TILE_SIZE as f32;
         let o = &scene.objects[i];
         let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
@@ -1088,9 +1090,9 @@ mod tests {
             (l.dir, l.group, l.face, l.turn),
             (6, Some(0), kept.face, kept.turn)
         );
-        assert_eq!((l.count, l.line), (22, false));
+        assert_eq!((l.count, l.line), (23, false));
         let steps = (1..).find(|_| scene.close_in_step(i, &mut l)).unwrap();
-        assert_eq!(steps, 22);
+        assert_eq!(steps, 23);
         let o = &scene.objects[i];
         assert_eq!((o.x, o.y), at);
     }

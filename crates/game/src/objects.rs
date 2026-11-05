@@ -496,6 +496,10 @@ pub struct Ship {
     /// (0x4c2230 states 2, 3 and 6).
     #[serde(default)]
     pub ram_run: Option<RamRun>,
+    /// A loader's hook out, pull alongside, walkway and link (0x4b73a0
+    /// states 7, 8, 10, 11, 4, 12 and 6).
+    #[serde(default)]
+    pub load_run: Option<LoadRun>,
     /// Landing a founding party at its berth (0x4b3370 states 2-8).
     #[serde(default)]
     pub landing: Option<Landing>,
@@ -601,6 +605,13 @@ pub struct Closing {
     /// the target's player, whose list (0x4a8710) has lost fallen ruins.
     #[serde(default)]
     pub by_id: bool,
+    /// The loader's last hook's tick (`+0x6be`, 0x4b84b0; zeroed with the
+    /// order by 0x4b8d10) and the cell it was thrown at (`+0x6d7`, kept
+    /// from the last throw when this one misses before it is written).
+    #[serde(default)]
+    pub thrown: Option<u32>,
+    #[serde(default)]
+    pub hook_cell: (i32, i32),
 }
 
 /// A ship's leviathan hunt, a game tick at a time (see `Ship::hunt`).
@@ -711,6 +722,71 @@ pub enum GrappleStage {
     Retract,
     /// Unfurling and sliding back to the cell's middle (state 6).
     Leave,
+}
+
+/// A loader's state in 0x4b73a0 (`+0x6a9`) past its throw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LoadStage {
+    /// 7: the hook out, waiting for it to hold.
+    Hook,
+    /// 8: sliding alongside and turning parallel (0x4b54a0, 0x4b57e0).
+    Pull,
+    /// 10: furling, a frame every 5 ticks (0x4b8aa0).
+    Furl,
+    /// 11: the walkway `MOST0_` going down (or up when released).
+    Plank,
+    /// 4: linked for reloading.
+    Linked,
+    /// 12: the walkway coming up.
+    PlankUp,
+    /// 6: back to the cell's middle and unfurling.
+    Back,
+}
+
+/// The loader's contact `+0x8e6`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LoadContact {
+    /// None (freed).
+    Free,
+    /// The hook in the air (type 300).
+    Flying,
+    /// Taken by the building (0x32) or the ship (200).
+    Taken,
+}
+
+/// A loader's run (see `Ship::load_run`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LoadRun {
+    pub target: u32,
+    /// The target is a building (contact kind 0x32), else a ship (200).
+    pub building: bool,
+    pub stage: LoadStage,
+    pub contact: LoadContact,
+    /// Released (`+0x6a2` < 0: a stop, Finish reload, the target lost).
+    pub released: bool,
+    /// The throw's tick (`+0x6be`) and the hook's time (`+0x6c2`).
+    pub thrown: u32,
+    pub flight: u32,
+    /// Where it lies alongside, the middle of its cell, where the
+    /// current slide began, the heading it turns to, and the direction of
+    /// the target (`+0x6e7`, the walkway's facing).
+    pub at: (f32, f32),
+    pub home: (f32, f32),
+    pub from: (f32, f32),
+    pub face: u8,
+    pub facing: u8,
+    /// The slide's point index (`+0x6b6`) and its count (`+0x6db`).
+    pub point: u32,
+    pub count: u32,
+    /// Ticks in the stage; the walkway's frame (-1 none); the hull's
+    /// sail frame past 8h + 0x58 (-1 not furled).
+    pub ticks: u32,
+    pub plank: i32,
+    pub sail: i32,
+    /// The hook's line still runs to where it landed (till the furl's
+    /// end).
+    pub rope: bool,
+    pub hook_at: (f32, f32),
 }
 
 /// A ship lying grappled to `with` (see `Ship::grapple`).
@@ -2290,6 +2366,7 @@ pub fn resolve(
         rock_clock: 0.0,
         grapple: None,
         ram_run: None,
+        load_run: None,
         landing: None,
         close_in: CloseIn::default(),
         build: None,

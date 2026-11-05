@@ -122,6 +122,7 @@ impl Scene {
                 o.ship.as_ref().is_some_and(|s| {
                     s.grapple.is_none()
                         && s.ram_run.is_none()
+                        && s.load_run.is_none()
                         && matches!(
                             s.task,
                             Some(
@@ -141,7 +142,7 @@ impl Scene {
             };
             let task = self.objects[i].ship.as_ref().unwrap().task.unwrap();
             if let Task::LoadAt { target } | Task::LoadRuins { target } = task {
-                self.load_tick(i, target);
+                self.load_tick(i, target, data, caches);
                 continue;
             }
             let (Task::Ram { target } | Task::Board { target, .. }) = task else {
@@ -193,6 +194,8 @@ impl Scene {
                     first_plan: true,
                     contact_wait: false,
                     by_id: false,
+                    thrown: None,
+                    hook_cell: (0, 0),
                 });
             }
             let near = s.closing.unwrap().near;
@@ -247,7 +250,7 @@ impl Scene {
     /// ship far at ruins sails to their berth and lies there, the two
     /// states turning, until another order; one near ends at once with
     /// notice 0x13c.
-    fn load_tick(&mut self, i: usize, target: u32) {
+    fn load_tick(&mut self, i: usize, target: u32, data: &GameData, caches: &mut Caches) {
         let found = self.object_index(target);
         let standing = found.filter(|_| !self.fallen(target));
         let own = self.cell_of_object(i);
@@ -274,6 +277,8 @@ impl Scene {
                 first_plan: true,
                 contact_wait: false,
                 by_id: !near,
+                thrown: None,
+                hook_cell: (0, 0),
             });
         }
         let s = self.objects[i].ship.as_ref().unwrap();
@@ -292,7 +297,7 @@ impl Scene {
                     c.from = None;
                 }
                 BoardLook::Closing => {}
-                BoardLook::Reach => self.load_contact(i, target),
+                BoardLook::Reach => self.load_contact(i, target, data, caches),
             }
             return;
         }
@@ -320,7 +325,7 @@ impl Scene {
     }
 
     /// An object's anchor cell (`+0x74 / +0x78`; a ship's own cell).
-    fn anchor_cell(&self, t: usize) -> (i32, i32) {
+    pub(super) fn anchor_cell(&self, t: usize) -> (i32, i32) {
         match self.objects[t].cell {
             Some(c) if self.objects[t].ship.is_none() => c,
             _ => self.cell_of_object(t),
@@ -399,35 +404,11 @@ impl Scene {
     }
 
     /// The loader within reach (0x4b73a0 state 1 -> 0x4b84b0, called with
-    /// no enemy test): 0x4b84b0 gives 0, and the loader stays in state 1
-    /// to try again the next tick, while it holds a contact (`+0x8e6`,
-    /// `Scene::in_contact`) or a ship target takes none (`+0x261` 0x1000
-    /// clear, `Scene::takes_contact`); a port's, yard's or dock's berth
-    /// must be the ship's cell, which its reach 0 has made it. Else the
-    /// two are taken up for reloading. (Not ported: 0x4b84b0's wait for
-    /// its last hook's reload (`now - +0x6be` below 0x5c7740[player byte
-    /// +0x90]); its hook (event 0x14ba, kind 9, the chance 0x4bf7f0 with
-    /// the 0x499ca0 test, `+0x6c2` from 0x598de4 by distance / 10) and
-    /// state 7 waiting for it; the hook at a building (0x4967b0 -> 0x138e
-    /// -> 0x423d60 -> 0x4bc140: contact {0x32, 4}, 0xcb7 to it, 0x4b3970);
-    /// states 8 (0x4b54a0 / 0x4b57e0), 10 (0x4b8aa0), 11 (the walkway
-    /// `+0x8c2`) and 3 (0x2875 by 0x4b3930), and the end by states 12 and
-    /// 6; the port links at once.)
-    fn load_contact(&mut self, i: usize, target: u32) {
-        let ship = self.objects[i].id;
-        if self.in_contact(i) {
-            return;
-        }
-        if let Some(t) = self.object_index(target) {
-            if self.objects[t].ship.is_some() && !self.takes_contact(t) {
-                return;
-            }
-        }
-        let s = self.objects[i].ship.as_mut().unwrap();
-        s.task = None;
-        s.closing = None;
-        s.path.clear();
-        self.link(ship, target);
+    /// no enemy test): it throws its hook (`Scene::load_throw`), the run
+    /// going on in state 7 (`Scene::run_load_runs`); else it stays in
+    /// state 1 to try again the next tick.
+    fn load_contact(&mut self, i: usize, target: u32, data: &GameData, caches: &mut Caches) {
+        self.load_throw(i, target, data, caches);
     }
 
     /// A port's, yard's, dock's or fort's berth (vt+0xb8, 0x40e050): its

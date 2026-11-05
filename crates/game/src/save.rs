@@ -157,6 +157,9 @@ pub struct SaveGame {
     /// Ships reloading alongside a port, dock or ship.
     #[serde(default)]
     pub loads: Vec<crate::scene::LoadLink>,
+    /// The buildings' ships taken in (`+0x1e0`), as (building, ship).
+    #[serde(default)]
+    pub occupants: Vec<(u32, u32)>,
     /// Heroes waiting at settlements (site id, heroes).
     #[serde(default)]
     pub site_heroes: Vec<(u32, Vec<u8>)>,

@@ -1611,11 +1611,70 @@ passed, or a ship whose contact is this one in its type 5, state 8 (0x4b37d0 hol
 sends 0x2875 (0x4b3930, a building) and goes to 4, lying linked; the
 contact gone: 12 (walkway up), 6 (sail out) and back to 1 with
 vt+4(8, 0x90). The port (`Scene::load_tick`, `load_look`) runs the order,
-the sailing and the look; at reach (`load_contact`) it keeps 0x4b84b0's
-two gates (called from state 1 with no enemy test, `param_3` 0): while
-the loader holds a contact (`Scene::in_contact`) or a ship target takes
-none (`Scene::takes_contact`) it waits in state 1, trying each tick;
-else it links at once.
+the sailing and the look; at reach 0x4b84b0 (`Scene::load_throw`,
+called from state 1 with no enemy test, `param_3` 0) and states 7-12
+(`scene/load_run.rs`, `Ship::load_run`) as below.
+**The machine past the throw** (0x4b73a0, one call a tick; `now` the
+game tick):
+- The throw: 0 while `now - +0x6be` < 0x5c7740[byte +0x90] (85 ticks at
+  level 0, 66 above; `Scene::hook_reload_ticks`) or a contact is held.
+  A building: its anchor's direction (0x59791d), 0x39-0x3b only from the
+  berth, distance 0; a ship (`+0x261` 0x1000) the distance 0x557440
+  ((min + 2 max) / 2) between the hull centres. The chance 0x4bf7f0 is
+  100 for item 9 (no draw); 0 when 0x499ca0 fails, or at a ship slipping
+  (0x4b5140 x 3000 / `+0x59b` < 17); else `+0x6d7` the target's cell.
+  `+0x6c2` = word 0x598de4[14 (d / 10)] / dword 0x599b40 (19): 3 ticks at
+  a building. A building's aim vt+0xc (0x423520 for port, yard, dock and
+  fort: two draws of its generator), and when the point is out of the
+  `+0x6d7` cell the chance 0 and vt+0xc(0) again (two more draws). Shot
+  0x14ba kind 9; `+0x6be` now; state 7.
+- The landing: a miss falls in the water (0x4983d0: 0x4e06a0, contact
+  freed; state 7 -> 1). At a building 0x4bc140 needs vt+0xb0, 0x40dfe0
+  for all four vtables (dumped vt+0xa4..+0xb8: 0x40dfd0, 0x425720,
+  0x4258c0, 0x40dfe0, 0x40e020, 0x40e050): facing `+0x1dc` >= 0, `+0xa4`
+  1, with `+0x1d8 & 0x10` the town `+0x1c8` set, and `+0x1e0` 0; then
+  0xcb7, which 0x4e7640 (fort 0x419f80) answers with `+0x1e0` = the
+  ship; 0xcb8 clears it, as does 0x2874 from its town (0xcb9 to it).
+  At a ship 0x4bbfc0 with no player test: the target grappled as a
+  boarded one (prey state 9, `Scene::grapple_prey`).
+- 7: released (`+0x6a2` < 0) -> 1 (contact 0x4e02a0); no contact -> 1;
+  type 300 stay; 0x32: a fort with 0x557440(cell, anchor) >= 2 is
+  released, else the hold once `now - +0x6be >= +0x6c2`, vt+0xb0 0 and
+  `+0x1e0` the ship; 0x39-0x3b released off the berth, else the hold
+  once the time passed; 200: the target's contact back at this ship in
+  its state 5 -> hold. The hold (0x4b74fb): 0x4b37d0(0x2000) (commands
+  but the stop dropped till state 6's end, `Scene::load_holds`), `+0x25d
+  |= 0x10`, 0x4b54a0 (as the boarder's), state 8.
+- 8 (0x4b57e0, two points a tick): released or no contact -> 6 (0x4c3320,
+  contact 0x4e02a0); done -> 10 (a ship only once its target is in 10,
+  3 or 4).
+- 10: a hull step each 5 ticks (delay 4): frame max(frame, 8h+0x58)+1, at
+  8h+0x5c it is 8h+0x5b, the line freed; 11 with the walkway (0x4b8aa0)
+  or 12 without a contact: 20 ticks.
+- 11, a frame a tick: released, the walkway back down to 0 then 6; at its
+  end (18 frames, 18 ticks) no contact -> 12, a building 0x2875
+  (0x4b3930(1)) and 0x4ad9f0, state 4.
+- 4: no contact -> 12. A human's (game `+0x1a1d`[nation x 4 + slot] 1 or
+  2) 0x4b71f0(1) stays while the contact holds and not released with
+  `+0x6e5` 4; a computer's 0x4bb3a0 only with `+0x6e9` set (no writer
+  found). Else 0x2876 (0x4b3930(0)) to a building and 12.
+- 12: the walkway up a frame a tick (18 ticks from 17), then 6.
+- 6, once a tick: the line back to the cell's middle (0x4c3320; none
+  when already there: count 0, so `+0x6b6 < count - 1` unsigned holds
+  forever and state 6 never ends) two points a tick; the sail 8h+0x5b ->
+  0x59 -> 0x58 (2 ticks). At the line's end and the sail done: frame h x
+  4, contact 0x32 0xcb8 + 0x4e06a0 (other 0x4e02a0), 0x4b3850, 0x4b8d10,
+  notice **0x13f** {now, ship +0x60, ship id, target `+0x6cb`} (0x4a1980)
+  to the group, `+0x25d &= ~0x10`, vt+4(8, 0x90).
+- 0x4e02a0 frees a contact: 0x32 with 0xcb8 (0x4b3970(0)); 200 the
+  target's line; 300 the bomb.
+- Released by: a stop (0x4aa540: `+0x25d & 0x10`, state not 0 / 1:
+  `+0x6a2` 0xff; linked, `+0x6e5` 4); Finish reload from the ship
+  (0xc45b -> 0x4bc750 -> 0x4aa2c0 case 4, linked); from the building
+  (0x4e7640 / 0x419f80 with `+0x104`: 0x2876 to `+0x108`, `+0x104`,
+  `+0x108` and `+0x1e0` cleared, 0xc453), the ship's 0x2876 (0x4dd3bc)
+  freeing its contact with 0x4e06a0 (no 0xcb8); the target gone. Other
+  orders are dropped.
 The hook decoded further: 0x4b84b0's shot carries a record {200, 3,
 ship, id}; as it flies 0x496f40 makes the shooter's contact type 300
 (the hook in the air, pointing at the bomb `+0xef`). Landing on a
@@ -1631,11 +1690,12 @@ slot 2, `+0x8d2` from the bomb's `+0xfb`), and for 0x34-0x36 and
 0x4e06a0 on the record's ship and clears the bomb's slot 2. 0x4b37d0 (state 7 to
 8) keeps `+0x25d` in `+0x69c`, clears it and ands `+0x261` with 0x2000;
 0x4b3930(1 / 0) sends 0x2875 / 0x2876 {building id, ship id}.
-Not ported: 0x4b84b0's reload wait (`now - +0x6be`) and hook, states
-7-12 (the pull, furl and walkway before the link, and their ending; the
-port's link still ends by `Scene::run_loads`' rule), the meaning of the
-building's `+0xa4` and vt+0xb0, the building flag of the plan (no goal
-on land) and `+0x594`. A settlement's own
+Not ported: vt+0xb0's town test (`+0x1d8 & 0x10`, `+0x1c8`), 0x2874's
+clearing of `+0x1e0`, 0x4ad9f0 (the unloading at a building at state
+11's end) and the computer's 0x4bda00 / 0x4e4120, the porters (`NOSIL_`,
+code 5 carries between ships, 0x4bc7c0), the hold's `+0x85` and
+reserved-cell release, the hook's landing sound at a building, the
+building flag of the plan (no goal on land) and `+0x594`. A settlement's own
 Reload Object (menu slot 1) does the same with one of its forts (0x441ba0
 case 0x1f, checked in 0xc452: one of its own buildings, its list
 `+0x1d0` of `+0x1c8`, of classes 0x34-0x36, while it is idle): there is no
@@ -2702,7 +2762,8 @@ a value but 0x4c133a's 0) and 0x4c3ca0 (`+0x25d & 2`: 0x4c3410 returns 1
 on the tick the boarded side's contact ends); `+0x25c` is the siren's
 song alone in the port.
 
-**Prey notices** (0x4a1800 0x13a, 0x4a1880 0x13d, 0x4a1900 0x13c, after
+**Prey notices** (0x4a1800 0x13a, 0x4a1880 0x13d, 0x4a1900 0x13c, the
+loader's 0x4a1980 0x13f at its state 6's end (Load panel), after
 0x4a1700's 0x136 and 0x4a1770's 0x137): to the ship's group (0x49c020
 with its player and group id `+0x5c`) when it has one with a notice list
 (`+0x2d`), the record `{code, tick, ship +0x60, ship id, a, b}`:
@@ -5916,7 +5977,8 @@ ship, 0x32 a building, 300 a hook in the air) runs a game tick at a time:
   **slides** from where its picture is to its cell's middle plus a step
   towards the other, 10 pixels across (0x59a7c8), 13 up or down
   (0x59a828), 19 and 19 slanting (0x59a888), alike for every type, along
-  a line of points (0x4b5220, padded to an even count) two points a tick;
+  a line of points (0x4b5220: a point a pixel of the longer side and the
+  end, an even count padded by one, so always odd) two points a tick;
   and **turns parallel** to the other: for the other ship east or west it
   turns north or south, north or south east or west, north-east or
   south-west north-west or south-east and the reverse, whichever is

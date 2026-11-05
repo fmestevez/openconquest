@@ -420,6 +420,10 @@ pub struct Scene {
     pub selling: BTreeMap<u32, u8>,
     /// Ships lying alongside an own port, dock or ship to reload.
     pub loads: Vec<load::LoadLink>,
+    /// Each port's, yard's, dock's or fort's ship taken in (`+0x1e0`:
+    /// 0xcb7 sets it, 0xcb8 and its Finish reload clear it; 0x4e7640),
+    /// as (building, ship).
+    pub occupants: Vec<(u32, u32)>,
     /// Harpies and dragons out of their nests, and the nests' counts.
     pub flyers: Vec<flyers::Flyer>,
     pub nests: Vec<flyers::Nest>,
@@ -591,6 +595,7 @@ mod hunt;
 mod landing;
 mod leviathan;
 pub mod load;
+mod load_run;
 mod orders;
 pub mod repair;
 mod sail;
@@ -948,6 +953,7 @@ impl Scene {
             fittings: Default::default(),
             towns: Default::default(),
             loads: Vec::new(),
+            occupants: Vec::new(),
             permits: crate::permits::Permits::ALL,
             seats: Vec::new(),
             active: 0,
@@ -1214,6 +1220,7 @@ impl Scene {
             fittings: self.fittings.iter().map(|(k, v)| (*k, v.clone())).collect(),
             towns: Some(self.towns.clone()),
             loads: self.loads.clone(),
+            occupants: self.occupants.clone(),
             permits: Some(self.permits),
             stats: self.stats.clone(),
             flyers: self.flyers.clone(),
@@ -1410,6 +1417,7 @@ impl Scene {
             None => scene.towns_start(),
         }
         scene.loads = save.loads.clone();
+        scene.occupants = save.occupants.clone();
         scene.flyers = save.flyers.clone();
         scene.stats = save.stats.clone();
         for i in 0..scene.objects.len() {
@@ -2396,6 +2404,18 @@ impl Scene {
                 self.cancel_build(i);
                 return;
             }
+            // A loader past its hold is released (0x4aa540 with `+0x25d &
+            // 0x10`: `+0x6a2` 0xff; linked, `+0x6e5` 4 too), its order
+            // going on to its end (`Scene::run_load_runs`).
+            if let Some(r) = self.objects[i]
+                .ship
+                .as_mut()
+                .and_then(|s| s.load_run.as_mut())
+                .filter(|r| r.stage != objects::LoadStage::Hook)
+            {
+                r.released = true;
+                return;
+            }
             // 0x4abc60 runs whole whatever it calls off: its tail ends
             // the fire task, guard, ram or board on giving fire state 2.
             if let Some(ship) = self.objects[i].ship.as_mut() {
@@ -2714,6 +2734,7 @@ impl Scene {
             self.run_leviathans(data, caches);
             self.run_hunts(data, caches);
             self.run_closing(data, caches);
+            self.run_load_runs();
             self.run_fire_pass(data, caches);
             self.run_landings(data, caches);
             // The commands of this tick reach their objects at the start

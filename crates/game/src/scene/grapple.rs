@@ -22,10 +22,10 @@ use crate::objects::{Grapple, GrappleStage, RamRun, RamStage};
 /// Ticks a frame of the sail furling while grappled: the hull's delay of
 /// 4 (0x4b5df0 state 8), a frame once more than 4 ticks have passed; four
 /// frames.
-const FURL_STEP: u32 = 5;
-const FURL_FRAMES: u32 = 4;
+pub(super) const FURL_STEP: u32 = 5;
+pub(super) const FURL_FRAMES: u32 = 4;
 /// The walkway's frames, one a tick (0x4b8aa0: delay 0).
-const PLANK_FRAMES: u32 = 18;
+pub(super) const PLANK_FRAMES: u32 = 18;
 /// How long a rammer's impact lasts when its picture is missing.
 const IMPACT_TICKS: u32 = 14;
 /// A rammer backs off a pixel on each axis a frame of its hull (delay 2: a
@@ -49,14 +49,14 @@ pub(super) const UNIT: [(i32, i32); 8] = [
 ];
 
 /// The direction of a neighbouring cell (0x59791d).
-fn direction(dx: i32, dy: i32) -> Option<usize> {
+pub(super) fn direction(dx: i32, dy: i32) -> Option<usize> {
     UNIT.iter().position(|&u| u == (dx.signum(), dy.signum()))
 }
 
 /// How far a grappled ship slides towards the other from its cell's
 /// middle (0x4b54a0: 0x59a7c8 across, 0x59a828 up and down, 0x59a888
 /// slanting; alike for every type).
-fn alongside_offset(dir: usize) -> (f32, f32) {
+pub(super) fn alongside_offset(dir: usize) -> (f32, f32) {
     let (ux, uy) = UNIT[dir % 8];
     match dir % 4 {
         0 => (10.0 * ux as f32, 0.0),
@@ -88,7 +88,7 @@ pub(super) fn parallel(dir: usize, rotation: i32) -> u8 {
 
 /// Turns a ship's hull one of its 24 rotations towards heading `face`, the
 /// shorter way (0x4b57e0); true once it lies so.
-fn turn_tick(ship: &mut objects::Ship, face: u8) -> bool {
+pub(super) fn turn_tick(ship: &mut objects::Ship, face: u8) -> bool {
     let want = face as i32 * 3;
     let mut at = ship.rotation.map_or(ship.heading as i32 * 3, i32::from);
     if at != want {
@@ -110,12 +110,13 @@ fn turn_tick(ship: &mut objects::Ship, face: u8) -> bool {
 }
 
 /// Where a slide from `from` to `to` stands after `ticks`: along the
-/// line's points (0x4b5220, padded to an even count), two a tick; and
+/// line's points (0x4b5220: one a pixel of the longer side and the end,
+/// padded by one to an odd count), two a tick; and
 /// whether it is over (0x4b57e0).
 pub(super) fn slide(from: (f32, f32), to: (f32, f32), ticks: u32) -> ((f32, f32), bool) {
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
     let major = dx.abs().max(dy.abs()).round() as u32;
-    let count = (major + 1).next_multiple_of(2);
+    let count = (major + 1) | 1;
     let k = 2 * ticks;
     let f = if major == 0 {
         1.0
@@ -292,6 +293,7 @@ impl Scene {
         };
         s.grapple.is_some()
             || s.ram_run.is_some()
+            || s.load_run.is_some()
             || matches!(s.task, Some(Task::Board { hooking: true, .. }))
             || self.objects.iter().any(|p| {
                 p.ship
@@ -308,7 +310,11 @@ impl Scene {
         for o in &self.objects {
             let Some(s) = o.ship.as_ref() else { continue };
             // A landing ship's hull is its landing's (0x4b3370) too.
-            if s.grapple.is_some() || s.landing.is_some() {
+            if s.grapple.is_some()
+                || s.landing.is_some()
+                || s.load_run
+                    .is_some_and(|r| r.stage != objects::LoadStage::Hook)
+            {
                 held.insert(o.id);
             }
             if let Some(r) = s.ram_run {
@@ -366,6 +372,16 @@ impl Scene {
             .copied()
             .unwrap_or_default();
         combat::reload_seconds(8, levels.rate[2])
+    }
+
+    /// The same in ticks (0x5c7740 as 0x4b84b0 reads it for a loader).
+    pub(super) fn hook_reload_ticks(&self, i: usize) -> u32 {
+        let levels = self.objects[i]
+            .owner
+            .and_then(|o| self.levels.get(&o))
+            .copied()
+            .unwrap_or_default();
+        combat::reload_ticks(8, levels.rate[2])
     }
 
     /// Boarder `i`, next to its prey `ti`, throws a hook if its last one was
@@ -450,6 +466,9 @@ impl Scene {
     /// if the prey is free and still lies in the next cell (0x4bbfc0, the
     /// boarded ship's state 9): both ships are then grappled.
     pub(super) fn hook_landed(&mut self, from: u32, target: u32, hit: bool) {
+        if self.load_hook_landed(from, target, hit) {
+            return;
+        }
         let Some(i) = self.object_index(from) else {
             return;
         };
@@ -486,38 +505,50 @@ impl Scene {
             return;
         }
         for (k, other) in [(i, ti), (ti, i)] {
-            let (here, there) = (self.cell_of_object(k), self.cell_of_object(other));
-            let dir = direction(there.0 - here.0, there.1 - here.1).unwrap_or(0);
-            let home = Self::cell_middle(here);
-            let (ox, oy) = alongside_offset(dir);
-            let with = self.objects[other].id;
-            let o = &mut self.objects[k];
-            let from = (o.x, o.y);
-            let s = o.ship.as_mut().unwrap();
-            let rotation = s.rotation.map_or(s.heading as i32 * 3, i32::from);
-            s.path.clear();
-            s.way = 0;
-            s.face = None;
-            // The boarded ship is held (move state 6, 0x4c3410 after the
-            // hook); the boarder at its hook cell lies still (0, 0x4a3560
-            // with its contact +0x6a9 = 6).
-            s.move_state = if k == i { 0 } else { 6 };
-            s.grapple = Some(Grapple {
-                with,
-                boarder: k == i,
-                stage: GrappleStage::Pull,
-                at: (home.0 + ox, home.1 + oy),
-                home,
-                from,
-                face: parallel(dir, rotation),
-                facing: dir as u8,
-                ticks: 0,
-                clock: 0.0,
-                fight: 0,
-                won: false,
-                rope: k == ti,
-            });
+            self.grapple_side(k, other, k == i);
         }
+    }
+
+    /// Ship `k` grappled to `other` (pulled alongside, turning parallel),
+    /// as the boarder or the boarded ship.
+    fn grapple_side(&mut self, k: usize, other: usize, boarder: bool) {
+        let (here, there) = (self.cell_of_object(k), self.cell_of_object(other));
+        let dir = direction(there.0 - here.0, there.1 - here.1).unwrap_or(0);
+        let home = Self::cell_middle(here);
+        let (ox, oy) = alongside_offset(dir);
+        let with = self.objects[other].id;
+        let o = &mut self.objects[k];
+        let from = (o.x, o.y);
+        let s = o.ship.as_mut().unwrap();
+        let rotation = s.rotation.map_or(s.heading as i32 * 3, i32::from);
+        s.path.clear();
+        s.way = 0;
+        s.face = None;
+        // The boarded ship is held (move state 6, 0x4c3410 after the
+        // hook); the boarder at its hook cell lies still (0, 0x4a3560
+        // with its contact +0x6a9 = 6).
+        s.move_state = if boarder { 0 } else { 6 };
+        s.grapple = Some(Grapple {
+            with,
+            boarder,
+            stage: GrappleStage::Pull,
+            at: (home.0 + ox, home.1 + oy),
+            home,
+            from,
+            face: parallel(dir, rotation),
+            facing: dir as u8,
+            ticks: 0,
+            clock: 0.0,
+            fight: 0,
+            won: false,
+            rope: !boarder,
+        });
+    }
+
+    /// Ship `t` hooked by loader `i` (0x4bbfc0, prey state 9): grappled as
+    /// a boarded ship, the line its own.
+    pub(super) fn grapple_prey(&mut self, t: usize, i: usize) {
+        self.grapple_side(t, i, false);
     }
 
     /// Grappled ships go on with their boarding, a game tick at a time.
@@ -558,7 +589,31 @@ impl Scene {
         let id = self.objects[k].id;
         let g = self.objects[k].ship.as_ref()?.grapple?;
         let p = self.object_index(g.with)?;
-        let pg = self.objects[p].ship.as_ref()?.grapple?;
+        let ps = self.objects[p].ship.as_ref()?;
+        // A loader's hooked ship sees its run's state as a boarder's.
+        if let Some(r) = ps.load_run.filter(|r| !r.building && r.target == id) {
+            use objects::LoadStage as L;
+            let stage = match r.stage {
+                L::Hook | L::Pull => GrappleStage::Pull,
+                L::Furl => GrappleStage::Furl,
+                L::Plank | L::Linked => GrappleStage::Plank,
+                L::PlankUp => GrappleStage::Retract,
+                L::Back => GrappleStage::Leave,
+            };
+            if r.contact != objects::LoadContact::Taken && stage != GrappleStage::Leave {
+                return None;
+            }
+            return Some((
+                p,
+                Grapple {
+                    with: id,
+                    boarder: true,
+                    stage,
+                    ..g
+                },
+            ));
+        }
+        let pg = ps.grapple?;
         (pg.with == id).then_some((p, pg))
     }
 
@@ -773,10 +828,15 @@ impl Scene {
     /// The top-left of boarder `k`'s walkway: from its picture's, by type,
     /// side and facing (0x4b8aa0 with 0x59a8e8, 0x4b8a40).
     fn plank_corner(&self, k: usize, g: Grapple) -> Option<(f32, f32)> {
+        self.plank_corner_at(k, g.facing)
+    }
+
+    /// The same for a walkway facing `facing`.
+    fn plank_corner_at(&self, k: usize, facing: u8) -> Option<(f32, f32)> {
         let o = &self.objects[k];
         let s = o.ship.as_ref()?;
         let kind = s.kind as usize % 12;
-        let facing = g.facing as usize % 8;
+        let facing = facing as usize % 8;
         let side = unload::walkway_side(facing, s.heading);
         let (ox, oy) = unload::WALKWAY_AT[kind.min(4)][side][facing];
         let half = objects::SHIP_FRAME[kind] / 2.0;
@@ -788,6 +848,19 @@ impl Scene {
     pub fn planks_shown(&self) -> Vec<(u32, &[objects::Layer], f32, f32)> {
         let mut out = Vec::new();
         for (k, o) in self.objects.iter().enumerate() {
+            // A loader's walkway (0x4b73a0 states 11, 4, 12).
+            if let Some(r) = o.ship.as_ref().and_then(|s| s.load_run) {
+                let frames = &self.plank_art[r.facing as usize % 8];
+                if let (Some(tl), Some(l), Some(frame)) = (
+                    self.plank_corner_at(k, r.facing),
+                    frames.last().and_then(|f| f.first()),
+                    usize::try_from(r.plank).ok().and_then(|f| frames.get(f)),
+                ) {
+                    let (w, h) = (l.image.width as f32, l.image.height as f32);
+                    out.push((o.id, frame.as_slice(), tl.0 + w / 2.0, tl.1 + h / 2.0));
+                }
+                continue;
+            }
             let Some(g) = o.ship.as_ref().and_then(|s| s.grapple) else {
                 continue;
             };
@@ -826,6 +899,12 @@ impl Scene {
             })
             .collect();
         for o in &self.objects {
+            // A loader's line to where its hook holds on a building.
+            if let Some(r) = o.ship.as_ref().and_then(|s| s.load_run) {
+                if r.rope {
+                    out.push(((o.x, o.y), r.hook_at));
+                }
+            }
             let Some(g) = o.ship.as_ref().and_then(|s| s.grapple) else {
                 continue;
             };

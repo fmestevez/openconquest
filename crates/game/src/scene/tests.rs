@@ -5989,12 +5989,15 @@ fn magic_wood_keeps_hooks_off() {
 #[test]
 fn grapple_slide_and_parallel() {
     use super::grapple::{parallel, slide};
-    // Ten pixels: two points a tick, over at the sixth (12 points, padded).
+    // Ten pixels: two points a tick, over at the sixth (11 points, odd);
+    // 13 pixels 14 points padded to 15, over at the eighth; 19 pixels 20
+    // padded to 21, at the eleventh.
     assert_eq!(slide((0.0, 0.0), (10.0, 0.0), 5), ((10.0, 0.0), false));
     assert_eq!(slide((0.0, 0.0), (10.0, 0.0), 6), ((10.0, 0.0), true));
-    assert!(slide((0.0, 0.0), (0.0, -13.0), 7).1);
-    assert!(!slide((0.0, 0.0), (19.0, 19.0), 9).1);
-    assert!(slide((0.0, 0.0), (19.0, 19.0), 10).1);
+    assert!(!slide((0.0, 0.0), (0.0, -13.0), 7).1);
+    assert!(slide((0.0, 0.0), (0.0, -13.0), 8).1);
+    assert!(!slide((0.0, 0.0), (19.0, 19.0), 10).1);
+    assert!(slide((0.0, 0.0), (19.0, 19.0), 11).1);
     // The other ship east: north or south, the nearer; a tie goes south.
     assert_eq!(parallel(0, 0), 6);
     assert_eq!(parallel(0, 3), 2);
@@ -6265,6 +6268,8 @@ fn prey_gone_ends_with_a_notice() {
             first_plan: true,
             contact_wait: false,
             by_id: false,
+            thrown: None,
+            hook_cell: (0, 0),
         });
         scene.ticks += 1;
         scene.run_closing(&data, &mut caches);
@@ -7437,8 +7442,25 @@ fn reload_beside(scene: &mut Scene, data: &GameData, caches: &mut Caches, ship: 
     scene.objects[i].ship.as_mut().unwrap().path.clear();
     scene.objects[i].ship.as_mut().unwrap().task = None;
     scene.order_load(ship, target).unwrap();
-    scene.run_closing(data, caches);
-    assert!(scene.load_link(ship).is_some_and(|l| l.other == target));
+    run_until_linked(scene, data, caches, ship, target);
+}
+
+/// Runs the scene until loader `ship`'s hook has taken `target` and its
+/// walkway is down (0x4b73a0 states 7, 8, 10, 11 to 4); the ticks taken.
+fn run_until_linked(
+    scene: &mut Scene,
+    data: &GameData,
+    caches: &mut Caches,
+    ship: u32,
+    target: u32,
+) -> u32 {
+    for n in 1..400 {
+        scene.update(crate::clock::TICK, data, caches);
+        if scene.load_link(ship).is_some_and(|l| l.other == target) {
+            return n;
+        }
+    }
+    panic!("never linked");
 }
 
 /// A standing target's load runs the original's machine (0x4aa840,
@@ -7491,6 +7513,109 @@ fn load_at_a_yard_sails_to_its_berth() {
         berth
     );
     assert_eq!(scene.load_link(ship).unwrap().other, yard);
+}
+
+/// The load's machine at a yard (0x4b73a0): on its berth the ship throws
+/// its hook (0x4b84b0: a building's distance 0, so `+0x6c2` 66 / 19 = 3
+/// ticks) and holds once it is taken (0x4bc140: the yard's `+0x1e0` the
+/// ship, 0xcb7) and its time passed, its commands but the stop held;
+/// slides alongside (0x4b57e0, the line 0x4b5220 padded to an odd count,
+/// two points a tick), furls in 20 ticks (four hull steps of delay 4),
+/// lowers the walkway in 18 (`MOST0_`, a frame a tick) and is linked
+/// (0x2875). A stop releases it: the walkway comes up in 18 ticks
+/// (0x2876 first), it slides back two points a tick, unfurling in 2, and
+/// the order ends with the yard's `+0x1e0` cleared (0xcb8) (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn load_hooks_pulls_furls_and_links() {
+    use crate::objects::LoadStage::{self, *};
+    use order::Order;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
+    scene.brain = None;
+    let yard = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .unwrap()
+        .id;
+    let t = scene.object_index(yard).unwrap();
+    let (berth, anchor) = (scene.vt_berth(t), scene.cell_of_object(t));
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind < 10))
+        .unwrap()
+        .id;
+    let i = scene.object_index(ship).unwrap();
+    (scene.objects[i].x, scene.objects[i].y) = Scene::cell_middle(berth);
+    scene.objects[i].ship.as_mut().unwrap().path.clear();
+    scene.order_load(ship, yard).unwrap();
+    let stage = |scene: &Scene| {
+        let i = scene.object_index(ship).unwrap();
+        scene.objects[i]
+            .ship
+            .as_ref()
+            .unwrap()
+            .load_run
+            .map(|r| r.stage)
+    };
+    let mut looks: Vec<Option<LoadStage>> = Vec::new();
+    while looks.len() < 400 && stage(&scene) != Some(Linked) {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        looks.push(stage(&scene));
+    }
+    let span = |looks: &[Option<LoadStage>], st: LoadStage| {
+        looks.iter().filter(|&&l| l == Some(st)).count()
+    };
+    let r = scene.objects[i].ship.as_ref().unwrap().load_run.unwrap();
+    assert_eq!(r.flight, 3);
+    assert!(span(&looks, Hook) >= 3);
+    assert_eq!(span(&looks, Furl), 20);
+    assert_eq!(span(&looks, Plank), 18);
+    assert_eq!(scene.load_link(ship).unwrap().other, yard);
+    assert_eq!(scene.occupant(yard), Some(ship));
+    // The slide: toward the anchor by 0x4b54a0's table.
+    let d = (anchor.0 - berth.0, anchor.1 - berth.1);
+    let dir = grapple::UNIT.iter().position(|&u| u == d).unwrap();
+    let major: u32 = match dir % 4 {
+        0 => 10,
+        2 => 13,
+        _ => 19,
+    };
+    assert_eq!(r.facing as usize, dir);
+    let pull = span(&looks, Pull) as u32;
+    assert!(pull >= (major + 1).div_ceil(2), "{pull}");
+    // Commands but the stop are held.
+    let (x, y) = Scene::cell_middle((berth.0 + 3, berth.1));
+    assert!(scene
+        .apply(&Order::Move { ship, x, y }, &data, &mut caches)
+        .is_err());
+    scene
+        .apply(&Order::Stop { id: ship }, &data, &mut caches)
+        .unwrap();
+    let mut back = Vec::new();
+    while back.len() < 400 && stage(&scene).is_some() {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        back.push(stage(&scene));
+    }
+    assert_eq!(back[0], Some(PlankUp));
+    assert!(scene.load_link(ship).is_none());
+    // The tick of 0x2876, then 17 frames down to 0 and under 0 at the
+    // 18th (that tick already state 6).
+    assert_eq!(span(&back, PlankUp), 18);
+    // Back: the line of `major` + 1 points padded odd, two a tick, and
+    // the sail unfurled in 2.
+    assert_eq!(span(&back, Back) as u32, major.div_ceil(2).max(2));
+    let o = &scene.objects[i];
+    assert_eq!((o.x, o.y), Scene::cell_middle(berth));
+    assert!(o.ship.as_ref().unwrap().task.is_none());
+    assert_eq!(scene.occupant(yard), None);
 }
 
 /// A fort's facing with no water beside its anchor is the constructor's
@@ -7750,11 +7875,17 @@ fn ships_reload_from_each_other() {
         scene.transfer(a, b, Cargo::Unit(0, 0), &data, &mut caches),
         Err("No room aboard".to_string())
     );
-    // Sailing off ends the reloading.
-    let (x, y) = (scene.objects[ka].x + 64.0 * 4.0, scene.objects[ka].y);
-    assert!(scene.order_move(a, x, y));
-    scene.update(0.02, &data, &mut caches);
+    // Finish reload from the loader ends it (0x4aa2c0 case 4, then
+    // 0x4b71f0 sending 0x2876 the next tick); the hooked ship lets go
+    // as the loader goes back (its state 6).
+    scene.end_load(a).unwrap();
+    scene.update(crate::clock::TICK, &data, &mut caches);
     assert!(scene.load_link(b).is_none());
+    for _ in 0..100 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert!(ship(&scene, a).load_run.is_none() && ship(&scene, a).task.is_none());
+    assert!(ship(&scene, b).grapple.is_none());
 }
 
 /// A loader within reach of a ship that takes no contact waits in state 1
@@ -7816,7 +7947,10 @@ fn load_waits_for_a_ship_taking_contact() {
     assert!(scene.objects[i].ship.as_ref().unwrap().task.is_some());
     scene.objects[kb].ship.as_mut().unwrap().build = None;
     scene.run_closing(&data, &mut caches);
-    assert!(scene.load_link(a).is_some_and(|l| l.other == b));
+    // The hook thrown (0x4b84b0 returning 1: state 7).
+    let r = scene.objects[i].ship.as_ref().unwrap().load_run.unwrap();
+    assert_eq!(r.stage, crate::objects::LoadStage::Hook);
+    run_until_linked(&mut scene, &data, &mut caches, a, b);
 }
 
 /// A ship sent to reload sails alongside its port first and is taken up
@@ -8423,6 +8557,7 @@ fn worn_units_are_mended() {
         u[6] = vec![50, 100];
         u
     });
+    reload_beside(&mut scene, &data, &mut caches, ship, dock);
     let amber = scene.amber;
     scene
         .apply(&Order::RepairStock { workshop }, &data, &mut caches)
@@ -8433,7 +8568,6 @@ fn worn_units_are_mended() {
     scene.order_repair_stock(workshop).unwrap();
     assert_eq!(amber - scene.amber, 70);
     // No unit goes ashore meanwhile.
-    reload_beside(&mut scene, &data, &mut caches, ship, dock);
     assert!(scene
         .transfer(ship, site, Cargo::Unit(0, 0), &data, &mut caches)
         .is_err());

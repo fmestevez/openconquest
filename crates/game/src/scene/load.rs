@@ -25,7 +25,7 @@ use crate::economy::{DOCK, PORT, SETTLEMENT, SHIPYARD, TOWN};
 const FORTS: std::ops::RangeInclusive<u32> = 0x34..=0x36;
 /// Treasures a fort can store (0x5c1094 by class, through 0x424af0).
 const FORT_STORE: usize = 1;
-use crate::objects::{self, Caches, Resource, Task, Treasure};
+use crate::objects::{self, Caches, LoadContact, LoadStage, Resource, Task, Treasure};
 
 /// Entry flags (the list entries' word at +6, 0x43bfe0, 0x4e5e40,
 /// 0x4f9520): nothing there (dimmed), something there, a group to open,
@@ -307,9 +307,9 @@ impl Scene {
         self.loads.push(LoadLink { ship, other });
     }
 
-    /// Links (taken up at the contact, `Scene::load_tick`) end as
-    /// either side sails off, falls or drifts apart (0x4b4401: the contact
-    /// ends with message 0x2876).
+    /// Links end as either side is gone or falls; a ship's link is
+    /// otherwise ended by its run (`Scene::run_load_runs`: state 4 left,
+    /// 0x2876), a settlement's and its fort's only at Finish reload.
     pub(super) fn run_loads(&mut self) {
         let keep: Vec<bool> = self
             .loads
@@ -319,22 +319,14 @@ impl Scene {
                 else {
                     return false;
                 };
-                let still = |k: usize| {
-                    self.objects[k]
-                        .ship
-                        .as_ref()
-                        .is_none_or(|s| s.path.is_empty() && s.task.is_none())
-                };
                 let standing = |k: usize| {
                     self.objects[k].owner.is_some()
                         && self.objects[k].combat.as_ref().is_none_or(|c| c.hull > 0.0)
                 };
-                // A settlement and its fort have no contact to lose: they
-                // part only at Finish reload (or when one falls).
                 if self.objects[i].ship.is_none() {
                     return standing(i) && standing(t);
                 }
-                still(i) && still(t) && standing(t) && self.alongside(i, t)
+                true
             })
             .collect();
         let mut k = 0;
@@ -682,6 +674,42 @@ impl Scene {
         let i = self.object_index(id).ok_or("No such object")?;
         if !self.is_own(&self.objects[i]) {
             return Err("Not yours".into());
+        }
+        // The ship selected: 0xc45b -> 0x4bc750 -> 0x4aa2c0 case 4 on a
+        // linked loader: released (`+0x6e5` 4), and the next tick it sends
+        // 0x2876 and raises its walkway.
+        if let Some(r) = self.objects[i]
+            .ship
+            .as_mut()
+            .and_then(|s| s.load_run.as_mut())
+            .filter(|r| r.stage == LoadStage::Linked)
+        {
+            r.released = true;
+            return Ok(());
+        }
+        // The building selected (0x4e7640, a fort's 0x419f80 alike, on
+        // 0xc45b with `+0x104` set): 0x2876 to its ship, which frees its
+        // contact (0x4dd3bc -> 0x4e06a0, no 0xcb8), its `+0x1e0` cleared.
+        if self.objects[i].ship.is_none() {
+            let held = self.objects.iter().position(|o| {
+                o.ship
+                    .as_ref()
+                    .and_then(|s| s.load_run)
+                    .is_some_and(|r| r.building && r.target == id && r.stage == LoadStage::Linked)
+            });
+            if let Some(k) = held {
+                self.occupants.retain(|o| o.0 != id);
+                self.loads.retain(|l| l.other != id);
+                let r = self.objects[k]
+                    .ship
+                    .as_mut()
+                    .unwrap()
+                    .load_run
+                    .as_mut()
+                    .unwrap();
+                r.contact = LoadContact::Free;
+                return Ok(());
+            }
         }
         let before = self.loads.len();
         self.loads.retain(|l| l.ship != id && l.other != id);
