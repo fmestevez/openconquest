@@ -1864,9 +1864,10 @@ impl Scene {
     /// all if `+0x10` is still 0. If none was sent and `+8 > 0x5f`, `+8`
     /// = 0 and every ship lying still (`+0x58c` 0) and not heard mended
     /// is sent to `+0x10` again. Then `+8` grows by the update's ticks
-    /// (`game +0xe2`, as the wind's counter). (Not ported here: the
-    /// pass's reports of blows, 0x4a21c0, which the port makes at once,
-    /// `fleet_attacked`; 0x4c42f0 after a join.)
+    /// (`game +0xe2`, as the wind's counter). A join heard is then sent
+    /// the group's three (0x4c42f0 at 0x4cde70, queued), whether or not it
+    /// was sent to a dock. (Not ported here: the pass's reports of blows,
+    /// 0x4a21c0, which the port makes at once, `fleet_attacked`.)
     fn run_repair_orders(&mut self) {
         for k in 0..self.brain.as_ref().unwrap().fleets.len() {
             if self.brain.as_ref().unwrap().fleets[k].repair.is_none() {
@@ -1888,6 +1889,18 @@ impl Scene {
                     self.repair_send(id, dock);
                     sent += 1;
                 }
+                // Then the group's behaviour, sent or not (0x4cde70; the
+                // zeroes when never given).
+                let (players, classes, third) = self.brain.as_ref().unwrap().fleets[k]
+                    .behaviour
+                    .unwrap_or((0, 0, 0));
+                self.post(super::Order::BehaviourCommand {
+                    ship: id,
+                    sub: 1,
+                    players,
+                    classes,
+                    third,
+                });
             }
             let order = self.brain.as_ref().unwrap().fleets[k]
                 .repair

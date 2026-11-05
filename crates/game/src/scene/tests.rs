@@ -10546,6 +10546,8 @@ fn repair_orders_as_the_original() {
     assert!(scene.brain.as_ref().unwrap().fleets[4].ships.contains(&id));
     let i = scene.object_index(id).unwrap();
     assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
+    scene.brain.as_mut().unwrap().fleets[4].behaviour = Some((0x10020, 0x3ffff, u32::MAX));
+    scene.objects[i].ship.as_mut().unwrap().behaviour = crate::objects::Behaviour::default();
     // Heard at the order's next tick.
     scene.update(crate::clock::TICK, &data, &mut caches);
     let i = scene.object_index(id).unwrap();
@@ -10553,6 +10555,10 @@ fn repair_orders_as_the_original() {
         scene.objects[i].ship.as_ref().unwrap().task,
         Some(Task::Repair { dock, sell: false })
     );
+    // Then the group's three (0x4cde70), delivered with the dock's.
+    let got = scene.objects[i].ship.as_ref().unwrap().behaviour;
+    assert!(got.guard && got.ram && got.board);
+    assert_eq!((got.players, got.classes), (0x10020, 0x3ffff));
     assert_eq!(
         scene.brain.as_ref().unwrap().fleets[4]
             .repair

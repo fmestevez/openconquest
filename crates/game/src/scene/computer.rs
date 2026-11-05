@@ -1164,7 +1164,9 @@ impl Scene {
             match class {
                 // A new settlement (0x5d95 case 0).
                 SETTLEMENT | TOWN => self.new_base(ai, i),
-                0x34..=0x36 => ai.flotillas[ai.forts].ships.push(id),
+                // 0x488bd8: 0x484000 -> 0x483fb0, a join (notice 300 once
+                // the flotilla has its block).
+                0x34..=0x36 => ai.join(ai.forts, id),
                 _ => {
                     // A building of a base: its zones and area again.
                     if let Some(b) = self.base_near(ai, i) {
@@ -1561,8 +1563,9 @@ impl Scene {
     /// the computer's tick; the original's navy reads them at its own).
     /// A ship still in it and the block the same: the gather zone hears it
     /// (0x4c9e30, which sends the group's behaviour); the guard (0x4d1ea0),
-    /// founding (0x4cba10), dock (0x4db110) and treasure (0x4da0a0)
-    /// blocks send it `#` sub 1 with the group's three. (The move's and
+    /// founding (0x4cba10), dock (0x4db110), treasure (0x4da0a0) and
+    /// forts' 0xd2 (0x4dc2a0) blocks send it `#` sub 1 with the group's
+    /// three. (The move's and
     /// the attack's are their passes', `flotilla_move_pass`,
     /// `attack_pass`.)
     fn read_joins(&mut self, ai: &mut Computer, f: usize) {
@@ -1874,6 +1877,19 @@ impl Scene {
     fn flotilla_turn(&mut self, ai: &mut Computer, f: usize, now: u32) {
         let role = ai.flotillas[f].role;
         if role == FORTS {
+            // 0x482950, letter 0: on its first turn (`+0x1c` 0) order 0xd2
+            // (0x482f10 -> 0x4dc320: its block {0xd2} made by 0x4dc240,
+            // so 0x4a1150 sends every fort the group's three); then only
+            // its turn's time kept (`+0x18` = now once `+0x14 + +0x18`
+            // is reached). Its block's notices: 300's `#` (0x4dc2a0,
+            // `read_joins`), the others dropped.
+            let fl = &mut ai.flotillas[f];
+            if !fl.started {
+                fl.started = true;
+                self.new_block(ai, f, 0xd2);
+            } else if fl.last + fl.period <= now {
+                fl.last = now;
+            }
             return;
         }
         if role == COMMANDER {
@@ -9003,6 +9019,65 @@ mod tests {
                 kinds: u32::MAX,
             }
         );
+    }
+
+    /// The forts' flotilla's first turn gives it order 0xd2 (0x482950 ->
+    /// 0x482f10): the new block sends every fort the group's three
+    /// (0x4a1150 -> 0x4c5b30); a fort joining it later posts 300, whose
+    /// case sends the three to it (0x4dc2a0); a second turn sends nothing.
+    #[test]
+    fn computer_forts_block_0xd2() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+        scene.ticks = super::super::order::HOLD;
+        let forts: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| matches!(scene.objects[i].class, ObjectClass::Building(0x34..=0x36)))
+            .take(2)
+            .collect();
+        assert_eq!(forts.len(), 2);
+        let mut ai = Computer {
+            owner: (5, 0),
+            ..Default::default()
+        };
+        let f = ai.add_flotilla(FORTS, 0);
+        ai.forts = f;
+        let ids: Vec<u32> = forts.iter().map(|&i| scene.objects[i].id).collect();
+        for &i in &forts {
+            scene.objects[i].owner = Some(ai.owner);
+            scene.objects[i].combat.as_mut().unwrap().fire.cease();
+        }
+        let at_will = |scene: &Scene, k: usize| {
+            scene.objects[forts[k]]
+                .combat
+                .as_ref()
+                .unwrap()
+                .fire
+                .at_will
+        };
+        ai.flotillas[f].ships.push(ids[0]);
+        scene.flotilla_turn(&mut ai, f, 0);
+        assert_eq!(ai.flotillas[f].block, 0xd2);
+        scene.deliver(&data, &mut caches);
+        assert!(at_will(&scene, 0));
+        // A fort joins: heard at the navy's tick.
+        ai.join(f, ids[1]);
+        assert_eq!(ai.flotillas[f].joined, [(ids[1], 0xd2, 300, 0)]);
+        scene.read_joins(&mut ai, f);
+        scene.deliver(&data, &mut caches);
+        assert!(at_will(&scene, 1));
+        // Its next turns send nothing.
+        scene.objects[forts[0]]
+            .combat
+            .as_mut()
+            .unwrap()
+            .fire
+            .cease();
+        scene.flotilla_turn(&mut ai, f, 1000);
+        scene.deliver(&data, &mut caches);
+        assert!(!at_will(&scene, 0));
     }
 
     #[test]

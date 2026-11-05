@@ -7791,7 +7791,7 @@ three when the group gets a new task block (below, 0x4c5b30) and, joined
 (0x483fb0: 0x4a0480 op 2, notice 300 by 0x4a1340 when the group has a
 block, `+0x2d`), from the block's case 300: guard 0x4d1ea0, attack
 (0x70 / 0x21) 0x4d6960, founding 0x4cba10, dock 0x4db110, treasure
-0x4da0a0, the gather zone 0x4c9e30, the move 0x4cc6a0 (only a join
+0x4da0a0, the forts' 0xd2 0x4dc2a0 (a fort joining), the gather zone 0x4c9e30, the move 0x4cc6a0 (only a join
 0x4cc650 sends to the order's cell). Ported (computer.rs
 `flotilla_behave`, `new_block`, `read_joins`): every site, the blocks'
 sends, the joins' (read at the computer's tick, not the navy's). The
@@ -8382,10 +8382,50 @@ group's `+0x31` list with no class test, and the fort's case 0x23
 the classes (`+0x490`) and the kinds (`+0x494`), sets every unit group
 at will (0x4469a0) and `+0x498 = 0` (ported: `Scene::fort_command`).
 The computers' attack zone's (0x4d6960's join, 0x4d6cd0's pass) and
-the human's attack zone's (0x49da43) are ported (above). Not ported:
-the other fleet orders' calls of 0x4c42f0 (0x4c449b, 0x4cbcb7, 0x4cde70, 0x4cf296,
-0x4d02bb, 0x4d1f8a, 0x4d4f84, 0x4d7966, 0x4d8185, 0x4d8c94, 0x4da1e2,
-0x4db1ec, 0x4dc2fa; not read).
+the human's attack zone's (0x49da43) are ported (above).
+
+The other calls of 0x4c42f0. The fleets' tick 0x4c4f40 runs a block by
+its kind and second word: 100/1 0x4ccd80 (move), 100/2 0x4cf550 (its
+notices 0x4cf0b0; the waypoint move, maker 0x4cf2c0), 0x6e/0x29 0x4d3b30
+(guard, notices 0x4d1ea0), 0x70/0x20 0x4d61d0 (the human's attack,
+0x4d4e50), 0x70/0x21 0x4d6cd0 (the computers' attack zone), 0x74/0x15
+0x4d0650 (the fleet attack task, 0x4d0210), 0x78/0x3d 0x4ca8d0 (gather),
+0x82/0x51 0x4ce140 (repair, 0x4cdc00), 0x8c/0x47 0x4cbe70 (founding,
+0x4cba10), 0xa0/0xb 0x4d91a0 (0x4d8b90), 0xaa 0x4d7b50 (0x4d7770),
+0xb4/0x65 0x4d8330 (0x4d8030), 0xbe 0x4da6a0 (treasure, 0x4da0a0), 200
+0x4dbd90 (dock, 0x4db110), 0xd2 0x4dc3a0 (0x4dc2a0); then a block with
+`+0x5d` set is ended (0x4a1c60). Every one of the calls below but the
+first is its block's notice 300 with the ship in the group (0x4cc590),
+after the case's own work: `#` sub 1 with the group's `+0x19`, `+0x1d`,
+`+0x21`. 0x4cbcb7 founding (after 0x4cb1a0), 0x4cde70 repair (after the
+dock send or none), 0x4cf296 the waypoint move, 0x4d02bb the fleet attack
+task (after 0x4cfad0 / 0x4cfe40), 0x4d1f8a guard (after 0x4d1a50 or
+0x4d1080 by block `+0x24`), 0x4d4f84 the human's attack, 0x4d7966 0xaa,
+0x4d8185 0xb4, 0x4d8c94 0xa0, 0x4da1e2 treasure, 0x4db1ec dock, 0x4dc2fa
+0xd2 (whose 300 does nothing else; its other notices are dropped).
+0x4c449b is 0x4c4410, which order 0x72 with first field 100 runs before
+0x4c4350 (0x4a09d0 case 0x72): group `+0x14`-`+0x24` zeroed and every
+member sent sub 2 `{0, 0, 0}`. It never runs: the only senders of 0x72
+(0x4a09d0's two `push 0x72` sites) are the brains' 0x4797e0, whose first
+field is its p3, 0 at all 165 sites, and the computers' 0x482eb0, `p2 ?
+0 : 100`, p2 1 at all 25 sites. Order 0xd2 is sent only by the forts'
+flotilla (role 1, 0x482950 letter 0): on its first turn (`+0x1c` 0, set
+to 1) 0x482f10 sends 0xd2 `{0}` (0x4dc320: a block of another kind
+ended; none, 0x4dc240 makes `{0xd2}`, 0x65 bytes zeroed, and 0x4a1150
+sends every fort the group's three; one of its kind zeroed, kind kept);
+later turns only keep its time (`+0x18` = now once `+0x14 + +0x18` is
+reached). A new fort joins it by 0x484000 -> 0x483fb0 (0x488bd8, the
+building's news; 0x487326 at the setup), a join posting 300. Orders 0xa0,
+0xaa, 0xb4 and 100/2 have no sender through 0x4a09d0 (no `push` of their
+codes before it; not read: other paths). Ported: the repair's
+(`run_repair_orders`, brains), the forts' block 0xd2 and its 300
+(`flotilla_turn`, `read_joins`; a new fort through `Computer::join`), and,
+before, the computers' guard, founding, treasure and dock, the human's
+attack. Not ported: the brains' founding (0x8c) and treasure (0xbe)
+blocks hear no notices in the port (no pass), so their 300's `#` is not
+sent; the fleet attack task's (the port keeps it per ship, no group: see
+"A ship's order at a jam"); the waypoint move, 0xa0, 0xaa, 0xb4 (not in
+the port).
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
 about the base's town, from 4 cells and 4 more a time, that holds a
