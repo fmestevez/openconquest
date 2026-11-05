@@ -924,6 +924,9 @@ pub struct App {
     /// The original mouse's right button stepping through the pointers:
     /// what the pointer was over, and how many steps on.
     cycle: Cell<(Option<HoverKey>, usize)>,
+    /// The pointer last shown: the original keeps it over another's object
+    /// with nothing selected (0x5175b0).
+    last_pointer: Cell<(crate::cursor::Pointer, bool)>,
     /// The object info last shown in the strip below the view (kept over
     /// what shows none, as 0x516c10 does).
     shown_info: Cell<Option<crate::object_info::ObjectInfo>>,
@@ -1222,6 +1225,7 @@ impl App {
             drag_from: None,
             right_press: None,
             cycle: Cell::new((None, 0)),
+            last_pointer: Cell::new((crate::cursor::Pointer::Standard, false)),
             shown_info: Cell::new(None),
             minimap_drag: false,
             selected: None,
@@ -6444,6 +6448,13 @@ impl App {
             };
         match target {
             Some(o) if kept_own(o) => (P::Own, false),
+            // With nothing selected (`[game+0x3221]` 0) 0x5175b0 jumps
+            // over another's object straight to its end (0x517a16): no
+            // new pointer, the one shown stays. The modern mouse, whose
+            // click selects any object for its info, shows the select.
+            Some(_) if self.selected.is_none() && !self.settings.modern_mouse => {
+                self.last_pointer.get()
+            }
             Some(o) if o.combat.is_some() || o.deposit.is_some() => (P::Select, false),
             _ => (P::Standard, false),
         }
@@ -6539,12 +6550,15 @@ impl App {
     /// has stepped to.
     fn pointer(&self, pos: PhysicalPosition<f64>) -> (crate::cursor::Pointer, bool) {
         let modes = self.pointer_modes(pos);
-        if self.settings.modern_mouse || modes.len() == 1 {
-            return modes[0];
-        }
-        let (key, steps) = self.cycle.get();
-        let steps = if key == self.hover_key(pos) { steps } else { 0 };
-        modes[steps % modes.len()]
+        let shown = if self.settings.modern_mouse || modes.len() == 1 {
+            modes[0]
+        } else {
+            let (key, steps) = self.cycle.get();
+            let steps = if key == self.hover_key(pos) { steps } else { 0 };
+            modes[steps % modes.len()]
+        };
+        self.last_pointer.set(shown);
+        shown
     }
 
     /// The original's right button: puts back what is carried, drops a
@@ -8665,6 +8679,68 @@ mod custom_tests {
         app.update(0.0);
         assert_eq!(app.menu, Some(MenuState::Main));
         assert!(app.scene.outcome.is_none());
+    }
+
+    /// The pointer with nothing selected (0x5175b0, `[game+0x3221]` 0):
+    /// over nothing mode 0, over an own object 5, over another's object
+    /// no new pointer, the one shown before stays (0x517a16).
+    #[test]
+    fn the_pointer_stays_over_anothers_object() {
+        use crate::cursor::Pointer as P;
+        let Some(mut app) = app() else {
+            return;
+        };
+        show(&mut app, "battle01");
+        let state = app.menu.unwrap();
+        app.menu_action(state, "Start");
+        assert_eq!(app.menu, None);
+        app.selected = None;
+        app.scene.fog = false;
+        let human = app.scene.human.unwrap();
+        let me = Some((human.nation, human.slot));
+        let other = |app: &App, id: u32| {
+            app.scene
+                .object_index(id)
+                .is_some_and(|i| app.scene.kept_owner(&app.scene.objects[i]) != me)
+        };
+        // A place in the view centred on `(x, y)` where `pick` holds.
+        let find = |app: &mut App, (x, y): (f32, f32), pick: &dyn Fn(&App, Option<u32>) -> bool| {
+            app.camera.x = (x - 300.0).max(0.0);
+            app.camera.y = (y - 200.0).max(0.0);
+            (0..200 * 150)
+                .map(|k| PhysicalPosition::new((k / 150) as f64 * 4.0, (k % 150) as f64 * 4.0))
+                .find(|&p| app.view_world(p).is_some() && pick(app, app.object_at(p)))
+        };
+        let at = |app: &App, f: &dyn Fn(&crate::objects::MapObject) -> bool| {
+            let o = app.scene.objects.iter().find(|o| f(o)).unwrap();
+            (o.x, o.y)
+        };
+        let mine = at(&app, &|o| o.owner == me && o.combat.is_some());
+        let theirs_at = at(&app, &|o| o.owner.is_some() && o.owner != me);
+        let own = find(&mut app, mine, &|app, id| {
+            id.is_some_and(|id| !other(app, id))
+        })
+        .unwrap();
+        let bare = find(&mut app, mine, &|_, id| id.is_none()).unwrap();
+        let theirs = find(&mut app, theirs_at, &|app, id| {
+            id.is_some_and(|id| other(app, id))
+        })
+        .expect("another's object in view");
+        let view = |app: &mut App, (x, y): (f32, f32)| {
+            app.camera.x = (x - 300.0).max(0.0);
+            app.camera.y = (y - 200.0).max(0.0);
+        };
+        view(&mut app, mine);
+        assert_eq!(app.pointer(bare), (P::Standard, false));
+        view(&mut app, theirs_at);
+        assert_eq!(app.pointer(theirs), (P::Standard, false));
+        view(&mut app, mine);
+        assert_eq!(app.pointer(own), (P::Own, false));
+        view(&mut app, theirs_at);
+        assert_eq!(app.pointer(theirs), (P::Own, false));
+        // The modern mouse selects any object for its info.
+        app.settings.modern_mouse = true;
+        assert_eq!(app.pointer(theirs).0, P::Select);
     }
 
     /// The connect screen's name edit (_sedit.cpp): the caret starts at

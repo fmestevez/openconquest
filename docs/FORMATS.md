@@ -6893,7 +6893,29 @@ the info's life 1 for ruins (`object_info::of`); tested on battle01.
 A ship's pointer over ruins: own ones the own pointer, an enemy's the
 attack (greyed unarmed), stepping as at a standing enemy
 (`Scene::ruins_enemy`, `App::default_pointer`, `App::pointer_modes`);
-not ported: own port and dock ruins by class (0x4e4680, 0x4e4630).
+The answer's word `+0x1a` is a mask of modes: 0x5175b0 shows, when it
+is not 0 (0x4000 is the grey, taken off), the mode of its lowest bit
+(bits 0-13: 5, 7, 9, 8, 0xa, 0xb, 0xf, 0xd, 0xc, 1, 4, 2, 3, 0x14), its
+`+0x18` only when the mask is 0. For an own target (0x4dd486, no state
+test): port 0x39 mask 1 | 0x4e4680 (0x180 for a ship whose `+0x25a` is 0
+or 1 with a byte of `+0x47f`-`+0x481`, else 0x100); dock 0x3b 0x101 |
+0x4e4630 (0x40 with `+0x261` bit 2, unless `+0x271` is 0x4ac110's answer
+and 0x4b8cb0 true); a class whose 0x50e600 is 0xc8 0x101 if
+0x4e6700(0x1f, 0) allows, else mode 5; 0x3a and forts 0x101; else mode
+5. So own port, dock, yard and fort ruins offer, as standing ones, own
+first, then by the right button modes 0xf, 0xd and 0xc (reload). Not ported: those modes
+over own ruins (the port's `pointer_modes` offers them only over a
+standing building), and the orders they send at ruins (the ship's
+0x4e2ba0 case 0x1f -> message 0x10 `{3, id}` and its look-up of a
+fallen target) not decoded.
+
+The pointer with nothing selected (0x5175b0, `[game+0x3221]` 0): over
+no object mode 0; over an object whose `+0x57` is 1 and `+0x54 /
++0x55` the viewer's mode 5; over any other object it jumps to its end
+(0x517a16) and sets no pointer: the one shown stays. The port keeps the
+last pointer shown (`App::last_pointer`) there with the original mouse;
+the modern mouse, whose click selects any object, shows the select
+pointer. Tested on battle01.
 
 The attack order at ruins. The click's order 0x16 `{id, 7}`
 (0x5180e0 mode 8 -> the navy -> 0x4cfc90, 0x520cc0) reaches the ship's
@@ -6932,13 +6954,24 @@ The 19 building vtables (holding 0x423520 at +0xc): 11 have 0x423a00,
 which only sets slot 0 to the cancel (0x102) for the main menu in state
 0 or while mended (`+0x10c`), and clears the enabled bits under `+0x144`:
 in state 2 an empty menu, as the port's (`commands::main_menu`, the
-ruins not `is_own`). Not decoded: the other eight, each testing `+0xa4`:
-0x4164e0 (vtable 0x5957cc; its upgrade-to-dock slot is gated by class
-0x3b in state 0 and 0x3a in state 1 only, so another class's ruins may
-reach it), 0x417ff0 (0x595938), 0x430f90 (0x596afc), 0x433e60
-(0x596c1c), 0x4361c0 (0x596d04), 0x437de0 (0x596e04), 0x438b80
-(0x596f04) and the town's 0x43c740 (0x597024); which classes hold those
-vtables is not read.
+ruins not `is_own`). The other eight (vtable, its constructor's store,
+class) fill nothing of their own outside state 1 (the town's also
+class 0x33 in state 0): the yards' 0x4164e0 (0x5957c0, 0x41629a,
+classes 0x3a / 0x3b: its berth slots need state 1, the upgrade slot
+class 0x3b in state 0 or 0x3a in state 1), then 0x423a00 in state 2;
+the fort's 0x417ff0 (0x59592c), 0x423a00 unless mended (`+0x10c`, job
+`+0x110` 0xff); the school's 0x430f90 (0x596af0), the smithy's 0x433e60
+(0x596c10) and the studio's 0x4361c0 (0x596cf8), 0x423a00 unless busy
+(`+0x10c`; the smithy and studio only with `+0x144` 0 and, the smithy,
+job 1-3); the temples' 0x437de0 (0x596df8) and 0x438b80 (0x596ef8),
+0x423a00 only when not busy; the town's 0x43c740 (0x597018), 0x423a00
+in state 2 only with `+0x144`. So a fallen building's menu is empty but
+for 0x423a00's cancel (0x102 in slot 0), which needs `+0x10c` set: the
+fall (0x423d60 on 0x138b) does not clear it (its vt+0x38, 0x422e30,
+0x4e7f90 for yards, 0x43bd60 for the town, redraws the picture), so a
+building busy at its fall would offer the cancel in its ruins. Not
+decoded: whether anything clears `+0x10c` in state 2 and what the
+cancel does there; the port shows ruins no menu (`main_menu`).
 
 The fall's rubble is a terrain tile on map layer 5. For each cell i of
 the site (`+0x56`, 1 or 4: x + i % 2, y + i / 2) two draws of the
