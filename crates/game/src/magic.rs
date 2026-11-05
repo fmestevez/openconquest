@@ -239,15 +239,6 @@ pub fn fx_lightning(water: bool) -> &'static str {
         "LTSPR_2"
     }
 }
-/// Protection auras, for small and large ships.
-pub fn fx_protection(spell: Spell, large: bool) -> String {
-    let kind = if spell == Spell::ProtectWeapons {
-        'W'
-    } else {
-        'M'
-    };
-    format!("PROT{kind}SPR_{}", if large { 128 } else { 64 })
-}
 
 /// Command to learn the next spell.
 pub const GET_MAGIC: Command = Command(0x54);

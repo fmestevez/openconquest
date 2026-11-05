@@ -307,7 +307,8 @@ pub fn draw_objects(
                 draw(frame, layers, x, y);
             }
         }
-        // Its banner, from the picture's top left.
+        // Its banner, from the picture's top left; limed, remapped as the
+        // picture (0x425990 at 0x4263c6: 0x50df60 on layer 1 too).
         if let (Some((flags, dx, dy)), Some(first), true) = (
             &obj.banner,
             obj.frame_at(time_ms).first(),
@@ -327,7 +328,7 @@ pub fn draw_objects(
                     left,
                     top,
                     false,
-                    None,
+                    limed,
                     mask(flag),
                 );
             }
@@ -335,6 +336,9 @@ pub fn draw_objects(
         // A building's shields (layers 0xc and 0xd, depth the picture's
         // less 4 and 5: over its fire and banner), from their top left;
         // kind-0 sprites, ghosted or hidden with the phantom as the rest.
+        // A ship's (layers 8 and 7, depth both the hull's less 0x4a: over
+        // the rest of the ship), likewise (0x4e1bb0 -> 0x4df380); neither
+        // is remapped by the lime or the stone.
         for (layers, left, top) in scene.building_shields_on(obj.id) {
             for l in layers.iter().filter(|_| !hidden) {
                 draw_image_ghosted(

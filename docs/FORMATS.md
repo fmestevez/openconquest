@@ -998,14 +998,52 @@ frame one size. The hero's house (0x420fd0) clears `+0x180` / `+0x160`
 by 0x419ba0 / 0x40eba0, which make no shield sprites (the strings'
 only other users are the ships', 0x4e0f30 and 0x4e1160); castles
 (0x410ca0 through 0x427f50), lairs (0x414f00) and the rest run 0x425990.
-The shields are not remapped by the lime (its 0x50df60 in 0x425990 is
-on layers 0 and 1 only). The port: `scene/shields.rs`, stepped in
+The shields are not remapped by the lime: 0x425990 remaps layers 0 and
+1 only, once when limed (`+0x148` 0 -> 1, 0x4263a8-0x4263cf: the
+picture if `+0x7c` is made, the banner if `+0xd8` is, both through
+0x5c1758 when `+0x1c4` is set, which the lime blow 0x42405d sets to the
+tick + its length, else 0x5c1558) and back to none when the lime is
+out. The port: `scene/shields.rs`, stepped in
 `Scene::tick_building_statuses` before each shield's end and drawn over
 the building's fire and banner, the magic shield's then the weapon
 shield's (depths less 4 and 5), ghosted or hidden with the phantom;
-saves do not keep the sprites' frames and times. A ship's shields keep
-the port's own aura (the ships' sprites, 0x4e0f30 / 0x4e1160, not
-decoded here).
+saves do not keep the sprites' frames and times. The banner is drawn
+limed as the picture (through 0x5c1758; the stare's `+0x1c4`, so
+whether a stared building takes 0x5c1558, not read).
+
+A ship's shields (ship.c): states `+0x254` (weapon) / `+0x255` (magic),
+0 none, 1 playing out, 2 cast, 3 looping. The casting 0xda9a (0x4de53c
+weapon, 0x4de4c8 magic), with the state below 2: no sprite made, it is
+made (0x4e0e70 / 0x4e10a0: 0x50cbf0 layer 7 / 8 depth 10, the sequence
+0x4e0f30 `PROTWSPR_64` / 0x4e1160 `PROTMSPR_64` whatever the ship,
+frame `+0x45`, delay `+0x7d` and time `+0x81` 0, placed at the hull's
+(`+0x8be`) left - (its w - the hull's w) / 2 and top - (its h - the
+hull's h) / 2 - the hull's h / 4, C division); a sprite still playing
+out goes on from its frame. Then state 2, time `+0x91` / `+0x99` the
+tick and length `+0x95` / `+0x9d` 0, event 0x50e570(5, cell, 0x56 /
+0x57); every casting adds its length. The tick (0x4dc630) ends them by
+0x4dec40 (with the mode `+0x251` at most 2, 0x4def3d-0x4defaf): the
+weapon shield then the magic one, state 2 or 3 with tick - time >=
+length (unsigned) -> state 1, time and length 0; the magic one's end
+writes 0 to the weapon's length `+0x95` instead of its own `+0x9d`, so a
+weapon shield still on ends at the next tick. Then it steps the magic
+sprite (0x4e11a0, 0x4dca36) then the weapon one (0x4e0f70, 0x4dca47),
+each while its state is not 0: with the sprite made and tick - time >
+delay 0, time = tick, 0x50d660 shows frame `+0x45` at the place above
+recomputed (depth the hull's `+0x19`, 0x50d290(0), less 0x4a); then,
+with `[clock+0xe2]` odd (weapon) / not a multiple of 3 (magic) -- 1 in
+single player -- the frame + 1: state 2 or 3, at 45 back to 14 (weapon)
+/ at 42 back to 13 (magic), state 3; state 1, at the count `+0x49` the
+layer is removed (0x4e0f50 / 0x4e1180) and the state 0, so the count's
+last frame is shown only by the step that removes it. The layers go
+through 0x4df380 with the phantom (0x4e1bb0 cases 7, 8), as the hull;
+no stone or lime remap. The save (0x4e12e0) keeps both sprites' frame,
+place, delay and time. The port: `Scene::tick_ship_shields` after the
+buildings' statuses, the same `ShieldSprite`s, drawn after the ship;
+the save keeps no sprite, so a loaded ship's shield remakes its sprite
+at frame 0; the casting's event 0x50e570 is not ported; a treasure's
+shield on a ship goes through the same casting (its own route not
+read).
 
 The pointer still picks a hidden phantom ship or building: 0x49a580
 asks each occupant's vt+8, the ship's 0x4e06c0 (its hull sprite's rect

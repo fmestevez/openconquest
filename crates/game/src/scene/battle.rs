@@ -2080,39 +2080,6 @@ impl Scene {
         }
     }
 
-    /// Loops the animation `name` over object `id` for `seconds`.
-    pub(super) fn spawn_aura(
-        &mut self,
-        data: &GameData,
-        caches: &mut Caches,
-        name: &str,
-        id: u32,
-        seconds: f32,
-    ) {
-        let Some(i) = self.object_index(id) else {
-            return;
-        };
-        let (x, y) = (self.objects[i].x, self.objects[i].y);
-        // A new aura of the same kind replaces the old one.
-        self.effects
-            .retain(|fx| fx.follow != Some(id) || fx.life_ms.is_none());
-        match objects::sequence_frames(data, caches, name) {
-            Ok(frames) if !frames.is_empty() => self.effects.push(Effect {
-                x,
-                y,
-                frames,
-                age_ms: 0.0,
-                follow: Some(id),
-                life_ms: Some(seconds * 1000.0),
-                frame_ms: crate::combat::FX_FRAME_MS,
-                tornado: None,
-                site: None,
-            }),
-            Ok(_) => {}
-            Err(e) => eprintln!("could not load effect {name}: {e:#}"),
-        }
-    }
-
     /// A building's timed statuses run out in its tick (LandObj 0x425990
     /// message 0), in this order: the phantom when its start `+0x13c` +
     /// length `+0x140` is below the game tick `+0xde` (0x426071-0x426096);
@@ -2170,12 +2137,11 @@ impl Scene {
     pub(super) fn run_statuses(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         let wrecked: Vec<u32> = Vec::new();
         for o in &mut self.objects {
-            // A building's run out in its tick (`tick_building_statuses`).
+            // A building's run out in its tick (`tick_building_statuses`),
+            // a ship's shields in its (`tick_ship_shields`).
             let Some(c) = o.combat.as_mut().filter(|_| o.ship.is_some()) else {
                 continue;
             };
-            c.protect_weapons = (c.protect_weapons - dt).max(0.0);
-            c.protect_magic = (c.protect_magic - dt).max(0.0);
             c.phantom = (c.phantom - dt).max(0.0);
         }
         for id in wrecked {

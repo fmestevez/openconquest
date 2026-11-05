@@ -114,43 +114,40 @@ impl Scene {
     /// index `t` (which has combat), however it was cast.
     pub(super) fn protect(&mut self, spell: Spell, t: usize, data: &GameData, caches: &mut Caches) {
         let target = self.objects[t].id;
-        let large = self.objects[t]
-            .ship
-            .as_ref()
-            .is_none_or(|s| matches!(s.kind, 2..=5 | 9 | 11));
         let (x, y) = (self.objects[t].x, self.objects[t].y);
         let ship = self.objects[t].ship.is_some();
+        let weapon = spell == Spell::ProtectWeapons;
+        // Cast while off, the shield's sprite is made or restarted
+        // (`shields`; LandObj 0xda9a, the ship's 0x4de4c8 / 0x4de53c).
+        let c = self.objects[t].combat.as_ref().unwrap();
+        let off = match spell {
+            Spell::ProtectWeapons => c.weapon_span.is_none(),
+            Spell::ProtectMagic => c.magic_span.is_none(),
+            _ => c.phantom_span.is_none(),
+        };
+        if off && spell != Spell::Phantom {
+            if ship {
+                self.ship_shield_cast(t, weapon, data, caches);
+            } else {
+                self.shield_cast(target, weapon);
+            }
+        }
         let now = self.ticks;
         let c = self.objects[t].combat.as_mut().unwrap();
-        // Casting again adds to the time left; a building's in game ticks
-        // from the first casting (LandObj 0xda97, 0xda9a).
+        // Casting again adds to the length, in game ticks from the first
+        // casting (LandObj 0xda97, 0xda9a; the ship's 0xda9a); a ship's
+        // phantom still a countdown.
         let (left, span) = match spell {
             Spell::ProtectWeapons => (&mut c.protect_weapons, &mut c.weapon_span),
             Spell::ProtectMagic => (&mut c.protect_magic, &mut c.magic_span),
             _ => (&mut c.phantom, &mut c.phantom_span),
         };
-        // Cast while off, a building's shield sprite starts at frame 0
-        // (0xda9a).
-        let off = span.is_none();
-        let left = if ship {
+        if ship && spell == Spell::Phantom {
             *left = left.max(0.0) + magic::PROTECTION_SECONDS;
-            *left
         } else {
             *left = crate::combat::Combatant::extend_span(span, now, magic::PROTECTION_TICKS);
-            span.map_or(0.0, |(start, len)| {
-                crate::clock::ticks((start + len).saturating_sub(now))
-            })
-        };
-        self.sounds.push(("prote1", x, y));
-        if !ship {
-            // A building's shields are drawn by its tick (`shields`).
-            if off && spell != Spell::Phantom {
-                self.shield_cast(target, spell == Spell::ProtectWeapons);
-            }
-        } else if spell != Spell::Phantom {
-            let name = magic::fx_protection(spell, large);
-            self.spawn_aura(data, caches, &name, target, left);
         }
+        self.sounds.push(("prote1", x, y));
     }
 
     /// Casts lightning, a fireball or the view on the map cell `(cx, cy)`.

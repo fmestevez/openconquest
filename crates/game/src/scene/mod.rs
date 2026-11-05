@@ -2623,6 +2623,7 @@ impl Scene {
             self.tick_castles(data, caches);
             self.tick_statuses(data, caches);
             self.tick_building_statuses(data, caches);
+            self.tick_ship_shields(data, caches);
             self.step_ship_fires();
             self.run_computers();
             self.run_brain_lands();

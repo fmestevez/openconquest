@@ -288,13 +288,30 @@ impl Scene {
                         self.messages.push(format!("{name}: {}", s.name()));
                     }
                     Some(s @ (Spell::Phantom | Spell::ProtectWeapons | Spell::ProtectMagic)) => {
+                        let weapon = s == Spell::ProtectWeapons;
+                        let c = self.objects[i].combat.as_ref().unwrap();
+                        let span = if weapon { c.weapon_span } else { c.magic_span };
+                        if s != Spell::Phantom && span.is_none() {
+                            self.ship_shield_cast(i, weapon, data, caches);
+                        }
+                        let now = self.ticks;
                         let c = self.objects[i].combat.as_mut().unwrap();
-                        let left = match s {
-                            Spell::Phantom => &mut c.phantom,
-                            Spell::ProtectWeapons => &mut c.protect_weapons,
-                            _ => &mut c.protect_magic,
+                        let (left, span) = match s {
+                            Spell::Phantom => (&mut c.phantom, None),
+                            Spell::ProtectWeapons => {
+                                (&mut c.protect_weapons, Some(&mut c.weapon_span))
+                            }
+                            _ => (&mut c.protect_magic, Some(&mut c.magic_span)),
                         };
-                        *left = left.max(0.0) + crate::magic::PROTECTION_SECONDS;
+                        // A ship's shields in game ticks (`tick_ship_shields`).
+                        *left = match span {
+                            Some(span) => crate::combat::Combatant::extend_span(
+                                span,
+                                now,
+                                crate::magic::PROTECTION_TICKS,
+                            ),
+                            None => left.max(0.0) + crate::magic::PROTECTION_SECONDS,
+                        };
                         self.messages.push(format!("{name}: {}", s.name()));
                     }
                     _ => {}
