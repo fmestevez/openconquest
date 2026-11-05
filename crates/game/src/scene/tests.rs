@@ -16292,3 +16292,91 @@ fn players_are_at_war_but_with_themselves() {
         }
     }
 }
+
+/// A shot at a land creature or its jam (0x4c0230 asking vt+0xc with the
+/// hit byte): the creature's 0x411bb0, from its place less its picture's
+/// offset (the cyclops' 0x1e, 0x30), a hit its picture's middle with no
+/// draw, a miss a corner by two draws of its own generator; a jam's
+/// 0x415ce0, a hit its cell's middle with two members, its member's
+/// point with one, a miss its cell's corner, none of them drawing; the
+/// pass's shot at a creature flies to its point (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn land_creature_and_jam_aim_points() {
+    let Some((data, mut caches, mut scene, mine, _, _)) = closing_pair(2, 0) else {
+        return;
+    };
+    let m = scene.object_index(mine).unwrap();
+    let own = scene.cell_of_object(m);
+    let cell = (own.0 + 2, own.1);
+    scene.put_walker(super::walkers::NO_LAIR, 0x1f4, cell, &data, &mut caches);
+    scene.put_walker(super::walkers::NO_LAIR, 0x1f4, cell, &data, &mut caches);
+    let (a, b) = (scene.walkers[0].id, scene.walkers[1].id);
+    let jam = scene.jams[0].id;
+    let i = scene.object_index(a).unwrap();
+    let l = &scene.objects[i].frames[0][0];
+    let (w, h) = (l.image.width as i32, l.image.height as i32);
+    let (px, py) = scene.walkers[0].pos;
+    let seed = |v: u32, n: usize| {
+        let mut r = crate::combat::Rng(v);
+        (0..n).for_each(|_| {
+            r.next();
+        });
+        r.0
+    };
+    // Generator 1 draws 16838, 38526 (both even), then 10113, 50283
+    // (both odd).
+    scene.walkers[0].rng = 1;
+    let middle = (px + w / 2 - 0x1e, py + h / 2 - 0x30);
+    assert_eq!(scene.walker_aim(a, true), Some(middle));
+    assert_eq!(scene.walkers[0].rng, 1);
+    assert_eq!(scene.walker_aim(a, false), Some((px - 0x1e, py - 0x30)));
+    assert_eq!(scene.walkers[0].rng, seed(1, 2));
+    let far = (px + w - 0x1e, py + h - 0x30);
+    assert_eq!(scene.walker_aim(a, false), Some(far));
+    assert_eq!(scene.walkers[0].rng, seed(1, 4));
+    // The jam: two members, then one.
+    scene.walkers[0].rng = 1;
+    let corner = (cell.0 * 64, cell.1 * 64);
+    assert_eq!(
+        scene.jam_aim(jam, true),
+        Some((corner.0 + 32, corner.1 + 32))
+    );
+    assert_eq!(scene.jam_aim(jam, false), Some(corner));
+    scene.jams[0].members.retain(|&x| x != b);
+    assert_eq!(scene.jam_aim(jam, true), Some(middle));
+    assert_eq!(scene.jam_aim(jam, false), Some(corner));
+    assert_eq!(scene.walkers[0].rng, 1);
+    // The pass's shot at the creature flies to its point.
+    let m = scene.object_index(mine).unwrap();
+    scene.objects[m].combat.as_mut().unwrap().weapons = vec![3];
+    let s = scene.objects[m].ship.as_mut().unwrap();
+    s.crew.squads = [0; 3];
+    s.behaviour.aims[1].target = a;
+    let mut seen = [false; 2];
+    for v in 1..40u32 {
+        scene.walkers[0].rng = v;
+        let hit = scene.walker_aim(a, true).unwrap();
+        scene.walkers[0].rng = v;
+        let miss = scene.walker_aim(a, false).unwrap();
+        let after_miss = scene.walkers[0].rng;
+        scene.walkers[0].rng = v;
+        let s = scene.objects[m].ship.as_mut().unwrap();
+        s.items_ready = [false; 12];
+        s.items_ready[3] = true;
+        s.fire_times = [0; 12];
+        s.lcg = Some(v.wrapping_mul(7919));
+        scene.shots.clear();
+        assert_ne!(scene.fire_items(m, 0b10, false, &data, &mut caches), 0);
+        let (to, id, _) = scene.shots[0].bound();
+        assert_eq!(id, a);
+        let to = (to.0 as i32, to.1 as i32);
+        let k = usize::from(to == hit && scene.walkers[0].rng == v);
+        assert!(
+            k == 1 || (to == miss && scene.walkers[0].rng == after_miss),
+            "{v}"
+        );
+        seen[k] = true;
+    }
+    assert!(seen[1]);
+}

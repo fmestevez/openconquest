@@ -393,14 +393,18 @@ impl Scene {
     /// `(x, y, 1, 0, 1)`) is not shot: no shot, no reload, the hit roll
     /// already drawn. A ship's point is 0x4e07c0 (`Scene::ship_aim`), a
     /// building's, castle's or lair's 0x423520 and a harpy nest's 0x41cef0
-    /// (`Scene::building_aim`), each drawing from the target's own
-    /// generator. Returns the positions fired. (Not decoded: a barbarian
-    /// structure's generator, which its handler 0x40ef70 does not seed at
-    /// message 2, and the hero's house's vtable; not ported: the harpy's
-    /// and dragon's 0x41df70, a jam's 0x415ce0, a leviathan's 0x495b40
-    /// and the gorgon's and siren's points: these fly to the target as
-    /// before. A position's target gone, the original's pointer dangles:
-    /// the port skips it.)
+    /// (`Scene::building_aim`), a land creature's 0x411bb0
+    /// (`Scene::walker_aim`), a jam's 0x415ce0 (`Scene::jam_aim`; a jam
+    /// on a list is the jam, the port's shot going to its first member),
+    /// a leviathan's 0x495b40 (`Scene::leviathan_point`), each drawing
+    /// from the target's own generator. Returns the positions fired. (Not
+    /// decoded: a barbarian structure's generator, which its handler
+    /// 0x40ef70 does not seed at message 2, and the hero's house's vtable;
+    /// not ported: the harpy's and dragon's 0x41df70, the gorgon's 0x402da0
+    /// and the siren's 0x4048f0, whose state, frame, picture and generator
+    /// the port's flyers and creatures do not keep: these fly to the
+    /// target as before. A position's target gone, the original's pointer
+    /// dangles: the port skips it.)
     #[allow(clippy::needless_range_loop)]
     pub(super) fn fire_items(
         &mut self,
@@ -424,6 +428,7 @@ impl Scene {
         let flame = self.flame_of(owner) > 0.0;
         let levels = self.levels_of(owner);
         let (mut target, mut family, mut cell) = (None::<usize>, 0u32, (0, 0));
+        let mut jam = None::<u32>;
         let (mut d, mut dist) = ((0, 0), 0);
         let mut fired = 0u8;
         for k in 0..n {
@@ -447,6 +452,11 @@ impl Scene {
                     } else {
                         s.behaviour.aims[k].target
                     };
+                    // A jam on a list is the jam (0x4c0cd0 takes the
+                    // slot's object): the port's shot goes to its first
+                    // member (0x415df0), aimed at the jam's point.
+                    jam = self.jams.iter().find(|j| j.id == id).map(|j| j.id);
+                    let id = jam.and_then(|j| self.jam_first(j)).unwrap_or(id);
                     target = (id != 0).then(|| self.object_index(id)).flatten();
                     let Some(t) = target else {
                         continue;
@@ -500,13 +510,18 @@ impl Scene {
                 }
                 // The target's aim point (vt+0xc, by the hit byte), where
                 // the shot flies: a ship's 0x4e07c0, a building's 0x423520
-                // (a harpy nest's 0x41cef0), a sea monster's 0x493350,
-                // which is not shot, no shot and no reload, when it falls
-                // on the shooter's own picture (vt+8 0x4e06c0 with `(x, y,
-                // 1, 0, 1)`).
+                // (a harpy nest's 0x41cef0), a jam's 0x415ce0, a land
+                // creature's 0x411bb0, a leviathan's 0x495b40, a sea
+                // monster's 0x493350, which is not shot, no shot and no
+                // reload, when it falls on the shooter's own picture (vt+8
+                // 0x4e06c0 with `(x, y, 1, 0, 1)`).
                 let hit = accuracy != 0;
+                let tid = self.objects[t].id;
                 let to = match self.objects[t].class {
+                    _ if jam.is_some() => jam.and_then(|j| self.jam_aim(j, hit)),
+                    _ if self.leviathans.contains_key(&tid) => self.leviathan_point(tid, hit),
                     _ if self.objects[t].ship.is_some() => Some(self.ship_aim(t, hit)),
+                    ObjectClass::Monster(0x1f4..=0x1f6) => self.walker_aim(tid, hit),
                     ObjectClass::Building(_)
                     | ObjectClass::Castle(_)
                     | ObjectClass::CreatureSpawn
@@ -838,8 +853,9 @@ impl Scene {
     /// (0x4bf5f0 at the ship's cell less `cell`, signed) goes on the item's
     /// list (a leviathan, 0x192, only for items 0-4: `i x 0x191 < 0x645`),
     /// with the cell `W x y + x`; the count stops at 49, the 50th entry
-    /// written over.
-    fn list_cell(&mut self, i: usize, k: usize, top: usize, cell: (i32, i32)) {
+    /// written over. A jam's entry is the jam (`jam`; its first member
+    /// `k` only for the tests).
+    fn list_cell(&mut self, i: usize, k: usize, jam: Option<u32>, top: usize, cell: (i32, i32)) {
         let own = self.cell_of_object(i);
         let counts = self.item_counts(i);
         let (me, o) = (&self.objects[i], &self.objects[k]);
@@ -854,7 +870,7 @@ impl Scene {
             return;
         }
         let leviathan = o.record.class_id == 0x192;
-        let (id, w) = (o.id, self.nav.width as i32);
+        let (id, w) = (jam.unwrap_or(o.id), self.nav.width as i32);
         let (ready, marked) = (s.items_ready, s.positions_ready);
         for p in (0..=top).rev() {
             if !marked[p] {
@@ -1014,7 +1030,7 @@ impl Scene {
                 if (Self::side_of(o) == 1 && !player_ok) || !self.look_class(i, k, jam.is_some()) {
                     continue;
                 }
-                self.list_cell(i, k, top, cell);
+                self.list_cell(i, k, jam, top, cell);
             }
             if ramboard && (ready.ram || ready.board) {
                 self.at_will_take(i, k, cell, route, &mut at_will);
@@ -1090,15 +1106,15 @@ impl Scene {
         let (cells, top) = self.look_cells(i, map, false);
         for (cell, held) in cells {
             let (k, jam) = match held {
-                Held::Object(k) => (k, false),
-                Held::Jam(k, _) => (k, true),
+                Held::Object(k) => (k, None),
+                Held::Jam(k, j) => (k, Some(j)),
                 Held::Other => continue,
             };
-            if !self.look_passes(i, k, cell) || !self.look_class(i, k, jam) {
+            if !self.look_passes(i, k, cell) || !self.look_class(i, k, jam.is_some()) {
                 continue;
             }
             if b.guard {
-                self.list_cell(i, k, top, cell);
+                self.list_cell(i, k, jam, top, cell);
             }
             if ramboard && (ready.ram || ready.board) {
                 self.at_will_take(i, k, cell, route, &mut at_will);

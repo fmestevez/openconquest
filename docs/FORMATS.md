@@ -8392,7 +8392,10 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   item ready with a unit aboard reaching the cell (0x4bf5f0, signed) gets
   the object on its list (id and `W x y + x`), a leviathan (0x192) only
   on items 0-4 (`i x 0x191 < 0x645`); the count stops at 49, the 50th
-  entry written over.
+  entry written over. The entry is the slot's object: a jam's is the
+  jam (its first member only for the class test), so the pass's shot
+  from the list aims at the jam's point (0x415ce0); the port's shot
+  goes to its first member.
 - **0x4c0eb0**, state 2 (and the attack's end): guard on, the lists
   cleared (9, 12 for types 8 and 9); over the box without the leviathans'
   slot, each object passing as above with, side 1, its player bit and
@@ -8463,16 +8466,44 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   to a ship's (`Scene::ship_aim`), a building's, castle's, lair's or
   nest's (`Scene::building_aim`) point, each drawn from the target's own
   generator after the hit roll and before the shooter's reload draw
-  (test `item_shot_flies_to_the_targets_aim_point`). A roll that misses
+  (test `item_shot_flies_to_the_targets_aim_point`). A land creature's
+  0x411bb0: from its place `+0xb4 / +0xb8` less its picture's offset
+  `+0xbc / +0xc0` (0x4111b0), a hit its picture's (`+0xb0`) `+0x61 / 2`,
+  `+0x65 / 2`, no draw; a miss `(r1 & 1) +0x61`, `(r2 & 1) +0x65`, two
+  draws of its own generator; clamped to the map. A jam's 0x415ce0 (`+0x74`
+  members, cell `+0x398 / +0x39c`): none, nothing written; a hit with
+  two or more its cell's `64 x + 32`, with one its member's (`+0x7c`)
+  vt+0xc; a miss its cell's `64 x`, no draw. A leviathan's 0x495b40, from
+  its cell `+0xa9 / +0xad` x the map's cell size (`w`, `h`), its own
+  generator: states 0, 5, 6, 0xff `w / 4 + r % (3w / 4 - w / 4 + 1)` and
+  the same down; 1 a hit 0x5bace0[heading `+0x98`] (no draw), a miss a
+  draw's bit `b` then 0x5bad20[heading x 2 + b] `{x, y, mx, my}` (dumped:
+  (0,0,64,40) (0,0,64,40) (39,45,25,19) (0,0,25,19) (0,36,63,28)
+  (0,36,63,28) (41,0,22,20) (0,44,22,20) (0,0,63,36) (0,0,63,36)
+  (0,0,19,23) (45,41,19,23) (0,0,19,63) (0,45,19,63) (0,39,25,25)
+  (42,0,22,17)), `x + r % mx`, `y + r % my`; 2 and 4 a hit (25, 45), a
+  miss `r % 61`, `r % 28`; 3 a hit `16 + r % 17`, `41 + r % 10`, a miss as
+  2's; any other (0, 0), not from the cell. Ported (`Scene::walker_aim`,
+  `Scene::jam_aim`, `Scene::leviathan_point`; tests
+  `land_creature_and_jam_aim_points`, `leviathan_point_is_the_originals`).
+  Decoded, not ported: the harpy's and dragon's 0x41df70 (picture `+0x74`;
+  a hit: the dragon, class 0x1f9, `+0x59 + 0x43`, `+0x5d + 0x3c`; a harpy
+  by state `+0x88`: 0 and 1 0x595ae0 `{x, y}`, 2 0x595ae0[frame `+0x45`],
+  6 0x595ae8[frame], else (0x28, 0x28), from the picture's top left; a
+  miss `(r1 & 1) +0x61`, `(r2 & 1) +0x65`; clamped), the gorgon's 0x402da0
+  (vtable 0x594340, constructor 0x401033; no picture `+0x11c`: its cell
+  `+0x114 / +0x118` x 64 + 32; a hit `20 + r % 21`, `20 + (r & 15)`, a miss
+  `10 + r % 51`, `60 + r % 11`, from the picture's top left) and the
+  siren's 0x4048f0 (vtable 0x594378, constructor 0x40306e; no picture
+  `+0x164`: its cell `+0xbc / +0xc0` x 64 + 32; a hit `30 + (r & 7)` each
+  way, a miss `r % 61`, `40 + r % 24`): the port's flyers, gorgons and
+  sirens keep no such state, frame, picture or generator. A roll that misses
   a building leaves its chance as the hit byte (0x4bf7f0 returns it), so
   only a chance of 0 takes the corner. Not decoded: a barbarian
   structure's generator (its handler 0x40ef70 does not seed `+0x18` at
   message 2 as 0x427f50 does) and the hero's house's vtable (type
-  0x1a6d); not ported: the harpy's and dragon's 0x41df70, the jam's
-  0x415ce0, the leviathan's 0x495b40 (by state `+0x74` with its own
-  generator; the port's `leviathan_aim` has only the hit's showing
-  point) and the gorgon's and siren's (0x1fa, 0x1fd): shots at these fly
-  to the target as before. 0x4c07c0 with no position in
+  0x1a6d); not ported: the harpy's, dragon's, gorgon's and siren's
+  (above): shots at these fly to the target as before. 0x4c07c0 with no position in
   state 3 (its id and player uninitialised; the port does nothing); a
   position's target gone, its pointer dangling (the port skips it);
   0x50ebf0's families with no cell (400 a leviathan, 700, the jam 0x1f7

@@ -177,7 +177,7 @@ impl Scene {
     }
 
     /// The first member of jam `jam` (0x415df0), if the jam is there.
-    fn jam_first(&self, jam: u32) -> Option<u32> {
+    pub(super) fn jam_first(&self, jam: u32) -> Option<u32> {
         self.jams
             .iter()
             .find(|j| j.id == jam)?

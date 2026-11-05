@@ -361,6 +361,54 @@ pub(crate) fn on_walker(scene: &Scene, w: &Walker, x: i32, y: i32) -> bool {
         && (top..top + l.image.height as i32).contains(&y)
 }
 
+impl Scene {
+    /// The point a shot at land creature `id` flies to (its vt+0xc,
+    /// 0x411bb0, by the hit byte): from its place (`+0xb4`, `+0xb8`) less
+    /// its picture's offset (`DRAWN_AT`, `+0xbc` / `+0xc0`), a hit the
+    /// picture's middle (`+0xb0` `+0x61 / 2`, `+0x65 / 2`, no draw), a miss
+    /// a corner by two draws of its own generator (`+0x18`), `(r1 & 1) w`
+    /// then `(r2 & 1) h`; clamped to the map (`0 ..= 64 x width - 1`, the
+    /// same down). `None` for no land creature.
+    pub(super) fn walker_aim(&mut self, id: u32, hit: bool) -> Option<(i32, i32)> {
+        let i = self.object_index(id)?;
+        let k = self.walkers.iter().position(|w| w.id == id)?;
+        let o = &self.objects[i];
+        let (bx, by) = DRAWN_AT[kind_of(o.record.class_id)];
+        let (w, h) = o
+            .frames
+            .first()
+            .and_then(|f| f.first())
+            .map_or((0, 0), |l| (l.image.width as i32, l.image.height as i32));
+        let walker = &mut self.walkers[k];
+        let (x, y) = if hit {
+            (w / 2, h / 2)
+        } else {
+            let x = (walker.draw() & 1) as i32 * w;
+            (x, (walker.draw() & 1) as i32 * h)
+        };
+        let (px, py) = walker.pos;
+        let (mw, mh) = self.map_size();
+        let cap = |v: i32, n: u32| if v < 0 { 0 } else { v.min(n as i32 * 64 - 1) };
+        Some((cap(x - bx + px, mw), cap(y - by + py, mh)))
+    }
+
+    /// The point a shot at jam `jam` flies to (its vt+0xc, 0x415ce0, by
+    /// the hit byte; `+0x74` its members, `+0x398` / `+0x39c` its cell): a
+    /// hit the cell's middle (`64 x + 32`) with two members or more, else
+    /// its member's point (`+0x7c`'s vt+0xc, `Scene::walker_aim`); a miss
+    /// the cell's top left. With no member it writes nothing (the port:
+    /// `None`, as for no jam).
+    pub(super) fn jam_aim(&mut self, jam: u32, hit: bool) -> Option<(i32, i32)> {
+        let j = self.jams.iter().find(|j| j.id == jam)?;
+        let ((cx, cy), first) = (j.cell, *j.members.first()?);
+        match (hit, j.members.len()) {
+            (false, _) => Some((cx << 6, cy << 6)),
+            (true, 1) => self.walker_aim(first, true),
+            (true, _) => Some((cx * 64 + 32, cy * 64 + 32)),
+        }
+    }
+}
+
 /// A land creature's sprite sequence (0x4111b0: `<CLP|MNT|AMZ>SPR_` and
 /// state and heading digits; state 6 has no heading). The amazons' throw
 /// (`AMZSPR_3<h><b>`) takes its variant `b` from a draw.

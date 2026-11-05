@@ -187,6 +187,29 @@ const AIM: [(i32, i32); 8] = [
     (35, 29),
 ];
 
+/// Where a shot that misses it is aimed while it shows itself (0x495b40
+/// without an accuracy, state 1: 0x5bad20 by `heading x 2 + bit`, the
+/// bit of a first draw): the box's left and top from its cell's corner
+/// and the moduli of the draws across and down.
+const MISS: [(i32, i32, u32, u32); 16] = [
+    (0, 0, 64, 40),
+    (0, 0, 64, 40),
+    (39, 45, 25, 19),
+    (0, 0, 25, 19),
+    (0, 36, 63, 28),
+    (0, 36, 63, 28),
+    (41, 0, 22, 20),
+    (0, 44, 22, 20),
+    (0, 0, 63, 36),
+    (0, 0, 63, 36),
+    (0, 0, 19, 23),
+    (45, 41, 19, 23),
+    (0, 0, 19, 63),
+    (0, 45, 19, 63),
+    (0, 39, 25, 25),
+    (42, 0, 22, 17),
+];
+
 /// A shot's blow on it in percent of the shot's power, by its letter
 /// (0x598100, read by 0x4967b0 and 0x498240).
 const SHOT_SHARE: [i32; 12] = [60, 0, 60, 60, 60, 40, 40, 44, 45, 0, 0, 0];
@@ -944,6 +967,49 @@ impl Scene {
         Some((l.cell.0 * t + ax, l.cell.1 * t + ay))
     }
 
+    /// The point a shot at it flies to (its vt+0xc, 0x495b40, by the hit
+    /// byte), from its cell's corner (`+0xa9`, `+0xad` x the map's cell
+    /// size), drawing from its own generator (`+0x18`): under water,
+    /// caught, coming up again or gone (0, 5, 6, 0xff) `w / 4 + r % (3w
+    /// / 4 - w / 4 + 1)` and the same down (`w`, `h` the cell's size);
+    /// showing itself (1) a hit its heading's point (0x5bace0, no draw), a
+    /// miss a draw's bit picking the heading's box (0x5bad20[2 heading +
+    /// bit]) and `left + r % across`, `top + r % down`; rising or
+    /// sinking (2, 4) a hit (25, 45), no draw, a miss `r % 61`, `r % 28`;
+    /// up (3) a hit `16 + r % 17`, `41 + r % 10`, a miss as 2's; any other
+    /// state (0, 0), not from the cell. `None` for no leviathan.
+    pub(super) fn leviathan_point(&mut self, id: u32, hit: bool) -> Option<(i32, i32)> {
+        let l = self.leviathans.get_mut(&id)?;
+        let t = TILE_SIZE as i32;
+        let (x0, y0) = (l.cell.0 * t, l.cell.1 * t);
+        let (dx, dy) = match l.state {
+            UNDER | CAUGHT | RESURFACING | GONE => {
+                let (lo, hi) = (t / 4, t * 3 / 4);
+                let x = l.draw() % (hi - lo + 1) as u32;
+                let y = l.draw() % (hi - lo + 1) as u32;
+                (lo + x as i32, lo + y as i32)
+            }
+            SHOWING if hit => AIM[l.heading as usize % 8],
+            SHOWING => {
+                let bit = (l.draw() & 1) as usize;
+                let (left, top, across, down) = MISS[(l.heading as usize % 8) * 2 + bit];
+                let x = l.draw() % across;
+                (left + x as i32, top + (l.draw() % down) as i32)
+            }
+            RISING | SINKING if hit => (25, 45),
+            UP if hit => {
+                let x = l.draw() % 17;
+                (16 + x as i32, 41 + (l.draw() % 10) as i32)
+            }
+            RISING | UP | SINKING => {
+                let x = l.draw() % 61;
+                (x as i32, (l.draw() % 28) as i32)
+            }
+            _ => return Some((0, 0)),
+        };
+        Some((x0 + dx, y0 + dy))
+    }
+
     /// Its hit test at the world point `(x, y)` (vt+8, 0x495a60): its
     /// picture shown and the point in its rect (the cell's corner, 5
     /// lower but showing itself; the picture's size), then the bit of its
@@ -1030,6 +1096,45 @@ mod tests {
     fn tick(scene: &mut Scene, data: &GameData, caches: &mut Caches) {
         scene.ticks += 1;
         scene.run_leviathans(data, caches);
+    }
+
+    /// A shot's point at it (0x495b40), from its cell (33, 1)'s corner
+    /// (2112, 64), its generator at 1 (draws 16838, 38526, 10113): under
+    /// water the cell's middle half, two draws; showing, a hit its
+    /// heading's point (no draw), a miss the box of the first draw's bit
+    /// (0x5bad20), three draws; rising a hit (25, 45); up a hit `16 + r %
+    /// 17`, `41 + r % 10`; sinking a miss `r % 61`, `r % 28`; state 7 (0,
+    /// 0), no draw (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn leviathan_point_is_the_originals() {
+        let Some((data, mut caches, mut scene, id)) = miss005() else {
+            return;
+        };
+        tick(&mut scene, &data, &mut caches);
+        assert_eq!(scene.leviathans[&id].cell, (33, 1));
+        let after = |n: usize| {
+            let mut r = Rng(1);
+            (0..n).for_each(|_| {
+                r.next();
+            });
+            r.0
+        };
+        for (state, heading, hit, point, draws) in [
+            (UNDER, 0, true, (2112 + 24, 64 + 31), 2),
+            (GONE, 0, false, (2112 + 24, 64 + 31), 2),
+            (SHOWING, 2, true, (2112 + 31, 64 + 15), 0),
+            (SHOWING, 2, false, (2112 + 33, 64 + 41), 3),
+            (SHOWING, 3, false, (2112 + 45, 64 + 13), 3),
+            (RISING, 0, true, (2112 + 25, 64 + 45), 0),
+            (UP, 0, true, (2112 + 24, 64 + 47), 2),
+            (SINKING, 0, false, (2112 + 2, 64 + 26), 2),
+            (7, 0, true, (0, 0), 0),
+        ] {
+            let l = scene.leviathans.get_mut(&id).unwrap();
+            (l.state, l.heading, l.lcg) = (state, heading, 1);
+            assert_eq!(scene.leviathan_point(id, hit), Some(point), "{state} {hit}");
+            assert_eq!(scene.leviathans[&id].lcg, after(draws), "{state} {hit}");
+        }
     }
 
     /// Message 2: its start cell is fields 7, 8 and its bounds that cell
