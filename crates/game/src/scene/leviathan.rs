@@ -142,7 +142,7 @@ impl std::fmt::Debug for Masks {
 /// `WHALE_MSK_<heading>`, `WHALE_M1_MSK` or `WHALE_M2_MSK`, and their
 /// count, the entry's width; each kind 18 named by the prefix and two
 /// digits).
-fn load_masks(data: &GameData, name: &str) -> Masks {
+pub(super) fn load_masks(data: &GameData, name: &str) -> Masks {
     use openconquest_formats::ResourceKind;
     let lib = &data.objects;
     let Some(e) = lib.find(name, ResourceKind::Other(11)) else {

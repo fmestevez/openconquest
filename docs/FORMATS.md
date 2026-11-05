@@ -6153,8 +6153,10 @@ is 1 and it falls (0x138b), put down to no one. The port:
 `Scene::stare_building`. The port: `scene::gorgon`. Not decoded: the treasure's
 own test 0x407950 on pickup. Not ported: tornadoes (0xda96) and reefs or
 whirlpools (0xda94, 0xda95) on her (the port's strike ships only); her
-pixel test 0x402d10; her save record (0x8cf: the port saves its own
-state).
+pixel test 0x402d10 (decoded: with her state `+0x110` not 0, 4 or 5 and
+her picture `+0x11c` made, a hit anywhere in its rectangle `+0x59`,
+`+0x5d`, `+0x61` x `+0x65`, no mask; the port tests her pixels); her
+save record (0x8cf: the port saves its own state).
 
 A siren (SirenaClassTy, `sirena.cpp`, class 0x1fd, vtable 0x594378,
 constructor 0x403050: life `+0xb8` 100000, killer `+0x138` -1). Message 2
@@ -6230,8 +6232,12 @@ smithies, studios, temples), towns 0x441ba0 and LandObj 0x425990 have no
 case for it, and the land creatures' jam 0x415ee0 hands only 0xda93,
 0xda96 and 0x187a2 to its members (the rest to 0x50c9e0, none); so any
 other occupant sung to counts in the share and takes nothing. Not ported: tornadoes (0xda96) and
-reefs or whirlpools (0xda94, 0xda95) on her; her pixel test 0x404800 and
-the mask `SIRMSK`; her save record (0x8cf: the port saves its own state).
+reefs or whirlpools (0xda94, 0xda95) on her; her pixel test 0x404800
+(decoded: with her state `+0x110` not 0, 4 or 5 and her picture `+0x164`
+made, her rectangle `+0x59`, `+0x5d`, `+0x61` x `+0x65`; the mask
+`SIRMSK` (`+0x84`, at the frame `+0x45`, clamped to its count less 1)
+only with a fifth argument not 0, which the pointer's pick 0x49a580
+does not pass; the port tests her pixels); her save record (0x8cf: the port saves its own state).
 
 Harpy nests (0x41d4a0) send out a new creature 55500 - 6000 x field 10
 game ticks after the last fell. A harpy (0x41fbd0, state 5) strikes at
@@ -6398,9 +6404,35 @@ up: an upgrade), so 0x423d60 never reads it: no hit, no fire, whoever
 dealt it; any other town's blow is left for 0x423d60
 (`Scene::blow_dropped`, in `hit` and a shot's landing).
 
-**Decoded, not ported**: the pixel hit test vt+8 0x41deb0 (picture 0's frame
-mask; a dragon in state 0 or 1 never hit); the draw offsets and depth (the
-port draws at the place). Not decoded: the targets' vt+0x2c and vt+0xa4
+**The pixel test and the pictures' place** (ported, `Scene::flyer_hit`,
+`objects::flyer_frames`; test `flyers_place_shadow_and_pick_are_the_originals`).
+vt+8 0x41deb0 (x, y, test, out): `out` (if given) the depth 0x50d290(0);
+with `test` 0 a hit; else never a dragon in state 0 or 1; else a hit
+when (x, y) lies in picture 0's rectangle (`+0x59 <= x < +0x59 + +0x61`,
+`+0x5d <= y < +0x5d + +0x65`: the creature, not its shadow) and the bit
+of the mask frame (`+0x7c`, `..M` kind 11, loaded by 0x41e130 with the
+pictures; 0x543240 gives none, no hit, for a frame `+0x45` at or past
+the mask's count) at (x - `+0x59`, y - `+0x5d`) is set (0x557640: rows
+of `(w + 7) & ~7` bits, the first bit of a byte the highest). The
+pointer's pick 0x49a580 calls vt+8 with `out` and a fifth argument 0.
+Masks: `HRP_STAY0_MSK_` for `HRPSPR_10M` (15 frames), `HRP_TURN_MSK_` /
+`DRG_TURN_MSK_` (64), `HRP_SOAR_FLY1_` / `DRG_SOAR_FLY1_` (15).
+0x41e4b0 places layer 0 (the creature, `+0x74`) and layer 1 (the shadow
+`..S`, `+0x78`) by 0x50d660, which writes the given point as the
+picture's top left (`+0x59`, `+0x5d`): a harpy's both at the place less
+(0x28, 0x78), 80 x 160 frames; a dragon's creature less (0x43, 0x92),
+its shadow less (0x43, 0xd5), 135 x 270. The message handler 0x4207b0
+makes the two layers (0x50cbf0) and sets layer 1's
+remap at 0x42098e: 0x50e130(1, 1, 0x26, 0x5c1358), only colour 0x26
+through the shadow table (every shadow sprite is all 0x26; the
+creature's own 0xfe is not marked on that layer). The port loads the
+shadow so (`Caches::shaded_frames`), and `render::layer_origin` takes a
+half pixel up (floor of v + 0.5) so a dragon's odd width stands alike
+left of the map's edge. Both layers' depth `max(0x26d0 - y, 1000)`
+is not ported: the port draws the flyers over everything, the shadow
+under the creature (which of two layers at one depth draws over is not
+decoded). A save restored makes the flyers' pictures and masks again
+(`Scene::flyers_restored`; neither is saved). Not decoded: the targets' vt+0x2c and vt+0xa4
 (the port takes every object as targetable); a dragon's picture place
 before its first draw (states 0 and 1, not drawn), which its aim point
 reads (the port takes the draw's).

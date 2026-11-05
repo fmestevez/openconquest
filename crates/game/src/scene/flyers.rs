@@ -224,6 +224,9 @@ pub struct Flyer {
     /// Removed at its dying picture's end (message 10).
     #[serde(default)]
     pub gone: bool,
+    /// Its picture's masks (`+0x7c`: `..M`, 0x41e130), loaded with it.
+    #[serde(skip)]
+    pub masks: super::leviathan::Masks,
 }
 
 impl Flyer {
@@ -944,19 +947,16 @@ impl Scene {
         }
     }
 
-    /// 0x41e130: the picture for the state and heading,
-    /// `HRPSPR_<state><heading>` / `DRGSPR_..` (turning `..SPR_4`, eight
-    /// frames a heading, from the heading's to the one turned to, the
-    /// short way through 0); a dragon resting is not drawn.
-    fn flyer_picture(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
-        let Some(i) = self.object_index(self.flyers[k].id) else {
-            return;
-        };
+    /// 0x41e130's pictures for flyer `k`'s state and heading, into its
+    /// object, with its masks (`..M`, `+0x7c`); the count of frames, or
+    /// `None` for a dragon resting (both pictures hidden, 0x50d470).
+    fn flyer_art(&mut self, k: usize, data: &GameData, caches: &mut Caches) -> Option<i32> {
+        let i = self.object_index(self.flyers[k].id)?;
         let class = self.objects[i].record.class_id;
         let f = &self.flyers[k];
         if class == DRAGON && f.state <= REST {
             self.objects[i].frames = Vec::new();
-            return;
+            return None;
         }
         let prefix = if class == DRAGON { "DRGSPR" } else { "HRPSPR" };
         let name = if f.state == TURN {
@@ -967,6 +967,35 @@ impl Scene {
         let frames = objects::flyer_frames(data, caches, &name).unwrap_or_default();
         let count = frames.len() as i32;
         self.objects[i].frames = frames;
+        self.flyers[k].masks = super::leviathan::load_masks(data, &format!("{name}M"));
+        Some(count)
+    }
+
+    /// The flyers' pictures and masks made again after a restore (neither
+    /// is saved), at their place.
+    pub(super) fn flyers_restored(&mut self, data: &GameData, caches: &mut Caches) {
+        for k in 0..self.flyers.len() {
+            self.flyer_art(k, data, caches);
+            let f = &self.flyers[k];
+            if let Some(i) = self.object_index(f.id) {
+                self.objects[i].x = f.pos.0 as f32;
+                self.objects[i].y = f.pos.1 as f32;
+            }
+        }
+    }
+
+    /// 0x41e130: the picture for the state and heading,
+    /// `HRPSPR_<state><heading>` / `DRGSPR_..` (turning `..SPR_4`, eight
+    /// frames a heading, from the heading's to the one turned to, the
+    /// short way through 0); a dragon resting is not drawn.
+    fn flyer_picture(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
+        let Some(count) = self.flyer_art(k, data, caches) else {
+            return;
+        };
+        let Some(i) = self.object_index(self.flyers[k].id) else {
+            return;
+        };
+        let class = self.objects[i].record.class_id;
         let f = &mut self.flyers[k];
         let delays = if class == DRAGON {
             &DRAGON_DELAYS
@@ -1673,6 +1702,43 @@ impl Scene {
                 }
             }
         }
+    }
+
+    /// Whether world pixel `(x, y)` is on flyer `id` (its pixel test,
+    /// vt+8 0x41deb0, as the pointer's pick 0x49a580 asks it): never a
+    /// dragon in state 0 or 1; else within picture 0's rectangle (`+0x59`,
+    /// `+0x5d`, `+0x61` x `+0x65`: the creature, not its shadow), the bit
+    /// of the mask frame at its frame `+0x45` (0x543240, none past the
+    /// mask's count: no hit; 0x557640, rows of the picture's width rounded
+    /// up to 8 bits, the first bit of a byte the highest).
+    pub fn flyer_hit(&self, id: u32, x: i32, y: i32) -> bool {
+        let Some(f) = self.flyers.iter().find(|f| f.id == id) else {
+            return false;
+        };
+        let Some(i) = self.object_index(id) else {
+            return false;
+        };
+        let o = &self.objects[i];
+        if o.record.class_id == DRAGON && f.state <= REST {
+            return false;
+        }
+        let Some(body) = o.frames.first().and_then(|l| l.last()) else {
+            return false;
+        };
+        let (left, top) = crate::render::layer_origin(o, body);
+        let (w, h) = (body.image.width as i32, body.image.height as i32);
+        if x < left || x >= left + w || y < top || y >= top + h {
+            return false;
+        }
+        let Some(mask) = f
+            .masks
+            .0
+            .as_ref()
+            .and_then(|m| usize::try_from(f.frame).ok().and_then(|k| m.get(k)))
+        else {
+            return false;
+        };
+        mask.bit(((w + 7) & !7) as usize * (y - top) as usize + (x - left) as usize)
     }
 
     /// Whether flyer `id` can be taken (vt+0x2c, 0x41de90): not a dragon

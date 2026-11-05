@@ -1849,29 +1849,40 @@ pub fn amber_frames(
     Ok(all.get(i).or(all.first()).cloned().into_iter().collect())
 }
 
-/// A flyer's frames: each its shadow on the water (sequence + `S`), then
-/// the creature in the air (drawn high in the frame).
+/// A flyer's frames: each its shadow on the water (layer 1, sequence +
+/// `S`), then the creature in the air (layer 0). 0x41e4b0 places both
+/// (0x50d660, their top left `+0x59`, `+0x5d`) at the flyer's place less
+/// (0x28, 0x78) for a harpy; a dragon's creature less (0x43, 0x92), its
+/// shadow less (0x43, 0xd5). The shadow layer has only colour 0x26 put
+/// through the shadow table (0x4207b0 at 0x42098e: 0x50e130(1, 1, 0x26,
+/// 0x5c1358); the shadow sprites are all of that colour).
 pub fn flyer_frames(data: &GameData, caches: &mut Caches, name: &str) -> Result<Vec<Vec<Layer>>> {
+    let ((ox, oy), shadow_oy) = if name.starts_with("DRG") {
+        ((0x43, 0x92), 0xd5)
+    } else {
+        ((0x28, 0x78), 0x78)
+    };
+    // The port centres a layer on the object's place plus (dx, dy)
+    // (`render::layer_origin`): the offsets that put its top left there.
+    let place = |l: &mut Layer, oy: i32| {
+        l.dx = l.image.width as i32 / 2 - ox;
+        l.dy = l.image.height as i32 / 2 - oy;
+    };
     let mut frames = sequence_frames(data, caches, name)?;
-    if let Ok(shadows) = sequence_frames(data, caches, &format!("{name}S")) {
+    for l in frames.iter_mut().flatten() {
+        place(l, oy);
+    }
+    if let Ok(shadows) = caches.shaded_frames(data, &format!("{name}S"), 0x26) {
         for (frame, shadow) in frames.iter_mut().zip(shadows) {
-            // The shadow sprites are drawn in one colour: as a shadow (the
-            // shadow table, `render::SHADOW_TABLE`).
-            let shadow = shadow.into_iter().map(|l| {
-                let img = &l.image;
-                let pixels = img
-                    .pixels
-                    .iter()
-                    .map(|p| p.map(|_| crate::assets::SHADOW))
-                    .collect();
-                Layer {
-                    image: Rc::new(Image::new(img.width, img.height, pixels)),
-                    dx: l.dx,
-                    dy: l.dy,
-                }
-            });
             let body = std::mem::take(frame);
-            *frame = shadow.chain(body).collect();
+            *frame = shadow
+                .into_iter()
+                .map(|mut l| {
+                    place(&mut l, shadow_oy);
+                    l
+                })
+                .chain(body)
+                .collect();
         }
     }
     Ok(frames)

@@ -1394,6 +1394,7 @@ impl Scene {
             scene.refresh_amber(i, data, caches);
         }
         scene.nests = save.nests.clone();
+        scene.flyers_restored(data, caches);
         scene.walkers = save.walkers.clone();
         scene.jams = save.jams.clone();
         scene.lairs = save.lairs.clone();

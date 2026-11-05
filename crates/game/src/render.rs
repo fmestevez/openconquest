@@ -831,12 +831,14 @@ impl Beneath {
     }
 }
 
-/// World position of the top-left corner of a layer's image.
+/// World position of the top-left corner of a layer's image (a half
+/// pixel taken up, so a picture of odd size stands alike on either side
+/// of the map's edge).
 pub fn layer_origin(obj: &MapObject, layer: &Layer) -> (i32, i32) {
     let img = &layer.image;
     (
-        (obj.x + layer.dx as f32 - img.width as f32 / 2.0).round() as i32,
-        (obj.y + layer.dy as f32 - img.height as f32 / 2.0).round() as i32,
+        (obj.x + layer.dx as f32 - img.width as f32 / 2.0 + 0.5).floor() as i32,
+        (obj.y + layer.dy as f32 - img.height as f32 / 2.0 + 0.5).floor() as i32,
     )
 }
 
@@ -881,7 +883,10 @@ pub fn hit_test(scene: &Scene, wx: f32, wy: f32, time_ms: u64) -> Option<u32> {
             openconquest_formats::ObjectClass::Monster(0x1f8 | 0x1f9)
         )
     };
-    if let Some(o) = visible().find(|o| flyer(o) && o.combat.is_some() && solid(o)) {
+    // A flyer by its creature's mask (vt+8 0x41deb0, `Scene::flyer_hit`).
+    if let Some(o) =
+        visible().find(|o| flyer(o) && o.combat.is_some() && scene.flyer_hit(o.id, px, py))
+    {
         return Some(o.id);
     }
     // The occupants of the pointer's cell and of those about it, in

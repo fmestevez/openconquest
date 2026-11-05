@@ -17917,3 +17917,89 @@ fn brain_land_pass_drops_sold_members() {
         sites[1..].to_vec()
     );
 }
+
+#[test]
+fn flyers_place_shadow_and_pick_are_the_originals() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    while scene.flyers[0].state == 0 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let f = scene.flyers[0].clone();
+    let i = scene.object_index(f.id).unwrap();
+    let o = &scene.objects[i];
+    // 0x41e4b0: a harpy's creature and shadow both at the place less
+    // (0x28, 0x78), 80 x 160.
+    let frame = o.frames[0].clone();
+    assert_eq!(frame.len(), 2);
+    for l in &frame {
+        assert_eq!((l.image.width, l.image.height), (80, 160));
+        assert_eq!(
+            crate::render::layer_origin(o, l),
+            (f.pos.0 - 0x28, f.pos.1 - 0x78)
+        );
+    }
+    // The shadow layer: its colour 0x26 (all of it) through the shadow
+    // table; the creature none.
+    let shadow = &frame[0].image;
+    assert!(shadow
+        .pixels
+        .iter()
+        .flatten()
+        .all(|&p| p == crate::assets::SHADOW));
+    assert!(shadow.pixels.iter().flatten().count() > 0);
+    let body = &frame[1].image;
+    assert!(body
+        .pixels
+        .iter()
+        .flatten()
+        .all(|&p| p != crate::assets::SHADOW));
+    // The pick (0x41deb0): the mask `HRP_STAY0_MSK_` at the frame, 15
+    // frames; a set bit picks it, through the pointer's pick too.
+    let masks = f.masks.0.clone().unwrap();
+    assert_eq!(masks.len(), 15);
+    let (left, top) = (f.pos.0 - 0x28, f.pos.1 - 0x78);
+    let k = f.frame as usize;
+    let bit = |x: i32, y: i32| masks[k].bit(80 * y as usize + x as usize);
+    let (mx, my) = (0..160)
+        .flat_map(|y| (0..80).map(move |x| (x, y)))
+        .find(|&(x, y)| bit(x, y))
+        .unwrap();
+    assert!(scene.flyer_hit(f.id, left + mx, top + my));
+    scene.fog = false;
+    assert_eq!(
+        crate::render::hit_test(&scene, (left + mx) as f32 + 0.5, (top + my) as f32 + 0.5, 0),
+        Some(f.id)
+    );
+    // Its shadow is not tested: a shadow pixel off the mask is no hit.
+    let (sx, sy) = (0..160)
+        .flat_map(|y| (0..80).map(move |x| (x, y)))
+        .find(|&(x, y)| shadow.pixels[(80 * y + x) as usize].is_some() && !bit(x, y))
+        .unwrap();
+    assert!(!scene.flyer_hit(f.id, left + sx, top + sy));
+    // Outside the picture's rectangle, none.
+    assert!(!scene.flyer_hit(f.id, left - 1, top + my));
+    // A dragon resting is never hit.
+    scene.objects[i].record.class_id = 0x1f9;
+    scene.flyers[0].state = 1;
+    assert!(!scene.flyer_hit(f.id, left + mx, top + my));
+    scene.objects[i].record.class_id = 0x1f8;
+    scene.flyers[0].state = f.state;
+    // A dragon's creature at the place less (0x43, 0x92), its shadow less
+    // (0x43, 0xd5), 135 x 270: alike at the map's left edge.
+    let frames = crate::objects::flyer_frames(&data, &mut caches, "DRGSPR_31").unwrap();
+    let d = &mut scene.objects[i];
+    d.frames = frames;
+    for (x, y) in [(32, 32), (1000, 700)] {
+        (d.x, d.y) = (x as f32, y as f32);
+        let l = &d.frames[0];
+        assert_eq!((l[1].image.width, l[1].image.height), (135, 270));
+        assert_eq!(crate::render::layer_origin(d, &l[0]), (x - 0x43, y - 0xd5));
+        assert_eq!(crate::render::layer_origin(d, &l[1]), (x - 0x43, y - 0x92));
+    }
+}
