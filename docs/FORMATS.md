@@ -1725,11 +1725,31 @@ reserved-cell release, the hook's landing sound at a building, the
 building flag of the plan (no goal on land) and `+0x594`; of 0x4ad9f0,
 the category kept from the taking (the port derives it from the kind and
 the present owner), the stats 0x4a9530, 0x4a8c30's share 0x4a8f40 and
-0x4beb50; 0x4ad9f0's treasure hand-over at 0x4add10's end (the port
-unloading, `scene/trade.rs`), where `deliver_treasures` (kinds 6, 7, 27
-at any own settlement or town alongside) is still a model; and 0x424b30
-case 6 crediting `field 7 + 400` (so the map's goods, 0x191, would
-credit nothing in the load panel), not checked against the disassembly.
+0x4beb50; and the `+0xa4` state test of 0x424af0 for player 16's
+structure 0x40 (its room, 0x5c1094[0x40] = 2, is kept).
+The treasure hand-over (`Scene::unload_treasures`) also runs at the end
+of the port unloading (0x4add10 calls the whole of 0x4ad9f0 once the
+porters' count `+0x45` reaches `+0x49`, the port its contact `+0x8e6`;
+`scene/trade.rs`). It is the only way a ship's treasures go ashore
+outside the load panel: 0x4bdc10 is called only from 0x4ad9f0 (0x4adc47)
+and the panel's move between a ship and a building (0x4e3ec9); 0x441480
+from the panels (0x41b3fd fort, 0x4421cd / 0x443cd2 town, 0x4e7b39 port)
+and 0x4bdc10; 0x424b30 besides from 0x441480 and 0x4bdc10 only from the
+creation of the map's held treasures (0x415173, 0x41d60d, 0x42815b),
+the fort panel (0x41b46b, 0x41ba5f), message 0x158c1 (0x4271fc) and a
+building's tick taking the class-700 treasures lying on its cells
+(0x425b38, then 0x158c1 to them). So no ship hands treasures over by lying
+alongside an own settlement (the earlier `deliver_treasures` model is
+gone). 0x424b30 case 6 credits through 0x4a8fa0 with `field 7 + 0x190`
+(0x424bb4 `add edx, 0x190`): field 7 0 amber, 1 fish, 2 a leviathan's;
+the map's goods (field 7 0x191, class 0x321) credit nothing when handed
+to a settlement or fort in the load panel, though 0x4ad9f0 credits them
+as fish (0x4a8fa0 with field 7 itself). 0x441480 unpacks kind 7: field
+7's low word the type, byte 2 the item, field 8 the count; type 1 a unit
+of the item with condition 100 each through 0x440d40 (refused while the
+stock is mended, `+0x10c` with `+0x110` 2), 2 armour of that level into
+`+0x248` (not level 0), 4 a ram into `+0x24c` (not level 3); any type
+returns 1, unannounced (`Scene::unpack`).
 A settlement's own
 Reload Object (menu slot 1) does the same with one of its forts (0x441ba0
 case 0x1f, checked in 0xc452: one of its own buildings, its list
@@ -1815,7 +1835,7 @@ is repairing: `+0x10c` and state 2), armour or a ram into its lists
 (`+0x248`, `+0x24c`; level 0 is none and is refused), a hero
 (0x424ed0, `+0x1a0`, announced 0x5d99), a treasure through 0x441480
 (kind 7 a pack of units, armour or rams; else 0x424b30: kinds 0-2
-amber, 3-5 fish, 6 goods credited; the rest stored if the building has
+amber, 3-5 fish, 6 goods by field 7 + 400 credited; the rest stored if the building has
 room, 0x424af0: table 0x5c1094 by class, settlements and towns 50, forts
 1, others 2, and announced with 0x5d94, 1). Goods do not go ashore here.
 
@@ -10314,7 +10334,10 @@ or none aboard (0x4be800 mode 6) sails to take one (0x4d9690, 0x4cf070);
 a carrier sails home (0x4d9f50). With no treasure left in the area
 (0x4d9920) the order reports done and the round goes on to the zone. Ours
 takes any treasure, nearest first, one ship each, and brings the
-settlement's alongside the base's town, where ours hands them over.
+settlement's alongside the base's town. Not decoded: the carrier's home
+move 0x4d9f50 sends command 0x22 (the cast order) with kind 0x10,
+priority 0x5a and three arguments; ours hands nothing over there (a
+ship's treasures go ashore only by 0x4ad9f0 and the load panel).
 
 **Spells.** Order 117's studies 33 and 34 have the Temple of the Sea or
 of War learn its next spell (1000 amber; 100 ticks for a computer,

@@ -6293,8 +6293,10 @@ impl Scene {
     }
 
     /// One ship of a treasure hunt (0x4da3e0): carrying treasures for the
-    /// settlement it brings them home (0x4d9f50; here alongside the base's
-    /// town), else it sails for the nearest treasure in the area no other
+    /// settlement it brings them home (0x4d9f50: command 0x22, the cast
+    /// order, kind 0x10, priority 0x5a, its three arguments; not decoded:
+    /// here it sails alongside the base's town and hands nothing over,
+    /// treasures going ashore only by 0x4ad9f0), else it sails for the nearest treasure in the area no other
     /// ship of the flotilla is after (0x4cf070). (Not ported: the hunt's
     /// treasure command is given at once here, a refused one trying the
     /// next; the home move is a command, delivered at the next tick.)

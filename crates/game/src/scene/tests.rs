@@ -4192,11 +4192,10 @@ fn scroll_reveals_armour() {
         .held
         .iter()
         .any(|(id, t)| *id == 0x18 && t.kind == 27 && t.param == 1));
-    let owner = scene.human.map(|h| (h.nation, h.slot)).unwrap();
-    // (No settlement yet: where it is handed over does not matter.)
-    scene.hand_over(
-        owner,
-        0,
+    // (No settlement yet: any own object takes it as one would.)
+    let site = scene.objects.iter().find(|o| scene.is_own(o)).unwrap().id;
+    scene.store_treasure(
+        site,
         crate::objects::Treasure {
             kind: 27,
             param: 1,
@@ -4208,6 +4207,49 @@ fn scroll_reveals_armour() {
         .messages
         .iter()
         .any(|m| m == "You can now upgrade to silver armor."));
+}
+
+/// Goods handed to a settlement or fort (the load panel's 0x441480 /
+/// 0x424b30) go through 0x4a8fa0 with field 7 + 400 (0x424bb4): the
+/// map's goods, field 7 0x191, credit nothing; field 7 0 would be amber
+/// x 3 x 40 / 100, 1 fish one for one (needs `OPENCONQUEST_DATA`).
+#[test]
+fn goods_handed_ashore_credit_field_7_plus_400() {
+    use crate::objects::Treasure;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    let goods: Vec<Treasure> = scene
+        .objects
+        .iter()
+        .filter_map(|o| o.treasure)
+        .chain(scene.held.iter().map(|(_, t)| *t))
+        .filter(|t| t.kind == 6)
+        .collect();
+    assert!(!goods.is_empty());
+    assert!(goods.iter().all(|t| t.param == 0x191));
+    let site = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(_)))
+        .unwrap()
+        .id;
+    let (amber, fish) = (scene.amber, scene.fish);
+    scene.store_treasure(site, goods[0]);
+    assert_eq!((scene.amber, scene.fish), (amber, fish));
+    let tr = |param, amount| Treasure {
+        kind: 6,
+        param,
+        amount,
+    };
+    scene.store_treasure(site, tr(0, 300));
+    assert_eq!(scene.amber, amber + 360);
+    scene.store_treasure(site, tr(1, 50));
+    assert_eq!(scene.fish, fish + 50);
+    assert!(scene.held_by(site).iter().all(|t| t.kind != 6));
 }
 
 /// Research, spells and revealed technology carry into the next campaign
@@ -7670,6 +7712,7 @@ fn load_link_unloads_at_a_building() {
     }
     scene.order_load(ship, yard).unwrap();
     let (amber, fish) = (scene.amber, scene.fish);
+    let garrison = scene.garrison(scene.home_settlement(t).unwrap())[2];
     let linked = |scene: &Scene| {
         scene.objects[i]
             .ship
@@ -7701,7 +7744,16 @@ fn load_link_unloads_at_a_building() {
     assert!((91..=100).contains(&s.priority), "{}", s.priority);
     assert_eq!(scene.amber, amber + 120);
     assert_eq!(scene.fish, fish + 900);
-    assert!(scene.delivered.contains(&7));
+    // The pack (type 1, item 2) joins the settlement's stock, five whole
+    // units, unannounced (0x441480 -> 0x440d40).
+    let town = scene.home_settlement(t).unwrap();
+    assert_eq!(scene.garrison(town)[2], garrison + 5);
+    assert!(scene.stock_units(town)[2]
+        .iter()
+        .rev()
+        .take(5)
+        .all(|&c| c == 100));
+    assert!(!scene.delivered.contains(&7));
 }
 
 /// A fort's facing with no water beside its anchor is the constructor's
@@ -11858,8 +11910,10 @@ fn town_orders_play_the_town_call() {
 
 /// A merchant unloading at a port lies held, move state 6, each tick
 /// (0x4adef0 step 0x11); leaving, it lies still (0x4a5b70) and moves a
-/// cell off the berth with priority 91 (0x4b46f0 with '['; needs
-/// `OPENCONQUEST_DATA`).
+/// cell off the berth with priority 91 (0x4b46f0 with '['), having
+/// handed its category-4 treasures to the port's town (0x4add10 ->
+/// 0x4ad9f0 -> 0x4bdc10 -> 0x441480): a pack unpacked into the stock, a
+/// barrel (category 2) kept (needs `OPENCONQUEST_DATA`).
 #[test]
 fn merchant_unloading_at_a_port_is_held() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -11906,7 +11960,15 @@ fn merchant_unloading_at_a_port_is_held() {
             deposit: u32::MAX,
             phase: crate::objects::GatherPhase::Unloading(port),
         });
+        let tr = |kind, param, amount| crate::objects::Treasure {
+            kind,
+            param,
+            amount,
+        };
+        s.treasures = vec![tr(1, 0, 50), tr(7, 2 << 16 | 1, 3)];
     }
+    let town = scene.home_settlement(p).expect("the port's town");
+    let garrison = scene.garrison(town)[2];
     scene.update(crate::clock::TICK, &data, &mut caches);
     let k = scene.object_index(id).unwrap();
     let s = scene.objects[k].ship.as_ref().unwrap();
@@ -11927,6 +11989,9 @@ fn merchant_unloading_at_a_port_is_held() {
     let s = scene.objects[k].ship.as_ref().unwrap();
     assert_ne!(s.move_state, 6);
     assert!(s.priority >= 91);
+    let kinds: Vec<u8> = s.treasures.iter().map(|t| t.kind).collect();
+    assert_eq!(kinds, [1]);
+    assert_eq!(scene.garrison(town)[2], garrison + 3);
     let goal = s.path.back().copied().expect("a cell off the berth");
     let goal = ((goal.0 / t) as i32, (goal.1 / t) as i32);
     assert!(goal != berth && (goal.0 - berth.0).abs() <= 2 && (goal.1 - berth.1).abs() <= 2);

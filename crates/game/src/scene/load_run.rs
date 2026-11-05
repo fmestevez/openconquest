@@ -556,14 +556,9 @@ impl Scene {
     /// but not at a fort (0x34-0x36), crew experience 10; a leviathan
     /// (`+0x480`) through 0x4a8fa0 class 0x192 (x 125 x 40 / 100) and
     /// 2500 fish, 400; amber (`+0x481`) through 0x4a8fa0 class 400 (x 3 x
-    /// 40 / 100), 100. Then its treasures from the last of category 4
-    /// (0x4b9740: kinds 6, 7, 27; every kind for player 16, 0x4bd0c0), or
-    /// 0x10 (kinds 10-14) for a computer's (side 3 or 4): goods (kind 6)
-    /// credited through 0x4a8fa0 by field 7's class and taken off; others
-    /// handed to the building by 0x4bdc10 (a fort 0x424b30, a port, yard
-    /// or dock its town 0x441480; elsewhere kept), taken off when taken
-    /// (announced 0x5d94 with 1). An order's priority 1-234 is drawn
-    /// again, 91 + r % 10 of the ship's generator.
+    /// 40 / 100), 100. Then its treasures (`unload_treasures`). An
+    /// order's priority 1-234 is drawn again, 91 + r % 10 of the ship's
+    /// generator.
     pub(super) fn unload_at(&mut self, k: usize, target: u32) {
         let Some(t) = self.object_index(target) else {
             return;
@@ -574,7 +569,6 @@ impl Scene {
         let Some(owner) = self.objects[k].owner else {
             return;
         };
-        let id = self.objects[k].id;
         let s = self.objects[k].ship.as_ref().unwrap();
         let amount = s.cargo.floor() as i64;
         let gain = match s.cargo_kind {
@@ -598,6 +592,33 @@ impl Scene {
             s.cargo_kind = None;
             self.gain_experience(k, gain);
         }
+        self.unload_treasures(k, t);
+        if (1..0xeb).contains(&self.objects[k].ship.as_ref().unwrap().priority) {
+            let roll = 91 + (self.ship_draw(k) % 10) as u8;
+            self.objects[k].ship.as_mut().unwrap().priority = roll;
+        }
+    }
+
+    /// 0x4ad9f0's treasures: ship `k` hands those of category 4 (0x4b9740:
+    /// kinds 6, 7, 27; every kind for player 16, 0x4bd0c0), or 0x10 (kinds
+    /// 10-14) for a computer's (side 3 or 4), from the last, to building
+    /// `t`, its contact (`+0x8e6 +5`; at a load link's end, or a port's
+    /// unloading 0x4add10): goods (kind 6) credited through 0x4a8fa0 by
+    /// field 7's class and taken off; others handed over by 0x4bdc10 (a
+    /// fort or player 16's 0x40 0x424b30, a port, yard or dock its town
+    /// 0x441480; elsewhere kept), taken off when taken (announced 0x5d94
+    /// with 1).
+    pub(super) fn unload_treasures(&mut self, k: usize, t: usize) {
+        let Some(owner) = self.objects[k].owner else {
+            return;
+        };
+        let (fort, port) = match self.objects[t].class {
+            ObjectClass::Building(c) => (is_fort(c), is_port_like(c)),
+            ObjectClass::Barbarian(0x40) => (true, false),
+            _ => (false, false),
+        };
+        let id = self.objects[k].id;
+        let target = self.objects[t].id;
         let barbarian = owner == (4, 0);
         let computer = self.side_computer(Some(owner));
         let count = self.objects[k].ship.as_ref().unwrap().treasures.len();
@@ -616,22 +637,13 @@ impl Scene {
                 continue;
             }
             if tr.kind == 6 {
-                // 0x4a8fa0: amber, fish or a leviathan's worth; any other
-                // class is taken off for nothing.
-                let amount = tr.amount as i64;
-                match tr.param {
-                    400 => self.earn(owner, amount * 3 * 40 / 100, 0),
-                    0x191 => self.earn(owner, 0, amount),
-                    0x192 => self.earn(owner, amount * 125 * 40 / 100, 0),
-                    _ => {}
-                }
+                self.credit_class(owner, tr.param, tr.amount as i64);
                 self.objects[k].ship.as_mut().unwrap().remove_treasure(n);
                 continue;
             }
-            let fort = is_fort(class);
             let to = if fort {
                 Some(target)
-            } else if is_port_like(class) {
+            } else if port {
                 self.home_settlement(t)
             } else {
                 None
@@ -650,10 +662,6 @@ impl Scene {
             } else {
                 self.store_treasure(to, tr);
             }
-        }
-        if (1..0xeb).contains(&self.objects[k].ship.as_ref().unwrap().priority) {
-            let roll = 91 + (self.ship_draw(k) % 10) as u8;
-            self.objects[k].ship.as_mut().unwrap().priority = roll;
         }
     }
 }

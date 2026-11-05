@@ -7,8 +7,6 @@ use openconquest_formats::ObjectClass;
 
 use super::Scene;
 use crate::assets::GameData;
-use crate::combat;
-use crate::economy::{SETTLEMENT, TOWN};
 use crate::magic::Spell;
 use crate::objects::{self, Caches, Task, Treasure};
 
@@ -104,7 +102,6 @@ impl Scene {
                 }
             }
         }
-        self.deliver_treasures();
         self.heal_forts(dt);
     }
 
@@ -461,82 +458,47 @@ impl Scene {
         ));
     }
 
-    /// Goods, weapons and scrolls are handed over at own settlements and
-    /// towns.
-    fn deliver_treasures(&mut self) {
-        let carriers: Vec<usize> = self
-            .objects
-            .iter()
-            .enumerate()
-            .filter(|(_, o)| {
-                o.ship
-                    .as_ref()
-                    .is_some_and(|s| s.treasures.iter().any(|tr| matches!(tr.kind, 6 | 7 | 27)))
-            })
-            .map(|(i, _)| i)
-            .collect();
-        for i in carriers {
-            let Some(owner) = self.objects[i].owner else {
-                continue;
-            };
-            let site = self
-                .objects
-                .iter()
-                .enumerate()
-                .find(|(k, b)| {
-                    matches!(b.class, ObjectClass::Building(SETTLEMENT | TOWN))
-                        && b.owner == Some(owner)
-                        && self.alongside(i, *k)
-                })
-                .map(|(_, b)| b.id);
-            let Some(site) = site else { continue };
-            let s = self.objects[i].ship.as_mut().unwrap();
-            let mut given = Vec::new();
-            for k in (0..s.treasures.len()).rev() {
-                if matches!(s.treasures[k].kind, 6 | 7 | 27) {
-                    given.insert(0, s.remove_treasure(k));
-                }
-            }
-            for tr in given {
-                self.hand_over(owner, site, tr);
-            }
+    /// 0x4a8fa0: goods of deposit class `class` credited to `owner`:
+    /// amber (400) x 3 x 40 / 100, fish (0x191) one for one, a
+    /// leviathan's (0x192) x 125 x 40 / 100 in amber; any other class
+    /// nothing.
+    pub(super) fn credit_class(&mut self, owner: (u32, u32), class: u32, amount: i64) {
+        match class {
+            400 => self.earn(owner, amount * 3 * 40 / 100, 0),
+            0x191 => self.earn(owner, 0, amount),
+            0x192 => self.earn(owner, amount * 125 * 40 / 100, 0),
+            _ => {}
         }
     }
 
-    pub(super) fn hand_over(&mut self, owner: (u32, u32), site: u32, tr: Treasure) {
-        if Some(owner) == self.human.map(|h| (h.nation, h.slot)) {
-            self.delivered.push(tr.kind);
-        }
-        match tr.kind {
-            6 => {
-                // Field 7 names the goods by their deposit class.
-                let amount = tr.amount as i64;
-                if tr.param == 0x191 {
-                    self.earn(owner, 0, amount);
-                    self.messages.push(format!("Delivered {amount} fish"));
-                } else {
-                    self.earn(owner, amount, 0);
-                    self.messages.push(format!("Delivered {amount} amber"));
+    /// A pack (kind 7) handed to settlement `site` (0x441480): field 7's
+    /// low word its type, byte 2 the item, field 8 how many. Units (1)
+    /// join the stock whole, one by one (0x440d40 with 100, refused while
+    /// the stock is mended); armour (2) into its list (`+0x248`) but level
+    /// 0; rams (4) into theirs (`+0x24c`) but level 3 (none); any other
+    /// type nothing. The pack is used up either way, unannounced.
+    pub(super) fn unpack(&mut self, site: u32, tr: Treasure) {
+        let item = (tr.param >> 16) as u8;
+        match tr.param as u16 {
+            1 => {
+                for _ in 0..tr.amount {
+                    if self.stock_repair_at(site).is_some() || item >= 9 {
+                        continue;
+                    }
+                    let mut stock = self.stock_units(site);
+                    stock[item as usize].push(100);
+                    self.set_stock_units(site, stock);
                 }
             }
-            7 => {
-                // Field 7: item (high word) and how many (low word).
-                let item = (tr.param >> 16) as usize;
-                let count = tr.param & 0xffff;
-                if item < 9 {
-                    self.garrisons.entry(site).or_default()[item] += count;
-                    self.messages
-                        .push(format!("Delivered {count} {}", combat::ITEM_NAMES[item]));
-                }
+            2 if item != 0 => {
+                let f = self.fittings.entry(site).or_default();
+                f.0.extend(std::iter::repeat_n(item, tr.amount as usize));
             }
-            _ => {
-                // A scroll of knowledge (field 7 its number) reveals
-                // technology (the brains' message 0x5d94).
-                if Some(owner) == self.human.map(|h| (h.nation, h.slot)) {
-                    let says = self.permits.read_scroll(tr.param);
-                    self.messages.push(says.to_string());
-                }
+            4 if item != 3 => {
+                let f = self.fittings.entry(site).or_default();
+                f.1.extend(std::iter::repeat_n(item - 3, tr.amount as usize));
             }
+            _ => {}
         }
     }
 }

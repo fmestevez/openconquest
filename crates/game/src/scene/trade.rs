@@ -2949,6 +2949,9 @@ impl Scene {
                     None => 0,
                 };
                 self.gain_experience(i, gain);
+                // Then its treasures go to the port's town (0x4add10 runs
+                // all of 0x4ad9f0, the port its contact).
+                self.unload_treasures(i, p);
                 let roll = 91 + (self.rng.next() % 10) as u8;
                 let ship = self.objects[i].ship.as_mut().unwrap();
                 ship.cargo = 0.0;

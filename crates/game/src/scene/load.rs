@@ -56,6 +56,8 @@ const CARGO_SLOTS: [u32; 2] = [4, 10];
 /// Treasures a building can store, by class (0x5c1094): settlements and
 /// towns 50, forts 1, the rest 2.
 const SETTLEMENT_STORE: usize = 50;
+/// The treasure room of player 16's structure 0x40 (0x5c1094[0x40]).
+const BARBARIAN_STORE: usize = 2;
 
 /// Armour and ram levels stored at a settlement.
 pub type Fittings = (Vec<u8>, Vec<u8>);
@@ -827,6 +829,21 @@ impl Scene {
                 _ => Err("A fort takes only units and treasures".into()),
             };
         }
+        if o.class == ObjectClass::Barbarian(0x40) {
+            // Player 16's structure 0x40 (0x424b30, 0x424af0): barrels and
+            // goods credited, the rest kept while it holds fewer than
+            // 0x5c1094[0x40] = 2. (Its `+0xa4` state test is not modelled.)
+            return match cargo {
+                Cargo::Treasure { kind, .. } if kind >= 7 => {
+                    if self.held_by(to).len() >= BARBARIAN_STORE {
+                        return Err("There is no room for the treasure".into());
+                    }
+                    Ok(())
+                }
+                Cargo::Treasure { .. } => Ok(()),
+                _ => Err("It takes only treasures".into()),
+            };
+        }
         let Some(s) = &o.ship else {
             return match cargo {
                 Cargo::Goods => Err("Goods are unloaded with Unload".into()),
@@ -1139,8 +1156,10 @@ impl Scene {
     }
 
     /// A building other than a settlement takes treasure `tr` (0x424b30):
-    /// barrels of amber or fish and goods are credited, the rest stored
-    /// (`can_take` checked the room) and announced (message 0x5d94 with 1).
+    /// barrels of amber or fish are credited, goods through 0x4a8fa0 with
+    /// field 7 + 400 (0x424bb4: so the map's goods, field 7 0x191, credit
+    /// nothing), the rest stored (`can_take` checked the room) and
+    /// announced (message 0x5d94 with 1).
     pub(super) fn store_at(&mut self, site: u32, tr: Treasure) {
         let Some(owner) = self.object_index(site).and_then(|i| self.objects[i].owner) else {
             return;
@@ -1148,7 +1167,7 @@ impl Scene {
         match tr.kind {
             0..=2 => self.earn(owner, tr.amount as i64, 0),
             3..=5 => self.earn(owner, 0, tr.amount as i64),
-            6 => self.hand_over(owner, site, tr),
+            6 => self.credit_class(owner, tr.param + 400, tr.amount as i64),
             _ => {
                 self.held.push((site, tr));
                 if Some(owner) == self.human.map(|h| (h.nation, h.slot)) {
@@ -1161,9 +1180,10 @@ impl Scene {
     }
 
     /// Building `site` takes treasure `tr` (0x441480, 0x424b30): barrels
-    /// of amber or fish and goods are credited, a pack of weapons joins
-    /// its stock, the rest is stored and announced to the brains (message
-    /// 0x5d94 with 1; here `delivered`).
+    /// of amber or fish are credited, goods by field 7 + 400 as at a fort
+    /// (`store_at`), a pack unpacked into its stock (`unpack`), the rest
+    /// stored and announced to the brains (message 0x5d94 with 1; here
+    /// `delivered`).
     pub(super) fn store_treasure(&mut self, site: u32, tr: Treasure) {
         let Some(owner) = self.object_index(site).and_then(|i| self.objects[i].owner) else {
             return;
@@ -1171,7 +1191,8 @@ impl Scene {
         match tr.kind {
             0..=2 => self.earn(owner, tr.amount as i64, 0),
             3..=5 => self.earn(owner, 0, tr.amount as i64),
-            6 | 7 => self.hand_over(owner, site, tr),
+            6 => self.credit_class(owner, tr.param + 400, tr.amount as i64),
+            7 => self.unpack(site, tr),
             _ => {
                 self.held.push((site, tr));
                 if Some(owner) == self.human.map(|h| (h.nation, h.slot)) {
