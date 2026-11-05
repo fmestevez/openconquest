@@ -41,12 +41,6 @@ pub(super) enum Piece {
     Ram(u8),
 }
 
-/// Seconds a frame of a building collapsing into ruins: the ruins' cycle
-/// (`objects::BUILDING_CYCLE`, 75 ticks) over its frames, in whole ticks.
-fn ruins_frame_seconds(frames: usize) -> f32 {
-    crate::clock::ticks((objects::BUILDING_CYCLE[2] / frames.max(1) as u32).max(1))
-}
-
 /// Goods a ship takes aboard each time (0x4ad0e0): amber 100 for boats and
 /// merchants (20 for other ships), fish by ship type from 0x59b2a8 (boat
 /// 33, merchant 50, others 20); the barbarians take a third. Amber comes
@@ -2395,18 +2389,51 @@ impl Scene {
         self.objects[i].progress = None;
     }
 
-    /// Ruins collapse once, then lie still on their last frame.
-    pub(super) fn run_ruins(&mut self, dt: f32) {
-        for obj in &mut self.objects {
-            if !matches!(obj.class, ObjectClass::Building(_))
-                || obj.owner.is_some()
-                || obj.combat.is_some()
-            {
+    /// A fallen building's ruins picture (state 2) steps as 0x4230f0 does:
+    /// on the first tick after the fall (vt+0x38 at the fall clears
+    /// `+0xbc`), then every `BUILDING_CYCLE[2] / n` ticks (75 / 21 = 3 for
+    /// a town's 21 frames), the frame drawn and one added;
+    /// the step reaching `n` posts message 10 to itself (0x4232ed), so the
+    /// object is removed at the end of that tick, `1 + (n - 1) x delay`
+    /// ticks after the fall (61 for a town). Its rubble (map layer 5)
+    /// stays. Returns the ruins whose last step this was.
+    pub(super) fn step_ruins(&mut self) -> Vec<u32> {
+        let mut done = Vec::new();
+        for (&id, r) in self.ruins.iter_mut() {
+            let Some(o) = self.objects.iter_mut().find(|o| o.id == id) else {
                 continue;
+            };
+            let n = r.frames.max(1);
+            let delay = objects::BUILDING_CYCLE[2] / n;
+            if r.started {
+                r.wait += 1;
+                if r.wait < delay {
+                    continue;
+                }
             }
-            if let Some(p) = obj.progress.as_mut().filter(|p| **p < 1.0) {
-                let n = obj.frames.len().max(1) as f32;
-                *p = (*p + dt / (n * ruins_frame_seconds(obj.frames.len()))).min(1.0);
+            r.started = true;
+            r.wait = 0;
+            // Frame `frame` drawn, then one added.
+            o.progress = Some((r.frame as f32 + 0.5) / n as f32);
+            r.frame += 1;
+            if r.frame >= n {
+                done.push(id);
+            }
+        }
+        let alive: Vec<u32> = self.objects.iter().map(|o| o.id).collect();
+        self.ruins.retain(|id, _| alive.contains(id));
+        done
+    }
+
+    /// Message 10 to fallen buildings whose ruins ended: the objects go
+    /// (their LandObj 0x425990 message 3; a settlement's or town's then
+    /// tells its computer player, 0x5d9b, which frees the base, read in
+    /// `computer_news`).
+    pub(super) fn remove_ruins(&mut self, ids: &[u32]) {
+        for &id in ids {
+            self.ruins.remove(&id);
+            if let Some(i) = self.object_index(id) {
+                self.objects.remove(i);
             }
         }
     }

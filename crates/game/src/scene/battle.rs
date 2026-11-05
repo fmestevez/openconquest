@@ -1485,16 +1485,27 @@ impl Scene {
                 .flatten()
                 .filter(|f| !f.is_empty());
             match ruins {
-                // Ruins stay as scenery, owned by no one.
+                // Ruins, owned by no one (the original keeps the owner),
+                // until their collapse ends.
                 Some(frames) => {
                     let obj = &mut self.objects[ti];
                     obj.frames = frames;
                     obj.combat = None;
                     obj.owner = None;
-                    // The collapse plays once.
+                    // The collapse plays once, then the object goes
+                    // (0x4230f0 state 2, `step_ruins`).
                     obj.progress = Some(0.0);
                     obj.picture = None;
                     obj.label = format!("Ruins ({})", obj.label);
+                    let frames = obj.frames.len() as u32;
+                    self.ruins.insert(
+                        target,
+                        Construction {
+                            site: target,
+                            frames,
+                            ..Default::default()
+                        },
+                    );
                 }
                 None => {
                     self.objects.remove(ti);
@@ -1527,23 +1538,6 @@ impl Scene {
                 Err(e) => eprintln!("could not redraw ship {}: {e:#}", o.id),
             }
             o.ship.as_mut().unwrap().look = Some(look);
-        }
-    }
-
-    /// Buildings fallen to ruins play their collapse once, over the third
-    /// entry of their class's cycle table (+0xc0: 75 ticks for every
-    /// player building and barbarian structure), then keep its last frame
-    /// (for a barbarian structure, the dust it leaves).
-    pub(super) fn run_collapses(&mut self, dt: f32) {
-        let step = dt / crate::clock::ticks(COLLAPSE_TICKS);
-        for o in &mut self.objects {
-            if o.combat.is_none() && o.owner.is_none() && o.ship.is_none() {
-                if let Some(p) = o.progress.as_mut() {
-                    if *p < 1.0 {
-                        *p = (*p + step).min(1.0);
-                    }
-                }
-            }
         }
     }
 
@@ -2192,6 +2186,3 @@ pub(super) struct ItemShot {
 }
 
 const NOT_A_WEAPON: u8 = 254;
-
-/// Ticks a building's collapse lasts (cycle table entry 2).
-const COLLAPSE_TICKS: u32 = 75;

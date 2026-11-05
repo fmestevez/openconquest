@@ -264,6 +264,11 @@ pub struct Scene {
     /// (`+0x7c->+0x45`, stepped by 0x4230f0 in state 1; its `frame`,
     /// `started` (`+0xbc`) and `wait`), which an upgrade starts from.
     pub standing_frames: BTreeMap<u32, Construction>,
+    /// The fallen buildings (`+0xa4` 2) collapsing: their ruins picture's
+    /// frame, stepped by 0x4230f0 every `BUILDING_CYCLE[2] / n` ticks, the
+    /// first step on the tick after the fall; the step reaching `n` posts
+    /// message 10 (0x4232ed), which removes the object (`step_ruins`).
+    pub ruins: BTreeMap<u32, Construction>,
     /// Amber and fish of the computer players.
     pub purses: std::collections::BTreeMap<(u32, u32), (u32, u32)>,
     /// Research levels per player (missing: all 0).
@@ -781,6 +786,7 @@ impl Scene {
             building_lcgs: BTreeMap::new(),
             constructions: Vec::new(),
             standing_frames: BTreeMap::new(),
+            ruins: BTreeMap::new(),
             messages: Vec::new(),
             sounds: Vec::new(),
             trainings: Vec::new(),
@@ -1133,6 +1139,7 @@ impl Scene {
                 .iter()
                 .map(|(&k, v)| (k, v.clone()))
                 .collect(),
+            ruins: self.ruins.iter().map(|(&k, v)| (k, v.clone())).collect(),
             trainings: self.trainings.clone(),
             garrisons: self.garrisons.clone(),
             purses: self.purses.iter().map(|(k, v)| (*k, *v)).collect(),
@@ -1288,6 +1295,7 @@ impl Scene {
             scene.constructions[k].upgrade_save(n);
         }
         scene.standing_frames = save.standing_frames.iter().cloned().collect();
+        scene.ruins = save.ruins.iter().cloned().collect();
         scene.trainings = save.trainings.clone();
         scene.trainings.iter_mut().for_each(Training::upgrade_save);
         scene.garrisons = save.garrisons.clone();
@@ -2608,6 +2616,9 @@ impl Scene {
         while self.brain_clock >= crate::clock::TICK {
             self.brain_clock -= crate::clock::TICK;
             self.ticks += 1;
+            // The ruins' picture steps (vt+0x3c 0x4230f0, first in each
+            // building's message 0, before anything can make it fall).
+            let removed = self.step_ruins();
             // The navy's tick (message 0, 0x49ab30 -> 0x4c4f40): the gather
             // zones hear their ships' notices and plan again. (Not settled:
             // whether before or after the ships' own ticks.)
@@ -2660,6 +2671,9 @@ impl Scene {
             // of the next, before anything runs (0x51fe20: 0x521570,
             // 0x5228c0, then the tick 0x542390): delivered here, before
             // the player can add his own after them.
+            // Message 10 from the ruins' last step, drained after the tick
+            // (0x542390's posted queue `+4`): the objects are removed.
+            self.remove_ruins(&removed);
             self.deliver(data, caches);
         }
         // The mission is judged every 250 ticks (0x448d40), a campaign
@@ -2707,7 +2721,6 @@ impl Scene {
         self.run_lightning(dt, data, caches);
         self.run_sight_points(dt);
         self.run_repairs(dt);
-        self.run_collapses(dt);
         self.refresh_ship_looks(data, caches);
         self.run_orders();
         self.run_treasures(dt, data, caches);
@@ -2723,7 +2736,6 @@ impl Scene {
         self.run_regrowth(dt, data, caches);
         self.offer_argo();
         self.run_hazards(dt, data, caches);
-        self.run_ruins(dt);
         self.run_combat(dt, data, caches);
         self.run_shots(dt, data, caches);
         self.run_volcanoes(dt, data, caches);

@@ -6722,6 +6722,34 @@ through row c - 1 of 0x5c1858, a static 7 x 256-byte table in the exe
 (no writer; rows 3 and 4 differ only at 186 and 191; dumped in the decode
 notes, `layers_spec.md`; a ship's fire uses it too, 0x4e2003).
 
+The fallen building's object. 0x423d60 on 0x138b sets `+0xa4` 2 and
+`+0xa8` 1, takes the ruins picture (vt+0x38, which clears `+0xbc`) at
+frame 0, and posts message 10 to itself at once only when it fell in
+state 0 (going up: `local_1c`); it clears neither owner byte (`+0x54`,
+`+0x55`). Every building class's vt+0x3c is 0x4230f0 (the 19 vtables
+holding 0x423520 at +0xc, dumped), which steps the ruins picture as any:
+the tick after the fall (it runs before the drain in message 0), then
+every `cycle[2] / n` ticks (75 for player buildings, the barbarian
+structures, the lairs (0x5953e0: 200, 75, 75, 75) and the hero's house
+(0x595e80: 50, 75, 75, 57); castles 100), the frame drawn and one added;
+the step reaching `n` (case 2) posts message 10 to itself (0x4232ed,
+0x542670 -> 0x541e10, the posted queue drained after the tick), resets
+the frame and redraws (0x423a60, 0x423b60). So the object lies fallen,
+owner kept, for `1 + (n - 1) x (cycle[2] / n)` ticks (a town's
+`TSPR_33_21`, 21 frames: 61) and is then removed; its removal runs
+LandObj 0x425990 message 3, which for a player's object (`+0x57` 1, and
+0x541a30(0x1c57) returning 0: not decoded) sends 0x5d9b `{id, class,
++0x54, +0x55, x, y, +0x1bc}` to the owner's player, the computer
+clearing the base that holds it (0x484b20 / 0x482c50). The rubble
+(below) stays. The port: `Scene::ruins` (saved), stepped first in each
+tick (`step_ruins`) and removed before the tick's delivery
+(`remove_ruins`); the computer frees a base when its town's object is
+gone (`computer_news`). Not ported: the port's ruins have no owner from
+the fall (`Scene::fallen`), where the original keeps `+0x54` / `+0x55`
+for those ticks; what else reads a fallen building's owner in that
+window (the judge's counts 0x448610, the interface, the brains) is not
+checked.
+
 The fall's rubble is a terrain tile on map layer 5. For each cell i of
 the site (`+0x56`, 1 or 4: x + i % 2, y + i / 2) two draws of the
 building's generator give k = r % 3 + 1 (0x4244a4) and s = r % 3 + 1
@@ -8707,8 +8735,9 @@ nothing, failing at 0; its last result +0x70 unwritten), one under way
 fails (+0x50 4); the berths' command (0x4295cb) goes to dword 3 as it is.
 The base keeps its town until the town's object is removed (LandObj
 0x425990 message 3 posts 0x5d9b, which clears +0x60 by 0x484b20 /
-0x482c50); not ported: the port clears it when the town is no longer the
-computer's (its ruins have no owner). Wakers: the walk itself for every
+0x482c50): a fallen town at its ruins' last step (0x4230f0, see "The
+fallen building's object"), a sold one at 0x424740; the port clears it
+when the town's object is gone (`computer_news`). Wakers: the walk itself for every
 entry it finds done or failed, 0x42c050 (an order put or refused), and the
 town at the end of each command it handles (0x441ba0 at 0x44393d; the port
 wakes at a part's start). A computer's parts send their town commands

@@ -7715,12 +7715,12 @@ fn attacks_end_at_ruins() {
     }
     let i = scene.object_index(ship).unwrap();
     assert_eq!(scene.objects[i].ship.as_ref().unwrap().task, None);
-    // The collapse plays out in 75 ticks.
+    // The collapse plays out within its 75 ticks, then the ruins go
+    // (0x4230f0 state 2: message 10).
     for _ in 0..(3.1 / 0.02) as usize {
         scene.update(0.02, &data, &mut caches);
     }
-    let t = scene.object_index(target).unwrap();
-    assert_eq!(scene.objects[t].progress, Some(1.0), "collapsed");
+    assert!(scene.object_index(target).is_none(), "collapsed and gone");
 }
 
 /// A ship's picture follows its hull (0x4be030) and fittings (0x4e5da0)

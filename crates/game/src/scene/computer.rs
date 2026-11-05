@@ -1144,16 +1144,14 @@ impl Scene {
     /// New and lost objects (messages 0x5d95, 0x5d97 and 0x5d9b).
     fn computer_news(&mut self, ai: &mut Computer) {
         // A settlement lost: its base waits to be founded again (0x5d9b).
-        // (Not ported: the original clears the base's town only when the
-        // town's object is removed, LandObj 0x425990 message 3; a fallen
-        // town, the port's ownerless ruin, is cleared here at once.)
+        // The original sends it from the town's removal (LandObj 0x425990
+        // message 3, a player's object, `+0x57` 1), not its fall: a fallen
+        // town stays in state 2 until its ruins' last step (0x4230f0 ->
+        // message 10, `step_ruins`), and a sold one until 0x424740, so its
+        // base keeps it meanwhile.
         for b in 0..ai.bases.len() {
             if let Some(site) = ai.bases[b].site {
-                let ours = self.object_index(site).is_some_and(|i| {
-                    self.objects[i].owner == Some(ai.owner)
-                        && matches!(self.class_of(i), Some(SETTLEMENT | TOWN))
-                });
-                if !ours {
+                if self.object_index(site).is_none() {
                     ai.bases[b].site = None;
                     ai.bases[b].state = 0;
                     ai.bases[b].started = false;
@@ -8122,6 +8120,55 @@ mod tests {
         scene.objects[i].owner = None;
         scene.land_fleet(&mut ai, 203);
         assert!(!ai.land.members.contains(&town));
+    }
+
+    /// A fallen town (0x423d60 on 0x138b: `+0xa4` 2) stays an object while
+    /// its ruins' picture steps (0x4230f0: the tick after the fall, then
+    /// every 75 / n ticks); the step reaching `n` posts message 10
+    /// (0x4232ed) and it goes at the end of that tick. Its removal
+    /// (0x425990 message 3 -> 0x5d9b) frees its computer's base, which
+    /// keeps it until then.
+    #[test]
+    fn a_fallen_town_goes_after_its_ruins() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        while scene
+            .computers
+            .players
+            .first()
+            .and_then(|p| p.bases.first()?.site)
+            .is_none()
+        {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        let town = scene.computers.players[0].bases[0].site.unwrap();
+        scene.hit(town, f32::MAX, None, &data, &mut caches);
+        let n = scene.ruins[&town].frames;
+        // TSPR_33_21: 21 frames, one every 75 / 21 = 3 ticks.
+        assert_eq!(n, 21);
+        let fell = scene.ticks;
+        let delay = crate::objects::BUILDING_CYCLE[2] / n;
+        let gone = fell + 1 + (n - 1) * delay;
+        assert_eq!(gone - fell, 61);
+        while scene.ticks < gone {
+            assert!(scene.object_index(town).is_some());
+            assert_eq!(scene.computers.players[0].bases[0].site, Some(town));
+            let before = scene.ticks;
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            if scene.ticks > before && scene.ticks < gone {
+                let frame = scene.ruins[&town].frame;
+                assert_eq!(frame, 1 + (scene.ticks - fell - 1) / delay);
+            }
+        }
+        assert_eq!(scene.ticks, gone);
+        assert!(scene.object_index(town).is_none() && !scene.ruins.contains_key(&town));
+        while scene.ticks == gone {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        assert_eq!(scene.computers.players[0].bases[0].site, None);
     }
 
     /// In battle01 the computer player (normal) builds its town up, fills
