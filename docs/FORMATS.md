@@ -10329,15 +10329,28 @@ about the base's town, from 4 cells and 4 more a time, that holds a
 treasure (0x4854f0, counting with 0x48f020); the whole map if none. Order
 0xbe (0x4da550; fleet state 0x79) holds the area, a mask of treasure kinds
 (`+0xb0` bits), and where to bring them: the town's ports (class 0x39,
-0x4d9a70). Each turn (0x4da3e0) a ship with room for a treasure (0x4e6700)
-or none aboard (0x4be800 mode 6) sails to take one (0x4d9690, 0x4cf070);
-a carrier sails home (0x4d9f50). With no treasure left in the area
-(0x4d9920) the order reports done and the round goes on to the zone. Ours
-takes any treasure, nearest first, one ship each, and brings the
-settlement's alongside the base's town. Not decoded: the carrier's home
-move 0x4d9f50 sends command 0x22 (the cast order) with kind 0x10,
-priority 0x5a and three arguments; ours hands nothing over there (a
-ship's treasures go ashore only by 0x4ad9f0 and the load panel).
+0x4d9a70). Each turn (0x4da3e0) every ship of the member (class 200) is
+sent after the same target, the first of the block's list `+0x2c`
+(0x4d9920 -> 0x4d9810: the area's treasures row by row, of the order's
+kinds `+0x1c` by `+0xb0`, `+0xa4` not 5; entries {object, id, kind, cell,
+-1}), and recorded in `+0x28` (0x4d9690): a ship that can take a
+treasure (0x4e6700 command 0x22 kind 0x10: capability `+0x261 & 0x8000`,
+every finished ship's by 0x4e6930, off while built, sold or holding its
+commands; and room, 0x4be800 mode 6 or 7) with room aboard (0x4be800
+mode 6: 0x597afc[type] = 1,1,2,1,1,1,1,1,0,0,0,0 less the treasures
+aboard `+0x482`; 0 for types 10 and 11) gets the take, 0x4d9f50: command
+0x22 {kind 0x10, cell x, cell y, the treasure's id}, priority 0x5a,
+which the ship's 0x4e2ba0 case 0x22 turns into event 0x40 {700, 10, the
+treasure, priority} as the player's take (0x49e0e0 gives the player's
+priority 0); any other ship a plain move to the treasure's cell
+(0x4cf070, command 0x14, priority 0). No ship sails home with what it
+carries: a computer's treasures go ashore only by 0x4ad9f0 and the
+panel. With no treasure left in the area (0x4d9920) the order reports
+done and the round goes on to the zone. Ours (`hunt_treasure`): the
+room test and the take or the move as the original's; not ported: the
+target (ours the nearest no other ship of the flotilla is after, the
+take given at once, a refused one trying the next) and the block's
+lists and notices (0x137, 0x141, 0x142).
 
 **Spells.** Order 117's studies 33 and 34 have the Temple of the Sea or
 of War learn its next spell (1000 amber; 100 ticks for a computer,

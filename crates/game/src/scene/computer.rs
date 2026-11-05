@@ -6292,31 +6292,37 @@ impl Scene {
         }
     }
 
-    /// One ship of a treasure hunt (0x4da3e0): carrying treasures for the
-    /// settlement it brings them home (0x4d9f50: command 0x22, the cast
-    /// order, kind 0x10, priority 0x5a, its three arguments; not decoded:
-    /// here it sails alongside the base's town and hands nothing over,
-    /// treasures going ashore only by 0x4ad9f0), else it sails for the nearest treasure in the area no other
-    /// ship of the flotilla is after (0x4cf070). (Not ported: the hunt's
-    /// treasure command is given at once here, a refused one trying the
-    /// next; the home move is a command, delivered at the next tick.)
+    /// One ship of a treasure hunt (0x4da3e0, over the member's ships of
+    /// class 200): one that can take a treasure (0x4e6700 command 0x22
+    /// kind 0x10: capability `+0x261 & 0x8000`, which every finished ship
+    /// has, 0x4e6930, but one being built, sold or holding its commands;
+    /// and room, 0x4be800 mode 6 or 7) with room aboard (mode 6:
+    /// 0x597afc[type] less the treasures aboard `+0x482`; none on types
+    /// 10 and 11) is sent to take it (0x4d9f50: command 0x22 kind 0x10
+    /// {cell x, cell y, the treasure}, priority 0x5a, which the ship's
+    /// 0x4e2ba0 turns into event 0x40 {700, 10, the treasure, 0x5a}, as
+    /// the player's take, 0x49e0e0 giving it priority 0); any other, a
+    /// plain move to the treasure's cell (0x4cf070, command 0x14). No ship
+    /// sails home with what it carries: a computer's treasures go ashore
+    /// only by 0x4ad9f0 and the panel. (Not ported: the target is the
+    /// first of the block's list `+0x2c` (0x4d9920 -> 0x4d9810: the area's
+    /// treasures row by row, of the order's kinds `+0x1c` by `+0xb0`,
+    /// `+0xa4` not 5), the same for every ship of the member, recorded in
+    /// `+0x28` by 0x4d9690; here the nearest no other ship of the flotilla
+    /// is after, the take given at once, a refused one trying the next.)
     fn hunt_treasure(&mut self, ai: &Computer, f: Option<usize>, i: usize, area: Cells) {
         let id = self.objects[i].id;
-        let carrying = self.objects[i]
-            .ship
-            .as_ref()
-            .is_some_and(|s| s.treasures.iter().any(|tr| matches!(tr.kind, 6 | 7 | 27)));
-        if carrying {
-            let home = f
-                .and_then(|f| ai.bases.get(ai.flotillas[f].base))
-                .and_then(|b| b.site)
-                .and_then(|s| self.object_index(s));
-            if let Some(t) = home {
-                let (x, y) = (self.objects[t].x, self.objects[t].y);
-                self.post(Order::Move { ship: id, x, y });
-            }
-            return;
-        }
+        let held = self.being_built(id)
+            || self.being_sold(id)
+            || self.hunt_holds(id)
+            || self.landing_holds(id)
+            || self.load_holds(id);
+        let room = self.objects[i].ship.as_ref().is_some_and(|s| {
+            super::chest::SINK_TREASURES
+                .get(s.kind as usize)
+                .is_some_and(|&n| usize::from(n) > s.treasures.len())
+        });
+        let take = !held && room;
         let taken: Vec<u32> = f
             .map(|f| ai.flotillas[f].ships.as_slice())
             .unwrap_or_default()
@@ -6337,6 +6343,19 @@ impl Scene {
             })
             .collect();
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if !take {
+            // 0x4cf070: a move to the target's cell, priority 0.
+            if let Some(k) = near.first().and_then(|&(_, t)| self.object_index(t)) {
+                let t = TILE_SIZE as f32;
+                let (cx, cy) = self.cell_of(k);
+                self.post(Order::Move {
+                    ship: id,
+                    x: cx as f32 * t + t / 2.0,
+                    y: cy as f32 * t + t / 2.0,
+                });
+            }
+            return;
+        }
         for (_, t) in near {
             if self.order_take(id, t).is_ok() {
                 return;
@@ -9466,6 +9485,74 @@ mod tests {
         let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
         scene.update(0.5, &data, &mut caches);
         assert!(scene.computers.players.is_empty());
+    }
+
+    /// A treasure hunt's ship (0x4da3e0): with room aboard (0x4be800
+    /// mode 6, 0x597afc[type] less those aboard) it goes to take the
+    /// treasure (0x4d9f50); full, or a type with no room (8-11), it only
+    /// moves to the treasure's cell (0x4cf070), never home with what it
+    /// carries (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn treasure_hunt_ships_take_or_move_to_the_treasure() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        // miss003 has treasures lying about.
+        let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+        scene.brain = None;
+        let i = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+        let id = scene.objects[i].id;
+        let all = (0, 0, i32::MAX / 2, i32::MAX / 2);
+        let target = {
+            let (x, y) = (scene.objects[i].x, scene.objects[i].y);
+            let mut near: Vec<usize> = scene.treasures_in(all).collect();
+            near.sort_by(|&a, &b| {
+                let d = |k: usize| (scene.objects[k].x - x).hypot(scene.objects[k].y - y);
+                d(a).total_cmp(&d(b))
+            });
+            near[0]
+        };
+        let t = TILE_SIZE as f32;
+        let (cx, cy) = scene.cell_of(target);
+        let cell = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
+        let ai = Computer::default();
+        let tr = crate::objects::Treasure {
+            kind: 6,
+            param: 0,
+            amount: 0,
+        };
+        // A royal ship (room 2) with one aboard still takes.
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.kind = 2;
+        s.treasures = vec![tr];
+        scene.outbox.clear();
+        scene.hunt_treasure(&ai, None, i, all);
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        assert!(matches!(s.task, Some(Task::Take { .. })), "{:?}", s.task);
+        assert!(scene.outbox.is_empty());
+        // With two aboard it is full: a move to the treasure's cell.
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.task = None;
+        s.path.clear();
+        s.treasures = vec![tr, tr];
+        scene.hunt_treasure(&ai, None, i, all);
+        assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
+        assert!(
+            matches!(scene.outbox[..], [Order::Move { ship, x, y }] if ship == id && (x, y) == cell),
+            "{:?}",
+            scene.outbox
+        );
+        // A type with no room (0x597afc 0 for 8-11), nothing aboard: the
+        // same move.
+        scene.outbox.clear();
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.kind = 9;
+        s.treasures.clear();
+        scene.hunt_treasure(&ai, None, i, all);
+        assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
+        assert!(matches!(scene.outbox[..], [Order::Move { ship, .. }] if ship == id));
     }
 }
 
