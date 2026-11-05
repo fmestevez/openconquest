@@ -10397,6 +10397,78 @@ cells, a stand-in); what 0x4b97d0 and 0x4bd0c0 do with each kind and the
 notices' texts (the port's messages are its own); the treasure's state
 5.
 
+**The land take, decoded so far (not ported).** 0x4af940 for the hero's
+house (class 0x49): `+0x792` = the cell its vt+0xb8 gives, `+0x797` =
+the house's own cell (`+0x74`, `+0x78`); always true. For a treasure on
+land: the ship's grid copied (0x5c93bc, 0x5c9398 when `+0x592`), every
+cell 0x499990(cell, 0) refuses that holds an object (0x5c74fc entry
+`+0xc`) less one, the ships about it laid on by 0x4a4e20 (its own
+`+0x591`, 0xfffe; a draw on the ship's generator when that is over 0x32),
+the treasure's cell set 0xffff, then 0x55a890(grid, w, h, ship cell,
+treasure cell, &n, 0x422a60, map): a list of 5-byte entries {x, y, dir};
+`+0x792` its next-to-last cell, `+0x797` its last; no route, false.
+0x55a890 is its own search (both ends checked on the grid; the grid's
+0 cells opened as 0xffff in a copy; 0x557910 from the start, then from
+the goal on the copy, then rings about the goal meeting through
+0x55a730), not the ships' 0x4a6330 nor walk_path's 0x55b560; its body,
+0x55a730 and the callback 0x422a60 are still to be read.
+Sub-code 10 (0x4b0e40, step `+0x77d`): **1** the target looked up by id
+`+0x77e` (gone: 0x4b8d40, the order ends); class 700 or 0x49 asks
+0x4afe50(0): from the ship's cell to `+0x797` the direction 0x59791d
+(`+0x7a3`, `+0x79c`), the shore group 0x4b3770 `+0x796` (none: false);
+a slant no line, `+0x79d` 0, `+0x6d7` the hull picture centred on its
+cell, false; straight, a line 0x4b5220 (`+0x7a9`, count `+0x7a5`) from
+the hull picture to its cell's place moved 0x599c44 / 0x59a1c8 /
+0x599ee8 / 0x59a4c8[type x 12 + group] (the founding's tables), the
+side-on heading `+0x7a4` and the turn `+0x79d` (+-1; the hull picture
+put on `h x 3 + 0x20`); the east / west line's y and the heading's choice
+are garbled in the decompile (read 0x4afe50-0x4b029f's disassembly).
+False, step 1 stays (asked again the next tick). True: `+0x78e` =
+`+0x79f` = 0, step 10, the commands held (0x4b37d0 with 0x2000,
+`+0x773`), `+0x25d |= 0x40`. **10** 0x4b0470(0) -> 0x4b02a0: the index
+`+0x78e` two points on (called off, `+0x77c` < 0, two back), a turn of
+`+0x79d` a tick on the hull frame (0x20-0x37, wrapping; stopped on the
+side-on heading's first frame), the picture to the point; at the line's
+end and turned, step 11 (called off and back at 0: the line freed, the
+hull on `+0x5af x 4`, `+0x25b` 0, 0x4b3850, message 8 class 0xc0, step
+1). **11** furl (0x4b89b0); furled, `+0x25b` 5, the walkway (slot 1,
+0x3e6) at the hull's top-left plus 0x599e88 / 0x59a408 or 0x59a468 /
+0x59a128 / 0x59a708 or 0x59a768 by direction and group (as the
+founding's), frame 0, its clock now, step 12. **12** a walkway frame a
+tick (its delay `+0x7d` 0); called off, down a frame a tick to 0, then
+step 5 (`+0x79f` = `+0x7a5`); at its last frame, for a treasure step 6
+and the party's picture (slot 3, 0x3de) at the walkway's top-left; for
+the house 0x4ba6b0 (false: step 14, 0x4ba2a0(`+0x78a`, 0)), else
+0x4ba2a0(`+0x78a`, 1), `+0x782` 1, step 6 likewise. **6** called off,
+step 14; else the party frame `+0x45` up by the map's `+0xe2` a tick; at
+half its frames (`+0x49 / 2`): the house 0x4bd350(`+0x78a`, `+0x252`)
+and, when it takes, 0x4ba7d0(`+0x77e`), 0x4b6df0(`+0x78a`), 0x4ba3f0 ->
+0x4bd500; a treasure 0x4b2d60 at the party picture's top-left +
+0x59a188[`+0x79c`]; then step 14. **14** the walkway frame down by
+`+0xe2` a tick; below 0, step 5 at the line's end. **5** a hull step:
+two points back (`+0x79f` -= 2), the sail unfurling a frame to
+`h x 8 + 0x58`; at 0 the hull on its cell's middle, the line freed,
+`+0x25b` 0, 0x4b3850 and `+0x25d &= ~0x40`.
+0x4b2d60 with `+0x25d & 0x40` sends 0x1a67 a record of kind 3 (byte
+`+0x74`): class field `+0x75` = `+0x7c2`, `+0x79` = `+0x7c6` (the
+treasure's cell, the party's site `+0xa16`, `+0xa1a`; its goal the
+cell's middle), `+0x7d` = the ship's id. The party (0x4221c0 message 2)
+walks as the founding's; on the site (0x421ea0) 0x421f00 kind 3: the
+object on the site cell's slot (0x5c74fc `+0xe`) of class 700 with
+0x407950 (`+0xa4` 1 or 2) gets message 0xda9d sent to the ship {the
+treasure's entry `+0xb0`, its id `+0x4c`} through the map's vt+0x18;
+answered yes (`+0x1c` set), 0x158c1 to the treasure; then the party
+goes (message 10). The ship's 0xda9d (0x4de5ea): 0x4b9740 class 2,
+0x4b97d0 at the ship's cell, notice 0x4a1af0; else 0x4bd0c0 (no room
+test of its own here), notice 0x4a1a60; either taken, 0x4b6e80(entry,
+1, 0) and yes. 0x4bd350: 0x4be800 mode 7 (hero room) at least 1, the
+next hero slot (`+0x483`, 0x18 bytes at `+0x4b5`) zeroed and given the
+hero, Argus (5) his count 0 and rate 0x14; 0x4beb50, 0x4bee60, and for
+a player 0x4bc820, 0x4bebe0. Still to read: 0x55a890's body, 0x55a730,
+0x422a60, 0x4a4e20's tail, 0x4b3770, the house's vt+0xb8 and what
+`+0x78a` holds for it, 0x4ba6b0, 0x4ba2a0, 0x4ba7d0, 0x4b6df0, 0x4ba3f0,
+0x4bd500, 0x4b6e80, 0xda9d's tail (the viewer's event).
+
 **Spells.** Order 117's studies 33 and 34 have the Temple of the Sea or
 of War learn its next spell (1000 amber; 100 ticks for a computer,
 0x439260). When a town is hit (0x488960, message 0x5d9c) the shooter's

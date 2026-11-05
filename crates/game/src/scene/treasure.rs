@@ -11,8 +11,12 @@ use crate::magic::Spell;
 use crate::objects::{self, Caches, Task, Treasure};
 
 /// How near (cells) a ship must come to a treasure on land, and to a
-/// hero's house to take the hero: the port's stand-in, not decoded (the
-/// original lands a party for them: 0x4ac2d0 sub-code 10, 0x4b0e40).
+/// hero's house to take the hero: the port's stand-in, not ported (the
+/// original sails to the route's last sea cell, 0x4af940 -> 0x55a890,
+/// and lands a party for them: 0x4ac2d0 sub-code 10, 0x4b0e40 -> 0x4b2d60
+/// kind 3 -> 0x421f00 -> message 0xda9d, or 0x4bd350 for the house; what
+/// is decoded and what is still to read under "The land take" in
+/// FORMATS.md).
 const TAKE_REACH: f32 = 1.0;
 const HERO_REACH: f32 = 2.6;
 /// What heals aboard (0x4b98b0, a tick at a time): each Cup of Asclepius
