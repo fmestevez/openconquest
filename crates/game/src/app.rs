@@ -6051,8 +6051,14 @@ impl App {
             };
             match order {
                 Ok(()) => {
-                    self.pending = None;
-                    self.status = None;
+                    // The settlement's mend (pointer mode 0xf) keeps its
+                    // mode after the tick, as 0x518734 does for 0xf and
+                    // 0x28 (the ship's repair mode is not checked here
+                    // and keeps the port's reset).
+                    if cmd == Command::REPAIR_SHIP {
+                        self.pending = None;
+                        self.status = None;
+                    }
                     self.confirm(pos);
                 }
                 Err(e) => self.say(e),
