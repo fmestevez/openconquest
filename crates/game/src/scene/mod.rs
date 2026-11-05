@@ -398,6 +398,10 @@ pub struct Scene {
     pub towns: towns::Towns,
     /// Settlements and towns sold (state 3).
     pub sold: Vec<u32>,
+    /// Town buildings sold (LandObj 0x425990 on 0x248f: state 3), by the
+    /// frame steps (0x4230f0) taken since; removed at the second
+    /// (`step_selling`).
+    pub selling: BTreeMap<u32, u8>,
     /// Ships lying alongside an own port, dock or ship to reload.
     pub loads: Vec<load::LoadLink>,
     /// Harpies and dragons out of their nests, and the nests' counts.
@@ -900,6 +904,7 @@ impl Scene {
             },
             dug: Vec::new(),
             sold: Vec::new(),
+            selling: BTreeMap::new(),
             strait_struck: false,
             strait_checked: false,
             winning: 0,
@@ -1161,6 +1166,7 @@ impl Scene {
                 .collect(),
             strait_struck: self.strait_struck,
             sold: self.sold.clone(),
+            selling: self.selling.clone(),
             strait_checked: self.strait_checked,
             winning: self.winning,
             losing: self.losing,
@@ -1322,7 +1328,14 @@ impl Scene {
         scene.woken = save.woken;
         scene.strait_struck = save.strait_struck;
         scene.sold = save.sold.clone();
-        for site in scene.sold.clone() {
+        scene.selling = save.selling.clone();
+        let shown: Vec<u32> = scene
+            .sold
+            .iter()
+            .chain(scene.selling.keys())
+            .copied()
+            .collect();
+        for site in shown {
             scene.show_sold(site, data, caches);
         }
         scene.strait_checked = save.strait_checked;
@@ -2579,6 +2592,7 @@ impl Scene {
             // Standing pictures before construction, so one finished this
             // tick takes its first standing step on the next (+0xbc).
             self.step_standing_frames();
+            self.step_selling();
             self.step_constructions(data, caches);
             for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {
                 self.big_reef(x, y, kind, data, caches);

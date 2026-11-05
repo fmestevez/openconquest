@@ -1212,7 +1212,9 @@ each item's place flags (stock ? 2 : 1) | 4, its count, no bar; armour
 and rams place 3, treasures and heroes place 7). DoInfoBut on a cell:
 - cursor in mode 0x34 (Sell Item) and the entry's flags exactly 2 with
   category 1, 2 or 4: the press sends 0x518db0(mode 0x34) with the entry's
-  word and its index less the header (the settlement sells it);
+  word and its index less the header (the settlement sells it); the
+  pointer's mode is left as it is (0x4f73f5 calls no 0x516940), so
+  more can be sold;
 - empty (flag 1): nothing;
 - flags 2 with 4 or 0x10: a group opens (the list becomes a header, the
   entry's word with flags 0x12, then the object's entries for that key:
@@ -1872,7 +1874,9 @@ Clicks (gcursor.cpp 0x5180e0, `CursorClassTy`; message 0x62 the left button,
   the modes possible there (`+0xe4` stepping through the mask `+0xe2`).
   With nothing selected it returns to the standard pointer.
 - **Confirmation.** The tick (`CreateConfirmSprite`, `TAKE_CMD`) follows
-  modes 7, 12, 13, 20, 30 and 50 only. It does not follow gathering or
+  modes 7, 12, 13, 15, 20, 30, 40 and 50 only (after an order sent at
+  0x51872d the switch at 0x518734: 12 and 13 the tick and the mode
+  reset, 0x516940; 15 and 40 the tick, the mode kept). It does not follow gathering or
   attacking. The cursor class's only other sprite is `VETOBUILD`, for
   building sites: CreateBuildSprite (0x516010) shows, where the site is
   refused (pointer mode 100), `VETOBUILD` (controlm) frame 1 for a
@@ -2401,8 +2405,8 @@ with the anchor down while the porters carry the goods in (the port's
 event 8 0x40 and moves a cell off the berth, 0x4b46f0 with '[' = 91 (see
 "Shipyards' berths"). Waiting by a taken port berth 300 ticks it steps
 aside itself (0x4b4b50 with 0x5a) and gives up after 349. A ship can be
-sold (message 0x248f, task 5) only in state 6 with a building contact.
-Not ported: selling ships (the port has none). The wait by a crowded
+sold (message 0x248f, task 5) only in state 6 with a building contact
+(its settlement's Sell Item click, see **Selling**). The wait by a crowded
 port berth is in "Gather zones".
 
 **Where cargo comes ashore.** 0x4ac2d0 routes the gathering task by its
@@ -4342,7 +4346,56 @@ destroyed: it goes to state 3, drawn as its building picture's last frame
 (0x422e30), keeping its owner and stock, with no menu and taking no orders.
 Only the human can sell (nothing else sends order 0x34; byte 2 the
 stock pick, 0x4f73f5; byte 1 a building or docked ship clicked in the
-sell mode, below). Sell Item and Sell
+sell mode, below).
+
+**The sell mode on the map.** Sell Item sets the pointer's mode 0x34
+with the settlement (`+0xef`); the pointer (0x5175b0) asks the
+settlement (0x441ba0): off the field cursor 0x28 enabled; over nothing
+(0xc451) 0x28 greyed (`+0x1b |= 0x40`); over an object (0xc452) the
+settlement itself cursor 6 (select), another's object 0 (standard), an
+own one (`+0x57` 1, its player and slot) with the settlement not standing
+idle (`+0xa4` 1, `+0x10c` 0) 5 (own), else 0x28: a non-ship (`+4` not
+0x1488) enabled when of class 0x32-0x3e (mask 0x1fff) and in the list
+`+0x1d0` (count `+0x1c8`), a ship greyed unless the settlement counts a
+yard or dock (`+0x20c`, `+0x210`) and a listed one, found (0x51f1f0),
+standing (`+0xa4` 1), of class 0x3a or 0x3b, holds it (`+0x1e0` its id).
+The click (0x5180e0, at 0x518709), not greyed (`+0xe6`) and on an own
+object, sends order 0x34 `{1, id, 0}` (0x518db0) and shows the tick
+(0x515e60, as after modes 0xf and 0x28; modes 0xc and 0xd also leave
+their mode, 0x516940); the mode stays. The order's 0x444220 posts the
+object 0x248f, unasked:
+- a building (LandObj 0x425990, with its scaffold picture `+0xe8`; the
+  Cyclops lair has none): standing only (`+0xa4` 1), its owner gets
+  `0x42d8b0(class) x condition +0xa8 x 75 / 10000` amber (0x4a8dc0,
+  integers), state 3, killer `+0x1ac` = slot + player x 4 (its owner),
+  vt+0x38: 0x422e30 in state 3 takes the construction picture (state
+  digit 0, damage digit 3) on its last frame with a wait `+0x7d` of 1 and
+  `+0xbc` 0. Its frame step (0x4230f0) draws that frame and steps past it
+  at the next tick; the step after finds it done and, in state 3, calls
+  0x424740: removed with `+0x158` 0 (no fall sound, no rubble, no ruins),
+  the drain reporting it killed by its owner (nothing counted); its town
+  lets it go (0x2874).
+- a dock (0x416f90) swallows only order 10 of an upgrade (0x280f case
+  10) and passes 0x248f on (0x4e8660 -> 0x4e7640 -> 0x427f50 ->
+  0x425990), as a yard or port does.
+- a fort (0x419f80) runs 0x4e7640 first (so the building's sale above),
+  then its own 0x248f: in state 1 or 3 (so again on a second click before
+  it goes), per unit of each of its 12 places (`+0x4d0` + 0x23 + 4k,
+  count `+0x3b`, kind `+0x38`, units `+0x3f`, condition byte +1) amber
+  `0x597164[kind / 3] x c x 75 / 10000` (30, 50, 70; 0x4a8dc0) and fish
+  `0x597170[kind] x c x 7500 / 10000` (2, 2, 3, then 0; 0x4a8c30).
+- a ship (0x4dcf1b): only in move state 6 with a building contact
+  (`+0x8e6` type 0x32): `+0x251` 2, task 5, state 1 (0x4b4380), whose
+  state 1 lets the contact go (0x4b3970: 0xcb8 to the dock; 0x4b3930:
+  0x2876 to it; 0x4e06a0) before the line to its cell; then as a sale at
+  a dock (see **Hulls, blows and dock repairs**).
+
+The port: `Command::SELL_ITEM` keeps `pending` (the stock pick
+`info_press` and the map click alike), `App::default_pointer`,
+`left_click` with `Order::SellObject` (`Scene::sell_object`,
+`settlement_idle`, `sellable`, `standing`; `selling` and `step_selling`
+for state 3), the ship's contact let go in `sale_tick` state 1. The
+original posts 0x248f; the port hands it over at once. Sell Item and Sell
 Town show only with permit bit 10 (player +0x46 bit 2) and are enabled
 while the settlement is built and idle; Sell Town also hides while a ship
 is taken up for loading (+0x1c8). No menu offers Sell Fish (0x7e).
@@ -4567,8 +4620,8 @@ The block in full (0x4db9e0, 0x4dafe0 and the rest):
   order done by message 8; or not a yard or dock of its player, every
   tick), 0x144 0x4a1bf0 (sale end), 0x137 0x4a1770 (0x49bef0, a ship
   leaving a group with a block: sunk, 0x4a8410, or moved by 0x49bd60).
-- Not decoded: who sends ship message 0x248f (the sale started at
-  0x4dcf1b). The settlement's handler 0x441ba0 sends it from its order
+- Ship message 0x248f (the sale started at
+  0x4dcf1b): the settlement's handler 0x441ba0 sends it from its order
   0x34 (0x443f8b, the payload byte 0): 3 to itself (0x443fbb, Sell Town,
   0x4f34c0), 1 to the object whose id is the payload's dword `+1`
   (0x444220, through `+0x70` vt+0x18). Byte 1 is the human's map click
@@ -4586,9 +4639,8 @@ The block in full (0x4db9e0, 0x4dafe0 and the rest):
   0x28, not disabled `+0xe6`, an own object) sends order 0x34 `{1, id
   (dword at +1), 0}` to `+0xef` (0x518709). So the human sells a ship
   lying in one of the settlement's yards or docks, or one of its
-  buildings, by clicking it in Sell Item mode. Not ported (the port's
-  sell mode takes the stock list only; the building's 0x248f, 0x425990,
-  and the ship's at 0x4dcf1b would be needed).
+  buildings, by clicking it in Sell Item mode; the mode stays (see
+  **Selling**).
 
 The port runs it at the game tick (`Scene::step_dock_repairs`, the
 landing's `Landing` with its `dock` contact; `Scene::dock_lets_go` for
@@ -4606,10 +4658,9 @@ Order 200's block is `DockBlock` on the flotilla (`Scene::dock_order`,
 `dock_pass`, `dock_status`), its notices posted by the repair machine
 (0x134 at the back-out; 0x143 in state 1, see below), the sale (0x144) and
 a ship leaving a flotilla (0x137, `Computer::leave`); its details under
-**Order 200's block** below. The walkway's state 7 and a contact let go (a ship
-the dock takes has neither in the port); the furled turn (`+0x25b` 5,
-not reached); 0x50e830's viewer; message 0x248f's sale (its sender not
-found); a fort's 0x4e7640 on 0x2874 (its `+0x1e0` not decoded).
+**Order 200's block** below. The walkway's state 7 (a ship
+the dock takes has none in the port); the furled turn (`+0x25b` 5,
+not reached); 0x50e830's viewer; a fort's 0x4e7640 on 0x2874 (its `+0x1e0` not decoded).
 
 **The fitting of types 2-7** (0x4bbca0(ship, dock, room), from 0x4b22f0
 in state 4 at a full hull with the contact `+0x8e6` and its dock `+5`;

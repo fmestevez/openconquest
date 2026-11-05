@@ -217,6 +217,12 @@ pub enum Order {
         ram: bool,
         level: u8,
     },
+    /// Settlement or town `site` sells own building or docked ship
+    /// `target` (order 0x34 byte 1).
+    SellObject {
+        site: u32,
+        target: u32,
+    },
     /// Sell settlement or town `site`, with its stock.
     SellTown {
         site: u32,
@@ -775,6 +781,7 @@ impl Scene {
             SellItem { site, item } => done(self.sell_item(site, item)),
             SellFitting { site, ram, level } => done(self.sell_fitting(site, ram, level)),
             SellTown { site } => done(self.sell_town(site, data, caches)),
+            SellObject { site, target } => done(self.sell_object(site, target, data, caches)),
             RepairStock { workshop } => done(self.order_repair_stock(workshop)),
             Halt { id } => done(self.halt(id, data, caches)),
             SelfMend { id } => done(self.self_mend(id)),

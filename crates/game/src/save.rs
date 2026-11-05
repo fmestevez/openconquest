@@ -135,6 +135,8 @@ pub struct SaveGame {
     #[serde(default)]
     pub sold: Vec<u32>,
     #[serde(default)]
+    pub selling: std::collections::BTreeMap<u32, u8>,
+    #[serde(default)]
     pub strait_checked: bool,
     #[serde(default)]
     pub winning: u32,

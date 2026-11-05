@@ -15953,3 +15953,162 @@ fn guard_fires_an_item_a_shot() {
     scene.run_fire_pass(&data, &mut caches);
     assert_eq!(scene.shots.len(), 1, "the item waits for its time");
 }
+
+/// The settlement's Sell Item on the map (pointer mode 0x34, 0x441ba0's
+/// 0xc452; order 0x34 byte 1, 0x444220 -> 0x248f): in miss005 town 2 sells
+/// a listed building, standing only, for `0x42d8b0(class) x condition x 75
+/// / 10000` amber (0x425990); it stays two frame steps in state 3
+/// (0x4230f0) and is removed. A fort also pays back each unit, amber
+/// `0x597164[kind / 3] x c x 75 / 10000` and fish `0x597170[kind] x c x
+/// 7500 / 10000`, and again when sold twice (0x419f80 in state 3). A ship
+/// may be sold only lying in a listed yard or dock (`+0x1e0`), and is let
+/// go by it (0x4dcf1b, 0x4b4380) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_settlement_sells_its_buildings_and_docked_ships() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    let town = 2;
+    let i = scene.object_index(town).unwrap();
+    let owner = scene.objects[i].owner.unwrap();
+    assert!(scene.settlement_idle(town));
+    // The workshop 35 at 80 %: 0x42d8b0(0x37) x 80 x 75 / 10000.
+    let w = scene.object_index(35).unwrap();
+    let class = scene.objects[w].record.class_id;
+    assert_eq!(class, WORKSHOP);
+    {
+        let c = scene.objects[w].combat.as_mut().unwrap();
+        c.hull = c.max_hull * 0.8;
+    }
+    assert!(scene.sellable(town, 35));
+    assert!(!scene.sellable(town, 41), "the port 41 has no town");
+    let amber = scene.funds(owner).0;
+    scene.sell_object(town, 35, &data, &mut caches).unwrap();
+    assert_eq!(
+        scene.funds(owner).0,
+        amber + economy::building_cost(WORKSHOP) * 80 * 75 / 10000
+    );
+    assert!(!scene.standing(35));
+    let w = scene.object_index(35).unwrap();
+    assert_eq!(scene.objects[w].frames.len(), 1, "its last frame");
+    // Sold, it pays nothing more.
+    scene.sell_object(town, 35, &data, &mut caches).unwrap();
+    assert_eq!(
+        scene.funds(owner).0,
+        amber + economy::building_cost(WORKSHOP) * 80 * 75 / 10000
+    );
+    scene.step_selling();
+    assert!(scene.object_index(35).is_some());
+    scene.step_selling();
+    assert!(scene.object_index(35).is_none(), "removed");
+    scene.run_town_links();
+    assert!(!scene.towns.lists[&town].contains(&35));
+
+    // A small fort of the town: a bowman whole and one at half, and a
+    // medium weapon (fish 0).
+    let id = scene.objects.iter().map(|o| o.id).max().unwrap() + 1;
+    scene
+        .place_building_facing(town, 0x34, 12, 14, Some(0), &data, &mut caches)
+        .unwrap();
+    // Going up, it is not listed and pays nothing.
+    let before = scene.funds(owner);
+    scene.sell_object(town, id, &data, &mut caches).unwrap();
+    assert_eq!(scene.funds(owner), before);
+    scene.constructions.retain(|c| c.site != id);
+    scene.run_town_links();
+    assert!(scene.sellable(town, id));
+    let f = scene.object_index(id).unwrap();
+    let mut places: [Vec<u8>; 9] = Default::default();
+    places[0] = vec![100, 50];
+    places[4] = vec![100];
+    scene.objects[f].set_fort_places(places);
+    {
+        let c = scene.objects[f].combat.as_mut().unwrap();
+        c.hull = c.max_hull;
+    }
+    let (amber, fish) = scene.funds(owner);
+    scene.sell_object(town, id, &data, &mut caches).unwrap();
+    // 30 x 100 x 75 / 10000 + 30 x 50 x 75 / 10000 + 50 x 100 x 75 /
+    // 10000 = 22 + 11 + 37; fish 2 x 100 x 0.75 + 2 x 50 x 0.75.
+    let units = (22 + 11 + 37, 150 + 75);
+    assert_eq!(
+        scene.funds(owner),
+        (
+            amber + economy::building_cost(0x34) * 75 / 100 + units.0,
+            fish + units.1
+        )
+    );
+    scene.sell_object(town, id, &data, &mut caches).unwrap();
+    assert_eq!(
+        scene.funds(owner),
+        (
+            amber + economy::building_cost(0x34) * 75 / 100 + 2 * units.0,
+            fish + 2 * units.1
+        )
+    );
+
+    // A ship: only in a listed yard or dock (miss000's settlement).
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let own = |scene: &Scene, cls| {
+        scene
+            .objects
+            .iter()
+            .find(|o| o.class == ObjectClass::Building(cls) && scene.is_own(o))
+            .map(|o| o.id)
+            .unwrap()
+    };
+    let town = own(&scene, SETTLEMENT);
+    let yard = own(&scene, SHIPYARD);
+    let owner = scene.objects[scene.object_index(town).unwrap()]
+        .owner
+        .unwrap();
+    scene.update(0.04, &data, &mut caches);
+    assert!(scene.towns.lists[&town].contains(&yard));
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| o.owner == Some(owner) && o.ship.is_some())
+        .unwrap()
+        .id;
+    assert!(!scene.sellable(town, ship));
+    let before = scene.funds(owner);
+    scene.sell_object(town, ship, &data, &mut caches).unwrap();
+    let k = scene.object_index(ship).unwrap();
+    assert!(scene.objects[k].ship.as_ref().unwrap().task.is_none());
+    {
+        let c = scene.objects[k].combat.as_mut().unwrap();
+        c.hull = c.max_hull / 2.0;
+    }
+    scene.order_repair(ship, yard).unwrap();
+    for _ in 0..50 * 120 {
+        scene.update(0.02, &data, &mut caches);
+        let k = scene.object_index(ship).unwrap();
+        let s = scene.objects[k].ship.as_ref().unwrap();
+        if s.landing.as_ref().is_some_and(|l| l.dock == Some(yard)) {
+            break;
+        }
+    }
+    assert!(scene.sellable(town, ship), "held by the yard");
+    scene.sell_object(town, ship, &data, &mut caches).unwrap();
+    let k = scene.object_index(ship).unwrap();
+    assert!(matches!(
+        scene.objects[k].ship.as_ref().unwrap().task,
+        Some(objects::Task::Sell(objects::Sale { state: 1, .. }))
+    ));
+    let mut freed = false;
+    for _ in 0..50 * 120 {
+        scene.update(0.02, &data, &mut caches);
+        let Some(k) = scene.object_index(ship) else {
+            break;
+        };
+        freed |= scene.objects[k].ship.as_ref().unwrap().landing.is_none();
+    }
+    assert!(freed, "the yard lets it go");
+    assert!(scene.object_index(ship).is_none(), "sold");
+    assert!(scene.funds(owner).0 > before.0);
+}

@@ -1352,6 +1352,170 @@ impl Scene {
         }
     }
 
+    /// Whether settlement or town `site` is standing and idle (`+0xa4` 1,
+    /// `+0x10c` 0): not going up, asleep or sold, and not training,
+    /// mending its stock or itself.
+    pub fn settlement_idle(&self, site: u32) -> bool {
+        self.object_index(site)
+            .is_some_and(|i| self.objects[i].asleep.is_none())
+            && !self.sold.contains(&site)
+            && self.construction_at(site).is_none()
+            && self.training_at(site).is_none()
+            && self.stock_repair_at(site).is_none()
+            && !self.mending.contains(&site)
+    }
+
+    /// Whether building `id` stands (`+0xa4` 1): not going up, asleep
+    /// (0x10) or sold (3).
+    pub fn standing(&self, id: u32) -> bool {
+        self.object_index(id)
+            .is_some_and(|i| self.objects[i].asleep.is_none())
+            && self.construction_at(id).is_none()
+            && !self.selling.contains_key(&id)
+            && !self.sold.contains(&id)
+    }
+
+    /// Whether settlement or town `site`'s sell pointer may take own
+    /// object `target` (its answer to 0xc452 in mode 0x34, 0x441ba0): a
+    /// building of classes 0x32-0x3e in its list (`+0x1d0`), or a ship
+    /// some yard or dock of its list, standing, holds (`+0x1e0`, the ship
+    /// in contact with it: `landing.dock`). The list's yards and docks
+    /// counted (`+0x20c`, `+0x210`) are those the search finds.
+    pub fn sellable(&self, site: u32, target: u32) -> bool {
+        let Some(t) = self.object_index(target) else {
+            return false;
+        };
+        let list = self.towns.lists.get(&site);
+        let listed = |id: u32| list.is_some_and(|l| l.contains(&id));
+        if self.objects[t].ship.is_none() {
+            return matches!(self.objects[t].class, ObjectClass::Building(0x32..=0x3e))
+                && listed(target);
+        }
+        let held = self.objects[t]
+            .ship
+            .as_ref()
+            .and_then(|s| s.landing.as_ref())
+            .and_then(|l| l.dock);
+        list.is_some_and(|l| {
+            l.iter().any(|&b| {
+                Some(b) == held
+                    && self.standing(b)
+                    && self.object_index(b).is_some_and(|i| {
+                        matches!(
+                            self.objects[i].class,
+                            ObjectClass::Building(SHIPYARD | DOCK)
+                        )
+                    })
+            })
+        })
+    }
+
+    /// Settlement or town `site` sells own object `target` (the sell
+    /// pointer's click, 0x5180e0 at 0x518709: order 0x34 byte 1 with the
+    /// id; the order's 0x444220 posts it 0x248f, unasked).
+    ///
+    /// - A building (LandObj 0x425990, with a scaffold picture `+0xe8`,
+    ///   which every player building has): standing only (`+0xa4` 1), its
+    ///   owner gets `0x42d8b0(class) x condition x 75 / 10000` amber
+    ///   (0x4a8dc0, integers), it is sold (state 3, its killer `+0x1ac` its
+    ///   owner) and shows its construction picture's last frame (0x422e30);
+    ///   it is removed at its second frame step (`step_selling`).
+    /// - A fort then (0x419f80, in state 1 or 3, so also when already
+    ///   sold) pays back each of its units: amber `0x597164[kind / 3] x c x
+    ///   75 / 10000` and fish `0x597170[kind] x c x 7500 / 10000` (0, 2, 3
+    ///   for marines and 0 for weapons), `c` its condition, unit by unit.
+    ///   Its weapons' armour and rams are not counted.
+    /// - A ship (0x4dcf1b): only held by a building (`+0x58c` 6, contact
+    ///   `+0x8e6` of type 0x32: `landing.dock`): it is sold as at a dock
+    ///   (task 5 in state 1, `sale_tick`).
+    ///
+    /// (The original posts 0x248f; the port hands it over at once.)
+    pub fn sell_object(
+        &mut self,
+        site: u32,
+        target: u32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Result<(), String> {
+        let s = self.object_index(site).ok_or("No such settlement")?;
+        let t = self.object_index(target).ok_or("Nothing to sell")?;
+        if !matches!(
+            self.objects[s].class,
+            ObjectClass::Building(SETTLEMENT | TOWN)
+        ) || self.objects[t].owner.is_none()
+            || self.objects[t].owner != self.objects[s].owner
+        {
+            return Err("Choose one of your buildings or ships".into());
+        }
+        if self.objects[t].ship.is_some() {
+            let s = self.objects[t].ship.as_mut().unwrap();
+            if s.landing.as_ref().is_some_and(|l| l.dock.is_some()) {
+                s.task = Some(Task::Sell(objects::Sale {
+                    state: 1,
+                    from: (0.0, 0.0),
+                    to: (0.0, 0.0),
+                    count: 0,
+                    at: 0,
+                    face: 0,
+                    turn: 0,
+                    frame: 0,
+                }));
+            }
+            return Ok(());
+        }
+        let ObjectClass::Building(class) = self.objects[t].class else {
+            return Ok(());
+        };
+        let owner = self.objects[t].owner.unwrap();
+        if self.standing(target) {
+            let condition = self.objects[t].combat.as_ref().map_or(100, |c| {
+                (c.hull / c.max_hull * 100.0).clamp(0.0, 100.0) as i64
+            });
+            let amber = economy::building_cost(class) as i64 * condition * 75 / 10000;
+            self.earn(owner, amber, 0);
+            self.selling.insert(target, 0);
+            self.show_sold(target, data, caches);
+        }
+        if self.objects[t].holds_units()
+            && (self.standing(target) || self.selling.contains_key(&target))
+        {
+            let (mut amber, mut fish) = (0i64, 0i64);
+            for (kind, units) in self.objects[t].fort_places().iter().enumerate() {
+                for &c in units {
+                    let c = c as i64;
+                    amber += combat::item_cost(kind as u8).0 as i64 * c * 75 / 10000;
+                    if kind < 3 {
+                        fish += combat::CREW_COST[kind].1 as i64 / 100 * c * 7500 / 10000;
+                    }
+                }
+            }
+            self.earn(owner, amber, fish);
+        }
+        Ok(())
+    }
+
+    /// The sold buildings' frame steps (0x4230f0 in state 3, `+0xbc` 0
+    /// after 0x422e30 and a wait `+0x7d` of 1): the first draws the last
+    /// frame and steps past it; the second finds the frame done and
+    /// removes the building (0x424740 with `+0x158` 0: no fall sound and
+    /// no rubble; the drain 0x423d60 reports it killed by its owner,
+    /// which counts nothing, and removes it, no ruins). Its town lets it
+    /// go at the next tick (`run_town_links`).
+    pub(super) fn step_selling(&mut self) {
+        for (id, steps) in std::mem::take(&mut self.selling) {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            if steps == 0 {
+                self.selling.insert(id, 1);
+                continue;
+            }
+            let owner = self.objects[i].owner;
+            self.note_destroyed(i, owner);
+            self.objects.remove(i);
+        }
+    }
+
     pub fn load_item(&mut self, site: u32, ship: u32, item: u8) -> Result<(), String> {
         let s = self.object_index(site).ok_or("No such settlement")?;
         let i = self.object_index(ship).ok_or("No such ship")?;

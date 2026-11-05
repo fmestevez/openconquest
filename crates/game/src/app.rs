@@ -4587,12 +4587,10 @@ impl App {
                                 level: e.sub.saturating_sub(3).min(2),
                             },
                         };
-                        match self.issue(order) {
-                            Ok(_) => {
-                                self.pending = None;
-                                self.status = None;
-                            }
-                            Err(err) => self.say(err),
+                        // The pick (0x4f73f5, order 0x34 {2, ...} by
+                        // 0x518db0) leaves the pointer's mode as it is.
+                        if let Err(err) = self.issue(order) {
+                            self.say(err);
                         }
                     }
                 } else if e.is_group() {
@@ -5442,11 +5440,12 @@ impl App {
                     Err(e) => self.say(e),
                 }
             }
-            // The pointer's sell mode: the stock unit pressed next is
-            // sold (c_info.cpp 0x4f72d0 with the cursor in mode 0x34).
+            // The pointer's sell mode: a stock unit pressed (c_info.cpp
+            // 0x4f72d0 with the cursor in mode 0x34) or an own building or
+            // docked ship clicked is sold, until the mode is left.
             Command::SELL_ITEM => {
                 self.pending = Some(Command::SELL_ITEM);
-                self.say("Choose an item in the stock to sell");
+                self.say("Choose an item, building or ship to sell");
             }
             Command::SELL_TOWN => {
                 if let Err(e) = self.issue(Order::SellTown { site: id }) {
@@ -5891,6 +5890,26 @@ impl App {
             self.right_click(pos);
             return;
         }
+        // The sell pointer's click (0x5180e0): greyed, nothing; on an own
+        // object order 0x34 {1, id} to the settlement (0x518709) and the
+        // tick (0x515e60), the mode kept (no 0x516940 after mode 0x28).
+        // Its other pointers (select, own, standard) click as they do.
+        if self.pending == Some(Command::SELL_ITEM) && self.view_world(pos).is_some() {
+            use crate::cursor::Pointer as P;
+            let (pointer, greyed) = self.default_pointer(pos);
+            if pointer == P::Sell {
+                if greyed {
+                    return;
+                }
+                if let (Some(site), Some(target)) = (self.selected, self.object_at(pos)) {
+                    match self.issue(Order::SellObject { site, target }) {
+                        Ok(_) => self.confirm(pos),
+                        Err(e) => self.say(e),
+                    }
+                }
+                return;
+            }
+        }
         if let Some(class) = self.pending.and_then(economy::building_of_command) {
             let (Some(settlement), Some(cell)) = (self.selected, self.cell_at(pos)) else {
                 return;
@@ -6222,10 +6241,38 @@ impl App {
         if self.in_game && self.scene.human.is_none() {
             return (P::Standard, false);
         }
-        // Selling, the sell pointer (0x441ba0 answers the sell mode 0x34
-        // with gcursor mode 0x28, CUR_SELL_).
+        // Selling, the sell pointer (0x5175b0 with the settlement's
+        // 0x441ba0 in mode 0x34): off the field gcursor mode 0x28,
+        // CUR_SELL_; over nothing the same greyed (0xc451); over an
+        // object (0xc452) the settlement itself selects (6), another's
+        // object is the standard pointer (0), an own one with the
+        // settlement not standing idle (`+0xa4` 1, `+0x10c` 0) the own
+        // pointer (5), else the sell pointer, greyed unless it may be
+        // sold (`Scene::sellable`).
         if self.pending == Some(Command::SELL_ITEM) {
-            return (P::Sell, false);
+            if self.view_world(pos).is_none() {
+                return (P::Sell, false);
+            }
+            let Some(target) = self
+                .object_at(pos)
+                .and_then(|id| self.scene.object_index(id))
+                .map(|i| &self.scene.objects[i])
+            else {
+                return (P::Sell, true);
+            };
+            let Some(site) = self.selected else {
+                return (P::Sell, true);
+            };
+            if target.id == site {
+                return (P::Select, false);
+            }
+            if !self.scene.is_own(target) {
+                return (P::Standard, false);
+            }
+            if !self.scene.settlement_idle(site) {
+                return (P::Own, false);
+            }
+            return (P::Sell, !self.scene.sellable(site, target.id));
         }
         // Over a quick help link, the hypertext pointer (0x51728a).
         if self.tab == Tab::Help {

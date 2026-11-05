@@ -690,8 +690,11 @@ impl Scene {
     ///   `+0x25d` 0), its walkway, party and hooks taken off (0x4e0240,
     ///   0x4df0c0); the line to its cell's middle (0x4b40d0), state 2.
     ///   (A walkway shown, `+0x8c2`, would first run down a frame a tick,
-    ///   state 7, and a contact, 0x32 or 200, be let go: the dock takes a
-    ///   ship lying with neither.)
+    ///   state 7: the dock takes a ship lying with none, and one docked
+    ///   for repair shows none.) A contact is let go: a building's
+    ///   (0x32: a ship its settlement sells from a yard or dock,
+    ///   `sell_object`) with 0xcb8 and 0x2876 to it; a ship's (200,
+    ///   0x4e02a0) is not reached.
     /// - **2** (0x4b4220): a hull rotation the way it turns and two
     ///   points of the line a tick; at the line's end and turned, its
     ///   building picture (0x4e1bb0(4) with `+0x251 == 2`: 0x4e0120 mode
@@ -712,6 +715,13 @@ impl Scene {
                 let s = self.objects[k].ship.as_mut().unwrap();
                 s.fire_wind_down();
                 s.path.clear();
+                // A building contact (a ship its settlement sells from a
+                // yard or dock, 0x4dcf1b) is let go: 0xcb8 to the dock
+                // (0x4b3970, its `+0x1e0` cleared), 0x2876 to it (0x4b3930,
+                // which ends no reload here: the dock's contact is not a
+                // load link) and the contact freed (0x4e06a0).
+                s.landing = None;
+                s.dock_step = None;
                 self.sale_line(k, &mut sale);
                 sale.state = 2;
             }
