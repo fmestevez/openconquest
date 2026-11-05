@@ -237,7 +237,7 @@ impl Scene {
             }
             // A party frame a tick up to 0x17 (0x15 north); there the
             // party is made at the walkway's top-left plus 0x59a188[dir]
-            // (0x4b2d60), and state 7.
+            // (0x4b2d60), the crew gains 200 experience, and state 7.
             6 => {
                 if l.abort {
                     l.porters = None;
@@ -257,6 +257,8 @@ impl Scene {
                         if let Some(owner) = owner {
                             self.make_party(owner, class, (cx, cy), at, data, caches);
                         }
+                        // The crew gains 200 experience (0x4b4680, 0x4b35f4).
+                        self.gain_experience(k, 200);
                     } else {
                         l.porters = Some(f);
                     }

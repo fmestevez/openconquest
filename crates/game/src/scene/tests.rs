@@ -3231,6 +3231,72 @@ fn gorgon_and_siren() {
     );
 }
 
+/// The crew's experience (`+0x544`): a map ship's is its record's byte
+/// 13 x 100 (0x4dfa90); it rises to at most 10000 (0x4b4680) and adds its
+/// hundredth in percent to the boarding strength (0x4bee60) (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn crew_experience() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut seen, mut matched) = (0, 0);
+    for n in 0..30 {
+        let name = format!("miss{n:03}");
+        let Ok(archive) = data.open_mission(&name) else {
+            continue;
+        };
+        let records = openconquest_formats::object_records(&archive).unwrap();
+        let objs = objects::load(&data, &mut caches, &archive).unwrap();
+        for rec in records
+            .iter()
+            .filter(|r| r.class() == openconquest_formats::ObjectClass::Ship)
+        {
+            let Some(o) = objs.drawn.iter().find(|o| o.id == rec.id) else {
+                continue;
+            };
+            matched += 1;
+            let want = (rec.field(13).unwrap_or(0) & 0xff) as i32 * 100;
+            assert_eq!(
+                o.ship.as_ref().unwrap().experience,
+                want,
+                "{name} {}",
+                rec.id
+            );
+            if want > 0 {
+                seen += 1;
+                eprintln!("{name} ship {} experience {want}", rec.id);
+            }
+        }
+    }
+    eprintln!("ships with experience: {seen} of {matched}");
+    assert!(matched > 0);
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let m = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    scene.objects[m].ship.as_mut().unwrap().experience = 0;
+    let base = scene.boarding_strength(m);
+    scene.gain_experience(m, 9_990);
+    scene.gain_experience(m, 50);
+    assert_eq!(scene.objects[m].ship.as_ref().unwrap().experience, 10_000);
+    assert_eq!(scene.boarding_strength(m), base + base);
+    scene.objects[m].ship.as_mut().unwrap().experience = 2_550;
+    assert_eq!(scene.boarding_strength(m), base * 25 / 100 + base);
+    // The ship of the dead wins its boarding: 450 more (0x4b5b00).
+    let e = (0..scene.objects.len())
+        .find(|&k| k != m && scene.objects[k].ship.as_ref().is_some_and(|s| s.kind != 11))
+        .unwrap();
+    scene.objects[e].ship.as_mut().unwrap().heroes.clear();
+    scene.objects[m].ship.as_mut().unwrap().kind = 11;
+    assert!(scene.board_roll(m, e));
+    assert_eq!(scene.objects[m].ship.as_ref().unwrap().experience, 3_000);
+}
+
 /// Greek fire's and quick lime's power (0x4bc360): rows 12 and 13 of the
 /// cache by the hull over 0x5c76b0[8] / [9], only on types 8 and 9 (needs
 /// `OPENCONQUEST_DATA`).

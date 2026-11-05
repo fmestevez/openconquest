@@ -353,8 +353,8 @@ impl Scene {
     /// shot of the item's fire power (0x4bc360, at 100, 0x4bfc20), never
     /// flaming; its reload 0x5c76e0[item x 3 + level] (level 2 with
     /// Atalanta, else its rate level) + a draw % 60 ticks, the item's time
-    /// `+0x5e3 + 4i`. (Not kept by the port: the crew's experience,
-    /// 0x4b4680, +50 a hit.)
+    /// `+0x5e3 + 4i`. The roll gives the crew 50 experience a hit, 10 a
+    /// miss (0x4b4680).
     fn hunt_fire(&mut self, i: usize, lev: u32, d: i32, data: &GameData, caches: &mut Caches) {
         let Some(lc) = self.leviathan_where(lev) else {
             return;
@@ -385,7 +385,9 @@ impl Scene {
             // 0x4bf7f0 (ease 25, 0x598130's 9 for both items): a hit or
             // not, 0x4af6a0 strikes at 100.
             let chance = 25 - d * 33 / (9 << 6) + 43;
-            let _hit = (self.ship_draw(i) % 100) < chance as u32;
+            let hit = (self.ship_draw(i) % 100) < chance as u32;
+            // The crew's experience (0x4b4680 from 0x4bf7f0, family 0x192).
+            self.gain_experience(i, if hit { 50 } else { 10 });
             let Some(aim) = self.leviathan_aim(lev) else {
                 continue;
             };

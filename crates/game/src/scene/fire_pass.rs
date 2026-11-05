@@ -325,7 +325,8 @@ impl Scene {
     /// `+0x134`) 0 and far 33; a ship its type's (0x597acc), 1 with Zetes
     /// aboard (hero 3), the phantom (`+0x253`) 0 and far 23; anything else
     /// 25. The draw `% 100` below it is a hit (100), else the chance
-    /// itself. (Not kept: the crew's experience, 0x4b4680.)
+    /// itself. Either way the crew gains experience (0x4b4680): 50 a hit
+    /// and 10 a miss, 170 and 20 at a ship (family 200).
     fn hit_roll(&mut self, i: usize, item: u8, d: i32, t: usize, family: u32) -> u8 {
         if item == 9 {
             return 100;
@@ -352,7 +353,17 @@ impl Scene {
             }
         }
         let chance = ease - far + 0x2b;
-        if ((draw % 100) as i32) < chance {
+        // The crew's experience (0x4b4680): a hit 50, 170 at a ship; a miss
+        // 10, 20 at a ship.
+        let hit = ((draw % 100) as i32) < chance;
+        let gain = match (hit, family == 200) {
+            (true, false) => 50,
+            (true, true) => 170,
+            (false, false) => 10,
+            (false, true) => 20,
+        };
+        self.gain_experience(i, gain);
+        if hit {
             100
         } else {
             chance as u8

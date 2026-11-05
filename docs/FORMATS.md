@@ -8360,7 +8360,32 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   0x4c09c0 compares an uninitialised distance with the aim (the port
   fires nothing there); `+0x594` = 1 and `+0x62f` (0x4c09c0's writes;
   their readers not read); 0x4ac050's player check (the port: there and
-  an enemy, or at a jam); the crew's experience (0x4b4680, +50 a hit).
+  an enemy, or at a jam).
+- The crew's experience `+0x544` (0x4b4680: `+0x544 += n`, at most
+  10000; with `+0x252` set, each hundred since `+0x548` posts the panel
+  notice 0x4bebe0 and `+0x548` follows). A map ship starts with its
+  record's byte `+0x34` x 100 (0x4dfa90, `+0x548` the same; 0 in every
+  campaign map), a ship built 0 (while built or sold, `+0x251 == 2`, the
+  field holds its price instead). Raised by: the hit roll 0x4bf7f0 (not
+  for item 9) 50 a hit and 10 a miss, 170 and 20 at a ship (family 200;
+  the hunt's 0x4af6a0 passes 0x192); a ram 330 (0x4c1c60, the rammer,
+  after both blows); a boarding won 450 (0x4b5b00, the boarders); a
+  building taken 470 (0x4b59f0); the founding party landed 200
+  (0x4b3370 with task `+0x72f == 2`, after 0x4b2d60); an unloading
+  (0x4ad9f0, once as its count `+0x45` reaches `+0x49`): fish 10 (at a
+  building of family 0x32 not of class 0x34-0x36), a leviathan 400,
+  amber 100. It changes no shot: 0x4bf7f0's fifth argument (the low
+  byte of `+0x544`) is never read. It counts in the boarding: the stats
+  refresh 0x4bee60 makes `+0x53c = (+0x544 / 100) x S / 100 + S` (S
+  0x4b4e80's); 0x4b5b00 takes each side's `+0x53c` (halved with `+600`)
+  + 1 and adds `+0x544` x that / 10000, then draws the boarders'
+  generator % (a + d) before the Hercules / type 11 test; the boarders'
+  blow `+0x6a4` is the defenders' strength + 1 without that term (+ hull
+  / 100), the defenders' `+0x721` the boarders' with it; 0x4b59f0 the
+  same against a building (`*out = a x 100 / 1500`). The panel shows
+  `+0x544` / 100 (0x4e51c0, 0x4e3850, 0x4e5ab0). The port keeps `+0x53c`
+  live rather than from the last refresh; 0x4b59f0 (marines taking a
+  building) is not ported.
 Who sends `#` (0x4c42f0, `{sub, +1, +5, +9, 0.., +0x15 0xff}`, queued:
 it reaches the ship at the next tick): 0x4c4350 (fleet order 0x72, from
 the brains' 0x4797e0 and the computers' 0x482eb0; the interface's attack

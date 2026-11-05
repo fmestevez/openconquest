@@ -2662,6 +2662,16 @@ impl Scene {
                 {
                     return;
                 }
+                // The crew's experience (0x4ad9f0, 0x4b4680): fish 10 (at a
+                // building of family 0x32 not a fort, 0x34-0x36: the ports
+                // 0x39 and 0x40 are), a leviathan 400, amber 100.
+                let gain = match kind {
+                    Some(Resource::Fish) => 10,
+                    Some(Resource::Leviathan) => 400,
+                    Some(Resource::Amber) => 100,
+                    None => 0,
+                };
+                self.gain_experience(i, gain);
                 let roll = 91 + (self.rng.next() % 10) as u8;
                 let ship = self.objects[i].ship.as_mut().unwrap();
                 ship.cargo = 0.0;

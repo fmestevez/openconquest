@@ -222,7 +222,10 @@ fn ship(scene: &Scene, obj: &MapObject, info: &mut ObjectInfo) {
         } else {
             info.fire = Some((scaled(hulls), scaled(crews)));
             info.board = Some((board * 1000 / 1500) as u16);
-            info.experience = Some((0, 100));
+            // `+0x251 == 2`: being built or sold.
+            let held = s.build.is_some() || matches!(s.task, Some(crate::objects::Task::Sell(_)));
+            let exp = if held { 0 } else { s.experience / 100 };
+            info.experience = Some((exp as u8, 100));
         }
     }
     info.treasure = !s.treasures.is_empty();

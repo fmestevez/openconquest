@@ -441,6 +441,11 @@ pub struct Ship {
     /// This is the Argo (a royal ship built with "Build Argo", 0x7d).
     #[serde(default)]
     pub argo: bool,
+    /// The crew's experience (`+0x544`, at most 10000, raised by
+    /// 0x4b4680): the map record's byte 13 x 100 (0x4dfa90), 0 for a ship
+    /// built.
+    #[serde(default)]
+    pub experience: i32,
     /// What its frames show; they are rebuilt when it changes.
     #[serde(skip)]
     pub look: Option<ShipLook>,
@@ -2249,6 +2254,7 @@ pub fn resolve(
         treasures: Vec::new(),
         heroes: Vec::new(),
         argo: false,
+        experience: (f(13) & 0xff) as i32 * 100,
         look: None,
         // Fields 29-100: each unit's condition, eight per item (the
         // loader 0x4dfe00); as many count as the ship carries.

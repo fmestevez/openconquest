@@ -1583,6 +1583,10 @@ impl Scene {
         // rammer's its prey's, 0x4c1f2a).
         self.ram_blow(idt, to_target, blast, by, data, caches);
         self.ram_blow(ida, to_self, 0.0, recoil, data, caches);
+        // The rammer's crew gains 330 experience (0x4b4680, 0x4c1f42).
+        if let Some(i) = self.object_index(ida) {
+            self.gain_experience(i, 330);
+        }
     }
 
     /// A ram's blow `blow` to ship `id` (0x4c1ad0): the hull takes its
@@ -1614,10 +1618,12 @@ impl Scene {
         self.refresh_stats(id);
     }
 
-    /// A side's boarding strength in the original's units (0x4b4e80,
-    /// 0x4bee60): each marine's condition x C x 15 / 1000 (0x4ac1e0 with
-    /// the A x 15 cache; C from 0x597d2c, `melee`), ten times that on the
-    /// ship of the dead.
+    /// A side's boarding strength in the original's units (`+0x53c`,
+    /// 0x4bee60): 0x4b4e80's, each marine's condition x C x 15 / 1000
+    /// (0x4ac1e0 with the A x 15 cache; C from 0x597d2c, `melee`), ten
+    /// times that on the ship of the dead; plus the crew's experience
+    /// `+0x544` / 100 percent of it. (The original keeps it from its last
+    /// stats refresh; the port works it out when asked.)
     pub(crate) fn boarding_strength(&self, i: usize) -> u32 {
         let o = &self.objects[i];
         let Some(ship) = o.ship.as_ref() else {
@@ -1631,11 +1637,25 @@ impl Scene {
                     .map(move |&c| c as u32 * combat::melee(k) * 15 / 1000)
             })
             .sum();
-        if ship.kind == 11 {
-            sum * 10
-        } else {
-            sum
+        let base = if ship.kind == 11 { sum * 10 } else { sum };
+        (ship.experience / 100 * base as i32 / 100 + base as i32) as u32
+    }
+
+    /// 0x4b4680: ship `i`'s crew gains `n` experience (`+0x544`), at most
+    /// 10000. (Its notice to the panel, 0x4bebe0 every hundred, is not
+    /// needed: the port's panel reads it when drawn.)
+    pub(super) fn gain_experience(&mut self, i: usize, n: i32) {
+        if let Some(s) = self.objects[i].ship.as_mut() {
+            s.experience = (s.experience + n).min(10000);
         }
+    }
+
+    /// A side's strength against the other in a boarding (0x4b5b00): its
+    /// fighting strength + 1, plus `+0x544` / 10000 of that.
+    fn contest_strength(&self, i: usize) -> u32 {
+        let s = self.fighting_strength(i) as i64 + 1;
+        let exp = self.objects[i].ship.as_ref().map_or(0, |s| s.experience) as i64;
+        (s + exp * s / 10000) as u32
     }
 
     /// A side's strength in a boarding (0x4b5b00): halved while limed.
@@ -1653,25 +1673,29 @@ impl Scene {
     }
 
     /// Decides the fight for ship `ti` boarded from `i` (0x4b5b00): with
-    /// strengths a and d (each + 1), the boarders win with chance
-    /// (2a - d) / (a + d); Hercules and the ship of the dead always win
-    /// unless the defenders have the same. (The magic wood keeps boarders
-    /// off sooner: their hooks fly wide, 0x4b84b0.)
+    /// strengths a and d (each + 1, and + `+0x544` / 10000 of that), a draw
+    /// of the boarders' generator % (a + d); the boarders win with chance
+    /// (2a - d) / (a + d). Hercules and the ship of the dead always win
+    /// unless the defenders have the same. Won, the boarders' crew gains
+    /// 450 experience (0x4b4680). (The magic wood keeps boarders off
+    /// sooner: their hooks fly wide, 0x4b84b0.)
     pub(super) fn board_roll(&mut self, i: usize, ti: usize) -> bool {
         let sure = |o: &MapObject| {
             o.ship
                 .as_ref()
                 .is_some_and(|s| s.has_hero(objects::HERCULES) || s.kind == 11)
         };
-        let (attacker, defender) = (&self.objects[i], &self.objects[ti]);
-        if sure(attacker) {
-            return !sure(defender);
-        }
-        let a = self.fighting_strength(i) + 1;
-        let d = self.fighting_strength(ti) + 1;
-        let roll = self.rng.next() % (a + d);
+        let a = self.contest_strength(i);
+        let d = self.contest_strength(ti);
+        let roll = self.ship_draw(i) % (a + d);
         let line = 2 * a as i64 - d as i64;
-        line >= (a + d) as i64 || (roll as i64) < line
+        let won = line >= (a + d) as i64 || (roll as i64) < line;
+        let (attacker, defender) = (&self.objects[i], &self.objects[ti]);
+        let won = if sure(attacker) { !sure(defender) } else { won };
+        if won {
+            self.gain_experience(i, 450);
+        }
+        won
     }
 
     /// The end of the fight for ship `t` boarded from `a` (0x4b5df0 state
@@ -1700,7 +1724,9 @@ impl Scene {
         let hull_t = self.objects[ti].combat.as_ref().map_or(0.0, |c| c.hull);
         // In the original's units: hulls here are a fifteenth.
         let blow = self.fighting_strength(ti) + 1 + (hull_t * 15.0 / 100.0) as u32;
-        let foe = self.fighting_strength(i) + 1;
+        // The defenders' blow is the boarders' strength with its experience
+        // (0x4b5b00 `+0x721`), the boarders' without (`+0x6a4`).
+        let foe = self.contest_strength(i);
         let sure = |o: &MapObject| {
             o.ship
                 .as_ref()
