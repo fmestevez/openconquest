@@ -10477,7 +10477,22 @@ or 0xff once taken; 0x24aef 1 while not taken; 0x24af1 taken 1, state
 `+0xa4` 4, the tick the map's `+0xde`, pictures reloaded (vt+0x38,
 0x422e30 `%sSPR_%1u%1u%1u`: `HHOUSE<hero>SPR_043`, standing `_013`); its
 tick (message 0) runs only taken and in state 1: 500 ticks after the
-take vt+4(0x138b), else `+0xa8 = 100 - (now - t) x 100 / 500`. The take
+take vt+4(0x138b), else `+0xa8 = 100 - (now - t) x 100 / 500`; a
+taken house is never in state 1 again (the only writers of `+0xa4` in
+its classes: message 2's 1 or the save's, 0x4230f0's vt+0x48), so that
+fade and its 0x138b are never reached. The taken house plays out
+instead: its picture step (vt+0x3c 0x4230f0, each tick in LandObj
+0x425990 message 0) with cycles `+0xc0` 0x595e80 {50, 75, 75, 57, 100,
+500} by state steps a frame when `+0xbc` is 0 (vt+0x38 clears it) or
+`now >= last + cycle[state] / n`; the step reaching `n` in state 4 or 5
+calls vt+0x48 (0x421050: 4 -> 5, 5 -> 2, any other 1), frame 0, vt+0x38
+(`HHOUSE<hero>SPR_053`, then `_023`; `_043` started at the standing
+picture's frame, kept unless past its count); in state 2 it posts
+message 10 to itself (0x4232ed) and the house is removed after the
+tick (0x421150 message 3: 0x499860 clears its cell). Theseus's house
+(9, 10 and 13 frames): states 5, 2 and removal 89, 540 and 601 ticks
+after the take. Blows do not reach it (vt+4 0x421130 drops 0x138e). The
+take
 (0x4b0e40 by `+0x76e` 0x49): **12** at the walkway's last frame 0x4ba6b0
 (the land cell's `+0xc` object the house by id `+0x77e`; its 0x24af0
 answer into `+0x78a`, which held the house until then; then 0x4ba3f0:
@@ -10504,9 +10519,10 @@ the order's own refusal of a ship without a hero place kept (the click's
 0x4e6700 room test, mode 6 or 7), its item refusal gone. Not ported:
 0x5d99 (the judge counts the heroes aboard), the notices' texts;
 0x4b6e80's 0x5d94 for the party's take; a berth of (-1, -1) (no facing:
-the port's route fails); who puts the house in state 1 after the take
-(not decoded: 0x24af1 sets 4 and nothing read sets 1, so the 500-tick
-fade and 0x138b never run from the take; the port's house stands taken).
+the port's route fails). The playing out is ported (`house_fades`,
+`step_house_fades`, kept in the save; the standing picture's frame in
+`standing_frames`); not settled: its step's place among the objects'
+ticks against the take of the same tick (the port steps it first).
 
 **Spells.** Order 117's studies 33 and 34 have the Temple of the Sea or
 of War learn its next spell (1000 amber; 100 ticks for a computer,

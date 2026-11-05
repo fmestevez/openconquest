@@ -387,6 +387,9 @@ pub struct Scene {
     /// Heroes' houses taken (0x24af1: `+0x1e8`, state 4) and the tick
     /// (`+0x1ec`).
     pub taken_houses: Vec<(u32, u32)>,
+    /// The taken houses' pictures playing out (states 4, 5 and 2 of
+    /// 0x4230f0, `treasure::HouseFade`) until the house is removed.
+    pub house_fades: BTreeMap<u32, treasure::HouseFade>,
     /// The lime's whitening as colour to colour (`render::LIME` through
     /// the palette, its first entry for each colour).
     pub lime_remap: std::collections::HashMap<u32, u32>,
@@ -612,6 +615,7 @@ mod sparkle;
 mod treasure;
 mod wake;
 pub use sight::{FogArt, Seen};
+pub use treasure::HouseFade;
 mod fireball;
 mod flyers;
 mod fort;
@@ -931,6 +935,7 @@ impl Scene {
             had_argo: false,
             woken: false,
             taken_houses: Vec::new(),
+            house_fades: BTreeMap::new(),
             lime_remap: {
                 let mut map = std::collections::HashMap::new();
                 for (i, &to) in crate::render::LIME.iter().enumerate() {
@@ -1210,6 +1215,11 @@ impl Scene {
             had_argo: self.had_argo,
             woken: self.woken,
             taken_houses: self.taken_houses.clone(),
+            house_fades: self
+                .house_fades
+                .iter()
+                .map(|(&k, v)| (k, v.clone()))
+                .collect(),
             dug: self
                 .dug
                 .iter()
@@ -1386,9 +1396,11 @@ impl Scene {
         scene.had_argo = save.had_argo;
         scene.woken = save.woken;
         scene.taken_houses = save.taken_houses.clone();
+        scene.house_fades = save.house_fades.iter().cloned().collect();
         for &(id, _) in &save.taken_houses {
             if let Some(g) = scene.object_index(id) {
-                scene.show_house_taken(g, data, caches);
+                let state = scene.house_fades.get(&id).map_or(4, |f| f.state);
+                scene.show_house(g, state, data, caches);
             }
         }
         scene.strait_struck = save.strait_struck;
@@ -2603,6 +2615,7 @@ impl Scene {
             .or_else(|| self.gorgon_frame(obj.id))
             .or_else(|| self.castle_frame(obj.id))
             .or_else(|| self.chest_frame(obj.id))
+            .or_else(|| self.house_frame(obj.id))
             .or_else(|| self.siren_frame(obj.id))
         {
             if let Some(layers) = obj.frames.get(f as usize).or(obj.frames.last()) {
@@ -2696,7 +2709,11 @@ impl Scene {
             self.ticks += 1;
             // The ruins' picture steps (vt+0x3c 0x4230f0, first in each
             // building's message 0, before anything can make it fall).
-            let removed = self.step_ruins();
+            let mut removed = self.step_ruins();
+            // A taken hero's house steps its pictures the same way
+            // (0x4230f0 states 4, 5, 2). (Not settled: its place among the
+            // objects' ticks, against the ship's take of the same tick.)
+            removed.extend(self.step_house_fades(data, caches));
             // The navy's tick (message 0, 0x49ab30 -> 0x4c4f40): the gather
             // zones hear their ships' notices and plan again. (Not settled:
             // whether before or after the ships' own ticks.)

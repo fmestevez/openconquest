@@ -3254,6 +3254,52 @@ fn treasures_and_heroes() {
     ));
 }
 
+/// A taken hero's house plays out (0x24af1 then 0x4230f0 with the
+/// house's cycles 0x595e80): `_043` over 100 ticks, `_053` over 500,
+/// `_023` over 75, a step every `cycle / n` ticks, the first on the tick
+/// after each picture is set; the last step of `_023` removes it
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_taken_house_plays_out_and_goes() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    let house = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::HeroHouse && o.record.field(22) == Some(1))
+        .expect("Theseus's house")
+        .id;
+    // Its standing picture at frame 0: `_043` (9 frames) starts there.
+    scene.standing_frames.remove(&house);
+    scene.house_taken(house, &data, &mut caches);
+    let h = scene.object_index(house).unwrap();
+    assert_eq!(scene.objects[h].frames.len(), 9);
+    let mut changes = Vec::new();
+    let mut state = 4;
+    for t in 1..=1000u32 {
+        let done = scene.step_house_fades(&data, &mut caches);
+        if !done.is_empty() {
+            assert_eq!(done, vec![house]);
+            changes.push((t, 0));
+            break;
+        }
+        let f = &scene.house_fades[&house];
+        if f.state != state {
+            state = f.state;
+            changes.push((t, state));
+        }
+    }
+    // 1 + 8 x (100 / 9); 1 + 9 x (500 / 10); 1 + 12 x (75 / 13).
+    assert_eq!(changes, vec![(89, 5), (540, 2), (601, 0)]);
+    scene.remove_ruins(&[house]);
+    assert!(scene.object_index(house).is_none());
+    assert!(scene.house_fades.is_empty());
+}
+
 /// A take order to a treasure on land (0x4af940 -> 0x55a890): the ship
 /// sails to a sea cell beside a land cell a party can walk from, closes
 /// in, lowers its walkway, lands a party (kind 3) that walks to the

@@ -133,6 +133,9 @@ pub struct SaveGame {
     pub woken: bool,
     #[serde(default)]
     pub taken_houses: Vec<(u32, u32)>,
+    /// The taken houses' pictures playing out (`Scene::house_fades`).
+    #[serde(default)]
+    pub house_fades: Vec<(u32, crate::scene::HouseFade)>,
     #[serde(default)]
     pub dug: Vec<(u32, u32, u32, u8, u8)>,
     #[serde(default)]

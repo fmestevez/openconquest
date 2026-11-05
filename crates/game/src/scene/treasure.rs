@@ -10,6 +10,24 @@ use crate::assets::GameData;
 use crate::magic::Spell;
 use crate::objects::{self, Caches, Task, Treasure};
 
+/// A hero's house's picture cycles by state (`+0xc0`, 0x595e80): the
+/// ticks a picture's frames take in states 0-5.
+const HOUSE_CYCLE: [u32; 6] = [50, 75, 75, 57, 100, 500];
+
+/// A taken hero's house playing out its pictures (0x4230f0 on states 4,
+/// 5 and 2): the state `+0xa4`, the frame `+0x7c->+0x45` and count
+/// `+0x49`, the frame last drawn, the first step made (`+0xbc`) and the
+/// ticks since the last.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct HouseFade {
+    pub state: u8,
+    pub frame: u32,
+    pub frames: u32,
+    pub shown: u32,
+    pub started: bool,
+    pub wait: u32,
+}
+
 /// The heroes' voices at their house (0x4ba2a0, mode 2), by hero: yes
 /// (0xfc, 0x102, 0x100, 0xfe, 0x104, 0x106, 0x108, 0x10a, 0x10c) and no
 /// (each one more), their `SND_<n>` samples.
@@ -879,26 +897,101 @@ impl Scene {
 
     /// The house `id` taken (0x421150 message 0x24af1): taken `+0x1e8` 1,
     /// state `+0xa4` 4, the tick `+0x1ec` the map's `+0xde`, its pictures
-    /// reloaded (vt+0x38, 0x422e30: `HHOUSE<hero>SPR_043`). Its tick then
-    /// runs only in state 1 (not decoded: what sets it, for the 500-tick
-    /// fade and 0x138b), so the house stands taken.
+    /// reloaded (vt+0x38, 0x422e30: `HHOUSE<hero>SPR_043`, the frame the
+    /// standing picture was at kept unless past the new count, `+0xbc`
+    /// cleared). Its own tick (message 0) runs only taken and in state 1,
+    /// which a taken house never is again: the 500-tick fade there and its
+    /// 0x138b are not reached. The house plays out instead
+    /// (`step_house_fades`).
     pub(super) fn house_taken(&mut self, id: u32, data: &GameData, caches: &mut Caches) {
         let Some(g) = self.object_index(id) else {
             return;
         };
         self.taken_houses.retain(|&(h, _)| h != id);
         self.taken_houses.push((id, self.ticks));
-        self.show_house_taken(g, data, caches);
+        let standing = self.standing_frames.remove(&id).map_or(0, |s| s.frame);
+        self.show_house(g, 4, data, caches);
+        let frames = self.objects[g].frames.len() as u32;
+        let frame = if standing >= frames { 0 } else { standing };
+        self.house_fades.insert(
+            id,
+            HouseFade {
+                state: 4,
+                frame,
+                frames,
+                shown: frame,
+                started: false,
+                wait: 0,
+            },
+        );
     }
 
-    /// A taken house's picture (state 4).
-    pub(super) fn show_house_taken(&mut self, g: usize, data: &GameData, caches: &mut Caches) {
+    /// A house's picture in state `state` (`HHOUSE<hero>SPR_0<state>3`).
+    pub(super) fn show_house(&mut self, g: usize, state: u8, data: &GameData, caches: &mut Caches) {
         let hero = self.objects[g].record.field(22).unwrap_or(0).min(8) as u8;
-        if let Ok(frames) = objects::hero_house_frames(data, caches, hero, 4) {
+        if let Ok(frames) = objects::hero_house_frames(data, caches, hero, state) {
             if !frames.is_empty() {
                 self.objects[g].frames = frames;
             }
         }
+    }
+
+    /// The taken houses' picture steps, LandObj's vt+0x3c 0x4230f0 with
+    /// the house's cycles (`HOUSE_CYCLE`): with `+0xbc` 0 or
+    /// `now >= last + cycle[state] / n`, the frame drawn and one added; the step
+    /// reaching `n` goes on by vt+0x48 (0x421050: 4 to 5, 5 to 2), the
+    /// frame 0 and the state's picture loaded (vt+0x38, `+0xbc` cleared:
+    /// `HHOUSE<hero>SPR_053`, then `_023`), and in state 2 posts message
+    /// 10 to itself (0x4232ed): the house is removed after the tick (its
+    /// message 3: 0x421150 frees its name, 0x499860 clears its cell).
+    /// Returns the houses removed so.
+    pub(super) fn step_house_fades(&mut self, data: &GameData, caches: &mut Caches) -> Vec<u32> {
+        let mut done = Vec::new();
+        let ids: Vec<u32> = self.house_fades.keys().copied().collect();
+        for id in ids {
+            let Some(g) = self.object_index(id) else {
+                self.house_fades.remove(&id);
+                continue;
+            };
+            let f = self.house_fades.get_mut(&id).unwrap();
+            let n = f.frames.max(1);
+            let delay = HOUSE_CYCLE[f.state as usize] / n;
+            if f.started {
+                f.wait += 1;
+                if f.wait < delay {
+                    continue;
+                }
+            }
+            f.started = true;
+            f.wait = 0;
+            f.shown = f.frame;
+            f.frame += 1;
+            if f.frame < n {
+                continue;
+            }
+            let next = match f.state {
+                4 => 5,
+                5 => 2,
+                _ => {
+                    done.push(id);
+                    continue;
+                }
+            };
+            self.show_house(g, next, data, caches);
+            let frames = self.objects[g].frames.len() as u32;
+            let f = self.house_fades.get_mut(&id).unwrap();
+            *f = HouseFade {
+                state: next,
+                frames,
+                ..HouseFade::default()
+            };
+        }
+        done
+    }
+
+    /// The frame a taken house shows.
+    pub(super) fn house_frame(&self, id: u32) -> Option<u32> {
+        self.house_fades.get(&id).map(|f| f.shown)
     }
 
     /// 0x4a8fa0: goods of deposit class `class` credited to `owner`:

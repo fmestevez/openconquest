@@ -2256,9 +2256,13 @@ impl Scene {
     pub(super) fn step_standing_frames(&mut self) {
         for i in 0..self.objects.len() {
             let o = &self.objects[i];
-            if !matches!(o.class, ObjectClass::Building(SETTLEMENT | SHIPYARD))
-                || o.owner.is_none()
-                || self.constructions.iter().any(|c| c.site == o.id)
+            // A hero's house stands in state 1 too (its cycle 0x595e80[1]
+            // is 75 as well) until taken (`house_fades`).
+            let house = o.class == ObjectClass::HeroHouse && !self.house_fades.contains_key(&o.id);
+            if !house
+                && (!matches!(o.class, ObjectClass::Building(SETTLEMENT | SHIPYARD))
+                    || o.owner.is_none()
+                    || self.constructions.iter().any(|c| c.site == o.id))
             {
                 continue;
             }
@@ -2437,6 +2441,7 @@ impl Scene {
     pub(super) fn remove_ruins(&mut self, ids: &[u32]) {
         for &id in ids {
             self.ruins.remove(&id);
+            self.house_fades.remove(&id);
             if let Some(i) = self.object_index(id) {
                 self.objects.remove(i);
             }
