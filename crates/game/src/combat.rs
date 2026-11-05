@@ -998,8 +998,8 @@ pub fn crew_damage_at(weapon: u8, level: u8) -> f32 {
         .map_or(0, |r| r[3 + level.min(2) as usize]) as f32
 }
 
-/// Whether item `weapon` is fired (the barrel of powder is not: it goes off
-/// when its ship rams). Greek fire's row 9 is empty: its shot has row 12.
+/// Whether item `weapon` is fired (the barrel of powder is not, nor does it
+/// go off in a ram, 0x4c1c60). Greek fire's row 9 is empty: its shot has row 12.
 pub fn fires(weapon: u8) -> bool {
     weapon <= QUICKLIME && weapon != 2
 }

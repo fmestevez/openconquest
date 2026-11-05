@@ -3358,8 +3358,8 @@ fn greek_fire_and_lime_power() {
     assert_eq!(scene.item_power(m, 9), 0);
 }
 
-/// Quicklime kills crews without touching the hull; a fire rammer's barrel
-/// of powder goes off in the ram (needs `OPENCONQUEST_DATA`).
+/// Quicklime kills crews without touching the hull; a barrel of powder
+/// adds nothing to a ram (needs `OPENCONQUEST_DATA`).
 #[test]
 fn crews_under_fire() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -3427,23 +3427,29 @@ fn crews_under_fire() {
         "hull untouched"
     );
     assert!(limed > 0.0, "limed (0x4c4120)");
-    // A barrel of powder adds its blast to a ram, once.
-    let m = scene.object_index(mine).unwrap();
-    scene.objects[m].combat.as_mut().unwrap().weapons = vec![combat::POWDER];
-    // Both sturdy enough to outlast the ram.
-    for k in [m, e] {
-        let c = scene.objects[k].combat.as_mut().unwrap();
-        (c.max_hull, c.hull) = (1e6, 1e6);
+    // A barrel of powder adds nothing to a ram and is not spent: the
+    // blow (0x4c1c60, 0x4c1ad0) reads no item 11.
+    let mut lost = [0.0; 2];
+    for (k, weapons) in [vec![], vec![combat::POWDER]].into_iter().enumerate() {
+        let m = scene.object_index(mine).unwrap();
+        let e = scene.object_index(enemy).unwrap();
+        scene.objects[m].combat.as_mut().unwrap().weapons = weapons;
+        // Both sturdy enough to outlast the ram.
+        for j in [m, e] {
+            let c = scene.objects[j].combat.as_mut().unwrap();
+            (c.max_hull, c.hull) = (1e6, 1e6);
+        }
+        scene.ram(m, e, &data, &mut caches);
+        let e = scene.object_index(enemy).unwrap();
+        lost[k] = 1e6 - scene.objects[e].combat.as_ref().unwrap().hull;
     }
-    let before = scene.objects[e].combat.as_ref().unwrap().hull;
-    scene.ram(m, e, &data, &mut caches);
-    let e = scene.object_index(enemy).unwrap();
-    let lost = before - scene.objects[e].combat.as_ref().unwrap().hull;
-    assert!(lost >= 400.0, "lost {lost}");
+    assert!(lost[0] > 0.0);
+    assert_eq!(lost[0], lost[1], "no blast");
     let m = scene.object_index(mine).unwrap();
-    assert!(
-        scene.objects[m].combat.as_ref().unwrap().weapons.is_empty(),
-        "spent"
+    assert_eq!(
+        scene.objects[m].combat.as_ref().unwrap().weapons,
+        vec![combat::POWDER],
+        "not spent"
     );
 }
 

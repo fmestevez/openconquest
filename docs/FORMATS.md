@@ -588,10 +588,12 @@ Combat tables:
   300/320/340) and 13 (no A, B 200/240/280); rows 14 and 15 A 80/40, B
   40/80; rows 16-18 the volcano's shots (A 1220/1420/1550, B
   600/1120/1180 at level 0). The port's `combat::DAMAGE` is the table as
-  dumped (test `damage_table_is_the_exes`). The fire rammer's blast in a
-  ram (400 to the hull, 150 to the crew, the manual's chart) is not
-  decoded: 0x4c1c60 and 0x4c1ad0 have no such term, and nothing yet shows
-  row 11 read for it.
+  dumped (test `damage_table_is_the_exes`). A ram has no blast of
+  powder (the manual's 400 hull / 150 crew is not the original's): the
+  blow 0x4c1c60 and its share-out 0x4c1ad0 read no item 11, and the ram
+  (0x4c2230) spends none; the fire rammer's (type 10) only extra is the
+  burning S it throws at its prey as its bow strikes (0x4c2566, 0x4c21c0,
+  shot kind 0x12; see the volcanoes below), whatever it carries.
   0x4ac1b0 and 0x4ac1e0 scale values by them; 0x4ac140 caches A x 15.
 - The warship menu (0x4e6980) opens the behaviour page (page 5) with
   0x6c `CBUT_BEHMAIN`: slot 0 guard 0x6f, 1 ram attack 0x79, 2 board attack
