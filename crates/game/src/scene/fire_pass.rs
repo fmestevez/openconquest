@@ -387,10 +387,14 @@ impl Scene {
     /// flies flaming, x 150 / 100 more; quick lime never flaming. The
     /// item's next time is 0x5c76e0[3i + L] + a draw % 30 + now (L the
     /// player's rate level `+0x8e + k`, 2 with Atalanta aboard, hero 6, or
-    /// for the fourth position). Returns the positions fired. (Not ported:
-    /// a sea monster's target, 0x1fb, is not shot when the shooter's vt+8
-    /// takes the aim point, `(x, y, 1, 0, 1)`, not decoded; a position's
-    /// target gone, the original's pointer dangles: the port skips it.)
+    /// for the fourth position). The target's aim point (vt+0xc, by the
+    /// hit byte) is where the shot flies; a sea monster's (0x493350) on a
+    /// solid pixel of the shooter's own picture (its vt+8 0x4e06c0 with
+    /// `(x, y, 1, 0, 1)`) is not shot: no shot, no reload, the hit roll
+    /// already drawn. Returns the positions fired. (Not ported: the other
+    /// targets' aim points here, a ship's 0x4e07c0 and a building's
+    /// 0x423520, `Scene::ship_aim` / `building_aim`; a position's target
+    /// gone, the original's pointer dangles: the port skips it.)
     #[allow(clippy::needless_range_loop)]
     pub(super) fn fire_items(
         &mut self,
@@ -488,6 +492,19 @@ impl Scene {
                 if counts[item] == 1 && accuracy != 100 && family != 0x32 {
                     accuracy = 0;
                 }
+                // The target's aim point (vt+0xc, by the hit byte): a sea
+                // monster's (0x493350) is not shot, no shot and no reload,
+                // when it falls on the shooter's own picture (vt+8
+                // 0x4e06c0 with `(x, y, 1, 0, 1)`); the shot flies to it.
+                let mut to = None;
+                if class == 0x1fb {
+                    if let Some(p) = self.sea_monster_aim(t, accuracy != 0) {
+                        if self.ship_solid_at(i, (p.0 as f32, p.1 as f32)) {
+                            continue;
+                        }
+                        to = Some(p);
+                    }
+                }
                 let flaming = match it {
                     9 => {
                         blow = blow * 150 / 100;
@@ -500,6 +517,7 @@ impl Scene {
                     accuracy,
                     blow: blow as f32 / 15.0,
                     flaming,
+                    to,
                 };
                 let target_id = self.objects[t].id;
                 self.send_volley(

@@ -15908,6 +15908,65 @@ fn ships_sold_at_a_dock() {
     assert_eq!((scene.amber - amber, scene.fish - fish), (94, 160));
 }
 
+/// A ship's item at a sea monster (0x4c0230): the monster's aim point
+/// (vt+0xc 0x493350, drawn from its own generator) on a solid pixel of
+/// the shooter's own picture (vt+8 0x4e06c0) is not shot, no shot and no
+/// reload; off it, the shot flies to the point (needs `OPENCONQUEST_DATA`).
+#[test]
+fn sea_monster_aim_on_the_shooter_holds_fire() {
+    let Some((data, mut caches, mut scene, mine, other, _)) = closing_pair(2, 0) else {
+        return;
+    };
+    let k = scene.object_index(other).unwrap();
+    scene.objects.remove(k);
+    let m = scene.object_index(mine).unwrap();
+    let cell = (
+        (scene.objects[m].x / 64.0).floor() as i32,
+        (scene.objects[m].y / 64.0).floor() as i32,
+    );
+    scene
+        .spawn_hazard(Spell::Monster, cell.0, cell.1, None, &data, &mut caches)
+        .unwrap();
+    let monster = scene.summons.last().unwrap().0;
+    let m = scene.object_index(mine).unwrap();
+    scene.objects[m].combat.as_mut().unwrap().weapons = vec![3, 3];
+    let s = scene.objects[m].ship.as_mut().unwrap();
+    s.crew.squads = [0; 3];
+    s.behaviour.aims[1].target = monster;
+    s.lcg = Some(12345);
+    // Monster seeds whose point falls on the ship and off it.
+    let t = scene.object_index(monster).unwrap();
+    let aim = |scene: &mut Scene, seed: u32| {
+        scene.set_sea_monster_seed(monster, seed);
+        scene.sea_monster_aim(t, false).unwrap()
+    };
+    let on = (0..)
+        .find(|&r| {
+            let p = aim(&mut scene, r);
+            scene.ship_solid_at(m, (p.0 as f32, p.1 as f32))
+        })
+        .unwrap();
+    let off = (0..)
+        .find(|&r| {
+            let p = aim(&mut scene, r);
+            !scene.ship_solid_at(m, (p.0 as f32, p.1 as f32))
+        })
+        .unwrap();
+    for (seed, shot) in [(on, false), (off, true)] {
+        scene.set_sea_monster_seed(monster, seed);
+        let s = scene.objects[m].ship.as_mut().unwrap();
+        s.items_ready = [false; 12];
+        s.items_ready[3] = true;
+        s.fire_times = [0; 12];
+        scene.shots.clear();
+        let fired = scene.fire_items(m, 0b10, false, &data, &mut caches);
+        assert_eq!(fired != 0, shot, "seed {seed}");
+        assert_eq!(scene.shots.len(), usize::from(shot));
+        let s = scene.objects[m].ship.as_ref().unwrap();
+        assert_eq!(s.fire_times[3] != 0, shot);
+    }
+}
+
 /// The fire pass on guard (0x4c1240 state 4 -> 0x4bfc60): an enemy in the
 /// box no position aims at goes on item 3's list (0x4c0cd0),
 /// the list is drawn (0x4e8af0 mode 10) and the item fires once from it

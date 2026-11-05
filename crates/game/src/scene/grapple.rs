@@ -899,9 +899,19 @@ impl Scene {
     /// Whether rammer `i`'s bow touches ship `ti`'s hull: a solid pixel of
     /// its picture as it lies (0x4c1870, 0x557640).
     fn bow_touches(&self, i: usize, ti: usize) -> bool {
-        let Some((bx, by)) = self.bow(i) else {
+        let Some(bow) = self.bow(i) else {
             return false;
         };
+        self.ship_solid_at(ti, bow)
+    }
+
+    /// Whether world point `(bx, by)` falls on a solid pixel of ship
+    /// `ti`'s picture as it lies (0x4c1870; a ship's vt+8 0x4e06c0 with
+    /// its third argument set: within the picture's rect `+0x8be` `+0x59`
+    /// / `+0x5d` / `+0x61` / `+0x65`, and solid, 0x557640, in its mask
+    /// `+0x8e2`'s frame 0x543240: `+0x45 - 0x20` while turning, 0x20-0x37,
+    /// else the heading `+0x5af` x 3).
+    pub(super) fn ship_solid_at(&self, ti: usize, (bx, by): (f32, f32)) -> bool {
         let t = &self.objects[ti];
         let Some(s) = t.ship.as_ref() else {
             return false;

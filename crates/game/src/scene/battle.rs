@@ -997,7 +997,10 @@ impl Scene {
                     rope: None,
                     shooter: Some(shooter),
                     by,
-                    to: throw.and_then(|t| t.to).map(|(x, y)| (x as f32, y as f32)),
+                    to: throw
+                        .and_then(|t| t.to)
+                        .or(pass.and_then(|p| p.to))
+                        .map(|(x, y)| (x as f32, y as f32)),
                 },
                 data,
                 caches,
@@ -2074,6 +2077,9 @@ pub(super) struct ItemShot {
     pub accuracy: u8,
     pub blow: f32,
     pub flaming: bool,
+    /// The target's aim point, where the port has it (a sea monster's,
+    /// 0x493350).
+    pub to: Option<(i32, i32)>,
 }
 
 const NOT_A_WEAPON: u8 = 254;

@@ -8423,14 +8423,32 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   (0x4ac210: 0x5bb4b0[t] x 650 x 100 / 100, 65 x 650 and 75 x 650; no
   other writer). Then `+0x47d = 3` and the total takes the Greek fire
   power / 100 (on a type 9 the stale `+0x46d`'s).
-- Not ported: a sea monster's target (0x1fb) is not shot (no shot, no
-  reload; the roll already drawn) when the shooter's vt+8 takes the aim
-  point `(x, y, 1, 0, 1)`: the ship's vt+8 is 0x4e06c0 (vtable 0x59b48c:
-  the point within its picture's rect `+0x59 / +0x5d / +0x61 / +0x65`
-  and solid in its mask `+0x8e2` frame `+0x45 - 0x20` while turning
-  (0x20-0x37), else heading x 3, 0x543240 / 0x557640, as 0x4c1870); the
-  point is the monster's vt+0xc 0x493350 (vtable 0x59750c, its own
-  generator; with 0x493110) which the port does not have yet. 0x4c07c0 with no position in
+- The aim point: 0x4c0230 asks every target's vt+0xc with the hit byte
+  (after a lone unit's miss is zeroed) and the shot flies there (the
+  bomb's `+0x1d / +0x21`). A sea monster's target (0x1fb) is not shot (no
+  shot, no reload; the roll already drawn) when the shooter's vt+8 takes
+  the point `(x, y, 1, 0, 1)`: the ship's vt+8 is 0x4e06c0 (vtable
+  0x59b48c: the point within its picture's rect `+0x8be` `+0x59 / +0x5d /
+  +0x61 / +0x65` and solid in its mask `+0x8e2` frame `+0x45 - 0x20`
+  while turning (0x20-0x37), else heading `+0x5af` x 3, 0x543240 /
+  0x557640, as 0x4c1870). The monster's vt+0xc is 0x493350 (vtable
+  0x59750c): its rect is its picture's (`+0x139` `+0x59 / +0x5d / +0x61 /
+  +0x65`) or, with none, its cell `+0x91 / +0x95` x the map's cell size
+  (`+0x17b2` shorts `+4 / +6`); each coordinate `lo + r % (hi - lo + 1)`
+  (unsigned) of its own generator `+0x18`. By state `+0x74`: 0, 6 and
+  0xff `w / 4 ..= 3w / 4` by `h / 4 ..= 3h / 4`; 1-4 by heading `+0xb5`, a
+  hit (0x492fa0) 0 / 4 `w / 4 ..= 3w / 4` by `h / 3 ..= 2h / 3`, 2 / 6 `w
+  / 3 ..= w` by `h / 4 ..= 3h / 4`, the odd ones `w / 3 ..= w` by `h / 3
+  ..= 2h / 3`; a miss (0x493110) draws one more first, bit 0 picking the
+  second box: 0 / 4 `0 ..= w - 1` by `0 ..= h / 3` or `2h / 3 ..= h - 1`;
+  2 / 6 `0 ..= w / 3` or `2w / 3 ..= w - 1` by `0 ..= h - 1`; the odd ones
+  (1 / 5 fall through into 3 / 7's code, 0x493222 -> 0x493228) `2w / 3
+  ..= w - 1` by `0 ..= h / 3` or `0 ..= w / 3` by `2h / 3 ..= h - 1`; any
+  other state the rect's top left. Ported for the sea monster
+  (`Scene::sea_monster_aim`, test `sea_monster_aim_is_the_originals`,
+  `sea_monster_aim_on_the_shooter_holds_fire`); the pass's other targets'
+  points (a ship's 0x4e07c0, a building's 0x423520) are not wired in the
+  pass yet. 0x4c07c0 with no position in
   state 3 (its id and player uninitialised; the port does nothing); a
   position's target gone, its pointer dangling (the port skips it);
   0x50ebf0's families with no cell (400 a leviathan, 700, the jam 0x1f7

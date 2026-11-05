@@ -883,11 +883,157 @@ impl Scene {
         }
         self.sea_monster_states.insert(id, m);
     }
+
+    /// Sets sea monster `id`'s generator, making its state first if it has
+    /// none yet (tests).
+    #[cfg(test)]
+    pub(super) fn set_sea_monster_seed(&mut self, id: u32, seed: u32) {
+        if !self.sea_monster_states.contains_key(&id) {
+            let i = self.object_index(id).unwrap();
+            let m = self.new_sea_monster(i);
+            self.sea_monster_states.insert(id, m);
+        }
+        self.sea_monster_states.get_mut(&id).unwrap().rng = Rng(seed);
+    }
+
+    /// Where a shot at sea monster `i` aims (its vt+0xc, 0x493350), by the
+    /// hit byte, drawing from its own generator (`+0x18`), within its
+    /// picture's rect (`+0x139` `+0x59` / `+0x5d`, size `+0x61` / `+0x65`;
+    /// here as the port places it, `render::layer_origin`) or, with no
+    /// picture (under water), its cell's (`+0x91` / `+0x95` x the cell's
+    /// size). By its state `+0x74`: 0, 6 and 0xff anywhere in the middle
+    /// half, `w / 4 + r % (3w / 4 - w / 4 + 1)` and the same down; 1-4 a
+    /// box by its heading `+0xb5`, `x1 + r % (x2 - x1 + 1)` and the same
+    /// down; any other its picture's top left. A hit's box (0x492fa0):
+    /// headings 0 / 4 `w / 4 ..= 3w / 4` by `h / 3 ..= 2h / 3`; 2 / 6 `w /
+    /// 3 ..= w` by `h / 4 ..= 3h / 4`; the others `w / 3 ..= w` by `h / 3
+    /// ..= 2h / 3`. A miss draws first which of two boxes (0x493110, bit 0
+    /// of the draw): 0 / 4 the top or bottom third (`0 ..= w - 1` by `0 ..=
+    /// h / 3`, or by `2h / 3 ..= h - 1`); 2 / 6 the left or right third (`0
+    /// ..= w / 3`, or `2w / 3 ..= w - 1`, by `0 ..= h - 1`); the odd
+    /// headings (1 / 5 run into 3 / 7's code) the top right
+    /// (`2w / 3 ..= w - 1` by `0 ..= h / 3`) or the bottom left
+    /// (`0 ..= w / 3` by `2h / 3 ..= h - 1`). `None` for no sea monster.
+    pub(super) fn sea_monster_aim(&mut self, i: usize, hit: bool) -> Option<(i32, i32)> {
+        let id = self.objects[i].id;
+        let o = &self.objects[i];
+        let m = self.sea_monster_states.get(&id)?;
+        let picture = o.frames.first().and_then(|f| f.first());
+        let (x, y, w, h) = match picture.filter(|_| m.state != UNDER) {
+            Some(l) => {
+                let (x, y) = crate::render::layer_origin(o, l);
+                (x, y, l.image.width as i32, l.image.height as i32)
+            }
+            None => {
+                let (cx, cy) = Self::cell_at(o);
+                let t = TILE_SIZE as i32;
+                (cx * t, cy * t, t, t)
+            }
+        };
+        let (state, heading) = (m.state, m.heading % 8);
+        let rng = &mut self.sea_monster_states.get_mut(&id)?.rng;
+        // `r % (hi - lo + 1) + lo`, unsigned as the original's.
+        fn draw(rng: &mut Rng, lo: i32, hi: i32) -> i32 {
+            let r = rng.next();
+            (r.checked_rem(hi.wrapping_sub(lo).wrapping_add(1) as u32)
+                .unwrap_or(0) as i32)
+                .wrapping_add(lo)
+        }
+        let (bx, by) = match state {
+            UNDER | DYING | GONE => {
+                let x = draw(rng, w / 4, w * 3 / 4);
+                (x, draw(rng, h / 4, h * 3 / 4))
+            }
+            1..=4 => {
+                let (x1, x2, y1, y2) = if hit {
+                    match heading {
+                        0 | 4 => (w / 4, w * 3 / 4, h / 3, h * 2 / 3),
+                        2 | 6 => (w / 3, w, h / 4, h * 3 / 4),
+                        _ => (w / 3, w, h / 3, h * 2 / 3),
+                    }
+                } else {
+                    let second = rng.next() & 1 != 0;
+                    match (heading, second) {
+                        (0 | 4, false) => (0, w - 1, 0, h / 3),
+                        (0 | 4, true) => (0, w - 1, h * 2 / 3, h - 1),
+                        (2 | 6, false) => (0, w / 3, 0, h - 1),
+                        (2 | 6, true) => (w * 2 / 3, w - 1, 0, h - 1),
+                        (_, false) => (w * 2 / 3, w - 1, 0, h / 3),
+                        (_, true) => (0, w / 3, h * 2 / 3, h - 1),
+                    }
+                };
+                let x = draw(rng, x1, x2);
+                (x, draw(rng, y1, y2))
+            }
+            _ => (0, 0),
+        };
+        Some((x + bx, y + by))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A shot at a sea monster aims where 0x493350 says, drawing from the
+    /// monster's own generator: up and swimming east, a hit within `w / 4
+    /// ..= 3w / 4` by `h / 3 ..= 2h / 3` of its picture, a miss in its top
+    /// or bottom third by the first draw; under water anywhere in the
+    /// middle half of its cell (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn sea_monster_aim_is_the_originals() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let ship = scene.objects.iter().find(|o| o.ship.is_some()).unwrap();
+        let cell = Scene::cell_at(ship);
+        scene.objects.retain(|o| o.ship.is_none());
+        scene
+            .spawn_hazard(Spell::Monster, cell.0, cell.1, None, &data, &mut caches)
+            .unwrap();
+        let id = scene.summons[0].0;
+        let i = scene.object_index(id).unwrap();
+        let mut m = scene.new_sea_monster(i);
+        m.state = SWIMMING;
+        m.heading = 0;
+        let frames = Scene::monster_frames(&m, &data, &mut caches);
+        scene.objects[i].frames = vec![frames[0].clone()];
+        scene.sea_monster_states.insert(id, m);
+        let o = &scene.objects[i];
+        let l = &o.frames[0][0];
+        let (left, top) = crate::render::layer_origin(o, l);
+        let (w, h) = (l.image.width as i32, l.image.height as i32);
+        let mut rng = Rng(scene.sea_monster_states[&id].rng.0);
+        let (r1, r2) = (rng.next(), rng.next());
+        let want = (
+            left + w / 4 + (r1 % (w * 3 / 4 - w / 4 + 1) as u32) as i32,
+            top + h / 3 + (r2 % (h * 2 / 3 - h / 3 + 1) as u32) as i32,
+        );
+        assert_eq!(scene.sea_monster_aim(i, true), Some(want));
+        let (r0, r1, r2) = (rng.next(), rng.next(), rng.next());
+        let (y1, y2) = if r0 & 1 == 0 {
+            (0, h / 3)
+        } else {
+            (h * 2 / 3, h - 1)
+        };
+        let want = (
+            left + (r1 % w as u32) as i32,
+            top + y1 + (r2 % (y2 - y1 + 1) as u32) as i32,
+        );
+        assert_eq!(scene.sea_monster_aim(i, false), Some(want));
+        scene.sea_monster_states.get_mut(&id).unwrap().state = UNDER;
+        let (cx, cy) = Scene::cell_at(&scene.objects[i]);
+        let (r1, r2) = (rng.next(), rng.next());
+        let want = (
+            cx * 64 + 16 + (r1 % 33) as i32,
+            cy * 64 + 16 + (r2 % 33) as i32,
+        );
+        assert_eq!(scene.sea_monster_aim(i, true), Some(want));
+    }
 
     /// Each time it comes up to swim, a monster with room (fewer than two
     /// carried) takes the treasure on its cell (0x491a40): the treasure
