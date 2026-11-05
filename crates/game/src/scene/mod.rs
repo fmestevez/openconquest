@@ -2940,7 +2940,7 @@ impl Scene {
                         ship.blocked += dt;
                         ship.stalled += dt;
                         let last = ship.path.back().map(|&(lx, ly)| cell_of(lx, ly));
-                        if last != Some(next) {
+                        if last != Some(next) || ship.attack_step {
                             ship.waited += dt;
                         }
                         ship.move_state = if ship.stalled >= crate::clock::ticks(50) {
@@ -2972,8 +2972,9 @@ impl Scene {
                             {
                                 ship.waited += dt;
                             }
+                            // (Or with `+0x594`, the attack's, 0x4a3d76.)
                             let last = ship.path.back().map(|&(lx, ly)| cell_of(lx, ly));
-                            if last != Some(next) {
+                            if last != Some(next) || ship.attack_step {
                                 ship.waited += dt;
                             }
                             // Held at its cell (3), its way kept, until 50
@@ -3001,6 +3002,7 @@ impl Scene {
                             ship.blocked = 0.0;
                             ship.stalled = 0.0;
                             ship.waited = 0.0;
+                            ship.attack_step = false;
                             // The next cell reserved (`+0x5b6`,
                             // 0x4a3a70): under way (5, 0x4a3560), between
                             // cells as it leaves its cell's middle.
@@ -3089,6 +3091,7 @@ impl Scene {
                                 ship.entering = c;
                                 ship.accel = None;
                                 ship.waited = 0.0;
+                                ship.attack_step = false;
                             } else {
                                 // Refused, the wait (`+0x591`) grows as
                                 // for a step asked at a route point
@@ -3108,7 +3111,7 @@ impl Scene {
                                         ship.waited += crate::clock::TICK;
                                     }
                                 }
-                                if last != Some(c) {
+                                if last != Some(c) || ship.attack_step {
                                     ship.waited += crate::clock::TICK;
                                 }
                             }

@@ -2157,9 +2157,13 @@ fn fire_state_writers() {
     let b = ship(&scene).behaviour;
     assert_eq!(b.fire_state, 3);
     assert!(ship(&scene).firing);
+    // The record keeps the enemy's player code (0x4ab3f0, `+0x644`).
+    let code = scene.player_code(enemy);
+    assert!(code >= 0);
     let at = Aim {
         target: enemy,
         state: 3,
+        player: code,
     };
     assert_eq!(b.aims, [Aim::default(), at, Aim::default(), Aim::default()]);
     // A move at the group's turn: 0x4abe00 first.
@@ -2181,7 +2185,8 @@ fn fire_state_writers() {
             1,
             Aim {
                 target: enemy,
-                state: 1
+                state: 1,
+                player: code,
             }
         )
     );
@@ -3295,6 +3300,32 @@ fn crew_experience() {
     scene.objects[m].ship.as_mut().unwrap().kind = 11;
     assert!(scene.board_roll(m, e));
     assert_eq!(scene.objects[m].ship.as_ref().unwrap().experience, 3_000);
+}
+
+/// 0x4ac050: an attack's record finds its target again by the player code
+/// it took (0x4ab3f0, `+0x644`): only while the target is that player's,
+/// anything of its id with -1 (side 2) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn attack_record_finds_by_player_code() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let e = scene
+        .objects
+        .iter()
+        .position(|o| o.ship.is_some() && o.owner.is_some())
+        .unwrap();
+    let id = scene.objects[e].id;
+    let (n, slot) = scene.objects[e].owner.unwrap();
+    let code = scene.player_code(id);
+    assert_eq!(code, (n * 4 + slot) as i8);
+    assert_eq!(scene.find_by_code(code, id), Some(e));
+    scene.objects[e].owner = Some((n, (slot + 1) % 4));
+    assert_eq!(scene.find_by_code(code, id), None);
+    assert_eq!(scene.find_by_code(-1, id), Some(e));
 }
 
 /// Greek fire's and quick lime's power (0x4bc360): rows 12 and 13 of the

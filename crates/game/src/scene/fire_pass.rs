@@ -684,9 +684,10 @@ impl Scene {
             return;
         };
         let armed = self.objects[i].armed_positions();
+        let code = self.player_code(t);
         let s = self.objects[i].ship.as_mut().unwrap();
         if s.behaviour.aims.iter().all(|a| a.target != t) {
-            s.take_attack(t, armed);
+            s.take_attack(t, code, armed);
         }
     }
 
@@ -1095,16 +1096,18 @@ impl Scene {
     /// 3's beats that. `None` with no position in state 3 (not decoded:
     /// the original's id and player are then uninitialised).
     #[allow(clippy::needless_range_loop)]
-    fn attack_range(&self, i: usize) -> Option<(i32, u32, u32)> {
+    fn attack_range(&self, i: usize) -> Option<(i32, u32, i8, u32)> {
         let s = self.objects[i].ship.as_ref().unwrap();
         let counts = self.item_counts(i);
         let n = s.positions();
         let (mut sums, mut aim, mut id) = ([0u32; 3], 0u32, None);
+        let mut code = -1;
         for p in 0..n {
             if s.behaviour.aims[p].state != 3 {
                 continue;
             }
             id = Some(s.behaviour.aims[p].target);
+            code = s.behaviour.aims[p].player;
             for item in 3 * p..3 * p + 3 {
                 let it = item as u8;
                 let r = [1, 2, 3].map(|d| self.reaches(i, it, d, 0));
@@ -1134,7 +1137,7 @@ impl Scene {
             (2, sums[1])
         };
         let d = if best < sums[2] { 3 } else { d };
-        Some((d, id, aim / 2))
+        Some((d, id, code, aim / 2))
     }
 
     /// 0x4b9140's route to the target's cell `goal` (0x4a6270 mode 5,
@@ -1184,8 +1187,9 @@ impl Scene {
     /// 0x16}` to its group (0x4a1800); found within the aim (0x557480 of
     /// its cell), the positions in state 3 fire at their targets (0x4c0230).
     /// Then with guard on and not 7 fired, 0x4bf9b0 again (its switches'
-    /// marks now cleared) and, non-zero, 0x4c0eb0. (Not ported: `+0x594`
-    /// = 1, `+0x62f` = its cell, readers not read.)
+    /// marks now cleared) and, non-zero, 0x4c0eb0. It first sets `+0x594`
+    /// (`attack_step`, read by the step's wait, 0x4a3d76); `+0x62f`, the
+    /// ship's cell written when the route is planned, has no reader.
     fn fire_attack(
         &mut self,
         i: usize,
@@ -1197,19 +1201,19 @@ impl Scene {
         if mask == 0 {
             return;
         }
-        let Some((d, target, aim)) = self.attack_range(i) else {
+        if let Some(s) = self.objects[i].ship.as_mut() {
+            s.attack_step = true;
+        }
+        let Some((d, target, code, aim)) = self.attack_range(i) else {
             return;
         };
         let own = self.cell_of_object(i);
+        // 0x4b9140 -> 0x4ac050 with the record's player code (`+0x644`):
+        // the target is found while it is that player's (anything of its
+        // id for -1), whoever's ally it has become since.
         let found = self
-            .object_index(target)
+            .find_by_code(code, target)
             .filter(|&t| target != 0 && self.objects[t].combat.is_some());
-        let at_jam = matches!(
-            self.objects[i].ship.as_ref().and_then(|s| s.task),
-            Some(Task::Attack { jam: Some(_), .. })
-        );
-        let found =
-            found.filter(|&t| at_jam || Self::are_enemies(&self.objects[i], &self.objects[t]));
         let Some(t) = found else {
             let id = self.objects[i].id;
             let s = self.objects[i].ship.as_mut().unwrap();

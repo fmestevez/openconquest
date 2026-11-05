@@ -441,6 +441,11 @@ pub struct Ship {
     /// This is the Argo (a royal ship built with "Build Argo", 0x7d).
     #[serde(default)]
     pub argo: bool,
+    /// Set by the attack (`+0x594`, 0x4c09c0 with a mask) and cleared by
+    /// a step granted (0x4a3c6e): a step refused then counts its extra
+    /// tick of wait even at the route's last cell (0x4a3d76).
+    #[serde(default)]
+    pub attack_step: bool,
     /// The crew's experience (`+0x544`, at most 10000, raised by
     /// 0x4b4680): the map record's byte 13 x 100 (0x4dfa90), 0 for a ship
     /// built.
@@ -933,6 +938,11 @@ pub struct Aim {
     pub target: u32,
     /// `+0x645`: its state (1 a target, 3 the attack).
     pub state: u8,
+    /// `+0x644`: the target's player code as the record was taken
+    /// (0x4ab3f0: nation x 4 + slot, -1 for side 2), by which 0x4ac050
+    /// finds it again (`Scene::player_code`).
+    #[serde(default)]
+    pub player: i8,
 }
 
 /// A behaviour record (the ship's event 0x100, 0x4a9e30 kinds 4-11).
@@ -1162,14 +1172,18 @@ impl Ship {
     /// target, and the fire state is 3; each other position with a target
     /// not in state 3 at this one goes to 1. The fire task is on
     /// (0x4ab580) whether a position took it or not.
-    pub fn take_attack(&mut self, target: u32, armed: [bool; 4]) {
+    pub fn take_attack(&mut self, target: u32, player: i8, armed: [bool; 4]) {
         let n = self.positions();
         let b = &mut self.behaviour;
         for (k, &on) in armed.iter().enumerate().take(n) {
             if !on {
                 continue;
             }
-            b.aims[k] = Aim { target, state: 3 };
+            b.aims[k] = Aim {
+                target,
+                state: 3,
+                player,
+            };
             b.fire_state = 3;
             // 0x4ab6a5: the next plan at once, 25 ticks apart after.
             self.attack_plan = RoutePlan {
@@ -2255,6 +2269,7 @@ pub fn resolve(
         heroes: Vec::new(),
         argo: false,
         experience: (f(13) & 0xff) as i32 * 100,
+        attack_step: false,
         look: None,
         // Fields 29-100: each unit's condition, eight per item (the
         // loader 0x4dfe00); as many count as the ship carries.

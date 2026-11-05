@@ -81,6 +81,7 @@ impl Scene {
             return Err("Choose an enemy ship or building".into());
         }
         let armed = self.objects[i].armed_positions();
+        let code = self.player_code(target);
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path.clear();
         ship.task = Some(Task::Attack {
@@ -90,7 +91,7 @@ impl Scene {
         });
         // The ship's tick takes the attack's fire records (0x4ab3f0 kind
         // 3 at every position, order 0x16 sub 7).
-        ship.take_attack(target, armed);
+        ship.take_attack(target, code, armed);
         Ok(())
     }
 
@@ -120,6 +121,7 @@ impl Scene {
         let target = self.jam_first(jam).ok_or("No such target")?;
         let count = self.ticks;
         let armed = self.objects[i].armed_positions();
+        let code = self.player_code(target);
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path.clear();
         ship.task = Some(Task::Attack {
@@ -127,7 +129,7 @@ impl Scene {
             jam: Some(jam),
             count,
         });
-        ship.take_attack(target, armed);
+        ship.take_attack(target, code, armed);
         Ok(())
     }
 
@@ -181,6 +183,7 @@ impl Scene {
                     _ => 0,
                 });
             let armed = self.objects[i].armed_positions();
+            let code = self.player_code(target);
             let s = self.objects[i].ship.as_mut().unwrap();
             s.task = Some(Task::Attack {
                 target,
@@ -188,7 +191,7 @@ impl Scene {
                 count,
             });
             if fresh {
-                s.take_attack(target, armed);
+                s.take_attack(target, code, armed);
             }
         }
     }
@@ -304,6 +307,27 @@ impl Scene {
     /// 0x410150; lairs, 0x414e20; the jam, 0x415c10; the port's other
     /// monsters, whose constructors were not all read), 1 a player's, 0
     /// none.
+    /// The player code an attack's record keeps of object `id` (0x4ab3f0,
+    /// `+0x644`): -1 for side 2 (or none), else nation x 4 + slot.
+    pub(super) fn player_code(&self, id: u32) -> i8 {
+        match self.object_index(id).map(|t| &self.objects[t]) {
+            Some(o) if Self::side_of(o) != 2 => o.owner.map_or(-1, |(n, s)| (n * 4 + s) as i8),
+            _ => -1,
+        }
+    }
+
+    /// 0x4ac050(code, id): object `id` found again by an attack's record,
+    /// `code` its player code: with -1 anything of that id (0x51f1f0),
+    /// else only among that player's objects (0x4a8710).
+    pub(super) fn find_by_code(&self, code: i8, id: u32) -> Option<usize> {
+        let t = self.object_index(id)?;
+        if code < 0 {
+            return Some(t);
+        }
+        let owner = self.objects[t].owner?;
+        (Self::side_of(&self.objects[t]) != 2 && (owner.0 * 4 + owner.1) as i8 == code).then_some(t)
+    }
+
     pub(super) fn side_of(o: &MapObject) -> u8 {
         if matches!(o.class, ObjectClass::Barbarian(_)) || o.owner == Some(combat::MONSTERS) {
             2
@@ -811,8 +835,9 @@ impl Scene {
         if armed_turn {
             if let Some(t) = self.object_index(target) {
                 let armed = self.objects[t].armed_positions();
+                let code = self.player_code(shooter);
                 let ship = self.objects[t].ship.as_mut().unwrap();
-                ship.take_attack(shooter, armed);
+                ship.take_attack(shooter, code, armed);
             }
         }
         let levels = self.levels_of(owner);

@@ -1543,7 +1543,7 @@ mod tests {
             .ship
             .as_mut()
             .unwrap()
-            .take_attack(gone, armed);
+            .take_attack(gone, -1, armed);
         scene.objects.retain(|o| o.id != gone);
         scene.ticks = (scene.ticks..).find(|t| (t ^ ids[0]) & 3 == 0).unwrap();
         scene.run_fire_pass(&data, &mut caches);

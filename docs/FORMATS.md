@@ -8351,16 +8351,28 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   (0x4ac210: 0x5bb4b0[t] x 650 x 100 / 100, 65 x 650 and 75 x 650; no
   other writer). Then `+0x47d = 3` and the total takes the Greek fire
   power / 100 (on a type 9 the stale `+0x46d`'s).
-- Not decoded: a sea monster's target (0x1fb) is not shot when the
-  shooter's vt+8 takes the aim point `(x, y, 1, 0, 1)`; 0x4c07c0 with no position in
+- Not ported: a sea monster's target (0x1fb) is not shot (no shot, no
+  reload; the roll already drawn) when the shooter's vt+8 takes the aim
+  point `(x, y, 1, 0, 1)`: the ship's vt+8 is 0x4e06c0 (vtable 0x59b48c:
+  the point within its picture's rect `+0x59 / +0x5d / +0x61 / +0x65`
+  and solid in its mask `+0x8e2` frame `+0x45 - 0x20` while turning
+  (0x20-0x37), else heading x 3, 0x543240 / 0x557640, as 0x4c1870); the
+  point is the monster's vt+0xc 0x493350 (vtable 0x59750c, its own
+  generator; with 0x493110) which the port does not have yet. 0x4c07c0 with no position in
   state 3 (its id and player uninitialised; the port does nothing); a
   position's target gone, its pointer dangling (the port skips it);
   0x50ebf0's families with no cell (400 a leviathan, 700, the jam 0x1f7
   and the land creatures not listed): 0x4b9140 returns 0 unrouted and
   0x4c09c0 compares an uninitialised distance with the aim (the port
-  fires nothing there); `+0x594` = 1 and `+0x62f` (0x4c09c0's writes;
-  their readers not read); 0x4ac050's player check (the port: there and
-  an enemy, or at a jam).
+  fires nothing there).
+- `+0x594`: set by 0x4c09c0 with a mask (and by 0x4b7f10 at a fort or
+  barbarian prey, 0xe01c, not ported), cleared by a step granted
+  (0x4a3c6e); a step refused at the route's last cell counts the extra
+  tick of wait with it set (0x4a3d76). `+0x62f` (0x4c09c0: the ship's
+  cell; 0x4ab6f7: -1) has no reader. 0x4ac050(code, id), the target found
+  again: code -1 anything of that id (0x51f1f0), else only that player's
+  objects (0x4a8710); the code is the record's `+0x644`, which 0x4ab3f0
+  takes as nation x 4 + slot, -1 for side 2. No enemy test there.
 - The crew's experience `+0x544` (0x4b4680: `+0x544 += n`, at most
   10000; with `+0x252` set, each hundred since `+0x548` posts the panel
   notice 0x4bebe0 and `+0x548` follows). A map ship starts with its
