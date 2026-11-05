@@ -59,6 +59,8 @@ const TORCH_OF_ARES: u8 = 10;
 pub struct Fire {
     pub ship: u32,
     pub size: u8,
+    /// The layer's frame `+0x45`: each step adds one and shows it modulo
+    /// the count (0x55ec70), so the last step's `count` shows frame 0.
     pub frame: usize,
     clock: f32,
     pub frames: Vec<Vec<objects::Layer>>,
@@ -115,10 +117,14 @@ impl Scene {
             return;
         }
         let shown = size.min(2);
-        // Their colour 0x26 darkens what is beneath through the shadow
-        // table (0x50e050 with 0x5c1358, 0x50e130(1, 0x26); 0x4e2117,
-        // 0x4e4fb0); the rest is painted.
-        let Ok(frames) = caches.shaded_frames(data, &format!("FIRE{shown}"), 0x26) else {
+        // 0x4e4fb0 sets colour 0x26 as shadow (0x50e050 with 0x5c1358,
+        // 0x50e130(5, 1, 0x26, 0)) before the picture is loaded, then
+        // 0x4e1bb0(5) loads `FIRE<+0x7a>` and puts 0x50e240(5, 1, 0x5c1858,
+        // 1, 7) on it (0x4e1ff4-0x4e2003): the same frame fields (0x55dd40:
+        // table +0x5c, value +0x60, count +0x64), so the flames' colours
+        // 1-7 blend with what is beneath through 0x5c1858, as a building's
+        // fire, and 0x26 is painted.
+        let Ok(frames) = caches.marked_frames(data, &format!("FIRE{shown}"), None, true) else {
             return;
         };
         if frames.is_empty() {
@@ -147,8 +153,9 @@ impl Scene {
         }
     }
 
-    /// The flames burn on and go out after their last frame, or with
-    /// their ship.
+    /// The flames burn on and go out, or with their ship: a step
+    /// (0x4e04d0) with the frame below the count adds one, one at the
+    /// count removes the layer (0x4e0260).
     pub(super) fn run_burning(&mut self, dt: f32) {
         let step = crate::clock::ticks(2);
         for f in &mut self.fires {
@@ -165,7 +172,7 @@ impl Scene {
             .map(|o| o.id)
             .collect();
         self.fires
-            .retain(|f| f.frame < f.frames.len() && alive.contains(&f.ship));
+            .retain(|f| f.frame <= f.frames.len() && alive.contains(&f.ship));
     }
 
     /// The flames on ship `obj` now and their top left, from its picture's.
@@ -176,7 +183,7 @@ impl Scene {
     ) -> Option<(&[objects::Layer], f32, f32)> {
         let f = self.fires.iter().find(|f| f.ship == obj.id)?;
         let ship = obj.ship.as_ref()?;
-        let layers = f.frames.get(f.frame)?;
+        let layers = f.frames.get(f.frame % f.frames.len())?;
         let flame = layers.first()?;
         let first = obj.frame_at(time_ms).first()?;
         let (pl, pt) = (

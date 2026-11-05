@@ -1422,16 +1422,37 @@ only goes back to the middle of its flames. A Torch of Ares aboard
 (treasure kind 10) keeps both off; +0x255 also keeps them off (not
 identified). The flames' bottom middle stands at the ship type's and
 heading's spot (0x598ad8, 8 a type) from its picture's top left, 23 pixels
-lower. The layer is drawn through the shadow table (0x50e050 with
-0x5c1358) and 0x50e130(1, 0x26). Both go to the sprite frame's remap
-(0x55dd40: flag 0x100, table at +0x5c, a value at +0x60, a count at
-+0x64, 1 from both setters); the caller (0x5725c0) passes the table only
-with the flag, and the blitter (0x57b7f0) draws a colour in [value, value
-+ count) as `table[(colour - value) x 256 + the pixel beneath]`. So the
-build preview's forts and ports have their colour 0xfe drawn as shadow,
-as every object's is, and the flames their colour 0x26 (with table 0, the
-layer's, 0x55dd10: the shadow table); the rest of the flames is painted. `SMOKE`
-(layer 6) is only restored from saves; nothing starts it in play.
+lower, set at each step (0x4e04d0; 0x4e4fb0 at the lighting writes the
+y with `- 0xf` where the step has `+ 0x17`). The layer's
+remap: 0x4e4fb0 sets the sprite's shadow table (0x50e050 with 0x5c1358,
+0x55dd10) and 0x50e130(5, 1, 0x26, 0), which, the layer having no
+picture yet (0x50e130 acts only with `+0x41` not -1), does nothing; then
+0x4e1bb0(5) loads `FIRE<+0x7a>` (0x4b1750, `FIRE%1d`; 0x50d080) and
+puts 0x50e240(5, 1, 0x5c1858, 1, 7) on it (0x4e1ff4-0x4e2003; 0x55dd40:
+flag 0x100, table +0x5c, value +0x60, count +0x64 on the frame and its
+children). The blitter (0x57b7f0, called from 0x572622, which passes the
+table only with the flag and the sprite's table `+0x63c` only for count 1
+and table 0) draws a colour in [value, value + count) as `table[(colour
+- value) x 256 + the pixel beneath]`: the flames' colours 1-7 blend with
+what is beneath through 0x5c1858 as a building's fire does, the rest
+(0x26 among them) painted. A re-ignition with another size calls
+0x4e1bb0(5) again, which reloads the same `FIRE<+0x7a>` (the size byte
+is written only at the lighting; the load 0x5461d0 leaves the frame
+`+0x45` alone). With the phantom (`+0x253`) 0x4df380 then ghosts the
+layer for its owner (0x50e460 with 0x5cdd2c) or hides it from others
+(0x50e350); not ported for the flames (the port draws them on any ship).
+
+The step (0x4e04d0, from the ship's tick at 0x4dca16 while `+0x8ca` is
+set): with the frame `+0x45` below the count `+0x49` and the game tick
+more than the delay 1 past its time `+0x81`, frame + 1, time = the tick,
+and 0x50d660 shows that frame (0x55ec70 takes it modulo the count, so
+the step reaching the count shows frame 0); with the frame at the count
+the layer is removed (0x4e0260). Not decoded: whether the new layer
+(0x50cbf0 with show flag 0) is visible before its first step, and so at
+the lighting's place, 38 pixels higher; the port shows its first frame at
+the step's place from the lighting. Ported in `scene/fire.rs` (the
+frames `marked_frames(.., None, true)`, drawn as a building's fire).
+`SMOKE` (layer 6) is only restored from saves; nothing starts it in play.
 
 ## Selection box
 

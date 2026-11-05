@@ -208,7 +208,7 @@ impl GameData {
     /// darkening what is beneath through the table at 0x5c1358: the
     /// original's frame remap (0x55dd40; blitter 0x57b7f0 draws a colour in
     /// [value, value + count) as `table[(colour - value) x 256 + beneath]`,
-    /// count 1), 0xfe for objects' shadows, 0x26 for ships' flames.
+    /// count 1), 0xfe for objects' shadows, 0x26 for buildings' smoke.
     pub fn load_image_shading(
         &self,
         lib: &Archive,

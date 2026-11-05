@@ -8041,9 +8041,28 @@ fn ships_burn_and_go_out() {
     scene.ignite(i, 9, false, 100.0, &data, &mut caches);
     let f = scene.fires.iter().find(|f| f.ship == id).unwrap();
     assert_eq!((f.size, f.frame), (2, f.frames.len() / 2));
-    let left = f.frames.len() - f.frame;
+    // The flames' colours 1-7 go through the blend 0x5c1858 (0x4e2003),
+    // none drawn as shadow.
+    let pixels = || {
+        f.frames
+            .iter()
+            .flat_map(|l| l[0].image.pixels.iter().flatten())
+    };
+    assert!(pixels().any(|&p| p & crate::assets::BLEND != 0));
+    assert!(pixels().all(|&p| p != crate::assets::SHADOW));
+    let count = f.frames.len();
+    let left = count - f.frame;
     assert!(scene.fire_on(&scene.objects[i], 0).is_some());
-    for _ in 0..left * 2 + 2 {
+    // A step at the count shows frame count % count, 0 (0x4e04d0,
+    // 0x55ec70); the next removes it.
+    scene.fires[0].frame = count;
+    let (layers, _, _) = scene.fire_on(&scene.objects[i], 0).unwrap();
+    assert!(std::rc::Rc::ptr_eq(
+        &layers[0].image,
+        &scene.fires[0].frames[0][0].image
+    ));
+    scene.fires[0].frame = count - left;
+    for _ in 0..left * 2 + 4 {
         scene.update(crate::clock::TICK, &data, &mut caches);
     }
     assert!(scene.fires.is_empty(), "burnt out");
