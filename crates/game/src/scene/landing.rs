@@ -828,7 +828,7 @@ impl Scene {
 /// Point `k` of a close-in line from `from` to `to` (0x4b5220: as many
 /// points as its longer side, padded to an even count; past the end, the
 /// end).
-fn line_point(from: (f32, f32), to: (f32, f32), k: i32) -> (f32, f32) {
+pub(super) fn line_point(from: (f32, f32), to: (f32, f32), k: i32) -> (f32, f32) {
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
     let major = dx.abs().max(dy.abs()).round() as i32;
     if major == 0 {

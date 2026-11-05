@@ -1305,8 +1305,16 @@ pub enum Task {
         #[serde(default)]
         hooking: bool,
     },
-    /// Sail to an own dock and be repaired there.
-    Repair { dock: u32 },
+    /// Sail to an own dock and be repaired there (task `+0x72f` 1); with
+    /// `sell` (`+0x749 == 3`, ship command 0x1e byte 0 3) sold there
+    /// instead, as the dock takes it (0x4b2506).
+    Repair {
+        dock: u32,
+        #[serde(default)]
+        sell: bool,
+    },
+    /// Being sold at a dock (task 5, 0x4b4380, `+0x251 == 2`).
+    Sell(Sale),
     /// Sail alongside own settlement `site` and take one `item` of its
     /// stock aboard.
     Fetch { site: u32, item: u8 },
@@ -1334,6 +1342,26 @@ pub enum Task {
     /// Sail alongside own port, shipyard, dock or ship `target` and reload
     /// there (Reload Object; see `scene::load`).
     LoadAt { target: u32 },
+}
+
+/// A ship being sold (task 5, 0x4b4380; `+0x755` its state): 1 just
+/// taken, 2 sailing to its cell's middle and turning to heading 0 or 6
+/// (0x4b4220), 3 its building picture running down (`+0x8be +0x45`).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Sale {
+    pub state: u8,
+    /// The line to the cell's middle (0x4b5220, `+0x766`): its ends in
+    /// world points, its count (`+0x75e`, 0 with none) and the point at
+    /// (`+0x74d`).
+    pub from: (f32, f32),
+    pub to: (f32, f32),
+    pub count: i32,
+    pub at: i32,
+    /// The heading it turns to (`+0x76a`) and the way (`+0x76c`).
+    pub face: u8,
+    pub turn: i8,
+    /// The picture's frame in state 3.
+    pub frame: i32,
 }
 
 /// A ship's patience with each new order (+0x5c8).
@@ -1378,6 +1406,7 @@ impl Task {
             Task::Convoy { .. } => 11,
             Task::Take { .. } => 12,
             Task::LoadAt { .. } => 13,
+            Task::Sell(_) => 14,
         }
     }
 }

@@ -523,11 +523,20 @@ impl Scene {
         gone
     }
 
-    /// Whether ship `id` is being built on a berth.
+    /// Whether ship `id` has `+0x251 == 2`: being built on a berth, or
+    /// being sold at a dock (`being_sold`); both skip their events and
+    /// lack the capabilities (`+0x261`) the commands test.
     pub fn being_built(&self, id: u32) -> bool {
         self.object_index(id)
             .and_then(|i| self.objects[i].ship.as_ref())
-            .is_some_and(|s| s.build.is_some())
+            .is_some_and(|s| s.build.is_some() || matches!(s.task, Some(Task::Sell(_))))
+    }
+
+    /// Whether ship `id` is being sold at a dock (task 5, 0x4b4380).
+    pub fn being_sold(&self, id: u32) -> bool {
+        self.object_index(id)
+            .and_then(|i| self.objects[i].ship.as_ref())
+            .is_some_and(|s| matches!(s.task, Some(Task::Sell(_))))
     }
 
     /// Calls off the building of ship `i` (event 8 with no record while
@@ -1111,7 +1120,7 @@ impl Scene {
         if self.objects[k]
             .ship
             .as_ref()
-            .is_none_or(|s| s.build.is_some())
+            .is_none_or(|s| s.build.is_some() || matches!(s.task, Some(Task::Sell(_))))
         {
             return;
         }
@@ -1158,7 +1167,7 @@ impl Scene {
             // (The port's ship mended at a dock lies off the slot,
             // `slot_ship`, so this one is never found there.)
             let mending_here = self.objects[k].owner == town_owner
-                && matches!(s.task, Some(Task::Repair { dock }) if dock == site);
+                && matches!(s.task, Some(Task::Repair { dock, .. }) if dock == site);
             if mending_here {
                 continue;
             }

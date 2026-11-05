@@ -4413,18 +4413,68 @@ state 4 at once, and the back-out sends no 0xcb8.
 The sale (`+0x749 == 3`): `+0x749` is the order's `+0x834`, the first
 byte of ship command 0x1e (0x4e3055: byte 0 -> `+0x834`, dword 1 the
 dock, byte 5 -> `+0x838`). Only 0x4dbb40 sends a 3, when its block
-record's `+0x30` is 1 (else 0); it is called by the computer's dock block
-0x4dbd90 / 0x4dbb90 (navy 0x4c5097). The repair member's 0x4cd930 sends
-the block's `+0xc` (0 from 0x82); the human's go-to-dock sender is not
-read.
-Task 5 (0x4b4380, run by 0x4ab930 while `+0x251 == 2`): state 1 clears
-`+0x261`, `+0x25d`, lets the contact go (0x4b3970(0), 0x4b3930(0),
-0x523d80, 0x4e06a0), then state 7 (`+0x8c2` set) or 2; state 2 waits
-for 0x4b4220, then 0x4e1bb0(4) and a picture count `+0x45` 0x27 (heading
-0) or 0x4f (6), state 3; state 3 counts it down each tick and, at 0 (or
-below 0x28 for heading 6), credits the player 0x4e4ce0 amber (0x4a8de0)
-and 0x4e4c80 fish (0x4a8c30), then 0x50e830, 0x50e750, 0x4a3970,
-0x4a1bf0, 0x10a6 with `+0x252`, 0x4e4f20 and message 10 to itself.
+record's `+0x30` is 1 (else 0); it is called by fleet order 200's block
+(the fleet module 0x4a09d0 case 200 -> maker 0x4db9e0 / 0x4dafe0; its
+tick 0x4dbd90, case 11 of 0x4c4f40's table 0x4c5118). The order's
+payload `[4]` is the block's `+0x30`: the computer players' reserve
+(task 0xb, 0x47f460 -> 0x483820) gives 2, their spares (task 0xd,
+0x47f6b0 -> 0x483900) 1, so the spares are sold. The repair member's
+0x4cd930 sends the block's `+0xc` (0 from 0x82); the human's go-to-dock
+sender is not read. The order (0x4aa990) and command 0x1e (0x4e3055,
+capability 2 only) ask nothing of the hull.
+Task 5 (0x4b4380, run by 0x4ab930 while `+0x251 == 2`, which runs no
+events then and whose blows 0x4b4000 drops for task 5): state 1 clears
+`+0x261` (so the stop, 0x4aa540 wanting 0x2000, does nothing too),
+`+0x25d`, takes off the party and hooks layers (0x4e0240, 0x4df0c0),
+lets a contact go (0x32: 0x4b3970(0), 0x4b3930(0), 0x523d80, 0x4e06a0;
+200: 0x4e02a0), then 0x4b40d0 and state 7 (a walkway `+0x8c2` shown) or
+2. 0x4b40d0: a line (0x4b5220) from the picture's corner to the cell's
+`x 64 - (w - 64) / 2` (none when there), and of headings 0 and 6 the one
+fewer turns away by 0x4b5420 (0x4b5390's test without writing the
+frame; 6 on a tie), `+0x76a`, its way `+0x76c` (0 when furled, `+0x25b`
+5; a turning hull below 0x20 on `h x 3 + 0x20`), `+0x74d` 0. State 7:
+the walkway's frame down one a tick (0x4e0470), at 0 freed, state 2.
+State 2, 0x4b4220 a tick: the frame `+= +0x76c` round 0x20-0x37, the
+heading `(f - 0x20) / 3`, the way 0 on the face's first frame (not when
+furled); `+0x74d += 2` while below the count - 2, else count - 1 (furled:
+the heading the face, frame `face x 8 + 0x5b`) and done with no way
+left; the hull on the line's point. Done: 0x4e1bb0(4), which with
+`+0x251 == 2` puts the building picture (0x4e0120 mode 2), frame 0x27
+(heading 0) or 0x4f (6), state 3. State 3 takes a frame off each tick
+and below 1 (heading 0) or 0x28 (6) credits the player 0x4e4ce0 amber
+(0x4a8de0) and 0x4e4c80 fish (0x4a8c30), then 0x50e830 (a viewer on its
+cell), 0x50e750 with its own player (counted for nobody), 0x4a3970,
+0x4a1bf0 (notice 0x144 to its group), 0x10a6 with `+0x252`, 0x4e4f20 and
+message 10 to itself. 0x4e4ce0: each load `(+0x527 + +0x47f x 100) x
+rate / 100` while `+0x527` is not 0 (fish 10, leviathan `+0x52b` /
+`+0x480` 5000, amber `+0x52f` / `+0x481` 0x78), which by the loaders
+(0x4ad445, 0x4bd8e7: count the hundreds rounded up, `+0x527` the last
+one's 1-100) is `(load + 100) x rate / 100`; each unit of items 0-8 its
+condition x 0x597164[item / 3] (30, 50, 70) / 100; and 0x59b358[type]
+(200, 400, 1100, 1300, 900, 800, 700, 600, 600, 900, 600, 900) / 20.
+0x4e4c80: each unit's condition x 0x597170[item] (2, 2, 3, 0 ...).
+Another `+0x251 = 2` with task 5: the ship's message 0x248f (0x4dcf1b)
+with `+0x58c` 6 and a dock contact (its sender not found: the town sends
+0x248f to itself, 0x443fbb).
+
+Order 200's block (`+0x25`, 0x65 bytes): `+0` 200, `+4` 0x83, `+8` now,
+`+0xc` payload 0, `+0x10` the dock (payload 1), `+0x18` the land fleet
+(2), `+0x1c` (3), `+0x20-0x2c` an area (5-8), `+0x30` the mode (4);
+`+0x34` the ships' list (0x4dabd0: ship, id, -, -, x, y, state), `+0x38`
+the docks' (0x4dad30). The maker then lists the docks (0x4db2e0: the
+dock `+0x10` gone, 4 in 5 return; the land fleet's docks, else every
+class 0x3b building of the player whose vt+0x2c holds), the fleet's ships
+(0x4db660) and moves those not in state 2 to a water cell of the area
+(0x4daec0, 0x4db720 through the formation planner 0x5614e0). Its tick
+0x4dbd90 hears the queue (0x4db110: 300 a ship joined, listed and moved;
+0x134 repaired, unlisted, handed to `+0x18` (0x49bd60) and sent command
+10; 0x137 and 0x144 unlisted; 0x143 every state 2 back to 1 and the docks
+listed again) and, none heard and `+8 > 0x5f`, `+8` = 0: with fewer
+than 2 ships in state 2 and docks, 0x4dbb90 sends the nearest 2 - n (by
+0x4a1e90's distance map from `+0x14`, 5000) to the dock (state 2,
+0x4dbb40); each ship in the fleet then reported if hit (`+0x691`) and,
+lying still and listed, moved to its cell in state 1 (within 1 and
+0x499a40, or farther) or sent to the dock again in state 2.
 
 The port runs it at the game tick (`Scene::step_dock_repairs`, the
 landing's `Landing` with its `dock` contact; `Scene::dock_lets_go` for
@@ -4434,12 +4484,16 @@ it shields from no blow (0x4bf170 spares only `+0x251 == 2`). Its
 commands are held the same span (0x4b37d0 with 0x2000 in state 1, back
 by 0x4b3850 at the ends of states 2 and 3): `landing_holds`, which
 refuses every ship command but the stop (`Scene::apply`), and takes no
-contact or fire at will. Not
-ported: the sale (the port's computer dock order is `FleetOrder::Dock`,
-not the block 0x4dbd90; not decoded: which orders give the block record
-`+0x30` 1, and 0x4b4220, 0x4e1bb0, 0x4e4ce0, 0x4e4c80, 0x4b40d0 of the
-machine); notice 0x143, read only by that block (0x4db110 case 0x143);
-a fort's 0x4e7640 on 0x2874 (its `+0x1e0` not decoded).
+contact or fire at will. The sale is `Scene::order_sell` (command
+`Order::Sell`) and `Task::Sell` (`sale_tick`, `sale_value`), from the
+spares' `FleetOrder::Sell`; `being_built` is `+0x251 == 2` for both.
+Not ported: order 200's block itself (the port's computer sends every
+ship of the flotilla to its first dock at once, `FleetOrder::Dock` and
+`Sell`, not two at a time from the area, nor the queue's notices 0x134,
+0x137, 0x143, 0x144); the walkway's state 7 and a contact let go (a ship
+the dock takes has neither in the port); the furled turn (`+0x25b` 5,
+not reached); 0x50e830's viewer; message 0x248f's sale (its sender not
+found); a fort's 0x4e7640 on 0x2874 (its `+0x1e0` not decoded).
 
 **The fitting of types 2-7** (0x4bbca0(ship, dock, room), from 0x4b22f0
 in state 4 at a full hull with the contact `+0x8e6` and its dock `+5`;
@@ -7328,7 +7382,7 @@ computer while the enemy is human) becomes the enemy.
 | 8 raiders | 0x480c40 | 9 (0x47e3c0) | guard the zone 6000-15000 ticks until as many ships as the target size (0x485650), wait 1000, attack one of the enemy's towns (100) or settlements (50) (0x485be0) 6000-15000 ticks, back at 3 ships; on normal and hard with more than 4 ships they strike early at a town where the enemy is weaker (0x485fc0) |
 | 9 fleet | 0x481100 | 10 (0x47e7c0) | as the raiders, target size 0x485960, no early strike, waits 1500 |
 | 10 reserve | 0x481e60 | 0xb (0x47f460) | sail to the base (500-1000 ticks), to the docks for repairs (order 200 mode 2, 6000-12000), then hand each ship to the flotilla wanting its type most (0x486910: 0x4866d0, else 0x47fd50) |
-| 11 spare | 0x481fe0 | 0xd (0x47f6b0) | the same without handing out (mode 1) |
+| 11 spare | 0x481fe0 | 0xd (0x47f6b0) | the same without handing out, order 200 mode 1: the ships sold (0x483900) |
 | 4 commander | 0x482160 | none | the grand attack, founding settlements, spells |
 
 The gathering steps read their zone's state each turn after the first

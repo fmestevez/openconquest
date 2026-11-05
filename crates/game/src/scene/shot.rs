@@ -802,6 +802,11 @@ impl Scene {
             }
             return;
         }
+        // A ship being sold takes nothing: 0x4bf170 hands its blows to
+        // 0x4b4000, which returns at once for task 5.
+        if target.is_some_and(|i| self.being_sold(self.objects[i].id)) {
+            return;
+        }
         // A ship being built keeps the hit for its tick (event 1, 0x4a9e30:
         // a fifth in a tick is dropped), where 0x4bf170 hands it to 0x4b4000
         // alone: no fire, lime, crew or weapon damage.

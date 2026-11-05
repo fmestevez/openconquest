@@ -4,8 +4,9 @@
 use openconquest_formats::ObjectClass;
 
 use super::{Scene, TILE_SIZE};
+use crate::assets::GameData;
 use crate::economy::{DOCK, SETTLEMENT, SHIPYARD, TOWN};
-use crate::objects::Task;
+use crate::objects::{self, Caches, Resource, Task};
 
 /// A settlement mends a building (message 0x1389, 0x425100) a hundredth of
 /// its strength every hundredth of its class's cycle (+0xc0: 200 ticks for
@@ -20,6 +21,11 @@ const DOCK_REPAIR_PRICE: [u32; 12] = [140, 280, 800, 910, 650, 560, 490, 420, 42
 /// what mending a unit costs is reckoned from them.
 const UNIT_PRICE: [u32; 3] = [30, 50, 70];
 const UNIT_TICKS: [u32; 3] = [70, 80, 95];
+/// Fish a unit of items 0-8 sells for at its full condition, a hundredth
+/// (0x597170 raw, 0x4e4c80).
+const SALE_UNIT_FISH: [i64; 9] = [2, 2, 3, 0, 0, 0, 0, 0, 0];
+/// A hull's sale price before the twentieth taken (0x59b358, 0x4e4ce0).
+const SALE_BASE: [i64; 12] = [200, 400, 1100, 1300, 900, 800, 700, 600, 600, 900, 600, 900];
 
 /// A settlement mending its stock (message 0x1e, sub-order 2; state 2 of
 /// 0x441ba0): how long it has been at it, the ticks it takes (`+0x114`),
@@ -103,6 +109,18 @@ impl Scene {
     /// berth (vt+0xb8, 0x40e050) of a yard or dock (class 0x3a or 0x3b) of
     /// the ship's own player in the cell; else the order is dropped.
     pub fn order_repair(&mut self, ship: u32, dock: u32) -> Result<(), String> {
+        self.send_to_dock(ship, dock, false)
+    }
+
+    /// Orders ship `ship` to own dock `dock` to be sold (ship command 0x1e
+    /// with byte 0 3, `+0x749`; only the computers' order 200 blocks of
+    /// mode 1 send it, 0x4dbb40). The order (0x4aa990) asks nothing of the
+    /// hull, so an unhurt ship goes too.
+    pub fn order_sell(&mut self, ship: u32, dock: u32) -> Result<(), String> {
+        self.send_to_dock(ship, dock, true)
+    }
+
+    fn send_to_dock(&mut self, ship: u32, dock: u32, sell: bool) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let d = self.object_index(dock).ok_or("Choose one of your docks")?;
         if !matches!(
@@ -119,7 +137,7 @@ impl Scene {
             .iter()
             .flatten()
             .any(|&c| c < 100);
-        if c.hull >= c.max_hull && !worn {
+        if c.hull >= c.max_hull && !worn && !sell {
             return Err("The ship needs no repair".into());
         }
         let berth = self.berth_cell(d).ok_or("Choose one of your docks")?;
@@ -130,7 +148,7 @@ impl Scene {
             .ok_or("The ship cannot reach that dock")?;
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
         s.path = path;
-        s.task = Some(Task::Repair { dock });
+        s.task = Some(Task::Repair { dock, sell });
         s.dock_step = None;
         Ok(())
     }
@@ -621,11 +639,10 @@ impl Scene {
     ///   the berth (0x4b46f0 with 'Q'), notice 0x134 (0x4a1690) and the
     ///   brains' 0x5d98 (0x4b6d60).
     ///
-    /// The dock's 0xcb9 as its town falls is `dock_lets_go`. (Not ported:
-    /// the sale, `+0x749 == 3`, `+0x251 = 2` and task 5 0x4b4380, sent
-    /// only by the computer's dock block 0x4dbd90 through 0x4dbb40, which
-    /// the port does not have.)
-    pub(super) fn step_dock_repairs(&mut self) {
+    /// The dock's 0xcb9 as its town falls is `dock_lets_go`. In state 1
+    /// the sale (`+0x749 == 3`, `order_sell`) makes it task 5 instead
+    /// (`sale_tick`).
+    pub(super) fn step_dock_repairs(&mut self, data: &GameData, caches: &mut Caches) {
         for o in self.objects.iter_mut() {
             if let Some(s) = o.ship.as_mut() {
                 if !matches!(s.task, Some(Task::Repair { .. })) {
@@ -633,6 +650,17 @@ impl Scene {
                 }
             }
         }
+        // A ship the dock takes for sale runs task 5 from its next tick.
+        let sold: Vec<u32> = self
+            .objects
+            .iter()
+            .filter(|o| {
+                o.ship
+                    .as_ref()
+                    .is_some_and(|s| matches!(s.task, Some(Task::Sell(_))))
+            })
+            .map(|o| o.id)
+            .collect();
         let ids: Vec<u32> = self
             .objects
             .iter()
@@ -648,6 +676,206 @@ impl Scene {
                 self.dock_tick(k);
             }
         }
+        for id in sold {
+            if let Some(k) = self.object_index(id) {
+                self.sale_tick(k, data, caches);
+            }
+        }
+    }
+
+    /// Ship `k` being sold, a tick (task 5, 0x4b4380, run by 0x4ab930
+    /// while `+0x251 == 2`):
+    ///
+    /// - **1**: its capabilities and task bits cleared (`+0x261`,
+    ///   `+0x25d` 0), its walkway, party and hooks taken off (0x4e0240,
+    ///   0x4df0c0); the line to its cell's middle (0x4b40d0), state 2.
+    ///   (A walkway shown, `+0x8c2`, would first run down a frame a tick,
+    ///   state 7, and a contact, 0x32 or 200, be let go: the dock takes a
+    ///   ship lying with neither.)
+    /// - **2** (0x4b4220): a hull rotation the way it turns and two
+    ///   points of the line a tick; at the line's end and turned, its
+    ///   building picture (0x4e1bb0(4) with `+0x251 == 2`: 0x4e0120 mode
+    ///   2) on frame 0x27 (heading 0) or 0x4f (6), state 3.
+    /// - **3**: the frame down one a tick; below 1 (heading 0) or 0x28
+    ///   (6) its player gets 0x4e4ce0 amber (0x4a8de0) and 0x4e4c80 fish
+    ///   (0x4a8c30) (`sale_value`), the ship is counted destroyed by its
+    ///   own player (0x50e750 with `+0x24f`: nobody's loss or gain), its
+    ///   group told 0x144 (0x4a1bf0) and it is removed (message 10).
+    ///   (Not ported: 0x50e830's viewer left on its cell, as for a
+    ///   building called off.)
+    fn sale_tick(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
+        let Some(Task::Sell(mut sale)) = self.objects[k].ship.as_ref().and_then(|s| s.task) else {
+            return;
+        };
+        match sale.state {
+            1 => {
+                let s = self.objects[k].ship.as_mut().unwrap();
+                s.fire_wind_down();
+                s.path.clear();
+                self.sale_line(k, &mut sale);
+                sale.state = 2;
+            }
+            2 => {
+                if self.sale_step(k, &mut sale) {
+                    let o = &mut self.objects[k];
+                    let nation = o.record.fields.get(5).copied().unwrap_or(1);
+                    let s = o.ship.as_mut().unwrap();
+                    let (kind, argo) = (s.kind, s.argo);
+                    s.rotation = None;
+                    s.furl = 0.0;
+                    sale.frame = if s.heading == 6 { 0x4f } else { 0x27 };
+                    if let Ok(frames) = objects::ship_build_frames(data, caches, kind, nation, argo)
+                    {
+                        if !frames.is_empty() {
+                            o.frames = frames;
+                        }
+                    }
+                    sale.state = 3;
+                    let n = o.frames.len().max(1);
+                    o.progress = Some((sale.frame as f32 + 0.5) / n as f32);
+                }
+            }
+            3 => {
+                sale.frame -= 1;
+                let heading = self.objects[k].ship.as_ref().unwrap().heading;
+                if (heading == 0 && sale.frame < 1) || (heading == 6 && sale.frame < 0x28) {
+                    let (amber, fish) = self.sale_value(k);
+                    let owner = self.objects[k].owner;
+                    if let Some(owner) = owner {
+                        self.earn(owner, amber, fish);
+                    }
+                    self.note_destroyed(k, owner);
+                    self.objects.remove(k);
+                    return;
+                }
+                let o = &mut self.objects[k];
+                let n = o.frames.len().max(1);
+                o.progress = Some((sale.frame.max(0) as f32 + 0.5) / n as f32);
+            }
+            _ => {}
+        }
+        if let Some(s) = self.objects[k].ship.as_mut() {
+            s.task = Some(Task::Sell(sale));
+        }
+    }
+
+    /// 0x4b40d0: a line (0x4b5220, `+0x766`; none when there already)
+    /// from where the hull is to its cell's middle (the picture's corner
+    /// to `cell x 64 - (w - 64) / 2`: the picture centred on the cell),
+    /// and of headings 0 and 6 the one fewer turns away (0x4b5420, as
+    /// 0x4b5390 without writing the frame; 6 on a tie), its way; turning,
+    /// a hull below the rotations on `h x 3 + 0x20`. (`+0x25b` 5, furled,
+    /// which stops the turn, is not reached: the ship lies unfurled.)
+    fn sale_line(&mut self, k: usize, sale: &mut objects::Sale) {
+        let t = TILE_SIZE as f32;
+        let o = &mut self.objects[k];
+        let (cx, cy) = ((o.x / t).floor(), (o.y / t).floor());
+        sale.from = (o.x, o.y);
+        sale.to = (cx * t + t / 2.0, cy * t + t / 2.0);
+        sale.count = 0;
+        if sale.from != sale.to {
+            let major = (sale.to.0 - sale.from.0)
+                .abs()
+                .max((sale.to.1 - sale.from.1).abs())
+                .round() as i32;
+            sale.count = (major + 1 + 1) / 2 * 2;
+        }
+        let s = o.ship.as_mut().unwrap();
+        let way = |c: i32| -> i32 {
+            match s.rotation {
+                Some(r) => {
+                    let u = c * 3 - r as i32;
+                    if u.abs() > 12 {
+                        u - 24 * u.signum()
+                    } else {
+                        u
+                    }
+                }
+                None => {
+                    let u = c - s.heading as i32;
+                    if u.abs() > 4 {
+                        u - 8 * u.signum()
+                    } else {
+                        u
+                    }
+                }
+            }
+        };
+        let (u0, u6) = (way(0), way(6));
+        let (face, u) = if u0.abs() < u6.abs() {
+            (0, u0)
+        } else {
+            (6, u6)
+        };
+        sale.face = face;
+        sale.turn = u.signum() as i8;
+        if sale.turn != 0 && s.rotation.is_none() {
+            s.rotation = Some(s.heading as u8 * 3);
+        }
+        sale.at = 0;
+    }
+
+    /// 0x4b4220, a tick: a hull rotation the way it turns (frames 0x20 to
+    /// 0x37, round), stopping on the heading's first; two points of the
+    /// line, its last kept; true at the line's end with no turn left.
+    fn sale_step(&mut self, k: usize, sale: &mut objects::Sale) -> bool {
+        let o = &mut self.objects[k];
+        let s = o.ship.as_mut().unwrap();
+        if sale.turn != 0 {
+            let r = s.rotation.map_or(s.heading as i32 * 3, i32::from);
+            let r = (r + sale.turn as i32).rem_euclid(24);
+            s.rotation = Some(r as u8);
+            s.heading = (r / 3) as usize;
+            if s.heading == sale.face as usize && r % 3 == 0 {
+                sale.turn = 0;
+            }
+        }
+        let mut done = false;
+        if sale.at < sale.count - 2 {
+            sale.at += 2;
+        } else {
+            sale.at = sale.count - 1;
+            done = sale.turn == 0;
+        }
+        if (0..sale.count).contains(&sale.at) {
+            (o.x, o.y) = super::landing::line_point(sale.from, sale.to, sale.at);
+        }
+        done
+    }
+
+    /// What ship `k` sells for (0x4e4ce0 amber, 0x4e4c80 fish): each load
+    /// aboard `(+0x527 + +0x47f x 100) x rate / 100` when `+0x527` is not
+    /// 0, which with the loaders' fields (0x4ad445, 0x4bd8e7: `+0x47f` the
+    /// hundreds rounded up, `+0x527` the last one's fill, 1-100) is
+    /// `(load + 100) x rate / 100` for a load above 0: fish 10, a leviathan 5000,
+    /// amber 0x78; each unit of items 0-8 its condition x
+    /// 0x597164[item / 3] / 100 amber and condition x 0x597170[item] fish;
+    /// and 0x59b358[type] / 20 amber.
+    pub(super) fn sale_value(&self, k: usize) -> (i64, i64) {
+        let o = &self.objects[k];
+        let Some(s) = o.ship.as_ref() else {
+            return (0, 0);
+        };
+        let mut amber = 0i64;
+        let load = s.cargo.max(0.0) as i64;
+        if load > 0 {
+            let rate = match s.cargo_kind {
+                Some(Resource::Fish) => 10,
+                Some(Resource::Leviathan) => 5000,
+                Some(Resource::Amber) => 0x78,
+                None => 0,
+            };
+            amber += (load + 100) * rate / 100;
+        }
+        let mut fish = 0i64;
+        for (item, units) in o.unit_conditions().iter().enumerate() {
+            for &c in units {
+                amber += c as i64 * UNIT_PRICE[item / 3] as i64 / 100;
+                fish += c as i64 * SALE_UNIT_FISH[item];
+            }
+        }
+        amber += SALE_BASE[s.kind.min(11) as usize] / 20;
+        (amber, fish)
     }
 
     /// Ship `k`'s repair order at its tick (0x4b2420).
@@ -656,7 +884,7 @@ impl Scene {
         let id = self.objects[k].id;
         let o = &self.objects[k];
         let s = o.ship.as_ref().unwrap();
-        let Some(Task::Repair { dock }) = s.task else {
+        let Some(Task::Repair { dock, sell }) = s.task else {
             return;
         };
         let Some(mut l) = s.landing.clone() else {
@@ -688,6 +916,25 @@ impl Scene {
                 return;
             };
             if !self.dock_free(d) {
+                return;
+            }
+            // `+0x749 == 3` (0x4b2506): the sale, `+0x251 = 2`, task 5 in
+            // state 1 (0x4b2512); no contact is made and the dock stays
+            // free.
+            if sell {
+                let s = self.objects[k].ship.as_mut().unwrap();
+                s.task = Some(Task::Sell(objects::Sale {
+                    state: 1,
+                    from: (0.0, 0.0),
+                    to: (0.0, 0.0),
+                    count: 0,
+                    at: 0,
+                    face: 0,
+                    turn: 0,
+                    frame: 0,
+                }));
+                s.path.clear();
+                s.dock_step = None;
                 return;
             }
             if let Some(mut l) = self.dock_close_in(k, cell) {

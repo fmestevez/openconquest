@@ -164,6 +164,12 @@ pub enum Order {
         ship: u32,
         dock: u32,
     },
+    /// Ship command 0x1e with byte 0 3 (0x4dbb40 for an order 200 block
+    /// of mode 1): to the dock to be sold there (`+0x749 == 3`).
+    Sell {
+        ship: u32,
+        dock: u32,
+    },
     Mend {
         site: u32,
         target: u32,
@@ -398,6 +404,7 @@ impl Order {
             | Unload { ship, .. }
             | Found { ship, .. }
             | Repair { ship, .. }
+            | Sell { ship, .. }
             | LoadCrew { ship }
             | LoadObject { ship, .. } => Some(ship),
             _ => None,
@@ -487,6 +494,10 @@ impl Scene {
         // behaviour switches (0x23: applied at once by 0x4a9e30) and the
         // spells cast on it.
         let ship = order.ship();
+        // So one being sold (`+0x261 = 0`, 0x4b4380 state 1).
+        if ship.is_some_and(|id| self.being_sold(id)) {
+            return Err("The ship is being sold".into());
+        }
         if ship.is_some_and(|id| self.being_built(id)) {
             return Err("The ship is still being built".into());
         }
@@ -549,7 +560,7 @@ impl Scene {
     ) -> Option<Result<u32, String>> {
         use Order::*;
         let (ship, rank) = match *order {
-            Found { ship, .. } | Repair { ship, .. } => (ship, 0),
+            Found { ship, .. } | Repair { ship, .. } | Sell { ship, .. } => (ship, 0),
             Gather { ship, .. } | Take { ship, .. } | Unload { ship, .. } => (ship, 1),
             Close { ship, .. } => (ship, 2),
             Move { ship, .. } | MoveKeep { ship, .. } => (ship, 3),
@@ -753,6 +764,7 @@ impl Scene {
                 class,
             } => done(self.order_found(ship, cx, cy, class)),
             Repair { ship, dock } => done(self.order_repair(ship, dock)),
+            Sell { ship, dock } => done(self.order_sell(ship, dock)),
             Mend { site, target } => done(self.order_mend(site, target)),
             LoadCrew { ship } => self.load_crew(ship),
             LoadItem { site, ship, item } => done(self.load_item(site, ship, item)),

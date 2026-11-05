@@ -10539,7 +10539,7 @@ fn repair_orders_as_the_original() {
     let i = scene.object_index(id).unwrap();
     assert_eq!(
         scene.objects[i].ship.as_ref().unwrap().task,
-        Some(Task::Repair { dock })
+        Some(Task::Repair { dock, sell: false })
     );
     assert_eq!(
         scene.brain.as_ref().unwrap().fleets[4]
@@ -12681,7 +12681,7 @@ fn commands_reach_ships_at_the_next_tick() {
     scene.post(Order::Repair { ship, dock });
     assert_eq!(state(&scene).0, None);
     tick(&mut scene, &mut caches);
-    assert_eq!(state(&scene).0, Some(Task::Repair { dock }));
+    assert_eq!(state(&scene).0, Some(Task::Repair { dock, sell: false }));
     // A move and a dock order in one tick: the dock, either way.
     for orders in [
         [go.clone(), Order::Repair { ship, dock }],
@@ -12694,7 +12694,7 @@ fn commands_reach_ships_at_the_next_tick() {
             scene.post(o);
         }
         tick(&mut scene, &mut caches);
-        assert_eq!(state(&scene).0, Some(Task::Repair { dock }));
+        assert_eq!(state(&scene).0, Some(Task::Repair { dock, sell: false }));
     }
 }
 
@@ -15660,4 +15660,101 @@ fn a_falling_town_lets_its_docks_ship_go() {
     let k = scene.object_index(ship).unwrap();
     assert!(scene.objects[k].ship.as_ref().unwrap().task.is_none());
     assert!(hull(&scene) < full);
+}
+
+/// A ship sent to be sold (ship command 0x1e with byte 0 3, `+0x749`):
+/// the dock taking it at the berth makes it task 5 (0x4b2512) with no
+/// contact; it turns to heading 0 or 6, its building picture runs down
+/// a frame a tick from 0x27 (or 0x4f), every command and the stop
+/// refused, then it is gone and its player paid 0x4e4ce0 amber and
+/// 0x4e4c80 fish (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ships_sold_at_a_dock() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap()
+        .id;
+    let k = scene.object_index(ship).unwrap();
+    {
+        let o = &mut scene.objects[k];
+        let s = o.ship.as_mut().unwrap();
+        s.kind = 0;
+        s.crew.squads = [1, 0, 0];
+        s.conditions = Default::default();
+        s.conditions[0] = vec![80];
+        s.conditions[3] = vec![50];
+        s.cargo = 250.0;
+        s.cargo_kind = Some(crate::objects::Resource::Fish);
+        let c = o.combat.as_mut().unwrap();
+        c.max_hull = combat::hull_strength(0);
+        c.hull = c.max_hull;
+        c.weapons = vec![3];
+    }
+    // Amber: the fish load (250 + 100) x 10 / 100 = 35, the swordsman 80
+    // x 30 / 100 = 24, the item 3 50 x 50 / 100 = 25, 200 / 20 = 10;
+    // fish: 80 x 2.
+    assert_eq!(scene.sale_value(k), (94, 160));
+    let dock = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .unwrap()
+        .id;
+    let d = scene.object_index(dock).unwrap();
+    scene.objects[d].class = ObjectClass::Building(economy::DOCK);
+    // Its hull whole, it is sent all the same (0x4aa990 asks nothing of
+    // the hull).
+    scene.order_sell(ship, dock).unwrap();
+    let sale = |scene: &Scene| {
+        let k = scene.object_index(ship)?;
+        match scene.objects[k].ship.as_ref().unwrap().task {
+            Some(Task::Sell(s)) => Some(s),
+            _ => None,
+        }
+    };
+    for _ in 0..50 * 120 {
+        if sale(&scene).is_some() {
+            break;
+        }
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert_eq!(sale(&scene).map(|s| s.state), Some(1));
+    assert!(scene.being_built(ship) && scene.being_sold(ship));
+    assert!(scene.dock_free(d), "no contact is made");
+    let go = Order::Move {
+        ship,
+        x: 0.0,
+        y: 0.0,
+    };
+    assert!(scene.apply(&go, &data, &mut caches).is_err());
+    scene.stop(ship);
+    let (amber, fish) = (scene.amber, scene.fish);
+    let mut down = None;
+    for _ in 0..400 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let Some(s) = sale(&scene) else {
+            break;
+        };
+        if s.state == 3 && down.is_none() {
+            let k = scene.object_index(ship).unwrap();
+            let h = scene.objects[k].ship.as_ref().unwrap().heading;
+            assert!(h == 0 || h == 6);
+            assert_eq!(s.frame, if h == 6 { 0x4f } else { 0x27 });
+            down = Some((scene.ticks, h));
+        }
+    }
+    assert!(scene.object_index(ship).is_none(), "sold");
+    let (at, h) = down.unwrap();
+    // Down a frame a tick: 39 ticks to below 1, 40 to below 0x28.
+    assert_eq!(scene.ticks - at, if h == 6 { 40 } else { 39 });
+    assert_eq!((scene.amber - amber, scene.fish - fish), (94, 160));
 }

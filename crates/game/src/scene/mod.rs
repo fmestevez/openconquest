@@ -1919,6 +1919,7 @@ impl Scene {
         let busy = s.grapple.is_some()
             || s.ram_run.is_some()
             || s.build.is_some()
+            || matches!(s.task, Some(Task::Sell(_)))
             || matches!(
                 s.task,
                 Some(Task::Gather {
@@ -2250,6 +2251,11 @@ impl Scene {
     /// Cancels a ship's route.
     pub fn stop(&mut self, id: u32) {
         if let Some(i) = self.object_index(id) {
+            // A ship being sold takes no stop (0x4aa540 wants `+0x261 &
+            // 0x2000`, which 0x4b4380 cleared).
+            if self.being_sold(id) {
+                return;
+            }
             // A ship being built is called off (event 8 with no record,
             // 0x4aa540 at 0x4aa565).
             if self.being_built(id) {
@@ -2528,7 +2534,7 @@ impl Scene {
             self.run_brain();
             self.step_fort_draws();
             self.heal_aboard();
-            self.step_dock_repairs();
+            self.step_dock_repairs(data, caches);
             self.step_mending();
             for (class, cell) in std::mem::take(&mut self.pending_walkers) {
                 self.put_walker(walkers::NO_LAIR, class, cell, data, caches);

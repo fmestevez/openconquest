@@ -543,10 +543,13 @@ enum FleetOrder {
     Move((i32, i32)),
     /// 0x8c: found a building of the class at a cell, by a ship.
     Found(u32, (i32, i32), u32),
-    /// 200: to the docks for repairs.
+    /// 200 mode 2 (0x483820, the reserve): to the docks for repairs.
     Dock,
     /// 0xbe: take the treasures in an area (0x4da550), bringing them home.
     Treasure(Cells),
+    /// 200 mode 1 (0x483900, the spares): to the docks to be sold (the
+    /// block's `+0x30` 1, so 0x4dbb40 sends command 0x1e with byte 0 3).
+    Sell,
 }
 
 impl FleetOrder {
@@ -559,7 +562,7 @@ impl FleetOrder {
             FleetOrder::Attack(_) => 0x70,
             FleetOrder::Move(_) => 100,
             FleetOrder::Found(..) => 0x8c,
-            FleetOrder::Dock => 200,
+            FleetOrder::Dock | FleetOrder::Sell => 200,
             FleetOrder::Treasure(_) => 0xbe,
         })
     }
@@ -4127,7 +4130,13 @@ impl Scene {
                     fl.step = true;
                     fl.since = now;
                     fl.len = len;
-                    fl.order = FleetOrder::Dock;
+                    // The reserve's order 200 is of mode 2 (0x483820),
+                    // the spares' of mode 1 (0x483900): sold.
+                    fl.order = if fl.task == 0xd {
+                        FleetOrder::Sell
+                    } else {
+                        FleetOrder::Dock
+                    };
                     self.give_order(ai, f);
                 } else if self.report(ai, f) == Some(DONE) {
                     if ai.flotillas[f].task == 0xb {
@@ -5562,7 +5571,7 @@ impl Scene {
                     y: y as f32 * t + t / 2.0,
                 });
             }
-            FleetOrder::Dock => {
+            FleetOrder::Dock | FleetOrder::Sell => {
                 let dock = self
                     .objects
                     .iter()
@@ -5573,7 +5582,11 @@ impl Scene {
                     })
                     .map(|o| o.id);
                 if let Some(d) = dock {
-                    self.post(Order::Repair { ship: id, dock: d });
+                    self.post(if matches!(order, FleetOrder::Sell) {
+                        Order::Sell { ship: id, dock: d }
+                    } else {
+                        Order::Repair { ship: id, dock: d }
+                    });
                 }
             }
             FleetOrder::Treasure(area) => {
@@ -5691,6 +5704,12 @@ impl Scene {
                         self.objects[i].ship.as_ref().and_then(|s| s.task),
                         Some(Task::Repair { .. })
                     )
+            }),
+            FleetOrder::Sell => ships().all(|i| {
+                !matches!(
+                    self.objects[i].ship.as_ref().and_then(|s| s.task),
+                    Some(Task::Repair { .. } | Task::Sell(_))
+                )
             }),
             FleetOrder::Treasure(area) => self.treasures_in(area).next().is_none(),
             FleetOrder::Gather(..) | FleetOrder::Guard(_) => false,
