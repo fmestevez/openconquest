@@ -197,6 +197,8 @@ pub struct SaveGame {
     #[serde(default)]
     pub fires: Vec<crate::scene::fire::SavedFire>,
     #[serde(default)]
+    pub building_fires: Vec<crate::scene::SavedBuildingFire>,
+    #[serde(default)]
     pub refits: Vec<(u32, Upgrade, u8, f32)>,
     #[serde(default)]
     pub flame: f32,

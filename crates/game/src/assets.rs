@@ -19,6 +19,9 @@ pub const ANIMATED: u32 = 0x0100_0000;
 /// remaps the destination through a darkening table (0x5c1358 in
 /// ANCIENT.EXE), which averages to about 3/4 brightness.
 pub const SHADOW: u32 = 0x0200_0000;
+/// Marks a flame pixel (low byte its palette index, 1-7) drawn through the
+/// flames' blend table with the pixel beneath (`render::FLAME_BLEND`).
+pub const BLEND: u32 = 0x0400_0000;
 const SHADOW_INDEX: u8 = 0xfe;
 
 /// A decoded image in the renderer's pixel format: `0x00RRGGBB`, or
@@ -212,6 +215,19 @@ impl GameData {
         name: &str,
         shade: Option<u8>,
     ) -> Result<Option<Image>> {
+        self.load_image_marked(lib, name, shade, false)
+    }
+
+    /// As `load_image_shading`, with `blend` the colours 1-7 marked
+    /// [`BLEND`] (the flames' remap, value 1, count 7: 0x50e240 with
+    /// 0x5c1858).
+    pub fn load_image_marked(
+        &self,
+        lib: &Archive,
+        name: &str,
+        shade: Option<u8>,
+        blend: bool,
+    ) -> Result<Option<Image>> {
         // Shelf tiles come twice: the bitmap shades into the open sea, the
         // sprite is a hard-edged shape. The map shows the bitmap.
         let bitmap_first = name.starts_with("b_shelf_");
@@ -228,6 +244,7 @@ impl GameData {
                         pixels[((s.y + y) * s.width + s.x + x) as usize] =
                             Some(match s.pixels[i] {
                                 index if Some(index) == shade => SHADOW,
+                                index @ 1..=7 if blend => BLEND | index as u32,
                                 index => self.global_pixel(index),
                             });
                     }

@@ -296,6 +296,8 @@ pub struct Scene {
     pub shots: Vec<shot::Shot>,
     /// Ships burning (not saved: flames are short-lived).
     pub fires: Vec<fire::Fire>,
+    /// Buildings' fires and smokes (`burning`).
+    pub building_fires: Vec<burning::BuildingFire>,
     /// Volcanoes' sleep and eruptions.
     pub volcanoes: HashMap<u32, volcano::Volcano>,
     /// Where one of the player's objects last took a blow.
@@ -551,6 +553,8 @@ mod ai;
 mod at_will;
 mod battle;
 mod brain;
+mod burning;
+pub use burning::SavedBuildingFire;
 mod castq;
 mod closing;
 mod computer;
@@ -796,6 +800,7 @@ impl Scene {
             effects: Vec::new(),
             shots: Vec::new(),
             fires: Vec::new(),
+            building_fires: Vec::new(),
             volcanoes: HashMap::new(),
             last_attack: None,
             rng: Rng(0x1234_5678),
@@ -1188,6 +1193,7 @@ impl Scene {
             porters: self.saved_planks().1,
             unloaded: self.unloaded.clone(),
             fires: self.saved_fires(),
+            building_fires: self.saved_building_fires(),
             refits: self.refits.clone(),
             flame: self.flame,
             mend_steps: self.mend_steps.iter().map(|(&k, &v)| (k, v)).collect(),
@@ -1386,6 +1392,7 @@ impl Scene {
         scene.last_attack = save.last_attack;
         scene.restore_planks(&save.planks, &save.porters, data, caches);
         scene.restore_fires(&save.fires, data, caches);
+        scene.restore_building_fires(&save.building_fires, data, caches);
         if let Some(p) = save.permits {
             scene.permits = p;
         }
@@ -2592,6 +2599,7 @@ impl Scene {
             // Standing pictures before construction, so one finished this
             // tick takes its first standing step on the next (+0xbc).
             self.step_standing_frames();
+            self.step_building_fires(data, caches);
             self.step_selling();
             self.step_constructions(data, caches);
             for (x, y, kind) in std::mem::take(&mut self.pending_reefs) {

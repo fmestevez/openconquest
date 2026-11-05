@@ -876,6 +876,11 @@ impl Scene {
                 self.wound(s.target, s.wounds);
                 self.wear(s.target, s.wear);
             }
+            // A flaming blow may set a building on fire (0x4240e0).
+            if let Some(i) = self.object_index(s.target) {
+                let hit = (s.to.0.floor() as i32, s.to.1.floor() as i32);
+                self.light_building(i, s.item, s.flaming, hit, by, data, caches);
+            }
             // A building it does not bring down is limed (0x42405d).
             if s.item == combat::QUICKLIME && !ship {
                 if let Some(i) = self.object_index(s.target) {

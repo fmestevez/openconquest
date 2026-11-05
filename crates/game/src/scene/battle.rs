@@ -1376,6 +1376,12 @@ impl Scene {
             let Some(ti) = self.object_index(target) else {
                 return;
             };
+            // A building falls: its fires and smokes go out, its rubble
+            // is laid (0x138b, 0x4243a2, 0x4244a4).
+            if matches!(self.objects[ti].class, ObjectClass::Building(_)) {
+                self.building_fires.retain(|f| f.building != target);
+                self.lay_rubble(ti, data, caches);
+            }
             // Creatures die with their own cry (land creatures 0x413ad0:
             // events 100-102 by class; the harpy 0x41fb02 event 103; the
             // sea's creatures events 105-107), buildings fall, ships wreck.

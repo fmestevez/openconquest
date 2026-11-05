@@ -5915,10 +5915,8 @@ the order's byte `+0xd` gives it (0x438694); the war temple passes 0
 and leaves nothing. Also drawn: a burning blow's fire (below) and the
 fall's rubble, two a cell (0x4244a4, 0x4244cb). The
 port keeps the generators (`Scene::building_lcgs`, saved) and ports the
-first look, the fort's draws and the aim. Not ported: the building
-fires and rubble (none in the port, so their draws are not taken: a
-building aimed at after a burning blow draws as one that never burned),
-the sea temple's (the port's casts name no temple), and the aim at
+first look, the fort's draws and the aim, the fire's draw and the
+rubble's (below, `scene/burning.rs`). Not ported: the sea temple's (the port's casts name no temple), and the aim at
 barbarian structures, castles, lairs and heroes' houses (0x423520 too,
 but their classes draw their generators elsewhere, not read: castles
 0x410e6e / 0x410ed8, lairs 0x415337 / 0x4156a8, barbarians
@@ -5997,9 +5995,26 @@ class `o_vor3_m`), `b_vor3_b`, 19 tiles each: k picks the set, s the size,
 the ground's group the tile. The message 0xcc2 {x, y} goes to every mapa
 (class 0x2f4, 0x51cdd0 -> 0x519aa0), which clears the cell's square in
 its window and redraws its layers 0-7 in order (0x5199b0 -> 0x519750 /
-0x5198b0 through 0x545200), the ordinary terrain draw. Not ported (the
-port has no hit point, mask or bomb kind at the building's blow yet, nor
-fire, smoke or rubble layers).
+0x5198b0 through 0x545200), the ordinary terrain draw.
+
+Ported in `scene/burning.rs`: a shot's blow on a building (`land_shot`)
+carries its landing point, item (as the bomb kind) and flaming flag to
+`light_building`; the tick steps the fire and smoke
+(`step_building_fires`, game tick `Scene::ticks`); the fall in `strike`
+puts them out and lays the rubble (`lay_rubble`, through the dig's
+`after_dig`, so the terrain, minimap, cell types and saves follow). The
+table 0x5c1858 is `render::FLAME_BLEND` and the groups 0x5c2480
+`burning::GROUPS`, both dumped from the exe and tested against it. The
+blend needs the palette index beneath, which the port's frame (colours,
+not indices) does not hold: it takes the first index of that colour, or
+the nearest for one no index has (a darkened shadow). Not decoded: the
+classes with no mask resource (only `ST`, `SM`, `SL`, `TS`, `TW` of
+nations 1 and 3 have `MSK_<n>11`) would read a null mask in 0x557640,
+the port lights none on them; whether a killing blow's state is still 1
+at the fire test (the port lights none on a building its blow brought
+down); which of fire (depth - 3) and smoke (- 2) draws over the other
+(the port draws the fire over); the fog's hiding of the frames at their
+step (the port draws them with their building).
 
 
 **The pointer on a jam.** The cursor (0x5175b0) asks the view (message

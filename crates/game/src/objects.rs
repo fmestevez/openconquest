@@ -38,7 +38,7 @@ pub struct Caches {
     sequences: HashMap<String, Rc<Vec<String>>>,
     /// Sequences' frames with a palette index drawn as shadow, by name
     /// and index (see `shaded_frames`).
-    shaded: HashMap<(String, u8), Vec<Vec<Layer>>>,
+    shaded: HashMap<(String, u16), Vec<Vec<Layer>>>,
 }
 
 impl Default for Caches {
@@ -74,13 +74,28 @@ impl Caches {
         name: &str,
         shade: u8,
     ) -> Result<Vec<Vec<Layer>>> {
-        let key = (name.to_string(), shade);
+        self.marked_frames(data, name, Some(shade), false)
+    }
+
+    /// As `shaded_frames`, with `blend` the colours 1-7 drawn through the
+    /// flames' blend (`assets::BLEND`).
+    pub fn marked_frames(
+        &mut self,
+        data: &GameData,
+        name: &str,
+        shade: Option<u8>,
+        blend: bool,
+    ) -> Result<Vec<Vec<Layer>>> {
+        let key = (
+            name.to_string(),
+            u16::from(shade.unwrap_or(0)) | u16::from(shade.is_some()) << 9 | u16::from(blend) << 8,
+        );
         if let Some(f) = self.shaded.get(&key) {
             return Ok(f.clone());
         }
         let mut frames = Vec::new();
         for n in self.sequence(data, name)?.iter() {
-            if let Some(image) = data.load_image_shading(&data.objects, n, Some(shade))? {
+            if let Some(image) = data.load_image_marked(&data.objects, n, shade, blend)? {
                 frames.push(vec![Layer {
                     image: Rc::new(image),
                     dx: 0,
@@ -2637,7 +2652,12 @@ pub fn building_frames(
 /// class, then the state (0 construction, 1 standing, 2 ruins), for ports
 /// and docks the facing (0 water to the east, 2 north, 4 west, 6 south),
 /// and the damage level (3 intact .. 1; construction 3, ruins 1).
-fn building_name(cls: u32, nation: u32, facing: u32, state: BuildingState) -> Option<String> {
+pub(crate) fn building_name(
+    cls: u32,
+    nation: u32,
+    facing: u32,
+    state: BuildingState,
+) -> Option<String> {
     let (state, damage) = match state {
         BuildingState::Construction => (0, 3),
         BuildingState::Standing(d) => (1, d.clamp(1, 3)),
