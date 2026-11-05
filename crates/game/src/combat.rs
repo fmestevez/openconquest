@@ -1374,6 +1374,9 @@ pub enum Aim {
     Other,
 }
 
+/// How easily a ship of each type is hit (0x597acc, read by 0x4bf7f0).
+pub const SHIP_EASE: [i32; 12] = [5, 8, 20, 25, 15, 15, 10, 10, 10, 15, 10, 15];
+
 /// The percent chance that a shot with `item` from `dist` world pixels
 /// away hits (0x4bf7f0): 43 + the target's ease - 33 x the distance in
 /// cells / the item's aiming distance (0x598130: 9, 7, 7, 9, 9, 9, 13,
@@ -1382,7 +1385,6 @@ pub enum Aim {
 /// 43 - 23 percent at any range. Greek fire always hits.
 pub fn hit_chance(item: u8, dist: f32, aim: Aim) -> u32 {
     const AIMING: [u32; 11] = [9, 7, 7, 9, 9, 9, 13, 11, 11, 7, 9];
-    const EASE: [i32; 12] = [5, 8, 20, 25, 15, 15, 10, 10, 10, 15, 10, 15];
     if item == GREEK_FIRE {
         return 100;
     }
@@ -1390,7 +1392,7 @@ pub fn hit_chance(item: u8, dist: f32, aim: Aim) -> u32 {
     let (ease, far) = match aim {
         Aim::Ship { phantom: true, .. } => (0, 23),
         Aim::Ship { zetes: true, .. } => (1, far),
-        Aim::Ship { kind, .. } => (EASE[kind as usize % 12], far),
+        Aim::Ship { kind, .. } => (SHIP_EASE[kind as usize % 12], far),
         Aim::Other => (25, far),
     };
     (ease - far + 43).clamp(0, 100) as u32

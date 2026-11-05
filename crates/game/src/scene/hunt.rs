@@ -352,9 +352,9 @@ impl Scene {
     /// the hull's middle, more than half the hull picture's width off: a
     /// shot of the item's fire power (0x4bc360, at 100, 0x4bfc20), never
     /// flaming; its reload 0x5c76e0[item x 3 + level] (level 2 with
-    /// Atalanta, else its rate level) + a draw % 60 ticks. (Not kept by the
-    /// port: the crew's experience, 0x4b4680, +50 a hit; the port keeps a
-    /// reload a unit, the item's first standing for it and all set.)
+    /// Atalanta, else its rate level) + a draw % 60 ticks, the item's time
+    /// `+0x5e3 + 4i`. (Not kept by the port: the crew's experience,
+    /// 0x4b4680, +50 a hit.)
     fn hunt_fire(&mut self, i: usize, lev: u32, d: i32, data: &GameData, caches: &mut Caches) {
         let Some(lc) = self.leviathan_where(lev) else {
             return;
@@ -366,20 +366,15 @@ impl Scene {
             return;
         };
         let (kind, atalanta) = (s.kind, s.has_hero(objects::ATALANTA));
-        if let Some(c) = self.objects[i].combat.as_mut() {
-            c.reloads.resize(shooters.len(), 0.0);
-        }
         for item in [3u8, 4] {
-            let units: Vec<usize> = (0..shooters.len())
-                .filter(|&k| shooters[k] == item)
-                .collect();
-            let Some(&first) = units.first() else {
+            if !shooters.contains(&item) {
                 continue;
-            };
+            }
+            let now = self.ticks;
             let loaded = self.objects[i]
-                .combat
+                .ship
                 .as_ref()
-                .is_some_and(|c| c.reloads[first] <= 0.0);
+                .is_some_and(|s| now.wrapping_sub(s.fire_times[item as usize]) as i32 >= 0);
             if !loaded {
                 continue;
             }
@@ -426,10 +421,9 @@ impl Scene {
                 levels.rate_for(item)
             };
             let wait = crate::combat::reload_ticks(item, rate) + self.ship_draw(i) % RELOAD_JITTER;
-            if let Some(c) = self.objects[i].combat.as_mut() {
-                for &k in &units {
-                    c.reloads[k] = crate::clock::ticks(wait);
-                }
+            let now = self.ticks;
+            if let Some(s) = self.objects[i].ship.as_mut() {
+                s.fire_times[item as usize] = now + wait;
             }
         }
     }
@@ -1003,11 +997,9 @@ mod tests {
         assert_eq!(power, 900.0);
         assert_eq!(scene.shots.len(), 1, "item 4 alone fires");
         let k = scene.object_index(WARSHIP).unwrap();
-        let shooters = scene.objects[k].shooters();
-        let w = shooters.iter().position(|&s| s == 4).unwrap();
-        let r = scene.objects[k].combat.as_ref().unwrap().reloads[w];
+        let at = scene.objects[k].ship.as_ref().unwrap().fire_times[4];
         let base = crate::combat::reload_ticks(4, 0);
-        let ticks = (r / crate::clock::TICK).round() as u32;
+        let ticks = at - scene.ticks;
         assert!((base..base + 60).contains(&ticks), "{ticks}");
         // Its point is in its mask but for the loop's first frames.
         assert!(scene.leviathan_hit(LEV, aim));
@@ -1395,7 +1387,14 @@ mod tests {
             scene.update(crate::clock::TICK, &data, &mut caches);
             struck |= scene.leviathans[&LEV].life < 1;
             let k = scene.object_index(WARSHIP).unwrap();
-            left |= struck && scene.objects[k].ship.as_ref().unwrap().task.is_none();
+            let gone = struck && scene.objects[k].ship.as_ref().unwrap().task.is_none();
+            if gone && !left {
+                // It leaves the hunt in the mouth of the one-cell channel
+                // along the map's top row the leviathan has gone up, the
+                // boat behind it: moved off, out of the boat's way.
+                place(&mut scene, WARSHIP, (35, 2), 0);
+            }
+            left |= gone;
             let k = scene.object_index(BOAT).unwrap();
             if scene.objects[k].ship.as_ref().unwrap().cargo >= 100.0 {
                 break;

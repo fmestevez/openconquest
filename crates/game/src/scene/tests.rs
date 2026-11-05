@@ -793,6 +793,9 @@ fn war_magic() {
         .unwrap();
     let e = scene.object_index(enemy).unwrap();
     scene.objects[e].combat.as_mut().unwrap().weapons = vec![4; 8];
+    // Sent at ours: on guard it would take the first it meets in its
+    // look's box (0x4bfc60): our buildings by the temple, here.
+    scene.order_attack(enemy, mine).unwrap();
     for _ in 0..50 * 10 {
         scene.update(0.02, &data, &mut caches);
     }
@@ -1869,12 +1872,8 @@ fn behaviours() {
         .unwrap();
     let m = scene.object_index(mine).unwrap();
     scene.objects[m].x -= 64.0 * 6.0; // out of our own range
-    let e = scene.object_index(enemy).unwrap();
-    scene.objects[e].ship.as_mut().unwrap().task = Some(Task::Attack {
-        target: mine,
-        jam: None,
-        count: 0,
-    });
+                                      // The enemy's attack (its fire records, 0x4ab3f0 kind 3).
+    scene.order_attack(enemy, mine).unwrap();
     for _ in 0..50 * 10 {
         scene.update(0.02, &data, &mut caches);
         if task(&scene, mine).is_some() {
@@ -2035,7 +2034,7 @@ fn at_will_timers() {
     let first = (51..).find(|t| (t ^ mine) & 3 == 0).unwrap();
     for t in 0..=first + 152 {
         scene.ticks = t;
-        scene.run_at_will();
+        scene.run_fire_pass(&data, &mut caches);
         if t == first - 1 {
             assert_eq!(wait(&scene), 0);
         }
@@ -2214,12 +2213,14 @@ fn fire_state_writers() {
         (1, false)
     );
     // The at-will list: in fire state 2 (0x4c0eb0) the classes mask
-    // shuts a prey out; in 1 off guard (0x4bfc60) it does not.
+    // shuts a prey out; in 1 off guard (0x4bfc60) it does not. With ram
+    // on and no position ready the box is 4 about its cell (0x4bfc60).
     let (mx, my) = (scene.objects[m].x, scene.objects[m].y);
     scene.objects[e].x = mx + 64.0;
     scene.objects[e].y = my;
     let s = scene.objects[m].ship.as_mut().unwrap();
     s.behaviour.classes = 0;
+    s.behaviour.ram = true;
     assert_eq!(scene.at_will_list(m, false), vec![e]);
     assert!(scene.at_will_list(m, true).is_empty());
     scene.objects[m].ship.as_mut().unwrap().behaviour.classes = !0;
@@ -2814,7 +2815,11 @@ fn zones() {
         .retain(|o| o.ship.is_some() || o.combat.as_ref().is_none_or(|c| c.weapons.is_empty()));
     let m = scene.object_index(mine).unwrap();
     let (mx, my) = (scene.objects[m].x, scene.objects[m].y);
-    scene.objects[m].combat.as_mut().unwrap().weapons = vec![6; 2];
+    // Gastraphetes: the ballista's shape (0x5980f4) does not reach 2
+    // cells straight across, where the attack stops (0x4c07c0 gives 3).
+    scene.objects[m].combat.as_mut().unwrap().weapons = vec![4; 2];
+    // A warship: types 0 and 1 fire nothing (0x4c0230).
+    scene.objects[m].ship.as_mut().unwrap().kind = 2;
     let e = scene.object_index(enemy).unwrap();
     scene.objects[e].owner = Some((1, (human.slot + 1) % 4));
     scene.objects[e].combat.as_mut().unwrap().weapons.clear();
@@ -3259,6 +3264,9 @@ fn crews_under_fire() {
     let (mx, my) = (scene.objects[m].x, scene.objects[m].y);
     scene.objects[m].combat.as_mut().unwrap().weapons = vec![combat::QUICKLIME];
     scene.objects[m].ship.as_mut().unwrap().crew.squads = [0; 3];
+    // Items 9-11 are the fourth position's, which only types 8 and 9 have
+    // (0x4bf9b0 reads 11 items for them, 9 for the others).
+    scene.objects[m].ship.as_mut().unwrap().kind = 8;
     let e = scene.object_index(enemy).unwrap();
     scene.objects[e].owner = Some((1, (human.slot + 1) % 4));
     scene.objects[e].x = mx + 100.0;
@@ -6717,9 +6725,13 @@ fn miss011_brain_builds_its_fleets() {
         &most[12..=16]
     );
     // The patrols of the north-east and the west coast, the raiders of
-    // the west and the Persians' gatherers start with nothing.
+    // the west and the Persians' gatherers start with nothing. (The west
+    // coast's yard at (8, 31) falls to its own patrol before it builds
+    // for the raiders: a barbarian structure is side 2, which 0x4bfc60 and
+    // 0x4c0cd0 pass for any ship, its player 16 in the patrol's players
+    // -1 and its class bit 0x2000 in the barbarians' classes 0x3ffff.)
     assert!(
-        [1, 5, 6].iter().all(|&k| most[k] > 0),
+        [1, 5].iter().all(|&k| most[k] > 0),
         "the barbarian yards built for their fleets"
     );
     assert!(
@@ -11630,8 +11642,10 @@ fn order_10_silences_a_fort() {
         .unwrap();
     scene.objects[i].x = water.0 as f32 * 64.0 + 32.0;
     scene.objects[i].y = water.1 as f32 * 64.0 + 32.0;
-    // The ship's own weapons are taken, so every shot is a fort's.
+    // The ship's own weapons and marines are taken (its archers shoot
+    // from the fire pass, 0x4c0230), so every shot is a fort's.
     scene.objects[i].combat.as_mut().unwrap().weapons.clear();
+    scene.objects[i].ship.as_mut().unwrap().crew.squads = [0; 3];
     // The ship is kept where it is, by the fort.
     let at = (water.0 as f32 * 64.0 + 32.0, water.1 as f32 * 64.0 + 32.0);
     let quiet = |scene: &mut Scene, caches: &mut Caches| {
@@ -15757,4 +15771,51 @@ fn ships_sold_at_a_dock() {
     // Down a frame a tick: 39 ticks to below 1, 40 to below 0x28.
     assert_eq!(scene.ticks - at, if h == 6 { 40 } else { 39 });
     assert_eq!((scene.amber - amber, scene.fish - fish), (94, 160));
+}
+
+/// The fire pass on guard (0x4c1240 state 4 -> 0x4bfc60): an enemy in the
+/// box no position aims at goes on item 3's list (0x4c0cd0),
+/// the list is drawn (0x4e8af0 mode 10) and the item fires once from it
+/// (0x4c0230): one shot, its next time the reload 0x5c76e0 + the third
+/// draw of the ship's generator % 30 (the list's, the roll's, then the
+/// reload's); the state stays 4, and the item waits for its time (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn guard_fires_an_item_a_shot() {
+    let Some((data, mut caches, mut scene, mine, other, _)) = closing_pair(2, 0) else {
+        return;
+    };
+    let m = scene.object_index(mine).unwrap();
+    scene.objects[m].combat.as_mut().unwrap().weapons = vec![3, 3];
+    let s = scene.objects[m].ship.as_mut().unwrap();
+    s.crew.squads = [0; 3];
+    s.behaviour = crate::objects::Behaviour {
+        guard: true,
+        players: !0,
+        classes: !0,
+        positions: 0xff,
+        fire_state: 4,
+        ..Default::default()
+    };
+    s.fire_times = [0; 12];
+    s.lcg = Some(12345);
+    let t = (1000..).find(|t| (t ^ mine) & 3 == 0).unwrap();
+    scene.ticks = t;
+    scene.shots.clear();
+    scene.run_fire_pass(&data, &mut caches);
+    assert_eq!(scene.shots.len(), 1, "one shot for the item's two units");
+    let mut r = crate::combat::Rng(12345);
+    let (_list, _roll, jitter) = (r.next(), r.next(), r.next() % 30);
+    let owner = scene.objects[m].owner;
+    let rate = scene.levels_of(owner).rate_for(3);
+    let s = scene.objects[m].ship.as_ref().unwrap();
+    assert_eq!(
+        s.fire_times[3],
+        t + crate::combat::reload_ticks(3, rate) + jitter
+    );
+    assert_eq!(s.behaviour.fire_state, 4);
+    assert!(scene.object_index(other).is_some());
+    scene.ticks = t + 4;
+    scene.run_fire_pass(&data, &mut caches);
+    assert_eq!(scene.shots.len(), 1, "the item waits for its time");
 }

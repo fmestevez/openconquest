@@ -413,6 +413,11 @@ pub struct Scene {
     /// Throws land creatures made this tick, for `run_combat` (not saved:
     /// fired in the same update).
     throws: Vec<walkers::Throw>,
+    /// The ships' candidate lists (0x5c7ed0, one an item), shared by
+    /// every ship's look as the original's (not saved: a look fills them
+    /// before it reads them, but where a look reads lists it has not
+    /// cleared, `fire_pass`).
+    fire_lists: [fire_pass::FireList; 12],
     /// The human players of a multiplayer game (empty otherwise), and the
     /// one whose state is in the fields above now.
     pub seats: Vec<seats::Seat>,
@@ -637,6 +642,9 @@ enum Plan {
     ToWater,
     Order,
     Waited,
+    /// Waited, its goal opened again and the route 0x55ba50 with the
+    /// given tolerance (0x4a6270 mode 5 from 0x4b9140, `keep` 0).
+    Within(i32),
 }
 
 impl Scene {
@@ -914,6 +922,7 @@ impl Scene {
             walkers: Vec::new(),
             jams: Vec::new(),
             throws: Vec::new(),
+            fire_lists: Default::default(),
             lair_clocks: Default::default(),
             carried: Vec::new(),
             site_heroes: Default::default(),
@@ -1721,6 +1730,20 @@ impl Scene {
         }
     }
 
+    /// A waited plan within `tol` cells of `(x, y)`, its goal opened again
+    /// (0x4a6330 -> 0x4a51b0 with `keep` 0, as 0x4b9140 asks).
+    pub(super) fn plan_route_within(
+        &self,
+        i: usize,
+        x: f32,
+        y: f32,
+        tol: i32,
+    ) -> Option<VecDeque<(f32, f32)>> {
+        let obj = &self.objects[i];
+        let none = HashSet::new();
+        self.plan_route_tolerant(i, (obj.x, obj.y), x, y, &none, Plan::Within(tol))
+    }
+
     /// A waited plan (0x4a6330 -> 0x4a51b0 with a plain move's arguments):
     /// the goal left closed if `avoid` names it, the route 0x55ba50 with a
     /// tolerance of 0 to water (0x4999e0), 1 to anything else: a goal it
@@ -1762,7 +1785,7 @@ impl Scene {
             Plan::Unwaited if sea => target,
             Plan::Unwaited => return None,
             Plan::ToWater => self.nav.nearest_water(target.0, target.1)?,
-            Plan::Order | Plan::Waited if on_map(target) => target,
+            Plan::Order | Plan::Waited | Plan::Within(_) if on_map(target) => target,
             _ => return None,
         };
         if plan == Plan::Order && !sea {
@@ -1800,7 +1823,16 @@ impl Scene {
         // The ship's own cell is never closed to it (0x4a4e20 and 0x4a7290
         // pass over cells it is in).
         let base = |c: (i32, i32)| self.nav.passable(c.0, c.1, deep) && !traps.contains(&c);
-        let cells = if plan == Plan::Waited {
+        let cells = if let Plan::Within(tol) = plan {
+            // 0x4a51b0 with `keep` 0: the goal opened again (0x55ca10's
+            // grid), the route within `tol` of it.
+            let shut =
+                |c: (i32, i32)| (c != start && c != to && avoid.contains(&c)) || traps.contains(&c);
+            if !base(start) {
+                return None;
+            }
+            self.nav.find_path_near(start, to, deep, shut, tol)?
+        } else if plan == Plan::Waited {
             // 0x4a51b0: no route from a closed start; the goal stays as the
             // plan's grid has it.
             let shut = |c: (i32, i32)| (c != start && avoid.contains(&c)) || traps.contains(&c);
@@ -2561,7 +2593,7 @@ impl Scene {
             self.run_leviathans(data, caches);
             self.run_hunts(data, caches);
             self.run_closing(data, caches);
-            self.run_at_will();
+            self.run_fire_pass(data, caches);
             self.run_landings(data, caches);
             // The commands of this tick reach their objects at the start
             // of the next, before anything runs (0x51fe20: 0x521570,

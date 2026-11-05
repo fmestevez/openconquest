@@ -1,16 +1,12 @@
-//! Ships set to ram or board (`+0x684 & 6`) going in at will: in the
-//! ship's tick (0x4ab930) after its behaviour, every fourth tick the
-//! weapons' gate 0x4bf9b0 marks the ram and the board (`+0x710`,
-//! `+0x711`) each once 50 ticks have passed since its time (`+0x704`,
-//! `+0x708`), and the fire state's search (0x4c1240 -> 0x4bfc60) lists
-//! the ships about it it could close with (0x4c0bc0 into 0x5c7d39), picks
-//! one (0x4e8db0 mode 0x32) and sends itself the board or ram (0x4c0b30,
-//! event 0x10). A game tick at a time.
+//! Ships set to ram or board (`+0x684 & 6`) going in at will: the fire
+//! pass's looks (0x4bfc60, 0x4c0eb0, `scene::fire_pass`) list each cell's
+//! ship it could close with (0x4c0bc0 into 0x5c7d39) while a switch is
+//! marked (0x4bf9b0), pick one (0x4e8db0 mode 0x32) and send themselves
+//! the board or ram (0x4c0b30, event 0x10).
 
 use super::order::Order;
 use super::{walk_path, Scene};
 use crate::combat;
-use crate::objects;
 
 /// The reach 0x4bfc60 gives 0x4c0bc0 (0x557480 from the ship's cell).
 const REACH: i32 = 2;
@@ -22,184 +18,77 @@ const LIST: usize = 50;
 const ODDS: i32 = 0x66;
 
 impl Scene {
-    /// The at-will ram and board of every ship, a game tick at a time.
-    pub(super) fn run_at_will(&mut self) {
-        let now = self.ticks;
-        let ids: Vec<u32> = self
-            .objects
-            .iter()
-            .filter(|o| {
-                o.ship
-                    .as_ref()
-                    .is_some_and(|s| s.behaviour.ram || s.behaviour.board)
-            })
-            .map(|o| o.id)
-            .collect();
-        for id in ids {
-            let Some(i) = self.object_index(id) else {
-                continue;
-            };
-            let Some((ram, board)) = self.at_will_marks(i, now) else {
-                continue;
-            };
-            // 0x4c1240: the search in fire states 1 and 4 (0x4bfc60) and
-            // 2 (0x4c0eb0); in 3 the attack (0x4c09c0) calls 0x4c0eb0 only
-            // after 0x4bf9b0 again, which has cleared the marks just set.
-            let s = self.objects[i].ship.as_ref().unwrap();
-            let state = s.behaviour.fire_state;
-            if !(ram || board) || !matches!(state, 1 | 2 | 4) {
-                continue;
-            }
-            let list = self.at_will_list(i, state == 2);
-            if list.is_empty() {
-                continue;
-            }
-            let Some((target, board)) = self.at_will_pick(i, &list, ram, board) else {
-                continue;
-            };
-            // 0x4c0b30: the record `{1 ram / 2 board, 1, id, 0xff, 0x46 /
-            // 0x45}` to itself (vt+4 event 0x10; its intake 0x4a9f2d keeps
-            // bytes 0-6, the order 0x4aa840 runs at the ship's next record
-            // pass), the ram's time `+0x708` now, the board's `+0x704`.
-            let s = self.objects[i].ship.as_mut().unwrap();
-            if board {
-                s.board_wait = now;
-            } else {
-                s.ram_wait = now;
-            }
-            self.post(Order::Close {
-                ship: id,
-                target,
-                board,
-            });
-        }
-    }
-
-    /// The gate of 0x4ab930 to the fire state's call (0x4c1240) and the
-    /// ram and board marks of 0x4bf9b0 (`+0x710`, `+0x711`): `None` when
-    /// the gate is shut. Every fourth tick (`(now ^ id) & 3 == 0`), a
-    /// ship that may fire (0x4e6700 0x15: capability `+0x261 & 0x800`,
-    /// armed, not limed `+0x258`) or (type above 1) whose ram or board
-    /// switch is on and is a royal ship, rammer or ship killer (0x597a30)
-    /// or carries a hero who fights (0x4e66c0, 0x4b4dd0), afloat (`+0x251
-    /// == 0`) and under no status (`+0x25c`: the siren's song); then
-    /// 0x4bf9b0 (`Scene::ready_mask`) marks each switch on whose time (ram
-    /// `+0x704`, board `+0x708`) is more than 50 ticks past and sets its
-    /// time to now + 100, and its mask, a position loaded or a mark, opens
-    /// the gate (0x4bfc60 lists nothing without a mark).
-    fn at_will_marks(&mut self, i: usize, now: u32) -> Option<(bool, bool)> {
-        let id = self.objects[i].id;
-        if (now ^ id) & 3 != 0 || self.being_built(id) {
-            return None;
-        }
-        let o = &self.objects[i];
-        let c = o.combat.as_ref()?;
-        let s = o.ship.as_ref()?;
-        if c.hull <= 0.0 || self.charmed.contains_key(&id) {
-            return None;
-        }
-        let held = self.hunt_holds(id) || self.landing_holds(id);
-        let fires = !held && o.is_armed() && c.lime <= 0.0;
-        let fights = s.kind > 1
-            && (matches!(s.kind, 2 | 5 | 6) || s.heroes.iter().any(|&h| h != objects::ORPHEUS));
-        if !fires && !fights {
-            return None;
-        }
-        // 0x4bf9b0 (`Scene::ready_mask`): its mask, the marks among it,
-        // shuts the gate when 0.
-        let r = self.ready_mask(i);
-        (r.mask != 0).then_some((r.ram, r.board))
-    }
-
-    /// The ships ship `i` could ram or board at will (0x4bfc60 over its
-    /// box, 0x4c0bc0 into 0x5c7d39), row by row: none while it is on a
-    /// ram or boarding (`+0x25d & 0x10`). The box (the range of its
-    /// highest loaded position, 0x5980f4: 9 or 13, or 4 with none, about
-    /// its cell) always holds the reach 2. A cell's first slot that holds
-    /// anything (`+0x14` the flyers, then `+0xc`) gives a ship other than
-    /// itself, not one that has reserved the cell (its `+0x5ab`), an
-    /// enemy (side 2 but the sea monster, or another player at war:
-    /// 0x4efe20 < 0; the port's players are all at war) whose player bit
-    /// is in `+0x689`, there (vt+0x2c), within 2 of the ship's cell
-    /// (0x557480) and taking a contact (`+0x261 & 0x1000`); a human's
-    /// ship (side 1 or 2, `game +0x1a1d`) with a route end (`+0x5b2`, its
-    /// own cell once stopped) on the map only takes those within 5 of it.
-    /// At most 50. The classes mask (`+0x68d`, 0x50ebb0) shuts out an
-    /// object too: always in fire state 2 (0x4c0eb0, `point`), and in 1
-    /// and 4 with guard on while not every position's target (`+0x640 +
-    /// 0x12k`) has been met earlier in the box (0x4bfc60's `local_5`, a
-    /// bit a position, against 7 or 0xf). (Not ported: 0x4bfc60's box is
-    /// its highest ready position's range, wider than the reach, and its
-    /// cells beyond the reach can meet those targets first; the ready
-    /// mask needs the fire pass's times, `+0x5e3`.)
-    pub(super) fn at_will_list(&self, i: usize, point: bool) -> Vec<usize> {
-        let mut list = Vec::new();
-        if self.closing_in(i) {
-            return list;
-        }
+    /// The end of ship `i`'s route the at-will list keeps to (0x4c0bc0):
+    /// a human's ship (side 1 or 2, `game +0x1a1d`) with a route end
+    /// (`+0x5b2`, its own cell once stopped) on the map; else none.
+    pub(super) fn at_will_route(&self, i: usize) -> Option<(i32, i32)> {
         let me = &self.objects[i];
-        let s = me.ship.as_ref().unwrap();
+        let s = me.ship.as_ref()?;
         let own = self.cell_of_object(i);
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
         let human = me.owner.is_some_and(|(n, k)| self.is_human_id(n * 4 + k));
-        let end = {
-            let t = openconquest_formats::map::TILE_SIZE as f32;
-            s.path.back().map_or(own, |&(x, y)| {
-                ((x / t).floor() as i32, (y / t).floor() as i32)
-            })
-        };
+        let t = openconquest_formats::map::TILE_SIZE as f32;
+        let end = s.path.back().map_or(own, |&(x, y)| {
+            ((x / t).floor() as i32, (y / t).floor() as i32)
+        });
         let end_index = w * end.1 + end.0;
-        let route = human && end_index > 0 && end_index < w * h;
-        let positions = s.positions();
-        let full = (1u8 << positions) - 1;
-        let mut met = 0u8;
-        let (x0, y0) = ((own.0 - REACH).max(0), (own.1 - REACH).max(0));
-        let (x1, y1) = ((own.0 + REACH + 1).min(w), (own.1 + REACH + 1).min(h));
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let cell = (x, y);
-                if self.flyer_slot_held(cell) {
-                    continue;
-                }
-                let Some(k) = self.slot_holder(cell) else {
-                    continue;
-                };
-                let o = &self.objects[k];
-                if k == i
-                    || self.reserved_cell(k) == Some(cell)
-                    || !o.combat.as_ref().is_some_and(|c| c.hull > 0.0)
-                    || !Self::are_enemies(me, o)
-                {
-                    continue;
-                }
-                let Some((n, slot)) = o.owner else {
-                    continue;
-                };
-                if s.behaviour.players & 1 << ((slot + n * 4) & 0x1f) == 0 {
-                    continue;
-                }
-                if !point {
-                    for (k, a) in s.behaviour.aims[..positions].iter().enumerate() {
-                        if a.target == o.id {
-                            met |= 1 << k;
-                        }
-                    }
-                }
-                if (point || s.behaviour.guard && met != full) && !self.picks_at_will(me, o) {
-                    continue;
-                }
-                if walk_path::dist2(own.0, own.1, x, y) > REACH {
-                    continue;
-                }
-                if route && walk_path::dist2(x, y, end.0, end.1) > ROUTE_REACH {
-                    continue;
-                }
-                if self.takes_contact(k) && list.len() < LIST {
-                    list.push(k);
-                }
-            }
+        (human && end_index > 0 && end_index < w * h).then_some(end)
+    }
+
+    /// 0x4c0bc0 for object `k` the look found on `cell` (an enemy of a
+    /// player in `+0x689`, there, not a ship on its reserved cell): a
+    /// ship within 2 of ship `i`'s cell (0x557480) taking a contact
+    /// (`+0x261 & 0x1000`), within 5 of the human's route end `route`,
+    /// goes on the list, at most 50; none while ship `i` is on a ram or
+    /// boarding (`+0x25d & 0x10`).
+    pub(super) fn at_will_take(
+        &self,
+        i: usize,
+        k: usize,
+        cell: (i32, i32),
+        route: Option<(i32, i32)>,
+        list: &mut Vec<usize>,
+    ) {
+        if self.closing_in(i) {
+            return;
         }
-        list
+        let own = self.cell_of_object(i);
+        if walk_path::dist2(own.0, own.1, cell.0, cell.1) > REACH {
+            return;
+        }
+        if route.is_some_and(|end| walk_path::dist2(cell.0, cell.1, end.0, end.1) > ROUTE_REACH) {
+            return;
+        }
+        if self.takes_contact(k) && list.len() < LIST {
+            list.push(k);
+        }
+    }
+
+    /// The end of a look with ram or board on and a list (0x4e8db0 mode
+    /// 0x32 > 0, then 0x4c0b30): the record `{1 ram / 2 board, 1, id,
+    /// 0xff, 0x46 / 0x45}` to itself (vt+4 event 0x10; its intake 0x4a9f2d
+    /// keeps bytes 0-6, the order 0x4aa840 runs at the ship's next record
+    /// pass), the ram's time `+0x708` now, the board's `+0x704`.
+    pub(super) fn at_will_close(&mut self, i: usize, list: &[usize], ram: bool, board: bool) {
+        if list.is_empty() {
+            return;
+        }
+        let Some((target, board)) = self.at_will_pick(i, list, ram, board) else {
+            return;
+        };
+        let now = self.ticks;
+        let id = self.objects[i].id;
+        let s = self.objects[i].ship.as_mut().unwrap();
+        if board {
+            s.board_wait = now;
+        } else {
+            s.ram_wait = now;
+        }
+        self.post(Order::Close {
+            ship: id,
+            target,
+            board,
+        });
     }
 
     /// 0x4e8db0 mode 0x32: of the list, the best to board (its boarding

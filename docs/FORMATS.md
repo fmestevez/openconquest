@@ -5124,7 +5124,8 @@ for a ship its type's (0x597acc: 5, 8, 20, 25, 15, 15, 10, 10, 10, 15,
 10, 15), 1 with hero 3 aboard, and a phantom is hit at 20 % whatever the
 range; Greek fire always hits. The roll's result is the shot's accuracy:
 100 for a hit, the chance itself for a miss, made 0 when the ship carries
-only one of that item and the target is a ship (0x4c0230). The shot is
+only one of that item and the target is not of family 0x32 (0x4c0230,
+0x50e600: a ship, a creature, anything but a building). The shot is
 aimed at the hull (0x4e07c0, leading a ship under way) unless that is 0,
 when it goes for the picture's edge and flies wide; its blow is the
 weapon's x the accuracy / 100 (0x4bfc20), a fiftieth when it is 0.
@@ -8114,10 +8115,9 @@ caller (0x4acf0f) all three first. Ported (`Ship::fire_wind_down`,
 3 (the port's attacks, at a jam its member), the stop (`Scene::stop`,
 0x4abc60 whatever it calls off), the sail's and the boarder's prey lost
 (0x4abc60), 0x4c09c0's target gone (0x180), 0x4abe00 at the group's turn
-(`one_event_a_tick`, once a batch), the hunt's 0x4acc61. Not ported: the
-fire pass (0x4c1240, 0x4bfc60, 0x4c0eb0, 0x4c09c0, 0x4c0230; the port's
-`battle.rs` fire is its own model) and so its writes (0x4c1240's
-3, 0x4c09c0's 1 in reach); kind 1 and 2 records (the port's ships take no
+(`one_event_a_tick`, once a batch), the hunt's 0x4acc61, and the fire
+pass's own writes (0x4c1240's 3, 0x4c09c0's 1 in reach; below). Not
+ported: kind 1 and 2 records (the port's ships take no
 0x15); 0x4abe50's deferral; the hunt's second site (0x4acf3a, the
 port's hunt has one). 0x4d60c0's cases on it are ported (`ha_retarget`).
 
@@ -8149,6 +8149,95 @@ to now + 100. The tick's gate (0x4abb39-0x4abba0) calls 0x4c1240 with the
 low 4 bits when the mask is not 0, then zeroes `+0x62b..+0x62e`
 (0x4abba5). Ported: 0x4bf5f0, 0x4bf9b0 (`Scene::reaches`,
 `Scene::ready_mask`; the gate's at-will half, `scene::at_will`).
+
+**The fire pass** (`scene::fire_pass`, `Scene::run_fire_pass`). Ships
+fire only from it; `battle.rs` keeps the forts', structures' and
+creatures' fire. 0x4c1240(mask) by the fire state `+0x5d1`: 1 and 4 the
+search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
+- **0x4c0230(positions, from_lists)**, types 2 and up (below, nothing):
+  each position in the mask, each of its items ready (`+0x613`) with a
+  unit aboard fires once, at the position's target (`+0x63c`, fetched for
+  its first such item) or, from the lists, at entry 0 of the item's list
+  (0x5c7ed0 + i x 0x191; empty, skipped). The target's cell (vt+0x28) and
+  family (0x50e600) give the reach (0x4bf5f0 at the distances across and
+  down; a settlement or town, class 0x32 / 0x33, from any of its 2 x 2
+  cells) and the roll's distance (0x557440; not taken anew for a 2 x 2
+  building of family 0x32, the last one standing). The roll 0x4bf7f0
+  (above) gives the accuracy; the blow is the power 0x4bc360 x accuracy
+  / 100 (0x4bfc20), x 150 / 100 with the Flame (`+0xa8`) and again with
+  Theseus; a miss's (0) power x 10 / 100 / 5. One unit of the item, not a
+  100 and a target not of family 0x32: accuracy 0, the shot flies wide.
+  Greek fire flies flaming, x 150 / 100 more; quick lime never flaming.
+  The item's time `+0x5e3 + 4i` = now + 0x5c76e0[3i + L] + a draw of the
+  ship's generator % 30 (L the rate level `+0x8e + k`, 2 with Atalanta,
+  hero 6, or for the fourth position). Returns the positions fired.
+- **0x4bfc60(mask)**, the search (states 1 and 4): guard on, the lists'
+  counts zeroed. The box: the highest marked position k gives
+  0x5980f4[L x 4 + k] (L its range level; 2 for the fourth or with
+  Theseus), none or 0 gives 4 with ram or board on, else 0; half of it
+  each way about the ship's cell, clipped. Each cell's slots in order
+  (`+0x14` flyers, `+0xc` occupant, `+0x18` sea creatures, `+0x10` a
+  leviathan only with `+0x74 == 1`): not itself; side 2 (`+0x57`) not
+  of class 0x1fb, or another player at war (0x4efe20 < 0); its player's
+  bit in `+0x689`; there (vt+0x2c); not a ship on its `+0x5ab` cell.
+  Each position whose target id (`+0x640 + 0x12k`) it is is met (a jam,
+  0x1f7, meets those whose target is among its members, 0x415e00). With
+  guard on and not all three met (`!= 7`; 0xf is never compared), a
+  side-1 object needs its player bit and any its class in `+0x68d`
+  (0x50ebb0), a jam as its first member (0x415df0), then 0x4c0cd0; with
+  ram or board and a switch marked, 0x4c0bc0 (the at-will list). Then
+  the met positions in the mask fire at their targets (0x4c0230); the
+  result is the positions in state 3 among those met and not fired (0
+  when all fired); none met: with anything met 0, else every position in
+  state 3. With guard on, not 7 met and mask left, the lists with entries
+  (positions 0-2, 9-10 as bit 8) are drawn (0x4e8af0 mode 10: each list
+  of a position in `+0x685` takes entry `draw % count` to slot 0) and
+  fired from (0x4c0230 with lists, the draw's bits & the lists' & the
+  mask). Then the at-will close (0x4e8db0, 0x4c0b30).
+- **0x4c0cd0(object, k, cell)**: for positions k down to 0 marked, each
+  item ready with a unit aboard reaching the cell (0x4bf5f0, signed) gets
+  the object on its list (id and `W x y + x`), a leviathan (0x192) only
+  on items 0-4 (`i x 0x191 < 0x645`); the count stops at 49, the 50th
+  entry written over.
+- **0x4c0eb0**, state 2 (and the attack's end): guard on, the lists
+  cleared (9, 12 for types 8 and 9); over the box without the leviathans'
+  slot, each object passing as above with, side 1, its player bit and
+  its class in `+0x68d` goes on the lists with guard on and on the
+  at-will list with a switch marked; the lists drawn (guard off, they
+  hold what the last look left) and fired from; the at-will close. The
+  state stays.
+- **0x4c09c0(mask)**, state 3, the attack (mask 0: nothing). 0x4c07c0:
+  over the positions in state 3 (the last gives the target's id
+  `+0x640`), the aim (the largest 0x598130 of their armed items, halved)
+  and `d`: the summed power 0x4bfc20(i, 100), once a unit, of the items
+  reaching (1, 0), (2, 0), (3, 0): 1 when 1's sum beats 2's, else 2, then
+  3 when 3's beats that. 0x4b9140(d, d, id): the target found
+  (0x4ac050), its cell 0x50ebf0 (with 1, vt+0x28's; its tolerance 0 for a
+  ship and the sea monsters 0x1fa / 0x1fb, 1 for the others) and its own
+  vt+0x28 cell both within `d` (0x557480) of the ship's: event 8 0x80
+  (the move stopped), the state 1, done. Else a plan, 0x4a6270 mode 5 to
+  that cell with the tolerance made `d` (0x4a6150: the first after the
+  attack's records at once, `+0x593`, which 0x4ab3f0 kind 3 sets with
+  `+0x57b` 0, `+0x57f` 25 and `+0x591` 0 at 0x4ab6a5; later ones 25
+  ticks apart and only when the ship changed cells, the goal changed or
+  it lies still, and not turning; then 0x4a6330 -> 0x4a51b0 with `keep`
+  0, the route 0x55ba50 within `d`). Not found: event 8 0x180 and notice
+  0x13a `{id, 0x16}` (0x4a1800). Found within the aim: 0x4c0230 of the
+  positions in state 3. Then with guard on and not 7 fired, 0x4bf9b0 again
+  (its marks just cleared) and, non-zero, 0x4c0eb0.
+- Not decoded: a sea monster's target (0x1fb) is not shot when the
+  shooter's vt+8 takes the aim point `(x, y, 1, 0, 1)`; quick lime's and
+  Greek fire's power (0x4bc360: 0x5c765c / 0x5c7668 by the hull over
+  0x5c76d0 / 0x5c76d4; the port keeps Greek fire's cache whole and quick
+  lime's by the hull over its full hull); 0x4c07c0 with no position in
+  state 3 (its id and player uninitialised; the port does nothing); a
+  position's target gone, its pointer dangling (the port skips it);
+  0x50ebf0's families with no cell (400 a leviathan, 700, the jam 0x1f7
+  and the land creatures not listed): 0x4b9140 returns 0 unrouted and
+  0x4c09c0 compares an uninitialised distance with the aim (the port
+  fires nothing there); `+0x594` = 1 and `+0x62f` (0x4c09c0's writes;
+  their readers not read); 0x4ac050's player check (the port: there and
+  an enemy, or at a jam); the crew's experience (0x4b4680, +50 a hit).
 Who sends `#` (0x4c42f0, `{sub, +1, +5, +9, 0.., +0x15 0xff}`, queued:
 it reaches the ship at the next tick): 0x4c4350 (fleet order 0x72, from
 the brains' 0x4797e0 and the computers' 0x482eb0; the interface's attack

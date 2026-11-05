@@ -498,6 +498,11 @@ pub struct Ship {
     /// `Task::Board`; `scene::closing`).
     #[serde(default)]
     pub closing: Option<Closing>,
+    /// The attack's route plans (0x4c09c0 -> 0x4b9140 -> 0x4a6270 mode
+    /// 5): `+0x57b`, `+0x573`, `+0x56b` and `+0x593` as the attack's
+    /// fire records set them (0x4ab3f0 kind 3, 0x4ab6a5).
+    #[serde(default)]
+    pub attack_plan: RoutePlan,
     /// `+0x704`: the tick after which (and 50 more) 0x4bf9b0 marks the
     /// ram switch for the at-will look (`scene::at_will`); 0x4c0b30 sets
     /// it to now after a board, the rammer's way back (0x4c2b9d) too.
@@ -522,6 +527,17 @@ pub struct Ship {
     /// the fire pass, 0x4abba5).
     #[serde(default)]
     pub positions_ready: [bool; 4],
+}
+
+/// A route's last plan (0x4a6150, 0x4a6100): its tick (`+0x57b`), the
+/// ship's cell and the goal then (`+0x573`, `+0x56b`), and whether the
+/// next is made at once (`+0x593`, cleared as 0x4a6330 plans).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RoutePlan {
+    pub planned: u32,
+    pub plan_from: (i32, i32),
+    pub plan_goal: (i32, i32),
+    pub first_plan: bool,
 }
 
 /// A rammer's or boarder's way to its prey, a game tick at a time (see
@@ -1150,6 +1166,11 @@ impl Ship {
             }
             b.aims[k] = Aim { target, state: 3 };
             b.fire_state = 3;
+            // 0x4ab6a5: the next plan at once, 25 ticks apart after.
+            self.attack_plan = RoutePlan {
+                first_plan: true,
+                ..Default::default()
+            };
             for (j, a) in b.aims[..3].iter_mut().enumerate() {
                 if j != k && a.target != 0 && (a.state != 3 || a.target != target) {
                     a.state = 1;
@@ -2203,6 +2224,7 @@ pub fn resolve(
         lcg: None,
         hunt: None,
         closing: None,
+        attack_plan: RoutePlan::default(),
         ram_wait: 0,
         board_wait: 0,
         firing: false,

@@ -1536,8 +1536,17 @@ mod tests {
             jam: None,
             count: 0,
         });
+        // The attack's records (0x4ab3f0 kind 3) at it, then it is gone:
+        // the fire pass's attack (0x4c09c0) finds nothing.
+        let armed = scene.objects[k].armed_positions();
+        scene.objects[k]
+            .ship
+            .as_mut()
+            .unwrap()
+            .take_attack(gone, armed);
         scene.objects.retain(|o| o.id != gone);
-        scene.run_combat(0.04, &data, &mut caches);
+        scene.ticks = (scene.ticks..).find(|t| (t ^ ids[0]) & 3 == 0).unwrap();
+        scene.run_fire_pass(&data, &mut caches);
         let k = scene.object_index(ids[0]).unwrap();
         assert!(scene.objects[k].ship.as_ref().unwrap().task.is_none());
         let n = scene.human_attacks[0].notices.last().copied().unwrap();
@@ -1574,11 +1583,14 @@ mod tests {
                 target: other
             }]
         );
-        // On a fire task in state 3, or 1 with a position in 3, not sent.
+        // On a fire task in state 3, or 1 with a position in 3, not sent
+        // (the attack's records left every armed position in 3).
         let send = |scene: &mut Scene, state: u8, aim: u8| {
             let s = scene.objects[k].ship.as_mut().unwrap();
             s.behaviour.fire_state = state;
-            s.behaviour.aims[2].state = aim;
+            for a in &mut s.behaviour.aims {
+                a.state = aim;
+            }
             let a = scene.human_attacks[0].clone();
             scene.ha_retarget(&a, k)
         };

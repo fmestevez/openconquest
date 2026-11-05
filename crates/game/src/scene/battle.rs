@@ -175,11 +175,21 @@ impl Scene {
                 }
             }
             count = count.wrapping_add(1);
-            self.objects[i].ship.as_mut().unwrap().task = Some(Task::Attack {
+            let fresh = target
+                != self.objects[i].ship.as_ref().map_or(0, |s| match s.task {
+                    Some(Task::Attack { target, .. }) => target,
+                    _ => 0,
+                });
+            let armed = self.objects[i].armed_positions();
+            let s = self.objects[i].ship.as_mut().unwrap();
+            s.task = Some(Task::Attack {
                 target,
                 jam: Some(jam),
                 count,
             });
+            if fresh {
+                s.take_attack(target, armed);
+            }
         }
     }
 
@@ -581,44 +591,24 @@ impl Scene {
             .objects
             .iter()
             .filter(|o| o.is_armed())
+            // A ship fires from its fire pass (`scene::fire_pass`).
+            .filter(|o| o.ship.is_none())
             // Land creatures throw from their own state step (0x412740
             // state 3, `Scene::tick_walkers`), handed over in `throws`.
             .filter(|o| !self.walkers.iter().any(|w| w.id == o.id))
             .map(|o| o.id)
             .collect();
-        let mut volleys = Vec::new();
+        let mut volleys: Vec<Volley> = Vec::new();
         for id in armed {
             let Some(i) = self.object_index(id) else {
                 continue;
             };
-            // A ship being built does no more than rise (0x4ab930 runs
-            // only its task 4 while `+0x251 == 2`).
-            if self.objects[i]
-                .ship
-                .as_ref()
-                .is_some_and(|s| s.build.is_some())
-            {
-                continue;
-            }
             let levels = self.levels_of(self.objects[i].owner);
             let c = self.objects[i].combat.as_mut().unwrap();
-            if c.stone > 0.0 {
-                continue;
-            }
             // Limed, a fort or stronghold does not fire (0x419e00,
-            // 0x40ef70), nor a ship (0x4e6700 shuts 0x4ab930's gate) unless
-            // its ram or board switch is on and it is a royal ship, rammer
-            // or ship killer (0x597a30) or carries a hero who fights
-            // (0x4e66c0: 0x4b4dd0 over 0x5991e0, every hero but Orpheus).
-            if c.lime > 0.0 {
-                let fights_on = self.objects[i].ship.as_ref().is_some_and(|s| {
-                    (s.behaviour.ram || s.behaviour.board)
-                        && (matches!(s.kind, 2 | 5 | 6)
-                            || s.heroes.iter().any(|&h| h != objects::ORPHEUS))
-                });
-                if !fights_on {
-                    continue;
-                }
+            // 0x40ef70).
+            if c.stone > 0.0 || c.lime > 0.0 {
+                continue;
             }
             let shooters = self.objects[i].shooters();
             let c = self.objects[i].combat.as_mut().unwrap();
@@ -626,98 +616,30 @@ impl Scene {
             for r in &mut c.reloads {
                 *r = (*r - dt).max(0.0);
             }
-            let ship = self.objects[i].ship.as_ref();
-            let theseus = ship.is_some_and(|s| s.has_hero(objects::THESEUS));
-            let atalanta = ship.is_some_and(|s| s.has_hero(objects::ATALANTA));
-            let reach_level = |w: u8| {
-                if theseus {
-                    objects::HERO_LEVEL
-                } else {
-                    levels.reach_for(w)
-                }
-            };
-            let rate_level = |w: u8| {
-                if atalanta {
-                    objects::HERO_LEVEL
-                } else {
-                    levels.rate_for(w)
-                }
-            };
+            let reach_level = |w: u8| levels.reach_for(w);
+            let rate_level = |w: u8| levels.rate_for(w);
             // The longest of its weapons' ranges.
             let range = shooters
                 .iter()
                 .map(|&w| combat::reach(w, reach_level(w)).1)
                 .fold(0.0, f32::max);
-            let (ordered, idle) = match &self.objects[i].ship {
-                Some(ship) => (
-                    match ship.task {
-                        Some(Task::Attack { target, .. }) => Some(target),
-                        Some(Task::Zone { rect, attack }) => self.zone_target(i, rect, attack),
-                        _ => None,
-                    },
-                    // The at-will search runs on guard only (0x4bfc60
-                    // calls 0x4c0cd0 with `+0x684 & 1`).
-                    ship.behaviour.guard
-                        && ((ship.task.is_none() && ship.path.is_empty())
-                            || matches!(
-                                ship.task,
-                                Some(Task::Patrol { .. } | Task::Convoy { .. })
-                            )),
-                ),
-                // Forts and barbarian structures with no mode set on any
-                // group (order 10, 0x4469b0) do not fire at all (0x4469c0);
-                // the others pick by group below.
-                None => match self.objects[i].combat.as_ref().map(|c| c.fire) {
-                    Some(fire) if self.objects[i].holds_units() => {
-                        if !fire.fires() {
-                            continue;
-                        }
-                        (None, false)
-                    }
-                    _ => (None, true),
-                },
-            };
-            let at_jam = matches!(
-                self.objects[i].ship.as_ref().and_then(|s| s.task),
-                Some(Task::Attack { jam: Some(_), .. })
-            );
-            let me = &self.objects[i];
-            let target = match ordered {
-                // A target gone, or no longer to be fought (a building
-                // fallen to ruins, a ship captured), ends the attack.
-                // Ordered at a jam, the member is side 2 (no diplomacy
-                // test); gone, the ship waits for the task to send it at
-                // the jam's next member (`run_jam_attacks`).
-                Some(t) => match self.object_index(t).filter(|&ti| {
-                    self.objects[ti].combat.is_some()
-                        && (at_jam || Self::are_enemies(&self.objects[i], &self.objects[ti]))
-                }) {
-                    Some(ti) => Some(ti),
-                    None if at_jam => continue,
-                    None => {
-                        let gone = self.object_index(t).is_none();
-                        let id = self.objects[i].id;
-                        let ship = self.objects[i].ship.as_mut().unwrap();
-                        if matches!(ship.task, Some(Task::Attack { .. })) {
-                            ship.task = None;
-                            ship.path.clear();
-                            // The target gone (0x4c09c0: 0x4b9140 finds no
-                            // object), the ship stops (event 8 0x180) and
-                            // posts notice 0x13a with it to its group
-                            // (0x4a1800, `{id, 0x16}`).
-                            if gone {
-                                // Event 8 with 0x180 (0x4aa540): its 0x100
-                                // part is the stop's fire part.
-                                ship.fire_wind_down();
-                                self.post_notice(id, 0x13a, t);
-                            }
-                        }
+            // Forts and barbarian structures with no mode set on any group
+            // (order 10, 0x4469b0) do not fire at all (0x4469c0); the others
+            // pick by group below.
+            let idle = match self.objects[i].combat.as_ref().map(|c| c.fire) {
+                Some(fire) if self.objects[i].holds_units() => {
+                    if !fire.fires() {
                         continue;
                     }
-                },
-                // Idle ships and forts fire at enemy ships in range.
-                None if idle => self
-                    .objects
+                    false
+                }
+                _ => true,
+            };
+            let theseus = false;
+            let me = &self.objects[i];
+            // The others fire at enemy ships in range.
+            let target = if idle {
+                self.objects
                     .iter()
                     .enumerate()
                     .filter(|(_, o)| {
@@ -732,8 +654,9 @@ impl Scene {
                                     .is_some_and(|s| s.has_hero(objects::ORPHEUS)))
                     })
                     .min_by(|a, b| dist(me, a.1).total_cmp(&dist(me, b.1)))
-                    .map(|(ti, _)| ti),
-                None => None,
+                    .map(|(ti, _)| ti)
+            } else {
+                None
             };
             // A fort's or barbarian structure's groups (item k's units are
             // group k) shoot when loaded (0x4469c0): with mode bit 2 at
@@ -794,42 +717,16 @@ impl Scene {
                 }
                 for (ti, weapons) in fired {
                     let owner = self.objects[i].owner;
-                    volleys.push((self.objects[ti].id, weapons, owner, id, theseus, None));
+                    volleys.push((self.objects[ti].id, weapons, owner, id, theseus, None, None));
                 }
                 continue;
             }
             let Some(ti) = target else { continue };
             let d = dist(&self.objects[i], &self.objects[ti]);
-            let (tx, ty) = (self.objects[ti].x, self.objects[ti].y);
             if d > range {
-                // Chase: re-plan when the target has moved away from the route's end.
-                let Some(ship) = self.objects[i].ship.as_ref() else {
-                    continue;
-                };
-                // A ship may sail off: follow it. A building or creature on
-                // land stays put, and the route ends where the water does,
-                // maybe far from it: plan once, not every tick.
-                let moving = self.objects[ti].ship.is_some();
-                let stale = match ship.path.back() {
-                    None => true,
-                    Some(&(px, py)) => {
-                        moving && ((px - tx).powi(2) + (py - ty).powi(2)).sqrt() > range / 2.0
-                    }
-                };
-                if ordered.is_some() && stale {
-                    if let Some(path) = self.plan_route_to_water(i, tx, ty) {
-                        self.objects[i].ship.as_mut().unwrap().path = path;
-                    }
-                }
                 continue;
             }
             let target_id = self.objects[ti].id;
-            // In range: it stops - at the end of the step it is on, ships
-            // keeping to the grid's cell centres.
-            if ordered.is_some() {
-                let path = &mut self.objects[i].ship.as_mut().unwrap().path;
-                path.truncate(1);
-            }
             // Each weapon fires when it is loaded and the target lies
             // between its shortest and longest range.
             let c = self.objects[i].combat.as_mut().unwrap();
@@ -843,197 +740,244 @@ impl Scene {
                 }
             }
             if !fired.is_empty() {
-                volleys.push((target_id, fired, self.objects[i].owner, id, theseus, None));
+                volleys.push((
+                    target_id,
+                    fired,
+                    self.objects[i].owner,
+                    id,
+                    theseus,
+                    None,
+                    None,
+                ));
             }
         }
         for t in std::mem::take(&mut self.throws) {
             let owner = self
                 .object_index(t.shooter)
                 .and_then(|s| self.objects[s].owner);
-            volleys.push((t.target, vec![t.weapon], owner, t.shooter, false, Some(t)));
+            volleys.push((
+                t.target,
+                vec![t.weapon],
+                owner,
+                t.shooter,
+                false,
+                Some(t),
+                None,
+            ));
         }
-        for (target, weapons, owner, shooter, theseus, throw) in volleys {
-            self.scout_attacked(target);
-            self.wizard_attacked(target, shooter);
-            self.computer_attacked(target, shooter);
-            self.brain_hit(target);
-            // A brain's fleet notes who fired on it, whoever it was.
-            self.fleet_attacked(target, shooter);
-            // A guard told to fire on aggressors turns on whoever shoots it.
-            if let Some(ship) = self
-                .object_index(target)
-                .and_then(|t| self.objects[t].ship.as_mut())
-            {
-                let b = ship.behaviour;
-                if b.guard && b.aggressor && ship.task.is_none() {
-                    ship.path.clear();
-                    ship.task = Some(Task::Attack {
-                        target: shooter,
-                        jam: None,
-                        count: 0,
-                    });
-                }
-            }
-            let levels = self.levels_of(owner);
-            let warded = self
-                .object_index(target)
-                .and_then(|t| self.objects[t].combat.as_ref())
-                .is_some_and(|c| c.protect_weapons > 0.0);
-            // What the target's state takes off every blow: the weapon
-            // shield 80%, the Flame and Theseus add; on a ship the Armour of
-            // Ares and the armour cut it, and it is shared out on arrival
-            // (0x4bf170, `combat::Shares`).
-            let mut factor = 1.0;
-            // A fort shares its blow out first and cuts each part under the
-            // shield on its own (`fort_blow`).
-            let holder = self
-                .object_index(target)
-                .is_some_and(|t| self.objects[t].holds_units());
-            if warded && !holder {
-                factor *= magic::SHIELD_FACTOR;
-            }
-            if theseus {
-                factor *= objects::THESEUS_DAMAGE;
-            }
-            let flaming = self.flame_of(owner) > 0.0;
-            if flaming {
-                factor *= magic::FLAME_FACTOR;
-            }
-            let mut shares = None;
-            if let Some(t) = self.object_index(target) {
-                if let Some(ship) = self.objects[t].ship.as_ref() {
-                    if let Some(a) = ship
-                        .treasures
-                        .iter()
-                        .find(|t| t.kind == objects::ARMOUR_OF_ARES)
-                    {
-                        let share = if a.amount > 0 {
-                            a.amount
-                        } else {
-                            objects::ARMOUR_OF_ARES_PERCENT
-                        };
-                        factor *= 1.0 - share.min(100) as f32 / 100.0;
-                    }
-                }
-                if let (Some(ship), Some(c)) = (&self.objects[t].ship, &self.objects[t].combat) {
-                    let levels = self.levels_of(self.objects[t].owner);
-                    factor *= combat::armour_factor(ship.armour, &levels);
-                    shares = Some(combat::Shares::of(ship, &c.weapons));
-                }
-            }
-            // Each weapon sends a shot off, carrying its blow (bomb.cpp).
-            let Some(s) = self.object_index(shooter) else {
-                continue;
-            };
-            // A land creature's throw leaves from its picture (0x412a8d).
-            let from = match throw {
-                Some(t) => (t.from.0 as f32, t.from.1 as f32),
-                None => (self.objects[s].x, self.objects[s].y),
-            };
-            let Some(t) = self.object_index(target) else {
-                continue;
-            };
-            // Land creatures throw as the original's (CyclopClassTy
-            // 0x412740 state 3, 0x4126f0): their own picture, a level-1
-            // weapon's blow less as they weaken (0x594ab8 by their
-            // percentage), hitting or not as their own draw said.
-            let thrower = match (self.objects[s].class, throw) {
-                (ObjectClass::Monster(c @ 0x1f4..=0x1f6), Some(t)) => Some((c, t)),
-                _ => None,
-            };
-            // The player each shot is put down to (message 0x14ba's `+4`):
-            // a ship's `+0x24f` (0x4c026b), a fort's player (0x4469c0); a
-            // land creature's throw none (0x412900 gives 0xff, 0x4129f3).
-            let by = match thrower {
-                Some(_) => None,
-                None => self.objects[s].owner,
-            };
-            let health = self.objects[s]
-                .combat
-                .as_ref()
-                .map_or(1.0, |c| (c.hull / c.max_hull.max(1.0)).clamp(0.0, 1.0));
-            let dist = (self.objects[t].x - from.0).hypot(self.objects[t].y - from.1);
-            let shooters = self.objects[s].shooters();
-            let same = |w: u8| shooters.iter().filter(|&&x| x == w).count();
-            let target_is_ship = self.objects[t].ship.is_some();
-            for w in weapons {
-                let aim = match (&self.objects[t].ship, &self.objects[t].combat) {
-                    (Some(ship), c) => combat::Aim::Ship {
-                        kind: ship.kind,
-                        zetes: ship.has_hero(objects::ZETES),
-                        phantom: c.as_ref().is_some_and(|c| c.phantom > 0.0),
-                    },
-                    _ => combat::Aim::Other,
-                };
-                let (strikes, level, letter, weaken) = match thrower {
-                    Some((class, t)) => (t.strikes, 1, Some(combat::throw_letter(class)), 1.0),
-                    None => {
-                        // A sure hit strikes whole; a miss strikes the hull
-                        // anyway for its chance in percent of the blow,
-                        // unless it is the ship's only one of the item, when
-                        // it flies wide (0x4c0230, 0x4bf7f0, 0x4bfc20).
-                        let chance = combat::hit_chance(w, dist, aim);
-                        let accuracy = if self.rng.chance(chance) {
-                            100
-                        } else if same(w) > 1 || !target_is_ship {
-                            chance
-                        } else {
-                            0
-                        };
-                        (
-                            accuracy > 0,
-                            levels.arms_for(w),
-                            None,
-                            accuracy as f32 / 100.0,
-                        )
-                    }
-                };
-                // A ship's weapons of a kind fire by their mean condition;
-                // quick lime by the ship's hull instead (0x4bc360, 0x4bfc20).
-                let blow = if let Some((_, t)) = thrower {
-                    combat::throw_blow(w, t.pct) * factor
-                } else if w == combat::QUICKLIME {
-                    combat::lime_power(level) * health * factor * weaken
-                } else {
-                    let worn = self.objects[s].mean_condition(w) as f32 / 100.0;
-                    combat::hull_damage_at(w, level) * factor * weaken * worn
-                };
-                // The hull's share, the crew's (by the item's B over its
-                // A, 0x4ac1b0) and the weapons', these in the units'
-                // points (blows here are a fifteenth of the original's).
-                let (damage, wounds, wear) = match shares {
-                    Some(sh) => (
-                        sh.hull_part(blow) * combat::hull_percent(w) as f32 / 100.0,
-                        sh.crew_part(blow) * 15.0 * combat::crew_scale(w),
-                        sh.weapons_part(blow) * 15.0,
-                    ),
-                    None => (blow, 0.0, 0.0),
-                };
-                self.fire_shot(
-                    super::shot::Firing {
-                        item: w,
-                        letter,
-                        flaming,
-                        from,
-                        target,
-                        strikes,
-                        damage,
-                        wounds,
-                        wear,
-                        rope: None,
-                        shooter: Some(shooter),
-                        by,
-                        to: throw.and_then(|t| t.to).map(|(x, y)| (x as f32, y as f32)),
-                    },
-                    data,
-                    caches,
-                );
-            }
+        for v in volleys {
+            self.send_volley(v, data, caches);
         }
         for fx in &mut self.effects {
             fx.age_ms += dt * 1000.0;
         }
         self.effects.retain(|fx| fx.frame().is_some());
+    }
+
+    /// Sends a volley off: the target's answers (the scouts, wizards,
+    /// computers, brains and fleets told, a guard on aggressors turning
+    /// on the shooter), then a shot for each item with its blow.
+    pub(super) fn send_volley(
+        &mut self,
+        (target, weapons, owner, shooter, theseus, throw, pass): Volley,
+        data: &GameData,
+        caches: &mut Caches,
+    ) {
+        self.scout_attacked(target);
+        self.wizard_attacked(target, shooter);
+        self.computer_attacked(target, shooter);
+        self.brain_hit(target);
+        // A brain's fleet notes who fired on it, whoever it was.
+        self.fleet_attacked(target, shooter);
+        // A guard told to fire on aggressors turns on whoever shoots it
+        // (the port's own; its attack fires from the fire pass, by the
+        // attack's records, 0x4ab3f0 kind 3).
+        let mut armed_turn = false;
+        if let Some(ship) = self
+            .object_index(target)
+            .and_then(|t| self.objects[t].ship.as_mut())
+        {
+            let b = ship.behaviour;
+            if b.guard && b.aggressor && ship.task.is_none() {
+                ship.path.clear();
+                ship.task = Some(Task::Attack {
+                    target: shooter,
+                    jam: None,
+                    count: 0,
+                });
+                armed_turn = true;
+            }
+        }
+        if armed_turn {
+            if let Some(t) = self.object_index(target) {
+                let armed = self.objects[t].armed_positions();
+                let ship = self.objects[t].ship.as_mut().unwrap();
+                ship.take_attack(shooter, armed);
+            }
+        }
+        let levels = self.levels_of(owner);
+        let warded = self
+            .object_index(target)
+            .and_then(|t| self.objects[t].combat.as_ref())
+            .is_some_and(|c| c.protect_weapons > 0.0);
+        // What the target's state takes off every blow: the weapon
+        // shield 80%, the Flame and Theseus add; on a ship the Armour of
+        // Ares and the armour cut it, and it is shared out on arrival
+        // (0x4bf170, `combat::Shares`).
+        let mut factor = 1.0;
+        // A fort shares its blow out first and cuts each part under the
+        // shield on its own (`fort_blow`).
+        let holder = self
+            .object_index(target)
+            .is_some_and(|t| self.objects[t].holds_units());
+        if warded && !holder {
+            factor *= magic::SHIELD_FACTOR;
+        }
+        // A ship's pass shot carries them in its blow already (0x4c0230).
+        let mut own_factor = 1.0;
+        if theseus {
+            own_factor *= objects::THESEUS_DAMAGE;
+        }
+        let flaming = match pass {
+            Some(p) => p.flaming,
+            None => self.flame_of(owner) > 0.0,
+        };
+        if flaming && pass.is_none() {
+            own_factor *= magic::FLAME_FACTOR;
+        }
+        let mut shares = None;
+        if let Some(t) = self.object_index(target) {
+            if let Some(ship) = self.objects[t].ship.as_ref() {
+                if let Some(a) = ship
+                    .treasures
+                    .iter()
+                    .find(|t| t.kind == objects::ARMOUR_OF_ARES)
+                {
+                    let share = if a.amount > 0 {
+                        a.amount
+                    } else {
+                        objects::ARMOUR_OF_ARES_PERCENT
+                    };
+                    factor *= 1.0 - share.min(100) as f32 / 100.0;
+                }
+            }
+            if let (Some(ship), Some(c)) = (&self.objects[t].ship, &self.objects[t].combat) {
+                let levels = self.levels_of(self.objects[t].owner);
+                factor *= combat::armour_factor(ship.armour, &levels);
+                shares = Some(combat::Shares::of(ship, &c.weapons));
+            }
+        }
+        // Each weapon sends a shot off, carrying its blow (bomb.cpp).
+        let Some(s) = self.object_index(shooter) else {
+            return;
+        };
+        // A land creature's throw leaves from its picture (0x412a8d).
+        let from = match throw {
+            Some(t) => (t.from.0 as f32, t.from.1 as f32),
+            None => (self.objects[s].x, self.objects[s].y),
+        };
+        let Some(t) = self.object_index(target) else {
+            return;
+        };
+        // Land creatures throw as the original's (CyclopClassTy
+        // 0x412740 state 3, 0x4126f0): their own picture, a level-1
+        // weapon's blow less as they weaken (0x594ab8 by their
+        // percentage), hitting or not as their own draw said.
+        let thrower = match (self.objects[s].class, throw) {
+            (ObjectClass::Monster(c @ 0x1f4..=0x1f6), Some(t)) => Some((c, t)),
+            _ => None,
+        };
+        // The player each shot is put down to (message 0x14ba's `+4`):
+        // a ship's `+0x24f` (0x4c026b), a fort's player (0x4469c0); a
+        // land creature's throw none (0x412900 gives 0xff, 0x4129f3).
+        let by = match thrower {
+            Some(_) => None,
+            None => self.objects[s].owner,
+        };
+        let health = self.objects[s]
+            .combat
+            .as_ref()
+            .map_or(1.0, |c| (c.hull / c.max_hull.max(1.0)).clamp(0.0, 1.0));
+        let dist = (self.objects[t].x - from.0).hypot(self.objects[t].y - from.1);
+        let shooters = self.objects[s].shooters();
+        let same = |w: u8| shooters.iter().filter(|&&x| x == w).count();
+        let target_is_ship = self.objects[t].ship.is_some();
+        for w in weapons {
+            let aim = match (&self.objects[t].ship, &self.objects[t].combat) {
+                (Some(ship), c) => combat::Aim::Ship {
+                    kind: ship.kind,
+                    zetes: ship.has_hero(objects::ZETES),
+                    phantom: c.as_ref().is_some_and(|c| c.phantom > 0.0),
+                },
+                _ => combat::Aim::Other,
+            };
+            let (strikes, level, letter, weaken) = match (thrower, pass) {
+                (Some((class, t)), _) => (t.strikes, 1, Some(combat::throw_letter(class)), 1.0),
+                (None, Some(p)) => (p.accuracy != 0, 0, None, 1.0),
+                (None, None) => {
+                    // A sure hit strikes whole; a miss strikes the hull
+                    // anyway for its chance in percent of the blow,
+                    // unless it is the ship's only one of the item, when
+                    // it flies wide (0x4c0230, 0x4bf7f0, 0x4bfc20).
+                    let chance = combat::hit_chance(w, dist, aim);
+                    let accuracy = if self.rng.chance(chance) {
+                        100
+                    } else if same(w) > 1 || !target_is_ship {
+                        chance
+                    } else {
+                        0
+                    };
+                    (
+                        accuracy > 0,
+                        levels.arms_for(w),
+                        None,
+                        accuracy as f32 / 100.0,
+                    )
+                }
+            };
+            // A ship's weapons of a kind fire by their mean condition;
+            // quick lime by the ship's hull instead (0x4bc360, 0x4bfc20).
+            let blow = if let Some((_, t)) = thrower {
+                combat::throw_blow(w, t.pct) * factor
+            } else if let Some(p) = pass {
+                p.blow * factor
+            } else if w == combat::QUICKLIME {
+                combat::lime_power(level) * health * factor * own_factor * weaken
+            } else {
+                let worn = self.objects[s].mean_condition(w) as f32 / 100.0;
+                combat::hull_damage_at(w, level) * factor * own_factor * weaken * worn
+            };
+            // The hull's share, the crew's (by the item's B over its
+            // A, 0x4ac1b0) and the weapons', these in the units'
+            // points (blows here are a fifteenth of the original's).
+            let (damage, wounds, wear) = match shares {
+                Some(sh) => (
+                    sh.hull_part(blow) * combat::hull_percent(w) as f32 / 100.0,
+                    sh.crew_part(blow) * 15.0 * combat::crew_scale(w),
+                    sh.weapons_part(blow) * 15.0,
+                ),
+                None => (blow, 0.0, 0.0),
+            };
+            self.fire_shot(
+                super::shot::Firing {
+                    item: w,
+                    letter,
+                    flaming,
+                    from,
+                    target,
+                    strikes,
+                    damage,
+                    wounds,
+                    wear,
+                    rope: None,
+                    shooter: Some(shooter),
+                    by,
+                    to: throw.and_then(|t| t.to).map(|(x, y)| (x as f32, y as f32)),
+                },
+                data,
+                caches,
+            );
+        }
     }
 
     /// Takes `points` off the marines of ship `target` (0x4be410, see
@@ -2060,6 +2004,28 @@ impl Scene {
 
 /// The item of a blow that is not a weapon's (a spell's, a tornado's):
 /// its marines' share is the weapons' (B over A as 1).
+/// A volley: target, items, the shooter's player, the shooter, Theseus
+/// aboard, a land creature's throw, a ship's pass shot (`ItemShot`).
+pub(super) type Volley = (
+    u32,
+    Vec<u8>,
+    Option<(u32, u32)>,
+    u32,
+    bool,
+    Option<super::walkers::Throw>,
+    Option<ItemShot>,
+);
+
+/// A ship's shot from its fire pass (0x4c0230): one an item, its accuracy
+/// (0 flies wide) and its blow (a fifteenth of the original's, with the
+/// Flame, Theseus and Greek fire's part in it) worked out by the pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct ItemShot {
+    pub accuracy: u8,
+    pub blow: f32,
+    pub flaming: bool,
+}
+
 const NOT_A_WEAPON: u8 = 254;
 
 /// Ticks a building's collapse lasts (cycle table entry 2).
