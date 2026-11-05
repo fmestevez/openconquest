@@ -31,6 +31,8 @@ const HEAD: u8 = 17;
 /// Treasure kind of the mirror shield of Athena; Perseus (hero 8).
 const MIRROR_SHIELD: u8 = 14;
 const PERSEUS: u8 = 8;
+/// The cyclops lair's class, which LandObj spares the stare (0x426fec).
+const CYCLOPS_LAIR: u32 = 0x46;
 /// Ticks of stone a stare adds (0x402100: the record's `+0x18`).
 const STONE_TICKS: u32 = 150;
 
@@ -532,9 +534,8 @@ impl Scene {
     /// their number (22000 from five), 150 and her id. A ship (0x4dc630)
     /// with Perseus or a magic shield is spared; else it is stone for 150
     /// ticks more and takes the blow (cut by a mirror shield's percent).
-    /// (Not decoded: the building's handlers of 0x158bf, the fort's
-    /// 0x41a041 among them: a building counts but takes nothing here.)
-    fn gorgon_stare(&mut self, g: &Gorgon, data: &GameData, caches: &mut Caches) {
+    /// Anything else takes it as `stare_building`.
+    pub(super) fn gorgon_stare(&mut self, g: &Gorgon, data: &GameData, caches: &mut Caches) {
         // Sound event 127 (`atmed1c`), mode 5 at her cell (0x402111).
         let t = TILE_SIZE as f32;
         let (cx, cy) = g.cell;
@@ -561,6 +562,7 @@ impl Scene {
             };
             let o = &self.objects[k];
             let Some(s) = o.ship.as_ref() else {
+                self.stare_building(id, blow, data, caches);
                 continue;
             };
             let warded = o.combat.as_ref().is_some_and(|c| c.protect_magic > 0.0);
@@ -583,6 +585,78 @@ impl Scene {
             }
             let hurt = blow as f32 / 15.0 * (100 - mirror) as f32 / 100.0;
             self.share_blow(id, hurt, None, data, caches);
+        }
+    }
+
+    /// Message 0x158bf (the stare: `+0x14` the blow, `+0x18` 150) to a
+    /// building, stronghold, castle, nest or lair `id`. The hero's house
+    /// (0x421150) drops it. A fort (0x419f80) posts itself a blow 0x138e
+    /// of bomb kind 4, not flaming, of player 0xff and no shooter: the
+    /// stare's, a fifth (`x 20 / 100`) under a magic shield (`+0x15c`),
+    /// less a stored mirror shield's percent (`+0x4b4`, 0x419e00 kind
+    /// 14) of it; it then passes the message on with `+0x14` 0. Every
+    /// other class passes it on whole (the barbarians, docks and yards
+    /// through 0x4e8660, the port 0x4e7640, the workshops, temples, castles
+    /// and nests 0x427f50, the lairs 0x414f00, towns 0x441ba0) to LandObj
+    /// 0x425990 (at 0x426fec): unless gone (`+0xa4` 0xff), asleep (0x10),
+    /// mended (2) or the cyclops lair (class 0x46), it is limed for
+    /// `+0x18` ticks more (`+0x144`, `+0x14c`, `+0x150`; a fifth under the
+    /// magic shield), then takes `+0x14` on its life whole (a fifth under
+    /// the shield), no units' share, no hit shown: below its life it is
+    /// taken off, else the life is 1 and it falls (0x138b), put down to
+    /// no one (`+0x1ac` not written).
+    fn stare_building(&mut self, id: u32, blow: i32, data: &GameData, caches: &mut Caches) {
+        let Some(k) = self.object_index(id) else {
+            return;
+        };
+        let o = &self.objects[k];
+        if o.class == ObjectClass::HeroHouse {
+            return;
+        }
+        let Some(c) = o.combat.as_ref() else {
+            return;
+        };
+        let shielded = c.protect_magic > 0.0;
+        let fifth = |n: i32| if shielded { n * 20 / 100 } else { n };
+        let fort = matches!(o.class, ObjectClass::Building(0x34..=0x36));
+        let landobj =
+            o.asleep.is_none() && !self.mending.contains(&id) && o.record.class_id != CYCLOPS_LAIR;
+        // LandObj's lime: the 0x138e a fort posts is taken from its queue
+        // (0x423c30) at its tick, after it.
+        if landobj {
+            let add = crate::clock::ticks(fifth(STONE_TICKS as i32) as u32);
+            if let Some(c) = self.objects[k].combat.as_mut() {
+                if c.lime <= 0.0 {
+                    c.lime_total = 0.0;
+                }
+                c.lime += add;
+                c.lime_total += add;
+            }
+        }
+        if fort {
+            let mirror = self
+                .held_by(id)
+                .iter()
+                .find(|t| t.kind == MIRROR_SHIELD)
+                .map_or(0, |t| t.amount as i32);
+            let mut b = fifth(blow);
+            if mirror != 0 {
+                b -= mirror * b / 100;
+            }
+            // Asleep it ignores blows, as `Scene::hit`.
+            if self.objects[k].asleep.is_none() {
+                self.fort_blow(id, b as f32 / 15.0, 0.0, 4, false, None, None, data, caches);
+            }
+        } else if landobj {
+            self.strike(
+                id,
+                fifth(blow) as f32 / 15.0,
+                false,
+                None,
+                true,
+                data,
+                caches,
+            );
         }
     }
 

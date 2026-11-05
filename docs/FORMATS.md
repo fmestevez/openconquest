@@ -5740,8 +5740,25 @@ distance about her (0x4016b0); sound event 116 (`hitmed`). Lightning
 (0xda93, her picture shown): life 0, cut short, the caster her killer.
 Shot at in states 1-3 only (vt+0x2c, 0x404690); her aim point 0x402da0.
 Her sounds are all 0x50e570 mode 5 at her cell (`+0x114`, `+0x118`).
-The port: `scene::gorgon`. Not decoded: the buildings' handlers of 0x158bf (the fort's 0x41a041), so a
-building stared at counts in the share but takes nothing; the treasure's
+A building stared at (each cell of its footprint is listed, so a 2 x 2
+gets four messages, each of the share): the hero's house (0x421150)
+drops it. A fort (0x419f80) posts itself (vt+4 0x418f60, queued by
+0x423c30 to its tick) a blow 0x138e of bomb kind 4, not flaming, player
+0xff, no shooter (0x41a041): the stare's `+0x14`, `x 20 / 100` under a
+magic shield (`+0x15c`), less a stored mirror shield's percent
+(`+0x4b4`) of it; then it hands the message on (0x4e7640) with `+0x14`
+0. Every other class hands it on whole (barbarians 0x40ef70, dock
+0x416f90 and yards via 0x4e8660, port 0x4e7640, castles 0x410ca0, nests
+0x41d4a0, schools, smithies, studios and temples via 0x427f50, lairs
+0x414f00, towns 0x441ba0) to LandObj 0x425990 (0x426fec): unless gone
+(`+0xa4` 0xff), asleep (0x10), mended (2) or the cyclops lair (class
+0x46), it is limed for `+0x18` (150) ticks more (`+0x144` set, `+0x14c`
+now and `+0x150` 0 when not limed yet, then `+0x150 +=`), then takes
+`+0x14` off its life (`+0xac`) whole, no units' share even for a
+barbarian stronghold, no hit shown (both a fifth under the magic shield):
+below its life it comes off (`+0xa8` the percent, vt+0x38), else the life
+is 1 and it falls (0x138b), put down to no one. The port:
+`Scene::stare_building`. The port: `scene::gorgon`. Not decoded: the treasure's
 own test 0x407950 on pickup. Not ported: tornadoes (0xda96) and reefs or
 whirlpools (0xda94, 0xda95) on her (the port's strike ships only); her
 pixel test 0x402d10; her save record (0x8cf: the port saves its own
@@ -5813,9 +5830,14 @@ short, the caster her killer. Shot at in states 1-3 (vt+0x2c, 0x404690);
 her aim point 0x4048f0 (no picture: her cell's centre; else from her
 picture's top left, a hit `30 + (r & 7)` each way, a miss `r % 61`, `40 +
 r % 24`, x drawn first). The port: `scene::siren` (ticked with the Gorgons
-in the objects' order; her sounds mode 6 at her cell). Not decoded: the
-buildings' handlers of 0x15ca7, so a building sung to
-counts in the share but takes nothing. Not ported: tornadoes (0xda96) and
+in the objects' order; her sounds mode 6 at her cell). Nothing but a ship
+reads 0x15ca7: the fort 0x419f80, barbarians 0x40ef70, dock 0x416f90,
+yards 0x4e8660, port 0x4e7640, hero's house 0x421150, castles 0x410ca0,
+nests 0x41d4a0, lairs 0x414f00, WorkLandObj 0x427f50 (schools,
+smithies, studios, temples), towns 0x441ba0 and LandObj 0x425990 have no
+case for it, and the land creatures' jam 0x415ee0 hands only 0xda93,
+0xda96 and 0x187a2 to its members (the rest to 0x50c9e0, none); so any
+other occupant sung to counts in the share and takes nothing. Not ported: tornadoes (0xda96) and
 reefs or whirlpools (0xda94, 0xda95) on her; her pixel test 0x404800 and
 the mask `SIRMSK`; her save record (0x8cf: the port saves its own state).
 

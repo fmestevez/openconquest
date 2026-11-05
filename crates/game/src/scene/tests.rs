@@ -12162,6 +12162,166 @@ fn order_10_silences_a_fort() {
     assert!(!quiet(&mut scene, &mut caches), "the fort did not fire");
 }
 
+/// The stare (0x158bf) on a building: LandObj (0x425990 at 0x426fec)
+/// limes it for 150 ticks and takes the blow off its life whole, a fifth
+/// of both under a magic shield, nothing asleep; a fort (0x419f80) is
+/// limed and posts itself the blow as 0x138e of kind 4. The song
+/// (0x15ca7) does nothing to a building. Needs `OPENCONQUEST_DATA`.
+#[test]
+fn gorgon_stare_on_buildings() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "battle17").unwrap();
+    scene.objects.retain(|o| o.ship.is_none());
+    let gorgon = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Monster(0x1fa))
+        .unwrap()
+        .id;
+    for o in scene.objects.iter_mut() {
+        if let Some(c) = o.combat.as_mut() {
+            if o.ship.is_none() && o.cell.is_some() {
+                (c.max_hull, c.hull) = (1e6, 1e6);
+            }
+        }
+    }
+    // A building of a player alone in the 3 x 3 about the cell stared at.
+    let alone = |scene: &Scene, fort: bool| {
+        scene.objects.iter().find_map(|o| {
+            let cell = o.cell?;
+            if Scene::side_of(o) != 1
+                || matches!(o.class, ObjectClass::Building(0x34..=0x36)) != fort
+                || !matches!(o.class, ObjectClass::Building(_))
+            {
+                return None;
+            }
+            let list: Vec<usize> = scene
+                .cell_occupants((cell.0 - 1, cell.1 - 1), (cell.0 + 2, cell.1 + 2))
+                .into_iter()
+                .filter(|&(_, k)| Scene::side_of(&scene.objects[k]) == 1)
+                .map(|(_, k)| k)
+                .collect();
+            list.iter()
+                .all(|&k| scene.objects[k].id == o.id)
+                .then_some((o.id, cell, list.len() as i32))
+        })
+    };
+    let stare = |scene: &mut Scene, cell, caches: &mut Caches| {
+        let mut g = scene.gorgons[&gorgon].clone();
+        (g.cell, g.loops) = (cell, 0);
+        scene.gorgon_stare(&g, &data, caches);
+    };
+    let state = |scene: &Scene, id| {
+        let c = scene.objects[scene.object_index(id).unwrap()]
+            .combat
+            .clone()
+            .unwrap();
+        (c.hull, c.lime, c.lime_total)
+    };
+    // Each cell of its footprint is listed: a message each.
+    let (b, cell, n) = alone(&scene, false).expect("a building alone");
+    let k = scene.object_index(b).unwrap();
+    let blow = if n < 5 { 88_000 / n } else { 22_000 };
+    let near = |a: (f32, f32, f32), b: (f32, f32, f32)| {
+        assert!(
+            (a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1e-3 && (a.2 - b.2).abs() < 1e-3,
+            "{a:?} {b:?}"
+        );
+    };
+    // The blow whole, over 15 in ours; limed 150 ticks a message.
+    stare(&mut scene, cell, &mut caches);
+    let ticks = |t: i32| crate::clock::ticks(t as u32);
+    let hurt = n as f32 * (blow as f32 / 15.0);
+    let limed = n as f32 * ticks(150);
+    near(state(&scene, b), (1e6 - hurt, limed, limed));
+    // Again: added up.
+    stare(&mut scene, cell, &mut caches);
+    near(
+        state(&scene, b),
+        (1e6 - 2.0 * hurt, 2.0 * limed, 2.0 * limed),
+    );
+    // Under a magic shield (`+0x15c`) a fifth of each.
+    let c = scene.objects[k].combat.as_mut().unwrap();
+    (c.hull, c.lime, c.lime_total, c.protect_magic) = (1e6, 0.0, 0.0, 100.0);
+    stare(&mut scene, cell, &mut caches);
+    let fifth = n as f32 * ((blow * 20 / 100) as f32 / 15.0);
+    near(
+        state(&scene, b),
+        (1e6 - fifth, n as f32 * ticks(30), n as f32 * ticks(30)),
+    );
+    // Asleep (`+0xa4` 0x10): nothing.
+    let c = scene.objects[k].combat.as_mut().unwrap();
+    (c.hull, c.lime, c.lime_total, c.protect_magic) = (1e6, 0.0, 0.0, 0.0);
+    scene.objects[k].asleep = Some(Default::default());
+    stare(&mut scene, cell, &mut caches);
+    assert_eq!(state(&scene, b), (1e6, 0.0, 0.0));
+    scene.objects[k].asleep = None;
+    // Felled at its life: put down to no one, gone.
+    scene.objects[k].combat.as_mut().unwrap().hull = blow as f32 / 15.0;
+    stare(&mut scene, cell, &mut caches);
+    assert!(scene.object_index(b).is_none_or(|k| {
+        scene.objects[k]
+            .combat
+            .as_ref()
+            .is_none_or(|c| c.hull <= 0.0)
+    }));
+    // The song: nothing.
+    if let Some((f, _, _)) = alone(&scene, false) {
+        let before = state(&scene, f);
+        scene.song_heard(f, 750, 88, cell);
+        assert!(!scene.charmed.contains_key(&f));
+        assert_eq!(state(&scene, f), before);
+    }
+    // A fort: limed, and the blow as a shot's 0x138e of kind 4.
+    // A fort (miss002's, woken): limed, and the blow as a shot's 0x138e
+    // of kind 4, through its units.
+    let mut g = scene.gorgons[&gorgon].clone();
+    let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+    scene.objects.retain(|o| o.ship.is_none());
+    let k = scene
+        .objects
+        .iter()
+        .position(|o| {
+            matches!(o.class, ObjectClass::Building(0x34..=0x36))
+                && o.is_armed()
+                && Scene::side_of(o) == 1
+        })
+        .expect("a fort");
+    let (f, cell) = (scene.objects[k].id, scene.objects[k].cell.unwrap());
+    scene.objects[k].asleep = None;
+    let c = scene.objects[k].combat.as_mut().unwrap();
+    (c.max_hull, c.hull) = (1e6, 1e6);
+    let list = scene.cell_occupants((cell.0 - 1, cell.1 - 1), (cell.0 + 2, cell.1 + 2));
+    let others: Vec<u32> = list
+        .iter()
+        .map(|&(_, i)| scene.objects[i].id)
+        .filter(|&id| id != f)
+        .collect();
+    scene.objects.retain(|o| !others.contains(&o.id));
+    let k = scene.object_index(f).unwrap();
+    let n = scene
+        .cell_occupants((cell.0 - 1, cell.1 - 1), (cell.0 + 2, cell.1 + 2))
+        .len() as i32;
+    let blow = if n < 5 { 88_000 / n } else { 22_000 };
+    let (before, rng) = (scene.objects[k].combat.clone(), scene.rng.clone());
+    (g.cell, g.loops) = (cell, 0);
+    scene.gorgon_stare(&g, &data, &mut caches);
+    let got = scene.objects[k].combat.clone().unwrap();
+    assert!((got.lime - n as f32 * ticks(150)).abs() < 1e-3);
+    (scene.objects[k].combat, scene.rng) = (before, rng);
+    for _ in 0..n {
+        let d = blow as f32 / 15.0;
+        scene.fort_blow(f, d, 0.0, 4, false, None, None, &data, &mut caches);
+    }
+    let e = scene.objects[k].combat.clone().unwrap();
+    assert!(e.hull < 1e6);
+    assert_eq!((got.hull, got.conditions), (e.hull, e.conditions));
+}
+
 /// Lightning on the Gorgon (0x402ab8) and a siren (0x404505): resting under
 /// water (no picture) they are left whole; up, struck one cell off they
 /// are killed, put down to the caster once when she goes, at the end of

@@ -260,8 +260,15 @@ impl Scene {
     /// the 15 x 15 about her (columns then rows, 50 at most), of any side:
     /// each gets message 0x15ca7 with 750 ticks, a share of 88 / their
     /// number (22 from five), her cell and her id (not kept). A ship takes it as
-    /// `Scene::song_heard` (0x4a7390). (Not decoded: the buildings'
-    /// handlers of 0x15ca7: a building counts but takes nothing here.)
+    /// `Scene::song_heard` (0x4a7390). Nothing else reads 0x15ca7: the
+    /// fort 0x419f80, the barbarians 0x40ef70, the dock 0x416f90, the
+    /// yards 0x4e8660, the port 0x4e7640, the hero's house 0x421150, the
+    /// castles 0x410ca0, the nests 0x41d4a0, the lairs 0x414f00, the
+    /// schools, smithies, studios and temples through 0x427f50, towns
+    /// 0x441ba0 and LandObj 0x425990 have no case for it, the land
+    /// creatures' jam 0x415ee0 hands only 0xda93, 0xda96 and 0x187a2 to
+    /// its members (the rest to 0x50c9e0, none): such an occupant counts
+    /// in the share and takes nothing.
     fn siren_song(&mut self, s: &Siren) {
         let (x, y) = s.cell;
         // Sound event 128 (`sir1`), mode 6 at her cell.
