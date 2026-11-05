@@ -170,9 +170,9 @@ const VOLCANIC_ARC: [f32; 33] = [
 /// and its arc's rise (0x5baf28, in thousandths).
 fn volcanic(letter: u8) -> (f32, f32, f32) {
     match letter {
-        16 => (1220.0, 600.0 / 1220.0, 0.55),
-        17 => (1420.0, 1120.0 / 1420.0, 0.45),
-        18 => (1550.0, 1180.0 / 1550.0, 0.35),
+        16 => (combat::hull_damage_at(16, 0), combat::crew_scale(16), 0.55),
+        17 => (combat::hull_damage_at(17, 0), combat::crew_scale(17), 0.45),
+        18 => (combat::hull_damage_at(18, 0), combat::crew_scale(18), 0.35),
         6 => (combat::hull_damage_at(6, 0), combat::crew_scale(6), 0.36),
         _ => (combat::hull_damage_at(5, 0), combat::crew_scale(5), 0.54),
     }

@@ -581,7 +581,17 @@ Combat tables:
   levels each, one row per item from 0: A is damage against hulls (5, 7,
   3, 40, 60, 80, 200, 250, 220 at level 0), B against crews; for the marine
   rows C (35, 68, 100) is used here as boarding strength (an
-  interpretation). Rows 9-18 belong to the special ships and upgrades.
+  interpretation). Rows 9-18 belong to the special ships and upgrades:
+  row 9 (Greek fire's item) is all zero, rows 10 and 11 (quick lime's and
+  the barrel of powder's items) are both A 200/240/280, B 80/96/112; the
+  Greek fire and quick lime shots use rows 12 (A 650/720/790, B
+  300/320/340) and 13 (no A, B 200/240/280); rows 14 and 15 A 80/40, B
+  40/80; rows 16-18 the volcano's shots (A 1220/1420/1550, B
+  600/1120/1180 at level 0). The port's `combat::DAMAGE` is the table as
+  dumped (test `damage_table_is_the_exes`). The fire rammer's blast in a
+  ram (400 to the hull, 150 to the crew, the manual's chart) is not
+  decoded: 0x4c1c60 and 0x4c1ad0 have no such term, and nothing yet shows
+  row 11 read for it.
   0x4ac1b0 and 0x4ac1e0 scale values by them; 0x4ac140 caches A x 15.
 - The warship menu (0x4e6980) opens the behaviour page (page 5) with
   0x6c `CBUT_BEHMAIN`: slot 0 guard 0x6f, 1 ram attack 0x79, 2 board attack

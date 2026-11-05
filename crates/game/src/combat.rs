@@ -439,7 +439,7 @@ pub fn item_cost(item: u8) -> (u32, u32) {
 
 /// Boarding strength of each marine kind (0x597d2c rows 0-2, third value
 /// at level 0).
-const CREW_MELEE: [u32; 3] = [35, 68, 100];
+const CREW_MELEE: [u32; 3] = [DAMAGE[0][6], DAMAGE[1][6], DAMAGE[2][6]];
 
 /// The people on a ship: its crew class (record field 14 minus 3; ramming
 /// uses it for crew quality) and squads of marines by kind.
@@ -949,65 +949,59 @@ pub fn weapons_from_record(fields: &[u32], kind: u8) -> Vec<u8> {
     }
 }
 
-pub fn hull_damage(weapon: u8) -> f32 {
-    hull_damage_at(weapon, 0)
-}
-
 /// The unique ships' weapons: Greek fire (the fire ship's ballista), the
 /// quick lime ship's catapult, and the fire rammer's barrel of powder.
 pub const GREEK_FIRE: u8 = 9;
 pub const QUICKLIME: u8 = 10;
 pub const POWDER: u8 = 11;
 
-/// Hull damage of an item at weapons level 0-2 (0x597d2c, A values; the
-/// unique ships' weapons from the manual's chart, which gives no upgraded
-/// values for them).
+/// 0x597d2c: per row three values (A against hulls, B against crews, C
+/// the marines' boarding strength), each at weapons levels 0-2. Rows 0-8
+/// are the items; row 9 (Greek fire's item) is empty, rows 10 and 11
+/// (quick lime's and the barrel of powder's items) alike; the shots of
+/// Greek fire and quick lime use rows 12 and 13 (0x4ac140, 0x4bc360);
+/// rows 16-18 are the volcano's shots.
+pub const DAMAGE: [[u32; 9]; 19] = [
+    [5, 7, 10, 45, 56, 68, 35, 44, 52],
+    [7, 9, 12, 25, 31, 38, 68, 85, 102],
+    [3, 5, 7, 5, 8, 11, 100, 125, 150],
+    [40, 48, 56, 80, 96, 112, 0, 0, 0],
+    [60, 72, 84, 60, 72, 84, 0, 0, 0],
+    [80, 96, 112, 40, 48, 56, 0, 0, 0],
+    [200, 240, 280, 80, 96, 112, 0, 0, 0],
+    [250, 300, 350, 100, 120, 140, 0, 0, 0],
+    [220, 264, 330, 80, 96, 112, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [200, 240, 280, 80, 96, 112, 0, 0, 0],
+    [200, 240, 280, 80, 96, 112, 0, 0, 0],
+    [650, 720, 790, 300, 320, 340, 0, 0, 0],
+    [0, 0, 0, 200, 240, 280, 0, 0, 0],
+    [80, 96, 112, 40, 48, 56, 0, 0, 0],
+    [40, 48, 56, 80, 96, 112, 0, 0, 0],
+    [1220, 1264, 1330, 600, 720, 840, 0, 0, 0],
+    [1420, 1464, 1530, 1120, 1144, 1168, 0, 0, 0],
+    [1550, 1600, 1650, 1180, 1216, 1252, 0, 0, 0],
+];
+
+/// Hull damage of row `weapon` of 0x597d2c at weapons level 0-2 (its A).
 pub fn hull_damage_at(weapon: u8, level: u8) -> f32 {
-    const A: [[u32; 3]; 12] = [
-        [5, 7, 10],
-        [7, 9, 12],
-        [3, 5, 7],
-        [40, 48, 56],
-        [60, 72, 84],
-        [80, 96, 112],
-        [200, 240, 280],
-        [250, 300, 350],
-        [220, 264, 330],
-        [350, 350, 350],
-        [0, 0, 0],
-        [400, 400, 400],
-    ];
-    A.get(weapon as usize)
-        .map_or(0, |a| a[level.min(2) as usize]) as f32
+    DAMAGE
+        .get(weapon as usize)
+        .map_or(0, |r| r[level.min(2) as usize]) as f32
 }
 
-/// Damage to crews of an item at weapons level 0-2 (0x597d2c, B values;
-/// quick lime its row 13; Greek fire and powder from the manual).
+/// Damage to crews of row `weapon` of 0x597d2c at weapons level 0-2 (its
+/// B).
 pub fn crew_damage_at(weapon: u8, level: u8) -> f32 {
-    const B: [[u32; 3]; 12] = [
-        [45, 56, 68],
-        [25, 31, 38],
-        [5, 8, 11],
-        [80, 96, 112],
-        [60, 72, 84],
-        [40, 48, 56],
-        [80, 96, 112],
-        [100, 120, 140],
-        [80, 96, 112],
-        [100, 100, 100],
-        [200, 240, 280],
-        [150, 150, 150],
-    ];
-    B.get(weapon as usize)
-        .map_or(0, |b| b[level.min(2) as usize]) as f32
+    DAMAGE
+        .get(weapon as usize)
+        .map_or(0, |r| r[3 + level.min(2) as usize]) as f32
 }
 
 /// Whether item `weapon` is fired (the barrel of powder is not: it goes off
-/// when its ship rams).
+/// when its ship rams). Greek fire's row 9 is empty: its shot has row 12.
 pub fn fires(weapon: u8) -> bool {
-    weapon != POWDER
-        && (hull_damage(weapon) > 0.0 || crew_damage_at(weapon, 0) > 0.0)
-        && weapon != 2
+    weapon <= QUICKLIME && weapon != 2
 }
 
 /// The unique weapon built into a ship type, if any.
@@ -1153,7 +1147,7 @@ pub fn hull_percent(item: u8) -> u32 {
 /// only: the cache of row 13's B, by the shooter's hull over its full
 /// hull, in place of the units' condition; here a fifteenth).
 pub fn lime_power(level: u8) -> f32 {
-    crew_damage_at(QUICKLIME, level)
+    crew_damage_at(13, level)
 }
 
 /// How long a quick lime hit limes a ship (0x4c4120: 120 ticks, 24 under
@@ -1167,7 +1161,7 @@ pub const LIME_BUILDING_TICKS: [u32; 2] = [200, 40];
 /// 300), quick lime row 13 (no A: its blow is the crew's as is).
 pub fn crew_scale(item: u8) -> f32 {
     match item {
-        GREEK_FIRE => 300.0 / 650.0,
+        GREEK_FIRE => crew_damage_at(12, 0) / hull_damage_at(12, 0),
         QUICKLIME => 1.0,
         _ => {
             let a = hull_damage_at(item, 0);
@@ -1800,6 +1794,31 @@ impl Rng {
 
 #[cfg(test)]
 mod tests {
+
+    /// 0x597d2c as the exe has it, with the info panel's copy of rows 0-11.
+    #[test]
+    fn damage_table_is_the_exes() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let path = crate::assets::find_ci(std::path::Path::new(&root), "ancient.exe")
+            .unwrap()
+            .unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        let at = 0x597d2c - 0x40_0000;
+        for (r, row) in DAMAGE.iter().enumerate() {
+            for (c, &v) in row.iter().enumerate() {
+                let o = at + (r * 9 + c) * 4;
+                assert_eq!(u32::from_le_bytes(bytes[o..o + 4].try_into().unwrap()), v);
+            }
+        }
+        for (r, p) in crate::info_panel::POWER.iter().enumerate() {
+            assert_eq!(p.concat(), DAMAGE[r]);
+        }
+        assert_eq!(hull_damage_at(GREEK_FIRE, 1), 0.0);
+        assert_eq!(crew_damage_at(POWDER, 2), 112.0);
+        assert_eq!(CREW_MELEE, [35, 68, 100]);
+    }
 
     #[test]
     fn hit_chances() {

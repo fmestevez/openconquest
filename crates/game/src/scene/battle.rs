@@ -1589,16 +1589,15 @@ impl Scene {
         self.objects[i].ship.as_mut().unwrap().task = None;
         // A fire rammer's barrel of powder goes off in the ram. (Not
         // decoded: 0x4c1c60 and 0x4c1ad0 have no such term; where the
-        // barrel goes off is still to be read.)
+        // barrel goes off is still to be read. Its blast, 400 to the hull
+        // and 150 to the crew, is the manual's chart, kept as it was:
+        // 0x597d2c's row 11 is 200 / 80, not known to be read for it.)
         let c = self.objects[i].combat.as_mut().unwrap();
         let barrel = c.weapons.iter().position(|&w| w == combat::POWDER);
         let (blast, burn) = match barrel {
             Some(k) => {
                 c.weapons.remove(k);
-                (
-                    combat::hull_damage(combat::POWDER),
-                    combat::crew_damage_at(combat::POWDER, 0) * 15.0,
-                )
+                (400.0, 150.0 * 15.0)
             }
             None => (0.0, 0.0),
         };

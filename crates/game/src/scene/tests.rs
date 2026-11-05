@@ -3439,7 +3439,7 @@ fn crews_under_fire() {
     scene.ram(m, e, &data, &mut caches);
     let e = scene.object_index(enemy).unwrap();
     let lost = before - scene.objects[e].combat.as_ref().unwrap().hull;
-    assert!(lost >= combat::hull_damage(combat::POWDER), "lost {lost}");
+    assert!(lost >= 400.0, "lost {lost}");
     let m = scene.object_index(mine).unwrap();
     assert!(
         scene.objects[m].combat.as_ref().unwrap().weapons.is_empty(),

@@ -296,8 +296,7 @@ impl Scene {
                 }
                 // 0x597d2c's rows 12 (A) and 13 (no A: B), x 1500 / 100
                 // (0x4ac140).
-                const ROWS: [[u64; 3]; 2] = [[650, 720, 790], [200, 240, 280]];
-                let cache = ROWS[item as usize - 9][level.min(2) as usize] * 1500 / 100;
+                let cache = crate::object_info::cache(item + 3, level) as u64;
                 let hull = o
                     .combat
                     .as_ref()
