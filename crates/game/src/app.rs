@@ -6423,8 +6423,16 @@ impl App {
                 return (P::Attack, false);
             }
         }
+        // An own object answers 5 by its bytes `+0x57`, `+0x54 / +0x55`
+        // (0x5175b0 with nothing selected; a building's 0xc452, 0x425990),
+        // which a fallen building keeps through its ruins: no state test.
+        let kept_own =
+            |o: &crate::objects::MapObject| match (self.scene.human, self.scene.kept_owner(o)) {
+                (Some(h), Some(owner)) => (h.nation, h.slot) == owner,
+                _ => false,
+            };
         match target {
-            Some(o) if own(o) => (P::Own, false),
+            Some(o) if kept_own(o) => (P::Own, false),
             Some(o) if o.combat.is_some() || o.deposit.is_some() => (P::Select, false),
             _ => (P::Standard, false),
         }

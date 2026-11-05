@@ -1513,6 +1513,17 @@ impl Scene {
         Ok(scene)
     }
 
+    /// The owner `obj` holds as `+0x54 / +0x55`: a fallen building keeps
+    /// it through its ruins (0x423d60 clears neither byte; the port's
+    /// ruins keep it in `Construction::owner`), for the readers that test
+    /// the bytes and not the player's list: the radar icon (0x50da60), the
+    /// object info (0x50e7b0) and the pointer (0x5175b0, 0x425990 and the
+    /// settlement's 0xc452).
+    pub fn kept_owner(&self, obj: &MapObject) -> Option<(u32, u32)> {
+        obj.owner
+            .or_else(|| self.ruins.get(&obj.id).and_then(|r| r.owner))
+    }
+
     /// Whether the human player owns `obj`.
     pub fn is_own(&self, obj: &MapObject) -> bool {
         match (self.human, obj.owner) {

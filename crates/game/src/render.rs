@@ -1556,8 +1556,7 @@ pub fn draw_minimap(
             // A fallen building keeps its icon, in its owner's colours,
             // until it is removed (message 3 sends itself 0xd21 at
             // 0x42686a; nothing at the fall).
-            let ruined = scene.ruins.get(&obj.id).and_then(|r| r.owner);
-            let Some((icon, large)) = minimap_icon(obj, obj.owner.or(ruined)) else {
+            let Some((icon, large)) = minimap_icon(obj, scene.kept_owner(obj)) else {
                 continue;
             };
             let atlas = if large { big } else { small };

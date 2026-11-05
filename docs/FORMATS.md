@@ -6829,12 +6829,35 @@ until the removal. The port keeps its ruins ownerless (`Scene::fallen`:
 no combat, no owner), which is what the list's walkers see, and the
 owner with the ruins (`Construction::owner`) for the minimap's icon
 (`render::minimap_icon`); tested: battle01's last building falling is
-a defeat at once, its ruins standing. Not decoded: what the pointer and
-the object info do over a fallen building, which the hit test 0x423460
-still picks in state 2 (the info filler vt+0x18 from 0x516c10, base
-0x50e7b0 reading `+0x57` and the owner; the pointer modes 0x516ea0 and
-clicks 0x5180e0 for it); the port picks the ruins and shows them with no
-owner.
+a defeat at once, its ruins standing.
+
+The pointer over a fallen building. The hit test 0x423460 still picks it
+in state 2, and none of its readers test the state. The info: every
+building class's vt+0x18 (the 18 vtables, dumped) is 0x423990 (town
+0x43c730 calls it; forts 0x417dc0, strongholds 0x40e7f0 add their
+garrison), which after the base 0x50e7b0 (`+0x50`, `+0x57`, `+0x54`)
+shows life `+0xa8`, 1 since the fall (a bar of 1 x 67 / 100 = 0 pixels),
+and the hero and treasure icons as standing. The pointer with nothing
+selected (0x5175b0, `[game+0x3221]` 0) gives mode 5 (`CUR_OWN`) over an
+object whose `+0x57` is 1 and `+0x54 / +0x55` the viewer's, else keeps
+the pointer it had; a selected building answers 0xc452 the same way
+(0x425990: itself 6, an own object 5). A ship's answer (0x4dc630 state
+0, 0x4dd424) tests the bytes too: own, by class (port 0x39 0x4e4680,
+dock 0x3b 0x4e4630, 0x3a / forts 0x4e6700(0x1f), else 5); an enemy
+(0x4efe20 < 0) 0x4e45c0, whose fire bit (0x4e35e0 with 0: any weapon
+position, no target test) gives mode 8, attack; vt+0x2c (0x40dfc0,
+`+0xa4` != 0x10) is true in state 2. A plain click in mode 5 sends 0xc453
+to the navy (0x5180e0; 0x49ab30 selects it, 0x49c2f0, and
+passes 0xc453 to the object), whose 0x425990 draws the selection frame
+only out of states 2 and 0xff. The port: `Scene::kept_owner` (the
+owner kept with the ruins) for the pointer's own test with no own ship
+selected (`App::pointer`), the minimap and a fort's levels in the info;
+the info's life 1 for ruins (`object_info::of`); tested on battle01.
+Not ported: a ship's pointer over ruins (attack over an enemy's, the
+port's ban; own port or dock ruins), and what the panel does with a
+selected fallen building (0x4fffe0 on 0xc453, its menu 0x10a0) and
+what the order 0x16 at ruins makes the ships do: not decoded; the port
+selects ruins by any click, as any object.
 
 The fall's rubble is a terrain tile on map layer 5. For each cell i of
 the site (`+0x56`, 1 or 4: x + i % 2, y + i / 2) two draws of the

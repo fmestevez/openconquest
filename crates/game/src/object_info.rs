@@ -124,7 +124,12 @@ pub fn of(scene: &Scene, obj: &MapObject) -> Option<ObjectInfo> {
         | ObjectClass::HarpyNest
         | ObjectClass::CreatureSpawn
         | ObjectClass::HeroHouse => {
-            info.life = Some(life(obj));
+            // Ruins show `+0xa8`, which the fall 0x423d60 sets to 1.
+            info.life = Some(if scene.ruins.contains_key(&obj.id) {
+                1
+            } else {
+                life(obj)
+            });
             info.hero = scene.site_heroes.get(&obj.id).and_then(|h| hero_icon(h));
             info.treasure = scene.held.iter().any(|h| h.0 == obj.id);
             if let ObjectClass::Building(c @ 0x34..=0x36)
@@ -237,7 +242,8 @@ fn ship(scene: &Scene, obj: &MapObject, info: &mut ObjectInfo) {
 /// crews by the running total (0x4ac1b0 is passed the sum so far), and
 /// its room taken (0x59729c: 1, 1, 2 by group) of 4, 7 or 10 (0x5967a8).
 fn garrison(scene: &Scene, obj: &MapObject, class: u32, info: &mut ObjectInfo) {
-    let levels = scene.levels_of(obj.owner);
+    // Of the owner the object holds (`+0x54 / +0x55`, kept by ruins).
+    let levels = scene.levels_of(scene.kept_owner(obj));
     let places = obj.fort_places();
     let (mut hulls, mut crews, mut room) = (0u16, 0u16, 0u32);
     for item in 0..9u8 {

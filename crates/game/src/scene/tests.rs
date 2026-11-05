@@ -7683,6 +7683,35 @@ fn ships_sail_to_reload() {
     panic!("the ship never got alongside");
 }
 
+/// A fallen building keeps its owner's bytes through its ruins (0x423d60
+/// clears neither `+0x54` nor `+0x55`), which the pointer tests for its
+/// own pointer (0x5175b0); the info shows its life `+0xa8`, 1 after the
+/// fall (0x423990) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn ruins_keep_their_owner_for_the_pointer() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+    scene.brain = None;
+    let (target, owner) = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(_)))
+        .map(|o| (o.id, o.owner))
+        .unwrap();
+    scene.hit(target, f32::MAX, None, &data, &mut caches);
+    let t = scene.object_index(target).expect("ruins");
+    let ruins = &scene.objects[t];
+    assert!(scene.fallen(target));
+    assert!(!scene.is_own(ruins), "out of the player's list");
+    assert_eq!(scene.kept_owner(ruins), owner);
+    let info = crate::object_info::of(&scene, ruins).unwrap();
+    assert_eq!(info.life, Some(1));
+}
+
 /// Ships attacking a building stop once it falls to ruins (needs
 /// `OPENCONQUEST_DATA`).
 #[test]
