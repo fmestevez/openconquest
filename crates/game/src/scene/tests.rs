@@ -17279,6 +17279,42 @@ fn a_sinking_and_a_fall_show_only_the_originals_pictures() {
     assert_eq!(scene.sounds, [("razru2", x, y)]);
 }
 
+/// A castle falls silent: its `+0x1a8` is 0x6c (sea) or 0x6d (war)
+/// (0x410ca0 at 0x410d78 / 0x410d3a), events whose `SND_` lists are empty,
+/// played by the fall (0x424492) as any building's (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn a_castle_falls_with_its_own_silent_event() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let a = data.sounds.as_ref().unwrap();
+    for e in [0x6c, 0x6d] {
+        assert!(openconquest_formats::sound::sound_choices(a, e)
+            .unwrap()
+            .is_empty());
+    }
+    assert_eq!(
+        openconquest_formats::sound::sound_choices(a, 4).unwrap(),
+        ["razru2"]
+    );
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss009").unwrap();
+    scene.brain = None;
+    let castle = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Castle(0x43))
+        .unwrap()
+        .id;
+    scene.sounds.clear();
+    scene.strike(castle, 1.0e9, None, false, &data, &mut caches);
+    // Fallen (the port takes it off the map at once).
+    assert!(scene.object_index(castle).is_none());
+    assert!(scene.sounds.is_empty());
+}
+
 /// A dock's town falling (0x2874 {town}) has the dock send its ship 0xcb9
 /// (0x4e7640): the ship lets its contact go and, mid-mending, backs out at
 /// once, its hull as it was (needs `OPENCONQUEST_DATA`).

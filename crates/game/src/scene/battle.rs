@@ -1457,11 +1457,14 @@ impl Scene {
             // Creatures die with their own cry (land creatures 0x413ad0:
             // events 100-102 by class; the harpy 0x41fb02 event 103; the
             // sea's creatures events 105-107), buildings fall with their
-            // `+0x1a8` (event 4, 0x424492).
+            // `+0x1a8` (0x424492): event 4 `razru2` (0x422dec), but the
+            // sea and war castles' 0x6c / 0x6d (0x410ca0 at 0x410d78 /
+            // 0x410d3a), whose `SND_` lists are empty.
             let sound = match self.objects[ti].class {
                 ObjectClass::Monster(0x1f8) => Some("deadga1"),
                 ObjectClass::Monster(0x1f9) => Some("dedr2"),
                 ObjectClass::Monster(_) => Some("deamons"),
+                ObjectClass::Castle(_) => None,
                 _ if is_building => Some("razru2"),
                 _ => None,
             };
@@ -1483,8 +1486,11 @@ impl Scene {
             // frame 0 and delay `+0x7d` 2), a frame each time more than 2
             // ticks have passed (0x4c12b0), gone past the last (message
             // 10). The port counts frame 0 from the sinking, the original
-            // from the hull picture's last step (`+0x81`); the treasure
-            // dropped at the next-to-last frame (0x4e4e30) is not ported.
+            // from the hull picture's last step (`+0x81`). Not ported: at
+            // the next-to-last frame the sunken chest (0x4e4e30, a
+            // `SkarbClassTy` 0x2c1 worth half the hull's sale value) and
+            // the treasures aboard laid then (0x4e4f20; the port lays them
+            // at once, `drop_held`).
             // A hull with no sinking picture shows nothing; a fallen
             // building only its ruins (0x423d60 on 0x138b: no blast).
             if let Some(ship) = self.objects[ti].ship.as_ref() {

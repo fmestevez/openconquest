@@ -819,7 +819,7 @@ game's own, from its error strings.
 | 0x2bc | `TreasClassTy` | treasure (sprite sequence `TREAS<kind>`) | 9, 10 | 4: kind 0-27, 5: holder id or -1 for lying on the map, 7: parameter, 8: amount |
 | 0x2be | `SheepsObjClassTy` | sheep flock | 4, 5 | 7: count |
 | 0x2bf | `TraksClassTy` | the particles' keeper: wakes' droplets and projectiles' trails (`Grig\traks.cpp`; nothing of its own to draw) | | |
-| 0x2c1 | `SkarbClassTy` | | | |
+| 0x2c1 | `SkarbClassTy` | sunken chest dropped by a sinking ship (`SKARB<kind>0`, `SKARB<kind>1`) | | |
 
 Positions are map cell coordinates. For buildings and ships, dword 1 is the
 object kind (1 = player-owned), dword 2 the nation (1 Greek, 3 Persian,
@@ -917,7 +917,53 @@ Mode 1 composites exist for types 0-9 of nation 1, 0-7 and 10-11 of
 3, 1-3 and 5-6 of 4; with none 0x50d080 has no picture and
 nothing shows. The port (`objects::ship_sink_frames`, a frame per 3
 ticks) counts frame 0 from the sinking, not from the hull's last step
-`+0x81`; the treasure at the sinking is not ported. The ghost table 0x5cdd2c (0x800 bytes of bss) is
+`+0x81`; the chest and the treasures' timing below are not ported.
+
+The sunken chest (`SkarbClassTy` 0x2c1, `andrey\ska`). 0x4c12b0 returns
+1 when its step leaves the frame at count - 2; the sinking ship then
+calls 0x4e4e30 and 0x4e4f20. 0x4e4e30 sends the world message 0x16e2
+(0x51ee0f: create a 0x2c1) with a 0x6c-byte record: `+0x10`, `+0x14` the
+ship's cell (`+0x5a3`, `+0x5a7`), `+0x1c` the value 0x4e4ce0 / 2 (the
+hull's sale value in amber, `Scene::sale_value`, halved toward zero),
+`+0x20` the kind by the hull's type `+0x25a` (a switch on 1, 2, 4, 8,
+0x10, 0x20, 0x40, 0x80, ...: jump table 0x4e4ee8 / index bytes 0x4e4ef8;
+for types 0-11: 4 and 8 give 2, all others 0), `+0x18` 0 (new).
+0x4e4f20 lays the treasures aboard (`+0x482` of them, records of 0x18
+bytes at `+0x485`): while any is left and fewer than 0x597afc[type]
+(1, 1, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0) were laid, 0x4b6e80(record i, 0, 0)
+announces it (brains' message 0x5d94 with 0) and 0x4bd500(index 0, with
+1) takes the first out and lays it on the ship's cell (0x520c70); the
+records shift down, so the announced record is the one at i after the
+shifts. The port lays every held treasure at once at the sinking
+(`drop_held`), with a message of its own.
+
+The chest's handler 0x405230: message 2 (creation) takes the cell
+(`+0xb8`, `+0xbc`), value `+0xc0`, kind `+0x74`, its generator `+0x18`
+(new: the world's `+0x2ee5` x its id `+0x4c`); new, 0x48ec60(cell, 1)
+0 removes it at once (message 10, state 4); else it takes the cell's
+object slot (0x5c74fc grid, `+8`), enters state 1 and plays sound
+event 0x58 (88, `wreck1`) mode 6 at the cell (0x4053f8). States
+(0x404e10, `+0xb4`; each a 0x50cbf0 layer at depth 0x4e82 and picture
+0x404af0 `SKARB<kind><0|1>`, placed at `cell x width - (picture width
+- 0x40) / 2`, likewise y, 0x404c90): 1 rising, `SKARB<k>0` backward from
+frame count - 2, one pass; 2 lying, `SKARB<k>1` forward, `r % 16 + 5`
+passes (`r` the generator's LCG 0x41c64e6d / 0x3039, `>> 16 & 0xf`), 0
+if hurried; 3 sinking, `SKARB<k>0` forward, one pass; then the cell's
+slot cleared, message 10 and state 4. Frames step (0x404b50) when the
+world tick (`+0xde`) reaches the last step `+0x7c` plus the delay
+`+0x80` 2 (0 when hurried, `+0x90`). Messages 0xda93-0xda96 (blows,
+spells) hurry it (`+0x90`, `+0x8c` 1); 0x158c0 (not in state 4) answers
+its value, hurries it and starts state 3. A ship's step (0x4a3f40, at
+0x4a47c0) onto a cell whose object slot holds a 0x2c1: if the ship is
+the local seat's, sound event by its `+0x54` (0 0xac, 1 0xad, 3 0xae,
+2 0xaf; mode 5) at its cell; then, the chest not in state 4, 0x4a8de0
+gives the ship's player the chest's `+0xc0` amber and posts 0x158c0.
+Saved with 0x8cf (record 0x6c bytes: kind 0x2c1, `+0x10` cell, `+0x18`
+the generator, ...; reloaded through 0x405130). Not ported: the chest
+(the port has no 0x2c1 object; `ObjectClass::Other(0x2c1)` only names
+it).
+
+The ghost table 0x5cdd2c (0x800 bytes of bss) is
 filled at start (0x519280 at 0x5193e5-0x51942b): 128 rows of 16
 bytes, 0xaa on an even row, 0x55 on an odd one. The drawing
 (0x572391-0x5723a4, 0x5725cc-0x5725df) passes the mask with a row of
@@ -7151,7 +7197,11 @@ A building's fall (0x423d60 on 0x138b) shows no blast: the ruins
 picture (vtable +0x38, frame 0), its fires and smokes out, the rubble
 below and, while the site has cells (`+0x158`), its `+0x1a8` sound
 event through 0x50e570 mode 5 (4 `razru2`, 0x422dec; the castles
-0x410ca0 set 0x6c / 0x6d, whose `SND_` lists are empty). The port drew
+0x410ca0 set 0x6c for the sea castle 0x42 at 0x410d78 and 0x6d for the
+war castle 0x43 at 0x410d3a, whose `SND_` lists are empty; no other
+building class writes `+0x1a8`: the other stores to an object's `+0x1a8`,
+0x456xxx, 0x45b3c0, 0x476c05, 0x499ee2, 0x55d774, are other objects'
+fields). The port plays `razru2` but at a castle (`Scene::strike`). The port drew
 `BOMBG10` there (and at a ship with no sinking picture): gone.
 
 The fall's rubble is a terrain tile on map layer 5. For each cell i of
