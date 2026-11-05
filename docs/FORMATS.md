@@ -1656,8 +1656,36 @@ game tick):
   (0x4b3930(1)) and 0x4ad9f0, state 4.
 - 4: no contact -> 12. A human's (game `+0x1a1d`[nation x 4 + slot] 1 or
   2) 0x4b71f0(1) stays while the contact holds and not released with
-  `+0x6e5` 4; a computer's 0x4bb3a0 only with `+0x6e9` set (no writer
-  found). Else 0x2876 (0x4b3930(0)) to a building and 12.
+  `+0x6e5` 4; a computer's 0x4bb3a0 only with `+0x6e9` set, which is
+  never set: the block `+0x696..+0x712` holding it is zeroed by the
+  constructor 0x4dc3f0 and 0x4b8d10 (state 6's end), saved and loaded
+  as a block (0x4e150b, 0x4e2365), with no other writer (byte, word or
+  dword, direct or through `lea`). So its transfer (0x4e4120 records,
+  0x4bda00 mode 1, 0x4ad9f0 again) never runs and a computer's ship
+  leaves at once. No computer orders a load anyway: event 0x10 kind 3
+  comes only from 0x4e2ba0 case 0x1f sub 2, and command 0x1f only from
+  0x4d9fa0 (sub 1, the gather zone's unloading) and 0x4d74a0 (the
+  navy's 0xaa task, made by 0x49dfb0 from 0x49e230, the interface's
+  0xc458). Else 0x2876 (0x4b3930(0)) to a building and 12.
+- 0x4ad9f0, the unloading (state 11's end at a building, and 0x4add10's
+  end): fish `+0x47f` (`+0x527 - 100 + n x 100`) through 0x4a9530 kind
+  0 and 0x4a8c30, only at a building of family 0x32 not a fort
+  0x34-0x36, experience 10 (0x4b4680); a leviathan `+0x480` through
+  0x4a8fa0 class 0x192 (x 125 x 40 / 100) and 0x4a8c30 2500, 400; amber
+  `+0x481` through 0x4a9530 kind 2 and 0x4a8fa0 class 400 (x 3 x 40 /
+  100), 100. Then the treasures `+0x489 + k x 0x18` from the last
+  (record: kind, -, category `+8`, field 7 `+0xc`, field 8 `+0x10`):
+  category 4, or 0x10 for a computer's (side 3 or 4): kind 6 through
+  0x4a8fa0(field 7, field 8) (400 amber, 0x191 fish, 0x192 a
+  leviathan's; another class credits nothing) and taken off (0x4bd500);
+  others through 0x4bdc10 (0x34-0x36 and 0x40: 0x424b30; 0x39-0x3b:
+  their town `+0x1c8`'s 0x441480; else 0), taken off and announced
+  (0x4a1af0) when taken. Then `+0x5c7` 1-234 is drawn again, 91 + r %
+  10 (the ship's `+0x18`), 0x4beb50 and the viewer's panel
+  (0x4bebe0, 0x4bc880). Categories (0x4bd0c0 -> 0x4b9740, at taking):
+  2 kinds 0-5 and 8; 4 kinds 6, 7, 27; 8 kinds 9, 17-26; 0x10 kinds
+  10-14; 1 kinds 15, 16; player 16's all 4. The map's goods (kind 6)
+  carry field 7 0x191 (miss003, miss007).
 - 12: the walkway up a frame a tick (18 ticks from 17), then 6.
 - 6, once a tick: the line back to the cell's middle (0x4c3320; none
   when already there: count 0, so `+0x6b6 < count - 1` unsigned holds
@@ -1691,11 +1719,18 @@ slot 2, `+0x8d2` from the bomb's `+0xfb`), and for 0x34-0x36 and
 8) keeps `+0x25d` in `+0x69c`, clears it and ands `+0x261` with 0x2000;
 0x4b3930(1 / 0) sends 0x2875 / 0x2876 {building id, ship id}.
 Not ported: vt+0xb0's town test (`+0x1d8 & 0x10`, `+0x1c8`), 0x2874's
-clearing of `+0x1e0`, 0x4ad9f0 (the unloading at a building at state
-11's end) and the computer's 0x4bda00 / 0x4e4120, the porters (`NOSIL_`,
+clearing of `+0x1e0`, the porters (`NOSIL_`,
 code 5 carries between ships, 0x4bc7c0), the hold's `+0x85` and
 reserved-cell release, the hook's landing sound at a building, the
-building flag of the plan (no goal on land) and `+0x594`. A settlement's own
+building flag of the plan (no goal on land) and `+0x594`; of 0x4ad9f0,
+the category kept from the taking (the port derives it from the kind and
+the present owner), the stats 0x4a9530, 0x4a8c30's share 0x4a8f40 and
+0x4beb50; 0x4ad9f0's treasure hand-over at 0x4add10's end (the port
+unloading, `scene/trade.rs`), where `deliver_treasures` (kinds 6, 7, 27
+at any own settlement or town alongside) is still a model; and 0x424b30
+case 6 crediting `field 7 + 400` (so the map's goods, 0x191, would
+credit nothing in the load panel), not checked against the disassembly.
+A settlement's own
 Reload Object (menu slot 1) does the same with one of its forts (0x441ba0
 case 0x1f, checked in 0xc452: one of its own buildings, its list
 `+0x1d0` of `+0x1c8`, of classes 0x34-0x36, while it is idle): there is no

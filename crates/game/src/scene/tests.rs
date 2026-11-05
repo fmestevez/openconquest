@@ -7618,6 +7618,92 @@ fn load_hooks_pulls_furls_and_links() {
     assert_eq!(scene.occupant(yard), None);
 }
 
+/// Linked at a building, a ship unloads (0x4ad9f0): its amber through
+/// 0x4a8fa0 class 400 (x 3 x 40 / 100), its goods by field 7's class
+/// (fish 0x191 one for one) and its category-4 treasures to the yard's
+/// settlement (0x4bdc10 -> 0x441480); a human's lasting gift (category
+/// 0x10) and barrels (2) stay aboard; the priority is drawn again,
+/// 91-100 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn load_link_unloads_at_a_building() {
+    use crate::objects::{LoadStage::Linked, Treasure};
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
+    scene.brain = None;
+    let yard = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .unwrap()
+        .id;
+    let t = scene.object_index(yard).unwrap();
+    let berth = scene.vt_berth(t);
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind < 10))
+        .unwrap()
+        .id;
+    let i = scene.object_index(ship).unwrap();
+    (scene.objects[i].x, scene.objects[i].y) = Scene::cell_middle(berth);
+    let tr = |kind, param, amount| Treasure {
+        kind,
+        param,
+        amount,
+    };
+    {
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.path.clear();
+        s.cargo = 100.0;
+        s.cargo_kind = Some(objects::Resource::Amber);
+        s.treasures = vec![
+            tr(1, 0, 50),
+            tr(6, 0x191, 900),
+            tr(11, 0, 0),
+            tr(7, 2 << 16 | 1, 5),
+        ];
+    }
+    scene.order_load(ship, yard).unwrap();
+    let (amber, fish) = (scene.amber, scene.fish);
+    let linked = |scene: &Scene| {
+        scene.objects[i]
+            .ship
+            .as_ref()
+            .unwrap()
+            .load_run
+            .map(|r| r.stage)
+            == Some(Linked)
+    };
+    for _ in 0..400 {
+        if linked(&scene) {
+            break;
+        }
+        // The load order's priority is 0 (0x4aa840), which is not drawn
+        // again; one set on the way is.
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        if s.load_run
+            .is_some_and(|r| r.stage == crate::objects::LoadStage::Plank)
+        {
+            s.priority = 50;
+        }
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    assert!(linked(&scene));
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert_eq!((s.cargo, s.cargo_kind), (0.0, None));
+    let kinds: Vec<u8> = s.treasures.iter().map(|t| t.kind).collect();
+    assert_eq!(kinds, [1, 11]);
+    assert!((91..=100).contains(&s.priority), "{}", s.priority);
+    assert_eq!(scene.amber, amber + 120);
+    assert_eq!(scene.fish, fish + 900);
+    assert!(scene.delivered.contains(&7));
+}
+
 /// A fort's facing with no water beside its anchor is the constructor's
 /// -1 (0x417810 sets `+0x1d8` 0x20, without the flag 8 that would take
 /// the record's field 10 at 0x4280e4): its berth (vt+0xb8, 0x40e050)

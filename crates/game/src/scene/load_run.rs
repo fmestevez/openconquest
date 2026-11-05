@@ -386,9 +386,12 @@ impl Scene {
                             r.released = true;
                         } else {
                             // 0x2875 (0x4b3930(1)): taken up for
-                            // reloading. (Not ported: 0x4ad9f0, the
-                            // unloading at a building.)
+                            // reloading; at a building it unloads
+                            // (0x4ad9f0).
                             self.link(id, r.target);
+                            if r.building {
+                                self.unload_at(k, r.target);
+                            }
                             r.stage = Linked;
                         }
                     }
@@ -399,7 +402,13 @@ impl Scene {
                 let human = owner.is_some_and(|(n, s)| self.is_human_id(n * 4 + s));
                 // A human's 0x4b71f0(1) stays while the contact holds
                 // and it is not released; a computer's 0x4bb3a0 only
-                // with `+0x6e9` set, which nothing found writes.
+                // with `+0x6e9` set, which is never set (zeroed by the
+                // constructor 0x4dc3f0 and 0x4b8d10, saved and loaded
+                // with its block; no other writer), so it leaves at once
+                // (its 0x4e4120 / 0x4bda00 transfer never runs). No
+                // computer orders a load anyway: the only sender of
+                // command 0x1f sub 2 is the navy's 0xaa task (0x4d74a0,
+                // made by 0x49dfb0 from the interface's 0xc458).
                 let stays = r.contact == LoadContact::Taken && !r.released && human;
                 if !stays {
                     // 0x2876 (0x4b3930(0)) to a building still in
@@ -540,5 +549,111 @@ impl Scene {
         s.closing = None;
         s.path.clear();
         self.post_notice(id, 0x13f, r.target);
+    }
+
+    /// Ship `k` unloads at building `target` (0x4ad9f0, at state 11's
+    /// end): fish (`+0x47f`) to its player through 0x4a8c30, one for one,
+    /// but not at a fort (0x34-0x36), crew experience 10; a leviathan
+    /// (`+0x480`) through 0x4a8fa0 class 0x192 (x 125 x 40 / 100) and
+    /// 2500 fish, 400; amber (`+0x481`) through 0x4a8fa0 class 400 (x 3 x
+    /// 40 / 100), 100. Then its treasures from the last of category 4
+    /// (0x4b9740: kinds 6, 7, 27; every kind for player 16, 0x4bd0c0), or
+    /// 0x10 (kinds 10-14) for a computer's (side 3 or 4): goods (kind 6)
+    /// credited through 0x4a8fa0 by field 7's class and taken off; others
+    /// handed to the building by 0x4bdc10 (a fort 0x424b30, a port, yard
+    /// or dock its town 0x441480; elsewhere kept), taken off when taken
+    /// (announced 0x5d94 with 1). An order's priority 1-234 is drawn
+    /// again, 91 + r % 10 of the ship's generator.
+    pub(super) fn unload_at(&mut self, k: usize, target: u32) {
+        let Some(t) = self.object_index(target) else {
+            return;
+        };
+        let ObjectClass::Building(class) = self.objects[t].class else {
+            return;
+        };
+        let Some(owner) = self.objects[k].owner else {
+            return;
+        };
+        let id = self.objects[k].id;
+        let s = self.objects[k].ship.as_ref().unwrap();
+        let amount = s.cargo.floor() as i64;
+        let gain = match s.cargo_kind {
+            Some(Resource::Fish) if !is_fort(class) => {
+                self.earn(owner, 0, amount);
+                10
+            }
+            Some(Resource::Leviathan) => {
+                self.earn(owner, amount * 125 * 40 / 100, 2500);
+                400
+            }
+            Some(Resource::Amber) => {
+                self.earn(owner, amount * 3 * 40 / 100, 0);
+                100
+            }
+            _ => 0,
+        };
+        if gain > 0 {
+            let s = self.objects[k].ship.as_mut().unwrap();
+            s.cargo = 0.0;
+            s.cargo_kind = None;
+            self.gain_experience(k, gain);
+        }
+        let barbarian = owner == (4, 0);
+        let computer = self.side_computer(Some(owner));
+        let count = self.objects[k].ship.as_ref().unwrap().treasures.len();
+        for n in (0..count).rev() {
+            let tr = self.objects[k].ship.as_ref().unwrap().treasures[n];
+            let category = if barbarian {
+                4
+            } else {
+                match tr.kind {
+                    6 | 7 | 27 => 4,
+                    10..=14 => 0x10,
+                    _ => 0,
+                }
+            };
+            if category != 4 && !(category == 0x10 && computer) {
+                continue;
+            }
+            if tr.kind == 6 {
+                // 0x4a8fa0: amber, fish or a leviathan's worth; any other
+                // class is taken off for nothing.
+                let amount = tr.amount as i64;
+                match tr.param {
+                    400 => self.earn(owner, amount * 3 * 40 / 100, 0),
+                    0x191 => self.earn(owner, 0, amount),
+                    0x192 => self.earn(owner, amount * 125 * 40 / 100, 0),
+                    _ => {}
+                }
+                self.objects[k].ship.as_mut().unwrap().remove_treasure(n);
+                continue;
+            }
+            let fort = is_fort(class);
+            let to = if fort {
+                Some(target)
+            } else if is_port_like(class) {
+                self.home_settlement(t)
+            } else {
+                None
+            };
+            let Some(to) = to else { continue };
+            let cargo = super::load::Cargo::Treasure {
+                index: n as u8,
+                kind: tr.kind,
+            };
+            if self.can_take(to, id, cargo).is_err() {
+                continue;
+            }
+            let tr = self.objects[k].ship.as_mut().unwrap().remove_treasure(n);
+            if fort {
+                self.store_at(to, tr);
+            } else {
+                self.store_treasure(to, tr);
+            }
+        }
+        if (1..0xeb).contains(&self.objects[k].ship.as_ref().unwrap().priority) {
+            let roll = 91 + (self.ship_draw(k) % 10) as u8;
+            self.objects[k].ship.as_mut().unwrap().priority = roll;
+        }
     }
 }

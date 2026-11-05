@@ -791,7 +791,7 @@ impl Scene {
 
     /// Whether holder `to` can take `cargo` from `from` (0x4bc8c0 for a
     /// ship, 0x4e7640's cases for a settlement).
-    fn can_take(&self, to: u32, from: u32, cargo: Cargo) -> Result<(), String> {
+    pub(super) fn can_take(&self, to: u32, from: u32, cargo: Cargo) -> Result<(), String> {
         let i = self.object_index(to).ok_or("No such object")?;
         let o = &self.objects[i];
         let full = Err("No room aboard".to_string());
@@ -1141,7 +1141,7 @@ impl Scene {
     /// A building other than a settlement takes treasure `tr` (0x424b30):
     /// barrels of amber or fish and goods are credited, the rest stored
     /// (`can_take` checked the room) and announced (message 0x5d94 with 1).
-    fn store_at(&mut self, site: u32, tr: Treasure) {
+    pub(super) fn store_at(&mut self, site: u32, tr: Treasure) {
         let Some(owner) = self.object_index(site).and_then(|i| self.objects[i].owner) else {
             return;
         };
@@ -1164,7 +1164,7 @@ impl Scene {
     /// of amber or fish and goods are credited, a pack of weapons joins
     /// its stock, the rest is stored and announced to the brains (message
     /// 0x5d94 with 1; here `delivered`).
-    fn store_treasure(&mut self, site: u32, tr: Treasure) {
+    pub(super) fn store_treasure(&mut self, site: u32, tr: Treasure) {
         let Some(owner) = self.object_index(site).and_then(|i| self.objects[i].owner) else {
             return;
         };
