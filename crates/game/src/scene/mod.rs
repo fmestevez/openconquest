@@ -1496,6 +1496,18 @@ impl Scene {
         }
     }
 
+    /// Whether `obj` is a ship with the phantom (`+0x253`).
+    pub fn is_phantom_ship(obj: &MapObject) -> bool {
+        obj.ship.is_some() && obj.combat.as_ref().is_some_and(|c| c.phantom > 0.0)
+    }
+
+    /// Whether `obj` is a ship with the phantom another player owns:
+    /// 0x4df380 hides its layers from the player at this seat (0x50e350)
+    /// and takes its radar icon off (0x50de40).
+    pub fn phantom_hidden(&self, obj: &MapObject) -> bool {
+        Self::is_phantom_ship(obj) && !self.is_own(obj)
+    }
+
     /// The cells whose occupants the pointer at world pixel `(x, y)` tries
     /// (0x49a580 with the main view's cursor `+0xbd` 1): its own cell, then
     /// those about it in the list 0x499ff0 builds for its place by the

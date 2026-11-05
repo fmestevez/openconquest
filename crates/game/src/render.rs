@@ -213,6 +213,21 @@ pub fn draw_objects(
             }
             continue;
         }
+        // A ship with the phantom (`+0x253`): 0x4df420, at the casting
+        // (0x4de3a2), its end (0x4df23c) and the ship's set-up (0x4e2b44),
+        // and 0x4e1bb0 at each layer's loading, pass its layers 0-3 and
+        // 5-8 to 0x4df380, which, for the player at this seat (0x5c7508
+        // `+0x18` the ship's `+0x24f`), draws them through the ghost table
+        // (0x50e460 with 0x5cdd2c), and for every other player hides them
+        // (0x50e350: `+0x8d`, the sprite's flag 0x40000). The flames'
+        // frames are of kind 1, which 0x57b7f0 draws without the mask.
+        let phantom = Scene::is_phantom_ship(obj);
+        if scene.phantom_hidden(obj) {
+            for (l, left, top) in scene.hunt_gear(obj) {
+                draw_image(frame, screen, camera, lut, &l.image, left, top);
+            }
+            continue;
+        }
         // Limed, its pictures and flames are whitened (0x4df510).
         let limed = obj
             .combat
@@ -220,25 +235,27 @@ pub fn draw_objects(
             .is_some_and(|c| c.lime > 0.0)
             .then_some(&scene.lime_remap);
         match limed {
-            Some(remap) => {
+            None if !phantom => draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y),
+            _ => {
+                // Every sprite of a ship's picture has the picture's size
+                // (`+0x61`) and stands at its top left, so the ghost
+                // table's place is the sprite's own pixel.
                 for layer in scene.frame_of(obj, time_ms) {
-                    let img = &layer.image;
-                    let left = (obj.x + layer.dx as f32 - img.width as f32 / 2.0).round() as i32;
-                    let top = (obj.y + layer.dy as f32 - img.height as f32 / 2.0).round() as i32;
-                    draw_image_remapped(
+                    let (left, top) = layer_origin(obj, layer);
+                    draw_image_ghosted(
                         frame,
                         screen,
                         camera,
                         lut,
-                        img,
+                        &layer.image,
                         left,
                         top,
                         false,
-                        Some(remap),
+                        limed,
+                        phantom,
                     );
                 }
             }
-            None => draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y),
         }
         // A leviathan hunt's haul and line, from their top left.
         for (l, left, top) in scene.hunt_gear(obj) {
@@ -611,6 +628,56 @@ fn draw_image_remapped(
     as_shadow: bool,
     remap: Option<&std::collections::HashMap<u32, u32>>,
 ) {
+    draw_image_ghosted(
+        frame, screen, camera, lut, img, left, top, as_shadow, remap, false,
+    );
+}
+
+/// The phantom's ghost table (0x5cdd2c, 0x800 bytes of bss): filled at
+/// start (0x519280 at 0x5193e5-0x51942b) as 128 rows of 16 bytes, 0xaa
+/// on an even row and 0x55 on an odd one. 0x4df380 puts it on a phantom
+/// ship's layers for its owner (0x50e460 -> 0x55e010: the sprite's
+/// `+0xb8`, and the picture's width `+0x61` as the mask's width
+/// `+0xbc`).
+pub const GHOST_TABLE: [u8; 0x800] = {
+    let mut t = [0u8; 0x800];
+    let mut i = 0;
+    while i < 0x800 {
+        t[i] = if (i / 16) % 2 == 0 { 0xaa } else { 0x55 };
+        i += 1;
+    }
+    t
+};
+
+/// Whether pixel `(x, y)` of a picture `width` wide shows through the
+/// ghost table: the drawing (0x572391-0x5723a4, 0x5725cc-0x5725df)
+/// passes the table with a row of `(width + 7) / 8` bytes and the
+/// pixel's place in the picture, and the blitter 0x57b7f0 (0x57b835-
+/// 0x57b84b) tests bit `0x80 >> (x & 7)` of byte `row x y + x / 8`.
+/// A ship's pictures (56 to 80 square) stay within the table.
+pub fn ghost_shows(width: u32, x: u32, y: u32) -> bool {
+    let i = (width as usize).div_ceil(8) * y as usize + x as usize / 8;
+    GHOST_TABLE[i] & (0x80 >> (x & 7)) != 0
+}
+
+/// `draw_image_remapped`, with `ghost` its pixels drawn only where the
+/// ghost table shows them ([`ghost_shows`], the picture's own width):
+/// 0x57b7f0 on a frame of kind 0 (header byte 0xd & 3; 0x57c5df-
+/// 0x57c616) draws a pixel of the shadow colour through the shadow table
+/// whatever the mask, and the rest only on a set bit.
+#[allow(clippy::too_many_arguments)]
+fn draw_image_ghosted(
+    frame: &mut Frame,
+    screen: &Screen,
+    camera: &Camera,
+    lut: &[u32; 256],
+    img: &Image,
+    left: i32,
+    top: i32,
+    as_shadow: bool,
+    remap: Option<&std::collections::HashMap<u32, u32>>,
+    ghost: bool,
+) {
     let scale = camera.scale(screen);
     let (vw, vh) = camera.view_size(screen);
     let w = screen.w.min(frame.width.saturating_sub(screen.x));
@@ -670,6 +737,7 @@ fn draw_image_remapped(
                         *d = lut[FLAME_BLEND[c - 1][under as usize] as usize];
                     }
                 }
+                Some(_) if ghost && !ghost_shows(img.width, ix, iy) => {}
                 Some(px) => {
                     let px = remap.and_then(|m| m.get(&px).copied()).unwrap_or(px);
                     *d = resolve(px, lut)
@@ -1409,10 +1477,13 @@ pub fn draw_minimap(
         // Things that stay put are drawn under the clouds, which hide them
         // until explored; ships and creatures only in sight.
         let moves = |o: &MapObject| o.ship.is_some() || matches!(o.class, ObjectClass::Monster(_));
+        // Another player's ship with the phantom has no icon: 0x4df380
+        // takes it off for layer 0 (0x50de40, message 0xd21) and puts it
+        // back at the end (0x50da60, 0xd20).
         for obj in scene
             .objects
             .iter()
-            .filter(|o| !moves(o) || scene.is_visible(o))
+            .filter(|o| (!moves(o) || scene.is_visible(o)) && !scene.phantom_hidden(o))
         {
             let Some((icon, large)) = minimap_icon(obj) else {
                 continue;
@@ -1574,6 +1645,122 @@ pub fn darken(px: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ghost table as 0x519280 fills it (the loop's code as the exe
+    /// has it: rows 0-0x7f, 0x10 bytes a row, `(-(row & 1) & 0xab) +
+    /// 0xaa` at 0x5cdd2c + row x 16 + byte), and where it shows a
+    /// picture's pixels: a 72-wide picture's rows of 9 bytes run across
+    /// the table's rows of 16.
+    #[test]
+    fn ghost_table_is_the_exes() {
+        if let Some(root) = std::env::var_os("OPENCONQUEST_DATA") {
+            let path = crate::assets::find_ci(std::path::Path::new(&root), "ancient.exe")
+                .unwrap()
+                .unwrap();
+            let exe = std::fs::read(path).unwrap();
+            let code = |va: usize, n: usize| exe[va - 0x40_0000..][..n].to_vec();
+            assert_eq!(code(0x5193ed, 6), [0x81, 0xf9, 0x80, 0, 0, 0]);
+            assert_eq!(code(0x5193fd, 3), [0x83, 0xf8, 0x10]);
+            assert_eq!(
+                code(0x519411, 13),
+                [0xf7, 0xda, 0x1b, 0xd2, 0x83, 0xe2, 0xab, 0x81, 0xc2, 0xaa, 0, 0, 0]
+            );
+            assert_eq!(
+                code(0x519420, 10),
+                [0xc1, 0xe6, 0x04, 0x88, 0x94, 0x06, 0x2c, 0xdd, 0x5c, 0x00]
+            );
+        }
+        for row in 0..0x80u32 {
+            let v = ((row & 1).wrapping_neg() & 0xffff_ffab).wrapping_add(0xaa) as u8;
+            assert!(GHOST_TABLE[row as usize * 16..][..16]
+                .iter()
+                .all(|&b| b == v));
+        }
+        // 64 wide: two picture rows to a table row, even pixels on rows 0
+        // and 1, odd ones on rows 2 and 3.
+        assert!(ghost_shows(64, 0, 0) && !ghost_shows(64, 1, 0));
+        assert!(ghost_shows(64, 62, 1) && !ghost_shows(64, 63, 1));
+        assert!(!ghost_shows(64, 0, 2) && ghost_shows(64, 1, 3));
+        // 72 wide, row 1: bytes 9-17, the table's row 1 from byte 16.
+        assert!(ghost_shows(72, 0, 1) && ghost_shows(72, 54, 1));
+        assert!(!ghost_shows(72, 56, 1) && ghost_shows(72, 57, 1));
+        // The largest ship picture, 80 square, ends at byte 799.
+        assert!(ghost_shows(80, 79, 79) == (GHOST_TABLE[799] & 1 != 0));
+    }
+
+    /// A ship with the phantom on miss000: drawn through the ghost table
+    /// for its owner (its shadow whole, the rest only where the table
+    /// shows), nothing of it for another player, and no radar icon.
+    #[test]
+    fn a_phantom_ship_is_ghosted_for_its_owner_and_hidden_from_others() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = crate::objects::Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        let i = scene
+            .objects
+            .iter()
+            .position(|o| o.ship.is_some() && scene.is_own(o))
+            .expect("a ship of the player's");
+        let ship = scene.objects.swap_remove(i);
+        scene.objects.clear();
+        scene.objects.push(ship);
+        scene.gulls.clear();
+        scene.droplets.clear();
+        let o = &scene.objects[0];
+        let layers: Vec<_> = scene.frame_of(o, 0).to_vec();
+        let (left, top) = layer_origin(o, &layers[0]);
+        let (w, h) = (layers[0].image.width, layers[0].image.height);
+        let screen = Screen::full(w + 20, h + 20);
+        let mut camera = Camera::new(crate::view::ScalePolicy {
+            fixed: Some(1.0),
+            integer: true,
+        });
+        camera.x = (left - 10) as f32;
+        camera.y = (top - 10) as f32;
+        let lut = palette_lut(&data, 0);
+        let draw = |scene: &Scene| {
+            const BACK: u32 = 0x0012_3456;
+            let mut px = vec![BACK; ((w + 20) * (h + 20)) as usize];
+            let mut frame = Frame {
+                pixels: &mut px,
+                width: w + 20,
+                height: h + 20,
+            };
+            draw_objects(&mut frame, &screen, scene, &camera, &lut, 0);
+            (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .filter(|&(x, y)| px[((y + 10) * (w + 20) + x + 10) as usize] != BACK)
+                .collect::<Vec<_>>()
+        };
+        let whole = draw(&scene);
+        assert!(!whole.is_empty());
+        scene.objects[0].combat.as_mut().unwrap().phantom = 30.0;
+        let ghost = draw(&scene);
+        assert!(!ghost.is_empty() && ghost.len() < whole.len());
+        let shadow = |x: u32, y: u32| {
+            layers
+                .iter()
+                .any(|l| l.image.pixels[(y * w + x) as usize] == Some(SHADOW))
+        };
+        for &(x, y) in &whole {
+            assert_eq!(
+                ghost.contains(&(x, y)),
+                shadow(x, y) || ghost_shows(w, x, y),
+                "({x}, {y})"
+            );
+        }
+        // Another player's: nothing drawn, and off the radar.
+        let mut other = scene.human.unwrap();
+        other.slot = (other.slot + 1) % 4;
+        scene.human = Some(other);
+        assert!(scene.phantom_hidden(&scene.objects[0]));
+        assert!(draw(&scene).is_empty());
+        scene.objects[0].combat.as_mut().unwrap().phantom = 0.0;
+        assert!(!scene.phantom_hidden(&scene.objects[0]));
+    }
 
     #[test]
     fn radar_fits_the_view_in_cells() {

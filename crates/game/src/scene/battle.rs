@@ -1959,6 +1959,10 @@ impl Scene {
         rec.fields[6] = player;
         let obj = &mut self.objects[i];
         obj.owner = owner;
+        // Its phantom ends (0x4b7016-0x4b7034: 0x4df420(0), `+0x253` 0).
+        if let Some(c) = obj.combat.as_mut() {
+            c.phantom = 0.0;
+        }
         if let Some(ship) = obj.ship.as_mut() {
             ship.crew = combat::Crew {
                 class,

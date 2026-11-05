@@ -890,6 +890,39 @@ and no table, and the blitter 0x57b7f0 draws the colour as
 looks the palette index beneath up as for the flames' blend (the first
 index of the frame's colour, else the nearest).
 
+A ship with the phantom (`+0x253`) is ghosted for its owner and hidden
+from the other players. 0x4df420(on) runs at the casting (0x4de378:
+`+0x253` 1, `+0x81` now, `+0x85` the length), at its end (0x4df210:
+now - `+0x81` >= `+0x85`, then `+0x253` 0), at a capture (0x4b6f20 at
+0x4b7016-0x4b7034: off, `+0x253` 0) and at the ship's set-up (0x4e2b44,
+with `+0x253`); unless the ship's `+0x251` is 4 it passes layers 0-3
+and 5-8 (not 4, the selection frame `RAM_0<w>X0<h>`) with their
+picture's width `+0x61` to 0x4df380, and 0x4e1bb0 does the same for a
+layer it loads anew. 0x4df380(on, layer, width): for the player at this
+seat (0x5c7508 `+0x18` the ship's `+0x24f`) 0x50e460(layer, on ?
+0x5cdd2c : 0, width) (0x55e010: the sprite's mask `+0xb8` and mask
+width `+0xbc`); for any other 0x50e350(layer, on) (`+0x8d`, the
+sprite's flag 0x40000: hidden) and, for layer 0, the radar icon off
+(0x50de40, message 0xd21) or back (0x50da60, 0xd20). Loading layer 0
+in the sinking mode (0x4e1bb0(0), `+0x74` 5) unghosts or shows it and
+clears `+0x253`. The ghost table 0x5cdd2c (0x800 bytes of bss) is
+filled at start (0x519280 at 0x5193e5-0x51942b): 128 rows of 16
+bytes, 0xaa on an even row, 0x55 on an odd one. The drawing
+(0x572391-0x5723a4, 0x5725cc-0x5725df) passes the mask with a row of
+`(width + 7) / 8` bytes and the pixel's place in the picture, and the
+blitter (0x57b7f0 at 0x57b835-0x57b84b) tests bit `0x80 >> (x & 7)`
+of byte `row x y + x / 8`; on a frame of kind 0 (header byte 0xd & 3)
+a pixel of the shadow colour goes through the shadow table whatever
+the mask (0x57c5df-0x57c616), the rest only on a set bit. Frames of
+kind 1 (the flames, `FIRE0-2`) are drawn without the mask; kind 2's
+copied runs advance the source only on a set bit (0x57be13-0x57be2a).
+Every ship sprite is of kind 0 and its picture's size (56 to 80
+square, so the mask stays within the table), so a ship's owner sees
+its hull through rows of alternating pixels (a 64-wide picture's two
+rows to a table row) and its flames whole (`render::GHOST_TABLE`,
+`ghost_shows`). Not decoded: a phantom building's ghosting (0x426105-
+0x42668d, width 0x80).
+
 ## Control bar tabs and panels
 
 The bar ends in five 42-pixel tabs at y 558 (0x511c00, ids 1000-1004,
@@ -1451,8 +1484,9 @@ what is beneath through 0x5c1858 as a building's fire does, the rest
 is written only at the lighting; the load 0x5461d0 leaves the frame
 `+0x45` alone). With the phantom (`+0x253`) 0x4df380 then ghosts the
 layer for its owner (0x50e460 with 0x5cdd2c) or hides it from others
-(0x50e350); not ported for the flames, as for the hull (the port draws
-no phantom ship ghosted or hidden). 0x4e4fb0 ends, lit anew or not, with
+(0x50e350); the flames' frames are of kind 1, which the blitter draws
+without the ghost's mask, so the owner sees them whole (see the
+phantom's paragraph below). 0x4e4fb0 ends, lit anew or not, with
 0x50e570(mode 1, the ship's cell `+0x5a3` / `+0x5a7`, event 5)
 (0x4e5107-0x4e510f): `SND_5` lists `firee1` alone, played at the ship.
 
