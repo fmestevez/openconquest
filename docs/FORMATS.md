@@ -6371,7 +6371,13 @@ resource `<prefix>MSK_<nation>1<level>` (`%sMSK_%1u%1u%1u`, prefix
 `+0xb8`, nation `+0x54`, the picture's damage level 3-1 pushed at
 0x422f4d; reloaded when a blow changes the level), loaded by 0x422e30 in
 state 1 through 0x542ee0 /
-0x542d60(0x12)); and none of the four fire slots `+0x80..+0x8c` is
+0x542d60(0x12); the forts' prefixes `FORTS`, `FORT`, `FORTB` set by
+0x419f80 at 0x41a141, 0x41a113, 0x41a0e6; a town's by its own LoadImages
+0x43bd60 (vt+0x38), `TMSK_%1u%2u%1u%1u` at 0x43be6c: nation `+0x54`,
+class `+0x50`, 1, the same level, so `TMSK_15011`; ports, docks and the
+barbarian 0x40 by 0x4e7f90, `%sMSK_%1u%2u%1u%1u%1u` with the facing
+`+0x1dc`; castles by 0x4101d0, `%sMSK_%1u%1u` at 0x4102d9: prefix, 1,
+level, so `CSTLWARMSK_13`); and none of the four fire slots `+0x80..+0x8c` is
 taken (the loop at 0x424153 gives up at the first slot in use, so a
 fire is lit only where none burns, and always in slot 3, the last
 index it passed). Then one draw of the building's generator (`+0x18`):
@@ -6443,10 +6449,29 @@ table 0x5c1858 is `render::FLAME_BLEND` and the groups 0x5c2480
 `burning::GROUPS`, both dumped from the exe and tested against it. The
 blend needs the palette index beneath, which the port's frame (colours,
 not indices) does not hold: it takes the first index of that colour, or
-the nearest for one no index has (a darkened shadow). Not decoded: the
-classes with no mask resource (only `ST`, `SM`, `SL`, `TS`, `TW` of
-nations 1 and 3 have `MSK_<n>11`) would read a null mask in 0x557640,
-the port lights none on them; whether a killing blow's state is still 1
+the nearest for one no index has (a darkened shadow). Forts and towns
+burn the same: a fort's drain 0x4184f0 reads 0x138e and leaves it in
+the queue for 0x4e7550 -> 0x427bb0 -> 0x423d60, a town's 0x43b290 takes
+only 0x138a-0x138c and leaves the rest to 0x423d60; their generators are
+the kept ones (above). Not ported: castles and lairs, whose drains reach
+0x423d60 too, because their generators' other draws are not the port's:
+a castle's is seeded by 0x427f50 at message 2 (0x410ca0 runs it for
+every message but 0xda96 on the sea castle), then 0x410ca0 draws the
+first cast's time (record field 4 below 2: `(1250 - 125 x field 22) x
+(r % 21 + 80) / 100`) and the sound's (`(r % 41 + 60) x 375 / 100`), and
+its tick 0x410790 draws the sound's again when due, and at frame 7 of
+its cast picture (state 4, entered from 1 by vt+0x38) the weighted
+cell's draw and the next cast's time; state 4 itself bars the fire (the
+test wants 1). The port's wizards (`run_wizards`) draw from the scene's
+generator, with no cast picture. A lair's is seeded `[game +0x2ee5] x
+id` at message 2 (0x414f00; a save's from its record), drawn every tick
+at message 0 for the next creature's time, and once more to pick the
+creature's cell among the free ones (0x414f00 after the scan); the
+port's `run_lairs` draws the scene's generator, with its own cells.
+Both are drawn also by the aim at them (0x423520, above). Not decoded:
+whether ports' and docks' drains reach 0x4240e0 (the port lights none on
+them); the classes with no mask resource would read a null mask in
+0x557640, the port lights none on them; whether a killing blow's state is still 1
 at the fire test (the port lights none on a building its blow brought
 down); which of fire (depth - 3) and smoke (- 2) draws over the other
 (the port draws the fire over); the fog's hiding of the frames at their
