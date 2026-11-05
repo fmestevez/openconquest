@@ -613,10 +613,10 @@ impl Scene {
         }
     }
 
-    /// The line's and haul's pictures to draw over ship `obj`'s hull, the
-    /// haul (depth 0x3de) under the line (0x3e6), both over the hull
-    /// (0xa): an object's slots are kept by depth, lowest first (0x55d9d0),
-    /// as the hooks' lines below the hull are (its depth less 0x46).
+    /// The line's and haul's pictures to draw over ship `obj`'s hull, in
+    /// the order drawn: the line (depth 0x3e6) under the haul (0x3de), both
+    /// over the hull (0xa): a smaller depth draws over a greater (0x55d9d0,
+    /// 0x564970), as the walkways over the hull (its depth less 0x46).
     pub fn hunt_gear(&self, obj: &crate::objects::MapObject) -> Vec<(&objects::Layer, i32, i32)> {
         let Some(h) = obj.ship.as_ref().and_then(|s| s.hunt) else {
             return Vec::new();
@@ -627,7 +627,7 @@ impl Scene {
                 .and_then(|f| art.get(f))
                 .and_then(|l| l.first())
         }
-        [pick(haul, h.haul), pick(line, h.line)]
+        [pick(line, h.line), pick(haul, h.haul)]
             .into_iter()
             .flatten()
             .map(|l| (l, h.gear.0, h.gear.1))

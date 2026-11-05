@@ -776,8 +776,9 @@ impl Scene {
         Some((o.x - half + ox as f32, o.y - half + oy as f32))
     }
 
-    /// The boarders' walkways to draw: frame and the point drawn about.
-    pub fn planks_shown(&self) -> Vec<(&[objects::Layer], f32, f32)> {
+    /// The boarders' walkways to draw: the ship, frame and the point drawn
+    /// about.
+    pub fn planks_shown(&self) -> Vec<(u32, &[objects::Layer], f32, f32)> {
         let mut out = Vec::new();
         for (k, o) in self.objects.iter().enumerate() {
             let Some(g) = o.ship.as_ref().and_then(|s| s.grapple) else {
@@ -801,7 +802,7 @@ impl Scene {
                 continue;
             };
             let (w, h) = (l.image.width as f32, l.image.height as f32);
-            out.push((frame.as_slice(), tl.0 + w / 2.0, tl.1 + h / 2.0));
+            out.push((o.id, frame.as_slice(), tl.0 + w / 2.0, tl.1 + h / 2.0));
         }
         out
     }

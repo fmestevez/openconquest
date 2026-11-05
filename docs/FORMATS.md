@@ -6435,9 +6435,8 @@ creature's own 0xfe is not marked on that layer). The port loads the
 shadow so (`Caches::shaded_frames`), and `render::layer_origin` takes a
 half pixel up (floor of v + 0.5) so a dragon's odd width stands alike
 left of the map's edge. Both layers' depth `max(0x26d0 - y, 1000)`
-is not ported: the port draws the flyers over everything, the shadow
-under the creature (see **The sprites' draw order** below: of two layers
-at one depth, the one set to it last from a greater depth draws under). A save restored makes the flyers' pictures and masks again
+is the object's in the port's draw list (see **The sprites' draw order**
+below), both layers drawn together, the shadow under the creature. A save restored makes the flyers' pictures and masks again
 (`Scene::flyers_restored`; neither is saved). Not decoded: the targets' vt+0x2c and vt+0xa4
 (the port takes every object as targetable); a dragon's picture place
 before its first draw (states 0 and 1, not drawn), which its aim point
@@ -6460,16 +6459,54 @@ and draws from its end down to its start (0x564730 a picture, flag
 0x4000 its callback `+0xcc`): the deepest first, so a smaller depth
 draws over a greater, and of two at one depth the one later in the
 list (set to it last from a greater depth) under the other. The depths
-seen: flyers `max(0x26d0 - y, 1000)` (0x41e4b0), a siren `0x26c6 -
-0x40 x cell y` (`+0xc0`; at least 1000, 0x4059e0 state 1), sea monsters `20000 - +0x95`
-(at least 10000, 0x491830 / 0x491d50), a treasure `0x26d0 - (+0x5d +
+seen: flyers `max(0x26d0 - y, 1000)` (0x41e4b0), the Slight (0x25d,
+`andrey\sli`) `0x26c6 - 0x40 x cell y` (`+0xc0`; at least 1000, 0x4059e0
+state 1), a siren 0x4e80 kept (0x403650, 0x403a30), sea monsters
+`20000 - +0x95` (the cell row; at least 10000, 0x491830 / 0x491d50), a treasure `0x26d0 - (+0x5d +
 +0x65)` (0x4068e0), a building's shields its picture's less 5 / 4,
 fire less 3 and smoke less 2, a ship's shields its hull's less 0x4a.
-Not ported: the port draws by a sort of its own (surface objects, then
-by the picture's bottom, the flyers over all) in `render::draw_objects`;
-to read before porting: every other class's main picture depth (ships'
-hull, buildings, towns, land creatures, wakes, gulls, the weather and
-the spells' pictures), each at its 0x50cbf0 / 0x50d660 calls.
+Every other depth: a ship's hull `max(20000 - bottom, 10000)` each draw
+(0x4df6e0 via 0x50d1a0; 0x4f4c from a sinking's frame 4), its walkway
+(layer 1, `+0x8c2`) the hull's less 0x46 (0x4e0470) and what crosses it
+(layer 3, `+0x8c6`, set at the walkway's top left: a landing party going
+down, porters; 0x4b71f0) less 0x47 (0x4e04a0), so both over the hull;
+its flames (layer 5) less 0x48 (0x4e04d0), layer 6 less 0x49, its shields
+(7, 8) both less 0x4a (0x4e0f70, 0x4e11a0); a hook's line `max(0x4de0 -
+the lower end's y, 10000)` (0x4df0e0, a projectile's 0x4964c0); a LandObj
+(building, barbarian structure, castle, lair, the hero's house)
+`max(20000 - bottom, 10000)` at its message 2 (0x425990), kept, its banner
+less 1 (0x4247b0); a nest `max(20000 - (top + h / 2), 10000)` (0x41d010);
+land creatures `max(20000 - +0xb8, 10000)` (their feet, 0x411520); a
+landing party `max(20000 - +0xa0a, 10000)` (0x421bb0); sheep `max(20000 -
+bottom, 10000)` (0x4331c0); medusa 0x4e81, skarb 0x4e82, fish 0x4e84,
+amber 0x4e86 and its glint 0x4e85, whirlpools and reefs 0x4ee8, all
+kept; a leviathan showing `max(20000 - bottom, 10000)` (0x493b00); the
+volcano `max(0x4da0 - 0x40 x cell row, 10000)` (0x445e20); a moving
+tornado `max(0x26f0 - y, 1000)` (0x43a380); lightning 0x3ed (0x42d480);
+gulls and their shadows 0x401, each gull made before its shadow
+(0x41c700), so of all 25 the last's shadow draws first; wake droplets
+0x4f4c (0x4a3f40), projectiles' trails `max(10000 - y, 1000)` (0x48f440
+with -2). Bands: 1000-9936 the air (flyers, treasures, a moving tornado,
+the Slight), 1005-1025 lightning and gulls (a gull is under a flyer whose
+place is below y 8912 and a treasure whose bottom is), 10000-20000 the
+ground and sea by their bottoms, 20096-20160 the sea creatures' and
+zones' constants, 20200 reefs, 20300 droplets (deepest). The port
+(`render::sprites`, `draw_objects`) makes one list of every slot in the
+order the original makes them (objects in the scene's order, each with
+its smoke, fire, glint, banner and shields; walkways; parties; lines;
+droplets; gulls), sorts it by depth deepest first, of equals the later
+made first (it keeps no history of depths set again, so equals stay in
+the order made). Not ported: the effects (a sinking hull, explosions,
+spells, the tornado, the volcano's flows, a yard's ship), fireballs and
+shots, drawn over the list (0x4965d0's states; a projectile's `+0x80`
+not decoded); a tornado's first depth (0x43a240); lightning's 0x3f7 at
+`LTSPR`. Not decoded: when 0x4e0470 / 0x4e04a0 run against 0x4df6e0
+(before the first, a walkway's 0x3e6 and a gangway's 0x3de); which
+leviathan states take 0x4e85; what building layer 2 (0xc453) and ship
+layer 4 (`+0x252`) show; the order of a ship's two shields at one depth
+(the port draws the weapon's under the magic's); whether a leviathan
+hunt's haul and line (0x3de / 0x3e6 at creation) are restacked (drawn
+with the hull, the line under the haul).
 
 ## Land creatures
 

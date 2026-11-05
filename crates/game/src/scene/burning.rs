@@ -319,18 +319,18 @@ impl Scene {
     }
 
     /// The fire and smoke on building `id` now: (frame, left, top), the
-    /// smoke first, the fire over it.
-    pub fn building_fire_on(&self, id: u32) -> Vec<(&[objects::Layer], i32, i32)> {
+    /// smoke first, the fire over it, each with whether it is the fire.
+    pub fn building_fire_on(&self, id: u32) -> Vec<(&[objects::Layer], i32, i32, bool)> {
         let Some(f) = self.building_fires.iter().find(|f| f.building == id) else {
             return Vec::new();
         };
-        [f.smoke.as_ref(), f.fire.as_ref()]
+        [(f.smoke.as_ref(), false), (f.fire.as_ref(), true)]
             .into_iter()
-            .flatten()
-            .filter_map(|b| {
+            .filter_map(|(b, fire)| {
+                let b = b?;
                 // A step shows frame `+0x45` and then counts it on.
                 let shown = b.frame.checked_sub(1)?;
-                Some((b.frames.get(shown)?.as_slice(), b.x, b.y))
+                Some((b.frames.get(shown)?.as_slice(), b.x, b.y, fire))
             })
             .collect()
     }

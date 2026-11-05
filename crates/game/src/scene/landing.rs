@@ -773,10 +773,11 @@ impl Scene {
         q
     }
 
-    /// The founding ships' walkways and party pictures to draw (behind
-    /// the hulls: 0x4e0470 and 0x4e04a0 draw them at the hull's order
-    /// less 0x46 and 0x47): frame and the point drawn about.
-    pub fn landings_shown(&self) -> Vec<(&[objects::Layer], f32, f32)> {
+    /// The founding ships' walkways and party pictures to draw (over the
+    /// hulls: 0x4e0470 and 0x4e04a0 set them to the hull's depth less 0x46
+    /// and 0x47): the ship, whether the party (layer 3, crossing the
+    /// walkway), frame and the point drawn about.
+    pub fn landings_shown(&self) -> Vec<(u32, bool, &[objects::Layer], f32, f32)> {
         let mut out = Vec::new();
         for o in self.objects.iter().filter(|o| self.is_visible(o)) {
             let Some(l) = o.ship.as_ref().and_then(|s| s.landing.as_ref()) else {
@@ -785,9 +786,9 @@ impl Scene {
             // The walkway `AMOST_<+0x76d>`, the party `ANOSIL_<+0x76b>`
             // (0x4e1bb0).
             let (walk, party) = (l.walk_dir as usize % 8, l.dir as usize % 8);
-            for (frames, f) in [
-                (&self.landing_art[walk][0], l.plank),
-                (&self.landing_art[party][1], l.porters),
+            for (frames, f, cross) in [
+                (&self.landing_art[walk][0], l.plank, false),
+                (&self.landing_art[party][1], l.porters, true),
             ] {
                 let Some(layers) = f
                     .and_then(|f| usize::try_from(f).ok())
@@ -798,6 +799,8 @@ impl Scene {
                 if let Some(img) = layers.first() {
                     let (w, h) = (img.image.width as f32, img.image.height as f32);
                     out.push((
+                        o.id,
+                        cross,
                         layers.as_slice(),
                         l.plank_at.0 + w / 2.0 - img.dx as f32,
                         l.plank_at.1 + h / 2.0 - img.dy as f32,
@@ -809,8 +812,9 @@ impl Scene {
     }
 
     /// The landing parties to draw: `LNDSPR_<dir>` at its point less half
-    /// the picture's width and its height (0x421d00).
-    pub fn parties_shown(&self) -> Vec<(&[objects::Layer], f32, f32)> {
+    /// the picture's width and its height (0x421d00), and its feet's y
+    /// (`+0xa0a`).
+    pub fn parties_shown(&self) -> Vec<(&[objects::Layer], f32, f32, i32)> {
         let mut out = Vec::new();
         for p in &self.parties {
             if self.seen(tdiv(p.point.0, 64), tdiv(p.point.1, 64)) != sight::Seen::InSight {
@@ -826,6 +830,7 @@ impl Scene {
                     layers.as_slice(),
                     p.point.0 as f32 - img.dx as f32,
                     p.point.1 as f32 - h / 2.0 - img.dy as f32,
+                    p.point.1,
                 ));
             }
         }

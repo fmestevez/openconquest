@@ -358,12 +358,18 @@ impl Scene {
     }
 
     /// Building `id`'s shield sprites now, the magic shield's (depth the
-    /// picture's less 4) then the weapon shield's (less 5, nearer).
-    pub fn building_shields_on(&self, id: u32) -> Vec<(&[objects::Layer], i32, i32)> {
+    /// picture's less 4) then the weapon shield's (less 5, nearer), each
+    /// with whether it is the weapon shield.
+    pub fn building_shields_on(&self, id: u32) -> Vec<(&[objects::Layer], i32, i32, bool)> {
         self.building_shields
             .iter()
             .filter(|s| s.building == id)
-            .flat_map(|s| [s.magic.shown(), s.weapon.shown()])
+            .flat_map(|s| {
+                [
+                    s.magic.shown().map(|(l, x, y)| (l, x, y, false)),
+                    s.weapon.shown().map(|(l, x, y)| (l, x, y, true)),
+                ]
+            })
             .flatten()
             .collect()
     }

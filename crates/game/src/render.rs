@@ -93,126 +93,199 @@ pub fn draw_world(
     }
 }
 
-/// Draws the mission objects over the terrain, back to front.
-///
-/// Sprites are sampled on the same world-pixel grid as the terrain so they
-/// stay aligned with it at any scale.
-pub fn draw_objects(
+/// What a picture slot of the draw list shows (`draw_order`, for tests).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    /// An object's picture (a ship's hull with its hunting gear).
+    Object(u32),
+    /// A burning ship's flames (layer 5).
+    ShipFire(u32),
+    /// A building's smoke and fire.
+    Smoke(u32),
+    Fire(u32),
+    /// An amber deposit's glint (layer 1).
+    Sparkle(u32),
+    /// A building's banner (layer 1).
+    Banner(u32),
+    /// A building's or ship's magic (false) or weapon (true) shield.
+    Shield(u32, bool),
+    /// A sheep of flock `id`.
+    Sheep(u32),
+    /// Ship `id`'s walkway (layer 1, `+0x8c2`) and what crosses it
+    /// (layer 3, `+0x8c6`: a landing party going down, porters).
+    Walkway(u32),
+    Gangway(u32),
+    /// A landing party ashore.
+    Party,
+    /// A hook's line.
+    Rope,
+    /// A wake's droplet or a projectile's trail particle.
+    Droplet,
+    /// Gull `k` and its shadow.
+    Gull(usize),
+    GullShadow(usize),
+}
+
+type Paint<'a> = Box<dyn Fn(&mut Frame, &Screen, &Camera, &[u32; 256]) + 'a>;
+
+/// A picture slot to draw: its depth (smaller draws over greater) and
+/// how it is drawn.
+struct Sprite<'a> {
+    depth: i32,
+    #[cfg_attr(not(test), allow(dead_code))]
+    slot: Slot,
+    paint: Paint<'a>,
+}
+
+/// A ground depth: `max(20000 - bottom, 10000)`, as the original sets
+/// ships' hulls (0x4df6e0), buildings (0x425990), land creatures
+/// (0x411520), landing parties (0x421bb0), sheep (0x4331c0).
+pub fn ground_depth(bottom: i32) -> i32 {
+    (20000 - bottom).max(10000)
+}
+
+/// The bottom of an object's picture (`+0x5d + +0x65`): layer 0's.
+fn picture_bottom(obj: &MapObject, layers: &[Layer]) -> i32 {
+    layers.first().map_or(obj.y as i32, |l| {
+        layer_origin(obj, l).1 + l.image.height as i32
+    })
+}
+
+/// An object's cell row (`+0x90` / `+0x95` / `+0xc0` of the classes below).
+fn cell_row(obj: &MapObject) -> i32 {
+    obj.cell
+        .map_or((obj.y / TILE_SIZE as f32).floor() as i32, |c| c.1)
+}
+
+/// The depth of object `obj`'s picture `layers` (its main slot), by class
+/// (`specs/draw_order_spec.md`; FORMATS.md "The sprites' draw order").
+pub fn object_depth(obj: &MapObject, layers: &[Layer]) -> i32 {
+    let bottom = || picture_bottom(obj, layers);
+    // A treasure: `0x26d0 - bottom`, no floor (0x4068e0).
+    if obj.treasure.is_some() || obj.class == ObjectClass::Treasure {
+        return 0x26d0 - bottom();
+    }
+    match obj.class {
+        // A ship's hull: `max(20000 - bottom, 10000)` each draw (0x4df6e0).
+        // (Not ported: from the sinking's frame 4 on 0x4f4c; the port's
+        // sinking hull is an effect.)
+        ObjectClass::Ship => ground_depth(bottom()),
+        // A LandObj's picture: the same at its message 2 (0x425990), then
+        // kept (the port takes the picture now drawn).
+        ObjectClass::Building(_)
+        | ObjectClass::Barbarian(_)
+        | ObjectClass::Castle(_)
+        | ObjectClass::HeroHouse
+        | ObjectClass::CreatureSpawn => ground_depth(bottom()),
+        // A nest: `max(20000 - (top + height / 2), 10000)` on its picture
+        // (0x41d010).
+        ObjectClass::HarpyNest => layers.first().map_or(10000, |l| {
+            ground_depth(layer_origin(obj, l).1 + l.image.height as i32 / 2)
+        }),
+        // Cyclops, minotaur, amazon: by its feet (`+0xb8`, 0x411520).
+        ObjectClass::Monster(0x1f4..=0x1f6) => ground_depth(obj.y as i32),
+        // Harpies, dragons: `max(0x26d0 - y, 1000)` (0x41e4b0).
+        ObjectClass::Monster(0x1f8 | 0x1f9) => (0x26d0 - obj.y as i32).max(1000),
+        // Medusa 0x4e81 (0x4019d0), kept.
+        ObjectClass::Monster(0x1fa) => 0x4e81,
+        // A sea monster: `max(20000 - cell row +0x95, 10000)` (0x491830,
+        // 0x491d50). (Not ported: 0x4e83 / 0x4ec0 of 0x490160's under-water
+        // states, which the port does not draw.)
+        ObjectClass::Monster(0x1fb) => ground_depth(cell_row(obj)),
+        // A landing party: by its feet (`+0xa0a`, 0x421bb0).
+        ObjectClass::Monster(0x1fc) => ground_depth(obj.y as i32),
+        // A siren 0x4e80 (0x403650), kept.
+        ObjectClass::Monster(0x1fd) => 0x4e80,
+        // Amber 0x4e86 (0x489f70), a fish shoal 0x4e84 (0x48dc40), kept.
+        ObjectClass::Amber => 0x4e86,
+        ObjectClass::FishZone => 0x4e84,
+        // A leviathan showing: `max(20000 - bottom, 10000)` (0x493b00).
+        // (Not decoded: which of its states take 0x4e85 instead.)
+        ObjectClass::WhaleZone => ground_depth(bottom()),
+        // Whirlpools and reefs 0x4ee8 (0x447ee0, 0x4306d0), kept.
+        ObjectClass::Whirlpool | ObjectClass::Reef(_) => 0x4ee8,
+        // Lightning 0x3ed (0x42d480; 0x3f7 at `LTSPR`, 0x42cdf0, not
+        // ported).
+        ObjectClass::Weather(0x25b) => 0x3ed,
+        // A tornado moving: `max(0x26f0 - y, 1000)` (0x43a380). (Not
+        // ported: its first, `max(20000 - y, 10000)`, 0x43a240.)
+        ObjectClass::Weather(0x25c) => (0x26f0 - obj.y as i32).max(1000),
+        // The Slight: `max(0x26c6 - 0x40 x cell row +0xc0, 1000)` (0x4059e0).
+        ObjectClass::Weather(0x25d) => (0x26c6 - 0x40 * cell_row(obj)).max(1000),
+        // The volcano's layer 0: `max(0x4da0 - 0x40 x cell row +0x90,
+        // 10000)` (0x445e20, 0x4453e0; its layers 1 and 3 that less 2 and
+        // 1, drawn with it here).
+        ObjectClass::Lava => (0x4da0 - 0x40 * cell_row(obj)).max(10000),
+        // Skarb 0x4e82 (0x404e10), kept.
+        ObjectClass::Other(0x2c1) => 0x4e82,
+        // Not decoded: any other class; taken as the ground's.
+        _ => ground_depth(bottom()),
+    }
+}
+
+/// A hook's line (ship layer 2, 0x4df0e0; a projectile's line, 0x4964c0):
+/// `max(0x4de0 - the lower end's y, 10000)`.
+pub fn line_depth(y0: i32, y1: i32) -> i32 {
+    (0x4de0 - y0.max(y1)).max(10000)
+}
+
+/// Draws `layers` centred on world point `(x, y)`, each by its offset.
+fn draw_layers(
     frame: &mut Frame,
     screen: &Screen,
-    scene: &Scene,
     camera: &Camera,
     lut: &[u32; 256],
-    time_ms: u64,
+    layers: &[Layer],
+    x: f32,
+    y: f32,
 ) {
-    // Harpies and dragons fly over everything else.
-    let flying = |o: &&crate::objects::MapObject| {
-        matches!(
-            o.class,
-            openconquest_formats::ObjectClass::Monster(0x1f8 | 0x1f9)
-        )
+    for layer in layers {
+        let img = &layer.image;
+        let left = (x + layer.dx as f32 - img.width as f32 / 2.0).round() as i32;
+        let top = (y + layer.dy as f32 - img.height as f32 / 2.0).round() as i32;
+        draw_image(frame, screen, camera, lut, img, left, top);
+    }
+}
+
+/// Every picture slot to draw, in the order the original makes them:
+/// objects in the scene's order, each with its other layers, then the
+/// walkways, landing parties, lines, droplets and gulls.
+fn sprites<'a>(scene: &'a Scene, time_ms: u64) -> Vec<Sprite<'a>> {
+    let mut out: Vec<Sprite<'a>> = Vec::new();
+    let mut push =
+        |depth: i32, slot: Slot, paint: Paint<'a>| out.push(Sprite { depth, slot, paint });
+    // The hulls' depths, which the ships' other layers follow.
+    let hull = |id: u32| {
+        scene
+            .object_index(id)
+            .map(|i| &scene.objects[i])
+            .map(|o| object_depth(o, scene.frame_of(o, time_ms)))
     };
-    let visible = scene.objects.iter().filter(|o| scene.is_visible(o));
-    let (above, mut below): (Vec<_>, Vec<_>) = visible.partition(flying);
-    // Things on the water's surface (fish shoals, leviathans, whirlpools,
-    // reefs) under everything; the rest by how far down the map they reach,
-    // nearer ones over farther.
-    let surface = |o: &crate::objects::MapObject| {
-        matches!(
-            o.class,
-            openconquest_formats::ObjectClass::FishZone
-                | openconquest_formats::ObjectClass::WhaleZone
-                | openconquest_formats::ObjectClass::Whirlpool
-                | openconquest_formats::ObjectClass::Reef(_)
-        )
-    };
-    let bottom = |o: &crate::objects::MapObject| {
-        o.frame_at(time_ms)
-            .first()
-            .map_or(o.y, |l| o.y + l.dy as f32 + l.image.height as f32 / 2.0)
-    };
-    below.sort_by(|a, b| {
-        (!surface(a), bottom(a))
-            .partial_cmp(&(!surface(b), bottom(b)))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let draw = |frame: &mut Frame, layers: &[crate::objects::Layer], x: f32, y: f32| {
-        for layer in layers {
-            let img = &layer.image;
-            let left = (x + layer.dx as f32 - img.width as f32 / 2.0).round() as i32;
-            let top = (y + layer.dy as f32 - img.height as f32 / 2.0).round() as i32;
-            draw_image(frame, screen, camera, lut, img, left, top);
-        }
-    };
-    // Gulls' shadows on the water.
-    let (gulls, shadows) = (&scene.gull_art.0, &scene.gull_art.1);
-    for g in &scene.gulls {
-        if let Some(l) = g
-            .frame()
-            .and_then(|f| shadows.get(f))
-            .and_then(|f| f.first())
-        {
-            let (x, y) = Scene::gull_shadow(g);
-            draw_image_as(
-                frame, screen, camera, lut, &l.image, x as i32, y as i32, true,
-            );
-        }
-    }
-    // Ships' wakes, under the hulls.
-    for d in &scene.droplets {
-        let frames = match d.trail {
-            Some(k) => match scene.trail_art.get(&k) {
-                Some(f) => f,
-                None => continue,
-            },
-            None if d.small => &scene.wake_art.0,
-            None => &scene.wake_art.1,
-        };
-        if let Some(layers) = d.frame(frames.len()).and_then(|f| frames.get(f)) {
-            let (x, y) = d.at();
-            draw(frame, layers, x, y);
-        }
-    }
-    // Boarders' walkways, and hooks' lines (palette colour 0x6d, 0x4964c0):
-    // just behind the hulls (their draw orders the hull's less 0x46 and
-    // 0x47), so over the water and under the ships.
-    for (layers, x, y) in scene.planks_shown() {
-        draw(frame, layers, x, y);
-    }
-    // A founding ship's walkway and its party going down it, likewise.
-    for (layers, x, y) in scene.landings_shown() {
-        draw(frame, layers, x, y);
-    }
-    let rope = Image::new(1, 1, vec![Some(lut[0x6d])]);
-    for ((x0, y0), (x1, y1)) in scene.ropes() {
-        let (x0, y0, x1, y1) = (
-            x0.round() as i32,
-            y0.round() as i32,
-            x1.round() as i32,
-            y1.round() as i32,
-        );
-        let n = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
-        for k in 0..=n {
-            let x = x0 + (x1 - x0) * k / n;
-            let y = y0 + (y1 - y0) * k / n;
-            draw_image(frame, screen, camera, lut, &rope, x, y);
-        }
-    }
-    for obj in below {
-        // A flock: its sheep, each with its top-left 7 and 14 pixels up-left
-        // of its place (0x4331c0).
+    for obj in scene.objects.iter().filter(|o| scene.is_visible(o)) {
+        // A flock: its sheep, each with its top-left 7 and 14 pixels
+        // up-left of its place, at `max(20000 - bottom, 10000)` (0x4331c0).
         if let Some(flock) = scene.flocks.get(&obj.id) {
             for s in &flock.sheep {
                 let frames = &scene.sheep_art[s.dir % 8][usize::from(s.walking)];
-                if let Some(layers) = frames.get(s.frame).or(frames.first()) {
-                    if let Some(l) = layers.first() {
-                        let (w, h) = (l.image.width as f32, l.image.height as f32);
-                        draw(frame, layers, s.x - 7.0 + w / 2.0, s.y - 14.0 + h / 2.0);
-                    }
-                }
+                let Some(layers) = frames.get(s.frame).or(frames.first()) else {
+                    continue;
+                };
+                let Some(l) = layers.first() else {
+                    continue;
+                };
+                let (w, h) = (l.image.width as f32, l.image.height as f32);
+                let (x, y) = (s.x - 7.0 + w / 2.0, s.y - 14.0 + h / 2.0);
+                let bottom = (s.y - 14.0).round() as i32 + h as i32;
+                push(
+                    ground_depth(bottom),
+                    Slot::Sheep(obj.id),
+                    Box::new(move |f, sc, cam, lut| draw_layers(f, sc, cam, lut, layers, x, y)),
+                );
             }
             continue;
         }
+        let layers = scene.frame_of(obj, time_ms);
+        let main = object_depth(obj, layers);
         // A ship with the phantom (`+0x253`): 0x4df420, at the casting
         // (0x4de3a2), its end (0x4df23c) and the ship's set-up (0x4e2b44),
         // and 0x4e1bb0 at each layer's loading, pass its layers 0-3 and
@@ -230,168 +303,333 @@ pub fn draw_objects(
         let phantom = Scene::is_phantom(obj);
         let hidden = scene.phantom_hidden(obj);
         let ship = obj.ship.is_some();
-        if hidden && ship {
-            for (l, left, top) in scene.hunt_gear(obj) {
-                draw_image(frame, screen, camera, lut, &l.image, left, top);
-            }
-            continue;
-        }
         // The mask's width: a ship's picture's (`+0x61`), a building's
         // 0x80.
-        let mask = |img: &Image| phantom.then_some(if ship { img.width } else { 0x80 });
+        let mask = move |img: &Image| phantom.then_some(if ship { img.width } else { 0x80 });
         // Limed, its pictures and flames are whitened (0x4df510).
         let limed = obj
             .combat
             .as_ref()
             .is_some_and(|c| c.lime > 0.0)
             .then_some(&scene.lime_remap);
-        match limed {
-            _ if hidden => {}
-            None if !phantom => draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y),
-            _ => {
-                // Every sprite of a ship's or building's picture has the
-                // picture's size (`+0x61`) and stands at its top left, so
-                // the ghost table's place is the sprite's own pixel.
-                for layer in scene.frame_of(obj, time_ms) {
-                    let (left, top) = layer_origin(obj, layer);
-                    draw_image_ghosted(
-                        frame,
-                        screen,
-                        camera,
-                        lut,
-                        &layer.image,
-                        left,
-                        top,
-                        false,
-                        limed,
-                        mask(&layer.image),
-                    );
+        // A leviathan hunt's line and haul, from their top left, drawn
+        // with the hull, the line under the haul (their 0x3e6 / 0x3de at
+        // creation; not decoded whether 0x4e0470 / 0x4e04a0 restack them
+        // to the hull's less 0x46 / 0x47).
+        let gear = scene.hunt_gear(obj);
+        push(
+            main,
+            Slot::Object(obj.id),
+            Box::new(move |f, sc, cam, lut| {
+                match limed {
+                    _ if hidden => {}
+                    None if !phantom => draw_layers(f, sc, cam, lut, layers, obj.x, obj.y),
+                    _ => {
+                        // Every sprite of a ship's or building's picture
+                        // has the picture's size (`+0x61`) and stands at
+                        // its top left, so the ghost table's place is the
+                        // sprite's own pixel.
+                        for layer in layers {
+                            let (left, top) = layer_origin(obj, layer);
+                            draw_image_ghosted(
+                                f,
+                                sc,
+                                cam,
+                                lut,
+                                &layer.image,
+                                left,
+                                top,
+                                false,
+                                limed,
+                                mask(&layer.image),
+                            );
+                        }
+                    }
                 }
-            }
+                for (l, left, top) in &gear {
+                    draw_image(f, sc, cam, lut, &l.image, *left, *top);
+                }
+            }),
+        );
+        if hidden && ship {
+            continue;
         }
-        // A leviathan hunt's haul and line, from their top left.
-        for (l, left, top) in scene.hunt_gear(obj) {
-            draw_image(frame, screen, camera, lut, &l.image, left, top);
-        }
-        // Flames on a burning ship.
-        if let Some((layers, left, top)) = scene.fire_on(obj, time_ms) {
-            if let Some(l) = layers.first() {
-                draw_image_remapped(
-                    frame,
-                    screen,
-                    camera,
-                    lut,
-                    &l.image,
-                    left.round() as i32,
-                    top.round() as i32,
-                    false,
-                    limed,
+        // Flames on a burning ship (layer 5: the hull's less 0x48,
+        // 0x4e04d0).
+        if let Some((fl, left, top)) = scene.fire_on(obj, time_ms) {
+            if let Some(l) = fl.first() {
+                push(
+                    main - 0x48,
+                    Slot::ShipFire(obj.id),
+                    Box::new(move |f, sc, cam, lut| {
+                        draw_image_remapped(
+                            f,
+                            sc,
+                            cam,
+                            lut,
+                            &l.image,
+                            left.round() as i32,
+                            top.round() as i32,
+                            false,
+                            limed,
+                        )
+                    }),
                 );
             }
         }
-        // A building's smoke and fire (layers 10 and 6), from their top left.
-        for (layers, left, top) in scene.building_fire_on(obj.id) {
-            if let Some(l) = layers.first() {
-                draw_image_remapped(
-                    frame, screen, camera, lut, &l.image, left, top, false, limed,
+        // A building's smoke and fire, from their top left: the picture's
+        // less 2 (0x425990) and 3 (0x423d60).
+        for (fl, left, top, fire) in scene.building_fire_on(obj.id) {
+            if let Some(l) = fl.first() {
+                let (depth, slot) = match fire {
+                    true => (main - 3, Slot::Fire(obj.id)),
+                    false => (main - 2, Slot::Smoke(obj.id)),
+                };
+                push(
+                    depth,
+                    slot,
+                    Box::new(move |f, sc, cam, lut| {
+                        draw_image_remapped(f, sc, cam, lut, &l.image, left, top, false, limed)
+                    }),
                 );
             }
         }
-        // An amber deposit's glint, part of it.
-        if let Some((f, x, y)) = scene
+        // An amber deposit's glint, its layer 1 at 0x4e85 (0x48a2c0).
+        if let Some((fr, x, y)) = scene
             .sparkles
             .get(&obj.id)
             .and_then(|s| s.frame(scene.sparkle_art.len()))
         {
-            if let Some(layers) = scene.sparkle_art.get(f) {
-                draw(frame, layers, x, y);
+            if let Some(sl) = scene.sparkle_art.get(fr) {
+                push(
+                    0x4e85,
+                    Slot::Sparkle(obj.id),
+                    Box::new(move |f, sc, cam, lut| draw_layers(f, sc, cam, lut, sl, x, y)),
+                );
             }
         }
-        // Its banner, from the picture's top left; limed, remapped as the
-        // picture (0x425990 at 0x4263c6: 0x50df60 on layer 1 too).
-        if let (Some((flags, dx, dy)), Some(first), true) = (
+        // Its banner (layer 1: the picture's less 1, 0x4247b0), from the
+        // picture's top left; limed, remapped as the picture (0x425990 at
+        // 0x4263c6: 0x50df60 on layer 1 too).
+        if let (Some((flags, dx, dy)), Some(first), true, false) = (
             &obj.banner,
             obj.frame_at(time_ms).first(),
             obj.owner.is_some() && obj.asleep.is_none(),
+            hidden,
         ) {
             const FLAG_MS: u64 = 75;
             let flag = &flags[(time_ms / FLAG_MS) as usize % flags.len()];
             let left = (obj.x - first.image.width as f32 / 2.0).round() as i32 + dx;
             let top = (obj.y - first.image.height as f32 / 2.0).round() as i32 + dy;
-            if !hidden {
-                draw_image_ghosted(
-                    frame,
-                    screen,
-                    camera,
-                    lut,
-                    flag,
-                    left,
-                    top,
-                    false,
-                    limed,
-                    mask(flag),
-                );
-            }
+            push(
+                main - 1,
+                Slot::Banner(obj.id),
+                Box::new(move |f, sc, cam, lut| {
+                    draw_image_ghosted(f, sc, cam, lut, flag, left, top, false, limed, mask(flag))
+                }),
+            );
         }
-        // A building's shields (layers 0xc and 0xd, depth the picture's
-        // less 4 and 5: over its fire and banner), from their top left;
+        // A building's shields (layers 0xc and 0xd, the picture's less 4
+        // and 5, 0x425990: over its fire and banner), from their top left;
         // kind-0 sprites, ghosted or hidden with the phantom as the rest.
-        // A ship's (layers 8 and 7, depth both the hull's less 0x4a: over
-        // the rest of the ship), likewise (0x4e1bb0 -> 0x4df380); neither
-        // is remapped by the lime or the stone.
-        for (layers, left, top) in scene.building_shields_on(obj.id) {
-            for l in layers.iter().filter(|_| !hidden) {
-                draw_image_ghosted(
-                    frame,
-                    screen,
-                    camera,
-                    lut,
-                    &l.image,
-                    left + l.dx,
-                    top + l.dy,
-                    false,
-                    None,
-                    mask(&l.image),
-                );
+        // A ship's (layers 8 and 7, both the hull's less 0x4a, 0x4e0f70,
+        // 0x4e11a0: over the rest of the ship), likewise (0x4e1bb0 ->
+        // 0x4df380); neither is remapped by the lime or the stone. (A
+        // ship's two at one depth: the magic's taken as made first, not
+        // decoded.)
+        for (sl, left, top, weapon) in scene.building_shields_on(obj.id) {
+            if hidden {
+                continue;
             }
+            let depth = match (ship, weapon) {
+                (true, _) => main - 0x4a,
+                (false, false) => main - 4,
+                (false, true) => main - 5,
+            };
+            push(
+                depth,
+                Slot::Shield(obj.id, weapon),
+                Box::new(move |f, sc, cam, lut| {
+                    for l in sl {
+                        draw_image_ghosted(
+                            f,
+                            sc,
+                            cam,
+                            lut,
+                            &l.image,
+                            left + l.dx,
+                            top + l.dy,
+                            false,
+                            None,
+                            mask(&l.image),
+                        );
+                    }
+                }),
+            );
         }
     }
-    // Walkways of unloading ships, and their porters.
+    // Ships' walkways (layer 1, `+0x8c2`: the hull's less 0x46, 0x4e0470)
+    // and what crosses them (layer 3, `+0x8c6`: less 0x47, 0x4e04a0), over
+    // their hulls: boarders' walkways, a founding ship's walkway and its
+    // party going down, unloading ships' walkways and porters. (Not
+    // decoded: when the steps run against the hull's 0x4df6e0; before the
+    // first, the walkway's 0x3e6 and the gangway's 0x3de.)
+    let walk = |ship: u32, cross: bool| {
+        hull(ship).map(|h| match cross {
+            false => (h - 0x46, Slot::Walkway(ship)),
+            true => (h - 0x47, Slot::Gangway(ship)),
+        })
+    };
+    let mut on_ships: Vec<(u32, bool, &'a [Layer], f32, f32)> = Vec::new();
+    for (ship, layers, x, y) in scene.planks_shown() {
+        on_ships.push((ship, false, layers, x, y));
+    }
+    for (ship, cross, layers, x, y) in scene.landings_shown() {
+        on_ships.push((ship, cross, layers, x, y));
+    }
     for p in &scene.planks {
         for (layers, x, y) in p.frame() {
-            draw(frame, layers, x, y);
+            on_ships.push((p.ship, false, layers, x, y));
         }
     }
     for p in &scene.porters {
         if let Some(layers) = p.frame(time_ms) {
-            draw(frame, layers, p.x, p.y);
+            on_ships.push((p.ship, true, layers, p.x, p.y));
         }
     }
-    // Landing parties ashore.
-    for (layers, x, y) in scene.parties_shown() {
-        draw(frame, layers, x, y);
-    }
-    for obj in above {
-        draw(frame, scene.frame_of(obj, time_ms), obj.x, obj.y);
-    }
-    // Gulls over everything.
-    for g in &scene.gulls {
-        if let Some(l) = g.frame().and_then(|f| gulls.get(f)).and_then(|f| f.first()) {
-            draw_image(frame, screen, camera, lut, &l.image, g.x as i32, g.y as i32);
+    for (ship, cross, layers, x, y) in on_ships {
+        if let Some((depth, slot)) = walk(ship, cross) {
+            push(
+                depth,
+                slot,
+                Box::new(move |f, sc, cam, lut| draw_layers(f, sc, cam, lut, layers, x, y)),
+            );
         }
     }
+    // Landing parties ashore: `max(20000 - feet, 10000)` (0x421bb0).
+    for (layers, x, y, feet) in scene.parties_shown() {
+        push(
+            ground_depth(feet),
+            Slot::Party,
+            Box::new(move |f, sc, cam, lut| draw_layers(f, sc, cam, lut, layers, x, y)),
+        );
+    }
+    // Hooks' lines (palette colour 0x6d, 0x4964c0).
+    for ((x0, y0), (x1, y1)) in scene.ropes() {
+        let (x0, y0, x1, y1) = (
+            x0.round() as i32,
+            y0.round() as i32,
+            x1.round() as i32,
+            y1.round() as i32,
+        );
+        push(
+            line_depth(y0, y1),
+            Slot::Rope,
+            Box::new(move |f, sc, cam, lut| {
+                let rope = Image::new(1, 1, vec![Some(lut[0x6d])]);
+                let n = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
+                for k in 0..=n {
+                    let x = x0 + (x1 - x0) * k / n;
+                    let y = y0 + (y1 - y0) * k / n;
+                    draw_image(f, sc, cam, lut, &rope, x, y);
+                }
+            }),
+        );
+    }
+    // Ships' wakes' droplets at 0x4f4c (0x4a3f40), projectiles' trails at
+    // -2: `max(10000 - y, 1000)` (0x48f440).
+    for d in &scene.droplets {
+        let frames = match d.trail {
+            Some(k) => match scene.trail_art.get(&k) {
+                Some(f) => f,
+                None => continue,
+            },
+            None if d.small => &scene.wake_art.0,
+            None => &scene.wake_art.1,
+        };
+        if let Some(layers) = d.frame(frames.len()).and_then(|f| frames.get(f)) {
+            let (x, y) = d.at();
+            let depth = match d.trail {
+                Some(_) => (10000 - y.floor() as i32).max(1000),
+                None => 0x4f4c,
+            };
+            push(
+                depth,
+                Slot::Droplet,
+                Box::new(move |f, sc, cam, lut| draw_layers(f, sc, cam, lut, layers, x, y)),
+            );
+        }
+    }
+    // Gulls, each made before its shadow, both at 0x401 (0x41c700).
+    let (gulls, shadows) = (&scene.gull_art.0, &scene.gull_art.1);
+    for (k, g) in scene.gulls.iter().enumerate() {
+        let Some(f) = g.frame() else {
+            continue;
+        };
+        if let Some(l) = gulls.get(f).and_then(|f| f.first()) {
+            let (x, y) = (g.x as i32, g.y as i32);
+            push(
+                0x401,
+                Slot::Gull(k),
+                Box::new(move |fr, sc, cam, lut| draw_image(fr, sc, cam, lut, &l.image, x, y)),
+            );
+        }
+        if let Some(l) = shadows.get(f).and_then(|f| f.first()) {
+            let (x, y) = Scene::gull_shadow(g);
+            push(
+                0x401,
+                Slot::GullShadow(k),
+                Box::new(move |fr, sc, cam, lut| {
+                    draw_image_as(fr, sc, cam, lut, &l.image, x as i32, y as i32, true)
+                }),
+            );
+        }
+    }
+    // The sprite manager's list (0x55d9d0): a slot made takes its depth
+    // from the list's end, so it lands after its equals; 0x564970 draws
+    // from the end down. Deepest first, and of equals the later made
+    // first (under). (The port keeps no history of depths set again: its
+    // equals are in the order made, as listed above.)
+    out.reverse();
+    out.sort_by_key(|s| std::cmp::Reverse(s.depth));
+    out
+}
+
+/// The draw list's slots and depths, in the order drawn (for tests).
+#[cfg(test)]
+pub fn draw_order(scene: &Scene, time_ms: u64) -> Vec<(i32, Slot)> {
+    sprites(scene, time_ms)
+        .iter()
+        .map(|s| (s.depth, s.slot))
+        .collect()
+}
+
+/// Draws the mission objects over the terrain in the original's order:
+/// every picture slot by its depth, deepest first (0x564970).
+///
+/// Sprites are sampled on the same world-pixel grid as the terrain so they
+/// stay aligned with it at any scale.
+pub fn draw_objects(
+    frame: &mut Frame,
+    screen: &Screen,
+    scene: &Scene,
+    camera: &Camera,
+    lut: &[u32; 256],
+    time_ms: u64,
+) {
+    for s in sprites(scene, time_ms) {
+        (s.paint)(frame, screen, camera, lut);
+    }
+    // Not ported: the effects' (sinking hulls, explosions, spells, the
+    // tornado, the volcano's, a yard's ship), fireballs' and shots'
+    // depths (0x4965d0's states; `+0x80` not decoded): drawn over the
+    // list.
     let t = TILE_SIZE as f32;
     for fx in scene.effects.iter().filter(|fx| {
         scene.seen((fx.x / t).floor() as i32, (fx.y / t).floor() as i32) == Seen::InSight
     }) {
         if let Some(layers) = fx.frame() {
-            for layer in layers {
-                let (left, top) = (
-                    (fx.x + layer.dx as f32 - layer.image.width as f32 / 2.0).round() as i32,
-                    (fx.y + layer.dy as f32 - layer.image.height as f32 / 2.0).round() as i32,
-                );
-                draw_image(frame, screen, camera, lut, &layer.image, left, top);
-            }
+            draw_layers(frame, screen, camera, lut, layers, fx.x, fx.y);
         }
     }
     // Fireballs over their cells.
@@ -414,7 +652,7 @@ pub fn draw_objects(
             }
         }
     }
-    // Shots in flight, over everything below them.
+    // Shots in flight.
     for s in scene
         .shots
         .iter()
@@ -1994,5 +2232,145 @@ mod tests {
             st + (k / l.image.width) as i32,
         );
         assert_eq!(hit_test(&scene, sx as f32, sy as f32, 0), Some(o.id));
+    }
+
+    /// The draw list on miss003 (ships, buildings with banners, treasures
+    /// lying about, a gull): every slot at its class's depth, drawn
+    /// deepest first, a gull's shadow under it (made after it at 0x401,
+    /// 0x41c700), the treasures (`0x26d0 - bottom`) over every ship and
+    /// building and under the gull when nearer the map's top than 8912.
+    #[test]
+    fn the_draw_list_puts_every_slot_at_its_depth() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = crate::objects::Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+        scene.fog = false;
+        scene.fly_gull(0, 200.0, 200.0, 1);
+        let order = draw_order(&scene, 0);
+        assert!(order.windows(2).all(|w| w[0].0 >= w[1].0));
+        let at = |slot: Slot| order.iter().position(|&(_, s)| s == slot);
+        let depth = |slot: Slot| order[at(slot).unwrap()].0;
+        let bottom = |o: &MapObject| {
+            let l = &scene.frame_of(o, 0)[0];
+            layer_origin(o, l).1 + l.image.height as i32
+        };
+        // A ship's hull: `max(20000 - bottom, 10000)` (0x4df6e0).
+        let ship = scene.objects.iter().find(|o| o.ship.is_some()).unwrap();
+        let hull = depth(Slot::Object(ship.id));
+        assert_eq!(hull, (20000 - bottom(ship)).max(10000));
+        eprintln!("ship {} bottom {} depth {hull}", ship.id, bottom(ship));
+        // A building and its banner, the picture's less 1 (0x4247b0), over
+        // it.
+        let (b, banner) = scene
+            .objects
+            .iter()
+            .find_map(|o| at(Slot::Banner(o.id)).map(|k| (o, k)))
+            .expect("a banner");
+        assert!(matches!(b.class, ObjectClass::Building(_)));
+        let main = depth(Slot::Object(b.id));
+        assert_eq!(main, (20000 - bottom(b)).max(10000));
+        assert_eq!(order[banner].0, main - 1);
+        assert!(banner > at(Slot::Object(b.id)).unwrap());
+        eprintln!("building {} depth {main}", b.id);
+        // The gull and its shadow at 0x401, the shadow drawn first.
+        assert_eq!(depth(Slot::Gull(0)), 0x401);
+        assert_eq!(depth(Slot::GullShadow(0)), 0x401);
+        assert!(at(Slot::GullShadow(0)) < at(Slot::Gull(0)));
+        // A treasure: `0x26d0 - bottom`, over every ship and building.
+        let t = scene
+            .objects
+            .iter()
+            .find(|o| o.treasure.is_some() && at(Slot::Object(o.id)).is_some())
+            .expect("a treasure");
+        let td = depth(Slot::Object(t.id));
+        assert_eq!(td, 0x26d0 - bottom(t));
+        eprintln!("treasure {} bottom {} depth {td}", t.id, bottom(t));
+        assert!(at(Slot::Object(t.id)) > at(Slot::Object(ship.id)));
+        assert!(at(Slot::Object(t.id)) > at(Slot::Object(b.id)));
+        assert_eq!(bottom(t) < 8912, at(Slot::Object(t.id)) < at(Slot::Gull(0)));
+    }
+
+    /// A gull (0x401) over a dragon or harpy whose place is above y 8912
+    /// (its depth `max(0x26d0 - y, 1000)` greater, 0x41e4b0), under one
+    /// below it: drawn, the pixels both cover show the one over.
+    #[test]
+    fn a_gull_is_under_a_flyer_low_on_the_map_and_over_one_high() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = crate::objects::Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+        scene.fog = false;
+        let i = scene
+            .objects
+            .iter()
+            .position(|o| {
+                matches!(o.class, ObjectClass::Monster(0x1f8 | 0x1f9))
+                    && !scene.frame_of(o, 0).is_empty()
+            })
+            .expect("a flyer");
+        let flyer = scene.objects.swap_remove(i);
+        scene.objects.clear();
+        scene.objects.push(flyer);
+        scene.droplets.clear();
+        scene.gulls.truncate(1);
+        let (sw, sh) = (400u32, 400u32);
+        let lut = palette_lut(&data, 0);
+        let render = |scene: &Scene, back: u32, (cx, cy): (f32, f32)| {
+            let mut camera = Camera::new(crate::view::ScalePolicy {
+                fixed: Some(1.0),
+                integer: true,
+            });
+            (camera.x, camera.y) = (cx, cy);
+            let mut px = vec![back; (sw * sh) as usize];
+            let mut frame = Frame {
+                pixels: &mut px,
+                width: sw,
+                height: sh,
+            };
+            draw_objects(&mut frame, &Screen::full(sw, sh), scene, &camera, &lut, 0);
+            px
+        };
+        // The pixels a picture covers whatever is under it.
+        let (b1, b2) = (0x0012_3456, 0x0065_4321);
+        let solid = |scene: &Scene, cam: (f32, f32)| -> Vec<usize> {
+            let (a, b) = (render(scene, b1, cam), render(scene, b2, cam));
+            (0..a.len()).filter(|&k| a[k] == b[k]).collect()
+        };
+        let g = scene.gull_art.0[10][0].image.clone();
+        let first = g.pixels.iter().position(|p| p.is_some()).unwrap() as u32;
+        let (gx, gy) = (first % g.width, first / g.width);
+        // Flyers at y 9000 (depth 1000, over the gull) and 8000 (1488,
+        // under it).
+        for (y, over) in [(9000.0, true), (8000.0, false)] {
+            let x = scene.objects[0].x;
+            scene.objects[0].y = y;
+            let cam = (x - 200.0, y - 200.0);
+            // The flyer alone (the gull far off).
+            scene.fly_gull(0, x + 5000.0, y, 1);
+            let flyer = render(&scene, b1, cam);
+            let body = solid(&scene, cam);
+            assert!(!body.is_empty());
+            // The gull's first solid pixel on one of the flyer's.
+            let k = body[body.len() / 2] as u32;
+            let (wx, wy) = (cam.0 + (k % sw) as f32, cam.1 + (k / sw) as f32);
+            scene.fly_gull(0, wx - gx as f32, wy - gy as f32, 1);
+            let both = render(&scene, b1, cam);
+            // The gull alone (the flyer far off).
+            scene.objects[0].y = y + 5000.0;
+            let gull = render(&scene, b1, cam);
+            let wing = solid(&scene, cam);
+            scene.objects[0].y = y;
+            let shared: Vec<_> = body.iter().filter(|k| wing.contains(k)).collect();
+            assert!(!shared.is_empty());
+            for &k in shared {
+                let want = if over { flyer[k] } else { gull[k] };
+                assert_eq!(both[k], want, "pixel {k}, flyer at y {y}");
+            }
+        }
     }
 }

@@ -33,6 +33,14 @@ impl Gull {
 impl Scene {
     /// The gulls of a map `w` x `h` cells: one for every 225 cells and one
     /// more, at most 25, each waiting 7.5 to 15 seconds.
+    /// Sets gull `k` flying `heading` with its top left at `(x, y)` (for
+    /// tests).
+    #[cfg(test)]
+    pub fn fly_gull(&mut self, k: usize, x: f32, y: f32, heading: usize) {
+        let g = &mut self.gulls[k];
+        (g.heading, g.x, g.y, g.step) = (Some(heading), x, y, 0);
+    }
+
     pub(super) fn new_gulls(w: u32, h: u32, rng: &mut Rng) -> Vec<Gull> {
         let n = ((w * h) / 225 + 1).min(25);
         (0..n)
