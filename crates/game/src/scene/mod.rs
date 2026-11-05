@@ -2592,6 +2592,7 @@ impl Scene {
                 self.put_walker(walkers::NO_LAIR, class, cell, data, caches);
             }
             self.tick_walkers(data, caches);
+            self.tick_flyers(data, caches);
             self.run_computers();
             self.run_brain_lands();
             self.run_town_links();

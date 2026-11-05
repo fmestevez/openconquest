@@ -6248,10 +6248,10 @@ fn harpy_strikes_and_goes_home() {
         // Hold the ship where it is.
         scene.objects[i].ship.as_mut().unwrap().path.clear();
         let f = scene.flyers.iter().find(|f| f.id == harpy.id).unwrap();
-        if matches!(f.flight, flyers::Flight::Striking { .. }) {
+        if f.state == 5 {
             struck = true;
         }
-        if struck && matches!(f.flight, flyers::Flight::Rest(_)) {
+        if struck && f.state == 1 {
             home_again = true;
             break;
         }
@@ -16379,4 +16379,109 @@ fn land_creature_and_jam_aim_points() {
         seen[k] = true;
     }
     assert!(seen[1]);
+}
+
+/// A flyer's route (0x55c3d0) turns its heading by one a cell towards
+/// the main direction, then runs straight: from (5, 5) heading east to
+/// three cells north, a turn to north-east, then north, then north-west.
+#[test]
+fn flyer_route_turns_a_heading_a_cell() {
+    let route = flyers::flyer_route(64, 64, (5, 5), 0, (5, 2));
+    assert_eq!(route, vec![(5, 5, 0), (6, 4, 1), (6, 3, 2), (5, 2, 3)]);
+    // On the top row heading north the turn would leave the map: the
+    // route keeps to it, a cell a step, each entered along its heading.
+    let route = flyers::flyer_route(64, 64, (5, 0), 2, (5, 3));
+    assert_eq!(route.first(), Some(&(5, 0, 2)));
+    assert_eq!(route.last().map(|e| (e.0, e.1)), Some((5, 3)));
+    assert!(route.iter().all(|e| e.0 >= 0 && e.1 >= 0));
+    for p in route.windows(2) {
+        let d = super::walk_path::DIRS[p[1].2 as usize];
+        assert_eq!((p[0].0 + d.0, p[0].1 + d.1), (p[1].0, p[1].1));
+    }
+}
+
+/// miss005's harpy runs the original's tick: its generator seeded
+/// `[game +0x2ee5] x id`, an odd heading drawn on appearing (0x41f680
+/// state 0), then on its rest `+0xe8 = now + r % 50` and `+0xec = now +
+/// r % (1100 - 100 x field 11)`; in flight each step takes a frame a
+/// tick of its flying picture, the place `from + (to - from) x frame /
+/// (frames - 1)`, along a route of neighbouring cells; orphaned, its hp
+/// falls to 0 over 1000 ticks (0xdaf9) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn harpy_runs_the_original_tick() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    scene.brain = None;
+    let f = scene.flyers[0].clone();
+    let mut rng = scene.rnd_init.unwrap().wrapping_mul(f.id);
+    let mut draw = || {
+        rng = rng.wrapping_mul(0x41c6_4e6d).wrapping_add(0x3039);
+        rng >> 16
+    };
+    let (w, h) = (scene.grid.width as i32, scene.grid.height as i32);
+    let heading = loop {
+        let hd = (draw() & 3) * 2 + 1;
+        let d = super::walk_path::DIRS[hd as usize];
+        let (x, y) = (f.cell.0 + d.0, f.cell.1 + d.1);
+        if x >= 0 && x < w && y >= 0 && y < h {
+            break hd as u8;
+        }
+    };
+    assert_eq!((f.state, f.heading), (0, heading));
+    let tick = |s: &mut Scene, caches: &mut Caches| s.update(crate::clock::TICK, &data, caches);
+    while scene.flyers[0].state == 0 {
+        tick(&mut scene, &mut caches);
+    }
+    let now = scene.ticks;
+    let f = scene.flyers[0].clone();
+    assert_eq!(f.state, 1);
+    assert_eq!(f.idle_at, now + draw() % 50);
+    assert_eq!(f.rest_end, now + draw() % (1100 - 100 * f.rest));
+    // Flying: a step from one cell's centre to the next, a frame a tick.
+    let mut steps = 0;
+    for _ in 0..20_000 {
+        tick(&mut scene, &mut caches);
+        let f = &scene.flyers[0];
+        if f.state == 3 && f.sub == 1 && f.frame > 0 && f.frame < f.end {
+            let n = f.end - f.first - 1;
+            let at = |a: i32, b: i32| (b - a) * (f.frame - 1) / n + a;
+            assert_eq!(f.pos, (at(f.from.0, f.to.0), at(f.from.1, f.to.1)));
+            assert_eq!(f.delay, 1);
+            steps += 1;
+        }
+        if steps > 50 {
+            break;
+        }
+    }
+    assert!(steps > 50, "the harpy flew");
+    let f = &scene.flyers[0];
+    for p in f.route.windows(2) {
+        let d = super::walk_path::DIRS[p[1].2 as usize];
+        assert_eq!((p[0].0 + d.0, p[0].1 + d.1), (p[1].0, p[1].1));
+    }
+    // The nest falls: the harpy's hp goes to 0 over 1000 ticks.
+    let (nest, id) = (f.nest, f.id);
+    scene.objects.retain(|o| o.id != nest);
+    let hp = |s: &Scene| {
+        s.objects[s.object_index(id).unwrap()]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hull
+    };
+    let full = hp(&scene) as u32;
+    tick(&mut scene, &mut caches);
+    let start = scene.ticks;
+    for _ in 0..250 {
+        tick(&mut scene, &mut caches);
+    }
+    assert!(!scene.flyers[0].has_nest);
+    assert_eq!(
+        hp(&scene) as u32,
+        full - (scene.ticks - start) * full / 1000
+    );
 }

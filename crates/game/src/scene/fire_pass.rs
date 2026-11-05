@@ -573,7 +573,7 @@ impl Scene {
 
 /// What a cell's slot holds for the looks (`grid + 0x18 x cell`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Held {
+pub(super) enum Held {
     /// An object (index).
     Object(usize),
     /// A land creatures' jam (0x1f7): its first member (0x415df0), the
@@ -589,16 +589,16 @@ enum Held {
 /// building on its footprint, a jam), the sea creatures (`+0x18`), and
 /// the leviathans' (`+0x10`, the search's alone).
 #[derive(Debug, Clone, Copy, Default)]
-struct Slots {
-    flyer: Option<Held>,
-    occupant: Option<Held>,
+pub(super) struct Slots {
+    pub(super) flyer: Option<Held>,
+    pub(super) occupant: Option<Held>,
     sea: Option<Held>,
     deep: Option<Held>,
 }
 
 impl Scene {
     /// Every cell's slots as the looks read them.
-    fn slot_map(&self) -> HashMap<(i32, i32), Slots> {
+    pub(super) fn slot_map(&self) -> HashMap<(i32, i32), Slots> {
         let mut map: HashMap<(i32, i32), Slots> = HashMap::new();
         let t = TILE_SIZE as f32;
         let at = |o: &MapObject| ((o.x / t).floor() as i32, (o.y / t).floor() as i32);

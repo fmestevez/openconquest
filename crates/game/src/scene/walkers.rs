@@ -525,7 +525,7 @@ impl Scene {
     /// The game's seed of the objects' own generators (`[game +0x2ee5]`,
     /// the original's time stamp `RND_INIT`; drawn once from the scene's
     /// generator, as for the ships, `ship_draw`).
-    fn objects_seed(&mut self) -> u32 {
+    pub(super) fn objects_seed(&mut self) -> u32 {
         match self.rnd_init {
             Some(v) => v,
             None => {

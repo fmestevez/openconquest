@@ -5663,61 +5663,121 @@ land (message 0x1497) or as a wild sea monster on water (0x493780).
 
 A flyer keeps to its nest's range: the nest's fields 7 and 8 (5 and 5 in
 most missions, 15 and 15 for miss010's dragon) are how many cells it may go
-either way, and field 11 shortens its rests. Its states (0x41f680, run a
-tick at a time by 0x41fbd0, moved by 0x41e4b0):
+either way, and field 11 shortens its rests. HarpyClassTy's vtable is
+0x595e00 (constructor 0x41dde0: side 2, nation 4, state `+0x88` 0xff): +0
+0x4207b0, +4 0x420670 (a shot, 0x138e), +0xc 0x41df70, +0x10 0x41de30 (`hp
+x 100 / max`), +0x1c 0x41e0f0 (speed `0x1900 / (frames x delay[3])`), +0x2c
+0x41de90 (a dragon in state 1 cannot be targeted).
 
-- **Rest (1).** It stays on the nest until `rand(1100 - 100 x field 11)`
-  ticks have passed. A dragon then takes off only if an object of a side is
-  in its range (0x41ef00); otherwise it rests again.
-- **Take-off (2), fly (3), land (6).** Each leg goes to a cell picked by
-  0x41e840. The cell lies within the 13 x 13 round mask at 0x595a30 around
-  the flyer and within the range. Each cell weighs 1, plus 10 x the sum of
-  (1 + count) over the marine groups aboard the ships beside it, and the
-  pick is weighted random.
-- **Moving.** Its route steps cell to cell. Each step spreads over one cycle
-  of the flying picture, so it covers a cell per 15 ticks. When a step's
-  heading differs, it turns first through `HRPSPR_4`/`DRGSPR_4`: 8 frames a
-  heading, one a tick.
-- **At each cell (0x41efb0).** It strikes (state 5) what is beside it,
-  except on its way home.
-- **After a strike.** It flies home (+0xc6), lands and rests. A leg without
-  a strike is followed by another.
-- **Picture delays.** By state at 0x595d10 (harpy) and 0x595d30 (dragon):
-  0 or 1 (a frame a tick), except 2 for a harpy waiting. Take-off and
-  landing play 35 frames for a harpy and 20 for a dragon.
+**Ported** (`scene::flyers`, a game tick at a time). Created (message 2,
+from the nest's 0x41d4a0): generator `+0x18 = game +0x2ee5 x id` (the LCG
+`s x 0x41c64e6d + 0x3039`, `r = s >> 16`), hp `+0x89` 200000 (harpy) or
+250000 (dragon), home the nest's cell, state 0. A tick (message 0) runs
+0x41fbd0 (states) then 0x41e4b0 (picture and place). 0x41fbd0 first sets
+state 7 when not in 1, 2, 6, 7 at frame 0 with hp 0, and, orphaned
+(0xdaf9: the nest gone; no chase, not homing), sets `hp = ba - (now - b6) x
+ba / 1000` (`+0xb6` the tick, `+0xba` the hp at the fall). The states
+(0x41f680):
 
-**Decoded, not ported** (the port's flyers run in seconds on the scene's
-generator, step in straight lines and keep none of what follows).
-HarpyClassTy's vtable is 0x595e00 (constructor 0x41dde0: side 2, nation 4,
-state `+0x88` 0xff): +0 0x4207b0, +4 0x420670 (a shot, 0x138e), +0xc
-0x41df70, +0x10 0x41de30 (`hp x 100 / max`), +0x1c 0x41e0f0 (speed `0x1900
-/ (frames x delay[3])`), +0x2c 0x41de90 (a dragon in state 1 cannot be
-targeted). Created (message 2): generator `+0x18 = game +0x2ee5 x id`,
-hp `+0x89` 200000 (harpy) or 250000 (dragon), state 0 (a random odd
-heading on the map). A tick (message 0) runs 0x41fbd0 (states) then
-0x41e4b0 (a frame when `now >= +0x81 + delay`; in flight the position is
-`from + (to - from) x frame / (frames - 1)`, so a step lasts the flying
-picture's frame count in ticks). States 0x41f680: rest 1 draws `+0xe8 =
-now + r % 50` (a harpy's idle picture, again after each) and `+0xec = now
-+ r % (1100 - 100 x field 11)`; it ends early when hit (`+0xca`), told of
-a target (`+0xce`), orphaned or at 0 hp. Each leg (state 3) draws its
-cell by 0x41e840 (`t = r % total + 1`; homing only when off both the
-nest's row and column, weight 100) and its flap-sound time `now + (r % 41
-+ 60) x 375 / 100`, and flies a turning route 0x55c3d0 (from its heading,
-one heading change a cell, tried both ways round, off-map penalty);
-route cells are entered only if the flyer slot is free and no other
-flyer is bound there (0x41ee20), else it hovers (delay index 4) and
-re-picks. At each cell 0x41efb0 (a harpy: a ship of nation other than 4
-without Orpheus, a town 0x1491, a fort 0x1494; a dragon: the nest's
-attacker, else one cell in three after it has seen an object); the strike
-0x41f1c0 picks the target (harpy: the last in scan order, skipping phantom
-ships and buildings with vt+0xa4) or the dragon's sowing cell (weight 50
-next to a building on landscape 8, else 0; one draw), turning to it
-first. Damage: 0x138e takes the blow (1 in 7 a cry), 0xda93 a quarter (on
-its cell: gone), 0xda96 and 0x158bf the amount; the nest's hit sends
-0xdaf7 (chase the shooter; 0xdaf8 clears it 3000 ticks later), its fall
-0xdaf9 (hp falls to 0 over 1000 ticks). Not decoded: 0x42ebf0's terrain
-bits, the targets' vt+0x2c and vt+0xa4.
+- **0 appear.** At its cell's centre, heading `(r & 3) x 2 + 1` drawn
+  until the cell along it is on the map; a harpy plays `HRPSPR_0h`, a
+  dragon rests at once.
+- **1 rest.** Draws `+0xe8 = now + r % 50` then `+0xec = now + r % (1100 -
+  100 x field 11)`. Until `+0xec`, while not told of an attacker, with a
+  nest, hp and no hit since (`+0xca`), it rests: a harpy plays its idle
+  picture (frames held at 0 otherwise) at `+0xe8`, and after each, `+0xe8
+  = now + r % 50`. Then a harpy takes off; a dragon only while an object of
+  side 1 and a nation other than 4 lies in the nest's range (0x41ef00),
+  else rests again (both draws anew). A dragon resting is not drawn.
+- **2 take-off**, then 3 (7 at hp 0).
+- **3 fly.** Entering, a leg (0x41e840): homing (`+0xc6`) with a nest and
+  off both the nest's row and column, the nest (weight 100); else each
+  cell of the 13 x 13 mask at 0x595a30 (1s only) about it, on the map,
+  within the nest's range and with its flyer slot free (0x406830): weight
+  1, 0xff beside the nest's attacker (`+0xd2`), plus 10 x the sum of (1 +
+  count) over the marine groups (kinds 0-2, 0x4e3960) of the side-1 ships
+  beside it (row by row, not on their `+0x5ab`). One draw, `t = r % total
+  + 1`, the first cell whose running sum reaches `t`. The route is
+  0x55c3d0 from its cell and heading (below); `+0x10d` = 1, the step from
+  its cell's centre to entry 1's; entry 1 entered with another heading:
+  state 4 first; else moving (`+0xe0` 1) if 0x41ee20 allows the cell, else
+  holding (3). Then the flap sound's tick `now + (r % 41 + 60) x 375 / 100`
+  (drawn again when it passes, moving). Moving, its cell (flyer slot
+  `+0x14`) follows its place; at a step's end: the attacker's leg flown
+  (`+0xd6`, homing) re-picks; else 0x41efb0 (always asked) finding
+  something, and not homing: state 5; else the next entry: same heading
+  and allowed, moving on; same heading but not allowed, holding, and
+  re-picking at once if the flyer in that cell is bound for this one;
+  another heading, state 4. At the route's end: homing on the nest's cell
+  with a nest, it lands (6) (chasing: homing ends, re-pick); else
+  re-picks. Holding plays the picture at delay index 4 and re-picks at its
+  end (and again, homing ends, if the next cell's flyer is bound here).
+- **4 turn.** `HRPSPR_4`/`DRGSPR_4` from frame `heading x 8` to `turn-to
+  x 8` (through the last frame when 0 is the shorter way), then back to
+  the state it came from (3: moving or holding as 0x41ee20 says; 5; 6).
+- **5 strike.** 0x41f1c0 picks (none: state 3), turning first if its
+  heading differs. A harpy: the 8 cells about it row by row, the last
+  ship of a nation other than 4 without Orpheus (not a phantom, not under
+  way into the cell), the attacker before all; at frame 7, if the target
+  still is, the shot. A dragon: the empty cells about it that 0x42ebf0
+  answers (0xf: low landscape nibble 8, no north or west shore, nibble 5
+  not 1, nibbles 6 and 7 zero; 0x2c0: any cell whose low nibble is not 8;
+  else 0), weight 0x32 on land after a building (0x32-0x3e) was met in the
+  scan, else 0; one draw (`r % count` if all weigh 0, else `r % total`,
+  the first running sum reaching it); at frame 16 it picks again and sows
+  there. At the picture's end it heads home (`+0xc6`) and flies a leg.
+- **6 land.** Homing ends; an even heading first turns to heading + 1.
+  Then rest.
+- **7 die.** The picture, then removed (message 10).
+
+0x41efb0 (at each step's end): the 3 x 3 about it, own cell too, row by
+row, by the cell's object slot. A harpy stops at a ship of a nation other
+than 4 without Orpheus; a dragon at the attacker, else at the first empty
+cell 0x42ebf0 answers: no if no object came before it, else `r % 3 == 0`.
+
+0x55c3d0 (W, H, start, heading, end): up to three passes, each from the
+start: write the cell; `D`, `A` the main and side directions to the end
+(diagonal when neither distance is twice the other; `A` = `D` on a row,
+column or diagonal); `D` the one closer to the heading; within 1: stop.
+At the first bend the turn's sense is set (towards `D`: -1 when `D -
+heading` is -3..-1 or 5..7), the heading reversed (`D - 4`) when `D` is 2
+or 3 off and the end is 1-2 cells straight off or one diagonal, and no
+turn when 2 and 3 off with the end a knight's move away. Passes 0 and 1
+turn the heading by the sense and step, charging every cell off the map
+by its overshoot; pass 2 steps along `D` near the end ({<2, <2} or a
+knight's move), else turns until the step is on the map. A pass charged
+nothing (or pass 2) is kept: the end appended if reached, else a straight
+run along `D` (axis: until the distances are equal; diagonal: until one
+is 0), then along `A`. After pass 0 the sense flips; after pass 1 it flips
+back when pass 0 was charged no more. Each entry holds the heading it was
+entered with.
+
+0x41ee20 (a cell may be entered): its flyer slot free or the flyer's own,
+and no other flyer in state 3 in the 3 x 3 about it flying into it.
+
+0x41e4b0, once `now >= +0x81 + delay` (or not yet drawn): moving, the
+place is `(to - from) x frame / (end - first - 1) + from` (the end frame:
+`to`); it is drawn at the place less (0x28, 0x78) (a dragon (0x43, 0x92),
+its shadow (0x43, 0xd5); not in states 0 and 1), depth `max(0x26d0 - y,
+1000)`; the frame steps towards the end (state 1 not idle: 0); at the end
+0 and 6 set `+0xe0`, 1 `+0xe4`, 2 `+0xe0` holding its last frame, 3
+`+0xe1`, 4 `+0xdb`, 5 `+0xe9`, 7 removes it. Delays by state at 0x595d10
+(harpy 1, 2, 1, 1, 0, 1, 1, 1) and 0x595d30 (dragon 0, 0, 1, 1, 0, 1, 1,
+1); index 4 also while holding. A step thus takes the flying picture's
+frame count in ticks.
+
+**Decoded, not ported** (part 2): the hits 0x420670 (0x138e: the blow, 1
+in 7 a cry, `+0xca`; an orphan's `+0xba` less the blow), 0xda93 (a quarter;
+on its cell: gone), 0xda96 and 0x158bf; the nest's 0xdaf7 (the shooter's
+id into `+0xd2`, the chase; 0xdaf8 clears it 3000 ticks after the nest's
+last hit), so `+0xce`, `+0xca` stay clear in the port; the shot 0x14ba as
+the original sends it (the port's `flyer_strikes` keeps its own blow and
+the dragon's sowing on the scene's generator), the aim point 0x41df70,
+vt+0x2c; a harpy's look and strike at a town (0x1491) or fort (0x1494 with
+vt+0xa4 0), and their garrison lists (vt+0x5c) in the leg's weights; the
+sounds (events 0x5c, 0x5d, 0x67/0x68, 0x7d/0x7e, 0x88/0x89); the draw
+offsets and depth (the port draws at the place). Not decoded: the
+targets' vt+0x2c and vt+0xa4 (the port takes every object as targetable).
 
 ## Land creatures
 
