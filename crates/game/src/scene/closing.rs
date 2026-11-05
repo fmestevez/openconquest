@@ -12,7 +12,7 @@ use openconquest_formats::map::TILE_SIZE;
 
 use super::grapple::{bow_row, UNIT};
 use super::{sail, walk_path, Caches, GameData, Region, Scene};
-use crate::economy::{DOCK, PORT};
+use crate::economy::{DOCK, PORT, SHIPYARD};
 use crate::objects::{self, Closing, Task};
 use openconquest_formats::ObjectClass;
 
@@ -104,7 +104,12 @@ impl Scene {
             if let Some(s) = o.ship.as_mut() {
                 if !matches!(
                     s.task,
-                    Some(Task::Ram { .. } | Task::Board { .. } | Task::LoadRuins { .. })
+                    Some(
+                        Task::Ram { .. }
+                            | Task::Board { .. }
+                            | Task::LoadAt { .. }
+                            | Task::LoadRuins { .. }
+                    )
                 ) {
                     s.closing = None;
                 }
@@ -119,7 +124,12 @@ impl Scene {
                         && s.ram_run.is_none()
                         && matches!(
                             s.task,
-                            Some(Task::Ram { .. } | Task::Board { .. } | Task::LoadRuins { .. })
+                            Some(
+                                Task::Ram { .. }
+                                    | Task::Board { .. }
+                                    | Task::LoadAt { .. }
+                                    | Task::LoadRuins { .. }
+                            )
                         )
                 })
             })
@@ -130,8 +140,8 @@ impl Scene {
                 continue;
             };
             let task = self.objects[i].ship.as_ref().unwrap().task.unwrap();
-            if let Task::LoadRuins { target } = task {
-                self.load_ruins_tick(i, target);
+            if let Task::LoadAt { target } | Task::LoadRuins { target } = task {
+                self.load_tick(i, target);
                 continue;
             }
             let (Task::Ram { target } | Task::Board { target, .. }) = task else {
@@ -209,41 +219,48 @@ impl Scene {
         }
     }
 
-    /// Ship `i`'s Reload Object at own ruins `target` (command 0x1f kind
-    /// 2: event 0x10 `{3, 1, id, 0xff}`, the order 0x4aa840, `+0x696` 3
-    /// run by 0x4b7370), a game tick at a time. The order finds the ruins
-    /// by id (0x4ac050 with -1) and measures (0x4abf60: 0x557440 to a
-    /// port's or dock's berth, vt+0xb8, else to the anchor `+0x74 /
-    /// +0x78`): within half the box (2) closing in (`+0x6a1` 1), keeping
-    /// the ruins' player in `+0x6c6`; else sailing (3) with `+0x6c6`
-    /// 0xff. Closing in (0x4b73a0 state 1) looks for them with 0x4b7f10
-    /// in the cells' object slots, which their fall emptied (0x423d60 on
-    /// 0x138b -> 0x499860): not in the box (0xff), so sailing again with
-    /// `+0x6c7` -1, and the contact (0x4b84b0) and 0x2875 are never
-    /// reached. Sailing (0x4b5d10) on a new cell or held up: 0x4b9140(2,
-    /// -1, `+0x6c6`, id) finds them by player (0x4a8710, a list that lost
-    /// them: notice 0x13c and the task stopped) or by id: 0x50ebf0 gives
-    /// the berth (vt+0xb8 for classes below 0x44); the berth and the
-    /// anchor (vt+0x28, 0x40dfa0) both within 2 (0x557480) closing in
-    /// again, else a plan (0x4a6270 mode 5) to the berth. So a ship far at
-    /// the order sails to the berth and then lies there, turning between
-    /// the two states, until the ruins are gone (removed, 0x4232ed: by id
-    /// not found, notice 0x13c) or another order; one near ends at once
-    /// with notice 0x13c.
-    fn load_ruins_tick(&mut self, i: usize, target: u32) {
-        let ruins = self.object_index(target);
+    /// Ship `i`'s Reload Object at own port, yard, dock, fort or ship
+    /// `target`, standing or in ruins (command 0x1f kind 2: event 0x10
+    /// `{3, 1, id, 0xff}`, the order 0x4aa840, `+0x696` 3 run by
+    /// 0x4b7370), a game tick at a time. The order finds the target by id
+    /// (0x4ac050 with -1; gone, it does nothing) and measures (0x4abf60:
+    /// 0x557440 from the ship's cell to a port's or dock's berth, vt+0xb8,
+    /// else to the anchor `+0x74 / +0x78`, a ship's cell): within half
+    /// the box (2) closing in (`+0x6a1` 1), keeping the target's player in
+    /// `+0x6c6`; else sailing (3) with `+0x6c6` 0xff.
+    ///
+    /// Closing in (0x4b73a0 state 1) looks for it with 0x4b7f10(5,
+    /// pointer, id, .., 1) in the cells' object slots (`Scene::load_look`;
+    /// a ship's as the boarder's, `Scene::board_look`): not in the box
+    /// (0xff; ruins never are, their fall emptied the slots, 0x423d60 on
+    /// 0x138b -> 0x499860), sailing again with `+0x6c7` -1; within reach,
+    /// the contact (0x4b84b0, `Scene::load_contact`).
+    ///
+    /// Sailing (0x4b5d10) on a new cell or held up: 0x4b9140(2, -1,
+    /// `+0x6c6`, id) finds the target by player (0x4ac050 -> 0x4a8710,
+    /// whose list holds a standing one and has lost ruins: notice 0x13c
+    /// and the task stopped) or by id (0x51f1f0, found while it lasts;
+    /// removed ruins, 0x4232ed, lost likewise): 0x50ebf0 gives the berth
+    /// (vt+0xb8 for building classes below 0x44, a ship's cell), and the
+    /// berth and the anchor (vt+0x28, 0x40dfa0) both within 2 (0x557480)
+    /// close in again, else a plan (0x4a6270 mode 5) to the berth. So a
+    /// ship far at ruins sails to their berth and lies there, the two
+    /// states turning, until another order; one near ends at once with
+    /// notice 0x13c.
+    fn load_tick(&mut self, i: usize, target: u32) {
+        let found = self.object_index(target);
+        let standing = found.filter(|_| !self.fallen(target));
         let own = self.cell_of_object(i);
         let s = self.objects[i].ship.as_mut().unwrap();
         if s.closing.is_none_or(|c| c.target != target) {
-            // 0x4aa840: the ruins by id; gone, the order does nothing.
-            let Some(t) = ruins else {
+            // 0x4aa840: the target by id; gone, the order does nothing.
+            let Some(t) = found else {
                 s.task = None;
                 return;
             };
-            let anchor = self.objects[t].cell.unwrap_or(own);
             let at = match self.objects[t].class {
                 ObjectClass::Building(PORT | DOCK) => self.vt_berth(t),
-                _ => anchor,
+                _ => self.anchor_cell(t),
             };
             let near = walk_path::dist(own.0, own.1, at.0, at.1) <= BOX / 2;
             self.objects[i].ship.as_mut().unwrap().closing = Some(Closing {
@@ -262,21 +279,36 @@ impl Scene {
         let s = self.objects[i].ship.as_ref().unwrap();
         let c = s.closing.unwrap();
         if c.near {
-            // 0x4b73a0 state 1: 0x4b7f10 does not find them (0xff).
-            let c = self.closing_mut(i);
-            c.near = false;
-            c.from = None;
+            // 0x4b73a0 state 1.
+            let look = match standing {
+                Some(t) if self.objects[t].ship.is_some() => self.board_look(i, t),
+                Some(t) => self.load_look(i, t),
+                None => BoardLook::Out,
+            };
+            match look {
+                BoardLook::Out => {
+                    let c = self.closing_mut(i);
+                    c.near = false;
+                    c.from = None;
+                }
+                BoardLook::Closing => {}
+                BoardLook::Reach => self.load_contact(i, target),
+            }
             return;
         }
         if c.from == Some(own) && s.waited == 0.0 {
             return;
         }
-        let Some(t) = ruins.filter(|_| c.by_id) else {
+        let Some(t) = (if c.by_id { found } else { standing }) else {
             self.prey_lost(i, 0x13c);
             return;
         };
-        let berth = self.vt_berth(t);
-        let anchor = self.objects[t].cell.unwrap_or(berth);
+        let (berth, anchor) = if self.objects[t].ship.is_some() {
+            let cell = self.cell_of_object(t);
+            (cell, cell)
+        } else {
+            (self.vt_berth(t), self.anchor_cell(t))
+        };
         if walk_path::dist2(berth.0, berth.1, own.0, own.1) <= BOX / 2
             && walk_path::dist2(anchor.0, anchor.1, own.0, own.1) <= BOX / 2
         {
@@ -287,13 +319,112 @@ impl Scene {
         self.closing_mut(i).from = Some(own);
     }
 
+    /// An object's anchor cell (`+0x74 / +0x78`; a ship's own cell).
+    fn anchor_cell(&self, t: usize) -> (i32, i32) {
+        match self.objects[t].cell {
+            Some(c) if self.objects[t].ship.is_none() => c,
+            _ => self.cell_of_object(t),
+        }
+    }
+
+    /// The loader's look for a building (0x4b7f10 with a box of 5 and a
+    /// reach of 1, from 0x4b73a0 state 1): the box and its grid as the
+    /// boarder's (`Scene::board_look`); the building is found where its
+    /// cell lies in the box (its object slot). The point is its berth
+    /// (vt+0xb8), but the anchor (`+0x74 / +0x78`) for the classes of the
+    /// mask 0xe01c from 0x32 (the forts 0x34-0x36, and 0x3f-0x41), and
+    /// the reach 0 for a port, yard or dock (0x39-0x3b): its distance the
+    /// larger axis from the ship's cell, if within half the box on both.
+    /// Not found, out; within reach, `+0x6aa` the cell one past the box's
+    /// end corner (as the boarder's); further, a move (0x4a6270 mode 6)
+    /// through the box to the point; out of half the box, none. (Not
+    /// ported: the plan's building flag, 0x4a6330's second argument,
+    /// which lets a goal on land through to the region finder 0x4a5a10,
+    /// and `+0x594` set for the anchor's classes; the port's plan takes
+    /// no goal on land.)
+    fn load_look(&mut self, i: usize, t: usize) -> BoardLook {
+        let s2 = BOX / 2;
+        let own = self.cell_of_object(i);
+        let (cx, cy) = self.reserved_cell(i).unwrap_or(own);
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        let (x0, x1) = ((cx - s2).max(0), (cx + s2 + 1).min(w));
+        let (y0, y1) = ((cy - s2).max(0), (cy + s2 + 1).min(h));
+        let deep = objects::deep_draught(self.objects[i].ship.as_ref().unwrap().kind);
+        let mine = self.reserved_cell(i);
+        let cell = self.anchor_cell(t);
+        let mut found = false;
+        let mut grid = Vec::with_capacity(((x1 - x0).max(0) * (y1 - y0).max(0)) as usize);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let c = (x, y);
+                let mut v = if self.sea_cell(c, deep) { 0 } else { -1 };
+                if let Some(k) = self.slot_holder(c) {
+                    if k != i && Some(c) != mine {
+                        v = -1;
+                    }
+                }
+                found |= c == cell;
+                grid.push(v);
+            }
+        }
+        let ObjectClass::Building(class) = self.objects[t].class else {
+            return BoardLook::Out;
+        };
+        if !found {
+            return BoardLook::Out;
+        }
+        let (point, reach) = match class {
+            PORT | SHIPYARD | DOCK => (self.vt_berth(t), 0),
+            c if (0x32..0x52).contains(&c) && (1u32 << (c - 0x32)) & 0xe01c != 0 => (cell, REACH),
+            _ => (self.vt_berth(t), REACH),
+        };
+        let (dx, dy) = ((own.0 - point.0).abs(), (own.1 - point.1).abs());
+        if dx > s2 || dy > s2 {
+            return BoardLook::Closing;
+        }
+        if dx.max(dy) <= reach {
+            self.closing_mut(i).contact = w * y1 + x1;
+            return BoardLook::Reach;
+        }
+        let region = Region {
+            x0,
+            y0,
+            goal: (point.0 - x0, point.1 - y0),
+            w: x1 - x0,
+            h: y1 - y0,
+            grid,
+        };
+        self.closing_plan(i, point, Some(&region));
+        BoardLook::Closing
+    }
+
+    /// The loader within reach (0x4b73a0 state 1 -> 0x4b84b0): the two
+    /// are taken up for reloading. (Not ported: 0x4b84b0 waits out its
+    /// last hook's reload (`+0x6be`, 0x5c7740) and wants a ship target's
+    /// `+0x261` 0x1000, then throws a hook (kind 9, its chance from
+    /// 0x4bf7f0 and 0x499ca0; a miss back to state 1); the hook taken,
+    /// 0x4b73a0 states 7, 8 (pulled alongside, 0x4b57e0), 10 (the sail
+    /// furled, 0x4b8aa0), 11 (the walkway) and 3, where 0x4b3930 sends a
+    /// building 0x2875; the port links at once.)
+    fn load_contact(&mut self, i: usize, target: u32) {
+        let ship = self.objects[i].id;
+        let s = self.objects[i].ship.as_mut().unwrap();
+        s.task = None;
+        s.closing = None;
+        s.path.clear();
+        self.link(ship, target);
+    }
+
     /// A port's, yard's, dock's or fort's berth (vt+0xb8, 0x40e050): its
     /// anchor a step toward its facing `+0x1dc` (0x5c4f4c), (-1, -1) for
     /// none. A fort's facing is set as it is made (0x419f80 message 2):
     /// 6 when the cell below its anchor is water (landscape low nibble 7
     /// or 1), else 0 for the cell right, 4 left, 2 above; with none it is
-    /// kept (the record's field 10 when the class flag 8 is set, 0x4280f2;
-    /// else the constructor's -1, 0x427780).
+    /// kept: the record's field 10 only with the class flag 8 (`+0x1d8`,
+    /// 0x4280e4), which the fort's constructor 0x417810 (vtable 0x59592c)
+    /// leaves out (0x20), so the base constructor's -1 (0x427780) and the
+    /// berth (-1, -1). A port's, yard's or dock's (0x40ef70: 0xa, flag 8)
+    /// facing is the record's field 10.
     pub(super) fn vt_berth(&self, t: usize) -> (i32, i32) {
         let o = &self.objects[t];
         if let (ObjectClass::Building(c), Some((x, y))) = (o.class, o.cell) {
@@ -313,10 +444,13 @@ impl Scene {
                 } else {
                     None
                 };
-                if let Some(f) = facing {
-                    let (dx, dy) = UNIT[f];
-                    return (x + dx, y + dy);
-                }
+                return match facing {
+                    Some(f) => {
+                        let (dx, dy) = UNIT[f];
+                        (x + dx, y + dy)
+                    }
+                    None => (-1, -1),
+                };
             }
         }
         self.berth_cell(t).unwrap_or((-1, -1))

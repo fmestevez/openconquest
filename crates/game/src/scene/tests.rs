@@ -7402,30 +7402,117 @@ fn miss007_guard_hunts_the_sword() {
     assert_eq!(scene.brain.as_ref().unwrap().fleets[11].state, 25);
 }
 
-/// Puts own ship `ship` beside object `target` and takes the two up for
-/// reloading (Reload Object, already alongside).
-fn reload_beside(scene: &mut Scene, ship: u32, target: u32) {
+/// Puts own ship `ship` where its load reaches object `target` (a port's,
+/// yard's or dock's berth, vt+0xb8; else a free water cell next to its
+/// anchor) and takes the two up for reloading (Reload Object: closing in
+/// at the order, 0x4aa840, and within reach at the first look, 0x4b7f10).
+fn reload_beside(scene: &mut Scene, data: &GameData, caches: &mut Caches, ship: u32, target: u32) {
     let (i, t) = (
         scene.object_index(ship).unwrap(),
         scene.object_index(target).unwrap(),
     );
-    let from = (scene.objects[i].x, scene.objects[i].y);
-    let (x, y) = scene
-        .beside_cells(t, from)
-        .into_iter()
-        .find(|&(x, y)| {
-            !scene
-                .objects
-                .iter()
-                .any(|o| o.id != ship && o.ship.is_some() && (o.x - x).hypot(o.y - y) < 32.0)
-        })
-        .unwrap();
+    let tile = TILE_SIZE as f32;
+    let anchor = scene.cell_of_object(t);
+    let (x, y) = if matches!(
+        scene.objects[t].class,
+        ObjectClass::Building(PORT | SHIPYARD | DOCK)
+    ) {
+        Scene::cell_middle(scene.vt_berth(t))
+    } else {
+        let from = (scene.objects[i].x, scene.objects[i].y);
+        scene
+            .beside_cells(t, from)
+            .into_iter()
+            .find(|&(x, y)| {
+                let c = ((x / tile).floor() as i32, (y / tile).floor() as i32);
+                (c.0 - anchor.0).abs().max((c.1 - anchor.1).abs()) == 1
+                    && !scene.objects.iter().any(|o| {
+                        o.id != ship && o.ship.is_some() && (o.x - x).hypot(o.y - y) < 32.0
+                    })
+            })
+            .unwrap()
+    };
     scene.objects[i].x = x;
     scene.objects[i].y = y;
     scene.objects[i].ship.as_mut().unwrap().path.clear();
     scene.objects[i].ship.as_mut().unwrap().task = None;
-    assert!(scene.alongside(i, t));
     scene.order_load(ship, target).unwrap();
+    scene.run_closing(data, caches);
+    assert!(scene.load_link(ship).is_some_and(|l| l.other == target));
+}
+
+/// A standing target's load runs the original's machine (0x4aa840,
+/// 0x4b7370): far at the order the ship sails to the berth (0x4b5d10,
+/// 0x4b9140 by id, a plan to vt+0xb8), closes in once berth and anchor
+/// are within 2 (0x557480), and reaches a yard (0x4b7f10, reach 0 for
+/// 0x39-0x3b) only on its berth, where the two are linked (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn load_at_a_yard_sails_to_its_berth() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    past_hold(&mut scene);
+    scene.brain = None;
+    let yard = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o))
+        .unwrap()
+        .id;
+    let t = scene.object_index(yard).unwrap();
+    let berth = scene.vt_berth(t);
+    let (_, ship) = scene
+        .objects
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind < 10))
+        .map(|(k, o)| (k, o.id))
+        .find(|&(k, _)| {
+            let c = scene.cell_of_object(k);
+            (c.0 - berth.0).abs().max((c.1 - berth.1).abs()) > 2
+        })
+        .unwrap();
+    scene.order_load(ship, yard).unwrap();
+    let mut linked = None;
+    for n in 0..3000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        if scene.load_link(ship).is_some() {
+            linked = Some(n);
+            break;
+        }
+    }
+    assert!(linked.is_some(), "never linked");
+    assert_eq!(
+        scene.cell_of_object(scene.object_index(ship).unwrap()),
+        berth
+    );
+    assert_eq!(scene.load_link(ship).unwrap().other, yard);
+}
+
+/// A fort's facing with no water beside its anchor is the constructor's
+/// -1 (0x417810 sets `+0x1d8` 0x20, without the flag 8 that would take
+/// the record's field 10 at 0x4280e4): its berth (vt+0xb8, 0x40e050)
+/// is (-1, -1) (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_dry_fort_has_no_berth() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let (mut scene, fort, _) = own_fort(&data, &mut caches);
+    let t = scene.object_index(fort).unwrap();
+    let (x, y) = scene.objects[t].cell.unwrap();
+    let w = scene.grid.width as i32;
+    for (dx, dy) in [(0, 1), (1, 0), (-1, 0), (0, -1)] {
+        let k = ((y + dy) * w + x + dx) as usize;
+        scene.cell_types[k] = (scene.cell_types[k] & 0xf0) | 8;
+    }
+    assert_eq!(scene.vt_berth(t), (-1, -1));
 }
 
 /// The load panel at a shipyard (c_load.cpp, 0x4e7640): the settlement's
@@ -7463,7 +7550,7 @@ fn load_panel_moves_items_both_ways() {
         .id;
     // Not a reload target: a settlement (only ports, yards, docks, ships).
     assert!(scene.order_load(ship, site).is_err());
-    reload_beside(&mut scene, ship, yard);
+    reload_beside(&mut scene, &data, &mut caches, ship, yard);
     assert_eq!(scene.load_sides(yard), Some([site, ship]));
     assert_eq!(scene.load_sides(ship), Some([ship, site]));
     let k = scene.object_index(ship).unwrap();
@@ -7612,7 +7699,7 @@ fn ships_reload_from_each_other() {
         o.ship.as_mut().unwrap().crew.squads = [0; 3];
         o.combat.as_mut().unwrap().weapons.clear();
     }
-    reload_beside(&mut scene, a, b);
+    reload_beside(&mut scene, &data, &mut caches, a, b);
     assert_eq!(scene.load_sides(b), Some([b, a]));
     let ka = scene.object_index(a).unwrap();
     {
@@ -8139,7 +8226,7 @@ fn units_wear_and_move_with_their_condition() {
 
     // Through the load panel: the worn scorpion ashore keeps its 40%, the
     // settlement's place shows its first unit's.
-    reload_beside(&mut scene, ship, yard);
+    reload_beside(&mut scene, &data, &mut caches, ship, yard);
     scene.set_stock_units(site, Default::default());
     let list = scene.load_list(ship, None);
     let first = list
@@ -8284,7 +8371,7 @@ fn worn_units_are_mended() {
     scene.order_repair_stock(workshop).unwrap();
     assert_eq!(amber - scene.amber, 70);
     // No unit goes ashore meanwhile.
-    reload_beside(&mut scene, ship, dock);
+    reload_beside(&mut scene, &data, &mut caches, ship, dock);
     assert!(scene
         .transfer(ship, site, Cargo::Unit(0, 0), &data, &mut caches)
         .is_err());
@@ -9350,7 +9437,7 @@ fn forts_reload_with_settlements_and_ships() {
         .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| (2..10).contains(&s.kind)))
         .unwrap()
         .id;
-    reload_beside(&mut scene, ship, fort);
+    reload_beside(&mut scene, &data, &mut caches, ship, fort);
     assert_eq!(scene.load_sides(fort), Some([fort, ship]));
     scene.run_loads();
     assert_eq!(scene.load_sides(ship), Some([ship, fort]));

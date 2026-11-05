@@ -1501,7 +1501,44 @@ shipyard (0x3a), dock (0x3b), fort (0x34-0x36) or ship (classes 200-211);
 not a settlement. The ship sails alongside through its contact machine
 (`+0x8e6`, type 0x32 for a building, 200 for a ship); in contact state 3
 it sends 0x2875 to the target (0x4b3930), which takes it up (LandObj
-0x425990: `+0x104` = 1, `+0x108` = the ship's id). A settlement's own
+0x425990: `+0x104` = 1, `+0x108` = the ship's id).
+
+The way there (event 0x10 `{3, 1, id, 0xff}`, the order 0x4aa840,
+`+0x696` 3 run by 0x4b7370 by `+0x6a1`) is the one under "Their orders
+at ruins" (Load), for a standing target too: near at the order (0x4abf60
+within 2: to a port's or dock's berth vt+0xb8, else the anchor, a ship's
+cell) closing in with `+0x6c6` the target's player, else sailing with
+0xff; sailing (0x4b5d10 -> 0x4b9140) finds a standing target by player
+or id, plans to its berth (0x50ebf0: vt+0xb8 for buildings below 0x44, a
+ship's cell) and closes in once berth and anchor are within 2. Closing in
+(0x4b73a0 state 1) looks with 0x4b7f10(5, ..., reach 1): a ship as the
+boarder's look; a building found where one of its cells' object slots in
+the box holds it, its point the berth (vt+0xb8), or the anchor for the
+classes of mask 0xe01c from 0x32 (0x34-0x36, 0x3f-0x41; these also set
+the ship's `+0x594` 1), the reach 0 for 0x39, 0x3a and 0x3b (so the ship
+must lie on the berth), the distance the larger axis from the ship's
+cell when within 2 on both; within reach 1 (and `+0x6aa` the box's
+end-corner quirk), further a mode 6 plan through the box to the point
+(0x4a6270 with the building flag, which lets 0x4a6330 take a goal on
+land to the region finder 0x4a5a10), out of 2 nothing. Within reach,
+0x4b84b0: 0 while `now - +0x6be` is below 0x5c7740[the player's byte at
+0x90 of its 0xba0 record] or a contact is held (`+0x8e6`), for 0x39-0x3b
+unless the berth is the ship's cell, for a ship target without `+0x261`
+0x1000; else it throws a hook (shot 0x14ba kind 9, its chance 0x4bf7f0
+with the 0x499ca0 test, `+0x6c2` from 0x598de4 by distance / 10) and
+returns 1: state 7 (`+0x6a0` 1). State 7: the hook missed (`+0x6a2` < 0)
+back to 1; held, for a fort (0x34-0x36) within 1 of its anchor, its
+`+0x6c2` time passed, vt+0xb0 0 and its `+0x1e0` the ship's `+0x4c`,
+or a port, yard or dock whose berth is the ship's cell and the time
+passed, or a ship whose contact is this one in its type 5, state 8 (0x4b37d0 holds the commands, 0x4b54a0 pulls); state 8
+(0x4b57e0) to 10 (furl, 0x4b8aa0) for a building; 11 the walkway; 3
+sends 0x2875 (0x4b3930, a building) and goes to 4, lying linked; the
+contact gone: 12 (walkway up), 6 (sail out) and back to 1 with
+vt+4(8, 0x90). The port (`Scene::load_tick`, `load_look`) runs the order,
+the sailing and the look; at reach it links at once (`load_contact`).
+Not ported: 0x4b84b0's waits and hook, states 7-12 (the pull, furl and
+walkway before the link, and their ending), the building flag of the
+plan (no goal on land) and `+0x594`. A settlement's own
 Reload Object (menu slot 1) does the same with one of its forts (0x441ba0
 case 0x1f, checked in 0xc452: one of its own buildings, its list
 `+0x1d0` of `+0x1c8`, of classes 0x34-0x36, while it is idle): there is no
@@ -7011,8 +7048,11 @@ Their orders at ruins (the click 0x5180e0: mode 0xc order 0x1f `{id,
   step for the facing `+0x1dc` (-1, -1 below 0); a fort's facing
   (0x419f80 message 2, after the weapons): 6 when the cell below its
   anchor has landscape low nibble 7 or 1 (`grid + 8`), else 0 the cell
-  right, 4 left, 2 above (each inside the map), else kept (0x427780's
-  -1, or record field 10 with class flag 8). The port: `order_load`
+  right, 4 left, 2 above (each inside the map), else kept: 0x427780's
+  -1, since the fort's constructor 0x417810 (vtable 0x59592c) sets
+  `+0x1d8` 0x20 without the flag 8 that takes record field 10 at
+  0x4280e4 (a port's, yard's or dock's 0x40ef70 sets 0xa, with it), so a
+  dry fort's berth is (-1, -1). The port: `order_load`
   takes own port, yard, dock and fort ruins as `Task::LoadRuins`,
   `Scene::load_ruins_tick` (`Closing::by_id` the `+0x6c6` 0xff),
   `Scene::vt_berth`. Tested on miss000.

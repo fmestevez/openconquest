@@ -199,8 +199,9 @@ enum Payload {
 
 impl Scene {
     /// Sends own ship `ship` (Reload Object, command 0x1f with a target) to
-    /// lie alongside own port, shipyard, dock, fort or ship `target`; once
-    /// there the two can reload (0x4dc630: the targets 0x4dd7af accepts).
+    /// reach own port, shipyard, dock, fort or ship `target` (the order
+    /// 0x4aa840, `Scene::load_tick`); at the contact
+    /// the two can reload (0x4dc630: the targets 0x4dd7af accepts).
     /// A settlement's Reload Object takes up one of its forts at once
     /// (`load_fort`).
     pub fn order_load(&mut self, ship: u32, target: u32) -> Result<(), String> {
@@ -251,20 +252,13 @@ impl Scene {
         if self.construction_at(target).is_some() {
             return Err("It is still being built".into());
         }
+        // The order 0x4aa840 (`+0x696` 3): closing in or sailing to the
+        // target, the contact within reach (`Scene::load_tick`).
         self.loads.retain(|l| l.ship != ship);
-        if self.alongside(i, t) {
-            let s = self.objects[i].ship.as_mut().unwrap();
-            s.path.clear();
-            s.task = None;
-            self.link(ship, target);
-            return Ok(());
-        }
-        let path = self
-            .route_beside(i, t)
-            .ok_or("The ship cannot get alongside")?;
         let s = self.objects[i].ship.as_mut().unwrap();
-        s.path = path;
+        s.path.clear();
         s.task = Some(Task::LoadAt { target });
+        s.closing = None;
         Ok(())
     }
 
@@ -307,42 +301,16 @@ impl Scene {
 
     /// Takes `ship` and `other` up for reloading (message 0x2875): a
     /// newcomer replaces any ship already there (`+0x108`).
-    fn link(&mut self, ship: u32, other: u32) {
+    pub(super) fn link(&mut self, ship: u32, other: u32) {
         self.loads
             .retain(|l| l.ship != ship && l.other != other && l.other != ship && l.ship != other);
         self.loads.push(LoadLink { ship, other });
     }
 
-    /// Ships sent to reload take up their target on arriving; links end as
+    /// Links (taken up at the contact, `Scene::load_tick`) end as
     /// either side sails off, falls or drifts apart (0x4b4401: the contact
     /// ends with message 0x2876).
     pub(super) fn run_loads(&mut self) {
-        let arrived: Vec<(u32, u32)> = self
-            .objects
-            .iter()
-            .filter_map(|o| match o.ship.as_ref() {
-                Some(s) if s.path.is_empty() => match s.task {
-                    Some(Task::LoadAt { target }) => Some((o.id, target)),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect();
-        for (ship, target) in arrived {
-            let Some(i) = self.object_index(ship) else {
-                continue;
-            };
-            self.objects[i].ship.as_mut().unwrap().task = None;
-            match self.object_index(target) {
-                Some(t) if self.alongside(i, t) => self.link(ship, target),
-                _ => {
-                    if self.is_own(&self.objects[i]) {
-                        self.messages
-                            .push("The ship could not get alongside".into());
-                    }
-                }
-            }
-        }
         let keep: Vec<bool> = self
             .loads
             .iter()
