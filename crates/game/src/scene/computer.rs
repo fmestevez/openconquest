@@ -8145,7 +8145,13 @@ mod tests {
             scene.update(crate::clock::TICK, &data, &mut caches);
         }
         let town = scene.computers.players[0].bases[0].site.unwrap();
+        let owner = scene.objects[scene.object_index(town).unwrap()].owner;
+        assert!(owner.is_some());
         scene.hit(town, f32::MAX, None, &data, &mut caches);
+        // Out of its player's list (0x4a8410), its owner kept for the
+        // radar icon.
+        assert_eq!(scene.objects[scene.object_index(town).unwrap()].owner, None);
+        assert_eq!(scene.ruins[&town].owner, owner);
         let n = scene.ruins[&town].frames;
         // TSPR_33_21: 21 frames, one every 75 / 21 = 3 ticks.
         assert_eq!(n, 21);
@@ -8169,6 +8175,41 @@ mod tests {
             scene.update(crate::clock::TICK, &data, &mut caches);
         }
         assert_eq!(scene.computers.players[0].bases[0].site, None);
+    }
+
+    /// The judge's count (0x448610 -> 0x4c46c0) walks the player's list,
+    /// which a fallen building leaves at its fall (0x423d60 -> 0x50e750 ->
+    /// the navy's 0x83 -> 0x4a8410), not at its removal: a player whose
+    /// last building falls is beaten while its ruins still stand.
+    #[test]
+    fn the_last_building_fallen_is_a_defeat_at_once() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        let own: Vec<(u32, bool)> = scene
+            .objects
+            .iter()
+            .filter(|o| scene.is_own(o))
+            .filter(|o| matches!(o.class, ObjectClass::Ship | ObjectClass::Building(_)))
+            .map(|o| (o.id, o.ship.is_some()))
+            .collect();
+        for &(id, ship) in &own {
+            if ship {
+                let i = scene.object_index(id).unwrap();
+                scene.objects.remove(i);
+            }
+        }
+        let buildings: Vec<u32> = own.iter().filter(|o| !o.1).map(|o| o.0).collect();
+        let (&last, rest) = buildings.split_last().unwrap();
+        for &id in rest {
+            scene.hit(id, f32::MAX, None, &data, &mut caches);
+        }
+        assert_eq!(scene.judge(), None);
+        scene.hit(last, f32::MAX, None, &data, &mut caches);
+        assert!(scene.ruins.contains_key(&last) && scene.object_index(last).is_some());
+        assert_eq!(scene.judge(), Some(crate::scene::Outcome::Defeat));
     }
 
     /// In battle01 the computer player (normal) builds its town up, fills

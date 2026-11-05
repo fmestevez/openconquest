@@ -1539,7 +1539,11 @@ pub fn draw_minimap(
             .iter()
             .filter(|o| (!moves(o) || scene.is_visible(o)) && !scene.phantom_hidden(o))
         {
-            let Some((icon, large)) = minimap_icon(obj) else {
+            // A fallen building keeps its icon, in its owner's colours,
+            // until it is removed (message 3 sends itself 0xd21 at
+            // 0x42686a; nothing at the fall).
+            let ruined = scene.ruins.get(&obj.id).and_then(|r| r.owner);
+            let Some((icon, large)) = minimap_icon(obj, obj.owner.or(ruined)) else {
                 continue;
             };
             let atlas = if large { big } else { small };
@@ -1646,14 +1650,14 @@ pub fn draw_minimap(
 }
 
 /// An object's minimap icon (an index into `LMAP8X8`, or `LMAP16X16` when
-/// large) as the original picks it (0x50da60, 0x51cdd0).
-fn minimap_icon(obj: &MapObject) -> Option<(u32, bool)> {
+/// large) as the original picks it (0x50da60, 0x51cdd0), `owner` the
+/// object's (a fallen building's kept one).
+fn minimap_icon(obj: &MapObject, owner: Option<(u32, u32)>) -> Option<(u32, bool)> {
     if obj.asleep.is_some() {
         return None;
     }
-    if let Some((nation, slot)) = obj
-        .owner
-        .filter(|_| matches!(obj.class, ObjectClass::Ship | ObjectClass::Building(_)))
+    if let Some((nation, slot)) =
+        owner.filter(|_| matches!(obj.class, ObjectClass::Ship | ObjectClass::Building(_)))
     {
         let icon = if nation == 4 { 0x10 } else { nation * 4 + slot };
         let large = matches!(obj.class, ObjectClass::Building(0x32 | 0x33));

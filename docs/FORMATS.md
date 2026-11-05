@@ -6776,11 +6776,31 @@ clearing the base that holds it (0x484b20 / 0x482c50). The rubble
 (below) stays. The port: `Scene::ruins` (saved), stepped first in each
 tick (`step_ruins`) and removed before the tick's delivery
 (`remove_ruins`); the computer frees a base when its town's object is
-gone (`computer_news`). Not ported: the port's ruins have no owner from
-the fall (`Scene::fallen`), where the original keeps `+0x54` / `+0x55`
-for those ticks; what else reads a fallen building's owner in that
-window (the judge's counts 0x448610, the interface, the brains) is not
-checked.
+gone (`computer_news`).
+
+Who sees the fallen building in that window. At the fall 0x423d60 (at
+0x42439d, all but forts 0x34-0x36; a fort's drain 0x4184f0 on 0x138b at
+0x418cfe / 0x418d48) calls 0x50e750 with the killer `+0x1ac`: a direct
+send (0x542630) of 0x1c57 message 0x83 to the navy, whose 0x4a8410
+counts the loss and gain (0x4a9250) and takes the building out of its
+player's list (`[0x5c7508] + player x 0xba0 + 3000`, 0x4a8460 ->
+0x55b500) and out of its group (0x49bef0, 0x49ec00 on `[0x5c7504]`).
+So every walk of that list stops seeing it at the fall: the judge's
+counts (0x448610 -> 0x4c46c0 -> 0x4c4610, which test no state, only the
+class masks), 0x4a8620, the ports' search 0x4c5910. The radar icon is
+not touched at the fall (0x50de40's callers are the phantom's 0xd21 and
+message 3's at 0x42686a, `+0xa4` not 0xff): it stays, in the owner's
+colours (0x50da60: `+0x54 / +0x55` for `+0x57` 1, taken when made),
+until the removal. The port keeps its ruins ownerless (`Scene::fallen`:
+no combat, no owner), which is what the list's walkers see, and the
+owner with the ruins (`Construction::owner`) for the minimap's icon
+(`render::minimap_icon`); tested: battle01's last building falling is
+a defeat at once, its ruins standing. Not decoded: what the pointer and
+the object info do over a fallen building, which the hit test 0x423460
+still picks in state 2 (the info filler vt+0x18 from 0x516c10, base
+0x50e7b0 reading `+0x57` and the owner; the pointer modes 0x516ea0 and
+clicks 0x5180e0 for it); the port picks the ruins and shows them with no
+owner.
 
 The fall's rubble is a terrain tile on map layer 5. For each cell i of
 the site (`+0x56`, 1 or 4: x + i % 2, y + i / 2) two draws of the

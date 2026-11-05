@@ -1416,7 +1416,10 @@ impl Scene {
 
     /// Whether building `id` has fallen (`+0xa4` 2: 0x423d60 on 0x138b at
     /// 0x424301, the nest's fall 0x41d3e5 / 0x41d470, nothing else writes
-    /// 2): the port's ruins, which keep no combat and no owner. (A
+    /// 2): the port's ruins, which keep no combat and no owner: the
+    /// original keeps `+0x54 / +0x55` but takes it out of its player's
+    /// list at the fall (0x50e750 -> 0x4a8410), as the port's walks by
+    /// owner do (the owner is kept in `ruins` for the radar icon). (A
     /// building being mended is in state 1: 0x1389 sets `+0x10c` only.)
     pub(super) fn fallen(&self, id: u32) -> bool {
         self.object_index(id).is_some_and(|i| {

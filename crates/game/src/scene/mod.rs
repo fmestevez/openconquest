@@ -181,6 +181,10 @@ pub struct Construction {
     pub started: bool,
     #[serde(default)]
     pub wait: u32,
+    /// Ruins only: the fallen building's owner (`+0x54 / +0x55`, which
+    /// 0x423d60 leaves), whose radar icon stays until the removal.
+    #[serde(default)]
+    pub owner: Option<(u32, u32)>,
     /// Saves from before the frames were counted: seconds of a whole.
     #[serde(default, skip_serializing)]
     elapsed: f32,

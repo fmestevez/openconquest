@@ -1485,13 +1485,19 @@ impl Scene {
                 .flatten()
                 .filter(|f| !f.is_empty());
             match ruins {
-                // Ruins, owned by no one (the original keeps the owner),
-                // until their collapse ends.
+                // Ruins, owned by no one, until their collapse ends. The
+                // original keeps `+0x54 / +0x55` but takes the building out
+                // of its player's list at the fall (0x423d60 at 0x42439d,
+                // forts' 0x4184f0 at 0x418cfe / 0x418d48: 0x50e750 -> the
+                // navy's 0x83 -> 0x4a8410), which the judge's counts
+                // (0x4c46c0), the ports' search (0x4c5910) and the groups
+                // (0x4a8460) walk; the owner is kept with the ruins for
+                // the radar icon, taken off only at the removal.
                 Some(frames) => {
                     let obj = &mut self.objects[ti];
                     obj.frames = frames;
                     obj.combat = None;
-                    obj.owner = None;
+                    let owner = obj.owner.take();
                     // The collapse plays once, then the object goes
                     // (0x4230f0 state 2, `step_ruins`).
                     obj.progress = Some(0.0);
@@ -1503,6 +1509,7 @@ impl Scene {
                         Construction {
                             site: target,
                             frames,
+                            owner,
                             ..Default::default()
                         },
                     );
