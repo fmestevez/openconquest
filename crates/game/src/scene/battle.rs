@@ -520,8 +520,9 @@ impl Scene {
     /// was found on, `+0x28` / `+0x2c`). Each cell gives at most one
     /// candidate, the first of its slots that is: the occupant, of
     /// another side (`+0x57`) or an enemy (0x4efe20 < 0), but a building
-    /// of classes 0x32-0x3e in state 2 (a settlement mending its stock,
-    /// 0x441ba0); a sea creature, the medusa (0x1fa) or the siren (0x1fd)
+    /// of classes 0x32-0x3e in state `+0xa4` 2 (fallen: the port's ruins,
+    /// owned by no one; a settlement mending its stock is in state 1, its
+    /// job `+0x110` 2); a sea creature, the medusa (0x1fa) or the siren (0x1fd)
     /// whoever's, else an enemy; a flyer (0x1f8, 0x1f9). It is kept with
     /// a non-zero shot test (`group_score`), but the object held, kept
     /// with the score it had where it was found, whatever (up to 150 in
@@ -555,7 +556,7 @@ impl Scene {
                         o.owner != me.owner
                             && (Self::side_of(o) != Self::side_of(me) || Self::are_enemies(me, o))
                             && !(matches!(o.class, ObjectClass::Building(0x32..=0x3e))
-                                && self.stock_repair_at(o.id).is_some())
+                                && self.fallen(o.id))
                     }
                     1 => {
                         matches!(o.class, ObjectClass::Monster(0x1fa | 0x1fd))

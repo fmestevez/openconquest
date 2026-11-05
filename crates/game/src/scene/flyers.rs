@@ -1191,21 +1191,20 @@ impl Scene {
     /// (0x4e3960 through 0x4e5e40). A settlement or town (class 0x1491)
     /// lists its stock (vt+0x5c 0x43bfe0 page 0: its nine items' places
     /// with their counts, so each of items 0-2 counts one more), none in
-    /// states `+0xa4` 2 (mended), 3 (sold) or 0xff; on its way up as an
+    /// states `+0xa4` 2 (fallen), 3 (sold) or 0xff; on its way up as an
     /// upgrade (`+0xa4` 0 with `+0x23c`), 0x43bfe0 first makes its life
     /// `+0xa8` whole. A fort (0x1494, vt+0x5c 0x4179b0) lists each squad of
-    /// its places alone, with no count, only while it stands (`+0xa4` 1).
-    /// Anything else lists nothing. (Not identified: the town state 0xff.)
+    /// its places alone, with no count, only while it stands (`+0xa4` 1);
+    /// being mended (`+0x10c` with job 0xff, still state 1) only changes
+    /// its entries' flags, so they count. Anything else lists nothing.
+    /// (Not identified: the town state 0xff.)
     pub(super) fn harpy_marines(&mut self, j: usize) -> u32 {
         use crate::economy::{SETTLEMENT, TOWN};
         let id = self.objects[j].id;
         let list = match self.objects[j].class {
             _ if self.objects[j].ship.is_some() => self.ship_list(j),
             ObjectClass::Building(SETTLEMENT | TOWN) => {
-                if self.mending.contains(&id)
-                    || self.selling.contains_key(&id)
-                    || self.sold.contains(&id)
-                {
+                if self.fallen(id) || self.selling.contains_key(&id) || self.sold.contains(&id) {
                     return 0;
                 }
                 if self.construction_at(id).is_some_and(|c| c.upgrade) {
@@ -1216,7 +1215,7 @@ impl Scene {
                 self.load_list(id, None)
             }
             ObjectClass::Building(0x34..=0x36) => {
-                if !self.standing(id) || self.mending.contains(&id) {
+                if !self.standing(id) || self.fallen(id) {
                     return 0;
                 }
                 self.fort_list(j)

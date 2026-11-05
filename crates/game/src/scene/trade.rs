@@ -1420,6 +1420,24 @@ impl Scene {
             && !self.mending.contains(&site)
     }
 
+    /// Whether building `id` has fallen (`+0xa4` 2: 0x423d60 on 0x138b at
+    /// 0x424301, the nest's fall 0x41d3e5 / 0x41d470, nothing else writes
+    /// 2): the port's ruins, which keep no combat and no owner. (A
+    /// building being mended is in state 1: 0x1389 sets `+0x10c` only.)
+    pub(super) fn fallen(&self, id: u32) -> bool {
+        self.object_index(id).is_some_and(|i| {
+            let o = &self.objects[i];
+            matches!(o.class, ObjectClass::Building(_)) && o.combat.is_none() && o.owner.is_none()
+        })
+    }
+
+    /// Whether building `id` is fallen (`+0xa4` 2) or sold (3, sold or
+    /// being sold), the states 0x42c9a0 drops from a group's list and
+    /// 0x43d220 counts no town building in (with 0xff, not identified).
+    pub(super) fn fallen_or_sold(&self, id: u32) -> bool {
+        self.fallen(id) || self.sold.contains(&id) || self.selling.contains_key(&id)
+    }
+
     /// Whether building `id` stands (`+0xa4` 1): not going up, asleep
     /// (0x10) or sold (3).
     pub fn standing(&self, id: u32) -> bool {

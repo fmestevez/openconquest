@@ -2174,7 +2174,8 @@ impl Scene {
     /// found; for player 16 its class-0x40 structures), then pruned when
     /// there is one (0x4c65c0, last to first: what is not a port, or
     /// whose vt+0xb4 0x40e020 fails: no facing, or a state `+0xa4` other
-    /// than 1 standing, being built 0, mended 2, asleep 0x10). (Not
+    /// than 1 standing, being built 0, fallen 2, sold 3, asleep 0x10;
+    /// not `+0x10c`, so a port being mended stays). (Not
     /// identified: the flag `+0x1d8 & 0x10` with `+0x1c8 == 0` that
     /// 0x40e020 also refuses.)
     fn zone_port_list(&mut self, z: usize) -> Vec<u32> {
@@ -2207,9 +2208,8 @@ impl Scene {
                     let o = &self.objects[p];
                     o.class == ObjectClass::Building(PORT)
                         && self.berth_cell(p).is_some()
-                        && o.asleep.is_none()
-                        && self.construction_at(id).is_none()
-                        && !self.mending.contains(&id)
+                        && self.standing(id)
+                        && !self.fallen(id)
                 })
             })
             .collect();

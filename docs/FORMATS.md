@@ -4092,8 +4092,9 @@ human's explored layer only: theirs scan every cell), the side `+0x57`
 of the ships a barbarian structure builds (0x4e2117 copies it from the
 creation record's `+0x1f`; not decoded, so the scan keeps the
 structure's own player's objects out), the
-state 2 of buildings 0x34-0x3e (a settlement's is its stock mending,
-0x441ba0, which the scan skips), a ship's reserved cell (the port's ships
+state 2 of buildings 0x34-0x3e (the scan skips classes 0x32-0x3e in
+`+0xa4` 2, fallen: the port's ruins, `Scene::fallen`; a settlement
+mending its stock is in state 1, its job `+0x110` 2, and is scanned), a ship's reserved cell (the port's ships
 hold only the cell they are in), a fort's 0xcb9 on 0x2874
 (its `+0x1e0` not decoded; yards' and docks' are ported), whether a navy group of a computer ever holds a fort (the
 port's flotillas hold ships), 0x43d300's test that the building is still
@@ -5195,6 +5196,22 @@ blow path (`hit`, `land_shot`, `fort_blow`, `strike`, the fire and the
 stare) does nothing on it, and a building being mended takes blows,
 fire and the stare as any. Not checked: the port's shots are aimed at
 their target and do not hit-test the ruins on their way.
+
+The other tests of `+0xa4` 2 are of the fallen too, never of the
+mending (`+0x10c`), and the port asks `Scene::fallen` (its ruins: a
+building with no combat and no owner) there: the harpy's count of a
+town's marines (0x43bfe0: none in 2, 3, 0xff) and of a fort's (0x4179b0:
+state 1 only; mended, job 0xff, it only sets its entries' flags, so they
+count); 0x43d220 (a town's buildings by class, none in 2, 3, 0xff) for a
+flotilla's ports; 0x42c9a0 dropping the gone and states 2, 3, 0xff from a
+group's list, for the brains' repair dock (0x4cdea0) and a flotilla's
+dock block (0x42cc40); 0x43da20 (a town makes items in state 1, or 0 for
+class 0x33); the yards' and docks' vt+0xb0 0x40dfe0 and the ports'
+vt+0xb4 0x40e020 (a facing and state 1; `+0x10c` not read, so one being
+mended takes a ship or stays in a gather zone's list); 0x446d60's group
+scan (classes 0x32-0x3e in 2 skipped). The port had read these as the
+mending, and 0x446d60's as a settlement mending its stock (that is its
+job `+0x110` 2, in state 1). (Not identified: the state 0xff.)
 
 The other classes' blows (vt+4 and the drain vt+0x4c, dumped from their
 vtables): castles (0x5949fc) queue it (0x423c30, not in state 2) and

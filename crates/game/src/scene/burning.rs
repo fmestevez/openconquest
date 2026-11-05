@@ -677,7 +677,8 @@ mod tests {
     /// `<FORTS|FORT|FORTB>MSK_<nation>1<level>` (0x422e30) and ports and
     /// docks `<PT|DK>MSK_<nation><class>1<facing><level>` (0x4e7f90); a
     /// flaming blow of kind 6 on a set bit with a draw 0 mod 3 lights FIRE2
-    /// on them, none while mended or asleep (`+0xa4` not 1, 0x42410e).
+    /// on them, none going up, fallen, sold or asleep (`+0xa4` not 1,
+    /// 0x42410e); being mended (state 1, `+0x10c`) they burn.
     #[test]
     fn towns_and_forts_take_fire() {
         let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {

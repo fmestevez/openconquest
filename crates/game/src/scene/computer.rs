@@ -4983,8 +4983,9 @@ impl Scene {
     /// 1); else, or the dock there, `+0x10` and `+0x14` are cleared. The
     /// list (`+0x38`, never emptied) gets the docks of the towns of the
     /// manager's land fleet (`+0x18`, a group of kind 0xb: 0x42cc40 ->
-    /// 0x42c9a0 with class 0x3b, its list the bases' sites, 0x487230: the
-    /// docks of each settlement or town's list `+0x1d0`, in order); with
+    /// 0x42c9a0 with class 0x3b, its list the bases' sites less the gone,
+    /// fallen and sold (`+0xa4` 2, 3, 0xff), 0x487230: the docks of each
+    /// settlement or town's list `+0x1d0`, in order); with
     /// none there, those of every cell's object (row by row): player 16's
     /// class 0x40, or a dock (0x3b) of the player not asleep (vt+0x2c,
     /// 0x40dfc0 in the dock's vtable 0x59b4c4). Then 0x4dadf0 takes the
@@ -5010,7 +5011,11 @@ impl Scene {
         let mut found: Vec<u32> = Vec::new();
         if b.hand >= 0 && b.hand as usize == ai.manager {
             for site in ai.bases.iter().filter_map(|b| b.site) {
-                let Some(t) = self.object_index(site) else {
+                // 0x42c9a0 drops the gone, fallen (2) and sold (3).
+                let Some(t) = self
+                    .object_index(site)
+                    .filter(|_| !self.fallen_or_sold(site))
+                else {
                     continue;
                 };
                 if !matches!(
@@ -5468,8 +5473,8 @@ impl Scene {
     /// class-0x39 buildings of its list `+0x1d0`, in order), none leaving
     /// the list for 0x4c6c30; and as args[10] / [11] the deposits
     /// 0x40b010 ranks (`flotilla_deposits`), which 0x4c8560 makes known
-    /// first. (The town states 3 and 0xff, not identified: the port tests
-    /// mending, 2.) Any other order ends it.
+    /// first. (The town state 0xff, not identified: the port tests the
+    /// fallen, 2, and the sold, 3.) Any other order ends it.
     fn give_order(&mut self, ai: &mut Computer, f: usize) {
         let order = ai.flotillas[f].order;
         if let Some(code) = order.code() {
@@ -6012,12 +6017,13 @@ impl Scene {
 
     /// The ports of flotilla `f`'s base town for its gather zone
     /// (0x43d220, 0x440c60): the town's class-0x39 buildings in its list's
-    /// order; none for a town being mended (`+0xa4` 2).
+    /// order; none for a town fallen (`+0xa4` 2) or sold (3). A town
+    /// being mended is in state 1 (`+0x10c`) and keeps its ports.
     fn flotilla_ports(&self, ai: &Computer, f: usize) -> Vec<u32> {
         let Some(town) = ai.bases.get(ai.flotillas[f].base).and_then(|b| b.site) else {
             return Vec::new();
         };
-        if self.mending.contains(&town) {
+        if self.fallen_or_sold(town) {
             return Vec::new();
         }
         self.town_buildings(town)

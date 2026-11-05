@@ -1799,13 +1799,13 @@ impl Scene {
 
     /// The repair order's dock pick (0x4cdea0): the player's fleet
     /// `+0x21` must be a land fleet (kind 0xb, `+0x29`); its buildings gone
-    /// are dropped from its list (0x42c9a0), and the docks of its towns
-    /// (type 0x1491, 0x43d220 and 0x440c60 with class 0x3b) are listed.
+    /// are dropped from its list (0x42c9a0: gone, or `+0xa4` 2 fallen, 3
+    /// sold or 0xff), and the docks of its towns (type 0x1491, 0x43d220
+    /// and 0x440c60 with class 0x3b) are listed.
     /// With any, `+0x10` becomes the first and the fleet manager's
     /// generator is drawn for a random one, returned (0 with none). A
-    /// ship fleet holds no town, so it lists none. (Not decoded: the
-    /// towns in states `+0xa4` 2, 3 and 0xff, which 0x42c9a0 drops from
-    /// the land fleet's list too.) The docks come in the town's list
+    /// ship fleet holds no town, so it lists none. (Not identified: the
+    /// state 0xff.) The docks come in the town's list
     /// order (`+0x1d0`). (Player 16 lists its class-0x40 buildings
     /// instead, never a repair member's.)
     fn repair_pick(&mut self, k: usize) -> u32 {
@@ -1823,7 +1823,7 @@ impl Scene {
             .ships
             .iter()
             .copied()
-            .filter(|&id| self.object_index(id).is_some())
+            .filter(|&id| self.object_index(id).is_some() && !self.fallen_or_sold(id))
             .collect();
         let mut docks = Vec::new();
         for &id in &list {

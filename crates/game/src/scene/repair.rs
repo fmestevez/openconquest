@@ -154,16 +154,16 @@ impl Scene {
     }
 
     /// Whether yard or dock `d` takes a ship in (its vt+0xb0, 0x40dfe0): a
-    /// facing (`+0x1dc >= 0`), standing idle (`+0xa4 == 1`: not going up,
-    /// mended or asleep), its town (`+0x1d8 & 0x10` with `+0x1c8`, set for
+    /// facing (`+0x1dc >= 0`), standing (`+0xa4 == 1`: not going up,
+    /// fallen, sold or asleep; `+0x10c` is not read, so a yard or dock
+    /// being mended takes one), its town (`+0x1d8 & 0x10` with `+0x1c8`, set for
     /// yards and docks) and no ship in it (`+0x1e0`, set by 0xcb7 as one
     /// enters, cleared by 0xcb8 as it leaves).
     pub(super) fn dock_free(&self, d: usize) -> bool {
         let id = self.objects[d].id;
         self.berth_cell(d).is_some()
-            && self.construction_at(id).is_none()
-            && !self.mending.contains(&id)
-            && self.objects[d].asleep.is_none()
+            && self.standing(id)
+            && !self.fallen(id)
             && self.home_settlement(d).is_some()
             && !self.objects.iter().any(|o| {
                 o.ship
@@ -1194,8 +1194,9 @@ impl Scene {
 
     /// Whether town `town` may have `item` made, the price aside (0x43da20
     /// with `param_3` 0): it stands (`+0xa4` 1; a town, class 0x33, also
-    /// while it goes up, `+0xa4` 0; not mended, 2, nor asleep), then case
-    /// 1 for its own player (`can_make_by`).
+    /// while it goes up, `+0xa4` 0; not fallen, 2, sold, 3, nor asleep,
+    /// 0x10; being mended is state 1, `+0x10c`, and passes), then case 1
+    /// for its own player (`can_make_by`).
     pub(super) fn town_may_make(&self, town: u32, item: u8) -> bool {
         let Some(t) = self.object_index(town) else {
             return false;
@@ -1204,7 +1205,7 @@ impl Scene {
         let Some(owner) = o.owner else {
             return false;
         };
-        let standing = !self.mending.contains(&town)
+        let standing = !self.fallen_or_sold(town)
             && o.asleep.is_none()
             && (self.construction_at(town).is_none() || o.class == ObjectClass::Building(TOWN));
         standing && self.can_make_by(town, owner, item)

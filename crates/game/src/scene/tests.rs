@@ -16614,6 +16614,15 @@ fn docks_fit_units_by_the_types_weights() {
     scene.levels.insert(owner, levels);
     let may: Vec<u8> = (0..9).filter(|&i| scene.town_may_make(town, i)).collect();
     assert_eq!(may, [0, 1, 3, 4, 6, 7, 8]);
+    // Being mended the town stays in state 1 (`+0x10c` only), which
+    // 0x43da20 asks; sold (3) it makes nothing.
+    scene.mending.push(town);
+    let may: Vec<u8> = (0..9).filter(|&i| scene.town_may_make(town, i)).collect();
+    assert_eq!(may, [0, 1, 3, 4, 6, 7, 8]);
+    scene.mending.clear();
+    scene.sold.push(town);
+    assert!((0..9).all(|i| !scene.town_may_make(town, i)));
+    scene.sold.clear();
     let units = |scene: &Scene| scene.objects[k].unit_counts();
     // Type 3 (100, 10, 30), room 7, seed 12345: one each of items 4 and
     // 6-8, for 50 + 3 x 70 amber.
@@ -16712,6 +16721,35 @@ fn a_falling_town_lets_its_docks_ship_go() {
     let k = scene.object_index(ship).unwrap();
     assert!(scene.objects[k].ship.as_ref().unwrap().task.is_none());
     assert!(hull(&scene) < full);
+}
+
+/// A dock takes a ship in (vt+0xb0, 0x40dfe0) in state `+0xa4` 1, which
+/// its mending (`+0x10c`) leaves; fallen (2, the port's ruins) it takes
+/// none (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_dock_being_mended_takes_ships() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let d = (0..scene.objects.len())
+        .find(|&i| {
+            let o = &scene.objects[i];
+            o.class == ObjectClass::Building(SHIPYARD) && scene.is_own(o)
+        })
+        .unwrap();
+    let dock = scene.objects[d].id;
+    scene.objects[d].class = ObjectClass::Building(economy::DOCK);
+    assert!(scene.dock_free(d));
+    scene.mending.push(dock);
+    assert!(scene.dock_free(d) && !scene.fallen(dock));
+    scene.mending.clear();
+    scene.objects[d].combat = None;
+    scene.objects[d].owner = None;
+    assert!(scene.fallen(dock) && !scene.dock_free(d));
 }
 
 /// A ship sent to be sold (ship command 0x1e with byte 0 3, `+0x749`):
@@ -17529,7 +17567,8 @@ fn harpy_hits_chase_and_aim_are_the_originals() {
 /// the marines of a side-1 neighbour's list (0x41e840): a ship's each
 /// squad once (0x4e3960, 0x4e5e40), a settlement's or town's stock
 /// (vt+0x5c 0x43bfe0 page 0) its items 0-2 each one more than their
-/// count, none while it is mended, a fort's (0x4179b0) each squad once
+/// count, none fallen (`+0xa4` 2) or sold (3), the same while it is
+/// mended (state 1, `+0x10c`), a fort's (0x4179b0) each squad once
 /// while it stands; listing a town on its way up as an upgrade makes it
 /// whole (`+0xa8`). It stops at a town (0x41efb0) and takes it to strike
 /// (0x41f1c0, not with the phantom), and its shot gives the town the blow
@@ -17553,8 +17592,18 @@ fn harpy_at_towns_and_forts_is_the_originals() {
     let g = scene.garrison(id);
     assert_eq!(scene.harpy_marines(town), 3 + g[0] + g[1] + g[2]);
     scene.mending.push(id);
-    assert_eq!(scene.harpy_marines(town), 0);
+    assert_eq!(scene.harpy_marines(town), 3 + g[0] + g[1] + g[2]);
     scene.mending.clear();
+    scene.sold.push(id);
+    assert_eq!(scene.harpy_marines(town), 0);
+    scene.sold.clear();
+    let (combat, owner) = (
+        scene.objects[town].combat.take(),
+        scene.objects[town].owner.take(),
+    );
+    assert_eq!(scene.harpy_marines(town), 0);
+    scene.objects[town].combat = combat;
+    scene.objects[town].owner = owner;
     // Upgrading: the list makes it whole.
     scene.constructions.push(super::Construction {
         site: id,

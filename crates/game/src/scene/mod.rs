@@ -468,7 +468,7 @@ pub struct Scene {
     /// The conditions of each settlement's stock units by item, in their
     /// order (kept as long as `garrisons` counts; see `stock_units`).
     pub stock_conditions: std::collections::BTreeMap<u32, [Vec<u8>; 9]>,
-    /// Settlements mending their stock (state 2, 0x441ba0).
+    /// Settlements mending their stock (job `+0x110` 2, 0x441ba0).
     pub stock_repairs: Vec<repair::StockRepair>,
     /// Each smithy's refits as the one batch the original runs (`+0x114`
     /// ticks, `+0x118` amber summed, from `+0x124`; 0x434a00 message
