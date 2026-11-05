@@ -812,6 +812,23 @@ impl Scene {
         if target.is_some_and(|i| self.blow_dropped(self.objects[i].id)) {
             return;
         }
+        // A castle's drain (0x4105c0, vt+0x4c, the blow queued by
+        // 0x423c30) takes the war castle's (0x43) fireball (kind 10) off
+        // the queue before 0x427bb0 / 0x423d60: no hit, fire or lime. Any
+        // other blow with a shooter (`+0x16`) makes him the wizard's
+        // attacker (`+0x1f4`, `+0x1f8` now) and plays sound event 0x77
+        // (sea) or 0x78 (war), mode 1 at its cell, whose `SND_119` and
+        // `SND_120` list nothing: silent.
+        if let Some(i) = target.filter(|&i| matches!(self.objects[i].class, ObjectClass::Castle(_)))
+        {
+            if self.objects[i].class == ObjectClass::Castle(0x43) && s.item == FIREBALL {
+                return;
+            }
+            if let Some(by) = s.shooter {
+                let id = self.objects[i].id;
+                self.wizard_attacked(id, by);
+            }
+        }
         // A ship being built keeps the hit for its tick (event 1, 0x4a9e30:
         // a fifth in a tick is dropped), where 0x4bf170 hands it to 0x4b4000
         // alone: no fire, lime, crew or weapon damage.
@@ -909,11 +926,15 @@ impl Scene {
                 // magic shield (`+0x15c`): a fireball's (kind 10) to
                 // 20 / 100, else a flaming one's to 100 / 150. (Its weapon
                 // shield's 20 / 100, `+0x17c`, is in the blow from the
-                // firing.)
+                // firing.) Castles reach it through 0x4105c0 and 0x427bb0,
+                // lairs straight (vt+0x4c 0x414ef0 jumps to it); a harpy
+                // nest takes its blow whole on arrival (vt+4 0x41d300).
                 let mut damage = s.damage;
                 let o = &self.objects[i];
-                if matches!(o.class, ObjectClass::Building(_))
-                    && o.combat.as_ref().is_some_and(|c| c.protect_magic > 0.0)
+                if matches!(
+                    o.class,
+                    ObjectClass::Building(_) | ObjectClass::Castle(_) | ObjectClass::CreatureSpawn
+                ) && o.combat.as_ref().is_some_and(|c| c.protect_magic > 0.0)
                 {
                     let blow = (damage * 15.0) as u32;
                     let cut = if s.item == FIREBALL {
@@ -936,12 +957,17 @@ impl Scene {
                 let hit = (s.to.0.floor() as i32, s.to.1.floor() as i32);
                 self.light_building(i, s.item, s.flaming, hit, by, data, caches);
             }
-            // A building it does not bring down is limed (0x42405d).
+            // A building it does not bring down is limed (0x42405d): any
+            // that reaches 0x423d60, castles and lairs too, not a harpy
+            // nest (0x41d300).
             if s.item == combat::QUICKLIME && !ship {
                 if let Some(i) = self.object_index(s.target) {
                     if matches!(
                         self.objects[i].class,
-                        ObjectClass::Building(_) | ObjectClass::Barbarian(_)
+                        ObjectClass::Building(_)
+                            | ObjectClass::Barbarian(_)
+                            | ObjectClass::Castle(_)
+                            | ObjectClass::CreatureSpawn
                     ) {
                         self.lime(i, combat::LIME_BUILDING_TICKS);
                     }

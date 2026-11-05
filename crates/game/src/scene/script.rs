@@ -151,7 +151,8 @@ impl Scene {
         crate::clock::ticks(base * (80 + self.rng.next() % 21) / 100)
     }
 
-    /// A shot from `shooter` at `target`: a wizard attacked hurries.
+    /// A blow from `shooter` on castle `target` (its drain 0x4105c0, a
+    /// shooter in `+0x16`): a wizard attacked hurries.
     pub(super) fn wizard_attacked(&mut self, target: u32, shooter: u32) {
         if let Some(w) = self.wizards.get_mut(&target) {
             w.attacker = Some((shooter, crate::clock::ticks(WIZARD_ANGER)));

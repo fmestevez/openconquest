@@ -190,7 +190,16 @@ impl Scene {
                         .as_ref()
                         .is_some_and(|s| s.has_treasure(objects::FIRE_TORCH))
             })
-            .map(|o| (o.id, o.combat.as_ref().unwrap().protect_magic > 0.0))
+            // A castle's or lair's drain (0x423d60) cuts the blow under
+            // its magic shield itself (`shot`).
+            .map(|o| {
+                let drained =
+                    matches!(o.class, ObjectClass::Castle(_) | ObjectClass::CreatureSpawn);
+                (
+                    o.id,
+                    o.combat.as_ref().unwrap().protect_magic > 0.0 && !drained,
+                )
+            })
             .collect();
         if targets.is_empty() {
             return;

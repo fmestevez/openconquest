@@ -844,8 +844,8 @@ impl Scene {
         self.effects.retain(|fx| fx.frame().is_some());
     }
 
-    /// Sends a volley off: the target's answers (the scouts, wizards,
-    /// computers, brains and fleets told, a guard on aggressors turning
+    /// Sends a volley off: the target's answers (the scouts, computers,
+    /// brains and fleets told, a guard on aggressors turning
     /// on the shooter), then a shot for each item with its blow.
     pub(super) fn send_volley(
         &mut self,
@@ -854,7 +854,6 @@ impl Scene {
         caches: &mut Caches,
     ) {
         self.scout_attacked(target);
-        self.wizard_attacked(target, shooter);
         self.computer_attacked(target, shooter);
         self.brain_hit(target);
         // A brain's fleet notes who fired on it, whoever it was.
@@ -901,7 +900,12 @@ impl Scene {
         let holder = self
             .object_index(target)
             .is_some_and(|t| self.objects[t].holds_units());
-        if warded && !holder {
+        // A harpy nest takes its blow whole (vt+4 0x41d300), shielded or
+        // not.
+        let nest = self
+            .object_index(target)
+            .is_some_and(|t| self.objects[t].class == ObjectClass::HarpyNest);
+        if warded && !holder && !nest {
             factor *= magic::SHIELD_FACTOR;
         }
         // A ship's pass shot carries them in its blow already (0x4c0230).

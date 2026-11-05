@@ -124,15 +124,21 @@ impl Scene {
     /// has no magic shield (`+0x15c`), kind / 3 is 1 or more, the building
     /// stands (`+0xa4` 1), the player is someone's, the hit point less the
     /// main picture's top left is a set bit of its mask (`<prefix>MSK_<
-    /// nation>11`, 0x422e30; 0x557640: bit `(row x ((w + 7) & ~7) + x) ^
-    /// 7`) and none of its fires burns (0x424153); then one draw of its
+    /// nation>1<level>`, its damage level after the blow, 0x422e30;
+    /// 0x557640: bit `(row x ((w + 7) & ~7) + x) ^ 7`) and none of its
+    /// fires burns (0x424153); then one draw of its
     /// generator, `(r >> 16) % m == 0` with `m` 5 for kind / 3 == 1, else
     /// 3. The fire `FIRE<kind / 3 for kinds 0-8, else 2>` stands with its
     /// top left at the hit point less half its width and four fifths of
     /// its height. (Not decoded: the classes with no mask resource, towns,
     /// forts, ports and docks, would read a null mask in 0x557640; the
     /// port lights none on them. A hit point above or left of the picture
-    /// reads before the mask: none here.)
+    /// reads before the mask: none here. Not ported: the same test on
+    /// castles and lairs, which reach 0x423d60 too, with their masks
+    /// `CSTLSEAMSK_1<level>` / `CSTLWARMSK_1<level>` (0x4101d0,
+    /// `%sMSK_%1u%1u`) and `<CLPF|MNTF|AMZF>MSK_41<level>` (0x422e30): its
+    /// draw is of their own generators, which the port does not keep
+    /// (castle 0x410ca0 message 2, 0x410790; lair 0x414f00 message 0).)
     #[allow(clippy::too_many_arguments)]
     pub(super) fn light_building(
         &mut self,
@@ -171,7 +177,12 @@ impl Scene {
             .record
             .field(openconquest_formats::mission::field::NATION)
             .unwrap_or(0);
-        let Some(mask) = building_mask(data, class, nation) else {
+        let objects::BuildingState::Standing(level) =
+            objects::BuildingState::for_condition(c.hull / c.max_hull * 100.0)
+        else {
+            unreachable!()
+        };
+        let Some(mask) = building_mask(data, class, nation, level) else {
             return;
         };
         let (mx, my) = (hx - left, hy - top);
@@ -382,18 +393,22 @@ impl Scene {
     }
 }
 
-/// A building's mask, `<prefix>MSK_<nation>11` (`%sMSK_%1u%1u%1u`, the
-/// prefix `+0xb8`, 0x422e30 in state 1); none for classes without one.
+/// A building's mask at damage level `level` (3 intact .. 1),
+/// `<prefix>MSK_<nation>1<level>` (`%sMSK_%1u%1u%1u`, the prefix `+0xb8`,
+/// the nation `+0x54`, 1, the level its picture's: 0x422e30 in state 1,
+/// 0x422f4d pushing the level of 0x422ef7, run again by 0x423d60 when a
+/// blow changes the level); none for classes without one.
 pub(super) fn building_mask(
     data: &GameData,
     class: u32,
     nation: u32,
+    level: u32,
 ) -> Option<openconquest_formats::Mask> {
     use openconquest_formats::ResourceKind;
     let name = objects::building_name(class, nation, 0, objects::BuildingState::Standing(3))?;
     let prefix = &name[..name.find("SPR_")?];
     let lib = &data.objects;
-    let e = lib.find(&format!("{prefix}MSK_{nation}11"), ResourceKind::Mask)?;
+    let e = lib.find(&format!("{prefix}MSK_{nation}1{level}"), ResourceKind::Mask)?;
     let bits = lib.read_entry(e).ok()?;
     openconquest_formats::Mask::parse(&bits, e.width.into(), e.height.into()).ok()
 }
@@ -453,7 +468,7 @@ mod tests {
                 o.combat.is_some()
                     && o.asleep.is_none()
                     && land
-                    && building_mask(data, class, nation.unwrap_or(0)).is_some()
+                    && building_mask(data, class, nation.unwrap_or(0), 3).is_some()
             });
             if let Some(i) = found {
                 return (scene, i);
@@ -483,7 +498,7 @@ mod tests {
             .record
             .field(openconquest_formats::mission::field::NATION)
             .unwrap();
-        let mask = building_mask(&data, class, nation).unwrap();
+        let mask = building_mask(&data, class, nation, 3).unwrap();
         let l = &o.frames[0][0];
         let (left, top) = crate::render::layer_origin(o, l);
         let stride = (mask.width + 7) & !7;

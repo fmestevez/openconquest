@@ -9047,6 +9047,83 @@ fn forts_blows_under_shields() {
     }
 }
 
+/// Shots on castles and lairs as the original's: both reach LandObj's
+/// drain 0x423d60 (castles through 0x4105c0 and 0x427bb0, lairs straight,
+/// vt+0x4c 0x414ef0), so under the magic shield (`+0x15c`) a flaming
+/// blow is cut to 100 / 150 and a fireball's to 20 / 100, and quick lime
+/// limes them (0x42405d, 200 ticks); the war castle's drain drops a
+/// fireball's blow whole (0x4105c0). miss009's war castle, miss000's lair
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn shots_on_castles_and_lairs() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let shoot = |scene: &mut Scene, k: usize, item: u8, flaming: bool, caches: &mut Caches| {
+        let c = scene.objects[k].combat.as_mut().unwrap();
+        (c.max_hull, c.hull, c.lime, c.lime_total) = (1e6, 1e6, 0.0, 0.0);
+        let to = scene.building_aim(k, true);
+        let o = &scene.objects[k];
+        let id = o.id;
+        scene.fire_shot(
+            super::shot::Firing {
+                item,
+                letter: None,
+                flaming,
+                from: (o.x - 200.0, o.y),
+                target: id,
+                strikes: true,
+                damage: 3000.0 / 15.0,
+                wounds: 0.0,
+                wear: 0.0,
+                rope: None,
+                shooter: None,
+                by: None,
+                to: Some((to.0 as f32, to.1 as f32)),
+            },
+            &data,
+            caches,
+        );
+        for _ in 0..500 {
+            if scene.shots.is_empty() {
+                break;
+            }
+            scene.run_shots(crate::clock::TICK, &data, caches);
+        }
+        assert!(scene.shots.is_empty());
+        let c = scene.objects[k].combat.as_ref().unwrap();
+        (((1e6 - c.hull) * 15.0).round() as u32, c.lime)
+    };
+    let fireball = super::shot::FIREBALL;
+    let lime = crate::clock::ticks(combat::LIME_BUILDING_TICKS[0]);
+    for (mission, class) in [
+        ("miss009", ObjectClass::Castle(0x43)),
+        ("miss000", ObjectClass::CreatureSpawn),
+    ] {
+        let mut scene = Scene::load(&data, &mut caches, mission).unwrap();
+        scene.brain = None;
+        let k = scene.objects.iter().position(|o| o.class == class).unwrap();
+        let war = class == ObjectClass::Castle(0x43);
+        scene.objects[k].combat.as_mut().unwrap().protect_magic = 0.0;
+        assert_eq!(shoot(&mut scene, k, 4, false, &mut caches), (3000, 0.0));
+        let fb = if war { 0 } else { 3000 };
+        assert_eq!(shoot(&mut scene, k, fireball, true, &mut caches), (fb, 0.0));
+        scene.objects[k].combat.as_mut().unwrap().protect_magic = 10.0;
+        assert_eq!(shoot(&mut scene, k, 4, false, &mut caches), (3000, 0.0));
+        assert_eq!(
+            shoot(&mut scene, k, 4, true, &mut caches),
+            (3000 * 100 / 150, 0.0)
+        );
+        let fb = if war { 0 } else { 3000 * 20 / 100 };
+        assert_eq!(shoot(&mut scene, k, fireball, true, &mut caches), (fb, 0.0));
+        scene.objects[k].combat.as_mut().unwrap().protect_magic = 0.0;
+        let (_, limed) = shoot(&mut scene, k, combat::QUICKLIME, false, &mut caches);
+        assert_eq!(limed, lime, "{mission}");
+    }
+}
+
 /// A shot on a town under its magic shield (`+0x15c`, 0x423d60): a
 /// flaming blow cut to 100 / 150, another whole (needs
 /// `OPENCONQUEST_DATA`).

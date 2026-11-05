@@ -4994,6 +4994,28 @@ weapons (items 3-8) take the share, the marines (0-2) `0x4ac1b0(kind,
 the shooter's level, share)`. Barbarian structures (0x40e0f0) share
 `blow x load / (load + 80)` with no cuts, the marines through 0x40ff00.
 
+The other classes' blows (vt+4 and the drain vt+0x4c, dumped from their
+vtables): castles (0x5949fc) queue it (0x423c30, not in state 2) and
+drain it by 0x4105c0, which takes a fireball's (bomb kind 10) off the war
+castle's (0x43) queue unread; any other, with a shooter (`+0x16`), makes
+him the wizard's attacker (`+0x1f4`, `+0x1f8` now) and plays event 0x77
+(sea) or 0x78 (war), mode 1 at its cell (`SND_119`, `SND_120` list
+nothing); then 0x427bb0 and 0x423d60 as any building. Lairs (0x5953f0 -
+0x595600) queue it (0x414ed0 -> 0x423c30) and drain it by 0x414ef0, a
+jump to 0x423d60. Both take the magic and weapon shields' cuts, the lime
+and the fire test of 0x423d60, and no units' share. Harpy nests
+(0x595d50) take it on arrival (vt+4 0x41d300), in state 1 only: the blow
+`+9` whole off the life `+0xac` (the percent `x 100 / 280000`), no cut,
+lime or fire, the nest's creature told (0xdaf7 with the shooter); at or
+over its life it falls (state 2, the kill to `+0x15`'s player, 0xdaf9).
+The hero's house (0x595e98) drops it (vt+4 0x421130 queues all but
+0x138e). The port: `land_shot` (scene/shot.rs). Not ported: the fire on
+castles and lairs (their masks `CSTLSEAMSK_1<level>`,
+`CSTLWARMSK_1<level>`, 0x4101d0 `%sMSK_%1u%1u`, and
+`<CLPF|MNTF|AMZF>MSK_41<level>`), whose draw is of their own generators
+(castle 0x410ca0 message 2 and 0x410790, lair 0x414f00 message 0), not
+kept by the port.
+
 Spreading a share over units of a mask: points are `condition x
 0x597cfc[item] / 100` (copied to 0x5c7438 by 0x44788c), the total their
 sum, the blow at most the total. A number is drawn, `rand % (total -
@@ -6296,8 +6318,7 @@ but their classes draw their generators elsewhere, not read: castles
 
 
 **A building's fire** (LandObjClassTy's drain 0x423d60, blow 0x138e,
-0x4240e0-0x4242e6; whether the subclasses' own drains, vt+0x4c, reach
-it is not read here). After the damage (and the picture's change of
+0x4240e0-0x4242e6; castles and lairs reach it too, see Forts' units). After the damage (and the picture's change of
 condition), the blow lights a fire when all hold, in this order: the
 message's flaming dword `+5` is not 0; no magic shield (`+0x15c` 0);
 the bomb kind (`+4`) / 3 is 1 or more; the building stands (`+0xa4` 1);
@@ -6305,8 +6326,10 @@ the shooter's player (`+0x15`) is not 0xff; the hit point (`+0xd`,
 `+0x11`, less the main picture's `+0x59` / `+0x5d`) is a set bit of the
 building's mask (0x557640: rows of `(width + 7) & ~7` bits, bit `(row
 x stride + x) ^ 7`; the mask `+0xcc` and its width `+0xd0` are the
-resource `<prefix>MSK_<nation><1>1` (`%sMSK_%1u%1u%1u`, prefix `+0xb8`,
-nation `+0x54`), loaded by 0x422e30 in state 1 through 0x542ee0 /
+resource `<prefix>MSK_<nation>1<level>` (`%sMSK_%1u%1u%1u`, prefix
+`+0xb8`, nation `+0x54`, the picture's damage level 3-1 pushed at
+0x422f4d; reloaded when a blow changes the level), loaded by 0x422e30 in
+state 1 through 0x542ee0 /
 0x542d60(0x12)); and none of the four fire slots `+0x80..+0x8c` is
 taken (the loop at 0x424153 gives up at the first slot in use, so a
 fire is lit only where none burns, and always in slot 3, the last
