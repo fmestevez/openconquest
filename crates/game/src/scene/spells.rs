@@ -64,6 +64,12 @@ impl Scene {
         self.amber -= magic::LEARN_COST;
         let site = self.temple_site(temple, site);
         self.magic.start_learning(temple, site);
+        // The temple's call on command 0x22 code 0x12 only when the
+        // learning began (0x438300, 0x439260: idle and paid; refused,
+        // `local_10` 0).
+        if let (Some(t), Some(h)) = (site, self.human) {
+            self.temple_voice(t, temple, (h.nation, h.slot));
+        }
         Ok(())
     }
 

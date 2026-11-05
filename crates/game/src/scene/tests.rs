@@ -10973,6 +10973,99 @@ fn order_10_calls_off_what_the_object_does() {
     assert_eq!(scene.amber, amber);
 }
 
+/// The settlement's call (TownObj 0x441ba0, `local_28`, events 220-223)
+/// after its orders, whatever the message passed on makes of them: the
+/// training (0x20), a building mended (0x1e sub 1), its upgrade (0x21 sub
+/// 1), selling (0x34); a training item taken off (0x3c) only when one was
+/// there; none once sold. A shipyard's upgrade (Dock 0x416f90, 228-231)
+/// and the workshop's stock repair (0x436ee0) have their own. Needs
+/// `OPENCONQUEST_DATA`.
+#[test]
+fn town_orders_play_the_town_call() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    use super::halt::{DOCK_CALLS, STUDIO_CALLS, TOWN_CALLS};
+    // A mission whose player's nation has calls (1 or 3).
+    let mut scene = (0..13)
+        .map(|n| Scene::load(&data, &mut caches, &format!("miss{n:03}")).unwrap())
+        .find(|s| s.human.is_some_and(|h| h.nation % 2 == 1))
+        .unwrap();
+    let nation = scene.human.unwrap().nation as usize;
+    scene.amber = 100_000;
+    scene.fish = 100_000;
+    let home = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.class == ObjectClass::Building(SETTLEMENT))
+        .unwrap()
+        .id;
+    let called = |scene: &mut Scene, calls: &super::halt::Calls| {
+        let c = scene.sounds.iter().any(|s| calls[nation].contains(&s.0));
+        scene.sounds.clear();
+        c
+    };
+    scene.sounds.clear();
+    // Training: called, and called again when one is taken off.
+    scene.train(home, 0).unwrap();
+    assert!(called(&mut scene, &TOWN_CALLS));
+    scene.cancel_training(home, 0).unwrap();
+    assert!(called(&mut scene, &TOWN_CALLS));
+    // Nothing to take off: no call.
+    assert!(scene.cancel_training(home, 0).is_err());
+    assert!(!called(&mut scene, &TOWN_CALLS));
+    // Refused for the price, still called (the town's case passes 0x138d
+    // on and keeps its flag).
+    scene.amber = 0;
+    assert!(scene.train(home, 0).is_err());
+    assert!(called(&mut scene, &TOWN_CALLS));
+    scene.amber = 100_000;
+    // A building mended (order 0x1e sub 1), itself here.
+    let h = scene.object_index(home).unwrap();
+    let c = scene.objects[h].combat.as_mut().unwrap();
+    c.hull = c.max_hull / 2.0;
+    scene.order_mend(home, home).unwrap();
+    assert!(called(&mut scene, &TOWN_CALLS));
+    // The workshop's stock repair: the workshop's call, not the town's.
+    let w = scene
+        .objects
+        .iter()
+        .position(|o| {
+            scene.is_own(o) && matches!(o.class, ObjectClass::Building(_)) && o.id != home
+        })
+        .unwrap();
+    scene.objects[w].class = ObjectClass::Building(economy::WORKSHOP);
+    let workshop = scene.objects[w].id;
+    scene.set_stock_units(home, {
+        let mut u: [Vec<u8>; 9] = Default::default();
+        u[6] = vec![50];
+        u
+    });
+    scene.mending.clear();
+    let _ = scene.order_repair_stock(workshop);
+    assert!(called(&mut scene, &STUDIO_CALLS));
+    assert!(!scene
+        .sounds
+        .iter()
+        .any(|s| TOWN_CALLS[nation].contains(&s.0)));
+    // A shipyard's upgrade: the dock's call.
+    scene.objects[w].class = ObjectClass::Building(economy::SHIPYARD);
+    let _ = scene.upgrade(workshop, &data, &mut caches);
+    assert!(called(&mut scene, &DOCK_CALLS));
+    // A smithy's refit refused (nothing studied): still its call.
+    scene.objects[w].class = ObjectClass::Building(economy::SMITHY);
+    assert!(scene
+        .refit(workshop, crate::combat::Upgrade::Armour, 3)
+        .is_err());
+    assert!(called(&mut scene, &super::halt::SMITHY_CALLS));
+    // Sold: it takes no orders, and makes no call.
+    scene.sold.push(home);
+    let _ = scene.train(home, 0);
+    assert!(!called(&mut scene, &TOWN_CALLS));
+}
+
 /// A merchant unloading at a port lies held, move state 6, each tick
 /// (0x4adef0 step 0x11); leaving, it lies still (0x4a5b70) and moves a
 /// cell off the berth with priority 91 (0x4b46f0 with '['; needs
@@ -11496,6 +11589,7 @@ fn building_calls_are_the_sound_entries() {
         (&SEA_TEMPLE_CALLS, 244),
         (&FINISHED_CALLS, 188),
         (&FORT_CALLS, 216),
+        (&DOCK_CALLS, 228),
     ] {
         for (nation, add) in [0, 1, 3, 2].into_iter().enumerate() {
             let names = openconquest_formats::sound::sound_choices(archive, base + add).unwrap();

@@ -720,6 +720,17 @@ impl Scene {
             ObjectClass::Building(SHIPYARD) => DOCK,
             _ => return Err("This cannot be upgraded".into()),
         };
+        // Order 0x21 plays the call whatever its message 0x138a makes of
+        // it: a settlement's (sub-order 1, 0x441ba0), a shipyard's (sub 2,
+        // Dock 0x416f90: event 0xe4 / 0xe5 / 0xe7 / 0xe6 by nation 0-3,
+        // mode 2 at its cell, for the local player's yard).
+        if to == TOWN {
+            self.town_voice(id);
+        } else {
+            let o = &self.objects[i];
+            let (owner, x, y) = (o.owner, o.x, o.y);
+            self.building_voice(owner, &super::halt::DOCK_CALLS, x, y);
+        }
         if self.yard_busy(id) {
             return Err("The shipyard is busy".into());
         }
@@ -860,6 +871,24 @@ impl Scene {
         if self.objects[i].class != ObjectClass::Building(class) || !self.is_own(&self.objects[i]) {
             return Err(format!("Only your {building} can do that"));
         }
+        // Order 0x21 plays the building's call after its case, whatever
+        // the study's start (0x138a) makes of it: the sage school's when
+        // it was idle (0x432210, `+0x10c` 0: no study, no mending), the
+        // smithy's (0x434ed0) and the workshop's (0x436ee0) on every order
+        // but 0x3c; so also on the refusals below.
+        let busy = self.research.iter().any(|r| r.0 == site)
+            || self.refits.iter().any(|r| r.0 == site)
+            || self.mending.contains(&site);
+        let calls = match class {
+            WORKSHOP => Some(&super::halt::STUDIO_CALLS),
+            economy::SMITHY => Some(&super::halt::SMITHY_CALLS),
+            _ => (!busy).then_some(&super::halt::SCHOOL_CALLS),
+        };
+        if let Some(calls) = calls {
+            let o = &self.objects[i];
+            let (owner, x, y) = (o.owner, o.x, o.y);
+            self.building_voice(owner, calls, x, y);
+        }
         if self.construction_at(site).is_some() {
             return Err("It is still being built".into());
         }
@@ -892,17 +921,6 @@ impl Scene {
         }
         self.amber -= cost;
         self.research.push((site, upgrade, level + 1, 0.0));
-        // Order 0x21 plays the building's call: the sage school's when it
-        // was idle (0x432210, `+0x10c` 0), the smithy's (0x434ed0) and the
-        // workshop's (0x436ee0) on every order but 0x3c.
-        let calls = match class {
-            WORKSHOP => &super::halt::STUDIO_CALLS,
-            economy::SMITHY => &super::halt::SMITHY_CALLS,
-            _ => &super::halt::SCHOOL_CALLS,
-        };
-        let o = &self.objects[i];
-        let (owner, x, y) = (o.owner, o.x, o.y);
-        self.building_voice(owner, calls, x, y);
         Ok(())
     }
 
@@ -926,6 +944,11 @@ impl Scene {
         {
             return Err("Only your smithy can do that".into());
         }
+        // Order 0x20: the smithy's call (0x434ed0, every order but 0x3c),
+        // whatever its message 0x138c makes of it.
+        let o = &self.objects[s];
+        let (owner, x, y) = (o.owner, o.x, o.y);
+        self.building_voice(owner, &super::halt::SMITHY_CALLS, x, y);
         let studied = self
             .levels_of(self.human.map(|h| (h.nation, h.slot)))
             .get(upgrade);
@@ -952,10 +975,6 @@ impl Scene {
         batch.paid += cost;
         batch.ticks += (combat::refit_seconds(level) / crate::clock::TICK).round() as u32;
         self.refits.push((smithy, upgrade, level, 0.0));
-        // Order 0x20: the smithy's call (0x434ed0, every order but 0x3c).
-        let o = &self.objects[s];
-        let (owner, x, y) = (o.owner, o.x, o.y);
-        self.building_voice(owner, &super::halt::SMITHY_CALLS, x, y);
         Ok(())
     }
 
@@ -1161,6 +1180,16 @@ impl Scene {
         if !fits {
             return Err("This building cannot make that".into());
         }
+        // Order 0x20 plays the call whatever the message it sends itself
+        // (0x138d, 0x138c) makes of it: the town's (0x441ba0, sub-orders
+        // 0x18-0x1a) and the workshop's (0x436ee0, every order but 0x3c).
+        let o = &self.objects[i];
+        if o.class == ObjectClass::Building(WORKSHOP) {
+            let (owner, x, y) = (o.owner, o.x, o.y);
+            self.building_voice(owner, &super::halt::STUDIO_CALLS, x, y);
+        } else {
+            self.town_voice(site);
+        }
         let (amber, fish) = combat::item_cost(item);
         if self.amber < amber || self.fish < fish {
             return Err("Not enough amber or fish".into());
@@ -1175,13 +1204,6 @@ impl Scene {
         }
         self.amber -= amber;
         self.fish -= fish;
-        // Order 0x20 at a workshop: its call (0x436ee0, every order but
-        // 0x3c). The town's (0x441ba0) not read here.
-        let o = &self.objects[i];
-        if o.class == ObjectClass::Building(WORKSHOP) {
-            let (owner, x, y) = (o.owner, o.x, o.y);
-            self.building_voice(owner, &super::halt::STUDIO_CALLS, x, y);
-        }
         Ok(())
     }
 
@@ -1208,6 +1230,9 @@ impl Scene {
         let (amber, fish) = combat::item_cost(item);
         self.amber += amber;
         self.fish += fish / 100;
+        // The town's call when it took one off (0x441ba0 case 0x3c sets
+        // `local_28` again); the workshop's switch has none for 0x3c.
+        self.town_voice(site);
         Ok(())
     }
 
@@ -1250,6 +1275,8 @@ impl Scene {
         if !self.is_own(&self.objects[i]) {
             return Err("Not your settlement".into());
         }
+        // The town's call on order 0x34 (0x441ba0), whatever it sold.
+        self.town_voice(site);
         let mut stock = self.stock_units(site);
         let units = stock.get_mut(item as usize).ok_or("No such item")?;
         if units.is_empty() {
@@ -1272,6 +1299,8 @@ impl Scene {
         if !self.is_own(&self.objects[i]) {
             return Err("Not your settlement".into());
         }
+        // The town's call on order 0x34 (0x441ba0), whatever it sold.
+        self.town_voice(site);
         let (armour, rams) = self.fittings.entry(site).or_default();
         let pieces = if ram { rams } else { armour };
         let k = pieces.iter().position(|&l| l == level).ok_or("None left")?;
@@ -1314,6 +1343,9 @@ impl Scene {
         if self.sold.contains(&site) {
             return Err(String::new());
         }
+        // The town's call on order 0x34 (0x441ba0): its message 0x248f
+        // to itself tests the rest.
+        self.town_voice(site);
         // Standing and idle (`+0x10c`): not building, training or mending.
         if self.construction_at(site).is_some()
             || self.training_at(site).is_some()
@@ -1321,6 +1353,7 @@ impl Scene {
         {
             return Err("The settlement is busy".into());
         }
+        let obj = &self.objects[i];
         let ObjectClass::Building(class) = obj.class else {
             unreachable!()
         };
@@ -1469,6 +1502,9 @@ impl Scene {
         {
             return Err("Choose one of your buildings or ships".into());
         }
+        // The town's call on order 0x34 (0x441ba0), its message 0x248f
+        // to the object sent.
+        self.town_voice(site);
         if self.objects[t].ship.is_some() {
             let s = self.objects[t].ship.as_mut().unwrap();
             if s.landing.as_ref().is_some_and(|l| l.dock.is_some()) {
@@ -1989,6 +2025,9 @@ impl Scene {
             .object_index(settlement)
             .and_then(|i| self.objects[i].owner)
             .ok_or("No settlement")?;
+        // The town's call on order 0x20 (0x441ba0, sub-orders 2-0xb,
+        // message 0x138c to itself), whatever that makes of it.
+        self.town_voice(settlement);
         let human = self.human.is_some_and(|h| (h.nation, h.slot) == owner);
         // A fort a town orders comes armed (default arming), its weapons
         // paid for or taken from the ordering town's stock.

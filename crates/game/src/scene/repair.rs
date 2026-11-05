@@ -193,6 +193,9 @@ impl Scene {
         if !self.is_own(&self.objects[s]) {
             return Err("Only your settlements and towns repair".into());
         }
+        // The town's call on order 0x1e sub-order 1 (0x441ba0), whatever
+        // its message 0x1389 to the building makes of it.
+        self.town_voice(site);
         self.mend_by(site, target)
     }
 
@@ -371,7 +374,15 @@ impl Scene {
     /// the time has passed, when they are all whole (0x441ba0 state 2).
     pub fn order_repair_stock(&mut self, workshop: u32) -> Result<(), String> {
         let w = self.object_index(workshop).ok_or("No such building")?;
-        if !self.is_own(&self.objects[w]) || self.construction_at(workshop).is_some() {
+        if !self.is_own(&self.objects[w]) {
+            return Err("Not your workshop".into());
+        }
+        // The workshop's call on order 0x1e (0x436ee0, every order but
+        // 0x3c), even under construction; the settlement's sub-order 2
+        // clears its own (0x441ba0).
+        let (owner, x, y) = (self.objects[w].owner, self.objects[w].x, self.objects[w].y);
+        self.building_voice(owner, &super::halt::STUDIO_CALLS, x, y);
+        if self.construction_at(workshop).is_some() {
             return Err("Not your workshop".into());
         }
         let home = self

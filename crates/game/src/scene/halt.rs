@@ -63,6 +63,13 @@ pub(super) const SCHOOL_CALLS: Calls = [
     &[],
     &["re_o2a", "re_o4a", "re_o6a"],
 ];
+/// A shipyard's on its upgrade to a dock (228-231, 0x416f90).
+pub(super) const DOCK_CALLS: Calls = [
+    &[],
+    &["re_o2a", "re_o4a", "re_o6a"],
+    &[],
+    &["re_o2a", "re_o4a", "re_o6a"],
+];
 /// A fort's acknowledgment (216-219, 0x419f80 at 0x41bd2f).
 pub(super) const FORT_CALLS: Calls = [
     &[],
@@ -504,6 +511,29 @@ impl Scene {
             c.fire.cease();
             c.fire.aggressor = false;
         }
+    }
+
+    /// A settlement's or town's call after an order (TownObj 0x441ba0,
+    /// message 0x280f): its switch runs unless the state `+0xa4` is 2, 3
+    /// (sold) or 0xff, with the flag `local_28` set 1; the default and
+    /// order 0x1e sub 2 (the stock repair) clear it, order 10 when there
+    /// was nothing to call off, order 0x3c unless it took an item off the
+    /// training list; every other order (0x1e, 0x1f, 0x20, 0x21, 0x22,
+    /// 0x28, 0x2d, 0x32 but two of its pointer branches, 0x34) keeps it,
+    /// whatever the message it passes on did. With it set and the town
+    /// the local player's (`+0x54`, `+0x55` against game `+0x3212`,
+    /// `+0x3213`), event 0xdc / 0xdd / 0xdf / 0xde by its nation 0-3,
+    /// mode 2 at its cell (at 0x444468, after the order's case and vt+0x4c).
+    pub(super) fn town_voice(&mut self, site: u32) {
+        let Some(o) = self.object_index(site).map(|i| &self.objects[i]) else {
+            return;
+        };
+        if !matches!(o.class, ObjectClass::Building(SETTLEMENT | TOWN)) || self.sold.contains(&site)
+        {
+            return;
+        }
+        let (owner, x, y) = (o.owner, o.x, o.y);
+        self.building_voice(owner, &TOWN_CALLS, x, y);
     }
 
     /// A fort's call after an order (0x419f80 message 0x280f, at

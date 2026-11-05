@@ -3702,8 +3702,43 @@ it.
   on every 0x280f order but 0x3c (so research 0x21, the refit / weapons
   batch 0x20 and 10); the sage school (0x432210) on 10 when busy and on
   0x21 when idle (`+0x10c` 0, even an unknown kind). The port plays them
-  on its research start, refit and workshop training. Not read: the
-  town's (0x441ba0, `local_28`) orders other than 10.
+  on its research start, refit and workshop training. Every call plays
+  after the order's case, whatever the message that case passes on (the
+  0x138a-0x138d starts and their price and busy tests) makes of it, so a
+  refused order is still called; the port plays them before its own
+  refusals of that kind.
+  The town's (0x441ba0, at 0x444468, `local_28`): its switch runs only
+  with `+0xa4` not 2, 3 (sold) or 0xff, the flag set 1; order 10 keeps it
+  only when it called off an upgrade or a busy job, 0x1e sub 2 (the stock
+  repair, from the workshop) and the default clear it, 0x3c (a training
+  item taken off, sub 2) sets it only when one was taken off, two of the
+  pointer branches of 0x32 (0x443d7f, 0x443c29) clear it; every other
+  case keeps it: 0x1e (sub 1, message 0x1389 to the building to mend),
+  0x1f (the Reload Object's fort pick, sub 2), 0x20 (sub-orders 2-0xb a
+  building placed, 0x138c; 0xc-0x17 a ship, passed to an idle yard;
+  0x18-0x1a marines, 0x138d; 0x1b-0x20 / 0x21-0x24 passed to an idle
+  smithy / workshop), 0x21 (sub 1 its upgrade, 0x138a; the others passed
+  to its yard, school, workshop or smithy), 0x22 (passed to an idle
+  temple), 0x28 (sub 3, its berths cleared), 0x2d (sub 1, passed to a
+  fort), 0x34 (sell: sub 1 an object, 2 a stock item, 3 itself, message
+  0x248f). A case that passes the order on (vt+0 with the same message)
+  has that building's call play as well. The voice: event 0xdc / 0xdd /
+  0xdf / 0xde by nation 0-3, mode 2 at its cell. The port:
+  `Scene::town_voice` at training, a training item taken off, mending,
+  the upgrade, building placement and the four sales.
+  The shipyard's (Dock 0x416f90): order 0x21 sub 2 (its upgrade to a
+  dock) sends 0x138a and plays event 0xe4 / 0xe5 / 0xe7 / 0xe6 (228 and
+  230 empty, 229 and 231 `re_o2a re_o4a re_o6a`, `DOCK_CALLS`); its
+  orders 0x20 (a ship), 0x3c (one taken off) and 10 (the upgrade's
+  cancel) have none.
+  The temples (0x438300, 0x439260): besides the casts, command 0x22 code
+  0x12 (learning) calls only when the learning began (idle `+0x10c` 0
+  and paid; else `local_10` 0); order 10 as above. The war temple's
+  other orders (not 10 or 0x22) reach its call with `local_10` 1; the sea
+  temple's return before it. Not ported: the Reload Object's town call
+  (0x1f, 0x32), the town's passing of orders to its buildings from its
+  own panel (the port's buttons act on the building itself), and the war
+  temple's call on its other orders.
 - A ship: 0x4e2ba0 case 10 is `vt+4(8, NULL)`, the stop event (0x4aa540),
   with no permission test; a ship being built has its build called off.
   ShipService 0x4e7640 takes order 0x32 only, GameObj 0x50c9e0 order 0x29
