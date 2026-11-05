@@ -6853,11 +6853,55 @@ only out of states 2 and 0xff. The port: `Scene::kept_owner` (the
 owner kept with the ruins) for the pointer's own test with no own ship
 selected (`App::pointer`), the minimap and a fort's levels in the info;
 the info's life 1 for ruins (`object_info::of`); tested on battle01.
-Not ported: a ship's pointer over ruins (attack over an enemy's, the
-port's ban; own port or dock ruins), and what the panel does with a
-selected fallen building (0x4fffe0 on 0xc453, its menu 0x10a0) and
-what the order 0x16 at ruins makes the ships do: not decoded; the port
-selects ruins by any click, as any object.
+A ship's pointer over ruins: own ones the own pointer, an enemy's the
+attack (greyed unarmed), stepping as at a standing enemy
+(`Scene::ruins_enemy`, `App::default_pointer`, `App::pointer_modes`);
+not ported: own port and dock ruins by class (0x4e4680, 0x4e4630).
+
+The attack order at ruins. The click's order 0x16 `{id, 7}`
+(0x5180e0 mode 8 -> the navy -> 0x4cfc90, 0x520cc0) reaches the ship's
+0x4e2ba0 case 0x16 (0x4e6700(0x16) first), which keeps
+fire records of kind 3 with the player byte `+0x10` 0xff. Its tick's
+0x4ab3f0 finds the target by 0x4ac050 with -1: by id among all objects
+(0x51f1f0), so the ruins are found; their `+0x57` is 1, so the bytes are
+tested: own or not at war (0x4efe20 >= 0) leaves the record untaken;
+else 0x4abf60 asks only a distance (0x557440 to the building's
+`+0x74/+0x78` cell), and the positions go to state 3 with the player code
+`+0x644` the kept owner's (`+0x55 + 4 x +0x54`). The fire pass's attack
+0x4c09c0 then calls 0x4b9140 -> 0x4ac050 with that code: the player's
+list, which lost the building at the fall, so it is not found, and the
+ship stops (vt+4(8, 0x180)) with notice 0x13a `{id, 0x16}`. So the order
+is taken and dropped at the first ready step, before any route; an attack
+running at the fall ends the same way. The port: `Scene::order_attack`
+takes an enemy's ruins (`ruins_enemy`) with the kept code, and
+`fire_attack`'s look (`find_by_code`) drops it; tested on miss002.
+
+The left click selects only own objects. 0x5180e0 on message 0x62 with
+an object under the pointer sends the mode's order (modes 1-4, 8-0xb
+with something selected `[game+0x3221]`; 7, 0xc, 0xd, 0xf, 0x14, 0x1e,
+0x28, 0x32 their own); only over an object whose `+0x57` is 1 and `+0x54
+/ +0x55` the viewer's does mode 5 select (0xc453, 0xc455 with Shift,
+0xc456 with Ctrl, to the navy 0x49ab30). Over another's object, or none,
+the standard pointer's click sends nothing (after the own test: `+0x3221` 0 or
+mode 0) and the selection is kept. Own ruins (bytes kept) are selected;
+an enemy's, a deposit or a treasure are not. The port's original mouse
+(`App::finish_select`, `kept_own_pick`); the modern mouse still selects
+any object for its info.
+
+The panel with selected own ruins: 0x4fffe0 on 0xc453 (the selection,
+`+0x14` not 0) asks the navy 0xc45a and makes windows 0x22c and 0x22d (0)
+or 0x22e. The menu is the object's vt+0x68 through 0x425990's 0x10a0.
+The 19 building vtables (holding 0x423520 at +0xc): 11 have 0x423a00,
+which only sets slot 0 to the cancel (0x102) for the main menu in state
+0 or while mended (`+0x10c`), and clears the enabled bits under `+0x144`:
+in state 2 an empty menu, as the port's (`commands::main_menu`, the
+ruins not `is_own`). Not decoded: the other eight, each testing `+0xa4`:
+0x4164e0 (vtable 0x5957cc; its upgrade-to-dock slot is gated by class
+0x3b in state 0 and 0x3a in state 1 only, so another class's ruins may
+reach it), 0x417ff0 (0x595938), 0x430f90 (0x596afc), 0x433e60
+(0x596c1c), 0x4361c0 (0x596d04), 0x437de0 (0x596e04), 0x438b80
+(0x596f04) and the town's 0x43c740 (0x597024); which classes hold those
+vtables is not read.
 
 The fall's rubble is a terrain tile on map layer 5. For each cell i of
 the site (`+0x56`, 1 or 4: x + i % 2, y + i / 2) two draws of the

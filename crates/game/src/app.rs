@@ -6391,9 +6391,20 @@ impl App {
                 .ship
                 .as_ref()
                 .is_some_and(|sh| crate::objects::cargo_capacity(sh.kind) > 0.0);
+            // The ship's answer (0x4dc630 state 0, 0x4dd424) tests the
+            // bytes `+0x57`, `+0x54 / +0x55`, which a fallen building keeps
+            // through its ruins: an own one's is the own pointer (not
+            // ported: an own port's or dock's ruins by class, 0x4e4680 /
+            // 0x4e4630), an enemy's the attack (0x4e45c0, 0x4e35e0 with
+            // 0: any weapon position).
+            let ruins_own = |o: &crate::objects::MapObject| {
+                o.owner.is_none()
+                    && self.scene.kept_owner(o).is_some()
+                    && self.scene.kept_owner(o) == s.owner
+            };
             return match target {
-                Some(o) if own(o) => (P::Own, false),
-                Some(o) if enemy(o) => (P::Attack, !s.is_armed()),
+                Some(o) if own(o) || ruins_own(o) => (P::Own, false),
+                Some(o) if enemy(o) || self.scene.ruins_enemy(s, o) => (P::Attack, !s.is_armed()),
                 Some(o) if o.treasure.is_some() => (P::Treasure, false),
                 Some(o) if o.class == openconquest_formats::ObjectClass::HeroHouse => {
                     (P::Treasure, false)
@@ -6472,7 +6483,8 @@ impl App {
             return modes;
         };
         let sh = s.ship.as_ref().unwrap();
-        let enemy = t.combat.is_some() && Scene::are_enemies(s, t) && !self.scene.is_own(t);
+        let enemy = (t.combat.is_some() && Scene::are_enemies(s, t) && !self.scene.is_own(t))
+            || self.scene.ruins_enemy(s, t);
         let mut more = Vec::new();
         if enemy {
             // Only what the ship can do to it (0x4e45c0): fire if armed;
@@ -6841,6 +6853,14 @@ impl App {
             chosen = all;
         } else if dragged && chosen.is_empty() {
             return;
+        } else if !self.settings.modern_mouse && !self.kept_own_pick(&chosen) {
+            // The original's left click (0x5180e0, message 0x62) selects
+            // only in mode 5, over an object whose `+0x57` is 1 and `+0x54
+            // / +0x55` the viewer's (0xc453 to the navy, 0x49ab30), which a
+            // fallen building keeps through its ruins; over another's
+            // object or none the standard pointer's click sends nothing
+            // (`[game+0x3221]` 0 or mode 0: 0x5187a2), the selection kept.
+            return;
         }
         let first = chosen.first().copied();
         if first != self.selected {
@@ -6848,6 +6868,22 @@ impl App {
         }
         self.selected = first;
         self.group = chosen.into_iter().skip(1).collect();
+    }
+
+    /// Whether a click's pick `chosen` is one object the viewer owns by
+    /// its bytes (`Scene::kept_owner`, ruins included): what the
+    /// original's left click selects.
+    fn kept_own_pick(&self, chosen: &[u32]) -> bool {
+        let [id] = chosen else {
+            return false;
+        };
+        self.scene
+            .object_index(*id)
+            .map(|i| &self.scene.objects[i])
+            .is_some_and(|o| match (self.scene.human, self.scene.kept_owner(o)) {
+                (Some(h), Some(owner)) => (h.nation, h.slot) == owner,
+                _ => false,
+            })
     }
 
     /// The world point under a window position, in the view or on the

@@ -7712,6 +7712,68 @@ fn ruins_keep_their_owner_for_the_pointer() {
     assert_eq!(info.life, Some(1));
 }
 
+/// An attack at an enemy's ruins is taken (0x4ab3f0 finds them by id,
+/// their kept bytes an enemy's; the position's player code the kept
+/// owner's) and dropped at the fire pass's first look (0x4c09c0 ->
+/// 0x4b9140 -> 0x4ac050: not in that player's list); an own building's
+/// ruins are no target; tested on miss002 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn an_attack_at_ruins_is_taken_and_dropped() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
+    scene.brain = None;
+    let ship = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && o.ship.is_some() && o.combat.is_some())
+        .unwrap()
+        .id;
+    let s = scene.object_index(ship).unwrap();
+    scene.objects[s].combat.as_mut().unwrap().weapons = vec![4; 2];
+    let (enemy, owner) = scene
+        .objects
+        .iter()
+        .find(|o| {
+            matches!(o.class, ObjectClass::Building(_)) && Scene::are_enemies(&scene.objects[s], o)
+        })
+        .map(|o| (o.id, o.owner.unwrap()))
+        .unwrap();
+    let own = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && matches!(o.class, ObjectClass::Building(_)))
+        .unwrap()
+        .id;
+    scene.hit(enemy, f32::MAX, None, &data, &mut caches);
+    scene.hit(own, f32::MAX, None, &data, &mut caches);
+    let (s, t) = (
+        scene.object_index(ship).unwrap(),
+        scene.object_index(enemy).unwrap(),
+    );
+    assert!(scene.fallen(enemy) && scene.fallen(own));
+    assert!(scene.ruins_enemy(&scene.objects[s], &scene.objects[t]));
+    assert!(scene.order_attack(ship, own).is_err());
+    scene.order_attack(ship, enemy).unwrap();
+    let code = (owner.0 * 4 + owner.1) as i8;
+    let sh = scene.objects[s].ship.as_ref().unwrap();
+    assert!(sh.task.is_some());
+    assert!(sh
+        .behaviour
+        .aims
+        .iter()
+        .any(|a| a.state == 3 && a.target == enemy && a.player == code));
+    for _ in 0..50 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    let s = scene.object_index(ship).unwrap();
+    assert!(scene.object_index(enemy).is_some(), "the ruins still lie");
+    assert_eq!(scene.objects[s].ship.as_ref().unwrap().task, None);
+}
+
 /// Ships attacking a building stop once it falls to ruins (needs
 /// `OPENCONQUEST_DATA`).
 #[test]

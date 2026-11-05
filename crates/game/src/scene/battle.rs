@@ -63,6 +63,23 @@ impl Scene {
                 if Self::diplomacy(Self::player_id(y), Self::player_id(x)) < 0)
     }
 
+    /// Whether `o` is a fallen building's ruins whose kept bytes (`+0x54
+    /// / +0x55`, `kept_owner`; 0x423d60 clears neither) are not `me`'s
+    /// and at war with it (0x4efe20 < 0): what a ship's answer to the
+    /// pointer (0x4dc630 state 0, 0x4dd424) and its taking of an attack
+    /// (0x4ab3f0: 0x4ac050 with the record's player -1 finds it by id,
+    /// 0x51f1f0; `+0x57` 1, so the bytes are tested) see. (The ruins are
+    /// out of their player's list: the port's `owner` is none.)
+    pub fn ruins_enemy(&self, me: &MapObject, o: &MapObject) -> bool {
+        o.owner.is_none()
+            && match (me.owner, self.ruins.get(&o.id).and_then(|r| r.owner)) {
+                (Some(x), Some(y)) => {
+                    x != y && Self::diplomacy(Self::player_id(y), Self::player_id(x)) < 0
+                }
+                _ => false,
+            }
+    }
+
     /// Whether `me`'s at-will search may pick `o`: a ship by its masks
     /// (`objects::Behaviour::may_pick`: players `+0x689`, classes
     /// `+0x68d`, positions `+0x685`), anything else always.
@@ -118,13 +135,24 @@ impl Scene {
         {
             return Err(String::new());
         }
-        if self.objects[t].combat.is_none()
-            || !Self::are_enemies(&self.objects[i], &self.objects[t])
+        // An enemy's ruins take the attack as a standing building does
+        // (0x4ab3f0: found by id, the kept bytes an enemy's, 0x4abf60 a
+        // distance only), the position's player code `+0x644` the kept
+        // owner's; the fire pass's first look for it (0x4c09c0 ->
+        // 0x4b9140 -> 0x4ac050 with that code, the player's list) finds
+        // nothing and stops the attack with notice 0x13a (`fire_attack`).
+        let ruins = self.ruins_enemy(&self.objects[i], &self.objects[t]);
+        if !ruins
+            && (self.objects[t].combat.is_none()
+                || !Self::are_enemies(&self.objects[i], &self.objects[t]))
         {
             return Err("Choose an enemy ship or building".into());
         }
         let armed = self.objects[i].armed_positions();
-        let code = self.player_code(target);
+        let code = match self.kept_owner(&self.objects[t]) {
+            Some((n, s)) if ruins => (n * 4 + s) as i8,
+            _ => self.player_code(target),
+        };
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path.clear();
         ship.task = Some(Task::Attack {
