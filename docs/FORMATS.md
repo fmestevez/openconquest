@@ -5879,9 +5879,8 @@ caster's draw (a reef's kind `r % 3 + 1`, a barbarian monster's `r &
 3`); the sea temple (0x438300) likewise for kinds 1-4, 0xd, 0x11 unless
 the order's byte `+0xd` gives it (0x438694); the war temple passes 0
 (0x439aa2). The town's draw at 0x441e9c runs before its seed, from 0,
-and leaves nothing. Also drawn: a burning blow's fire (0x423d60 at
-0x42417d: `r % 5` with the hit's third 1, else `r % 3`, 0, a free fire
-slot lit) and the fall's rubble, two a cell (0x4244a4, 0x4244cb). The
+and leaves nothing. Also drawn: a burning blow's fire (below) and the
+fall's rubble, two a cell (0x4244a4, 0x4244cb). The
 port keeps the generators (`Scene::building_lcgs`, saved) and ports the
 first look, the fort's draws and the aim. Not ported: the building
 fires and rubble (none in the port, so their draws are not taken: a
@@ -5891,6 +5890,48 @@ barbarian structures, castles, lairs and heroes' houses (0x423520 too,
 but their classes draw their generators elsewhere, not read: castles
 0x410e6e / 0x410ed8, lairs 0x415337 / 0x4156a8, barbarians
 0x4e8a5e-0x4e927a). (0x430449 is a reef's, 0x4300a0, not a building's.)
+
+
+**A building's fire** (LandObjClassTy's drain 0x423d60, blow 0x138e,
+0x4240e0-0x4242e6; whether the subclasses' own drains, vt+0x4c, reach
+it is not read here). After the damage (and the picture's change of
+condition), the blow lights a fire when all hold, in this order: the
+message's flaming dword `+5` is not 0; no magic shield (`+0x15c` 0);
+the bomb kind (`+4`) / 3 is 1 or more; the building stands (`+0xa4` 1);
+the shooter's player (`+0x15`) is not 0xff; the hit point (`+0xd`,
+`+0x11`, less the main picture's `+0x59` / `+0x5d`) is a set bit of the
+building's mask (0x557640: rows of `(width + 7) & ~7` bits, bit `(row
+x stride + x) ^ 7`; the mask `+0xcc` and its width `+0xd0` are the
+resource `<prefix>MSK_<nation><1>1` (`%sMSK_%1u%1u%1u`, prefix `+0xb8`,
+nation `+0x54`), loaded by 0x422e30 in state 1 through 0x542ee0 /
+0x542d60(0x12)); and none of the four fire slots `+0x80..+0x8c` is
+taken (the loop at 0x424153 gives up at the first slot in use, so a
+fire is lit only where none burns, and always in slot 3, the last
+index it passed). Then one draw of the building's generator (`+0x18`):
+the fire is lit when `(r >> 16) % m == 0`, `m` 5 for kind / 3 == 1 (kinds
+3-5), else 3. The fire is layer `slot + 3` (3-6; layers 7-10 are the
+slots `+0x90..+0x9c`, which nothing in LandObj fills) at depth the main
+picture's `+0x19` less 3 (0x50cbf0), drawn through 0x50e240(layer, 1,
+table 0x5c1858, 1, 7) (0x55dd40: remap flag 1, value 1, count 7; the
+table's bytes 00 26 26 25 26 26 26 01 ...), redraw 0x50e570(5, cell, 5);
+its size byte `+0xa0 + slot` is kind / 3 for kinds 0-8 (mask 0x1ff),
+else 2; the picture `FIRE<size>` (`FIRE%1u`, a sequence, type 7,
+0x50cf60), its delay `+0x7d` 1, time `+0x81` 0, frame `+0x45` 0; its
+top left the hit point less half the sequence's width and four fifths
+of its height (`x - w / 2`, `y - (4 h) / 5`). The fire stays until the
+building falls (0x138b, 0x4243a2: layers 3-10 removed, slots cleared)
+or is removed (message 3, 0x425990); no other LandObj code reads the
+slots, so a building burns once. Not decoded: who steps the fire's
+frames (no LandObj function reads the layer's `+0x7d` / `+0x81`, the
+vt+0x3c/0x40/0x44 slots of the 19 building vtables are 0x4230f0,
+0x4233f0 or 0x427b30, and 0x423410, none of which touches layers 3-10;
+the sprite layer 0x546480 sets no timer); how 0x55dd40's table
+0x5c1858 with value 1, count 7 maps the flames' colours; and the fall's
+rubble (0x527fe0 on the map's `+0x17b2`: the cell's high byte `kind x 3
++ variant + 0x22`, kind and variant each `r % 3 + 1`, a draw each, per
+cell of the 1 x 1 or 2 x 2 site, and message 0x2f4 / 3 / 0xcc2), which
+is a terrain overlay not read here. Not ported (the port has no hit
+point, mask or bomb kind at the building's blow yet).
 
 
 **The pointer on a jam.** The cursor (0x5175b0) asks the view (message
