@@ -191,7 +191,9 @@ impl Scene {
                 s.picture = true;
                 self.siren_picture(i, s);
                 self.siren_step(s);
-                // Not decoded: the name of sound event 95 (mode 6).
+                // Sound event 95 (`app3`), mode 6 at her cell.
+                let (px, py) = (self.objects[i].x, self.objects[i].y);
+                self.sounds.push(("app3", px, py));
             }
             2 => {
                 s.state = 2;
@@ -213,8 +215,9 @@ impl Scene {
                 self.siren_picture(i, s);
                 s.cut = false;
                 self.siren_step(s);
-                // Not decoded: the name of sound event 106 (mode 6).
+                // Sound event 106 (`deamons`), mode 6 at her cell.
                 let (px, py) = (self.objects[i].x, self.objects[i].y);
+                self.sounds.push(("deamons", px, py));
                 self.drop_carried(id, px, py, data, caches);
             }
             _ => {
@@ -260,8 +263,11 @@ impl Scene {
     /// `Scene::song_heard` (0x4a7390). (Not decoded: the buildings'
     /// handlers of 0x15ca7: a building counts but takes nothing here.)
     fn siren_song(&mut self, s: &Siren) {
-        // Not decoded: the name of sound event 128 (mode 6).
         let (x, y) = s.cell;
+        // Sound event 128 (`sir1`), mode 6 at her cell.
+        let t = TILE_SIZE as f32;
+        self.sounds
+            .push(("sir1", x as f32 * t + t / 2.0, y as f32 * t + t / 2.0));
         let r = SONG_REACH;
         let mut list = self.cell_occupants((x - r, y - r), (x + r + 1, y + r + 1));
         list.sort_by_key(|&(c, _)| c);
@@ -305,8 +311,8 @@ impl Scene {
     /// vt+4 (0x403480): a blow of `damage` (ours, a fifteenth of hers)
     /// from player `by`. Only surfacing, singing or diving does she take
     /// it: off her life (down to 0), a blow leaving none reporting her
-    /// kill at once (0x50e750, every such blow). (Not decoded: the name
-    /// of sound event 117, mode 6.)
+    /// kill at once (0x50e750, every such blow). Sound event 117 has no
+    /// sample: silent.
     pub(super) fn siren_struck(&mut self, id: u32, damage: f32, by: Option<Owner>) {
         let Some(i) = self.object_index(id) else {
             return;
@@ -327,8 +333,8 @@ impl Scene {
     }
 
     /// Lightning on her (0xda93, her picture shown): her life to 0, cut
-    /// short, the caster her killer (reported when she goes). (Not
-    /// decoded: the name of sound event 117.)
+    /// short, the caster her killer (reported when she goes); event 117,
+    /// silent.
     pub(super) fn siren_lightning(&mut self, id: u32, caster: Option<Owner>) {
         let Some(i) = self.object_index(id) else {
             return;

@@ -5741,16 +5741,16 @@ with the run done.
   takes strictly and never onto a treasure, each weighing 1, one picked
   by 0x404730 (no draw with one, else `r % (n + 1)`, the first twice as
   likely): moved -> 1, none -> 0 again.
-- **1 surface** (sound event 95): frames 0-10 once, then 2.
+- **1 surface** (sound event 95, `app3`): frames 0-10 once, then 2.
 - **2 sing**: with life and not cut short, frames 11-100 once, taking the
   treasure on her cell (as the leviathan's, cap 2); else straight to 3.
   As frame 45 is about to be drawn (a latch `+0x114`: once a surfacing)
-  she sings (sound event 128): every object in the ship slot `+0xc` of
+  she sings (sound event 128, `sir1`): every object in the ship slot `+0xc` of
   each map cell within 7 either way (columns then rows, 50 at most), of
   **any side**, gets message 0x15ca7 with 750 ticks, a share of 88 / their
   number (22 from five), her cell and her id. Then 3.
 - **3 dive**: frames 101-113 once; then life left -> 0, none -> 4.
-- **4 death** (sound event 106): frames 114-162 once, 3 ticks a frame; her
+- **4 death** (sound event 106, `deamons`): frames 114-162 once, 3 ticks a frame; her
   cell gets what she carried (0x520c70, no head); then 0, whose end
   removes her.
 
@@ -5764,13 +5764,13 @@ off with hero 5, none on a ship shielded from magic).
 
 Struck (vt+4, 0x403480) in states 1-3 only: the blow comes off her life
 (down to 0; a blow leaving 0 reports her kill at once, 0x50e750; sound
-event 117); no target. Lightning (0xda93, her picture shown): life 0, cut
+event 117, which has no sample: silent); no target. Lightning (0xda93, her picture shown): life 0, cut
 short, the caster her killer. Shot at in states 1-3 (vt+0x2c, 0x404690);
 her aim point 0x4048f0 (no picture: her cell's centre; else from her
 picture's top left, a hit `30 + (r & 7)` each way, a miss `r % 61`, `40 +
 r % 24`, x drawn first). The port: `scene::siren` (ticked with the Gorgons
-in the objects' order). Not decoded: the names of sound events 95, 106,
-117 and 128; the buildings' handlers of 0x15ca7, so a building sung to
+in the objects' order; her sounds mode 6 at her cell). Not decoded: the
+buildings' handlers of 0x15ca7, so a building sung to
 counts in the share but takes nothing. Not ported: tornadoes (0xda96) and
 reefs or whirlpools (0xda94, 0xda95) on her; her pixel test 0x404800 and
 the mask `SIRMSK`; her save record (0x8cf: the port saves its own state).

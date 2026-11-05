@@ -3319,6 +3319,8 @@ fn gorgon_and_siren() {
     }
     assert_eq!(scene.ticks - rose, 88);
     assert_eq!(scene.sirens[&siren].state, 2);
+    // Sung with sound event 128 (`sir1`).
+    assert!(scene.sounds.iter().any(|s| s.0 == "sir1"));
     let c = &scene.charmed[&ships[0]];
     assert_eq!(c.share, if n < 5 { 88 / n } else { 22 });
     let left = c.left;
