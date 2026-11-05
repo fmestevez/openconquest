@@ -2595,6 +2595,7 @@ impl Scene {
             self.tick_flyers(data, caches);
             self.tick_gorgons(data, caches);
             self.tick_statuses(data, caches);
+            self.step_ship_fires();
             self.run_computers();
             self.run_brain_lands();
             self.run_town_links();
@@ -2691,7 +2692,6 @@ impl Scene {
         self.run_ruins(dt);
         self.run_combat(dt, data, caches);
         self.run_shots(dt, data, caches);
-        self.run_burning(dt);
         self.run_volcanoes(dt, data, caches);
         self.run_wakeups(dt);
         self.run_contact(dt, data, caches);

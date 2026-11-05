@@ -8291,9 +8291,19 @@ fn ships_burn_and_go_out() {
     scene.brain = None;
     let i = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
     let id = scene.objects[i].id;
+    scene.sounds.clear();
     scene.ignite(i, 9, false, 100.0, &data, &mut caches);
     let f = scene.fires.iter().find(|f| f.ship == id).unwrap();
     assert_eq!((f.size, f.frame), (2, f.frames.len() / 2));
+    // The lighting plays sound event 5 at the ship (0x4e510f), whose list
+    // is `firee1` alone.
+    let a = data.sounds.as_ref().unwrap();
+    assert_eq!(
+        openconquest_formats::sound::sound_choices(a, 5).unwrap(),
+        ["firee1"]
+    );
+    let o = &scene.objects[i];
+    assert_eq!(scene.sounds, [("firee1", o.x, o.y)]);
     // The flames' colours 1-7 go through the blend 0x5c1858 (0x4e2003),
     // none drawn as shadow.
     let pixels = || {
@@ -8315,9 +8325,23 @@ fn ships_burn_and_go_out() {
         &scene.fires[0].frames[0][0].image
     ));
     scene.fires[0].frame = count - left;
-    for _ in 0..left * 2 + 4 {
-        scene.update(crate::clock::TICK, &data, &mut caches);
+    // A step every other game tick (the delay 1, 0x4e04d0 from the ship's
+    // tick): the count reached after 2 x left ticks, gone at the next.
+    let tick = |scene: &mut Scene, caches: &mut Caches| {
+        let t = scene.ticks;
+        while scene.ticks == t {
+            scene.update(crate::clock::TICK, &data, caches);
+        }
+    };
+    tick(&mut scene, &mut caches);
+    assert_eq!(scene.fires[0].frame, count - left, "no step a tick on");
+    tick(&mut scene, &mut caches);
+    assert_eq!(scene.fires[0].frame, count - left + 1);
+    for _ in 2..left * 2 {
+        tick(&mut scene, &mut caches);
     }
+    assert_eq!(scene.fires[0].frame, count);
+    tick(&mut scene, &mut caches);
     assert!(scene.fires.is_empty(), "burnt out");
     let ship = scene.objects[i].ship.as_mut().unwrap();
     ship.treasures.push(crate::objects::Treasure {

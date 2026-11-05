@@ -1451,14 +1451,20 @@ what is beneath through 0x5c1858 as a building's fire does, the rest
 is written only at the lighting; the load 0x5461d0 leaves the frame
 `+0x45` alone). With the phantom (`+0x253`) 0x4df380 then ghosts the
 layer for its owner (0x50e460 with 0x5cdd2c) or hides it from others
-(0x50e350); not ported for the flames (the port draws them on any ship).
+(0x50e350); not ported for the flames, as for the hull (the port draws
+no phantom ship ghosted or hidden). 0x4e4fb0 ends, lit anew or not, with
+0x50e570(mode 1, the ship's cell `+0x5a3` / `+0x5a7`, event 5)
+(0x4e5107-0x4e510f): `SND_5` lists `firee1` alone, played at the ship.
 
 The step (0x4e04d0, from the ship's tick at 0x4dca16 while `+0x8ca` is
 set): with the frame `+0x45` below the count `+0x49` and the game tick
 more than the delay 1 past its time `+0x81`, frame + 1, time = the tick,
 and 0x50d660 shows that frame (0x55ec70 takes it modulo the count, so
 the step reaching the count shows frame 0); with the frame at the count
-the layer is removed (0x4e0260). Not decoded: whether the new layer
+the layer is removed (0x4e0260). The time is the game tick at the
+lighting, so the first step comes 2 ticks on, then every 2; the count
+reached, the next tick removes it. The port steps them in its game-tick
+loop with the ship statuses (`step_ship_fires`). Not decoded: whether the new layer
 (0x50cbf0 with show flag 0) is visible before its first step, and so at
 the lighting's place, 38 pixels higher; the port shows its first frame at
 the step's place from the lighting. Ported in `scene/fire.rs` (the

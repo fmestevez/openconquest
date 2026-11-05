@@ -62,7 +62,8 @@ pub struct Fire {
     /// The layer's frame `+0x45`: each step adds one and shows it modulo
     /// the count (0x55ec70), so the last step's `count` shows frame 0.
     pub frame: usize,
-    clock: f32,
+    /// The game tick of the lighting or of the last step (`+0x81`).
+    time: u32,
     pub frames: Vec<Vec<objects::Layer>>,
 }
 
@@ -105,6 +106,11 @@ impl Scene {
             return;
         };
         self.set_fire(id, size, data, caches);
+        // 0x4e4fb0 ends with 0x50e570(1, cell, 5) (0x4e510f), lit anew or
+        // not: sound event 5, whose `SND_5` lists `firee1` alone, mode 1
+        // at the ship's cell.
+        let o = &self.objects[i];
+        self.sounds.push(("firee1", o.x, o.y));
     }
 
     /// Lights flames of `size` on ship `id` (0x4e4fb0: 3 is the biggest,
@@ -135,7 +141,7 @@ impl Scene {
             ship: id,
             size: shown,
             frame,
-            clock: 0.0,
+            time: self.ticks,
             frames,
         });
     }
@@ -153,18 +159,13 @@ impl Scene {
         }
     }
 
-    /// The flames burn on and go out, or with their ship: a step
-    /// (0x4e04d0) with the frame below the count adds one, one at the
-    /// count removes the layer (0x4e0260).
-    pub(super) fn run_burning(&mut self, dt: f32) {
-        let step = crate::clock::ticks(2);
-        for f in &mut self.fires {
-            f.clock += dt;
-            while f.clock >= step {
-                f.clock -= step;
-                f.frame += 1;
-            }
-        }
+    /// The flames burn on and go out, or with their ship, each game tick
+    /// as the ship's tick (0x4dc630 message 0, at 0x4dca16 while `+0x8ca`
+    /// is set) steps them (0x4e04d0): with the frame below the count and
+    /// the tick more than the delay 1 past their time, frame + 1 and time
+    /// = the tick; with the frame at the count the layer is removed
+    /// (0x4e0260).
+    pub(super) fn step_ship_fires(&mut self) {
         let alive: HashSet<u32> = self
             .objects
             .iter()
@@ -172,7 +173,14 @@ impl Scene {
             .map(|o| o.id)
             .collect();
         self.fires
-            .retain(|f| f.frame <= f.frames.len() && alive.contains(&f.ship));
+            .retain(|f| f.frame < f.frames.len() && alive.contains(&f.ship));
+        let now = self.ticks;
+        for f in &mut self.fires {
+            if now.wrapping_sub(f.time) > 1 {
+                f.frame += 1;
+                f.time = now;
+            }
+        }
     }
 
     /// The flames on ship `obj` now and their top left, from its picture's.
@@ -205,7 +213,9 @@ pub struct SavedFire {
     ship: u32,
     size: u8,
     frame: usize,
-    clock: f32,
+    /// The tick of the last step (`+0x81`).
+    #[serde(default)]
+    time: u32,
 }
 
 impl Scene {
@@ -216,7 +226,7 @@ impl Scene {
                 ship: f.ship,
                 size: f.size,
                 frame: f.frame,
-                clock: f.clock,
+                time: f.time,
             })
             .collect()
     }
@@ -231,7 +241,7 @@ impl Scene {
             self.set_fire(f.ship, f.size, data, caches);
             if let Some(g) = self.fires.iter_mut().find(|g| g.ship == f.ship) {
                 g.frame = f.frame;
-                g.clock = f.clock;
+                g.time = f.time;
             }
         }
     }
