@@ -356,6 +356,14 @@ pub struct Scene {
     /// A leviathan hunt's line and haul (`WMOST_`, `WNOSIL_`; see
     /// `Scene::hunt_gear`).
     pub hunt_art: std::rc::Rc<(Frames, Frames)>,
+    /// The queued targets' marks' pictures (`fleet_attack::wp_art`).
+    pub wp_art: std::rc::Rc<fleet_attack::WpArt>,
+    /// The ships showing a queued target's mark (the object's `+0x35`,
+    /// kind `+0x3d`, number): set by 0xc45d sub 1, freed by sub 0 (not
+    /// saved: the interface's).
+    pub wp_marks: BTreeMap<u32, (u8, u8)>,
+    /// The selection the marks were last seen with (`fa_selection_seen`).
+    pub wp_selection: Vec<u32>,
     /// Amber deposits' glints and the sparkle's frames (`ASTAR_`).
     pub sparkles: sparkle::Sparkles,
     pub sparkle_art: std::rc::Rc<Frames>,
@@ -885,6 +893,9 @@ impl Scene {
             })),
             landing_art: std::rc::Rc::new(landing::landing_art(data, caches)),
             parties: Vec::new(),
+            wp_art: std::rc::Rc::new(fleet_attack::wp_art(data)),
+            wp_marks: BTreeMap::new(),
+            wp_selection: Vec::new(),
             hunt_art: std::rc::Rc::new((
                 objects::sequence_frames(data, caches, "WMOST_").unwrap_or_default(),
                 objects::sequence_frames(data, caches, "WNOSIL_").unwrap_or_default(),

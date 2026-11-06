@@ -384,6 +384,8 @@ fn sprites<'a>(scene: &'a Scene, time_ms: u64) -> Vec<Sprite<'a>> {
         // creation; not decoded whether 0x4e0470 / 0x4e04a0 restack them
         // to the hull's less 0x46 / 0x47).
         let gear = scene.hunt_gear(obj);
+        // A queued target's mark (depth 7, over the hull's 0xa).
+        let wp = scene.wp_mark_layers(obj);
         push(
             main,
             Slot::Object(obj.id),
@@ -414,6 +416,9 @@ fn sprites<'a>(scene: &'a Scene, time_ms: u64) -> Vec<Sprite<'a>> {
                     }
                 }
                 for (l, left, top) in &gear {
+                    draw_image(f, sc, cam, lut, &l.image, *left, *top);
+                }
+                for (l, left, top) in &wp {
                     draw_image(f, sc, cam, lut, &l.image, *left, *top);
                 }
             }),

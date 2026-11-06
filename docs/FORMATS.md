@@ -2967,6 +2967,38 @@ frames counted from the sinking, as the port's are; when message 10 is
 processed after its posting not read); 0x4cfad0's `+0x10` and
 0x4cfc90's move take its cell. Only the blows' sinking (battle.rs)
 records one.
+The queued target's mark: 0x4a1f20(navy, target, index, command)
+posts 0xc45d to the target, sub `+0x14` 1, `+0x18` the kind (8 for
+0x15/0x16, 6 for 0x17, 7 for 0x18; 5, 9, 10 for 0x1e, 0x20, 0x1f/0x32),
+`+0x1a` the byte `index + 1`; 0x4a2000 posts sub 0. A ship (0x4de040,
+GetMessage) with a picture `+0x8be`: sub 1 makes the mark (0x50c020,
+none at `+0x35`) or redraws it (0x50c3d0, the same picture and mask
+kept), then places it (0x50c600) at `(w - 0x24) / 2 + x`, `(h - 0x1d) /
+2 + y` of its picture, again each tick (0x4dc9dd); sub 0 frees it
+(0x50c320). The mark: a 0x91-byte picture (0x545e70) at depth 7 kind 8
+(0x545ef0; the hull's 0xa below it), composite `WPFIRE` / `WPBOARD` /
+`WPRAM` (controlm; `WPREPAIR` 5, `WPLOAD` 10; a deposit's or treasure's
+class picks `WPAMBER`, `WPFISH`, `WPWHALE`, `WPTREAS` whatever the
+kind), 36 x 29, 21 layers: 0-9 the tens' `_WPNUMn` at (19, 18), 10-19
+the units' at (29, 18), 20 the picture at (0, 0); the mask `1 << n / 10
+| 1 << n % 10 + 10 | 0x100000` for `0 < n < 100`, else 0x100000 (so 1
+reads `01`); `+0x7d` 1000, frame 0. 0x4cfbc0 posts it for the viewing
+player (`navy +0x21`) with Shift. 0x4a2050(navy, player, show), with
+`navy +0x20` 0, the player's selected group `+0xc2` and its block
+`+0x59` 0: 0x74/0x15 runs 0x4d07a0(queue, 1, show): each entry whose
+target is found (0x51f1f0) gets 0x4a1f20 (show) or 0x4a2000 (hide)
+(other blocks: 0x4cacf0, 0x4cc0b0, 0x4d7cd0, the route's 0x4ced10 /
+0x4cef10). It hides at 0xc453 (a new selection, w17.c) and in 0x49e850
+(0xc455, a ship added or taken), before the selection changes; 0x4a1c60
+hides for 0x78/0x3d and 0x8c/0x47 but not for this block (its marks
+stay until the selection changes). The navy's own 0xc45d (sub `+0x14`)
+runs 0x4a2050 with it; its sender (0x4effb9's 0xc45d / 0xc45e, an
+interface object keeping the sub at `+0x20`) was not traced, so the
+re-showing is not ported. The port: `Scene::wp_marks` (ships only:
+the other classes' 0xc45d handlers not read), shown from
+`order_fleet_attack` with Shift, hidden by `fa_selection_seen` when the
+App's selection differs from the last seen; drawn with the ship
+(`wp_mark_layers`). Not saved.
 The tick 0x4d0650 (from 0x4c4f40): with no notices or none heard and
 group `+8 > 0x50` (unsigned): `+8 = 0`, each ship lying still (`+0x58c`
 0) sent (0x4cfe40) when for 0x15/0x16 it has no fire task (`+0x25d &
@@ -2981,8 +3013,7 @@ board and ram a non-ship), silently, as the click's refusals; 0x51f1f0
 is the port's id lookup (an object, a jam or a ship sinking). Not ported: the route `+0x61` (kept
 only from a block of another kind under Shift) with 0x4cfe40's route
 branch (0x4cea20, 0x4ceab0, 0x4ce8a0), the held orders `+0x34`
-(0x4cffb0, 0x4d0030, 0x4d0090) and 0x136's case; the mark message
-0xc45d; 300's `#` (the port posts no 300 to a human group). What they do: 0x4d0210's 0x13a-0x13d, the ship in the group:
+(0x4cffb0, 0x4d0030, 0x4d0090) and 0x136's case; 300's `#` (the port posts no 300 to a human group). What they do: 0x4d0210's 0x13a-0x13d, the ship in the group:
 0x4cfa70(group, the record's `+0x10` (prey), 1) finds the entry of the
 block's target list `+0x30` whose `+4` is the prey and removes it (-1
 none); -1, or 0x4cfad0 true, sends the ship again (0x4cfe40), counted

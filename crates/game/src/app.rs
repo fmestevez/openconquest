@@ -7596,6 +7596,9 @@ impl App {
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         self.time_ms = (now - self.started).as_millis() as u64;
+        // A selection changed hides its fleet attack's marks (0x4a2050).
+        let sel = self.selection();
+        self.scene.fa_selection_seen(&sel);
         // A fade holds everything up but the sound (it busy-waits).
         if self.fade.is_none() {
             self.update(dt);

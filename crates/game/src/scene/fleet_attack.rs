@@ -120,7 +120,8 @@ impl Scene {
         let z = self.selection_fleet(&group);
         if keys & 4 != 0 {
             if let Some(z) = z {
-                fa_queue(&mut self.fleet_attacks[z], target, command);
+                let k = fa_queue(&mut self.fleet_attacks[z], target, command);
+                self.fa_mark(target, k, command);
                 return Ok(());
             }
         }
@@ -180,7 +181,10 @@ impl Scene {
         if let Some(c) = cell {
             a.cell = c;
         }
-        fa_queue(a, target, command);
+        let k = fa_queue(a, target, command);
+        if keys & 4 != 0 {
+            self.fa_mark(target, k, command);
+        }
         if self.fa_found(target) {
             let mut a = self.fleet_attacks.remove(z);
             for id in a.ships.clone() {
@@ -386,6 +390,90 @@ impl Scene {
                 .any(|k| k.id == id && k.until > self.ticks)
     }
 
+    /// 0x4a1f20 (navy, target, index, command): message 0xc45d to the
+    /// target, sub 1, `+0x18` the kind (8 for 0x15 / 0x16, 6 for 0x17, 7
+    /// for 0x18), `+0x1a` the byte `index + 1`. A ship (0x4de040) with a
+    /// picture `+0x8be` makes its mark (0x50c020) or redraws it
+    /// (0x50c3d0); with none, nothing. Only the human orders this block,
+    /// so its player is the viewer (0x4cfbc0's `navy +0x21` test).
+    pub(super) fn fa_mark(&mut self, target: u32, index: usize, command: u8) {
+        let kind = match command {
+            0x15 | 0x16 => 8,
+            0x17 => 6,
+            0x18 => 7,
+            _ => return,
+        };
+        let shown = self
+            .object_index(target)
+            .is_some_and(|i| self.objects[i].ship.is_some() && !self.objects[i].frames.is_empty());
+        if shown {
+            self.wp_marks
+                .insert(target, (kind, (index as u8).wrapping_add(1)));
+        }
+    }
+
+    /// 0x4a2050(navy, player, 0), at a new selection (0xc453 to the navy)
+    /// and a ship added to or taken from it (0xc455, 0x49e850), before the
+    /// selection changes: the selected group's block of this kind runs
+    /// 0x4d07a0(queue, 1, 0), which for each entry whose target is found
+    /// (0x51f1f0) posts 0xc45d sub 0 (0x4a2000): the ship's mark freed
+    /// (0x50c320). The port calls it when it sees the selection `now`
+    /// differ from the one before.
+    pub fn fa_selection_seen(&mut self, now: &[u32]) {
+        if self.wp_selection.as_slice() == now {
+            return;
+        }
+        let before = std::mem::replace(&mut self.wp_selection, now.to_vec());
+        let Some(z) = self.selection_fleet(&before) else {
+            return;
+        };
+        let targets: Vec<u32> = self.fleet_attacks[z]
+            .queue
+            .iter()
+            .map(|q| q.target)
+            .collect();
+        for t in targets {
+            if self.fa_found(t) {
+                self.wp_marks.remove(&t);
+            }
+        }
+    }
+
+    /// The mark over ship `obj` (0x50c020's `WPFIRE` / `WPBOARD` /
+    /// `WPRAM`, controlm, 36 x 29, kind 8 at depth 7, over the hull's
+    /// 0xa): its layers by the mask `1 << mark / 10 | 1 << mark % 10 + 10
+    /// | 0x100000` (the tens' digit layers 0-9, the units' 10-19, the
+    /// picture 20), only 0x100000 for a mark of 0 or 100 and more; its top
+    /// left `(w - 0x24) / 2 + x`, `(h - 0x1d) / 2 + y` of the ship's
+    /// picture (0x50c600, each tick at 0x4dc9dd). Each layer with its own
+    /// offset.
+    pub fn wp_mark_layers(
+        &self,
+        obj: &crate::objects::MapObject,
+    ) -> Vec<(&crate::objects::Layer, i32, i32)> {
+        let Some(&(kind, mark)) = self.wp_marks.get(&obj.id) else {
+            return Vec::new();
+        };
+        let Some(l) = obj.frames.first().and_then(|f| f.first()) else {
+            return Vec::new();
+        };
+        let Some((_, art)) = self.wp_art.iter().find(|(k, _)| *k == kind) else {
+            return Vec::new();
+        };
+        let mask: u32 = if mark != 0 && mark < 100 {
+            1 << (mark / 10) | 1 << (mark % 10 + 10) | 0x100000
+        } else {
+            0x100000
+        };
+        let (x, y) = crate::render::layer_origin(obj, l);
+        let (w, h) = (l.image.width as i32, l.image.height as i32);
+        let (left, top) = ((w - 0x24) / 2 + x, (h - 0x1d) / 2 + y);
+        art.iter()
+            .filter(|(k, _)| mask & (1 << k) != 0)
+            .map(|(_, l)| (l, left + l.dx, top + l.dy))
+            .collect()
+    }
+
     /// 0x4cfe40 without a route: the record `{ship, +0xc, +0x10, +0x14,
     /// +0x1c, +0x18}` (0x4cfdf0) given as the command 0x4cfc90: 0x15 /
     /// 0x16 a ship with no strength (0x50ea70 0) sent to the target's
@@ -436,10 +524,8 @@ impl Scene {
 
 /// 0x4cfbc0: the first entry for `target` with the same command is kept
 /// (its index returned); with another it is removed and the target
-/// appended anew, as one not queued. (Not ported: for the viewing player
-/// with Shift, 0x4a1f20 posts message 0xc45d with the mark `index + 1`,
-/// kind 8 for 0x15 / 0x16, 6 for 0x17, 7 for 0x18: the queued target's
-/// number shown.)
+/// appended anew, as one not queued. For the viewing player with Shift
+/// the caller shows the entry's mark (0x4a1f20, `Scene::fa_mark`).
 fn fa_queue(a: &mut FleetAttack, target: u32, command: u8) -> usize {
     if let Some(k) = a.queue.iter().position(|q| q.target == target) {
         if a.queue[k].command == command {
@@ -454,6 +540,52 @@ fn fa_queue(a: &mut FleetAttack, target: u32, command: u8) -> usize {
     });
     a.queue.len() - 1
 }
+
+/// The marks' pictures (0x50c020: kind 6 `WPBOARD`, 7 `WPRAM`, 8
+/// `WPFIRE`, composites of controlm): each with its layers as
+/// `(layer index, layer)`, in the order drawn (the highest order first,
+/// as `objects::composite_frames_with`).
+pub(super) fn wp_art(data: &crate::assets::GameData) -> WpArt {
+    use openconquest_formats::{anim::EMPTY_SPRITE, Composite, ResourceKind};
+    let Some(menus) = data.menus.as_ref() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (kind, name) in [(6, "WPBOARD"), (7, "WPRAM"), (8, "WPFIRE")] {
+        let Some(e) = menus.find(name, ResourceKind::Composite) else {
+            continue;
+        };
+        let Ok(c) = menus.read_entry(e).and_then(|b| Composite::parse(&b, e)) else {
+            continue;
+        };
+        if c.frames == 0 {
+            continue;
+        }
+        let mut cells: Vec<_> = c.frame(0).iter().enumerate().collect();
+        cells.sort_by_key(|(_, c)| std::cmp::Reverse(c.order));
+        let mut layers = Vec::new();
+        for (k, cell) in cells {
+            if cell.sprite == EMPTY_SPRITE {
+                continue;
+            }
+            if let Ok(Some(img)) = data.load_image(menus, &cell.sprite, false) {
+                layers.push((
+                    k,
+                    crate::objects::Layer {
+                        image: std::rc::Rc::new(img),
+                        dx: cell.dx,
+                        dy: cell.dy,
+                    },
+                ));
+            }
+        }
+        out.push((kind, layers));
+    }
+    out
+}
+
+/// The marks' pictures by kind (`wp_art`).
+pub type WpArt = Vec<(u8, Vec<(usize, crate::objects::Layer)>)>;
 
 #[cfg(test)]
 mod tests {
@@ -518,6 +650,21 @@ mod tests {
             extra: 0,
         };
         assert_eq!(a.queue, [q(f), q(g)]);
+        // Only the Shift-queued target shows its mark (0x4a1f20): WPFIRE
+        // numbered 2, the tens' 0 and the units' 2 over the picture.
+        assert_eq!(scene.wp_marks.get(&f), None);
+        assert_eq!(scene.wp_marks.get(&g), Some(&(8, 2)));
+        let gi = scene.object_index(g).unwrap();
+        let ks: Vec<i32> = scene
+            .wp_mark_layers(&scene.objects[gi])
+            .iter()
+            .map(|(l, _, _)| l.dx)
+            .collect();
+        assert_eq!(ks, [0, 29, 19]);
+        // A selection changed hides the queue's marks (0x4a2050).
+        scene.fa_selection_seen(&[id0, id1]);
+        scene.fa_selection_seen(&[id0]);
+        assert!(scene.wp_marks.is_empty());
         let at = |ship, target| Order::Attack { ship, target };
         assert_eq!(std::mem::take(&mut scene.outbox), [at(id0, f), at(id1, f)]);
         // A prize taken: the old target still there.
