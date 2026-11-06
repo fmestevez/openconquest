@@ -2903,7 +2903,8 @@ block, the record's prey, 1) below 0 or 0x4cfad0 sends it again
 0x13c, 0x13d, 0x4d1750 of the ship `>> 16` 2 zeroes that entry's `+8`
 and `+0xc` in `+0x48`). The gather zone (0x4c9e30) and the move
 (0x4cc6a0) read none. Ported (`Scene::post_notice`: gather zones, human
-attack groups and the computers' flotillas with a block,
+attack groups, the human's fleet attack groups and the computers'
+flotillas with a block,
 `Computer::post_notice`): every sender (the rammer's state 6 as the
 port's `RamStage::Back` ends, `ram_done`), the attack's only for a
 target gone from the map (the port also ends an attack on a target no
@@ -2911,13 +2912,60 @@ longer an enemy, posting nothing); the human block's and the computers'
 attack zone's cases. The boarder's end posts as the port's leave stage
 ends, the task with it (event 8 0x90, `+0x708` now). The boarder
 closing in, a prey within reach but not at war: nothing (0x4b5df0 state
-1); the rammer's look finds the prey only at war (0x4b8d80). Not ported:
-0x4d0210's and 0x4d1ea0's cases, the port having neither block as the
-original keeps it: the fleet attack task (0x74, the human's commands
-0x15-0x18 through 0x49dda0 -> 0x4d04a0; no other sender) is per ship in
-the port, with no group or target list, and the computers' guard is
-their zone (`order_zone`), without the block's lists `+0x44`, `+0x48`,
-`+0x4c`. What they do: 0x4d0210's 0x13a-0x13d, the ship in the group:
+1); the rammer's look finds the prey only at war (0x4b8d80). The fleet
+attack task's 0x4d0210 is ported (`scene/fleet_attack.rs`, below). Not
+ported: 0x4d1ea0's cases, the computers' guard being their zone
+(`order_zone`), without the block's lists `+0x44`, `+0x48`, `+0x4c`.
+
+**The fleet attack task `{0x74, 0x15}`** (port `scene/fleet_attack.rs`,
+`Order::FleetAttack`). Made only by the human's fleet commands 0x15-0x18
+(attack, attack, board, ram) at a target: the pointer's click
+(0x5180e0) -> the navy 0x49e230 -> 0x49dda0 (payload `{command, target,
+cell, 0}`, the sub byte dropped). With Shift (`keys & 4`) and the
+selection's group already running this block, only 0x4cfbc0 (the target
+queued); else 0x4d04a0: a block of another kind ended (0x4a1c60; with
+Shift its route `+0x61` kept), none made (0x4cf990: 0x65 bytes zeroed,
+the notices 0x4a1150), else rewritten in place (queue `+0x30` and held
+orders `+0x34` kept). Fields: `+8` now (`+0xde`), `+0xc` target, `+0x14`
+command, `+0x18` 7, `+0x1c` 0, `+0x10` the target's cell `x + y*W`
+(0x51f1f0 / 0x50ebf0; not found: kept; a jam 0). Then 0x4cfbc0 with the
+target and, the target found, 0x4cfe40 for every ship of the group.
+0x4cfbc0: the queue's 0x18-byte entries `{0, target, -1, command, 0, 0}`;
+the target's entry with the same command kept (its index), with another
+removed and appended anew; for the viewing player with Shift, 0x4a1f20
+posts message 0xc45d with mark `index + 1` (kind 8 for 0x15/0x16, 6 for
+0x17, 7 for 0x18). 0x4cfe40 without a route gives the record `{ship,
++0xc, +0x10, +0x14, +0x1c, +0x18}` (0x4cfdf0) to 0x4cfc90: 0x15/0x16 a
+ship of no strength (0x50ea70) moved to the target's cell (0x4cf070;
+target not found, nothing), else the command `{target, 7, code, 0x44}`
+(0x520cc0, the outbox); 0x17 nothing for a ship with `+0x53c < 1`, else
+0x17 `{target, 0x45}`; 0x18 `{target, 0x46}`. 0x4d0210 (the notices
+newest first, each removed, while the block lasts; the ship the group's,
+0x4cc590): 300 with 0x4cfad0 true sends the ship (heard), then `#` sub 1
+with the group's three (0x4c42f0); 0x136 only with a route; 0x13a-0x13d
+(rec `a` the prey): 0x4cfa70 removes the prey's queue entry; none, or
+0x4cfad0 true, sends the ship (heard); else 0x4a1c60 ends the block.
+0x4cfad0: queue empty, 0; else the block's **old** target `+0xc` looked
+up (0x51f1f0): found, `+0x10` = its cell and from entry 0 (not removed)
+`+0xc`, `+0x14`, `+0x1c`, `+0x18` 7, result 1; not found, 0. So a
+target sunk ends the block however many targets are queued; a prize
+taken (0x13a from 0x4b6f20, the prize still there) moves on to the next.
+The tick 0x4d0650 (from 0x4c4f40): with no notices or none heard and
+group `+8 > 0x50` (unsigned): `+8 = 0`, each ship lying still (`+0x58c`
+0) sent (0x4cfe40) when for 0x15/0x16 it has no fire task (`+0x25d &
+0x100`) and no ram or boarding (`& 0x10`), for 0x17 no ram or boarding
+and `+0x53c > 0`, for 0x18 no ram or boarding; then `+8 += +0xe2`. No
+draws. The end 0x4a1c60 -> 0x4cf940 frees the notices, `+0x30`, `+0x34`,
+the route and the block. The port: the group is the selection's (a
+gather zone's or attack zone's group of the same ships taken over, its
+`+8` kept); forts of the selection take the attack themselves; the port
+refuses a target the attack pointer would not take (a friend; for
+board and ram a non-ship); 0x51f1f0 is the port's id lookup (an object
+or a jam; a sunk object is gone). Not ported: the route `+0x61` (kept
+only from a block of another kind under Shift) with 0x4cfe40's route
+branch (0x4cea20, 0x4ceab0, 0x4ce8a0), the held orders `+0x34`
+(0x4cffb0, 0x4d0030, 0x4d0090) and 0x136's case; the mark message
+0xc45d; 300's `#` (the port posts no 300 to a human group). What they do: 0x4d0210's 0x13a-0x13d, the ship in the group:
 0x4cfa70(group, the record's `+0x10` (prey), 1) finds the entry of the
 block's target list `+0x30` whose `+4` is the prey and removes it (-1
 none); -1, or 0x4cfad0 true, sends the ship again (0x4cfe40), counted
@@ -7680,12 +7728,11 @@ jam again (0x4cfe40); then `+8 += +0xe2`. So with its member dead the
 ship is sent at the jam's new first member within 81 ticks; with the jam
 gone nothing is given and the task stays (nothing in 0x4d0650 ends it).
 Shots hit only a jam's first member (0x4983d0). The port: the pick
-names the jam (`App::attack_target`), `Task::Attack` keeps it (`jam`,
-`count` the task's `+8`, per ship), `Scene::run_jam_attacks` is
-0x4d0650 (the member given at once, not through the next tick's
-command), and the ship waits while its member is gone. Not decoded: who
-removes the task (0x4d0210's notices, 0x4a1c60's callers); a fleet task
-with a route `+0x61` (0x4ceab0 with the cell 0); the at-will pick of a
+names the jam (`App::attack_target`), the fleet attack task keeps it
+(`scene/fleet_attack.rs`, above), `Task::Attack` the ship's record (`jam`;
+the member given at once, not through the next tick's command); the
+member gone, the ship's notice 0x13a (the member not in the queue)
+sends it at the jam again at once. Not decoded: the at-will pick of a
 jam (0x4c0cd0, 0x4c0bc0). Not ported: message
 0xda96 (life off by the message's amount); several sounds to pick from are picked by the port's
 stand-in for the C library's `rand()` (`gull_rng`). Not decoded:

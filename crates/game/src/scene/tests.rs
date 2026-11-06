@@ -1937,8 +1937,7 @@ fn behaviours() {
         task(&scene, mine),
         Some(Task::Attack {
             target: enemy,
-            jam: None,
-            count: 0
+            jam: None
         })
     );
     // Set to ram, it goes in at will at an enemy within 2 cells of it
@@ -13472,11 +13471,13 @@ fn land_creatures_look_alert_and_throw() {
     assert_eq!(scene.building_lcgs.get(&bid), Some(&aim_rng.0));
 }
 
-/// An armed ship ordered at a jam keeps the jam (0x4d04a0 `+0xc`) and
-/// fires at its first member (0x4ab3f0); its member gone, the fleet task
-/// sends it, lying still, at the jam's next first member once its counter
-/// is past 0x50 (0x4d0650); the jam gone, the task stays with nothing
-/// given (needs `OPENCONQUEST_DATA`).
+/// An armed ship ordered at a jam: the fleet attack task keeps the jam
+/// (0x4d04a0 `+0xc`, `+0x10` 0) and sends the ship at it (0x4cfe40), which
+/// fires at its first member (0x4ab3f0); its member gone (notice 0x13a,
+/// the member not queued), the task sends it at the jam again at once,
+/// now its next first member; lying still without a fire task, it is sent
+/// again once the counter is past 0x50 (0x4d0650); the jam gone, the
+/// task stays (needs `OPENCONQUEST_DATA`).
 #[test]
 fn a_ship_ordered_at_a_jam_takes_its_first_member() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -13503,8 +13504,26 @@ fn a_ship_ordered_at_a_jam_takes_its_first_member() {
     let jam = scene.jams[0].id;
     assert_eq!(scene.jams[0].members, vec![a, b]);
     scene.ticks = 1000;
+    scene.outbox.clear();
+    scene.order_fleet_attack(&[ship], jam, 0x16, 0).unwrap();
+    let block = scene.fleet_attacks[0].clone();
+    assert_eq!(
+        (
+            block.made,
+            block.target,
+            block.cell,
+            block.command,
+            block.sub
+        ),
+        (1000, jam, 0, 0x16, 7)
+    );
+    assert_eq!(block.queue.len(), 1);
+    let sent = Order::Attack { ship, target: jam };
+    assert_eq!(
+        std::mem::take(&mut scene.outbox),
+        std::slice::from_ref(&sent)
+    );
     scene.order_attack(ship, jam).unwrap();
-    let i = scene.object_index(ship).unwrap();
     let task = |s: &Scene| {
         let i = s.object_index(ship).unwrap();
         s.objects[i].ship.as_ref().unwrap().task
@@ -13514,37 +13533,44 @@ fn a_ship_ordered_at_a_jam_takes_its_first_member() {
         Some(Task::Attack {
             target: a,
             jam: Some(jam),
-            count: 1000
         })
     );
-    scene.objects[i].ship.as_mut().unwrap().move_state = 0;
-    // The first tick of the task: past 0x50, back to 0, then 1.
-    scene.run_jam_attacks();
-    assert!(matches!(task(&scene), Some(Task::Attack { target, count: 1, .. }) if target == a));
-    // The first member leaves the jam (dies): the ship keeps its order
-    // and, 81 ticks of the task on, is given the next.
+    // The first member dies: the fire pass's 0x13a (0x4c09c0) for it.
     scene.jams[0].members.remove(0);
     scene.objects.retain(|o| o.id != a);
-    for k in 2..=81 {
-        scene.run_jam_attacks();
-        assert!(
-            matches!(task(&scene), Some(Task::Attack { target, count, .. }) if target == a && count == k),
-            "{k}: {:?}",
-            task(&scene)
-        );
+    scene.post_notice(ship, 0x13a, a);
+    scene.run_fleet_attacks();
+    assert_eq!(
+        std::mem::take(&mut scene.outbox),
+        std::slice::from_ref(&sent)
+    );
+    scene.order_attack(ship, jam).unwrap();
+    assert!(matches!(task(&scene), Some(Task::Attack { target, .. }) if target == b));
+    // Lying still with its fire task over: sent again as the counter
+    // (1 after the notice's tick) reaches 81, past 0x50; then it is 1.
+    let i = scene.object_index(ship).unwrap();
+    let s = scene.objects[i].ship.as_mut().unwrap();
+    s.move_state = 0;
+    s.firing = false;
+    for _ in 1..81 {
+        scene.run_fleet_attacks();
+        assert!(scene.outbox.is_empty());
     }
-    scene.run_jam_attacks();
-    assert!(matches!(task(&scene), Some(Task::Attack { target, count: 1, .. }) if target == b));
-    // The jam gone: nothing to give; the task stays (0x4d0650 never ends
-    // it).
+    scene.run_fleet_attacks();
+    assert_eq!(
+        std::mem::take(&mut scene.outbox),
+        std::slice::from_ref(&sent)
+    );
+    assert_eq!(scene.fleet_attacks[0].elapsed, 1);
+    // The jam gone: the ship's 0x13a sends it again, at nothing; the task
+    // stays.
     scene.jams.clear();
     scene.objects.retain(|o| o.id != b);
-    for _ in 0..200 {
-        scene.run_jam_attacks();
-    }
-    assert!(
-        matches!(task(&scene), Some(Task::Attack { target, jam: Some(j), .. }) if target == b && j == jam)
-    );
+    scene.post_notice(ship, 0x13a, b);
+    scene.run_fleet_attacks();
+    assert_eq!(std::mem::take(&mut scene.outbox), [sent]);
+    assert!(scene.order_attack(ship, jam).is_err());
+    assert_eq!(scene.fleet_attacks.len(), 1);
 }
 
 /// A shot at a ship aims where its vt+0xc (0x4e07c0) says, drawing from
@@ -15330,14 +15356,7 @@ fn an_attack_goes_with_the_group() {
     // The attack alone.
     tick(&mut scene, &mut caches);
     scene.apply(&attack, &data, &mut caches).unwrap();
-    assert_eq!(
-        task(&scene),
-        Some(Task::Attack {
-            target,
-            jam: None,
-            count: 0
-        })
-    );
+    assert_eq!(task(&scene), Some(Task::Attack { target, jam: None }));
 }
 
 /// The commands of 0x520cc0 reach their objects at the next tick, in

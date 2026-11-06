@@ -228,6 +228,7 @@ impl Scene {
         self.gather_zones
             .retain(|z| !(matches!(z.group, ZoneGroup::Human(_)) && z.ships.is_empty()));
         self.leave_attacks(ids);
+        self.leave_fleets(ids);
     }
 
     /// Ends the gather zone of `group` (its task replaced, 0x4a1c60).
@@ -251,6 +252,8 @@ impl Scene {
             self.gather_zones[z].notices.push(notice);
         } else if let Some(z) = self.ship_attack(id) {
             self.human_attacks[z].notices.push(notice);
+        } else if let Some(z) = self.ship_fleet(id) {
+            self.fleet_attacks[z].notices.push(notice);
         } else {
             for ai in &mut self.computers.players {
                 if ai.post_notice(id, code, class) {

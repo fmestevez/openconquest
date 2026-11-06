@@ -1534,7 +1534,6 @@ mod tests {
         scene.objects[k].ship.as_mut().unwrap().task = Some(crate::objects::Task::Attack {
             target: gone,
             jam: None,
-            count: 0,
         });
         // The attack's records (0x4ab3f0 kind 3) at it, then it is gone:
         // the fire pass's attack (0x4c09c0) finds nothing.

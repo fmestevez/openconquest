@@ -1,0 +1,524 @@
+//! The fleet attack task `{0x74, 0x15}`: the human's fleet commands
+//! 0x15-0x18 (attack, attack, board, ram) at a target, from a selection
+//! (0x49e230 -> 0x49dda0 -> 0x4d04a0; no other sender). The selection's
+//! group keeps the target `+0xc`, the command `+0x14` and a queue of
+//! targets `+0x30` (Shift), sends its ships at the target (0x4cfe40 ->
+//! 0x4cfc90), hears their notices (0x4d0210) and sends the ships lying
+//! still again every 81 ticks (0x4d0650). See docs/FORMATS.md ("The
+//! fleet attack task").
+
+use super::gather::Notice;
+use super::{Order, Scene};
+use openconquest_formats::map::TILE_SIZE;
+use serde::{Deserialize, Serialize};
+
+/// An entry of the block's target queue `+0x30` (0x4cfbc0: 0x18 bytes
+/// `{0, target id, -1, command, 0, 0}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Queued {
+    /// `+4`.
+    pub target: u32,
+    /// `+0xc`.
+    pub command: u8,
+    /// `+0x10` (always 0 as 0x4cfbc0 writes it).
+    pub extra: u32,
+}
+
+/// A human group running the fleet attack task: the group's own fields
+/// the task reads and the block (0x65 bytes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FleetAttack {
+    /// The group's serial number (shared with the other human groups).
+    pub serial: u32,
+    /// Group `+0x31`: its ships, by id.
+    pub ships: Vec<u32>,
+    /// Group `+0x2d`: the notices not yet read, oldest first.
+    pub notices: Vec<Notice>,
+    /// Group `+8`: the task's tick counter.
+    pub elapsed: u32,
+    /// Block `+8`: the tick it was made or rewritten (game `+0xde`).
+    pub made: u32,
+    /// Block `+0xc`: the target's id.
+    pub target: u32,
+    /// Block `+0x10`: a target's cell `x + y * W` (0x50ebf0), read only
+    /// by the route's 0x4ceab0.
+    pub cell: i32,
+    /// Block `+0x14`: the command 0x15-0x18.
+    pub command: u8,
+    /// Block `+0x18`: the command's sub byte, 7.
+    pub sub: u8,
+    /// Block `+0x1c`.
+    pub extra: u32,
+    /// Block `+0x30`.
+    pub queue: Vec<Queued>,
+}
+
+/// 0x4d0650's period: the ships are sent again once group `+8` is over
+/// 0x50.
+pub const PASS: u32 = 0x50;
+
+impl Scene {
+    /// The human's fleet command `command` (0x15 / 0x16 attack, 0x17
+    /// board, 0x18 ram) at `target` for `ships`, with the click's key
+    /// flags `keys` (0x49dda0: the payload `{command, target, cell, 0}`).
+    /// Forts in the selection take the attack themselves (0x419f80). The
+    /// port refuses a target the attack pointer would not let through (a
+    /// friend, or for the board and the ram anything but a ship).
+    ///
+    /// With Shift (`keys & 4`) and the selection's group running this
+    /// block, the target is only queued (0x4cfbc0). Else 0x4d04a0: the
+    /// selection's group (0x49e230 keeps it while the selection is
+    /// unchanged, its block of another kind ended by 0x4a1c60; else
+    /// 0x49ca60 makes a new one, its ships leaving their old groups)
+    /// gets the block made (0x4cf990) or rewritten in place (the queue
+    /// kept): `+8` now, `+0xc` the target, `+0x14` the command, `+0x18`
+    /// 7, `+0x1c` 0, `+0x10` the target's cell (not found: kept; a jam
+    /// 0). The target queued (0x4cfbc0) and, found (0x51f1f0), each ship
+    /// sent (0x4cfe40). Not ported: a route `+0x61` kept from a block of
+    /// another kind under Shift, and with it 0x4cfe40's route branch,
+    /// the held orders `+0x34` and notice 0x136's case.
+    pub fn order_fleet_attack(
+        &mut self,
+        ships: &[u32],
+        target: u32,
+        command: u8,
+        keys: u8,
+    ) -> Result<(), String> {
+        let mut result = Err("Nothing is selected".to_string());
+        let mut group = Vec::new();
+        for &id in ships {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            if self.objects[i].ship.is_some() {
+                group.push(id);
+            } else if command <= 0x16 && self.objects[i].holds_units() {
+                result = self.order_attack(id, target).or(result);
+            }
+        }
+        let Some(&first) = group.first() else {
+            return result;
+        };
+        let jam = self.jams.iter().any(|j| j.id == target);
+        let me = &self.objects[self.object_index(first).unwrap()];
+        let ok = jam
+            || self.object_index(target).is_some_and(|t| {
+                let it = &self.objects[t];
+                if command >= 0x17 {
+                    it.ship.is_some() && Self::are_enemies(me, it)
+                } else {
+                    self.ruins_enemy(me, it) || (it.combat.is_some() && Self::are_enemies(me, it))
+                }
+            });
+        if !ok {
+            return Err(if command >= 0x17 {
+                "Choose an enemy ship".into()
+            } else {
+                "Choose an enemy ship or building".into()
+            });
+        }
+        let z = self.selection_fleet(&group);
+        if keys & 4 != 0 {
+            if let Some(z) = z {
+                fa_queue(&mut self.fleet_attacks[z], target, command);
+                return Ok(());
+            }
+        }
+        let z = match z {
+            Some(z) => z,
+            None => {
+                // The group: the selection's own (its other block ended,
+                // its counter kept), or a new one.
+                let mut elapsed = 0;
+                let serial = if let Some(g) = self.selection_zone(&group) {
+                    let zone = self.gather_zones.remove(g);
+                    elapsed = zone.elapsed;
+                    match zone.group {
+                        super::gather::ZoneGroup::Human(s) => s,
+                        _ => unreachable!(),
+                    }
+                } else if let Some(g) = self.selection_attack(&group) {
+                    let a = self.human_attacks.remove(g);
+                    elapsed = a.elapsed;
+                    a.serial
+                } else {
+                    self.leave_zones(&group);
+                    self.zone_serial += 1;
+                    self.zone_serial
+                };
+                self.fleet_attacks.push(FleetAttack {
+                    serial,
+                    ships: group.clone(),
+                    notices: Vec::new(),
+                    elapsed,
+                    made: 0,
+                    target: 0,
+                    cell: 0,
+                    command: 0,
+                    sub: 0,
+                    extra: 0,
+                    queue: Vec::new(),
+                });
+                self.fleet_attacks.len() - 1
+            }
+        };
+        let cell = if jam {
+            Some(0)
+        } else {
+            self.object_index(target).map(|t| {
+                let (x, y) = self.cell_of(t);
+                x + y * self.nav.width as i32
+            })
+        };
+        let now = self.ticks;
+        let a = &mut self.fleet_attacks[z];
+        a.made = now;
+        a.target = target;
+        a.command = command;
+        a.sub = 7;
+        a.extra = 0;
+        if let Some(c) = cell {
+            a.cell = c;
+        }
+        fa_queue(a, target, command);
+        if self.fa_found(target) {
+            let mut a = self.fleet_attacks.remove(z);
+            for id in a.ships.clone() {
+                self.fa_send(&mut a, id);
+            }
+            self.fleet_attacks.insert(z, a);
+        }
+        Ok(())
+    }
+
+    /// The fleet attack group whose ships are exactly `ships`.
+    pub fn selection_fleet(&self, ships: &[u32]) -> Option<usize> {
+        let mut sel: Vec<u32> = ships.to_vec();
+        sel.sort_unstable();
+        sel.dedup();
+        self.fleet_attacks.iter().position(|a| {
+            let mut s = a.ships.clone();
+            s.sort_unstable();
+            !s.is_empty() && s == sel
+        })
+    }
+
+    /// The fleet attack group holding ship `id`.
+    pub fn ship_fleet(&self, id: u32) -> Option<usize> {
+        self.fleet_attacks
+            .iter()
+            .position(|a| a.ships.contains(&id))
+    }
+
+    /// Ships leaving their fleet attack groups post notice 0x137
+    /// (0x4a1770; 0x4d0210 drops it); a group left with none goes.
+    pub(super) fn leave_fleets(&mut self, ids: &[u32]) {
+        let tick = self.ticks;
+        for a in &mut self.fleet_attacks {
+            for &s in &a.ships {
+                if ids.contains(&s) {
+                    a.notices.push(Notice {
+                        code: 0x137,
+                        tick,
+                        ship: s,
+                        class: 0,
+                    });
+                }
+            }
+            a.ships.retain(|s| !ids.contains(s));
+        }
+        self.fleet_attacks.retain(|a| !a.ships.is_empty());
+    }
+
+    /// The navy's tick for the fleet attack groups (0x4d0650 each, from
+    /// 0x4c4f40); a block ended by its notices goes (0x4a1c60 -> 0x4cf940).
+    pub(super) fn run_fleet_attacks(&mut self) {
+        let gone: Vec<u32> = self
+            .fleet_attacks
+            .iter()
+            .flat_map(|a| a.ships.iter().copied())
+            .filter(|&id| {
+                self.object_index(id)
+                    .is_none_or(|i| self.objects[i].ship.is_none())
+            })
+            .collect();
+        if !gone.is_empty() {
+            self.leave_fleets(&gone);
+        }
+        let mut z = 0;
+        while z < self.fleet_attacks.len() {
+            let mut a = self.fleet_attacks.remove(z);
+            if self.fa_tick(&mut a) {
+                self.fleet_attacks.insert(z, a);
+                z += 1;
+            }
+        }
+    }
+
+    /// 0x4d0650: with no notices, or none heard (0x4d0210), and group
+    /// `+8` over 0x50 (unsigned) and the block still there: `+8 = 0` and
+    /// each ship of the group lying still (`+0x58c` 0) sent (0x4cfe40)
+    /// if, for 0x15 / 0x16, it has neither a fire task (`+0x25d & 0x100`)
+    /// nor a ram or boarding (`& 0x10`); for 0x17 no ram or boarding and
+    /// a boarding strength (`+0x53c > 0`); for 0x18 no ram or boarding.
+    /// Then `+8` grows by the tick's `+0xe2` (1). No draws. Returns
+    /// whether the block is still there.
+    fn fa_tick(&mut self, a: &mut FleetAttack) -> bool {
+        let heard = if a.notices.is_empty() {
+            0
+        } else {
+            match self.fa_notices(a) {
+                Some(heard) => heard,
+                None => return false,
+            }
+        };
+        if heard == 0 && a.elapsed > PASS {
+            a.elapsed = 0;
+            for id in a.ships.clone() {
+                let Some(i) = self.object_index(id) else {
+                    continue;
+                };
+                let Some(s) = self.objects[i].ship.as_ref() else {
+                    continue;
+                };
+                if s.move_state != 0 {
+                    continue;
+                }
+                let closing = self.closing_in(i);
+                let send = match a.command {
+                    0x15 | 0x16 => !s.fire_task() && !closing,
+                    0x17 => !closing && self.boarding_strength(i) > 0,
+                    0x18 => !closing,
+                    _ => false,
+                };
+                if send {
+                    self.fa_send(a, id);
+                }
+            }
+        }
+        a.elapsed = a.elapsed.wrapping_add(1);
+        true
+    }
+
+    /// 0x4d0210: the notices, newest first, each removed after its case,
+    /// while the block lasts; `None` when it ended (0x4a1c60, the notices
+    /// freed with it), else the count heard. The record's ship is the
+    /// group's (0x4cc590), or nothing is done. 300 (a join): 0x4cfad0
+    /// true sends it (0x4cfe40), heard. (Not ported: the `#` sub 1 with
+    /// the group's three it then sends, 0x4c42f0; the port posts no 300
+    /// to a human group.) 0x136: only with a route `+0x61` (none here).
+    /// 0x13a-0x13d (`class` the prey): its entry of the queue removed
+    /// (0x4cfa70); none, or 0x4cfad0 true, the ship sent again
+    /// (0x4cfe40), heard; else the block ends. Others dropped.
+    fn fa_notices(&mut self, a: &mut FleetAttack) -> Option<u32> {
+        let mut heard = 0;
+        while let Some(n) = a.notices.pop() {
+            let ship = a.ships.contains(&n.ship)
+                && self
+                    .object_index(n.ship)
+                    .is_some_and(|i| self.objects[i].ship.is_some());
+            match n.code {
+                300 if ship => {
+                    if self.fa_next(a) {
+                        self.fa_send(a, n.ship);
+                        heard += 1;
+                    }
+                }
+                0x13a..=0x13d if ship => {
+                    let i = a.queue.iter().position(|q| q.target == n.class);
+                    if let Some(i) = i {
+                        a.queue.remove(i);
+                    }
+                    if i.is_none() || self.fa_next(a) {
+                        self.fa_send(a, n.ship);
+                        heard += 1;
+                    } else {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Some(heard)
+    }
+
+    /// 0x4cfad0, the next target: none with the queue empty; else with
+    /// the block's target `+0xc` still found (0x51f1f0) `+0x10` = that
+    /// old target's cell, and from the queue's first entry (not removed)
+    /// `+0xc`, `+0x14`, `+0x1c`, with `+0x18` 7. So with the old target
+    /// gone (the usual 0x13a) the result is 0 and the block ends, however
+    /// many targets are queued.
+    fn fa_next(&self, a: &mut FleetAttack) -> bool {
+        let Some(&q) = a.queue.first() else {
+            return false;
+        };
+        if !self.fa_found(a.target) {
+            return false;
+        }
+        if self.jams.iter().any(|j| j.id == a.target) {
+            a.cell = 0;
+        } else if let Some(t) = self.object_index(a.target) {
+            let (x, y) = self.cell_of(t);
+            a.cell = x + y * self.nav.width as i32;
+        }
+        a.target = q.target;
+        a.command = q.command;
+        a.sub = 7;
+        a.extra = q.extra;
+        true
+    }
+
+    /// Whether object `id` is found (0x51f1f0): an object of the map or a
+    /// land creatures' jam.
+    fn fa_found(&self, id: u32) -> bool {
+        self.object_index(id).is_some() || self.jams.iter().any(|j| j.id == id)
+    }
+
+    /// 0x4cfe40 without a route: the record `{ship, +0xc, +0x10, +0x14,
+    /// +0x1c, +0x18}` (0x4cfdf0) given as the command 0x4cfc90: 0x15 /
+    /// 0x16 a ship with no strength (0x50ea70 0) sent to the target's
+    /// cell (0x51f1f0, vt+0x28; none: nothing) by a plain move
+    /// (0x4cf070), else the command `{target, 7, command, 0x44}` (the
+    /// outbox, 0x520cc0); 0x17 a ship with no boarding strength
+    /// (`+0x53c < 1`) nothing, else 0x17 `{target, 0x45}`; 0x18 0x18
+    /// `{target, 0x46}`.
+    fn fa_send(&mut self, a: &mut FleetAttack, ship: u32) {
+        let Some(i) = self.object_index(ship) else {
+            return;
+        };
+        let target = a.target;
+        match a.command {
+            0x15 | 0x16 => {
+                if self.strength(i) != 0 {
+                    self.post(Order::Attack { ship, target });
+                    return;
+                }
+                let Some(t) = self.object_index(target) else {
+                    return;
+                };
+                let (x, y) = self.cell_of(t);
+                let s = TILE_SIZE as f32;
+                self.post(Order::Move {
+                    ship,
+                    x: x as f32 * s + s / 2.0,
+                    y: y as f32 * s + s / 2.0,
+                });
+            }
+            0x17 if self.boarding_strength(i) >= 1 => self.post(Order::Close {
+                ship,
+                target,
+                board: true,
+            }),
+            0x18 => self.post(Order::Close {
+                ship,
+                target,
+                board: false,
+            }),
+            _ => {}
+        }
+    }
+}
+
+/// 0x4cfbc0: the first entry for `target` with the same command is kept
+/// (its index returned); with another it is removed and the target
+/// appended anew, as one not queued. (Not ported: for the viewing player
+/// with Shift, 0x4a1f20 posts message 0xc45d with the mark `index + 1`,
+/// kind 8 for 0x15 / 0x16, 6 for 0x17, 7 for 0x18: the queued target's
+/// number shown.)
+fn fa_queue(a: &mut FleetAttack, target: u32, command: u8) -> usize {
+    if let Some(k) = a.queue.iter().position(|q| q.target == target) {
+        if a.queue[k].command == command {
+            return k;
+        }
+        a.queue.remove(k);
+    }
+    a.queue.push(Queued {
+        target,
+        command,
+        extra: 0,
+    });
+    a.queue.len() - 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::GameData;
+    use crate::objects::Caches;
+
+    /// Two of the human's ships on miss000 ordered at an enemy ship, a
+    /// second Shift-queued (0x4cfbc0): the block `{target, cell, command
+    /// 0x16, 7}`, each ship sent at the first (0x4cfe40), the queue both.
+    /// A 0x13a for the first while it is still there (a prize taken) moves
+    /// the block to the queued one (0x4cfad0, `+0x10` the old target's
+    /// cell) and sends the ship there; the first queued again and the
+    /// second sunk, its notice ends the block though a target is queued
+    /// (0x4cfad0 finds no old target).
+    #[test]
+    fn fleet_attack_queue_on_miss000() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let foe = (human.0 ^ 1, human.1);
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(4)
+            .collect();
+        let water = |scene: &Scene, c: (i32, i32)| {
+            scene.nav.is_sea(c.0, c.1) && scene.nav.passable(c.0, c.1, true)
+        };
+        let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+        let row = (3..h - 3)
+            .flat_map(|y| (3..w - 6).map(move |x| (x, y)))
+            .find(|&(x, y)| (0..4).all(|k| water(&scene, (x + k, y))))
+            .unwrap();
+        let t = TILE_SIZE as f32;
+        for (k, &i) in ships.iter().enumerate() {
+            let o = &mut scene.objects[i];
+            o.owner = Some(if k < 2 { human } else { foe });
+            o.x = (row.0 + k as i32) as f32 * t + t / 2.0;
+            o.y = row.1 as f32 * t + t / 2.0;
+            let s = o.ship.as_mut().unwrap();
+            s.kind = 2;
+            s.argo = false;
+            s.move_state = 0;
+        }
+        let id = |k: usize| scene.objects[ships[k]].id;
+        let (id0, id1, f, g) = (id(0), id(1), id(2), id(3));
+        scene.outbox.clear();
+        scene.order_fleet_attack(&[id0, id1], f, 0x16, 0).unwrap();
+        scene.order_fleet_attack(&[id0, id1], g, 0x16, 4).unwrap();
+        assert_eq!(scene.fleet_attacks.len(), 1);
+        let a = scene.fleet_attacks[0].clone();
+        let fcell = row.0 + 2 + row.1 * w;
+        assert_eq!((a.target, a.cell, a.command, a.sub), (f, fcell, 0x16, 7));
+        let q = |target| Queued {
+            target,
+            command: 0x16,
+            extra: 0,
+        };
+        assert_eq!(a.queue, [q(f), q(g)]);
+        let at = |ship, target| Order::Attack { ship, target };
+        assert_eq!(std::mem::take(&mut scene.outbox), [at(id0, f), at(id1, f)]);
+        // A prize taken: the old target still there.
+        scene.post_notice(id0, 0x13a, f);
+        scene.run_fleet_attacks();
+        let a = &scene.fleet_attacks[0];
+        assert_eq!((a.target, a.cell), (g, fcell));
+        assert_eq!(a.queue, [q(g)]);
+        assert_eq!(std::mem::take(&mut scene.outbox), [at(id0, g)]);
+        // f queued again behind g; g sunk: the block ends, f still queued.
+        scene.order_fleet_attack(&[id0, id1], f, 0x16, 4).unwrap();
+        assert_eq!(scene.fleet_attacks[0].queue, [q(g), q(f)]);
+        scene.objects.retain(|o| o.id != g);
+        scene.post_notice(id1, 0x13a, g);
+        scene.run_fleet_attacks();
+        assert!(scene.fleet_attacks.is_empty());
+        assert!(scene.outbox.is_empty());
+    }
+}

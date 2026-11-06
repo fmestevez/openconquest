@@ -115,6 +115,16 @@ pub enum Order {
         a: (f32, f32),
         b: (f32, f32),
     },
+    /// The human's fleet command `command` (0x15 / 0x16 attack, 0x17
+    /// board, 0x18 ram) at `target` with `ships` selected (0x49dda0): the
+    /// selection's group given the fleet attack task (`fleet_attack`).
+    /// `keys`: the click's key flags (4 Shift: the target queued).
+    FleetAttack {
+        ships: Vec<u32>,
+        target: u32,
+        command: u8,
+        keys: u8,
+    },
     /// The human's gather click on a deposit with `ships` selected
     /// (0x49d3c0): a gather zone of the 3 x 3 cells about it. `keys`: the
     /// click's key flags (Sinput, the mouse message's `+0x14`: 4 Shift, 8
@@ -457,7 +467,8 @@ impl Scene {
             | Order::GatherArea { .. }
             | Order::GatherZone { .. }
             | Order::ZoneWaypoint { .. }
-            | Order::AttackZone { .. } => {}
+            | Order::AttackZone { .. }
+            | Order::FleetAttack { .. } => {}
             Order::Behaviour { .. } | Order::LoadCrew { .. } | Order::LoadObject { .. } => {}
             Order::Stop { id } => self.leave_zones(&[*id]),
             o => {
@@ -728,6 +739,12 @@ impl Scene {
             } => done(self.order_attack_zone(&[ship], a, b)),
             Zone { ship, a, b, attack } => done(self.order_zone(ship, a, b, attack)),
             AttackZone { ref ships, a, b } => done(self.order_attack_zone(ships, a, b)),
+            FleetAttack {
+                ref ships,
+                target,
+                command,
+                keys,
+            } => done(self.order_fleet_attack(ships, target, command, keys)),
             GatherZone {
                 ship,
                 a,

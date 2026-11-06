@@ -109,6 +109,9 @@ pub struct SaveGame {
     /// The human groups' attack blocks.
     #[serde(default)]
     pub human_attacks: Vec<crate::scene::HumanAttack>,
+    /// The human groups' fleet attack blocks.
+    #[serde(default)]
+    pub fleet_attacks: Vec<crate::scene::FleetAttack>,
     #[serde(default)]
     pub zone_serial: u32,
     /// The navy's generator.

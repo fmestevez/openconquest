@@ -6186,7 +6186,7 @@ impl App {
             let order = match self.object_at(pos) {
                 Some(target) => {
                     let target = self.attack_target(target);
-                    self.order_each(|ship| Order::Attack { ship, target })
+                    self.order_fleet(target, 0x16)
                 }
                 None => Err("Choose an enemy ship or building".into()),
             };
@@ -6642,13 +6642,10 @@ impl App {
         let result = match (pointer, target) {
             (P::Attack, Some(target)) => {
                 let target = self.attack_target(target);
-                self.order_each(|ship| Order::Attack { ship, target })
+                self.order_fleet(target, 0x16)
             }
-            (P::Board | P::Ram, Some(target)) => self.order_each(|ship| Order::Close {
-                ship,
-                target,
-                board: pointer == P::Board,
-            }),
+            (P::Board, Some(target)) => self.order_fleet(target, 0x17),
+            (P::Ram, Some(target)) => self.order_fleet(target, 0x18),
             (P::Repair, Some(dock)) => self.order_each(|ship| Order::Repair { ship, dock }),
             (P::Unload, Some(port)) => self.order_each(|ship| Order::Unload { ship, port }),
             (P::Load, Some(target)) => self.order_each(|ship| Order::LoadObject { ship, target }),
@@ -6679,6 +6676,21 @@ impl App {
 
     /// Gives an order to each selected object: done if any of them took
     /// it, else the first refusal.
+    /// The fleet command `command` (0x16 attack, 0x17 board, 0x18 ram)
+    /// at `target` for the selection, with the click's key flags: the
+    /// navy's 0x49dda0 (the selection's group, `Scene::order_fleet_attack`).
+    fn order_fleet(&mut self, target: u32, command: u8) -> Result<(), String> {
+        let ships = self.selection();
+        let keys = self.key_flags();
+        self.issue(Order::FleetAttack {
+            ships,
+            target,
+            command,
+            keys,
+        })
+        .map(|_| ())
+    }
+
     fn order_each(&mut self, order: impl Fn(u32) -> Order) -> Result<(), String> {
         let mut result = Err("Nothing is selected".to_string());
         for (k, id) in self.selection().into_iter().enumerate() {
@@ -7049,7 +7061,13 @@ impl App {
             };
             if own_warship && enemy_ship {
                 let target = self.attack_target(target);
-                if let Err(e) = self.issue(Order::Attack { ship: id, target }) {
+                let keys = self.key_flags();
+                if let Err(e) = self.issue(Order::FleetAttack {
+                    ships: vec![id],
+                    target,
+                    command: 0x16,
+                    keys,
+                }) {
                     self.say(e);
                 }
                 return;
@@ -7066,10 +7084,12 @@ impl App {
                 .object_index(target)
                 .is_some_and(|t| self.scene.objects[t].ship.is_some());
             if own_rammer && enemy_ship && target_ship {
-                if let Err(e) = self.issue(Order::Close {
-                    ship: id,
+                let keys = self.key_flags();
+                if let Err(e) = self.issue(Order::FleetAttack {
+                    ships: vec![id],
                     target,
-                    board: false,
+                    command: 0x18,
+                    keys,
                 }) {
                     self.say(e);
                 }

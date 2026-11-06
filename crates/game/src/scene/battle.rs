@@ -163,11 +163,7 @@ impl Scene {
         };
         let ship = self.objects[i].ship.as_mut().unwrap();
         ship.path.clear();
-        ship.task = Some(Task::Attack {
-            target,
-            jam: None,
-            count: 0,
-        });
+        ship.task = Some(Task::Attack { target, jam: None });
         // The ship's tick takes the attack's fire records (0x4ab3f0 kind
         // 3 at every position, order 0x16 sub 7).
         ship.take_attack(target, code, armed);
@@ -176,7 +172,7 @@ impl Scene {
 
     /// Armed ship `i`'s attack on land creatures' jam `jam` (order 0x16
     /// {jam id, 7}: the navy's fleet attack task 0x4d04a0 keeps the jam's
-    /// id, `+8` the game's tick `+0xde`): the jam is side 2, so no
+    /// id and sends it again, `fleet_attack`): the jam is side 2, so no
     /// diplomacy test (0x4e46c0 asks only for weapons); the ship's tick
     /// (0x4ab3f0, 0x4ab5a4) takes the jam's first member (0x415df0) as
     /// its target. A fort's attack at a jam gets the member from the pick
@@ -198,7 +194,6 @@ impl Scene {
             return Err(String::new());
         }
         let target = self.jam_first(jam).ok_or("No such target")?;
-        let count = self.ticks;
         let armed = self.objects[i].armed_positions();
         let code = self.player_code(target);
         let ship = self.objects[i].ship.as_mut().unwrap();
@@ -206,7 +201,6 @@ impl Scene {
         ship.task = Some(Task::Attack {
             target,
             jam: Some(jam),
-            count,
         });
         ship.take_attack(target, code, armed);
         Ok(())
@@ -220,59 +214,6 @@ impl Scene {
             .members
             .first()
             .copied()
-    }
-
-    /// The fleet attack task's tick at a jam (0x4d0650, from the navy's
-    /// 0x4c4f40): once its `+8` is past 0x50 it goes back to 0, and each
-    /// of the group's ships lying still (`+0x58c` 0) is sent at the jam
-    /// again (0x4cfe40, 0x16 sub 7 {jam id}), taking its first member now
-    /// (0x4ab3f0); then `+8` grows by the tick's `+0xe2` (1). Nothing ends
-    /// the task when the jam is gone (0x4d0650 tests no target): the
-    /// ship's records then find nothing. The port keeps the counter with
-    /// each ship (one task for the ships ordered together) and gives the
-    /// member at once, not through the next tick's command. (Not decoded:
-    /// 0x4d0210's notices and who removes the task, 0x4a1c60's callers.)
-    pub(super) fn run_jam_attacks(&mut self) {
-        for i in 0..self.objects.len() {
-            let Some(ship) = self.objects[i].ship.as_ref() else {
-                continue;
-            };
-            let Some(Task::Attack {
-                target,
-                jam: Some(jam),
-                count,
-            }) = ship.task
-            else {
-                continue;
-            };
-            let still = ship.move_state == 0;
-            let (mut target, mut count) = (target, count);
-            if count > 0x50 {
-                count = 0;
-                if still {
-                    if let Some(m) = self.jam_first(jam) {
-                        target = m;
-                    }
-                }
-            }
-            count = count.wrapping_add(1);
-            let fresh = target
-                != self.objects[i].ship.as_ref().map_or(0, |s| match s.task {
-                    Some(Task::Attack { target, .. }) => target,
-                    _ => 0,
-                });
-            let armed = self.objects[i].armed_positions();
-            let code = self.player_code(target);
-            let s = self.objects[i].ship.as_mut().unwrap();
-            s.task = Some(Task::Attack {
-                target,
-                jam: Some(jam),
-                count,
-            });
-            if fresh {
-                s.take_attack(target, code, armed);
-            }
-        }
     }
 
     /// Whether some unit of fort `i` reaches object `t` (the answer to the
@@ -915,7 +856,6 @@ impl Scene {
                 ship.task = Some(Task::Attack {
                     target: shooter,
                     jam: None,
-                    count: 0,
                 });
                 armed_turn = true;
             }

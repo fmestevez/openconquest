@@ -516,6 +516,8 @@ pub struct Scene {
     /// The human groups running the attack block (0x49d790 case 10,
     /// `human_attack`), in the order the navy's tick runs them.
     pub human_attacks: Vec<human_attack::HumanAttack>,
+    /// The human groups' fleet attack blocks `{0x74, 0x15}`.
+    pub fleet_attacks: Vec<fleet_attack::FleetAttack>,
     /// The last human group's serial number.
     pub zone_serial: u32,
     /// The navy's generator (`[0x5c7504] +0x18`), until its first draw.
@@ -620,6 +622,7 @@ mod wake;
 pub use sight::{FogArt, Seen};
 pub use treasure::HouseFade;
 mod fireball;
+mod fleet_attack;
 mod flyers;
 mod fort;
 mod gather;
@@ -642,6 +645,7 @@ mod walkers;
 mod yard;
 pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use computer::Computers;
+pub use fleet_attack::FleetAttack;
 pub use flyers::{Flyer, Nest};
 pub use gather::GatherZone;
 pub use halt::Batch;
@@ -918,6 +922,7 @@ impl Scene {
             outbox: Vec::new(),
             gather_zones: Vec::new(),
             human_attacks: Vec::new(),
+            fleet_attacks: Vec::new(),
             zone_serial: 0,
             navy_lcg: None,
             ticks: 0,
@@ -1203,6 +1208,7 @@ impl Scene {
             outbox: self.outbox.clone(),
             gather_zones: self.gather_zones.clone(),
             human_attacks: self.human_attacks.clone(),
+            fleet_attacks: self.fleet_attacks.clone(),
             zone_serial: self.zone_serial,
             navy_lcg: self.navy_lcg,
             ticks: self.ticks,
@@ -1385,6 +1391,7 @@ impl Scene {
         scene.outbox = save.outbox.clone();
         scene.gather_zones = save.gather_zones.clone();
         scene.human_attacks = save.human_attacks.clone();
+        scene.fleet_attacks = save.fleet_attacks.clone();
         scene.zone_serial = save.zone_serial;
         scene.navy_lcg = save.navy_lcg;
         scene.ticks = save.ticks;
@@ -2712,7 +2719,7 @@ impl Scene {
             // whether before or after the ships' own ticks.)
             self.run_gather_zones();
             self.run_human_attacks();
-            self.run_jam_attacks();
+            self.run_fleet_attacks();
             self.run_brain();
             self.step_fort_draws();
             self.heal_aboard();
