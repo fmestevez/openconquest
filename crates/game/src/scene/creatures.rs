@@ -178,7 +178,6 @@ impl Scene {
             }
         }
         s.task = None;
-        s.goal = Some(cell);
         s.priority = CHARM_PRIORITY;
         s.patience = crate::objects::PATIENCE;
     }

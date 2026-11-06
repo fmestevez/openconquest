@@ -206,22 +206,25 @@ impl Scene {
     }
 
     /// Ship `i` takes the route `path` (0x4a6330's store:
-    /// `+0x5c2`, its count `+0x5ba` and its last cell `+0x5b2`), then by
-    /// its move state (0x4a6667): told to stop (1), stopping (4) or under
-    /// way (5) and between cells (0x4e0b50 false), the route goes on from
-    /// the cell it is entering (`+0x5be` 1) and it is under way (5); in
-    /// its cell, with `+0x5be` 0, the turn 0x4e0100 from its heading
-    /// (`+0x5af`) to the route's first step (0x59791d, `+0x5b1`) over 1
-    /// asks for the step to route entry 1 at once (0x4a3a70(this, 1)), and
-    /// refused it brakes (0x4a2f60) unless already stopping (4, kept);
-    /// else (or granted) under way (5).
+    /// `+0x5c2`, its count `+0x5ba` and its last cell `+0x5b2`, the port's
+    /// `goal`), then by its move state (0x4a6667): told to stop (1),
+    /// stopping (4) or under way (5) and between cells (0x4e0b50 false),
+    /// the route goes on from the cell it is entering (`+0x5be` 1) and it
+    /// is under way (5); in its cell, with `+0x5be` 0, the turn 0x4e0100
+    /// from its heading (`+0x5af`) to the route's first step (0x59791d,
+    /// `+0x5b1`) over 1 asks for the step to route entry 1 at once
+    /// (0x4a3a70(this, 1)), and refused it brakes (0x4a2f60) unless
+    /// already stopping (4, kept); else (or granted) under way (5). Lying
+    /// still or at a cell (0, 3): no turn, at the cell to leave it (3,
+    /// `+0x596` 1), else turning (2, `+0x5b0` 0: 0x4a3320 picks the way
+    /// round afresh), both through 0x4a3140 (the hull's frame delay
+    /// `+0x7d` 2, the port's `SHIP_FRAME_MS`); turning (2): no turn 3
+    /// (`+0x596` kept), else 2 and `+0x5b0` 0; all with `+0x5be` 1. Held
+    /// (6) it is only stored.
     ///
     /// The port's route holds no entry for the cell it starts from; its
-    /// first step is to the first point off its own cell. The other move
-    /// states (0 / 3 to 3 or 2 by the turn, 2 the same, 0x4a3140; 6 kept)
-    /// are left to the port's mover, which turns it (`turn_ship`) before
-    /// it steps; `+0x5b2` is the port's `goal` only for a plain move (not
-    /// ported for the others' routes).
+    /// first step is to the first point off its own cell. The turn itself
+    /// is the port's mover's (`turn_ship`, 0x4a3320's rotations).
     pub(super) fn store_route(&mut self, i: usize, path: VecDeque<(f32, f32)>) {
         let (x, y, id) = (self.objects[i].x, self.objects[i].y, self.objects[i].id);
         let own = cell_of(x, y);
@@ -229,10 +232,11 @@ impl Scene {
             return;
         };
         ship.path = path;
-        if !matches!(ship.move_state, 1 | 4 | 5) {
-            return;
+        // `+0x5b2`: the route's last cell (0x4a664d, 0x4a67c9).
+        if let Some(&(lx, ly)) = ship.path.back() {
+            ship.goal = Some(cell_of(lx, ly));
         }
-        if !ship.plans_from_own_cell() {
+        if matches!(ship.move_state, 1 | 4 | 5) && !ship.plans_from_own_cell() {
             ship.move_state = 5;
             return;
         }
@@ -245,8 +249,27 @@ impl Scene {
             return;
         };
         let dir = super::grapple::direction(next.0 - own.0, next.1 - own.1).unwrap_or(0);
-        let diff = (ship.heading as i32 - dir as i32).abs();
+        // `+0x5af`: the hull's frame over 3 while it turns (0x4a3320).
+        let heading = ship.rotation.map_or(ship.heading as i32, |r| r as i32 / 3);
+        let diff = (heading - dir as i32).abs();
         let turn = if diff > 4 { 8 - diff } else { diff };
+        match ship.move_state {
+            0 | 3 if turn == 0 => {
+                ship.between.set(true);
+                ship.move_state = 3;
+                return;
+            }
+            2 if turn == 0 => {
+                ship.move_state = 3;
+                return;
+            }
+            0 | 2 | 3 => {
+                ship.move_state = 2;
+                return;
+            }
+            1 | 4 | 5 => {}
+            _ => return,
+        }
         if turn <= 1 {
             ship.move_state = 5;
             return;

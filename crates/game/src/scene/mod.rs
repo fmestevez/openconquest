@@ -1752,8 +1752,10 @@ impl Scene {
                 ship.waited = crate::clock::TICK;
             }
         }
+        // Its move goal `+0x5b2` is the stored route's last cell (0x4a6330,
+        // `store_route`), not the cell asked for; with no route it keeps the
+        // last.
         ship.task = None;
-        ship.goal = Some((cx, cy));
         // A plain move carries priority 0 (0x4cf070).
         ship.priority = 0;
         ship.patience = objects::PATIENCE;
@@ -1899,13 +1901,17 @@ impl Scene {
                 let first = r.front().map(cell);
                 r.iter().any(|p| Some(cell(p)) != first)
             });
+            let found = route.is_some();
+            // Stored as every plan (0x4a6150 -> 0x4a6330).
+            if let Some(path) = route {
+                self.store_route(i, path);
+            }
             let s = self.objects[i].ship.as_mut().unwrap();
             s.planned = 0.0;
-            match route {
-                Some(path) => {
-                    (s.path, s.pending) = (path, None);
-                }
-                None => s.waited += crate::clock::TICK,
+            if found {
+                s.pending = None;
+            } else {
+                s.waited += crate::clock::TICK;
             }
         }
     }
@@ -3077,10 +3083,12 @@ impl Scene {
                 let here = cell_of(obj.x, obj.y);
                 let at = (obj.x.round() as i32, obj.y.round() as i32);
                 // Told to stop (1) and in its cell (`+0x596` 0), it brakes
-                // there (0x4a38f0), its extra cell released.
+                // there (0x4a38f0), its extra cell released; its move goal
+                // is that cell (0x4a392b).
                 if ship.move_state == 1 && !ship.between.get() {
                     ship.ahead = None;
                     brake(ship, at, here);
+                    ship.goal = Some(here);
                 }
                 let next = cell_of(tx, ty);
                 // At a route point (0, 2, 3, or held 6) the step to the
@@ -3221,8 +3229,12 @@ impl Scene {
                 if !ship.between.get() && ship.ahead.is_none() {
                     let last = ship.path.back().map(|&(lx, ly)| cell_of(lx, ly));
                     let after = ship.path.get(1).map(|&(nx, ny)| cell_of(nx, ny));
+                    // Come into its move goal it brakes without asking
+                    // (0x4a4976-0x4a49c8), wherever the goal lies on the
+                    // route.
                     let granted = match after {
                         _ if last == Some(here) => false,
+                        _ if entered && ship.goal == Some(here) => false,
                         None => false,
                         Some(c) if c == here => true,
                         Some(c) => steps.ask(obj.id, ship, c, last),

@@ -4968,12 +4968,7 @@ speed is saved with a game (`SPEED_GAME`).
 - Not ported: the closing-in branches of the tick (`+0x25d & 0x10`, the
   port's grapple); the refreshes under way other than blows and the song's
   end, the mending aboard (0x4b98b0, see "Healing aboard") and at a dock
-  (0x4b1fc0); 0x4a6330's other move states at the store (0 / 3: a turn
-  0 to 3 with `+0x596` 1, else 2 with `+0x5b0` 0, both 0x4a3140; 2 the
-  same without 0x4a3140; then `+0x5be` 1), left to the port's mover,
-  which turns a ship (`turn_ship`) before it steps; `+0x5b2` set to the
-  last cell of every stored route (the port's `goal` is a plain move's
-  only).
+  (0x4b1fc0).
 - The route store (0x4a6330, the port's `Scene::store_route`, through
   which every plan's route goes): the route (`+0x5c2`), its count
   (`+0x5ba`) and last cell (`+0x5b2`), the first step's direction
@@ -4985,7 +4980,32 @@ speed is saved with a game (`SPEED_GAME`).
   5; in its cell, `+0x5be` 0 and with a turn over 1 the step to route
   entry 1 is asked at once (0x4a3a70(this, 1), weighed as the move
   tick's asks: `Steps::ask`); refused, the brake 0x4a2f60 unless
-  already 4 (state kept); else, or granted, 5. A ship with Jason whose
+  already 4 (state kept); else, or granted, 5. Lying still or at a cell
+  (0, 3): a turn of 0 makes it 3 with `+0x596` 1, any other 2 (turning)
+  with `+0x5b0` 0 (0x4a3320 then picks the way round afresh, 0x4b5390),
+  both calling 0x4a3140 (the hull picture's frame delay `+0x7d` = 2, the
+  port's constant `SHIP_FRAME_MS`); turning (2): 0 makes it 3
+  (`+0x596` untouched), else 2 with `+0x5b0` 0; all three then `+0x5be`
+  1. Held (6) or any other: stored only. The turn's heading `+0x5af` is
+  the hull's frame over 3 mid-turn (0x4a3320: `(+0x45 - 0x20) / 3`, the
+  port's `rotation / 3`); the turning itself stays the port's mover's
+  (`turn_ship`). `+0x5b2` is written only by the store (0x4a664d,
+  0x4a67c9: the route's last cell, every route stored), the stop
+  0x4a38f0 (its own cell, with `+0x5ba = +0x5be + 1`) and the drop
+  0x4a5b70 (-1); a plan with no route (0xff) or a goal at its own cell
+  leaves it. Its readers: the stop (0x4a3942, `+0x5ab` kept when it is
+  the goal), the move tick (0x4a4976: come into it, 0x136 posted by
+  0x4a1700 and the brake, nothing asked; 0x4a4a27: held 1 short, 0x136;
+  0x4a4cb7: braking at a route point in it, state 0, way 0), the at-will
+  list 0x4c0bc0 (within 5 of it), the rammer (0x4c267c) and 0x4c2e8c.
+  The port's `goal` follows the store (a plain move's or charm's goal is
+  no longer the cell asked for but the route's end), the stop and the
+  waited plan (0x4a6150, now through the store); the port's mover brakes
+  on coming into its goal wherever it lies on the route. Not ported:
+  the drop's -1 (the port clears routes in many places not yet matched
+  to 0x4a5b70), so the at-will list still takes the port's route end
+  (`at_will_route`: the route's last point, else its own cell); the
+  initial `+0x5b2` (the constructor's) not read. A ship with Jason whose
   ask sinks a whirlpool or medium reef (0x4a7630) has it sunk with the
   next move tick's sinks (the port's `step_sinks`; in the original
   within the ask). Not 0x4a6330 stores, set directly: the slides to a

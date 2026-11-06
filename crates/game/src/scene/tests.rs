@@ -20263,3 +20263,63 @@ fn a_route_stored_under_way_asks_its_step() {
     let s = ship(&scene);
     assert_eq!((s.move_state, s.ahead), (5, None));
 }
+
+/// The store's other move states (0x4a6330's switch at 0x4a6667): lying
+/// still or at a cell (0, 3), no turn to the first step: at the cell to
+/// leave it (3, `+0x596` 1); any turn: turning (2); turning (2), no turn:
+/// 3 (`+0x596` kept), else 2; held (6) only stored. Every store sets the
+/// move goal `+0x5b2` to the route's last cell (0x4a664d, 0x4a67c9).
+#[test]
+fn a_route_stored_lying_still_or_turning() {
+    let Some((_data, _caches, mut scene, mine, _other, cell)) = closing_pair(1, 0) else {
+        return;
+    };
+    let t = TILE_SIZE as f32;
+    let i = scene.object_index(mine).unwrap();
+    let mid = |c: (i32, i32)| (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+    (scene.objects[i].x, scene.objects[i].y) = mid(cell);
+    let set = |scene: &mut Scene, state: u8, heading: usize| {
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.move_state = state;
+        s.heading = heading;
+        s.rotation = None;
+        s.between.set(false);
+        s.goal = None;
+    };
+    let end = (cell.0 + 2, cell.1);
+    let east: VecDeque<(f32, f32)> = [mid((cell.0 + 1, cell.1)), mid(end)].into();
+    let ship = |scene: &Scene| scene.objects[i].ship.clone().unwrap();
+    for state in [0, 3] {
+        set(&mut scene, state, 0);
+        scene.store_route(i, east.clone());
+        let s = ship(&scene);
+        assert_eq!(
+            (s.move_state, s.between.get(), s.goal),
+            (3, true, Some(end))
+        );
+        set(&mut scene, state, 1);
+        scene.store_route(i, east.clone());
+        let s = ship(&scene);
+        assert_eq!(
+            (s.move_state, s.between.get(), s.goal),
+            (2, false, Some(end))
+        );
+    }
+    set(&mut scene, 2, 0);
+    scene.store_route(i, east.clone());
+    let s = ship(&scene);
+    assert_eq!((s.move_state, s.between.get()), (3, false));
+    set(&mut scene, 2, 4);
+    scene.store_route(i, east.clone());
+    assert_eq!(ship(&scene).move_state, 2);
+    // Mid-turn the heading is the hull's rotation over 3 (`+0x5af`):
+    // rotation 2 of 24 is heading 0, east.
+    set(&mut scene, 2, 1);
+    scene.objects[i].ship.as_mut().unwrap().rotation = Some(2);
+    scene.store_route(i, east.clone());
+    assert_eq!(ship(&scene).move_state, 3);
+    set(&mut scene, 6, 4);
+    scene.store_route(i, east.clone());
+    let s = ship(&scene);
+    assert_eq!((s.move_state, s.goal, s.path.len()), (6, Some(end), 2));
+}
