@@ -392,24 +392,48 @@ impl Scene {
 
     /// 0x4a1f20 (navy, target, index, command): message 0xc45d to the
     /// target, sub 1, `+0x18` the kind (8 for 0x15 / 0x16, 6 for 0x17, 7
-    /// for 0x18), `+0x1a` the byte `index + 1`. A ship (0x4de040) with a
+    /// for 0x18), `+0x1a` the byte `index + 1`. Only the human orders this
+    /// block, so its player is the viewer (0x4cfbc0's `navy +0x21` test).
+    /// By the target's class (its GetMessage): a ship (0x4de040) with a
     /// picture `+0x8be` makes its mark (0x50c020) or redraws it
-    /// (0x50c3d0); with none, nothing. Only the human orders this block,
-    /// so its player is the viewer (0x4cfbc0's `navy +0x21` test).
+    /// (0x50c3d0), with none nothing; a LandObj (0x425990, 0x426de1) and
+    /// a cyclops, minotaur or amazon (0x413d70) make it of the kind sent;
+    /// the gorgon (0x402360) and a siren (0x403f60) always of kind 8,
+    /// keeping it (`+0xbc` / `+0x7c`) and its number; a sea monster
+    /// (0x492360) keeps it (`+0x12d`, `+0x131`) and makes it of kind 8
+    /// only with its picture `+0x139` (shown by `wp_mark_layers` while it
+    /// is up). Not ported: harpies and dragons (0x4207b0), placed by a
+    /// table by their state.
     pub(super) fn fa_mark(&mut self, target: u32, index: usize, command: u8) {
+        use openconquest_formats::ObjectClass;
         let kind = match command {
             0x15 | 0x16 => 8,
             0x17 => 6,
             0x18 => 7,
             _ => return,
         };
-        let shown = self
-            .object_index(target)
-            .is_some_and(|i| self.objects[i].ship.is_some() && !self.objects[i].frames.is_empty());
-        if shown {
-            self.wp_marks
-                .insert(target, (kind, (index as u8).wrapping_add(1)));
-        }
+        let Some(i) = self.object_index(target) else {
+            return;
+        };
+        let o = &self.objects[i];
+        let kind = match o.class {
+            _ if o.ship.is_some() => {
+                if o.frames.is_empty() {
+                    return;
+                }
+                kind
+            }
+            ObjectClass::Building(_)
+            | ObjectClass::Barbarian(_)
+            | ObjectClass::Castle(_)
+            | ObjectClass::HeroHouse
+            | ObjectClass::CreatureSpawn
+            | ObjectClass::Monster(0x1f4..=0x1f6) => kind,
+            ObjectClass::Monster(0x1fa | 0x1fb | 0x1fd) => 8,
+            _ => return,
+        };
+        self.wp_marks
+            .insert(target, (kind, (index as u8).wrapping_add(1)));
     }
 
     /// 0x4a2050(navy, player, 0), at a new selection (0xc453 to the navy)
@@ -462,35 +486,68 @@ impl Scene {
         }
     }
 
-    /// The mark over ship `obj` (0x50c020's `WPFIRE` / `WPBOARD` /
-    /// `WPRAM`, controlm, 36 x 29, kind 8 at depth 7, over the hull's
-    /// 0xa): its layers by the mask `1 << mark / 10 | 1 << mark % 10 + 10
-    /// | 0x100000` (the tens' digit layers 0-9, the units' 10-19, the
-    /// picture 20), only 0x100000 for a mark of 0 or 100 and more; its top
-    /// left `(w - 0x24) / 2 + x`, `(h - 0x1d) / 2 + y` of the ship's
-    /// picture (0x50c600, each tick at 0x4dc9dd). Each layer with its own
-    /// offset.
+    /// The mark over `obj` (0x50c020's `WPFIRE` / `WPBOARD` / `WPRAM`,
+    /// controlm, 36 x 29, kind 8 at depth 7, over the hull's 0xa): its
+    /// layers by the mask `1 << mark / 10 | 1 << mark % 10 + 10 |
+    /// 0x100000` (the tens' digit layers 0-9, the units' 10-19, the
+    /// picture 20), only 0x100000 for a mark of 0 or 100 and more. Its
+    /// top left (0x50c600) by the class: a ship, LandObj or cyclops
+    /// `(w - 0x24) / 2 + x`, `(h - 0x1d) / 2 + y` of its picture (a ship
+    /// each tick at 0x4dc9dd, a cyclops at 0x413d70's tick, a LandObj at
+    /// its message and 0x425990's tick); the gorgon and a siren `(w -
+    /// 0x24) / 2`, `(h - 0x1d) / 2` of their picture, its x and y not
+    /// added (0x402360 / 0x403f60 at the message and each tick), so on
+    /// the map's top left, and only with their picture; a sea monster
+    /// its cell `x * tile w + 0xe`, `y * tile h + 0x11` (0x492360 at the
+    /// message and each tick, 0x491830 states 1 and 4), shown only while
+    /// up (state 0 frees it, keeping it). Each layer with its own offset.
     pub fn wp_mark_layers(
         &self,
         obj: &crate::objects::MapObject,
     ) -> Vec<(&crate::objects::Layer, i32, i32)> {
+        use openconquest_formats::ObjectClass;
         let Some(&(kind, mark)) = self.wp_marks.get(&obj.id) else {
-            return Vec::new();
-        };
-        let Some(l) = obj.frames.first().and_then(|f| f.first()) else {
             return Vec::new();
         };
         let Some((_, art)) = self.wp_art.iter().find(|(k, _)| *k == kind) else {
             return Vec::new();
+        };
+        let picture = obj.frames.first().and_then(|f| f.first());
+        let (left, top) = match obj.class {
+            ObjectClass::Monster(0x1fb) => {
+                if self.sea_monster_hidden(obj.id) {
+                    return Vec::new();
+                }
+                let t = TILE_SIZE as f32;
+                let (cx, cy) = ((obj.x / t).floor() as i32, (obj.y / t).floor() as i32);
+                (cx * t as i32 + 0xe, cy * t as i32 + 0x11)
+            }
+            ObjectClass::Monster(c @ (0x1fa | 0x1fd)) => {
+                let up = if c == 0x1fa {
+                    self.gorgons.get(&obj.id).is_some_and(|g| g.picture)
+                } else {
+                    self.sirens.get(&obj.id).is_some_and(|s| s.picture)
+                };
+                let Some(l) = picture.filter(|_| up) else {
+                    return Vec::new();
+                };
+                let (w, h) = (l.image.width as i32, l.image.height as i32);
+                ((w - 0x24) / 2, (h - 0x1d) / 2)
+            }
+            _ => {
+                let Some(l) = picture else {
+                    return Vec::new();
+                };
+                let (x, y) = crate::render::layer_origin(obj, l);
+                let (w, h) = (l.image.width as i32, l.image.height as i32);
+                ((w - 0x24) / 2 + x, (h - 0x1d) / 2 + y)
+            }
         };
         let mask: u32 = if mark != 0 && mark < 100 {
             1 << (mark / 10) | 1 << (mark % 10 + 10) | 0x100000
         } else {
             0x100000
         };
-        let (x, y) = crate::render::layer_origin(obj, l);
-        let (w, h) = (l.image.width as i32, l.image.height as i32);
-        let (left, top) = ((w - 0x24) / 2 + x, (h - 0x1d) / 2 + y);
         art.iter()
             .filter(|(k, _)| mask & (1 << k) != 0)
             .map(|(_, l)| (l, left + l.dx, top + l.dy))
@@ -732,5 +789,69 @@ mod tests {
         scene.run_fleet_attacks();
         assert!(scene.fleet_attacks.is_empty());
         assert!(scene.outbox.is_empty());
+    }
+
+    /// The marks on targets other than ships (0xc45d): a building on
+    /// battle17 (LandObj 0x425990) takes the kind sent, placed as a
+    /// ship's by its picture; the gorgon (0x402360) always WPFIRE, placed
+    /// by her picture's size alone and only with her picture; a treasure
+    /// (0x4074d0, the gather's) none from this block.
+    #[test]
+    fn fleet_attack_marks_on_other_classes() {
+        use openconquest_formats::ObjectClass;
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle17").unwrap();
+        scene.brain = None;
+        let b = scene
+            .objects
+            .iter()
+            .find(|o| matches!(o.class, ObjectClass::Building(_)) && !o.frames.is_empty())
+            .unwrap()
+            .id;
+        scene.fa_mark(b, 2, 0x17);
+        assert_eq!(scene.wp_marks.get(&b), Some(&(6, 3)));
+        let bi = scene.object_index(b).unwrap();
+        let o = &scene.objects[bi];
+        let l = &o.frames[0][0];
+        let (x, y) = crate::render::layer_origin(o, l);
+        let (w, h) = (l.image.width as i32, l.image.height as i32);
+        let got: Vec<(i32, i32)> = scene
+            .wp_mark_layers(o)
+            .iter()
+            .map(|(l, a, b)| (a - l.dx, b - l.dy))
+            .collect();
+        assert_eq!(got, vec![((w - 0x24) / 2 + x, (h - 0x1d) / 2 + y); 3]);
+        let g = scene
+            .objects
+            .iter()
+            .find(|o| o.class == ObjectClass::Monster(0x1fa))
+            .unwrap()
+            .id;
+        scene.fa_mark(g, 0, 0x16);
+        assert_eq!(scene.wp_marks.get(&g), Some(&(8, 1)));
+        let gi = scene.object_index(g).unwrap();
+        assert!(scene.wp_mark_layers(&scene.objects[gi]).is_empty());
+        scene.gorgons.get_mut(&g).unwrap().picture = true;
+        if scene.objects[gi].frames.is_empty() {
+            scene.objects[gi].frames = scene.objects[bi].frames.clone();
+        }
+        let o = &scene.objects[gi];
+        let l = &o.frames[0][0];
+        let (w, h) = (l.image.width as i32, l.image.height as i32);
+        let got: Vec<(i32, i32)> = scene
+            .wp_mark_layers(o)
+            .iter()
+            .map(|(l, a, b)| (a - l.dx, b - l.dy))
+            .collect();
+        assert_eq!(got, vec![((w - 0x24) / 2, (h - 0x1d) / 2); 3]);
+        if let Some(t) = scene.objects.iter().find(|o| o.treasure.is_some()) {
+            let t = t.id;
+            scene.fa_mark(t, 0, 0x16);
+            assert_eq!(scene.wp_marks.get(&t), None);
+        }
     }
 }

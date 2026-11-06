@@ -569,6 +569,9 @@ impl Scene {
                 self.sounds.push(("atmons3", x, y));
             }
             DYING => {
+                // Its queued target's mark freed and forgotten (0x491830
+                // case 6: 0x50c320, `+0x12d` 0).
+                self.wp_marks.remove(&self.objects[i].id);
                 m.kind = 0;
                 m.heading = 0;
                 m.frame = 3;
@@ -1033,6 +1036,22 @@ mod tests {
             cy * 64 + 16 + (r2 % 33) as i32,
         );
         assert_eq!(scene.sea_monster_aim(i, true), Some(want));
+        // A queued target's mark (0xc45d, 0x492360): WPFIRE whatever the
+        // command, kept under water but not shown; up, at its cell `x *
+        // 64 + 0xe`, `y * 64 + 0x11`; dying (0x491830 case 6), forgotten.
+        scene.fa_mark(id, 4, 0x18);
+        assert_eq!(scene.wp_marks.get(&id), Some(&(8, 5)));
+        assert!(scene.wp_mark_layers(&scene.objects[i]).is_empty());
+        scene.sea_monster_states.get_mut(&id).unwrap().state = SWIMMING;
+        let got: Vec<(i32, i32)> = scene
+            .wp_mark_layers(&scene.objects[i])
+            .iter()
+            .map(|(l, a, b)| (a - l.dx, b - l.dy))
+            .collect();
+        assert_eq!(got, vec![(cx * 64 + 0xe, cy * 64 + 0x11); 3]);
+        let mut m = scene.sea_monster_states.remove(&id).unwrap();
+        scene.monster_enter(i, &mut m, DYING, &data, &mut caches);
+        assert_eq!(scene.wp_marks.get(&id), None);
     }
 
     /// Each time it comes up to swim, a monster with room (fewer than two

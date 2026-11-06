@@ -3005,26 +3005,47 @@ it to id 0x100 class 3 (vt+0x18); on 0xc45e (0x4ee970: Space 0x50f910
 0x511c00, 0x4eec16) with `+0x20` set it sends itself 0xc45d 0. A
 modifier key's entry fires whatever else is held (Sinput). So the
 queue's marks show while Shift is held and go when it is let go. The
-port: `Scene::wp_marks` (ships only: the other classes' 0xc45d handlers
-not ported), shown from `order_fleet_attack` with Shift and by
+port: `Scene::wp_marks` (`fa_mark`), shown from `order_fleet_attack` with Shift and by
 `fa_marks_shown` from the App's Shift keys (`shift_key`, 0xc45e
 `shift_marks_dropped` at Space, Tab, the place and group recalls; the
 port's own quick save keys have none), hidden by `fa_selection_seen`
 when the App's selection differs from the last seen (each frame, before
 the tick: the 0xc453 / 0xc455 points not hooked one by one); drawn with
-the ship (`wp_mark_layers`). Not saved. The other classes' 0xc45d, read but not
-ported: buildings (0x425990, 0x426de1) as the ship's, kind `+0x18`,
-placed by their picture `+0x7c` at `(w - 0x24) / 2 + x`, `(h - 0x1d) /
-2 + y`; 0x402360 and 0x403f60 (gsrange.c) always kind 8 (WPFIRE),
-placed at `(w - 0x24) / 2`, `(h - 0x1d) / 2` of their picture (`+0x11c`
-/ `+0x164`, no x / y: 0x50c600 not read for them), keeping 1 and the
-number in two fields (`+0xbc` / `+0x7c`); 0x492340 kind 8 and 0x494f90
-kind 4, 0x48a9b8 kind 2 at the cell (`cell x * tile w + 0xe`, `cell y *
-tile h + 0x11`) when `+0x139` / `+0x189` is set, keeping 1 and the
-number at `+0x12d` / `+0x105`; 0x50c020 takes a deposit's or treasure's
-class (`+0x50` 400, 0x191, 0x192, 700) over the kind and makes nothing
-for a kind outside 5-8 and 10. Still to read: 0x4074d0, 0x413d70,
-0x4207b0, 0x48e100's cases, and which port objects each class is.
+the object (`wp_mark_layers`). Not saved. The other classes' 0xc45d (each
+class's GetMessage, vtable slot 0): LandObj 0x425990 (vtable 0x595fb0,
+0x426de1; the port's buildings, barbarians, castles, hero houses and
+creature spawns) as the ship's, kind `+0x18`, placed by its picture
+`+0x7c` at `(w - 0x24) / 2 + x`, `(h - 0x1d) / 2 + y` at the message
+and its tick; CyclopClassTy 0x413d70 (vtable 0x5953a8, 0x1f4-0x1f6) the
+same by its picture `+0xb0`, again each tick (its message 0);
+the gorgon 0x402360 (vtable 0x594340, 0x1fa) and a siren 0x403f60
+(0x594378, 0x1fd, constructor 0x403050) always kind 8 (WPFIRE),
+keeping 1 and the number (`+0xbc` / `+0xc0`, `+0x7c` / `+0x80`), placed
+only with their picture (`+0x11c` / `+0x164`) at `(w - 0x24) / 2`, `(h
+- 0x1d) / 2` of it, its x / y not added (at the message, each tick and
+at state 1; 0x50c600 stores the arguments as the mark's place and moves
+its sprite there, 0x55ec70), so on the map's top left; their states
+(0x4019d0 / 0x403650) 0 and 4 on free and forget it, 1 makes it again,
+2 and 3 keep it; a sea monster 0x492360 (0x1fb) kind 8, kept (`+0x12d`,
+`+0x131`) and made only with its picture `+0x139`, at its cell `+0x91 x
+tile w + 0xe`, `+0x95 x tile h + 0x11` (the message, each tick, states 1
+and 4 of 0x491830); state 0 frees it (kept), 6 (dying) frees and forgets
+it. The port: `fa_mark` by class, `wp_mark_layers` places it (the
+gorgon and siren with `picture`, the sea monster while not under water),
+`set_gorgon_state` / `set_siren_state` / `monster_enter` forget it. Not
+ported: a harpy's or dragon's (0x4207b0, vtable 0x595e00, 0x1f8/0x1f9:
+kind `+0x18`, placed from `+0x74`'s picture by its state `+0x88`: 0 / 1
+`x + [0x595ae0] - 0x12`, `y + [0x595ae4] - 0xe`; 2 and 6 by the
+picture's direction `+0x45` from tables at 0x595ae0 / 0x595ae8 (16-byte
+rows); others `x + 0x16`, `y + 0x1a`; the tables not dumped). The
+gather's targets: a treasure 0x4074d0 (0x594420, class 700) kind 0xb
+at `+0xc4`'s `+0x59 + 0xe`, `+0x5d + 0x11`; fish 0x48e100 (0x59749c,
+0x191), leviathans 0x494f90 (0x597544, 0x192, kind 4) and amber
+0x48a9b8 (kind 2) at their cell; 0x50c020 picks `WPAMBER`, `WPFISH`,
+`WPWHALE`, `WPTREAS` by the class (`+0x50` 400, 0x191, 0x192, 700) over
+the kind and makes nothing for a kind outside 5-8 and 10 otherwise. Not
+ported: the other blocks' marks (0x4cacf0, 0x4cc0b0, 0x4d7cd0) and so
+these classes'.
 The tick 0x4d0650 (from 0x4c4f40): with no notices or none heard and
 group `+8 > 0x50` (unsigned): `+8 = 0`, each ship lying still (`+0x58c`
 0) sent (0x4cfe40) when for 0x15/0x16 it has no fire task (`+0x25d &

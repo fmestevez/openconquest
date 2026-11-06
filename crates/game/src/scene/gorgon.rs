@@ -388,6 +388,12 @@ impl Scene {
         g.since = self.ticks;
         let id = self.objects[i].id;
         let (px, py) = (self.objects[i].x, self.objects[i].y);
+        // A queued target's mark: states 0 and 4 on free it and forget it
+        // (0x4019d0: 0x50c320, `+0xbc` 0); 1 makes it again (kept, so
+        // drawn with the picture), 2 and 3 keep it.
+        if s == 0 || s >= 4 {
+            self.wp_marks.remove(&id);
+        }
         match s {
             0 => {
                 g.state = 0;
