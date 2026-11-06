@@ -182,10 +182,9 @@ impl Command {
     /// gives (`help_id`); for strings 0x95-0x15e only, `"%s. %s-%d"` with
     /// string 0x59 (Cost) and the price's amber, `"%s, %s-%d"` with string
     /// 0x5a (Fish) and its fish, then the key (`key`, `Hotkeys::suffix`);
-    /// other strings alone. Not ported: the `&1` (format 0x5be6fc) that
-    /// starts those strings and the `&0` before the key (0x5be6c8), font
-    /// colour variants 1 and 0 (0x547860: `&` and a digit set the atlas,
-    /// 0x547710); the message field's font (`+0x28`) is not traced.
+    /// other strings alone. Those strings start with `&1` (format
+    /// 0x5be6fc) and the key with `&0` (0x5be6c8): the message line's
+    /// colour variants 1 and 0 (0x547860, `ui::escape_runs`).
     pub fn help_line(
         self,
         closes: bool,
@@ -195,10 +194,10 @@ impl Command {
     ) -> String {
         let text = |id: u32| strings.get(&id).map_or("", |s| s.as_str());
         let id = self.help_id(closes);
-        let mut line = text(id).to_string();
         if !(0x95..0x15f).contains(&id) {
-            return line;
+            return text(id).to_string();
         }
+        let mut line = format!("&1{}", text(id));
         let (amber, fish) = price;
         if amber != 0 {
             line = format!("{line}. {}-{amber}", text(0x59));
@@ -1452,19 +1451,19 @@ mod tests {
             openconquest_formats::pe::string_table(&std::fs::read(path).unwrap()).unwrap();
         let line = |c: Command, price| c.help_line(false, price, " - B", &strings);
         let ship = |k| line(economy::ship_command(k), economy::ship_cost(k));
-        assert_eq!(ship(0), "Build boat. Cost-200 - B");
-        assert_eq!(ship(2), "Build royal battleship. Cost-1100, Fish-400 - B");
+        assert_eq!(ship(0), "&1Build boat. Cost-200 - B");
+        assert_eq!(ship(2), "&1Build royal battleship. Cost-1100, Fish-400 - B");
         assert_eq!(
             line(Command(0x2f), crate::combat::item_cost(2)),
-            "Train swordsmen. Cost-30, Fish-300 - B"
+            "&1Train swordsmen. Cost-30, Fish-300 - B"
         );
         // No price stored, no price shown; the key still follows.
-        assert_eq!(line(Command::STOP, (0, 0)), "Stop - B");
+        assert_eq!(line(Command::STOP, (0, 0)), "&1Stop - B");
         // The ship's spell buttons (0x4e6980) and the Gorgon's head.
-        assert_eq!(line(Command(0x6b), (0, 0)), "Head of Gorgon - B");
+        assert_eq!(line(Command(0x6b), (0, 0)), "&1Head of Gorgon - B");
         assert_eq!(
             line(Command(0x61), (0, 0)).split(" - ").next(),
-            Some("Magic of whirlpool")
+            Some("&1Magic of whirlpool")
         );
         // Strings outside 0x95-0x15e alone: no price, no key (0x505e70).
         assert_eq!(Command(0).help_id(false), 0x28);
@@ -1474,7 +1473,7 @@ mod tests {
         );
         assert_eq!(
             Command::STOP.help_line(true, (0, 0), "", &strings),
-            "Cancel"
+            "&1Cancel"
         );
     }
 }

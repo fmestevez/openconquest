@@ -1427,9 +1427,19 @@ for the slot's stored price (`+0x52`: amber low word, fish high)
 alone. The text drawer (0x547860) reads `&` and a digit (0x5469b0) as the
 colour variant: the font's atlas n (n < 15, else its default `+0x4c`;
 forced to `+0x86` when that is not negative; only with `+0x82` set), an n
-past the font's atlases drawing atlas 0 (0x547710). Not ported: the
-colours, the message field's font (`+0x28` of the field, vtable
-0x59b62c) not traced. `Command::help_id` / `help_line`.
+past the font's atlases drawing atlas 0 (0x547710). The digit is one
+character read by strtol base 16 (0x5469b0: 0-9, a-f; `f` = 15 gives the
+default); a character after `&` that is not one is drawn, the `&` never.
+The line starts in the default (`+0x50` set: `+0x48` = `+0x4c` = the
+call's 0). The message field (vtable 0x59b62c, made at 0x505dd3) gets its
+font `+0x28` at 0x506e16: 0x546aa0(0x18e, ..., `<theme>SYSTEM_FONT`
+(0x4ebc80 `"%d%s"`), 0), letter gap 1 (0x5470f0); 0x546aa0 sets `+0x82` 1,
+`+0x86` -1, `+0x4c` 0, and nothing else writes them for this font (the
+setter 0x547160 is called only from the 0x4ea... widgets). 0x505e70
+draws every line it shows at x 5, centred vertically (0x547860(text, 5,
+-1, 0)), so the help line's text is in atlas 1 and its key in atlas 0,
+and any `&` in a name or status line is read the same way.
+`Command::help_id` / `help_line`, `ui::escape_runs`.
 
 The prices on the buttons (`+0x52`, u32 per slot at menu byte 0x32 + 4 x
 slot) are written by the menus only and read only by the hover

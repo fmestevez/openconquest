@@ -202,14 +202,14 @@ impl Hotkeys {
     fn slot_for(&self, menu: &Menu, pressed: KeyCode, held: &dyn Fn(u8) -> bool) -> Option<usize> {
         self.slots_for(menu, pressed, held).first().copied()
     }
-
-    /// What the button's help line adds: ` - M` (0x505e70: `%s - &0%s`
+    /// What the button's help line adds: ` - &0M` (0x505e70: `%s - &0%s`
+    /// or `%s - &0%s-%s`: the key in colour variant 0, after the `&1` text).
     /// or `%s - &0%s-%s`, the key in the highlight colour).
     pub fn suffix(&self, slot: &crate::commands::Slot) -> String {
         let b = self.slot_binding(slot);
         match (key_name(b.key), key_name(b.with)) {
-            (Some(k), Some(w)) => format!(" - {w}-{k}"),
-            (Some(k), None) | (None, Some(k)) => format!(" - {k}"),
+            (Some(k), Some(w)) => format!(" - &0{w}-{k}"),
+            (Some(k), None) | (None, Some(k)) => format!(" - &0{k}"),
             (None, None) => String::new(),
         }
     }
@@ -473,7 +473,7 @@ mod tests {
         // The cross's own command's key (D) does not press it.
         assert_eq!(h.slot_for(&menu, KeyCode::KeyD, &none_held), None);
         assert_eq!(h.slot_for(&menu, KeyCode::KeyM, &none_held), Some(0));
-        assert_eq!(h.suffix(&back), " - Escape");
+        assert_eq!(h.suffix(&back), " - &0Escape");
     }
 
     #[test]
@@ -512,8 +512,8 @@ mod tests {
         let shift = |s: u8| s == 0x2a;
         assert!(fires(h.binding(Command::STOP), KeyCode::KeyX, &shift));
         assert!(!fires(h.binding(Command::STOP), KeyCode::KeyX, &none_held));
-        assert_eq!(h.suffix(&slot(0x01, true).unwrap()), " - Shift-X");
-        assert_eq!(h.suffix(&slot(0x04, true).unwrap()), " - G");
+        assert_eq!(h.suffix(&slot(0x01, true).unwrap()), " - &0Shift-X");
+        assert_eq!(h.suffix(&slot(0x04, true).unwrap()), " - &0G");
     }
 
     #[test]

@@ -83,6 +83,16 @@ impl TextRenderer {
         glyphs + self.spacing * (text.len() as u32).saturating_sub(1)
     }
 
+    /// How far drawing `text` moves the pen, in font pixels: each glyph and
+    /// the gap after it.
+    pub fn advance(&self, text: &str) -> u32 {
+        if text.is_empty() {
+            0
+        } else {
+            self.measure(text) + self.spacing
+        }
+    }
+
     /// Height of `text` in font pixels: its tallest glyph's (as mfcfnt.cpp's
     /// 0x547350 measures it for centring).
     pub fn height(&self, text: &str) -> u32 {

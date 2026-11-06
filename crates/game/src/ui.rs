@@ -143,6 +143,10 @@ pub struct Interface {
     pause_sign: Vec<Rc<Image>>,
     /// The messages' font (`MESS_FONT`, chat.cpp).
     mess_font: Option<TextRenderer>,
+    /// The message line's font (the field's `+0x28`, 0x506e16:
+    /// `SYSTEM_FONT`) in its colour variants past the first, for its `&n`
+    /// escapes.
+    message_atlases: Vec<TextRenderer>,
     /// The load panel's pictures.
     pub load_art: load_panel::LoadArt,
     /// The green tick where a ship was sent (`TAKE_CMD`, controlm).
@@ -339,6 +343,9 @@ impl Interface {
             panels: Panels::load(data, theme)?,
             pause_sign: sequence(&format!("{theme}WIN_PAUSE")),
             mess_font: TextRenderer::load(&data.controls, "MESS_FONT", 0).ok(),
+            message_atlases: (1..15)
+                .map_while(|a| TextRenderer::load(&data.controls, "0SYSTEM_FONT", a).ok())
+                .collect(),
             load_art: load_panel::LoadArt::load(data, theme),
             take_cmd: (0..4)
                 .filter_map(|i| {
@@ -620,7 +627,18 @@ impl Interface {
         let top = MESSAGE_LINE.1 as f32 * s
             + y as f32 * s
             + (h as f32 * s - (text.line_height() * text_scale) as f32) / 2.0;
-        text.draw(frame, left as i32, top as i32, text_scale, msg);
+        // The field draws through 0x547860 with its font's escapes on
+        // (`+0x82` 1, 0x546aa0): each run in its colour variant, a variant
+        // past the font's in its first (0x547710).
+        let mut pen = left as i32;
+        for (atlas, run) in escape_runs(msg) {
+            let font = atlas
+                .checked_sub(1)
+                .and_then(|a| self.message_atlases.get(a))
+                .unwrap_or(text);
+            font.draw(frame, pen, top as i32, text_scale, &run);
+            pen += (font.advance(&run) * text_scale) as i32;
+        }
     }
 
     /// An object panel picture (a bitmap in CONTROLG), cached.
@@ -1732,6 +1750,34 @@ fn reloading_shown(
     load.is_some_and(|(view, _)| load_panel::lists(scene, selected, &view).is_some())
 }
 
+/// `text` as the text drawer reads it (0x547860, escapes on): runs of
+/// characters with their colour variant, from 0 (`+0x48` = `+0x4c` = 0);
+/// `&` (0x546980) is not drawn and the character after it is read as a
+/// hex digit (0x5469b0: strtol base 16 of that one character), variant n
+/// for n below 15, else the default 0 (`+0x86` -1: none forced); not a
+/// digit, that character is drawn.
+pub fn escape_runs(text: &str) -> Vec<(usize, String)> {
+    let mut runs: Vec<(usize, String)> = Vec::new();
+    let (mut atlas, mut escape) = (0, false);
+    for c in text.chars() {
+        if escape {
+            escape = false;
+            if let Some(n) = c.to_digit(16) {
+                atlas = if n < 15 { n as usize } else { 0 };
+                continue;
+            }
+        } else if c == '&' {
+            escape = true;
+            continue;
+        }
+        match runs.last_mut() {
+            Some((a, run)) if *a == atlas => run.push(c),
+            _ => runs.push((atlas, c.to_string())),
+        }
+    }
+    runs
+}
+
 /// Splits `text` into lines no wider than `width` font pixels.
 pub fn wrap(font: &TextRenderer, text: &str, width: u32) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
@@ -1783,6 +1829,23 @@ const SHADE: [u8; 256] = [
 mod tests {
     use super::*;
     use crate::objects::Caches;
+
+    /// The text drawer's escapes (0x547860): `&` and a hex digit pick the
+    /// colour variant (15 the default 0), anything else after `&` drawn.
+    #[test]
+    fn message_escapes() {
+        let runs = |t| escape_runs(t);
+        assert_eq!(
+            runs("&1Stop - &0B"),
+            vec![(1, "Stop - ".to_string()), (0, "B".to_string())]
+        );
+        assert_eq!(
+            runs("a&fb&cc"),
+            vec![(0, "ab".to_string()), (12, "c".to_string())]
+        );
+        assert_eq!(runs("a&&b&"), vec![(0, "a&b".to_string())]);
+        assert_eq!(runs("a&-b"), vec![(0, "a-b".to_string())]);
+    }
 
     /// The control bar at either side ([0x5ca54a]): on the right the field
     /// at 0 and the bar at 592 (0x512ab0: 0x250); on the left the bar at 0
