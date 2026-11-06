@@ -454,6 +454,10 @@ pub struct Ship {
     /// Treasures aboard.
     #[serde(default)]
     pub treasures: Vec<Treasure>,
+    /// Its own Magic object (`+0x7d2`), made by the first spell counted
+    /// (0x4ba070, 0x4b9bf0).
+    #[serde(default)]
+    pub magic: Option<ShipMagic>,
     /// Heroes aboard (see `HERO_NAMES`).
     #[serde(default)]
     pub heroes: Vec<u8>,
@@ -1168,12 +1172,55 @@ pub struct HealSlot {
     pub mends: bool,
 }
 
+/// A ship's Magic object (`+0x7d2`, 0x42ed20): the counts `+0x10 + 4 s`
+/// by spell index 0..13 and its player (`+8` nation, `+0xc` slot), set at
+/// each count (0x4ba070, 0x4b9bf0). Its cell (`+0`, `+4`) is the ship's,
+/// set there and at each cell the ship steps into (0x4a3f40 at 0x4a48d7):
+/// the port takes the ship's cell.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ShipMagic {
+    pub counts: [u32; 14],
+    pub owner: Option<(u32, u32)>,
+}
+
+/// The Gorgon's head's spell index in a ship's magic (0x4ba070) and its
+/// slot's parameter (0x4bd0c0): the stare, Magic.cpp 0x42f580 case 0xd.
+pub const HEAD_SPELL: u32 = 0xd;
+
+/// Whether a treasure kind is of 0x4b9740's class 8 (9, 0x11-0x1a: the
+/// spells, the Gorgon's head and the heroes' items), whose slot 0x4bd0c0
+/// flags (`+0x485`) and offers to 0x4ba070.
+pub fn treasure_kept(kind: u8) -> bool {
+    matches!(kind, 9 | 0x11..=0x1a)
+}
+
 impl Ship {
     /// Puts a treasure aboard in the next slot (0x4bd0c0): a Cup's or a
     /// Fleece's count from 0 (0x4bd23e), its flags 0x4b9740's class, or
     /// 4 for player 16's ship (`barbarian`).
-    pub fn add_treasure(&mut self, tr: Treasure, barbarian: bool) {
+    ///
+    /// A treasure of class 8 is counted in the ship's magic (0x4ba070):
+    /// kind 9 its spell, the Gorgon's head (kind 0x11, its slot's
+    /// parameter set 0xd) spell 0xd; the magic made if none, its player
+    /// the ship's `owner`.
+    pub fn add_treasure(&mut self, mut tr: Treasure, owner: Option<(u32, u32)>) {
+        let barbarian = owner == Some((4, 0));
         self.sync_heal_slots(barbarian);
+        if tr.kind == 0x11 {
+            tr.param = HEAD_SPELL;
+        }
+        let spell = match tr.kind {
+            9 => Some(tr.param),
+            0x11 => Some(HEAD_SPELL),
+            _ => None,
+        };
+        if let Some(s) = spell {
+            let m = self.magic.get_or_insert_with(ShipMagic::default);
+            m.owner = owner;
+            if let Some(c) = m.counts.get_mut(s as usize) {
+                *c += 1;
+            }
+        }
         self.treasures.push(tr);
         self.heal_slots.push(HealSlot {
             count: 0,
@@ -1187,7 +1234,18 @@ impl Ship {
         if k < self.heal_slots.len() {
             self.heal_slots.remove(k);
         }
-        self.treasures.remove(k)
+        // A slot of class 8 (`+0x485`) frees the ship's magic when its
+        // counts are all 0 (0x4bd500); the counts are not lowered.
+        let tr = self.treasures.remove(k);
+        if treasure_kept(tr.kind) && self.magic.is_some_and(|m| m.counts.iter().all(|&c| c == 0)) {
+            self.magic = None;
+        }
+        tr
+    }
+
+    /// Whether a slot of class 8 is aboard (0x4b9fd0).
+    pub fn keeps_treasure(&self) -> bool {
+        self.treasures.iter().any(|t| treasure_kept(t.kind))
     }
 
     /// A hero comes aboard in the next slot (0x4bd350): Argus's count from
@@ -2418,6 +2476,7 @@ pub fn resolve(
             b
         },
         treasures: Vec::new(),
+        magic: None,
         heroes: Vec::new(),
         argo: false,
         experience: (f(13) & 0xff) as i32 * 100,

@@ -1,18 +1,16 @@
 //! The human players of a multiplayer game. The scene keeps one active
 //! player in its single-player fields (`human`, `amber`, `fish`, `magic`,
-//! `permits`, `free_casts`, `flame`); each other human player's share of
+//! `permits`, `flame`); each other human player's share of
 //! them waits in a seat, their amber and fish in `purses` like a computer
 //! player's. Every machine simulates with the first seat active and seats
 //! each order's player to apply it, so all compute the same game; between
 //! turns the local player's seat is active for the interface.
 
-use std::collections::BTreeMap;
-
 use openconquest_formats::PlayerInfo;
 
 use super::{Order, Scene, Seen};
 use crate::assets::GameData;
-use crate::magic::{Magic, Spell};
+use crate::magic::Magic;
 use crate::objects::Caches;
 use crate::permits::Permits;
 
@@ -22,7 +20,6 @@ pub struct Seat {
     pub player: PlayerInfo,
     magic: Magic,
     permits: Permits,
-    free_casts: BTreeMap<Spell, u32>,
     flame: f32,
     sight: Vec<Seen>,
     stats: super::Stats,
@@ -41,7 +38,6 @@ impl Scene {
                 },
                 magic: Magic::default(),
                 permits: Permits::ALL,
-                free_casts: BTreeMap::new(),
                 flame: 0.0,
                 sight: vec![Seen::Unexplored; self.sight.len()],
                 stats: Default::default(),
@@ -126,7 +122,6 @@ impl Scene {
         let s = &mut self.seats[k];
         std::mem::swap(&mut self.magic, &mut s.magic);
         std::mem::swap(&mut self.permits, &mut s.permits);
-        std::mem::swap(&mut self.free_casts, &mut s.free_casts);
         std::mem::swap(&mut self.flame, &mut s.flame);
         std::mem::swap(&mut self.sight, &mut s.sight);
         std::mem::swap(&mut self.stats, &mut s.stats);

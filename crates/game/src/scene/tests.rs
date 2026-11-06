@@ -3510,6 +3510,124 @@ fn a_treasure_used_at_once() {
     assert!(scene.messages.is_empty(), "{:?}", scene.messages);
 }
 
+/// A spell aboard (0x4bd0c0 -> 0x4ba070): kind 9 goes aboard and counts
+/// its spell in the ship's own magic (`+0x7d2`), the Gorgon's head
+/// (0x11) spell 0xd; the warship's slots 2 and 3 offer them (0x4e6980);
+/// order 0x22 (0x4e2ba0) casts from the ship's cell, takes the count and
+/// the slot (0x4ba130, 0x4bd500: the magic freed at no count left); the
+/// head stares at another player's ship (0x42f580 case 0xd), not its own
+/// player's (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_spell_aboard_is_cast_from_the_ship() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    scene.brain = None;
+    let human = scene.human.unwrap();
+    let me = Some((human.nation, human.slot));
+    let ship = scene.objects.iter().find(|o| o.ship.is_some()).unwrap().id;
+    let i = scene.object_index(ship).unwrap();
+    scene.objects[i].owner = me;
+    scene.objects[i].ship.as_mut().unwrap().kind = 2;
+    scene.objects[i].ship.as_mut().unwrap().treasures.clear();
+    let c = scene.cell_of(i);
+    let place = |scene: &mut Scene, kind: u8, param: u32| {
+        let k = scene
+            .objects
+            .iter()
+            .position(|o| o.treasure.is_some())
+            .unwrap();
+        scene.objects[k].treasure = Some(crate::objects::Treasure {
+            kind,
+            param,
+            amount: 0,
+        });
+        let t = TILE_SIZE as f32;
+        scene.objects[k].x = (c.0 as f32 + 0.5) * t;
+        scene.objects[k].y = (c.1 as f32 + 0.5) * t;
+        scene.objects[k].cell = None;
+    };
+    let menu = |scene: &Scene| {
+        crate::commands::main_menu(scene, &scene.objects[scene.object_index(ship).unwrap()])
+    };
+    // A reef aboard: counted, offered in slot 2.
+    place(&mut scene, 9, 1);
+    scene.ship_steps_on_treasure(ship, c, &data, &mut caches);
+    let i = scene.object_index(ship).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert_eq!(s.treasures.len(), 1);
+    let m = s.magic.unwrap();
+    assert_eq!((m.counts[1], m.owner), (1, me));
+    assert_eq!(menu(&scene)[2].unwrap().command, Spell::Reef.command());
+    assert!(menu(&scene)[3].is_none());
+    // Cast at the first open cell the pointer takes, within 12 cells.
+    let cell = (-12..=12)
+        .flat_map(|dy| (-12..=12).map(move |dx| (c.0 + dx, c.1 + dy)))
+        .filter(|&p| p != c)
+        .find(|&p| scene.ship_cast_check(i, 1, p, None).is_ok())
+        .expect("an open cell");
+    assert!(scene.ship_cast_check(i, 1, (c.0 + 13, c.1), None).is_err());
+    scene
+        .ship_cast(ship, 1, cell, None, &data, &mut caches)
+        .unwrap();
+    assert!(scene.third_place_object(cell).is_some());
+    let i = scene.object_index(ship).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert!(s.treasures.is_empty() && s.magic.is_none());
+    assert!(scene
+        .ship_cast(ship, 1, cell, None, &data, &mut caches)
+        .is_err());
+    // The Gorgon's head: spell 0xd, its slot's parameter 0xd.
+    place(&mut scene, 0x11, 0);
+    scene.ship_steps_on_treasure(ship, c, &data, &mut caches);
+    let i = scene.object_index(ship).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert_eq!(s.treasures[0].param, crate::objects::HEAD_SPELL);
+    assert_eq!(s.magic.unwrap().counts[13], 1);
+    assert_eq!(
+        menu(&scene)[2].unwrap().command,
+        crate::commands::HEAD_STARE
+    );
+    // A second ship of the player's, a copy of this one.
+    let mut fields = vec![0u32; 13];
+    fields[0] = 0xc8;
+    fields[1] = 1;
+    fields[5] = 1;
+    fields[7] = 5;
+    fields[12] = 100;
+    let rec = ObjectRecord {
+        id: 990_000,
+        class_id: 0xc8,
+        fields,
+    };
+    let mut copy = crate::objects::resolve(&data, &mut caches, &rec)
+        .unwrap()
+        .unwrap();
+    copy.owner = me;
+    scene.objects.push(copy);
+    let foe = 990_000;
+    assert!(scene
+        .ship_cast(ship, 13, c, Some(foe), &data, &mut caches)
+        .is_err());
+    let f = scene.object_index(foe).unwrap();
+    scene.objects[f].owner = Some((human.nation ^ 1, 0));
+    scene
+        .ship_cast(ship, 13, c, Some(foe), &data, &mut caches)
+        .unwrap();
+    // Stone for 150 ticks and the blow whole: 88000 / 15 sinks it.
+    let f = scene.object_index(foe);
+    assert!(f.is_none_or(|f| {
+        let c = scene.objects[f].combat.as_ref().unwrap();
+        c.stone_len == 150 && c.hull <= 0.0
+    }));
+    let i = scene.object_index(ship).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert!(s.treasures.is_empty() && s.magic.is_none());
+}
+
 /// The Gorgon rests, rises and stares tick by tick as the original's
 /// (0x401f70, 0x4019d0): her ships beside her turn to stone (not
 /// Perseus's) at frame 13 of `GORG2`; her aim point (0x402da0); shot down

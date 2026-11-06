@@ -485,8 +485,6 @@ pub struct Scene {
     /// The Flames the brains' war temples brew (0x439260): the temple, its
     /// player and the seconds left.
     pub brain_brews: Vec<(u32, (u32, u32), f32)>,
-    /// Spells the player may cast once for nothing (disposable magic).
-    pub free_casts: std::collections::BTreeMap<Spell, u32>,
     /// Buildings being repaired by a settlement or town.
     pub mending: Vec<u32>,
     /// Forts and barbarian structures being mended mending their units.
@@ -918,7 +916,6 @@ impl Scene {
             navy_lcg: None,
             ticks: 0,
             town_fish: BTreeMap::new(),
-            free_casts: Default::default(),
             creature_clock: 0.0,
             castles: BTreeMap::new(),
             chests: BTreeMap::new(),
@@ -1204,11 +1201,6 @@ impl Scene {
             navy_lcg: self.navy_lcg,
             ticks: self.ticks,
             town_fish: self.town_fish.clone(),
-            free_casts: self
-                .free_casts
-                .iter()
-                .map(|(&s, &n)| (s as u32, n))
-                .collect(),
             start_sites: self.start_sites.clone(),
             delivered: self.delivered.clone(),
             joined: self.joined.clone(),
@@ -1511,11 +1503,6 @@ impl Scene {
         if !save.start_sites.is_empty() {
             scene.start_sites = save.start_sites.clone();
         }
-        scene.free_casts = save
-            .free_casts
-            .iter()
-            .filter_map(|&(s, n)| Some((Spell::of_index(s)?, n)))
-            .collect();
         // Buildings look as they stood: going up, damaged or in ruins.
         let buildings: Vec<(u32, bool, bool)> = scene
             .objects

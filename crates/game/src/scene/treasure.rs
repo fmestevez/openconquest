@@ -692,19 +692,22 @@ impl Scene {
                     }
                     _ => {}
                 }
-            }
-            9 => {
-                // A spell to cast once, at no cost. (Not ported: the
-                // original puts it aboard, 0x4bd0c0 -> 0x4ba070 counting
-                // spell field 7 in the ship's own magic `+0x7d2`; the port
-                // counts it for the player.)
-                if let Some(s) = Spell::of_index(tr.param) {
-                    *self.free_casts.entry(s).or_default() += 1;
+                // The ship's magic stays made with the ship's player, its
+                // count back where it was (taken by the cast, or given
+                // back when refused), and is freed when no slot of class
+                // 8 is aboard (0x4b9fd0).
+                let s = self.objects[i].ship.as_mut().unwrap();
+                if s.keeps_treasure() {
+                    s.magic.get_or_insert_with(Default::default).owner = owner;
+                } else {
+                    s.magic = None;
                 }
             }
+            // Kind 9 and the Gorgon's head (0x11) go aboard and are counted
+            // in the ship's magic (0x4bd0c0 -> 0x4ba070, `add_treasure`).
             _ => {
                 let s = self.objects[i].ship.as_mut().unwrap();
-                s.add_treasure(tr, owner == Some((4, 0)));
+                s.add_treasure(tr, owner);
             }
         }
         // The treasure answers message 0x158c1 (0x4074d0) by going to
@@ -1055,5 +1058,121 @@ impl Scene {
             }
             _ => {}
         }
+    }
+
+    /// The pointer's test of ship `id`'s spell index `s` at cell `cell`
+    /// over `target` (0x4dd2fc's state 0x22, kinds 1-3, 6-8, 0xd-0xf,
+    /// 0x11, 0x13): its magic (`+0x7d2`) with a count of the spell, then
+    /// 0x42ef90 from the ship's cell for the magic's player
+    /// (`magic_cast_check`); the Gorgon's head (kind 0x13, spell 0xd) on
+    /// any target, at any distance (0x42ef90 asks only 0x42ed40), but not
+    /// a nature object (`+0x57` 2) nor one of the ship's own player's.
+    pub(super) fn ship_cast_check(
+        &self,
+        i: usize,
+        s: u32,
+        cell: (i32, i32),
+        target: Option<u32>,
+    ) -> Result<(), String> {
+        let refused = || "The ship holds no such spell".to_string();
+        let m = self.objects[i]
+            .ship
+            .as_ref()
+            .unwrap()
+            .magic
+            .ok_or_else(refused)?;
+        if m.counts.get(s as usize).is_none_or(|&n| n < 1) {
+            return Err(refused());
+        }
+        if s == objects::HEAD_SPELL {
+            let t = target
+                .and_then(|t| self.object_index(t))
+                .ok_or("Choose a ship or building")?;
+            match Self::side_of(&self.objects[t]) {
+                2 => return Err("Choose a ship or building".into()),
+                1 if self.objects[t].owner == self.objects[i].owner => {
+                    return Err("Choose another player's ship or building".into())
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+        let spell = Spell::of_index(s).ok_or_else(refused)?;
+        let here = self.ship_cell(i);
+        self.magic_cast_check(&m.counts, m.owner, here, spell, cell, target)
+            .map_err(|e| e.replace("{}", "the ship"))
+    }
+
+    /// Order 0x22 to ship `id` (0x4e2ba0; 0x4e6700 passes every kind but
+    /// 0x10) with spell index `s` (0x4ba1d0 of the pointer's kind), after
+    /// the pointer's test (`ship_cast_check`). With its magic: a draw of
+    /// its generator `+0x18`, 0x42fa90 -> Magic.cpp 0x42f580 casts as the
+    /// magic's player (`magic_cast`; the Gorgon's head, case 0xd, with a
+    /// target: a count taken if any, message 0x158bf of 88000 and 150 to
+    /// it, `stare_at`), and the first slot of class 8 holding the spell
+    /// (0x4ba130: kind 9 of that parameter, the head's 0xd) leaves, cast
+    /// or not (0x4b6e80's notice 0x5d94 to the brain; 0x4bd500, the magic
+    /// freed when its counts are all 0).
+    pub fn ship_cast(
+        &mut self,
+        id: u32,
+        s: u32,
+        cell: (i32, i32),
+        target: Option<u32>,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Result<(), String> {
+        let i = self.object_index(id).ok_or("No such ship")?;
+        if self.objects[i].ship.is_none() {
+            return Err("Not a ship".into());
+        }
+        self.ship_cast_check(i, s, cell, target)?;
+        let Some(mut m) = self.objects[i].ship.as_ref().unwrap().magic else {
+            return Ok(());
+        };
+        let draw = self.ship_draw(i);
+        if s == objects::HEAD_SPELL {
+            if let Some(t) = target {
+                if self.magic_may_cast(&m.counts, m.owner, s as usize) {
+                    let c = &mut m.counts[s as usize];
+                    *c = c.saturating_sub(1);
+                    self.objects[i].ship.as_mut().unwrap().magic = Some(m);
+                    self.stare_at(t, 88_000, data, caches);
+                }
+            }
+        } else if let Some(spell) = Spell::of_index(s) {
+            let may = self.magic_may_cast(&m.counts, m.owner, s as usize);
+            let counted = m.counts[s as usize] > 0;
+            if self
+                .magic_cast(&m.counts, m.owner, spell, cell, target, draw, data, caches)
+                .is_ok()
+                && may
+                && counted
+            {
+                m.counts[s as usize] -= 1;
+            }
+            // The ship may have gone with the cast.
+            if let Some(sh) = self
+                .object_index(id)
+                .and_then(|k| self.objects[k].ship.as_mut())
+            {
+                sh.magic = Some(m);
+            }
+        }
+        let Some(i) = self.object_index(id) else {
+            return Ok(());
+        };
+        // Player 16's slots are flagged 4, not 8 (0x4bd0c0): none found.
+        if self.objects[i].owner == Some((4, 0)) {
+            return Ok(());
+        }
+        let sh = self.objects[i].ship.as_mut().unwrap();
+        let slot = sh.treasures.iter().position(|t| {
+            (t.kind == 9 && t.param == s) || (t.kind == 0x11 && s == objects::HEAD_SPELL)
+        });
+        if let Some(k) = slot {
+            sh.remove_treasure(k);
+        }
+        Ok(())
     }
 }

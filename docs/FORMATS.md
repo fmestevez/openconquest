@@ -10459,8 +10459,45 @@ second draw for the type), 9 phantom, 10 / 11 the shields; a count the
 cast refuses is taken back; the magic freed when 0x4b9fd0 finds no
 spell left. Ported (`take_treasure`). Kind 9 goes aboard (use 8):
 0x4bd0c0 -> 0x4ba070 counts spell field 7 (kind 0x11: spell 0xd) in the
-ship's magic; not ported: the port counts it as a free cast for the
-player (`free_casts`), the ship's own magic not being kept.
+ship's magic (below).
+
+**A ship's own magic** (`+0x7d2`, a Magic object 0x42ed20 of 0x50 bytes;
+`Ship::magic`, kept in the save). 0x4bd0c0 flags a slot of 0x4b9740's
+class 8 (kinds 9, 0x11-0x1a; `+0x485` 1; its flags `+0x491` 8, but 4 on
+player 16's ship) and gives it to 0x4ba070: kind 9 counts its parameter
+(record `+0xc`), the Gorgon's head (0x11, its slot's parameter `+0x495`
+set 0xd) spell 0xd, at `+0x10 + 4 s`; the object made if none (`+0x48` /
+`+0x4c` the ship's `+0x70` / `+0x68`), its cell (`+0`, `+4`) the ship's
+`+0x5a3` / `+0x5a7` and its player (`+8`, `+0xc`) the ship's `+0x54` /
+`+0x55` at each count. The move tick sets its cell at each cell the ship
+steps into (0x4a3f40 at 0x4a48d7). 0x4bd500 taking a flagged slot out
+frees it when all 14 counts are 0 (the counts are not lowered); 0x4df870
+frees it too (0x4df9c2; what calls 0x4df870 not read). The warship's menu 0x4e6980 offers slot 2
+for slot 0 of class 8 and slot 3 for slot 1 when there are exactly two and
+slot 1 is not slot 0 again (0x4ba010: kind, flags, parameter, amount), by
+the parameter: 1 0x62, 2 0x61, 3 0x60, 4 0x63, 5 0x55, 6 0x69, 7 0x6a, 9
+0x66, 10 0x65, 11 0x68, 0xd 0x6b (`CBUT_HGORG`, 0x4f08a0; help 0x202),
+enabled; none for 0, 8, 12. The button sets the pointer state 0x22 with
+its kind (0x4f34c0; 0x6b kind 0x13). The pointer (0x4dd2fc's state 0x22,
+kinds 1-3, 6-8, 0xd-0xf, 0x11, 0x13) is refused (0x58) without the
+magic or a count of the kind's spell (0x42fc80), and refused when
+0x42ef90 fails (the fort's tests, from the ship's cell; case 0x13 a
+target and 0x42ed40(0xd) only, no reach); for 0x13 also on a nature
+object (`+0x57` 2) or one of the ship's own player's. Order 0x22
+(0x4e2ba0; 0x4e6700 passes every kind but 0x10): with the magic a draw
+of the ship's `+0x18`, 0x42fa90 -> 0x42f580 (the magic's player; case 0xd
+with a target: the count lowered if not 0, message 0x158bf {88000, 150}
+to the target, the gorgon's stare on it), then 0x4ba1d0 the kind's
+spell, 0x4ba130 the first slot flagged 8 holding it (kind 9 of that
+parameter, or 0x11 for 0xd), and 0x4b6e80 (notice 0x5d94 to the brain,
+not shown) and 0x4bd500 take it out, cast or not. Ported:
+`Ship::add_treasure` / `remove_treasure`, `commands::ship_menu`,
+`Scene::ship_cast_check` / `ship_cast` (`magic_may_cast`,
+`magic_cast_check`, `magic_cast` shared with the forts), `stare_at`;
+the port's own free casts for the player are gone. Not decoded: whether
+a ship's capture sets the magic's player (only the counts do here),
+0x4df870's callers, and 0x42f580's own refusals for a ship's cast (the
+port lowers the count only when the cast is made).
 
 **The land take.** 0x4af940 (`+0x792` the sea cell, `+0x797` the land
 cell): the hero's house (class 0x49) its berth vt+0xb8 = 0x40e050 and its

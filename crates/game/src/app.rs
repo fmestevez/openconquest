@@ -5542,6 +5542,10 @@ impl App {
                 self.pending = Some(c);
                 self.say(Spell::of_command(c).unwrap().prompt());
             }
+            crate::commands::HEAD_STARE => {
+                self.pending = Some(entry.command);
+                self.say("Choose another player's ship or building");
+            }
             Command::BUILD_GROUND => self.page = Page::Ground,
             Command::RAM | Command::BOARD => {
                 self.pending = Some(entry.command);
@@ -5949,6 +5953,37 @@ impl App {
                         "Building a {}",
                         crate::objects::building_label(class)
                     ));
+                }
+                Err(e) => self.say(e),
+            }
+            return;
+        }
+        // A ship's spell aboard goes to the ship as order 0x22 with the
+        // pointer's cell and object (0x4e2ba0).
+        let ship = self
+            .selected
+            .and_then(|id| self.scene.object_index(id))
+            .filter(|&i| self.scene.objects[i].ship.is_some())
+            .map(|i| self.scene.objects[i].id);
+        let ship_spell = self.pending.and_then(|c| {
+            if c == crate::commands::HEAD_STARE {
+                Some(crate::objects::HEAD_SPELL)
+            } else {
+                Spell::of_command(c).map(|s| s as u32)
+            }
+        });
+        if let (Some(ship), Some(spell), Some((cx, cy))) = (ship, ship_spell, self.cell_at(pos)) {
+            let target = self.object_at(pos);
+            match self.issue(Order::ShipCast {
+                ship,
+                spell,
+                cx,
+                cy,
+                target,
+            }) {
+                Ok(_) => {
+                    self.pending = None;
+                    self.status = None;
                 }
                 Err(e) => self.say(e),
             }

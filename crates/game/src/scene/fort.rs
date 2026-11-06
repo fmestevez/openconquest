@@ -115,15 +115,19 @@ impl Scene {
         Some(now.saturating_sub(start) * 100 / (100 - start))
     }
 
-    /// Whether fort `id`'s Magic object may cast spell index `s`
-    /// (0x42ed40 with a price to check, at the full price): a count of it,
-    /// else its permission bit (0x42fd70's, `Permits::spell`; the big
-    /// reef's 0x38) and its price at hand.
-    fn fort_may_cast(&self, id: u32, s: usize) -> bool {
-        if self.fort_spells(id)[s] != 0 {
+    /// 0x42ed40 for a Magic object of `counts` and player `owner`, at the
+    /// full price: a count of spell index `s`, else its permission bit and
+    /// its price at hand.
+    pub(super) fn magic_may_cast(
+        &self,
+        counts: &[u32; 14],
+        owner: Option<(u32, u32)>,
+        s: usize,
+    ) -> bool {
+        if counts.get(s).is_some_and(|&n| n != 0) {
             return true;
         }
-        let Some(owner) = self.object_index(id).and_then(|i| self.objects[i].owner) else {
+        let Some(owner) = owner else {
             return false;
         };
         let (allowed, (amber, fish)) = match Spell::of_index(s as u32) {
@@ -260,44 +264,60 @@ impl Scene {
     ) -> Result<(), String> {
         let i = self.object_index(id).ok_or("No such fort")?;
         let here = self.objects[i].cell.ok_or("No such fort")?;
+        let owner = self.objects[i].owner;
+        self.magic_cast_check(&self.fort_spells(id), owner, here, spell, cell, target)
+            .map_err(|e| e.replace("{}", "the fort"))
+    }
+
+    /// 0x42ef90 for a Magic object of `counts` and player `owner` at
+    /// cell `here` (a fort's, a ship's): `fort_cast_check`'s tests.
+    pub(super) fn magic_cast_check(
+        &self,
+        counts: &[u32; 14],
+        owner: Option<(u32, u32)>,
+        here: (i32, i32),
+        spell: Spell,
+        cell: (i32, i32),
+        target: Option<u32>,
+    ) -> Result<(), String> {
         let s = spell as usize;
-        if !self.fort_may_cast(id, s) {
+        if !self.magic_may_cast(counts, owner, s) {
             return Err(String::new());
         }
         let d = cell_distance(cell, here);
         match spell {
             Spell::ViewMap => Ok(()),
             Spell::Lightning if d <= 12 => Ok(()),
-            Spell::Lightning => Err("Too far from the fort (reach: 12 cells)".into()),
+            Spell::Lightning => Err("Too far from {} (reach: 12 cells)".into()),
             Spell::Phantom | Spell::ProtectWeapons | Spell::ProtectMagic => {
                 let own = target.and_then(|t| self.object_index(t)).is_some_and(|t| {
-                    self.objects[t].owner.is_some()
-                        && self.objects[t].owner == self.objects[i].owner
+                    self.objects[t].owner.is_some() && self.objects[t].owner == owner
                 });
                 if !own {
                     return Err("Choose one of your ships or buildings".into());
                 }
                 if d > 15 {
-                    return Err("Too far from the fort (reach: 15 cells)".into());
+                    return Err("Too far from {} (reach: 15 cells)".into());
                 }
                 Ok(())
             }
             Spell::Reef | Spell::Whirlpool | Spell::Monster | Spell::Fireball => {
                 if spell == Spell::Whirlpool
-                    && !(self.fort_may_cast(id, BIG_REEF) && self.fort_may_cast(id, 1))
+                    && !(self.magic_may_cast(counts, owner, BIG_REEF)
+                        && self.magic_may_cast(counts, owner, 1))
                 {
                     return Err(String::new());
                 }
                 if d > 12 {
-                    return Err("Too far from the fort (reach: 12 cells)".into());
+                    return Err("Too far from {} (reach: 12 cells)".into());
                 }
-                self.cast_cell_check(spell, cell, self.objects[i].owner)
+                self.cast_cell_check(spell, cell, owner)
             }
             Spell::Waterspout => {
                 if d >= 16 {
-                    return Err("Too far from the fort (reach: 15 cells)".into());
+                    return Err("Too far from {} (reach: 15 cells)".into());
                 }
-                self.cast_cell_check(spell, cell, self.objects[i].owner)
+                self.cast_cell_check(spell, cell, owner)
             }
             _ => Err(String::new()),
         }
@@ -333,8 +353,39 @@ impl Scene {
         let s = spell as usize;
         let owner = self.objects[i].owner;
         let draw = self.building_draw(i);
-        if self.fort_may_cast(site, s) {
-            if self.fort_spells(site)[s] == 0 {
+        let counts = self.fort_spells(site);
+        self.magic_cast(&counts, owner, spell, (cx, cy), target, draw, data, caches)?;
+        if let Some(k) = self
+            .held
+            .iter()
+            .position(|h| h.0 == site && h.1.kind == 9 && h.1.param == s as u32)
+        {
+            self.held.remove(k);
+        }
+        self.fort_voice(site);
+        Ok(())
+    }
+
+    /// Magic.cpp 0x42f580 for a Magic object of `counts` and player
+    /// `owner` (a fort's, a ship's): spell `spell` at cell `(cx, cy)`
+    /// over `target` with the caster's `draw`, when 0x42ed40 passes
+    /// (`magic_may_cast`); 0x42f470 takes a count if there is one (the
+    /// caller's), else the price.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn magic_cast(
+        &mut self,
+        counts: &[u32; 14],
+        owner: Option<(u32, u32)>,
+        spell: Spell,
+        (cx, cy): (i32, i32),
+        target: Option<u32>,
+        draw: u32,
+        data: &GameData,
+        caches: &mut Caches,
+    ) -> Result<(), String> {
+        let s = spell as usize;
+        if self.magic_may_cast(counts, owner, s) {
+            if counts[s] == 0 {
                 if let Some(owner) = owner {
                     let (amber, fish) = spell.cost();
                     self.earn(owner, -(amber as i64), -(fish as i64));
@@ -363,14 +414,6 @@ impl Scene {
                 }
             }
         }
-        if let Some(k) = self
-            .held
-            .iter()
-            .position(|h| h.0 == site && h.1.kind == 9 && h.1.param == s as u32)
-        {
-            self.held.remove(k);
-        }
-        self.fort_voice(site);
         Ok(())
     }
 }

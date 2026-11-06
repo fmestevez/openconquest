@@ -266,6 +266,15 @@ pub enum Order {
         cy: i32,
         target: Option<u32>,
     },
+    /// Ship `ship` casts spell index `spell` from its own magic at cell
+    /// `(cx, cy)` over `target` (order 0x22, `Scene::ship_cast`).
+    ShipCast {
+        ship: u32,
+        spell: u32,
+        cx: i32,
+        cy: i32,
+        target: Option<u32>,
+    },
     BuildShip {
         site: u32,
         kind: u8,
@@ -810,6 +819,13 @@ impl Scene {
                 cy,
                 target,
             } => done(self.fort_cast(site, spell, (cx, cy), target, data, caches)),
+            ShipCast {
+                ship,
+                spell,
+                cx,
+                cy,
+                target,
+            } => done(self.ship_cast(ship, spell, (cx, cy), target, data, caches)),
             BuildShip { site, kind } => {
                 let r = self.start_ship(site, kind);
                 self.make_new_ships(data, caches);

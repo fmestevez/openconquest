@@ -557,35 +557,44 @@ impl Scene {
         let blow = if n < 5 { 88_000 / n } else { 22_000 };
         let ids: Vec<u32> = list.iter().map(|&(_, k)| self.objects[k].id).collect();
         for id in ids {
-            let Some(k) = self.object_index(id) else {
-                continue;
-            };
-            let o = &self.objects[k];
-            let Some(s) = o.ship.as_ref() else {
-                self.stare_building(id, blow, data, caches);
-                continue;
-            };
-            let warded = o.combat.as_ref().is_some_and(|c| c.protect_magic > 0.0);
-            if s.has_hero(PERSEUS) || warded {
-                continue;
-            }
-            let mirror = s
-                .treasures
-                .iter()
-                .find(|t| t.kind == MIRROR_SHIELD)
-                .map_or(0, |t| if t.amount > 0 { t.amount.min(100) } else { 100 });
-            // Not stone yet: from now (`+0x257`, `+0xa1`, `+0xa5` 0);
-            // either way 150 ticks more (`+0xa5`).
-            let now = self.ticks;
-            if let Some(c) = self.objects[k].combat.as_mut() {
-                if c.stone_len == 0 {
-                    c.stone_since = now;
-                }
-                c.stone_len += STONE_TICKS;
-            }
-            let hurt = blow as f32 / 15.0 * (100 - mirror) as f32 / 100.0;
-            self.share_blow(id, hurt, None, data, caches);
+            self.stare_at(id, blow, data, caches);
         }
+    }
+
+    /// Message 0x158bf with blow `blow` and 150 to object `id` (the
+    /// gorgon's stare, the Gorgon's head's 0x42f580 case 0xd): a ship
+    /// (0x4dc630) with Perseus or a magic shield is spared; else it is
+    /// stone for 150 ticks more and takes the blow (cut by a mirror
+    /// shield's percent). Anything else takes it as `stare_building`.
+    pub(super) fn stare_at(&mut self, id: u32, blow: i32, data: &GameData, caches: &mut Caches) {
+        let Some(k) = self.object_index(id) else {
+            return;
+        };
+        let o = &self.objects[k];
+        let Some(s) = o.ship.as_ref() else {
+            self.stare_building(id, blow, data, caches);
+            return;
+        };
+        let warded = o.combat.as_ref().is_some_and(|c| c.protect_magic > 0.0);
+        if s.has_hero(PERSEUS) || warded {
+            return;
+        }
+        let mirror = s
+            .treasures
+            .iter()
+            .find(|t| t.kind == MIRROR_SHIELD)
+            .map_or(0, |t| if t.amount > 0 { t.amount.min(100) } else { 100 });
+        // Not stone yet: from now (`+0x257`, `+0xa1`, `+0xa5` 0);
+        // either way 150 ticks more (`+0xa5`).
+        let now = self.ticks;
+        if let Some(c) = self.objects[k].combat.as_mut() {
+            if c.stone_len == 0 {
+                c.stone_since = now;
+            }
+            c.stone_len += STONE_TICKS;
+        }
+        let hurt = blow as f32 / 15.0 * (100 - mirror) as f32 / 100.0;
+        self.share_blow(id, hurt, None, data, caches);
     }
 
     /// Message 0x158bf (the stare: `+0x14` the blow, `+0x18` 150) to a

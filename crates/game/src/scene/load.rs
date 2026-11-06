@@ -1098,7 +1098,7 @@ impl Scene {
                 o.add_unit(k, c);
                 return;
             }
-            let barbarian = o.owner == Some((4, 0));
+            let owner = o.owner;
             let s = o.ship.as_mut().unwrap();
             let mut back = None;
             match payload {
@@ -1115,7 +1115,7 @@ impl Scene {
                     }
                     s.ram = l;
                 }
-                Payload::Treasure(tr) => s.add_treasure(tr, barbarian),
+                Payload::Treasure(tr) => s.add_treasure(tr, owner),
                 Payload::Hero(h) => s.add_hero(h),
                 Payload::Goods(goods, amount) => {
                     s.cargo_kind = Some(goods);

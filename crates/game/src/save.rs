@@ -116,9 +116,6 @@ pub struct SaveGame {
     pub navy_lcg: Option<u32>,
     #[serde(default)]
     pub ticks: u32,
-    /// Free casts from treasures, by spell index.
-    #[serde(default)]
-    pub free_casts: Vec<(u32, u32)>,
     /// The player's settlements at the mission's start (for its story).
     #[serde(default)]
     pub start_sites: Vec<u32>,

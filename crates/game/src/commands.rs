@@ -124,6 +124,7 @@ impl Command {
             0x68 => "CBUT_PROTMAGIC",
             0x69 => "CBUT_LIGHTNING",
             0x6a => "CBUT_SLIGHTNING",
+            0x6b => "CBUT_HGORG",
             0x54 => "CBUT_GETMAGIC",
             0x55 => "CBUT_VIEWMAP",
             0x56..=0x5f => "CBUT_WIND",
@@ -397,6 +398,7 @@ impl Command {
             }
             0x3a => "Upgrade to town",
             0x3b => "Upgrade to dock",
+            0x6b => "Gorgon's head",
             0x6c => "Behaviour",
             0x6d => "Convoy",
             0x6e => "Patrol",
@@ -545,24 +547,11 @@ fn temple_menu(scene: &Scene, temple: Temple, menu: &mut Menu) {
         });
         slot = 1;
     }
-    // Known spells, then any the player may cast once from a treasure.
-    let free = |s: Spell| scene.free_casts.get(&s).is_some_and(|&n| n > 0);
-    let gifts = scene
-        .free_casts
-        .keys()
-        .copied()
-        .filter(|&s| s.temple() == temple && free(s) && !scene.magic.knows(s));
-    let spells: Vec<Spell> = scene
-        .magic
-        .known(temple)
-        .iter()
-        .copied()
-        .chain(gifts)
-        .collect();
+    // The known spells.
+    let spells: Vec<Spell> = scene.magic.known(temple).to_vec();
     for spell in spells {
         let (amber, fish) = spell.cost();
-        let enabled =
-            spell.implemented() && (free(spell) || scene.amber >= amber && scene.fish >= fish);
+        let enabled = spell.implemented() && scene.amber >= amber && scene.fish >= fish;
         if slot < SLOTS {
             set(menu, slot, spell.command(), enabled);
             // A brewing Flame shows its progress, and waits (0x439260).
@@ -763,6 +752,28 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
         set(menu, 7, Command::ZONES, true);
     } else {
         // Warships (0x4e6980): weapons and behaviour.
+        // Slots 2 and 3: the spells aboard (0x4e6980): slot 0's when it is
+        // of class 8 (0x4b9740), slot 1's when there are two and it is
+        // not slot 0's again (0x4ba010: kind, flags, parameter and amount), by their
+        // parameter (`+0x495`, `+0x4ad`; the Gorgon's head's 0xd).
+        for (slot, k) in [(2, 0), (3, 1)] {
+            let Some(t) = ship.treasures.get(k) else {
+                continue;
+            };
+            if !crate::objects::treasure_kept(t.kind)
+                || k == 1 && (ship.treasures.len() != 2 || ship.treasures[0] == *t)
+            {
+                continue;
+            }
+            let command = match t.param {
+                crate::objects::HEAD_SPELL => Some(HEAD_STARE),
+                0 | 8 | 12 => None,
+                p => Spell::of_index(p).map(Spell::command),
+            };
+            if let Some(c) = command {
+                set(menu, slot, c, true);
+            }
+        }
         set(menu, 4, Command::FIRE, obj.is_armed());
         set(menu, 5, Command::BOARD, ship.crew.count() > 0);
         set(menu, 6, Command::RAM, true);
@@ -1032,6 +1043,9 @@ pub const PATROL: Command = Command(0x6e);
 pub const GUARD_ZONE: Command = Command(0x74);
 pub const CONVOY: Command = Command(0x6d);
 /// A fort's guard and fire on aggressor switches (0x417ff0 slots 1, 2).
+/// The Gorgon's head's button (0x4e6980, `CBUT_HGORG` 0x4f08a0): the
+/// pointer state 0x22 with kind 0x13 (0x4f34c0), spell 0xd.
+pub const HEAD_STARE: Command = Command(0x6b);
 pub const FORT_GUARD: Command = Command(0x70);
 pub const FORT_AGGRESSOR: Command = Command(0x73);
 /// A fort's Repair (0x417ff0 slot 4): it mends itself.

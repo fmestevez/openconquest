@@ -75,14 +75,6 @@ impl Scene {
 
     /// Pays for `spell` if it is known and affordable.
     pub(super) fn pay_spell(&mut self, spell: Spell) -> Result<(), String> {
-        // A spell from a treasure is cast once for nothing.
-        if self.free_casts.get(&spell).is_some_and(|&n| n > 0) {
-            if !self.has_temple(spell.temple()) {
-                return Err("You need a temple for that".into());
-            }
-            *self.free_casts.get_mut(&spell).unwrap() -= 1;
-            return Ok(());
-        }
         if !self.has_temple(spell.temple()) || !self.magic.knows(spell) {
             return Err("The temple does not know that spell".into());
         }
@@ -709,7 +701,7 @@ impl Scene {
         self.cast_cell_check(spell, (cx, cy), master)?;
         let t = TILE_SIZE as f32;
         self.in_reach(spell, cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0)?;
-        if !self.magic.knows(spell) && self.free_casts.get(&spell).is_none_or(|&n| n == 0) {
+        if !self.magic.knows(spell) {
             return Err("The temple does not know that spell".into());
         }
         self.pay_spell(spell)?;
