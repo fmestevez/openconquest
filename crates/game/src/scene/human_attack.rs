@@ -850,7 +850,18 @@ impl Scene {
     /// occupants hold the cells the ships are in only. Not the port's:
     /// fireballs and tornadoes holding `+0xc`.)
     fn ha_area_targets(&self, a: &HumanAttack) -> Vec<Target> {
-        let (x0, y0, rw, rh) = a.rect;
+        self.area_targets(a.rect, a.owner, a.area_players)
+    }
+
+    /// 0x4cd300 over `rect` for a group of `own` with players `players`
+    /// (`ha_area_targets`; the guard block's, `+0x19`).
+    pub(super) fn area_targets(
+        &self,
+        rect: (i32, i32, i32, i32),
+        own: Option<(u32, u32)>,
+        players: u32,
+    ) -> Vec<Target> {
+        let (x0, y0, rw, rh) = rect;
         let (w, h) = (self.nav.width as i32, self.nav.height as i32);
         let occupants =
             self.cell_occupants((x0.max(0), y0.max(0)), ((x0 + rw).min(w), (y0 + rh).min(h)));
@@ -859,7 +870,6 @@ impl Scene {
             let o = &self.objects[k];
             ((o.x / t).floor() as i32, (o.y / t).floor() as i32)
         };
-        let own = a.owner;
         // `+0xc`: harpies and dragons; `+0x10`: the gorgon, the sea
         // monster (`sea_monster_at`), each by its cell.
         let mut flyers: Vec<((i32, i32), usize)> = Vec::new();
@@ -899,7 +909,7 @@ impl Scene {
                 let Some(p) = o.owner else {
                     continue;
                 };
-                if a.area_players & 1 << ((p.1 + p.0 * 4) & 0x1f) == 0 || Some(p) == own {
+                if players & 1 << ((p.1 + p.0 * 4) & 0x1f) == 0 || Some(p) == own {
                     continue;
                 }
                 let class = Self::ha_class(o);

@@ -2913,9 +2913,8 @@ attack zone's cases. The boarder's end posts as the port's leave stage
 ends, the task with it (event 8 0x90, `+0x708` now). The boarder
 closing in, a prey within reach but not at war: nothing (0x4b5df0 state
 1); the rammer's look finds the prey only at war (0x4b8d80). The fleet
-attack task's 0x4d0210 is ported (`scene/fleet_attack.rs`, below). Not
-ported: 0x4d1ea0's cases, the computers' guard being their zone
-(`order_zone`), without the block's lists `+0x44`, `+0x48`, `+0x4c`.
+attack task's 0x4d0210 is ported (`scene/fleet_attack.rs`, below), and
+the guard's 0x4d1ea0 (`scene/computer/fleet_guard.rs`, below).
 
 **The fleet attack task `{0x74, 0x15}`** (port `scene/fleet_attack.rs`,
 `Order::FleetAttack`). Made only by the human's fleet commands 0x15-0x18
@@ -2995,6 +2994,83 @@ first, but for 0x137): 300: with block `+0x24` 1 or 2, or 3 with
 steps 0-3 round, 0x4d2160 its corner of `+0xc` and 0x4d22f0 there;
 0x137 (rec[3]): 0x4d1750 mode 1 of kind 4 exactly: 0x4d25a0 with
 `+0xc` and 0x4d2110; 0x13a, 0x13c, 0x13d as above (rec[3] the ship).
+
+**The guard task `{0x6e, 0x29}`** (port `scene/computer/fleet_guard.rs`,
+part 1). The computers' fleet order 0x6e (0x483570, from 0x47e48d,
+0x47e88d, 0x47ecbd, 0x47ef37, all mode 3): args `[0..3]` the flotilla's
+home `+0x178`, `[4..7]` its zone `+0x168`, `[8]` no mask, `[9]` `+0x154`
+= (AIPlayer `+0x20` == 0) << 16 (task 7's, 0x47ef29, also `| 1`), `[10]`
+the mode. The maker 0x4d1ce0 ends the old block only when
+`b[0] != 0x6e && b[1] != 0x29` (an `&&` for `||`: a guard block is
+rewritten, 0x4d0c90 with 1 freeing the mask and the lists `+0x40`-`+0x4c`,
+the notices, `+0x29`, `+0x2b`, `+0x2c` kept), else 0x4d1bc0 makes it;
+the fields `+8` now, `+0xc` rect, `+0x1c` mask, `+0x20` args 9, `+0x24`
+mode, `+0x30` rect2; by the mode 1, 2 0x4d1080(rect), 3 0x4d1080(rect2)
+with its w and h both set, else 0x4d1450 (each ship posted at its own
+cell, not moved); 0 nothing. The lists (0x557890, null until the first
+entry): `+0x40` spots `{x, y}`, `+0x44` posts and `+0x4c` patrol
+`{ship, id, x, y, tick}` (0x4d15a0 / 0x4d1670 by ship: an update keeps /
+sets the tick), `+0x48` engaged `{ship, id, target, target id, x, y}`
+(0x4d18d0: `+0x2c` = now, an update rewrites, a new entry sends 0x4d0140
+command 0x16). 0x4d1750(id, mode): 0 the last entry's `kind << 16 |
+index` over posts (1), engaged (2), patrol (4), a later list's
+overriding; 1 removes the first post, the first engaged entry and every
+patrol entry, the index stepping on after a removal (the entry after one
+skipped), returning the first list's.
+0x4d1540 (spots): n = the group's ship count, `+0x40` made if null and
+never cleared, 0x561530(rect, mask, W, H, n, 0x4999e0(x, y, 0)) appends;
+returns n. 0x561530: L = x + (w-1)/2, T = y + (h-1)/2, R = x + w/2, B =
+y + h/2; each round clamps to the rect (flags 1 R, 2 T, 4 L, 8 B) and
+stops with all four; the right column x = R from B (B - 1 unless flag 8
+or a one-cell ring) up to T, the top row from R - 1 (R when the right
+was skipped) down to L, the left column from T + 1 (T) down to B, the
+bottom row from L + 1 (L) to R; then L, T less 1, R, B more 1. A cell
+counts with no mask or `mask[y * w + x] != -1` (the absolute cell, a
+slip) and the test; n reached: 0. Then the same rings past the rect,
+clamped to the map, no mask, the right column from B itself (so a
+corner can come twice): n reached gives n less the rect's count; the
+map run out -4 (0x556660). 0x4d1a50(ship, force): unless forced only
+for a ship in no list; 0x4d1540 > 0; posts null: one draw (navy LCG
+`>> 16` % spots), the ship posted there and sent (0x4d19b0 kind 1:
+0x4d15a0 then 0x4cf070); else the spots in order not a post's cell, the
+first that lists it. 0x4d1080(rect, ship): copies of 0x5c93bc and
+0x5c9398; each cell of the rect within the map whose `+0xc` object has
+`+0x50` 0xb2, 0x3a or 0x3b closes the 5 x 5 about it in both; the centre
+0x4d0f40 (the rect's middle `(x + w/2, y + h/2)` if 0x4999e0, else the
+rect's water cell nearest it by 0x557440, strictly less from w + h, row
+by row; none: 0); 0x4d0d20's records (class 200: cell `+0x5a3/+0x5a7`,
+`+8` 0, `+0xc` = `+0x592 != 0`); 0x5614e0(0x5c9398's copy, 0x5c93bc's,
+0, W, H, -1, -1, centre); >= 0: ship 0 each record posted and sent;
+with a ship, that one so, each other by 0x4d1750 mode 0: kind 1 posted
+and sent, kind 2 the engaged entry's x, y the cell, kind 4 the patrol
+entry **at the record's index** given it, in no list nothing (the
+decompile's 0x4d1363 is reached only inside `0 < kind`).
+The tick 0x4d3b30: heard = 0x4d1ea0 with notices; P = 0x69, 0x4b, 0x3c
+by `+0x1a31` for a player of kind 3 or 4 out of the campaign (`+0xd80 !=
+1`), else 0x4b; none heard, `+8` > P, a block and ships: mode 1 0x4d33c0
+then, it 0, 0x4d2720; 2, 3 0x4d33c0; the engaged list: 0x4d3990; `+8` =
+0; then `+8` += game `+0xe2`. 0x4d33c0: the patrol's entries then the
+posts', a ship hit (`+0x691`) within 3 of its entry (0x557480) or in the
+rect (`rx < x <= rx + w`, the same for y) its attacker (`+0x692`,
+0x51f1f0; the patrol reusing the last found when the lookup fails) with
+a cell listed (A4 / A1) and 0x4cf760; lying still (`+0x58c` 0) more than
+1 off (0x557440) sent back (0x4cf070). Busy 0x4d3080(G, 2); T 0x4cd300
+over the rect with the group's `+0x19`. No T, not busy and the engaged
+list: from its last each ship 0x4d1750 mode 1, mode 1/2 0x4d1a50(ship,
+1), 3 posted at the entry's cell and sent. Sum |A4| + |A1| + |T|: 0 with
+`+0x2b`, posts and engaged: a draw % engaged, its target found: every
+post from the last removed and engaged on it at its cell; > 0 0x4d2b00.
+Ported: all of the above, the computers' flotillas holding the block
+(`Flotilla::guard`) in place of each ship's `order_zone`. Not ported
+(part 2): the retreat test 0x4d3080 (busy taken as 0, `+0x2b` never
+set), the sharing out 0x4d2b00 / 0x4d2980 (the port's former guard
+stands in: each idle post ship given `order_zone` over the zone), the
+patrol rounds 0x4d2720 (mode 1 only) with 0x4d2200, 0x4d2160, 0x4d22f0,
+0x4d25a0 (0x136's and 0x137's patrol cases), and 0x4d3990. Not
+decoded: the class `+0x50` 0xb2 (no class of the port's); the mask past
+its `w x h` (the original reads past it; the port's computers have no
+mask and the port counts it closed); 0x4d1080's `this` for 0x4d19b0
+(local_3c unset; it only posts the move).
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
