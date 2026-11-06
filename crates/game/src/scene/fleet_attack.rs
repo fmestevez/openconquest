@@ -403,13 +403,23 @@ impl Scene {
     /// (0x492360) keeps it (`+0x12d`, `+0x131`) and makes it of kind 8
     /// only with its picture `+0x139` (shown by `wp_mark_layers` while it
     /// is up); a harpy or dragon (0x4207b0) makes it of the kind sent.
+    /// 0x4a1f20's kinds for the other commands: 0x1e 5, 0x1f and 0x32
+    /// 10, 0x20 9, any other 0. The deposits' handlers make theirs of
+    /// their own class whatever the kind (0x50c020 by `+0x50`): amber
+    /// 0x48a800 always (`WPAMBER`); fish 0x48e100 and a leviathan
+    /// 0x494f90 keep it and its number (`+0xcd` / `+0xd1`, `+0x105` /
+    /// `+0x109`) and make it only with their picture (`+0x111`, `+0x189`;
+    /// shown by `wp_mark_layers` while up). For a kind 0x50c020 has no
+    /// picture for (0, 9) nothing is made.
     pub(super) fn fa_mark(&mut self, target: u32, index: usize, command: u8) {
         use openconquest_formats::ObjectClass;
         let kind = match command {
             0x15 | 0x16 => 8,
             0x17 => 6,
             0x18 => 7,
-            _ => return,
+            0x1e => 5,
+            0x1f | 0x32 => 10,
+            _ => 0,
         };
         let Some(i) = self.object_index(target) else {
             return;
@@ -429,8 +439,14 @@ impl Scene {
             | ObjectClass::CreatureSpawn
             | ObjectClass::Monster(0x1f4..=0x1f6 | 0x1f8 | 0x1f9) => kind,
             ObjectClass::Monster(0x1fa | 0x1fb | 0x1fd) => 8,
+            ObjectClass::Amber => 2,
+            ObjectClass::FishZone => 3,
+            ObjectClass::WhaleZone => 4,
             _ => return,
         };
+        if !matches!(kind, 2..=8 | 10) {
+            return;
+        }
         self.wp_marks
             .insert(target, (kind, (index as u8).wrapping_add(1)));
     }
@@ -447,6 +463,9 @@ impl Scene {
             return;
         }
         let before = std::mem::replace(&mut self.wp_selection, now.to_vec());
+        if let Some(z) = self.selection_zone(&before) {
+            self.gather_marks(z, false);
+        }
         let Some(z) = self.selection_fleet(&before) else {
             return;
         };
@@ -469,6 +488,9 @@ impl Scene {
     /// target is found (0x51f1f0) its mark, numbered by its place in the
     /// queue (0x4a1f20), or frees it (0x4a2000).
     pub fn fa_marks_shown(&mut self, selection: &[u32], show: bool) {
+        if let Some(z) = self.selection_zone(selection) {
+            self.gather_marks(z, show);
+        }
         let Some(z) = self.selection_fleet(selection) else {
             return;
         };
@@ -481,6 +503,33 @@ impl Scene {
                 self.fa_mark(q.target, k, q.command);
             } else {
                 self.wp_marks.remove(&q.target);
+            }
+        }
+    }
+
+    /// 0x4a2050's gather block (0x78 / 0x3d, its deposits `+0x39` not
+    /// null) runs 0x4cacf0(navy, player, `+0x39`, `+0x28`, show): for the
+    /// viewing player (`navy +0x21`: a human zone's) each deposit known
+    /// gets its mark numbered by its place, command 0 (0x4a1f20), then
+    /// each port of the port list (if any) command 0x1f (`WPLOAD`), or
+    /// each is freed (0x4a2000); no lookup (0x51f1f0) first. The block's
+    /// end (0x4a1c60) frees them too (`end_zone`).
+    pub(super) fn gather_marks(&mut self, z: usize, show: bool) {
+        let zone = &self.gather_zones[z];
+        if !matches!(zone.group, super::gather::ZoneGroup::Human(_)) {
+            return;
+        }
+        let lists = [
+            (zone.deposits.clone(), 0),
+            (zone.ports.clone().unwrap_or_default(), 0x1f),
+        ];
+        for (list, command) in lists {
+            for (k, t) in list.into_iter().enumerate() {
+                if show {
+                    self.fa_mark(t, k, command);
+                } else {
+                    self.wp_marks.remove(&t);
+                }
             }
         }
     }
@@ -517,6 +566,19 @@ impl Scene {
         let (left, top) = match obj.class {
             ObjectClass::Monster(0x1fb) => {
                 if self.sea_monster_hidden(obj.id) {
+                    return Vec::new();
+                }
+                let t = TILE_SIZE as f32;
+                let (cx, cy) = ((obj.x / t).floor() as i32, (obj.y / t).floor() as i32);
+                (cx * t as i32 + 0xe, cy * t as i32 + 0x11)
+            }
+            ObjectClass::Amber | ObjectClass::FishZone | ObjectClass::WhaleZone => {
+                let hidden = match obj.class {
+                    ObjectClass::FishZone => self.shoal_gone(obj.id),
+                    ObjectClass::WhaleZone => self.leviathan_hidden(obj.id),
+                    _ => false,
+                };
+                if hidden {
                     return Vec::new();
                 }
                 let t = TILE_SIZE as f32;
@@ -628,8 +690,10 @@ fn fa_queue(a: &mut FleetAttack, target: u32, command: u8) -> usize {
     a.queue.len() - 1
 }
 
-/// The marks' pictures (0x50c020: kind 6 `WPBOARD`, 7 `WPRAM`, 8
-/// `WPFIRE`, composites of controlm): each with its layers as
+/// The marks' pictures (0x50c020, composites of controlm: by the
+/// target's class `+0x50` 400 `WPAMBER` (kind 2), 0x191 `WPFISH` (3),
+/// 0x192 `WPWHALE` (4), 700 `WPTREAS` (0xb); else by the kind sent, 5
+/// `WPREPAIR`, 6 `WPBOARD`, 7 `WPRAM`, 8 `WPFIRE`, 10 `WPLOAD`): each with its layers as
 /// `(layer index, layer)`, in the order drawn (the highest order first,
 /// as `objects::composite_frames_with`).
 pub(super) fn wp_art(data: &crate::assets::GameData) -> WpArt {
@@ -638,7 +702,17 @@ pub(super) fn wp_art(data: &crate::assets::GameData) -> WpArt {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for (kind, name) in [(6, "WPBOARD"), (7, "WPRAM"), (8, "WPFIRE")] {
+    for (kind, name) in [
+        (2, "WPAMBER"),
+        (3, "WPFISH"),
+        (4, "WPWHALE"),
+        (5, "WPREPAIR"),
+        (6, "WPBOARD"),
+        (7, "WPRAM"),
+        (8, "WPFIRE"),
+        (10, "WPLOAD"),
+        (0xb, "WPTREAS"),
+    ] {
         let Some(e) = menus.find(name, ResourceKind::Composite) else {
             continue;
         };
@@ -860,5 +934,78 @@ mod tests {
             scene.fa_mark(t, 0, 0x16);
             assert_eq!(scene.wp_marks.get(&t), None);
         }
+    }
+
+    /// The gather zone's marks (0x4a2050 -> 0x4cacf0): each deposit known
+    /// numbered by its place, of its class's picture, at its cell `x 64 +
+    /// 0xe`, `+ 0x11`; each listed port `WPLOAD`; freed at a new selection
+    /// and the zone's end (miss008's port; needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn gather_zone_marks_are_the_originals() {
+        use openconquest_formats::ObjectClass;
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss008").unwrap();
+        scene.brain = None;
+        scene.ticks = super::super::order::HOLD;
+        let own = 18;
+        let p = scene.object_index(own).unwrap();
+        let (bx, by) = scene.berth_cell(p).unwrap();
+        let owner = scene.objects[p].owner.unwrap();
+        scene.objects[p].asleep = None;
+        let boat = scene
+            .spawn_ship(owner, 0, bx, by, &data, &mut caches)
+            .unwrap();
+        let deposits: Vec<(u32, ObjectClass)> = scene
+            .objects
+            .iter()
+            .filter(|o| super::super::gather::deposit_class(o).is_some())
+            .map(|o| (o.id, o.class))
+            .collect();
+        scene.order_gather_at(&[boat], deposits[0].0, 0).unwrap();
+        let ids: Vec<u32> = deposits.iter().take(3).map(|d| d.0).collect();
+        scene.gather_zones[0].deposits = ids.clone();
+        scene.gather_zones[0].ports = Some(vec![own]);
+        scene.wp_marks.clear();
+        scene.fa_marks_shown(&[boat], true);
+        for (k, (id, class)) in deposits.iter().take(3).enumerate() {
+            let kind = match class {
+                ObjectClass::Amber => 2,
+                ObjectClass::FishZone => 3,
+                _ => 4,
+            };
+            assert_eq!(scene.wp_marks.get(id), Some(&(kind, k as u8 + 1)));
+            let o = &scene.objects[scene.object_index(*id).unwrap()];
+            let got: Vec<(i32, i32)> = scene
+                .wp_mark_layers(o)
+                .iter()
+                .map(|(l, a, b)| (a - l.dx, b - l.dy))
+                .collect();
+            let hidden = match class {
+                ObjectClass::FishZone => scene.shoal_gone(*id),
+                ObjectClass::WhaleZone => scene.leviathan_hidden(*id),
+                _ => false,
+            };
+            if hidden {
+                assert!(got.is_empty());
+            } else {
+                let (cx, cy) = ((o.x / 64.0).floor() as i32, (o.y / 64.0).floor() as i32);
+                assert!(!got.is_empty());
+                assert!(got.iter().all(|&q| q == (cx * 64 + 0xe, cy * 64 + 0x11)));
+            }
+        }
+        assert_eq!(scene.wp_marks.get(&own), Some(&(10, 1)));
+        assert!(!scene
+            .wp_mark_layers(&scene.objects[scene.object_index(own).unwrap()])
+            .is_empty());
+        scene.fa_marks_shown(&[boat], false);
+        assert!(scene.wp_marks.is_empty());
+        scene.fa_marks_shown(&[boat], true);
+        scene.wp_selection = vec![boat];
+        scene.fa_selection_seen(&[]);
+        assert!(scene.wp_marks.is_empty());
     }
 }

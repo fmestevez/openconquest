@@ -232,7 +232,11 @@ impl Scene {
     }
 
     /// Ends the gather zone of `group` (its task replaced, 0x4a1c60).
+    /// Its marks freed for the viewing player (0x4cacf0 with 0).
     pub(super) fn end_zone(&mut self, group: ZoneGroup) {
+        if let Some(z) = self.gather_zones.iter().position(|z| z.group == group) {
+            self.gather_marks(z, false);
+        }
         self.gather_zones.retain(|z| z.group != group);
     }
 

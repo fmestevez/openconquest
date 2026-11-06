@@ -3049,9 +3049,37 @@ at `+0xc4`'s `+0x59 + 0xe`, `+0x5d + 0x11`; fish 0x48e100 (0x59749c,
 0x191), leviathans 0x494f90 (0x597544, 0x192, kind 4) and amber
 0x48a9b8 (kind 2) at their cell; 0x50c020 picks `WPAMBER`, `WPFISH`,
 `WPWHALE`, `WPTREAS` by the class (`+0x50` 400, 0x191, 0x192, 700) over
-the kind and makes nothing for a kind outside 5-8 and 10 otherwise. Not
-ported: the other blocks' marks (0x4cacf0, 0x4cc0b0, 0x4d7cd0) and so
-these classes'.
+the kind and makes nothing for a kind outside 5-8 and 10 otherwise
+(0x4a1f20's kinds: 0x15 / 0x16 8, 0x17 6, 0x18 7, 0x1e 5 `WPREPAIR`,
+0x1f and 0x32 10 `WPLOAD`, 0x20 9, any other 0). Amber's 0x48a800 on
+0xc45d makes it always (kind 2) at its cell `+0x90 x tile w + 0xe`,
+`+0x94 x tile h + 0x11`; fish 0x48e100 keeps it (`+0xcd`, `+0xd1`) and
+makes it (kind 3) only with its picture `+0x111`, at `+0x9d` / `+0xa1`
+the same way, again each tick and at its state 1 (0x48d910); state 0
+(gone below) frees it, state 4 frees and forgets it; a leviathan
+0x494f90 likewise (`+0x105`, `+0x109`, picture `+0x189`, cell `+0xa9`
+/ `+0xad`; its states 0x494400: 0 frees, 1 and 2 make it again;
+message 3 frees). 0x4a2050's other blocks: 0x78 / 0x3d (gather, its
+`+0x39` not null) 0x4cacf0(navy, player, `+0x39`, `+0x28`, show): for
+the viewing player (`navy +0x21`) each known deposit 0x4a1f20 with
+its place and command 0 (so its class's picture), then each port of
+the port list `+0x28` (if any) with its place and 0x1f (`WPLOAD`, a
+LandObj's of the kind sent), or 0x4a2000 each; no 0x51f1f0 lookup.
+0x4a1c60 runs it with 0 at the block's end. The port: `gather_marks`
+from `fa_marks_shown` / `fa_selection_seen` for the selection's human
+zone and from `end_zone`; `wp_mark_layers` places a deposit at its cell,
+fish while not gone below (`shoal_gone`), a leviathan while it has its
+picture (`leviathan_hidden`). Test `gather_zone_marks_are_the_originals`
+(miss008). Not ported: the fish's state 4 forgetting (the port's mark
+kept), and 0x50c020 freeing a target's mark when sent a kind it has no
+picture for (0, 9). Not decoded: the block's `+0x59` that 0x4a2050
+tests (no store found; the port takes it 0 for both blocks). Not
+ported: 0x8c / 0x47 (founding, 0x4cc0b0 -> 0x4cc170 / 0x4cc370, not
+read; made by the brains' and computers' founding, not the viewer's
+selected group in the port) and 0xaa (0x4d7cd0: the block's `+0x11`
+looked up with 0x51f1f0 and, when that returns 0, its `+0x4c` given 0x4a1f20 with 0
+and 0x1f; the task is not in the port); a treasure's 0x4074d0 (kind
+0xb) has no sender among these blocks.
 The tick 0x4d0650 (from 0x4c4f40): with no notices or none heard and
 group `+8 > 0x50` (unsigned): `+8 = 0`, each ship lying still (`+0x58c`
 0) sent (0x4cfe40) when for 0x15/0x16 it has no fire task (`+0x25d &
