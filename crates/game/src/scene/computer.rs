@@ -702,9 +702,20 @@ impl Computer {
 
     /// Ship `id` joins flotilla `f` (0x483fb0: 0x4a0480 op 2), which
     /// posts notice 300 to its group's block if it has one (0x4a1340).
+    /// A ship is in one group at a time (its index at +0x5c): one already
+    /// in the group stays where it is (0x49bd60 returns its place, the
+    /// notice still posted), one in another group leaves that first
+    /// (0x49bef0, notice 0x137).
     fn join(&mut self, f: usize, id: u32) {
+        if !self.flotillas[f].ships.contains(&id) {
+            for g in 0..self.flotillas.len() {
+                if g != f {
+                    self.leave(g, id);
+                }
+            }
+            self.flotillas[f].ships.push(id);
+        }
         let fl = &mut self.flotillas[f];
-        fl.ships.push(id);
         if fl.block != 0 && !fl.no_notices {
             fl.joined.push((id, fl.block, 300, 0));
         }
@@ -8481,7 +8492,13 @@ mod tests {
             let (x, y) = scene.ship_cell(scene.object_index(id).unwrap());
             map[(y * w + x) as usize]
         };
-        let first = sold(&scene);
+        // (A ship sent lying still is sent again by its own step.)
+        let mut first: Vec<u32> = Vec::new();
+        for s in sold(&scene) {
+            if !first.contains(&s) {
+                first.push(s);
+            }
+        }
         assert_eq!(first.len(), 2);
         let left = *ships.iter().find(|s| !first.contains(s)).unwrap();
         assert!(first
@@ -9494,9 +9511,11 @@ mod tests {
         // A human with no ships is attacked only by the grand attack
         // (0x482160), which wants (their ships / 5) x 5 + 12 ready
         // warships: the guards engage only what comes into their zone
-        // (0x4d33c0, 0x4d2b00), never leaving it to chase.
+        // (0x4d33c0, 0x4d2b00), never leaving it to chase. The ships
+        // handed out leave the reserve (0x49bd60), so it asks for more.
+        assert!(max_ready >= 12, "{max_ready} warships ready");
         assert!(
-            attacked || defeat_at.is_some() || max_ready < 12,
+            attacked || defeat_at.is_some(),
             "the computer never attacked with {max_ready} warships ready"
         );
         assert_eq!(

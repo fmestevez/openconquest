@@ -9798,7 +9798,11 @@ at +0xe04. A town hit makes its base's flotillas defend it (letter 0x65)
 and asks the commander for spells (letters 6, 7: 0x4839e0-0x483c40, magic
 order 0x3ee). The commander (0x482160) every turn: after the first attack
 time (easy 22500-27000 ticks, normal 15000-22500, hard 13500-18000) and
-then every 1500-3000 ticks, if the free warships (message 0x66) number
+then every 1500-3000 ticks, if the free warships (message 0x66, 0x4871a0:
+the sum over the flotillas of 0x4829d0's reply `+0xc`, which only guard
+task 7, defence task 8 with `+0x70` < 0, raiders task 9 and fleet task 10
+not in state 0xc give, each its group's ship count, 0x482b80 -> 0x4a0480
+op 6) number
 the enemy's warships rounded down to 5 plus 12 (at most 30 easy, 35
 otherwise), it mails task 8 against one of the enemy's towns (0x487690) to
 every guard, defence, raider and fleet flotilla (mask 0x3c0), 15000-22500
@@ -9915,7 +9919,13 @@ case 8. All take players +0xe18 (-1 at the start, 0x487d47) and classes
 -1, third -1 but where said. A computer's ship also gets its flotilla's
 three when the group gets a new task block (below, 0x4c5b30) and, joined
 (0x483fb0: 0x4a0480 op 2, notice 300 by 0x4a1340 when the group has a
-block, `+0x2d`), from the block's case 300: guard 0x4d1ea0, attack
+block, `+0x2d`; 0x49bd60 keeps a ship in one group, its index at
+`+0x5c`: already in the group it stays and the notice is still posted,
+in another it leaves that one first, 0x49bef0 with notice 0x137. So a
+ship the reserve hands on or a flotilla's launched ship counted first
+by the reserve is no longer the reserve's, whose types 0x4800c0 reads
+as "spare": a ship listed in both made its flotilla never ask for that
+type again, holding battle01's computer at 11 warships), from the block's case 300: guard 0x4d1ea0, attack
 (0x70 / 0x21) 0x4d6960, founding 0x4cba10, dock 0x4db110, treasure
 0x4da0a0, the forts' 0xd2 0x4dc2a0 (a fort joining), the gather zone 0x4c9e30, the move 0x4cc6a0 (only a join
 0x4cc650 sends to the order's cell). Ported (computer.rs
