@@ -118,6 +118,8 @@ pub enum Slot {
     Gangway(u32),
     /// A landing party ashore.
     Party,
+    /// The route's waypoint marks.
+    RouteMarks,
     /// A hook's line.
     Rope,
     /// A wake's droplet or a projectile's trail particle.
@@ -577,6 +579,20 @@ fn sprites<'a>(scene: &'a Scene, time_ms: u64) -> Vec<Sprite<'a>> {
                 Box::new(move |f, sc, cam, lut| draw_layers(f, sc, cam, lut, layers, x, y)),
             );
         }
+    }
+    // The selected group's route's waypoint marks (0x4ced80: the
+    // cursor layer 7).
+    let route_marks = scene.route_mark_layers();
+    if !route_marks.is_empty() {
+        push(
+            7,
+            Slot::RouteMarks,
+            Box::new(move |f, sc, cam, lut| {
+                for (l, left, top) in &route_marks {
+                    draw_image(f, sc, cam, lut, &l.image, *left, *top);
+                }
+            }),
+        );
     }
     // Landing parties ashore: `max(20000 - feet, 10000)` (0x421bb0).
     for (layers, x, y, feet) in scene.parties_shown() {

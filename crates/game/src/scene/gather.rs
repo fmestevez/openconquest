@@ -88,7 +88,14 @@ pub struct GatherZone {
     pub done: bool,
 }
 
-/// A zone's route `+0x61` (0xc bytes, 0x4ce5e0).
+/// Whose block a route `+0x61` is (the human groups').
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Owner {
+    Zone(usize),
+    Move(usize),
+}
+
+/// A block's route `+0x61` (0xc bytes, 0x4ce5e0).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Route {
     /// `R[0]`: 0x4ce8a0's count (an entry's index + 1 when it appends,
@@ -100,6 +107,132 @@ pub struct Route {
     /// `R[2]`: where each ship sent along it is bound (0x11-byte entries
     /// `{ship, id, dir, x, y}`, 0x4ce8a0).
     pub progress: Vec<Progress>,
+    /// Each waypoint's mark (the entry's `+8`, `WPMOVE`) shown, for the
+    /// viewing player (not saved: the interface's).
+    #[serde(skip)]
+    pub marks: Vec<bool>,
+}
+
+impl Route {
+    /// 0x4ce6c0(player, route, x, y, place, -1): cell `(x, y)` appended
+    /// to the waypoints unless listed (1 returned then, else 0: here
+    /// `None`, else the new entry's index). For the viewing player
+    /// (`navy +0x21`) the entry's mark is made (0x4ced80) and, with
+    /// `place`, put at its cell (0x4ced10); every call of the human's
+    /// orders places it.
+    pub fn append(&mut self, x: i32, y: i32) -> Option<usize> {
+        if self.waypoints.contains(&(x, y)) {
+            return None;
+        }
+        self.waypoints.push((x, y));
+        self.marks.resize(self.waypoints.len(), false);
+        let k = self.waypoints.len() - 1;
+        self.marks[k] = true;
+        Some(k)
+    }
+
+    /// 0x4cea20(ship, route, &dir): ship `id`'s progress entry: its cell
+    /// `y*W + x` (0 for the entry's `(-1, -1)`) and its way; none, -1 and
+    /// way 0.
+    pub fn at(&self, id: u32, w: i32) -> (i32, i8) {
+        match self.progress.iter().find(|p| p.ship == id) {
+            None => (-1, 0),
+            Some(p) if p.at == (-1, -1) => (0, p.dir),
+            Some(p) => (p.at.1 * w + p.at.0, p.dir),
+        }
+    }
+
+    /// 0x4ce7c0(route, x, y, &end, dir): the waypoint after `(x, y)` the
+    /// way `dir` (1 and up forward, else back), as a cell `y*W + x`, and
+    /// whether the walk ran off the route's end; past the end only a way
+    /// of 2 (forward) or -2 (back) goes round to the other end. `(x, y)`
+    /// not a waypoint: -1.
+    pub fn next(&self, x: i32, y: i32, dir: i8, w: i32) -> (i32, bool) {
+        let wp = &self.waypoints;
+        let n = wp.len();
+        let Some(k) = wp.iter().position(|&c| c == (x, y)) else {
+            return (-1, false);
+        };
+        let cell = |c: (i32, i32)| c.1 * w + c.0;
+        if dir < 1 {
+            if k >= 1 {
+                return (cell(wp[k - 1]), false);
+            }
+            if dir != -2 {
+                return (-1, true);
+            }
+            (cell(wp[n - 1]), true)
+        } else {
+            if k + 1 < n {
+                return (cell(wp[k + 1]), false);
+            }
+            if dir != 2 {
+                return (-1, true);
+            }
+            (cell(wp[0]), true)
+        }
+    }
+
+    /// 0x4ce8a0(ship, route, x, y, remove, mark) for ship `id` in cell
+    /// `at`: its progress entry, with `remove` and a way not looping
+    /// (|dir| != 2), taken out (`R[0]` less 1) and nothing else. Then,
+    /// the ship within 0x557480 distance 2 of `(x, y)`, notice 0x136 with
+    /// that cell (0x4a1700; returned true for the caller to post); the
+    /// entry set to `(x, y)` (and the way to `mark` if not 0), or, none,
+    /// appended `{ship, mark, (x, y)}` (`R[0]` its index + 1).
+    pub fn set_progress(
+        &mut self,
+        id: u32,
+        at: (i32, i32),
+        x: i32,
+        y: i32,
+        remove: bool,
+        mark: i8,
+    ) -> bool {
+        let k = self.progress.iter().position(|p| p.ship == id);
+        if let Some(k) = k {
+            if remove && self.progress[k].dir.unsigned_abs() != 2 {
+                self.progress.remove(k);
+                self.count -= 1;
+                return false;
+            }
+        }
+        let arrived = walk_path::dist2(x, y, at.0, at.1) < 2;
+        match k {
+            Some(k) => {
+                self.progress[k].at = (x, y);
+                if mark != 0 {
+                    self.progress[k].dir = mark;
+                }
+            }
+            None => {
+                self.progress.push(Progress {
+                    ship: id,
+                    dir: mark,
+                    at: (x, y),
+                });
+                self.count = self.progress.len() as i32;
+            }
+        }
+        arrived
+    }
+
+    /// 0x4a2050's route: each waypoint's mark made and placed (0x4ced10)
+    /// or freed (0x4cef10).
+    pub fn show_marks(&mut self, show: bool) {
+        self.marks = vec![show; self.waypoints.len()];
+    }
+
+    /// The marks shown: each waypoint's top left `(x*64 + 14, y*64 + 18)`
+    /// (0x4ced10) and number, its index + 1 (0x4ced80).
+    pub fn marks_shown(&self) -> impl Iterator<Item = (i32, i32, u8)> + '_ {
+        self.waypoints
+            .iter()
+            .zip(&self.marks)
+            .enumerate()
+            .filter(|(_, (_, &m))| m)
+            .map(|(k, (&(x, y), _))| (x * 64 + 14, y * 64 + 18, (k as u8).wrapping_add(1)))
+    }
 }
 
 /// An entry of a route's `R[2]`.
@@ -229,6 +362,7 @@ impl Scene {
             .retain(|z| !(matches!(z.group, ZoneGroup::Human(_)) && z.ships.is_empty()));
         self.leave_attacks(ids);
         self.leave_fleets(ids);
+        self.leave_waypoint_moves(ids);
     }
 
     /// Ends the gather zone of `group` (its task replaced, 0x4a1c60).
@@ -258,6 +392,8 @@ impl Scene {
             self.human_attacks[z].notices.push(notice);
         } else if let Some(z) = self.ship_fleet(id) {
             self.fleet_attacks[z].notices.push(notice);
+        } else if let Some(z) = self.ship_waypoint_move(id) {
+            self.waypoint_moves[z].notices.push(notice);
         } else {
             for ai in &mut self.computers.players {
                 if ai.post_notice(id, code, class) {
@@ -319,8 +455,8 @@ impl Scene {
     /// any set group `+0x10`, the first deposit only). (Not ported: the
     /// message 0xc45d 0x4a1f20 sends the interface on the Shift add. A
     /// Shift 0x78 to a group of another block moves that block's `+0x61`
-    /// over and skips the start's dispatch: the port's human groups have
-    /// no other blocks, their waypoint moves being per ship.)
+    /// over and skips the start's dispatch: here a waypoint move's or
+    /// fleet attack's group starts a new zone, its route gone.)
     pub fn order_gather_at(&mut self, ships: &[u32], deposit: u32, keys: u8) -> Result<(), String> {
         let d = self.object_index(deposit).ok_or("No such deposit")?;
         let class = deposit_class(&self.objects[d]).ok_or("Nothing to gather there")?;
@@ -425,16 +561,13 @@ impl Scene {
     /// `+0x61` made if null (0x4ce5e0), then cell `(x, y)` appended to
     /// its waypoints unless listed (0x4ce6c0 with -1). No ship is sent:
     /// 0x4cec00 runs only for a cell listed in a route just made, which
-    /// cannot be. (Not ported: the flag picture 0x4ced80 puts at the
-    /// waypoint for its player, 0x4ced10 at `(x*64 + 14, y*64 + 18)`.)
+    /// cannot be. The waypoint's mark is made and placed (`Route::append`).
     pub fn order_zone_waypoint(&mut self, ships: &[u32], x: i32, y: i32) -> Result<(), String> {
         let z = self.selection_zone(ships).ok_or("No such group")?;
-        let route = self.gather_zones[z]
+        self.gather_zones[z]
             .route
-            .get_or_insert_with(Route::default);
-        if !route.waypoints.contains(&(x, y)) {
-            route.waypoints.push((x, y));
-        }
+            .get_or_insert_with(Route::default)
+            .append(x, y);
         Ok(())
     }
 
@@ -1129,16 +1262,16 @@ impl Scene {
         if s.task.is_some() || s.goal.is_none() {
             return None;
         }
-        let (_, dir) = self.route_at(z, id);
+        let (_, dir) = self.route_at(Owner::Zone(z), id);
         let w = self.nav.width as i32;
         let n = w * self.nav.height as i32;
         let c = cell as i32;
-        let (nx, end) = self.route_next(z, c % w, c / w, dir);
+        let (nx, end) = self.route_next(Owner::Zone(z), c % w, c / w, dir);
         if nx < 1 || nx >= n {
             if !end {
                 return None;
             }
-            self.route_progress(z, i, -1, -1, true, 0);
+            self.route_progress(Owner::Zone(z), i, -1, -1, true, 0);
             return match self.deferred_index(z, id) {
                 Some(k) => {
                     self.zone_fire_deferred(z, k, i);
@@ -1148,7 +1281,7 @@ impl Scene {
             };
         }
         self.zone_move(id, nx % w, nx / w);
-        self.route_progress(z, i, nx % w, nx / w, end, 0);
+        self.route_progress(Owner::Zone(z), i, nx % w, nx / w, end, 0);
         None
     }
 
@@ -1935,7 +2068,7 @@ impl Scene {
 
     /// 0x4cf070(group, ship, x, y): command 0x14 `{x, y, 0}`, a plain move
     /// to the cell, priority 0, through the outbox.
-    fn zone_move(&mut self, ship: u32, x: i32, y: i32) {
+    pub(super) fn zone_move(&mut self, ship: u32, x: i32, y: i32) {
         let t = TILE_SIZE as f32;
         self.post(Order::Move {
             ship,
@@ -1953,95 +2086,89 @@ impl Scene {
         )
     }
 
-    /// 0x4cea20(ship, route, &dir): ship `id`'s progress entry: its cell
-    /// `y*W + x` (0 for the entry's `(-1, -1)`) and its way; none, -1 and
-    /// way 0.
-    fn route_at(&self, z: usize, id: u32) -> (i32, i8) {
-        let w = self.nav.width as i32;
-        let Some(r) = self.gather_zones[z].route.as_ref() else {
-            return (-1, 0);
-        };
-        match r.progress.iter().find(|p| p.ship == id) {
-            None => (-1, 0),
-            Some(p) if p.at == (-1, -1) => (0, p.dir),
-            Some(p) => (p.at.1 * w + p.at.0, p.dir),
+    /// The route `+0x61` of a human group's block.
+    pub(super) fn route_of(&self, o: Owner) -> Option<&Route> {
+        match o {
+            Owner::Zone(z) => self.gather_zones[z].route.as_ref(),
+            Owner::Move(z) => Some(&self.waypoint_moves[z].route),
         }
     }
 
-    /// 0x4ce7c0(route, x, y, &end, dir): the waypoint after `(x, y)` the
-    /// way `dir` (1 and up forward, else back), as a cell `y*W + x`, and
-    /// whether the walk ran off the route's end; past the end only a way
-    /// of 2 (forward) or -2 (back) goes round to the other end. `(x, y)`
-    /// not a waypoint: -1.
-    fn route_next(&self, z: usize, x: i32, y: i32, dir: i8) -> (i32, bool) {
-        let w = self.nav.width as i32;
-        let Some(r) = self.gather_zones[z].route.as_ref() else {
-            return (-1, false);
-        };
-        let wp = &r.waypoints;
-        let n = wp.len();
-        let Some(k) = wp.iter().position(|&c| c == (x, y)) else {
-            return (-1, false);
-        };
-        let cell = |c: (i32, i32)| c.1 * w + c.0;
-        if dir < 1 {
-            if k >= 1 {
-                return (cell(wp[k - 1]), false);
-            }
-            if dir != -2 {
-                return (-1, true);
-            }
-            (cell(wp[n - 1]), true)
-        } else {
-            if k + 1 < n {
-                return (cell(wp[k + 1]), false);
-            }
-            if dir != 2 {
-                return (-1, true);
-            }
-            (cell(wp[0]), true)
+    pub(super) fn route_of_mut(&mut self, o: Owner) -> Option<&mut Route> {
+        match o {
+            Owner::Zone(z) => self.gather_zones[z].route.as_mut(),
+            Owner::Move(z) => Some(&mut self.waypoint_moves[z].route),
         }
     }
 
-    /// 0x4ce8a0(ship, route, x, y, remove, mark): the ship's progress
-    /// entry, with `remove` and a way not looping (|dir| != 2), taken out
-    /// (`R[0]` less 1) and nothing else. Then, the ship within 0x557480
-    /// distance 2 of `(x, y)`, notice 0x136 with that cell (0x4a1700);
-    /// the entry set to `(x, y)` (and the way to `mark` if not 0), or,
-    /// none, appended `{ship, mark, (x, y)}` (`R[0]` its index + 1).
-    fn route_progress(&mut self, z: usize, i: usize, x: i32, y: i32, remove: bool, mark: i8) {
+    /// 0x4ceab0(ship, route, cell, &closer, &index): of the waypoints but
+    /// the ship's own cell, the one with the greatest value of the
+    /// wavefront 0x4a1e90 from the ship (its draught, limit 5000, bigger
+    /// nearer; the first kept on a tie), as a cell `y*W + x`, with
+    /// whether its value is below `cell`'s (`closer`: `cell` nearer than
+    /// any waypoint). None (no waypoints but at the ship, no wavefront):
+    /// -1, `closer` not written (`None`). `cell` -1 (0x4cf550's call)
+    /// reads the word before the wavefront, the heap's header of the
+    /// block 0x4a1e90 took (0x557770 -> malloc), not the game's: `closer`
+    /// is `None` then too.
+    pub(super) fn route_best(&self, r: &Route, i: usize, cell: i32) -> (i32, Option<bool>) {
+        let w = self.nav.width as i32;
+        let Some(s) = self.objects[i].ship.as_ref() else {
+            return (-1, None);
+        };
+        let at = self.ship_cell(i);
+        let Some(f) = self.nav.wavefront(at, deep_draught(s.kind), 5000) else {
+            return (-1, None);
+        };
+        let mut best: Option<(i32, i16)> = None;
+        for &c in &r.waypoints {
+            if c == at {
+                continue;
+            }
+            let k = c.1 * w + c.0;
+            let v = f[k as usize];
+            if best.is_none_or(|(_, b)| b < v) {
+                best = Some((k, v));
+            }
+        }
+        let Some((k, v)) = best else {
+            return (-1, None);
+        };
+        let closer = (cell >= 0 && (cell as usize) < f.len()).then(|| v < f[cell as usize]);
+        (k, closer)
+    }
+
+    /// 0x4cea20 on the route of `o` (`Route::at`).
+    pub(super) fn route_at(&self, o: Owner, id: u32) -> (i32, i8) {
+        let w = self.nav.width as i32;
+        self.route_of(o).map_or((-1, 0), |r| r.at(id, w))
+    }
+
+    /// 0x4ce7c0 on the route of `o` (`Route::next`).
+    pub(super) fn route_next(&self, o: Owner, x: i32, y: i32, dir: i8) -> (i32, bool) {
+        let w = self.nav.width as i32;
+        self.route_of(o)
+            .map_or((-1, false), |r| r.next(x, y, dir, w))
+    }
+
+    /// 0x4ce8a0 on the route of `o` for ship `i` (`Route::set_progress`),
+    /// the notice 0x136 it asks for posted (0x4a1700).
+    pub(super) fn route_progress(
+        &mut self,
+        o: Owner,
+        i: usize,
+        x: i32,
+        y: i32,
+        remove: bool,
+        mark: i8,
+    ) {
         let id = self.objects[i].id;
         let at = self.ship_cell(i);
-        let Some(r) = self.gather_zones[z].route.as_mut() else {
+        let Some(r) = self.route_of_mut(o) else {
             return;
         };
-        let k = r.progress.iter().position(|p| p.ship == id);
-        if let Some(k) = k {
-            if remove && r.progress[k].dir.unsigned_abs() != 2 {
-                r.progress.remove(k);
-                r.count -= 1;
-                return;
-            }
-        }
-        if walk_path::dist2(x, y, at.0, at.1) < 2 {
+        if r.set_progress(id, at, x, y, remove, mark) {
             self.post_arrival(id, x, y);
-        }
-        let r = self.gather_zones[z].route.as_mut().unwrap();
-        match k {
-            Some(k) => {
-                r.progress[k].at = (x, y);
-                if mark != 0 {
-                    r.progress[k].dir = mark;
-                }
-            }
-            None => {
-                r.progress.push(Progress {
-                    ship: id,
-                    dir: mark,
-                    at: (x, y),
-                });
-                r.count = r.progress.len() as i32;
-            }
         }
     }
 
@@ -2136,7 +2263,7 @@ impl Scene {
         let at = self.ship_cell(i);
         if (at.0 - p.0).abs() > 1 || (at.1 - p.1).abs() > 1 || n < 2 {
             self.zone_move(id, p.0, p.1);
-            self.route_progress(z, i, -1, -1, false, dir);
+            self.route_progress(Owner::Zone(z), i, -1, -1, false, dir);
             return 1;
         }
         let k2 = if s >= 1 {
@@ -2152,7 +2279,7 @@ impl Scene {
         };
         let q = wp[k2];
         self.zone_move(id, q.0, q.1);
-        self.route_progress(z, i, q.0, q.1, false, dir);
+        self.route_progress(Owner::Zone(z), i, q.0, q.1, false, dir);
         0
     }
 
@@ -2494,12 +2621,12 @@ impl Scene {
                     continue;
                 };
                 if route {
-                    let (pos, dir) = self.route_at(z, id);
+                    let (pos, dir) = self.route_at(Owner::Zone(z), id);
                     if pos >= 0 {
                         if self.objects[i].ship.as_ref().unwrap().move_state != 0 {
                             continue;
                         }
-                        let (nx, end) = self.route_next(z, pos % w, pos / w, dir);
+                        let (nx, end) = self.route_next(Owner::Zone(z), pos % w, pos / w, dir);
                         if !end {
                             if 0 < nx && nx < n {
                                 self.zone_move(id, nx % w, nx / w);
@@ -2549,13 +2676,13 @@ impl Scene {
                 continue;
             };
             if route {
-                let (pos, dir) = self.route_at(z, id);
+                let (pos, dir) = self.route_at(Owner::Zone(z), id);
                 if pos >= 0 {
                     if self.objects[i].ship.as_ref().unwrap().move_state != 0 {
                         on_route = true;
                         continue;
                     }
-                    let (nx, end) = self.route_next(z, pos % w, pos / w, dir);
+                    let (nx, end) = self.route_next(Owner::Zone(z), pos % w, pos / w, dir);
                     if !end && 0 < nx && nx < n {
                         self.zone_move(id, nx % w, nx / w);
                         continue;

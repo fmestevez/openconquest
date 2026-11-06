@@ -7150,21 +7150,22 @@ impl App {
         let Some(target) = self.world_at(pos) else {
             return;
         };
-        // Shift on the ships of a group running a gather zone: the click's
-        // cell goes to the group as a waypoint of the zone's route
-        // (0x49de70), once for the selection.
+        // Shift: the click's cell goes to the selection's group as a
+        // waypoint of its block's route (0x49de70 with key flag 4), once
+        // for the selection.
         if is_ship && self.modifiers.shift_key() {
-            let ships = self.selection();
-            if self.scene.selection_zone(&ships).is_some() {
-                if k == 0 {
-                    let t = openconquest_formats::map::TILE_SIZE as f32;
-                    let (x, y) = ((target.0 / t).floor() as i32, (target.1 / t).floor() as i32);
-                    if let Err(e) = self.issue(Order::ZoneWaypoint { ships, x, y }) {
-                        self.say(e);
-                    }
+            if k == 0 {
+                let ships = self.selection();
+                let t = openconquest_formats::map::TILE_SIZE as f32;
+                let (x, y) = ((target.0 / t).floor() as i32, (target.1 / t).floor() as i32);
+                // The tick follows the move mode whatever the keys
+                // (0x518734).
+                match self.issue(Order::ShiftMove { ships, x, y }) {
+                    Ok(_) => self.sent = Some((target.0, target.1, self.time_ms)),
+                    Err(e) => self.say(e),
                 }
-                return;
             }
+            return;
         }
         let (dx, dy) = group_offset(k);
         let target = (target.0 + dx, target.1 + dy);

@@ -3106,10 +3106,33 @@ gather zone's or attack zone's group of the same ships taken over, its
 `+8` kept); forts of the selection take the attack themselves; the port
 refuses a target the attack pointer would not take (a friend; for
 board and ram a non-ship), silently, as the click's refusals; 0x51f1f0
-is the port's id lookup (an object, a jam or a ship sinking). Not ported: the route `+0x61` (kept
-only from a block of another kind under Shift) with 0x4cfe40's route
-branch (0x4cea20, 0x4ceab0, 0x4ce8a0), the held orders `+0x34`
-(0x4cffb0, 0x4d0030, 0x4d0090) and 0x136's case; 300's `#` (the port posts no 300 to a human group). What they do: 0x4d0210's 0x13a-0x13d, the ship in the group:
+is the port's id lookup (an object, a jam or a ship sinking). The route
+`+0x61` (see **Route** under the gather zone) comes from a block of
+another kind ended under Shift (0x4d04a0 takes it before 0x4a1c60, so
+it keeps its marks; without Shift it goes with that block) or from
+Shift move clicks on the group (0x49de70, appended, no ship sent).
+0x4cfe40 with one: R = 0x4cfdf0's record; a ship not on it (0x4cea20 <
+0) gets 0x4ceab0(ship, route, `+0x10`, &closer): the waypoint other
+than the ship's cell with the greatest value of the wavefront 0x4a1e90
+(draught `+0x592`, limit 5000; the first kept, strict `>`), `closer` =
+its value below `+0x10`'s; none found, `closer` is not written and the
+caller's (its group pointer, never 0) reads as set: R given at once
+(0x4cfc90), return 1, nothing held; found and not `closer`: a plain
+move to it (0x4cf070) and 0x4ce8a0(-1, -1, 0, way 1). A ship on it
+whose way byte (`movsx` at 0x4cff11) equals the waypoints' count less 1
+gets R given too. Then R is held (0x4cffb0: list made if null, the
+ship's earlier entry removed, appended); return given + 1 (unused).
+0x4d0210's 0x136 (route set, the ship in the group; no 0x4a0230 test
+here): 0x4ce7c0 from the cell with its way; `0 < nx < W*H`: move there
+and 0x4ce8a0(nx, remove = end); else with end: 0x4ce8a0(-1, -1, remove
+1), then with `+0x34` null or no entry for the ship (0x4d0030 with 0)
+R given (0x4cfdf0 + 0x4cfc90), heard; else 0x4d0090: the entry (its
+ship the one asked), replaced by a fresh record when its `+4` / `+0xc`
+differ from the block's `+0xc` / `+0x14`, given, removed, not heard.
+Port: `FleetAttack.route` / `held`, `fa_send`, `fa_command`,
+`fa_notices`; the notices posted while the list is walked wait for the
+next tick (the walk counts down from its first count). Not ported:
+300's `#` (the port posts no 300 to a human group). What they do: 0x4d0210's 0x13a-0x13d, the ship in the group:
 0x4cfa70(group, the record's `+0x10` (prey), 1) finds the entry of the
 block's target list `+0x30` whose `+4` is the prey and removes it (-1
 none); -1, or 0x4cfad0 true, sends the ship again (0x4cfe40), counted
@@ -3540,8 +3563,8 @@ list and escorts).
   route `+0x61` kept) and its block rewritten. On a group whose block is
   another order: without key flag 4 that block's route is freed
   (0x4ce5a0); with it the route is moved to the new block and the start's
-  dispatch is skipped (`local_8`). The port's human groups have no other
-  blocks (their waypoint moves are per ship), so that case never arises.
+  dispatch is skipped (`local_8`). Not ported (see **Route**): the port's
+  0x78 on a waypoint move's group starts a new zone.
 - **Start** (0x4c8a80 tail): 0x4c5b90 mode 0 lists the rectangle's
   deposits of the class and knows them (`+0x39`); if any: 0x4c5f40 splits
   the group into merchants (types 0/1, with their room 0x4be800(3),
@@ -3731,12 +3754,59 @@ list and escorts).
   (0x4ce6c0 with -1); no ship is sent (0x4cec00 needs the cell listed in
   a route just made: never). Without Shift the group gets a move order
   (0x4ccc30), which ends the zone; with Shift on a group with no block or
-  a move block, a waypoint move (0x4cf2c0, not ported: the port's
-  per-ship waypoints). The brain and the computer never make one. The
-  marker picture (0x4ced80, placed by 0x4ced10 at `(x*64 + 14, y*64 +
-  18)`) is not ported. Port: `GatherZone.route`, `Order::ZoneWaypoint`
-  (app.rs: Shift right click on a zone group's own ships, the click's
-  cell, once for the selection).
+  a move block, a waypoint move (0x4cf2c0, below). The brain and the
+  computer never make one. Port: `GatherZone.route`,
+  `Order::ShiftMove` -> `Scene::order_shift_move` (app.rs: a Shift right
+  click with ships selected, the click's cell, once for the selection,
+  the green tick after it as after a move: 0x518734 goes by the pointer
+  mode). Not ported: Shift on a human attack block `{0x70, 0x20}` (its
+  route; the click does nothing there), a Shift 0x78 taking a waypoint
+  move's route (0x4c8a80's `local_8`, the start skipped), and 0x49d790
+  case 8 (button 0x23 sub 8: waypoints on a 100/2 block whose `+0x14`
+  is 2, looping, through 0x4cf2c0 with group 1).
+  - **The marks** (`Route.marks`, not saved): 0x4ce6c0 for the viewing
+    player (`navy +0x21`) makes the new entry's picture 0x4ced80(index):
+    the controlm composite `WPMOVE` (kind 8, 0x545ef0 cursor layer 7),
+    its layers by the mask `1 << n / 10 | 1 << n % 10 + 10 | 0x100000`
+    for `n` = index + 1 in 1..99, else 0x100000; with its `place`
+    argument (1 from every human click) 0x4ced10 puts it at `(x*64 + 14,
+    y*64 + 18)` (`+0x59` / `+0x5d`, 0x55ec70). 0x4a2050(navy, player,
+    show) (Shift pressed / let go, and with 0 at a new selection and at
+    0xc455), after its block's own marks, walks the selected group's
+    route: 0x4ced10 (made if missing, placed) or 0x4cef10 (freed). The
+    route's end (0x4ce5a0 -> 0x4cecb0) frees them. Port:
+    `Scene::route_marks`, `route_mark_layers` (drawn at depth 7).
+  - **The waypoint move `{100, 2}`** (port `scene/waypoint_move.rs`).
+    0x49de70 with flag 4 on a group whose block is null or 100: payload
+    `{x, y, 1, 0, 1, &cell}`, 0x4cf2c0(player, group, payload, place 1,
+    from-group 0). A block not 100/2 ended (0x4a1c60). Null: 0x4cef80
+    (0x65 bytes zeroed; `{100, 2, now, x, y, 1, 0}`, its route made
+    0x4ce5e0 and the cell appended 0x4ce6c0 with -1, the notices
+    0x4a1150), the route new. 100/2: rewritten `{100, 2, now, payload}`,
+    the route made if null (new) and the cell appended. Only with a new
+    route: each ship (class 200) of the group a plain move to the route's
+    first waypoint (0x4cf070) and 0x4ce8a0(-1, -1, 0, mark `+0x14`).
+    (With from-group set, 0x4c56e0's group centre is appended first, at
+    the start, and the ships go to the second; only case 8 sets it.)
+    Its notices 0x4cf0b0 (newest first): 300, the ship in the group:
+    no route 0x4cc650, heard; else 0x4ceab0's best waypoint, a move
+    there and 0x4ce8a0(-1, -1, 0, `+0x14`); then `#` (0x4c42f0). 0x136
+    with a route and the ship in the group, unless it is alone in it
+    (0x4a0230: `navy +0x20` 0, 0x49c100 its group's count 1 or its group
+    -1) and the cell is not its own: 0x4ce7c0 from the cell with its
+    way; `0 < nx < W*H`: a move there and 0x4ce8a0(nx, remove = end, 0);
+    past the end nothing (the ship stays, its progress kept). Others
+    dropped. Its tick 0x4cf550: with no notices or none heard (with a
+    route only 300 is heard: never in the port) and group `+8` over 100,
+    `+8` = 0 and each ship: a blow `+0x691`: 0x4a21c0 and 0x4cf760;
+    lying still (`+0x58c` 0) and on the route (0x4cea20 >= 0): at its
+    entry (0) 0x4ceab0 with cell -1, whose `closer` reads `flood[-1]`,
+    the heap header before the wavefront (not the game's: the port sends
+    nothing); else 0x4ce7c0 from its progress cell; not past the end and
+    `0 < nx < W*H`: a move there and, that its own cell, 0x4ce8a0(nx, 0,
+    0) (posting its 0x136). `+8` += `+0xe2`. Port: `WaypointMove`,
+    `order_shift_move`, `run_waypoint_moves`; a plain move (0x4ccc30)
+    or any other order takes the ships out (`leave_waypoint_moves`).
   - The route flag: 0x4c96e0's gather (its unload with no room goes with
     route 0), 0x4c8f20 / 0x4c9270 (from 0x4c9930 and 0x4ca290 with it),
     0x4c9ae0 (the route's being set; its first 0x4c9930 with route 0) and

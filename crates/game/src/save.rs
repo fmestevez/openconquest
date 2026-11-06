@@ -112,6 +112,9 @@ pub struct SaveGame {
     /// The human groups' fleet attack blocks.
     #[serde(default)]
     pub fleet_attacks: Vec<crate::scene::FleetAttack>,
+    /// The human groups' waypoint moves.
+    #[serde(default)]
+    pub waypoint_moves: Vec<crate::scene::WaypointMove>,
     #[serde(default)]
     pub zone_serial: u32,
     /// The navy's generator.

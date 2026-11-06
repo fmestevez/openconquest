@@ -528,6 +528,8 @@ pub struct Scene {
     pub human_attacks: Vec<human_attack::HumanAttack>,
     /// The human groups' fleet attack blocks `{0x74, 0x15}`.
     pub fleet_attacks: Vec<fleet_attack::FleetAttack>,
+    /// The human groups' waypoint moves `{100, 2}`.
+    pub waypoint_moves: Vec<waypoint_move::WaypointMove>,
     /// The last human group's serial number.
     pub zone_serial: u32,
     /// The navy's generator (`[0x5c7504] +0x18`), until its first draw.
@@ -652,6 +654,7 @@ pub mod unload;
 pub mod volcano;
 pub(crate) mod walk_path;
 mod walkers;
+mod waypoint_move;
 mod yard;
 pub use brain::{Brain, EASY, HARD, NORMAL};
 pub use computer::Computers;
@@ -671,6 +674,7 @@ pub use story::goal_name;
 pub use story::{Carry, Goal};
 pub use towns::Towns;
 pub use walkers::{anchor_walker_frames, walker_frame_ms, walker_sequence, Jam, Lair, Walker};
+pub use waypoint_move::WaypointMove;
 pub use yard::ShipOrder;
 #[cfg(test)]
 mod tests;
@@ -951,6 +955,7 @@ impl Scene {
             gather_zones: Vec::new(),
             human_attacks: Vec::new(),
             fleet_attacks: Vec::new(),
+            waypoint_moves: Vec::new(),
             zone_serial: 0,
             navy_lcg: None,
             ticks: 0,
@@ -1238,6 +1243,7 @@ impl Scene {
             gather_zones: self.gather_zones.clone(),
             human_attacks: self.human_attacks.clone(),
             fleet_attacks: self.fleet_attacks.clone(),
+            waypoint_moves: self.waypoint_moves.clone(),
             zone_serial: self.zone_serial,
             navy_lcg: self.navy_lcg,
             ticks: self.ticks,
@@ -1422,6 +1428,7 @@ impl Scene {
         scene.gather_zones = save.gather_zones.clone();
         scene.human_attacks = save.human_attacks.clone();
         scene.fleet_attacks = save.fleet_attacks.clone();
+        scene.waypoint_moves = save.waypoint_moves.clone();
         scene.zone_serial = save.zone_serial;
         scene.navy_lcg = save.navy_lcg;
         scene.ticks = save.ticks;
@@ -2760,6 +2767,7 @@ impl Scene {
             self.run_gather_zones();
             self.run_human_attacks();
             self.run_fleet_attacks();
+            self.run_waypoint_moves();
             self.run_brain();
             self.step_fort_draws();
             self.heal_aboard();

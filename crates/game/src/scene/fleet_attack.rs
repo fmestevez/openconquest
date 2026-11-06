@@ -7,7 +7,7 @@
 //! still again every 81 ticks (0x4d0650). See docs/FORMATS.md ("The
 //! fleet attack task").
 
-use super::gather::Notice;
+use super::gather::{Notice, Route};
 use super::{Order, Scene};
 use openconquest_formats::map::TILE_SIZE;
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,41 @@ pub struct FleetAttack {
     pub extra: u32,
     /// Block `+0x30`.
     pub queue: Vec<Queued>,
+    /// Block `+0x34`: the commands held while the route runs (0x4cffb0),
+    /// one per ship.
+    #[serde(default)]
+    pub held: Vec<Held>,
+    /// Block `+0x61`: a route kept from the group's block of another
+    /// kind under Shift (0x4d04a0), or made by Shift move clicks on the
+    /// group (0x49de70).
+    #[serde(default)]
+    pub route: Option<Route>,
+}
+
+/// A command record (0x4cfdf0, 0x18 bytes `{ship id, +0xc, +0x10, +0x14,
+/// +0x1c, +0x18}`), as given to 0x4cfc90 and held in `+0x34`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Held {
+    pub ship: u32,
+    pub target: u32,
+    pub cell: i32,
+    pub command: u8,
+    pub extra: u32,
+    pub sub: u8,
+}
+
+impl FleetAttack {
+    /// 0x4cfdf0: the block's command for `ship`.
+    fn record(&self, ship: u32) -> Held {
+        Held {
+            ship,
+            target: self.target,
+            cell: self.cell,
+            command: self.command,
+            extra: self.extra,
+            sub: self.sub,
+        }
+    }
 }
 
 /// 0x4d0650's period: the ships are sent again once group `+8` is over
@@ -74,9 +109,9 @@ impl Scene {
     /// kept): `+8` now, `+0xc` the target, `+0x14` the command, `+0x18`
     /// 7, `+0x1c` 0, `+0x10` the target's cell (not found: kept; a jam
     /// 0). The target queued (0x4cfbc0) and, found (0x51f1f0), each ship
-    /// sent (0x4cfe40). Not ported: a route `+0x61` kept from a block of
-    /// another kind under Shift, and with it 0x4cfe40's route branch,
-    /// the held orders `+0x34` and notice 0x136's case.
+    /// sent (0x4cfe40). A block of another kind ended under Shift gives
+    /// the new one its route `+0x61` (taken before 0x4a1c60, so kept
+    /// with its marks); without, it goes with the old block (0x4ce5a0).
     pub fn order_fleet_attack(
         &mut self,
         ships: &[u32],
@@ -129,11 +164,14 @@ impl Scene {
             Some(z) => z,
             None => {
                 // The group: the selection's own (its other block ended,
-                // its counter kept), or a new one.
+                // its counter kept, with Shift its route taken first), or
+                // a new one.
                 let mut elapsed = 0;
+                let mut route = None;
                 let serial = if let Some(g) = self.selection_zone(&group) {
                     let zone = self.gather_zones.remove(g);
                     elapsed = zone.elapsed;
+                    route = zone.route;
                     match zone.group {
                         super::gather::ZoneGroup::Human(s) => s,
                         _ => unreachable!(),
@@ -142,6 +180,11 @@ impl Scene {
                     let a = self.human_attacks.remove(g);
                     elapsed = a.elapsed;
                     a.serial
+                } else if let Some(g) = self.selection_waypoint_move(&group) {
+                    let m = self.waypoint_moves.remove(g);
+                    elapsed = m.elapsed;
+                    route = Some(m.route);
+                    m.serial
                 } else {
                     self.leave_zones(&group);
                     self.zone_serial += 1;
@@ -159,6 +202,8 @@ impl Scene {
                     sub: 0,
                     extra: 0,
                     queue: Vec::new(),
+                    held: Vec::new(),
+                    route: route.filter(|_| keys & 4 != 0),
                 });
                 self.fleet_attacks.len() - 1
             }
@@ -305,18 +350,29 @@ impl Scene {
     }
 
     /// 0x4d0210: the notices, newest first, each removed after its case,
-    /// while the block lasts; `None` when it ended (0x4a1c60, the notices
-    /// freed with it), else the count heard. The record's ship is the
-    /// group's (0x4cc590), or nothing is done. 300 (a join): 0x4cfad0
-    /// true sends it (0x4cfe40), heard. (Not ported: the `#` sub 1 with
-    /// the group's three it then sends, 0x4c42f0; the port posts no 300
-    /// to a human group.) 0x136: only with a route `+0x61` (none here).
+    /// while the block lasts (those posted meanwhile wait for the next
+    /// tick); `None` when it ended (0x4a1c60, the notices freed with it),
+    /// else the count heard. The record's ship is the group's (0x4cc590),
+    /// or nothing is done. 300 (a join): 0x4cfad0 true sends it
+    /// (0x4cfe40), heard. (Not ported: the `#` sub 1 with the group's
+    /// three it then sends, 0x4c42f0; the port posts no 300 to a human
+    /// group.) 0x136 (`class` the cell; only with a route `+0x61`): the
+    /// waypoint after the cell its way (0x4cea20, 0x4ce7c0); inside the
+    /// map above cell 0 a plain move there (0x4cf070) and its progress set
+    /// (0x4ce8a0, the end flag as `remove`); else, past the end, off the
+    /// route (0x4ce8a0 `(-1, -1)`, removing) and, no command held for it
+    /// (`+0x34`, 0x4d0030), the block's given (0x4cfdf0 -> 0x4cfc90),
+    /// heard; else the held one (0x4d0090: replaced by the block's when
+    /// its target or command differ), given and taken out, not heard.
     /// 0x13a-0x13d (`class` the prey): its entry of the queue removed
     /// (0x4cfa70); none, or 0x4cfad0 true, the ship sent again
     /// (0x4cfe40), heard; else the block ends. Others dropped.
     fn fa_notices(&mut self, a: &mut FleetAttack) -> Option<u32> {
         let mut heard = 0;
-        while let Some(n) = a.notices.pop() {
+        let w = self.nav.width as i32;
+        let cells = w * self.nav.height as i32;
+        let notes = std::mem::take(&mut a.notices);
+        for n in notes.into_iter().rev() {
             let ship = a.ships.contains(&n.ship)
                 && self
                     .object_index(n.ship)
@@ -326,6 +382,34 @@ impl Scene {
                     if self.fa_next(a) {
                         self.fa_send(a, n.ship);
                         heard += 1;
+                    }
+                }
+                0x136 if ship && a.route.is_some() => {
+                    let i = self.object_index(n.ship).unwrap();
+                    let c = n.class as i32;
+                    let r = a.route.as_ref().unwrap();
+                    let (_, dir) = r.at(n.ship, w);
+                    let (nx, end) = r.next(c % w, c / w, dir, w);
+                    if 0 < nx && nx < cells {
+                        self.zone_move(n.ship, nx % w, nx / w);
+                        self.fa_progress(a, i, nx % w, nx / w, end, 0);
+                    } else if end {
+                        self.fa_progress(a, i, -1, -1, true, 0);
+                        match a.held.iter().position(|h| h.ship == n.ship) {
+                            None => {
+                                let rec = a.record(n.ship);
+                                self.fa_command(rec);
+                                heard += 1;
+                            }
+                            Some(k) => {
+                                let mut rec = a.held[k];
+                                if rec.target != a.target || rec.command != a.command {
+                                    rec = a.record(n.ship);
+                                }
+                                self.fa_command(rec);
+                                a.held.remove(k);
+                            }
+                        }
                     }
                 }
                 0x13a..=0x13d if ship => {
@@ -344,6 +428,25 @@ impl Scene {
             }
         }
         Some(heard)
+    }
+
+    /// 0x4ce8a0 on the block's route for ship `i`, its notice 0x136 posted
+    /// to the block (0x4a1700).
+    fn fa_progress(&self, a: &mut FleetAttack, i: usize, x: i32, y: i32, remove: bool, mark: i8) {
+        let id = self.objects[i].id;
+        let at = self.ship_cell(i);
+        let Some(r) = a.route.as_mut() else {
+            return;
+        };
+        if r.set_progress(id, at, x, y, remove, mark) {
+            let w = self.nav.width as i32;
+            a.notices.push(Notice {
+                code: 0x136,
+                tick: self.ticks,
+                ship: id,
+                class: (y * w + x) as u32,
+            });
+        }
     }
 
     /// 0x4cfad0, the next target: none with the queue empty; else with
@@ -463,6 +566,9 @@ impl Scene {
             return;
         }
         let before = std::mem::replace(&mut self.wp_selection, now.to_vec());
+        if let Some(r) = self.selection_route(&before) {
+            r.show_marks(false);
+        }
         if let Some(z) = self.selection_zone(&before) {
             self.gather_marks(z, false);
         }
@@ -488,6 +594,9 @@ impl Scene {
     /// target is found (0x51f1f0) its mark, numbered by its place in the
     /// queue (0x4a1f20), or frees it (0x4a2000).
     pub fn fa_marks_shown(&mut self, selection: &[u32], show: bool) {
+        if let Some(r) = self.selection_route(selection) {
+            r.show_marks(show);
+        }
         if let Some(z) = self.selection_zone(selection) {
             self.gather_marks(z, show);
         }
@@ -505,6 +614,53 @@ impl Scene {
                 self.wp_marks.remove(&q.target);
             }
         }
+    }
+
+    /// The route `+0x61` of the selection's group's block, whose marks
+    /// 0x4a2050 shows (0x4ced10) or frees (0x4cef10) after the block's
+    /// own.
+    fn selection_route(&mut self, selection: &[u32]) -> Option<&mut super::gather::Route> {
+        if let Some(z) = self.selection_zone(selection) {
+            return self.gather_zones[z].route.as_mut();
+        }
+        if let Some(z) = self.selection_fleet(selection) {
+            return self.fleet_attacks[z].route.as_mut();
+        }
+        let z = self.selection_waypoint_move(selection)?;
+        Some(&mut self.waypoint_moves[z].route)
+    }
+
+    /// The route marks shown (`WPMOVE`, kind 8 at depth 7): each
+    /// waypoint's top left and number, of every human group's route.
+    pub fn route_marks(&self) -> Vec<(i32, i32, u8)> {
+        let zones = self.gather_zones.iter().filter_map(|z| z.route.as_ref());
+        let fleets = self.fleet_attacks.iter().filter_map(|a| a.route.as_ref());
+        let moves = self.waypoint_moves.iter().map(|m| &m.route);
+        zones
+            .chain(fleets)
+            .chain(moves)
+            .flat_map(|r| r.marks_shown())
+            .collect()
+    }
+
+    /// The route marks' layers with their top left: 0x4ced80's `WPMOVE`
+    /// (controlm, its layers by the queued marks' mask over the number)
+    /// at the waypoint's `(x*64 + 14, y*64 + 18)` (0x4ced10), each layer
+    /// with its own offset.
+    pub fn route_mark_layers(&self) -> Vec<(&crate::objects::Layer, i32, i32)> {
+        let Some((_, art)) = self.wp_art.iter().find(|(k, _)| *k == MOVE_MARK) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (left, top, mark) in self.route_marks() {
+            let mask = mark_mask(mark);
+            out.extend(
+                art.iter()
+                    .filter(|(k, _)| mask & (1 << k) != 0)
+                    .map(|(_, l)| (l, left + l.dx, top + l.dy)),
+            );
+        }
+        out
     }
 
     /// 0x4a2050's gather block (0x78 / 0x3d, its deposits `+0x39` not
@@ -612,31 +768,61 @@ impl Scene {
                 ((w - 0x24) / 2 + x, (h - 0x1d) / 2 + y)
             }
         };
-        let mask: u32 = if mark != 0 && mark < 100 {
-            1 << (mark / 10) | 1 << (mark % 10 + 10) | 0x100000
-        } else {
-            0x100000
-        };
+        let mask = mark_mask(mark);
         art.iter()
             .filter(|(k, _)| mask & (1 << k) != 0)
             .map(|(_, l)| (l, left + l.dx, top + l.dy))
             .collect()
     }
 
-    /// 0x4cfe40 without a route: the record `{ship, +0xc, +0x10, +0x14,
-    /// +0x1c, +0x18}` (0x4cfdf0) given as the command 0x4cfc90: 0x15 /
-    /// 0x16 a ship with no strength (0x50ea70 0) sent to the target's
-    /// cell (0x51f1f0, vt+0x28; none: nothing) by a plain move
-    /// (0x4cf070), else the command `{target, 7, command, 0x44}` (the
-    /// outbox, 0x520cc0); 0x17 a ship with no boarding strength
-    /// (`+0x53c < 1`) nothing, else 0x17 `{target, 0x45}`; 0x18 0x18
-    /// `{target, 0x46}`.
+    /// 0x4cfe40: the block's command for `ship` (0x4cfdf0), given at once
+    /// (0x4cfc90) with no route. With one: a ship not on it (0x4cea20 -1)
+    /// takes the waypoint nearest it (0x4ceab0 with the block's cell
+    /// `+0x10`): none, or the target's cell nearer, the command given at
+    /// once and nothing held (returning there); else a plain move to the
+    /// waypoint (0x4cf070) and its progress `(-1, -1)` way 1 (0x4ce8a0).
+    /// A ship on it whose way byte is the waypoints' count less 1 is
+    /// given the command too. Then the command is held for the ship
+    /// (0x4cffb0: its earlier entry replaced, appended).
     fn fa_send(&mut self, a: &mut FleetAttack, ship: u32) {
+        let rec = a.record(ship);
+        let Some(r) = a.route.as_ref() else {
+            self.fa_command(rec);
+            return;
+        };
         let Some(i) = self.object_index(ship) else {
             return;
         };
-        let target = a.target;
-        match a.command {
+        let w = self.nav.width as i32;
+        let (k, dir) = r.at(ship, w);
+        if k < 0 {
+            let (c, closer) = self.route_best(r, i, a.cell);
+            if c < 0 || closer != Some(false) {
+                self.fa_command(rec);
+                return;
+            }
+            self.zone_move(ship, c % w, c / w);
+            self.fa_progress(a, i, -1, -1, false, 1);
+        } else if dir as i32 == r.waypoints.len() as i32 - 1 {
+            self.fa_command(rec);
+        }
+        a.held.retain(|h| h.ship != ship);
+        a.held.push(rec);
+    }
+
+    /// 0x4cfc90(record): 0x15 / 0x16 a ship with no strength (0x50ea70 0)
+    /// sent to the target's cell (0x51f1f0, vt+0x28; none: nothing) by a
+    /// plain move (0x4cf070), else the command `{target, sub, command,
+    /// 0x44}` (the outbox, 0x520cc0); 0x17 a ship with no boarding
+    /// strength (`+0x53c < 1`) nothing, else 0x17 `{target, 0x45}`; 0x18
+    /// 0x18 `{target, 0x46}`.
+    fn fa_command(&mut self, rec: Held) {
+        let ship = rec.ship;
+        let Some(i) = self.object_index(ship) else {
+            return;
+        };
+        let target = rec.target;
+        match rec.command {
             0x15 | 0x16 => {
                 if self.strength(i) != 0 {
                     self.post(Order::Attack { ship, target });
@@ -668,6 +854,17 @@ impl Scene {
             }),
             _ => {}
         }
+    }
+}
+
+/// A mark's layers for its number (0x50c020, 0x4ced80): `1 << n / 10 |
+/// 1 << n % 10 + 10 | 0x100000` (the tens' digit layers 0-9, the units'
+/// 10-19, the picture 20), only 0x100000 for 0 or 100 and more.
+fn mark_mask(mark: u8) -> u32 {
+    if mark != 0 && mark < 100 {
+        1 << (mark / 10) | 1 << (mark % 10 + 10) | 0x100000
+    } else {
+        0x100000
     }
 }
 
@@ -712,6 +909,7 @@ pub(super) fn wp_art(data: &crate::assets::GameData) -> WpArt {
         (8, "WPFIRE"),
         (10, "WPLOAD"),
         (0xb, "WPTREAS"),
+        (MOVE_MARK, "WPMOVE"),
     ] {
         let Some(e) = menus.find(name, ResourceKind::Composite) else {
             continue;
@@ -744,6 +942,10 @@ pub(super) fn wp_art(data: &crate::assets::GameData) -> WpArt {
     }
     out
 }
+
+/// `wp_art`'s key for the route's waypoint mark (0x4ced80's `WPMOVE`,
+/// not one of 0x50c020's kinds).
+pub const MOVE_MARK: u8 = 0xff;
 
 /// The marks' pictures by kind (`wp_art`).
 pub type WpArt = Vec<(u8, Vec<(usize, crate::objects::Layer)>)>;
