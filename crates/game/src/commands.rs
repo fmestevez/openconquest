@@ -646,7 +646,7 @@ pub fn menu(scene: &Scene, obj: &MapObject, page: Page) -> Menu {
 /// slot, then each fort in its own (0x34, 0x35, 0x36 in slots 1-3) if the
 /// player's technology allows it (player `+0x4e` bit 6, `+0x45` bit 6,
 /// `+0x4e` bit 5), the empty slots kept. No price is tested: each is
-/// enabled by the ship's capability bit 0 (`+0x261`, which every finished
+/// enabled by the ship's capability bit 0 (`+0x261`, `Scene::capabilities`; every finished
 /// ship has), its price (0x42d8b0) only carried for the help line; the
 /// landing party pays at the site, or builds nothing (0x421f00).
 fn ground_menu(scene: &Scene, obj: &MapObject) -> Menu {
@@ -654,13 +654,16 @@ fn ground_menu(scene: &Scene, obj: &MapObject) -> Menu {
     if !scene.is_own(obj) || obj.ship.is_none() {
         return menu;
     }
+    let on = scene
+        .object_index(obj.id)
+        .is_some_and(|i| scene.capabilities(i) & 1 != 0);
     for (slot, id) in [0x16, 0x17, 0x18, 0x19].into_iter().enumerate() {
         let command = Command(id);
         let class = economy::building_of_command(command).unwrap();
         if id != 0x16 && !scene.permits.building(class) {
             continue;
         }
-        set(&mut menu, slot, command, true);
+        set(&mut menu, slot, command, on);
     }
     menu
 }
@@ -814,7 +817,7 @@ pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
         return menu;
     }
     match obj.class {
-        ObjectClass::Ship => ship_menu(obj, &mut menu),
+        ObjectClass::Ship => ship_menu(scene, obj, &mut menu),
         ObjectClass::Building(SHIPYARD | DOCK) => shipyard_menu(scene, obj, &mut menu),
         ObjectClass::Building(SETTLEMENT | TOWN) => settlement_menu(scene, obj, &mut menu),
         ObjectClass::Building(WORKSHOP) => workshop_menu(scene, obj, &mut menu),
@@ -901,52 +904,70 @@ fn set(menu: &mut Menu, slot: usize, command: Command, enabled: bool) {
     });
 }
 
-fn ship_menu(obj: &MapObject, menu: &mut Menu) {
+/// A ship's main page, a merchant's (0x4e6e90) or a warship's (0x4e6980),
+/// each button enabled on its bit of the capability word `+0x261`
+/// (`Scene::capabilities`): move on 0x4e6700(0x14), bit 10; stop bit 13;
+/// a merchant's unload (slot 2) and gathers (4-6) shown on bit 8, the
+/// unload enabled on bit 13, the gathers always; a warship's fire bit 11,
+/// board bit 4, ram bit 3; the behaviour or zones button on any of bits
+/// 0-11; reload bit 2; the building page bit 0; the treasure bit 15 with
+/// room for a treasure or a hero (0x4e6700(0x22, 0x10): 0x4be800 modes 6
+/// and 7). The spells (a merchant one in slot 3, a warship two in 2 and
+/// 3) are always enabled.
+fn ship_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
     let Some(ship) = obj.ship.as_ref() else {
         return;
     };
+    let caps = scene
+        .object_index(obj.id)
+        .map_or(0, |i| scene.capabilities(i));
+    let bit = |b: u32| caps & 1 << b != 0;
     let kind = ship.kind;
-    set(menu, 0, Command::MOVE, true);
-    set(menu, 1, Command::STOP, true);
-    if kind <= 1 {
-        // Merchants (0x4e6e90): cargo and gathering.
-        // Unload resource (0x4e6e90 slot 2): to one of the player's ports
-        // or settlements, once there are goods aboard.
-        set(menu, 2, Command::UNLOAD, ship.cargo >= 1.0);
-        set(menu, 4, Command::AMBER, true);
-        set(menu, 5, Command::FISH, true);
-        set(menu, 6, Command::WHALE, true);
-        set(menu, 7, Command::ZONES, true);
+    set(menu, 0, Command::MOVE, bit(10));
+    set(menu, 1, Command::STOP, bit(13));
+    // Slots 2 and 3 (slot 3 alone for a merchant): the spells aboard:
+    // slot 0's when it is of class 8 (0x4b9740), slot 1's when there are
+    // two and it is not slot 0's again (0x4ba010: kind, flags, parameter
+    // and amount), by their parameter (`+0x495`, `+0x4ad`; the Gorgon's
+    // head's 0xd).
+    let spells: &[(usize, usize)] = if kind <= 1 {
+        &[(3, 0)]
     } else {
-        // Warships (0x4e6980): weapons and behaviour.
-        // Slots 2 and 3: the spells aboard (0x4e6980): slot 0's when it is
-        // of class 8 (0x4b9740), slot 1's when there are two and it is
-        // not slot 0's again (0x4ba010: kind, flags, parameter and amount), by their
-        // parameter (`+0x495`, `+0x4ad`; the Gorgon's head's 0xd).
-        for (slot, k) in [(2, 0), (3, 1)] {
-            let Some(t) = ship.treasures.get(k) else {
-                continue;
-            };
-            if !crate::objects::treasure_kept(t.kind)
-                || k == 1 && (ship.treasures.len() != 2 || ship.treasures[0] == *t)
-            {
-                continue;
-            }
-            let command = match t.param {
-                crate::objects::HEAD_SPELL => Some(HEAD_STARE),
-                0 | 8 | 12 => None,
-                p => Spell::of_index(p).map(Spell::command),
-            };
-            if let Some(c) = command {
-                set(menu, slot, c, true);
-            }
+        &[(2, 0), (3, 1)]
+    };
+    for &(slot, k) in spells {
+        let Some(t) = ship.treasures.get(k) else {
+            continue;
+        };
+        if !crate::objects::treasure_kept(t.kind)
+            || k == 1 && (ship.treasures.len() != 2 || ship.treasures[0] == *t)
+        {
+            continue;
         }
-        set(menu, 4, Command::FIRE, obj.is_armed());
-        set(menu, 5, Command::BOARD, ship.crew.count() > 0);
-        set(menu, 6, Command::RAM, true);
-        set(menu, 7, Command::BEHAVIOUR, true);
+        let command = match t.param {
+            crate::objects::HEAD_SPELL => Some(HEAD_STARE),
+            0 | 8 | 12 => None,
+            p => Spell::of_index(p).map(Spell::command),
+        };
+        if let Some(c) = command {
+            set(menu, slot, c, true);
+        }
     }
-    set(menu, 8, Command::LOAD, true);
+    if kind <= 1 {
+        if bit(8) {
+            set(menu, 2, Command::UNLOAD, bit(13));
+            set(menu, 4, Command::AMBER, true);
+            set(menu, 5, Command::FISH, true);
+            set(menu, 6, Command::WHALE, true);
+        }
+        set(menu, 7, Command::ZONES, caps & 0xfff != 0);
+    } else {
+        set(menu, 4, Command::FIRE, bit(11));
+        set(menu, 5, Command::BOARD, bit(4));
+        set(menu, 6, Command::RAM, bit(3));
+        set(menu, 7, Command::BEHAVIOUR, caps & 0xfff != 0);
+    }
+    set(menu, 8, Command::LOAD, bit(2));
     // The repair (0x4e6980 at 0x4e6d82, 0x4e6e90 at 0x4e6fd9) is enabled
     // on `+0x261` bit 1 (every finished ship's, 0x4e6930) and the player
     // record's `[0x5c7508] + p x 0xba0 + 0x118` not 0, its price then
@@ -955,16 +976,17 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
     // whole copy (0x4a89e0): its only accesses in the listing are these two
     // reads. So it stays 0 and the button is never enabled.
     const PLAYER_RECORD_118: u32 = 0;
-    let repair = PLAYER_RECORD_118 != 0;
+    let repair = bit(1) && PLAYER_RECORD_118 != 0;
     set(menu, 9, Command::REPAIR_SHIP, repair);
     if repair {
         if let Some(b) = menu[9].as_mut() {
             b.price = (crate::scene::repair::ship_repair_price(obj), 0);
         }
     }
-    // Every ship's capabilities allow building (0x4e6930 clears other bits).
-    set(menu, 10, Command::BUILD_GROUND, true);
-    set(menu, 11, Command::TREASURE, true);
+    set(menu, 10, Command::BUILD_GROUND, bit(0));
+    let room = ship.treasures.len() < crate::objects::treasure_room(kind)
+        || ship.heroes.len() < crate::objects::hero_room(kind);
+    set(menu, 11, Command::TREASURE, bit(15) && room);
     // Unique ships lose some commands (0x4e42e0).
     let removed: &[usize] = match kind {
         8 => &[5, 6, 11],
@@ -1274,7 +1296,11 @@ fn behaviour_menu(scene: &Scene, obj: &MapObject) -> Menu {
         return menu;
     };
     let b = ship.behaviour;
+    let on = scene
+        .object_index(obj.id)
+        .is_some_and(|i| scene.capabilities(i) & 0xfff != 0);
     let mut toggle = |slot: usize, command: Command, enabled: bool, checked: bool| {
+        let (enabled, checked) = (on && enabled, on && checked);
         menu[slot] = Some(Slot {
             command,
             enabled,
@@ -1307,28 +1333,26 @@ fn behaviour_menu(scene: &Scene, obj: &MapObject) -> Menu {
     menu
 }
 
-/// A merchant's gathering zone page: amber, fish and leviathan zones in
-/// slots 0-2, the one in use shown set.
+/// A merchant's gathering zone page (0x4e6e90 pages 1 and 5): amber, fish
+/// and leviathan zones in slots 0-2, each with flag bit 8 of the
+/// capability word alone: none is ever shown set.
 fn zones_menu(scene: &Scene, obj: &MapObject) -> Menu {
-    use crate::objects::Resource;
     let mut menu: Menu = [None; SLOTS];
     if obj.ship.is_none() || !scene.is_own(obj) {
         return menu;
     }
-    for (slot, (command, resource)) in GATHER_ZONES
-        .into_iter()
-        .zip([Resource::Amber, Resource::Fish, Resource::Leviathan])
-        .enumerate()
-    {
+    // Enabled on capability bit 8 (0x4e6e90 pages 1 and 5).
+    let on = scene
+        .object_index(obj.id)
+        .is_some_and(|i| scene.capabilities(i) & 0x100 != 0);
+    for (slot, command) in GATHER_ZONES.into_iter().enumerate() {
         menu[slot] = Some(Slot {
             command,
-            enabled: true,
+            enabled: on,
             progress: None,
             count: 0,
             price: (0, 0),
-            checked: scene
-                .ship_zone(obj.id)
-                .is_some_and(|z| scene.gather_zones[z].class == resource),
+            checked: false,
             closes: false,
         });
     }

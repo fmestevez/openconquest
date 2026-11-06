@@ -1355,6 +1355,21 @@ impl Scene {
             obj.label = s.label.clone();
             obj.owner = s.owner;
             obj.ship = s.ship.clone();
+            // A save from before the capability word: as its state has it
+            // (0x4dfe00's 0x2000 while built, the sale's 0, else 0x4e6930).
+            if let Some(sh) = obj
+                .ship
+                .as_mut()
+                .filter(|sh| sh.caps == objects::CAPS_UNSAVED)
+            {
+                sh.caps = if sh.build.is_some() {
+                    0x2000
+                } else if matches!(sh.task, Some(objects::Task::Sell(_))) {
+                    0
+                } else {
+                    objects::caps_mask(sh.kind)
+                };
+            }
             obj.deposit = s.deposit;
             obj.dormant = s.dormant;
             obj.combat = s.combat.clone();

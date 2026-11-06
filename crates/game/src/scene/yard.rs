@@ -403,6 +403,8 @@ impl Scene {
             }
             let s = o.ship.as_mut().unwrap();
             s.argo = argo;
+            // Only the stop while built (0x4dfe00 at 0x4dfe4d).
+            s.caps = 0x2000;
             s.build = Some(objects::Build {
                 yard: n.site,
                 since: BUILD_TICKS,
@@ -537,6 +539,48 @@ impl Scene {
         self.object_index(id)
             .and_then(|i| self.objects[i].ship.as_ref())
             .is_some_and(|s| matches!(s.task, Some(Task::Sell(_))))
+    }
+
+    /// Ship `i`'s capability word as the original holds it (`+0x261`,
+    /// `Ship::caps`) with what its holds take off: a hunt's, a landing's
+    /// or a load's (0x4b37d0 with 0x2000, given back by 0x4b3850), stone
+    /// (`+0x261 &= 0x2000`), the song (0x4a7390: 0x4b37d0, cleared), and
+    /// the prey of a boarding or a ram losing bit 12 (0x4c3410 at
+    /// 0x4c3543, 0x4c3ec0 at 0x4c3eef; set again by 0x4c3af4, 0x4c3f19,
+    /// 0x4c40e4). 0 for an object that is not a ship. (Not ported: the
+    /// other 0x4b37d0 callers' masks, 0x4ae191, 0x4af089, 0x4b067f,
+    /// 0x4b0ecc, 0x4b25be, 0x4b3424, 0x4b604e, 0x4c23f1, 0x4c2522, the
+    /// boarded prey's 0x4c3577 with 0, 0x4c404f, 0x4de905; the
+    /// `+0x251 == 1` clears of bits 0-11, 0x4b3882 and 0x4defda; the
+    /// build's 0 at 0x4b3c69; the loader's `|= 0x2000` at 0x4b707f and
+    /// 0x4b38d0's `&= !0x2000`; the save's copy at 0x4e2326.)
+    pub fn capabilities(&self, i: usize) -> u32 {
+        let o = &self.objects[i];
+        let Some(s) = o.ship.as_ref() else {
+            return 0;
+        };
+        let id = o.id;
+        let mut caps = s.caps;
+        if self.hunt_holds(id) || self.landing_holds(id) || self.load_holds(id) {
+            caps &= 0x2000;
+        }
+        if o.combat.as_ref().is_some_and(|c| c.stone_len > 0) {
+            caps &= 0x2000;
+        }
+        if self.charmed.contains_key(&id) {
+            caps = 0;
+        }
+        let prey = s.grapple.as_ref().is_some_and(|g| !g.boarder)
+            || self.objects.iter().any(|p| {
+                p.ship
+                    .as_ref()
+                    .and_then(|ps| ps.ram_run)
+                    .is_some_and(|r| r.target == id)
+            });
+        if prey {
+            caps &= !0x1000;
+        }
+        caps
     }
 
     /// Calls off the building of ship `i` (event 8 with no record while
@@ -859,6 +903,8 @@ impl Scene {
         let s = o.ship.as_mut().unwrap();
         s.build = None;
         s.look = None;
+        // Every capability its type has (0x4b3ef1: 0xffffffff & 0x4e6930).
+        s.caps = objects::caps_mask(s.kind);
         let (kind, argo) = (s.kind, s.argo);
         let (x, y) = (o.x, o.y);
         if self.is_own(&self.objects[i]) {

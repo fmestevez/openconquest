@@ -245,6 +245,24 @@ pub fn treasure_name(kind: u8) -> String {
 /// holder -1, 0, parameter, amount). Lairs, nests, barbarian structures,
 /// fortresses, towns, sea monsters and leviathans keep theirs at different
 /// fields.
+/// A ship's capabilities by its type (0x4e6930 on `+0x25a`): all but bit
+/// 11 (fire) for boats and merchants (0, 1), all but bit 8 (a merchant's
+/// unload and gathers) for warships (2-11), all for any other.
+pub fn caps_mask(kind: u8) -> u32 {
+    match kind {
+        0 | 1 => 0xffff_f7ff,
+        2..=11 => 0xffff_feff,
+        _ => 0xffff_ffff,
+    }
+}
+
+/// The capability word of a ship saved before `Ship::caps` was kept.
+pub const CAPS_UNSAVED: u32 = u32::MAX;
+
+fn caps_unsaved() -> u32 {
+    CAPS_UNSAVED
+}
+
 pub fn inventory(rec: &ObjectRecord) -> Vec<Treasure> {
     let count_at = match rec.class_id {
         0x46..=0x48 => 10,
@@ -283,10 +301,10 @@ pub fn treasure_hero(kind: u8) -> Option<u8> {
     (18..=26).contains(&kind).then(|| kind - 18)
 }
 
-/// Treasures and heroes a ship type can carry (the manual's chart:
-/// "displacement for treasures" and "for heroes").
+/// Treasures and heroes a ship type can carry (0x4be800 modes 6 and 7:
+/// the bytes 0x597afc and 0x597b08 by type, dumped).
 pub fn treasure_room(kind: u8) -> usize {
-    [1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0][kind as usize % 12]
+    [1, 1, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0][kind as usize % 12]
 }
 
 pub fn hero_room(kind: u8) -> usize {
@@ -524,6 +542,21 @@ pub struct Ship {
     /// index `+0x78e` at the last point, the picture one before it.
     #[serde(default)]
     pub slide_end: bool,
+    /// Its capability word (`+0x261`), each bit a command it may take
+    /// (0x4e6700) and a button of its panel (0x4e6980, 0x4e6e90): 0 the
+    /// building page and found (0x20), 1 repair (0x1e), 2 reload (0x1f),
+    /// 3 ram (0x18), 4 board (0x17), 5 dock (0x19), 6 gather and the hunt
+    /// (0x1a, 0x1c, 0x1d), 7 transfer (0x1b), 8 a merchant's unload and
+    /// gathers, 10 move (0x14), 11 fire (0x15, 0x16), 12 taking a contact,
+    /// 13 stop, 14 the song's move, 15 taking a treasure (0x22 kind 0x10);
+    /// any of bits 0-11 the behaviour or zones button. Set by the map
+    /// loader (0x4dfa90: record field 8 & 0x4e6930), the yard's (0x4dfe00
+    /// at 0x4dfe4d: 0x2000) and the build's end (0x4b3ab0 at 0x4b3ef1:
+    /// 0xffffffff & 0x4e6930); 0 from the sale (0x4b4380 at 0x4b43b6).
+    /// What holds take off is laid over it by `Scene::capabilities`.
+    /// (`CAPS_UNSAVED` in a save from before it, set again on load.)
+    #[serde(default = "caps_unsaved")]
+    pub caps: u32,
     /// Its own random numbers (`+0x18`, the usual LCG), from its first
     /// draw (`Scene::ship_draw`).
     #[serde(default)]
@@ -2494,6 +2527,8 @@ pub fn resolve(
         argus_count: 0,
         dock_step: None,
         slide_end: false,
+        // Record field 8 (`+0x20`) masked by the type's (0x4dfa90).
+        caps: f(8) & caps_mask(f(7).min(11) as u8),
     });
     let combat = crate::combat::Combatant::from_record(rec, class);
     // Deposits: amber holds field 4 x 100 units; a negative amount starts

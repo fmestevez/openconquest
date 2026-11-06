@@ -6298,6 +6298,72 @@ fn warships_open_the_building_page() {
     assert_eq!(ground[0].unwrap().command, crate::commands::Command(0x16));
 }
 
+/// The capability word `+0x261` (needs `OPENCONQUEST_DATA`): the map
+/// loader's record field 8 & 0x4e6930 (0x4dfa90), every main page button
+/// on its bit (0x4e6980), and a hold (0x4b37d0 with 0x2000) leaving the
+/// stop alone.
+#[test]
+fn ship_buttons_follow_the_capability_word() {
+    use crate::commands::{menu, Command, Page};
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    for o in scene.objects.iter() {
+        if let Some(s) = o.ship.as_ref() {
+            let f8 = o.record.field(8).unwrap_or(0);
+            assert_eq!(
+                s.caps,
+                f8 & crate::objects::caps_mask(s.kind),
+                "ship {}",
+                o.id
+            );
+        }
+    }
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind >= 2))
+        .unwrap();
+    let caps = scene.capabilities(i);
+    // The map's record holds 0xffffffff; a warship lacks bit 8.
+    assert_eq!(caps, 0xffff_feff);
+    let enabled = |scene: &Scene, c: Command| {
+        menu(scene, &scene.objects[i], Page::Main)
+            .iter()
+            .flatten()
+            .find(|s| s.command == c)
+            .map(|s| s.enabled)
+    };
+    for (c, b) in [
+        (Command::STOP, 13),
+        (Command::FIRE, 11),
+        (Command::BOARD, 4),
+        (Command::RAM, 3),
+        (Command::LOAD, 2),
+        (Command::BUILD_GROUND, 0),
+    ] {
+        assert_eq!(enabled(&scene, c), Some(caps & 1 << b != 0), "{c:?}");
+    }
+    assert_eq!(enabled(&scene, Command::MOVE), Some(caps & 0x400 != 0));
+    assert_eq!(enabled(&scene, Command::BEHAVIOUR), Some(caps & 0xfff != 0));
+    // Held for a hunt: 0x2000 alone, the stop the only button on.
+    scene.objects[i].ship.as_mut().unwrap().hunt = Some(crate::objects::Hunt {
+        held: true,
+        ..Default::default()
+    });
+    assert_eq!(scene.capabilities(i), caps & 0x2000);
+    for b in menu(&scene, &scene.objects[i], Page::Main).iter().flatten() {
+        assert_eq!(b.enabled, b.command == Command::STOP, "{:?}", b.command);
+    }
+    assert!(menu(&scene, &scene.objects[i], Page::Behaviour)
+        .iter()
+        .flatten()
+        .all(|b| !b.enabled && !b.checked));
+}
+
 /// A settlement's stocked marine goes aboard a ship alongside, one at a time
 /// (needs `OPENCONQUEST_DATA`).
 #[test]

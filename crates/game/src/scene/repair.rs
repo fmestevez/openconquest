@@ -763,6 +763,8 @@ impl Scene {
                 let s = self.objects[k].ship.as_mut().unwrap();
                 s.fire_wind_down();
                 s.path.clear();
+                // Its capabilities cleared (0x4b43b6).
+                s.caps = 0;
                 // A building contact (a ship its settlement sells from a
                 // yard or dock, 0x4dcf1b) is let go: 0xcb8 to the dock
                 // (0x4b3970, its `+0x1e0` cleared), 0x2876 to it (0x4b3930,

@@ -1492,6 +1492,45 @@ founding command (0x4aa990: kind 2 needs bit 0, kind 1 bit 1). A settlement's bu
 built in this order: port, the three forts, workshop, shipyard, smithy,
 school, Temple of the Sea, Temple of War.
 
+**The capability word `+0x261`** (`Ship::caps`, `Scene::capabilities`).
+Bits, by 0x4e6700's command tests and the pages: 0 building page and
+found (0x20), 1 repair (0x1e), 2 reload (0x1f), 3 ram (0x18), 4 board
+(0x17, with marines), 5 dock (0x19), 6 gather and hunt (0x1a, 0x1c,
+0x1d), 7 transfer (0x1b), 8 a merchant's unload and gathers, 10 move
+(0x14), 11 fire (0x15, 0x16, armed and not limed), 12 taking a contact,
+13 stop, 14 the song's move, 15 taking a treasure (0x22 kind 0x10, with
+room 0x4be800 mode 6 or 7: 0x597afc[type] less `+0x482`, 0x597b08[type]
+less `+0x483`, dumped: treasures 1 1 2 1 1 1 1 1 0 0 0 0, heroes 0 0 2 1
+1 1 0 0 0 0 0 0). 0x4e6930 by type: 0xfffff7ff (0, 1), 0xfffffeff
+(2-11), else all. Writers: the constructor 0x4dc3f0 (0); the map loader
+0x4dfa90 (record field 8 & 0x4e6930; miss000's ships hold 0xffffffff);
+the yard's 0x4dfe00 (0x2000); the build's end 0x4b3ab0 (0x4b3ef1:
+0xffffffff & 0x4e6930); the sale's state 1 0x4b4380 (0); 0x4b37d0
+(saves it, `&= mask`) and 0x4b3850 (puts it back, `&= 0xfffff000` when
+`+0x251 == 1`), masks 0x2000 for the hunt, landing and loader holds, 0
+for the song (0x4a757c); stone `&= 0x2000`; the charm's tick `|= 0x4400`
+for the call (0x4a75b9, put back at 0x4a7617); bit 12 off on a boarding's
+or ram's prey (0x4c3543, 0x4c3eef; on again 0x4c3c25, 0x4c3f02,
+0x4c3fc1, 0x4c40ef). The main pages read it per button: a warship's
+(0x4e6980) move 0x4e6700(0x14), stop bit 13, the spells always on, fire
+bit 11, board bit 4, ram bit 3, behaviour any of 0-11, reload bit 2,
+repair bit 1 and the player record's `+0x118`, build bit 0, treasure bit
+15 with room; a merchant's (0x4e6e90) the same but unload (slot 2) and
+the amber, fish and leviathan gathers (4-6) shown only on bit 8, the
+unload enabled on bit 13, the gathers always, one spell (slot 3, slot 0's
+treasure), zones (slot 7) on bits 0-11; its zones page (1, 5) every
+button on bit 8, none shown set; the building page every button on bit
+0; the behaviour page all on bits 0-11, else all off and none set. The
+port keeps the written word in `Ship::caps` and lays the holds over it
+in `Scene::capabilities`, which the pages and `takes_contact` read. Not
+ported: the other 0x4b37d0 callers' masks (0x4ae191, 0x4af089,
+0x4b067f, 0x4b0ecc, 0x4b25be, 0x4b3424, 0x4b604e, 0x4c23f1, 0x4c2522,
+0x4c3577 with 0, 0x4c404f, 0x4de905), the `+0x251 == 1` clears
+(0x4b3882, 0x4defda), the build's 0 at 0x4b3c69, the loader's `|=
+0x2000` (0x4b707f) and 0x4b38d0's `&= ~0x2000`, the saved copy
+(0x4e2326), 0x4bbfb1's 0xffffffff; the command handler 0x4e2ba0 still
+refuses through the port's hold tests, not the word.
+
 ## Object panel (ships)
 
 `c_load.cpp` (0x4f9520) lays a ship's slots in a grid of four columns 48

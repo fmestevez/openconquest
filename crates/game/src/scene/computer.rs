@@ -5949,20 +5949,7 @@ impl Scene {
     /// 0x4c3ec0 at 0x4c3eef; 0x4c3af4, 0x4c3f19 and 0x4c40e4 set it
     /// again: the port's boarded ship's grapple and a ram run at it).
     pub(super) fn takes_contact(&self, i: usize) -> bool {
-        let id = self.objects[i].id;
-        let Some(s) = self.objects[i].ship.as_ref() else {
-            return false;
-        };
-        !self.being_built(id)
-            && !self.hunt_holds(id)
-            && !self.landing_holds(id)
-            && !s.grapple.as_ref().is_some_and(|g| !g.boarder)
-            && !self.objects.iter().any(|p| {
-                p.ship
-                    .as_ref()
-                    .and_then(|ps| ps.ram_run)
-                    .is_some_and(|r| r.target == id)
-            })
+        self.capabilities(i) & 0x1000 != 0
     }
 
     /// Ship `i`'s odds of boarding ship `k` (0x4ba900): its boarding
