@@ -5820,8 +5820,20 @@ take (0x4de5ea: 0x4de669 with 1 after 0x4b97d0 uses it at once, 0x4de6a6
 with 1 when 0x4bd0c0 put it aboard) and a ship's cast of a spell aboard
 (order 0x22, 0x4e329b: 0x4e330c with 0, the slot before 0x4bd500 takes
 it out) send it too. 0x424cf0 (a building's stored treasure taken out)
-sends it with 0 while the building is a player's and 0x541a30(0x1c57)
-is 0. The handlers with 1, all with the record's owner the brain's
+sends it with 0 while the building is a player's (`+0x57` 1) and
+0x541a30(0x1c57) is 0: 0x541a30 (on the building's `+0xc`) walks that
+object's list (`+0x10`: count `+0xc`, stride `+8`, base `+0x1c`) for an
+entry whose `+4` points at a record with the id at `+4`, giving 0 when one
+is found, else -4; 0x1c57 is made at every mission's start by
+Players.cpp 0x51f680 (at 0x51f746) and is what the navy is sent to
+(0x542630). Its callers: 0x41af58 (four calls), 0x41d3e3, 0x41d4a0,
+TownObj 0x441ba0 (three), the fall (0x423d60 at 0x4243fc, each with 1: laid on the
+ground), the removal (0x425990 at 0x4268ac), 0x479570, 0x4bdcc0, the
+dock (0x4e7861). Only miss007's sword handler hears it (kind 22: `+0x104`
+0). The capture's sends for each slot below the type's room: 0x4bd500
+(a treasure out of a ship) shifts the slots after it down and zeroes the
+freed last one (6 dwords at `+0x485 + (count - 1) x 0x18`), so a slot
+past the held ones reads kind 0, which no handler with 0 acts on. The handlers with 1, all with the record's owner the brain's
 player (+0xe4): the scrolls (kind 27, field 7 the scroll's number; class
 0x32 / 0x33 the grants by 0x4a9810 with 1, the brain's strings by
 0x4ff360, each a chat line (message 0x4dd to the chat), and 0x479570; any
@@ -5838,13 +5850,26 @@ only while `+0x164` is 0 (set at the grant; then nothing, not even
 to golden armor.", not 0x845) and 11: 41, 0x842; miss009 (0x4663d0) 13:
 46, 76, 0x846; miss009 kind 9, number 6, at any class: string 0x847;
 miss010 (0x46a0f0) the Fleece (kind 16) at any class, a ship's take too:
-byte `+0x130`; miss003 also kind 6 (goods) at any class: 0x445de0(9) on
-three of the interface's objects (not decoded). No other brain handles
+byte `+0x130`; miss003 also kind 6 (goods) at any class (0x450dc1): 0x445de0(9) on the
+objects in the landscape grid's object slots (`[0x5c74fc] + 8 + 24 x (y x
+width + x) + 20`) of (28, 34), (32, 34) and (30, 37), its lava flows:
+0x445de0 sets the strength `+0x94` and calls 0x445920(1), erupting at
+once; unlike 0x445e00 it leaves `+0xb4` alone, so the flow keeps its cycle
+with strength 9. No other brain handles
 0x5d94 (miss000, 008, 011-013). miss001's judge (0x44a070) wins only with
 `+0x134` 0 and loses with `+0x134` set while 0x4c46c0 finds no kind 27
 held by the player (its ships 0xfff and buildings 0x1fff, the whole map:
 the count read at `[ebp-0x2c]`, treasure slot 0x47 + 27 of the second
-call's table). 0x479570 (this, number, the building's id) walks the
+call's table). 0x4c46c0 walks the player's object list (`[0x5c7508] +
+player x 0xba0 + 3000`) and asks 0x4c4610: a building (0x50e600 0x32)
+counts when bit `class - 0x32` of the building mask is set, a ship (200)
+when bit `class - 200` of the ship mask is (or, without it, its `+0x259`
+set and mask bit 0x1000000); a counted building adds its store (`+0x67`)
+by kind at 0x47 + kind and its heroes at 0x3e + hero, a ship its slots
+(`+0x489`) and heroes (`+0x4b5`). So 0xfff is every ship type 0-11 and
+0x1fff every building class 0x32-0x3e. The other judges' treasure
+counts: miss000's (0x3ff, 0) ships of type 0-9; miss010-013's Fleece
+the call with (0, 3), settlements and towns. 0x479570 (this, number, the building's id) walks the
 building's store by index and takes each scroll of that number out
 (0x424cf0 with 0: 0x55b500, no new object), going on to the next index
 after a removal, so a scroll right after a removed one stays. miss007's byte
@@ -5867,9 +5892,14 @@ judge `Goal::Delivered(27)` and `Goal::Kept(27)`) from `take_treasure`
 the capture and `ship_cast`; member 11's 0x47aed0 waits in the port's
 state 16 (not sent back to 15). The stores show no text of their own
 (0x424b30 has none). Not ported: the capture's sends for slots past the
-ones held (the port keeps no leftovers), 0x424cf0's own 0x5d94 with 0
-(no handler acts on it for a scroll; 0x541a30 not decoded), miss003's
-kind-6 0x445de0.
+ones held (the port keeps no leftovers: they read kind 0, heard by none).
+0x424cf0's 0x5d94 with 0 is `Scene::store_out_news`, from the load
+panel's take out of a fort's or a settlement's store, the fort's cast,
+`take_out_scrolls` and a building's fall (`drop_held`); the port takes
+0x1c57 as always there (not decoded: whether it can go before the
+mission ends); its other callers (0x41d3e3, 0x41d4a0, 0x4bdcc0) not
+read. miss003's goods: `Scene::stir_volcano`. miss001's `Goal::Kept`:
+ships of any type, any building 0x32-0x3e of the player's.
 
 **Buildings asleep.** A building's record field 4 sets its state
 (0x441ba0 for settlements and towns, 0x427f50 for the rest): 1 being built,

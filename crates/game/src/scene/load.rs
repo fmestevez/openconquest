@@ -1025,7 +1025,9 @@ impl Scene {
                         .nth(index as usize)
                         .map(|(p, _)| p)
                         .ok_or("It is not there")?;
-                    Payload::Treasure(self.held.remove(p).1)
+                    let tr = self.held.remove(p).1;
+                    self.store_out_news(id, tr);
+                    Payload::Treasure(tr)
                 }
                 _ => return Err("It is not there".into()),
             });
@@ -1070,7 +1072,9 @@ impl Scene {
                     .nth(index as usize)
                     .map(|(p, _)| p)
                     .ok_or("It is not there")?;
-                Payload::Treasure(self.held.remove(p).1)
+                let tr = self.held.remove(p).1;
+                self.store_out_news(id, tr);
+                Payload::Treasure(tr)
             }
             Cargo::Hero(h) => {
                 if let Some(v) = self.site_heroes.get_mut(&id) {

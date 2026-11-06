@@ -45,7 +45,9 @@ pub enum Goal {
     /// miss001's parchment: delivered (`+0x134` 0, cleared by the
     /// brain's scroll handler 0x44af70) or one of kind 27 held by the
     /// player, aboard or stored (0x44a070: the count of 0x4c46c0 over the
-    /// whole map, ships 0xfff and buildings 0x1fff).
+    /// whole map, ships 0xfff and buildings 0x1fff: by 0x4c4610 a ship
+    /// of type 0-11 (class 200 + bit) and a building of class 0x32-0x3e
+    /// (0x32 + bit), any building of the player's, not only a town).
     Kept(u8),
     /// A brain's flag set by message 0x5d94 (`Scene::delivered`):
     /// miss001's parchment delivered (0x44a070 needs `+0x134` 0).
@@ -339,8 +341,18 @@ impl Scene {
             Goal::Stored(kind, b) => self.stored_in(kind, b),
             Goal::Kept(kind) => {
                 self.delivered.contains(&kind)
-                    || self.stored_in(kind, None)
-                    || self.goal_met(Goal::Aboard(kind))
+                    || self.held.iter().any(|(id, t)| {
+                        t.kind == kind
+                            && self.object_index(*id).is_some_and(|i| {
+                                let o = &self.objects[i];
+                                self.is_own(o)
+                                    && matches!(o.class, ObjectClass::Building(0x32..=0x3e))
+                            })
+                    })
+                    || self.own_ships().any(|o| {
+                        let s = o.ship.as_ref().unwrap();
+                        s.kind <= 11 && s.has_treasure(kind)
+                    })
             }
             Goal::Delivered(kind) => self.delivered.contains(&kind),
             Goal::TownIn(b) => self.towns_in(b).next().is_some(),

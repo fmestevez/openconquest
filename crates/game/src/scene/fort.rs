@@ -360,7 +360,8 @@ impl Scene {
             .iter()
             .position(|h| h.0 == site && h.1.kind == 9 && h.1.param == s as u32)
         {
-            self.held.remove(k);
+            let tr = self.held.remove(k).1;
+            self.store_out_news(site, tr);
         }
         self.fort_voice(site);
         Ok(())

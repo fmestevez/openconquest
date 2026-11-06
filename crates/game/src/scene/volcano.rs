@@ -197,12 +197,19 @@ impl Scene {
     /// at once, even if it already was, and after that eruption sleeps for
     /// good.
     pub(super) fn wake_volcano(&mut self, id: u32, n: u32) {
+        self.stir_volcano(id, n);
+        self.volcanoes.get_mut(&id).unwrap().once = true;
+    }
+
+    /// Volcano `id` given strength `n` and erupting at once (0x445de0:
+    /// `+0x94` set, 0x445920 with 1), keeping its cycle afterwards with
+    /// that strength (miss003's goods, 0x44fd90).
+    pub(super) fn stir_volcano(&mut self, id: u32, n: u32) {
         let v = self
             .volcanoes
             .entry(id)
             .or_insert_with(|| Volcano::new(id, n));
         v.n = n;
-        v.once = true;
         v.start();
         if let Some(i) = self.object_index(id) {
             let (x, y) = (self.objects[i].x, self.objects[i].y);

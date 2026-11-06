@@ -4707,6 +4707,126 @@ fn scroll_reveals_armour() {
     assert_eq!(kept, [3]);
 }
 
+/// miss001's keep term (0x44a070): a parchment held by the player over
+/// the whole map, counted by 0x4c46c0 with ships 0xfff (types 0-11) and
+/// buildings 0x1fff (classes 0x32-0x3e, 0x4c4610), so one aboard a ship
+/// of type 11 or stored in a building other than a town counts (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn miss001_parchment_held_by_masks() {
+    let Ok(root) = std::env::var("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    let scroll = crate::objects::Treasure {
+        kind: 27,
+        param: 0,
+        amount: 1,
+    };
+    scene.held.retain(|h| h.1.kind != 27);
+    for o in scene.objects.iter_mut() {
+        if let Some(s) = o.ship.as_mut() {
+            s.treasures.retain(|t| t.kind != 27);
+        }
+    }
+    assert!(!scene.goal_met(Goal::Kept(27)));
+    let site = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && matches!(o.record.class_id, 0x32 | 0x33))
+        .unwrap();
+    let id = scene.objects[site].id;
+    scene.objects[site].class = ObjectClass::Building(0x3e);
+    scene.held.push((id, scroll));
+    assert!(scene.goal_met(Goal::Kept(27)));
+    scene.objects[site].class = ObjectClass::Building(0x3f);
+    assert!(!scene.goal_met(Goal::Kept(27)));
+    scene.held.clear();
+    let ship = scene
+        .objects
+        .iter()
+        .position(|o| o.ship.is_some() && scene.is_own(o))
+        .unwrap();
+    let s = scene.objects[ship].ship.as_mut().unwrap();
+    s.kind = 11;
+    s.treasures.push(scroll);
+    assert!(scene.goal_met(Goal::Kept(27)));
+    assert!(!scene.goal_met(Goal::Aboard(27)));
+}
+
+/// miss003's goods (0x44fd90, message 0x5d94 with 1, kind 6, the brain's
+/// player at any class): the lava flows at (28, 34), (32, 34) and (30, 37)
+/// get 0x445de0 with 9, erupting at once with strength 9 and, unlike
+/// 0x445e00, not asleep for good after (needs `OPENCONQUEST_DATA`).
+#[test]
+fn miss003_goods_stir_the_lava() {
+    let Ok(root) = std::env::var("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    let ids: Vec<u32> = [(28, 34), (32, 34), (30, 37)]
+        .into_iter()
+        .map(|c| scene.volcano_at(c).unwrap())
+        .collect();
+    let goods = crate::objects::Treasure {
+        kind: 6,
+        param: 0,
+        amount: 1,
+    };
+    // Another player's, or one taken out: nothing.
+    scene.treasure_news(Some((3, 3)), None, goods, true);
+    scene.treasure_news(human, None, goods, false);
+    assert!(ids
+        .iter()
+        .all(|id| scene.volcanoes.get(id).is_none_or(|v| !v.erupting)));
+    scene.treasure_news(human, None, goods, true);
+    for id in ids {
+        let v = &scene.volcanoes[&id];
+        assert!(v.erupting && v.n == 9 && !v.once);
+    }
+}
+
+/// 0x424cf0: a treasure out of a player's building's store tells the
+/// brains (message 0x5d94 with 0): miss007's sword state (0x45f770) goes
+/// to 0 when the sword leaves a store, at the building's fall too
+/// (0x423d60 at 0x4243fc) (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn store_take_out_tells_the_brains() {
+    let Ok(root) = std::env::var("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    let sword_state = |scene: &Scene| scene.brain.as_ref().unwrap().fields[0];
+    let sword = crate::objects::Treasure {
+        kind: 22,
+        param: 0,
+        amount: 0,
+    };
+    let site = scene
+        .objects
+        .iter()
+        .find(|o| scene.is_own(o) && matches!(o.record.class_id, 0x32 | 0x33))
+        .unwrap()
+        .id;
+    scene.store_treasure(site, sword);
+    assert_eq!(sword_state(&scene), 2);
+    scene.store_out_news(site, sword);
+    assert_eq!(sword_state(&scene), 0);
+    scene.store_treasure(site, sword);
+    assert_eq!(sword_state(&scene), 2);
+    scene.drop_held(site, &data, &mut caches);
+    assert_eq!(sword_state(&scene), 0);
+    assert!(scene.held.iter().all(|h| h.0 != site));
+}
+
 /// The other missions' scroll handlers (message 0x5d94 with 1): miss001
 /// (0x44af70) says 0x848 and 0x849 for the parchment (number 0) at a
 /// settlement or town and clears `+0x134`, its judge's term (0x44a070),

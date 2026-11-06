@@ -1654,8 +1654,10 @@ impl Scene {
     /// state `+0x104` 0, with 1 1 for player 16, else 2) and, with 1 and
     /// the record's owner the brain's player, the scrolls
     /// (`scroll_news`), miss009's kind 9 number 6 (0x4663d0: string
-    /// 0x847, at any class) and miss010's Golden Fleece (0x46a0f0: kind
-    /// 16 at any class, its byte `+0x130`, here `delivered` 16).
+    /// 0x847, at any class), miss003's goods (0x44fd90: kind 6 at any
+    /// class, three lava flows stirred) and miss010's Golden Fleece
+    /// (0x46a0f0: kind 16 at any class, its byte `+0x130`, here
+    /// `delivered` 16).
     pub(super) fn treasure_news(
         &mut self,
         owner: Option<(u32, u32)>,
@@ -1669,6 +1671,16 @@ impl Scene {
         let mine = owner.is_some() && owner == self.human.map(|h| (h.nation, h.slot));
         if stored && mine {
             self.scroll_news(site, tr);
+            // miss003 (0x44fd90 at 0x450dc1), goods at any class: the
+            // objects in the landscape grid's slots of cells (28, 34),
+            // (32, 34) and (30, 37), its lava flows, get 0x445de0 with 9.
+            if self.mission == "miss003" && tr.kind == 6 {
+                for cell in [(28, 34), (32, 34), (30, 37)] {
+                    if let Some(id) = self.volcano_at(cell) {
+                        self.stir_volcano(id, 9);
+                    }
+                }
+            }
             if self.mission == "miss009" && tr.kind == 9 && tr.param == 6 {
                 self.said.push(0x847);
             }
@@ -1741,8 +1753,8 @@ impl Scene {
     /// 0x479570: building `site`'s stored scrolls numbered `number` taken
     /// out of its store (0x424cf0 with 0: 0x55b500, no object made). It
     /// walks the store by index and goes on to the next index after a
-    /// removal, so a scroll right after a removed one stays. (0x424cf0's
-    /// own message 0x5d94 with 0 is heard by no handler for a scroll.)
+    /// removal, so a scroll right after a removed one stays; each one
+    /// taken out is told (`store_out_news`).
     fn take_out_scrolls(&mut self, site: u32, number: u32) {
         let mut k = 0;
         while let Some(p) = self
@@ -1756,9 +1768,33 @@ impl Scene {
             let tr = self.held[p].1;
             if tr.kind == 27 && tr.param == number {
                 self.held.remove(p);
+                self.store_out_news(site, tr);
             }
             k += 1;
         }
+    }
+
+    /// 0x424cf0's message 0x5d94 with 0 to the brains: treasure `tr` taken
+    /// out of building `site`'s store, told while the building is a
+    /// player's (`+0x57` 1) and 0x541a30(0x1c57) is 0. 0x541a30 (on the
+    /// building's `+0xc`) walks its list of objects (`+0x10`) for one whose
+    /// `+4` record has 0x1c57 at `+4` and gives 0 when it finds one, else
+    /// -4. 0x1c57 is what Players.cpp 0x51f680 makes at every mission's
+    /// start (0x51f746), the id the navy is sent to (0x542630); the port
+    /// takes it as there (not decoded: whether it ever goes before the
+    /// mission ends). Only miss007's sword (kind 22) handler acts on it
+    /// (`treasure_news`).
+    pub(super) fn store_out_news(&mut self, site: u32, tr: crate::objects::Treasure) {
+        let Some(o) = self.object_index(site).map(|i| &self.objects[i]) else {
+            return;
+        };
+        if !matches!(o.class, openconquest_formats::ObjectClass::Building(_))
+            || Self::side_of(o) != 1
+        {
+            return;
+        }
+        let owner = o.owner;
+        self.treasure_news(owner, Some(site), tr, false);
     }
 
     /// `n` cells about cell `(x, y)` (0x4796c0 with a 1 x 1 area).

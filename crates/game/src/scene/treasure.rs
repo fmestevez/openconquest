@@ -764,6 +764,9 @@ impl Scene {
         self.held = kept;
         for (_, tr) in dropped {
             self.place_treasure(tr, x, y, data, caches);
+            // A building's store emptied at its fall (0x423d60 at
+            // 0x4243fc: 0x424cf0 with 1) is told to the brains.
+            self.store_out_news(id, tr);
             self.messages.push(format!(
                 "{} lies in the wreckage",
                 objects::treasure_name(tr.kind)
