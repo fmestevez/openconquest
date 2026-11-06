@@ -44,6 +44,27 @@ pub struct Chest {
     pub stepped: u32,
 }
 
+/// A sinking ship still in the world's object table (0x51f1f0 finds it):
+/// the original keeps the hull (`+0x74` 5, `+0x251` 4) until 0x4dec40,
+/// on 0x4c12b0's 2 (the frame at the count; with no picture the first
+/// step), posts message 10 to it (0x542670) and it is removed. Its
+/// player's list lost it at the sinking (0x4a8410), so 0x4ac050 no
+/// longer finds it for a player (0x4a8710) and the attackers' 0x13a
+/// comes while it is still found here. The port takes the ship out at
+/// once and keeps this.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Sinking {
+    /// The ship's id (`+0x4c`).
+    pub id: u32,
+    /// Its cell (`+0x5a3`, `+0x5a7`; the hull no longer moves).
+    pub cell: (i32, i32),
+    /// The tick of message 10: a step each 3 ticks (`+0x7d` 2), so
+    /// `3 x max(frames, 1)` from the sinking, counted from the sinking as
+    /// the port's frames are.
+    pub until: u32,
+}
+
 /// What a sinking ship leaves at its next-to-last frame (0x4e4e30,
 /// 0x4e4f20), kept from the sinking (the port takes the ship out then).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -114,6 +135,16 @@ impl Scene {
     /// fewer than 3 frames (the first step already leaves frame 1, and
     /// with none it is past the last), so nothing is left then.
     pub(super) fn sink_drop(&mut self, i: usize, frames: usize, treasures: Vec<Treasure>) {
+        {
+            let t = TILE_SIZE as f32;
+            let o = &self.objects[i];
+            let cell = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+            self.sinkings.push(Sinking {
+                id: o.id,
+                cell,
+                until: self.ticks + 3 * (frames.max(1) as u32),
+            });
+        }
         if frames < 3 {
             return;
         }
@@ -142,6 +173,7 @@ impl Scene {
     /// with 0).
     pub(super) fn run_sink_drops(&mut self, data: &GameData, caches: &mut Caches) {
         let now = self.ticks;
+        self.sinkings.retain(|k| k.until > now);
         let (due, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sink_drops)
             .into_iter()
             .partition(|d| d.at <= now);

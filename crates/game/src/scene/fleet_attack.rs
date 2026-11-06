@@ -345,9 +345,10 @@ impl Scene {
     /// 0x4cfad0, the next target: none with the queue empty; else with
     /// the block's target `+0xc` still found (0x51f1f0) `+0x10` = that
     /// old target's cell, and from the queue's first entry (not removed)
-    /// `+0xc`, `+0x14`, `+0x1c`, with `+0x18` 7. So with the old target
-    /// gone (the usual 0x13a) the result is 0 and the block ends, however
-    /// many targets are queued.
+    /// `+0xc`, `+0x14`, `+0x1c`, with `+0x18` 7. A sunk target is still
+    /// found while it sinks (`Sinking`), so its 0x13a moves on; only a
+    /// target removed (message 10 past its sinking, a prize gone) ends
+    /// the block, however many targets are queued.
     fn fa_next(&self, a: &mut FleetAttack) -> bool {
         let Some(&q) = a.queue.first() else {
             return false;
@@ -360,6 +361,8 @@ impl Scene {
         } else if let Some(t) = self.object_index(a.target) {
             let (x, y) = self.cell_of(t);
             a.cell = x + y * self.nav.width as i32;
+        } else if let Some(k) = self.sinkings.iter().find(|k| k.id == a.target) {
+            a.cell = k.cell.0 + k.cell.1 * self.nav.width as i32;
         }
         a.target = q.target;
         a.command = q.command;
@@ -368,10 +371,19 @@ impl Scene {
         true
     }
 
-    /// Whether object `id` is found (0x51f1f0): an object of the map or a
-    /// land creatures' jam.
+    /// Whether object `id` is found (0x51f1f0): an object of the map, a
+    /// land creatures' jam, or a ship sinking until its message 10. The
+    /// lookup skips only entries whose `+0x14` is set: the base class
+    /// 0x5425a0 sets it 1, the game objects' 0x50b960 then 0, and no game
+    /// object's store of it was found, so a sunk ship stays found until
+    /// removed.
     fn fa_found(&self, id: u32) -> bool {
-        self.object_index(id).is_some() || self.jams.iter().any(|j| j.id == id)
+        self.object_index(id).is_some()
+            || self.jams.iter().any(|j| j.id == id)
+            || self
+                .sinkings
+                .iter()
+                .any(|k| k.id == id && k.until > self.ticks)
     }
 
     /// 0x4cfe40 without a route: the record `{ship, +0xc, +0x10, +0x14,
@@ -393,10 +405,13 @@ impl Scene {
                     self.post(Order::Attack { ship, target });
                     return;
                 }
-                let Some(t) = self.object_index(target) else {
-                    return;
+                let (x, y) = match self.object_index(target) {
+                    Some(t) => self.cell_of(t),
+                    None => match self.sinkings.iter().find(|k| k.id == target) {
+                        Some(k) if k.until > self.ticks => k.cell,
+                        _ => return,
+                    },
                 };
-                let (x, y) = self.cell_of(t);
                 let s = TILE_SIZE as f32;
                 self.post(Order::Move {
                     ship,
@@ -512,11 +527,28 @@ mod tests {
         assert_eq!((a.target, a.cell), (g, fcell));
         assert_eq!(a.queue, [q(g)]);
         assert_eq!(std::mem::take(&mut scene.outbox), [at(id0, g)]);
-        // f queued again behind g; g sunk: the block ends, f still queued.
+        // f queued again behind g; g sunk, its hull still in the world's
+        // table while it sinks (0x51f1f0 finds it): its 0x13a moves the
+        // block on to f, `+0x10` g's cell.
         scene.order_fleet_attack(&[id0, id1], f, 0x16, 4).unwrap();
         assert_eq!(scene.fleet_attacks[0].queue, [q(g), q(f)]);
+        let gi = scene.object_index(g).unwrap();
+        scene.sink_drop(gi, 20, Vec::new());
+        assert_eq!(scene.sinkings[0].until, scene.ticks + 60);
         scene.objects.retain(|o| o.id != g);
         scene.post_notice(id1, 0x13a, g);
+        scene.run_fleet_attacks();
+        let a = &scene.fleet_attacks[0];
+        assert_eq!((a.target, a.cell), (f, row.0 + 3 + row.1 * w));
+        assert_eq!(a.queue, [q(f)]);
+        assert_eq!(std::mem::take(&mut scene.outbox), [at(id1, f)]);
+        // g queued behind f, then f removed (gone from the table): its
+        // 0x13a ends the block though g is queued (0x4cfad0 finds no old
+        // target).
+        scene.order_fleet_attack(&[id0, id1], id0, 0x16, 4).ok();
+        scene.fleet_attacks[0].queue.push(q(g));
+        scene.objects.retain(|o| o.id != f);
+        scene.post_notice(id0, 0x13a, f);
         scene.run_fleet_attacks();
         assert!(scene.fleet_attacks.is_empty());
         assert!(scene.outbox.is_empty());

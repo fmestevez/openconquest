@@ -7062,14 +7062,14 @@ impl App {
             if own_warship && enemy_ship {
                 let target = self.attack_target(target);
                 let keys = self.key_flags();
-                if let Err(e) = self.issue(Order::FleetAttack {
+                // The click's refusals are silent (0x5180e0; the navy's
+                // 0x49dda0 and the ships' 0x4e2ba0 show no text).
+                let _ = self.issue(Order::FleetAttack {
                     ships: vec![id],
                     target,
                     command: 0x16,
                     keys,
-                }) {
-                    self.say(e);
-                }
+                });
                 return;
             }
             // Unarmed warships (fire ships, fire rammers) ram instead.
@@ -7085,14 +7085,14 @@ impl App {
                 .is_some_and(|t| self.scene.objects[t].ship.is_some());
             if own_rammer && enemy_ship && target_ship {
                 let keys = self.key_flags();
-                if let Err(e) = self.issue(Order::FleetAttack {
+                // The click's refusals are silent (0x5180e0; the navy's
+                // 0x49dda0 and the ships' 0x4e2ba0 show no text).
+                let _ = self.issue(Order::FleetAttack {
                     ships: vec![id],
                     target,
                     command: 0x18,
                     keys,
-                }) {
-                    self.say(e);
-                }
+                });
                 return;
             }
         }

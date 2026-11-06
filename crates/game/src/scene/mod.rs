@@ -475,6 +475,8 @@ pub struct Scene {
     pub chests: BTreeMap<u32, chest::Chest>,
     /// What sinking ships will leave at their next-to-last frame.
     pub sink_drops: Vec<chest::SinkDrop>,
+    /// Sunk ships still in the world's table until their message 10.
+    pub sinkings: Vec<chest::Sinking>,
     /// Big reefs a brain raises this tick: cell and kind (not saved: raised
     /// at once).
     pending_reefs: Vec<(i32, i32, u32)>,
@@ -931,6 +933,7 @@ impl Scene {
             castles: BTreeMap::new(),
             chests: BTreeMap::new(),
             sink_drops: Vec::new(),
+            sinkings: Vec::new(),
             pending_reefs: Vec::new(),
             pending_walkers: Vec::new(),
             pending_casts: Vec::new(),
@@ -1288,6 +1291,7 @@ impl Scene {
                 castles: self.castles.iter().map(|(k, v)| (*k, v.clone())).collect(),
                 chests: self.chests.iter().map(|(k, v)| (*k, v.clone())).collect(),
                 sink_drops: self.sink_drops.clone(),
+                sinkings: self.sinkings.clone(),
                 parties: self.parties.clone(),
             },
             game_id: None,
@@ -1511,6 +1515,7 @@ impl Scene {
         scene.castles = b.castles.iter().cloned().collect();
         scene.chests = b.chests.iter().cloned().collect();
         scene.sink_drops = b.sink_drops.clone();
+        scene.sinkings = b.sinkings.clone();
         scene.parties = b.parties.clone();
         scene.refresh_sight();
         if !save.start_sites.is_empty() {
@@ -3509,6 +3514,8 @@ pub struct Battle {
     pub chests: Vec<(u32, chest::Chest)>,
     #[serde(default)]
     pub sink_drops: Vec<chest::SinkDrop>,
+    #[serde(default)]
+    pub sinkings: Vec<chest::Sinking>,
     #[serde(default)]
     pub parties: Vec<landing::Party>,
 }

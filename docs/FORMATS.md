@@ -2946,9 +2946,27 @@ with the group's three (0x4c42f0); 0x136 only with a route; 0x13a-0x13d
 0x4cfad0 true, sends the ship (heard); else 0x4a1c60 ends the block.
 0x4cfad0: queue empty, 0; else the block's **old** target `+0xc` looked
 up (0x51f1f0): found, `+0x10` = its cell and from entry 0 (not removed)
-`+0xc`, `+0x14`, `+0x1c`, `+0x18` 7, result 1; not found, 0. So a
-target sunk ends the block however many targets are queued; a prize
-taken (0x13a from 0x4b6f20, the prize still there) moves on to the next.
+`+0xc`, `+0x14`, `+0x1c`, `+0x18` 7, result 1; not found, 0. 0x51f1f0
+walks the world's table (`+0x10`: count `+0xc`, 8-byte entries from
+`+0x1c`) for the id `+0x4c`, skipping entries whose `+0x14` is set: the
+framework's base 0x5425a0 sets it 1, the game objects' 0x50b960 then 0,
+and no store of it to a game object was found (the listing's constant
+stores of 1 at `+0x14` are other structures). A sunk ship stays in the
+table while it sinks (0x4dec40: `+0x74` 5, `+0x251` 4) until 0x4c12b0
+returns 2 (its frame at the count; with no picture its first step, a
+step each time more than `+0x7d` 2 ticks passed) and 0x4dec40 posts
+message 10 to it (0x542670) which removes it. Its player's list lost it
+at the sinking (0x4a8410), so the attackers' 0x4c09c0 -> 0x4b9140 ->
+0x4ac050 (a player's object by 0x4a8710) no longer find it and post
+0x13a while 0x51f1f0 still does: a target sunk moves the block on to the
+next queued, as a prize taken (0x13a from 0x4b6f20) does; only a target
+removed from the table ends it with targets queued. The port keeps a
+sunk ship's id and cell (`chest::Sinking`, `Scene::sinkings`, from
+`sink_drop`) until `3 x max(frames, 1)` ticks after the sinking (its
+frames counted from the sinking, as the port's are; when message 10 is
+processed after its posting not read); 0x4cfad0's `+0x10` and
+0x4cfc90's move take its cell. Only the blows' sinking (battle.rs)
+records one.
 The tick 0x4d0650 (from 0x4c4f40): with no notices or none heard and
 group `+8 > 0x50` (unsigned): `+8 = 0`, each ship lying still (`+0x58c`
 0) sent (0x4cfe40) when for 0x15/0x16 it has no fire task (`+0x25d &
@@ -2959,8 +2977,8 @@ the route and the block. The port: the group is the selection's (a
 gather zone's or attack zone's group of the same ships taken over, its
 `+8` kept); forts of the selection take the attack themselves; the port
 refuses a target the attack pointer would not take (a friend; for
-board and ram a non-ship); 0x51f1f0 is the port's id lookup (an object
-or a jam; a sunk object is gone). Not ported: the route `+0x61` (kept
+board and ram a non-ship), silently, as the click's refusals; 0x51f1f0
+is the port's id lookup (an object, a jam or a ship sinking). Not ported: the route `+0x61` (kept
 only from a block of another kind under Shift) with 0x4cfe40's route
 branch (0x4cea20, 0x4ceab0, 0x4ce8a0), the held orders `+0x34`
 (0x4cffb0, 0x4d0030, 0x4d0090) and 0x136's case; the mark message
