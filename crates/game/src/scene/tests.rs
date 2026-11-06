@@ -4935,7 +4935,8 @@ fn creatures_leave_their_lairs() {
 /// miss002: Argus come to one of the player's buildings (message 0x5d99
 /// from a building) lets them build the Argo, once (`+0x160`); Argus taken
 /// by a ship (0x5d99 from a ship) is the brain's `+0x164`, the judge's,
-/// and sends members (1, 3) and (1, 2) to state 0x46; the mission wants the
+/// and sends members (1, 3) and (1, 2) to state 0x46, an attack on
+/// (0, 0, 10, 13); the mission wants the
 /// Argo afloat with Jason and Argus aboard (needs `OPENCONQUEST_DATA`).
 #[test]
 fn argus_builds_the_argo() {
@@ -4968,6 +4969,17 @@ fn argus_builds_the_argo() {
     for m in [3, 2] {
         let k = scene.member_fleet(1, m).unwrap();
         assert_eq!(scene.brain.as_ref().unwrap().fleets[k].state, 0x46);
+    }
+    // At their next turns both attack (0, 0, 10, 13) (0x44c280, 0x44c460).
+    for _ in 0..60 * 2 {
+        scene.update(0.02, &data, &mut caches);
+    }
+    for m in [3, 2] {
+        let k = scene.member_fleet(1, m).unwrap();
+        assert_eq!(
+            scene.brain.as_ref().unwrap().fleets[k].last_area,
+            (0, 0, 10, 13)
+        );
     }
     let ship = scene
         .objects

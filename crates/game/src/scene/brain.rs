@@ -3775,6 +3775,11 @@ mod miss002 {
         }
     }
 
+    /// The state members (1, 3) and (1, 2) are sent to when Argus is taken
+    /// aboard a ship (0x44d0e0), and its area (0x47a6a0's x, y, w, h).
+    const ARGUS_RAID: u32 = 0x46;
+    const ARGUS_AREA: Cells = (0, 0, 10, 13);
+
     /// Holds the harbour mouth (0x44c280).
     fn home_guard(state: u32) -> Op {
         const WATCH: &[Event] = &[
@@ -3793,6 +3798,15 @@ mod miss002 {
                 failed: 0,
                 to: (33, 24),
                 ticks: 3000,
+                events: WATCH,
+            },
+            // Argus taken aboard a ship (0x44d0e0): an attack on the
+            // north-west corner, 7500 ticks (0x44c280).
+            ARGUS_RAID => Op::Attack {
+                next: 0,
+                failed: 0,
+                target: Target::Area(ARGUS_AREA),
+                ticks: 7500,
                 events: WATCH,
             },
             _ => Op::Attack {
@@ -3889,6 +3903,14 @@ mod miss002 {
                 target: Target::Seen,
                 ticks: 4500,
                 events: FIGHTING,
+            },
+            // As the home guard's (0x44c460).
+            ARGUS_RAID => Op::Attack {
+                next: 0,
+                failed: 0,
+                target: Target::Area(ARGUS_AREA),
+                ticks: 7500,
+                events: APPROACH,
             },
             _ => Op::Attack {
                 next: 0,

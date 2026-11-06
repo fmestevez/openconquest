@@ -5756,7 +5756,8 @@ the owner (nation x 4 + slot against the brain's player `+0xe4`) and the
 hero, never the param, and set a flag once: miss001 (0x44af70) Jason
 `+0x130`; miss002 (0x44d0e0) Argus: from a ship `+0x164` (each time, with
 members (1, 3) and (1, 2) sent to state 0x46 by 0x479750: an attack on
-(0, 0, 10, 13), 7500 ticks, their usual events), from any other class the
+(0, 0, 10, 13) as 0x47a6a0's x, y, w, h, 7500 ticks, their usual events,
+next and failed state 0: case 0x46 of 0x44c280 and 0x44c460), from any other class the
 first time (`+0x160`) the permission to build the Argo (0x4a9810 with
 0x50, 1; no notice); miss003 (0x44fd90) Theseus `+0x168`; miss004
 (0x453b00) Perseus `+0x190`; miss005 (0x457950) Odysseus `+0x1b0`;
