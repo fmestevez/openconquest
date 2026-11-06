@@ -10527,10 +10527,17 @@ not shown) and 0x4bd500 take it out, cast or not. Ported:
 `Ship::add_treasure` / `remove_treasure`, `commands::ship_menu`,
 `Scene::ship_cast_check` / `ship_cast` (`magic_may_cast`,
 `magic_cast_check`, `magic_cast` shared with the forts), `stare_at`;
-the port's own free casts for the player are gone. Not decoded: whether
-a ship's capture sets the magic's player (only the counts do here),
-0x4df870's callers, and 0x42f580's own refusals for a ship's cast (the
-port lowers the count only when the cast is made).
+the port's own free casts for the player are gone. The capture (0x4b6f20,
+0x4b9700 the ship's player) leaves the magic alone: its player stays the
+old one until the next count (the only `+0x7d2` users are 0x4a3f40,
+0x4b9bf0, 0x4b9fd0, 0x4ba070, 0x4bd500, 0x4dc3d0 setting it 0, 0x4dd2fc,
+0x4df870 and 0x4e2ba0). 0x4df870, called only by the ship's handler
+0x4dc630 on message 3 (after posting 0xd21), is the ship's teardown: the
+magic goes with the ship (the port's `Ship` with its object). 0x42f580
+refuses only when 0x42ed40 does (and case 0xd without a target); past it
+0x42f470 lowers the count (or with none takes the price, 0x596844 /
+0x59687c less the discount) before the spell is made, whatever the
+spell then does; the port lowers it so.
 
 **The land take.** 0x4af940 (`+0x792` the sea cell, `+0x797` the land
 cell): the hero's house (class 0x49) its berth vt+0xb8 = 0x40e050 and its

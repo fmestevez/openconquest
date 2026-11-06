@@ -1143,14 +1143,13 @@ impl Scene {
                 }
             }
         } else if let Some(spell) = Spell::of_index(s) {
+            // 0x42f580's only refusal is 0x42ed40's; past it 0x42f470
+            // takes the count before the spell is made, whatever comes of
+            // it.
             let may = self.magic_may_cast(&m.counts, m.owner, s as usize);
             let counted = m.counts[s as usize] > 0;
-            if self
-                .magic_cast(&m.counts, m.owner, spell, cell, target, draw, data, caches)
-                .is_ok()
-                && may
-                && counted
-            {
+            let _ = self.magic_cast(&m.counts, m.owner, spell, cell, target, draw, data, caches);
+            if may && counted {
                 m.counts[s as usize] -= 1;
             }
             // The ship may have gone with the cast.
