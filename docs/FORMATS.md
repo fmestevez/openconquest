@@ -5778,20 +5778,42 @@ announcements at the start (they set nothing).
 
 Message 0x5d94 (same record, `+0x16` the treasure's 20 bytes: kind,
 .., `+0x22` field 7) is sent with 1 by a building storing a treasure
-(0x424b30) and with 0 by a ship taking one (0x4b6e80 from 0x4b97d0 /
-0x4bd0c0) or laying one as it sinks (0x4e4f20). The handlers with 1: the
-scrolls (kind 27, field 7 the scroll's number; class 0x32 / 0x33 the
-grants, else string 0x837): miss001 (0x44af70) number 0 to a settlement
-or town strings 0x848, 0x849, 0x479570 and `+0x134` cleared; miss002
-(0x44d0e0) 1, miss003 (0x44fd90) 3, miss004 (0x453b00) 4, miss005
-(0x457950) 5, miss006 (0x45b280) 6, miss007 11 and 12, miss009
-(0x4663d0) 13 (see the scrolls' grants); miss009 kind 9, number 6:
-string 0x847; miss010 (0x46a0f0) the Fleece (kind 16) `+0x130`. With 0 only
-miss007 (0x45f770): Hercules's sword (kind 22) taken or laid sets byte
-`+0x104` 0 (with 1, stored by player 16 1, by any other 2). Not ported:
-the 0x5d94 messages themselves; the port keeps `Scene::delivered` and the
-scrolls' grants at the store (`store_treasure`), and miss007's member 11
-looks at the sword where it is instead of `+0x104`; 0x479570.
+(0x424b30, while a player's) and by a ship taking one (0x4b6e80 from
+0x4a5bc0: at 0x4a5c89 after 0x4b97d0 uses it at once, at 0x4a5cef when
+0x4bd0c0 put it aboard), and with 0 for each treasure aboard a ship laying
+them as it sinks (0x4e4f20 at 0x4e4f52) or at a capture (0x4b6f20 at
+0x4b7142); 0x4de5ea (0x4de669 with 1, 0x4de6a6) and 0x4e329b (0x4e330c)
+send it too (not read). The handlers with 1: the scrolls (kind 27, field
+7 the scroll's number, the record's owner the brain's player; class 0x32 /
+0x33 the grants, the brain's string and 0x479570, any other class, so a
+ship, string 0x837): miss001 (0x44af70) number 0 to a settlement or town
+strings 0x848, 0x849, 0x479570 and `+0x134` cleared; miss002 (0x44d0e0)
+1, miss003 (0x44fd90) 3, miss004 (0x453b00) 4, miss005 (0x457950) 5,
+miss006 (0x45b280) 6, miss007 (0x45f770) 12 (0x4a9810 0x1e, 0x24, 0x34;
+string 0x841) and 11 (0x29; 0x842), miss009 (0x4663d0) 13 (see the
+scrolls' grants); miss009 kind 9, number 6: string 0x847; miss010
+(0x46a0f0) the Fleece (kind 16) `+0x130`. 0x479570 (this, number, the
+building's id) takes the building's stored scrolls of that number out of
+its store (0x424cf0 with 0: 0x55b500, no new object). miss007's byte
+`+0x104`, Hercules's sword (kind 22), whoever the owner: with 0 it is 0,
+with 1 1 for player 16 and 2 for any other; message 2 starts it at 2.
+Its member 11 (0x45e120) reads it before its switch: below 2 to state 15
+(0x47aed0's take of the sword, the whole map) unless there; at 2 each of
+the brain's player's ships (class 200-0xd3), settlements and towns
+(0x32, 0x33) holding the sword sends it to state 0x19, an attack on the
+holder's cell (x, y, 1, 1) for 6000 ticks; reaching 0x14 from 15 sets 3.
+Member 8 (0x45d640), after its ask: member 11 under four royal ships,
+bombers and ship killers, member 8's own count at least its size less
+one and `+0x104` 0 or 2, member 11's ships join it (0x479370). The port:
+`treasure_news` (miss007's `+0x104`, brain field 0) from `take_treasure`
+(sea and land takes), `store_treasure` / `store_at` and
+`run_sink_drops`; member 11's 0x47aed0 waits in the port's state 16 (not
+sent back to 15). Not ported: the scroll handlers themselves (the port
+keeps `Scene::delivered` and grants any mission's scroll at a store to
+any of the player's buildings, with its own texts, `read_scroll`; the
+original grants only the mission's number at a settlement or town, says
+string 0x837 for one taken by a ship, and takes it out of the store with
+0x479570), the capture's 0x5d94, 0x4de5ea's and 0x4e329b's.
 
 **Buildings asleep.** A building's record field 4 sets its state
 (0x441ba0 for settlements and towns, 0x427f50 for the rest): 1 being built,

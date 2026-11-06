@@ -1645,18 +1645,25 @@ impl Scene {
             .map(|o| o.id)
     }
 
-    /// The cell of the human player's ship or building holding a treasure
-    /// of kind `kind`.
-    pub(super) fn human_holder_of(&self, kind: u8) -> Option<(i32, i32)> {
-        let t = TILE_SIZE as f32;
-        self.objects
-            .iter()
-            .filter(|o| self.is_own(o))
-            .find(|o| {
-                o.ship.as_ref().is_some_and(|s| s.has_treasure(kind))
-                    || self.held.iter().any(|h| h.0 == o.id && h.1.kind == kind)
-            })
-            .map(|o| ((o.x / t) as i32, (o.y / t) as i32))
+    /// Message 0x5d94 to the brains: a treasure of kind `kind` came to an
+    /// object of `owner`'s (`stored` 1: a ship taking it, 0x4a5bc0, or a
+    /// building storing it, 0x424b30) or left a ship's hold (0: laid as it
+    /// sinks, 0x4e4f20; the capture, 0x4b6f20). Of the handlers' terms
+    /// only miss007's on Hercules's sword (0x45f770) is here: with 0 its
+    /// state `+0x104` 0, with 1 1 for player 16, else 2. (The scrolls'
+    /// grants and the Fleece are `Scene::delivered`'s.)
+    pub(super) fn treasure_news(&mut self, owner: Option<(u32, u32)>, kind: u8, stored: bool) {
+        if self.mission != "miss007" || kind != 22 {
+            return;
+        }
+        let Some(br) = self.brain.as_mut() else {
+            return;
+        };
+        br.fields[miss007::SWORD_STATE] = match (stored, owner) {
+            (false, _) => 0,
+            (true, Some((n, s))) if n * 4 + s == 16 => 1,
+            (true, _) => 2,
+        };
     }
 
     /// `n` cells about cell `(x, y)` (0x4796c0 with a 1 x 1 area).
@@ -8103,6 +8110,8 @@ mod miss007 {
             }
             scene.add_deposit(0x191, (15, 46, 5, 5), data, caches);
         }
+        // The sword's state starts at 2 (0x45f770's message 2).
+        scene.brain.as_mut().unwrap().fields[SWORD_STATE] = 2;
         // The barbarian fleets' sizes before raiding (brain + 0x108-0x10c).
         let d = level as u32;
         let rolls = [(2, 3), (1, 4), (2, 3), (2, 3), (3, 4)];
@@ -8130,15 +8139,35 @@ mod miss007 {
     /// Each fleet's bookkeeping on its turn (the start of 0x45cbf0 and the
     /// others): what to ask the yard for.
     pub fn turn(scene: &mut Scene, k: usize) {
-        // Member 11 (0x45e120): while the player holds Hercules's sword,
-        // it attacks about the ship or building holding it.
+        // Member 11 (0x45e120), by the sword's state (`+0x104`): below 2
+        // (taken or laid, or stored by the barbarians) it goes to take it
+        // (state 15) unless there already; at 2 (stored by another, as at
+        // the start) each of the player's ships, settlements and towns
+        // holding it sends it to attack the holder's cell (25); at 3
+        // nothing.
         if k == 11 {
-            let state = scene.brain.as_ref().unwrap().fleets[k].state;
-            if state != 25 {
-                if let Some(cell) = scene.human_holder_of(SWORD) {
-                    scene.set_fleet_area(k, (cell.0 - 2, cell.1 - 2, 5, 5));
-                    scene.brain.as_mut().unwrap().fleets[k].state = 25;
-                    scene.brain.as_mut().unwrap().fleets[k].started = false;
+            let sword = scene.brain.as_ref().unwrap().fields[SWORD_STATE];
+            if sword < 2 {
+                // (16 is the port's wait for 0x47aed0's take, state 15's.)
+                if !matches!(scene.brain.as_ref().unwrap().fleets[k].state, 15 | 16) {
+                    scene.set_state(k, 15);
+                }
+            } else if sword < 3 {
+                let t = TILE_SIZE as f32;
+                let holders: Vec<(i32, i32)> = scene
+                    .objects
+                    .iter()
+                    .filter(|o| scene.is_own(o))
+                    .filter(|o| {
+                        o.ship.as_ref().is_some_and(|s| s.has_treasure(SWORD))
+                            || matches!(o.record.class_id, 0x32 | 0x33)
+                                && scene.held.iter().any(|h| h.0 == o.id && h.1.kind == SWORD)
+                    })
+                    .map(|o| ((o.x / t) as i32, (o.y / t) as i32))
+                    .collect();
+                for (x, y) in holders {
+                    scene.set_fleet_area(k, (x, y, 1, 1));
+                    scene.set_state(k, 25);
                 }
             }
             return;
@@ -8205,6 +8234,19 @@ mod miss007 {
             } else {
                 let r = scene.brain_draw();
                 scene.brain.as_mut().unwrap().fleets[k].vars[TARGET] = r % (d + span) + base;
+            }
+            // Member 8 (0x45d640): with member 11 under four royal ships,
+            // bombers and ship killers, its own at least its size less one
+            // and the sword's state 0 or 2, member 11's ships join it
+            // (0x479370).
+            if k == 8 {
+                let br = scene.brain.as_ref().unwrap();
+                let (want, sword) = (br.fleets[k].vars[TARGET], br.fields[SWORD_STATE]);
+                let m = scene.fleet_types(11);
+                let theirs = m[ROYAL as usize] + m[BOMBER as usize] + m[KILLER as usize];
+                if theirs < 4 && want as i32 - 1 <= have as i32 && matches!(sword, 0 | 2) {
+                    scene.fleet_merge(k, 11);
+                }
             }
             return;
         }
@@ -8571,6 +8613,8 @@ mod miss007 {
                         .is_some_and(|s| s.has_treasure(SWORD))
                 });
                 if held {
+                    // Done (0x47aed0 to 0x14): the sword's state 3.
+                    scene.brain.as_mut().unwrap().fields[SWORD_STATE] = 3;
                     20
                 } else if scene.loose_treasure(SWORD).is_some() {
                     16
@@ -8603,6 +8647,11 @@ mod miss007 {
 
     /// Hercules's sword (treasure kind 22, the brain's +0x104 watch).
     const SWORD: u8 = 22;
+    /// The brain field holding the sword's state (byte `+0x104`): 0 taken
+    /// out of a ship's hold or laid by a sinking ship, 1 stored or taken
+    /// by player 16, 2 by any other (and at the start), 3 taken by member
+    /// 11 (message 0x5d94, 0x45f770; `Scene::treasure_news`).
+    pub const SWORD_STATE: usize = 0;
 
     fn persian_amber(state: u32) -> Op {
         match state {

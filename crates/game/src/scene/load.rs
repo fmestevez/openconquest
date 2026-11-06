@@ -1174,6 +1174,7 @@ impl Scene {
             6 => self.credit_class(owner, tr.param + 400, tr.amount as i64),
             _ => {
                 self.held.push((site, tr));
+                self.treasure_news(Some(owner), tr.kind, true);
                 if Some(owner) == self.human.map(|h| (h.nation, h.slot)) {
                     self.delivered.push(tr.kind);
                     self.messages
@@ -1199,6 +1200,7 @@ impl Scene {
             7 => self.unpack(site, tr),
             _ => {
                 self.held.push((site, tr));
+                self.treasure_news(Some(owner), tr.kind, true);
                 if Some(owner) == self.human.map(|h| (h.nation, h.slot)) {
                     self.delivered.push(tr.kind);
                     self.messages

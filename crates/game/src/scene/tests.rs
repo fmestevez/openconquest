@@ -7965,7 +7965,8 @@ fn miss013_brain_builds_its_fleets() {
 }
 
 /// miss007's wizard guard turns on the player's ship holding Hercules's
-/// sword (needs `OPENCONQUEST_DATA`).
+/// sword while the sword's state (`+0x104`, message 0x5d94) is 2, and
+/// goes to take it at 0 (needs `OPENCONQUEST_DATA`).
 #[test]
 fn miss007_guard_hunts_the_sword() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -7989,10 +7990,41 @@ fn miss007_guard_hunts_the_sword() {
             param: 0,
             amount: 0,
         });
+    let id = scene.objects[i].id;
     for _ in 0..100 {
         scene.update(crate::clock::TICK, &data, &mut caches);
     }
     assert_eq!(scene.brain.as_ref().unwrap().fleets[11].state, 25);
+    // The holder's own cell (0x45e120's area x, y, 1, 1).
+    let i = scene.object_index(id).unwrap();
+    let t = TILE_SIZE as f32;
+    let (x, y) = (scene.objects[i].x / t, scene.objects[i].y / t);
+    let at = (x as i32, y as i32, 1, 1);
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[11].area, Some(at));
+    // Message 0x5d94 (0x45f770): with 1 player 16's 1, another's 2; with
+    // 0 (laid as a ship sinks) 0, and member 11 goes to take it (15).
+    let sword = |scene: &Scene| scene.brain.as_ref().unwrap().fields[0];
+    assert_eq!(sword(&scene), 2);
+    scene.treasure_news(Some((4, 0)), 22, true);
+    assert_eq!(sword(&scene), 1);
+    scene.treasure_news(scene.human.map(|h| (h.nation, h.slot)), 22, true);
+    assert_eq!(sword(&scene), 2);
+    scene.treasure_news(None, 21, false);
+    assert_eq!(sword(&scene), 2);
+    let i = scene.object_index(id).unwrap();
+    scene.objects[i].ship.as_mut().unwrap().treasures.clear();
+    scene.treasure_news(None, 22, false);
+    assert_eq!(sword(&scene), 0);
+    for _ in 0..100 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    // State 15's 0x47aed0 ran: the whole map into `+0x40` (none lies
+    // loose, so on to 5, and back to 15 at the next turn).
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    assert_eq!(
+        scene.brain.as_ref().unwrap().fleets[11].last_area,
+        (0, 0, w, h)
+    );
 }
 
 /// Puts own ship `ship` where its load reaches object `target` (a port's,

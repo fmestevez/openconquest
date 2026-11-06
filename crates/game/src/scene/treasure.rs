@@ -612,8 +612,8 @@ impl Scene {
     /// (0x4b9bf0). Any other goes aboard (0x4bd0c0). Neither shows a text:
     /// the notices 0x4a1af0 / 0x4a1a60 (0x142 / 0x141) go to the ship's
     /// group for the computers' orders, 0x4bd0c0's 0x4bebe0 / 0x4bc880
-    /// refresh the panel, and 0x4b6e80's 0x5d94 goes to the player's
-    /// brain.
+    /// refresh the panel, and 0x4b6e80's 0x5d94 (with 1) goes to the
+    /// player's brain (`treasure_news`).
     fn take_treasure(&mut self, i: usize, g: usize, data: &GameData, caches: &mut Caches) {
         let tr = self.objects[g].treasure.unwrap();
         let id = self.objects[g].id;
@@ -710,6 +710,8 @@ impl Scene {
                 s.add_treasure(tr, owner);
             }
         }
+        // Message 0x5d94 with 1 (0x4b6e80; 0x4a5bc0 at 0x4a5c89, 0x4a5cef).
+        self.treasure_news(owner, tr.kind, true);
         // The treasure answers message 0x158c1 (0x4074d0) by going to
         // state 3, 0x406c80: off its cell, sound event 272 (`trea2`).
         self.sounds.push(("trea2", x, y));
