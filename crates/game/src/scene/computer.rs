@@ -2492,14 +2492,14 @@ impl Scene {
     /// wanted and the reserve has none.
     fn ai_ask_ships(&mut self, ai: &mut Computer, f: usize, now: u32) {
         let b = ai.flotillas[f].base;
-        if ai.bases.get(b).is_none_or(|b| b.site.is_none()) {
+        let Some(town) = ai.bases.get(b).and_then(|b| b.site) else {
             return;
-        }
+        };
         let have = self.type_counts(&ai.flotillas[f]);
         let spare = self.type_counts(&ai.flotillas[ai.reserve]);
         for group in ai.wants_of(ai.flotillas[f].role) {
             let Some(&(kind, count, flag, prio)) =
-                group.iter().find(|w| self.can_produce(ai.owner, w.0))
+                group.iter().find(|w| self.can_produce(ai.owner, town, w.0))
             else {
                 continue;
             };
@@ -2541,20 +2541,26 @@ impl Scene {
         n
     }
 
-    /// Whether the player can have ships of type `kind` built (0x43da20
-    /// case 4 without the price): its nation's, studied if unique, the
-    /// buildings it needs standing.
-    fn can_produce(&self, owner: (u32, u32), kind: u8) -> bool {
-        if !economy::buildable_ships(owner.0).any(|k| k == kind) {
-            return false;
-        }
-        if (8..12).contains(&kind)
-            && self.levels_of(Some(owner)).get(Upgrade::Special(kind - 8)) == 0
+    /// Whether `owner`'s town `town` may have ships of type `kind` built
+    /// (0x480000 with 200: 0x43da20(town, 4, 1, 0, kind, 0, 1, 0, 1) is 0).
+    /// The town standing (`+0xa4` 1), or a town (0x33) going up (`+0xa4`
+    /// 0), else -5; then its nation's (the permission), the studies (a
+    /// bomber's armour and a rammer's ram, -7; the unique ships'), the
+    /// buildings it needs, and with param_6 the default arming's fallback
+    /// items, armour and ram to hand (0x43da20 test 5); param_3 0 stops
+    /// it before the idle test and the price. (The other `+0xa4` states,
+    /// mended or asleep, are not ported, as in `queue_test`.)
+    fn can_produce(&self, owner: (u32, u32), town: u32, kind: u8) -> bool {
+        if self.construction_at(town).is_some()
+            && self
+                .object_index(town)
+                .is_none_or(|i| self.class_of(i) != Some(TOWN))
         {
             return false;
         }
-        let need = economy::ship_requirements(kind) | 1;
-        self.buildings_of(owner) & need == need
+        economy::buildable_ships(owner.0).any(|k| k == kind)
+            && self.may_build_ship_for(owner, kind).is_ok()
+            && self.fallbacks_to_hand(owner, town, kind)
     }
 
     /// Sends the asked ships to the towns and forgets the served (0x480270).
@@ -4163,13 +4169,13 @@ impl Scene {
     /// fire rammers (8, 10), quick lime ships or ships of the dead (9, 11).
     fn target_size(&self, ai: &mut Computer, f: usize, fleet: bool) -> u32 {
         let b = ai.flotillas[f].base;
-        if ai.bases.get(b).and_then(|b| b.site).is_none() {
+        let Some(t) = ai.bases.get(b).and_then(|b| b.site) else {
             return ai.roll(3) + if fleet { 6 } else { 5 };
-        }
+        };
         let o = ai.owner;
-        let bomb = self.can_produce(o, 3);
-        let fire = self.can_produce(o, 8) || self.can_produce(o, 10);
-        let lime = self.can_produce(o, 9) || self.can_produce(o, 11);
+        let bomb = self.can_produce(o, t, 3);
+        let fire = self.can_produce(o, t, 8) || self.can_produce(o, t, 10);
+        let lime = self.can_produce(o, t, 9) || self.can_produce(o, t, 11);
         let d = ai.difficulty;
         if !fleet {
             match d {
@@ -9446,6 +9452,39 @@ mod tests {
             }
         }
         assert!(sent && took, "the computer never went for a treasure");
+    }
+
+    /// A type the base's town may not have built is not asked for
+    /// (0x4800c0 -> 0x480000 -> 0x43da20 case 4): in battle01 the computer
+    /// has neither armour nor the ram studied, so its want groups' bombers
+    /// (3) and rammers (5) give way to the next type of each group, and
+    /// every ship it asks for is built.
+    #[test]
+    fn computer_asks_only_for_ships_it_may_build() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "battle01").unwrap();
+        let mut asked = 0;
+        let mut done = 0;
+        for k in 0..15 * 60 * 10 {
+            scene.update(0.1, &data, &mut caches);
+            let ai = &scene.computers.players[0];
+            let levels = scene.levels_of(Some(ai.owner));
+            for r in &ai.requests {
+                if r.kind == 3 {
+                    assert_ne!(levels.get(Upgrade::Armour), 0, "t{k}: a bomber asked");
+                }
+                if r.kind == 5 {
+                    assert_ne!(levels.get(Upgrade::Ram), 0, "t{k}: a rammer asked");
+                }
+                assert_ne!(r.state, 3, "t{k}: type {} refused", r.kind);
+            }
+            asked = asked.max(ai.requests.len());
+            done = done.max(ai.requests.iter().filter(|r| r.state == 2).count());
+        }
+        assert!(asked > 0 && done > 0, "{asked} asked, {done} built");
     }
 
     #[test]

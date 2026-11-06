@@ -604,7 +604,7 @@ impl Scene {
     /// 0x43da20 test 5 for a ship of type `kind` armed by default at
     /// settlement `town` of `owner`: its fallback items, armour and ram
     /// in its store or to be had.
-    fn fallbacks_to_hand(&self, owner: (u32, u32), town: u32, kind: u8) -> bool {
+    pub(super) fn fallbacks_to_hand(&self, owner: (u32, u32), town: u32, kind: u8) -> bool {
         let k = kind as usize % 12;
         let stock = self.garrison(town);
         let (armour, rams) = self.fittings.get(&town).cloned().unwrap_or_default();

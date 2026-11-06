@@ -9592,7 +9592,11 @@ below 25-45% (boats, merchants) or 50-75% (warships; or crews below 35-65%,
 **Want tables** (by difficulty, 0x47f980; the Persians, player ids 12-15,
 have their own for roles 6, 8, 9): groups of 16-byte entries (ship type,
 count, flag, priority), each group ending in -1. For each group the first
-type the base's town can build (0x480000 -> 0x43da20 case 4) is asked for
+type the base's town can build (0x480000 -> 0x43da20(town, 4, 1, 0, kind,
+0, 1, 0, 1) == 0: the town standing, or a town going up; the permission;
+a bomber's armour and a rammer's ram studied (-7), the unique ships'
+study; the buildings; the default arming's fallbacks to hand; param_3 0
+ends it before the idle test and the price) is asked for
 when the flotilla has fewer than `count` and the reserve none; the request
 (+0xe00, 0x90 bytes) keys on `priority - flag x 2500 + 22767`, waits 12-50
 ticks, is sent to the town as order `0x50 + type` (0x5c for boats), and is
