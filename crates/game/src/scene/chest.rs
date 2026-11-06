@@ -160,7 +160,7 @@ impl Scene {
             let (x, y) = (d.cell.0 as f32 * t + t / 2.0, d.cell.1 as f32 * t + t / 2.0);
             for tr in d.treasures.into_iter().take(cap) {
                 // Message 0x5d94 with 0 for each (0x4e4f20 at 0x4e4f52).
-                self.treasure_news(None, tr.kind, false);
+                self.treasure_news(None, None, tr, false);
                 self.place_treasure(tr, x, y, data, caches);
             }
         }

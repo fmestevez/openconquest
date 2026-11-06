@@ -41,17 +41,18 @@ const MISSION_GRANTS: [&[u8]; 14] = [
     &[],
 ];
 
-/// The scrolls of knowledge: number, the mission holding it, what it
-/// grants and what it says (string resources 2104-2118).
-const SCROLLS: &[(u32, usize, &[u8], &str)] = &[
-    (1, 2, &[29, 35, 52], "You can now upgrade to silver armor."),
-    (3, 3, &[17, 50], "You can now produce strong weapons."),
-    (4, 4, &[25], "You can now upgrade power of strong weapons."),
-    (5, 5, &[26], "You can now upgrade rate of strong weapons."),
-    (6, 6, &[53], "You can now upgrade speed of ships."),
-    (11, 7, &[41], "You can now build Bomber ships."),
-    (12, 7, &[30, 36, 52], "You can now upgrade to golden armor."),
-    (13, 9, &[46, 76], "You can now research Greek Fire."),
+/// The scrolls of knowledge: number, the mission holding it and what its
+/// brain grants when it is delivered (the 0x5d94 handlers,
+/// `Scene::scroll_news`).
+const SCROLLS: &[(u32, usize, &[u8])] = &[
+    (1, 2, &[29, 35, 52]),
+    (3, 3, &[17, 50]),
+    (4, 4, &[25]),
+    (5, 5, &[26]),
+    (6, 6, &[53]),
+    (11, 7, &[41]),
+    (12, 7, &[30, 36, 52]),
+    (13, 9, &[46, 76]),
 ];
 
 /// Building the Argo (0x4164e0 offers command 0x7d with bit 80).
@@ -89,7 +90,7 @@ impl Permits {
                 p.set(b, true);
             }
         }
-        for &(_, mission, grants, _) in SCROLLS {
+        for &(_, mission, grants) in SCROLLS {
             if mission < n {
                 for &b in grants {
                     p.set(b, true);
@@ -110,16 +111,13 @@ impl Permits {
         p
     }
 
-    /// Grants scroll `number`'s knowledge, returning what it says.
-    pub fn read_scroll(&mut self, number: u32) -> &'static str {
-        match SCROLLS.iter().find(|s| s.0 == number) {
-            Some(&(_, _, grants, says)) => {
-                for &b in grants {
-                    self.set(b, true);
-                }
-                says
+    /// Grants what scroll `number`'s delivery grants (tests).
+    #[cfg(test)]
+    pub fn grant_scroll(&mut self, number: u32) {
+        for s in SCROLLS.iter().filter(|s| s.0 == number) {
+            for &b in s.2 {
+                self.set(b, true);
             }
-            None => "You have got a scroll of knowledge.",
         }
     }
 
@@ -229,7 +227,7 @@ mod tests {
         assert!(Permits::campaign(13).ship(3));
         let mut p = Permits::campaign(6);
         assert!(!p.ship(3));
-        assert_eq!(p.read_scroll(11), "You can now build Bomber ships.");
+        p.grant_scroll(11);
         assert!(p.ship(3));
         assert!(Permits::ALL.spell(Spell::Lightning));
         assert!(!Permits::campaign(13).spell(Spell::Lightning));

@@ -5742,7 +5742,7 @@ count), so a mission is never won without a town to carry:
 | Mission | Win | Loss |
 |---|---|---|
 | 000 | barbarians cleared; the parchment aboard a ship of type 0-9 | no town at (19-20, 0-1) |
-| 001 | barbarians cleared; town (0-1, 2-3) with every hero; the parchment stored; Jason | parchment neither stored nor aboard; town gone; Jason lost after joining |
+| 001 | barbarians cleared; town (0-1, 2-3) with every hero; the parchment delivered (`+0x134` 0, see Hero and treasure messages); Jason | parchment not delivered and none held, aboard or stored; town gone; Jason lost after joining |
 | 002 | town (0-1, 2-3); Argus boarded; the Argo with Jason and Argus | town gone; the Argo lost; Jason gone; Argus lost after boarding |
 | 003 | Argo; town (0-4, 40-47) with every hero; home (35-36, 20-21); Jason | no Argo; home gone; Jason gone |
 | 004 | Persians without ships and settlements; Argo; Pylos (25-27, 5-7) with every hero; Jason | no Argo; Jason gone; Pylos gone |
@@ -5791,19 +5791,40 @@ Message 0x5d94 (same record, `+0x16` the treasure's 20 bytes: kind,
 0x4a5bc0: at 0x4a5c89 after 0x4b97d0 uses it at once, at 0x4a5cef when
 0x4bd0c0 put it aboard), and with 0 for each treasure aboard a ship laying
 them as it sinks (0x4e4f20 at 0x4e4f52) or at a capture (0x4b6f20 at
-0x4b7142); 0x4de5ea (0x4de669 with 1, 0x4de6a6) and 0x4e329b (0x4e330c)
-send it too (not read). The handlers with 1: the scrolls (kind 27, field
-7 the scroll's number, the record's owner the brain's player; class 0x32 /
-0x33 the grants, the brain's string and 0x479570, any other class, so a
-ship, string 0x837): miss001 (0x44af70) number 0 to a settlement or town
-strings 0x848, 0x849, 0x479570 and `+0x134` cleared; miss002 (0x44d0e0)
-1, miss003 (0x44fd90) 3, miss004 (0x453b00) 4, miss005 (0x457950) 5,
-miss006 (0x45b280) 6, miss007 (0x45f770) 12 (0x4a9810 0x1e, 0x24, 0x34;
-string 0x841) and 11 (0x29; 0x842), miss009 (0x4663d0) 13 (see the
-scrolls' grants); miss009 kind 9, number 6: string 0x847; miss010
-(0x46a0f0) the Fleece (kind 16) `+0x130`. 0x479570 (this, number, the
-building's id) takes the building's stored scrolls of that number out of
-its store (0x424cf0 with 0: 0x55b500, no new object). miss007's byte
+0x4b7142: 0x4b6e80 as the taker, while the prize holds any treasure, for
+each slot below its type's room 0x597afc, held or not); the land party's
+take (0x4de5ea: 0x4de669 with 1 after 0x4b97d0 uses it at once, 0x4de6a6
+with 1 when 0x4bd0c0 put it aboard) and a ship's cast of a spell aboard
+(order 0x22, 0x4e329b: 0x4e330c with 0, the slot before 0x4bd500 takes
+it out) send it too. 0x424cf0 (a building's stored treasure taken out)
+sends it with 0 while the building is a player's and 0x541a30(0x1c57)
+is 0. The handlers with 1, all with the record's owner the brain's
+player (+0xe4): the scrolls (kind 27, field 7 the scroll's number; class
+0x32 / 0x33 the grants by 0x4a9810 with 1, the brain's strings by
+0x4ff360, each a chat line (message 0x4dd to the chat), and 0x479570; any
+other class, a ship or another building, string 0x837 "You have got a
+scroll of knowledge."): miss001 (0x44af70) number 0, only at a settlement
+or town (no 0x837): strings 0x848 "The parchment that describes the way
+to Colchis", 0x849 " is delivered to the town Iolcus.", 0x479570 and
+`+0x134` cleared; miss002 (0x44d0e0) 1: 35, 29, 52, 0x838 ("You can now
+uprgrade to silver armor.", the game's spelling); miss003 (0x44fd90) 3
+only while `+0x164` is 0 (set at the grant; then nothing, not even
+0x837): 17, 50, 0x83d; miss004 (0x453b00) 4: 25, 0x83e; miss005
+(0x457950) 5: 26, 0x83f; miss006 (0x45b280) 6: 53, 0x844; miss007
+(0x45f770) 12: 30, 36, 52, 0x841 ("Technology that allows you to upgrade
+to golden armor.", not 0x845) and 11: 41, 0x842; miss009 (0x4663d0) 13:
+46, 76, 0x846; miss009 kind 9, number 6, at any class: string 0x847;
+miss010 (0x46a0f0) the Fleece (kind 16) at any class, a ship's take too:
+byte `+0x130`; miss003 also kind 6 (goods) at any class: 0x445de0(9) on
+three of the interface's objects (not decoded). No other brain handles
+0x5d94 (miss000, 008, 011-013). miss001's judge (0x44a070) wins only with
+`+0x134` 0 and loses with `+0x134` set while 0x4c46c0 finds no kind 27
+held by the player (its ships 0xfff and buildings 0x1fff, the whole map:
+the count read at `[ebp-0x2c]`, treasure slot 0x47 + 27 of the second
+call's table). 0x479570 (this, number, the building's id) walks the
+building's store by index and takes each scroll of that number out
+(0x424cf0 with 0: 0x55b500, no new object), going on to the next index
+after a removal, so a scroll right after a removed one stays. miss007's byte
 `+0x104`, Hercules's sword (kind 22), whoever the owner: with 0 it is 0,
 with 1 1 for player 16 and 2 for any other; message 2 starts it at 2.
 Its member 11 (0x45e120) reads it before its switch: below 2 to state 15
@@ -5814,15 +5835,18 @@ holder's cell (x, y, 1, 1) for 6000 ticks; reaching 0x14 from 15 sets 3.
 Member 8 (0x45d640), after its ask: member 11 under four royal ships,
 bombers and ship killers, member 8's own count at least its size less
 one and `+0x104` 0 or 2, member 11's ships join it (0x479370). The port:
-`treasure_news` (miss007's `+0x104`, brain field 0) from `take_treasure`
-(sea and land takes), `store_treasure` / `store_at` and
-`run_sink_drops`; member 11's 0x47aed0 waits in the port's state 16 (not
-sent back to 15). Not ported: the scroll handlers themselves (the port
-keeps `Scene::delivered` and grants any mission's scroll at a store to
-any of the player's buildings, with its own texts, `read_scroll`; the
-original grants only the mission's number at a settlement or town, says
-string 0x837 for one taken by a ship, and takes it out of the store with
-0x479570), the capture's 0x5d94, 0x4de5ea's and 0x4e329b's.
+`treasure_news` (miss007's `+0x104`, brain field 0; the scrolls
+`scroll_news` and `take_out_scrolls`; miss001's `+0x134`, miss003's
+`+0x164` and miss010's `+0x130` in `Scene::delivered`, 27 and 16; the
+strings in `Scene::said`, shown by the front end as chat lines; miss001's
+judge `Goal::Delivered(27)` and `Goal::Kept(27)`) from `take_treasure`
+(sea and land takes), `store_treasure` / `store_at`, `run_sink_drops`,
+the capture and `ship_cast`; member 11's 0x47aed0 waits in the port's
+state 16 (not sent back to 15). The stores show no text of their own
+(0x424b30 has none). Not ported: the capture's sends for slots past the
+ones held (the port keeps no leftovers), 0x424cf0's own 0x5d94 with 0
+(no handler acts on it for a scroll; 0x541a30 not decoded), miss003's
+kind-6 0x445de0.
 
 **Buildings asleep.** A building's record field 4 sets its state
 (0x441ba0 for settlements and towns, 0x427f50 for the rest): 1 being built,
@@ -8974,7 +8998,7 @@ held by an amazon lair) 29, 35, 52 ("You can now upgrade to silver
 armor"); 3 (miss003) 17, 50 (strong weapons); 4 (miss004) 25 (their
 power); 5 (miss005) 26 (their rate); 6 (miss006) 53 (speed of ships); 11
 (miss007) 41 (bombers); 12 (miss007) 30, 36, 52 (golden armour); 13
-(miss009) 46, 76 (Greek fire). Other scrolls only say "You have got a
+(miss009) 46, 76 (Greek fire). Only the mission's own number grants, in its own mission; one taken by a ship (or at another class) says "You have got a
 scroll of knowledge". Brains also grant computer players bits (78, 79: the
 Persians' specials).
 

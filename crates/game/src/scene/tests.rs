@@ -1134,7 +1134,7 @@ fn save_and_restore() {
         scene.update(0.02, &data, &mut caches);
     }
     // Knowledge gained since the start is kept.
-    scene.permits.read_scroll(1);
+    scene.permits.grant_scroll(1);
     let path = std::env::temp_dir().join(format!(
         "openconquest-save-test-{}.json",
         std::process::id()
@@ -4639,7 +4639,11 @@ fn difficulty_sets_bonus() {
 
 /// The campaign reveals technology as it goes: miss002's player cannot
 /// build bombers or study armour until the amazons' scroll of knowledge
-/// reaches a settlement (needs `OPENCONQUEST_DATA`).
+/// (number 1) reaches a settlement or town of theirs. The brain's handler
+/// (0x44d0e0, message 0x5d94 with 1) says string 0x837 for one taken by a
+/// ship; at a settlement it grants 35, 29 and 52 (0x4a9810), says 0x838
+/// and takes the scroll out of the store (0x479570). Another number, or
+/// another player's building, does nothing (needs `OPENCONQUEST_DATA`).
 #[test]
 fn scroll_reveals_armour() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -4655,21 +4659,125 @@ fn scroll_reveals_armour() {
         .held
         .iter()
         .any(|(id, t)| *id == 0x18 && t.kind == 27 && t.param == 1));
-    // (No settlement yet: any own object takes it as one would.)
-    let site = scene.objects.iter().find(|o| scene.is_own(o)).unwrap().id;
-    scene.store_treasure(
-        site,
-        crate::objects::Treasure {
-            kind: 27,
-            param: 1,
-            amount: 1,
-        },
+    let scroll = |param| crate::objects::Treasure {
+        kind: 27,
+        param,
+        amount: 1,
+    };
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    // Taken by a ship: "You have got a scroll of knowledge.", no grant.
+    scene.treasure_news(human, None, scroll(1), true);
+    assert_eq!(scene.said, [0x837]);
+    assert_eq!(
+        data.strings.get(&0x837).unwrap(),
+        "You have got a scroll of knowledge."
     );
-    assert_eq!(scene.next_level(crate::combat::Upgrade::Armour), Some(0));
-    assert!(scene
-        .messages
+    assert!(!scene.permits.allows(29));
+    scene.said.clear();
+    // The lair's own store (not the player's): nothing.
+    scene.store_treasure(0x18, scroll(1));
+    assert!(scene.said.is_empty());
+    let site = scene
+        .objects
         .iter()
-        .any(|m| m == "You can now upgrade to silver armor."));
+        .find(|o| scene.is_own(o) && matches!(o.record.class_id, 0x32 | 0x33))
+        .unwrap()
+        .id;
+    // Another number at the settlement: stored, nothing said.
+    scene.store_treasure(site, scroll(3));
+    assert!(scene.said.is_empty());
+    assert!(!scene.permits.allows(29));
+    scene.store_treasure(site, scroll(1));
+    assert_eq!(scene.said, [0x838]);
+    assert_eq!(
+        data.strings.get(&0x838).unwrap(),
+        "You can now uprgrade to silver armor."
+    );
+    for b in [29, 35, 52] {
+        assert!(scene.permits.allows(b), "{b}");
+    }
+    assert_eq!(scene.next_level(crate::combat::Upgrade::Armour), Some(0));
+    // Scroll 1 is out of the store; scroll 3 stays.
+    let kept: Vec<u32> = scene
+        .held
+        .iter()
+        .filter(|h| h.0 == site)
+        .map(|h| h.1.param)
+        .collect();
+    assert_eq!(kept, [3]);
+}
+
+/// The other missions' scroll handlers (message 0x5d94 with 1): miss001
+/// (0x44af70) says 0x848 and 0x849 for the parchment (number 0) at a
+/// settlement or town and clears `+0x134`, its judge's term (0x44a070),
+/// nothing for one taken by a ship; miss003 (0x44fd90) grants scroll 3
+/// once (`+0x164`); miss007 (0x45f770) 12 with 0x841 and 11 with 0x842;
+/// 0x479570 skips the scroll right after one it takes out (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn scroll_handlers_by_mission() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let scroll = |param| crate::objects::Treasure {
+        kind: 27,
+        param,
+        amount: 1,
+    };
+    let town_of = |scene: &Scene| {
+        scene
+            .objects
+            .iter()
+            .find(|o| scene.is_own(o) && matches!(o.record.class_id, 0x32 | 0x33))
+            .unwrap()
+            .id
+    };
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    assert!(scene.story.contains(&Goal::Delivered(27)));
+    scene.treasure_news(human, None, scroll(0), true);
+    assert!(scene.said.is_empty() && scene.delivered.is_empty());
+    let site = town_of(&scene);
+    // Two already in the store, a third stored: 0x479570 takes out the
+    // first, then looks at index 1 of the two left (the third), so the
+    // second stays.
+    scene.held.push((site, scroll(0)));
+    scene.held.push((site, scroll(0)));
+    scene.store_treasure(site, scroll(0));
+    assert_eq!(scene.said, [0x848, 0x849]);
+    assert_eq!(
+        data.strings.get(&0x849).unwrap(),
+        " is delivered to the town Iolcus."
+    );
+    assert_eq!(scene.held.iter().filter(|h| h.0 == site).count(), 1);
+    assert!(scene.goal_met(Goal::Delivered(27)) && scene.goal_met(Goal::Kept(27)));
+
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    let site = town_of(&scene);
+    scene.store_treasure(site, scroll(3));
+    assert_eq!(scene.said, [0x83d]);
+    assert!(scene.permits.allows(17) && scene.permits.allows(50));
+    scene.said.clear();
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    scene.treasure_news(human, None, scroll(3), true);
+    scene.store_treasure(site, scroll(3));
+    assert!(scene.said.is_empty(), "granted once: then nothing");
+    assert!(scene.held.contains(&(site, scroll(3))));
+
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    let site = town_of(&scene);
+    scene.store_treasure(site, scroll(11));
+    scene.store_treasure(site, scroll(12));
+    assert_eq!(scene.said, [0x842, 0x841]);
+    assert_eq!(
+        data.strings.get(&0x841).unwrap(),
+        "Technology that allows you to upgrade to golden armor."
+    );
+    for b in [41, 30, 36, 52] {
+        assert!(scene.permits.allows(b), "{b}");
+    }
 }
 
 /// Goods handed to a settlement or fort (the load panel's 0x441480 /
@@ -4729,7 +4837,7 @@ fn campaign_carries_research() {
     let mut levels = scene.levels_of(Some(owner));
     levels.set(crate::combat::Upgrade::Reach(1), 2);
     scene.levels.insert(owner, levels);
-    scene.permits.read_scroll(11);
+    scene.permits.grant_scroll(11);
     let carry = scene.carry();
     let mut next = Scene::load(&data, &mut caches, "miss003").unwrap();
     assert!(!next.permits.ship(3));
@@ -8004,16 +8112,26 @@ fn miss007_guard_hunts_the_sword() {
     // Message 0x5d94 (0x45f770): with 1 player 16's 1, another's 2; with
     // 0 (laid as a ship sinks) 0, and member 11 goes to take it (15).
     let sword = |scene: &Scene| scene.brain.as_ref().unwrap().fields[0];
+    let sword_of = |kind| crate::objects::Treasure {
+        kind,
+        param: 0,
+        amount: 0,
+    };
     assert_eq!(sword(&scene), 2);
-    scene.treasure_news(Some((4, 0)), 22, true);
+    scene.treasure_news(Some((4, 0)), None, sword_of(22), true);
     assert_eq!(sword(&scene), 1);
-    scene.treasure_news(scene.human.map(|h| (h.nation, h.slot)), 22, true);
+    scene.treasure_news(
+        scene.human.map(|h| (h.nation, h.slot)),
+        None,
+        sword_of(22),
+        true,
+    );
     assert_eq!(sword(&scene), 2);
-    scene.treasure_news(None, 21, false);
+    scene.treasure_news(None, None, sword_of(21), false);
     assert_eq!(sword(&scene), 2);
     let i = scene.object_index(id).unwrap();
     scene.objects[i].ship.as_mut().unwrap().treasures.clear();
-    scene.treasure_news(None, 22, false);
+    scene.treasure_news(None, None, sword_of(22), false);
     assert_eq!(sword(&scene), 0);
     for _ in 0..100 {
         scene.update(crate::clock::TICK, &data, &mut caches);
@@ -8358,8 +8476,8 @@ fn a_dry_fort_has_no_berth() {
 
 /// The load panel at a shipyard (c_load.cpp, 0x4e7640): the settlement's
 /// stock and the ship trade marines and weapons both ways within the
-/// room aboard; a treasure handed to the settlement is stored and counts
-/// as delivered (message 0x5d94), and goes back aboard; Kill item throws
+/// room aboard; a treasure handed to the settlement is stored (message
+/// 0x5d94 to the brain), and goes back aboard; Kill item throws
 /// a treasure into the sea; Finish reload ends it (needs
 /// `OPENCONQUEST_DATA`).
 #[test]
@@ -8443,7 +8561,7 @@ fn load_panel_moves_items_both_ways() {
     assert!(scene
         .transfer(ship, site, Cargo::Unit(6, 0), &data, &mut caches)
         .is_err());
-    // The Golden Fleece handed to the settlement: stored, delivered.
+    // The Golden Fleece handed to the settlement: stored.
     let fleece = crate::objects::Treasure {
         kind: 16,
         param: 0,
@@ -8454,7 +8572,8 @@ fn load_panel_moves_items_both_ways() {
     let tr = Cargo::Treasure { index: 0, kind: 16 };
     scene.transfer(ship, site, tr, &data, &mut caches).unwrap();
     assert!(scene.held.contains(&(site, fleece)));
-    assert!(scene.delivered.contains(&16), "the brains hear of it");
+    // (miss000's brain has no 0x5d94 handler: nothing set.)
+    assert!(scene.delivered.is_empty());
     let store = scene.load_list(site, Some((STORE, 0)));
     assert_eq!(store.len(), 2, "the header and the Fleece");
     assert_eq!((store[1].cat, store[1].sub), (TREASURE, 16));

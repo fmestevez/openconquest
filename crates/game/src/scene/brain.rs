@@ -1645,25 +1645,120 @@ impl Scene {
             .map(|o| o.id)
     }
 
-    /// Message 0x5d94 to the brains: a treasure of kind `kind` came to an
-    /// object of `owner`'s (`stored` 1: a ship taking it, 0x4a5bc0, or a
-    /// building storing it, 0x424b30) or left a ship's hold (0: laid as it
-    /// sinks, 0x4e4f20; the capture, 0x4b6f20). Of the handlers' terms
-    /// only miss007's on Hercules's sword (0x45f770) is here: with 0 its
-    /// state `+0x104` 0, with 1 1 for player 16, else 2. (The scrolls'
-    /// grants and the Fleece are `Scene::delivered`'s.)
-    pub(super) fn treasure_news(&mut self, owner: Option<(u32, u32)>, kind: u8, stored: bool) {
-        if self.mission != "miss007" || kind != 22 {
+    /// Message 0x5d94 to the brains (0x4b6e80, 0x424b30): treasure `tr`
+    /// came to an object of `owner`'s, building `site` or a ship (`None`)
+    /// (`stored` 1: a ship taking it, 0x4a5bc0 and 0x4de5ea, or a building
+    /// storing it, 0x424b30) or left a ship's hold (0: laid as it sinks,
+    /// 0x4e4f20; the capture, 0x4b6f20 at 0x4b7142; a cast, 0x4e330c).
+    /// The handlers: miss007's on Hercules's sword (0x45f770: with 0 its
+    /// state `+0x104` 0, with 1 1 for player 16, else 2) and, with 1 and
+    /// the record's owner the brain's player, the scrolls
+    /// (`scroll_news`), miss009's kind 9 number 6 (0x4663d0: string
+    /// 0x847, at any class) and miss010's Golden Fleece (0x46a0f0: kind
+    /// 16 at any class, its byte `+0x130`, here `delivered` 16).
+    pub(super) fn treasure_news(
+        &mut self,
+        owner: Option<(u32, u32)>,
+        site: Option<u32>,
+        tr: crate::objects::Treasure,
+        stored: bool,
+    ) {
+        if self.brain.is_none() {
             return;
         }
-        let Some(br) = self.brain.as_mut() else {
+        let mine = owner.is_some() && owner == self.human.map(|h| (h.nation, h.slot));
+        if stored && mine {
+            self.scroll_news(site, tr);
+            if self.mission == "miss009" && tr.kind == 9 && tr.param == 6 {
+                self.said.push(0x847);
+            }
+            if self.mission == "miss010" && tr.kind == 16 && !self.delivered.contains(&16) {
+                self.delivered.push(16);
+            }
+        }
+        if self.mission != "miss007" || tr.kind != 22 {
             return;
-        };
+        }
+        let br = self.brain.as_mut().unwrap();
         br.fields[miss007::SWORD_STATE] = match (stored, owner) {
             (false, _) => 0,
             (true, Some((n, s))) if n * 4 + s == 16 => 1,
             (true, _) => 2,
         };
+    }
+
+    /// The brains' scroll handlers (message 0x5d94 with 1, kind 27, field
+    /// 7 the mission's number, the record's owner the brain's player): at
+    /// a settlement or town (class 0x32 / 0x33) the permissions (0x4a9810
+    /// with 1), the brain's lines (0x4ff360, a chat line each) and the
+    /// building's scrolls of that number taken out of its store
+    /// (0x479570); at any other class (a ship, or another building)
+    /// string 0x837, "You have got a scroll of knowledge.". miss001
+    /// (0x44af70) number 0, only at a settlement or town (no 0x837):
+    /// strings 0x848, 0x849 and `+0x134` cleared (`delivered` 27, its
+    /// judge's term); miss002 (0x44d0e0) 1: 35, 29, 52, 0x838; miss003
+    /// (0x44fd90) 3 while `+0x164` is 0 (`delivered` 27, set at the
+    /// grant; after it nothing, not even 0x837): 17, 50, 0x83d; miss004
+    /// (0x453b00) 4: 25, 0x83e; miss005 (0x457950) 5: 26, 0x83f; miss006
+    /// (0x45b280) 6: 53, 0x844; miss007 (0x45f770) 12: 30, 36, 52, 0x841
+    /// (its "Technology that allows you to upgrade to golden armor."),
+    /// and 11: 41, 0x842; miss009 (0x4663d0) 13: 46, 76, 0x846.
+    fn scroll_news(&mut self, site: Option<u32>, tr: crate::objects::Treasure) {
+        if tr.kind != 27 {
+            return;
+        }
+        let (grants, says): (&[u8], &[u32]) = match (self.mission.as_str(), tr.param) {
+            ("miss001", 0) => (&[], &[0x848, 0x849]),
+            ("miss002", 1) => (&[35, 29, 52], &[0x838]),
+            ("miss003", 3) if !self.delivered.contains(&27) => (&[17, 50], &[0x83d]),
+            ("miss004", 4) => (&[25], &[0x83e]),
+            ("miss005", 5) => (&[26], &[0x83f]),
+            ("miss006", 6) => (&[53], &[0x844]),
+            ("miss007", 12) => (&[30, 36, 52], &[0x841]),
+            ("miss007", 11) => (&[41], &[0x842]),
+            ("miss009", 13) => (&[46, 76], &[0x846]),
+            _ => return,
+        };
+        let town = site
+            .and_then(|s| self.object_index(s))
+            .is_some_and(|i| matches!(self.objects[i].record.class_id, 0x32 | 0x33));
+        let Some(site) = site.filter(|_| town) else {
+            if self.mission != "miss001" {
+                self.said.push(0x837);
+            }
+            return;
+        };
+        if matches!(self.mission.as_str(), "miss001" | "miss003") {
+            self.delivered.push(27);
+        }
+        for &b in grants {
+            self.permits.set(b, true);
+        }
+        self.said.extend_from_slice(says);
+        self.take_out_scrolls(site, tr.param);
+    }
+
+    /// 0x479570: building `site`'s stored scrolls numbered `number` taken
+    /// out of its store (0x424cf0 with 0: 0x55b500, no object made). It
+    /// walks the store by index and goes on to the next index after a
+    /// removal, so a scroll right after a removed one stays. (0x424cf0's
+    /// own message 0x5d94 with 0 is heard by no handler for a scroll.)
+    fn take_out_scrolls(&mut self, site: u32, number: u32) {
+        let mut k = 0;
+        while let Some(p) = self
+            .held
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| h.0 == site)
+            .nth(k)
+            .map(|(p, _)| p)
+        {
+            let tr = self.held[p].1;
+            if tr.kind == 27 && tr.param == number {
+                self.held.remove(p);
+            }
+            k += 1;
+        }
     }
 
     /// `n` cells about cell `(x, y)` (0x4796c0 with a 1 x 1 area).
@@ -10861,9 +10956,9 @@ mod miss009 {
 /// Member 9's request is checked in its own slot (`+0x11c`, which nothing
 /// sets) but written into member 8's (`+0x11a`), so member 9 never gets a
 /// ship and member 8 gets the Persians' own ships too; ported as is.
-/// (The Golden Fleece is delivered by
-/// storing it in one of the player's buildings through the load panel
-/// (0x5d94; automatic unloading never hands it over). An
+/// (The handler 0x46a0f0 sets `+0x130` on message 0x5d94 with 1 for
+/// kind 16 at any object of the player's: a ship taking the Fleece or a
+/// building storing it, `treasure_news`.) An
 /// attack's "failed" exit is taken as its "ok" one, as in miss008. A
 /// Persian yard that cannot pay tries again on its next turn.)
 mod miss010 {
@@ -11315,8 +11410,8 @@ mod miss010 {
     }
 
     /// The brain's tick (0x46a313): once the player has delivered the
-    /// Golden Fleece to one of their buildings (message 0x5d94 with kind
-    /// 16), lightning at (58, 5), and on the next tick at (59, 4).
+    /// Golden Fleece to a ship or building of theirs (message 0x5d94 with
+    /// 1, kind 16: `+0x130`), lightning at (58, 5), and on the next tick at (59, 4).
     fn tick(scene: &mut Scene) {
         let cast = var(scene, 0, CAST);
         if cast < 2 && scene.delivered.contains(&16) {

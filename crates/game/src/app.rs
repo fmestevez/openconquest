@@ -7245,6 +7245,11 @@ impl App {
         // 0x4ff390); the oldest goes every "message speed" seconds, or at
         // once while there are more than "message lines" (0x4ff4c0).
         self.chat.append(&mut self.scene.messages);
+        for id in std::mem::take(&mut self.scene.said) {
+            if let Some(s) = self.data.strings.get(&id) {
+                self.chat.push(s.clone());
+            }
+        }
         let lines = self.settings.config.chat_lines.max(1) as usize;
         let every = Duration::from_secs(self.settings.config.chat_speed.max(1) as u64);
         if self.chat.len() > lines || self.chat_since.elapsed() >= every {

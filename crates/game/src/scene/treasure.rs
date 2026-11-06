@@ -711,7 +711,7 @@ impl Scene {
             }
         }
         // Message 0x5d94 with 1 (0x4b6e80; 0x4a5bc0 at 0x4a5c89, 0x4a5cef).
-        self.treasure_news(owner, tr.kind, true);
+        self.treasure_news(owner, None, tr, true);
         // The treasure answers message 0x158c1 (0x4074d0) by going to
         // state 3, 0x406c80: off its cell, sound event 272 (`trea2`).
         self.sounds.push(("trea2", x, y));
@@ -1172,6 +1172,11 @@ impl Scene {
             (t.kind == 9 && t.param == s) || (t.kind == 0x11 && s == objects::HEAD_SPELL)
         });
         if let Some(k) = slot {
+            // 0x4b6e80(slot, 0, 1) at 0x4e330c: message 0x5d94 with 0.
+            let tr = sh.treasures[k];
+            let owner = self.objects[i].owner;
+            self.treasure_news(owner, None, tr, false);
+            let sh = self.objects[i].ship.as_mut().unwrap();
             sh.remove_treasure(k);
         }
         Ok(())

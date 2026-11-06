@@ -1163,7 +1163,8 @@ impl Scene {
     /// barrels of amber or fish are credited, goods through 0x4a8fa0 with
     /// field 7 + 400 (0x424bb4: so the map's goods, field 7 0x191, credit
     /// nothing), the rest stored (`can_take` checked the room) and
-    /// announced (message 0x5d94 with 1).
+    /// announced (message 0x5d94 with 1, `treasure_news`; 0x424b30 shows
+    /// nothing itself).
     pub(super) fn store_at(&mut self, site: u32, tr: Treasure) {
         let Some(owner) = self.object_index(site).and_then(|i| self.objects[i].owner) else {
             return;
@@ -1174,12 +1175,7 @@ impl Scene {
             6 => self.credit_class(owner, tr.param + 400, tr.amount as i64),
             _ => {
                 self.held.push((site, tr));
-                self.treasure_news(Some(owner), tr.kind, true);
-                if Some(owner) == self.human.map(|h| (h.nation, h.slot)) {
-                    self.delivered.push(tr.kind);
-                    self.messages
-                        .push(format!("Handed over: {}", objects::treasure_name(tr.kind)));
-                }
+                self.treasure_news(Some(owner), Some(site), tr, true);
             }
         }
     }
@@ -1187,8 +1183,8 @@ impl Scene {
     /// Building `site` takes treasure `tr` (0x441480, 0x424b30): barrels
     /// of amber or fish are credited, goods by field 7 + 400 as at a fort
     /// (`store_at`), a pack unpacked into its stock (`unpack`), the rest
-    /// stored and announced to the brains (message 0x5d94 with 1; here
-    /// `delivered`).
+    /// stored and announced to the brains (message 0x5d94 with 1,
+    /// `treasure_news`; 0x424b30 shows nothing itself).
     pub(super) fn store_treasure(&mut self, site: u32, tr: Treasure) {
         let Some(owner) = self.object_index(site).and_then(|i| self.objects[i].owner) else {
             return;
@@ -1200,16 +1196,7 @@ impl Scene {
             7 => self.unpack(site, tr),
             _ => {
                 self.held.push((site, tr));
-                self.treasure_news(Some(owner), tr.kind, true);
-                if Some(owner) == self.human.map(|h| (h.nation, h.slot)) {
-                    self.delivered.push(tr.kind);
-                    self.messages
-                        .push(format!("Handed over: {}", objects::treasure_name(tr.kind)));
-                    if tr.kind == 27 {
-                        let says = self.permits.read_scroll(tr.param);
-                        self.messages.push(says.to_string());
-                    }
-                }
+                self.treasure_news(Some(owner), Some(site), tr, true);
             }
         }
     }

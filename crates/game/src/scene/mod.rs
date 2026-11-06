@@ -294,6 +294,9 @@ pub struct Scene {
     pub sounds: Vec<(&'static str, f32, f32)>,
     /// News for the player (e.g. an order that could not be carried out).
     pub messages: Vec<String>,
+    /// The game's strings to show as chat lines (0x4ff360: message 0x4dd
+    /// to the chat, a line each), by id; the front end drains this.
+    pub said: Vec<u32>,
     pub minimap: Vec<u32>,
     pub minimap_size: (u32, u32),
     /// The minimap's first cell shown: it shows 24 x 24 cells and follows
@@ -376,7 +379,9 @@ pub struct Scene {
     pub story: Vec<Goal>,
     /// The player's settlements and towns at the start.
     pub start_sites: Vec<u32>,
-    /// Kinds of treasure the player has handed over at a settlement.
+    /// The brains' flags set by message 0x5d94 (`treasure_news`): 27
+    /// miss001's parchment delivered (`+0x134` cleared) or miss003's
+    /// scroll granted (`+0x164`), 16 miss010's Fleece (`+0x130`).
     pub delivered: Vec<u8>,
     /// The campaign judge's record: heroes joined (0x5d99), the Argo once
     /// afloat, ticks the win has held, ticks to a loss once seen.
@@ -811,6 +816,7 @@ impl Scene {
             standing_frames: BTreeMap::new(),
             ruins: BTreeMap::new(),
             messages: Vec::new(),
+            said: Vec::new(),
             sounds: Vec::new(),
             trainings: Vec::new(),
             summons: Vec::new(),

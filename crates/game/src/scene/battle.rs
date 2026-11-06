@@ -2066,6 +2066,17 @@ impl Scene {
         }
         obj.record = rec;
         self.brain_prize(id, (nation, player));
+        // Then message 0x5d94 with 0 for its treasures (0x4b6f20 at
+        // 0x4b7142: 0x4b6e80 as the taker, while the prize holds any, for
+        // each slot below its type's room 0x597afc; the slots past the
+        // ones held, whose leftovers the port does not keep, are not sent).
+        let held: Vec<objects::Treasure> = self.objects[i]
+            .ship
+            .as_ref()
+            .map_or(Vec::new(), |s| s.treasures.clone());
+        for tr in held {
+            self.treasure_news(owner, None, tr, false);
+        }
     }
 
     /// A prize taken by a campaign brain's player (event 0x5d97, sent by

@@ -42,8 +42,14 @@ pub enum Goal {
     /// A treasure of this kind stored in a settlement or town of the
     /// player's (in the box, if any).
     Stored(u8, Option<Cells>),
-    /// A treasure of this kind stored or aboard.
+    /// miss001's parchment: delivered (`+0x134` 0, cleared by the
+    /// brain's scroll handler 0x44af70) or one of kind 27 held by the
+    /// player, aboard or stored (0x44a070: the count of 0x4c46c0 over the
+    /// whole map, ships 0xfff and buildings 0x1fff).
     Kept(u8),
+    /// A brain's flag set by message 0x5d94 (`Scene::delivered`):
+    /// miss001's parchment delivered (0x44a070 needs `+0x134` 0).
+    Delivered(u8),
     /// A settlement or town of the player's in the box.
     TownIn(Cells),
     /// That, and every hero the player holds in the box's towns.
@@ -89,12 +95,7 @@ pub fn judge_of(mission: &str) -> Option<Judge> {
         "miss000" => j(125, &[Kill(0), Aboard(27)], &[TownIn((19, 0, 20, 1))]),
         "miss001" => j(
             75,
-            &[
-                Kill(0),
-                Assemble((0, 2, 1, 3)),
-                Stored(27, None),
-                Hero(JASON),
-            ],
+            &[Kill(0), Assemble((0, 2, 1, 3)), Delivered(27), Hero(JASON)],
             &[
                 Kept(27),
                 TownIn((0, 2, 1, 3)),
@@ -336,7 +337,12 @@ impl Scene {
                 s.kind <= 9 && s.has_treasure(kind)
             }),
             Goal::Stored(kind, b) => self.stored_in(kind, b),
-            Goal::Kept(kind) => self.stored_in(kind, None) || self.goal_met(Goal::Aboard(kind)),
+            Goal::Kept(kind) => {
+                self.delivered.contains(&kind)
+                    || self.stored_in(kind, None)
+                    || self.goal_met(Goal::Aboard(kind))
+            }
+            Goal::Delivered(kind) => self.delivered.contains(&kind),
             Goal::TownIn(b) => self.towns_in(b).next().is_some(),
             Goal::Assemble(b) => {
                 let towns: Vec<u32> = self.towns_in(b).map(|o| o.id).collect();
@@ -493,8 +499,10 @@ pub fn goal_name(goal: Goal) -> String {
             "Take aboard the {}",
             objects::treasure_name(kind).to_lowercase()
         ),
-        Goal::Stored(27, _) | Goal::Kept(27) => "Bring the parchment to your town".into(),
-        Goal::Stored(kind, _) | Goal::Kept(kind) => format!(
+        Goal::Stored(27, _) | Goal::Kept(27) | Goal::Delivered(27) => {
+            "Bring the parchment to your town".into()
+        }
+        Goal::Stored(kind, _) | Goal::Kept(kind) | Goal::Delivered(kind) => format!(
             "Bring the {} to your town",
             objects::treasure_name(kind).to_lowercase()
         ),
