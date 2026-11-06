@@ -3456,6 +3456,60 @@ fn a_treasure_needs_room_aboard() {
     assert!(!scene.takes_treasure(i, 28));
 }
 
+/// A treasure used at once (0x4a5bc0 -> 0x4b97d0) shows no text: amber
+/// to the player (0x4a8de0); a Gift of Poseidon's monster (0x4b9bf0 case
+/// 4) for the player of the ship's draw `% 20` (nation `/ 4`, slot `% 4`).
+#[test]
+fn a_treasure_used_at_once() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+    scene.brain = None;
+    let human = scene.human.unwrap();
+    let ship = scene.objects.iter().find(|o| o.ship.is_some()).unwrap().id;
+    let i = scene.object_index(ship).unwrap();
+    scene.objects[i].owner = Some((human.nation, human.slot));
+    let c = scene.cell_of(i);
+    let place = |scene: &mut Scene, kind: u8, param: u32, amount: u32| {
+        let k = scene
+            .objects
+            .iter()
+            .position(|o| o.treasure.is_some())
+            .unwrap();
+        scene.objects[k].treasure = Some(crate::objects::Treasure {
+            kind,
+            param,
+            amount,
+        });
+        let t = TILE_SIZE as f32;
+        scene.objects[k].x = (c.0 as f32 + 0.5) * t;
+        scene.objects[k].y = (c.1 as f32 + 0.5) * t;
+        scene.objects[k].cell = None;
+        scene.objects[k].id
+    };
+    scene.messages.clear();
+    let amber = scene.amber;
+    let id = place(&mut scene, 1, 0, 700);
+    scene.ship_steps_on_treasure(ship, c, &data, &mut caches);
+    assert!(scene.object_index(id).is_none());
+    assert_eq!(scene.amber, amber + 700);
+    // The monster: the ship's two draws, the first its player.
+    let i = scene.object_index(ship).unwrap();
+    let saved = scene.objects[i].ship.as_ref().unwrap().lcg;
+    let r = scene.ship_draw(i) % 20;
+    scene.objects[i].ship.as_mut().unwrap().lcg = saved;
+    let id = place(&mut scene, 8, 4, 0);
+    scene.ship_steps_on_treasure(ship, c, &data, &mut caches);
+    assert!(scene.object_index(id).is_none());
+    let (monster, _) = *scene.summons.last().expect("a monster");
+    let g = scene.object_index(monster).unwrap();
+    assert_eq!(scene.objects[g].owner, Some((r >> 2, r & 3)));
+    assert!(scene.messages.is_empty(), "{:?}", scene.messages);
+}
+
 /// The Gorgon rests, rises and stares tick by tick as the original's
 /// (0x401f70, 0x4019d0): her ships beside her turn to stone (not
 /// Perseus's) at frame 13 of `GORG2`; her aim point (0x402da0); shot down

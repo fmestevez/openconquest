@@ -10390,11 +10390,30 @@ treasure gets 0x158c1. For the viewer's ship it plays the nation's event
 the step's take and the sea treasure's route and end as the original's
 (the route the port's plain plan to the cell; 0x4ad680's re-plans and
 make-way not ported). The land treasure's landing party is ported (the
-next paragraph); not ported: the hero's house (class 0x49, the same
-machine with 0x4bd350 at the party's half: the port's reach of 2.6
-cells, a stand-in); what 0x4b97d0 and 0x4bd0c0 do with each kind and the
-notices' texts (the port's messages are its own); the treasure's state
-5.
+next paragraph), and the hero's house (below); not ported: the
+treasure's state 5.
+
+No take shows a text. 0x4a1af0 and 0x4a1a60 post records 0x142 and
+0x141 to the ship's group (`+0x2d`, read by the computers' treasure
+block); 0x4bd0c0's 0x4bebe0 (UI message 0x22c, 0x10a2 / 0x10ad) and
+0x4bc880 (0x22d, 0x10a3), like 0x4bd350's 0x4bee60 / 0x4bebe0, refresh
+the ship's panel; 0x4b6e80's 0x5d94 and 0x4b6df0's 0x5d99 go to the
+owner's player's brain (`+0x34`). The port shows none (its own messages
+gone). Used at once, 0x4b97d0 by the record's kind: 0-2 0x4a8de0(field
+8) the amber, 3-5 0x4a8c30(field 8) the fish, 8 0x4b9bf0(field 7, the
+cell), any other 0. 0x4b9bf0 makes the ship's magic `+0x7d2` if none
+(0x42ed20, `+0x48` / `+0x4c` the ship's `+0x70` / `+0x68`), sets its cell and player
+(nation `+0x54`, slot `+0x55`), counts one of the spell (`+0x10 + 4 x
+spell`), so 0x42ed40 passes, and casts 0x42f580(spell, 0 or the ship's
+id `+0x4c` for 9-11, the cell, draw): 1 reef (draw: the ship's `+0x18`
+LCG `>> 16`), 2 whirlpool, 3 waterspout, 4 monster (the player drawn
+first by the ship: `r % 20`, nation `r >> 2`, slot `r & 3`; then a
+second draw for the type), 9 phantom, 10 / 11 the shields; a count the
+cast refuses is taken back; the magic freed when 0x4b9fd0 finds no
+spell left. Ported (`take_treasure`). Kind 9 goes aboard (use 8):
+0x4bd0c0 -> 0x4ba070 counts spell field 7 (kind 0x11: spell 0xd) in the
+ship's magic; not ported: the port counts it as a free cast for the
+player (`free_casts`), the ship's own magic not being kept.
 
 **The land take.** 0x4af940 (`+0x792` the sea cell, `+0x797` the land
 cell): the hero's house (class 0x49) its berth vt+0xb8 = 0x40e050 and its
@@ -10517,7 +10536,7 @@ berth (`vt_berth`, the record's field 10 facing: the constructor
 0x420fd0 sets `+0x1d8` 0xa) with its cell the land cell, all the above;
 the order's own refusal of a ship without a hero place kept (the click's
 0x4e6700 room test, mode 6 or 7), its item refusal gone. Not ported:
-0x5d99 (the judge counts the heroes aboard), the notices' texts;
+0x5d99 (the judge counts the heroes aboard);
 0x4b6e80's 0x5d94 for the party's take; a berth of (-1, -1) (no facing:
 the port's route fails). The playing out is ported (`house_fades`,
 `step_house_fades`, kept in the save; the standing picture's frame in

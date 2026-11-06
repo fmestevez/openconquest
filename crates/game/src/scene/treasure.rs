@@ -605,7 +605,15 @@ impl Scene {
         }
     }
 
-    /// Ship `i` takes the treasure object `g`.
+    /// Ship `i` takes the treasure object `g` (0x4a5bc0). A treasure of
+    /// use 2 (kinds 0-5 and 8) is used at once by 0x4b97d0: 0-2 add field 8
+    /// to the player's amber (0x4a8de0), 3-5 to the fish (0x4a8c30), 8
+    /// casts spell field 7 where it lay through the ship's own magic
+    /// (0x4b9bf0). Any other goes aboard (0x4bd0c0). Neither shows a text:
+    /// the notices 0x4a1af0 / 0x4a1a60 (0x142 / 0x141) go to the ship's
+    /// group for the computers' orders, 0x4bd0c0's 0x4bebe0 / 0x4bc880
+    /// refresh the panel, and 0x4b6e80's 0x5d94 goes to the player's
+    /// brain.
     fn take_treasure(&mut self, i: usize, g: usize, data: &GameData, caches: &mut Caches) {
         let tr = self.objects[g].treasure.unwrap();
         let id = self.objects[g].id;
@@ -613,8 +621,6 @@ impl Scene {
         let (x, y) = (self.objects[g].x, self.objects[g].y);
         let t = TILE_SIZE as f32;
         let cell = ((x / t) as i32, (y / t) as i32);
-        let ship_id = self.objects[i].id;
-        let name = objects::treasure_name(tr.kind);
         if self.is_own(&self.objects[i]) {
             self.stats.treasures_found += 1;
             // Its crew cheers (events 168-171 by nation, 0x4a5bc0).
@@ -629,23 +635,37 @@ impl Scene {
                     let amount = tr.amount as i64;
                     if tr.kind <= 2 {
                         self.earn(owner, amount, 0);
-                        self.messages.push(format!("Found {amount} amber"));
                     } else {
                         self.earn(owner, 0, amount);
-                        self.messages.push(format!("Found {amount} fish"));
                     }
                 }
             }
             8 => {
-                // A spell bursts out where the treasure lay: protections on
-                // the ship, or reefs, whirlpools, waterspouts and monsters
-                // around it.
+                // 0x4b9bf0: the ship's magic (`+0x7d2`) casts at the cell
+                // with one of the spell counted, so 0x42ed40 passes and
+                // 0x42f580 casts: the reef (1), whirlpool (2) and
+                // waterspout (3) as the ship's player, the reef's kind from
+                // the ship's draw; the monster (4) for a player drawn by
+                // the ship (`r % 20`: nation `/ 4`, slot `% 4`), its type
+                // from a second draw; the phantom (9) and the shields (10,
+                // 11) on the ship.
                 match Spell::of_index(tr.param) {
-                    Some(
-                        s @ (Spell::Reef | Spell::Whirlpool | Spell::Waterspout | Spell::Monster),
-                    ) => {
-                        let _ = self.spawn_hazard(s, cell.0, cell.1, None, data, caches);
-                        self.messages.push(format!("{name}: {}", s.name()));
+                    Some(s @ (Spell::Reef | Spell::Whirlpool | Spell::Waterspout)) => {
+                        let draw = (s == Spell::Reef).then(|| self.ship_draw(i));
+                        let _ = self.spawn_hazard_drawn(s, cell, owner, draw, data, caches);
+                    }
+                    Some(Spell::Monster) => {
+                        let r = self.ship_draw(i) % 20;
+                        let master = Some((r >> 2, r & 3));
+                        let draw = Some(self.ship_draw(i));
+                        let _ = self.spawn_hazard_drawn(
+                            Spell::Monster,
+                            cell,
+                            master,
+                            draw,
+                            data,
+                            caches,
+                        );
                     }
                     Some(s @ (Spell::Phantom | Spell::ProtectWeapons | Spell::ProtectMagic)) => {
                         let weapon = s == Spell::ProtectWeapons;
@@ -669,25 +689,24 @@ impl Scene {
                             now,
                             crate::magic::PROTECTION_TICKS,
                         );
-                        self.messages.push(format!("{name}: {}", s.name()));
                     }
                     _ => {}
                 }
             }
             9 => {
-                // A spell to cast once, at no cost.
+                // A spell to cast once, at no cost. (Not ported: the
+                // original puts it aboard, 0x4bd0c0 -> 0x4ba070 counting
+                // spell field 7 in the ship's own magic `+0x7d2`; the port
+                // counts it for the player.)
                 if let Some(s) = Spell::of_index(tr.param) {
                     *self.free_casts.entry(s).or_default() += 1;
-                    self.messages.push(format!("{name}: one free {}", s.name()));
                 }
             }
             _ => {
                 let s = self.objects[i].ship.as_mut().unwrap();
                 s.add_treasure(tr, owner == Some((4, 0)));
-                self.messages.push(format!("Taken aboard: {name}"));
             }
         }
-        let _ = ship_id;
         // The treasure answers message 0x158c1 (0x4074d0) by going to
         // state 3, 0x406c80: off its cell, sound event 272 (`trea2`).
         self.sounds.push(("trea2", x, y));
@@ -870,7 +889,8 @@ impl Scene {
     /// aboard, 0x4ba7d0 sends the house 0x24af1 (`house_taken`), 0x4b6df0
     /// message 0x5d99 to the owner's player (not ported: the judge counts
     /// the heroes aboard), and the hero's item 0x4ba3f0 finds is taken
-    /// out (0x4bd500, not dropped).
+    /// out (0x4bd500, not dropped). No text: 0x4bd350's 0x4beb50,
+    /// 0x4bee60 and 0x4bebe0 refresh the ship and its panel.
     pub(super) fn hero_boards(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
         let Some(Task::Take {
             target,
@@ -889,9 +909,6 @@ impl Scene {
         let s = self.objects[k].ship.as_mut().unwrap();
         if let Some(idx) = Self::hero_item(s, hero) {
             s.remove_treasure(idx);
-        }
-        if let Some(name) = objects::HERO_NAMES.get(hero as usize) {
-            self.messages.push(format!("{name} comes aboard"));
         }
     }
 
