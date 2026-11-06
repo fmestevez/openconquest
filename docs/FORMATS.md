@@ -3032,12 +3032,18 @@ tile w + 0xe`, `+0x95 x tile h + 0x11` (the message, each tick, states 1
 and 4 of 0x491830); state 0 frees it (kept), 6 (dying) frees and forgets
 it. The port: `fa_mark` by class, `wp_mark_layers` places it (the
 gorgon and siren with `picture`, the sea monster while not under water),
-`set_gorgon_state` / `set_siren_state` / `monster_enter` forget it. Not
-ported: a harpy's or dragon's (0x4207b0, vtable 0x595e00, 0x1f8/0x1f9:
-kind `+0x18`, placed from `+0x74`'s picture by its state `+0x88`: 0 / 1
-`x + [0x595ae0] - 0x12`, `y + [0x595ae4] - 0xe`; 2 and 6 by the
-picture's direction `+0x45` from tables at 0x595ae0 / 0x595ae8 (16-byte
-rows); others `x + 0x16`, `y + 0x1a`; the tables not dumped). The
+`set_gorgon_state` / `set_siren_state` / `monster_enter` forget it. A
+harpy's or dragon's (0x4207b0, vtable 0x595e00, 0x1f8/0x1f9, either
+class alike): kind `+0x18`, kept at `+0x35`, placed (0x50c600) at the
+message and each tick after 0x41fbd0 from `+0x74`'s picture top left
+(`+0x59`, `+0x5d`) by its state `+0x88`: 0 / 1 `x + [0x595ae0] - 0x12`,
+`y + [0x595ae4] - 0xe` (40, 116: the aim table's first row); 2 and 6
+by the picture's frame `+0x45` from the 16-byte rows of 0x595ae0 (`{x2,
+y2}`, state 2) / 0x595ae8 (`{x6, y6}`, state 6), less (0x12, 0xe);
+others `x + 0x16`, `y + 0x1a`; its states (0x41f680) do not touch it
+(the port's `Scene::flyer_mark_place`, the table `flyers::AIM_OFFSETS`;
+the harpy's and dragon's taking-off and landing pictures stay within
+its 35 rows). The
 gather's targets: a treasure 0x4074d0 (0x594420, class 700) kind 0xb
 at `+0xc4`'s `+0x59 + 0xe`, `+0x5d + 0x11`; fish 0x48e100 (0x59749c,
 0x191), leviathans 0x494f90 (0x597544, 0x192, kind 4) and amber

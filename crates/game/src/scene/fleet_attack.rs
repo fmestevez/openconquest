@@ -402,8 +402,7 @@ impl Scene {
     /// keeping it (`+0xbc` / `+0x7c`) and its number; a sea monster
     /// (0x492360) keeps it (`+0x12d`, `+0x131`) and makes it of kind 8
     /// only with its picture `+0x139` (shown by `wp_mark_layers` while it
-    /// is up). Not ported: harpies and dragons (0x4207b0), placed by a
-    /// table by their state.
+    /// is up); a harpy or dragon (0x4207b0) makes it of the kind sent.
     pub(super) fn fa_mark(&mut self, target: u32, index: usize, command: u8) {
         use openconquest_formats::ObjectClass;
         let kind = match command {
@@ -428,7 +427,7 @@ impl Scene {
             | ObjectClass::Castle(_)
             | ObjectClass::HeroHouse
             | ObjectClass::CreatureSpawn
-            | ObjectClass::Monster(0x1f4..=0x1f6) => kind,
+            | ObjectClass::Monster(0x1f4..=0x1f6 | 0x1f8 | 0x1f9) => kind,
             ObjectClass::Monster(0x1fa | 0x1fb | 0x1fd) => 8,
             _ => return,
         };
@@ -500,7 +499,9 @@ impl Scene {
     /// the map's top left, and only with their picture; a sea monster
     /// its cell `x * tile w + 0xe`, `y * tile h + 0x11` (0x492360 at the
     /// message and each tick, 0x491830 states 1 and 4), shown only while
-    /// up (state 0 frees it, keeping it). Each layer with its own offset.
+    /// up (state 0 frees it, keeping it); a harpy or dragon by its state
+    /// from its picture (`Scene::flyer_mark_place`). Each layer with its
+    /// own offset.
     pub fn wp_mark_layers(
         &self,
         obj: &crate::objects::MapObject,
@@ -521,6 +522,12 @@ impl Scene {
                 let t = TILE_SIZE as f32;
                 let (cx, cy) = ((obj.x / t).floor() as i32, (obj.y / t).floor() as i32);
                 (cx * t as i32 + 0xe, cy * t as i32 + 0x11)
+            }
+            ObjectClass::Monster(0x1f8 | 0x1f9) => {
+                let Some(p) = self.flyer_mark_place(obj.id) else {
+                    return Vec::new();
+                };
+                p
             }
             ObjectClass::Monster(c @ (0x1fa | 0x1fd)) => {
                 let up = if c == 0x1fa {

@@ -1764,6 +1764,33 @@ impl Scene {
     /// size, as for the land creatures). Clamped to the map. (Not decoded:
     /// a dragon's picture place before its first draw, states 0 and 1,
     /// where it is not drawn: the port takes the draw's.)
+    /// The top left of the queue mark over harpy or dragon `id` (0x4207b0
+    /// at its 0xc45d sub 1 and each tick after 0x41fbd0 while it has one,
+    /// 0x50c600), from its picture's top left (`+0x74`'s `+0x59`, `+0x5d`,
+    /// as `flyer_aim`'s) by its state `+0x88`, for either class: 0 and 1
+    /// 0x595ae0's first `{x, y}`, 2 its `{x2, y2}` and 6 its `{x6, y6}` at
+    /// the picture's frame `+0x45`, each less (0x12, 0xe); any other
+    /// (0x16, 0x1a). Its states (0x41f680) leave the mark alone.
+    pub(super) fn flyer_mark_place(&self, id: u32) -> Option<(i32, i32)> {
+        let i = self.object_index(id)?;
+        let f = self.flyers.iter().find(|f| f.id == id)?;
+        let (ox, oy) = if self.objects[i].record.class_id == DRAGON {
+            (0x43, 0x92)
+        } else {
+            (0x28, 0x78)
+        };
+        let (px, py) = (f.pos.0 - ox, f.pos.1 - oy);
+        let frame = f.frame.max(0) as usize;
+        let row = |k: usize| AIM_OFFSETS.get(k).copied();
+        let (x, y) = match f.state {
+            APPEAR | REST => (AIM_OFFSETS[0].0 - 0x12, AIM_OFFSETS[0].1 - 0xe),
+            TAKE_OFF => row(frame).map(|o| (o.0 - 0x12, o.1 - 0xe))?,
+            LAND => row(frame).map(|o| (o.2 - 0x12, o.3 - 0xe))?,
+            _ => (0x16, 0x1a),
+        };
+        Some((px + x, py + y))
+    }
+
     pub(super) fn flyer_aim(&mut self, id: u32, hit: bool) -> Option<(i32, i32)> {
         let i = self.object_index(id)?;
         let k = self.flyers.iter().position(|f| f.id == id)?;
