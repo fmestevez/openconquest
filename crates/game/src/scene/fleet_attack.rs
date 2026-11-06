@@ -179,6 +179,7 @@ impl Scene {
                 } else if let Some(g) = self.selection_attack(&group) {
                     let a = self.human_attacks.remove(g);
                     elapsed = a.elapsed;
+                    route = a.route;
                     a.serial
                 } else if let Some(g) = self.selection_waypoint_move(&group) {
                     let m = self.waypoint_moves.remove(g);
@@ -626,6 +627,9 @@ impl Scene {
         if let Some(z) = self.selection_fleet(selection) {
             return self.fleet_attacks[z].route.as_mut();
         }
+        if let Some(z) = self.selection_attack(selection) {
+            return self.human_attacks[z].route.as_mut();
+        }
         let z = self.selection_waypoint_move(selection)?;
         Some(&mut self.waypoint_moves[z].route)
     }
@@ -636,9 +640,11 @@ impl Scene {
         let zones = self.gather_zones.iter().filter_map(|z| z.route.as_ref());
         let fleets = self.fleet_attacks.iter().filter_map(|a| a.route.as_ref());
         let moves = self.waypoint_moves.iter().map(|m| &m.route);
+        let attacks = self.human_attacks.iter().filter_map(|a| a.route.as_ref());
         zones
             .chain(fleets)
             .chain(moves)
+            .chain(attacks)
             .flat_map(|r| r.marks_shown())
             .collect()
     }

@@ -83,6 +83,13 @@ pub struct HumanAttack {
     /// strength and their strengths' sum.
     pub armed: i32,
     pub strength: i32,
+    /// Block `+0x61`: the route a Shift move click gives it (0x49de70 ->
+    /// 0x4ce5e0 / 0x4ce6c0). The block's own code (0x4d5f50, 0x4d61d0
+    /// and what they call) never reads it: it is only shown under Shift
+    /// (0x4a2050) and freed with the block (0x4a1c60); a rewrite
+    /// (0x4d5f50 on a `{0x70, 0x20}`) keeps it.
+    #[serde(default)]
+    pub route: Option<super::gather::Route>,
 }
 
 /// What 0x4d5100 makes of a slot: the ship, its cell and the cell the
@@ -197,6 +204,7 @@ impl Scene {
                     area_classes: u32::MAX,
                     armed: 0,
                     strength: 0,
+                    route: None,
                 });
                 let z = self.human_attacks.len() - 1;
                 // 0x4d4c30: the block zeroed, `{0x70, 0x20, now}`, then as
@@ -1358,6 +1366,7 @@ mod tests {
             area_classes: 0,
             armed: 0,
             strength: 0,
+            route: None,
         }
     }
 

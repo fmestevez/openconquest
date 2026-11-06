@@ -2805,10 +2805,9 @@ fn waypoints() {
     assert_eq!(*path.back().unwrap(), b, "on to the second");
 }
 
-/// A scout sails out and back; a patrol turns at each end (needs
-/// `OPENCONQUEST_DATA`).
+/// A scout sails out and back (needs `OPENCONQUEST_DATA`).
 #[test]
-fn scout_and_patrol() {
+fn scout_out_and_back() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
@@ -2840,19 +2839,6 @@ fn scout_and_patrol() {
     let (px, py, task) = at(&scene);
     assert!(reached, "went out");
     assert!(near((px, py), (x, y)) && task.is_none(), "came home");
-    scene.order_patrol(id, far.0, far.1).unwrap();
-    let mut turns = 0;
-    let mut last = at(&scene).2;
-    for _ in 0..50 * 240 {
-        scene.update(0.02, &data, &mut caches);
-        let task = at(&scene).2;
-        if task != last {
-            turns += 1;
-            last = task;
-        }
-    }
-    assert!(turns >= 2, "turned {turns} times");
-    assert!(matches!(last, Some(Task::Patrol { .. })));
 }
 
 /// A ship guarding a zone fights an enemy that comes into it; an attack

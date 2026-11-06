@@ -26,7 +26,8 @@ pub struct WaypointMove {
     /// Block `+0xc` / `+0x10`: the last click's cell (0x49de70's payload
     /// `{x, y, 1, 0, 1, &cell}`).
     pub cell: (i32, i32),
-    /// Block `+0x14`: 1, the way 0x4ce8a0 gives the ships it sends.
+    /// Block `+0x14`: the way 0x4ce8a0 gives the ships it sends: 1 for
+    /// the Shift move, 2 (round) for the patrol.
     pub way: i8,
     /// Block `+0x61`.
     pub route: Route,
@@ -42,9 +43,9 @@ impl Scene {
     /// group whose block is neither null nor a move's 100 (a gather zone,
     /// the fleet attack task) the block's route is made if null and the
     /// cell appended unless listed (0x4ce6c0), no ship sent (0x4cec00
-    /// needs the cell listed in a route just made: never). (Not ported:
-    /// the human's attack block `{0x70, 0x20}`, whose route the port's
-    /// block has not; the click does nothing to it.) Else 0x4cf2c0 (payload
+    /// needs the cell listed in a route just made: never); the human's
+    /// attack block `{0x70, 0x20}` alike (its code never reads the
+    /// route: the cells are only marked). Else 0x4cf2c0 (payload
     /// `{x, y, 1, 0, 1, &cell}`, place 1, from the group 0): a move block
     /// of another kind (100 / 1) ended (0x4a1c60); the group's 100 / 2
     /// rewritten (`+8` now, `+0xc`-`+0x18` the payload) and the cell
@@ -78,7 +79,11 @@ impl Scene {
                 .append(x, y);
             return Ok(());
         }
-        if self.selection_attack(&ships).is_some() {
+        if let Some(z) = self.selection_attack(&ships) {
+            self.human_attacks[z]
+                .route
+                .get_or_insert_with(Route::default)
+                .append(x, y);
             return Ok(());
         }
         let now = self.ticks;
@@ -112,6 +117,91 @@ impl Scene {
             };
             self.zone_move(id, fx, fy);
             self.route_progress(Owner::Move(z), i, -1, -1, false, 1);
+        }
+        Ok(())
+    }
+
+    /// The patrol button's click (0x6e `CBUT_BEHPATROL`: command 0x23
+    /// sub 8 with the cell, 0x49d790 case 8) for the selection `ships`.
+    /// On a group whose block is a waypoint move of way `+0x14` 2 the
+    /// route made if null (0x4ce5e0) and the cell appended unless listed,
+    /// its mark made but not placed (0x4ce6c0 place 0, -1); no ship sent
+    /// (0x4cec00 needs the cell listed in a route just made: never).
+    /// Else the block ended (0x4a1c60) and 0x4cf2c0(payload `{x, y, 2, 0,
+    /// 1, &cell}`, place 0, centre 1): the block made (0x4cef80, its route
+    /// with the cell, not placed); the group's centre (0x4c56e0) put
+    /// first (0x4ce6c0 at 0, not placed) unless listed; each ship sent to
+    /// the route's second waypoint (0x4cf070) with progress `(-1, -1)`,
+    /// way 2 (0x4ce8a0). The way 2 goes round the route at its ends
+    /// (0x4ce7c0) and keeps a ship's progress at the end (0x4ce8a0).
+    /// With the centre the click's cell the route holds one waypoint and
+    /// 0x4cf2c0 reads the entry past it from a null pointer (the
+    /// original's fault): here no ship is sent. The selection's group:
+    /// a waypoint move's kept (its counter `+8`), else a new one.
+    pub fn order_patrol_route(&mut self, ships: &[u32], x: i32, y: i32) -> Result<(), String> {
+        let ships: Vec<u32> = ships
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.object_index(id)
+                    .is_some_and(|i| self.objects[i].ship.is_some())
+            })
+            .collect();
+        if ships.is_empty() {
+            return Err("No such ship".into());
+        }
+        let old = self.selection_waypoint_move(&ships);
+        if let Some(z) = old.filter(|&z| self.waypoint_moves[z].way == 2) {
+            self.waypoint_moves[z].route.add(x, y, false, None);
+            return Ok(());
+        }
+        let (serial, elapsed) = match old {
+            Some(z) => {
+                let m = self.waypoint_moves.remove(z);
+                (m.serial, m.elapsed)
+            }
+            None => {
+                self.leave_zones(&ships);
+                self.zone_serial += 1;
+                (self.zone_serial, 0)
+            }
+        };
+        let mut route = Route::default();
+        route.add(x, y, false, None);
+        // 0x4c56e0: the mean of the ships' cells (each weight 1; a
+        // building's, weight 2, never in the human's groups, which would
+        // test the centre at sea, 0x499990).
+        let cells: Vec<(i32, i32)> = ships
+            .iter()
+            .filter_map(|&id| self.object_index(id))
+            .map(|i| self.ship_cell(i))
+            .collect();
+        let n = cells.len() as i32;
+        if n != 0 {
+            let cx = cells.iter().map(|c| c.0).sum::<i32>() / n;
+            let cy = cells.iter().map(|c| c.1).sum::<i32>() / n;
+            route.add(cx, cy, false, Some(0));
+        }
+        self.waypoint_moves.push(WaypointMove {
+            serial,
+            ships: ships.clone(),
+            notices: Vec::new(),
+            elapsed,
+            made: self.ticks,
+            cell: (x, y),
+            way: 2,
+            route,
+        });
+        let z = self.waypoint_moves.len() - 1;
+        let Some(&(fx, fy)) = self.waypoint_moves[z].route.waypoints.get(1) else {
+            return Ok(());
+        };
+        for id in ships {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            self.zone_move(id, fx, fy);
+            self.route_progress(Owner::Move(z), i, -1, -1, false, 2);
         }
         Ok(())
     }
@@ -409,5 +499,138 @@ mod tests {
             .progress
             .iter()
             .all(|p| p.ship != id0));
+    }
+
+    /// A Shift gather click (0x49d3c0 -> 0x4c8a80, key flag 4) on a
+    /// waypoint move's group: the block's route taken (`local_8`) into
+    /// the new zone's block, its marks kept, the group's serial and
+    /// counter kept, no ship sent (0x4c5f40 / 0x4c6ee0 skipped). Without
+    /// Shift the route is freed (0x4ce5a0).
+    #[test]
+    fn shift_gather_keeps_the_move_route() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(2)
+            .collect();
+        for &i in &ships {
+            scene.objects[i].owner = Some(human);
+        }
+        let sel: Vec<u32> = ships.iter().map(|&i| scene.objects[i].id).collect();
+        let deposit = (0..scene.objects.len())
+            .find(|&i| super::super::gather::deposit_class(&scene.objects[i]).is_some())
+            .map(|i| scene.objects[i].id)
+            .unwrap();
+        for keys in [4, 0] {
+            scene.gather_zones.clear();
+            scene.order_shift_move(&sel, 3, 4).unwrap();
+            scene.order_shift_move(&sel, 5, 6).unwrap();
+            scene.waypoint_moves[0].elapsed = 17;
+            let serial = scene.waypoint_moves[0].serial;
+            scene.outbox.clear();
+            scene.order_gather_at(&sel, deposit, keys).unwrap();
+            assert!(scene.waypoint_moves.is_empty());
+            assert_eq!(scene.gather_zones.len(), 1);
+            let z = &scene.gather_zones[0];
+            let route = z.route.as_ref().map(|r| r.waypoints.clone());
+            if keys == 4 {
+                assert_eq!(z.group, super::super::gather::ZoneGroup::Human(serial));
+                assert_eq!(z.elapsed, 17);
+                assert_eq!(route, Some(vec![(3, 4), (5, 6)]));
+                assert_eq!(scene.route_marks().len(), 2);
+                assert!(scene.outbox.is_empty());
+            } else {
+                assert_eq!(route, None);
+            }
+        }
+    }
+
+    /// The patrol button's click (0x49d790 case 8 -> 0x4cf2c0 with place
+    /// 0, centre 1) for two ships on miss000: the route the click's cell
+    /// with the group's centre (0x4c56e0) put first, their marks made
+    /// unplaced (the centre numbered 2, made second), both ships sent to
+    /// the click's cell, way 2; at the route's end an arrival (0x136)
+    /// goes round to the first waypoint, the progress kept. A second
+    /// click on the patrol only appends its cell, no ship sent; a Shift
+    /// move rewrites the way to 1.
+    #[test]
+    fn patrol_route_on_miss000() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(2)
+            .collect();
+        let water = |scene: &Scene, c: (i32, i32)| {
+            scene.nav.is_sea(c.0, c.1) && scene.nav.passable(c.0, c.1, true)
+        };
+        let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+        let row = (3..h - 3)
+            .flat_map(|y| (3..w - 12).map(move |x| (x, y)))
+            .find(|&(x, y)| (0..10).all(|k| water(&scene, (x + k, y))))
+            .unwrap();
+        let t = TILE_SIZE as f32;
+        for (k, &i) in ships.iter().enumerate() {
+            let o = &mut scene.objects[i];
+            o.owner = Some(human);
+            o.x = (row.0 + [0, 3][k]) as f32 * t + t / 2.0;
+            o.y = row.1 as f32 * t + t / 2.0;
+            let s = o.ship.as_mut().unwrap();
+            s.kind = 2;
+            s.argo = false;
+            s.move_state = 0;
+        }
+        let sel: Vec<u32> = ships.iter().map(|&i| scene.objects[i].id).collect();
+        let (id0, id1) = (sel[0], sel[1]);
+        let mv = |ship, p: (i32, i32)| Order::Move {
+            ship,
+            x: p.0 as f32 * t + t / 2.0,
+            y: p.1 as f32 * t + t / 2.0,
+        };
+        // The centre: (x0 + x0 + 3) / 2 = x0 + 1.
+        let (centre, c, d) = ((row.0 + 1, row.1), (row.0 + 7, row.1), (row.0 + 9, row.1));
+        scene.outbox.clear();
+        scene.order_patrol_route(&sel, c.0, c.1).unwrap();
+        let m = &scene.waypoint_moves[0];
+        assert_eq!((m.way, m.cell), (2, c));
+        assert_eq!(m.route.waypoints, [centre, c]);
+        assert!(m
+            .route
+            .progress
+            .iter()
+            .all(|p| p.dir == 2 && p.at == (-1, -1)));
+        assert_eq!(std::mem::take(&mut scene.outbox), [mv(id0, c), mv(id1, c)]);
+        assert!(scene.route_marks().is_empty());
+        scene.fa_marks_shown(&sel, true);
+        let place = |p: (i32, i32), n| (p.0 * 64 + 14, p.1 * 64 + 18, n);
+        assert_eq!(scene.route_marks(), [place(centre, 2), place(c, 1)]);
+        // At the end: round to the first, the progress kept.
+        scene.post_notice(id0, 0x136, (c.1 * w + c.0) as u32);
+        scene.run_waypoint_moves();
+        assert_eq!(std::mem::take(&mut scene.outbox), [mv(id0, centre)]);
+        let m = &scene.waypoint_moves[0];
+        let p = m.route.progress.iter().find(|p| p.ship == id0).unwrap();
+        assert_eq!((p.at, p.dir), (centre, 2));
+        // Another click: appended, its mark not placed, nothing sent.
+        scene.order_patrol_route(&sel, d.0, d.1).unwrap();
+        let m = &scene.waypoint_moves[0];
+        assert_eq!(m.route.waypoints, [centre, c, d]);
+        assert!(scene.outbox.is_empty());
+        assert_eq!(scene.route_marks().len(), 2);
+        scene.order_shift_move(&sel, row.0 + 5, row.1).unwrap();
+        assert_eq!(scene.waypoint_moves[0].way, 1);
     }
 }

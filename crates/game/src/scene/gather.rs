@@ -111,6 +111,11 @@ pub struct Route {
     /// viewing player (not saved: the interface's).
     #[serde(skip)]
     pub marks: Vec<bool>,
+    /// Each waypoint's mark number less 1, fixed as the mark is made
+    /// (0x4ced80 with the count of waypoints before the entry: its index
+    /// for an append, not for 0x4c56e0's centre put first).
+    #[serde(default)]
+    pub numbers: Vec<u8>,
 }
 
 impl Route {
@@ -118,16 +123,28 @@ impl Route {
     /// to the waypoints unless listed (1 returned then, else 0: here
     /// `None`, else the new entry's index). For the viewing player
     /// (`navy +0x21`) the entry's mark is made (0x4ced80) and, with
-    /// `place`, put at its cell (0x4ced10); every call of the human's
-    /// orders places it.
+    /// `place`, put at its cell (0x4ced10); the Shift orders place it.
     pub fn append(&mut self, x: i32, y: i32) -> Option<usize> {
+        self.add(x, y, true, None)
+    }
+
+    /// 0x4ce6c0(player, route, x, y, place, at): as `append`, the entry
+    /// put at index `at` (0x55f3b0) or, `None` (-1), last (0x5577d0);
+    /// its mark numbered by the count of waypoints before it and shown
+    /// only with `place`.
+    pub fn add(&mut self, x: i32, y: i32, place: bool, at: Option<usize>) -> Option<usize> {
         if self.waypoints.contains(&(x, y)) {
             return None;
         }
-        self.waypoints.push((x, y));
-        self.marks.resize(self.waypoints.len(), false);
-        let k = self.waypoints.len() - 1;
-        self.marks[k] = true;
+        let n = self.waypoints.len();
+        self.marks.resize(n, false);
+        while self.numbers.len() < n {
+            self.numbers.push(self.numbers.len() as u8);
+        }
+        let k = at.unwrap_or(n).min(n);
+        self.waypoints.insert(k, (x, y));
+        self.marks.insert(k, place);
+        self.numbers.insert(k, n as u8);
         Some(k)
     }
 
@@ -231,7 +248,10 @@ impl Route {
             .zip(&self.marks)
             .enumerate()
             .filter(|(_, (_, &m))| m)
-            .map(|(k, (&(x, y), _))| (x * 64 + 14, y * 64 + 18, (k as u8).wrapping_add(1)))
+            .map(|(k, (&(x, y), _))| {
+                let n = self.numbers.get(k).copied().unwrap_or(k as u8);
+                (x * 64 + 14, y * 64 + 18, n.wrapping_add(1))
+            })
     }
 }
 
@@ -453,10 +473,9 @@ impl Scene {
     /// deposit's cell (1 x 1 with Shift), clipped to the map, its class,
     /// `+0x24 = 0x100`, args[9] -1, started (0x4c8a80 with the flags:
     /// any set group `+0x10`, the first deposit only). (Not ported: the
-    /// message 0xc45d 0x4a1f20 sends the interface on the Shift add. A
-    /// Shift 0x78 to a group of another block moves that block's `+0x61`
-    /// over and skips the start's dispatch: here a waypoint move's or
-    /// fleet attack's group starts a new zone, its route gone.)
+    /// message 0xc45d 0x4a1f20 sends the interface on the Shift add.)
+    /// A Shift 0x78 to a group of another block takes that block's route
+    /// (`human_zone`).
     pub fn order_gather_at(&mut self, ships: &[u32], deposit: u32, keys: u8) -> Result<(), String> {
         let d = self.object_index(deposit).ok_or("No such deposit")?;
         let class = deposit_class(&self.objects[d]).ok_or("Nothing to gather there")?;
@@ -478,7 +497,7 @@ impl Scene {
         let u = i32::from(!shift);
         let (x0, y0) = ((cx - u).max(0), (cy - u).max(0));
         let rect = (x0, y0, (cx + u + 1).min(w) - x0, (cy + u + 1).min(h) - y0);
-        self.human_zone(ships, rect, class, 0x100, keys != 0)
+        self.human_zone(ships, rect, class, 0x100, keys)
     }
 
     /// The merchants' amber, fish and leviathan zone buttons (0x23 sub
@@ -499,22 +518,17 @@ impl Scene {
         let (ax, ay, bx, by) = (cell(a.0), cell(a.1), cell(b.0), cell(b.1));
         let (x0, x1) = (ax.min(bx), ax.max(bx));
         let (y0, y1) = (ay.min(by), ay.max(by));
-        self.human_zone(
-            ships,
-            (x0, y0, x1 - x0 + 1, y1 - y0 + 1),
-            class,
-            0x10000,
-            false,
-        )
+        self.human_zone(ships, (x0, y0, x1 - x0 + 1, y1 - y0 + 1), class, 0x10000, 0)
     }
 
+    /// 0x4c8a80 for the human's selection with key flags `keys`.
     fn human_zone(
         &mut self,
         ships: &[u32],
         rect: Cells,
         class: Resource,
         flags: u32,
-        first_only: bool,
+        keys: u8,
     ) -> Result<(), String> {
         let ships: Vec<u32> = ships
             .iter()
@@ -529,16 +543,79 @@ impl Scene {
         }
         // The selection unchanged, its group gets the order (0x49e230):
         // a zone of it is started again (0x4c8a80 on a 0x78 block,
-        // 0x4c7650), its route kept.
+        // 0x4c7650), its route kept. A group of another block has it
+        // ended (0x4a1c60), its counter `+8` kept; with key flag 4 the
+        // block's route `+0x61` is taken first (`local_8`, so 0x4a1c60
+        // frees no route and no mark) and put in the new block after
+        // 0x4c87d0, and the start's split and dispatch (0x4c5f40 /
+        // 0x4c6ee0) are skipped: the ships go on as they were until a
+        // notice or the zone's pass. Without it 0x4ce5a0 frees the route.
+        let shift = keys & 4 != 0;
+        let mut kept = None;
         let group = match self.selection_zone(&ships) {
             Some(z) => self.gather_zones[z].group,
             None => {
-                self.leave_zones(&ships);
-                self.zone_serial += 1;
-                ZoneGroup::Human(self.zone_serial)
+                let mut taken = None;
+                if let Some(g) = self.selection_waypoint_move(&ships) {
+                    let m = self.waypoint_moves.remove(g);
+                    taken = Some((m.serial, m.elapsed, Some(m.route)));
+                } else if let Some(g) = self.selection_attack(&ships) {
+                    let a = self.human_attacks.remove(g);
+                    taken = Some((a.serial, a.elapsed, a.route));
+                } else if let Some(g) = self.selection_fleet(&ships) {
+                    kept = self.fleet_attacks[g].route.take().filter(|_| shift);
+                }
+                match taken {
+                    Some((serial, elapsed, route)) => {
+                        kept = route.filter(|_| shift);
+                        let owner = ships.iter().find_map(|&id| {
+                            self.object_index(id).and_then(|i| self.objects[i].owner)
+                        });
+                        self.gather_zones.push(GatherZone {
+                            group: ZoneGroup::Human(serial),
+                            owner,
+                            rect,
+                            class,
+                            flags,
+                            first_only: false,
+                            deposits: Vec::new(),
+                            ports: None,
+                            ships: ships.clone(),
+                            notices: Vec::new(),
+                            escorts: Vec::new(),
+                            wrecks: Vec::new(),
+                            route: None,
+                            deferred: Vec::new(),
+                            elapsed,
+                            done: false,
+                        });
+                        ZoneGroup::Human(serial)
+                    }
+                    None => {
+                        self.leave_zones(&ships);
+                        self.zone_serial += 1;
+                        ZoneGroup::Human(self.zone_serial)
+                    }
+                }
             }
         };
-        self.start_zone(group, ships, rect, class, flags, first_only);
+        let skip = kept.is_some();
+        self.start_zone_listed(
+            group,
+            ships,
+            rect,
+            class,
+            flags,
+            keys != 0,
+            Vec::new(),
+            &[],
+            skip,
+        );
+        if let Some(z) = self.gather_zones.iter().position(|z| z.group == group) {
+            if kept.is_some() {
+                self.gather_zones[z].route = kept;
+            }
+        }
         Ok(())
     }
 
@@ -603,7 +680,17 @@ impl Scene {
         first_only: bool,
         listed: Vec<u32>,
     ) {
-        self.start_zone_listed(group, ships, rect, class, flags, first_only, listed, &[]);
+        self.start_zone_listed(
+            group,
+            ships,
+            rect,
+            class,
+            flags,
+            first_only,
+            listed,
+            &[],
+            false,
+        );
     }
 
     /// A computer flotilla's order 0x78 (0x483090: key flags 0, flags
@@ -618,7 +705,7 @@ impl Scene {
         listed: Vec<u32>,
         ranked: &[(u32, (i32, i32))],
     ) {
-        self.start_zone_listed(group, ships, rect, class, 0, false, listed, ranked);
+        self.start_zone_listed(group, ships, rect, class, 0, false, listed, ranked, false);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -632,6 +719,7 @@ impl Scene {
         first_only: bool,
         listed: Vec<u32>,
         ranked: &[(u32, (i32, i32))],
+        kept: bool,
     ) {
         let mut ports: Vec<u32> = Vec::new();
         for id in listed {
@@ -687,7 +775,7 @@ impl Scene {
             self.zone_know_listed(z, ranked);
         }
         let cands = self.zone_deposits(z, 0);
-        if cands.is_empty() {
+        if cands.is_empty() || kept {
             return;
         }
         let (merchants, others) = self.zone_split(z);

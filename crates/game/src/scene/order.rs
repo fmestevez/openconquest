@@ -64,10 +64,12 @@ pub enum Order {
         x: f32,
         y: f32,
     },
+    /// The patrol button's click at cell `(x, y)` with `ships` selected
+    /// (0x49d790 case 8; `Scene::order_patrol_route`).
     Patrol {
-        ship: u32,
-        x: f32,
-        y: f32,
+        ships: Vec<u32>,
+        x: i32,
+        y: i32,
     },
     Zone {
         ship: u32,
@@ -426,7 +428,6 @@ impl Order {
             | Attack { ship, .. }
             | Close { ship, .. }
             | Scout { ship, .. }
-            | Patrol { ship, .. }
             | Zone { ship, .. }
             | GatherZone { ship, .. }
             | Convoy { ship, .. }
@@ -475,6 +476,7 @@ impl Scene {
             | Order::GatherZone { .. }
             | Order::ZoneWaypoint { .. }
             | Order::ShiftMove { .. }
+            | Order::Patrol { .. }
             | Order::AttackZone { .. }
             | Order::FleetAttack { .. } => {}
             Order::Behaviour { .. } | Order::LoadCrew { .. } | Order::LoadObject { .. } => {}
@@ -736,7 +738,7 @@ impl Scene {
                 Ok(0)
             }
             Scout { ship, x, y } => done(self.order_scout(ship, x, y)),
-            Patrol { ship, x, y } => done(self.order_patrol(ship, x, y)),
+            Patrol { ref ships, x, y } => done(self.order_patrol_route(ships, x, y)),
             // An attack zone given to one ship (an outbox of an older
             // save) is its group's.
             Zone {

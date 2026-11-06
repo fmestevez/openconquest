@@ -6134,7 +6134,14 @@ impl App {
                 Some((x, y)) if cmd == crate::commands::SCOUT => {
                     self.order_each(|ship| Order::Scout { ship, x, y })
                 }
-                Some((x, y)) => self.order_each(|ship| Order::Patrol { ship, x, y }),
+                // 0x23 sub 8 with the click's cell, once for the
+                // selection (0x49d790 case 8).
+                Some((x, y)) => {
+                    let t = openconquest_formats::map::TILE_SIZE as f32;
+                    let ships = self.selection();
+                    let (x, y) = ((x / t).floor() as i32, (y / t).floor() as i32);
+                    self.issue(Order::Patrol { ships, x, y }).map(|_| ())
+                }
                 None => Err("Choose a place at sea".into()),
             };
             match order {

@@ -22,19 +22,6 @@ impl Scene {
         Ok(())
     }
 
-    /// Sets own ship `ship` patrolling between where it is and `(x, y)`.
-    pub fn order_patrol(&mut self, ship: u32, x: f32, y: f32) -> Result<(), String> {
-        let i = self.object_index(ship).ok_or("No such ship")?;
-        let from = (self.objects[i].x, self.objects[i].y);
-        let path = self
-            .plan_route_to_water(i, x, y)
-            .ok_or("The ship cannot sail there")?;
-        let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
-        s.path = path;
-        s.task = Some(Task::Patrol { from, to: (x, y) });
-        Ok(())
-    }
-
     /// Has own ship `ship` guard (or with `attack`, attack) the world
     /// rectangle between the corners `a` and `b`.
     pub fn order_zone(

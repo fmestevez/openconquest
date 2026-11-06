@@ -3563,8 +3563,12 @@ list and escorts).
   route `+0x61` kept) and its block rewritten. On a group whose block is
   another order: without key flag 4 that block's route is freed
   (0x4ce5a0); with it the route is moved to the new block and the start's
-  dispatch is skipped (`local_8`). Not ported (see **Route**): the port's
-  0x78 on a waypoint move's group starts a new zone.
+  dispatch is skipped (`local_8`; 0x4a1c60 then finds no route, so the
+  marks stay): the ships go on as they were until a notice or the pass.
+  The group, its notices and counter `+8` are kept (0x4a1150 makes the
+  notices only if null). Port: `human_zone` (a waypoint move's or human
+  attack's group kept, its serial and counter; a fleet attack's route
+  taken, its group left as before).
 - **Start** (0x4c8a80 tail): 0x4c5b90 mode 0 lists the rectangle's
   deposits of the class and knows them (`+0x39`); if any: 0x4c5f40 splits
   the group into merchants (types 0/1, with their room 0x4be800(3),
@@ -3759,17 +3763,22 @@ list and escorts).
   `Order::ShiftMove` -> `Scene::order_shift_move` (app.rs: a Shift right
   click with ships selected, the click's cell, once for the selection,
   the green tick after it as after a move: 0x518734 goes by the pointer
-  mode). Not ported: Shift on a human attack block `{0x70, 0x20}` (its
-  route; the click does nothing there), a Shift 0x78 taking a waypoint
-  move's route (0x4c8a80's `local_8`, the start skipped), and 0x49d790
-  case 8 (button 0x23 sub 8: waypoints on a 100/2 block whose `+0x14`
-  is 2, looping, through 0x4cf2c0 with group 1).
+  mode). The human attack block `{0x70, 0x20}` takes the route the same
+  way (`HumanAttack.route`), but its code (0x4d5f50, 0x4d61d0, 0x4d4e50
+  and their callees) never reads `+0x61`: the cells are only marked, the
+  route kept by a rewrite (0x4d5f50 on a 70/20) and freed when the block
+  ends (0x4a1c60); a fleet attack started on that group takes it
+  (0x4d04a0). A Shift 0x78 takes a waypoint move's route (0x4c8a80's
+  `local_8`, above).
   - **The marks** (`Route.marks`, not saved): 0x4ce6c0 for the viewing
     player (`navy +0x21`) makes the new entry's picture 0x4ced80(index):
     the controlm composite `WPMOVE` (kind 8, 0x545ef0 cursor layer 7),
     its layers by the mask `1 << n / 10 | 1 << n % 10 + 10 | 0x100000`
-    for `n` = index + 1 in 1..99, else 0x100000; with its `place`
-    argument (1 from every human click) 0x4ced10 puts it at `(x*64 + 14,
+    for `n` = the count of waypoints before the entry + 1 in 1..99, else
+    0x100000 (the number fixed as the mark is made: an append's index +
+    1, but the patrol's centre, put first after the click's cell, is
+    2; `Route.numbers`); with its `place` argument (1 from the Shift
+    clicks, 0 from the patrol) 0x4ced10 puts it at `(x*64 + 14,
     y*64 + 18)` (`+0x59` / `+0x5d`, 0x55ec70). 0x4a2050(navy, player,
     show) (Shift pressed / let go, and with 0 at a new selection and at
     0xc455), after its block's own marks, walks the selected group's
@@ -3786,8 +3795,32 @@ list and escorts).
     the route made if null (new) and the cell appended. Only with a new
     route: each ship (class 200) of the group a plain move to the route's
     first waypoint (0x4cf070) and 0x4ce8a0(-1, -1, 0, mark `+0x14`).
-    (With from-group set, 0x4c56e0's group centre is appended first, at
-    the start, and the ships go to the second; only case 8 sets it.)
+    (With from-group set, 0x4c56e0's group centre is put at index 0
+    (0x4ce6c0 with 0, 0x55f3b0) unless listed, and the ships go to the
+    second waypoint, `local_c` not counted; only case 8 sets it.)
+    **The patrol** (button 0x6e `CBUT_BEHPATROL`, command 0x23 sub 8
+    with the cell, 0x49d790 case 8): on a 100/2 block whose short
+    `+0x14` is 2 the route made if null (0x4ce5e0) and the cell appended
+    with place 0 (0x4ce6c0 -1; 0x4cec00 never: it needs the cell listed
+    and the route new); else 0x4a1c60 and 0x4cf2c0(payload `{x, y, 2, 0,
+    1, &cell}`, place 0, from-group 1). 0x4c56e0(player, group): of the
+    group's members, ships (class 200, cell `+0x5a3/+0x5a7`) weight 1,
+    class 0x32 (position `+0x74/+0x78`) weight 2; the weighted mean
+    (C division); with a 0x32 member and 0x499990(cell, 0) false the
+    last ship within `|dx| + |dy| < W + H` of it (the bound not
+    tightened), else the mean; 0 with no members. The human's groups
+    hold only ships. With the centre the click's cell the route has one
+    waypoint and 0x4cf2c0 reads the second from a null pointer (the
+    original faults; the port sends nothing). Way 2: 0x4ce7c0 goes round
+    at either end, 0x4ce8a0 keeps the progress of a way +/-2 on a
+    removal. A Shift move on a patrol rewrites `+0x14` to 1. Port:
+    `Order::Patrol` -> `Scene::order_patrol_route` (app.rs: the patrol
+    button, then a click at sea, the cell, once for the selection;
+    the per-ship `Task::Patrol` estimate is no longer given). Not
+    decoded: the patrol button's set state in the warship menu
+    (0x4e6980; the port's reads `Task::Patrol`, now never set); a
+    zone's, attack's or fleet's group given the patrol leaves for a new
+    group in the port (the original keeps the group, its `+8`).
     Its notices 0x4cf0b0 (newest first): 300, the ship in the group:
     no route 0x4cc650, heard; else 0x4ceab0's best waypoint, a move
     there and 0x4ce8a0(-1, -1, 0, `+0x14`); then `#` (0x4c42f0). 0x136
