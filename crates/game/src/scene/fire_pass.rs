@@ -1204,8 +1204,8 @@ impl Scene {
     /// not turning (move state 2). (0x4a6150's goal-is-its-cell end is not
     /// met: the target within `d` stops the attack first. Its wait
     /// counter `+0x591` is the port's own mover's.) Then 0x4a51b0 with
-    /// `keep` 0, the route within `d` of the goal; the plan's tick, cell
-    /// and goal kept (0x4a6330, 0x4a6100).
+    /// `keep` 0, the route within `d` of the goal; the plan's tick and
+    /// cell kept, its goal only with a route (0x4a6330, 0x4a6100).
     fn attack_plan(&mut self, i: usize, goal: (i32, i32), d: i32) {
         let now = self.ticks;
         let own = self.cell_of_object(i);
@@ -1221,13 +1221,15 @@ impl Scene {
         let (x, y) = (goal.0 as f32 * t + t / 2.0, goal.1 as f32 * t + t / 2.0);
         let route = self.plan_route_within(i, x, y, d);
         let s = self.objects[i].ship.as_mut().unwrap();
+        // 0x4a6100: the goal is the last stored route's (`+0x54e`).
+        let plan_goal = if route.is_some() { goal } else { p.plan_goal };
         if let Some(path) = route {
             s.path = path;
         }
         s.attack_plan = objects::RoutePlan {
             planned: now,
             plan_from: own,
-            plan_goal: goal,
+            plan_goal,
             first_plan: false,
         };
     }

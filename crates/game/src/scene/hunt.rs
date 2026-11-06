@@ -10,7 +10,7 @@
 use openconquest_formats::map::TILE_SIZE;
 
 use super::leviathan::{SHOWING, UP};
-use super::{walk_path, Caches, GameData, Region, Scene};
+use super::{walk_path, Caches, GameData, Region, RegionPlan, Scene};
 use crate::objects::{self, GatherPhase, Hunt, Resource, Task};
 
 /// The square of cells a hunter looks over and sails within half of
@@ -191,18 +191,25 @@ impl Scene {
         let t = TILE_SIZE as f32;
         let (x, y) = (goal.0 as f32 * t + t / 2.0, goal.1 as f32 * t + t / 2.0);
         let route = match region {
-            Some(r) => self.plan_region(i, goal, r),
-            None => self.plan_route(i, x, y),
+            Some(r) => self.plan_region(i, goal, r, false),
+            None => match self.plan_route(i, x, y) {
+                Some(path) => RegionPlan::Route(path),
+                None => RegionPlan::NoRoute,
+            },
         };
-        let s = self.objects[i].ship.as_mut().unwrap();
-        if let Some(path) = route {
-            s.path = path;
-        }
+        // 0x4a6100 after 0x4a6330: the cell always, the tick once it
+        // plans (`+0x57b`), the goal only with a route stored (`+0x54e`).
         let h = self.hunt_mut(i);
+        h.plan_from = here;
+        if matches!(route, RegionPlan::Refused) {
+            return;
+        }
         h.first_plan = false;
         h.planned = now;
-        h.plan_from = here;
-        h.plan_goal = goal;
+        if let RegionPlan::Route(path) = route {
+            h.plan_goal = goal;
+            self.objects[i].ship.as_mut().unwrap().path = path;
+        }
     }
 
     /// Sub-code 9 (0x4ad680), at step 1: the leviathan by its id, at its
@@ -1315,12 +1322,14 @@ mod tests {
         assert!(scene
             .plan_route(i, centre(goal).0, centre(goal).1)
             .is_some());
-        assert!(scene
-            .plan_region(i, goal, &region(wall(false), goal))
-            .is_none());
-        let route = scene
-            .plan_region(i, goal, &region(wall(true), goal))
-            .unwrap();
+        assert!(matches!(
+            scene.plan_region(i, goal, &region(wall(false), goal), false),
+            RegionPlan::NoRoute
+        ));
+        let RegionPlan::Route(route) = scene.plan_region(i, goal, &region(wall(true), goal), false)
+        else {
+            panic!("no route");
+        };
         let cells: Vec<(i32, i32)> = route
             .iter()
             .map(|&(x, y)| ((x / t).floor() as i32, (y / t).floor() as i32))
@@ -1331,9 +1340,10 @@ mod tests {
             .iter()
             .all(|&(x, y)| (x0..x0 + 5).contains(&x) && (y0..y0 + 5).contains(&y)));
         let off = (x0 + 6, y0 + 2);
-        assert!(scene
-            .plan_region(i, off, &region(wall(true), off))
-            .is_none());
+        assert!(matches!(
+            scene.plan_region(i, off, &region(wall(true), off), false),
+            RegionPlan::NoRoute
+        ));
     }
 
     /// A leviathan under water is not seen (0x4ac8d0 gives 0xff): the

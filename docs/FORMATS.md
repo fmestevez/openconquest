@@ -1657,8 +1657,14 @@ the ship's `+0x594` 1), the reach 0 for 0x39, 0x3a and 0x3b (so the ship
 must lie on the berth), the distance the larger axis from the ship's
 cell when within 2 on both; within reach 1 (and `+0x6aa` the box's
 end-corner quirk), further a mode 6 plan through the box to the point
-(0x4a6270 with the building flag, which lets 0x4a6330 take a goal on
-land to the region finder 0x4a5a10), out of 2 nothing. Within reach,
+(0x4a6270 with the building flag, `[ebp-0x54]` set at 0x4b8247 when the
+slot's object is the prey and a building (0x50e600); it is 0x4a6330's
+second argument, the wait, which lets a goal on land past 0x4a6498 to the
+region finder 0x4a5a10, 0x55ba50 with tolerance 1: the route ends next to
+the anchor when water within 1 is reached), out of 2 nothing. Only this
+family plans to land: the gathering look 0x4ad0ba and the rammer
+0x4c2666 / 0x4c272e pass 0 (`Scene::closing_plan`, `Scene::plan_region`
+take `wait`; `a_loader_plans_to_a_forts_anchor_on_land`). Within reach,
 0x4b84b0: 0 while `now - +0x6be` is below 0x5c7740[the player's byte at
 0x90 of its 0xba0 record] or a contact is held (`+0x8e6`), for 0x39-0x3b
 unless the berth is the ship's cell, for a ship target without `+0x261`
@@ -1783,8 +1789,7 @@ slot 2, `+0x8d2` from the bomb's `+0xfb`), and for 0x34-0x36 and
 Not ported: vt+0xb0's town test (`+0x1d8 & 0x10`, `+0x1c8`), 0x2874's
 clearing of `+0x1e0`, the porters (`NOSIL_`,
 code 5 carries between ships, 0x4bc7c0), the hold's `+0x85` and
-reserved-cell release, the hook's landing sound at a building, the
-building flag of the plan (no goal on land) and `+0x594`; of 0x4ad9f0,
+reserved-cell release, the hook's landing sound at a building; of 0x4ad9f0,
 the category kept from the taking (the port derives it from the kind and
 the present owner), the stats 0x4a9530, 0x4a8c30's share 0x4a8f40 and
 0x4beb50; and the `+0xa4` state test of 0x424af0 for player 16's
@@ -2584,7 +2589,17 @@ re-plan under way and the behaviours' plans 0x4a5740's. Not waited (wait 0), 0x4
 0x499990(cell, 0) refuses (layer-0 type 8 or more, or layer-1 type 4, 5
 or 6), after its goal-is-its-own-cell test (returns 1) and before any
 planner (the region planner 0x4a5a10 included); its callers choose their
-own water cell. The port's `plan_route` does the same. A founding ship
+own water cell. The port's `plan_route` does the same. Waited, the goal
+goes on (0x4a6498: `test esi, esi` on the second argument); only 0x4b7f10
+waits, for a building prey (0x4b8247). After the planner (0x4a6330): no
+route, `+0x591` counted, 0xff; a route of fewer than 2 entries, or 2
+equal, is not stored (the old route kept, `+0x591` counted; 2 when entry
+1 is the own cell, else 0); else `+0x54e / +0x552` the goal and the route
+stored. 0x4a6100, after each 0x4a6330 from 0x4a6150 / 0x4a6270, copies
+`+0x54e` (so the goal of the last stored route), `+0x591` and the own cell
+for 0x4a6150's changed test; `+0x57b` (the tick) and `+0x593` are set
+only past 0x4a6330's goal tests (`RegionPlan`; `closing_plan`,
+`hunt_plan`, `attack_plan`). A founding ship
 (0x4aa990) sails for 0x4b2710's berth (`Scene::found_berth`, "A ship's
 fort" below; no berth drops the order, and `+0x591` is zeroed after).
 Not decoded, and kept on the port's own nearest water
@@ -10669,7 +10684,7 @@ search 0x4bfc60, non-zero setting the state 3; 2 0x4c0eb0; 3 0x4c09c0.
   0x4c09c0 compares an uninitialised distance with the aim (the port
   fires nothing there).
 - `+0x594`: set by 0x4c09c0 with a mask (and by 0x4b7f10 at a fort or
-  barbarian prey, 0xe01c, not ported), cleared by a step granted
+  barbarian prey, 0xe01c, `Scene::load_look`), cleared by a step granted
   (0x4a3c6e); a step refused at the route's last cell counts the extra
   tick of wait with it set (0x4a3d76). `+0x62f` (0x4c09c0: the ship's
   cell; 0x4ab6f7: -1) has no reader. 0x4ac050(code, id), the target found

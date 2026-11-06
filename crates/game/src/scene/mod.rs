@@ -693,6 +693,21 @@ pub(super) struct Region {
     pub grid: Vec<i16>,
 }
 
+/// What 0x4a6330 gave with a region (`Scene::plan_region`).
+#[derive(Debug)]
+pub(super) enum RegionPlan {
+    /// No plan made: the goal its own cell (1), or a goal on land not
+    /// waited for (0x4a6498, 0); `+0x57b` and `+0x593` are left.
+    Refused,
+    /// A route of one cell, or of two equal ones (0 or 2): `+0x591`
+    /// counted, the old route kept.
+    Short,
+    /// No route (0xff).
+    NoRoute,
+    /// A route, stored with its goal (`+0x54e`).
+    Route(VecDeque<(f32, f32)>),
+}
+
 /// Which of 0x4a6330's planners a ship's route comes from: not waited
 /// with a tolerance of 0 (0x4a5740), a plain move's first plan
 /// (0x4a5f30), or waited (0x4a51b0). `ToWater` is the port's own: an
@@ -2020,24 +2035,29 @@ impl Scene {
 
     /// 0x4a6330 with a region (0x4a5a10, ShipClassTy::GetWayNew): ship
     /// `i`'s plan to `goal` inside `region` only. 0x4a6330's checks first:
-    /// no plan to its own cell, nor to one 0x499990(cell, 0) refuses (not
-    /// waited). From the cell 0x4a6330 plans from (the one it is entering
+    /// no plan to its own cell, nor to one 0x499990(cell, 0) refuses
+    /// unless `wait` (its second argument, 0x4a6498: set only by
+    /// 0x4b7f10 for a building prey, 0x4b8247, which lets a goal on land
+    /// through). From the cell 0x4a6330 plans from (the one it is entering
     /// while between cells), relative to the box with no bounds test: on
     /// a closed cell no route; the region's goal open, the exact route
     /// 0x55ca10, else 0x55ba50 with a tolerance of 1, both with the
     /// heading 0 and none for an end off the box; the entries moved back
-    /// by the box's corner (`x0`, `y0`). The route then as any other.
+    /// by the box's corner (`x0`, `y0`). A route of one cell, or of two
+    /// equal (a start within 1 of a closed goal), is none to follow and
+    /// the old one is kept. The route then as any other.
     pub(super) fn plan_region(
         &self,
         i: usize,
         goal: (i32, i32),
         region: &Region,
-    ) -> Option<VecDeque<(f32, f32)>> {
+        wait: bool,
+    ) -> RegionPlan {
         let t = TILE_SIZE as f32;
         let obj = &self.objects[i];
         let own = ((obj.x / t).floor() as i32, (obj.y / t).floor() as i32);
-        if goal == own || !self.nav.is_sea(goal.0, goal.1) {
-            return None;
+        if goal == own || !wait && !self.nav.is_sea(goal.0, goal.1) {
+            return RegionPlan::Refused;
         }
         let entering = obj
             .ship
@@ -2051,21 +2071,25 @@ impl Scene {
         // Off the box the original reads past its grid; the finders give
         // no route for such a start, taken here at once.
         if !inside(rx, ry) || region.grid[(ry * w + rx) as usize] == -1 {
-            return None;
+            return RegionPlan::NoRoute;
         }
         let mut m = region.grid.clone();
         let route = if inside(gx, gy) && m[(gy * w + gx) as usize] != -1 {
-            walk_path::route_exact(&mut m, w, h, (rx, ry), (gx, gy), 0)?
+            walk_path::route_exact(&mut m, w, h, (rx, ry), (gx, gy), 0)
         } else {
-            walk_path::route(&mut m, w, h, (rx, ry), (gx, gy), 0, 1)?.0
+            walk_path::route(&mut m, w, h, (rx, ry), (gx, gy), 0, 1).map(|r| r.0)
+        };
+        let Some(route) = route else {
+            return RegionPlan::NoRoute;
         };
         let route: Vec<(i32, i32, u8)> = route
             .into_iter()
             .map(|(x, y, d)| (x + region.x0, y + region.y0, d))
             .collect();
+        // 0x4a6330: fewer than 2 entries, or 2 equal, store nothing.
         let cells = crate::nav::cells_after(&route);
-        if entering.is_some() && cells.is_empty() {
-            return None;
+        if cells.is_empty() {
+            return RegionPlan::Short;
         }
         let mut points: Vec<(f32, f32)> = cells
             .into_iter()
@@ -2075,7 +2099,7 @@ impl Scene {
         if (here.0 - obj.x).hypot(here.1 - obj.y) > 0.5 {
             points.insert(0, here);
         }
-        Some(points.into())
+        RegionPlan::Route(points.into())
     }
 
     /// Ship `mover`, held up by ship `still` lying in its way, pushes it

@@ -11,7 +11,7 @@
 use openconquest_formats::map::TILE_SIZE;
 
 use super::grapple::{bow_row, UNIT};
-use super::{sail, walk_path, Caches, GameData, Region, Scene};
+use super::{sail, walk_path, Caches, GameData, Region, RegionPlan, Scene};
 use crate::economy::{DOCK, PORT, SHIPYARD};
 use crate::objects::{self, Closing, Task};
 use openconquest_formats::ObjectClass;
@@ -320,7 +320,7 @@ impl Scene {
             self.closing_mut(i).near = true;
             return;
         }
-        self.closing_plan(i, berth, None);
+        self.closing_plan(i, berth, None, false);
         self.closing_mut(i).from = Some(own);
     }
 
@@ -342,11 +342,12 @@ impl Scene {
     /// larger axis from the ship's cell, if within half the box on both.
     /// Not found, out; within reach, `+0x6aa` the cell one past the box's
     /// end corner (as the boarder's); further, a move (0x4a6270 mode 6)
-    /// through the box to the point; out of half the box, none. (Not
-    /// ported: the plan's building flag, 0x4a6330's second argument,
-    /// which lets a goal on land through to the region finder 0x4a5a10,
-    /// and `+0x594` set for the anchor's classes; the port's plan takes
-    /// no goal on land.)
+    /// through the box to the point, with the building flag (0x4a6330's
+    /// second argument, set at 0x4b8247 for a building prey) that lets a
+    /// goal on land through to the region finder 0x4a5a10 (0x4a6498);
+    /// out of half the box, none. The anchor's classes also set `+0x594`
+    /// (`attack_step`, read by the step's wait, 0x4a3d76) as the building
+    /// is found, before the reach test.
     fn load_look(&mut self, i: usize, t: usize) -> BoardLook {
         let s2 = BOX / 2;
         let own = self.cell_of_object(i);
@@ -380,7 +381,10 @@ impl Scene {
         }
         let (point, reach) = match class {
             PORT | SHIPYARD | DOCK => (self.vt_berth(t), 0),
-            c if (0x32..0x52).contains(&c) && (1u32 << (c - 0x32)) & 0xe01c != 0 => (cell, REACH),
+            c if (0x32..0x52).contains(&c) && (1u32 << (c - 0x32)) & 0xe01c != 0 => {
+                self.objects[i].ship.as_mut().unwrap().attack_step = true;
+                (cell, REACH)
+            }
             _ => (self.vt_berth(t), REACH),
         };
         let (dx, dy) = ((own.0 - point.0).abs(), (own.1 - point.1).abs());
@@ -399,7 +403,7 @@ impl Scene {
             h: y1 - y0,
             grid,
         };
-        self.closing_plan(i, point, Some(&region));
+        self.closing_plan(i, point, Some(&region), true);
         BoardLook::Closing
     }
 
@@ -489,10 +493,20 @@ impl Scene {
     /// state 2). (0x4a6150's goal-is-its-cell end, event 8 0x80, is never
     /// met: the goals are the prey's cells. Its wait counter `+0x591` is
     /// the port's own mover's.) Then 0x4a6330: no plan to its own cell
-    /// (1) or to one 0x499990(cell, 0) refuses (0); none for a route of
-    /// one cell (0 or 2); no route, 0xff. The plan's tick, cell and goal
-    /// are kept (0x4a6330, 0x4a6100).
-    fn closing_plan(&mut self, i: usize, goal: (i32, i32), region: Option<&Region>) -> Planned {
+    /// (1) or to one 0x499990(cell, 0) refuses (0) unless `wait` (its
+    /// second argument, 0x4a6498: 0x4b7f10's for a building prey,
+    /// 0x4b8247); none for a route of one cell, the old one kept (0 or
+    /// 2); no route, 0xff. The plan's tick is kept once it plans
+    /// (0x4a6330's `+0x57b`), its cell after each (0x4a6100), its goal
+    /// only with a route stored (0x4a6100 copies `+0x54e`, set with the
+    /// route).
+    fn closing_plan(
+        &mut self,
+        i: usize,
+        goal: (i32, i32),
+        region: Option<&Region>,
+        wait: bool,
+    ) -> Planned {
         let now = self.ticks;
         let own = self.cell_of_object(i);
         let s = self.objects[i].ship.as_ref().unwrap();
@@ -503,7 +517,8 @@ impl Scene {
                 return Planned::Kept;
             }
         }
-        if goal == own || !self.nav.is_sea(goal.0, goal.1) {
+        if goal == own || !wait && !self.nav.is_sea(goal.0, goal.1) {
+            self.closing_mut(i).plan_from = own;
             return Planned::Kept;
         }
         let start = if s.plans_from_own_cell() {
@@ -512,24 +527,31 @@ impl Scene {
             s.entering
         };
         let route = match region {
-            Some(r) => self.plan_region(i, goal, r),
+            Some(r) => self.plan_region(i, goal, r, wait),
             None => {
                 let (x, y) = Self::cell_middle(goal);
-                self.plan_route(i, x, y)
+                match self.plan_route(i, x, y) {
+                    Some(path) => RegionPlan::Route(path),
+                    None if start == goal => RegionPlan::Short,
+                    None => RegionPlan::NoRoute,
+                }
             }
         };
         let c = self.closing_mut(i);
+        c.plan_from = own;
+        if matches!(route, RegionPlan::Refused) {
+            return Planned::Kept;
+        }
         c.first_plan = false;
         c.planned = now;
-        c.plan_from = own;
-        c.plan_goal = goal;
         match route {
-            Some(path) => {
+            RegionPlan::Route(path) => {
+                c.plan_goal = goal;
                 self.objects[i].ship.as_mut().unwrap().path = path;
                 Planned::Routed
             }
-            None if start == goal => Planned::Kept,
-            None => Planned::NoRoute,
+            RegionPlan::NoRoute => Planned::NoRoute,
+            RegionPlan::Refused | RegionPlan::Short => Planned::Kept,
         }
     }
 
@@ -555,7 +577,7 @@ impl Scene {
             self.closing_mut(i).near = true;
             return;
         }
-        self.closing_plan(i, prey, None);
+        self.closing_plan(i, prey, None, false);
         self.closing_mut(i).from = Some(own);
     }
 
@@ -580,7 +602,7 @@ impl Scene {
             c.first_plan = true;
             return;
         }
-        self.closing_plan(i, prey, None);
+        self.closing_plan(i, prey, None, false);
         self.closing_mut(i).from = Some(own);
     }
 
@@ -685,7 +707,7 @@ impl Scene {
             h: y1 - y0,
             grid,
         };
-        self.closing_plan(i, goal, Some(&region));
+        self.closing_plan(i, goal, Some(&region), false);
         BoardLook::Closing
     }
 
@@ -711,7 +733,7 @@ impl Scene {
         };
         let (alongside, goal) = self.ram_goal(i, ti);
         if !reach {
-            if self.closing_plan(i, goal, Some(&region)) == Planned::NoRoute {
+            if self.closing_plan(i, goal, Some(&region), false) == Planned::NoRoute {
                 let c = self.closing_mut(i);
                 c.near = false;
                 c.contact_wait = false;
@@ -725,7 +747,7 @@ impl Scene {
         self.closing_mut(i).contact_wait = false;
         let w = self.nav.width as i32;
         self.closing_mut(i).contact = w * goal.1 + goal.0;
-        let planned = self.closing_plan(i, goal, Some(&region));
+        let planned = self.closing_plan(i, goal, Some(&region), false);
         let s = self.objects[i].ship.as_ref().unwrap();
         let t = TILE_SIZE as f32;
         let end = s.path.back().map_or(own, |&(x, y)| {
@@ -994,5 +1016,102 @@ impl Scene {
             walk_path::dist(at.0, at.1, to.0, to.1)
         });
         dist[0] >= dist[1]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A loader 2 cells from a fort's anchor (0x4b7f10, mask 0xe01c: the
+    /// point the anchor, on land) plans with the building flag (0x4b8247
+    /// -> 0x4a6330's wait, 0x4a6498) through the box to a cell within 1
+    /// of the anchor (0x55ba50, tolerance 1), and sets `+0x594` (needs
+    /// `OPENCONQUEST_DATA`).
+    #[test]
+    fn a_loader_plans_to_a_forts_anchor_on_land() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let (mut planned, mut next_to) = (0, 0);
+        for n in 0..28 {
+            let Ok(mut scene) = Scene::load(&data, &mut caches, &format!("miss{n:03}")) else {
+                continue;
+            };
+            scene.brain = None;
+            let forts: Vec<usize> = (0..scene.objects.len())
+                .filter(|&k| matches!(scene.objects[k].class, ObjectClass::Building(0x34..=0x36)))
+                .collect();
+            let Some(i) = scene
+                .objects
+                .iter()
+                .position(|o| o.ship.as_ref().is_some_and(|s| s.kind < 10))
+            else {
+                continue;
+            };
+            let deep = objects::deep_draught(scene.objects[i].ship.as_ref().unwrap().kind);
+            for &t in &forts {
+                let anchor = scene.anchor_cell(t);
+                assert!(!scene.nav.is_sea(anchor.0, anchor.1));
+                for dy in -2..=2 {
+                    for dx in -2..=2 {
+                        let c = (anchor.0 + dx, anchor.1 + dy);
+                        if dx.abs().max(dy.abs()) != 2
+                            || !scene.sea_cell(c, deep)
+                            || scene.slot_holder(c).is_some()
+                        {
+                            continue;
+                        }
+                        let id = scene.objects[t].id;
+                        let s = scene.objects[i].ship.as_mut().unwrap();
+                        s.path.clear();
+                        s.move_state = 0;
+                        s.attack_step = false;
+                        s.closing = Some(Closing {
+                            target: id,
+                            near: true,
+                            from: None,
+                            contact: -1,
+                            planned: 0,
+                            plan_from: c,
+                            plan_goal: c,
+                            first_plan: true,
+                            contact_wait: false,
+                            by_id: false,
+                            thrown: None,
+                            hook_cell: (0, 0),
+                        });
+                        (scene.objects[i].x, scene.objects[i].y) = Scene::cell_middle(c);
+                        if scene.reserved_cell(i).is_some_and(|r| r != c) {
+                            continue;
+                        }
+                        assert_eq!(scene.load_look(i, t), BoardLook::Closing);
+                        let s = scene.objects[i].ship.as_ref().unwrap();
+                        assert!(s.attack_step);
+                        let Some(&(x, y)) = s.path.back() else {
+                            continue;
+                        };
+                        let tile = TILE_SIZE as f32;
+                        let cell =
+                            |x: f32, y: f32| ((x / tile).floor() as i32, (y / tile).floor() as i32);
+                        let end = cell(x, y);
+                        // The ring search about the goal (0x55ba50) may end
+                        // further when no water within 1 is reached.
+                        if walk_path::dist(end.0, end.1, anchor.0, anchor.1) <= 1 {
+                            next_to += 1;
+                        }
+                        assert!(s.path.iter().all(|&(x, y)| {
+                            let p = cell(x, y);
+                            (p.0 - c.0).abs() <= 2 && (p.1 - c.1).abs() <= 2
+                        }));
+                        assert_eq!(s.closing.unwrap().plan_goal, anchor);
+                        planned += 1;
+                    }
+                }
+            }
+        }
+        assert!(planned > 0 && next_to > 0, "{planned} {next_to}");
     }
 }
