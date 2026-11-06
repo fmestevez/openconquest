@@ -83,6 +83,34 @@ pub struct MendingUnit {
     pub last: u8,
 }
 
+/// What mending a ship would cost, as its main page stores it on the
+/// repair button (0x4b1ed0, from 0x4e6980 / 0x4e6e90 into slot 9's
+/// `+0x56`): the hull's `(full - hull) x 0x59b388[type] / full` (full
+/// 0x5c76b0[type], hull `+0x271`), then for types other than 0 and 1 each
+/// unit below 100, items 9 down to 0 (`+0x292` down, conditions `+0x3b9`
+/// down by 32), `0x597164[item / 3] x (100 - condition) x 9 / 1000`. The
+/// dock's own charge is reckoned step by step (0x4b1fc0,
+/// `dock_repair_step`).
+pub fn ship_repair_price(obj: &objects::MapObject) -> u32 {
+    let (Some(s), Some(c)) = (obj.ship.as_ref(), obj.combat.as_ref()) else {
+        return 0;
+    };
+    let kind = s.kind as usize % 12;
+    let full = crate::combat::hull_points(kind as u8) as i64;
+    let hull = (c.hull * 15.0).round() as i64;
+    let mut price = (full - hull) * DOCK_REPAIR_PRICE[kind] as i64 / full;
+    if kind != 0 && kind != 1 {
+        // Item 9 (the unique ships' own) is never worn (0x4be110), so its
+        // price past the table (0x597164[3] = 2) never counts here.
+        for (k, u) in obj.unit_conditions().iter().enumerate().rev() {
+            for &c in u.iter().filter(|&&c| c < 100) {
+                price += (UNIT_PRICE[k / 3] * (100 - c as u32) * 9 / 1000) as i64;
+            }
+        }
+    }
+    price as u32
+}
+
 /// What mending the worn `units` (by item) costs at a settlement
 /// (0x440fd0): amber and ticks, each `(100 - condition) / 100` of the
 /// unit's price and making time.

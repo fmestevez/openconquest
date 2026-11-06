@@ -1445,8 +1445,16 @@ level ({1200, 1300, 0, 400}). Smithy (0x433e60): 0x42d960 / 0x42d940.
 Workshop (0x4361c0): 0x597164. Temples (0x437de0): spells 0x596844 /
 0x59687c x 100, magic (0x54) 1000. A ship's building page (0x4e6980):
 0x42d8b0 of 0x32, 0x34-0x36, unarmed; its main page only the repair (slot
-9, command 6: 0x4b1ed0, not ported: nothing shown), none on the spells.
-`Slot::price`, `Scene::upgrade_price`.
+9, command 6), none on the spells. The repair's (0x4e6980 at 0x4e6db5,
+0x4e6e90 at 0x4e700d) is stored only when the button is enabled (`+0x261`
+bit 1 and the player record's `[0x5c7508] + p x 0xba0 + 0x118` not 0;
+that field's writer not decoded, the port enables on a worn hull): the
+u32 0x4b1ed0 returns, `(0x5c76b0[t] - +0x271) x 0x59b388[t] / 0x5c76b0[t]`
+and, for types other than 0 and 1, each unit below 100, items 9 down to
+0 (counts `+0x292` down, conditions `+0x3b9` down by 32), `0x597164[item
+/ 3] x (100 - c) x 9 / 1000` (item 9 never worn): the whole job's price at
+the dock's own rates (0x4b1fc0 charges it step by step).
+`Slot::price`, `Scene::upgrade_price`, `repair::ship_repair_price`.
 
 Ships' main page (0x4e6980): move, stop, two spell slots, fire, board,
 ram, behaviour, reload, repair, building, hero/treasure; enabled by a

@@ -619,7 +619,7 @@ pub fn menu(scene: &Scene, obj: &MapObject, page: Page) -> Menu {
     };
     // Each building's menu stores its buttons' prices (`+0x52`); a ship's
     // main page stores none but on the repair button (0x4e6980: 0x4b1ed0,
-    // not ported), its building page the buildings' (0x42d8b0).
+    // `ship_menu`), its building page the buildings' (0x42d8b0).
     if obj.class != ObjectClass::Ship || page == Page::Ground {
         for b in menu.iter_mut().flatten() {
             if b.price == (0, 0) && !b.closes {
@@ -950,6 +950,13 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
     set(menu, 8, Command::LOAD, true);
     let damaged = obj.combat.as_ref().is_some_and(|c| c.hull < c.max_hull);
     set(menu, 9, Command::REPAIR_SHIP, damaged);
+    // The repair's price, stored with the button when it is enabled
+    // (0x4e6980 / 0x4e6e90: 0x4b1ed0 into `+0x56`, slot 9's amber word).
+    if damaged {
+        if let Some(b) = menu[9].as_mut() {
+            b.price = (crate::scene::repair::ship_repair_price(obj), 0);
+        }
+    }
     // Every ship's capabilities allow building (0x4e6930 clears other bits).
     set(menu, 10, Command::BUILD_GROUND, true);
     set(menu, 11, Command::TREASURE, true);

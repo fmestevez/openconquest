@@ -20093,3 +20093,48 @@ fn a_sunk_ship_leaves_its_chest_and_treasures_at_its_next_to_last_frame() {
     assert!(scene.chests.is_empty());
     assert!(scene.object_index(id).is_none());
 }
+
+/// A ship's repair button stores the price 0x4b1ed0 reckons: the hull's
+/// `(full - hull) x 0x59b388[type] / full` and each worn unit's
+/// `0x597164[item / 3] x (100 - condition) x 9 / 1000` (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn ship_repair_button_price() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let k = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let o = &mut scene.objects[k];
+    o.ship.as_mut().unwrap().kind = 3;
+    o.ship.as_mut().unwrap().crew.squads = [1, 0, 0];
+    o.combat.as_mut().unwrap().weapons = vec![6];
+    o.ship.as_mut().unwrap().conditions = Default::default();
+    o.units().unwrap()[6] = vec![50];
+    o.units().unwrap()[0] = vec![90];
+    let c = o.combat.as_mut().unwrap();
+    c.max_hull = combat::hull_strength(3);
+    // A tenth of the hull (78000 points) gone: 7800 x 910 / 78000 = 91;
+    // item 6: 70 x 50 x 9 / 1000 = 31; item 0: 30 x 10 x 9 / 1000 = 2.
+    c.hull = (78_000 - 7_800) as f32 / 15.0;
+    let menu = crate::commands::main_menu(&scene, &scene.objects[k]);
+    let b = menu[9].unwrap();
+    assert!(b.enabled);
+    assert_eq!(b.price, (91 + 31 + 2, 0));
+    // A merchant's units are not counted (types 0 and 1).
+    scene.objects[k].ship.as_mut().unwrap().kind = 1;
+    let c = scene.objects[k].combat.as_mut().unwrap();
+    c.max_hull = combat::hull_strength(1);
+    c.hull = (58_500 - 5_850) as f32 / 15.0;
+    assert_eq!(
+        crate::scene::repair::ship_repair_price(&scene.objects[k]),
+        5_850 * 280 / 58_500
+    );
+}
