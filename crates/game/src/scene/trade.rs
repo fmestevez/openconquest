@@ -671,30 +671,6 @@ impl Scene {
         )
     }
 
-    /// In miss002, Argus come to one of the player's settlements lets
-    /// them build the Argo (the brain's message 0x5d99), unless it is
-    /// afloat or being built.
-    pub(super) fn offer_argo(&mut self) {
-        if self.mission != "miss002" || self.permits.argo() {
-            return;
-        }
-        const ARGUS: u8 = 5;
-        let argus_home = self
-            .site_heroes
-            .iter()
-            .any(|(site, heroes)| heroes.contains(&ARGUS) && self.object_index(*site).is_some());
-        let argo = self.ship_orders.iter().any(|p| p.argo)
-            || self
-                .objects
-                .iter()
-                .any(|o| self.is_own(o) && o.ship.as_ref().is_some_and(|s| s.argo));
-        if argus_home && !argo {
-            self.permits.set(crate::permits::ARGO, true);
-            self.messages
-                .push("Argus can build the Argo at your shipyard".into());
-        }
-    }
-
     /// Ship `id` is the Argo.
     pub(super) fn christen_argo(&mut self, id: u32) {
         if let Some(i) = self.object_index(id) {
@@ -1688,12 +1664,18 @@ impl Scene {
             let obj = &mut self.objects[i];
             let ship = obj.ship.as_mut().unwrap();
             if let Some(waiting) = self.site_heroes.get_mut(&site) {
+                let mut gone = Vec::new();
                 while ship.heroes.len() < crate::objects::hero_room(kind) && !waiting.is_empty() {
-                    ship.add_hero(waiting.remove(0));
+                    let h = waiting.remove(0);
+                    ship.add_hero(h);
+                    gone.push(h);
                     n += 1;
                 }
                 if waiting.is_empty() {
                     self.site_heroes.remove(&site);
+                }
+                for h in gone {
+                    self.site_hero_news(site, h);
                 }
             }
         }

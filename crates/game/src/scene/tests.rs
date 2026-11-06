@@ -4814,9 +4814,11 @@ fn creatures_leave_their_lairs() {
     assert!(hull(&scene) < before, "the creatures threw at the ship");
 }
 
-/// miss002: Argus at the player's town lets them build the Argo, and the
-/// mission wants it afloat with Jason and Argus aboard (needs
-/// `OPENCONQUEST_DATA`).
+/// miss002: Argus come to one of the player's buildings (message 0x5d99
+/// from a building) lets them build the Argo, once (`+0x160`); Argus taken
+/// by a ship (0x5d99 from a ship) is the brain's `+0x164`, the judge's,
+/// and sends members (1, 3) and (1, 2) to state 0x46; the mission wants the
+/// Argo afloat with Jason and Argus aboard (needs `OPENCONQUEST_DATA`).
 #[test]
 fn argus_builds_the_argo() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -4825,25 +4827,94 @@ fn argus_builds_the_argo() {
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
     let mut scene = Scene::load(&data, &mut caches, "miss002").unwrap();
-    scene.brain = None;
     assert!(scene.story.contains(&Goal::ArgoWith));
+    assert!(scene.story.contains(&Goal::Joined(5)));
     assert!(!scene.permits.argo());
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    let site = *scene.start_sites.first().unwrap();
+    // Another's building, or another hero: nothing.
+    scene.hero_news(Some((15, 0)), false, 5);
+    scene.site_hero_news(site, 0);
+    assert!(!scene.permits.argo());
+    // Argus at the player's town: the permission, once.
+    scene.site_heroes.insert(site, vec![5]);
+    scene.site_hero_news(site, 5);
+    assert!(scene.permits.argo());
+    assert!(scene.joined.is_empty());
+    scene.permits.set(crate::permits::ARGO, false);
+    scene.site_hero_news(site, 5);
+    assert!(!scene.permits.argo());
+    // Argus taken by a ship.
+    scene.hero_news(human, true, 5);
+    assert_eq!(scene.joined, [5]);
+    for m in [3, 2] {
+        let k = scene.member_fleet(1, m).unwrap();
+        assert_eq!(scene.brain.as_ref().unwrap().fleets[k].state, 0x46);
+    }
     let ship = scene
         .objects
         .iter()
         .find(|o| scene.is_own(o) && o.ship.is_some())
         .unwrap()
         .id;
-    // Argus waits at one of the player's buildings.
-    scene.site_heroes.insert(ship, vec![5]);
-    scene.update(0.02, &data, &mut caches);
-    assert!(scene.permits.argo());
     assert!(!scene.goal_met(Goal::ArgoWith));
     scene.christen_argo(ship);
     let i = scene.object_index(ship).unwrap();
     scene.objects[i].ship.as_mut().unwrap().heroes = vec![0, 5];
     assert!(scene.goal_met(Goal::ArgoWith));
     assert_eq!(scene.objects[i].label, "Argo");
+}
+
+/// The heroes each campaign brain records on message 0x5d99 are the
+/// mission's own (`HERO_ARR`), and none of them is carried in from an
+/// earlier mission (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brains_hear_their_own_heroes() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    for m in 0..14 {
+        let mission = format!("miss{m:03}");
+        let archive = data.open_mission(&mission).unwrap();
+        let flags = openconquest_formats::mission::heroes(&archive).unwrap();
+        let own: Vec<u8> = (0..9u8).filter(|&h| flags[h as usize]).collect();
+        let mut heard = super::story::hero_listeners(&mission).to_vec();
+        heard.sort();
+        assert_eq!(own, heard, "{mission}");
+        let carried = super::story::carried_heroes(&data, &mission);
+        assert!(heard.iter().all(|h| !carried.contains(h)), "{mission}");
+    }
+}
+
+/// miss005: Odysseus joins by the brain's message 0x5d99 only (a ship
+/// taking him at his house, a building of the player's taking him in or
+/// letting him go), not by being aboard.
+#[test]
+fn heroes_join_by_message() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    scene.objects[i].ship.as_mut().unwrap().heroes.push(7);
+    scene.judge_campaign(125);
+    assert!(!scene.goal_met(Goal::Joined(7)));
+    // Another hero, or another player's: nothing.
+    scene.hero_news(human, true, 1);
+    scene.hero_news(Some((15, 0)), true, 7);
+    assert!(scene.joined.is_empty());
+    scene.hero_news(human, false, 7);
+    assert_eq!(scene.joined, [7]);
+    scene.hero_news(human, true, 7);
+    assert_eq!(scene.joined, [7]);
 }
 
 /// Two machines, a host and a client over a local connection, play

@@ -205,6 +205,29 @@ pub fn judge_of(mission: &str) -> Option<Judge> {
     }
 }
 
+/// The heroes campaign mission `mission`'s brain records on message
+/// 0x5d99 (its handler: the hero at `+0x16` of the message's object, of
+/// the brain's player `+0xe4`; the flag set once): miss001 (0x44af70)
+/// Jason `+0x130`; miss002 (0x44d0e0) Argus `+0x164`, from a ship only;
+/// miss003 (0x44fd90) Theseus `+0x168`; miss004 (0x453b00) Perseus
+/// `+0x190`; miss005 (0x457950) Odysseus `+0x1b0`; miss006 (0x45b280)
+/// Zetes `+0x1b8` and Orpheus `+0x1bc`; miss007 (0x45f770) Hercules
+/// `+0x105` and Atalanta `+0x106`. The others have no case for it. Each
+/// mission's judge needs its flags for the win (0x44a070, 0x44b770, 0x44dd80,
+/// 0x451090, 0x454af0, 0x458570, 0x45c510).
+pub fn hero_listeners(mission: &str) -> &'static [u8] {
+    match mission {
+        "miss001" => &[JASON],
+        "miss002" => &[ARGUS],
+        "miss003" => &[1],
+        "miss004" => &[8],
+        "miss005" => &[7],
+        "miss006" => &[3, 2],
+        "miss007" => &[4, 6],
+        _ => &[],
+    }
+}
+
 /// The heroes the campaign has won over before `mission`: those of every
 /// earlier mission's `HERO_ARR`. (The original carries them over in its
 /// campaign state and puts them in the player's starting settlement, the
@@ -231,11 +254,12 @@ pub fn carried_heroes(data: &crate::assets::GameData, mission: &str) -> Vec<u8> 
 
 impl Scene {
     /// The terms campaign mission `mission` is won by: its judge's, and
-    /// its own heroes joined.
-    pub(super) fn story_goals(&self, heroes: [bool; 9]) -> Vec<Goal> {
-        let mut goals: Vec<Goal> = (0..9u8)
-            .filter(|&h| heroes[h as usize])
-            .map(Goal::Joined)
+    /// the heroes its brain records joined (`hero_listeners`; each judge
+    /// reads its brain's flags).
+    pub(super) fn story_goals(&self) -> Vec<Goal> {
+        let mut goals: Vec<Goal> = hero_listeners(&self.mission)
+            .iter()
+            .map(|&h| Goal::Joined(h))
             .collect();
         if let Some(j) = judge_of(&self.mission) {
             goals.extend_from_slice(j.win);
@@ -363,21 +387,59 @@ impl Scene {
                 .is_some()
     }
 
+    /// Message 0x5d99 to the brains: hero `hero` came to or left an
+    /// object of `owner`'s, a ship (`ship`) or a building. Its senders: a
+    /// ship taking the hero at their house (0x4b6df0, `hero_boards`), a
+    /// building taking a hero in (0x424ed0) or letting one go (0x424fb0);
+    /// a building's only while it is a player's (`+0x57` 1). The object's
+    /// class (`+4`), owner (`+8`, `+9`) and the hero (`+0x16`) are all
+    /// the handlers read (`hero_listeners`). miss002's (0x44d0e0) on
+    /// Argus: from a ship (class 200-0xd3) the flag `+0x164` and members
+    /// (1, 3) and (1, 2) to state 0x46 (0x479750); from a building, the
+    /// first time (`+0x160`), the permission to build the Argo
+    /// (0x4a9810 with 0x50, 1).
+    pub(super) fn hero_news(&mut self, owner: Option<(u32, u32)>, ship: bool, hero: u8) {
+        if owner.is_none() || owner != self.human.map(|h| (h.nation, h.slot)) {
+            return;
+        }
+        if !hero_listeners(&self.mission).contains(&hero) || self.brain.is_none() {
+            return;
+        }
+        if self.mission == "miss002" {
+            if ship {
+                if !self.joined.contains(&hero) {
+                    self.joined.push(hero);
+                }
+                for member in [3, 2] {
+                    if let Some(k) = self.member_fleet(1, member) {
+                        self.set_state(k, 0x46);
+                    }
+                }
+            } else if !self.brain.as_ref().unwrap().argus_came {
+                self.permits.set(crate::permits::ARGO, true);
+                self.brain.as_mut().unwrap().argus_came = true;
+            }
+            return;
+        }
+        if !self.joined.contains(&hero) {
+            self.joined.push(hero);
+        }
+    }
+
+    /// Building `site` took hero `hero` in (0x424ed0) or let them go
+    /// (0x424fb0): message 0x5d99 (`hero_news`). (The carried heroes put
+    /// in the starting town at a mission's start are announced too, but
+    /// none is one its brain listens for.)
+    pub(super) fn site_hero_news(&mut self, site: u32, hero: u8) {
+        let owner = self.object_index(site).and_then(|i| self.objects[i].owner);
+        self.hero_news(owner, false, hero);
+    }
+
     /// The campaign mission's judge, every period (0x4c4920): the terms to
     /// keep first lose it 250 ticks after one fails, whatever follows; the
     /// terms to win must hold at every check for 250 ticks.
     pub(super) fn judge_campaign(&mut self, period: u32) -> Option<super::Outcome> {
         let judge = judge_of(&self.mission)?;
-        // Heroes join once, aboard a ship.
-        let aboard: Vec<u8> = self
-            .own_ships()
-            .flat_map(|o| o.ship.as_ref().unwrap().heroes.iter().copied())
-            .collect();
-        for h in aboard {
-            if !self.joined.contains(&h) {
-                self.joined.push(h);
-            }
-        }
         if self.argo().is_some() {
             self.had_argo = true;
         }

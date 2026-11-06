@@ -5726,7 +5726,7 @@ first, held at every check for 250 ticks; a loss fires 250 ticks after it
 is first seen, whatever follows. The generic judge 0x448610 returns at once
 in the campaign: no "nothing left" defeat. 0x4c46c0 counts the player's
 ships and buildings in a box and the heroes and treasures they hold; heroes
-join once (0x5d99). Each win needs the town anchored in the box its victory
+join once (0x5d99, see Hero and treasure messages). Each win needs the town anchored in the box its victory
 carries, with every hero the player holds in it (heroes aboard do not
 count), so a mission is never won without a town to carry:
 
@@ -5744,6 +5744,53 @@ count), so a mission is never won without a town to carry:
 | 010 | Argo at x >= 50, y <= 8; town (50-64, 0-8) with every hero and the Fleece | no Argo; Jason gone |
 | 011 / 012 | Argo; town (0-5, 0-5) / (2-8, 48-52) with every hero and the Fleece; Jason | no Argo; Jason gone |
 | 013 | Argo; home (0-2, 58-60) with every hero and the Fleece; Jason; Persians without ships and buildings 0x32-0x3e | no Argo; Jason gone; home gone |
+
+**Hero and treasure messages.** Message 0x5d99 goes to the owner's player
+object (type 2, vt+0x18: param, then a record {`+0` id, `+4` class, `+8`
+nation, `+9` slot, ..., `+0x16` hero}) from three places: a ship taking the
+hero at their house (0x4b6df0, param 0, the ship's class 200-0xd3), a
+building taking a hero in (0x424ed0, param 1) and a building letting one
+go (0x424fb0 at 0x425038, param 0, the hero vt+0x88), a building's only
+while it is a player's (`+0x57` 1). The brains' handlers read the class,
+the owner (nation x 4 + slot against the brain's player `+0xe4`) and the
+hero, never the param, and set a flag once: miss001 (0x44af70) Jason
+`+0x130`; miss002 (0x44d0e0) Argus: from a ship `+0x164` (each time, with
+members (1, 3) and (1, 2) sent to state 0x46 by 0x479750: an attack on
+(0, 0, 10, 13), 7500 ticks, their usual events), from any other class the
+first time (`+0x160`) the permission to build the Argo (0x4a9810 with
+0x50, 1; no notice); miss003 (0x44fd90) Theseus `+0x168`; miss004
+(0x453b00) Perseus `+0x190`; miss005 (0x457950) Odysseus `+0x1b0`;
+miss006 (0x45b280) Zetes `+0x1b8` and Orpheus `+0x1bc`; miss007
+(0x45f770) Hercules `+0x105` and Atalanta `+0x106`. Each mission's judge
+needs its flags to win (0x44a070, 0x44b770, 0x44dd80, 0x451090, 0x454af0,
+0x458570, 0x45c510; miss001 and miss002 also lose when the flag is set
+and the hero not held). These heroes are the missions' `HERO_ARR`, and
+none is carried in, so the carried heroes put in the starting town
+(0x424ed0 from the brain's message 2) set nothing. So a hero aboard from
+the start, or aboard by any other way, has not joined; Argus put in a
+building does not join miss002. The port: `hero_news` (the take
+`hero_boards`, the load panel's hero moves, the heroes waiting at a
+settlement boarding a ship at its load, `site_hero_news`), the flags in
+`Scene::joined` (miss002's `+0x160` `Brain::argus_came`), the judges'
+`Goal::Joined` from `hero_listeners`. Not ported: the carried heroes'
+announcements at the start (they set nothing).
+
+Message 0x5d94 (same record, `+0x16` the treasure's 20 bytes: kind,
+.., `+0x22` field 7) is sent with 1 by a building storing a treasure
+(0x424b30) and with 0 by a ship taking one (0x4b6e80 from 0x4b97d0 /
+0x4bd0c0) or laying one as it sinks (0x4e4f20). The handlers with 1: the
+scrolls (kind 27, field 7 the scroll's number; class 0x32 / 0x33 the
+grants, else string 0x837): miss001 (0x44af70) number 0 to a settlement
+or town strings 0x848, 0x849, 0x479570 and `+0x134` cleared; miss002
+(0x44d0e0) 1, miss003 (0x44fd90) 3, miss004 (0x453b00) 4, miss005
+(0x457950) 5, miss006 (0x45b280) 6, miss007 11 and 12, miss009
+(0x4663d0) 13 (see the scrolls' grants); miss009 kind 9, number 6:
+string 0x847; miss010 (0x46a0f0) the Fleece (kind 16) `+0x130`. With 0 only
+miss007 (0x45f770): Hercules's sword (kind 22) taken or laid sets byte
+`+0x104` 0 (with 1, stored by player 16 1, by any other 2). Not ported:
+the 0x5d94 messages themselves; the port keeps `Scene::delivered` and the
+scrolls' grants at the store (`store_treasure`), and miss007's member 11
+looks at the sword where it is instead of `+0x104`; 0x479570.
 
 **Buildings asleep.** A building's record field 4 sets its state
 (0x441ba0 for settlements and towns, 0x427f50 for the rest): 1 being built,
@@ -10534,9 +10581,9 @@ owner's player object (type 2), and the item 0x4ba3f0 finds out by
 `house_taken`, `taken_houses` kept in the save): the house sailed to its
 berth (`vt_berth`, the record's field 10 facing: the constructor
 0x420fd0 sets `+0x1d8` 0xa) with its cell the land cell, all the above;
-the order's own refusal of a ship without a hero place kept (the click's
+0x5d99 (`hero_news`, see Hero and treasure messages); the order's own
+refusal of a ship without a hero place kept (the click's
 0x4e6700 room test, mode 6 or 7), its item refusal gone. Not ported:
-0x5d99 (the judge counts the heroes aboard);
 0x4b6e80's 0x5d94 for the party's take; a berth of (-1, -1) (no facing:
 the port's route fails). The playing out is ported (`house_fades`,
 `step_house_fades`, kept in the save; the standing picture's frame in

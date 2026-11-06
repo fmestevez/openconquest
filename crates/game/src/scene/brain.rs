@@ -362,6 +362,10 @@ pub struct Brain {
     /// miss006: squadron (2, 6) has joined (2, 7) (`+0x1b4`).
     #[serde(default)]
     pub joined: bool,
+    /// miss002: Argus has come to one of the player's buildings and the
+    /// Argo's permission was given (`+0x160`, message 0x5d99).
+    #[serde(default)]
+    pub argus_came: bool,
     /// miss005: the harpy nests and the barbarians' stronghold found gone
     /// (`+0x184`, `+0x18c` cleared by the brain's pass).
     #[serde(default)]
@@ -813,6 +817,7 @@ impl Scene {
             side: Vec::new(),
             watch: [1, 0, 0],
             joined: false,
+            argus_came: false,
             gone: [false; 2],
             landed: [false; 2],
             yards: [true; 2],
@@ -1039,7 +1044,7 @@ impl Scene {
         }
     }
 
-    fn set_state(&mut self, k: usize, state: u32) {
+    pub(super) fn set_state(&mut self, k: usize, state: u32) {
         let f = &mut self.brain.as_mut().unwrap().fleets[k];
         let state = if state == PREVIOUS { f.previous } else { state };
         f.previous = f.state;

@@ -1079,6 +1079,7 @@ impl Scene {
                         self.site_heroes.remove(&id);
                     }
                 }
+                self.site_hero_news(id, h);
                 Payload::Hero(h)
             }
             Cargo::Goods => return Err("No goods there".into()),
@@ -1149,7 +1150,10 @@ impl Scene {
             }
             Payload::Armour(l) => self.fittings.entry(to).or_default().0.push(l),
             Payload::Ram(l) => self.fittings.entry(to).or_default().1.push(l),
-            Payload::Hero(h) => self.site_heroes.entry(to).or_default().push(h),
+            Payload::Hero(h) => {
+                self.site_heroes.entry(to).or_default().push(h);
+                self.site_hero_news(to, h);
+            }
             Payload::Treasure(tr) => self.store_treasure(to, tr),
             Payload::Goods(..) => {}
         }

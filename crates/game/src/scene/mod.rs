@@ -1112,7 +1112,7 @@ impl Scene {
             }
             scene.place_scripted(difficulty, data, caches);
             let heroes = openconquest_formats::mission::heroes(&archive).unwrap_or_default();
-            scene.story = scene.story_goals(heroes);
+            scene.story = scene.story_goals();
             let wanted: Vec<u8> = (0..9u8).filter(|&h| heroes[h as usize]).collect();
             scene.hide_hero_items(&wanted, data, caches);
             // The start's message 0x8d1 reaches the map's objects before
@@ -2832,7 +2832,6 @@ impl Scene {
         self.run_furling(dt);
         self.run_rocking(dt);
         self.run_regrowth(dt, data, caches);
-        self.offer_argo();
         self.run_hazards(dt, data, caches);
         self.run_combat(dt, data, caches);
         self.run_shots(dt, data, caches);

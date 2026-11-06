@@ -887,9 +887,9 @@ impl Scene {
     /// takes hero `+0x78a` aboard with a hero place free (0x4be800 mode 7:
     /// 0x597b08[type] less the heroes aboard; Argus's count from 0);
     /// aboard, 0x4ba7d0 sends the house 0x24af1 (`house_taken`), 0x4b6df0
-    /// message 0x5d99 to the owner's player (not ported: the judge counts
-    /// the heroes aboard), and the hero's item 0x4ba3f0 finds is taken
-    /// out (0x4bd500, not dropped). No text: 0x4bd350's 0x4beb50,
+    /// message 0x5d99 to the owner's player (`hero_news`, from a ship),
+    /// and the hero's item 0x4ba3f0 finds is taken out (0x4bd500, not
+    /// dropped). No text: 0x4bd350's 0x4beb50,
     /// 0x4bee60 and 0x4bebe0 refresh the ship and its panel.
     pub(super) fn hero_boards(&mut self, k: usize, data: &GameData, caches: &mut Caches) {
         let Some(Task::Take {
@@ -906,6 +906,8 @@ impl Scene {
         }
         s.add_hero(hero);
         self.house_taken(target, data, caches);
+        let owner = self.objects[k].owner;
+        self.hero_news(owner, true, hero);
         let s = self.objects[k].ship.as_mut().unwrap();
         if let Some(idx) = Self::hero_item(s, hero) {
             s.remove_treasure(idx);
