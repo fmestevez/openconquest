@@ -393,6 +393,7 @@ mod tests {
             progress: None,
             count: 0,
             checked: false,
+            price: (0, 0),
             closes: false,
         })
     }

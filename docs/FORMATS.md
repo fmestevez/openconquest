@@ -1420,10 +1420,33 @@ The help line on hover (0x4f2a90 sends message 0x54b, 0x505e70 draws it):
 the string 0x4f1b40 gives for the slot (0xa4 `Cancel` on a crossed slot;
 by command, e.g. 1-2 0x95 `Stop`, 4 0x96 `Move`, 0x61 0xd5 `Magic of
 whirlpool`, 0x6b 0xf9 `Head of Gorgon`, 0x71 0xec (no such string); 0x28
-for none), `&1` before it for 0x95-0x15e (0x5be6fc, the colour not
-ported), then for the slot's stored price (`+0x52`: amber low word, fish
-high) `"%s. %s-%d"` with string 0x59 `Cost` and `"%s, %s-%d"` with 0x5a
-`Fish`, then the key. `Command::help_id` / `help_line`.
+for none). Only for strings 0x95-0x15e: `&1` before it (0x5be6fc), then
+for the slot's stored price (`+0x52`: amber low word, fish high)
+`"%s. %s-%d"` with string 0x59 `Cost` and `"%s, %s-%d"` with 0x5a
+`Fish`, then the key (`"%s - &0%s"`, 0x5be6c8); any other string is shown
+alone. The text drawer (0x547860) reads `&` and a digit (0x5469b0) as the
+colour variant: the font's atlas n (n < 15, else its default `+0x4c`;
+forced to `+0x86` when that is not negative; only with `+0x82` set), an n
+past the font's atlases drawing atlas 0 (0x547710). Not ported: the
+colours, the message field's font (`+0x28` of the field, vtable
+0x59b62c) not traced. `Command::help_id` / `help_line`.
+
+The prices on the buttons (`+0x52`, u32 per slot at menu byte 0x32 + 4 x
+slot) are written by the menus only and read only by the hover
+(0x4f28af): the orders pay what their handlers reckon. Shipyard
+(0x4164e0): each ship type's 0x43e5c0 price (hull and, with default
+arming `[game+0x3295]`, the arming; fish x 100), the Argo type 2's,
+the dock (slot 11) `0x42d8b0(0x3a) x (100 - +0xa8) / 100 + 0x42d8b0(0x3b)`
+(the shipyard's mending), the same price tested to enable it. Settlement
+(0x43c740): the town (slot 4) `0x42d8b0(0x32) x (100 - +0xa8) / 100 +
+0x42d8b0(0x33)`, likewise; the buildings 0x42d8b0, the forts 0x42d8b0 and
+their arming 0x43e990 (fish x 100). Fort/upgrades (0x430f90): 0x5971ac by
+level ({1200, 1300, 0, 400}). Smithy (0x433e60): 0x42d960 / 0x42d940.
+Workshop (0x4361c0): 0x597164. Temples (0x437de0): spells 0x596844 /
+0x59687c x 100, magic (0x54) 1000. A ship's building page (0x4e6980):
+0x42d8b0 of 0x32, 0x34-0x36, unarmed; its main page only the repair (slot
+9, command 6: 0x4b1ed0, not ported: nothing shown), none on the spells.
+`Slot::price`, `Scene::upgrade_price`.
 
 Ships' main page (0x4e6980): move, stop, two spell slots, fire, board,
 ram, behaviour, reload, repair, building, hero/treasure; enabled by a

@@ -1696,9 +1696,12 @@ impl GameView<'_> {
                     .and_then(|id| self.scene.object_index(id))
                     .map(|i| &self.scene.objects[i])?;
                 menu(self.scene, obj, self.page)[slot].map(|e| {
-                    e.command
-                        .help_line(e.closes, &self.data.strings, Some(self.scene))
-                        + &self.hotkeys.suffix(&e)
+                    e.command.help_line(
+                        e.closes,
+                        e.price,
+                        &self.hotkeys.suffix(&e),
+                        &self.data.strings,
+                    )
                 })
             });
             // Blank with nothing to say, as on the original (the objectives

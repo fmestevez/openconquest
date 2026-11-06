@@ -178,47 +178,59 @@ impl Command {
     }
 
     /// The button's help line (0x505e70 from message 0x54b, sent by
-    /// 0x4f2a90 on hover): the string 0x4f1b40 gives (`help_id`), then for
-    /// a price stored on the slot `"%s. %s-%d"` with string 0x59 (Cost) and
-    /// the amber, `"%s, %s-%d"` with string 0x5a (Fish) and the fish (the
-    /// price for research at the human player's level in `scene`). The key
-    /// follows (`Hotkeys::suffix`). Not ported: the `&1` colour 0x505e70
-    /// puts before strings 0x95-0x15e (format 0x5be6fc).
+    /// 0x4f2a90 on hover with the slot's stored price): the string 0x4f1b40
+    /// gives (`help_id`); for strings 0x95-0x15e only, `"%s. %s-%d"` with
+    /// string 0x59 (Cost) and the price's amber, `"%s, %s-%d"` with string
+    /// 0x5a (Fish) and its fish, then the key (`key`, `Hotkeys::suffix`);
+    /// other strings alone. Not ported: the `&1` (format 0x5be6fc) that
+    /// starts those strings and the `&0` before the key (0x5be6c8), font
+    /// colour variants 1 and 0 (0x547860: `&` and a digit set the atlas,
+    /// 0x547710); the message field's font (`+0x28`) is not traced.
     pub fn help_line(
         self,
         closes: bool,
+        price: (u32, u32),
+        key: &str,
         strings: &std::collections::HashMap<u32, String>,
-        scene: Option<&Scene>,
     ) -> String {
-        let cost = if let Some(kind) = economy::ship_of_command(self) {
-            Some(economy::ship_cost(kind))
-        } else if let Some(class) = economy::building_of_command(self) {
-            Some((economy::building_cost(class), 0))
-        } else if (0x2d..=0x35).contains(&self.0) {
-            Some(crate::combat::item_cost(self.0 - 0x2d))
-        } else if let Some(spell) = Spell::of_command(self) {
-            Some(spell.cost())
-        } else if let Some(upgrade) = crate::combat::Upgrade::of_command(self.0) {
-            let level = scene.and_then(|s| s.next_level(upgrade)).unwrap_or(0);
-            Some((upgrade.cost(level), 0))
-        } else {
-            match self {
-                Command::UPGRADE_TOWN => Some((economy::building_cost(TOWN), 0)),
-                Command::UPGRADE_DOCK => Some((economy::building_cost(DOCK), 0)),
-                magic::GET_MAGIC => Some((magic::LEARN_COST, 0)),
-                _ => None,
-            }
-        };
         let text = |id: u32| strings.get(&id).map_or("", |s| s.as_str());
-        let mut line = text(self.help_id(closes)).to_string();
-        let (amber, fish) = cost.unwrap_or((0, 0));
+        let id = self.help_id(closes);
+        let mut line = text(id).to_string();
+        if !(0x95..0x15f).contains(&id) {
+            return line;
+        }
+        let (amber, fish) = price;
         if amber != 0 {
             line = format!("{line}. {}-{amber}", text(0x59));
         }
         if fish != 0 {
             line = format!("{line}, {}-{fish}", text(0x5a));
         }
-        line
+        line + key
+    }
+
+    /// The price a building's menu stores with this command's button, from
+    /// the tables the menus read: buildings 0x42d8b0, the items 0x597164 /
+    /// 0x597170 (0x4361c0), spells 0x596844 / 0x59687c x 100 (0x437de0),
+    /// upgrades 0x5971ac / 0x42d960 / 0x42d940 (0x430f90, 0x433e60), magic
+    /// 1000 (0x437de0 command 0x54). The yard's ships and the upgrades to
+    /// town and dock are set by their menus (`ship_price`,
+    /// `upgrade_price`).
+    fn listed_price(self, scene: &Scene) -> (u32, u32) {
+        if let Some(class) = economy::building_of_command(self) {
+            (economy::building_cost(class), 0)
+        } else if (0x2d..=0x35).contains(&self.0) {
+            crate::combat::item_cost(self.0 - 0x2d)
+        } else if let Some(spell) = Spell::of_command(self) {
+            spell.cost()
+        } else if let Some(upgrade) = crate::combat::Upgrade::of_command(self.0) {
+            let level = scene.next_level(upgrade).unwrap_or(0);
+            (upgrade.cost(level), 0)
+        } else if self == magic::GET_MAGIC {
+            (magic::LEARN_COST, 0)
+        } else {
+            (0, 0)
+        }
     }
 
     /// The string of the button's help line (0x4f1b40): 0xa4 (Cancel) on a
@@ -567,6 +579,10 @@ pub struct Slot {
     pub checked: bool,
     /// Closes the page it is on (drawn with a red cross).
     pub closes: bool,
+    /// The price the menu stores on the button (`+0x52`: amber, fish),
+    /// shown on its help line only: the orders pay what their own
+    /// handlers reckon (0x4f28af is the array's only reader).
+    pub price: (u32, u32),
 }
 
 pub type Menu = [Option<Slot>; SLOTS];
@@ -601,6 +617,16 @@ pub fn menu(scene: &Scene, obj: &MapObject, page: Page) -> Menu {
         Page::Zones => zones_menu(scene, obj),
         Page::Ground => ground_menu(scene, obj),
     };
+    // Each building's menu stores its buttons' prices (`+0x52`); a ship's
+    // main page stores none but on the repair button (0x4e6980: 0x4b1ed0,
+    // not ported), its building page the buildings' (0x42d8b0).
+    if obj.class != ObjectClass::Ship || page == Page::Ground {
+        for b in menu.iter_mut().flatten() {
+            if b.price == (0, 0) && !b.closes {
+                b.price = b.command.listed_price(scene);
+            }
+        }
+    }
     // Limed, the smithy's, workshop's and settlement's buttons are all
     // shown off (0x433e60, 0x4361c0, 0x43c740 through 0x423a00).
     let limed = obj.combat.as_ref().is_some_and(|c| c.lime > 0.0);
@@ -676,6 +702,7 @@ fn temple_menu(scene: &Scene, temple: Temple, menu: &mut Menu) {
             enabled: learning.is_some() || scene.amber >= magic::LEARN_COST,
             progress: learning.map(|t| t / magic::LEARN_SECONDS),
             count: 0,
+            price: (0, 0),
         });
         slot = 1;
     }
@@ -738,6 +765,10 @@ fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
             command,
             !full && scene.amber >= cost.0 && scene.fish >= cost.1,
         );
+        // A fort's price with its arming (0x43c740: 0x42d8b0 and 0x43e990).
+        if let Some(b) = &mut menu[slot] {
+            b.price = cost;
+        }
         slot += 1;
     }
     // The page's own button, bottom right, closes it.
@@ -746,6 +777,7 @@ fn structures_menu(scene: &Scene, obj: &MapObject) -> Menu {
         enabled: true,
         progress: None,
         count: 0,
+        price: (0, 0),
         checked: false,
         closes: true,
     });
@@ -777,6 +809,7 @@ pub fn main_menu(scene: &Scene, obj: &MapObject) -> Menu {
                 enabled: true,
                 progress: Some(c.done()),
                 count: 0,
+                price: (0, 0),
             });
         }
         return menu;
@@ -824,6 +857,7 @@ fn fort_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             enabled: on,
             progress: None,
             count: 0,
+            price: (0, 0),
             checked,
             closes: false,
         });
@@ -844,6 +878,7 @@ fn fort_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             enabled: true,
             progress: scene.fort_mend_progress(obj.id).map(|p| p as f32 / 100.0),
             count: 0,
+            price: (0, 0),
             checked: false,
             closes: false,
         });
@@ -863,6 +898,7 @@ fn set(menu: &mut Menu, slot: usize, command: Command, enabled: bool) {
         enabled,
         progress: None,
         count: 0,
+        price: (0, 0),
     });
 }
 
@@ -960,6 +996,7 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             next - 1
         };
         let command = economy::ship_command(kind);
+        let price = scene.ship_price(obj.id, kind);
         let mut entry = Slot {
             checked: false,
             closes: false,
@@ -967,12 +1004,14 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             // More may be ordered while the berth is taken: they wait their
             // turn (0x4164e0 counts them on the button, 0x416f90; the
             // button looks at the price, not at the berth).
-            enabled: scene.can_build_ship(kind).is_ok() && {
-                let p = scene.ship_price(obj.id, kind);
-                scene.amber >= p.amber && scene.fish >= p.fish
-            },
+            enabled: scene.can_build_ship(kind).is_ok()
+                && scene.amber >= price.amber
+                && scene.fish >= price.fish,
             progress: None,
             count: scene.ships_queued(obj.id, kind, false),
+            // With the arming when default arming is on (0x4164e0 ->
+            // 0x43e5c0).
+            price: (price.amber, price.fish),
         };
         if let Some((_, _, done)) = building.filter(|b| b.0 == kind && !b.1) {
             entry.progress = Some(done);
@@ -992,6 +1031,11 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
                 && scene.berth_answer(obj.id) == 0,
             progress: None,
             count: 0,
+            price: {
+                // The royal ship's price (0x4164e0 -> 0x43e5c0 with type 2).
+                let p = scene.ship_price(obj.id, Scene::ROYAL_SHIP);
+                (p.amber, p.fish)
+            },
         };
         if let Some((_, _, done)) = building.filter(|b| b.1) {
             entry.progress = Some(done);
@@ -999,9 +1043,17 @@ fn shipyard_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         }
         menu[slot] = Some(entry);
     }
+    // The dock's price and the shipyard's mending (0x4164e0 slot 11), on
+    // the button and in its test.
     if obj.class == ObjectClass::Building(SHIPYARD) && scene.permits.dock() {
-        let enabled = !scene.yard_busy(obj.id) && scene.amber >= economy::building_cost(DOCK);
+        let price = scene
+            .object_index(obj.id)
+            .map_or(0, |i| scene.upgrade_price(i, DOCK));
+        let enabled = !scene.yard_busy(obj.id) && scene.amber >= price;
         set(menu, 11, Command::UPGRADE_DOCK, enabled);
+        if let Some(b) = &mut menu[11] {
+            b.price = (price, 0);
+        }
     }
 }
 
@@ -1033,6 +1085,8 @@ fn smithy_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
                 && (refitting || scene.amber >= crate::combat::refit_cost(upgrade, level)),
             progress,
             count,
+            // 0x433e60: 0x42d960 / 0x42d940 for the level.
+            price: (crate::combat::refit_cost(upgrade, level), 0),
         });
     }
     let busy = scene.research_at(obj.id);
@@ -1051,6 +1105,7 @@ fn smithy_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
                 enabled: true,
                 progress: Some(progress),
                 count: 0,
+                price: (0, 0),
             },
             (_, Some(level)) => Slot {
                 checked: false,
@@ -1061,6 +1116,7 @@ fn smithy_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
                     && scene.amber >= upgrade.cost(level),
                 progress: None,
                 count: 0,
+                price: (0, 0),
             },
             _ => continue,
         };
@@ -1101,6 +1157,7 @@ fn school_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
                 enabled: true,
                 progress: Some(progress),
                 count: 0,
+                price: (0, 0),
             },
             (_, Some(level)) => Slot {
                 checked: false,
@@ -1109,6 +1166,7 @@ fn school_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
                 enabled: busy.is_none() && scene.amber >= upgrade.cost(level),
                 progress: None,
                 count: 0,
+                price: (0, 0),
             },
             _ => continue,
         };
@@ -1135,6 +1193,7 @@ fn workshop_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
             enabled: scene.amber >= amber && scene.fish >= fish || making.is_some(),
             progress: making.and_then(|t| t.progress(item, true)),
             count: making.map_or(0, |t| t.count(item)),
+            price: (0, 0),
         });
     }
     // Slot 8 opens the research page (command 0x3d, menu page 3).
@@ -1161,6 +1220,7 @@ fn workshop_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
                 || idle && units.iter().flatten().any(|&c| c < 100) && scene.amber >= amber,
             progress: repair.map(|r| r.done() as f32 / 100.0),
             count: 0,
+            price: (0, 0),
         });
     }
 }
@@ -1202,6 +1262,7 @@ fn behaviour_menu(scene: &Scene, obj: &MapObject) -> Menu {
             enabled,
             progress: None,
             count: 0,
+            price: (0, 0),
             checked,
             closes: false,
         });
@@ -1241,6 +1302,7 @@ fn zones_menu(scene: &Scene, obj: &MapObject) -> Menu {
             enabled: true,
             progress: None,
             count: 0,
+            price: (0, 0),
             checked: scene
                 .ship_zone(obj.id)
                 .is_some_and(|z| scene.gather_zones[z].class == resource),
@@ -1274,6 +1336,7 @@ fn research_menu(scene: &Scene, obj: &MapObject) -> Menu {
                 enabled: true,
                 progress: Some(progress),
                 count: 0,
+                price: (0, 0),
             }),
             (_, Some(level)) => Some(Slot {
                 checked: false,
@@ -1282,6 +1345,7 @@ fn research_menu(scene: &Scene, obj: &MapObject) -> Menu {
                 enabled: busy.is_none() && scene.amber >= upgrade.cost(level),
                 progress: None,
                 count: 0,
+                price: (0, 0),
             }),
             _ => None,
         };
@@ -1326,6 +1390,7 @@ fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
                 || training.is_some_and(|t| t.count(kind) > 0),
             progress: training.and_then(|t| t.progress(kind, false)),
             count: training.map_or(0, |t| t.count(kind)),
+            price: (0, 0),
         });
     }
     set(menu, 2, Command::REPAIR_BUILDING, true);
@@ -1337,13 +1402,16 @@ fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         set(menu, 5, Command::SELL_ITEM, idle);
         set(menu, 6, Command::SELL_TOWN, idle);
     }
+    // The town's price and the settlement's mending (0x43c740 slot 4), on
+    // the button and in its test.
     if obj.class == ObjectClass::Building(SETTLEMENT) && scene.permits.town() {
-        set(
-            menu,
-            4,
-            Command::UPGRADE_TOWN,
-            scene.amber >= economy::building_cost(TOWN),
-        );
+        let price = scene
+            .object_index(obj.id)
+            .map_or(0, |i| scene.upgrade_price(i, TOWN));
+        set(menu, 4, Command::UPGRADE_TOWN, scene.amber >= price);
+        if let Some(b) = &mut menu[4] {
+            b.price = (price, 0);
+        }
     }
 }
 
@@ -1361,20 +1429,31 @@ mod tests {
             .unwrap();
         let strings =
             openconquest_formats::pe::string_table(&std::fs::read(path).unwrap()).unwrap();
-        let line = |c: Command| c.help_line(false, &strings, None);
-        assert_eq!(line(economy::ship_command(0)), "Build boat. Cost-200");
+        let line = |c: Command, price| c.help_line(false, price, " - B", &strings);
+        let ship = |k| line(economy::ship_command(k), economy::ship_cost(k));
+        assert_eq!(ship(0), "Build boat. Cost-200 - B");
+        assert_eq!(ship(2), "Build royal battleship. Cost-1100, Fish-400 - B");
         assert_eq!(
-            line(economy::ship_command(2)),
-            "Build royal battleship. Cost-1100, Fish-400"
+            line(Command(0x2f), crate::combat::item_cost(2)),
+            "Train swordsmen. Cost-30, Fish-300 - B"
         );
-        assert_eq!(line(Command(0x2f)), "Train swordsmen. Cost-30, Fish-300");
-        assert_eq!(line(Command::STOP), "Stop");
+        // No price stored, no price shown; the key still follows.
+        assert_eq!(line(Command::STOP, (0, 0)), "Stop - B");
         // The ship's spell buttons (0x4e6980) and the Gorgon's head.
-        assert_eq!(line(Command(0x6b)), "Head of Gorgon");
+        assert_eq!(line(Command(0x6b), (0, 0)), "Head of Gorgon - B");
         assert_eq!(
-            line(Command(0x61)).split('.').next(),
+            line(Command(0x61), (0, 0)).split(" - ").next(),
             Some("Magic of whirlpool")
         );
-        assert_eq!(Command::STOP.help_line(true, &strings, None), "Cancel");
+        // Strings outside 0x95-0x15e alone: no price, no key (0x505e70).
+        assert_eq!(Command(0).help_id(false), 0x28);
+        assert_eq!(
+            line(Command(0), (5, 5)),
+            strings.get(&0x28).cloned().unwrap_or_default()
+        );
+        assert_eq!(
+            Command::STOP.help_line(true, (0, 0), "", &strings),
+            "Cancel"
+        );
     }
 }

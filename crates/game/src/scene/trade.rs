@@ -682,6 +682,19 @@ impl Scene {
         }
     }
 
+    /// The amber an upgrade of the building at index `i` to class `to`
+    /// costs: the upgrade's price and the mending of what the building
+    /// lacks (TownObj 0x43b290 / Dock 0x416340 on message 0x138a; the
+    /// menus store the same on the button, 0x43c740 slot 4 and 0x4164e0
+    /// slot 11: `0x42d8b0(from) x (100 - +0xa8) / 100 + 0x42d8b0(to)`).
+    pub fn upgrade_price(&self, i: usize, to: u32) -> u32 {
+        let condition = self.objects[i].combat.as_ref().map_or(100, |c| {
+            ((c.hull / c.max_hull.max(1.0)) * 100.0).clamp(0.0, 100.0) as u32
+        });
+        let from = if to == TOWN { SETTLEMENT } else { SHIPYARD };
+        economy::building_cost(to) + economy::building_cost(from) * (100 - condition) / 100
+    }
+
     /// Upgrades a settlement to a town or a shipyard to a dock.
     pub fn upgrade(&mut self, id: u32, data: &GameData, caches: &mut Caches) -> Result<(), String> {
         let i = self.object_index(id).ok_or("No such object")?;
@@ -711,9 +724,7 @@ impl Scene {
         let condition = self.objects[i].combat.as_ref().map_or(100, |c| {
             ((c.hull / c.max_hull.max(1.0)) * 100.0).clamp(0.0, 100.0) as u32
         });
-        let from = if to == TOWN { SETTLEMENT } else { SHIPYARD };
-        let cost =
-            economy::building_cost(to) + economy::building_cost(from) * (100 - condition) / 100;
+        let cost = self.upgrade_price(i, to);
         let owner = self.objects[i].owner.ok_or("No owner")?;
         if self.funds(owner).0 < cost {
             return Err(format!("Not enough amber: {cost} needed"));
