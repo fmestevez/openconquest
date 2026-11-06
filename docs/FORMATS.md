@@ -4927,8 +4927,13 @@ speed is saved with a game (`SPEED_GAME`).
 - Not ported: the closing-in branches of the tick (`+0x25d & 0x10`, the
   port's grapple); the refreshes under way other than blows and the song's
   end, the mending aboard (0x4b98b0, see "Healing aboard") and at a dock
-  (0x4b1fc0); 0x4a6330's 0x4a3a70(1) when planning between
-  cells.
+  (0x4b1fc0); 0x4a6330 in move states 1, 4 and 5 at a cell (not
+  between): the route stored with `+0x5be` 0, and with a turn
+  (0x4e0100 from `+0x5af` to the route's first direction) over 1 the
+  step to route entry 1 asked at once (0x4a3a70(this, 1)), refused the
+  brake 0x4a2f60 unless already 4 (state kept), else state 5. The port
+  stores routes at many places (no single 0x4a6330) and its mover asks
+  no step in state 5, so this needs that store gathered first.
 - The shore and pier slide: 0x4b02a0 steps `+0x78e` by 2 (back out:
   down by 2 while above 1, else to 0) along the line 0x4b5220 built from
   the picture's top-left (Bresenham, an odd count padded with the last
@@ -4992,7 +4997,16 @@ landscape dword (`grid + 8`) has its low nibble below 8 and nibble 1 not
 4, 5 or 6, and its object slot (`grid + 0xc`) is empty; a ship holds the
 slot of the cell it is in (0x499800 takes an empty slot, 0x4998a0 /
 0x499860 / 0x4a3970 clear their own; a ship mended in a dock is off its
-slot). **0x4e82f0(yard, 1, code)**: -5 unless the yard is idle (`+0xa4 ==
+slot). A building (LandObj's message 2, 0x425b87) takes, through
+0x499800, the slot of its anchor (`+0x74 / +0x78`) when its size `+0x56`
+is 1 and of the four cells x + i % 2, y + i / 2 when it is 4
+(settlements and towns); any other size takes none. Its fall (0x424573,
+0x499860) clears the same cells. So the readers of a cell's object find
+a settlement or town on any of its four cells: 0x4b7f10's box (the
+port's `trade::fills_slot` in `Scene::load_look`) and 0x456540, a
+brain's cell event (`Event::Cell`); 0x421490 (the classes in a box)
+keeps a settlement or town (mask 3 from 0x32) only at its anchor.
+**0x4e82f0(yard, 1, code)**: -5 unless the yard is idle (`+0xa4 ==
 1`: not going up, not being made a dock); for codes 0xc-0x17 the draught
 test 0x4e8290: royal ships, bombers and rammers (0x597ce4 = 0 0 1 1 0 1 0 0
 0 0 0 0, the ship's `+0x592`) get -5 when the berth's nibble 1 is 3; then 0

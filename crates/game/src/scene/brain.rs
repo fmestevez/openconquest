@@ -1111,11 +1111,10 @@ impl Scene {
                     class,
                     holds,
                 } => {
-                    let there = self.objects.iter().any(|o| {
-                        o.record.class_id == class
-                            && o.cell == Some(cell)
-                            && o.combat.as_ref().is_none_or(|c| c.hull > 0.0)
-                    });
+                    let there = self
+                        .objects
+                        .iter()
+                        .any(|o| o.record.class_id == class && super::trade::fills_slot(o, cell));
                     if there == holds {
                         return Some(state);
                     }

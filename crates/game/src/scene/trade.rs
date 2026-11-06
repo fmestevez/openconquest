@@ -3432,6 +3432,19 @@ pub(super) fn building_cells(o: &MapObject) -> i32 {
     }
 }
 
+/// Whether object `o` fills cell `(x, y)`'s object slot (`grid + 0xc`) as
+/// it stands: LandObj's placement at message 2 (0x425b87) puts it, through
+/// 0x499800 (only into an empty slot), in its anchor (`+0x74 / +0x78`)
+/// when its size `+0x56` is 1 and in the four cells x + i % 2, y + i / 2
+/// when it is 4 (settlements and towns, `building_cells`); the fall
+/// (0x424573, 0x499860) clears the same cells.
+pub(super) fn fills_slot(o: &MapObject, (x, y): (i32, i32)) -> bool {
+    let n = building_cells(o);
+    o.cell
+        .is_some_and(|(cx, cy)| (cx..cx + n).contains(&x) && (cy..cy + n).contains(&y))
+        && o.combat.as_ref().is_none_or(|c| c.hull > 0.0)
+}
+
 /// The group (`SHORE_GROUPS`) of the shore tile on cell `(x, y)` (0x4b3770).
 pub(super) fn shore_group(grid: &openconquest_formats::MapGrid, x: i32, y: i32) -> Option<usize> {
     if x < 0 || y < 0 || x as u32 >= grid.width || y as u32 >= grid.height {

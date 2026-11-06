@@ -334,9 +334,10 @@ impl Scene {
 
     /// The loader's look for a building (0x4b7f10 with a box of 5 and a
     /// reach of 1, from 0x4b73a0 state 1): the box and its grid as the
-    /// boarder's (`Scene::board_look`); the building is found where its
-    /// cell lies in the box (its object slot). The point is its berth
-    /// (vt+0xb8), but the anchor (`+0x74 / +0x78`) for the classes of the
+    /// boarder's (`Scene::board_look`); the building is found where one of
+    /// the cells whose object slot it fills lies in the box
+    /// (`trade::fills_slot`: its anchor, or any of a settlement's or
+    /// town's four). The point is its berth (vt+0xb8), but the anchor (`+0x74 / +0x78`) for the classes of the
     /// mask 0xe01c from 0x32 (the forts 0x34-0x36, and 0x3f-0x41), and
     /// the reach 0 for a port, yard or dock (0x39-0x3b): its distance the
     /// larger axis from the ship's cell, if within half the box on both.
@@ -359,6 +360,7 @@ impl Scene {
         let mine = self.reserved_cell(i);
         let cell = self.anchor_cell(t);
         let mut found = false;
+        let prey = &self.objects[t];
         let mut grid = Vec::with_capacity(((x1 - x0).max(0) * (y1 - y0).max(0)) as usize);
         for y in y0..y1 {
             for x in x0..x1 {
@@ -369,7 +371,7 @@ impl Scene {
                         v = -1;
                     }
                 }
-                found |= c == cell;
+                found |= super::trade::fills_slot(prey, c);
                 grid.push(v);
             }
         }
@@ -1113,5 +1115,90 @@ mod tests {
             }
         }
         assert!(planned > 0 && next_to > 0, "{planned} {next_to}");
+    }
+
+    /// A loader whose 5 x 5 box holds a settlement's or town's south-east
+    /// cell but not its anchor finds it all the same (0x4b7f10 reads the
+    /// box's object slots, and the placement 0x425b87 fills all four cells
+    /// of a building of size 4), and one holding none of them does not
+    /// (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn a_loader_finds_a_town_by_any_of_its_cells() {
+        use crate::economy::{SETTLEMENT, TOWN};
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let (mut found, mut out) = (0, 0);
+        for n in 0..28 {
+            let Ok(mut scene) = Scene::load(&data, &mut caches, &format!("miss{n:03}")) else {
+                continue;
+            };
+            scene.brain = None;
+            let towns: Vec<usize> = (0..scene.objects.len())
+                .filter(|&k| {
+                    matches!(
+                        scene.objects[k].class,
+                        ObjectClass::Building(SETTLEMENT | TOWN)
+                    )
+                })
+                .collect();
+            let Some(i) = scene
+                .objects
+                .iter()
+                .position(|o| o.ship.as_ref().is_some_and(|s| s.kind < 10))
+            else {
+                continue;
+            };
+            for &t in &towns {
+                let anchor = scene.anchor_cell(t);
+                let town = &scene.objects[t];
+                assert!(super::super::trade::fills_slot(
+                    town,
+                    (anchor.0 + 1, anchor.1 + 1)
+                ));
+                assert!(!super::super::trade::fills_slot(
+                    town,
+                    (anchor.0 + 2, anchor.1)
+                ));
+                // (3, 3) off: the box reaches the south-east cell only;
+                // (4, 4) off: none of the four.
+                for (d, inside) in [(3, true), (4, false)] {
+                    let c = (anchor.0 + d, anchor.1 + d);
+                    if c.0 >= scene.nav.width as i32 || c.1 >= scene.nav.height as i32 {
+                        continue;
+                    }
+                    let id = scene.objects[t].id;
+                    let s = scene.objects[i].ship.as_mut().unwrap();
+                    s.path.clear();
+                    s.move_state = 0;
+                    s.closing = Some(Closing {
+                        target: id,
+                        near: true,
+                        from: None,
+                        contact: -1,
+                        planned: 0,
+                        plan_from: c,
+                        plan_goal: c,
+                        first_plan: true,
+                        contact_wait: false,
+                        by_id: false,
+                        thrown: None,
+                        hook_cell: (0, 0),
+                    });
+                    (scene.objects[i].x, scene.objects[i].y) = Scene::cell_middle(c);
+                    let look = scene.load_look(i, t);
+                    if inside {
+                        assert_ne!(look, BoardLook::Out);
+                        found += 1;
+                    } else {
+                        assert_eq!(look, BoardLook::Out);
+                        out += 1;
+                    }
+                }
+            }
+        }
+        assert!(found > 0 && out > 0, "{found} {out}");
     }
 }
