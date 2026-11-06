@@ -20138,3 +20138,55 @@ fn ship_repair_button_price() {
         5_850 * 280 / 58_500
     );
 }
+
+/// The settlement's town button (0x43c740 slot 4) is enabled only with a
+/// port, a yard or dock, a smithy and a workshop of its own (`+0x208`,
+/// `+0x20c` / `+0x210`, `+0x200`, `+0x1fc`) and the price in amber (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn town_button_needs_its_buildings() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    scene.amber = 100_000;
+    scene.permits = crate::permits::Permits::default();
+    assert!(scene.permits.town());
+    let site = scene
+        .objects
+        .iter()
+        .find(|o| o.class == ObjectClass::Building(SETTLEMENT) && scene.is_own(o))
+        .unwrap()
+        .id;
+    // Four other objects, made a port, a yard, a smithy and a workshop.
+    let others: Vec<usize> = (0..scene.objects.len())
+        .filter(|&k| scene.objects[k].id != site)
+        .take(4)
+        .collect();
+    let mut ids = Vec::new();
+    for (&k, class) in others
+        .iter()
+        .zip([PORT, SHIPYARD, crate::economy::SMITHY, WORKSHOP])
+    {
+        scene.objects[k].class = ObjectClass::Building(class);
+        ids.push(scene.objects[k].id);
+    }
+    let (port, yard, smithy, workshop) = (ids[0], ids[1], ids[2], ids[3]);
+    let enabled = |scene: &mut Scene, list: Vec<u32>| {
+        scene.towns.lists.insert(site, list);
+        let i = scene.object_index(site).unwrap();
+        crate::commands::main_menu(scene, &scene.objects[i])[4]
+            .unwrap()
+            .enabled
+    };
+    assert!(enabled(&mut scene, vec![port, yard, smithy, workshop]));
+    assert!(!enabled(&mut scene, vec![yard, smithy, workshop]));
+    assert!(!enabled(&mut scene, vec![port, smithy, workshop]));
+    assert!(!enabled(&mut scene, vec![port, yard, workshop]));
+    assert!(!enabled(&mut scene, vec![port, yard, smithy]));
+    scene.amber = 0;
+    assert!(!enabled(&mut scene, vec![port, yard, smithy, workshop]));
+}

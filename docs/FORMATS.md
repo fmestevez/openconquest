@@ -1502,7 +1502,12 @@ to load onto a ship. Its starting stock is record fields 14-22. Its menu
 one of its own forts 0x34-0x36, see Load panel; there when the player may
 have marines, player `+0x46` bit 7, enabled while it is idle, `+0xa4` 1
 and `+0x10c` 0, and has a fort, `+0x214`-`+0x21c`), repair
-(2), upgrade to town (4), sell item (5), sell town (6), and from slot 8 the
+(2), upgrade to town (4: there with player `+0x46` bit 5, for a town
+(0x33) only while it is being built, `+0xa4` 0, showing `100 - +0x120`;
+on a settlement enabled when `+0xa4` is 1, `+0x10c` 0, and the town's
+counts of its list (0x2873) give a port `+0x208`, a yard `+0x20c` or a
+dock `+0x210`, a smithy `+0x200` and a workshop `+0x1fc`, and 0x4a8d00
+holds the price), sell item (5), sell town (6), and from slot 8 the
 marines it can train: only with a workshop of the settlement, and for
 swordsmen a smithy (0x43da20, +0x1fc, +0x200).
 

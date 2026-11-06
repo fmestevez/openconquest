@@ -10,7 +10,7 @@
 use openconquest_formats::ObjectClass;
 
 use crate::economy::{
-    self, DOCK, SCHOOL, SETTLEMENT, SHIPYARD, SMITHY, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR, TOWN,
+    self, DOCK, PORT, SCHOOL, SETTLEMENT, SHIPYARD, SMITHY, TEMPLE_OF_THE_SEA, TEMPLE_OF_WAR, TOWN,
     WORKSHOP,
 };
 use crate::magic::{self, Spell, Temple};
@@ -1410,12 +1410,26 @@ fn settlement_menu(scene: &Scene, obj: &MapObject, menu: &mut Menu) {
         set(menu, 6, Command::SELL_TOWN, idle);
     }
     // The town's price and the settlement's mending (0x43c740 slot 4), on
-    // the button and in its test.
+    // the button and in its test: enabled while the settlement stands idle
+    // (`+0xa4` 1, `+0x10c` 0) with a port (`+0x208`), a yard or a dock
+    // (`+0x20c`, `+0x210`), a smithy (`+0x200`) and a workshop (`+0x1fc`)
+    // of its own, and the price in amber (0x4a8d00).
     if obj.class == ObjectClass::Building(SETTLEMENT) && scene.permits.town() {
         let price = scene
             .object_index(obj.id)
             .map_or(0, |i| scene.upgrade_price(i, TOWN));
-        set(menu, 4, Command::UPGRADE_TOWN, scene.amber >= price);
+        let idle = training.is_none()
+            && scene.stock_repair_at(obj.id).is_none()
+            && !scene.mending.contains(&obj.id)
+            && scene.construction_at(obj.id).is_none();
+        let has = |class| scene.town_class_count(obj.id, class) != 0;
+        let enabled = idle
+            && has(PORT)
+            && (has(SHIPYARD) || has(DOCK))
+            && has(SMITHY)
+            && has(WORKSHOP)
+            && scene.amber >= price;
+        set(menu, 4, Command::UPGRADE_TOWN, enabled);
         if let Some(b) = &mut menu[4] {
             b.price = (price, 0);
         }

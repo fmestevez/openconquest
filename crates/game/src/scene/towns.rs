@@ -347,6 +347,16 @@ impl Scene {
             .unwrap_or_default()
     }
 
+    /// How many buildings of class `class` town `town` counts (0x2873:
+    /// those of its list, `+0x1fc` workshops, `+0x200` smithies, `+0x208`
+    /// ports, `+0x20c` yards, `+0x210` docks).
+    pub fn town_class_count(&self, town: u32, class: u32) -> usize {
+        self.town_buildings(town)
+            .into_iter()
+            .filter(|&k| self.objects[k].class == ObjectClass::Building(class))
+            .count()
+    }
+
     /// Town `town`'s workshops (`+0x1fc`, the first five also kept by
     /// pointer, `+0x1d4[]`) or smithies (`+0x200`, `+0x1e8[]`): those of
     /// its list, in order.
