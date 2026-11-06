@@ -617,8 +617,8 @@ pub fn menu(scene: &Scene, obj: &MapObject, page: Page) -> Menu {
         Page::Ground => ground_menu(scene, obj),
     };
     // Each building's menu stores its buttons' prices (`+0x52`); a ship's
-    // main page stores none but on the repair button (0x4e6980: 0x4b1ed0,
-    // `ship_menu`), its building page the buildings' (0x42d8b0).
+    // main page stores none but on the repair button when enabled (0x4e6980:
+    // 0x4b1ed0, `ship_menu`; never), its building page the buildings' (0x42d8b0).
     if obj.class != ObjectClass::Ship || page == Page::Ground {
         for b in menu.iter_mut().flatten() {
             if b.price == (0, 0) && !b.closes {
@@ -947,11 +947,17 @@ fn ship_menu(obj: &MapObject, menu: &mut Menu) {
         set(menu, 7, Command::BEHAVIOUR, true);
     }
     set(menu, 8, Command::LOAD, true);
-    let damaged = obj.combat.as_ref().is_some_and(|c| c.hull < c.max_hull);
-    set(menu, 9, Command::REPAIR_SHIP, damaged);
-    // The repair's price, stored with the button when it is enabled
-    // (0x4e6980 / 0x4e6e90: 0x4b1ed0 into `+0x56`, slot 9's amber word).
-    if damaged {
+    // The repair (0x4e6980 at 0x4e6d82, 0x4e6e90 at 0x4e6fd9) is enabled
+    // on `+0x261` bit 1 (every finished ship's, 0x4e6930) and the player
+    // record's `[0x5c7508] + p x 0xba0 + 0x118` not 0, its price then
+    // stored (0x4b1ed0 into `+0x56`, slot 9's amber word). Nothing writes
+    // that field but the records' zeroing (0x4a7f70) and the saved game's
+    // whole copy (0x4a89e0): its only accesses in the listing are these two
+    // reads. So it stays 0 and the button is never enabled.
+    const PLAYER_RECORD_118: u32 = 0;
+    let repair = PLAYER_RECORD_118 != 0;
+    set(menu, 9, Command::REPAIR_SHIP, repair);
+    if repair {
         if let Some(b) = menu[9].as_mut() {
             b.price = (crate::scene::repair::ship_repair_price(obj), 0);
         }

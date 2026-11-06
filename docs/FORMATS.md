@@ -1438,7 +1438,9 @@ font `+0x28` at 0x506e16: 0x546aa0(0x18e, ..., `<theme>SYSTEM_FONT`
 setter 0x547160 is called only from the 0x4ea... widgets). 0x505e70
 draws every line it shows at x 5, centred vertically (0x547860(text, 5,
 -1, 0)), so the help line's text is in atlas 1 and its key in atlas 0,
-and any `&` in a name or status line is read the same way.
+and any `&` in a name or status line is read the same way. `0SYSTEM_FONT`
+has two atlases: 0 white (0xffffff, index 38), 1 grey (0x9f9d9c, index
+32); the help line's text grey, its key white (test `help_line_colours`).
 `Command::help_id` / `help_line`, `ui::escape_runs`.
 
 The prices on the buttons (`+0x52`, u32 per slot at menu byte 0x32 + 4 x
@@ -1458,7 +1460,10 @@ Workshop (0x4361c0): 0x597164. Temples (0x437de0): spells 0x596844 /
 9, command 6), none on the spells. The repair's (0x4e6980 at 0x4e6db5,
 0x4e6e90 at 0x4e700d) is stored only when the button is enabled (`+0x261`
 bit 1 and the player record's `[0x5c7508] + p x 0xba0 + 0x118` not 0;
-that field's writer not decoded, the port enables on a worn hull): the
+that field is never written: its only accesses in the listing are these
+two reads (0x4e6da6, 0x4e6ffe), no store at displacement 0x118 is to a
+player record, so it keeps the zeroing of 0x4a7f70 and the saved game's
+whole copy 0x4a89e0: the button is never enabled nor priced): the
 u32 0x4b1ed0 returns, `(0x5c76b0[t] - +0x271) x 0x59b388[t] / 0x5c76b0[t]`
 and, for types other than 0 and 1, each unit below 100, items 9 down to
 0 (counts `+0x292` down, conditions `+0x3b9` down by 32), `0x597164[item
@@ -5920,8 +5925,17 @@ ones held (the port keeps no leftovers: they read kind 0, heard by none).
 panel's take out of a fort's or a settlement's store, the fort's cast,
 `take_out_scrolls` and a building's fall (`drop_held`); the port takes
 0x1c57 as always there (not decoded: whether it can go before the
-mission ends); its other callers (0x41d3e3, 0x41d4a0, 0x4bdcc0) not
-read. miss003's goods: `Scene::stir_volcano`. miss001's `Goal::Kept`:
+mission ends). Its other callers: the nest's fall (0x41d300 on 0x138e
+reaching the life, at 0x41d3e3: each held treasure 0x424cf0(0, 1), laid
+down, then `+0x19c` freed) and removal (0x41d4a0 message 3, at 0x41d964:
+0x424cf0(0, 0), none made) send nothing, the nest being side 2 (its
+constructor 0x41ce20 sets `+0x57` 2; the only variable store to `+0x57`
+in the listing is 0x4e21ad, a ship's), as the port's `drop_held` (side
+1 buildings only); 0x4bdcc0 (from the ship's load panel, 0x4e3f1a /
+0x4e405e) takes treasure `vt+0x78(n)` out of a 0x34-0x36 building, or of
+a 0x39-0x3b fort when 0x51f1f0 finds the ship's player's object (else
+nothing), with 0, then 0x4bc820 when asked: the load panel's take-out
+already ported (`scene/load.rs`, `store_out_news`). miss003's goods: `Scene::stir_volcano`. miss001's `Goal::Kept`:
 ships of any type, any building 0x32-0x3e of the player's.
 
 **Buildings asleep.** A building's record field 4 sets its state

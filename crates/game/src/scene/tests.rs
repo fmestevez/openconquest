@@ -20094,9 +20094,10 @@ fn a_sunk_ship_leaves_its_chest_and_treasures_at_its_next_to_last_frame() {
     assert!(scene.object_index(id).is_none());
 }
 
-/// A ship's repair button stores the price 0x4b1ed0 reckons: the hull's
+/// The price 0x4b1ed0 reckons for a ship's repair button: the hull's
 /// `(full - hull) x 0x59b388[type] / full` and each worn unit's
-/// `0x597164[item / 3] x (100 - condition) x 9 / 1000` (needs
+/// `0x597164[item / 3] x (100 - condition) x 9 / 1000`; the button never
+/// enabled (0x4e6980: player record `+0x118` never written) (needs
 /// `OPENCONQUEST_DATA`).
 #[test]
 fn ship_repair_button_price() {
@@ -20124,10 +20125,16 @@ fn ship_repair_button_price() {
     // A tenth of the hull (78000 points) gone: 7800 x 910 / 78000 = 91;
     // item 6: 70 x 50 x 9 / 1000 = 31; item 0: 30 x 10 x 9 / 1000 = 2.
     c.hull = (78_000 - 7_800) as f32 / 15.0;
+    assert_eq!(
+        crate::scene::repair::ship_repair_price(&scene.objects[k]),
+        91 + 31 + 2
+    );
+    // The button itself is never enabled, so never priced: the player
+    // record's `+0x118` it tests (0x4e6d82) is never written.
     let menu = crate::commands::main_menu(&scene, &scene.objects[k]);
     let b = menu[9].unwrap();
-    assert!(b.enabled);
-    assert_eq!(b.price, (91 + 31 + 2, 0));
+    assert!(!b.enabled);
+    assert_eq!(b.price, (0, 0));
     // A merchant's units are not counted (types 0 and 1).
     scene.objects[k].ship.as_mut().unwrap().kind = 1;
     let c = scene.objects[k].combat.as_mut().unwrap();

@@ -1847,6 +1847,78 @@ mod tests {
         assert_eq!(runs("a&-b"), vec![(0, "a-b".to_string())]);
     }
 
+    /// A help line's text (0x505e70's `&1`) drawn in `0SYSTEM_FONT`'s
+    /// atlas 1, its key (`&0`) in atlas 0: the font has the two atlases,
+    /// white and grey. Needs `OPENCONQUEST_DATA`.
+    #[test]
+    fn help_line_colours() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let font = openconquest_formats::Font::parse(
+            &data
+                .controls
+                .read("0SYSTEM_FONT", openconquest_formats::ResourceKind::Font)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(font.atlas_offsets.len(), 2);
+        // The colour of a glyph's opaque pixels in an atlas (one each).
+        let colour = |atlas: usize, c: u8| {
+            let bm = font.atlas(&data.controls, atlas).unwrap();
+            let g = font.glyphs[&c];
+            let mut cols = std::collections::BTreeSet::new();
+            for y in g.y..g.y + g.height {
+                for x in g.x..g.x + g.width {
+                    let i = bm.pixels[(y as u32 * bm.width + x as u32) as usize];
+                    if i != font.transparent {
+                        cols.insert(rgb(bm.palette.0[i as usize]));
+                    }
+                }
+            }
+            assert_eq!(cols.len(), 1);
+            cols.into_iter().next().unwrap()
+        };
+        let mut caches = Caches::default();
+        let scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        let ui = Interface::load(&data, '0').unwrap();
+        let text = TextRenderer::load(&data.controls, "0SYSTEM_FONT", 0).unwrap();
+        let policy = ScalePolicy {
+            fixed: None,
+            integer: true,
+        };
+        let layout = ui.layout((800, 600), &policy, &scene, false, false);
+        let line = crate::commands::Command::STOP.help_line(false, (0, 0), " - &0S", &data.strings);
+        assert!(line.starts_with("&1"));
+        let first = line.as_bytes()[2];
+        let draw = |msg: &str| {
+            let mut pixels = vec![1u32; 800 * 600];
+            let mut frame = Frame {
+                pixels: &mut pixels,
+                width: 800,
+                height: 600,
+            };
+            ui.draw_message(&mut frame, &layout, &text, msg);
+            pixels
+        };
+        // The leftmost drawn column is the first glyph's: atlas 1's colour.
+        let pixels = draw(&line);
+        let drawn: Vec<usize> = (0..pixels.len()).filter(|&i| pixels[i] != 1).collect();
+        let left = drawn.iter().map(|&i| i % 800).min().unwrap();
+        let firsts: std::collections::BTreeSet<u32> = drawn
+            .iter()
+            .filter(|&&i| i % 800 == left)
+            .map(|&i| pixels[i])
+            .collect();
+        assert_eq!(firsts, [colour(1, first)].into());
+        assert_eq!(colour(1, first), 0x9f9d9c);
+        // The key's `S` after `&0` in atlas 0's white; the rest grey.
+        let all: std::collections::BTreeSet<u32> = drawn.iter().map(|&i| pixels[i]).collect();
+        assert_eq!(all, [colour(0, b'S'), colour(1, first)].into());
+        assert_eq!(colour(0, b'S'), 0xffffff);
+    }
+
     /// The control bar at either side ([0x5ca54a]): on the right the field
     /// at 0 and the bar at 592 (0x512ab0: 0x250); on the left the bar at 0
     /// and the field, the view (0x511170(0x67, 8)), the wind rose, the
