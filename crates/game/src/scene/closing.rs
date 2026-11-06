@@ -549,7 +549,7 @@ impl Scene {
         match route {
             RegionPlan::Route(path) => {
                 c.plan_goal = goal;
-                self.objects[i].ship.as_mut().unwrap().path = path;
+                self.store_route(i, path);
                 Planned::Routed
             }
             RegionPlan::NoRoute => Planned::NoRoute,

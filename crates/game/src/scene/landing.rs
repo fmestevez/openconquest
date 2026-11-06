@@ -155,7 +155,7 @@ impl Scene {
             if here != berth {
                 let (bx, by) = (berth.0 as f32 * t + t / 2.0, berth.1 as f32 * t + t / 2.0);
                 if let Some(path) = self.plan_route(k, bx, by) {
-                    self.objects[k].ship.as_mut().unwrap().path = path;
+                    self.store_route(k, path);
                 }
                 return;
             }

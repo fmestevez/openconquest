@@ -1607,8 +1607,8 @@ impl Scene {
                 .route_beside(i, s)
                 .ok_or("The ship cannot reach the settlement")?;
             let ship = self.objects[i].ship.as_mut().unwrap();
-            ship.path = path;
             ship.task = Some(Task::Fetch { site, item });
+            self.store_route(i, path);
             return Ok(());
         }
         if self.objects[i].combat.is_none() {
@@ -2510,7 +2510,6 @@ impl Scene {
         if ship.cargo_kind.is_some_and(|k| k != resource) {
             ship.cargo = 0.0;
         }
-        ship.path = path;
         ship.task = Some(Task::Gather {
             deposit,
             phase: GatherPhase::ToDeposit,
@@ -2522,6 +2521,7 @@ impl Scene {
             cell: at,
             rect,
         });
+        self.store_route(i, path);
         Ok(())
     }
 
@@ -2636,10 +2636,9 @@ impl Scene {
         };
         let capacity = cargo_capacity(ship.kind);
         let set = |scene: &mut Scene, task: Option<Task>, path: Option<VecDeque<(f32, f32)>>| {
-            let ship = scene.objects[i].ship.as_mut().unwrap();
-            ship.task = task;
+            scene.objects[i].ship.as_mut().unwrap().task = task;
             if let Some(p) = path {
-                ship.path = p;
+                scene.store_route(i, p);
             }
         };
         // An exhausted deposit growing back counts as gone.
@@ -2660,8 +2659,7 @@ impl Scene {
                     if !arrived {
                         let (x, y) = (self.objects[d].x, self.objects[d].y);
                         if let Some(path) = self.plan_route(i, x, y) {
-                            let ship = self.objects[i].ship.as_mut().unwrap();
-                            ship.path = path;
+                            self.store_route(i, path);
                         }
                         return;
                     }
@@ -3209,7 +3207,6 @@ impl Scene {
             .plan_route_to_water(i, bx, by)
             .ok_or("The ship cannot reach it")?;
         let ship = self.objects[i].ship.as_mut().unwrap();
-        ship.path = path;
         ship.task = Some(Task::Gather {
             deposit,
             phase: GatherPhase::ToPort(port),
@@ -3222,6 +3219,7 @@ impl Scene {
         ship.priority = prio.wrapping_add(1);
         ship.home_port = port;
         ship.berth_wait = 0;
+        self.store_route(i, path);
         Ok(())
     }
 
@@ -3254,11 +3252,11 @@ impl Scene {
         let ship = self.objects[i].ship.as_mut().unwrap();
         match route {
             Some((port, path)) => {
-                ship.path = path;
                 ship.task = Some(Task::Gather {
                     deposit,
                     phase: GatherPhase::ToPort(port),
                 });
+                self.store_route(i, path);
             }
             None => ship.task = None,
         }
@@ -3290,7 +3288,6 @@ impl Scene {
             .plan_route(i, bx as f32 * t + t / 2.0, by as f32 * t + t / 2.0)
             .ok_or("The ship cannot sail there")?;
         let ship = self.objects[i].ship.as_mut().unwrap();
-        ship.path = path;
         ship.task = Some(Task::Found {
             cx,
             cy,
@@ -3298,6 +3295,7 @@ impl Scene {
             berth: (bx, by),
             land,
         });
+        self.store_route(i, path);
         Ok(())
     }
 }

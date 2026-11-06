@@ -109,8 +109,14 @@ impl Scene {
             }
         }
         .ok_or("The ship cannot sail there")?;
+        // At the cell already, 0x4a6330 stores no route (its goal its own
+        // cell): the empty one is the port's own.
+        if path.is_empty() {
+            self.objects[i].ship.as_mut().unwrap().path = path;
+        } else {
+            self.store_route(i, path);
+        }
         let s = self.objects[i].ship.as_mut().unwrap();
-        s.path = path;
         s.task = Some(Task::Take {
             target,
             at,
@@ -433,7 +439,7 @@ impl Scene {
                     let w = TILE_SIZE as f32;
                     let to = ((e.0 as f32 + 0.5) * w, (e.1 as f32 + 0.5) * w);
                     match self.plan_route(i, to.0, to.1) {
-                        Some(path) => self.objects[i].ship.as_mut().unwrap().path = path,
+                        Some(path) => self.store_route(i, path),
                         None => self.objects[i].ship.as_mut().unwrap().task = None,
                     }
                     return;

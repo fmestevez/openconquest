@@ -183,9 +183,9 @@ impl Scene {
             .plan_route(i, bx, by)
             .ok_or("The ship cannot reach that dock")?;
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
-        s.path = path;
         s.task = Some(Task::Repair { dock, sell });
         s.dock_step = None;
+        self.store_route(i, path);
         Ok(())
     }
 
@@ -965,7 +965,7 @@ impl Scene {
             if here != berth {
                 let (bx, by) = (berth.0 as f32 * t + t / 2.0, berth.1 as f32 * t + t / 2.0);
                 if let Some(path) = self.plan_route(k, bx, by) {
-                    self.objects[k].ship.as_mut().unwrap().path = path;
+                    self.store_route(k, path);
                 }
                 return;
             }

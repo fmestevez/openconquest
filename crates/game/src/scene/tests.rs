@@ -3090,7 +3090,12 @@ fn treasures_and_heroes() {
     assert!(treasures >= 5, "{treasures} treasures on the map");
     let ship = scene.objects.iter().find(|o| o.ship.is_some()).unwrap().id;
     let human = scene.human.unwrap();
-    scene.objects.retain(|o| o.ship.is_none() || o.id == ship);
+    // No reefs or whirlpools: one surfacing under the ship on its way
+    // would sink it.
+    scene.objects.retain(|o| {
+        (o.ship.is_none() || o.id == ship)
+            && !matches!(o.class, ObjectClass::Reef(_) | ObjectClass::Whirlpool)
+    });
     let i = scene.object_index(ship).unwrap();
     scene.objects[i].owner = Some((human.nation, human.slot));
     scene.objects[i].ship.as_mut().unwrap().kind = 2; // a royal ship
@@ -20201,4 +20206,60 @@ fn town_button_needs_its_buildings() {
     assert!(!enabled(&mut scene, vec![port, yard, smithy]));
     scene.amber = 0;
     assert!(!enabled(&mut scene, vec![port, yard, smithy, workshop]));
+}
+
+/// A route stored under way in a cell (0x4a6330, move states 1, 4, 5 and
+/// 0x4e0b50 true): a turn over 1 to its first step asks for the step at
+/// once (0x4a3a70(this, 1)); refused, the brake 0x4a2f60 (state 4, kept
+/// when already 4), granted or a turn of 1, under way (5). Between cells
+/// it is under way (5) all the same.
+#[test]
+fn a_route_stored_under_way_asks_its_step() {
+    let Some((_data, _caches, mut scene, mine, _other, cell)) = closing_pair(1, 0) else {
+        return;
+    };
+    let t = TILE_SIZE as f32;
+    let i = scene.object_index(mine).unwrap();
+    let mid = |c: (i32, i32)| (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+    (scene.objects[i].x, scene.objects[i].y) = mid(cell);
+    let set = |scene: &mut Scene, state: u8, heading: usize, between: bool| {
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.move_state = state;
+        s.heading = heading;
+        s.between.set(between);
+        s.entering = cell;
+        s.way = 7200;
+        s.brake = 0;
+        s.ahead = None;
+    };
+    let east: VecDeque<(f32, f32)> = [mid((cell.0 + 1, cell.1)), mid((cell.0 + 2, cell.1))].into();
+    let north: VecDeque<(f32, f32)> = [mid((cell.0, cell.1 - 1))].into();
+    let ship = |scene: &Scene| scene.objects[i].ship.clone().unwrap();
+    // Facing north, east is a turn of 2; the other ship holds the cell:
+    // refused, it brakes over 64 (0x4a2f60: 7200 x 7200 / (64 x -6000)).
+    set(&mut scene, 5, 2, false);
+    scene.store_route(i, east.clone());
+    let s = ship(&scene);
+    assert_eq!((s.move_state, s.brake, s.ahead), (4, -135, None));
+    // Already stopping, it stays so, the brake not set again.
+    set(&mut scene, 4, 2, false);
+    scene.store_route(i, east.clone());
+    let s = ship(&scene);
+    assert_eq!((s.move_state, s.brake), (4, 0));
+    // A turn of 1 asks nothing.
+    set(&mut scene, 4, 1, false);
+    scene.store_route(i, east.clone());
+    let s = ship(&scene);
+    assert_eq!((s.move_state, s.ahead), (5, None));
+    // Facing east, north is a turn of 2, the cell free: granted.
+    set(&mut scene, 1, 0, false);
+    scene.store_route(i, north.clone());
+    let s = ship(&scene);
+    let n = (cell.0, cell.1 - 1);
+    assert_eq!((s.move_state, s.ahead, s.entering), (5, Some(n), n));
+    // Between cells: under way, nothing asked.
+    set(&mut scene, 4, 2, true);
+    scene.store_route(i, east);
+    let s = ship(&scene);
+    assert_eq!((s.move_state, s.ahead), (5, None));
 }

@@ -159,13 +159,16 @@ impl Scene {
         let (x, y) = (cell.0 as f32 * t + t / 2.0, cell.1 as f32 * t + t / 2.0);
         let here = (self.objects[i].x, self.objects[i].y);
         let path = self.plan_route_order(i, here, x, y);
-        let Some(s) = self.objects[i].ship.as_mut() else {
+        if self.objects[i].ship.is_none() {
             return;
-        };
+        }
+        if let Some(path) = path.clone() {
+            self.store_route(i, path);
+        }
+        let s = self.objects[i].ship.as_mut().unwrap();
         s.planned = 0.0;
         match path {
-            Some(path) => {
-                s.path = path;
+            Some(_) => {
                 s.pending = None;
                 s.waited = 0.0;
             }

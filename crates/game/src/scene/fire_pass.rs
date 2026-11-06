@@ -1220,12 +1220,12 @@ impl Scene {
         let t = TILE_SIZE as f32;
         let (x, y) = (goal.0 as f32 * t + t / 2.0, goal.1 as f32 * t + t / 2.0);
         let route = self.plan_route_within(i, x, y, d);
-        let s = self.objects[i].ship.as_mut().unwrap();
         // 0x4a6100: the goal is the last stored route's (`+0x54e`).
         let plan_goal = if route.is_some() { goal } else { p.plan_goal };
         if let Some(path) = route {
-            s.path = path;
+            self.store_route(i, path);
         }
+        let s = self.objects[i].ship.as_mut().unwrap();
         s.attack_plan = objects::RoutePlan {
             planned: now,
             plan_from: own,

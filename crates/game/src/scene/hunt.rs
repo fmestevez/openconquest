@@ -208,7 +208,7 @@ impl Scene {
         h.planned = now;
         if let RegionPlan::Route(path) = route {
             h.plan_goal = goal;
-            self.objects[i].ship.as_mut().unwrap().path = path;
+            self.store_route(i, path);
         }
     }
 

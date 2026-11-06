@@ -400,6 +400,10 @@ pub struct Scene {
     /// Heroes' houses taken (0x24af1: `+0x1e8`, state 4) and the tick
     /// (`+0x1ec`).
     pub taken_houses: Vec<(u32, u32)>,
+    /// Cells whose whirlpool or reef a ship with Jason sinks, asked for at
+    /// a route store (0x4a6330 -> 0x4a3a70 -> 0x4a7630), sunk with the
+    /// move tick's (`Scene::store_route`).
+    step_sinks: Vec<(i32, i32)>,
     /// The taken houses' pictures playing out (states 4, 5 and 2 of
     /// 0x4230f0, `treasure::HouseFade`) until the house is removed.
     pub house_fades: BTreeMap<u32, treasure::HouseFade>,
@@ -629,6 +633,7 @@ mod shot;
 mod sight;
 mod sleep;
 mod sparkle;
+mod steps;
 mod treasure;
 mod wake;
 pub use sight::{FogArt, Seen};
@@ -977,6 +982,7 @@ impl Scene {
             had_argo: false,
             woken: false,
             taken_houses: Vec::new(),
+            step_sinks: Vec::new(),
             house_fades: BTreeMap::new(),
             lime_remap: {
                 let mut map = std::collections::HashMap::new();
@@ -1728,13 +1734,16 @@ impl Scene {
         }
         let here = (self.objects[i].x, self.objects[i].y);
         let path = self.plan_route_order(i, here, x, y);
-        let Some(ship) = self.objects[i].ship.as_mut() else {
+        if self.objects[i].ship.is_none() {
             return false;
-        };
+        }
+        if let Some(path) = path.clone() {
+            self.store_route(i, path);
+        }
+        let ship = self.objects[i].ship.as_mut().unwrap();
         ship.planned = 0.0;
         match path {
-            Some(path) => {
-                ship.path = path;
+            Some(_) => {
                 ship.pending = None;
                 ship.waited = 0.0;
             }
@@ -2267,10 +2276,14 @@ impl Scene {
                 self.replan(i, (lx, ly))
             };
             // Try again a while later either way.
-            let ship = self.objects[i].ship.as_mut().unwrap();
-            ship.blocked = 0.0;
-            if let Some(path) = route {
-                ship.path = path;
+            self.objects[i].ship.as_mut().unwrap().blocked = 0.0;
+            match route {
+                // No cell to go round by: the port's own empty route.
+                Some(path) if path.is_empty() => {
+                    self.objects[i].ship.as_mut().unwrap().path = path;
+                }
+                Some(path) => self.store_route(i, path),
+                None => {}
             }
         }
     }
@@ -2452,10 +2465,9 @@ impl Scene {
             } else {
                 None
             };
-            let s = self.objects[i].ship.as_mut().unwrap();
-            s.remembered = memory;
+            self.objects[i].ship.as_mut().unwrap().remembered = memory;
             if let Some(path) = route.filter(|p| !p.is_empty()) {
-                s.path = path;
+                self.store_route(i, path);
             }
         }
     }
@@ -2887,49 +2899,19 @@ impl Scene {
         self.run_wakeups(dt);
         self.run_contact(dt, data, caches);
         let mut moved = false;
-        // One ship to a cell: the cells ships lie in, and those they are
-        // already sailing into, are taken.
+        // What the steps asked for are weighed against (0x4a3a70), the
+        // asks made at a route store since the last update first among
+        // them (`Scene::store_route`).
         let t = TILE_SIZE as f32;
         let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
-        let mut taken: HashMap<(i32, i32), u32> = HashMap::new();
-        for o in self.objects.iter().filter(|o| o.ship.is_some()) {
-            taken.entry(cell_of(o.x, o.y)).or_insert(o.id);
-        }
-        for o in &self.objects {
-            let Some(&(nx, ny)) = o.ship.as_ref().and_then(|s| s.path.front()) else {
-                continue;
-            };
-            let here = cell_of(o.x, o.y);
-            let centre = (here.0 as f32 * t + t / 2.0, here.1 as f32 * t + t / 2.0);
-            if (o.x - centre.0).hypot(o.y - centre.1) > 0.5 {
-                taken.entry(cell_of(nx, ny)).or_insert(o.id);
-            }
-        }
-        // The cell after the one a ship has entered, reserved as it
-        // entered it (`+0x5ab`, 0x4a3f40), while still on its route.
-        for o in &self.objects {
-            let Some(s) = o.ship.as_ref() else {
-                continue;
-            };
-            let on_route = s
-                .path
-                .iter()
-                .take(2)
-                .any(|&(px, py)| Some(cell_of(px, py)) == s.ahead);
-            if let Some(a) = s.ahead.filter(|_| on_route) {
-                taken.entry(a).or_insert(o.id);
-            }
-        }
+        let mut steps = self.steps();
+        steps.sinks = std::mem::take(&mut self.step_sinks);
         // The game ticks this update ran: ships move a tick at a time.
         let ticks = self.ticks.wrapping_sub(ticks_before);
         let width = self.grid.width as i32;
         // The brake 0x4a2f60: move state 4 and `+0x284` (`sail::brake`).
         let brake = |ship: &mut objects::Ship, at: (i32, i32), own: (i32, i32)| {
-            ship.move_state = 4;
-            match sail::brake(ship.way, at, own, ship.entering, ship.between.get(), width) {
-                Some(b) => ship.brake = b,
-                None => ship.ahead = None,
-            }
+            steps::brake(ship, at, own, width)
         };
         // Held one short of its goal (0x4a3f40 at 0x4a49f6-0x4a4a67): not
         // between cells (`+0x596` 0), the next step refused and the goal 1
@@ -2940,32 +2922,10 @@ impl Scene {
                 .flatten()
                 .filter(|g| walk_path::dist(g.0, g.1, at.0, at.1) == 1)
         };
-        // The original's move states (+0x58c): 0 lying still, 3 waiting at
-        // a cell for the next (0x4a3560), 6 held by a boarding, ram or
-        // dock; the rest under way (2 turning, 4 stopping, 5 sailing). A
-        // ship waiting 50 ticks falls to lying still, its route kept, and
-        // may be pushed aside like any (0x4a374a).
-        let rest = crate::clock::ticks(50);
-        let lying: HashSet<u32> = self
-            .objects
-            .iter()
-            .filter(|o| {
-                o.ship
-                    .as_ref()
-                    .is_some_and(|s| s.path.is_empty() || s.stalled >= rest)
-            })
-            .map(|o| o.id)
-            .collect();
         let idle: HashSet<u32> = self
             .objects
             .iter()
             .filter(|o| o.ship.as_ref().is_some_and(|s| s.path.is_empty()))
-            .map(|o| o.id)
-            .collect();
-        let waiting: HashSet<u32> = self
-            .objects
-            .iter()
-            .filter(|o| o.ship.as_ref().is_some_and(|s| s.stalled > 0.0))
             .map(|o| o.id)
             .collect();
         // The ships' top speeds `+0x59f` (0x4bece0, 0x4a74c0).
@@ -2973,27 +2933,8 @@ impl Scene {
             .filter(|&i| self.objects[i].ship.is_some())
             .map(|i| (self.objects[i].id, self.ship_top(i)))
             .collect();
-        // Ships grappled, ramming or being rammed keep still (they are
-        // moved by the boarding and the ram); a charging rammer may sail
-        // into its target's cell.
-        let held_still = self.held_by_contact();
-        let charging: HashMap<u32, u32> = self
-            .objects
-            .iter()
-            .filter_map(|o| {
-                let r = o.ship.as_ref()?.ram_run?;
-                (r.stage == objects::RamStage::Charge).then_some((o.id, r.target))
-            })
-            .collect();
         // Ships held up: the cell ahead, and whether a ship lies in it.
         let mut held = Vec::new();
-        // Ships lying still in the cell a ship under way looks ahead to,
-        // to be pushed aside (0x4a3a70 -> 0x4b4b50): (lying, mover).
-        // The mover's wait before it asked.
-        let mut asides: Vec<(u32, u32, f32)> = Vec::new();
-        // Cells reefs and whirlpools hold, and the ones Jason sinks.
-        let hazard_cells = self.hazard_cells();
-        let mut jason_sinks = Vec::new();
         // Ships at their move goal (notice 0x136, 0x4a3f40).
         let mut arrived: Vec<(u32, (i32, i32))> = Vec::new();
         // Ships come into a cell (0x4a3f40 at 0x4a47c0: its chest).
@@ -3035,7 +2976,7 @@ impl Scene {
             if obj.combat.as_ref().is_some_and(|c| c.stone_len > 0) {
                 continue;
             }
-            if held_still.contains(&obj.id) {
+            if steps.held_still.contains(&obj.id) {
                 ship.way = 0;
                 continue;
             }
@@ -3150,10 +3091,10 @@ impl Scene {
                 // aboard sinks a whirlpool or medium reef (0x4a3a70 ->
                 // 0x4a7630: 0xda9f / 0xda9e) and steps in; others wait
                 // there as for any refused step.
-                let hazard = hazard_cells.get(&next).copied();
-                if asking && hazard.is_some() && !taken.contains_key(&next) {
+                let hazard = steps.hazards.get(&next).copied();
+                if asking && hazard.is_some() && !steps.taken.contains_key(&next) {
                     if hazard == Some(true) && ship.has_hero(objects::JASON) {
-                        jason_sinks.push(next);
+                        steps.sinks.push(next);
                     } else {
                         ship.blocked += dt;
                         ship.stalled += dt;
@@ -3174,9 +3115,9 @@ impl Scene {
                     }
                 }
                 if asking {
-                    match taken.get(&next) {
+                    match steps.taken.get(&next) {
                         Some(&other)
-                            if other != obj.id && charging.get(&obj.id) != Some(&other) =>
+                            if other != obj.id && steps.charging.get(&obj.id) != Some(&other) =>
                         {
                             ship.blocked += dt;
                             ship.stalled += dt;
@@ -3184,9 +3125,9 @@ impl Scene {
                             // short of the route's last cell, and a tick
                             // more when the ship there lies still, waits
                             // or is held (0x4a3a70).
-                            if lying.contains(&other)
-                                || waiting.contains(&other)
-                                || held_still.contains(&other)
+                            if steps.lying.contains(&other)
+                                || steps.waiting.contains(&other)
+                                || steps.held_still.contains(&other)
                             {
                                 ship.waited += dt;
                             }
@@ -3206,7 +3147,7 @@ impl Scene {
                             held.push((
                                 obj.id,
                                 next,
-                                lying.contains(&other),
+                                steps.lying.contains(&other),
                                 idle.contains(&other),
                                 other,
                             ));
@@ -3216,7 +3157,7 @@ impl Scene {
                             break;
                         }
                         _ => {
-                            taken.insert(next, obj.id);
+                            steps.taken.insert(next, obj.id);
                             ship.blocked = 0.0;
                             ship.stalled = 0.0;
                             ship.waited = 0.0;
@@ -3284,58 +3225,7 @@ impl Scene {
                         _ if last == Some(here) => false,
                         None => false,
                         Some(c) if c == here => true,
-                        Some(c) => {
-                            let free = match taken.get(&c) {
-                                Some(&other) => {
-                                    other == obj.id || charging.get(&obj.id) == Some(&other)
-                                }
-                                None => true,
-                            };
-                            let free = free
-                                && match hazard_cells.get(&c).copied() {
-                                    None => true,
-                                    Some(sinkable) => {
-                                        let sinks = sinkable
-                                            && ship.has_hero(objects::JASON)
-                                            && !taken.contains_key(&c);
-                                        if sinks {
-                                            jason_sinks.push(c);
-                                        }
-                                        sinks
-                                    }
-                                };
-                            if free {
-                                taken.insert(c, obj.id);
-                                ship.ahead = Some(c);
-                                ship.entering = c;
-                                ship.accel = None;
-                                ship.waited = 0.0;
-                                ship.attack_step = false;
-                            } else {
-                                // Refused, the wait (`+0x591`) grows as
-                                // for a step asked at a route point
-                                // (0x4a3a70): a tick when the ship there
-                                // lies still (pushing it aside, 0x4b4b50,
-                                // the same player's of lower priority),
-                                // waits or is held; a tick more short of
-                                // the route's last cell.
-                                if let Some(&other) = taken.get(&c).filter(|&&o| o != obj.id) {
-                                    if lying.contains(&other) {
-                                        asides.push((other, obj.id, ship.waited));
-                                    }
-                                    if lying.contains(&other)
-                                        || waiting.contains(&other)
-                                        || held_still.contains(&other)
-                                    {
-                                        ship.waited += crate::clock::TICK;
-                                    }
-                                }
-                                if last != Some(c) || ship.attack_step {
-                                    ship.waited += crate::clock::TICK;
-                                }
-                            }
-                            free
-                        }
+                        Some(c) => steps.ask(obj.id, ship, c, last),
                     };
                     if !granted {
                         if ship.move_state != 4 {
@@ -3379,21 +3269,10 @@ impl Scene {
                 }
             }
         }
-        for c in jason_sinks {
+        for c in std::mem::take(&mut steps.sinks) {
             self.sink_hazard_at(c, data, caches);
         }
-        // The push is weighed on the wait before the ask; pushed, the
-        // wait starts again from 0 and counts this ask (0x4a3b56-0x4a3bab).
-        for (still, mover, before) in asides {
-            let Some(m) = self.object_index(mover) else {
-                continue;
-            };
-            let after = self.objects[m].ship.as_ref().unwrap().waited;
-            self.objects[m].ship.as_mut().unwrap().waited = before;
-            let pushed = self.push_aside(still, mover);
-            self.objects[m].ship.as_mut().unwrap().waited =
-                if pushed { after - before } else { after };
-        }
+        self.push_asides(std::mem::take(&mut steps.asides));
         for (id, c) in stepped_in {
             self.ship_steps_on_chest(id, c, data, caches);
             self.ship_steps_on_treasure(id, c, data, caches);

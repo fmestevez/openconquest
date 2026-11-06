@@ -17,8 +17,8 @@ impl Scene {
             .plan_route_to_water(i, x, y)
             .ok_or("The ship cannot sail there")?;
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
-        s.path = path;
         s.task = Some(Task::Scout { home });
+        self.store_route(i, path);
         Ok(())
     }
 
@@ -41,8 +41,8 @@ impl Scene {
             .plan_route_to_water(i, cx, cy)
             .ok_or("The ship cannot sail there")?;
         let s = self.objects[i].ship.as_mut().ok_or("Not a ship")?;
-        s.path = path;
         s.task = Some(Task::Zone { rect, attack });
+        self.store_route(i, path);
         Ok(())
     }
 
@@ -105,9 +105,8 @@ impl Scene {
             return;
         };
         if let Some(path) = self.plan_route_to_water(i, home.0, home.1) {
-            let s = self.objects[i].ship.as_mut().unwrap();
-            s.path = path;
-            s.task = None;
+            self.objects[i].ship.as_mut().unwrap().task = None;
+            self.store_route(i, path);
         }
     }
 
@@ -149,7 +148,7 @@ impl Scene {
                 .is_none_or(|&(px, py)| ((px - wx).powi(2) + (py - wy).powi(2)).sqrt() > 64.0);
             if far && stale {
                 if let Some(path) = self.plan_route_to_water(i, wx, wy) {
-                    self.objects[i].ship.as_mut().unwrap().path = path;
+                    self.store_route(i, path);
                 }
             }
         }
@@ -175,7 +174,7 @@ impl Scene {
             let away = ((o.x - cx).powi(2) + (o.y - cy).powi(2)).sqrt() > 64.0;
             if away && o.ship.as_ref().unwrap().path.is_empty() {
                 if let Some(path) = self.plan_route_to_water(i, cx, cy) {
-                    self.objects[i].ship.as_mut().unwrap().path = path;
+                    self.store_route(i, path);
                 }
             }
         }
@@ -200,8 +199,8 @@ impl Scene {
             let s = self.objects[i].ship.as_mut().unwrap();
             match path {
                 Some(p) => {
-                    s.path = p;
                     s.task = next;
+                    self.store_route(i, p);
                 }
                 None => s.task = None,
             }

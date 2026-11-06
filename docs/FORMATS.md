@@ -4960,13 +4960,30 @@ speed is saved with a game (`SPEED_GAME`).
 - Not ported: the closing-in branches of the tick (`+0x25d & 0x10`, the
   port's grapple); the refreshes under way other than blows and the song's
   end, the mending aboard (0x4b98b0, see "Healing aboard") and at a dock
-  (0x4b1fc0); 0x4a6330 in move states 1, 4 and 5 at a cell (not
-  between): the route stored with `+0x5be` 0, and with a turn
-  (0x4e0100 from `+0x5af` to the route's first direction) over 1 the
-  step to route entry 1 asked at once (0x4a3a70(this, 1)), refused the
-  brake 0x4a2f60 unless already 4 (state kept), else state 5. The port
-  stores routes at many places (no single 0x4a6330) and its mover asks
-  no step in state 5, so this needs that store gathered first.
+  (0x4b1fc0); 0x4a6330's other move states at the store (0 / 3: a turn
+  0 to 3 with `+0x596` 1, else 2 with `+0x5b0` 0, both 0x4a3140; 2 the
+  same without 0x4a3140; then `+0x5be` 1), left to the port's mover,
+  which turns a ship (`turn_ship`) before it steps; `+0x5b2` set to the
+  last cell of every stored route (the port's `goal` is a plain move's
+  only).
+- The route store (0x4a6330, the port's `Scene::store_route`, through
+  which every plan's route goes): the route (`+0x5c2`), its count
+  (`+0x5ba`) and last cell (`+0x5b2`), the first step's direction
+  (0x59791d, `+0x5b1`) and the turn to it 0x4e0100 (`|a - b|`, folded
+  past 4 to 8 - it) from the heading `+0x5af`. Then by the move state
+  (the switch at 0x4a6667): told to stop (1), stopping (4) or under way
+  (5) and between cells (0x4e0b50 false), the route goes on from the
+  cell it is entering (own cell prepended, `+0x5be` 1) and the state is
+  5; in its cell, `+0x5be` 0 and with a turn over 1 the step to route
+  entry 1 is asked at once (0x4a3a70(this, 1), weighed as the move
+  tick's asks: `Steps::ask`); refused, the brake 0x4a2f60 unless
+  already 4 (state kept); else, or granted, 5. A ship with Jason whose
+  ask sinks a whirlpool or medium reef (0x4a7630) has it sunk with the
+  next move tick's sinks (the port's `step_sinks`; in the original
+  within the ask). Not 0x4a6330 stores, set directly: the slides to a
+  shore or pier and alongside (0x4b02a0 / 0x4afe50), the push aside
+  (0x4b4b50's synthesized route), a land walker's path, and the empty
+  routes of a goal at the ship's own cell (0x4a6330 stores none).
 - The shore and pier slide: 0x4b02a0 steps `+0x78e` by 2 (back out:
   down by 2 while above 1, else to 0) along the line 0x4b5220 built from
   the picture's top-left (Bresenham, an odd count padded with the last
