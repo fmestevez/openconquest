@@ -166,30 +166,13 @@ impl Scene {
                 // The group: the selection's own (its other block ended,
                 // its counter kept, with Shift its route taken first), or
                 // a new one.
-                let mut elapsed = 0;
-                let mut route = None;
-                let serial = if let Some(g) = self.selection_zone(&group) {
-                    let zone = self.gather_zones.remove(g);
-                    elapsed = zone.elapsed;
-                    route = zone.route;
-                    match zone.group {
-                        super::gather::ZoneGroup::Human(s) => s,
-                        _ => unreachable!(),
+                let (serial, elapsed, route) = match self.end_selection_block(&group) {
+                    Some(t) => t,
+                    None => {
+                        self.leave_zones(&group);
+                        self.zone_serial += 1;
+                        (self.zone_serial, 0, None)
                     }
-                } else if let Some(g) = self.selection_attack(&group) {
-                    let a = self.human_attacks.remove(g);
-                    elapsed = a.elapsed;
-                    route = a.route;
-                    a.serial
-                } else if let Some(g) = self.selection_waypoint_move(&group) {
-                    let m = self.waypoint_moves.remove(g);
-                    elapsed = m.elapsed;
-                    route = Some(m.route);
-                    m.serial
-                } else {
-                    self.leave_zones(&group);
-                    self.zone_serial += 1;
-                    self.zone_serial
                 };
                 self.fleet_attacks.push(FleetAttack {
                     serial,

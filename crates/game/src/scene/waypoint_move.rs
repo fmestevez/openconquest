@@ -136,8 +136,11 @@ impl Scene {
     /// (0x4ce7c0) and keeps a ship's progress at the end (0x4ce8a0).
     /// With the centre the click's cell the route holds one waypoint and
     /// 0x4cf2c0 reads the entry past it from a null pointer (the
-    /// original's fault): here no ship is sent. The selection's group:
-    /// a waypoint move's kept (its counter `+8`), else a new one.
+    /// original's fault): here no ship is sent. The selection's group
+    /// (0x49e230) is kept with its serial and counter `+8`, whatever its
+    /// block (`end_selection_block`: a gather zone, the human's attack,
+    /// the fleet attack, a waypoint move), its route freed; else a new
+    /// one, its ships leaving their old groups.
     pub fn order_patrol_route(&mut self, ships: &[u32], x: i32, y: i32) -> Result<(), String> {
         let ships: Vec<u32> = ships
             .iter()
@@ -155,11 +158,8 @@ impl Scene {
             self.waypoint_moves[z].route.add(x, y, false, None);
             return Ok(());
         }
-        let (serial, elapsed) = match old {
-            Some(z) => {
-                let m = self.waypoint_moves.remove(z);
-                (m.serial, m.elapsed)
-            }
+        let (serial, elapsed) = match self.end_selection_block(&ships) {
+            Some((serial, elapsed, _)) => (serial, elapsed),
             None => {
                 self.leave_zones(&ships);
                 self.zone_serial += 1;
@@ -632,5 +632,80 @@ mod tests {
         assert_eq!(scene.route_marks().len(), 2);
         scene.order_shift_move(&sel, row.0 + 5, row.1).unwrap();
         assert_eq!(scene.waypoint_moves[0].way, 1);
+    }
+
+    /// The patrol button (0x49d790 case 8) and a Shift gather (0x4c8a80,
+    /// key flag 4) on the selection's group (0x49e230): its block ended
+    /// (0x4a1c60) but the group kept, its serial and counter `+8` with
+    /// it. A fleet attack's group given the Shift gather keeps them as
+    /// its route goes into the zone; a gather zone's given the patrol.
+    /// The behaviour page (0x4e6980 page 5) never shows the patrol set.
+    #[test]
+    fn patrol_and_shift_gather_keep_the_group() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(2)
+            .collect();
+        for &i in &ships {
+            scene.objects[i].owner = Some(human);
+            scene.objects[i].ship.as_mut().unwrap().kind = 2;
+        }
+        let sel: Vec<u32> = ships.iter().map(|&i| scene.objects[i].id).collect();
+        // The first enemy the attack takes (a refusal changes nothing).
+        let ids: Vec<u32> = scene.objects.iter().map(|o| o.id).collect();
+        assert!(ids
+            .into_iter()
+            .any(|t| scene.order_fleet_attack(&sel, t, 0x15, 0).is_ok()));
+        scene.order_shift_move(&sel, 3, 4).unwrap();
+        scene.fleet_attacks[0].elapsed = 23;
+        let serial = scene.fleet_attacks[0].serial;
+        let deposit = (0..scene.objects.len())
+            .find(|&i| super::super::gather::deposit_class(&scene.objects[i]).is_some())
+            .map(|i| scene.objects[i].id)
+            .unwrap();
+        scene.order_gather_at(&sel, deposit, 4).unwrap();
+        assert!(scene.fleet_attacks.is_empty());
+        let z = &scene.gather_zones[0];
+        assert_eq!(z.group, super::super::gather::ZoneGroup::Human(serial));
+        assert_eq!(z.elapsed, 23);
+        assert_eq!(
+            z.route.as_ref().map(|r| r.waypoints.clone()),
+            Some(vec![(3, 4)])
+        );
+        scene.gather_zones[0].elapsed = 31;
+        let (x, y) = scene.ship_cell(ships[0]);
+        scene.order_patrol_route(&sel, x + 2, y).unwrap();
+        assert!(scene.gather_zones.is_empty());
+        let m = &scene.waypoint_moves[0];
+        assert_eq!((m.serial, m.elapsed, m.way), (serial, 31, 2));
+        let menu = crate::commands::menu(
+            &scene,
+            &scene.objects[ships[0]],
+            crate::commands::Page::Behaviour,
+        );
+        let at = |k: usize| menu[k].map(|s| (s.command, s.enabled, s.checked));
+        assert_eq!(at(8), Some((crate::commands::PATROL, true, false)));
+        assert_eq!(at(9), Some((crate::commands::GUARD_ZONE, true, false)));
+        assert_eq!(at(10), Some((crate::commands::ATTACK_ZONE, true, false)));
+        // Type 10 (0x4e42e0): no guard nor board attack; fire on
+        // aggressor off even while guarding.
+        let s = scene.objects[ships[0]].ship.as_mut().unwrap();
+        s.kind = 10;
+        s.behaviour.guard = true;
+        let menu = crate::commands::menu(
+            &scene,
+            &scene.objects[ships[0]],
+            crate::commands::Page::Behaviour,
+        );
+        assert!(menu[0].is_none() && menu[2].is_none() && menu[1].is_some());
+        assert!(menu[5].is_some_and(|s| !s.enabled && !s.checked));
     }
 }

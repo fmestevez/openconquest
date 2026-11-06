@@ -385,6 +385,39 @@ impl Scene {
         self.leave_waypoint_moves(ids);
     }
 
+    /// The selection's group given a new block (0x49e230 keeps it while
+    /// the selection is unchanged): its block ended (0x4a1c60: a gather
+    /// zone's marks freed first, 0x4a2050 with 0; every block's notices
+    /// `+0x2d` freed), the group's serial and counter `+8` kept, and its
+    /// route `+0x61`, which 0x4a1c60 frees (0x4ce5a0) unless the caller
+    /// took it first. `None` when the selection is no human block's group.
+    pub(super) fn end_selection_block(
+        &mut self,
+        ships: &[u32],
+    ) -> Option<(u32, u32, Option<Route>)> {
+        if let Some(g) = self.selection_zone(ships) {
+            let ZoneGroup::Human(serial) = self.gather_zones[g].group else {
+                unreachable!()
+            };
+            self.gather_marks(g, false);
+            let zone = self.gather_zones.remove(g);
+            return Some((serial, zone.elapsed, zone.route));
+        }
+        if let Some(g) = self.selection_attack(ships) {
+            let a = self.human_attacks.remove(g);
+            return Some((a.serial, a.elapsed, a.route));
+        }
+        if let Some(g) = self.selection_fleet(ships) {
+            let a = self.fleet_attacks.remove(g);
+            return Some((a.serial, a.elapsed, a.route));
+        }
+        if let Some(g) = self.selection_waypoint_move(ships) {
+            let m = self.waypoint_moves.remove(g);
+            return Some((m.serial, m.elapsed, Some(m.route)));
+        }
+        None
+    }
+
     /// Ends the gather zone of `group` (its task replaced, 0x4a1c60).
     /// Its marks freed for the viewing player (0x4cacf0 with 0).
     pub(super) fn end_zone(&mut self, group: ZoneGroup) {
@@ -555,16 +588,7 @@ impl Scene {
         let group = match self.selection_zone(&ships) {
             Some(z) => self.gather_zones[z].group,
             None => {
-                let mut taken = None;
-                if let Some(g) = self.selection_waypoint_move(&ships) {
-                    let m = self.waypoint_moves.remove(g);
-                    taken = Some((m.serial, m.elapsed, Some(m.route)));
-                } else if let Some(g) = self.selection_attack(&ships) {
-                    let a = self.human_attacks.remove(g);
-                    taken = Some((a.serial, a.elapsed, a.route));
-                } else if let Some(g) = self.selection_fleet(&ships) {
-                    kept = self.fleet_attacks[g].route.take().filter(|_| shift);
-                }
+                let taken = self.end_selection_block(&ships);
                 match taken {
                     Some((serial, elapsed, route)) => {
                         kept = route.filter(|_| shift);

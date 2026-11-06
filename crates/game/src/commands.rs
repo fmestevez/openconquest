@@ -1259,9 +1259,15 @@ pub const GATHER_ZONES: [Command; 3] = [Command(0x7a), Command(0x7b), Command(0x
 pub const ATTACK_ZONE: Command = Command(0x75);
 
 /// A warship's behaviour page (0x4e6980, page 5): guard, ram attack and
-/// board attack in slots 0-2, fire on aggressor in slot 5 (only while
-/// guarding), convoy in 4, scout in 6, patrol in 8, guard and attack zones
-/// in 9 and 10.
+/// board attack in slots 0-2, fire on aggressor in slot 5, convoy in 4,
+/// scout in 6, patrol in 8, guard and attack zones in 9 and 10. Every
+/// button is enabled on the capability mask `+0x261 & 0xfff` (every
+/// finished warship's, 0x4e6930); only the three switches (ship byte
+/// `+0x684` bits 0-2) and fire on aggressor (`+0x633`) are ever shown set
+/// (flag 0x20), the others always plain (flag 1); fire on aggressor is
+/// enabled while guarding unless the ship is of type 10 (`+0x25a`). Unique
+/// ships lose some (0x4e42e0, page 5): type 8 the board attack, 10 the
+/// guard and board attack, 11 the ram attack.
 fn behaviour_menu(scene: &Scene, obj: &MapObject) -> Menu {
     let mut menu: Menu = [None; SLOTS];
     let Some(ship) = obj.ship.as_ref().filter(|_| scene.is_own(obj)) else {
@@ -1282,17 +1288,22 @@ fn behaviour_menu(scene: &Scene, obj: &MapObject) -> Menu {
     toggle(0, GUARD, true, b.guard);
     toggle(1, RAM_ATTACK, true, b.ram);
     toggle(2, BOARD_ATTACK, true, b.board);
-    toggle(5, FIRE_ON_AGGRESSOR, b.guard, b.guard && b.aggressor);
-    let scouting = matches!(ship.task, Some(crate::objects::Task::Scout { .. }));
-    let patrolling = matches!(ship.task, Some(crate::objects::Task::Patrol { .. }));
-    toggle(6, SCOUT, true, scouting);
-    toggle(8, PATROL, true, patrolling);
-    let zone = |attack| matches!(ship.task, Some(crate::objects::Task::Zone { attack: a, .. }) if a == attack);
-    toggle(9, GUARD_ZONE, obj.is_armed(), zone(false));
-    let attacking = zone(true) || scene.ship_attack(obj.id).is_some();
-    toggle(10, ATTACK_ZONE, obj.is_armed(), attacking);
-    let escorting = matches!(ship.task, Some(crate::objects::Task::Convoy { .. }));
-    toggle(4, CONVOY, true, escorting);
+    toggle(4, CONVOY, true, false);
+    let aggressor = b.guard && ship.kind != 10;
+    toggle(5, FIRE_ON_AGGRESSOR, aggressor, aggressor && b.aggressor);
+    toggle(6, SCOUT, true, false);
+    toggle(8, PATROL, true, false);
+    toggle(9, GUARD_ZONE, true, false);
+    toggle(10, ATTACK_ZONE, true, false);
+    let removed: &[usize] = match ship.kind {
+        8 => &[2],
+        10 => &[0, 2],
+        11 => &[1],
+        _ => &[],
+    };
+    for &slot in removed {
+        menu[slot] = None;
+    }
     menu
 }
 

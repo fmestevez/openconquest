@@ -600,9 +600,15 @@ Combat tables:
 - The warship menu (0x4e6980) opens the behaviour page (page 5) with
   0x6c `CBUT_BEHMAIN`: slot 0 guard 0x6f, 1 ram attack 0x79, 2 board attack
   0x78 (ship byte +0x684 bits 0-2; a set switch has button flag 0x20), 4
-  convoy 0x6d, 5 fire on aggressor 0x72 (enabled only while guarding;
-  ship byte +0x633), 6 scout 0x76, 8 patrol 0x6e, 9 guard zone 0x74, 10
-  attack zone 0x75. Commands 0x70, 0x71, 0x73, 0x77 and 0x7a-0x7c are
+  convoy 0x6d, 5 fire on aggressor 0x72 (enabled only while guarding and
+  the hull type `+0x25a` not 10; set with ship byte +0x633), 6 scout
+  0x76, 8 patrol 0x6e, 9 guard zone 0x74, 10 attack zone 0x75. Every
+  button is enabled on `+0x261 & 0xfff` (all off otherwise); convoy,
+  scout, patrol and the two zones always have flag 1, never 0x20: they
+  are never shown set, whatever the ship or its group is doing, and the
+  zones need no weapons. 0x4e42e0 then drops, on page 5, type 8's board
+  attack (slot 2), type 10's guard and board attack (0, 2) and type
+  11's ram attack (1). Port: `commands::behaviour_menu`. Commands 0x70, 0x71, 0x73, 0x77 and 0x7a-0x7c are
   `BEHFGUARD`, `BEHRAID`, `BEHFAGR`, `BEHRCZONE` and the merchants' amber,
   fish and whale zones.
 - Once the sage school's arming (+0xa3) is above 1, its menu (0x430f90)
@@ -3566,9 +3572,10 @@ list and escorts).
   dispatch is skipped (`local_8`; 0x4a1c60 then finds no route, so the
   marks stay): the ships go on as they were until a notice or the pass.
   The group, its notices and counter `+8` are kept (0x4a1150 makes the
-  notices only if null). Port: `human_zone` (a waypoint move's or human
-  attack's group kept, its serial and counter; a fleet attack's route
-  taken, its group left as before).
+  notices only if null). Port: `human_zone` through
+  `Scene::end_selection_block` (a waypoint move's, human attack's or
+  fleet attack's group kept, its serial and counter, the route taken
+  under Shift).
 - **Start** (0x4c8a80 tail): 0x4c5b90 mode 0 lists the rectangle's
   deposits of the class and knows them (`+0x39`); if any: 0x4c5f40 splits
   the group into merchants (types 0/1, with their room 0x4be800(3),
@@ -3816,11 +3823,12 @@ list and escorts).
     removal. A Shift move on a patrol rewrites `+0x14` to 1. Port:
     `Order::Patrol` -> `Scene::order_patrol_route` (app.rs: the patrol
     button, then a click at sea, the cell, once for the selection;
-    the per-ship `Task::Patrol` estimate is no longer given). Not
-    decoded: the patrol button's set state in the warship menu
-    (0x4e6980; the port's reads `Task::Patrol`, now never set); a
-    zone's, attack's or fleet's group given the patrol leaves for a new
-    group in the port (the original keeps the group, its `+8`).
+    the per-ship `Task::Patrol` estimate is no longer given). The
+    selection's group (0x49e230) is kept whatever its block, a gather
+    zone's, attack's, fleet's or move's, its serial and counter `+8`
+    with it, its route freed by 0x4a1c60 (port:
+    `Scene::end_selection_block`). The patrol button is never shown
+    set (0x4e6980 page 5, below).
     Its notices 0x4cf0b0 (newest first): 300, the ship in the group:
     no route 0x4cc650, heard; else 0x4ceab0's best waypoint, a move
     there and 0x4ce8a0(-1, -1, 0, `+0x14`); then `#` (0x4c42f0). 0x136

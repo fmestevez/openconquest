@@ -5343,9 +5343,6 @@ impl App {
                         "The shipyard is busy, or not enough amber or fish".to_string()
                     }
                     crate::commands::FIRE_ON_AGGRESSOR => "Only while guarding".to_string(),
-                    crate::commands::GUARD_ZONE | crate::commands::ATTACK_ZONE => {
-                        "This ship has no weapons".to_string()
-                    }
                     _ => "Not possible now".to_string(),
                 },
             };
