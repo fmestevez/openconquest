@@ -1416,6 +1416,15 @@ the command's string (0x4f21b0, e.g. 0x1a2 ` \nMOVE`) in `BUT_FONT` (atlas
 (11 per line less 2 between) at the button's bottom. The strings come from
 `ancient.exe`'s string table.
 
+The help line on hover (0x4f2a90 sends message 0x54b, 0x505e70 draws it):
+the string 0x4f1b40 gives for the slot (0xa4 `Cancel` on a crossed slot;
+by command, e.g. 1-2 0x95 `Stop`, 4 0x96 `Move`, 0x61 0xd5 `Magic of
+whirlpool`, 0x6b 0xf9 `Head of Gorgon`, 0x71 0xec (no such string); 0x28
+for none), `&1` before it for 0x95-0x15e (0x5be6fc, the colour not
+ported), then for the slot's stored price (`+0x52`: amber low word, fish
+high) `"%s. %s-%d"` with string 0x59 `Cost` and `"%s, %s-%d"` with 0x5a
+`Fish`, then the key. `Command::help_id` / `help_line`.
+
 Ships' main page (0x4e6980): move, stop, two spell slots, fire, board,
 ram, behaviour, reload, repair, building, hero/treasure; enabled by a
 capability mask (+0x261, all set but bit 11 for boats and merchants, bit 8
@@ -10499,7 +10508,8 @@ frees it too (0x4df9c2; what calls 0x4df870 not read). The warship's menu 0x4e69
 for slot 0 of class 8 and slot 3 for slot 1 when there are exactly two and
 slot 1 is not slot 0 again (0x4ba010: kind, flags, parameter, amount), by
 the parameter: 1 0x62, 2 0x61, 3 0x60, 4 0x63, 5 0x55, 6 0x69, 7 0x6a, 9
-0x66, 10 0x65, 11 0x68, 0xd 0x6b (`CBUT_HGORG`, 0x4f08a0; help 0x202),
+0x66, 10 0x65, 11 0x68, 0xd 0x6b (`CBUT_HGORG`, 0x4f08a0; caption 0x202,
+help line 0xf9 `Head of Gorgon`),
 enabled; none for 0, 8, 12. The button sets the pointer state 0x22 with
 its kind (0x4f34c0; 0x6b kind 0x13). The pointer (0x4dd2fc's state 0x22,
 kinds 1-3, 6-8, 0xd-0xf, 0x11, 0x13) is refused (0x58) without the

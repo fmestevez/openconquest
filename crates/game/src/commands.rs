@@ -177,9 +177,19 @@ impl Command {
         Some(fixed.to_string())
     }
 
-    /// The name and, for things that cost amber or fish, the price (for
-    /// research, at the human player's level in `scene`).
-    pub fn describe(self, scene: Option<&Scene>) -> String {
+    /// The button's help line (0x505e70 from message 0x54b, sent by
+    /// 0x4f2a90 on hover): the string 0x4f1b40 gives (`help_id`), then for
+    /// a price stored on the slot `"%s. %s-%d"` with string 0x59 (Cost) and
+    /// the amber, `"%s, %s-%d"` with string 0x5a (Fish) and the fish (the
+    /// price for research at the human player's level in `scene`). The key
+    /// follows (`Hotkeys::suffix`). Not ported: the `&1` colour 0x505e70
+    /// puts before strings 0x95-0x15e (format 0x5be6fc).
+    pub fn help_line(
+        self,
+        closes: bool,
+        strings: &std::collections::HashMap<u32, String>,
+        scene: Option<&Scene>,
+    ) -> String {
         let cost = if let Some(kind) = economy::ship_of_command(self) {
             Some(economy::ship_cost(kind))
         } else if let Some(class) = economy::building_of_command(self) {
@@ -199,10 +209,132 @@ impl Command {
                 _ => None,
             }
         };
-        match cost {
-            Some((amber, 0)) => format!("{}: {amber} amber", self.name()),
-            Some((amber, fish)) => format!("{}: {amber} amber, {fish} fish", self.name()),
-            None => self.name(),
+        let text = |id: u32| strings.get(&id).map_or("", |s| s.as_str());
+        let mut line = text(self.help_id(closes)).to_string();
+        let (amber, fish) = cost.unwrap_or((0, 0));
+        if amber != 0 {
+            line = format!("{line}. {}-{amber}", text(0x59));
+        }
+        if fish != 0 {
+            line = format!("{line}, {}-{fish}", text(0x5a));
+        }
+        line
+    }
+
+    /// The string of the button's help line (0x4f1b40): 0xa4 (Cancel) on a
+    /// slot drawn with a cross, else by the command, 0x28 for none.
+    pub fn help_id(self, closes: bool) -> u32 {
+        if closes {
+            return 0xa4;
+        }
+        match self.0 {
+            0x01 | 0x02 => 0x95,
+            0x03 => 0x97,
+            0x04 => 0x96,
+            0x05 => 0xa1,
+            0x06 => 0xa6,
+            0x07 | 0x10 => 0xa2,
+            0x08 => 0xe3,
+            0x09 => 0x9b,
+            0x0a => 0x9c,
+            0x0b => 0xa7,
+            0x0c => 0x9d,
+            0x0d => 0x9e,
+            0x0e => 0x9f,
+            0x0f => 0xa0,
+            0x11 | 0x14 => 0xc6,
+            0x12 => 0xe6,
+            0x13 => 0xa3,
+            0x15 => 0xe7,
+            0x16 => 0xa8,
+            0x17..=0x19 => 0xa9,
+            0x1a => 0xaa,
+            0x1b => 0xab,
+            0x1c => 0xac,
+            0x1d => 0xad,
+            0x1e => 0xae,
+            0x1f => 0xaf,
+            0x20 => 0xb0,
+            0x21 => 0xb1,
+            0x22 => 0xb2,
+            0x23 => 0xb4,
+            0x24 => 0xb3,
+            0x25 => 0xb5,
+            0x26 => 0xed,
+            0x27 => 0xee,
+            0x28 => 0xef,
+            0x29 => 0xf0,
+            0x2a => 0xf1,
+            0x2b => 0xf2,
+            0x2c => 0xf3,
+            0x2d => 0xb9,
+            0x2e => 0xbb,
+            0x2f => 0xba,
+            0x30 => 0xbc,
+            0x31 => 0xbd,
+            0x32 => 0xbe,
+            0x33 => 0xbf,
+            0x34 => 0xc0,
+            0x35 => 0xc1,
+            0x36 => 0xc2,
+            0x37 => 0xc3,
+            0x38 => 0xc4,
+            0x39 => 0xc5,
+            0x3a => 0xc7,
+            0x3b => 0xc9,
+            0x3c | 0x3d => 0xca,
+            0x3e => 0x141,
+            0x3f => 0x143,
+            0x40 => 0x142,
+            0x41 => 0x144,
+            0x42 => 0x146,
+            0x43 => 0x145,
+            0x44 => 0x147,
+            0x45 => 0x149,
+            0x46 => 0x148,
+            0x47 | 0x49 | 0x4a | 0x4b => 0xd1,
+            0x48 | 0x4c | 0x4d | 0x4e => 0xd2,
+            0x4f => 0xe4,
+            0x50 => 0xf4,
+            0x51 => 0xf5,
+            0x52 => 0xf6,
+            0x53 => 0xf7,
+            0x54 => 0xf8,
+            0x55 => 0x140,
+            0x56..=0x5f => 0xdf,
+            0x60 => 0xd6,
+            0x61 => 0xd5,
+            0x62 => 0xd7,
+            0x63 => 0xe0,
+            0x64 => 0xde,
+            0x65 => 0xe1,
+            0x66 => 0xdd,
+            0x67 => 0xd8,
+            0x68 => 0xe2,
+            0x69 => 0xdb,
+            0x6a => 0xdc,
+            0x6b => 0xf9,
+            0x6c => 0xe5,
+            0x6d => 0xe8,
+            0x6e => 0xea,
+            0x6f | 0x70 => 0xeb,
+            0x71 => 0xec,
+            0x72 => 0xfb,
+            0x73 => 0xfc,
+            0x74 => 0xfd,
+            0x75 => 0xfa,
+            0x76 => 0xfe,
+            0x77 => 0xff,
+            0x78 => 0x14b,
+            0x79 => 0x14c,
+            0x7a => 0x150,
+            0x7b => 0x151,
+            0x7c => 0x152,
+            0x7d => 0x14a,
+            0x7e => 0x14d,
+            0x7f => 0x14e,
+            0x80 => 0x14f,
+            _ => 0x28,
         }
     }
 
@@ -398,7 +530,7 @@ impl Command {
             }
             0x3a => "Upgrade to town",
             0x3b => "Upgrade to dock",
-            0x6b => "Gorgon's head",
+            0x6b => "Head of Gorgon",
             0x6c => "Behaviour",
             0x6d => "Convoy",
             0x6e => "Patrol",
@@ -1220,24 +1352,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn descriptions_name_prices() {
+    fn help_lines_name_prices() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let path = crate::assets::find_ci(std::path::Path::new(&root), "ancient.exe")
+            .unwrap()
+            .unwrap();
+        let strings =
+            openconquest_formats::pe::string_table(&std::fs::read(path).unwrap()).unwrap();
+        let line = |c: Command| c.help_line(false, &strings, None);
+        assert_eq!(line(economy::ship_command(0)), "Build boat. Cost-200");
         assert_eq!(
-            economy::ship_command(0).describe(None),
-            "Build Boat: 200 amber"
+            line(economy::ship_command(2)),
+            "Build royal battleship. Cost-1100, Fish-400"
         );
+        assert_eq!(line(Command(0x2f)), "Train swordsmen. Cost-30, Fish-300");
+        assert_eq!(line(Command::STOP), "Stop");
+        // The ship's spell buttons (0x4e6980) and the Gorgon's head.
+        assert_eq!(line(Command(0x6b)), "Head of Gorgon");
         assert_eq!(
-            economy::ship_command(2).describe(None),
-            "Build Royal Ship: 1100 amber, 400 fish"
+            line(Command(0x61)).split('.').next(),
+            Some("Magic of whirlpool")
         );
-        assert_eq!(
-            Command(0x2f).describe(None),
-            "Train swordsmen: 30 amber, 300 fish"
-        );
-        assert_eq!(Command(0x33).describe(None), "Build a ballista: 70 amber");
-        assert_eq!(
-            Command::UPGRADE_TOWN.describe(None),
-            "Upgrade to town: 500 amber"
-        );
-        assert_eq!(Command::STOP.describe(None), "Stop");
+        assert_eq!(Command::STOP.help_line(true, &strings, None), "Cancel");
     }
 }
