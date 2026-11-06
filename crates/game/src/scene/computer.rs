@@ -1685,6 +1685,25 @@ impl Scene {
     /// groups first; with `only`, in each list just the group holding it
     /// when there. Their extents.
     fn enemy_groups(&self, owner: (u32, u32), only: Option<u32>) -> Vec<Cells> {
+        self.enemy_groups_weighed(owner, only)
+            .into_iter()
+            .map(|g| g.0)
+            .collect()
+    }
+
+    /// 0x408b70's `fire + board / 10` of the first group (`+0x14` fire:
+    /// the ships' `+0x479`, a fort's or barbarian structure's units' fire
+    /// (0x446710) / 100 for each cell it covers; `+0x18` board: the ships'
+    /// `+0x53c`) of the groups `enemy_groups` lists with `only`; 0 for
+    /// none (0x4d2980, 0x4d3080).
+    pub(super) fn enemy_power(&self, owner: (u32, u32), only: u32) -> i32 {
+        self.enemy_groups_weighed(owner, Some(only))
+            .first()
+            .map_or(0, |g| g.1 + g.2 / 10)
+    }
+
+    /// `enemy_groups` with each group's fire and boarding strength.
+    fn enemy_groups_weighed(&self, owner: (u32, u32), only: Option<u32>) -> Vec<(Cells, i32, i32)> {
         let mut ships = Vec::new();
         let mut forts = Vec::new();
         for (i, o) in self.objects.iter().enumerate() {
@@ -1694,13 +1713,19 @@ impl Scene {
                 continue;
             }
             match o.class {
-                ObjectClass::Ship => ships.push((self.cell_of(i), o.id)),
+                ObjectClass::Ship => ships.push((
+                    self.cell_of(i),
+                    o.id,
+                    self.fire_power(i),
+                    self.boarding_strength(i) as i32,
+                )),
                 ObjectClass::Building(0x34..=0x36) | ObjectClass::Barbarian(_) => {
                     let (x, y) = self.cell_of(i);
                     let n = super::trade::building_cells(o);
+                    let fire = self.units_fire(i) / 100;
                     for dy in 0..n {
                         for dx in 0..n {
-                            forts.push(((x + dx, y + dy), o.id));
+                            forts.push(((x + dx, y + dy), o.id, fire, 0));
                         }
                     }
                 }
@@ -1708,8 +1733,8 @@ impl Scene {
             }
         }
         // The scan goes row by row.
-        ships.sort_by_key(|&((x, y), _)| (y, x));
-        forts.sort_by_key(|&((x, y), _)| (y, x));
+        ships.sort_by_key(|&((x, y), ..)| (y, x));
+        forts.sort_by_key(|&((x, y), ..)| (y, x));
         let mut out = Vec::new();
         for list in [ships, forts] {
             let cells: Vec<(i32, i32)> = list.iter().map(|e| e.0).collect();
@@ -1720,6 +1745,7 @@ impl Scene {
                     continue;
                 }
                 let mut rect: Option<(i32, i32, i32, i32)> = None;
+                let (mut fire, mut board) = (0, 0);
                 for (k, &(x, y)) in cells.iter().enumerate() {
                     if labels[k] != g {
                         continue;
@@ -1728,9 +1754,11 @@ impl Scene {
                         None => (x, y, x, y),
                         Some((a, b, c, d)) => (a.min(x), b.min(y), c.max(x), d.max(y)),
                     });
+                    fire += list[k].2;
+                    board += list[k].3;
                 }
                 if let Some((a, b, c, d)) = rect {
-                    out.push((a, b, c - a + 1, d - b + 1));
+                    out.push(((a, b, c - a + 1, d - b + 1), fire, board));
                 }
             }
         }
@@ -5982,6 +6010,18 @@ impl Scene {
     /// and 0x4ba810's mode 1, three draws of 0x4a2540 over the odds
     /// weighed by the ring: the attack pass asks for neither.)
     fn close_pick(&self, i: usize) -> (u32, u8, u8) {
+        self.close_pick_with(i, false, 0)
+    }
+
+    /// 0x4baae0 itself with reach 2 for any kind (its kinds 10 and 11 widen
+    /// only a reach below 2) and 0x4ba810's `mode` (the guard's 0x4d3990:
+    /// the block's `+0x20` low word): with several finds, mode 0 the first
+    /// greatest, any other none.
+    pub(super) fn square_pick(&self, i: usize, mode: u32) -> (u32, u8, u8) {
+        self.close_pick_with(i, true, mode)
+    }
+
+    fn close_pick_with(&self, i: usize, square: bool, mode: u32) -> (u32, u8, u8) {
         const RINGS: [&[(i32, i32)]; 2] = [
             &[
                 (-1, -1),
@@ -6051,12 +6091,17 @@ impl Scene {
         let pick = |finds: &[Find], one_ram_id: bool| {
             if let [f] = finds {
                 (f.0, f.1, if one_ram_id { f.0 } else { 0 }, f.2)
+            } else if mode != 0 {
+                // 0x4ba810 mode 1 asks for a weighing function, which
+                // 0x4baae0 passes as 0: -1, nothing picked (any other mode
+                // too).
+                (0, 0, 0, 0)
             } else {
                 let (b, r) = (best(finds, |f| f.1), best(finds, |f| f.2));
                 (finds[b].0, finds[b].1, finds[r].0, finds[r].2)
             }
         };
-        if !matches!(s.kind, 10 | 11) {
+        if square || !matches!(s.kind, 10 | 11) {
             let finds: Vec<Find> = (cy - 2..cy + 3)
                 .flat_map(|y| (cx - 2..cx + 3).map(move |x| (x, y)))
                 .filter_map(find)
@@ -9386,12 +9431,7 @@ mod tests {
         assert!(sent && took, "the computer never went for a treasure");
     }
 
-    // The "attacked" this asserts came from the help mail (task 8 state
-    // 0xc) after guards on the former per-ship zone guard (`order_zone`)
-    // were hit chasing the human's ships; the guard block's posts wait for
-    // the sharing out 0x4d2b00 (guard task part 2, not ported) to engage.
     #[test]
-    #[ignore = "waits for the guard task's part 2 (0x4d2b00, 0x4d3080)"]
     fn computer_builds_gathers_and_attacks() {
         let Some(data) = data() else {
             return;
@@ -9401,6 +9441,7 @@ mod tests {
         let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
         let mut unloaded = false;
         let mut attacked = false;
+        let mut max_ready = 0;
         let mut defeat_at = None;
         // 25 minutes of game time.
         for k in 0..25 * 60 * 10 {
@@ -9418,6 +9459,7 @@ mod tests {
                         )
                 });
                 attacked |= ai.flotillas.iter().any(|f| f.task == 8 && f.state == 0xc);
+                max_ready = max_ready.max(scene.ready_warships(ai));
             }
             if k == 5 * 60 * 10 {
                 // Five minutes in: a town with its port and yard, and ships.
@@ -9449,17 +9491,18 @@ mod tests {
             }
         }
         assert!(unloaded, "the computer's merchants never unloaded");
-        // Its guards may sink a passive human before the first grand
-        // attack is under way (some 10 minutes in on normal).
+        // A human with no ships is attacked only by the grand attack
+        // (0x482160), which wants (their ships / 5) x 5 + 12 ready
+        // warships: the guards engage only what comes into their zone
+        // (0x4d33c0, 0x4d2b00), never leaving it to chase.
         assert!(
-            attacked || defeat_at.is_some(),
-            "the computer never attacked"
+            attacked || defeat_at.is_some() || max_ready < 12,
+            "the computer never attacked with {max_ready} warships ready"
         );
         assert_eq!(
             scene.computers.players[0].enemy,
             Some(human.0 * 4 + human.1)
         );
-        assert!(defeat_at.is_some(), "the human player still stands");
     }
 
     /// Two runs of a mission with two computer players are the same (so

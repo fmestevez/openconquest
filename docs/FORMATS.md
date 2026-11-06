@@ -3060,14 +3060,69 @@ list: from its last each ship 0x4d1750 mode 1, mode 1/2 0x4d1a50(ship,
 1), 3 posted at the entry's cell and sent. Sum |A4| + |A1| + |T|: 0 with
 `+0x2b`, posts and engaged: a draw % engaged, its target found: every
 post from the last removed and engaged on it at its cell; > 0 0x4d2b00.
-Ported: all of the above, the computers' flotillas holding the block
-(`Flotilla::guard`) in place of each ship's `order_zone`. Not ported
-(part 2): the retreat test 0x4d3080 (busy taken as 0, `+0x2b` never
-set), the sharing out 0x4d2b00 / 0x4d2980 (the port's former guard
-stands in: each idle post ship given `order_zone` over the zone), the
-patrol rounds 0x4d2720 (mode 1 only) with 0x4d2200, 0x4d2160, 0x4d22f0,
-0x4d25a0 (0x136's and 0x137's patrol cases), and 0x4d3990. Not
-decoded: the class `+0x50` 0xb2 (no class of the port's); the mask past
+The retreat test 0x4d3080(G, 2): `+0x2b` = 0; with the engaged list,
+from its last: a ship outside the rect (`x <= rx`, `x > rx + w`, the
+same for y) whose nearer edge is more than 2 off on x or on y and more
+than 6 (0x557480) from its entry a stray; own += 0x50ea70; hit, the
+attacker found (0x51f1f0): `+0x2c` = now, the strongest (strict >) kept;
+0x4cf760; an entry with target id 0 idle. enemy = the strongest's group
+0x408b70 (whole map, `only` its id) `+0x14 + +0x18 / 10` (fire: ships'
+`+0x479`, forts' units' fire / 100 per cell; board: ships' `+0x53c`).
+All idle (an empty list too): 0; n < 8 with strays x 100 / n > 90, or
+n >= 8 with > 70: 0; else the strays, `+0x2b` = 1 when strays and own <
+2 enemy. Neither and 0 (a null list too): now - `+0x2c` < 3 P
+(unsigned) gives 1. 0x4d2980(list, n, own, kind): Σ 0x50ea70 of the
+targets (kind 10 / 0x14: word 2 of 6-word entries; 0x1e: word 0 of 8)
+<= 2 own: the sum; else a draw % n and that target's 0x408b70 `fire +
+board / 10` (0 for none). 0x4d2b00 (R = block + 0xc): (1) T: own = Σ
+patrol ships; v = 0x4d2980(T, 0x1e); own < 3 v and posts: each post
+from the last removed, engaged (0x4d18d0) at its cell on T[draw % t];
+then, regardless, each patrol entry so. (2) A1, patrol + posts > 0,
+posts non-null: own = Σ A1's ships, v (A1, 0x14); own < 3 v: posts then
+patrol from the last on A1's attackers round robin (index 0 again for
+the patrol); else each A1 from the first: 0x4d1750 mode 1, listed:
+engaged on its attacker at the ship's `+0x5a3 / +0x5a7`. (3) A4,
+patrol non-null, patrol + posts > 0: own = Σ patrol ships, v (A4, 10);
+own < 3 v as in (2) from A4; else each A4 from the last: mode 1, listed:
+engaged at A4's words 4, 5, which 0x4d33c0 never writes (malloc'd,
+uninitialised: the original reads heap garbage). **The port's stand-in,
+not the original's: the ship's own cell, as (2).** 0x4d2720 (mode 1,
+the watch 0), engaged null or empty only: no patrol: posts and 0x4d28e0
+(cells 0x499990(cell, 0) over x in [0, rx + w), y in [0, ry + h), from
+the map's origin, index `y W + x`; > 3 x ships) then 0x4d25a0(R,
+0x4d2110); else the first patrol entry's age >= 0x2711 (unsigned) or
+0x4d2200: `+0x29` + 1 (past 3: 0), 0x4d2160, 0x4d22f0 (a 1 in 3 recall
+for an age of 65000 or more lies under age < 0x2711: dead). 0x4d2110:
+ships 0, 1, 2 the same, else 2 + (n / 3 > 3). 0x4d2200: the patrol
+non-empty, every ship within 1 on both axes of its entry, and of those
+one older than 200 (unsigned). 0x4d2160(R, c): 1 (x+w-1, y), 2 (x+w-1,
+y+h-1), 3 (x, y+h-1), else (x, y). 0x4d22f0(x, y): patrol empty 0; one
+ship 0x4d1670(x, y) and 0x4cf070, returning 0; more: records (cell, 0,
+`+0xc` `+0x592 != 0`) to 0x5614e0(0x4d50b0(1) = 0x5c9398's copy if a
+ship has `+0x592` 0, 0x4d50b0(0) = 0x5c93bc's if one has it set), each
+0x4d1670 + 0x4cf070 at its cell; the count (0 on failure). 0x4d25a0(R,
+k): posts empty 0; draw start % posts, k indices on (wrapping, at most
+the posts); draw c = r & 3 into `+0x29`; the indices sorted (for i, j <
+i: swap when a[j] <= a[i], largest first) with the swap's `mov ebx,
+esi` (0x4d2652) writing the smaller index into the corner's register;
+each post's ship 0x4d1670(-1, -1) and the post removed; 0x4d2160 with
+ebx (an index above 3: corner 0), 0x4d22f0; 1 if any moved. Notices:
+0x136 with the ship's mode-0 kind bit 4 and 0x4d2200: the next corner as
+0x4d2720; 0x137 with mode 1's kind exactly 4: 0x4d25a0(R, 0x4d2110).
+0x4d3990: draw-free `done` = 0; each engaged entry in order with `+0x253`
+0: draw % 100, level `+0x20 >> 16` 1 skips above 60, 2 above 30; with
+`+0x261 & 0x1000`, `+0x25d != 0x10` and 0x4baae0(s, 2, `+0x20` low word,
+0) finding p: board >= 0x65 0x4d0190 (0x17), else ram >= 0x65 0x4d01d0
+(0x18), done = 1; else (and when the first call is not made or finds
+none) with done 0 and type `+0x25a` 10 / 11, 0x4baae0 again: 10 ram, 11
+board. 0x4baae0 here has reach 2 for every type (its 10 / 11 widening
+only for a reach below 2); 0x4ba810 with mode 1 and no weigher (0x4baae0
+passes 0) gives -1: several finds pick none, one find is taken.
+Ported: all of the above (`scene/computer/fleet_guard.rs`), the
+computers' flotillas holding the block (`Flotilla::guard`) in place of
+each ship's `order_zone`; the computers' blocks are mode 3, so the patrol
+rounds (mode 1) never run for them. Not decoded: the class `+0x50` 0xb2
+(no class of the port's); the mask past
 its `w x h` (the original reads past it; the port's computers have no
 mask and the port counts it closed); 0x4d1080's `this` for 0x4d19b0
 (local_3c unset; it only posts the move).
