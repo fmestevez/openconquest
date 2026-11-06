@@ -915,6 +915,12 @@ pub struct App {
     text: TextRenderer,
 
     keys: HashSet<KeyCode>,
+    /// The game screen's Shift entries (0x4eff70 message 8: Sinput
+    /// entries for LShift 0x2a and RShift 0x36, press 0xc45d with 1,
+    /// release 0xc45d with 0): each key's down flag (`+0x4a`).
+    shift_keys: [bool; 2],
+    /// That object's `+0x20`: the last Shift value it forwarded.
+    shift_marks: bool,
     modifiers: ModifiersState,
     cursor: Option<PhysicalPosition<f64>>,
     focused: bool,
@@ -1219,6 +1225,8 @@ impl App {
             bar_hidden: false,
             text,
             keys: HashSet::new(),
+            shift_keys: [false; 2],
+            shift_marks: false,
             modifiers: ModifiersState::empty(),
             cursor: None,
             focused: true,
@@ -5806,6 +5814,7 @@ impl App {
     /// cells wide at (16, 8), its scroll clamped to the map (0xcc3: the
     /// top-left cell kept).
     fn toggle_bar(&mut self) {
+        self.shift_marks_dropped();
         self.drag_from = None;
         self.box_from = None;
         self.minimap_drag = false;
@@ -5826,6 +5835,7 @@ impl App {
         if self.bar_hidden {
             return;
         }
+        self.shift_marks_dropped();
         self.radar = !self.radar;
         if self.radar {
             self.radar_origin = (0, 0);
@@ -6713,6 +6723,43 @@ impl App {
         u8::from(m.control_key()) * 8
             + u8::from(m.shift_key()) * 4
             + u8::from(self.right_press.is_some()) * 2
+    }
+
+    /// The game screen's key object 0x4eff70 on 0xc45d: `+0x20` set to
+    /// the message's `+0x14` and 0xc45d with it sent on to the navy (id
+    /// 0x100, class 3), which shows (1) or hides (0) its selected group's
+    /// marks (0x49b73b -> 0x4a2050).
+    fn shift_marks_sent(&mut self, show: bool) {
+        self.shift_marks = show;
+        let sel = self.selection();
+        self.scene.fa_marks_shown(&sel, show);
+    }
+
+    /// A Shift key down or up (`k` 0 left, 1 right): Sinput sends an
+    /// entry's press once until its release, and the release only after a
+    /// press (0x553670's dispatch; a modifier key fires whatever else is
+    /// held). Only in the game, where 0x4eff70 registers them.
+    fn shift_key(&mut self, k: usize, down: bool) {
+        if self.menus.is_some() || self.video.is_some() || self.fade.is_some() {
+            self.shift_keys[k] = false;
+            return;
+        }
+        if down && !self.shift_keys[k] {
+            self.shift_keys[k] = true;
+            self.shift_marks_sent(true);
+        } else if !down && self.shift_keys[k] {
+            self.shift_keys[k] = false;
+            self.shift_marks_sent(false);
+        }
+    }
+
+    /// Message 0xc45e (0x4ee970: Space, Tab, a place or group key's
+    /// recall): 0x4eff70 with `+0x20` set sends itself 0xc45d with 0, the
+    /// marks hidden while Shift is still held.
+    fn shift_marks_dropped(&mut self) {
+        if self.shift_marks {
+            self.shift_marks_sent(false);
+        }
     }
 
     /// The selected object and the ships selected with it.
@@ -7782,9 +7829,20 @@ impl ApplicationHandler for App {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
+                let shift = match code {
+                    KeyCode::ShiftLeft => Some(0),
+                    KeyCode::ShiftRight => Some(1),
+                    _ => None,
+                };
                 if event.state == ElementState::Released {
                     self.keys.remove(&code);
+                    if let Some(k) = shift {
+                        self.shift_key(k, false);
+                    }
                     return;
+                }
+                if let Some(k) = shift {
+                    self.shift_key(k, true);
                 }
                 // (See ModifiersChanged: with Command held, key releases
                 // never come.)
@@ -7983,6 +8041,7 @@ impl ApplicationHandler for App {
                             self.say(format!("Group {} set", (n + 1) % 10));
                         }
                     } else {
+                        self.shift_marks_dropped();
                         self.recall_group(n);
                     }
                     return;
@@ -7991,8 +8050,11 @@ impl ApplicationHandler for App {
                     if self.modifiers.shift_key() {
                         let (vw, vh) = self.camera.view_size(&screen);
                         self.places[n] = Some((self.camera.x + vw / 2.0, self.camera.y + vh / 2.0));
-                    } else if let Some((x, y)) = self.places[n] {
-                        self.camera.center_on(x, y, &screen, map);
+                    } else {
+                        self.shift_marks_dropped();
+                        if let Some((x, y)) = self.places[n] {
+                            self.camera.center_on(x, y, &screen, map);
+                        }
                     }
                     return;
                 }

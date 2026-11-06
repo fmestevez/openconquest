@@ -328,7 +328,8 @@ starts with the bar shown and the flag is not saved. Message 0x4e1, in
 order:
 
 1. 0x4ee970: the cursor clip back to the whole screen and broadcast 0x14a
-   (the mapas end any drag, 0x51cdd0) (and message 0xc45e, not read).
+   (the mapas end any drag, 0x51cdd0) and message 0xc45e (the Shift-held
+   marks dropped, 0x4eff70).
 2. If the view's mapa is in mode 2 (the radar map), 0xcbc to the field
    (Tab) puts the view back.
 3. The flag flipped.
@@ -365,7 +366,8 @@ name, Ctrl+O loads that save at once (command 0x102) and Ctrl+S calls
 `quick.json` and never open the file panel: the original's two branches are
 not ported.
 
-Not decoded: message 0xc45e (0x4ee970); whether Sinput ignores the bar's
+Message 0xc45e (0x4ee970): the game screen's key object 0x4eff70 drops
+the Shift-held marks (see "The fleet attack task"). Not decoded: whether Sinput ignores the bar's
 key bindings while it is off screen (no unbinding is done by 0x4e1 or
 0x24, Sinput's dispatch not read for a rect test): the port keeps the
 command buttons' keys off while the bar is hidden, as before.
@@ -2991,14 +2993,38 @@ target is found (0x51f1f0) gets 0x4a1f20 (show) or 0x4a2000 (hide)
 0x4cef10). It hides at 0xc453 (a new selection, w17.c) and in 0x49e850
 (0xc455, a ship added or taken), before the selection changes; 0x4a1c60
 hides for 0x78/0x3d and 0x8c/0x47 but not for this block (its marks
-stay until the selection changes). The navy's own 0xc45d (sub `+0x14`)
-runs 0x4a2050 with it; its sender (0x4effb9's 0xc45d / 0xc45e, an
-interface object keeping the sub at `+0x20`) was not traced, so the
-re-showing is not ported. The port: `Scene::wp_marks` (ships only:
-the other classes' 0xc45d handlers not read), shown from
-`order_fleet_attack` with Shift, hidden by `fa_selection_seen` when the
-App's selection differs from the last seen; drawn with the ship
-(`wp_mark_layers`). Not saved.
+stay until the selection changes). The navy's own 0xc45d (0x49b73b)
+runs 0x4a2050(navy, `+0x21`, its `+0x14`). Its sender is the game
+screen's key object 0x4eff70: on activation (message 8) it registers
+Sinput entries (0x4e9840 -> 0x4e9710) for LShift 0x2a and RShift 0x36,
+press 0xc45d with `+0x14` 1, release 0xc45d with 0 (on message 9
+removed, 0x4e9880; also Ctrl+C 0x1d / 0x2e -> 0x163, sent on to its
+`+0x18`); on 0xc45d it keeps `+0x14` at `+0x20` and sends 0xc45d with
+it to id 0x100 class 3 (vt+0x18); on 0xc45e (0x4ee970: Space 0x50f910
+0x4e1, Tab 0x504620, a place or group recall in 0x50f910, Ctrl+S / O
+0x511c00, 0x4eec16) with `+0x20` set it sends itself 0xc45d 0. A
+modifier key's entry fires whatever else is held (Sinput). So the
+queue's marks show while Shift is held and go when it is let go. The
+port: `Scene::wp_marks` (ships only: the other classes' 0xc45d handlers
+not ported), shown from `order_fleet_attack` with Shift and by
+`fa_marks_shown` from the App's Shift keys (`shift_key`, 0xc45e
+`shift_marks_dropped` at Space, Tab, the place and group recalls; the
+port's own quick save keys have none), hidden by `fa_selection_seen`
+when the App's selection differs from the last seen (each frame, before
+the tick: the 0xc453 / 0xc455 points not hooked one by one); drawn with
+the ship (`wp_mark_layers`). Not saved. The other classes' 0xc45d, read but not
+ported: buildings (0x425990, 0x426de1) as the ship's, kind `+0x18`,
+placed by their picture `+0x7c` at `(w - 0x24) / 2 + x`, `(h - 0x1d) /
+2 + y`; 0x402360 and 0x403f60 (gsrange.c) always kind 8 (WPFIRE),
+placed at `(w - 0x24) / 2`, `(h - 0x1d) / 2` of their picture (`+0x11c`
+/ `+0x164`, no x / y: 0x50c600 not read for them), keeping 1 and the
+number in two fields (`+0xbc` / `+0x7c`); 0x492340 kind 8 and 0x494f90
+kind 4, 0x48a9b8 kind 2 at the cell (`cell x * tile w + 0xe`, `cell y *
+tile h + 0x11`) when `+0x139` / `+0x189` is set, keeping 1 and the
+number at `+0x12d` / `+0x105`; 0x50c020 takes a deposit's or treasure's
+class (`+0x50` 400, 0x191, 0x192, 700) over the kind and makes nothing
+for a kind outside 5-8 and 10. Still to read: 0x4074d0, 0x413d70,
+0x4207b0, 0x48e100's cases, and which port objects each class is.
 The tick 0x4d0650 (from 0x4c4f40): with no notices or none heard and
 group `+8 > 0x50` (unsigned): `+8 = 0`, each ship lying still (`+0x58c`
 0) sent (0x4cfe40) when for 0x15/0x16 it has no fire task (`+0x25d &

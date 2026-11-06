@@ -439,6 +439,29 @@ impl Scene {
         }
     }
 
+    /// 0x4a2050(navy, player, show) from the navy's 0xc45d (0x49b73b,
+    /// show its `+0x14`): Shift pressed (1) or let go (0), forwarded by
+    /// the game screen's key object (0x4eff70). For the selected group's
+    /// block (0x74 / 0x15) 0x4d07a0(queue, 1, show) gives each entry whose
+    /// target is found (0x51f1f0) its mark, numbered by its place in the
+    /// queue (0x4a1f20), or frees it (0x4a2000).
+    pub fn fa_marks_shown(&mut self, selection: &[u32], show: bool) {
+        let Some(z) = self.selection_fleet(selection) else {
+            return;
+        };
+        let queue = self.fleet_attacks[z].queue.clone();
+        for (k, q) in queue.iter().enumerate() {
+            if !self.fa_found(q.target) {
+                continue;
+            }
+            if show {
+                self.fa_mark(q.target, k, q.command);
+            } else {
+                self.wp_marks.remove(&q.target);
+            }
+        }
+    }
+
     /// The mark over ship `obj` (0x50c020's `WPFIRE` / `WPBOARD` /
     /// `WPRAM`, controlm, 36 x 29, kind 8 at depth 7, over the hull's
     /// 0xa): its layers by the mask `1 << mark / 10 | 1 << mark % 10 + 10
@@ -664,6 +687,16 @@ mod tests {
         // A selection changed hides the queue's marks (0x4a2050).
         scene.fa_selection_seen(&[id0, id1]);
         scene.fa_selection_seen(&[id0]);
+        assert!(scene.wp_marks.is_empty());
+        // Shift pressed with the group selected shows every queued
+        // target's mark, numbered by its place (0xc45d 1, 0x4d07a0); let
+        // go, they are hidden (0xc45d 0).
+        scene.fa_marks_shown(&[id1, id0], true);
+        assert_eq!(scene.wp_marks.get(&f), Some(&(8, 1)));
+        assert_eq!(scene.wp_marks.get(&g), Some(&(8, 2)));
+        scene.fa_marks_shown(&[id0], true);
+        assert_eq!(scene.wp_marks.len(), 2);
+        scene.fa_marks_shown(&[id0, id1], false);
         assert!(scene.wp_marks.is_empty());
         let at = |ship, target| Order::Attack { ship, target };
         assert_eq!(std::mem::take(&mut scene.outbox), [at(id0, f), at(id1, f)]);
