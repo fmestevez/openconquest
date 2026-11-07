@@ -1557,8 +1557,18 @@ into a ship's `+0x251` (0x4bee60 0, or 4 with no hull; 0x4b3ab0 at
 0x419690's writes at 0x4197de / 0x4197ea are a settlement's supplies;
 the load 0x4e21f5 copies `+0x24f..` back from what the save 0x4e13af
 wrote). So the readers of 1 (0x4b650c, 0x4c3a7c, 0x4c3ad0) never pass
-either. Not ported: 0x4bbfa0 (`+0x275` not loaded), the mover's
-0x4a473e / 0x4a4c0d, the saved copy (0x4e2326).
+either. 0x4bbfa0 (called only at 0x4c3c58, the boarded ship's state 6
+end, after 0x4b3850 and `|= 0x1000`): with `+0x275` set, `+0x251 = 0`
+and `+0x261 = 0xffffffff`. `+0x275` is the byte of the map record's
+`+0x40` (field 16; the loader 0x4dfa90 at 0x4dfb7c, written back by
+0x4e5bc0 at 0x4e5bf0, no other access: the yard's 0x4dfe00 does not write it; the port's
+yard records have no field 16).
+On the real data only miss013's ships have it (1, 6 or 8; its merchants
+43, 44 with 1). The port reads the record's field 16 at the boarded
+ship's `GrappleStage::Leave` end and sets `Ship::caps` to 0xffffffff
+(`a_boarded_ship_with_its_flag_gets_every_capability`); the port keeps
+no `+0x251` for a ship afloat. Not ported: the mover's 0x4a473e /
+0x4a4c0d, the saved copy (0x4e2326).
 
 Its readers. The command handler 0x4e2ba0 tests each ship command with
 0x4e6700 before posting its event and drops a refused one silently
@@ -1597,7 +1607,7 @@ way, 0x4e66c0, is tried only for a type above 1 (0x4abb59 `cmp byte
 0x4e66c6) before 0x597a30 (types 2, 5, 6) or a hero; their page
 0x4e6e90 has no fire button. Nothing gives a boat or merchant bit 11
 back but 0x4bbfa0 (`+0x275` set: 0xffffffff, at a boarded ship's state
-6 end, 0x4c3c58; not ported); every other writer masks with 0x4e6930,
+6 end, 0x4c3c58; ported, above: miss013's merchants 43, 44); every other writer masks with 0x4e6930,
 saves the word or sets bits 10, 12, 13, 14 only. miss001's one human
 ship is the boat carried from miss000 (`list_treasures`, record field 8
 masked again by 0x4dfa90); its records' two ships (types 2 and 5, field
@@ -11326,7 +11336,19 @@ ship kinds 5 / 10, 8 for 4 / 11, with players and classes -1, positions
 0x4dfd12: record `+0x10 == 0`; the yard's 0x4dfe00 and 0x4e2180 do not)
 and at the launch of a human's ship (0x4b3fcf). So a computer's or
 brain's yard-built ship sits off guard, masks 0, until a `#` reaches it.
-The capture (0x4b6f20, 0x4b7085) clears ram and board, nothing else.
+The capture (0x4b6f20, 0x4b7085) clears ram and board, nothing else of
+these; it zeroes the weapon positions' records (0x4b7058: 0x12 dwords
+from `+0x63c`, all four), the fire state `+0x5d1` and `+0x638` kept
+(`Behaviour::aims` cleared, `a_prize_gets_its_stop`). Its other clears
+there: the pending group `+0x7d6 &= ~0x1f0` (0x4b7077) and `+0x265 = 0`
+(0x4b708c), nothing to clear in the port, which runs a ship's events at
+delivery and keeps no `+0x265`; then the stop event vt+4(8, 0)
+(0x4b7098), run at the prize's next tick (0x4aa540, taken as bit 13 is
+now set). Not ported: that stop (the port clears the prize's task and
+route at once instead: not decoded how the prize's tick falls against
+the capture's in the Sapp walk, and so whether the brain's prize order
+reaches it before the stop), `+0x719 = 0` (0x4b70a9), the 0x40 task's
+record `+0x76e` (0x19 dwords; the port's task cleared), 0x50de40, 0x50da60, 0x4b6cd0.
 Command `#` (0x4e2ba0 case 0x23; payload players `+1`, classes `+5`,
 third `+9`): sub 1 guard on where off, ram where off with bit 25, board
 where off with bit 26 (a switch on gets nothing, its masks kept); 2 guard

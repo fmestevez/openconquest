@@ -770,6 +770,9 @@ impl Scene {
                 let (pos, slid) = slide(g.from, g.home, g.ticks);
                 let o = &mut self.objects[k];
                 (o.x, o.y) = pos;
+                // `+0x275`, the map loader's byte of record field 16
+                // (0x4dfa90 at 0x4dfb7c: `+0x40`).
+                let all_back = o.record.fields.get(16).is_some_and(|&f| f & 0xff != 0);
                 let s = o.ship.as_mut().unwrap();
                 // The sail unfurls a frame a tick (0x4b5df0 state 6).
                 let furled = s.furl >= 1.0;
@@ -794,6 +797,14 @@ impl Scene {
                             s.path.clear();
                         }
                         self.post_notice(id, 0x13c, g.with);
+                    } else if all_back {
+                        // The boarded ship's state 6 done (0x4c3410 at
+                        // 0x4c3c58, after its commands back and bit 12):
+                        // 0x4bbfa0 with `+0x275` set gives it every
+                        // capability, `+0x261 = 0xffffffff` (a boat's or
+                        // merchant's fire bit 11 too), and `+0x251 = 0`
+                        // (the port keeps no such state for a ship afloat).
+                        s.caps = u32::MAX;
                     }
                     return;
                 }

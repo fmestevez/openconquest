@@ -2009,6 +2009,16 @@ impl Scene {
             // And gives it bit 13 (stop) of its capability word, the rest
             // kept (`+0x261 |= 0x2000` at 0x4b707f).
             ship.caps |= 0x2000;
+            // Its weapon positions' records go (0x4b6f20 at 0x4b7058: the
+            // 0x12 dwords from `+0x63c`, all four records): no target, id,
+            // player or state is left for its fire pass (0x4bf9b0,
+            // 0x4c0230) or the attack zone's sends; the fire state and the
+            // guard stay. The pending order group (`+0x7d6 &= ~0x1f0`, 0x4b7077) and
+            // the busy ship's kept code (`+0x265 = 0`, 0x4b708c) have nothing to
+            // clear here: the port runs a ship's events at delivery
+            // (`one_event_a_tick`) and keeps no `+0x265` (only 0x4abe50
+            // writes it nonzero, and zeroes it again).
+            ship.behaviour.aims = Default::default();
             // Its new colours drawn with its damage.
             ship.look = None;
         }

@@ -5665,12 +5665,82 @@ fn a_prize_gets_its_stop() {
         })
         .unwrap();
     let id = scene.objects[i].id;
-    scene.objects[i].ship.as_mut().unwrap().caps = 0x1234;
+    let s = scene.objects[i].ship.as_mut().unwrap();
+    s.caps = 0x1234;
+    s.behaviour.guard = true;
+    s.behaviour.fire_state = 3;
+    s.behaviour.aims[1] = objects::Aim {
+        target: 7,
+        state: 3,
+        player: 2,
+    };
     scene.capture(id, human, 0, Default::default(), &data, &mut caches);
     let i = scene.object_index(id).unwrap();
     assert_eq!(scene.objects[i].owner, human);
-    assert_eq!(scene.objects[i].ship.as_ref().unwrap().caps, 0x3234);
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert_eq!(s.caps, 0x3234);
     assert_eq!(scene.capabilities(i), 0x3234);
+    // Its weapon positions' records zeroed (0x4b7058), guard and fire
+    // state kept.
+    assert_eq!(s.behaviour.aims, [objects::Aim::default(); 4]);
+    assert!(s.behaviour.guard);
+    assert_eq!(s.behaviour.fire_state, 3);
+}
+
+/// A boarded ship whose map record's field 16 byte (`+0x275`) is set gets
+/// every capability back at its state 6's end (0x4c3410 at 0x4c3c58:
+/// 0x4bbfa0, `+0x261 = 0xffffffff`): a merchant its fire bit 11 too; one
+/// without keeps its word. miss013's merchants 43 and 44 have it (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn a_boarded_ship_with_its_flag_gets_every_capability() {
+    use crate::objects::GrappleStage;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let scene = Scene::load(&data, &mut caches, "miss013").unwrap();
+    for id in [43, 44] {
+        let o = &scene.objects[scene.object_index(id).unwrap()];
+        assert_eq!(o.ship.as_ref().unwrap().kind, 1);
+        assert_eq!(o.record.fields[16], 1);
+        assert_eq!(o.ship.as_ref().unwrap().caps, 0xfffff7ff);
+    }
+    for flag in [0, 1] {
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        let (mine, other, _) = boarding_pair(&mut scene, 1, 0);
+        let k = scene.object_index(other).unwrap();
+        let rec = &mut scene.objects[k].record;
+        rec.fields.resize(rec.fields.len().max(17), 0);
+        rec.fields[16] = flag;
+        scene.order_close(mine, other, true).unwrap();
+        let grapple = |s: &Scene, id| {
+            s.objects[s.object_index(id).unwrap()]
+                .ship
+                .as_ref()
+                .unwrap()
+                .grapple
+        };
+        let mut called = false;
+        for _ in 0..3000 {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            match grapple(&scene, mine) {
+                Some(g) if g.stage == GrappleStage::Plank && !called => {
+                    let i = scene.object_index(mine).unwrap();
+                    scene.objects[i].ship.as_mut().unwrap().task = None;
+                    called = true;
+                }
+                None if called && grapple(&scene, other).is_none() => break,
+                _ => {}
+            }
+        }
+        assert!(called && grapple(&scene, other).is_none());
+        let k = scene.object_index(other).unwrap();
+        let want = if flag != 0 { u32::MAX } else { 0xfffff7ff };
+        assert_eq!(scene.objects[k].ship.as_ref().unwrap().caps, want);
+        assert_eq!(scene.capabilities(k), want);
+    }
 }
 
 /// The killer each death is put down to (0x50e750's callers): none (0xff)
