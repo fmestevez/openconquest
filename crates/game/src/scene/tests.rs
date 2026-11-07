@@ -21104,3 +21104,52 @@ fn the_amber_event_wants_bit_7() {
     }
     assert!(checked > 0);
 }
+
+/// 0x4e5970's ship types for the members miss009 (0, 4), (0, 6) and
+/// miss010 (0, 4) make with 0x6e (0x4672e9, 0x46734e, 0x46ad0b): the
+/// barbarians standing in their cells (royal ships, bombers, rammers and
+/// killers) all pass; a boat, boarder or unique ship there would not
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn the_raiders_take_their_cells_ships_by_type() {
+    use super::brain::ship_of_types;
+    // 0x6e: bits 1, 2, 3, 5, 6.
+    let pass: Vec<u8> = (0..14).filter(|&k| ship_of_types(k, false, 0x6e)).collect();
+    assert_eq!(pass, [1, 2, 3, 5, 6]);
+    assert!((0..12).all(|k| ship_of_types(k, false, 0xfff)));
+    assert!(!ship_of_types(12, true, u32::MAX));
+    // A royal ship without bit 2: only the Argo, with bit 24.
+    assert!(!ship_of_types(2, false, 0x100_0000));
+    assert!(ship_of_types(2, true, 0x100_0000));
+    assert!(!ship_of_types(2, true, 0x1b));
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for (m, k, ids) in [
+        ("miss009", 4, &[19, 20, 21, 22, 23, 24, 25, 26][..]),
+        ("miss009", 6, &[62, 63, 64, 65, 66][..]),
+        ("miss010", 4, &[7, 6, 8, 9, 10, 11][..]),
+    ] {
+        let mut scene = Scene::load(&data, &mut caches, m).unwrap();
+        assert_eq!(
+            scene.brain.as_ref().unwrap().fleets[k].ships,
+            ids,
+            "{m} {k}"
+        );
+        // Retyped a boarder, a boat and a unique ship, the first three stay out.
+        for (&id, kind) in ids.iter().zip([4, 0, 7]) {
+            let i = scene.object_index(id).unwrap();
+            scene.objects[i].ship.as_mut().unwrap().kind = kind;
+        }
+        let difficulty = scene.brain.as_ref().unwrap().difficulty;
+        scene.brain = None;
+        scene.start_brain(&data, &mut caches, difficulty);
+        assert_eq!(
+            scene.brain.as_ref().unwrap().fleets[k].ships,
+            ids[3..],
+            "{m} {k}"
+        );
+    }
+}

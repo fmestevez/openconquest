@@ -3472,8 +3472,24 @@ a `mov`); 0x4672e9, 0x46734e (miss009, members (0, 4) and (0, 6)) and
 0x46ad0b (miss010, member (0, 4)) the 0x479200 flags of a kind-10
 fleet, `0x479200(0, m, 10, 0x6e, 0, cells, 1)`: op 8's record `[7]`,
 handed to 0x49c830 as the test 0x4e5970(ship, 0x6e) on each ship
-standing in the cells (not decoded: what 0x4e5970 tests; the port takes
-every ship in the cells). **The human's guard zone** (behaviour page
+standing in the cells. 0x4e5970(ship, types) switches on the ship's
+type `+0x25a` (jump table 0x4e5a78, `ja` past 0xb returns 0): type t in
+0-11 passes with bit t of `types`, except a royal ship (2) without bit 2,
+which passes only as the Argo (`+0x259`) with bit 0x1000000. So 0x6e
+takes merchants, royal ships, bombers, rammers and killers (1, 2, 3, 5,
+6), never boats, boarders or the unique ships (0, 4, 7-11). The other
+flags of the 0x479200 calls: 0xfff (every type) for every other kind-10
+member with cells, 0x1c (2, 3, 4) for miss004's caseless (0, 7), (2, 5)
+(0x454304, 0x454412; the port makes no fleet for them), 0 for MissWEB's
+member 3 (0x47cfc7); a kind-11 member's cells go to 0x49c710 with
+`param_5` instead. 0x49c830's other tests on a ship (class 200): its
+player (`+0x55 + 4 * +0x54`), not already of the group (`+0x5c`), the
+cell not its `+0x5ab`, and `+0x251` not 4. On the real data every ship
+in these members' cells passes (miss009 (0, 4): ids 19-26, (0, 6): 62-66;
+miss010 (0, 4): 6-11, all types 2, 3, 5, 6). Ported: `cell_types`,
+`ship_of_types` (`scene/brain.rs`, `start_brain`). Not ported: 0x49c830's
+`+0x5ab` and `+0x251` tests and its kind-0x32 buildings (classes 0x34-0x36)
+for kind-10 members; 0x49c710's test of the builders' cells. **The human's guard zone** (behaviour page
 slot 9, command 0x74: 0x4f34c0 sets the drag's message 0x23 sub 9,
 as 0x75 sub 10) is 0x49d790 case 9: fourteen dwords zeroed,
 `[0..3]` the payload's rect `{x, y, w, h}` (shorts at `+1`, `+5`), no

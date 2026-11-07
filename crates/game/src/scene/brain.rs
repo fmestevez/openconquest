@@ -820,6 +820,35 @@ fn group_player(name: &str, g: u8) -> Option<(u32, u32)> {
 /// A group's player as `(nation, slot)`, none when not known.
 pub(super) type GroupPlayer = Option<(u32, u32)>;
 
+/// The ship types member `(g, m)` takes from its cells: 0x479200's
+/// `param_4`, op 8's record `[7]`, which 0x4a0480 hands to 0x49c830 as
+/// the test 0x4e5970(ship, types) on each ship standing in them. Of the
+/// 0x479200 calls with cells, miss009 (0, 4), (0, 6) (0x4672e9,
+/// 0x46734e) and miss010 (0, 4) (0x46ad0b) pass 0x6e (types 1, 2, 3, 5,
+/// 6: no boats, boarders or the nations' own ships), miss004's members
+/// with no case (0, 7), (2, 5) (calls 0x454304, 0x454412) 0x1c (the port
+/// makes no fleet for them), MissWEB's member 3 (0x47cfc7) 0, every other
+/// kind-10 member 0xfff (all twelve types); the builders' (kind 11) cells
+/// go to 0x49c710 instead (not read here: they keep every ship).
+fn cell_types(name: &str, g: u8, m: u8) -> u32 {
+    match (name, g, m) {
+        ("miss009", 0, 4 | 6) | ("miss010", 0, 4) => 0x6e,
+        _ => 0xfff,
+    }
+}
+
+/// 0x4e5970: whether a ship of type `kind` (`+0x25a`) is among `types`,
+/// bit `kind` for types 0-11 (a jump table at 0x4e5a78); a royal ship
+/// (2) without bit 2 passes only as the Argo (`+0x259`) with bit 24.
+/// Other types fail.
+pub(super) fn ship_of_types(kind: u8, argo: bool, types: u32) -> bool {
+    match kind {
+        2 if types & 4 == 0 => argo && types & 0x100_0000 != 0,
+        0..=11 => types & 1 << kind != 0,
+        _ => false,
+    }
+}
+
 fn mission(name: &str) -> Option<Mission> {
     match name {
         "miss000" => Some(Mission {
@@ -1042,7 +1071,9 @@ impl Scene {
             fields: [0; 8],
         };
         for def in m.fleets {
-            // The ships (or buildings) standing in the given cells (0x479200).
+            // The ships (or buildings) standing in the given cells (0x479200),
+            // a ship only of the member's types (0x49c830 -> 0x4e5970).
+            let types = cell_types(&self.mission, def.group, def.member);
             let ships: Vec<u32> = def
                 .cells
                 .iter()
@@ -1057,6 +1088,9 @@ impl Scene {
                                 && cx < x + w
                                 && cy >= y
                                 && cy < y + h
+                                && o.ship
+                                    .as_ref()
+                                    .is_none_or(|s| ship_of_types(s.kind, s.argo, types))
                         })
                         .filter(|o| !self.is_own(o))
                         .map(|o| o.id)
