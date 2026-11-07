@@ -269,6 +269,13 @@ impl Scene {
                         k = i;
                         // The crew gains 200 experience (0x4b4680, 0x4b35f4).
                         self.gain_experience(k, 200);
+                        // Notice 0x130 to the ship's group (0x4a15a0 at
+                        // 0x4b3637: `{tick, +0x60, id, x, y, class}`, the
+                        // site `+0x73c` and class `+0x73b`; the port's
+                        // record the site's cell index, the class byte
+                        // above it).
+                        let cell = cy * self.nav.width as i32 + cx;
+                        self.post_notice(id, 0x130, (class & 0xff) << 24 | cell as u32);
                     } else {
                         l.porters = Some(f);
                     }

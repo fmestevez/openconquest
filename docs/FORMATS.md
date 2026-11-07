@@ -2390,8 +2390,9 @@ The ship's landing (0x4b3370, run by the ship tick 0x4ab930 while
 
 The port runs it at the game tick and draws the walkway and party with
 the amber walkways. Its lines are the slide's (`grapple::slide`) points.
-Not ported: the crew's experience, the notice 0x130 (the port's zones
-take no founding notices), lightning on a party (0xda93, 0x50e750), the
+The notice 0x130 is posted (`post_notice`), heard by the computers'
+founding block (`found_notices`). Not ported: the crew's experience,
+lightning on a party (0xda93, 0x50e750), the
 0x8e6 contact test of 0x4b2a40 / 0x4b1d40. Not settled: the hull clock's
 phase (`+0x81`) at the landing's start (the port counts from it), and
 whether the party's first tick falls on the tick it is made (the port's:
@@ -3206,8 +3207,8 @@ picture (`leviathan_hidden`). Test `gather_zone_marks_are_the_originals`
 kept), and 0x50c020 freeing a target's mark when sent a kind it has no
 picture for (0, 9). Not decoded: the block's `+0x59` that 0x4a2050
 tests (no store found; the port takes it 0 for both blocks). Not
-ported: 0x8c / 0x47 (founding, 0x4cc0b0 -> 0x4cc170 / 0x4cc370, not
-read; made by the brains' and computers' founding, not the viewer's
+ported: 0x8c / 0x47 (founding, 0x4cc0b0 -> 0x4cc170 / 0x4cc370 over
+`+0x29`, marks of the sites, not read; made by the brains' and computers' founding, not the viewer's
 selected group in the port) and 0xaa (0x4d7cd0: the block's `+0x11`
 looked up with 0x51f1f0 and, when that returns 0, its `+0x4c` given 0x4a1f20 with 0
 and 0x1f; the task is not in the port); a treasure's 0x4074d0 (kind
@@ -11274,22 +11275,70 @@ member, ship): the 300, tick now, only while the member has a block
 the player taken into a group, and 0x49d0d0, one group's ships passed to
 another, post it the same way; neither is a build.) A built ship
 reaching a founding or treasure member under its block is heard; the
-founding block's work for it is not ported (the 300 waits in `joined`
-until a new block), the treasure block's is (`treasure_notices`). Their 300 cases do
+founding block's work for it is ported (`found_notices`), as the
+treasure block's is (`treasure_notices`). Their 300 cases do
 the block's work first, then `#` sub 1: founding 0x4cba10 (0x4cb1a0:
 no route `+0x61`, a site by 0x4cb850 and 0x4cb0b0; with one, 0x4cea20
 / 0x4ceab0 and 0x4cb110 / 0x4cb5f0), treasure 0x4da0a0 (0x4d97c0 a
 target not taken: 0x4d9690 and 0x4d8b30, counted; none, with `+0x28`
 listing, 0x4d9920 over `+0xc` and 0x4da3e0 on `+0x2c`'s first);
 founding's other cases 0x130 and 0x136, treasure's 0x137, 0x141,
-0x142 (`+0x34` 4). The computers' read of these 300s (`read_joins`)
-sends the `#` alone for the founding (its sites and routes not
-ported); the treasure block's is ported (`treasure_notices`, below). Ported:
+0x142 (`+0x34` 4). The computers' founding block's (`found_notices`, its routes
+not ported) and treasure block's (`treasure_notices`) are ported, below. Ported:
 a brain's mended ship's join posts 300 as a prize's
 (`brain_heard_join`), only with a block, and a new block of another
 kind drops the joins not heard (`brain_block`). Not ported: the fleet attack task's (the port keeps it per ship, no group: see
 "A ship's order at a jam"); the waypoint move, 0xa0, 0xaa, 0xb4 (not in
 the port).
+
+**Founding** (tasks 6 and 0xc, fleet order 0x8c: 0x4834c0 -> 0x4a09d0 ->
+0x4cbcf0 with flags 0; payload `{+0x154, class +0x70, cell +0x178..+0x184
+(1 x 1), -1}` to the block's `+0xc..+0x24`). 0x4cbcf0 ends a block of
+another kind (0x4a1c60; with flags 4 keeping its route `+0x61`), makes
+one zeroed (0x4cb000: 0x65 bytes, 0x4a1150) or rewrites this one (its
+`+0x28`, sites `+0x29`, assignments `+0x2d` and route kept); then the
+area as a site (0x4cb110 with ship 0 and -1, -1: `{0, area, +0x24,
+class, 1, 100}`; 0x4cb4b0 into `+0x29`, 0x19-byte `{x, y, w, h, +0x24,
+class byte}`: one of the same rect, class and `+0x24` kept, of the same
+rect otherwise taken off, the new appended; the marks 0x4cc1e0 /
+0x4cc170 for the viewer's player with flags 4); then 0x4cb1a0 for every
+ship of the group. 0x4cb1a0 without a route: the site 0x4cb850 and, in
+`[0, cells)`, command 0x20 `{x, y, +0x24, class, 1, 100}` (0x4cb0b0).
+0x4cb850: the object of kind 200 only; a 1 x 1 area, class 0x32 or
+0x34-0x36 and 0x4e4420(ship, x, y, class): the cell, else -1; a wider
+area: the cells on the map where 0x4e4420 holds with a berth 0x4b2710 in
+`[0, cells)`, sorted by 0x4cb790 (the wavefront 0x4a1e90 of the ship's
+draught from its cell, 5000: for i, for j < i, `W[b[i]] <= W[b[j]]`
+swaps, signed shorts; no wavefront, -1), the first (with none the
+malloc'd array's first word, never written). With a route (`+0x61`,
+only the human's Shift founding 0x49dc90 sets it): 0x4cea20 / 0x4ceab0,
+0x4cb110 / 0x4cb5f0 into `+0x2d` (0x1b bytes by ship id), 0x4cf070.
+The notices 0x4cba10 (from the last): 300 of a ship of the group
+(0x4cc590), 0x4cb1a0 and `#` sub 1 with the group's three (0x4c42f0),
+counted; 0x130 (0x4a15a0 from the landing's state 6 at 0x4b3637, after
+the party 0x4b2d60 and 0x4b4680(200): `{0x130, tick, +0x60, id, x, y,
+class}`, the site `+0x73c` and class `+0x73b`) of a ship of the group:
+command 10 to each other ship of it, then 0x4cb370 (the first site
+whose rect holds (x, y) with that class byte, taken off) and, one taken,
+0x4cb450: the block's class, area and `+0x24` the first site's, none
+left `+0x28` = 1 (marks freed, 0x4cc110); 0x136 only with a route. The
+tick 0x4cbe70 (0x4c5047): with no notices or no 300 heard, `+8` past 100
+and a block: `+8` = 0 and each ship of kind 200: `+0x691` (a blow)
+0x4a21c0 and 0x4cf760; `+0x58c` 0, not landing (`+0x25d & 0x20`) and
+`+0x28` 0, 0x4cb1a0 again; `+8` += `+0xe2`. The status 0x4cbfc0 (by
+0x4a0e20): `+0x28` set, 0x1f5 result 10; else a ship of kind 200 in the
+group, 500; else 0x1f5 result 1. Tasks 6 (0x47f200) and 0xc (0x47f050)
+go on done with result 1 to p[5] (`+0x84`), 10 to p[7] (`+0x8c`), 0xb to
+p[4], 0xc to p[6]. The end 0x4caf90 frees the notices, `+0x2d` and
+`+0x29`. Port: computer.rs `FoundBlock`, `found`, `found_send`,
+`found_site`, `found_notices`, `found_tick`, `found_status`,
+`found_next`; the landing posts 0x130 (landing.rs; the port's record the
+cell index, the class byte at bit 24). Test
+`the_founding_block_sends_hears_and_ends` (miss000). Not ported: the
+route branches and 0x136 (no computer order sets a route), the wider
+area's scan (the computers' order is 1 x 1), the marks; the brains'
+founding (miss005's raiders) keeps `found_by`, a ship sent the command
+while none of its fleet's is founding.
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
 about the base's town, from 4 cells and 4 more a time, that holds a
