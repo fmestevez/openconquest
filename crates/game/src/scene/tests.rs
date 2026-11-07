@@ -6303,6 +6303,77 @@ fn warships_open_the_building_page() {
 /// on its bit (0x4e6980), and a hold (0x4b37d0 with 0x2000) leaving the
 /// stop alone.
 #[test]
+fn the_ram_board_and_stone_holds_mask_the_word() {
+    use crate::objects::{Grapple, GrappleStage, RamRun, RamStage};
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind >= 2))
+        .unwrap();
+    // 0xffffffff & 0xfffffeff from the map (0x4dfa90).
+    assert_eq!(scene.capabilities(i), 0xffff_feff);
+    // The rammer from its strike (0x4c2230 at 0x4c2522): 0x2000.
+    let run = RamRun {
+        target: 0,
+        stage: RamStage::Charge,
+        home: (0.0, 0.0),
+        ticks: 0,
+        clock: 0.0,
+        frames: 0,
+    };
+    scene.objects[i].ship.as_mut().unwrap().ram_run = Some(run);
+    assert_eq!(scene.capabilities(i), 0xffff_feff);
+    for stage in [RamStage::Impact, RamStage::Back] {
+        scene.objects[i].ship.as_mut().unwrap().ram_run = Some(RamRun { stage, ..run });
+        assert_eq!(scene.capabilities(i), 0x2000);
+    }
+    scene.objects[i].ship.as_mut().unwrap().ram_run = None;
+    // The boarder: 0x2000 from its hook (0x4b604e), 0 from the fight
+    // (0x4b38d0); the boarded ship 0 (0x4c3577).
+    let g = Grapple {
+        with: 0,
+        boarder: true,
+        stage: GrappleStage::Pull,
+        at: (0.0, 0.0),
+        home: (0.0, 0.0),
+        from: (0.0, 0.0),
+        face: 0,
+        facing: 0,
+        ticks: 0,
+        clock: 0.0,
+        fight: 0,
+        won: false,
+        rope: false,
+    };
+    scene.objects[i].ship.as_mut().unwrap().grapple = Some(g);
+    assert_eq!(scene.capabilities(i), 0x2000);
+    scene.objects[i].ship.as_mut().unwrap().grapple = Some(Grapple {
+        stage: GrappleStage::Fight,
+        fight: 10,
+        ..g
+    });
+    assert_eq!(scene.capabilities(i), 0);
+    scene.objects[i].ship.as_mut().unwrap().grapple = Some(Grapple {
+        boarder: false,
+        stage: GrappleStage::Lie,
+        ..g
+    });
+    assert_eq!(scene.capabilities(i), 0);
+    scene.objects[i].ship.as_mut().unwrap().grapple = None;
+    // Stone (0x4de905): 0x2000 with bit 14 set, else 0.
+    scene.objects[i].combat.as_mut().unwrap().stone_len = 1000;
+    assert_eq!(scene.capabilities(i), 0x2000);
+    scene.objects[i].ship.as_mut().unwrap().caps = 0xffff_beff;
+    assert_eq!(scene.capabilities(i), 0);
+}
+
+#[test]
 fn ship_buttons_follow_the_capability_word() {
     use crate::commands::{menu, Command, Page};
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {

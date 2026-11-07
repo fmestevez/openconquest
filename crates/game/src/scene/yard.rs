@@ -542,18 +542,28 @@ impl Scene {
     }
 
     /// Ship `i`'s capability word as the original holds it (`+0x261`,
-    /// `Ship::caps`) with what its holds take off: a hunt's, a landing's
-    /// or a load's (0x4b37d0 with 0x2000, given back by 0x4b3850), stone
-    /// (`+0x261 &= 0x2000`), the song (0x4a7390: 0x4b37d0, cleared), and
-    /// the prey of a boarding or a ram losing bit 12 (0x4c3410 at
-    /// 0x4c3543, 0x4c3ec0 at 0x4c3eef; set again by 0x4c3af4, 0x4c3f19,
-    /// 0x4c40e4). 0 for an object that is not a ship. (Not ported: the
-    /// other 0x4b37d0 callers' masks, 0x4ae191, 0x4af089, 0x4b067f,
-    /// 0x4b0ecc, 0x4b25be, 0x4b3424, 0x4b604e, 0x4c23f1, 0x4c2522, the
-    /// boarded prey's 0x4c3577 with 0, 0x4c404f, 0x4de905; the
-    /// `+0x251 == 1` clears of bits 0-11, 0x4b3882 and 0x4defda; the
-    /// build's 0 at 0x4b3c69; the loader's `|= 0x2000` at 0x4b707f and
-    /// 0x4b38d0's `&= !0x2000`; the save's copy at 0x4e2326.)
+    /// `Ship::caps`) with what its holds take off: a hunt's (0x4af089), a
+    /// landing's, a dock repair's or a treasure take's (`Ship::landing`:
+    /// 0x4b3424, 0x4b25be, 0x4b0ecc) or a load's (0x4b7509), all 0x4b37d0
+    /// with 0x2000, given back by 0x4b3850; a rammer's from its strike or
+    /// back-off (0x4c2230: 0x4c2522 entering state 3, 0x4c23f1 entering
+    /// 6, 0x2000; given back at 0x4c2b64); a boarder's from its hook
+    /// taken (0x4b5df0 at 0x4b604e, 0x2000), bit 13 too from the fight
+    /// (0x4b38d0 at 0x4b66e5, entering state 3); the boarded ship all of
+    /// it (0x4c3410 state 9: bit 12 off, then 0x4b37d0 with 0 at
+    /// 0x4c3577; given back with bit 12 at state 6's end, 0x4c3c15);
+    /// stone (the stare's 0x158bf, 0x4dc630 at 0x4de905: 0x4b37d0 with
+    /// 0x2000 when bit 14 is set, else 0); the song (0x4a7390: 0x4b37d0,
+    /// cleared); a ram's prey losing bit 12. 0 for an object that is not
+    /// a ship. (Not ported: the amber gather's 0x4b067f and the unload's
+    /// 0x4ae191, the port's amber and unload not being the original's
+    /// step machines 0x4b0590 / 0x4adef0; the ram prey's 0x4c404f with 0,
+    /// its contact states 0x4c3ec0 not ported; the `+0x251 == 1` clears
+    /// of bits 0-11, 0x4b3882 and 0x4defda, no ship writer of
+    /// `+0x251 = 1` found; the capture's `|= 0x2000` at 0x4b707f;
+    /// 0x4bbfa0's 0xffffffff for a ship with `+0x275`, record `+0x40`, not
+    /// loaded; the mover's 0x4a473e / 0x4a4c0d; the save's copy at
+    /// 0x4e2326.)
     pub fn capabilities(&self, i: usize) -> u32 {
         let o = &self.objects[i];
         let Some(s) = o.ship.as_ref() else {
@@ -564,19 +574,33 @@ impl Scene {
         if self.hunt_holds(id) || self.landing_holds(id) || self.load_holds(id) {
             caps &= 0x2000;
         }
-        if o.combat.as_ref().is_some_and(|c| c.stone_len > 0) {
+        if s.ram_run
+            .is_some_and(|r| r.stage != objects::RamStage::Charge)
+        {
             caps &= 0x2000;
+        }
+        match s.grapple.as_ref() {
+            Some(g) if !g.boarder => caps = 0,
+            Some(g) => {
+                caps &= 0x2000;
+                if g.fight > 0 {
+                    caps &= !0x2000;
+                }
+            }
+            None => {}
+        }
+        if o.combat.as_ref().is_some_and(|c| c.stone_len > 0) {
+            caps &= if caps & 0x4000 != 0 { 0x2000 } else { 0 };
         }
         if self.charmed.contains_key(&id) {
             caps = 0;
         }
-        let prey = s.grapple.as_ref().is_some_and(|g| !g.boarder)
-            || self.objects.iter().any(|p| {
-                p.ship
-                    .as_ref()
-                    .and_then(|ps| ps.ram_run)
-                    .is_some_and(|r| r.target == id)
-            });
+        let prey = self.objects.iter().any(|p| {
+            p.ship
+                .as_ref()
+                .and_then(|ps| ps.ram_run)
+                .is_some_and(|r| r.target == id)
+        });
         if prey {
             caps &= !0x1000;
         }
@@ -811,6 +835,8 @@ impl Scene {
                     self.build_called_off(i, b);
                     return;
                 }
+                // Not yet down: the word cleared (0x4b3ab0 at 0x4b3c69).
+                self.objects[i].ship.as_mut().unwrap().caps = 0;
             } else if !self.yard_stands(i, b.yard) {
                 b.cancelled = true;
             } else {

@@ -1507,8 +1507,24 @@ less `+0x483`, dumped: treasures 1 1 2 1 1 1 1 1 0 0 0 0, heroes 0 0 2 1
 the yard's 0x4dfe00 (0x2000); the build's end 0x4b3ab0 (0x4b3ef1:
 0xffffffff & 0x4e6930); the sale's state 1 0x4b4380 (0); 0x4b37d0
 (saves it, `&= mask`) and 0x4b3850 (puts it back, `&= 0xfffff000` when
-`+0x251 == 1`), masks 0x2000 for the hunt, landing and loader holds, 0
-for the song (0x4a757c); stone `&= 0x2000`; the charm's tick `|= 0x4400`
+`+0x251 == 1`), masks 0x2000 for the hunt (0x4af089), the landing
+(0x4b3370 state 1 -> 2 at 0x4b3424, back at state 3's end), the dock
+repair (0x4b2420 likewise, 0x4b25be), the treasure take (0x4b0e40,
+0x4b0ecc), the loader (0x4b7509), the rammer (0x4c2230: entering state 3
+at 0x4c2522 and state 6 at 0x4c23f1 when not yet held, back at the
+back-off's end 0x4c2b64), the boarder (0x4b5df0 case 7 on its hook
+taken, 0x4b604e; bit 13 cleared too by 0x4b38d0 at 0x4b66e5 entering the
+fight, state 3; back at 0x4b6234 / 0x4b6bae), the amber gather (0x4b0590
+step 1 -> 10, 0x4b067f) and the unload (0x4adef0 step 10, 0x4ae191); 0
+for the song (0x4a757c), the boarded ship (0x4c3410 state 9: bit 12 off,
+0x4c3577; back with bit 12 at state 6's end 0x4c3c15, then 0x4bbfa0: a
+ship with `+0x275`, record `+0x40`, `+0x251 = 0` and 0xffffffff) and the
+ram's prey (0x4c3ec0 state 3 -> 6 on event 200, 0x4c404f; back at state
+6 step 2's end); stone (the stare's message 0x158bf in 0x4dc630, 0x4de905)
+with 0x2000 when bit 14 is set, else 0; the cancelled build's 0 each step
+till it is down (0x4b3ab0 at 0x4b3c69); the capture's `|= 0x2000`
+(0x4b6f20 at 0x4b707f); the mover's 0x4a473e / 0x4a4c0d (0x2000 into
+`+0x698`, not read here). The charm's tick `|= 0x4400`
 for the call (0x4a75b9, put back at 0x4a7617); bit 12 off on a boarding's
 or ram's prey (0x4c3543, 0x4c3eef; on again 0x4c3c25, 0x4c3f02,
 0x4c3fc1, 0x4c40ef). The main pages read it per button: a warship's
@@ -1522,13 +1538,16 @@ treasure), zones (slot 7) on bits 0-11; its zones page (1, 5) every
 button on bit 8, none shown set; the building page every button on bit
 0; the behaviour page all on bits 0-11, else all off and none set. The
 port keeps the written word in `Ship::caps` and lays the holds over it
-in `Scene::capabilities`, which the pages and `takes_contact` read. Not
-ported: the other 0x4b37d0 callers' masks (0x4ae191, 0x4af089,
-0x4b067f, 0x4b0ecc, 0x4b25be, 0x4b3424, 0x4b604e, 0x4c23f1, 0x4c2522,
-0x4c3577 with 0, 0x4c404f, 0x4de905), the `+0x251 == 1` clears
-(0x4b3882, 0x4defda), the build's 0 at 0x4b3c69, the loader's `|=
-0x2000` (0x4b707f) and 0x4b38d0's `&= ~0x2000`, the saved copy
-(0x4e2326), 0x4bbfb1's 0xffffffff; the command handler 0x4e2ba0 still
+in `Scene::capabilities` (the rammer by `RamStage` past `Charge`, the
+boarder and boarded by `Grapple`, bit 13 off once its fight is set),
+which the pages and `takes_contact` read; the cancelled build's 0 in
+`Ship::caps`. Not ported: the amber and unload holds (the port's amber
+and unload are not the original's step machines), the ram prey's 0 (its
+contact states 0x4c3ec0 not ported), the `+0x251 == 1` clears
+(0x4b3882, 0x4defda; no ship writer of `+0x251 = 1` found), the
+capture's `|= 0x2000`, 0x4bbfa0 (`+0x275` not loaded), the mover's
+0x4a473e / 0x4a4c0d, the saved copy (0x4e2326); the readers: the
+command handler 0x4e2ba0 still
 refuses through the port's hold tests, not the word.
 
 ## Object panel (ships)
