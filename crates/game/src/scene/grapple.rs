@@ -660,19 +660,28 @@ impl Scene {
         if partner.is_none() && g.stage != Leave {
             g = self.leave(k, g);
         }
-        // A boarder given another order before the fight calls the boarding
-        // off: the walkway, if going down, comes back up from where it is,
-        // and both ships leave (0x4b5df0 before state 3).
-        let ordered_off = g.boarder
-            && !matches!(
-                self.objects[k].ship.as_ref().unwrap().task,
-                Some(Task::Board { target, .. }) if target == g.with
-            );
+        // A boarder called off before the fight (`+0x6a2` below 0: a stop
+        // or a busy ship's order, 0x4abc60, which keep the task to state
+        // 6's end) lets go: in state 8 (0x4b61a5) the contact freed and
+        // back to the cell's middle (0x4c3320, state 6); in 0xb (0x4b6373)
+        // the contact freed and the walkway back up from where it is, then
+        // state 6. The furl (state 10, 0x4b8aa0) does not read it and
+        // runs to its end, into 0xb; the fight (3), 0xc and 6 do not
+        // either. (The order gone some other way does the same.)
+        let ordered_off = g.boarder && {
+            let s = self.objects[k].ship.as_ref().unwrap();
+            !matches!(s.task, Some(Task::Board { target, .. }) if target == g.with)
+                || s.closing
+                    .is_some_and(|c| c.target == g.with && c.called_off)
+        };
         if ordered_off {
             match g.stage {
-                Pull | Furl => g = self.leave(k, g),
+                Pull => g = self.leave(k, g),
                 Plank => {
-                    let down = g.ticks.min(PLANK_FRAMES);
+                    // The frame down before this tick's step (the walkway
+                    // made at 0 by 0x4b8aa0, a frame a tick): back up a
+                    // frame a tick, state 6 at 0 (0x4b6394).
+                    let down = g.ticks.saturating_sub(1).min(PLANK_FRAMES);
                     g.stage = Retract;
                     g.ticks = PLANK_FRAMES.saturating_sub(down);
                 }
@@ -1099,6 +1108,32 @@ impl Scene {
             self.objects[i].ship.as_ref().unwrap().task,
             Some(Task::Ram { target }) if target == r.target
         );
+        // Called off in state 2 (0x4c2480: `+0x6a2` below 0, before the
+        // grant 0x4c1760 and the bow 0x4c1870), at a cell (0x4e0b50) whose
+        // slot holds it: the contact freed (0x4c1950), `+0x6a0 = 0`
+        // (0x4c24c2), the order zeroed (0x4b8d10), state 1 and event 8
+        // 0x90, which ends the ram and its move. (0x4c2480 is reached only
+        // with the prey alongside, 0x4c1f60 giving 2; the port's charge
+        // does not look again.)
+        if ti.is_some()
+            && still_ordered
+            && self.objects[i]
+                .ship
+                .as_ref()
+                .unwrap()
+                .closing
+                .is_some_and(|c| c.target == r.target && c.called_off)
+            && self.objects[i].ship.as_ref().unwrap().plans_from_own_cell()
+            && self.slot_holder(self.cell_of_object(i)) == Some(i)
+        {
+            let s = self.objects[i].ship.as_mut().unwrap();
+            s.ram_run = None;
+            s.hook_busy = false;
+            s.task = None;
+            s.closing = None;
+            s.path.clear();
+            return;
+        }
         let (Some(ti), true) = (ti, still_ordered) else {
             let s = self.objects[i].ship.as_mut().unwrap();
             s.ram_run = None;

@@ -6642,20 +6642,30 @@ fn a_hooking_boarders_order_is_lost() {
             .unwrap();
         let i = scene.object_index(mine).unwrap();
         let s = scene.objects[i].ship.as_ref().unwrap().clone();
-        (s, (x, y))
+        (scene, mine, s, (x, y))
     };
     // Not yet thrown: the move runs, the boarding gone with it.
-    let (s, (x, y)) = run(false, &mut caches);
+    let (_, _, s, (x, y)) = run(false, &mut caches);
     let t = TILE_SIZE as f32;
     let goal = ((x / t).floor() as i32, (y / t).floor() as i32);
     assert_eq!(s.goal, Some(goal));
     assert!(s.task.is_none());
     // Hooking: busy (0x4abe50), the task wound down (0x4abc60) and the
-    // move lost: no route stored. (State 7 is called off in the original,
-    // `+0x6a2 = 0xff`; the port ends it at once, see `Scene::wind_down`.)
-    let (s, _) = run(true, &mut caches);
+    // move lost: no route stored. State 7 is called off (`+0x6a2 = 0xff`,
+    // the task kept); at its next tick (0x4b5f06) state 1 and event 8
+    // 0x10, which ends the task at the boarder's own cell.
+    let (mut scene, mine, s, _) = run(true, &mut caches);
     assert_eq!(s.goal, None, "the move was lost");
+    assert!(matches!(
+        s.task,
+        Some(objects::Task::Board { hooking: true, .. })
+    ));
+    assert!(s.closing.unwrap().called_off);
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let i = scene.object_index(mine).unwrap();
+    let s = scene.objects[i].ship.as_ref().unwrap();
     assert!(s.task.is_none());
+    assert_eq!(s.goal, None);
 }
 
 #[test]
@@ -10590,6 +10600,160 @@ fn boarding_called_off_before_the_fight() {
         grapple(&scene, other).is_none(),
         "the boarded ship let go too"
     );
+}
+
+/// A stop to a grappling boarder calls it off (0x4abc60: `+0x6a2 =
+/// 0xff`, the task kept): pulling (state 8) it lets go at once, furling
+/// (state 10) it furls on and rolls the walkway back from 0xb; no fight,
+/// orders lost while it leaves (busy, 0x4abe50) and the task ends with
+/// state 6 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_stopped_grapple_lets_go_in_its_state() {
+    use crate::objects::GrappleStage;
+    use order::Order;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for at in [GrappleStage::Pull, GrappleStage::Furl] {
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let (mine, other, _) = boarding_pair(&mut scene, 1, 0);
+        scene.order_close(mine, other, true).unwrap();
+        let ship = |s: &Scene| {
+            s.objects[s.object_index(mine).unwrap()]
+                .ship
+                .as_ref()
+                .unwrap()
+                .clone()
+        };
+        let mut stopped = false;
+        let mut stages = Vec::new();
+        for _ in 0..3000 {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            let s = ship(&scene);
+            let Some(g) = s.grapple else {
+                if stopped {
+                    break;
+                }
+                continue;
+            };
+            if stopped && stages.last() != Some(&g.stage) {
+                stages.push(g.stage);
+            }
+            if g.stage == at && g.ticks == 2 && !stopped {
+                scene.stop(mine);
+                stopped = true;
+                stages.push(g.stage);
+                let i = scene.object_index(mine).unwrap();
+                let s = ship(&scene);
+                assert!(matches!(s.task, Some(objects::Task::Board { .. })));
+                assert!(s.closing.unwrap().called_off);
+                assert!(scene.task_busy(i));
+                // A move now is lost (busy).
+                let (x, y) = (scene.objects[i].x + 320.0, scene.objects[i].y);
+                let _ = scene.apply(&Order::Move { ship: mine, x, y }, &data, &mut caches);
+                assert_eq!(ship(&scene).goal, None, "the move was lost");
+            }
+        }
+        assert!(stopped);
+        let s = ship(&scene);
+        assert!(
+            s.grapple.is_none() && s.task.is_none(),
+            "ended with state 6"
+        );
+        let want: &[GrappleStage] = if at == GrappleStage::Pull {
+            &[GrappleStage::Pull, GrappleStage::Leave]
+        } else {
+            // 0xb a tick, its walkway at frame 0, then 6 (0x4b6394).
+            &[GrappleStage::Furl, GrappleStage::Plank, GrappleStage::Leave]
+        };
+        assert_eq!(stages, want, "stopped in {at:?}");
+    }
+}
+
+/// A stop to a charging rammer (state 2) at a cell whose slot holds it
+/// releases it (0x4c2480): no blow, the order ended, `+0x6a0` 0; between
+/// cells, or at the blow (state 3, which does not read it), the blow and
+/// back-off run on with the order to state 6's end
+/// (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_stopped_ram_lets_go_only_charging() {
+    use crate::objects::RamStage;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    for (at, held) in [
+        (RamStage::Charge, true),
+        (RamStage::Charge, false),
+        (RamStage::Impact, false),
+    ] {
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let (mine, other, _) = boarding_pair(&mut scene, 1, 0);
+        scene.order_close(mine, other, false).unwrap();
+        let ship = |s: &Scene| {
+            s.objects[s.object_index(mine).unwrap()]
+                .ship
+                .as_ref()
+                .unwrap()
+                .clone()
+        };
+        let mut stopped = false;
+        let mut stages = Vec::new();
+        for _ in 0..1000 {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            let s = ship(&scene);
+            let stage = s.ram_run.map(|r| r.stage);
+            if stopped && stages.last() != Some(&stage) {
+                stages.push(stage);
+            }
+            if stopped && stage.is_none() {
+                break;
+            }
+            if stage == Some(at) && !stopped {
+                if held {
+                    // Back at its cell's middle, lying still: 0x4e0b50
+                    // true, the cell's slot its own.
+                    let i = scene.object_index(mine).unwrap();
+                    let home = s.ram_run.unwrap().home;
+                    (scene.objects[i].x, scene.objects[i].y) = home;
+                    let s = scene.objects[i].ship.as_mut().unwrap();
+                    s.path.clear();
+                    s.move_state = 0;
+                }
+                scene.stop(mine);
+                stopped = true;
+                stages.push(stage);
+                let s = ship(&scene);
+                assert!(matches!(s.task, Some(objects::Task::Ram { .. })));
+                assert!(s.closing.unwrap().called_off);
+            }
+        }
+        assert!(stopped);
+        let s = ship(&scene);
+        assert!(s.task.is_none());
+        if held {
+            assert_eq!(stages, [Some(RamStage::Charge), None]);
+            assert!(!s.hook_busy);
+        } else if at == RamStage::Charge {
+            // Between cells 0x4e0b50 is false: the charge goes on.
+            assert_eq!(
+                stages,
+                [
+                    Some(RamStage::Charge),
+                    Some(RamStage::Impact),
+                    Some(RamStage::Back),
+                    None
+                ]
+            );
+        } else {
+            assert_eq!(stages, [Some(RamStage::Impact), Some(RamStage::Back), None]);
+        }
+    }
 }
 
 /// A big fort of miss012 with water beside it, handed to the human with

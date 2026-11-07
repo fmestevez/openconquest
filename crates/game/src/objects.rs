@@ -675,7 +675,9 @@ pub struct Closing {
     pub hook_cell: (i32, i32),
     /// The call-off (`+0x6a2` 0xff, 1 from the order 0x4aa840): given by
     /// 0x4abc60 to a 0x10 task it cannot end at once; read in the
-    /// rammer's state 2 (0x4c2230 at 0x4c2480, `Scene::ram_contact`).
+    /// rammer's state 2 (0x4c2480, `Scene::ram_contact`, `Scene::charge`),
+    /// the boarder's states 7, 8 and 0xb (0x4b5df0, the closing tick,
+    /// `Scene::grapple_tick`) and the loader's throw (`LoadRun::released`).
     #[serde(default)]
     pub called_off: bool,
 }

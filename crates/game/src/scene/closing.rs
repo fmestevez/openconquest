@@ -162,6 +162,25 @@ impl Scene {
                 ..
             } = task
             {
+                // Called off (0x4b5f06: `+0x6a2` below 0): the contact
+                // freed (0x4e02a0; the hook in the air, type 300, loses
+                // its record `+0xef`, 0x498e70, so its landing does
+                // nothing), state 1 and event 8 0x10 (`Scene::ten_event`).
+                if self.objects[i]
+                    .ship
+                    .as_ref()
+                    .unwrap()
+                    .closing
+                    .is_some_and(|c| c.target == target && c.called_off)
+                {
+                    self.objects[i].ship.as_mut().unwrap().task = Some(Task::Board {
+                        target,
+                        thrown,
+                        hooking: false,
+                    });
+                    self.ten_event(i);
+                    continue;
+                }
                 if self.shots.iter().any(|s| s.rope == Some(id)) {
                     self.objects[i].ship.as_mut().unwrap().path.clear();
                     continue;
@@ -780,8 +799,7 @@ impl Scene {
     /// (0x4b37d0), its back-off heading the opposite of its own (0x4a34f0)
     /// and state 6 (`RamStage::Back` to its cell's middle), lying still
     /// (move state 0). (Not ported: the reservation itself, the port keeps
-    /// no slots between ticks; state 2's release with `+0x6a2` below 0,
-    /// whose setter is not traced.)
+    /// no slots between ticks.)
     fn ram_contact(&mut self, i: usize, ti: usize) {
         let waiting = self.closing_mut(i).contact_wait;
         // Called off in state 2 (0x4c2480: `+0x6a2` below 0), at a cell

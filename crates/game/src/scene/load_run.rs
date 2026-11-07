@@ -143,6 +143,9 @@ impl Scene {
         let id = self.objects[i].id;
         let s = self.objects[i].ship.as_mut().unwrap();
         let cl = s.closing.as_mut().unwrap();
+        // A call-off kept from state 1 (`+0x6a2` stays 0xff) is read at
+        // state 7's first tick.
+        let released = cl.called_off;
         cl.thrown = Some(now);
         cl.hook_cell = hook_cell;
         // State 7 and `+0x6a0 = 1` (0x4b741f).
@@ -152,7 +155,7 @@ impl Scene {
             building: !ship_target,
             stage: LoadStage::Hook,
             contact: LoadContact::Flying,
-            released: false,
+            released,
             thrown: now,
             flight,
             at: from,
@@ -265,9 +268,13 @@ impl Scene {
         r.ticks += 1;
         match r.stage {
             Hook => {
+                // Released (0x4b7452): state 1, the contact freed
+                // (0x4e02a0), the line taken off (0x4df0c0) and event 8
+                // 0x10 (`Scene::ten_event`).
                 if r.released {
                     self.free_contact(id, &mut r);
                     self.objects[k].ship.as_mut().unwrap().load_run = None;
+                    self.ten_event(k);
                     return;
                 }
                 match r.contact {

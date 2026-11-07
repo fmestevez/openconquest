@@ -2543,14 +2543,14 @@ impl Scene {
     /// and by a busy ship's order group (0x4abe50, `Scene::busy`).
     pub(super) fn wind_down(&mut self, i: usize) {
         {
-            // A loader past its hold is released (0x4aa540 with `+0x25d &
-            // 0x10`: `+0x6a2` 0xff; linked, `+0x6e5` 4 too), its order
-            // going on to its end (`Scene::run_load_runs`).
+            // A loader past its throw (state 7 on) is released (0x4abc60
+            // with `+0x25d & 0x10`: `+0x6a2` 0xff; linked, `+0x6e5` 4
+            // too), its order going on to its end (`Scene::run_load_runs`;
+            // in state 7 back to 1 and event 8 0x10, 0x4b7452).
             if let Some(r) = self.objects[i]
                 .ship
                 .as_mut()
                 .and_then(|s| s.load_run.as_mut())
-                .filter(|r| r.stage != objects::LoadStage::Hook)
             {
                 r.released = true;
                 return;
@@ -2585,15 +2585,23 @@ impl Scene {
                         )
                     )
             });
-            let called_off = closing_in && {
-                let s = self.objects[i].ship.as_ref().unwrap();
-                let state_1 = s.closing.is_none_or(|c| !c.contact_wait);
-                let into_other = s.between.get()
-                    && matches!(s.move_state, 5 | 4 | 1)
-                    && self.slot_holder(s.entering) != Some(i);
-                let own = self.slot_holder(self.cell_of_object(i)) == Some(i);
-                !(state_1 && !into_other && own)
-            };
+            // Past state 1 (`+0x6a9` 7 on: the boarder's hook out or its
+            // grapple; 2 granted, 3 and 6: the rammer's charge and blow) it
+            // is always called off; the boarder's states 7, 8 and 0xb read
+            // it (0x4b5df0, `Scene::grapple_tick`), the rammer's state 2
+            // (0x4c2480, `Scene::charge`); its states 3 and 6 and the
+            // boarder's 10, 3, 0xc and 6 do not, and run to their end.
+            let past_one = self.objects[i].ship.as_ref().is_some_and(|s| match s.task {
+                Some(objects::Task::Board { hooking: true, .. }) => true,
+                Some(objects::Task::Board { target, .. }) => {
+                    s.grapple.is_some_and(|g| g.boarder && g.with == target)
+                }
+                Some(objects::Task::Ram { target }) => {
+                    s.ram_run.is_some_and(|r| r.target == target)
+                }
+                _ => false,
+            });
+            let called_off = past_one || (closing_in && !self.ten_ends(i));
             if called_off {
                 if let Some(c) = self.objects[i]
                     .ship
@@ -2638,6 +2646,40 @@ impl Scene {
                 }
                 ship.task = None;
             }
+        }
+    }
+
+    /// 0x4abc60's (and 0x4aa540's, mask 0x10) test for the 0x10 task in
+    /// state 1 (`+0x6a9`; 2 is the rammer's contact wait): at a cell
+    /// whose slot (0x5c74fc `+0xc`) holds the ship and not under way
+    /// (`+0x596`, move state 5, 4 or 1) into a cell `+0x5b6` another
+    /// holds, the task ends there. (0x4b93f0, called then for the ram,
+    /// `+0x696` 1, returns at once: the cell's slot holds the ship and
+    /// 0x499990 passes the open water it lies on; only a cell refused or
+    /// held by another would make it free the slot and move the ship off
+    /// to a neighbour drawn by 0x4b92b0's weights.)
+    pub(super) fn ten_ends(&self, i: usize) -> bool {
+        let s = self.objects[i].ship.as_ref().unwrap();
+        let state_1 = s.closing.is_none_or(|c| !c.contact_wait);
+        let into_other = s.between.get()
+            && matches!(s.move_state, 5 | 4 | 1)
+            && self.slot_holder(s.entering) != Some(i);
+        let own = self.slot_holder(self.cell_of_object(i)) == Some(i);
+        state_1 && !into_other && own
+    }
+
+    /// Event 8 0x10 to a ship back in state 1 (the boarder's and the
+    /// loader's state 7 called off, 0x4b5f06 / 0x4b7452): 0x4aa540 with
+    /// mask 0x10 alone, so no stop of the move (0x4a6330 is for 0x80):
+    /// the task ends where `ten_ends` holds (`+0x25d &= ~0x10`, 0x4c1950,
+    /// 0x4a3800), else it is called off again and goes on.
+    pub(super) fn ten_event(&mut self, i: usize) {
+        let ends = self.ten_ends(i);
+        let s = self.objects[i].ship.as_mut().unwrap();
+        if ends {
+            s.task = None;
+        } else if let Some(c) = s.closing.as_mut() {
+            c.called_off = true;
         }
     }
 

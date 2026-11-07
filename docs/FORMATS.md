@@ -5599,13 +5599,59 @@ throw runs, one given with the hook in the air is lost): the 0x40 byte
 for the fish gather and the leviathan hunt, the 0x10 byte for a board,
 ram or load order; 0x4abc60's test for a ship closing in (states 1 and
 2, the slots as `Scene::slot_holder` has them), and the rammer's state 2
-release. Not ported: the call-off's other readers (the boarder's state 7
--> 1 and event 8 0x10, its grapple states; a stop or a busy drop there
-ends the task at once as before, and the loader's hold keeps its
-`released`), 0x4b93f0 (not read), the rammer's states 3 and 6 under a
-call-off (the port's charge ends with the task), a `+0x77b` left set
-under the amber gather, the treasure take or the unload, and a refused
-event's old task, which the port keeps though 0x4abe50 took its bit off.
+release. The call-off's readers (every reference to `+0x6a2` in the
+listing: writers 0x4aa2c0, 0x4aa540, 0x4aa840, 0x4abc60 and the
+machines; readers 0x4b5f06, 0x4b61a5, 0x4b6211, 0x4b6373, 0x4b6394,
+0x4b63dc in the boarder 0x4b5df0, 0x4b721a, 0x4b7452, 0x4b76fe, 0x4b7763,
+0x4b78dd in the loader, 0x4bb3be in the computer's transfer that never
+runs, and 0x4c2480 in the rammer): past state 1 (`+0x6a9` 7 on, or the
+rammer's 2 to 6) 0x4abc60 always calls the task off and keeps it. The
+boarder's state 7 (0x4b5f06): the contact freed (0x4e02a0; the hook in
+the air, type 300, has its record `+0xef` freed by 0x498e70, so its
+landing does nothing), state 1, event 8 0x10, and on with the contact
+gone to state 1. Event 8 0x10 is 0x4aa540 with mask 0x10 alone: the
+0x4abc60 test above (state 1 now) ends the task there (`+0x25d &=
+~0x10`, 0x4c1950, 0x4a3800), with no stop of the move (0x4a6330 is the
+0x80 bit's); else `+0x6a2` stays 0xff and state 1 goes on (0x4b5df0's
+state 1 and 0x4b7f10 do not read it), the next throw's state 7 reading
+it at once. State 8 (0x4b61a5): 0x4c3320 back to the cell's middle
+(state 6 when planned; none, `+0x251` 4 and state 8 kept), the contact
+freed, 0x4df0c0. State 10, the furl (0x4b8aa0), does not read it: it
+furls on and enters 0xb with the walkway at frame 0. State 0xb
+(0x4b6373): the contact freed; a frame up a tick (`+0x45 - 1`, at the
+layer's delay `+0x7d` 0), at frame 0 (below 1) 0x4c3320 and state 6,
+the walkway's layer taken off (0x4e0220). The fight (3), 0xc and 6 do
+not read it; state 6's end is the usual one (notice 0x13c, event 8
+0x90). The loader's state 7 (0x4b7452) is the boarder's (state 1, the
+contact freed, 0x4df0c0, event 8 0x10); its states 8, 11 and 4 as under
+"The machine past the throw". The rammer reads it only in state 2
+(0x4c2480, before 0x4c1760 and the bow 0x4c1870, so in the charge too);
+its states 3 and 6 run to their end (0x4b8d10, event 8 0x90). 0x4b93f0,
+called at the task's end for `+0x696` 1 (the ram), returns at once
+there: the end needs the cell's slot to hold the ship, and 0x499990
+(cell, 0) passes the open water it lies on (only a refused cell or one
+another holds makes it free the slot, 0x4a3970, and send the ship to a
+neighbour drawn by 0x4b92b0's weights with the ship's generator, 0x499830,
+move state 3, vt+4(0x80, ...)). The port: `Scene::wind_down` (`past_one`:
+a hooking boarder, a grappling boarder, a rammer in its run),
+`Scene::ten_ends` and `Scene::ten_event`, the hooking branch of the
+closing tick, `Scene::grapple_tick` (the call-off read in `Pull` and
+`Plank`, not in `Furl`), `Scene::charge` (the release at a cell whose
+slot holds it), the loader's `Hook` stage (`released`, taken from the
+call-off at the throw, then `ten_event`);
+`a_stopped_grapple_lets_go_in_its_state` (stopped pulling: Pull, Leave;
+furling: Furl, Plank a tick, Leave; no fight, a move then lost, the task
+ending with state 6), `a_stopped_ram_lets_go_only_charging` (charging at
+its cell: released, `+0x6a0` 0; between cells or at the blow: the blow
+and back-off on, the task ending with state 6),
+`a_hooking_boarders_order_is_lost` (the task kept, ended at the next
+tick at its own cell), on miss000. Not decoded: whether the hook's line
+is still drawn in the air once its record is freed (the port draws it
+till it lands); the port's charge does not look again, so 0x4c2480's
+alongside test (0x4c1f60 giving 2) is not made there. Not ported: a
+`+0x77b` left set under the amber gather, the treasure take or the
+unload, and a refused event's old task, which the port keeps though
+0x4abe50 took its bit off.
 
 **When a command arrives** (Players.cpp; decompiles of 0x520cc0,
 0x51fe20, 0x521570, 0x5228c0, 0x542390, 0x51f250, 0x541f70). 0x520cc0
@@ -7038,8 +7084,9 @@ ship, 0x32 a building, 300 a hook in the air) runs a game tick at a time:
   boarder is in state 6 (its states 4 and 6). The boarder's order is
   then done (message 8, 0x90).
 
-A new order (`+0x6a2` < 0) before the fight rolls the walkway back up
-and leaves; it is not checked during the fight.
+A new order (`+0x6a2` < 0, 0x4abc60) before the fight rolls the walkway
+back up and leaves (states 8 and 0xb; the furl runs on into 0xb, see
+"One event a tick"); it is not checked during the fight.
 
 ### The ram's run
 
