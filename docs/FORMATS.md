@@ -6403,8 +6403,8 @@ weapon shield) to cast on its ships as it attacks (0x47acf0 by member
 (1, 0), unpaid). Then north, once both harpy nests at (23, 20) and
 (26, 19) are gone, and west, once the barbarians' stronghold at (3, 29) is,
 land unless the player holds the place: a medium fort founded at (19, 16)
-or (8, 20) (0x47b000, fleet order 0x8c, waiting for its price; 3000
-ticks). Landed, and the stronghold gone, they raid one of the player's
+or (8, 20) (0x47b000, fleet order 0x8c: the founding block, on to 50
+when its status is done or 3000 ticks on; see "Founding"). Landed, and the stronghold gone, they raid one of the player's
 settlements or towns in (0, 0, 35, 35), else (27, 28, 9, 8), 6000 ticks,
 and live in a second patrol about their fort, back to the first if it
 falls. West casts its spell in its raids every turn and clears north's
@@ -11303,9 +11303,10 @@ codes before it; not read: other paths). Ported: the repair's
 (`run_repair_orders`, brains), the forts' block 0xd2 and its 300
 (`flotilla_turn`, `read_joins`; a new fort through `Computer::join`), and,
 before, the computers' guard, founding, treasure and dock, the human's
-attack. The brains' founding (0x8c, miss005's raiders (1, 6) and
-(1, 7)) and treasure (0xbe, miss007's (0, 11)) blocks hear no notices
-in the port (no pass); a 300 reaches them in the original only by a
+attack. The brains' founding block (0x8c, miss005's raiders (1, 6) and
+(1, 7)) is the computers' (below, "Founding"), its notices heard; the
+treasure block (0xbe, miss007's (0, 11)) hears none in the port (no
+pass); a 300 reaches them in the original only by a
 join, 0x4a1340 posting it while the group has a block (its queue
 `+0x2d`, made by 0x4a1150, freed by 0x4a1c60): a brain's joins are
 0x479300 op 2 (0x4a0480: 0x49bd60, then 0x4a1340), for prizes to the
@@ -11376,15 +11377,35 @@ and a block: `+8` = 0 and each ship of kind 200: `+0x691` (a blow)
 group, 500; else 0x1f5 result 1. Tasks 6 (0x47f200) and 0xc (0x47f050)
 go on done with result 1 to p[5] (`+0x84`), 10 to p[7] (`+0x8c`), 0xb to
 p[4], 0xc to p[6]. The end 0x4caf90 frees the notices, `+0x2d` and
-`+0x29`. Port: computer.rs `FoundBlock`, `found`, `found_send`,
-`found_site`, `found_notices`, `found_tick`, `found_status`,
-`found_next`; the landing posts 0x130 (landing.rs; the port's record the
-cell index, the class byte at bit 24). Test
-`the_founding_block_sends_hears_and_ends` (miss000). Not ported: the
-route branches and 0x136 (no computer order sets a route), the wider
-area's scan (the computers' order is 1 x 1), the marks; the brains'
-founding (miss005's raiders) keeps `found_by`, a ship sent the command
-while none of its fleet's is founding.
+`+0x29`. The brains' order (0x47b000, primitive of miss005's raiders'
+state 0x2d at 0x456a7b and 0x457313: `(p3 0x32, p4 0x32, (x, y), 1, 1,
+class 0x35, p10 -1, p11 0, p12 3000, events none)`): at the state's
+first call (member `+0x10` 0) `+0x10` = 1, `+0x18` the brain's tick,
+`+0x14` p12, then 0x479af0: member `+0x40..+0x4c` the area, and to
+0x4a09d0 (flags 0) the payload `{p11, p9 class, area, member p10's first
+word}` (p10 -1: the word 0xb4 bytes before the group's member array,
+out of it, not decoded; it is the block's `+0x24` only, the site's and
+command 0x20's third word, which the port's command does not carry: the
+port writes -1). At the later calls query 0x8d (0x4a0f60 -> 0x4a0e20:
+the block `{0x8c, 0x47}`, 0x4cbfc0; with no return the switch falls
+into 0xa1's 0x4a0e60, which acts only on a block 0xa0): 0x1f5 goes to
+p3 with result 10, else p4; then p12 set and `+0x18 + +0x14 <=` the
+tick, p3 (0x479750 twice when both: the previous state the new one);
+then the events. miss005's caller sets the brain's `+0x190` (north) or
+`+0x194` (west) after each call (0x456a80, 0x457318). The landing's
+0x130 reaches the brain fleet (0x4a15a0 posts it to the ship's group,
+any player's). Port: computer/fleet_found.rs `FoundBlock`, `FoundGroup`
+(a flotilla, brain.rs `Fleet`), `found_make`, `found_send`,
+`found_site`, `found_notices`, `found_tick`, `found_status`; computer.rs
+`found`, `found_next`; brain.rs `Op::Found`, `brain_found`,
+`brain_found_status`, `brain_notice` (the founding block's notices, with
+the 300s of `brain_heard_join`), `run_found_orders`; the landing posts
+0x130 (landing.rs; the port's record the cell index, the class byte at
+bit 24). Tests `the_founding_block_sends_hears_and_ends` (miss000),
+`miss005_raiders_found_through_the_block`. Not ported: the route
+branches and 0x136 (no computer or brain order sets a route), the wider
+area's scan (both orders are 1 x 1), the marks; the notices of the
+brains' other blocks (`brain_notice` keeps only the founding's).
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
 about the base's town, from 4 cells and 4 more a time, that holds a

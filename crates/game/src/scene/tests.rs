@@ -20701,3 +20701,120 @@ fn boats_and_merchants_never_fire() {
         assert!(gate(&mut scene));
     }
 }
+
+/// miss005's northern raiders land (state 45, 0x47b000 at 0x456a7b):
+/// fleet order 0x8c makes the founding block with the site (19, 16, 1, 1)
+/// of a medium fort and sends each ship command 0x20 there; a ship's
+/// party ashore there (notice 0x130) takes the site off, the founding
+/// done with result 10 (0x4cbfc0) and the member's next call goes to 50;
+/// the boat itself sails and lands, the same; held, 3000 ticks on it goes
+/// to 50 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn miss005_raiders_found_through_the_block() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    const NORTH: usize = 10;
+    // The raiders start with none: another member's ship given them.
+    let give = |scene: &mut Scene, data: &GameData, caches: &mut Caches| {
+        // A boat of a computer's at the human's ship's cell.
+        let t = TILE_SIZE as f32;
+        let at = (scene.objects.iter())
+            .find(|o| o.ship.is_some() && scene.is_own(o))
+            .map(|o| ((o.x / t) as i32, (o.y / t) as i32))
+            .unwrap();
+        let owner = (scene.objects.iter())
+            .filter(|o| !scene.is_own(o))
+            .find_map(|o| o.owner.filter(|w| w.0 != 99))
+            .unwrap();
+        let id = scene
+            .spawn_ship(owner, 0, at.0, at.1, data, caches)
+            .unwrap();
+        // Out of the human's ships' reach of harm.
+        let i = scene.object_index(id).unwrap();
+        let c = scene.objects[i].combat.as_mut().unwrap();
+        (c.max_hull, c.hull) = (1e9, 1e9);
+        let br = scene.brain.as_mut().unwrap();
+        for f in &mut br.fleets {
+            f.ships.retain(|&s| s != id);
+        }
+        br.fleets[NORTH].ships.push(id);
+        scene.set_state(NORTH, 45);
+    };
+    let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+    give(&mut scene, &data, &mut caches);
+    let ships = scene.fleet_ships(NORTH);
+    let turn = |scene: &mut Scene, data: &GameData, caches: &mut Caches| {
+        let f = &scene.brain.as_ref().unwrap().fleets[NORTH];
+        let (state, since) = (f.state, f.since);
+        for _ in 0..50 {
+            scene.update(0.04, data, caches);
+            let f = &scene.brain.as_ref().unwrap().fleets[NORTH];
+            if f.started && (f.state != state || f.since != since) {
+                break;
+            }
+        }
+    };
+    turn(&mut scene, &data, &mut caches);
+    let f = &scene.brain.as_ref().unwrap().fleets[NORTH];
+    assert_eq!((f.state, f.block), (45, 0x8c));
+    assert_eq!(f.last_area, (19, 16, 1, 1));
+    let fb = f.founding.as_ref().unwrap();
+    assert_eq!((fb.class, fb.area, fb.done), (0x35, (19, 16, 1, 1), false));
+    assert_eq!(fb.sites.len(), 1);
+    assert_eq!(scene.brain_found_status(NORTH), (500, 0));
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[0].vars[2], 1);
+    // A party of the first ship ashore at the site.
+    let w = scene.nav.width as i32;
+    scene.post_notice(ships[0], 0x130, 0x35 << 24 | (16 * w + 19) as u32);
+    scene.update(0.04, &data, &mut caches);
+    let f = &scene.brain.as_ref().unwrap().fleets[NORTH];
+    assert!(f.founding.as_ref().unwrap().done);
+    assert_eq!(scene.brain_found_status(NORTH), (0x1f5, 10));
+    for _ in 0..50 {
+        scene.update(0.04, &data, &mut caches);
+    }
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[NORTH].state, 50);
+    // The boat itself sails, lands and its party goes ashore: the
+    // landing's 0x130 ends the founding, result 10, and the member goes
+    // to 50 at its first turn after; held where it is, 3000 ticks on.
+    for hold in [false, true] {
+        let mut scene = Scene::load(&data, &mut caches, "miss005").unwrap();
+        give(&mut scene, &data, &mut caches);
+        let boat = scene.fleet_ships(NORTH)[0];
+        turn(&mut scene, &data, &mut caches);
+        let since = scene.brain.as_ref().unwrap().fleets[NORTH].since;
+        let mut left = None;
+        let mut done_at = None;
+        for _ in 0..3200 {
+            scene.update(0.04, &data, &mut caches);
+            if hold {
+                let i = scene.object_index(boat).unwrap();
+                scene.objects[i].ship.as_mut().unwrap().path.clear();
+            }
+            let b = scene.brain.as_ref().unwrap();
+            let f = &b.fleets[NORTH];
+            if done_at.is_none() && f.founding.as_ref().is_some_and(|fb| fb.done) {
+                done_at = Some(b.tick);
+            }
+            if f.state != 45 {
+                left = Some(b.tick - since);
+                break;
+            }
+        }
+        let b = scene.brain.as_ref().unwrap();
+        assert_eq!(b.fleets[NORTH].state, 50);
+        let left = left.unwrap();
+        if hold {
+            // The member's turns are 50 ticks apart: 3000 on the dot.
+            assert_eq!(left, 3000);
+            assert!(done_at.is_none());
+        } else {
+            let done_at = done_at.unwrap() - since;
+            assert!(left < 3000 && left % 50 == 0 && left >= done_at && left - done_at <= 50);
+            assert!(!scene.parties.is_empty() || !scene.constructions.is_empty());
+        }
+    }
+}

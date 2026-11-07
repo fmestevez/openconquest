@@ -29,7 +29,8 @@ use openconquest_formats::map::TILE_SIZE;
 use openconquest_formats::ObjectClass;
 use serde::{Deserialize, Serialize};
 
-use super::{Order, Scene, BUILD_RADIUS, FOUND_REACH};
+use super::{Order, Scene, BUILD_RADIUS};
+use fleet_found::FoundBlock;
 
 use crate::combat::{Rng, Upgrade};
 use crate::economy::{
@@ -41,6 +42,7 @@ use crate::objects::{Resource, Task};
 /// A rectangle of map cells: x, y, width, height.
 type Cells = (i32, i32, i32, i32);
 
+pub(super) mod fleet_found;
 pub(super) mod fleet_guard;
 
 /// Flotilla roles (`AIPlayer + 0xdfc` entries, field 0; 0x483e10).
@@ -287,33 +289,6 @@ pub struct Flotilla {
     /// Fleet order 0x8c's block (0x4cbcf0), while the block is a founding.
     #[serde(default)]
     founding: Option<FoundBlock>,
-}
-
-/// Fleet order 0x8c's block (`+0x25`, `{0x8c, 0x47}`, 0x4cbcf0; made
-/// zeroed by 0x4cb000): the order's payload (0x4834c0: the flotilla's
-/// flags `+0x154`, unread, its class `+0x70`, its cell `+0x178..+0x184`,
-/// -1) and the sites it keeps.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct FoundBlock {
-    /// `+0x10` the class to found.
-    class: u32,
-    /// `+0x14..+0x20` the area to found in.
-    area: Cells,
-    /// `+0x24` (payload 6, -1 from 0x4834c0): command 0x20's third word.
-    third: i32,
-    /// `+0x28`: the last site founded (0x130), read by the status 0x4cbfc0.
-    done: bool,
-    /// `+0x29` the sites (0x4cb4b0, 0x19 bytes: the area, `+0x24`, the
-    /// class byte).
-    sites: Vec<FoundSite>,
-}
-
-/// A site in the founding block's list (`+0x29`, 0x4cb4b0).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-struct FoundSite {
-    area: Cells,
-    third: i32,
-    class: u8,
 }
 
 /// Fleet order 0xbe's block (`+0x25`, `{0xbe, 0x79}`, 0x4da550): the
@@ -1705,7 +1680,7 @@ impl Scene {
         let block = ai.flotillas[f].block;
         if block == 0x8c {
             // The founding block's tick (0x4cbe70, 0x4c5047).
-            self.found_tick(ai, f);
+            self.found_tick(&mut fleet_guard::Flotilla { ai, f });
             return;
         }
         if block == 0xbe {
@@ -4607,15 +4582,9 @@ impl Scene {
     }
 
     /// Fleet order 0x8c (0x4834c0 -> 0x4a09d0 -> 0x4cbcf0, flags 0): a
-    /// block of another kind ended (`new_block`), this one made zeroed
-    /// (0x4cb000) or rewritten (its sites, `+0x28` and route kept), its
-    /// class `p[0]`, area the home cell (1 x 1) and `+0x24` -1 set. The
-    /// area becomes a site (0x4cb110 with no ship, 0x4cb4b0): kept as it
-    /// is when one of the same rect, class and `+0x24` is listed, else
-    /// listed last (one of the same rect but another class or `+0x24`
-    /// taken off first). Then every ship of the group is given its site
-    /// (0x4cb1a0, `found_send`). (Its marks, 0x4cc1e0 / 0x4cc170, are
-    /// the viewer's player's alone, and need flags 4.)
+    /// block of another kind ended (`new_block`), this one made or
+    /// rewritten (`found_make`) with class `p[0]`, area the home cell
+    /// (1 x 1) and `+0x24` -1.
     fn found(&mut self, ai: &mut Computer, f: usize) {
         let fl = &ai.flotillas[f];
         let area = fl.home;
@@ -4623,184 +4592,13 @@ impl Scene {
         let ship = fl.ships.first().copied().unwrap_or(0);
         ai.flotillas[f].order = FleetOrder::Found(ship, (area.0, area.1), class);
         self.new_block(ai, f, 0x8c);
-        let b = ai.flotillas[f]
-            .founding
-            .get_or_insert_with(Default::default);
-        b.class = class;
-        b.area = area;
-        b.third = -1;
-        let site = FoundSite {
-            area,
-            third: -1,
-            class: class as u8,
-        };
-        match b.sites.iter().position(|e| e.area == area) {
-            Some(p) if b.sites[p] == site => {}
-            Some(p) => {
-                b.sites.remove(p);
-                b.sites.push(site);
-            }
-            None => b.sites.push(site),
-        }
-        for id in ai.flotillas[f].ships.clone() {
-            self.found_send(ai, f, id);
-        }
+        self.found_make(&mut fleet_guard::Flotilla { ai, f }, class, area, -1);
     }
 
-    /// 0x4cb1a0 for ship `id` of flotilla `f`, its block without a route
-    /// (`+0x61`, set only by the human's Shift founding, 0x49dc90 with
-    /// flags 4): its site (`found_site`) and, with one, command 0x20
-    /// `{x, y, +0x24, class, 1, 100}` (0x4cb0b0 -> 0x520cc0), delivered
-    /// at the next tick. Whether it was sent.
-    fn found_send(&mut self, ai: &Computer, f: usize, id: u32) -> bool {
-        let Some(b) = ai.flotillas[f].founding.as_ref() else {
-            return false;
-        };
-        let Some((cx, cy)) = self.found_site(b, id) else {
-            return false;
-        };
-        let class = b.class & 0xff;
-        self.post(Order::Found {
-            ship: id,
-            cx,
-            cy,
-            class,
-        });
-        true
-    }
-
-    /// 0x4cb850: the site of ship `id` (an object of kind 200, a ship) in
-    /// the founding block `b`. A 1 x 1 area: its cell, for class 0x32 or
-    /// 0x34-0x36, where the ship may found it (0x4e4420, `check_ground`);
-    /// else none. (Not ported: a wider area, which the computers' order
-    /// never gives: its cells the ship may found on with a berth
-    /// (0x4b2710), sorted by the wavefront 0x4a1e90 at their berths
-    /// (0x4cb790), the first taken; with no such cell the original reads
-    /// a word it never wrote.)
-    fn found_site(&self, b: &FoundBlock, id: u32) -> Option<(i32, i32)> {
-        let i = self.object_index(id)?;
-        self.objects[i].ship.as_ref()?;
-        let (x, y, w, h) = b.area;
-        if (w, h) != (1, 1) || !matches!(b.class, 0x32 | 0x34..=0x36) {
-            return None;
-        }
-        self.check_ground(b.class, x, y).ok()?;
-        Some((x, y))
-    }
-
-    /// The founding block's notices (0x4cba10), from the last: 300 of a
-    /// ship of the group (0x4cc590), its site (`found_send`), then `#`
-    /// sub 1 with the group's three (0x4c42f0), counted. 0x130, a ship of
-    /// the group whose landing party went ashore (0x4a15a0, from 0x4b3637:
-    /// `{tick, +0x60, id, x, y, class}`, the site `+0x73c` and class
-    /// `+0x73b`): every other ship of the group stopped (command 10), and
-    /// the first site holding the cell with that class taken off
-    /// (0x4cb370); then with none left `+0x28` set, the founding done,
-    /// else the block's class, area and `+0x24` the first site's
-    /// (0x4cb450). (0x136 needs a route `+0x61`.) The count of 300s.
-    fn found_notices(&mut self, ai: &mut Computer, f: usize) -> i32 {
-        let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
-        let mut n = 0;
-        let mut heard = std::mem::take(&mut ai.flotillas[f].joined);
-        while let Some((id, at, code, rec)) = heard.pop() {
-            if at != 0x8c || !ai.flotillas[f].ships.contains(&id) {
-                continue;
-            }
-            match code {
-                300 => {
-                    self.found_send(ai, f, id);
-                    self.send_behaviour(id, b);
-                    n += 1;
-                }
-                0x130 => {
-                    for other in ai.flotillas[f].ships.clone() {
-                        if other != id && self.object_index(other).is_some() {
-                            self.post(Order::Stop { id: other });
-                        }
-                    }
-                    let w = self.nav.width as i32;
-                    let (cell, class) = ((rec & 0xff_ffff) as i32, (rec >> 24) as u8);
-                    let (x, y) = (cell % w, cell / w);
-                    let Some(fb) = ai.flotillas[f].founding.as_mut() else {
-                        continue;
-                    };
-                    let Some(p) = fb.sites.iter().position(|e| {
-                        let (sx, sy, sw, sh) = e.area;
-                        (sx..sx + sw).contains(&x) && (sy..sy + sh).contains(&y) && e.class == class
-                    }) else {
-                        continue;
-                    };
-                    fb.sites.remove(p);
-                    match fb.sites.first().copied() {
-                        Some(e) => {
-                            fb.class = e.class as u32;
-                            fb.area = e.area;
-                            fb.third = e.third;
-                        }
-                        None => fb.done = true,
-                    }
-                }
-                _ => {}
-            }
-        }
-        n
-    }
-
-    /// The founding block's tick (0x4cbe70, the navy's 0x4c5047): the
-    /// notices (`found_notices`); when no 300 was heard (or none were
-    /// posted), group `+8` past 100 and the block there, `+8` back to 0
-    /// and each ship of the group: a blow marked (`+0x691`) forgotten
-    /// (0x4cf760, command 0x28 sub 4; its report 0x4a21c0 the port's as
-    /// it lands); lying still (`+0x58c` 0), not landing (`+0x25d & 0x20`)
-    /// and the block not done, its site again (`found_send`). Then `+8`
-    /// grows by the tick.
-    fn found_tick(&mut self, ai: &mut Computer, f: usize) {
-        let heard = if ai.flotillas[f].joined.is_empty() {
-            0
-        } else {
-            self.found_notices(ai, f)
-        };
-        if heard == 0 && ai.flotillas[f].elapsed > 100 && ai.flotillas[f].founding.is_some() {
-            ai.flotillas[f].elapsed = 0;
-            for id in ai.flotillas[f].ships.clone() {
-                let Some(i) = self.object_index(id) else {
-                    continue;
-                };
-                let Some(s) = self.objects[i].ship.as_ref() else {
-                    continue;
-                };
-                let (blow, still, landing) =
-                    (s.blow.is_some(), s.move_state == 0, s.landing.is_some());
-                if blow {
-                    self.post(Order::ClearBlow { ship: id });
-                }
-                let done = ai.flotillas[f].founding.as_ref().is_some_and(|b| b.done);
-                if still && !landing && !done {
-                    self.found_send(ai, f, id);
-                }
-            }
-        }
-        ai.flotillas[f].elapsed += 1;
-    }
-
-    /// The founding block's status (0x4cbfc0, by 0x4a0e20 for `{0x8c,
-    /// 0x47}`): `+0x28` set, done (0x1f5) with result 10; else with a
-    /// ship (0x50e600 200) in the group running (500); else done with
-    /// result 1.
+    /// The founding block's status (0x4cbfc0, `fleet_found::found_status`).
     fn found_status(&self, ai: &Computer, f: usize) -> (u32, u32) {
         let fl = &ai.flotillas[f];
-        if fl.founding.as_ref().is_some_and(|b| b.done) {
-            return (DONE, 10);
-        }
-        let ships = fl.ships.iter().any(|&id| {
-            self.object_index(id)
-                .is_some_and(|i| self.objects[i].ship.is_some())
-        });
-        if ships {
-            (500, 0)
-        } else {
-            (DONE, 1)
-        }
+        fleet_found::found_status(self, &fl.ships, fl.founding.as_ref())
     }
 
     /// Tasks 6 and 0xc's reading of the founding's status (0x47f200,
@@ -4814,27 +4612,6 @@ impl Scene {
             (DONE, 0xb) => Some(p[4]),
             (DONE, 0xc) => Some(p[6]),
             _ => None,
-        }
-    }
-
-    /// Ship `ship` founds `class` at `cell` (the brains' founding, its
-    /// block's work not ported there); while the price cannot be
-    /// paid it sails there and waits (the order stands until the step's
-    /// time is up). The move is a command, delivered at the next tick.
-    /// (Not ported: the founding command 0x20 is given at once here, its
-    /// answer deciding the move; the original's 0x4cbcf0 cannot see it.)
-    pub(super) fn found_by(&mut self, ship: u32, cell: (i32, i32), class: u32) {
-        if self.order_found(ship, cell.0, cell.1, class).is_ok() {
-            return;
-        }
-        let t = TILE_SIZE as f32;
-        let Some(i) = self.object_index(ship) else {
-            return;
-        };
-        let (x, y) = (cell.0 as f32 * t + t / 2.0, cell.1 as f32 * t + t / 2.0);
-        let o = &self.objects[i];
-        if (o.x - x).hypot(o.y - y) > (FOUND_REACH as f32 + 0.5) * t {
-            self.post(Order::Move { ship, x, y });
         }
     }
 
@@ -8409,6 +8186,7 @@ pub(super) fn rank_deposit_cells(
 
 #[cfg(test)]
 mod tests {
+    use super::fleet_found::FoundSite;
     use super::*;
     use crate::assets::GameData;
     use crate::objects::Caches;

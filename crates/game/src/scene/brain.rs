@@ -104,6 +104,20 @@ pub enum Op {
     },
     /// Go to `next` at once (0x479750), nothing else.
     Goto { next: u32 },
+    /// Found `class` in `area` (0x47b000): at the state's first call
+    /// fleet order 0x8c (`brain_found`, the call's flags 0, p10 -1); at
+    /// the later ones the founding's status (`brain_found_status`):
+    /// done, `done` with result 10 else `other`; then, `ticks` set and
+    /// that many past the first call (member `+0x18` + `+0x14` <= brain
+    /// `+0xfc`), `done`. (The call's event list, p13, is none at every
+    /// call site.)
+    Found {
+        done: u32,
+        other: u32,
+        area: Cells,
+        class: u32,
+        ticks: u32,
+    },
     /// Wait (0x47a3b0).
     Wait { next: u32, ticks: u32 },
     /// Wait as many ticks as the fleet's variable `var` holds.
@@ -280,6 +294,15 @@ pub struct Fleet {
     /// 0x8c found), 0 none (`brain_block`).
     #[serde(default)]
     pub block: u32,
+    /// Fleet order 0x8c's block (0x4cbcf0), while the block is a founding
+    /// (`fleet_found`).
+    #[serde(default)]
+    pub(super) founding: Option<super::computer::fleet_found::FoundBlock>,
+    /// The block's notices (`+0x2d`, `(ship, code, record)`, oldest first)
+    /// for the blocks that read them through their group (`FoundGroup`):
+    /// the founding's 300 and 0x130.
+    #[serde(default)]
+    pub(super) notices: Vec<(u32, u32, u32)>,
     /// The member's town order sent (0x47b130 with `+0x10` 1, set at its
     /// first call, cleared with the state by 0x479750): its later calls
     /// read the order's state.
@@ -487,6 +510,31 @@ impl Brain {
     }
 }
 
+/// A brain's fleet as the founding block's group (0x4cbcf0 by 0x479af0).
+impl super::computer::fleet_found::FoundGroup for Fleet {
+    fn ships(&self) -> &[u32] {
+        &self.ships
+    }
+    fn block(&self) -> &Option<super::computer::fleet_found::FoundBlock> {
+        &self.founding
+    }
+    fn block_mut(&mut self) -> &mut Option<super::computer::fleet_found::FoundBlock> {
+        &mut self.founding
+    }
+    fn behaviour(&self) -> (u32, u32, u32) {
+        self.behaviour.unwrap_or((0, 0, 0))
+    }
+    fn elapsed(&mut self) -> &mut u32 {
+        &mut self.elapsed
+    }
+    fn has_notices(&self) -> bool {
+        !self.notices.is_empty()
+    }
+    fn take_notices(&mut self) -> Vec<(u32, u32, u32)> {
+        std::mem::take(&mut self.notices)
+    }
+}
+
 impl Fleet {
     fn new(ships: Vec<u32>) -> Self {
         Fleet {
@@ -508,6 +556,8 @@ impl Fleet {
             span: 0,
             behaviour: None,
             block: 0,
+            founding: None,
+            notices: Vec::new(),
             ordered: false,
             build: None,
         }
@@ -958,6 +1008,7 @@ impl Scene {
         // not decoded: whether before or after the brain's).
         self.run_repair_orders();
         self.run_move_orders();
+        self.run_found_orders();
         if tick % 5 != 0 {
             return;
         }
@@ -1161,6 +1212,25 @@ impl Scene {
                 self.set_state(k, next)
             }
             Op::Goto { next } => self.set_state(k, next),
+            Op::Found {
+                done,
+                other,
+                area,
+                class,
+                ticks,
+            } => {
+                if !started {
+                    self.brain_found(k, area, class);
+                } else {
+                    let (status, result) = self.brain_found_status(k);
+                    if status == 0x1f5 {
+                        self.set_state(k, if result == 10 { done } else { other });
+                    }
+                    if ticks != 0 && elapsed >= ticks {
+                        self.set_state(k, done);
+                    }
+                }
+            }
             Op::Wait { next, ticks } => {
                 if started && elapsed >= ticks {
                     self.set_state(k, next);
@@ -2137,9 +2207,70 @@ impl Scene {
             return;
         }
         let f = &mut self.brain.as_mut().unwrap().fleets[k];
-        if f.block != 0 {
+        if f.block == 0x8c {
+            f.notices.push((id, 300, 0));
+        } else if f.block != 0 {
             f.joined.push(id);
         }
+    }
+
+    /// A notice `code` of ship `id` (0x4a15a0 and the like) to the brain
+    /// fleet holding it, posted only while its block reads its notices
+    /// through its group (the founding, `notices`); whether a fleet held
+    /// it. (Not ported: the notices of the brains' other blocks.)
+    pub(super) fn brain_notice(&mut self, id: u32, code: u32, rec: u32) -> bool {
+        let Some(brain) = self.brain.as_mut() else {
+            return false;
+        };
+        let Some(f) = brain.fleets.iter_mut().find(|f| f.ships.contains(&id)) else {
+            return false;
+        };
+        if f.block == 0x8c {
+            f.notices.push((id, code, rec));
+        }
+        true
+    }
+
+    /// The founding blocks' ticks (0x4cbe70, the navy's 0x4c5047) of the
+    /// brain fleets that hold one (`fleet_found`).
+    fn run_found_orders(&mut self) {
+        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
+            let f = &mut self.brain.as_mut().unwrap().fleets[k];
+            if f.block != 0x8c {
+                continue;
+            }
+            let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
+            self.found_tick(&mut f);
+            self.brain.as_mut().unwrap().fleets[k] = f;
+        }
+    }
+
+    /// Fleet order 0x8c from member `k` (0x479af0, from 0x47b000's first
+    /// call): the member's `+0x40` the area, then to 0x4cbcf0 with flags 0
+    /// the payload `{flags, class, area, third}` (the call's p11, p9,
+    /// p5-p8 and the first word of member p10 of the group): a block of
+    /// another kind ended (`brain_block`), this one made or rewritten
+    /// (`found_make`). The brains' p10 is -1 (miss005's 0x456a7b,
+    /// 0x457313): the word 0xb4 bytes before the group's member array,
+    /// out of it; its value is not decoded, and reaches only the site's
+    /// `+0x24` (the same for the member's every order) and command 0x20's
+    /// third word, which the port's command does not carry (the port
+    /// writes -1, as the computers' order).
+    pub(super) fn brain_found(&mut self, k: usize, area: Cells, class: u32) {
+        self.brain.as_mut().unwrap().fleets[k].last_area = area;
+        self.brain_block(k, 0x8c);
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
+        self.found_make(&mut f, class, area, -1);
+        self.brain.as_mut().unwrap().fleets[k] = f;
+    }
+
+    /// 0x47b000's later calls: the founding's status (query 0x8d, 0x4a0f60
+    /// -> 0x4a0e20 -> 0x4cbfc0, `fleet_found::found_status`), read while
+    /// the block is the founding.
+    pub(super) fn brain_found_status(&self, k: usize) -> (u32, u32) {
+        let f = &self.brain.as_ref().unwrap().fleets[k];
+        super::computer::fleet_found::found_status(self, &f.ships, f.founding.as_ref())
     }
 
     /// Puts a leviathan zone (class 0x192, 0x4960b0) of `area` on the map:
@@ -2259,6 +2390,8 @@ impl Scene {
         // The old block's queue is freed with it (0x4a1c60) and a new one
         // made (0x4a1150): the joins it had not heard are gone.
         f.joined.clear();
+        f.notices.clear();
+        f.founding = None;
         let (players, classes, third) = f.behaviour.unwrap_or((0, 0, 0));
         for ship in self.fleet_ships(k) {
             if self.object_index(ship).is_some() {
@@ -6540,23 +6673,10 @@ mod miss005 {
         if k == WEST && matches!(state, 86 | 91) {
             cast_spell(scene, WEST, NORTH);
         }
-        // Landing: the order waits for its price, its ship sailing there
-        // (0x4cbcf0, as `found_by`).
-        if matches!(k, NORTH | WEST) && state == 46 {
-            let at = if k == WEST { (8, 20) } else { (19, 16) };
-            let founding = scene.fleet_ships(k).iter().any(|&id| {
-                scene.object_index(id).is_some_and(|i| {
-                    matches!(
-                        scene.objects[i].ship.as_ref().and_then(|s| s.task),
-                        Some(crate::objects::Task::Found { .. })
-                    )
-                })
-            });
-            if !founding {
-                if let Some(&ship) = scene.fleet_ships(k).first() {
-                    scene.found_by(ship, at, FORT);
-                }
-            }
+        // Landing: each call of state 45 (0x2d) sets the brain's `+0x190`
+        // (north) or `+0x194` (west) after 0x47b000 (0x456a80, 0x457318).
+        if matches!(k, NORTH | WEST) && state == 45 {
+            scene.brain.as_mut().unwrap().fleets[0].vars[LANDED[(k == WEST) as usize]] = 1;
         }
     }
 
@@ -6827,38 +6947,19 @@ mod miss005 {
                 ticks: 6000,
                 events: zones,
             },
-            // The landing: a medium fort (0x47b000, order 0x8c, its 1 x 1
-            // area written into `+0x40` by 0x479af0).
-            45 => Op::Custom(|scene, k| {
-                // Fleet order 0x8c (0x4cbcf0, its block 0x4cb000).
-                scene.brain_block(k, 0x8c);
-                let west = k == WEST;
-                let at = if west { (8, 20) } else { (19, 16) };
-                scene.brain.as_mut().unwrap().fleets[k].last_area = (at.0, at.1, 1, 1);
-                if let Some(&ship) = scene.fleet_ships(k).first() {
-                    scene.found_by(ship, at, FORT);
-                }
-                scene.brain.as_mut().unwrap().fleets[0].vars[LANDED[west as usize]] = 1;
-                46
-            }),
-            46 => Op::Watch {
-                next: 50,
-                ticks: 3000,
-                events: if k == NORTH {
-                    &[Event::Cell {
-                        state: 50,
-                        cell: (19, 16),
-                        class: FORT,
-                        holds: true,
-                    }]
+            // The landing: a medium fort (0x47b000 at 0x456a7b / 0x457313:
+            // done or 3000 ticks on, 50; its call's `+0x190` / `+0x194`
+            // is `turn`'s).
+            45 => Op::Found {
+                done: 50,
+                other: 50,
+                area: if k == NORTH {
+                    (19, 16, 1, 1)
                 } else {
-                    &[Event::Cell {
-                        state: 50,
-                        cell: (8, 20),
-                        class: FORT,
-                        holds: true,
-                    }]
+                    (8, 20, 1, 1)
                 },
+                class: FORT,
+                ticks: 3000,
             },
             50 => Op::Custom(|scene, k| {
                 roll(scene, k, true);

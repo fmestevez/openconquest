@@ -633,7 +633,7 @@ impl Scene {
             self.waypoint_moves[z].notices.push(notice);
         } else if let Some(z) = self.ship_guard(id) {
             self.human_guards[z].notices.push(notice);
-        } else {
+        } else if !self.brain_notice(id, code, class) {
             for ai in &mut self.computers.players {
                 if ai.post_notice(id, code, class) {
                     break;
