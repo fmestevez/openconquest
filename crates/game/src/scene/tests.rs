@@ -6996,6 +6996,142 @@ fn rammer_charges_strikes_and_backs_off() {
     assert_eq!((s.ram_wait, s.board_wait), (scene.ticks, 0));
 }
 
+/// A ram's prey (0x4c3ec0): bit 12 off while the rammer charges (state
+/// 0x14), state 6 from the blow's message on the impact's tick with its
+/// commands all held (0x4c404f), the hull jolted a rotation for a tick
+/// (0x4c3cc0, 0x59b2d8) and set back, the slide (none: lying in its
+/// cell's middle) and the word back with bit 12 at its end, the rammer
+/// still at its splinters (needs `OPENCONQUEST_DATA`).
+#[test]
+fn the_rams_prey_jolts_holds_and_slides() {
+    use crate::objects::RamStage;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let (mine, other, cell) = boarding_pair(&mut scene, 1, 0);
+    let ti = scene.object_index(other).unwrap();
+    scene.objects[ti].ship.as_mut().unwrap().heading = 1;
+    let full = scene.capabilities(ti);
+    assert_eq!(full & 0x1000, 0x1000);
+    scene.order_close(mine, other, false).unwrap();
+    let mut log = Vec::new();
+    let mut sums = None;
+    for _ in 0..1000 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        let i = scene.object_index(mine).unwrap();
+        let ti = scene.object_index(other).unwrap();
+        let stage = scene.objects[i]
+            .ship
+            .as_ref()
+            .unwrap()
+            .ram_run
+            .map(|r| r.stage);
+        let hit = scene.objects[ti].ship.as_ref().unwrap().ram_hit;
+        log.push((stage, hit, scene.capabilities(ti)));
+        if stage == Some(RamStage::Impact) && sums.is_none() {
+            // The prey's spot (0x598ad8 by its type and heading) and the
+            // rammer's bow (0x599204 by the prey's type), from the
+            // pictures' top left, summed x + y.
+            let (t, r) = (&scene.objects[ti], &scene.objects[i]);
+            let (ts, rs) = (t.ship.as_ref().unwrap(), r.ship.as_ref().unwrap());
+            let left = |o: &MapObject, k: u8| {
+                let half = objects::SHIP_FRAME[k as usize] / 2.0;
+                (o.x - half).round() as i32 + (o.y - half).round() as i32
+            };
+            let (sx, sy) = super::fire::SPOT[ts.kind as usize][1];
+            let (bx, by) = super::grapple::bow_row(ts.kind)[0];
+            sums = Some((
+                left(t, ts.kind) + sx + sy,
+                left(r, rs.kind) + bx as i32 + by as i32,
+            ));
+        }
+        if stage == Some(RamStage::Back) {
+            break;
+        }
+    }
+    let impact = log
+        .iter()
+        .position(|l| l.0 == Some(RamStage::Impact))
+        .unwrap();
+    // Charging: state 0x14, bit 12 off (0x4c3eef).
+    assert!(log[..impact]
+        .iter()
+        .filter(|l| l.0 == Some(RamStage::Charge))
+        .all(|l| l.2 == full & !0x1000 && l.1.is_none()));
+    // The rammer heads east (0), the prey north-east (1): |1 - 0| = 1,
+    // lying in its cell, so the slide is to the cell's middle, where it
+    // lies (0x4c3320: no line).
+    let i = scene.object_index(mine).unwrap();
+    assert_eq!(scene.objects[i].ship.as_ref().unwrap().heading, 0);
+    let middle = (cell.0 as f32 * 64.0 + 96.0, cell.1 as f32 * 64.0 + 32.0);
+    let h = log[impact].1.expect("state 6 on the impact's tick");
+    assert_eq!((h.step, h.to, h.frame), (0, Some(middle), None));
+    // The jolt, prey heading 1: side 1 when the prey's spot's x + y
+    // (0x598ad8) is below the bow's (0x599204 by the prey's type), else
+    // side 0; 0x59b2d8[1][0] is {1, -1}.
+    let (p, b) = sums.unwrap();
+    assert!(p > b, "the bow lies west of the prey's spot");
+    assert_eq!(h.rock, 1);
+    assert_eq!(log[impact].2, 0);
+    // Step 0 a tick later: rotation 1 x 3 + 0x20 and the jolt; step 1 the
+    // rotation; step 2's first tick ends it (no line), the word back.
+    let frames: Vec<_> = log[impact + 1..impact + 3]
+        .iter()
+        .map(|l| l.1.and_then(|h| h.frame))
+        .collect();
+    assert_eq!(frames, [Some(0x24), Some(0x23)]);
+    assert!(log[impact..impact + 3].iter().all(|l| l.2 == 0));
+    assert_eq!(log[impact + 3].0, Some(RamStage::Impact));
+    assert!(log[impact + 3].1.is_none());
+    assert_eq!(log[impact + 3].2, full);
+}
+
+/// A rammed ship under way between cells and struck from astern slides
+/// on along its heading to 30 pixels off its cell's middle each axis
+/// (0x4c3110), two points of the line a tick from step 2 (0x4b5220,
+/// 0x4c3070; needs `OPENCONQUEST_DATA`).
+#[test]
+fn the_rams_prey_under_way_slides_on() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let (mine, other, cell) = boarding_pair(&mut scene, 1, 0);
+    let (i, ti) = (
+        scene.object_index(mine).unwrap(),
+        scene.object_index(other).unwrap(),
+    );
+    let middle = (cell.0 as f32 * 64.0 + 96.0, cell.1 as f32 * 64.0 + 32.0);
+    {
+        let o = &mut scene.objects[ti];
+        o.x = middle.0 + 5.0;
+        let s = o.ship.as_mut().unwrap();
+        s.heading = 1;
+        s.move_state = 5;
+        s.between.set(true);
+    }
+    scene.ram_hit_start(ti, i);
+    let h = scene.objects[ti].ship.as_ref().unwrap().ram_hit.unwrap();
+    assert_eq!(h.to, Some((middle.0 + 30.0, middle.1 - 30.0)));
+    // From (+5, 0) to (+30, -30): 31 points (the longer side 30 and the
+    // end), odd; two a tick, done the tick after the end: 16 ticks of
+    // step 2, after steps 0 and 1.
+    let mut ticks = 0;
+    while scene.objects[ti].ship.as_ref().unwrap().ram_hit.is_some() {
+        scene.run_ram_hits(crate::clock::TICK);
+        ticks += 1;
+        assert!(ticks < 100);
+    }
+    assert_eq!(ticks, 18);
+    let o = &scene.objects[ti];
+    assert_eq!((o.x, o.y), (middle.0 + 30.0, middle.1 - 30.0));
+}
+
 /// A blow without a shot (a ram's 0x4c1ad0, a bite's 0xf166, a stare's
 /// 0x158bf, a waterspout's 0xda96, a reef's 0xda94: all a ship's code 4,
 /// 0x4a9e30 -> 0x4befc0) makes no picture or sound at the struck ship,

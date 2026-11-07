@@ -519,6 +519,9 @@ pub struct Ship {
     /// (0x4c2230 states 2, 3 and 6).
     #[serde(default)]
     pub ram_run: Option<RamRun>,
+    /// Being rammed: the prey's contact state 6 (0x4c3ec0, `+0x713` 1).
+    #[serde(default)]
+    pub ram_hit: Option<RamHit>,
     /// A loader's hook out, pull alongside, walkway and link (0x4b73a0
     /// states 7, 8, 10, 11, 4, 12 and 6).
     #[serde(default)]
@@ -951,6 +954,26 @@ pub struct RamRun {
     pub clock: f32,
     /// The impact picture's length in ticks.
     pub frames: u32,
+}
+
+/// A rammed ship's state 6 (0x4c3ec0), entered from state 3 on the
+/// blow's message (0x301) with its contact a ship (type 200): the hull
+/// jolts a rotation over for a tick, then slides (0x4c3070) and is done.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RamHit {
+    /// The jolt `+0x726` (0x4c3cc0: -1, 0 or 1).
+    pub rock: i8,
+    /// The hull's frame `+0x45` it set, while `rock` is not 0.
+    pub frame: Option<u8>,
+    /// The step `+0x72b`: 0 the jolt, 1 the hull back, 2 the slide.
+    pub step: u8,
+    /// Where the slide (0x4b5220, `+0x6df`) runs from and to; `None` for
+    /// none (`+0x6db` 0).
+    pub from: (f32, f32),
+    pub to: Option<(f32, f32)>,
+    /// Ticks into the slide (step 2).
+    pub ticks: u32,
+    pub clock: f32,
 }
 
 /// What a ship's picture shows (0x4e5da0 picks its composite's layers):
@@ -1712,7 +1735,7 @@ pub const SHIP_FRAME_MS: u64 = 3 * TICK_MS;
 /// Furling the sail goes slower: the delay of 4 a ship gets lying against
 /// something (0x4b5df0), a frame every 5 ticks.
 pub const SHIP_FURL_SECONDS: f32 = 5.0 * crate::clock::TICK;
-const SHIP_FURL_FRAMES: usize = 88;
+pub(crate) const SHIP_FURL_FRAMES: usize = 88;
 /// The furling's four frames done: the sail furled.
 pub const SHIP_FURLED: f32 = 4.0;
 
@@ -1941,6 +1964,11 @@ impl MapObject {
             // rest, rocking the other.
             Some(ship) if n >= SHIP_IDLE_FRAMES + 32 => match ship.rotation {
                 Some(r) => SHIP_TURN_FRAMES + r as usize % 24,
+                // Rammed, its hull's frame as the hit set it (0x4c3ec0
+                // state 6: the jolt, then the rotation of its heading).
+                None if ship.ram_hit.is_some_and(|h| h.frame.is_some()) => {
+                    ship.ram_hit.and_then(|h| h.frame).unwrap_or(0) as usize
+                }
                 // Lying loading or unloading, the sail furls (0x4b5df0, the
                 // frames from 88, 8 a heading: four furling, then, the sail
                 // furled (+0x25b = 5), four it rocks over, 0x4a3150).
@@ -2478,6 +2506,7 @@ pub fn resolve(
         rock_clock: 0.0,
         grapple: None,
         ram_run: None,
+        ram_hit: None,
         load_run: None,
         landing: None,
         close_in: CloseIn::default(),

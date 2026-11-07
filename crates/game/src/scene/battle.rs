@@ -1633,6 +1633,10 @@ impl Scene {
     /// `grapple`); their closing in is `Scene::run_closing`.
     pub(super) fn run_contact(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
         self.run_grapples(dt, data, caches);
+        // The prey ticks before its rammer here: a hit the blow starts
+        // steps from the next tick (0x4c3ec0 state 6 is entered on the
+        // tick of state 3, its step 0 a tick later).
+        self.run_ram_hits(dt);
         self.run_ram_runs(dt, data, caches);
     }
 

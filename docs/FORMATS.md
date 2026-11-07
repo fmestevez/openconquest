@@ -1539,11 +1539,19 @@ button on bit 8, none shown set; the building page every button on bit
 0; the behaviour page all on bits 0-11, else all off and none set. The
 port keeps the written word in `Ship::caps` and lays the holds over it
 in `Scene::capabilities` (the rammer by `RamStage` past `Charge`, the
-boarder and boarded by `Grapple`, bit 13 off once its fight is set),
-which the pages and `takes_contact` read; the cancelled build's 0 in
-`Ship::caps`. Not ported: the amber and unload holds (the port's amber
-and unload are not the original's step machines), the ram prey's 0 (its
-contact states 0x4c3ec0 not ported), the `+0x251 == 1` clears
+boarder and boarded by `Grapple`, bit 13 off once its fight is set,
+the ram's prey bit 12 off while its rammer is at `RamStage::Charge` and
+0 through `Ship::ram_hit`), which the pages and `takes_contact` read;
+the cancelled build's 0 in `Ship::caps`. Not ported: the amber and
+unload holds (the port's amber and unload are not the original's step
+machines: the amber's hold runs from step 1 -> 10 at the deposit's
+cell, lying still, with room, 0x4afe50 true, to step 5's end, the slide
+back to the cell's middle done, `+0x79f < 1`, 0x4b3850 at 0x4b0d74; the
+unload's from step 1 -> 10 at the berth `+0x7bd`, lying still, the port
+`+0x7b1` on its cell, vt+0xb0 true, 0x4afe50(1) true, the contact
+`{0x32, 5, port}` made, to step 0x13's end, the slide back done,
+0x4b3850 at 0x4ae683; no phase of the port's `GatherPhase` starts or
+ends at those steps), the `+0x251 == 1` clears
 (0x4b3882, 0x4defda; no ship writer of `+0x251 = 1` found), the
 capture's `|= 0x2000`, 0x4bbfa0 (`+0x275` not loaded), the mover's
 0x4a473e / 0x4a4c0d, the saved copy (0x4e2326).
@@ -3578,7 +3586,45 @@ with code 1 (`+0x811` 0x14 when the rammer is alongside, 3 at the blow,
 = +0x811`, `+0x25d |= 2`) runs 0x4c3ec0 from the contact machine 0x4c3ca0,
 which stores no `+0x58c` (nor do 0x4abc40, 0x4b3850, 0x4e06a0, 0x4c3320 it
 calls); by then the prey's contact is the rammer (type 1, set by 0x4c1760
-as the ram reached state 2). State 6 from contact is 0x4c3410 case 9 (at
+as the ram reached state 2). **The prey's states (0x4c3ec0**, run each
+tick by the ship's tick at 0x4aba9b through 0x4c3ca0 while `+0x25d & 2`
+and `+0x713 == 1`, state `+0x71e`): 0x14 (from 0x1401, the rammer
+alongside) clears `+0x261` bit 12 each tick and, its contact `+0x8e6`
+gone, sets it again, frees the record (0x4e06a0) and turns the machine
+off (0x4abc40: `+0x25d &= ~2`). 3 (from 0x301, the rammer's state 2 ->
+3): a contact that is not a ship (type 200) sets bit 12 and turns the
+machine off; else `+0x72b = 0`, the jolt `+0x726` = 0x4c3cc0(rammer) (0
+when its hull frame `+0x45 > 0x57`, a furled sail's), the word held with
+mask 0 (0x4b37d0 at 0x4c404f into `+0x715` / `+0x719`), `+0x71f = 1`,
+state 6, `+0x6b2` the tick, `+0x6b6 = +0x6db = +0x6ba = 0`, and its
+slide by `d = |prey heading - rammer heading|` (plain): 0, 1, 7 between
+cells (0x4e0b50 false) 0x4c3110(heading), a line (0x4b5220) from its
+picture's top left `+0x59` / `+0x5d` to its cell's `x * 64 - (w - 64) /
+2` plus 0x1e on each axis toward the heading (0 +x, 1 +x -y, 2 -y, 3 -x
+-y, 4 -x, 5 -x +y, 6 +y, 7 +x +y); 0, 1, 7 lying in a cell and 3, 4, 5
+0x4c3320, a line to the cell's middle (none when there already); 2, 6
+none. 6: step 0, with a jolt, `+0x727 = heading x 3 + 0x20` and `+0x45 =
++0x727 + jolt`; step 1, with a jolt, `+0x45 = +0x727`; step 2 0x4c3070
+(no line: done; else each tick past `+0x6b2 + +0x6ba` the index `+0x6b6`
+steps 2 points while below count - 2, the picture there, else the line
+freed and done); done: state 0x14, the word given back (0x4b3850), bit
+12 set, the machine off (0x4abc40), `+0x6a0 = 0`. Each state 6 tick with
+a jolt redraws and stamps `+0x81`. **0x4c3cc0(prey, rammer)**: the
+prey's spot 0x598ad8[type][heading] (two ints) plus its top left; the
+bow 0x599204 indexed by the prey's type (sic) and the rammer's rotation
+(`+0x45 - 0x20` while 0x20-0x37, else heading x 3), two shorts, plus the
+rammer's top left; by the prey's heading: 0 `bx > px`, 1 `px + py < bx
++ by`, 2 `by < py` and `by <= px` (sic, 0x4c3dd2), 3 `py - px < by -
+bx`, 4 `bx < px`, 5 `px + py > bx + by`, 6 always 0, 7 `py - px > by -
+bx`, the two sides level giving jolt 0; else the byte
+0x59b2d8[(rammer heading + prey heading x 8) x 2 + side]: by `(rammer -
+prey) mod 8`, 0 and 4 {0, 0}, 1-3 {-1, 1}, 5-7 {1, -1}. The port:
+`Ship::ram_hit` (grapple.rs `ram_hit_start` at the impact's start,
+`run_ram_hits` before the rammers so step 0 falls a tick later; the prey
+held still meanwhile, `held_by_contact`); the frame shown is the port's
+composite frame of that number (its rotations are 32-55); after state 6
+the port's frames take over (not decoded: what draws a hull whose `+0x45`
+was left at a rotation). State 6 from contact is 0x4c3410 case 9 (at
 0x4c35c6, `+0x713 == 2`), the ship a hook holds. The tick
 stamps +0x58d every frame but in state 3, so a ship waiting there 50 ticks
 (0x4a374a) falls to state 0 with its route kept, where the push rule

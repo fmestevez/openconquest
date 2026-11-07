@@ -554,11 +554,12 @@ impl Scene {
     /// 0x4c3577; given back with bit 12 at state 6's end, 0x4c3c15);
     /// stone (the stare's 0x158bf, 0x4dc630 at 0x4de905: 0x4b37d0 with
     /// 0x2000 when bit 14 is set, else 0); the song (0x4a7390: 0x4b37d0,
-    /// cleared); a ram's prey losing bit 12. 0 for an object that is not
-    /// a ship. (Not ported: the amber gather's 0x4b067f and the unload's
-    /// 0x4ae191, the port's amber and unload not being the original's
-    /// step machines 0x4b0590 / 0x4adef0; the ram prey's 0x4c404f with 0,
-    /// its contact states 0x4c3ec0 not ported; the `+0x251 == 1` clears
+    /// cleared); a ram's prey losing bit 12 while its rammer charges, all
+    /// of it in its state 6 (`Ship::ram_hit`, 0x4b37d0 with 0 at
+    /// 0x4c404f). 0 for an object that is not a ship. (Not ported: the
+    /// amber gather's 0x4b067f and the unload's 0x4ae191, the port's
+    /// amber and unload not being the original's step machines 0x4b0590
+    /// / 0x4adef0; the `+0x251 == 1` clears
     /// of bits 0-11, 0x4b3882 and 0x4defda, no ship writer of
     /// `+0x251 = 1` found; the capture's `|= 0x2000` at 0x4b707f;
     /// 0x4bbfa0's 0xffffffff for a ship with `+0x275`, record `+0x40`, not
@@ -595,14 +596,21 @@ impl Scene {
         if self.charmed.contains_key(&id) {
             caps = 0;
         }
+        // A ram's prey: bit 12 off in contact state 0x14 while its rammer
+        // charges (from the alongside message 0x1401, 0x4c3eef), all of it
+        // held in state 6 (0x4c404f, mask 0) and bit 12 back at its end
+        // (0x4c3f02), the machine then off.
         let prey = self.objects.iter().any(|p| {
             p.ship
                 .as_ref()
                 .and_then(|ps| ps.ram_run)
-                .is_some_and(|r| r.target == id)
+                .is_some_and(|r| r.target == id && r.stage == objects::RamStage::Charge)
         });
         if prey {
             caps &= !0x1000;
+        }
+        if s.ram_hit.is_some() {
+            caps = 0;
         }
         caps
     }

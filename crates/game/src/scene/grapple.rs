@@ -17,7 +17,7 @@
 //! middle of its cell (state 6).
 
 use super::*;
-use crate::objects::{Grapple, GrappleStage, RamRun, RamStage};
+use crate::objects::{Grapple, GrappleStage, RamHit, RamRun, RamStage};
 
 /// Ticks a frame of the sail furling while grappled: the hull's delay of
 /// 4 (0x4b5df0 state 8), a frame once more than 4 ticks have passed; four
@@ -34,6 +34,29 @@ const BACK_STEP: u32 = 3;
 /// How far back a rammer recoils at the impact's second frame, in pixels
 /// along its heading (0x4c2230 state 3).
 const RECOIL: f32 = 4.0;
+
+/// A rammed ship's jolt by its heading and the rammer's (0x59b2d8, two
+/// bytes each, `[prey][rammer]`, 0x4c3cc0's side 0 or 1): none head on or
+/// astern, else one rotation each way.
+const ROCK: [[[i8; 2]; 8]; 8] = {
+    const O: [i8; 2] = [0, 0];
+    const A: [i8; 2] = [-1, 1];
+    const B: [i8; 2] = [1, -1];
+    [
+        [O, A, A, A, O, B, B, B],
+        [B, O, A, A, A, O, B, B],
+        [B, B, O, A, A, A, O, B],
+        [B, B, B, O, A, A, A, O],
+        [O, B, B, B, O, A, A, A],
+        [A, O, B, B, B, O, A, A],
+        [A, A, O, B, B, B, O, A],
+        [A, A, A, O, B, B, B, O],
+    ]
+};
+
+/// How far a rammed ship under way is pushed on along its heading from
+/// its cell's middle, each axis (0x4c3110: 0x1e).
+const SHOVE: f32 = 30.0;
 
 /// The eight directions' steps on the grid (0x5c4f4c): 0 east,
 /// counter-clockwise.
@@ -315,6 +338,10 @@ impl Scene {
                 || s.load_run
                     .is_some_and(|r| r.stage != objects::LoadStage::Hook)
             {
+                held.insert(o.id);
+            }
+            // A rammed ship slides (0x4c3ec0 state 6).
+            if s.ram_hit.is_some() {
                 held.insert(o.id);
             }
             if let Some(r) = s.ram_run {
@@ -1138,6 +1165,147 @@ impl Scene {
             frames: n,
             ..r
         });
+        self.ram_hit_start(ti, i);
+    }
+
+    /// The prey's side of the blow (0x4c3ec0 state 3, on the rammer's
+    /// message 0x301 at 0x4c2563 with its contact the rammer, type 200):
+    /// the jolt `+0x726` (0x4c3cc0; none on a furled sail's frame,
+    /// `+0x45 > 0x57`), its commands held with mask 0 (0x4b37d0 at 0x4c404f),
+    /// state 6 at step 0, and its slide by the two headings' difference
+    /// `|prey - rammer|` (plain, 0 to 7): 0, 1 or 7 under way between
+    /// cells (0x4e0b50 false) on along its heading (0x4c3110), lying in a
+    /// cell or 3 to 5 to its cell's middle (0x4c3320), 2 or 6 none.
+    pub(super) fn ram_hit_start(&mut self, ti: usize, i: usize) {
+        let furled = {
+            let t = &self.objects[ti];
+            t.ship
+                .as_ref()
+                .is_some_and(|s| s.furl > 0.0 && t.frames.len() >= objects::SHIP_FURL_FRAMES + 64)
+        };
+        let rock = if furled { 0 } else { self.ram_rock(ti, i) };
+        let cell = Self::cell_middle(self.cell_of_object(ti));
+        let rammer = self.objects[i].ship.as_ref().map_or(0, |s| s.heading % 8);
+        let t = &self.objects[ti];
+        let Some(s) = t.ship.as_ref() else {
+            return;
+        };
+        let face = s.heading % 8;
+        let to = match (face as i32 - rammer as i32).abs() {
+            0 | 1 | 7 if !s.plans_from_own_cell() => {
+                let (ux, uy) = UNIT[face];
+                Some((cell.0 + SHOVE * ux as f32, cell.1 + SHOVE * uy as f32))
+            }
+            0 | 1 | 7 | 3 | 4 | 5 => Some(cell),
+            _ => None,
+        };
+        let from = (t.x, t.y);
+        self.objects[ti].ship.as_mut().unwrap().ram_hit = Some(RamHit {
+            rock,
+            frame: None,
+            step: 0,
+            from,
+            to,
+            ticks: 0,
+            clock: 0.0,
+        });
+    }
+
+    /// The jolt a ram gives prey `ti` (0x4c3cc0, rammer `i`): its hull's
+    /// spot by its type and heading (0x598ad8, from its picture's top
+    /// left) set against the rammer's bow (0x599204 by the prey's type,
+    /// sic, and the rammer's hull rotation), compared along the prey's
+    /// heading (east: x; north-east: x + y; north: y, side 0 when the bow's
+    /// y passes the spot's x, sic; north-west: y - x; west: x;
+    /// south-west: x + y; south: always side 0; south-east: y - x), level
+    /// gives none, else the side picks from 0x59b2d8.
+    fn ram_rock(&self, ti: usize, i: usize) -> i8 {
+        let (t, r) = (&self.objects[ti], &self.objects[i]);
+        let (Some(ts), Some(rs)) = (t.ship.as_ref(), r.ship.as_ref()) else {
+            return 0;
+        };
+        let (pf, rf) = (ts.heading % 8, rs.heading % 8);
+        let kind = (ts.kind as usize).min(11);
+        let left = |o: &MapObject, k: u8| {
+            let half = objects::SHIP_FRAME[k as usize % 12] / 2.0;
+            ((o.x - half).round() as i32, (o.y - half).round() as i32)
+        };
+        let (tx, ty) = left(t, ts.kind);
+        let (sx, sy) = super::fire::SPOT[kind][pf];
+        let (px, py) = (tx + sx, ty + sy);
+        let rot = rs.rotation.map_or(rf * 3, usize::from) % 24;
+        let (bx, by) = bow_row(ts.kind)[rot];
+        let (rx, ry) = left(r, rs.kind);
+        let (bx, by) = (rx + bx as i32, ry + by as i32);
+        let side = match pf {
+            0 if bx == px => return 0,
+            0 => bx > px,
+            1 if bx + by == px + py => return 0,
+            1 => px + py < bx + by,
+            2 if by == py => return 0,
+            2 => by < py && by <= px,
+            3 if by - bx == py - px => return 0,
+            3 => py - px < by - bx,
+            4 if bx == px => return 0,
+            4 => bx < px,
+            5 if bx + by == px + py => return 0,
+            5 => px + py > bx + by,
+            7 if by - bx == py - px => return 0,
+            7 => py - px > by - bx,
+            _ => false,
+        };
+        ROCK[pf][rf][side as usize]
+    }
+
+    /// Rammed ships' state 6 a tick at a time (0x4c3ec0, the contact
+    /// machine 0x4c3ca0 run by the ship's tick while `+0x25d & 2`): step 0
+    /// the hull's frame `+0x45` its heading's rotation `x 3 + 0x20` and the
+    /// jolt (`+0x727` kept), step 1 back to `+0x727`, step 2 the slide
+    /// (0x4c3070: two points of 0x4b5220's line a tick); at its end state
+    /// 0x14, its commands given back (0x4b3850), `+0x261 |= 0x1000`, the
+    /// machine off (0x4abc40), `+0x6a0 = 0`. (Not decoded: what draws the
+    /// hull after `+0x45` is left at the rotation; the port's frames take
+    /// over again.)
+    pub(super) fn run_ram_hits(&mut self, dt: f32) {
+        for i in 0..self.objects.len() {
+            let Some(mut h) = self.objects[i].ship.as_ref().and_then(|s| s.ram_hit) else {
+                continue;
+            };
+            let mut done = false;
+            h.clock += dt;
+            while h.clock >= crate::clock::TICK && !done {
+                h.clock -= crate::clock::TICK;
+                let face = self.objects[i].ship.as_ref().unwrap().heading % 8;
+                let still = (face * 3 + 0x20) as u8;
+                match h.step {
+                    0 => {
+                        if h.rock != 0 {
+                            h.frame = Some((still as i8 + h.rock) as u8);
+                        }
+                        h.step = 1;
+                    }
+                    1 => {
+                        if h.rock != 0 {
+                            h.frame = Some(still);
+                        }
+                        h.step = 2;
+                    }
+                    _ => {
+                        h.ticks += 1;
+                        match h.to {
+                            Some(to) => {
+                                let (at, over) = slide(h.from, to, h.ticks);
+                                let o = &mut self.objects[i];
+                                (o.x, o.y) = at;
+                                done = over;
+                            }
+                            None => done = true,
+                        }
+                    }
+                }
+            }
+            self.objects[i].ship.as_mut().unwrap().ram_hit = (!done).then_some(h);
+        }
     }
 
     /// One tick of a rammer at the impact or backing off; `None` once it
