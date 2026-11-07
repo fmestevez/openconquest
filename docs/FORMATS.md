@@ -11151,9 +11151,9 @@ member, ship): the 300, tick now, only while the member has a block
 (`ship_launched` -> `brain_heard_join`). (0x49c830, an area's ships of
 the player taken into a group, and 0x49d0d0, one group's ships passed to
 another, post it the same way; neither is a build.) A built ship
-reaching a founding or treasure member under its block is heard, but the
-block's work for it is not ported (the 300 waits in `joined` until a
-new block). Their 300 cases do
+reaching a founding or treasure member under its block is heard; the
+founding block's work for it is not ported (the 300 waits in `joined`
+until a new block), the treasure block's is (`treasure_notices`). Their 300 cases do
 the block's work first, then `#` sub 1: founding 0x4cba10 (0x4cb1a0:
 no route `+0x61`, a site by 0x4cb850 and 0x4cb0b0; with one, 0x4cea20
 / 0x4ceab0 and 0x4cb110 / 0x4cb5f0), treasure 0x4da0a0 (0x4d97c0 a
@@ -11161,8 +11161,8 @@ target not taken: 0x4d9690 and 0x4d8b30, counted; none, with `+0x28`
 listing, 0x4d9920 over `+0xc` and 0x4da3e0 on `+0x2c`'s first);
 founding's other cases 0x130 and 0x136, treasure's 0x137, 0x141,
 0x142 (`+0x34` 4). The computers' read of these 300s (`read_joins`)
-sends the `#` alone: the block's work is not ported (the port's
-founding and treasure orders keep no sites, routes or lists). Ported:
+sends the `#` alone for the founding (its sites and routes not
+ported); the treasure block's is ported (`treasure_notices`, below). Ported:
 a brain's mended ship's join posts 300 as a prize's
 (`brain_heard_join`), only with a block, and a new block of another
 kind drops the joins not heard (`brain_block`). Not ported: the fleet attack task's (the port keeps it per ship, no group: see
@@ -11188,14 +11188,67 @@ aboard `+0x482`; 0 for types 10 and 11) gets the take, 0x4d9f50: command
 which the ship's 0x4e2ba0 case 0x22 turns into event 0x40 {700, 10, the
 treasure, priority} as the player's take (0x49e0e0 gives the player's
 priority 0); any other ship a plain move to the treasure's cell
-(0x4cf070, command 0x14, priority 0). No ship sails home with what it
-carries: a computer's treasures go ashore only by 0x4ad9f0 and the
-panel. With no treasure left in the area (0x4d9920) the order reports
-done and the round goes on to the zone. Ours (`hunt_treasure`): the
-room test and the take or the move as the original's; not ported: the
-target (ours the nearest no other ship of the flotilla is after, the
-take given at once, a refused one trying the next) and the block's
-lists and notices (0x137, 0x141, 0x142).
+(0x4cf070, command 0x14, priority 0). A treasure put aboard sends its
+ship home to a port (0x141, below; not in the port). With no treasure
+in the area at the order (0x4d9920), a treasure used at once (0x142)
+or no ships, the order reports done and the round goes on to the
+zone.
+
+The block (0x65 bytes; 0x483350 gives payload {area x, y, w, h `+0x56..
++0x59` of the task, kinds -1, `+0x55`, the base town's ports (class
+0x39, 0x43d220 / 0x440c60) count and ids, the manager's `+8`}):
+0x4da550 ends a block of another kind (0x4a1c60) but keeps one of
+`{0xbe, 0x79}` with its lists, sets `+0xc..+0x18` the area, `+0x1c`
+the kinds, `+0x20`, `+0x30` and the status `+0x34` 0, lists the ports
+`+0x24` (0x4d9a70), then 0x4d9920: none, `+0x34` 5; else 0x4da3e0 on
+`+0x2c`'s first entry. 0x4d9920(area, first): 0 for an area whose x or
+y is off the map; the cells to `min(x + w, W)`, `min(y + h, H)`, row by
+row, the cell slot's object (`0x5c74fc + (W y + x) x 0xc + 0xe`) of
+class 700, `+0xa4` not 5, kind bit in `+0x1c`, through 0x4d9810 (the
+entry {object, id, kind, cell, -1} of that id overwritten, else
+appended; never removed but by 0x4d98c0); with `first`, the index + 1
+of the first, else the count. 0x4da3e0 records each ship (0x4d9690:
+{ship, id, cell x, y, target, cell, state, kind}, by id, overwritten
+or appended) with state 1: target and kind the entry's for the take,
+0 for the move. The status 0x4da900: 0x1f5 result 1 with no ships, 500
+running, `+0x34` 4 0x1f5 result 0xc, 5 result 0xd. The tick 0x4da6a0
+(navy 0x4c5088) reads the notices first, from the last (0x4da0a0):
+300 of a ship in the group (0x4cc590): a record of state 2 (0x4d97c0),
+the joiner is recorded state 3 behind that ship and sent `*` sub 1
+with its id (0x4d8b30); none, with records, 0x4d9920 again and
+0x4da3e0 on the first entry (every ship, not the joiner alone); then
+`#` sub 1 (0x4c42f0). 0x137 (0x4a1770: rec {code, tick, `+0x60`, id,
+cell x, y}): the record dropped (0x4d9760); one of state 2, the list
+about its cell (rect {x - 2, y - 2, x + 2, y + 2} read as x, y, w, h)
+with `first`: none `+0x34` 5, else 0x4da3e0 on that entry. 0x141
+(0x4a1a60 from 0x4a5bc0 at 0x4a5d26: rec[4] `[edi]`, [5] 0, [6] the
+ship's cell index, [7] 1): with rec[7] > 0, the target of id rec[5]
+dropped (0x4d98c0, so id 0), the ports re-listed (0x4d9a70 mode 0:
+the order's group `+0x30` of type 0xb's ports by 0x42cc20, player 16's
+0x40 by 0x42c9a0, else every cell's port of the player), 0x4d9cf0 the
+ones gone dropped, 0x4d9db0 the least `W[ship] - W[port]` of the
+wavefront 0x4a1e90 (`+0x592`, ship cell, 5000), the ship recorded
+state 2 with it and sent command 0x1f {port, 1, 0x5a} (0x4d9fa0), the
+others not of state 2 recorded state 3 and sent `*` after it
+(0x4d9fe0). 0x142 (0x4a1af0, 0x4a5bc0 at 0x4a5c7d, 0x4adc8c,
+0x4de65a): `+0x34` 4. Without a notice heard and `+8` past 0x5a,
+`+8` 0 and each ship (class 200): `+0x691` set, 0x4a21c0 and 0x4cf760;
+`+0x58c` 0 with a record: that of index the loop's (not the ship's
+record) of state 2 and treasures aboard `+0x482`, the trip home again;
+else a state-2 record, the ship recorded state 3 behind it and sent
+`*`. `+8` grows by `+0xe2` each tick.
+
+Ours (`treasure_order`, `treasure_list`, `treasure_send`,
+`treasure_notices`, the status in `report`): the block kept per
+flotilla (`TreasureBlock`, cleared by a new block of another kind), the
+list, the send after the first entry with its records, the 300, 0x137
+and 0x142 and the status as the original's; the take posts 0x142 or
+0x141 (`take_treasure`); ships are no longer re-sent when idle. Not
+ported: 0x141's trip home and the escorts (state 2 and 3, behaviour
+`*`, the ports' list), so the 300's escort, the 0x137 of a carrier and
+0x4da6a0's ship pass never run; `+0x691` / 0x4a21c0 / 0x4cf760; the
+treasure's state 5; two treasures on a cell (the
+port takes the first in object order).
 
 **A ship's take** (event 0x40 class 700, the player's and the computer's
 alike). 0x4aab00 sets the gather task `+0x76e` 700, sub-code `+0x772` 9,

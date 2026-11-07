@@ -716,6 +716,14 @@ impl Scene {
                 s.add_treasure(tr, owner);
             }
         }
+        // The notice to the ship's group (0x49c020): 0x142 used at once
+        // (0x4a1af0 at 0x4a5c7d), 0x141 put aboard (0x4a1a60 at 0x4a5d26).
+        let code = if matches!(tr.kind, 0..=5 | 8) {
+            0x142
+        } else {
+            0x141
+        };
+        self.post_notice(self.objects[i].id, code, 0);
         // Message 0x5d94 with 1 (0x4b6e80; 0x4a5bc0 at 0x4a5c89, 0x4a5cef).
         self.treasure_news(owner, None, tr, true);
         // The treasure answers message 0x158c1 (0x4074d0) by going to

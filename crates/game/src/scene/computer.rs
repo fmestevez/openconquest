@@ -280,6 +280,56 @@ pub struct Flotilla {
     /// Fleet order 0x6e's block (0x4d1ce0), while the block is a guard.
     #[serde(default)]
     guard: Option<fleet_guard::GuardBlock>,
+    /// Fleet order 0xbe's block (0x4da550), while the block is a
+    /// treasure hunt.
+    #[serde(default)]
+    treasure: Option<TreasureBlock>,
+}
+
+/// Fleet order 0xbe's block (`+0x25`, `{0xbe, 0x79}`, 0x4da550): the
+/// order's payload (0x483350: the area, kinds -1, the town's ports, the
+/// manager's group) and the lists the block builds.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct TreasureBlock {
+    /// `+0xc..+0x18` the area (payload 0-3).
+    area: Cells,
+    /// `+0x1c` the kinds taken, a bit each (payload 4).
+    kinds: u32,
+    /// `+0x34`: 4 a treasure used at once (0x142), 5 none in the area;
+    /// read by the status 0x4da900.
+    status: u32,
+    /// `+0x28` the ships' records (0x4d9690, 0x20 bytes, by ship id).
+    ships: Vec<TreasureRec>,
+    /// `+0x2c` the targets (0x4d9810, 0x18 bytes, by treasure id).
+    targets: Vec<TreasureTarget>,
+}
+
+/// A ship's record in the treasure block (`+0x28`, 0x4d9690).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+struct TreasureRec {
+    /// `+4` the ship's id, `+8`, `+0xc` its cell when sent.
+    ship: u32,
+    x: i32,
+    y: i32,
+    /// `+0x10` the treasure to take (0 for a plain move), `+0x14` the
+    /// target's cell index (`y x W + x`).
+    target: u32,
+    cell: i32,
+    /// `+0x18`: 1 sent, 2 carrying home, 3 escorting (0x141's).
+    state: u32,
+    /// `+0x1c` the treasure's kind (0 for a move).
+    kind: u32,
+}
+
+/// A target in the treasure block's list (`+0x2c`, 0x4d9810: `+0` the
+/// object, `+0x10` -1, unread).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+struct TreasureTarget {
+    /// `+4` the treasure's id, `+8` its kind (`+0xb0`), `+0xc` its cell
+    /// index.
+    id: u32,
+    kind: u32,
+    cell: i32,
 }
 
 /// Fleet order 200's block (`+0x25`, 0x65 bytes, 0x4dafe0: `+0` 200, `+4`
@@ -1598,6 +1648,7 @@ impl Scene {
         ai.flotillas[f].move_order = None;
         ai.flotillas[f].dock_block = None;
         ai.flotillas[f].guard = None;
+        ai.flotillas[f].treasure = None;
         ai.flotillas[f].target = 0;
         ai.flotillas[f].no_notices = false;
         let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
@@ -1610,16 +1661,20 @@ impl Scene {
     /// the computer's tick; the original's navy reads them at its own).
     /// A ship still in it and the block the same: the gather zone hears it
     /// (0x4c9e30, which sends the group's behaviour); the founding
-    /// (0x4cba10), dock (0x4db110), treasure (0x4da0a0) and forts' 0xd2
-    /// (0x4dc2a0) blocks send it `#` sub 1 with the group's three. (The
-    /// move's, the attack's and the guard's are their passes',
-    /// `flotilla_move_pass`, `attack_pass`, `guard_pass`.) (Not ported:
-    /// the work those 300 cases do first, on lists the port's blocks do
-    /// not keep: the founding's 0x4cb1a0, a site 0x4cb850 or a waypoint route `+0x61`;
-    /// the treasure's 0x4d97c0 target, else with `+0x28` listing 0x4d9920
-    /// and 0x4da3e0, else 0x4d9690 and 0x4d8b30.)
+    /// (0x4cba10), dock (0x4db110) and forts' 0xd2 (0x4dc2a0) blocks send
+    /// it `#` sub 1 with the group's three; the treasure block's notices
+    /// are its own (0x4da0a0, `treasure_notices`). (The move's, the
+    /// attack's and the guard's are their passes', `flotilla_move_pass`,
+    /// `attack_pass`, `guard_pass`.) (Not ported: the work the founding's
+    /// 300 does first, on lists the port's block does not keep: 0x4cb1a0,
+    /// a site 0x4cb850 or a waypoint route `+0x61`.)
     fn read_joins(&mut self, ai: &mut Computer, f: usize) {
         let block = ai.flotillas[f].block;
+        if block == 0xbe {
+            // The treasure block's tick (0x4da6a0, 0x4c5088).
+            self.treasure_notices(ai, f);
+            return;
+        }
         let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
         for (id, at, code, _) in std::mem::take(&mut ai.flotillas[f].joined) {
             if code != 300 || at != block || !ai.flotillas[f].ships.contains(&id) {
@@ -5618,8 +5673,12 @@ impl Scene {
             self.dock_order(ai, f, mode);
             return;
         }
+        if let FleetOrder::Treasure(area) = order {
+            self.treasure_order(ai, f, area);
+            return;
+        }
         for id in ai.flotillas[f].ships.clone() {
-            self.order_ship(ai, id, order);
+            self.order_ship(id, order);
         }
     }
 
@@ -6284,32 +6343,17 @@ impl Scene {
             if idle && !self.building_at(cell) {
                 self.found_by(ship, cell, class);
             }
-            return;
         }
         // (The attack's ships are its pass's, `attack_pass`; the guard's
-        // its block's, `guard_pass`.)
-        if !matches!(order, FleetOrder::Treasure(_)) {
-            return;
-        }
-        for id in ai.flotillas[f].ships.clone() {
-            let Some(i) = self.object_index(id) else {
-                continue;
-            };
-            let idle = self.objects[i]
-                .ship
-                .as_ref()
-                .is_some_and(|s| s.task.is_none() && s.path.is_empty());
-            if idle {
-                self.order_ship(ai, id, order);
-            }
-        }
+        // its block's, `guard_pass`; the treasure hunt's its block's, sent
+        // at the order and on a join, `treasure_notices`.)
     }
 
     /// The flotilla's order to ship `id`: moves and the dock are commands
     /// through the outbox (0x520cc0, the navy's helpers 0x4cf070 and
     /// 0x4cd930), delivered at the next tick; the zones are the navy's
     /// own tasks, set at once.
-    fn order_ship(&mut self, ai: &Computer, id: u32, order: FleetOrder) {
+    fn order_ship(&mut self, id: u32, order: FleetOrder) {
         let t = TILE_SIZE as f32;
         let world = |(x, y, w, h): Cells| {
             (
@@ -6317,9 +6361,9 @@ impl Scene {
                 ((x + w) as f32 * t, (y + h) as f32 * t),
             )
         };
-        let Some(i) = self.object_index(id) else {
+        if self.object_index(id).is_none() {
             return;
-        };
+        }
         match order {
             // The flotilla's own zone (`give_order`).
             FleetOrder::Gather(..) => {}
@@ -6343,81 +6387,216 @@ impl Scene {
             }
             // The block's (`dock_order`).
             FleetOrder::Dock | FleetOrder::Sell => {}
-            FleetOrder::Treasure(area) => {
-                let f = ai.flotillas.iter().position(|fl| fl.ships.contains(&id));
-                self.hunt_treasure(ai, f, i, area)
-            }
+            // The block's (`treasure_order`).
+            FleetOrder::Treasure(_) => {}
             FleetOrder::Found(..) | FleetOrder::Guard(_) | FleetOrder::None => {}
         }
     }
 
-    /// One ship of a treasure hunt (0x4da3e0, over the member's ships of
-    /// class 200): one that can take a treasure (0x4e6700 command 0x22
-    /// kind 0x10: capability `+0x261 & 0x8000`, which every finished ship
-    /// has, 0x4e6930, but one being built, sold or holding its commands;
-    /// and room, 0x4be800 mode 6 or 7) with room aboard (mode 6:
-    /// 0x597afc[type] less the treasures aboard `+0x482`; none on types
-    /// 10 and 11) is sent to take it (0x4d9f50: command 0x22 kind 0x10
-    /// {cell x, cell y, the treasure}, priority 0x5a, which the ship's
-    /// 0x4e2ba0 turns into event 0x40 {700, 10, the treasure, 0x5a}, as
-    /// the player's take, 0x49e0e0 giving it priority 0); any other, a
-    /// plain move to the treasure's cell (0x4cf070, command 0x14). No ship
-    /// sails home with what it carries: a computer's treasures go ashore
-    /// only by 0x4ad9f0 and the panel. (Not ported: the target is the
-    /// first of the block's list `+0x2c` (0x4d9920 -> 0x4d9810: the area's
-    /// treasures row by row, of the order's kinds `+0x1c` by `+0xb0`,
-    /// `+0xa4` not 5), the same for every ship of the member, recorded in
-    /// `+0x28` by 0x4d9690; here the nearest no other ship of the flotilla
-    /// is after, the take given at once, a refused one trying the next.)
-    fn hunt_treasure(&mut self, ai: &Computer, f: Option<usize>, i: usize, area: Cells) {
-        let id = self.objects[i].id;
-        let held = self.being_built(id)
-            || self.being_sold(id)
-            || self.hunt_holds(id)
-            || self.landing_holds(id)
-            || self.load_holds(id);
-        let room = self.objects[i].ship.as_ref().is_some_and(|s| {
-            super::chest::SINK_TREASURES
-                .get(s.kind as usize)
-                .is_some_and(|&n| usize::from(n) > s.treasures.len())
-        });
-        let take = !held && room;
-        let taken: Vec<u32> = f
-            .map(|f| ai.flotillas[f].ships.as_slice())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|&s| self.object_index(s))
-            .filter_map(|k| match self.objects[k].ship.as_ref()?.task {
-                Some(Task::Take { target, .. }) => Some(target),
-                _ => None,
-            })
-            .collect();
-        let (x, y) = (self.objects[i].x, self.objects[i].y);
-        let mut near: Vec<(f32, u32)> = self
-            .treasures_in(area)
-            .filter(|&k| !taken.contains(&self.objects[k].id))
+    /// The treasure block's list of targets (0x4d9920 over `area`): the
+    /// treasures on the map's cells row by row (the cell's object, class
+    /// 700, `+0xa4` not 5), of the block's kinds (`+0x1c & 1 << (+0xb0 &
+    /// 31)`), each put in `+0x2c` by 0x4d9810: the entry of its id updated
+    /// in place, else appended; entries are never dropped here. An area
+    /// starting off the map, or with no rows on it, lists none. With
+    /// `first` the index + 1 of the first listed, else the count. (Not
+    /// ported: the treasure's state 5, which the port's treasures never
+    /// take; the port's cells hold a treasure each, the first in object
+    /// order where two lie on one.)
+    fn treasure_list(&self, ai: &mut Computer, f: usize, area: Cells, first: bool) -> i32 {
+        let (w, h) = self.map_cells();
+        let (x0, y0, aw, ah) = area;
+        if x0 < 0 || y0 < 0 || x0 >= w || y0 >= h {
+            return 0;
+        }
+        let (x1, y1) = ((x0 + aw).min(w), (y0 + ah).min(h));
+        let mut cells: Vec<(i32, i32, usize)> = (0..self.objects.len())
+            .filter(|&k| self.objects[k].class == ObjectClass::Treasure)
             .map(|k| {
-                let o = &self.objects[k];
-                ((o.x - x).hypot(o.y - y), o.id)
-            })
-            .collect();
-        near.sort_by(|a, b| a.0.total_cmp(&b.0));
-        if !take {
-            // 0x4cf070: a move to the target's cell, priority 0.
-            if let Some(k) = near.first().and_then(|&(_, t)| self.object_index(t)) {
-                let t = TILE_SIZE as f32;
                 let (cx, cy) = self.cell_of(k);
+                (cy, cx, k)
+            })
+            .filter(|&(cy, cx, _)| cx >= x0 && cx < x1 && cy >= y0 && cy < y1)
+            .collect();
+        cells.sort_by_key(|&(cy, cx, _)| (cy, cx));
+        cells.dedup_by_key(|c| (c.0, c.1));
+        let b = ai.flotillas[f]
+            .treasure
+            .get_or_insert_with(Default::default);
+        let mut n = 0;
+        for (cy, cx, k) in cells {
+            let kind = self.objects[k].treasure.map_or(0, |t| u32::from(t.kind));
+            if b.kinds & 1 << (kind & 31) == 0 {
+                continue;
+            }
+            let e = TreasureTarget {
+                id: self.objects[k].id,
+                kind,
+                cell: cy * w + cx,
+            };
+            let at = match b.targets.iter().position(|t| t.id == e.id) {
+                Some(p) => {
+                    b.targets[p] = e;
+                    p
+                }
+                None => {
+                    b.targets.push(e);
+                    b.targets.len() - 1
+                }
+            };
+            if first {
+                return at as i32 + 1;
+            }
+            n += 1;
+        }
+        n
+    }
+
+    /// The treasure block's send (0x4da3e0): every ship of the member
+    /// (class 200), in its order, after target `t`. One that can take a
+    /// treasure (0x4e6700 command 0x22 kind 0x10: capability `+0x261 &
+    /// 0x8000`, which every finished ship has, 0x4e6930, but one being
+    /// built, sold or holding its commands; and room, 0x4be800 mode 6 or
+    /// 7) with room aboard (mode 6: 0x597afc[type] less the treasures
+    /// aboard `+0x482`; none on types 10 and 11) is recorded in `+0x28`
+    /// (0x4d9690: its cell, the target, its cell, state 1, the kind) and
+    /// sent to take it (0x4d9f50: command 0x22 kind 0x10 {cell x, cell y,
+    /// the treasure}, priority 0x5a, which the ship's 0x4e2ba0 turns into
+    /// event 0x40 {700, 10, the treasure, 0x5a}, as the player's take,
+    /// 0x49e0e0 giving it priority 0; the port's take refused on a
+    /// treasure gone); any other is recorded with target 0 and kind 0 and
+    /// given a plain move to the target's cell (0x4cf070, command 0x14).
+    /// The ships sent.
+    fn treasure_send(&mut self, ai: &mut Computer, f: usize, t: TreasureTarget) -> i32 {
+        let (w, _) = self.map_cells();
+        let mut n = 0;
+        for id in ai.flotillas[f].ships.clone() {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            if self.objects[i].ship.is_none() {
+                continue;
+            }
+            let held = self.being_built(id)
+                || self.being_sold(id)
+                || self.hunt_holds(id)
+                || self.landing_holds(id)
+                || self.load_holds(id);
+            let room = self.objects[i].ship.as_ref().is_some_and(|s| {
+                super::chest::SINK_TREASURES
+                    .get(s.kind as usize)
+                    .is_some_and(|&n| usize::from(n) > s.treasures.len())
+            });
+            let take = !held && room;
+            let (x, y) = self.cell_of(i);
+            let rec = TreasureRec {
+                ship: id,
+                x,
+                y,
+                target: if take { t.id } else { 0 },
+                cell: t.cell,
+                state: 1,
+                kind: if take { t.kind } else { 0 },
+            };
+            let b = ai.flotillas[f]
+                .treasure
+                .get_or_insert_with(Default::default);
+            match b.ships.iter().position(|r| r.ship == id) {
+                Some(p) => b.ships[p] = rec,
+                None => b.ships.push(rec),
+            }
+            if take {
+                let _ = self.order_take(id, t.id);
+            } else {
+                // 0x4cf070: a move to the target's cell, priority 0.
+                let s = TILE_SIZE as f32;
+                let (cx, cy) = (t.cell % w, t.cell / w);
                 self.post(Order::Move {
                     ship: id,
-                    x: cx as f32 * t + t / 2.0,
-                    y: cy as f32 * t + t / 2.0,
+                    x: cx as f32 * s + s / 2.0,
+                    y: cy as f32 * s + s / 2.0,
                 });
             }
+            n += 1;
+        }
+        n
+    }
+
+    /// Fleet order 0xbe (0x4da550, block `{0xbe, 0x79}`): a block of
+    /// another kind is ended (0x4a1c60, `new_block`), one of this kind
+    /// kept with its lists; the area `+0xc`, the kinds `+0x1c` (0x483350:
+    /// -1, every kind) and the status `+0x34` 0 set. Then the area's list
+    /// (0x4d9920): none, status 5 (the order done); else every ship is
+    /// sent after the list's first entry (0x4da3e0), the same for all.
+    /// (Not ported: the ports' list `+0x24`, 0x4d9a70 with the order's
+    /// town's ports, read only by the trip home of 0x141.)
+    fn treasure_order(&mut self, ai: &mut Computer, f: usize, area: Cells) {
+        let b = ai.flotillas[f]
+            .treasure
+            .get_or_insert_with(Default::default);
+        b.area = area;
+        b.kinds = u32::MAX;
+        b.status = 0;
+        if self.treasure_list(ai, f, area, false) < 1 {
+            ai.flotillas[f].treasure.as_mut().unwrap().status = 5;
             return;
         }
-        for (_, t) in near {
-            if self.order_take(id, t).is_ok() {
-                return;
+        if let Some(&t) = ai.flotillas[f].treasure.as_ref().unwrap().targets.first() {
+            self.treasure_send(ai, f, t);
+        }
+    }
+
+    /// The treasure block's notices (0x4da0a0, from the last posted).
+    /// 300, a ship joined and still in the group (0x4cc590): with no
+    /// record of state 2 (0x4d97c0) and the records `+0x28` not empty, the
+    /// area listed again (0x4d9920) and, with any, every ship sent after
+    /// the list's first entry (0x4da3e0); then `#` sub 1 with the group's
+    /// three (0x4c42f0). 0x137, a ship left: its record dropped (0x4d9760).
+    /// 0x142, a treasure used at once by a ship of the group (0x4a1af0):
+    /// status 4, the order done. (Not ported: 0x141, a treasure put
+    /// aboard (0x4a1a60), whose case sends the ship home to the nearest
+    /// port of `+0x24` (0x4d9cf0, 0x4d9db0, command 0x1f {port, 1, 0x5a}
+    /// by 0x4d9fa0) with record state 2 and the others escorting it
+    /// (0x4d9fe0: state 3, behaviour `*` by 0x4d8b30); so no record is in
+    /// state 2 here and the 300's escort (0x4d9690 state 3, 0x4d8b30), the
+    /// 0x137 of a ship of state 2 (the list about its cell, status 5 with
+    /// none) and the block's tick 0x4da6a0 over state 2 never run.)
+    fn treasure_notices(&mut self, ai: &mut Computer, f: usize) {
+        let b = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
+        let mut heard = std::mem::take(&mut ai.flotillas[f].joined);
+        while let Some((id, at, code, _)) = heard.pop() {
+            if at != 0xbe {
+                continue;
+            }
+            match code {
+                300 if ai.flotillas[f].ships.contains(&id) => {
+                    let area = ai.flotillas[f].treasure.as_ref().map(|t| t.area);
+                    let any = ai.flotillas[f]
+                        .treasure
+                        .as_ref()
+                        .is_some_and(|t| !t.ships.is_empty());
+                    if let (Some(area), true) = (area, any) {
+                        if self.treasure_list(ai, f, area, false) > 0 {
+                            let t = ai.flotillas[f].treasure.as_ref().unwrap().targets.first();
+                            if let Some(&t) = t {
+                                self.treasure_send(ai, f, t);
+                            }
+                        }
+                    }
+                    self.send_behaviour(id, b);
+                }
+                0x137 => {
+                    if let Some(t) = ai.flotillas[f].treasure.as_mut() {
+                        t.ships.retain(|r| r.ship != id);
+                    }
+                }
+                0x142 => {
+                    ai.flotillas[f]
+                        .treasure
+                        .get_or_insert_with(Default::default)
+                        .status = 4;
+                }
+                _ => {}
             }
         }
     }
@@ -6475,7 +6654,16 @@ impl Scene {
             FleetOrder::Dock | FleetOrder::Sell => {
                 fl.ships.is_empty() || fl.dock_block.as_ref().is_none_or(|b| b.dock == 0)
             }
-            FleetOrder::Treasure(area) => self.treasures_in(area).next().is_none(),
+            // The block's status (0x4da900): done (0x1f5) with no ships
+            // (result 1), status 4 (result 0xc) or 5 (result 0xd); else
+            // running (500).
+            FleetOrder::Treasure(_) => {
+                ships().next().is_none()
+                    || fl
+                        .treasure
+                        .as_ref()
+                        .is_some_and(|t| matches!(t.status, 4 | 5))
+            }
             FleetOrder::Gather(..) | FleetOrder::Guard(_) => false,
         };
         done.then_some(DONE)
@@ -9592,9 +9780,9 @@ mod tests {
 
     /// A treasure hunt's ship (0x4da3e0): with room aboard (0x4be800
     /// mode 6, 0x597afc[type] less those aboard) it goes to take the
-    /// treasure (0x4d9f50); full, or a type with no room (8-11), it only
-    /// moves to the treasure's cell (0x4cf070), never home with what it
-    /// carries (needs `OPENCONQUEST_DATA`).
+    /// target (0x4d9f50), recorded with it and its kind; full, or a type
+    /// with no room (8-11), it only moves to the target's cell (0x4cf070),
+    /// recorded with target and kind 0 (needs `OPENCONQUEST_DATA`).
     #[test]
     fn treasure_hunt_ships_take_or_move_to_the_treasure() {
         let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -9608,54 +9796,141 @@ mod tests {
         let i = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
         let id = scene.objects[i].id;
         let all = (0, 0, i32::MAX / 2, i32::MAX / 2);
-        let target = {
-            let (x, y) = (scene.objects[i].x, scene.objects[i].y);
-            let mut near: Vec<usize> = scene.treasures_in(all).collect();
-            near.sort_by(|&a, &b| {
-                let d = |k: usize| (scene.objects[k].x - x).hypot(scene.objects[k].y - y);
-                d(a).total_cmp(&d(b))
-            });
-            near[0]
-        };
+        let target = scene.treasures_in(all).next().unwrap();
+        let (w, _) = scene.map_cells();
         let t = TILE_SIZE as f32;
         let (cx, cy) = scene.cell_of(target);
         let cell = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
-        let ai = Computer::default();
+        let goal = TreasureTarget {
+            id: scene.objects[target].id,
+            kind: 6,
+            cell: cy * w + cx,
+        };
+        let mut ai = Computer::default();
+        ai.flotillas.push(Flotilla {
+            ships: vec![id],
+            ..Default::default()
+        });
         let tr = crate::objects::Treasure {
             kind: 6,
             param: 0,
             amount: 0,
         };
+        let rec = |ai: &Computer| ai.flotillas[0].treasure.as_ref().unwrap().ships[0];
         // A royal ship (room 2) with one aboard still takes.
         let s = scene.objects[i].ship.as_mut().unwrap();
         s.kind = 2;
         s.treasures = vec![tr];
         scene.outbox.clear();
-        scene.hunt_treasure(&ai, None, i, all);
+        assert_eq!(scene.treasure_send(&mut ai, 0, goal), 1);
         let s = scene.objects[i].ship.as_ref().unwrap();
         assert!(matches!(s.task, Some(Task::Take { .. })), "{:?}", s.task);
         assert!(scene.outbox.is_empty());
+        let r = rec(&ai);
+        assert_eq!(
+            (r.ship, r.target, r.cell, r.state, r.kind),
+            (id, goal.id, goal.cell, 1, 6)
+        );
         // With two aboard it is full: a move to the treasure's cell.
         let s = scene.objects[i].ship.as_mut().unwrap();
         s.task = None;
         s.path.clear();
         s.treasures = vec![tr, tr];
-        scene.hunt_treasure(&ai, None, i, all);
+        scene.treasure_send(&mut ai, 0, goal);
         assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
         assert!(
             matches!(scene.outbox[..], [Order::Move { ship, x, y }] if ship == id && (x, y) == cell),
             "{:?}",
             scene.outbox
         );
+        let r = rec(&ai);
+        assert_eq!((r.target, r.cell, r.state, r.kind), (0, goal.cell, 1, 0));
+        assert_eq!(ai.flotillas[0].treasure.as_ref().unwrap().ships.len(), 1);
         // A type with no room (0x597afc 0 for 8-11), nothing aboard: the
         // same move.
         scene.outbox.clear();
         let s = scene.objects[i].ship.as_mut().unwrap();
         s.kind = 9;
         s.treasures.clear();
-        scene.hunt_treasure(&ai, None, i, all);
+        scene.treasure_send(&mut ai, 0, goal);
         assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
         assert!(matches!(scene.outbox[..], [Order::Move { ship, .. }] if ship == id));
+    }
+
+    /// The treasure block (0x4da550, 0x4da0a0, 0x4da900): the area's
+    /// treasures listed row by row (0x4d9920) and every ship sent after
+    /// the first; a join re-lists and sends them all again after the same
+    /// first entry, a leave drops the ship's record, a treasure used at
+    /// once (0x142) ends the order, and an area with none ends it at once
+    /// (needs `OPENCONQUEST_DATA`).
+    #[test]
+    fn the_treasure_block_lists_sends_and_hears() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss003").unwrap();
+        scene.brain = None;
+        let ships: Vec<u32> = scene
+            .objects
+            .iter()
+            .filter(|o| o.ship.is_some())
+            .map(|o| o.id)
+            .take(2)
+            .collect();
+        assert_eq!(ships.len(), 2);
+        let (w, h) = scene.map_cells();
+        // The row-by-row order of the map's treasures.
+        let mut rows: Vec<(i32, i32, u32)> = scene
+            .treasures_in((0, 0, w, h))
+            .map(|k| {
+                let (cx, cy) = scene.cell_of(k);
+                (cy, cx, scene.objects[k].id)
+            })
+            .collect();
+        rows.sort();
+        assert!(rows.len() > 1);
+        let mut ai = Computer::default();
+        ai.flotillas.push(Flotilla {
+            ships: vec![ships[0]],
+            order: FleetOrder::Treasure((0, 0, w, h)),
+            ..Default::default()
+        });
+        scene.give_order(&mut ai, 0);
+        let b = ai.flotillas[0].treasure.as_ref().unwrap();
+        assert_eq!(ai.flotillas[0].block, 0xbe);
+        assert_eq!(b.kinds, u32::MAX);
+        assert_eq!(b.status, 0);
+        let ids: Vec<u32> = b.targets.iter().map(|t| t.id).collect();
+        assert_eq!(ids, rows.iter().map(|r| r.2).collect::<Vec<_>>());
+        assert_eq!(b.targets[0].cell, rows[0].0 * w + rows[0].1);
+        assert_eq!(b.ships.len(), 1);
+        assert_eq!(b.ships[0].cell, b.targets[0].cell);
+        assert!(scene.report(&ai, 0).is_none());
+        // A join: both ships after the first entry, the list not grown.
+        ai.join(0, ships[1]);
+        scene.read_joins(&mut ai, 0);
+        let b = ai.flotillas[0].treasure.as_ref().unwrap();
+        assert_eq!(b.targets.len(), rows.len());
+        let sent: Vec<(u32, i32)> = b.ships.iter().map(|r| (r.ship, r.cell)).collect();
+        let first = b.targets[0].cell;
+        assert_eq!(sent, vec![(ships[0], first), (ships[1], first)]);
+        // A leave drops its record.
+        ai.leave(0, ships[1]);
+        scene.read_joins(&mut ai, 0);
+        let b = ai.flotillas[0].treasure.as_ref().unwrap();
+        assert_eq!(b.ships.len(), 1);
+        // A treasure used at once by a ship of the group: done.
+        ai.post_notice(ships[0], 0x142, 0);
+        scene.read_joins(&mut ai, 0);
+        assert_eq!(ai.flotillas[0].treasure.as_ref().unwrap().status, 4);
+        assert_eq!(scene.report(&ai, 0), Some(DONE));
+        // An area off the map lists none: done at once.
+        ai.flotillas[0].order = FleetOrder::Treasure((w, 0, 4, 4));
+        scene.give_order(&mut ai, 0);
+        assert_eq!(ai.flotillas[0].treasure.as_ref().unwrap().status, 5);
+        assert_eq!(scene.report(&ai, 0), Some(DONE));
     }
 }
 
