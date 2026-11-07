@@ -321,10 +321,16 @@ pub struct Fleet {
     #[serde(default)]
     pub(super) treasure: Option<super::computer::fleet_treasure::TreasureBlock>,
     /// The block's notices (`+0x2d`, `(ship, code, record)`, oldest first)
-    /// for the blocks that read them through their group (`FoundGroup`):
-    /// the founding's 300 and 0x130.
+    /// for the blocks that read them through their group: the founding's
+    /// (`FoundGroup`), the treasure hunt's (`TreasureGroup`), the attack
+    /// zone's (`AttackGroup`: 300 and 0x13a) and the repair's (300 and
+    /// 0x134).
     #[serde(default)]
     pub(super) notices: Vec<(u32, u32, u32)>,
+    /// Fleet order 0x70's block (0x4d6a90), while the block is an attack
+    /// zone (`fleet_attack_zone`).
+    #[serde(default)]
+    pub(super) attack: Option<super::computer::fleet_attack_zone::AttackBlock>,
     /// The member's town order sent (0x47b130 with `+0x10` 1, set at its
     /// first call, cleared with the state by 0x479750): its later calls
     /// read the order's state.
@@ -557,6 +563,67 @@ impl super::computer::fleet_found::FoundGroup for Fleet {
     }
 }
 
+impl Fleet {
+    /// Whether its block reads more of its notices than the joins: the
+    /// founding's (0x4cba10: 300, 0x130), the treasure hunt's (0x4da6a0:
+    /// 300, 0x141, 0x142), the repair's (0x4cdc00: 300, 0x134; 0x136 only
+    /// with a route `+0x61`, which the brains' order never gives) and the
+    /// attack zone's (0x4d6960: 300, 0x13a) while its notices are not
+    /// freed (0x4d6520; none posted then, 0x4a1340).
+    fn hears_notices(&self) -> bool {
+        match self.block {
+            0x8c | 0xbe | 0x82 => true,
+            0x70 => !self.attack.as_ref().is_some_and(|b| b.freed),
+            _ => false,
+        }
+    }
+}
+
+impl super::computer::fleet_attack_zone::AttackGroup for Fleet {
+    fn ships(&self) -> &[u32] {
+        &self.ships
+    }
+    fn area(&self) -> Option<Cells> {
+        self.attack.as_ref().map(|b| b.area)
+    }
+    fn target(&mut self) -> &mut u32 {
+        &mut self.attack.get_or_insert_with(Default::default).target
+    }
+    fn flags(&self) -> u32 {
+        self.attack.as_ref().map_or(0, |b| b.flags)
+    }
+    fn behaviour(&self) -> Option<(u32, u32, u32)> {
+        self.behaviour
+    }
+    fn elapsed(&mut self) -> &mut u32 {
+        &mut self.elapsed
+    }
+    /// The group's player (member `+4`): that of its ships, each of the
+    /// group's own player (none without a ship on the map).
+    fn owner(&self, scene: &Scene) -> (u32, u32) {
+        self.ships
+            .iter()
+            .find_map(|&id| scene.objects[scene.object_index(id)?].owner)
+            .unwrap_or((u32::MAX, u32::MAX))
+    }
+    /// The campaign's (game `+0xd80` 1): 0x5a for every side.
+    fn period(&self) -> u32 {
+        0x5a
+    }
+    fn freed(&self) -> bool {
+        self.attack.as_ref().is_some_and(|b| b.freed)
+    }
+    fn take_notices(&mut self) -> Vec<(u32, u32, u32)> {
+        std::mem::take(&mut self.notices)
+    }
+    fn free_notices(&mut self) {
+        if let Some(b) = self.attack.as_mut() {
+            b.freed = true;
+        }
+        self.notices.clear();
+    }
+}
+
 impl super::computer::fleet_treasure::TreasureGroup for Fleet {
     fn ships(&self) -> &[u32] {
         &self.ships
@@ -628,6 +695,7 @@ impl Fleet {
             founding: None,
             treasure: None,
             notices: Vec::new(),
+            attack: None,
             ordered: false,
             build: None,
         }
@@ -1078,6 +1146,7 @@ impl Scene {
         // not decoded: whether before or after the brain's).
         self.run_repair_orders();
         self.run_move_orders();
+        self.run_attack_orders();
         self.run_found_orders();
         self.run_treasure_orders();
         if tick % 5 != 0 {
@@ -1263,12 +1332,6 @@ impl Scene {
         } else {
             0
         };
-        // An order given to a fleet with no ships is taken like any other
-        // (0x4a09d0 allocates its block, 0x4cc500 / 0x4d6540) and left as
-        // it was by the fleet tick; every status routine (0x4ccf60,
-        // 0x4d63d0, 0x4d70d0, 0x4c8da0) then reports it done, result 1, at
-        // the member's next turn.
-        let empty = started && self.brain.as_ref().unwrap().fleets[k].ships.is_empty();
         match op {
             Op::Behave { next } => {
                 self.behave(k, 0, 0xfff_ffff, u32::MAX, u32::MAX);
@@ -1542,16 +1605,22 @@ impl Scene {
                         // Order 0x70 (0x479a40) writes the area into `+0x40`.
                         Some(a) => {
                             self.brain.as_mut().unwrap().fleets[k].last_area = a;
-                            self.fleet_attack(k, a);
+                            let flags = match self.brain.as_ref().unwrap().difficulty {
+                                0 => 2 << 16,
+                                1 => 1 << 16,
+                                _ => 0,
+                            };
+                            self.fleet_attack(k, a, flags);
                         }
                         None => self.set_state(k, next),
                     }
-                } else if empty {
-                    // Done, result 1: p4, unless the time is up too.
-                    let up = ticks > 0 && elapsed >= ticks;
-                    self.set_state(k, if up { next } else { failed });
-                } else if self.fleet_idle(k) || (ticks > 0 && elapsed >= ticks) {
+                } else if ticks > 0 && elapsed >= ticks {
+                    // The time up (0x47a6a0's second test) wins over the
+                    // status.
                     self.set_state(k, next);
+                } else if let (0x1f5, result) = self.brain_attack_status(k) {
+                    // Done: p3 on result 10, else (1 included) p4.
+                    self.set_state(k, if result == 10 { next } else { failed });
                 }
             }
             Op::Build { next } | Op::BuildRest { next, .. } => {
@@ -2170,8 +2239,10 @@ impl Scene {
     }
 
     /// The repair orders' tick (0x4ce140, from the fleets' tick 0x4c4f40,
-    /// each game tick): the fleet's queue is heard newest first (0x4cdc00):
-    /// a ship that joined (300) and is in the fleet gets the dock pick on
+    /// each game tick): the fleet's queue is heard newest first (0x4cdc00),
+    /// each notice taken off: a mending's end (0x134) of a ship in the
+    /// fleet noted (`brain_repaired`); a ship that joined (300) and is in
+    /// the fleet gets the dock pick on
     /// the order's `+0x21` (the yard now) and is sent to `+0x10` (with
     /// `+0x18 == 0` 0x4cdb00 sends every ship to `+0x10`, the random dock
     /// the pick returns only telling whether any was found), or not at
@@ -2182,15 +2253,22 @@ impl Scene {
     /// the group's three (0x4c42f0 at 0x4cde70, queued), whether or not it
     /// was sent to a dock. (Not ported here: the pass's reports of blows,
     /// 0x4a21c0, which the port makes at once, `fleet_attacked`.)
-    fn run_repair_orders(&mut self) {
+    pub(super) fn run_repair_orders(&mut self) {
         for k in 0..self.brain.as_ref().unwrap().fleets.len() {
             if self.brain.as_ref().unwrap().fleets[k].repair.is_none() {
                 continue;
             }
-            let queue = std::mem::take(&mut self.brain.as_mut().unwrap().fleets[k].joined);
+            let queue = std::mem::take(&mut self.brain.as_mut().unwrap().fleets[k].notices);
             let mut sent = 0;
-            for &id in queue.iter().rev() {
+            for &(id, code, _) in queue.iter().rev() {
                 if !self.brain.as_ref().unwrap().fleets[k].ships.contains(&id) {
+                    continue;
+                }
+                if code == 0x134 {
+                    self.brain_repaired(k, id);
+                    continue;
+                }
+                if code != 300 {
                     continue;
                 }
                 self.repair_pick(k);
@@ -2246,23 +2324,18 @@ impl Scene {
         }
     }
 
-    /// A brain's ship mended at a dock: the repair order of its fleet
-    /// hears it (message 0x134, 0x4cdc00): with `+0x18 == 0` it is not
-    /// handed on, but noted mended (0x4cd980, state 10) so the order's
-    /// pass sends it no more. (Not decoded: ship command 10, 0x520cc0,
-    /// it is given too.)
-    pub(super) fn brain_repaired(&mut self, id: u32) {
-        let Some(brain) = self.brain.as_mut() else {
-            return;
-        };
-        for f in &mut brain.fleets {
-            if let Some(r) = f.repair.as_mut() {
-                if f.ships.contains(&id) {
-                    r.mended.retain(|&m| m != id);
-                    r.mended.push(id);
-                }
-            }
+    /// Notice 0x134 of ship `id` (its mending at a dock over, 0x4a1a60)
+    /// read by fleet `k`'s repair order (0x4cdc00), the ship in the fleet:
+    /// with `+0x18 == 0` it is not handed on (0x49bd60), but noted mended
+    /// (0x4cd980, state 10) so the order's pass sends it no more, and
+    /// given ship command 10 (0x520cc0, the stop, as the computers' dock
+    /// block's 0x134).
+    fn brain_repaired(&mut self, k: usize, id: u32) {
+        if let Some(r) = self.brain.as_mut().unwrap().fleets[k].repair.as_mut() {
+            r.mended.retain(|&m| m != id);
+            r.mended.push(id);
         }
+        self.post(super::Order::Halt { id });
     }
 
     /// A prize joins the repair member (`group`, `member`) (0x479300 op 2,
@@ -2301,18 +2374,19 @@ impl Scene {
             return;
         }
         let f = &mut self.brain.as_mut().unwrap().fleets[k];
-        if matches!(f.block, 0x8c | 0xbe) {
+        if f.hears_notices() {
             f.notices.push((id, 300, 0));
-        } else if f.block != 0 {
+        } else if f.block != 0 && f.block != 0x70 {
             f.joined.push(id);
         }
     }
 
     /// A notice `code` of ship `id` (0x4a15a0, 0x4a1a60, 0x4a1af0 and the
-    /// like) to the brain fleet holding it, posted only while its block
-    /// reads its notices through its group (the founding's and the
-    /// treasure hunt's, `notices`); whether a fleet held it. (Not ported:
-    /// the notices of the brains' other blocks.)
+    /// like) to the brain fleet holding it, kept while its block reads its
+    /// notices (`Fleet::hears_notices`); whether a fleet held it. The
+    /// other blocks' readers take every notice off and act on 300 alone:
+    /// the move's 0x4cc6a0 and the gather zone's own list (`gather`), so
+    /// the port keeps only their joins (`joined`, `brain_heard_join`).
     pub(super) fn brain_notice(&mut self, id: u32, code: u32, rec: u32) -> bool {
         let Some(brain) = self.brain.as_mut() else {
             return false;
@@ -2320,7 +2394,7 @@ impl Scene {
         let Some(f) = brain.fleets.iter_mut().find(|f| f.ships.contains(&id)) else {
             return false;
         };
-        if matches!(f.block, 0x8c | 0xbe) {
+        if f.hears_notices() {
             f.notices.push((id, code, rec));
         }
         true
@@ -2529,6 +2603,7 @@ impl Scene {
         f.notices.clear();
         f.founding = None;
         f.treasure = None;
+        f.attack = None;
         let (players, classes, third) = f.behaviour.unwrap_or((0, 0, 0));
         for ship in self.fleet_ships(k) {
             if self.object_index(ship).is_some() {
@@ -2812,31 +2887,54 @@ impl Scene {
         );
     }
 
-    fn fleet_attack(&mut self, k: usize, (x, y, w, h): Cells) {
-        // Fleet order 0x70 (0x479a40 -> 0x4d6a90).
+    /// Fleet order 0x70 from member `k` (0x47a6a0's first call, 0x479a40
+    /// -> 0x4a09d0 -> 0x4d6a90): the member's `+0x40` the area (written by
+    /// the caller), the payload `{area, .., [7] flags, [8] member +0x2c,
+    /// [9] +0x28, [10] +0x30}` (the block's `+0x20..+0x28`, which the
+    /// block's code passes to 0x4d6640 unread); a block of another kind
+    /// ended (`brain_block`), this one made zeroed (0x4d6540) or rewritten
+    /// (area and flags; its target and freed notices as they were), then
+    /// its target and ships (`attack_make`). `flags` is 0x47a6a0's p3 to
+    /// 0x479a40: `2 << 16` easy, `1 << 16` normal, 0 hard (`+0x32a1`).
+    pub(super) fn fleet_attack(&mut self, k: usize, area: Cells, flags: u32) {
         self.brain_block(k, 0x70);
         self.brain.as_mut().unwrap().fleets[k].move_order = None;
         self.end_zone(super::gather::ZoneGroup::Brain(k));
-        let t = TILE_SIZE as f32;
-        let (a, b) = (
-            (x as f32 * t, y as f32 * t),
-            ((x + w) as f32 * t, (y + h) as f32 * t),
-        );
-        for id in self.fleet_ships(k) {
-            let _ = self.order_zone(id, a, b);
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        let b = f.attack.get_or_insert_with(Default::default);
+        b.area = area;
+        b.flags = flags;
+        let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
+        self.attack_make(&mut f);
+        self.brain.as_mut().unwrap().fleets[k] = f;
+    }
+
+    /// The attack blocks' passes (0x4d6cd0, the navy's 0x4c4f40) of the
+    /// brain fleets that hold one (`fleet_attack_zone::attack_tick`).
+    pub(super) fn run_attack_orders(&mut self) {
+        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
+            let f = &mut self.brain.as_mut().unwrap().fleets[k];
+            if f.block != 0x70 || f.attack.is_none() {
+                continue;
+            }
+            let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
+            self.attack_tick(&mut f);
+            self.brain.as_mut().unwrap().fleets[k] = f;
         }
     }
 
-    /// No ship of fleet `k` has anything left to do.
-    fn fleet_idle(&self, k: usize) -> bool {
-        self.fleet_ships(k).into_iter().all(|id| {
-            self.object_index(id).is_none_or(|i| {
-                self.objects[i]
-                    .ship
-                    .as_ref()
-                    .is_none_or(|s| s.path.is_empty() && s.task.is_none())
-            })
-        })
+    /// 0x47a6a0's later calls: the attack's status (query 0x71, 0x4a0f60
+    /// -> 0x4a0d80 -> 0x4d70d0, `fleet_attack_zone::attack_status`).
+    pub(super) fn brain_attack_status(&self, k: usize) -> (u32, u32) {
+        use super::computer::fleet_attack_zone::AttackGroup;
+        let f = &self.brain.as_ref().unwrap().fleets[k];
+        super::computer::fleet_attack_zone::attack_status(
+            self,
+            &f.ships,
+            f.owner(self),
+            f.behaviour,
+            f.attack.as_ref().map(|b| b.area),
+        )
     }
 
     /// The human player's warships of types 4-7 (boarders, rammers, ship

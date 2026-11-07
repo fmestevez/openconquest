@@ -325,6 +325,9 @@ fn warship_sinks_enemy() {
     scene.objects[enemy].y = y;
     let target = scene.objects[enemy].id;
     let mine = scene.objects[mine].id;
+    // The brain kept out: our ship in its bays, its guards attack us
+    // through their attack zone (0x4d6cd0); this is about our shots.
+    scene.brain = None;
     scene.order_attack(mine, target).unwrap();
     let (mut flew, mut landed) = (false, false);
     for _ in 0..60 * 120 {
@@ -20970,4 +20973,105 @@ fn miss005_raiders_found_through_the_block() {
             assert!(!scene.parties.is_empty() || !scene.constructions.is_empty());
         }
     }
+}
+
+/// miss000's guards (member (0, 0), 0x4495a0 state 20) attack the bay
+/// through the navy's attack zone (0x47a6a0 -> 0x479a40 -> 0x4d6a90):
+/// the human's ship in the area is the target, the guards sent at it;
+/// the status 0x4d70d0 running; a 0x13a naming the target looks again;
+/// with none left the status done with result 10 and, past the period
+/// 0x5a, the notices freed, a 300 no more posted (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn brain_guards_attack_through_the_zone_block() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let k = scene.member_fleet(0, 0).unwrap();
+    let guards = scene.brain.as_ref().unwrap().fleets[k].ships.clone();
+    assert_eq!(guards.len(), 2);
+    scene.behave(k, 0, 0xfff_ffff, u32::MAX, u32::MAX);
+    let mine = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.is_some())
+        .unwrap();
+    let me = scene.objects[mine].id;
+    let t = TILE_SIZE as f32;
+    scene.objects[mine].x = 5.0 * t + t / 2.0;
+    scene.objects[mine].y = 18.0 * t + t / 2.0;
+    let area = (2, 16, 15, 8);
+    scene.outbox.clear();
+    scene.fleet_attack(k, area, 2 << 16);
+    let fleet = |s: &Scene| s.brain.as_ref().unwrap().fleets[k].clone();
+    let b = fleet(&scene).attack.unwrap();
+    assert_eq!(
+        (b.area, b.target, b.flags, b.freed),
+        (area, me, 2 << 16, false)
+    );
+    let sent: Vec<u32> = scene
+        .outbox
+        .iter()
+        .filter_map(|o| match *o {
+            Order::Attack { ship, target } if target == me => Some(ship),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, guards);
+    assert_eq!(scene.brain_attack_status(k), (500, 0));
+    // Our ship out of the area: a 0x13a naming the target finds none.
+    scene.objects[mine].x = 40.0 * t;
+    scene.objects[mine].y = 40.0 * t;
+    scene.post_notice(guards[0], 0x13a, me);
+    assert_eq!(fleet(&scene).notices, [(guards[0], 0x13a, me)]);
+    scene.outbox.clear();
+    scene.run_attack_orders();
+    assert_eq!(fleet(&scene).attack.unwrap().target, 0);
+    assert!(scene.outbox.is_empty());
+    // Armed guards and no target: done, result 10 (0x47a6a0's p3).
+    assert_eq!(scene.brain_attack_status(k), (0x1f5, 10));
+    // Past the period with none heard: the notices freed.
+    scene.brain.as_mut().unwrap().fleets[k].elapsed = 0x5b;
+    scene.run_attack_orders();
+    assert!(fleet(&scene).attack.unwrap().freed);
+    scene.post_notice(guards[1], 300, 0);
+    assert!(fleet(&scene).notices.is_empty());
+    // A block of another kind makes them again.
+    scene.brain_block(k, 100);
+    scene.fleet_attack(k, area, 0);
+    assert!(!fleet(&scene).attack.unwrap().freed);
+}
+
+/// A brain repair order hears the mending's end (0x134) through its
+/// queue (0x4cdc00): the ship noted mended and stopped (command 10) at
+/// the order's next tick (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brain_repair_hears_the_mending_end() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    let k = scene.member_fleet(0, 0).unwrap();
+    let id = scene.brain.as_ref().unwrap().fleets[k].ships[0];
+    {
+        let f = &mut scene.brain.as_mut().unwrap().fleets[k];
+        f.block = 0x82;
+        f.repair = Some(Default::default());
+    }
+    scene.post_notice(id, 0x134, 0);
+    let fleet = |s: &Scene| s.brain.as_ref().unwrap().fleets[k].clone();
+    assert_eq!(fleet(&scene).notices, [(id, 0x134, 0)]);
+    assert!(fleet(&scene).repair.unwrap().mended.is_empty());
+    scene.outbox.clear();
+    scene.run_repair_orders();
+    assert_eq!(fleet(&scene).repair.unwrap().mended, [id]);
+    assert!(scene
+        .outbox
+        .iter()
+        .any(|o| matches!(*o, Order::Halt { id: i } if i == id)));
 }

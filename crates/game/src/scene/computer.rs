@@ -43,6 +43,7 @@ use crate::objects::{Resource, Task};
 /// A rectangle of map cells: x, y, width, height.
 type Cells = (i32, i32, i32, i32);
 
+pub(super) mod fleet_attack_zone;
 pub(super) mod fleet_found;
 pub(super) mod fleet_guard;
 pub(super) mod fleet_treasure;
@@ -5604,8 +5605,8 @@ impl Scene {
             return;
         }
         self.end_zone(group);
-        if let FleetOrder::Attack(area) = order {
-            self.attack_zone(ai, f, area);
+        if let FleetOrder::Attack(_) = order {
+            self.attack_zone(ai, f);
             return;
         }
         if let FleetOrder::Guard(_) = order {
@@ -5634,24 +5635,10 @@ impl Scene {
 
     /// Fleet order 0x70 (0x483650 -> 0x4a09d0 -> 0x4d6a90), its block
     /// `{0x70, 0x21}` made or rewritten (`new_block`; a rewrite leaves the
-    /// notices as they are): the target found in `area` (0x4d6640,
-    /// `zone_foe`) kept in the block (`+0x1c`); with one, each ship
-    /// of the flotilla with no strength (0x50ea70 0) sent to the target's
-    /// cell (0x51f1f0, its vt+0x28; 0x4cf070), the others to attack it
-    /// (0x4d0140: command 0x16). None: nothing.
-    fn attack_zone(&mut self, ai: &mut Computer, f: usize, area: Cells) {
-        let target = self.zone_foe(ai, f, area);
-        ai.flotillas[f].target = target;
-        if target == 0 {
-            return;
-        }
-        let mut cell = None;
-        for id in ai.flotillas[f].ships.clone() {
-            let Some(i) = self.object_index(id) else {
-                continue;
-            };
-            self.attack_one(i, target, &mut cell);
-        }
+    /// notices as they are), then its target and ships
+    /// (`fleet_attack_zone::attack_make`).
+    fn attack_zone(&mut self, ai: &mut Computer, f: usize) {
+        self.attack_make(&mut fleet_guard::Flotilla { ai, f });
     }
 
     /// Ship `i` of an attack block with target `target`: with no strength
@@ -5689,6 +5676,7 @@ impl Scene {
     /// an object already in it skipped. An object of class 0x46-0x48
     /// marks the index it went in at (not moved by later insertions).
     /// The id of the entry marked, else of the first; 0 when none.
+    #[cfg(test)]
     fn zone_foe(&self, ai: &Computer, f: usize, area: Cells) -> u32 {
         let (players, classes, _) = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
         self.area_foe(ai.owner, players, classes, area)
@@ -5803,140 +5791,9 @@ impl Scene {
         found
     }
 
-    /// The attack block's pass (0x4d6cd0, from the navy's tick 0x4c4f40,
-    /// each game tick). With notices, they are read newest first
-    /// (0x4d6960): a ship that joined (300) and is in the flotilla is sent
-    /// at the target (0x4d0140; not with none: command 0x16 with target 0,
-    /// whose record 0x4ab3f0 keeps, 0x4ac050 finding nothing, after the
-    /// pending group's turn in 0x4abe50: not traced) and the group's
-    /// three (0x4c42f0); a ship whose target is gone or that took a prize
-    /// (0x13a, from 0x4c09c0 and 0x4b6f20) and is in the flotilla: the
-    /// target looked for again (0x4d6640) when the notice names the
-    /// block's (`+0x1c`), then the ship sent at it if there is one, heard
-    /// either way; others (0x13c, 0x13d) are dropped. When none was read, group `+8` is
-    /// over the period (0x5a, but for a computer's side 3 or 4 outside the
-    /// campaign 0x78, 0x4b, 0x3c by its level `+0x1a31`) and the flotilla
-    /// has ships, the target is looked for again (0x4d6640). None: the
-    /// notices are freed (0x4d6520), the block left as it is, so no join
-    /// is heard again and the area looked at again each tick. Else `+8`
-    /// goes back to 0 and each ship of the flotilla: sent the group's
-    /// three when its `+0x689 / +0x68d` are not the group's (`+0x14`
-    /// set); with a blow marked made to forget it (0x4cf760; the report
-    /// 0x4a21c0 not ported); then a draw of the navy's generator `% 100`
-    /// and, the block's flags `+0x2c >> 16` 1, above 60 nothing more (2:
-    /// above 30); a phantom (`+0x253`) nothing more; one boarding or ramming
-    /// (`+0x25d == 0x10`, `closing_in`) nothing more; one that takes a
-    /// contact (`+0x261 & 0x1000`, `takes_contact`) looks about it
-    /// (`close_pick`: 0x4bad90 for kinds 10 and 11, else 0x4baae0, both
-    /// with reach 2 and the flags' low half, 0, as the mode) and with a
-    /// find whose boarding odds are 101 or more is sent to board it
-    /// (0x4d0190, command 0x17), else with ramming odds 101 or more to ram
-    /// it (0x4d01d0, command 0x18); else, and without the contact, sent at
-    /// the target as at the order (`attack_one`). Then `+8` grows by the
-    /// tick.
-    ///
-    /// The flags are the flotilla's `+0x154`, which each attack's caller
-    /// (tasks 8, 9, 10 state 0xc: 0x47ed7b, 0x47e5e3, 0x47e992) sets to
-    /// `(difficulty == 0) << 16` just before.
+    /// The attack block's pass (0x4d6cd0, `fleet_attack_zone::attack_tick`).
     fn attack_pass(&mut self, ai: &mut Computer, f: usize) {
-        let block = ai.flotillas[f].block;
-        let behaviour = ai.flotillas[f].behaviour;
-        let mut heard = 0;
-        if !ai.flotillas[f].no_notices {
-            for (id, at, code, rec) in std::mem::take(&mut ai.flotillas[f].joined)
-                .into_iter()
-                .rev()
-            {
-                if at != block
-                    || !ai.flotillas[f].ships.contains(&id)
-                    || self.object_index(id).is_none()
-                {
-                    continue;
-                }
-                match code {
-                    300 => {
-                        let target = ai.flotillas[f].target;
-                        if target != 0 {
-                            self.post(Order::Attack { ship: id, target });
-                        }
-                        heard += 1;
-                        self.send_behaviour(id, behaviour.unwrap_or((0, 0, 0)));
-                    }
-                    0x13a => {
-                        if rec == ai.flotillas[f].target {
-                            if let FleetOrder::Attack(area) = ai.flotillas[f].order {
-                                ai.flotillas[f].target = self.zone_foe(ai, f, area);
-                            }
-                        }
-                        let target = ai.flotillas[f].target;
-                        if target != 0 {
-                            self.post(Order::Attack { ship: id, target });
-                        }
-                        heard += 1;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let period = [0x78, 0x4b, 0x3c][ai.difficulty.min(2)];
-        if heard == 0 && period < ai.flotillas[f].elapsed && !ai.flotillas[f].ships.is_empty() {
-            let FleetOrder::Attack(area) = ai.flotillas[f].order else {
-                return;
-            };
-            let target = self.zone_foe(ai, f, area);
-            ai.flotillas[f].target = target;
-            if target == 0 {
-                ai.flotillas[f].no_notices = true;
-                ai.flotillas[f].joined.clear();
-            } else {
-                ai.flotillas[f].elapsed = 0;
-                let level = u32::from(ai.difficulty == 0);
-                let mut cell = None;
-                for id in ai.flotillas[f].ships.clone() {
-                    let Some(i) = self.object_index(id) else {
-                        continue;
-                    };
-                    let Some(s) = self.objects[i].ship.as_ref() else {
-                        continue;
-                    };
-                    if let Some(b @ (players, classes, _)) = behaviour {
-                        if s.behaviour.players != players || s.behaviour.classes != classes {
-                            self.send_behaviour(id, b);
-                        }
-                    }
-                    if self.objects[i].ship.as_ref().unwrap().blow.is_some() {
-                        self.post(Order::ClearBlow { ship: id });
-                    }
-                    let roll = self.navy_draw() % 100;
-                    if (level == 1 && roll > 60) || (level == 2 && roll > 30) {
-                        continue;
-                    }
-                    if self.objects[i]
-                        .combat
-                        .as_ref()
-                        .is_some_and(|c| c.phantom > 0.0)
-                    {
-                        continue;
-                    }
-                    if self.closing_in(i) {
-                        continue;
-                    }
-                    if self.takes_contact(i) {
-                        let (pick, board, ram) = self.close_pick(i);
-                        if pick != 0 && (board >= 0x65 || ram >= 0x65) {
-                            self.post(Order::Close {
-                                ship: id,
-                                target: pick,
-                                board: board >= 0x65,
-                            });
-                            continue;
-                        }
-                    }
-                    self.attack_one(i, target, &mut cell);
-                }
-            }
-        }
-        ai.flotillas[f].elapsed += 1;
+        self.attack_tick(&mut fleet_guard::Flotilla { ai, f });
     }
 
     /// Whether ship `i` is on a boarding or a ram (`+0x25d == 0x10`: the
@@ -6340,27 +6197,18 @@ impl Scene {
                     .as_ref()
                     .is_none_or(|s| s.path.is_empty())
             }),
-            // The attack's status (0x4d70d0, by 0x4a0d80 for block
-            // `{0x70, 0x21}`): done (0x1f5) with no ships (result 1), or
-            // with no armed ship (result 1) or no target in the area
-            // (0x4d6640, result 10); else running (500). Armed: a ship
-            // (0x50e600 200) neither a boat nor a merchant for which
-            // 0x4bc270(7) holds: types 8-11 always, the others with a
-            // weapon in a position (`+0x289..+0x291`). (The results and
-            // the counts are not read by the tasks, only the code.)
+            // The attack's status (0x4d70d0, `attack_status`; the
+            // results and the counts are not read by the tasks, only the
+            // code).
             FleetOrder::Attack(area) => {
-                fl.ships.is_empty()
-                    || !ships().any(|i| {
-                        self.objects[i].ship.as_ref().is_some_and(|s| {
-                            !matches!(s.kind, 0 | 1)
-                                && (matches!(s.kind, 8..=11)
-                                    || self.objects[i]
-                                        .combat
-                                        .as_ref()
-                                        .is_some_and(|c| !c.weapons.is_empty()))
-                        })
-                    })
-                    || self.zone_foe(ai, f, area) == 0
+                fleet_attack_zone::attack_status(
+                    self,
+                    &fl.ships,
+                    ai.owner,
+                    fl.behaviour,
+                    Some(area),
+                )
+                .0 == DONE
             }
             // The block's status (0x4cbfc0, `found_status`).
             FleetOrder::Found(..) => self.found_status(ai, f).0 == DONE,

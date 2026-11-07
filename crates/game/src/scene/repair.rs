@@ -1065,7 +1065,6 @@ impl Scene {
             3 if self.back_out_step(k, &mut l, hull_step) => {
                 self.objects[k].ship.as_mut().unwrap().task = None;
                 self.off_the_berth(k, b'Q');
-                self.brain_repaired(id);
                 self.post_notice(id, 0x134, 0);
                 self.brain_mended(id);
                 return;

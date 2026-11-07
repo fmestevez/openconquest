@@ -11441,7 +11441,42 @@ founding's other cases 0x130 and 0x136, treasure's 0x137, 0x141,
 not ported) and treasure block's (`treasure_notices`) are ported, below. Ported:
 a brain's mended ship's join posts 300 as a prize's
 (`brain_heard_join`), only with a block, and a new block of another
-kind drops the joins not heard (`brain_block`). Not ported: the fleet attack task's (the port keeps it per ship, no group: see
+kind drops the joins not heard (`brain_block`).
+
+**The brains' blocks' notices.** Each block's reader takes every
+notice of the group's queue off, newest first, and acts on these codes
+alone (the ship looked up in the group's list, 0x4cc590): move 100
+(0x4cc6a0, from 0x4ccd80): 300; gather 0x78: its zone's own list; the
+attack zone 0x70 (0x4d6960, from 0x4d6cd0): 300 and 0x13a; repair 0x82
+(0x4cdc00, from 0x4ce140): 300, 0x134 (`+0x18 > 0` 0x49bd60, never for
+the brains' `{0, 0, yard, 0}`; then 0x4cd980 state 10, noted mended,
+and 0x520cc0 command 10, the stop) and 0x136 only with a route
+`+0x61`, which the brains' order never gives; founding 0x8c: 300, 0x130,
+0x136 (route); treasure 0xbe: 300, 0x137, 0x141, 0x142. The port keeps
+the move's and the gather's joins alone (`joined`, the zone's list) and
+the others' notices whole (`Fleet::hears_notices`, `brain_notice`):
+the repair's 0x134 is read in its queue at the order's tick
+(`run_repair_orders`; before, the port noted it at the mending's end and
+gave no stop). **The brains' attack** (0x47a6a0: first call member
+`+0x10` 1, `+0x18` now, `+0x14` p10, then 0x479a40 with p3 `2 << 16`
+easy, `1 << 16` normal, 0 hard by `+0x32a1`) sends fleet order 0x70
+`{member +0x40..+0x4c (the area p5-p8), .., [7] p3, [8] member +0x2c,
+[9] +0x28, [10] +0x30}` to 0x4d6a90, the computers' attack zone
+(`computer/fleet_attack_zone.rs`, `AttackGroup` for a flotilla or a
+brain's fleet: `attack_make`, `attack_tick` 0x4d6cd0, `attack_status`
+0x4d70d0; the block's `+0x20..+0x28` are passed to 0x4d6640 unread).
+Its pass's period is 0x5a in the campaign (game `+0xd80` 1, for every
+side). Its later calls query 0x71 (0x4a0f60 -> 0x4a0d80 -> 0x4d70d0):
+done, result 10 to p3, else (1 included) to p4; then the timeout
+(`+0x18 + +0x14 <=` now, p10 non-zero) to p3; then the events, each
+switch overriding the one before. (Before, the port gave each ship a
+zone order and waited for them idle.) Ported: miss000's guards
+(`brain_guards_attack_through_the_zone_block`). Not decoded: the
+brains' group's player for a fleet with no ship on the map (the port
+takes its ships' owner, `AttackGroup::owner`); the order of the groups
+in the navy's tick 0x4c4f40 against the port's pass by kind (repair,
+move, attack, founding, treasure), which orders their draws of the
+navy's generator. Not ported: the fleet attack task's (the port keeps it per ship, no group: see
 "A ship's order at a jam"); the waypoint move, 0xa0, 0xaa, 0xb4 (not in
 the port).
 
