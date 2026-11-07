@@ -556,13 +556,16 @@ impl Scene {
     /// 0x2000 when bit 14 is set, else 0); the song (0x4a7390: 0x4b37d0,
     /// cleared); a ram's prey losing bit 12 while its rammer charges, all
     /// of it in its state 6 (`Ship::ram_hit`, 0x4b37d0 with 0 at
-    /// 0x4c404f). 0 for an object that is not a ship. (Not ported: the
+    /// 0x4c404f). 0 for an object that is not a ship. The capture's
+    /// `|= 0x2000` (0x4b6f20 at 0x4b707f) goes into `Ship::caps`. The
+    /// clears of bits 0-11 while `+0x251 == 1` (0x4b3850 at 0x4b3882,
+    /// 0x4dec40 at 0x4defda) never run: no ship code writes 1 there
+    /// (its writers 0x4bee60 0 or 4, 0x4b3ab0 0, 0x4bbfa0 0, 0x4b2506 /
+    /// 0x4dcf1b / 0x4dffb7 2, the rest 4; the load 0x4e21f5 only copies
+    /// back what the save 0x4e13af wrote). (Not ported: the
     /// amber gather's 0x4b067f and the unload's 0x4ae191, the port's
     /// amber and unload not being the original's step machines 0x4b0590
-    /// / 0x4adef0; the `+0x251 == 1` clears
-    /// of bits 0-11, 0x4b3882 and 0x4defda, no ship writer of
-    /// `+0x251 = 1` found; the capture's `|= 0x2000` at 0x4b707f;
-    /// 0x4bbfa0's 0xffffffff for a ship with `+0x275`, record `+0x40`, not
+    /// / 0x4adef0; 0x4bbfa0's 0xffffffff for a ship with `+0x275`, record `+0x40`, not
     /// loaded; the mover's 0x4a473e / 0x4a4c0d; the save's copy at
     /// 0x4e2326.)
     pub fn capabilities(&self, i: usize) -> u32 {

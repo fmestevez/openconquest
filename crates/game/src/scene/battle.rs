@@ -2006,6 +2006,9 @@ impl Scene {
             // switches (`+0x684 &= ~6`); the guard and the masks stay.
             ship.behaviour.ram = false;
             ship.behaviour.board = false;
+            // And gives it bit 13 (stop) of its capability word, the rest
+            // kept (`+0x261 |= 0x2000` at 0x4b707f).
+            ship.caps |= 0x2000;
             // Its new colours drawn with its damage.
             ship.look = None;
         }

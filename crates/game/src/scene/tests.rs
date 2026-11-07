@@ -5642,6 +5642,37 @@ fn an_empty_fleet_takes_its_orders_as_the_original() {
     );
 }
 
+/// A prize taken gets bit 13 (stop) of its capability word, the rest kept
+/// (0x4b6f20 at 0x4b707f: `+0x261 |= 0x2000`; needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_prize_gets_its_stop() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss010").unwrap();
+    scene.brain = None;
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| {
+            o.ship.is_some()
+                && !scene.is_own(o)
+                && o.owner
+                    .is_some_and(|w| w != crate::combat::MONSTERS && w != (4, 0))
+        })
+        .unwrap();
+    let id = scene.objects[i].id;
+    scene.objects[i].ship.as_mut().unwrap().caps = 0x1234;
+    scene.capture(id, human, 0, Default::default(), &data, &mut caches);
+    let i = scene.object_index(id).unwrap();
+    assert_eq!(scene.objects[i].owner, human);
+    assert_eq!(scene.objects[i].ship.as_ref().unwrap().caps, 0x3234);
+    assert_eq!(scene.capabilities(i), 0x3234);
+}
+
 /// The killer each death is put down to (0x50e750's callers): none (0xff)
 /// counts the owner's loss and nobody's gain; each rammed ship goes to
 /// the other's player (0x4c1c60); a prize taken counts as the taker's ship

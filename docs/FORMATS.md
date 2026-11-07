@@ -1546,9 +1546,18 @@ the cancelled build's 0 in `Ship::caps`; the amber gather's hold from
 step 1 -> 10 to step 5's end (0x4b0d74) as its machine's `Landing`
 (`Scene::landing_holds`, see "Amber, step by step"). The unload's hold
 from step 1 -> 10 to step 0x13's end (0x4b3850 at 0x4ae683) likewise
-(see "Unload, step by step"). Not ported: the `+0x251 == 1` clears
-(0x4b3882, 0x4defda; no ship writer of `+0x251 = 1` found), the
-capture's `|= 0x2000`, 0x4bbfa0 (`+0x275` not loaded), the mover's
+(see "Unload, step by step"). The capture's `|= 0x2000` (0x4b6f20 at
+0x4b707f, the rest of the word kept) into `Ship::caps`
+(`a_prize_gets_its_stop`). The clears of bits 0-11 while `+0x251 == 1`
+(0x4b3850 at 0x4b3882 on a hold's release, 0x4dec40 at 0x4defda each
+tick, which then, `+0x58c` clear, sets `+0x595` 0xb and, `+0x25b` not
+5, `+0x25b` 5 and the sprite's `+0x45` to 8 x `+0x5af` + 0x58) never run, so are not ported: no code writes 1
+into a ship's `+0x251` (0x4bee60 0, or 4 with no hull; 0x4b3ab0 at
+0x4b3eeb 0; 0x4bbfa0 0; 0x4b2512, 0x4dcf1b, 0x4dffb7 2; the others 4;
+0x419690's writes at 0x4197de / 0x4197ea are a settlement's supplies;
+the load 0x4e21f5 copies `+0x24f..` back from what the save 0x4e13af
+wrote). So the readers of 1 (0x4b650c, 0x4c3a7c, 0x4c3ad0) never pass
+either. Not ported: 0x4bbfa0 (`+0x275` not loaded), the mover's
 0x4a473e / 0x4a4c0d, the saved copy (0x4e2326).
 
 Its readers. The command handler 0x4e2ba0 tests each ship command with
