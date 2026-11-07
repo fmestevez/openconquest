@@ -6602,8 +6602,9 @@ one and `+0x104` 0 or 2, member 11's ships join it (0x479370). The port:
 strings in `Scene::said`, shown by the front end as chat lines; miss001's
 judge `Goal::Delivered(27)` and `Goal::Kept(27)`) from `take_treasure`
 (sea and land takes), `store_treasure` / `store_at`, `run_sink_drops`,
-the capture and `ship_cast`; member 11's 0x47aed0 waits in the port's
-state 16 (not sent back to 15). The stores show no text of their own
+the capture and `ship_cast`; member 11's 0x47aed0 is `Op::Treasure`
+through the treasure block (below), `+0x104` 3 set by the call that
+leaves it in 0x14. The stores show no text of their own
 (0x424b30 has none). Not ported: the capture's sends for slots past the
 ones held (the port keeps no leftovers: they read kind 0, heard by none).
 0x424cf0's 0x5d94 with 0 is `Scene::store_out_news`, from the load
@@ -11568,6 +11569,46 @@ search); 0x4a21c0's report of a blow (the port reports blows as they
 land); which cells of a building hold it in their slot (its anchor, as
 the dock block's); the treasure's state 5; two treasures on a cell (the
 port takes the first in object order).
+
+The block lives in `computer/fleet_treasure.rs` behind `TreasureGroup`
+(a computer's `Flotilla`, a brain's `Fleet`). 0x4da550's payload:
+`[0..3]` the area `+0xc`, `[4]` the kinds `+0x1c`, `[5]` `+0x20`
+(unread by the port), `[6]`, `[7]` the ports' count and list for mode
+1, `[8]` the manager group `+0x30`; 0x4d9e90 (no block) makes it zeroed
+first. 0x4d9a70 mode 0 (from 0x4d9b73) takes `+0x30` through 0x49c020:
+a group of kind 0xb with `+0x29`; 0x42c9a0 drops from its list `+0x2c`
+the members gone or of state 2, 3, 0xff, then by the class bit
+`1 << (class - 0x32)`: 0x39 (0x80) a town's (type 0x1491) buildings of
+the class (0x43d220 / 0x440c60); 0x40 (0x4000, in 0xe000) the members
+of the class themselves (`{+0x4c, +0x74, +0x78}`). The status 0x4da900:
+no members (`+0x31` count 0) 0x1f5 result 1; else a member in the
+player's objects 500, none 0x1f5 result 1; then `+0x34` 4 0x1f5 result
+0xc, 5 0x1f5 result 0xd.
+
+The brains' primitive 0x47aed0 (`(p3, p4, x, y, w, h, kinds p9, p10,
+flags p11, ticks p12, events p13)`; its one call site miss007's member
+11, 0x45e120 state 0xf: `(0x14, 5, 0, 0, map w, map h, 0x400000, 4, 0,
+0, none)`): at the state's first call `+0x10` 1, `+0x18` the tick,
+`+0x14` p12, then 0x479c90: member `+0x40..+0x4c` the area and to
+0x4a09d0 order 0xbe the payload `{area, p9, p11 & 0xffff, 0, 0, member
+p10's first word (-1 for p10 < 0)}` (no ports). Later calls query 0xbf
+(0x4a0f60 -> 0x4a0e20 -> 0x4da900): 0x1f5 to p3 with result 0xc, else
+p4; p12 set and past, p3; then p13's events (0x47a370). Ours:
+`Op::Treasure` (`brain_treasure`, `brain_treasure_status`), the block's
+tick each brain tick (`run_treasure_orders`), its notices by
+`brain_notice` (0x141, 0x142), `brain_heard_join` (300) and
+`brain_mended`'s leave (0x137); `+0x30` the fleet of member p10 of the
+group, its list (the member's buildings) as a land fleet's, as the
+repair's dock pick reads its yard. miss007's member 11 thus sails the
+sword home to member 4's class-0x40 building at (15, 68). The status's
+0xc needs `+0x34` 4, set only by 0x142 (a treasure used at once, kinds
+0-5 and 8), never by the sword's 0x141, and `+0x34` 5 only at the
+order (none listed) or by a carrier's 0x137 with none about it: once
+the sword is aboard the member stays in 0xf while the block runs, until
+then or until it has no ships (result 1, to 5). The group's player
+(the block's first argument) is taken as its ships' owner.
+Not ported: the merge 0x479370 (0x4a0480 op 0xe; its notices to the
+blocks are not decoded: `fleet_merge` posts none).
 
 **A ship's take** (event 0x40 class 700, the player's and the computer's
 alike). 0x4aab00 sets the gather task `+0x76e` 700, sub-code `+0x772` 9,

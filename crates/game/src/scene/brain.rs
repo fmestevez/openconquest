@@ -118,6 +118,24 @@ pub enum Op {
         class: u32,
         ticks: u32,
     },
+    /// Take the treasures of `kinds` (a bit each) in the area `area`
+    /// works out (0x47aed0): at the state's first call fleet order 0xbe
+    /// (`brain_treasure`, the call's p11 flags into payload 5, `manager`
+    /// p10's member); at the later ones the block's status (query 0xbf,
+    /// `brain_treasure_status`): done, `done` with result 0xc else
+    /// `other`; then, `ticks` set and that many past the first call,
+    /// `done`. `after` is the member's own code run behind the call when
+    /// it left the member in `done` (0x45e120 state 0xf's `+0x104`).
+    /// (The call's event list, p13, is none at its call site.)
+    Treasure {
+        done: u32,
+        other: u32,
+        area: fn(&Scene) -> Cells,
+        kinds: u32,
+        manager: usize,
+        ticks: u32,
+        after: Option<fn(&mut Scene)>,
+    },
     /// Wait (0x47a3b0).
     Wait { next: u32, ticks: u32 },
     /// Wait as many ticks as the fleet's variable `var` holds.
@@ -298,6 +316,10 @@ pub struct Fleet {
     /// (`fleet_found`).
     #[serde(default)]
     pub(super) founding: Option<super::computer::fleet_found::FoundBlock>,
+    /// Fleet order 0xbe's block (0x4da550), while the block is a treasure
+    /// hunt (`fleet_treasure`).
+    #[serde(default)]
+    pub(super) treasure: Option<super::computer::fleet_treasure::TreasureBlock>,
     /// The block's notices (`+0x2d`, `(ship, code, record)`, oldest first)
     /// for the blocks that read them through their group (`FoundGroup`):
     /// the founding's 300 and 0x130.
@@ -535,6 +557,53 @@ impl super::computer::fleet_found::FoundGroup for Fleet {
     }
 }
 
+impl super::computer::fleet_treasure::TreasureGroup for Fleet {
+    fn ships(&self) -> &[u32] {
+        &self.ships
+    }
+    fn block(&self) -> &Option<super::computer::fleet_treasure::TreasureBlock> {
+        &self.treasure
+    }
+    fn block_mut(&mut self) -> &mut Option<super::computer::fleet_treasure::TreasureBlock> {
+        &mut self.treasure
+    }
+    fn behaviour(&self) -> (u32, u32, u32) {
+        self.behaviour.unwrap_or((0, 0, 0))
+    }
+    fn elapsed(&mut self) -> &mut u32 {
+        &mut self.elapsed
+    }
+    /// The group's player (member `+4`): that of its ships, each of the
+    /// group's own player (none without a ship on the map, where the
+    /// block lists no port).
+    fn owner(&self, scene: &Scene) -> (u32, u32) {
+        self.ships
+            .iter()
+            .find_map(|&id| scene.objects[scene.object_index(id)?].owner)
+            .unwrap_or((u32::MAX, u32::MAX))
+    }
+    /// Block `+0x30`, the first word of the call's member p10: that
+    /// member's group, taken as a land fleet as the repair's dock pick
+    /// takes its yard's (`repair_pick`): its list less the gone, fallen
+    /// and sold, written back (0x42c9a0).
+    fn managers(&mut self, scene: &mut Scene) -> Option<Vec<u32>> {
+        let m = self.treasure.as_ref()?.manager?;
+        let ships = scene.brain.as_ref()?.fleets.get(m)?.ships.clone();
+        let list: Vec<u32> = ships
+            .into_iter()
+            .filter(|&id| scene.object_index(id).is_some() && !scene.fallen_or_sold(id))
+            .collect();
+        scene.brain.as_mut().unwrap().fleets[m].ships = list.clone();
+        Some(list)
+    }
+    fn has_notices(&self) -> bool {
+        !self.notices.is_empty()
+    }
+    fn take_notices(&mut self) -> Vec<(u32, u32, u32)> {
+        std::mem::take(&mut self.notices)
+    }
+}
+
 impl Fleet {
     fn new(ships: Vec<u32>) -> Self {
         Fleet {
@@ -557,6 +626,7 @@ impl Fleet {
             behaviour: None,
             block: 0,
             founding: None,
+            treasure: None,
             notices: Vec::new(),
             ordered: false,
             build: None,
@@ -1009,6 +1079,7 @@ impl Scene {
         self.run_repair_orders();
         self.run_move_orders();
         self.run_found_orders();
+        self.run_treasure_orders();
         if tick % 5 != 0 {
             return;
         }
@@ -1228,6 +1299,33 @@ impl Scene {
                     }
                     if ticks != 0 && elapsed >= ticks {
                         self.set_state(k, done);
+                    }
+                }
+            }
+            Op::Treasure {
+                done,
+                other,
+                area,
+                kinds,
+                manager,
+                ticks,
+                after,
+            } => {
+                if !started {
+                    let area = area(self);
+                    self.brain_treasure(k, area, kinds, manager);
+                } else {
+                    let (status, result) = self.brain_treasure_status(k);
+                    if status == 0x1f5 {
+                        self.set_state(k, if result == 0xc { done } else { other });
+                    }
+                    if ticks != 0 && elapsed >= ticks {
+                        self.set_state(k, done);
+                    }
+                }
+                if let Some(after) = after {
+                    if self.brain.as_ref().unwrap().fleets[k].state == done {
+                        after(self);
                     }
                 }
             }
@@ -1706,14 +1804,6 @@ impl Scene {
         }
     }
 
-    /// A treasure of kind `kind` lying on the map, if any.
-    pub(super) fn loose_treasure(&self, kind: u8) -> Option<u32> {
-        self.objects
-            .iter()
-            .find(|o| o.treasure.is_some_and(|t| t.kind == kind))
-            .map(|o| o.id)
-    }
-
     /// Message 0x5d94 to the brains (0x4b6e80, 0x424b30): treasure `tr`
     /// came to an object of `owner`'s, building `site` or a ship (`None`)
     /// (`stored` 1: a ship taking it, 0x4a5bc0 and 0x4de5ea, or a building
@@ -1965,6 +2055,10 @@ impl Scene {
         };
         let brain = self.brain.as_mut().unwrap();
         for f in &mut brain.fleets {
+            // Leaving (0x49bef0) posts 0x137 to the group's block (0x4a1770).
+            if f.ships.contains(&id) && matches!(f.block, 0x8c | 0xbe) {
+                f.notices.push((id, 0x137, 0));
+            }
             f.ships.retain(|&s| s != id);
         }
         if let Some(f) = brain.fleets.get_mut(into) {
@@ -2207,17 +2301,18 @@ impl Scene {
             return;
         }
         let f = &mut self.brain.as_mut().unwrap().fleets[k];
-        if f.block == 0x8c {
+        if matches!(f.block, 0x8c | 0xbe) {
             f.notices.push((id, 300, 0));
         } else if f.block != 0 {
             f.joined.push(id);
         }
     }
 
-    /// A notice `code` of ship `id` (0x4a15a0 and the like) to the brain
-    /// fleet holding it, posted only while its block reads its notices
-    /// through its group (the founding, `notices`); whether a fleet held
-    /// it. (Not ported: the notices of the brains' other blocks.)
+    /// A notice `code` of ship `id` (0x4a15a0, 0x4a1a60, 0x4a1af0 and the
+    /// like) to the brain fleet holding it, posted only while its block
+    /// reads its notices through its group (the founding's and the
+    /// treasure hunt's, `notices`); whether a fleet held it. (Not ported:
+    /// the notices of the brains' other blocks.)
     pub(super) fn brain_notice(&mut self, id: u32, code: u32, rec: u32) -> bool {
         let Some(brain) = self.brain.as_mut() else {
             return false;
@@ -2225,7 +2320,7 @@ impl Scene {
         let Some(f) = brain.fleets.iter_mut().find(|f| f.ships.contains(&id)) else {
             return false;
         };
-        if f.block == 0x8c {
+        if matches!(f.block, 0x8c | 0xbe) {
             f.notices.push((id, code, rec));
         }
         true
@@ -2271,6 +2366,47 @@ impl Scene {
     pub(super) fn brain_found_status(&self, k: usize) -> (u32, u32) {
         let f = &self.brain.as_ref().unwrap().fleets[k];
         super::computer::fleet_found::found_status(self, &f.ships, f.founding.as_ref())
+    }
+
+    /// The treasure blocks' ticks (0x4da6a0, the navy's 0x4c5088) of the
+    /// brain fleets that hold one (`fleet_treasure`).
+    fn run_treasure_orders(&mut self) {
+        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
+            let f = &mut self.brain.as_mut().unwrap().fleets[k];
+            if f.block != 0xbe {
+                continue;
+            }
+            let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
+            self.treasure_tick(&mut f);
+            self.brain.as_mut().unwrap().fleets[k] = f;
+        }
+    }
+
+    /// Fleet order 0xbe from member `k` (0x47aed0's first call, 0x479c90):
+    /// the member's `+0x40` the area, then to 0x4da550 the payload `{area,
+    /// kinds, flags & 0xffff, 0, 0, third}` (the call's p5-p8, p9, p11,
+    /// no ports, and the first word of member p10 of the group, -1 for a
+    /// p10 below 0): a block of another kind ended (`brain_block`), this
+    /// one made or rewritten (`treasure_order`). `manager` is p10, whose
+    /// group the block's trip home takes the ports of.
+    pub(super) fn brain_treasure(&mut self, k: usize, area: Cells, kinds: u32, manager: usize) {
+        self.brain.as_mut().unwrap().fleets[k].last_area = area;
+        self.brain_block(k, 0xbe);
+        let group = mission_fleets(&self.brain.as_ref().unwrap().mission)
+            .and_then(|defs| defs.get(k))
+            .map(|d| d.group);
+        let manager = group.and_then(|g| self.member_fleet(g, manager));
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
+        self.treasure_order(&mut f, area, kinds, &[], manager);
+        self.brain.as_mut().unwrap().fleets[k] = f;
+    }
+
+    /// 0x47aed0's later calls: the treasure block's status (query 0xbf,
+    /// 0x4a0f60 -> 0x4a0e20 -> 0x4da900, `fleet_treasure::treasure_status`).
+    pub(super) fn brain_treasure_status(&self, k: usize) -> (u32, u32) {
+        let f = &self.brain.as_ref().unwrap().fleets[k];
+        super::computer::fleet_treasure::treasure_status(self, &f.ships, f.treasure.as_ref())
     }
 
     /// Puts a leviathan zone (class 0x192, 0x4960b0) of `area` on the map:
@@ -2392,6 +2528,7 @@ impl Scene {
         f.joined.clear();
         f.notices.clear();
         f.founding = None;
+        f.treasure = None;
         let (players, classes, third) = f.behaviour.unwrap_or((0, 0, 0));
         for ship in self.fleet_ships(k) {
             if self.object_index(ship).is_some() {
@@ -8815,44 +8952,23 @@ mod miss007 {
                     15
                 }
             }),
-            // 0x47aed0 (order 0xbe): a ship takes the sword (kind 22) where
-            // it lies anywhere on the map (0x4d9920; the whole map written
-            // into `+0x40` by 0x479c90); 5 if there is none. (Not ported:
-            // the treasure command goes through 0x520cc0 to the next tick;
-            // here it is given at once, its answer picking the ship.)
-            15 => Op::Custom(|scene, k| {
-                scene.brain_block(k, 0xbe);
-                let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
-                scene.brain.as_mut().unwrap().fleets[k].last_area = (0, 0, w, h);
-                match scene.loose_treasure(SWORD) {
-                    Some(target) => {
-                        for id in scene.fleet_ships(k) {
-                            if scene.order_take(id, target).is_ok() {
-                                return 16;
-                            }
-                        }
-                        5
-                    }
-                    None => 5,
-                }
-            }),
-            16 => Op::Custom(|scene, k| {
-                let held = scene.fleet_ships(k).iter().any(|&id| {
-                    scene
-                        .object_index(id)
-                        .and_then(|i| scene.objects[i].ship.as_ref())
-                        .is_some_and(|s| s.has_treasure(SWORD))
-                });
-                if held {
-                    // Done (0x47aed0 to 0x14): the sword's state 3.
-                    scene.brain.as_mut().unwrap().fields[SWORD_STATE] = 3;
-                    20
-                } else if scene.loose_treasure(SWORD).is_some() {
-                    16
-                } else {
-                    5
-                }
-            }),
+            // 0x47aed0 (order 0xbe, `Op::Treasure`): the sword (kind 22,
+            // kinds 0x400000) taken where it lies anywhere on the map
+            // (`+0x40` the map's cells, 0x15b5 -> 0x17b2), the trip home
+            // to the ports of member 4's group (p10 4); flags 0, no time
+            // limit. Done with result 0xc (status 4: a treasure used at
+            // once, 0x142, which a sword put aboard, 0x141, never is) to
+            // 0x14, with the sword's state 3 set by the same call; done
+            // otherwise (none in the area, 0xd; no ships, 1) back to 5.
+            15 => Op::Treasure {
+                done: 20,
+                other: 5,
+                area: |scene| (0, 0, scene.nav.width as i32, scene.nav.height as i32),
+                kinds: 1 << SWORD,
+                manager: 4,
+                ticks: 0,
+                after: Some(|scene| scene.brain.as_mut().unwrap().fields[SWORD_STATE] = 3),
+            },
             // Taken: fleet 8 joins it (0x479370) and it holds the waters.
             20 => Op::Custom(|scene, k| {
                 scene.fleet_merge(k, 8);

@@ -8504,6 +8504,85 @@ fn miss007_guard_hunts_the_sword() {
     );
 }
 
+/// miss007's wizard guard takes the sword through the treasure block
+/// (0x47aed0 -> 0x479c90 -> 0x4da550): the whole map, kinds 0x400000,
+/// member 4's group the ports' manager; the block hears 0x141 (the trip
+/// home) and 0x142 (status 4), whose status 0xc takes the member to 0x14
+/// with the sword's state 3 (needs `OPENCONQUEST_DATA`).
+#[test]
+fn miss007_guard_takes_the_sword_through_the_block() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    let ships = scene.fleet_ships(11);
+    let i = scene.object_index(ships[0]).unwrap();
+    let (x, y) = (scene.objects[i].x, scene.objects[i].y);
+    let tr = objects::Treasure {
+        kind: 22,
+        param: 0,
+        amount: 0,
+    };
+    scene.place_treasure(tr, x + 64.0, y, &data, &mut caches);
+    let sword = scene
+        .objects
+        .iter()
+        .find(|o| o.treasure.is_some_and(|t| t.kind == 22))
+        .map(|o| o.id)
+        .unwrap();
+    scene.set_state(11, 15);
+    for _ in 0..50 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+    let f = &scene.brain.as_ref().unwrap().fleets[11];
+    let b = f.treasure.as_ref().unwrap();
+    assert_eq!((f.block, b.area, b.kinds), (0xbe, (0, 0, w, h), 0x400000));
+    assert_eq!(b.manager, Some(4));
+    assert_eq!(b.targets[0].id, sword);
+    // The first ship (in reach of the sword's cell, (19, 21)) takes it
+    // (0x141): sent home (state 2) to member 4's own class-0x40 building
+    // at (15, 68), the others escorting it from its cell.
+    let mut n = 0;
+    let carrying = |scene: &Scene| {
+        let b = scene.brain.as_ref().unwrap().fleets[11].treasure.as_ref();
+        b.is_some_and(|b| b.ships.iter().any(|r| r.state == 2))
+    };
+    while n < 3000 && !carrying(&scene) {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        n += 1;
+    }
+    let lair = scene.fleet_ships(4)[0];
+    let o = &scene.objects[scene.object_index(lair).unwrap()];
+    assert_eq!(
+        (o.class, o.cell),
+        (ObjectClass::Barbarian(0x40), Some((15, 68)))
+    );
+    let b = scene.brain.as_ref().unwrap().fleets[11]
+        .treasure
+        .clone()
+        .unwrap();
+    assert_eq!(b.ports, vec![(lair, 68 * w + 15)]);
+    assert_eq!((b.ships[0].ship, b.ships[0].state), (ships[0], 2));
+    assert_eq!(b.ships[0].target, lair);
+    assert!(b.ships[1..]
+        .iter()
+        .all(|r| (r.state, r.target, r.x, r.y) == (3, ships[0], 19, 21)));
+    assert_eq!(scene.brain.as_ref().unwrap().fleets[11].state, 15);
+    // A treasure used at once (0x142): status 4, read at the member's
+    // next turn as done with result 0xc: on to 0x14, the sword's state 3.
+    scene.post_notice(ships[0], 0x142, 0);
+    for _ in 0..50 {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+    }
+    let br = scene.brain.as_ref().unwrap();
+    assert_eq!(br.fleets[11].treasure.as_ref().unwrap().status, 4);
+    assert_eq!(br.fleets[11].state, 20);
+    assert_eq!(br.fields[0], 3);
+}
+
 /// Puts own ship `ship` where its load reaches object `target` (a port's,
 /// yard's or dock's berth, vt+0xb8; else a free water cell next to its
 /// anchor) and takes the two up for reloading (Reload Object: closing in
