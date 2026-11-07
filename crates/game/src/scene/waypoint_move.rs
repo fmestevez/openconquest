@@ -99,6 +99,13 @@ impl Scene {
                 .append(x, y);
             return Ok(());
         }
+        if let Some(z) = self.selection_found(&ships) {
+            self.human_founds[z]
+                .route
+                .get_or_insert_with(Route::default)
+                .append(x, y);
+            return Ok(());
+        }
         let now = self.ticks;
         if let Some(z) = self.selection_waypoint_move(&ships) {
             let m = &mut self.waypoint_moves[z];

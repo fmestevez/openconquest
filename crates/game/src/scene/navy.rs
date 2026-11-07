@@ -32,6 +32,7 @@ impl Scene {
         self.drop_gone_fleet_attacks();
         self.drop_gone_waypoint_moves();
         self.drop_gone_guards();
+        self.drop_gone_founds();
         for k in 0..self.computers.players.len() * self.computers.on as usize {
             let mut ai = std::mem::take(&mut self.computers.players[k]);
             self.computer_drop_gone(&mut ai);
@@ -74,6 +75,7 @@ impl Scene {
             .chain(self.fleet_attacks.iter().map(|a| a.serial))
             .chain(self.waypoint_moves.iter().map(|m| m.serial))
             .chain(self.human_guards.iter().map(|g| g.serial))
+            .chain(self.human_founds.iter().map(|g| g.serial))
             .collect();
         serials.sort_unstable();
         serials.dedup();
@@ -125,6 +127,9 @@ impl Scene {
             let mut g = self.human_guards.remove(z);
             self.guard_tick(&mut g);
             self.human_guards.insert(z, g);
+        }
+        if let Some(z) = self.human_founds.iter().position(|g| g.serial == s) {
+            self.human_found_tick(z);
         }
     }
 }

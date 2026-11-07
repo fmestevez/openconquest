@@ -5941,13 +5941,21 @@ impl App {
             let (Some(settlement), Some(cell)) = (self.selected, self.cell_at(pos)) else {
                 return;
             };
-            // A ship sails there to put it up.
+            // A ship sails there to put it up: the found pointer's click
+            // (0x5180e0 mode 0xe) sends the navy the fleet command 0x20
+            // `{x, y, -1, +0xe1}` for the selection (0xc458 -> 0x49e230 ->
+            // 0x49dc90), `+0xe1` the building command less 0x15
+            // (0x4f34c0).
             if self.selected_ship().is_some() {
-                match self.issue(Order::Found {
-                    ship: settlement,
-                    cx: cell.0,
-                    cy: cell.1,
-                    class,
+                let ships = self.selection();
+                let code = self.pending.map_or(0, |c| c.0.wrapping_sub(0x15));
+                let keys = self.key_flags();
+                match self.issue(Order::FleetFound {
+                    ships,
+                    x: cell.0,
+                    y: cell.1,
+                    code,
+                    keys,
                 }) {
                     Ok(_) => {
                         self.pending = None;
@@ -6727,6 +6735,7 @@ impl App {
             | Order::AttackZone { .. }
             | Order::GuardZone { .. }
             | Order::FleetAttack { .. }
+            | Order::FleetFound { .. }
             | Order::GatherAt { .. }
             | Order::GatherArea { .. } => true,
             Order::Behaviour { ship, .. } => self.selection().contains(ship),

@@ -171,6 +171,18 @@ pub enum Order {
         command: u8,
         keys: u8,
     },
+    /// The human's fleet command 0x20 (the found pointer) at cell `(x,
+    /// y)` with `ships` selected (0x49dc90): the selection's group given
+    /// the founding block (`fleet_found`). `code` the pointer's `+0xe1`
+    /// (the building command less 0x15); `keys` the click's key flags
+    /// (4 Shift: the site listed).
+    FleetFound {
+        ships: Vec<u32>,
+        x: i32,
+        y: i32,
+        code: u8,
+        keys: u8,
+    },
     /// The human's gather click on a deposit with `ships` selected
     /// (0x49d3c0): a gather zone of the 3 x 3 cells about it. `keys`: the
     /// click's key flags (Sinput, the mouse message's `+0x14`: 4 Shift, 8
@@ -516,7 +528,8 @@ impl Scene {
             | Order::Patrol { .. }
             | Order::AttackZone { .. }
             | Order::GuardZone { .. }
-            | Order::FleetAttack { .. } => {}
+            | Order::FleetAttack { .. }
+            | Order::FleetFound { .. } => {}
             Order::Behaviour { .. } | Order::LoadCrew { .. } | Order::LoadObject { .. } => {}
             // The selection's plain order: its group kept (0x49e230),
             // made at once at the click, before the ships' own orders.
@@ -885,6 +898,13 @@ impl Scene {
                 command,
                 keys,
             } => done(self.order_fleet_attack(ships, target, command, keys)),
+            FleetFound {
+                ref ships,
+                x,
+                y,
+                code,
+                keys,
+            } => done(self.order_human_found(ships, x, y, code, keys)),
             GatherZone {
                 ship,
                 a,

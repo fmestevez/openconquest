@@ -536,6 +536,9 @@ pub struct Scene {
     /// The human groups running the guard block `{0x6e, 0x29}` (0x49d790
     /// case 9, `human_guard`).
     pub human_guards: Vec<human_guard::HumanGuard>,
+    /// The human groups running the founding block `{0x8c, 0x47}`
+    /// (0x49dc90, `computer::fleet_found::HumanFound`).
+    pub human_founds: Vec<computer::fleet_found::HumanFound>,
     /// The human groups with no block the port runs (`gather::HumanGroup`).
     pub human_groups: Vec<gather::HumanGroup>,
     /// The last human group's serial number.
@@ -671,6 +674,7 @@ mod walkers;
 mod waypoint_move;
 mod yard;
 pub use brain::{Brain, EASY, HARD, NORMAL};
+pub use computer::fleet_found::HumanFound;
 pub use computer::Computers;
 pub use fleet_attack::FleetAttack;
 pub use flyers::{Flyer, Nest};
@@ -976,6 +980,7 @@ impl Scene {
             fleet_attacks: Vec::new(),
             waypoint_moves: Vec::new(),
             human_guards: Vec::new(),
+            human_founds: Vec::new(),
             human_groups: Vec::new(),
             zone_serial: 0,
             navy_lcg: None,
@@ -1266,6 +1271,7 @@ impl Scene {
             fleet_attacks: self.fleet_attacks.clone(),
             waypoint_moves: self.waypoint_moves.clone(),
             human_guards: self.human_guards.clone(),
+            human_founds: self.human_founds.clone(),
             human_groups: self.human_groups.clone(),
             zone_serial: self.zone_serial,
             navy_lcg: self.navy_lcg,
@@ -1466,6 +1472,7 @@ impl Scene {
         scene.fleet_attacks = save.fleet_attacks.clone();
         scene.waypoint_moves = save.waypoint_moves.clone();
         scene.human_guards = save.human_guards.clone();
+        scene.human_founds = save.human_founds.clone();
         scene.human_groups = save.human_groups.clone();
         scene.zone_serial = save.zone_serial;
         scene.navy_lcg = save.navy_lcg;

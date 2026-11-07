@@ -423,6 +423,7 @@ impl Scene {
         self.leave_fleets(ids);
         self.leave_waypoint_moves(ids);
         self.leave_guards(ids);
+        self.leave_founds(ids);
     }
 
     /// The selection's group given a new block (0x49e230 keeps it while
@@ -459,6 +460,10 @@ impl Scene {
         }
         if let Some(g) = self.selection_guard(ships) {
             let g = self.human_guards.remove(g);
+            return Some((g.serial, g.elapsed, g.route, g.behaviour));
+        }
+        if let Some(g) = self.selection_found(ships) {
+            let g = self.human_founds.remove(g);
             return Some((g.serial, g.elapsed, g.route, g.behaviour));
         }
         if let Some(g) = self.selection_group(ships) {
@@ -554,6 +559,8 @@ impl Scene {
             Some(&self.waypoint_moves[z].ships)
         } else if let Some(z) = self.ship_guard(id) {
             Some(&self.human_guards[z].ships)
+        } else if let Some(z) = self.ship_found(id) {
+            Some(&self.human_founds[z].ships)
         } else {
             self.human_groups
                 .iter()
@@ -586,6 +593,8 @@ impl Scene {
             &mut self.waypoint_moves[z].ships
         } else if let Some(z) = self.ship_guard(member) {
             &mut self.human_guards[z].ships
+        } else if let Some(z) = self.ship_found(member) {
+            &mut self.human_founds[z].ships
         } else if let Some(g) = self
             .human_groups
             .iter_mut()
@@ -633,6 +642,8 @@ impl Scene {
             self.waypoint_moves[z].notices.push(notice);
         } else if let Some(z) = self.ship_guard(id) {
             self.human_guards[z].notices.push(notice);
+        } else if let Some(z) = self.ship_found(id) {
+            self.human_founds[z].notices.push(notice);
         } else if !self.brain_notice(id, code, class) {
             for ai in &mut self.computers.players {
                 if ai.post_notice(id, code, class) {

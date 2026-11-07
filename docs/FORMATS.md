@@ -11674,8 +11674,35 @@ area: the cells on the map where 0x4e4420 holds with a berth 0x4b2710 in
 draught from its cell, 5000: for i, for j < i, `W[b[i]] <= W[b[j]]`
 swaps, signed shorts; no wavefront, -1), the first (with none the
 malloc'd array's first word, never written). With a route (`+0x61`,
-only the human's Shift founding 0x49dc90 sets it): 0x4cea20 / 0x4ceab0,
-0x4cb110 / 0x4cb5f0 into `+0x2d` (0x1b bytes by ship id), 0x4cf070.
+kept only through the human's Shift founding, 0x4cbcf0 with flags 4 on
+a block of another kind, or added by Shift move clicks 0x49de70 on the
+founding group): a ship on it (0x4cea20 not -1) waits: 0x4cb110 with
+its 0x4cb850 site into the block's `+0x2d` (0x4cb5f0: 0x1b-byte
+records, the ship's earlier one taken off, appended; only `+0` the ship
+id is ever read), no command. Off it: for the viewing player (`navy
++0x21`) the berth 0x4b2710(ship, area cell) by the ship's `+0x73b`
+(none: return 0, nothing), others -1; then 0x4ceab0(ship, route, that,
+&closer): a waypoint, not closer, a move there (0x4cf070), progress
+`(-1, -1, 0, 1)` (0x4ce8a0) and the wait; closer, the command at once
+(0x4cb850, 0x4cb0b0); no waypoint and closer 0, the wait alone (closer
+is not written then: ebp-0xc read uninitialised, not decoded; the port
+gives the command). The notice 0x136 (rec the cell, route only): the
+ship's way (0x4cea20), 0x4ce7c0's next waypoint; in `[1, cells)` a move
+there and 0x4ce8a0 with the end flag; else past the end 0x4ce8a0 `(-1,
+-1)` removing, then not waiting (`+0x2d` null or 0x4cb670 -1) the
+command (in range, counted), else 0x4cb6f0: the command (0x4cb850
+unchecked: a -1 sent as cell (-1, 0), the port sends none) and the wait
+taken off, not counted. The human's command (0x5180e0 mode 0xe, the
+found pointer: 0x518db0 0x20 `{x, y, -1, +0xe1, player +0x3295, 1}`,
+`+0xe1` the building command less 0x15 set by 0x4f34c0; 0xc458 ->
+0x49e230 case 0x20 -> 0x49dc90): with Shift on a group already running
+`{0x8c, 0x47}`, 0x4cb4b0 with `{0, x, y, 1, 1, -1, code byte, 1, 100}`,
+the code itself as the class byte (0x49dce8, unmapped), nothing sent;
+else 0x4cbcf0 with `{0, class, x, y, 1, 1, -1}`, class by the code
+(table 0x49dd88: 1 0x32, 3 0x35, 4 0x36, else 0x34), the key flags as
+its flags. A Shift-listed site coming up (0x4cb450) gives 0x4cb850 a
+class 1-4: no site, so no command; nor does the landing's 0x130 (class
+`+0x73b`) match it.
 The notices 0x4cba10 (from the last): 300 of a ship of the group
 (0x4cc590), 0x4cb1a0 and `#` sub 1 with the group's three (0x4c42f0),
 counted; 0x130 (0x4a15a0 from the landing's state 6 at 0x4b3637, after
@@ -11718,10 +11745,18 @@ any player's). Port: computer/fleet_found.rs `FoundBlock`, `FoundGroup`
 the 300s of `brain_heard_join`), `run_found_orders`; the landing posts
 0x130 (landing.rs; the port's record the cell index, the class byte at
 bit 24). Tests `the_founding_block_sends_hears_and_ends` (miss000),
-`miss005_raiders_found_through_the_block`. Not ported: the route
-branches and 0x136 (no computer or brain order sets a route), the wider
-area's scan (both orders are 1 x 1), the marks; the notices of the
-brains' other blocks (`brain_notice` keeps only the founding's).
+`miss005_raiders_found_through_the_block`. The human's: `HumanFound`
+(`Scene::human_founds`, saved), `order_human_found` (`Order::FleetFound`
+from the found pointer's click, was a direct `Order::Found` to the
+selected ship), `found_class`, `run_human_founds` (the navy's tick),
+the route arms in `found_send` / `found_notices` (`FoundBlock::waiting`
+the `+0x2d` list); tests `the_human_founds_through_the_block`,
+`a_founding_group_sails_its_route_first` (miss000). Not ported: the
+wider area's scan (every order is 1 x 1), the sites' marks (0x4cc1e0 /
+0x4cc170, the viewing player's, interface only); the ship's `+0x73b`
+once its founding task is over (the port's berth reads the class of a
+current `Task::Found` only, else finds none). Not decoded: 0x4cb1a0's
+`closer` with no waypoint (above).
 
 **Treasure hunting** (builders, task 5 state 2): the area is the square
 about the base's town, from 4 cells and 4 more a time, that holds a

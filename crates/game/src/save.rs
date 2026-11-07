@@ -118,6 +118,9 @@ pub struct SaveGame {
     /// The human groups' guard blocks.
     #[serde(default)]
     pub human_guards: Vec<crate::scene::HumanGuard>,
+    /// The human groups' founding blocks.
+    #[serde(default)]
+    pub human_founds: Vec<crate::scene::HumanFound>,
     /// The human groups with no block.
     #[serde(default)]
     pub human_groups: Vec<crate::scene::HumanGroup>,
