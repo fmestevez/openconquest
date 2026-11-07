@@ -7,7 +7,7 @@ use crate::assets::GameData;
 use crate::combat::Upgrade;
 use crate::commands::Command;
 use crate::magic::{Spell, Temple};
-use crate::objects::{Caches, Resource, Task};
+use crate::objects::{Caches, Resource};
 
 use super::Scene;
 
@@ -522,61 +522,95 @@ impl Scene {
         data: &GameData,
         caches: &mut Caches,
     ) -> Result<u32, String> {
-        // A ship being built refuses its commands (0x4e2ba0 tests each with
-        // 0x4e6700, and its capability word `+0x261` is 0x2000 alone:
-        // moves 0x14, fire 0x15 / 0x16, board, ram, gather, dock,
-        // transfer, found and treasure are dropped, nothing kept), but the
-        // stop, which calls the building off (event 8, 0x4aa540), the
-        // behaviour switches (0x23: applied at once by 0x4a9e30) and the
-        // spells cast on it.
-        let ship = order.ship();
-        // So one being sold (`+0x261 = 0`, 0x4b4380 state 1).
-        if ship.is_some_and(|id| self.being_sold(id)) {
-            return Err("The ship is being sold".into());
-        }
-        if ship.is_some_and(|id| self.being_built(id)) {
-            return Err("The ship is still being built".into());
-        }
-        // So one netting a leviathan (0x4b37d0 leaves `+0x261` 0x2000 till
-        // 0x4b3850); its stop calls the hunt off (0x4aa540 -> 0x4abc60,
-        // `Scene::stop`).
-        if ship.is_some_and(|id| self.hunt_holds(id)) {
-            return Err("The ship is hunting".into());
-        }
-        // A landing ship holds them too (0x4b37d0, till 0x4b3850), and a
-        // ship under its repair order from the close-in to the end of the
-        // back-out (0x4b2420 state 1 -> 2 and 0x4b1d40 / 0x4b1c60), but
-        // the stop (event 8), which calls the landing off (0x4abc60).
-        if let Some(id) = ship.filter(|&id| self.landing_holds(id)) {
-            if !matches!(order, Order::Stop { .. }) {
-                let i = self.object_index(id).unwrap();
-                let docking = matches!(
-                    self.objects[i].ship.as_ref().and_then(|s| s.task),
-                    Some(Task::Repair { .. })
-                );
-                return Err(if docking {
-                    "The ship is docking"
-                } else {
-                    "The ship is landing"
-                }
-                .into());
+        // The command handler 0x4e2ba0 tests a ship's command on its
+        // capability word (0x4e6700 on `+0x261`, `Scene::capabilities`)
+        // and drops a refused one silently, nothing posted (`word_test`).
+        // A ship being built (0x2000 alone), being sold (0), netting a
+        // leviathan, landing, docking, taking a treasure, loading,
+        // ramming, boarding or boarded, stone or charmed so refuses them.
+        if let Some(passed) = self.word_test(order) {
+            if !passed {
+                return Err("The ship cannot do that now".into());
             }
-        }
-        // A loader holds them from the hold to the end of its state 6
-        // (0x4b37d0 with 0x2000, 0x4b74fb till 0x4b3850), the stop
-        // (`Scene::stop`: released) and the reloading itself aside.
-        if ship.is_some_and(|id| self.load_holds(id))
-            && !matches!(
-                order,
-                Order::Stop { .. } | Order::LoadCrew { .. } | Order::LoadObject { .. }
-            )
-        {
-            return Err("The ship is reloading".into());
+            // Passed, its event is still never run by a ship being built
+            // or sold: 0x4ab720 runs the group 0x1f0 only for `+0x251`
+            // neither 1 nor 2 (0x4ab7e1) with `+0x261 & 0x1f0` (0x4ab7ef),
+            // else the song's alone (kind 0x17 with `+0x25c`).
+            if order.ship().is_some_and(|id| self.being_built(id)) {
+                return Err("The ship is still being built".into());
+            }
+        } else {
+            // The port's own orders, not commands of 0x4e2ba0 (a waypoint,
+            // the scout, zones, the convoy, the follow, the crew load):
+            // held as before through the holds. (Not decoded: what of the
+            // original stands for them.)
+            let ship = order.ship();
+            if ship.is_some_and(|id| self.being_sold(id)) {
+                return Err("The ship is being sold".into());
+            }
+            if ship.is_some_and(|id| self.being_built(id)) {
+                return Err("The ship is still being built".into());
+            }
+            if ship.is_some_and(|id| self.hunt_holds(id)) {
+                return Err("The ship is hunting".into());
+            }
+            if ship.is_some_and(|id| self.landing_holds(id)) {
+                return Err("The ship is landing".into());
+            }
+            if ship.is_some_and(|id| self.load_holds(id))
+                && !matches!(order, Order::LoadCrew { .. })
+            {
+                return Err("The ship is reloading".into());
+            }
         }
         if let Some(r) = self.one_event_a_tick(order, data, caches) {
             return r;
         }
         self.apply_now(order, data, caches)
+    }
+
+    /// The test 0x4e2ba0 makes of ship command `order` (0x4e6700 on the
+    /// ship's word, `Scene::capabilities`): move 0x14 bit 10; fire 0x15 /
+    /// 0x16 bit 11 (then a weapon at the position asked, 0x4bc270, and
+    /// not limed, `+0x258`: `order_attack`); board 0x17 bit 4 (then
+    /// marines, 0x4bc270(1), or a hero who fights, 0x4b4dd0:
+    /// `order_close`); ram 0x18 bit 3; the fish gather 0x19 bit 5, the
+    /// amber 0x1a and leviathan 0x1c / 0x1d bit 6; repair and sale 0x1e
+    /// bit 1; unload 0x1f kind 1 (then cargo aboard, `+0x47f..+0x484`)
+    /// and reload alongside kind 2 bit 2; found 0x20 bit 0; the treasure
+    /// take 0x22 kind 0x10 bit 15 with room (0x4be800 modes 6 and 7), the
+    /// spells (0x22 other kinds) none. The stop (case 10, event 8) and
+    /// the behaviour switches (0x23) take no test here; the stop's is
+    /// its event's (0x4aa540, `Scene::stop`). `None` for an order that is
+    /// not such a command, or not to a ship.
+    fn word_test(&self, order: &Order) -> Option<bool> {
+        use Order::*;
+        let i = self.object_index(order.ship()?)?;
+        let s = self.objects[i].ship.as_ref()?;
+        let caps = self.capabilities(i);
+        let bit = match *order {
+            Move { .. } | MoveKeep { .. } => 0x400,
+            Attack { .. } => 0x800,
+            Close { board: true, .. } => 0x10,
+            Close { board: false, .. } => 8,
+            Gather { deposit, .. } => {
+                let d = self.object_index(deposit);
+                match d.and_then(|d| super::gather::deposit_class(&self.objects[d])) {
+                    Some(Resource::Fish) => 0x20,
+                    _ => 0x40,
+                }
+            }
+            Repair { .. } | Sell { .. } => 2,
+            Unload { .. } | LoadObject { .. } => 4,
+            Found { .. } => 1,
+            Take { .. } => {
+                let room = s.treasures.len() < crate::objects::treasure_room(s.kind)
+                    || s.heroes.len() < crate::objects::hero_room(s.kind);
+                return Some(caps & 0x8000 != 0 && room);
+            }
+            _ => return None,
+        };
+        Some(caps & bit != 0)
     }
 
     /// A ship takes one order of the 0x1f0 group a tick (0x4ab720): its
@@ -615,6 +649,11 @@ impl Scene {
             Stop { id } => {
                 let i = self.object_index(id)?;
                 self.objects[i].ship.as_ref()?;
+                // Refused without bit 13 (0x4aa540), the group pending
+                // stays (`+0x7d6` cleared only on taking it).
+                if self.capabilities(i) & 0x2000 == 0 {
+                    return None;
+                }
                 // The group pending this tick goes; then the stop.
                 if let Some(TickOrder::Ran { before, .. }) = self.tick_orders.remove(&id) {
                     self.objects[i].ship = Some(*before);

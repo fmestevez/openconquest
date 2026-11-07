@@ -1538,10 +1538,18 @@ impl Scene {
         }
     }
 
+    /// Whether ship `ship` offers the attack pointer at an enemy (0x4e45c0
+    /// mode 4): with bit 11 of its word (`Scene::capabilities`) and a
+    /// weapon at any position (0x4e35e0 with 0).
+    pub fn may_fire(&self, ship: u32) -> bool {
+        self.object_index(ship)
+            .is_some_and(|i| self.capabilities(i) & 0x800 != 0 && self.objects[i].is_armed())
+    }
+
     /// Whether ship `ship` may board (`board`) or ram object `target`, as
-    /// the pointer's choice asks (0x4e45c0): with capability `+0x261 &
-    /// 0x10` (board) or `& 8` (ram), which a ship being built or with its
-    /// commands held (a hunt, a landing: 0x4b37d0) lacks; the board also
+    /// the pointer's choice asks (0x4e45c0): with bit 4 (board) or 3 (ram)
+    /// of its word (`Scene::capabilities`), which a ship being built or
+    /// with its commands held (0x4b37d0) lacks; the board also
     /// with marines aboard (0x4e6700 0x17: 0x4bc270(1), items 0-2) or a
     /// hero who fights (0x4b4dd0); then the target a ship (0x50e600 200),
     /// the picker of type neither 0 nor 1, and the target taking a contact
@@ -1553,7 +1561,7 @@ impl Scene {
         let Some(s) = self.objects[i].ship.as_ref() else {
             return false;
         };
-        if self.being_built(ship) || self.hunt_holds(ship) || self.landing_holds(ship) {
+        if self.capabilities(i) & if board { 0x10 } else { 8 } == 0 {
             return false;
         }
         if board && s.crew.count() == 0 && !s.heroes.iter().any(|&h| h != objects::ORPHEUS) {

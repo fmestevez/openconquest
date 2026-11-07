@@ -1733,9 +1733,10 @@ impl Scene {
         let Some(i) = self.object_index(id) else {
             return false;
         };
-        // A ship being built takes no move (0x4ab720 skips its events,
-        // 0x4ab250 drops them without capability 0x400).
-        if self.being_built(id) {
+        // The move event 0x80 is dropped without bit 10 of the word
+        // (0x4ab250: `+0x261 & 0x400` clear and the kind `+0x864` not the
+        // song's 0x17, its pending bit `+0x7d6 & 0x80` cleared).
+        if self.objects[i].ship.is_some() && self.capabilities(i) & 0x400 == 0 {
             return false;
         }
         // The exact route (0x55ca10; to a cell not water 0x55ba50 within
@@ -2496,9 +2497,12 @@ impl Scene {
     /// Cancels a ship's route.
     pub fn stop(&mut self, id: u32) {
         if let Some(i) = self.object_index(id) {
-            // A ship being sold takes no stop (0x4aa540 wants `+0x261 &
-            // 0x2000`, which 0x4b4380 cleared).
-            if self.being_sold(id) {
+            // The stop (event 8) is taken only with bit 13 of the word
+            // (0x4aa540 tests `+0x261 & 0x2000`): not by a ship being sold
+            // (0x4b4380 cleared it), boarded, charmed, stone without bit 14
+            // or a boarder in its fight (0x4b38d0); refused, nothing of it
+            // is done.
+            if self.objects[i].ship.is_some() && self.capabilities(i) & 0x2000 == 0 {
                 return;
             }
             // A ship being built is called off (event 8 with no record,

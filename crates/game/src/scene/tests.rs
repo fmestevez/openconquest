@@ -15439,14 +15439,17 @@ fn an_attack_goes_with_the_group() {
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
     past_hold(&mut scene);
     scene.brain = None;
     let t = TILE_SIZE as f32;
+    // A warship: types 0 and 1 lack the fire bit 11 (0x4e6930).
     let i = scene
         .objects
         .iter()
-        .position(|o| scene.is_own(o) && o.ship.is_some() && o.is_armed())
+        .position(|o| {
+            scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind >= 2) && o.is_armed()
+        })
         .unwrap();
     let ship = scene.objects[i].id;
     let target = scene
@@ -20459,4 +20462,63 @@ fn a_route_stored_lying_still_or_turning() {
     scene.store_route(i, east.clone());
     let s = ship(&scene);
     assert_eq!((s.move_state, s.goal, s.path.len()), (6, Some(end), 2));
+}
+
+/// The readers of the word (needs `OPENCONQUEST_DATA`): the command
+/// handler 0x4e2ba0 drops a command whose bit 0x4e6700 finds clear (move
+/// 0x14 bit 10, found 0x20 bit 0, ram 0x18 bit 3, board 0x17 bit 4), the
+/// stop's event 0x4aa540 wants bit 13, the move event 0x4ab250 bit 10,
+/// and the pointer's attack 0x4e45c0 bit 11.
+#[test]
+fn commands_are_refused_on_the_word() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.ticks = order::HOLD;
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind >= 2))
+        .unwrap();
+    let id = scene.objects[i].id;
+    let (x, y) = (scene.objects[i].x, scene.objects[i].y);
+    let refused = Err("The ship cannot do that now".to_string());
+    scene.objects[i].ship.as_mut().unwrap().caps = 0xffff_feff & !0x400;
+    let mv = Order::Move { ship: id, x, y };
+    assert_eq!(scene.apply(&mv, &data, &mut caches), refused);
+    // The move event (0x4ab250) dropped likewise.
+    let path = scene.objects[i].ship.as_ref().unwrap().path.clone();
+    scene.go_to_cell(i, (0, 0), 0x32);
+    assert_eq!(scene.objects[i].ship.as_ref().unwrap().path, path);
+    scene.objects[i].ship.as_mut().unwrap().caps = 0xffff_feff;
+    assert_ne!(scene.apply(&mv, &data, &mut caches), refused);
+    let found = Order::Found {
+        ship: id,
+        cx: 0,
+        cy: 0,
+        class: 0,
+    };
+    let close = |board| Order::Close {
+        ship: id,
+        target: 0,
+        board,
+    };
+    for (bit, order) in [(1, found), (8, close(false)), (0x10, close(true))] {
+        scene.objects[i].ship.as_mut().unwrap().caps = 0xffff_feff & !bit;
+        assert_eq!(scene.apply(&order, &data, &mut caches), refused);
+    }
+    // The pointer (0x4e45c0): no attack without bit 11.
+    let armed = scene.objects[i].is_armed();
+    scene.objects[i].ship.as_mut().unwrap().caps = 0xffff_feff;
+    assert_eq!(scene.may_fire(id), armed);
+    scene.objects[i].ship.as_mut().unwrap().caps = 0xffff_feff & !0x800;
+    assert!(!scene.may_fire(id));
+    // The stop without bit 13 (0x4aa540) leaves the route as it is.
+    scene.objects[i].ship.as_mut().unwrap().path = [(x + 64.0, y)].into_iter().collect();
+    scene.objects[i].ship.as_mut().unwrap().caps = 0xffff_feff & !0x2000;
+    scene.stop(id);
+    assert_eq!(scene.objects[i].ship.as_ref().unwrap().path.len(), 1);
 }

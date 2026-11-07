@@ -1546,9 +1546,46 @@ and unload are not the original's step machines), the ram prey's 0 (its
 contact states 0x4c3ec0 not ported), the `+0x251 == 1` clears
 (0x4b3882, 0x4defda; no ship writer of `+0x251 = 1` found), the
 capture's `|= 0x2000`, 0x4bbfa0 (`+0x275` not loaded), the mover's
-0x4a473e / 0x4a4c0d, the saved copy (0x4e2326); the readers: the
-command handler 0x4e2ba0 still
-refuses through the port's hold tests, not the word.
+0x4a473e / 0x4a4c0d, the saved copy (0x4e2326).
+
+Its readers. The command handler 0x4e2ba0 tests each ship command with
+0x4e6700 before posting its event and drops a refused one silently
+(nothing posted, nothing kept): move 0x14 bit 10 (event 0x80); fire
+0x15 / 0x16 bit 11, then 0x4bc270 (a weapon at the position: sub 1, 2,
+4, else 7) and `+0x258` clear (event 0x100); board 0x17 bit 4 with
+0x4bc270(1) or 0x4b4dd0 > 0, ram 0x18 bit 3 (event 0x10 kinds 2, 1);
+the fish gather 0x19 bit 5 (event 0x40 0x191), the amber 0x1a and the
+leviathan 0x1c / 0x1d bit 6 (400, 0x192); repair and sale 0x1e bit 1
+(event 0x20 0x101); 0x1f bit 2, kind 1 the unload (only with cargo,
+`+0x47f..+0x484` summed, event 0x40 400 kind 0xc), kind 2 the reload
+alongside (tested twice, event 0x10 kind 3); found 0x20 bit 0 (event
+0x20 0x102); 0x22 kind 0x10 the treasure take bit 15 with room, any
+other kind (the spells) passes; no test for the stop (case 10, event 8),
+0x23 (the behaviour switches), 0x28 / 0x29 / 0x2a, 0x32. The stop's event
+0x4aa540 is taken only with bit 13 (`+0x7d6` cleared only then); the
+move event 0x4ab250 is dropped (`+0x7d6 &= ~0x80`) without bit 10
+unless its kind `+0x864` is the song's 0x17. The pointer's choice
+0x4e45c0: attack (4) on bit 11 and 0x4e35e0, board (0x10) on bit 4 and
+0x4e3580, ram (0x20) on bit 3 and 0x4e3800. The port: `carry_out`
+tests `Scene::word_test` on `Scene::capabilities` for Move / MoveKeep,
+Attack, Close, Gather, Repair, Sell, Unload, LoadObject, Found and Take
+(its own checks after it kept: weapons, lime, marines, cargo); the
+port's own orders (Waypoint, Scout, Zone, GatherZone, Convoy, Follow,
+LoadCrew) keep the hold tests (not decoded: what of the original stands
+for them); `Scene::stop` and the Stop's tick clear on bit 13;
+`order_move` and `go_to_cell` (event 0x80) on bit 10 (the song's own
+move is the charm's, `creatures.rs`); `may_fire` and `may_close` for
+the pointer. Other readers, not ported: 0x4ab720 at 0x4ab7ef (`& 0x1f0`
+with events pending or `+0x265` deferred and `+0x251` neither 1 nor 2, else none but the song's (kind 0x17 with `+0x25c`), the port keeping the `+0x251 == 2` skip (`being_built`) in `carry_out`; not ported:
+0x4abe50's deferral), 0x4aa990 (0x4aa99e, 0x4aa9af: bits 1 and 0 again
+at the event), 0x4aab00 (0x4aacb6-0x4aacde: bits 5, 6, 7 again by class),
+0x4a4bf5 (the mover: word nonzero), the song's 0x4a7476 / 0x4a7567 and
+0x4ab930 (0x4ab981: bit 14), bit 12 in 0x4b84b0, 0x4bb126, 0x4bbfc0,
+0x4c0bc0, 0x4c1760, 0x4d3990, 0x4d6cd0 (the contact tests; the port's
+`takes_contact` covers 0x4e3580 / 0x4e3800 only), the pointer helpers
+0x4e4630 (bit 1), 0x4e46c0 (bit 11 and the positions), 0x4e4750,
+0x4e47e0 (bits 8 and 7 over a deposit), 0x4e48b4 (bit 7), 0x4e73c0
+(`& 0x1f0`), and 0x4e12e0 (copies it, 0x4e14c7).
 
 ## Object panel (ships)
 

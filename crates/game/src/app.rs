@@ -6463,7 +6463,9 @@ impl App {
             };
             return match target {
                 Some(o) if own(o) || ruins_own(o) => (P::Own, false),
-                Some(o) if enemy(o) || self.scene.ruins_enemy(s, o) => (P::Attack, !s.is_armed()),
+                Some(o) if enemy(o) || self.scene.ruins_enemy(s, o) => {
+                    (P::Attack, !self.scene.may_fire(s.id))
+                }
                 Some(o) if o.treasure.is_some() => (P::Treasure, false),
                 Some(o) if o.class == openconquest_formats::ObjectClass::HeroHouse => {
                     (P::Treasure, false)
@@ -6553,11 +6555,11 @@ impl App {
             || self.scene.ruins_enemy(s, t);
         let mut more = Vec::new();
         if enemy {
-            // Only what the ship can do to it (0x4e45c0): fire if armed;
+            // Only what the ship can do to it (0x4e45c0): fire (`may_fire`);
             // board and ram (`Scene::may_close`: 0x4e3580, 0x4e3800). The
             // first of them is the default.
             let options = [
-                (P::Attack, s.is_armed()),
+                (P::Attack, self.scene.may_fire(s.id)),
                 (P::Board, self.scene.may_close(s.id, t.id, true)),
                 (P::Ram, self.scene.may_close(s.id, t.id, false)),
             ];

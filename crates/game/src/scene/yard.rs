@@ -1184,16 +1184,14 @@ impl Scene {
         Some(pool[self.ship_draw(k) as usize % pool.len()])
     }
 
-    /// Ship `k`'s move event 0x80 (0x4ab250) to `cell`: dropped by a ship
-    /// being built (it lacks capability 0x400); else the priority taken
-    /// and a plain go-to-cell planned (0x4a5f30). A ship with a task goes
-    /// on about it from there (the port's tasks plan their own routes).
+    /// Ship `k`'s move event 0x80 (0x4ab250) to `cell`: dropped without
+    /// bit 10 of its word (`+0x261 & 0x400`; the kind is not the song's
+    /// 0x17), as by a ship being built, sold or held; else the priority
+    /// taken and a plain go-to-cell planned (0x4a5f30). A ship with a task
+    /// goes on about it from there (the port's tasks plan their own
+    /// routes).
     pub(super) fn go_to_cell(&mut self, k: usize, cell: (i32, i32), prio: u8) {
-        if self.objects[k]
-            .ship
-            .as_ref()
-            .is_none_or(|s| s.build.is_some() || matches!(s.task, Some(Task::Sell(_))))
-        {
+        if self.objects[k].ship.is_none() || self.capabilities(k) & 0x400 == 0 {
             return;
         }
         let t = TILE_SIZE as f32;
