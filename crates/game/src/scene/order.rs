@@ -94,10 +94,15 @@ pub enum Order {
         a: (f32, f32),
         b: (f32, f32),
     },
-    /// Merchant `ship` unloads its goods at own port `port`.
+    /// Command 0x1f sub 1 `{port, 1, prio}` (0x4e2ba0): `ship` unloads
+    /// its goods and treasures at own port `port`, priority `prio` (the
+    /// human's 0x4d74a0 75, the gather zone's 0x4c89b0 and the treasure
+    /// block's 0x4d9fa0 0x5a).
     Unload {
         ship: u32,
         port: u32,
+        #[serde(default = "human_unload_prio")]
+        prio: u8,
     },
     /// The gather command (0x19 fish, 0x1a amber, 0x1d leviathan) from a
     /// gather zone: `{deposit, port, 0x5a}`.
@@ -881,7 +886,7 @@ impl Scene {
                 port,
             } => done(self.order_gather_with(ship, deposit, port)),
             Take { ship, target } => done(self.order_take(ship, target)),
-            Unload { ship, port } => done(self.order_unload(ship, port)),
+            Unload { ship, port, prio } => done(self.order_unload_with(ship, port, prio)),
             Found {
                 ship,
                 cx,
@@ -1050,4 +1055,9 @@ pub enum TickOrder {
         before: Box<crate::objects::Ship>,
     },
     Stopped,
+}
+
+/// The human's unload goes out with priority 75 (0x4d74a0's 0x1f).
+fn human_unload_prio() -> u8 {
+    75
 }

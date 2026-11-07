@@ -7673,7 +7673,15 @@ fn merchants_unload_where_sent() {
     s.cargo_kind = Some(Resource::Fish);
     let fish = scene.fish;
     scene
-        .apply(&order::Order::Unload { ship, port }, &data, &mut caches)
+        .apply(
+            &order::Order::Unload {
+                ship,
+                port,
+                prio: 75,
+            },
+            &data,
+            &mut caches,
+        )
         .unwrap();
     for _ in 0..50 * 180 {
         scene.update(0.02, &data, &mut caches);
@@ -16155,7 +16163,8 @@ fn zone_sends_a_full_boat_to_unload() {
             phase: GatherPhase::ToPort(p),
         }) if d == deposit && p == ports[0]
     ));
-    assert_eq!(s.priority, 76);
+    // Command 0x1f `{port, 1, 0x5a}` (0x4c89b0), raised by one (0x4aac43).
+    assert_eq!(s.priority, 0x5b);
 }
 
 /// The ships' routes on miss005's shallow grid as the original's machine
@@ -17560,7 +17569,8 @@ fn zone_hears_wrecks_leavers_and_new_ports() {
     assert_eq!(scene.gather_zones[0].ports, Some(vec![ports[0]]));
     assert!(scene.outbox.contains(&Order::Unload {
         ship: boat,
-        port: ports[0]
+        port: ports[0],
+        prio: 0x5a,
     }));
     // The escort leaves for a group of its own: its entry goes.
     scene.leave_zones(&[escort]);

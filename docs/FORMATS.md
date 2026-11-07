@@ -11280,7 +11280,7 @@ which the ship's 0x4e2ba0 case 0x22 turns into event 0x40 {700, 10, the
 treasure, priority} as the player's take (0x49e0e0 gives the player's
 priority 0); any other ship a plain move to the treasure's cell
 (0x4cf070, command 0x14, priority 0). A treasure put aboard sends its
-ship home to a port (0x141, below; not in the port). With no treasure
+ship home to a port (0x141, below). With no treasure
 in the area at the order (0x4d9920), a treasure used at once (0x142)
 or no ships, the order reports done and the round goes on to the
 zone.
@@ -11329,16 +11329,48 @@ record) of state 2 and treasures aboard `+0x482`, the trip home again;
 else a state-2 record, the ship recorded state 3 behind it and sent
 `*`. `+8` grows by `+0xe2` each tick.
 
+0x4d9a70 mode 1 (at the order, the payload's ports: 0x483350's base
+town's class 0x39 by 0x43d220 / 0x440c60) keeps those on the map
+(vt+0x28) that are player 16's class 0x40, or another's port not
+asleep (vt+0x2c) of whatever player, and stops there. Mode 0 (the trip
+home): the manager's land fleet (`+0x30`: kind 0xb with `+0x29`) towns'
+class 0x39 (0x42cc20 = 0x42c9a0 with 0x39; player 16: 0x40) by their
+cell `+0x74, +0x78`; none, every cell's object row by row. Entries by
+0x4d9600 ({id, cell}, the cell of that id rewritten, else appended).
+0x4d9cf0 keeps an entry whose cell's object is that id, the player's
+port not asleep (player 16: its 0x40). 0x4d9db0's cell is the
+building's own (not its berth, as 0x4ad9f0's), so with the anchor on
+land every port counts `W[ship] + 1` and the first listed wins. 0x4d9fa0
+is 0x520cc0 command 0x1f `{port, 1, 0x5a}`; 0x4e2ba0 case 0x1f sub 1
+takes it with `+0x47f..+0x484` not all 0 (the cargo, treasures
+`+0x482`, heroes `+0x483`), as event 0x40 400 code 0xc with the
+priority byte (0x4aab00 raises it by one): the unload at the port,
+whose end hands the treasures over (0x4ad9f0). The gather zone's
+0x4c89b0 sends the same 0x5a; the human's 0x4d74a0 75. 0x4d9fe0: every
+record (the count at the start) not the carrier's and not of state 2
+recorded state 3 (the carrier's cell, target its id) and sent `*` sub 1
+(0x4d8b30: `{1, range 1, priority 0, the carrier's id}`, 0x520cc0). The
+tick's ship pass reads the record at the loop's index (an index past
+the records reads address 0x18: not decoded). 0x4da0a0 returns the
+ships sent (0x4da3e0's count for 300 and 0x137, `1 + escorts` for
+0x141, 1 for an escort), so a notice that sent none lets the pass run.
+
 Ours (`treasure_order`, `treasure_list`, `treasure_send`,
-`treasure_notices`, the status in `report`): the block kept per
-flotilla (`TreasureBlock`, cleared by a new block of another kind), the
-list, the send after the first entry with its records, the 300, 0x137
-and 0x142 and the status as the original's; the take posts 0x142 or
-0x141 (`take_treasure`); ships are no longer re-sent when idle. Not
-ported: 0x141's trip home and the escorts (state 2 and 3, behaviour
-`*`, the ports' list), so the 300's escort, the 0x137 of a carrier and
-0x4da6a0's ship pass never run; `+0x691` / 0x4a21c0 / 0x4cf760; the
-treasure's state 5; two treasures on a cell (the
+`treasure_ports`, `treasure_ports_check`, `treasure_port_pick`,
+`treasure_home`, `treasure_escorts`, `treasure_notices`,
+`treasure_tick`, the status in `report`): the block kept per flotilla
+(`TreasureBlock`, cleared by a new block of another kind), the lists
+(targets, records, ports), the sends, every notice (300 with its
+escort, 0x137 with a carrier's search, 0x141's trip home and escorts,
+0x142), the tick's pass (`+8` past 0x5a: blows forgotten, the carrier
+home again, the others escorting) and the status as the original's; the
+take posts 0x142 or 0x141 (`take_treasure`); command 0x1f with its
+priority (`Order::Unload`'s `prio`; its test of something aboard counts
+treasures and heroes). Not ported: the 0x137 of a carrier gone from
+the objects (the port no longer has its cell: the record dropped, no
+search); 0x4a21c0's report of a blow (the port reports blows as they
+land); which cells of a building hold it in their slot (its anchor, as
+the dock block's); the treasure's state 5; two treasures on a cell (the
 port takes the first in object order).
 
 **A ship's take** (event 0x40 class 700, the player's and the computer's

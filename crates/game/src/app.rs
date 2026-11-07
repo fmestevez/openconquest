@@ -6173,7 +6173,11 @@ impl App {
         }
         if self.pending == Some(Command::UNLOAD) {
             let order = match self.object_at(pos) {
-                Some(port) => self.order_each(|ship| Order::Unload { ship, port }),
+                Some(port) => self.order_each(|ship| Order::Unload {
+                    ship,
+                    port,
+                    prio: 75,
+                }),
                 None => Err("Choose one of your ports or settlements".into()),
             };
             match order {
@@ -6668,7 +6672,11 @@ impl App {
             (P::Board, Some(target)) => self.order_fleet(target, 0x17),
             (P::Ram, Some(target)) => self.order_fleet(target, 0x18),
             (P::Repair, Some(dock)) => self.order_each(|ship| Order::Repair { ship, dock }),
-            (P::Unload, Some(port)) => self.order_each(|ship| Order::Unload { ship, port }),
+            (P::Unload, Some(port)) => self.order_each(|ship| Order::Unload {
+                ship,
+                port,
+                prio: 75,
+            }),
             (P::Load, Some(target)) => self.order_each(|ship| Order::LoadObject { ship, target }),
             _ => {
                 self.right_click(pos);

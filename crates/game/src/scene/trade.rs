@@ -3169,11 +3169,23 @@ impl Scene {
     /// kind 1 is sent only with cargo aboard, 0x4e2ba0). 0x4aab00 takes it
     /// only for a port of the ship's player (0x4ac050) not asleep; any
     /// other target drops it, the old task kept.
+    #[cfg(test)]
     pub fn order_unload(&mut self, ship: u32, port: u32) -> Result<(), String> {
+        self.order_unload_with(ship, port, 75)
+    }
+
+    /// Command 0x1f sub 1 `{port, 1, prio}` (0x4e2ba0): taken only with
+    /// something aboard (`+0x47f..+0x484` summed: the cargo, the
+    /// treasures `+0x482` and the heroes `+0x483`), as event 0x40 400
+    /// code 0xc with priority `prio`.
+    pub fn order_unload_with(&mut self, ship: u32, port: u32, prio: u8) -> Result<(), String> {
         let i = self.object_index(ship).ok_or("No such ship")?;
         let p = self.object_index(port).ok_or("Choose one of your ports")?;
         let o = &self.objects[i];
-        if o.ship.as_ref().is_none_or(|s| s.cargo < 1.0) {
+        if o.ship
+            .as_ref()
+            .is_none_or(|s| s.cargo < 1.0 && s.treasures.is_empty() && s.heroes.is_empty())
+        {
             return Err("The ship has nothing to unload".into());
         }
         // Own port ruins (the pointer offers the unload there, 0x4dd486):
@@ -3182,9 +3194,8 @@ impl Scene {
         if self.fallen(port) {
             return Err(String::new());
         }
-        // Unloading at a port goes out with 75 and is raised by one
-        // (0x4d74a0's 0x1f, 0x4aac43).
-        self.unload_event(i, p, 75)
+        // The priority is raised by one (0x4aac43).
+        self.unload_event(i, p, prio)
     }
 
     /// Event 0x40 code 0xc with priority `prio` reaching ship `i` (0x4aab00):

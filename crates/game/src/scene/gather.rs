@@ -2269,6 +2269,7 @@ impl Scene {
             self.post(Order::Unload {
                 ship: e.ship,
                 port: e.b,
+                prio: 0x5a,
             });
         } else if (400..=0x192).contains(&e.class) {
             self.post(Order::Gather {
