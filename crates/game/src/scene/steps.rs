@@ -285,7 +285,11 @@ impl Scene {
         } else if ship.move_state != 4 {
             brake(ship, (x.round() as i32, y.round() as i32), own, width);
         }
-        self.step_sinks.append(&mut steps.sinks);
+        // 0x4a7630 sends the hazard 0xda9e / 0xda9f inside the ask: it is
+        // sinking before the store returns.
+        for c in steps.sinks {
+            self.sink_hazard_in_ask(c);
+        }
         self.push_asides(steps.asides);
     }
 }

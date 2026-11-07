@@ -400,10 +400,11 @@ pub struct Scene {
     /// Heroes' houses taken (0x24af1: `+0x1e8`, state 4) and the tick
     /// (`+0x1ec`).
     pub taken_houses: Vec<(u32, u32)>,
-    /// Cells whose whirlpool or reef a ship with Jason sinks, asked for at
-    /// a route store (0x4a6330 -> 0x4a3a70 -> 0x4a7630), sunk with the
-    /// move tick's (`Scene::store_route`).
-    step_sinks: Vec<(i32, i32)>,
+    /// Whirlpools and medium reefs a ship with Jason sank in an ask at a
+    /// route store (0x4a6330 -> 0x4a3a70 -> 0x4a7630, `Scene::store_route`),
+    /// sinking already, whose sinking picture (0x4300a0 / 0x447930) is
+    /// loaded at the update's end or start (`Scene::show_sunk_hazards`).
+    sunk_pictures: Vec<u32>,
     /// The taken houses' pictures playing out (states 4, 5 and 2 of
     /// 0x4230f0, `treasure::HouseFade`) until the house is removed.
     pub house_fades: BTreeMap<u32, treasure::HouseFade>,
@@ -1004,7 +1005,7 @@ impl Scene {
             had_argo: false,
             woken: false,
             taken_houses: Vec::new(),
-            step_sinks: Vec::new(),
+            sunk_pictures: Vec::new(),
             house_fades: BTreeMap::new(),
             lime_remap: {
                 let mut map = std::collections::HashMap::new();
@@ -2850,6 +2851,7 @@ impl Scene {
     }
 
     pub fn update(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+        self.show_sunk_hazards(data, caches);
         self.sync_units();
         self.move_shoals(dt);
         self.move_gulls(dt);
@@ -3037,7 +3039,6 @@ impl Scene {
         let t = TILE_SIZE as f32;
         let cell_of = |x: f32, y: f32| ((x / t).floor() as i32, (y / t).floor() as i32);
         let mut steps = self.steps();
-        steps.sinks = std::mem::take(&mut self.step_sinks);
         // The game ticks this update ran: ships move a tick at a time.
         let ticks = self.ticks.wrapping_sub(ticks_before);
         let width = self.grid.width as i32;
@@ -3421,6 +3422,7 @@ impl Scene {
         self.go_round(held);
         self.plan_pending(dt);
         self.refresh_routes(dt);
+        self.show_sunk_hazards(data, caches);
         if moved {
             // Keep painter's order as ships move.
             self.objects.sort_by(|a, b| a.y.total_cmp(&b.y));

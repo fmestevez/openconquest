@@ -466,6 +466,37 @@ impl Scene {
     /// 0xda9e / 0xda9f (0x4a7630): a medium reef or whirlpool on cell `c`
     /// sinks, unless sinking or under already.
     pub(super) fn sink_hazard_at(&mut self, c: (i32, i32), data: &GameData, caches: &mut Caches) {
+        if let Some(id) = self.sink_hazard(c) {
+            self.show_hazard(id, data, caches);
+        }
+    }
+
+    /// 0x4a7630 inside an ask at a route store (0x4a6330 -> 0x4a3a70): the
+    /// handler (0x4306d0 / 0x447ee0) runs at once, 0x430320 / 0x447b80
+    /// with state 2 setting it (`+0x74`); its picture (0x4300a0 /
+    /// 0x447930, from frame 0 at this tick) is loaded before the next
+    /// hazard tick or draw, at the update's end or start
+    /// (`Scene::show_sunk_hazards`), the store having no game data.
+    pub(super) fn sink_hazard_in_ask(&mut self, c: (i32, i32)) {
+        if let Some(id) = self.sink_hazard(c) {
+            self.sunk_pictures.push(id);
+        }
+    }
+
+    /// The sinking pictures of the hazards sunk in an ask
+    /// (`Scene::sink_hazard_in_ask`), at the tick they sank.
+    pub(super) fn show_sunk_hazards(&mut self, data: &GameData, caches: &mut Caches) {
+        for id in std::mem::take(&mut self.sunk_pictures) {
+            if self.object_index(id).is_some() {
+                self.show_hazard(id, data, caches);
+            }
+        }
+    }
+
+    /// The state part of 0xda9e / 0xda9f on cell `c`'s hazard: sinking
+    /// (2), unless sinking or under already (0x4306d0, 0x447ee0). The
+    /// hazard sunk.
+    fn sink_hazard(&mut self, c: (i32, i32)) -> Option<u32> {
         let found = self.objects.iter().find_map(|o| {
             let f = |i| o.record.field(i).unwrap_or(0) as i32;
             matches!(o.class, ObjectClass::Whirlpool | ObjectClass::Reef(0x25a))
@@ -473,16 +504,13 @@ impl Scene {
                 .filter(|&(_, at)| at == c)
                 .map(|(id, _)| id)
         });
-        let Some(id) = found else {
-            return;
-        };
-        if self
-            .hazards
-            .get(&id)
-            .is_some_and(|h| h.state != 2 && h.state != 3)
-        {
-            self.set_hazard(id, 2, false, data, caches);
+        let id = found?;
+        let h = self.hazards.get_mut(&id)?;
+        if h.state == 2 || h.state == 3 {
+            return None;
         }
+        h.state = 2;
+        Some(id)
     }
 
     /// A ship with Jason lying still (0x4a3150, move state 0) on a cell

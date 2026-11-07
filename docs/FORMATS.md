@@ -5320,9 +5320,14 @@ speed is saved with a game (`SPEED_GAME`).
   to 0x4a5b70), so the at-will list still takes the port's route end
   (`at_will_route`: the route's last point, else its own cell); the
   initial `+0x5b2` (the constructor's) not read. A ship with Jason whose
-  ask sinks a whirlpool or medium reef (0x4a7630) has it sunk with the
-  next move tick's sinks (the port's `step_sinks`; in the original
-  within the ask). Not 0x4a6330 stores, set directly: the slides to a
+  ask sinks a whirlpool or medium reef has it sunk within the ask:
+  0x4a7630 calls the hazard's handler at once (vtable slot 0, 0x4306d0
+  0xda9e / 0x447ee0 0xda9f), which unless sinking or under runs
+  0x430320 / 0x447b80 with state 2 (the state `+0x74`, then the
+  picture 0x4300a0 / 0x447930 from frame 0); the port sets the state in
+  the store (`Scene::sink_hazard_in_ask`) and loads the picture, timed
+  from that tick, at the update's end or start (`show_sunk_hazards`),
+  before any hazard tick or draw. Not 0x4a6330 stores, set directly: the slides to a
   shore or pier and alongside (0x4b02a0 / 0x4afe50), the push aside
   (0x4b4b50's synthesized route), a land walker's path, and the empty
   routes of a goal at the ship's own cell (0x4a6330 stores none).

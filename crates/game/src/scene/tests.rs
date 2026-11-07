@@ -20805,6 +20805,75 @@ fn a_route_stored_under_way_asks_its_step() {
     assert_eq!((s.move_state, s.ahead), (5, None));
 }
 
+/// A ship with Jason whose ask at a route store (0x4a6330 -> 0x4a3a70)
+/// finds a whirlpool up with no ship there sinks it inside the ask
+/// (0x4a7630 -> 0x447ee0 0xda9f -> 0x447b80(2)): sinking before the store
+/// returns, the step granted; its sinking picture (0x447930) from the
+/// update on, a step of 60 ticks over its frames (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn jason_sinks_a_whirlpool_inside_the_ask() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+    scene.brain = None;
+    let sea = scene.nav.nearest_water(20, 20).unwrap();
+    scene
+        .spawn_hazard(
+            magic::Spell::Whirlpool,
+            sea.0,
+            sea.1,
+            None,
+            &data,
+            &mut caches,
+        )
+        .unwrap();
+    let id = scene.objects.iter().map(|o| o.id).max().unwrap();
+    scene.set_hazard(id, 1, false, &data, &mut caches);
+    assert_eq!(scene.hazards[&id].state, 1);
+    let t = TILE_SIZE as f32;
+    let mid = |c: (i32, i32)| (c.0 as f32 * t + t / 2.0, c.1 as f32 * t + t / 2.0);
+    let own = (sea.0 - 1, sea.1);
+    let i = scene
+        .objects
+        .iter()
+        .position(|o| o.ship.is_some())
+        .expect("a ship");
+    (scene.objects[i].x, scene.objects[i].y) = mid(own);
+    let s = scene.objects[i].ship.as_mut().unwrap();
+    s.path.clear();
+    s.task = None;
+    s.heroes.push(crate::objects::JASON);
+    // Under way and facing north, east is a turn of 2: the step is asked.
+    s.move_state = 5;
+    s.heading = 2;
+    s.between.set(false);
+    s.entering = own;
+    s.ahead = None;
+    let at = scene.ticks;
+    scene.store_route(i, [mid(sea), mid((sea.0 + 1, sea.1))].into());
+    let s = scene.objects[i].ship.as_ref().unwrap();
+    assert_eq!((s.move_state, s.ahead), (5, Some(sea)));
+    assert_eq!(scene.hazards[&id].state, 2);
+    scene.update(crate::clock::TICK, &data, &mut caches);
+    let n = crate::objects::sequence_frames(&data, &mut caches, "WHIRLSPR_2")
+        .unwrap()
+        .len() as u32;
+    let h = scene.hazards[&id];
+    let k = scene.object_index(id).unwrap();
+    assert_eq!((h.state, h.art, h.step), (2, Some(2), 60 / n));
+    assert_eq!(scene.objects[k].frames.len() as u32, n);
+    // From frame 0 at the tick it sank.
+    let stepped = at + 1 >= at + h.step;
+    assert_eq!(
+        (h.frame, h.stepped),
+        if stepped { (1, at + 1) } else { (0, at) }
+    );
+}
+
 /// The store's other move states (0x4a6330's switch at 0x4a6667): lying
 /// still or at a cell (0, 3), no turn to the first step: at the cell to
 /// leave it (3, `+0x596` 1); any turn: turning (2); turning (2), no turn:
