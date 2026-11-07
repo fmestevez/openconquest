@@ -23,7 +23,11 @@ impl Scene {
     }
 
     /// Has own ship `ship` guard (or with `attack`, attack) the world
-    /// rectangle between the corners `a` and `b`.
+    /// rectangle between the corners `a` and `b`. Not the original's: its
+    /// guard zone (command 0x74, 0x4f34c0 drag sub 9) is 0x49d790 case 9,
+    /// the guard block 0x4d1ce0 on the selection's group with the rect,
+    /// no mask, flags 0 and mode 2 (`computer/fleet_guard.rs` runs it only
+    /// for a computer's flotilla); not ported.
     pub fn order_zone(
         &mut self,
         ship: u32,

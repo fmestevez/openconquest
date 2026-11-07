@@ -403,7 +403,10 @@ pub(super) fn spiral(
 }
 
 impl Scene {
-    /// Fleet order 0x6e from a computer's flotilla (0x483570 mode 3, at
+    /// Fleet order 0x6e from a computer's flotilla (the only sender of
+    /// 0x6e through 0x4a09d0: no mission's brain guards; 0x4d1ce0's other
+    /// caller is the human's guard zone, 0x49d790 case 9, mode 2, not
+    /// ported) (0x483570 mode 3, at
     /// 0x47e48d, 0x47e88d, 0x47ecbd, 0x47ef37): the args the flotilla's
     /// home `+0x178` (the zone), its zone `+0x168` (the second rect), no
     /// mask, `+0x154` = (AIPlayer `+0x20` == 0) << 16, task 7's (0x47ef29)

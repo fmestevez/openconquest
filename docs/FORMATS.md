@@ -3395,6 +3395,36 @@ rounds (mode 1) never run for them. Not decoded: the class `+0x50` 0xb2
 its `w x h` (the original reads past it; the port's computers have no
 mask and the port counts it closed); 0x4d1080's `this` for 0x4d19b0
 (local_3c unset; it only posts the move).
+**Who makes it.** 0x4d1ce0 has two callers: the fleet order dispatcher
+0x4a09d0 (at 0x4a0a8a) and the interface's fleet commands 0x49d790 case
+9 (at 0x49d9c2). Of the 25 calls of 0x4a09d0 only 0x483570 (0x483606)
+passes 0x6e; the brains' runtime sends 0x72 (0x479857), 100 (0x4798e5),
+0x82 (0x47995d), 0x78 (0x479a25), 0x70 (0x479adb), 0x8c (0x479b92),
+0xbe (0x479d49) and 0 (0x479c0f, 0x479c7a, 0x47aba0), so **no mission's
+brain ever guards** (the order is the computers' alone, mode 3). The
+other `push 0x6e` in the exe are not the order: 0x4059bd, 0x42b45d,
+0x499752, 0x4f82c3 the line number (0x6d / 0x6e / 0x6f / 0x70) of an
+error report (0x5568f0, 0x556680); 0x494711 sound event 0x6e (0x50e570
+mode 5); 0x511ff1 an interface object's id (0x4e9340(id, 0x6e), vtable
+0x59b7c0); 0x520745 a message word to 0x5405b0 (`{.., 0x6e, 0, 0x5b2}`,
+a `mov`); 0x4672e9, 0x46734e (miss009, members (0, 4) and (0, 6)) and
+0x46ad0b (miss010, member (0, 4)) the 0x479200 flags of a kind-10
+fleet, `0x479200(0, m, 10, 0x6e, 0, cells, 1)`: op 8's record `[7]`,
+handed to 0x49c830 as the test 0x4e5970(ship, 0x6e) on each ship
+standing in the cells (not decoded: what 0x4e5970 tests; the port takes
+every ship in the cells). **The human's guard zone** (behaviour page
+slot 9, command 0x74: 0x4f34c0 sets the drag's message 0x23 sub 9,
+as 0x75 sub 10) is 0x49d790 case 9: fourteen dwords zeroed,
+`[0..3]` the payload's rect `{x, y, w, h}` (shorts at `+1`, `+5`), no
+second rect, no mask, `[9]` flags 0, `[10]` mode **2**; straight to
+0x4d1ce0 on the selection's group (no 0x4c4350 behaviour first, unlike
+case 10): the formation into the rect (0x4d1080), and at each pass
+(P = 0x4b, the human being no player of kind 3 or 4) 0x4d33c0 only, so
+mode 1's patrol rounds (0x4d2720) are reached by no sender at all. Not
+ported: the human's guard zone through the block; the port still gives
+each ship its own `order_zone` (`Order::Zone`, attack false), and
+`fleet_guard.rs` runs only on a computer's flotilla (its fields, period
+and target players read from `Computer`).
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
@@ -10661,7 +10691,8 @@ in 0x4cd300's and 0x4d5430's tests (the port's ownerless creatures are
 no player's, as in 0x4d6640's port). 0x13a's senders: **Prey
 notices**. The status 0x4d63d0 is ported, its readers (the
 tasks' 0x4a0d80) hold brains' and computers' groups only. The port's
-per-ship `Task::Zone` stays for the guard zone.
+per-ship `Task::Zone` stays for the guard zone (the original's is the
+guard block, mode 2: "Who makes it" under the guard task; not ported).
 
 A fort of the forts' flotilla takes the `#` too (below).
 
