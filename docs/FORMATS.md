@@ -1542,13 +1542,12 @@ in `Scene::capabilities` (the rammer by `RamStage` past `Charge`, the
 boarder and boarded by `Grapple`, bit 13 off once its fight is set,
 the ram's prey bit 12 off while its rammer is at `RamStage::Charge` and
 0 through `Ship::ram_hit`), which the pages and `takes_contact` read;
-the cancelled build's 0 in `Ship::caps`. Not ported: the amber and
-unload holds (the port's amber and unload are not the original's step
-machines: the amber's hold runs from step 1 -> 10 at the deposit's
-cell, lying still, with room, 0x4afe50 true, to step 5's end, the slide
-back to the cell's middle done, `+0x79f < 1`, 0x4b3850 at 0x4b0d74; the
-unload's from step 1 -> 10 at the berth `+0x7bd`, lying still, the port
-`+0x7b1` on its cell, vt+0xb0 true, 0x4afe50(1) true, the contact
+the cancelled build's 0 in `Ship::caps`; the amber gather's hold from
+step 1 -> 10 to step 5's end (0x4b0d74) as its machine's `Landing`
+(`Scene::landing_holds`, see "Amber, step by step"). Not ported: the
+unload's hold (the port's unload is not the original's step machine:
+its hold runs from step 1 -> 10 at the berth `+0x7bd`, lying still, the
+port `+0x7b1` on its cell, vt+0xb0 true, 0x4afe50(1) true, the contact
 `{0x32, 5, port}` made, to step 0x13's end, the slide back done,
 0x4b3850 at 0x4ae683; no phase of the port's `GatherPhase` starts or
 ends at those steps), the `+0x251 == 1` clears
@@ -8425,6 +8424,56 @@ ashore, 1 back. A ship holds its load in slots of 100 (0x4ad300); each
 laden trip, started by a message (0x4aab00, type 5), carries a slot.
 
 ## Gathering
+
+**Amber, step by step** (0x4b0590, `scene/amber.rs`; sub-codes 10 and 11
+of 0x4ac2d0 for class 400, a game tick at a time, step `+0x77d`):
+
+- **1**: the cell `+0x797`'s object not class 400: the nearest amber to
+  the middle of the box `+0x7c2..+0x7ce` (0x4ac610 mode 1) sent for
+  (event 0x40 `{400, 10, id, priority 0x5a}`), none and the order ends
+  (event 8, 0). Away from the seat `+0x792` (0x4afb80(ship, amber,
+  &seat, 1, -1): of the amber cell's east, west, south and north
+  neighbours on the map, those 0x499aa0 opens to the ship, one as it is,
+  more the least 0x557440 from the ship's cell, strict `<`, cell index 0
+  skipped; none: nothing done) it is sent there (0x4a6270). There and
+  lying still (`+0x58c` 0): no room (0x4be800 mode 3) ends the order
+  (event 8, 0x40); else 0x4afe50(ship, 0) each tick till true: `+0x78e`,
+  `+0x79f` 0, step 10, the commands held (0x4b37d0 with 0x2000 at
+  0x4b067f), `+0x25d |= 0x40`.
+- **10**: 0x4b0470(0), the slide 0x4b02a0 (two points a tick and the
+  turn); at its end step 0xb; called off and back, the line freed, the
+  hull at `h x 4`, the commands back (0x4b3850) and event 8 0xc0.
+- **0xb**: 0x4b89b0 (the furl a frame a hull step); furled, `+0x25b` 5,
+  the walkway (slot 1, picture 0x3e6) at the ship frame's top-left plus
+  the type's offset (see "Nets, walkways and porters"), its delay 0,
+  step 0xc.
+- **0xc**: the walkway a frame a tick; at its last (`+0x49 - 1`) the
+  porters (slot 3, 0x3de) on its top-left, delay 0, frame 0, step 0xf.
+  Called off: down a frame a tick, below 1 the walkway gone and step 5
+  from the line's end (`+0x79f = +0x7a5`).
+- **0xf**: 0x4afdd0: the cell's object class 400, the order's amber
+  `+0x78a` and standing (`+0x74` 0): `+0x782` = 0x4ad0e0(ship, 400) (the
+  take, the amber drained by it) and 0; else 1. 0 and not called off:
+  step 6; else the porters gone and step 0xe (a take made while called
+  off is lost).
+- **6**: called off, the porters gone, step 0xe. Else a frame a tick
+  (the map's `+0xe2`); at their count (`+0x49`) frame 0, step 0xf and
+  0x4ad300(ship, 2, `+0x782`): full (the room 0x4ad280 no more than the
+  take), `+0x782` 0, the porters gone and step 0xe.
+- **0xe**: the walkway down a frame a tick; below 0 gone, step 5 from the
+  line's end.
+- **5**: a hull step `+0x79f -= 2` and the furl a frame back; at or below
+  0 the line freed, the hull on its cell's middle at `h x 4`, `+0x25b`
+  0, the commands back (0x4b3850 at 0x4b0d74), notice 0x138 to its group
+  (0x4a1430, class 400), step 1 and event 8 0xc0: the order ends.
+
+So a boat (4 loads) takes 4 rounds of 100, a round the porters' frames
+in ticks, and leaves full; the order ends there and its gather zone
+sends it on. Not ported: 0x499aa0's object-slot and heading-corner tests
+(the port reads the draught's grid), the take's notice 0x4a13b0, the
+computers' doubled take (0x4ad0e0's side and difficulty test),
+`+0x25d |= 0x40`, 0x4a6270's failure to reach the seat (the port waits).
+
 
 Gathering (0x4ad0e0): each take moves amber 100 (boats and merchants; 20
 for other ships) or fish by ship type (0x59b2a8: boat 33, merchant 50,

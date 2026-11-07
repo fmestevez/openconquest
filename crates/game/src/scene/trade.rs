@@ -45,7 +45,7 @@ pub(super) enum Piece {
 /// merchants (20 for other ships), fish by ship type from 0x59b2a8 (boat
 /// 33, merchant 50, others 20); the barbarians take a third. Amber comes
 /// once per round of the porters, fish once per cast of the net.
-fn take_per_round(resource: Resource, kind: u8, barbarian: bool) -> f32 {
+pub(super) fn take_per_round(resource: Resource, kind: u8, barbarian: bool) -> f32 {
     let n = match (resource, kind) {
         // A leviathan 50 a cast, whoever hunts it (0x4ad0e0).
         (Resource::Leviathan, _) => return 50.0,
@@ -2622,6 +2622,10 @@ impl Scene {
         let Some(Task::Gather { deposit, phase }) = ship.task else {
             return;
         };
+        // Amber goes a game tick at a time (0x4b0590, `Scene::run_amber`).
+        if self.amber_order(i).is_some() {
+            return;
+        }
         // A leviathan hunt goes a game tick at a time (`Scene::run_hunts`).
         if ship.hunt.is_some() && matches!(phase, GatherPhase::ToDeposit | GatherPhase::Collecting)
         {
@@ -2662,29 +2666,6 @@ impl Scene {
                             self.store_route(i, path);
                         }
                         return;
-                    }
-                }
-                // At amber the ship first closes in on the shore, until its
-                // bow is about to touch land (the original moves it there
-                // along a path, Run_Ship.cpp 0x4b0590).
-                if let (true, Some(d)) = (arrived, deposit_at) {
-                    let amber = self.objects[d]
-                        .deposit
-                        .is_some_and(|dep| dep.resource == Resource::Amber);
-                    let cell = self.objects[d]
-                        .record
-                        .fields
-                        .get(6..8)
-                        .map(|f| (f[0] as i32, f[1] as i32));
-                    if let (true, Some(cell)) = (amber, cell) {
-                        if let Some(((ax, ay), face)) = self.approach(i, cell, false) {
-                            let ship = self.objects[i].ship.as_mut().unwrap();
-                            ship.face = Some(face);
-                            if (ax - sx).hypot(ay - sy) > 1.0 {
-                                ship.path = [(ax, ay)].into();
-                                return;
-                            }
-                        }
                     }
                 }
                 // Stopped short (it gave a jammed route up, 0x4a618d): its
@@ -3080,9 +3061,8 @@ impl Scene {
         }
     }
 
-    /// Where ship `i` sails to work deposit `d`: for amber, the water cell
-    /// straight beside it nearest the ship (so it can close in, 0x4afe50);
-    /// else the deposit.
+    /// Where ship `i` sails to work deposit `d`: for amber, its seat
+    /// (0x4afb80, `Scene::amber_seat`); else the deposit.
     pub(super) fn deposit_goal(&self, i: usize, d: usize) -> (f32, f32) {
         let t = TILE_SIZE as f32;
         let o = &self.objects[d];
@@ -3092,20 +3072,9 @@ impl Scene {
             .fields
             .get(6..8)
             .map(|f| (f[0] as i32, f[1] as i32));
-        let (sx, sy) = (self.objects[i].x, self.objects[i].y);
-        if let (true, Some((cx, cy))) = (amber, cell) {
-            let best = [(1, 0), (0, -1), (-1, 0), (0, 1)]
-                .iter()
-                .map(|&(dx, dy)| (cx + dx, cy + dy))
-                .filter(|&(x, y)| self.nav.is_water(x, y))
-                .map(|(x, y)| (x as f32 * t + t / 2.0, y as f32 * t + t / 2.0))
-                .min_by(|a, b| {
-                    (a.0 - sx)
-                        .hypot(a.1 - sy)
-                        .total_cmp(&(b.0 - sx).hypot(b.1 - sy))
-                });
-            if let Some(p) = best {
-                return p;
+        if let (true, Some(cell)) = (amber, cell) {
+            if let Some((cx, cy)) = self.amber_seat(i, cell) {
+                return (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
             }
         }
         (o.x, o.y)

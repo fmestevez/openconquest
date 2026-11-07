@@ -8525,6 +8525,7 @@ mod tests {
             let s = scene.objects[ship].ship.as_mut().unwrap();
             s.path.clear();
             s.task = None;
+            s.landing = None;
             s.priority = 0;
         }
         assert_eq!(scene.berth_answer(yard), -1);

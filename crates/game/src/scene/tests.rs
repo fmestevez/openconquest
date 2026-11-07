@@ -1494,10 +1494,11 @@ fn merchant_gathers_amber() {
             .planks
             .iter()
             .any(|p| p.activity == super::unload::Activity::Unloading);
-        amber_walkway |= scene
-            .planks
-            .iter()
-            .any(|p| p.activity == super::unload::Activity::Amber);
+        amber_walkway |= scene.objects[scene.object_index(boat).unwrap()]
+            .ship
+            .as_ref()
+            .and_then(|s| s.landing.as_ref())
+            .is_some_and(|l| l.plank.is_some());
         porters |= !scene.porters.is_empty();
         if scene.amber >= amber + 400 {
             break;

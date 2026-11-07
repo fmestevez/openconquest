@@ -904,6 +904,10 @@ pub struct Landing {
     /// contact with (`+0x8e6`, the dock's occupant `+0x1e0` the ship).
     #[serde(default)]
     pub dock: Option<u32>,
+    /// The amber gather's take of this round of the porters (`+0x782`,
+    /// 0x4afdd0), stored aboard at the round's end (0x4ad300).
+    #[serde(default)]
+    pub load: i32,
 }
 
 fn landing_line() -> bool {

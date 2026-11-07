@@ -413,6 +413,7 @@ impl Scene {
             plank_at: (0.0, 0.0),
             clock: 0.0,
             dock: None,
+            load: 0,
         };
         let d = trade::APPROACH[dir as usize / 2][kind][g as usize] as f32;
         self.close_in_line(k, &mut l, here, dir, d);
@@ -615,6 +616,7 @@ impl Scene {
             plank_at: (0.0, 0.0),
             clock: 0.0,
             dock: None,
+            load: 0,
         };
         // No shore group (0x4b3770 < 0): it returns before the line,
         // keeping the direction, group, heading, way and point count of
@@ -681,6 +683,7 @@ impl Scene {
             plank_at: (0.0, 0.0),
             clock: 0.0,
             dock: None,
+            load: 0,
         };
         let d = if dir % 4 == 0 { 10.0 } else { 13.0 };
         self.close_in_line(k, &mut l, here, dir, d);

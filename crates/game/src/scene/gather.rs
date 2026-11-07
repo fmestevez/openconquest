@@ -1138,7 +1138,7 @@ impl Scene {
     }
 
     /// A deposit's class word by its object class.
-    fn deposit_cell(&self, d: usize) -> (i32, i32) {
+    pub(super) fn deposit_cell(&self, d: usize) -> (i32, i32) {
         let o = &self.objects[d];
         if o.class == ObjectClass::Amber {
             if let Some(f) = o.record.fields.get(6..8) {
@@ -1394,7 +1394,7 @@ impl Scene {
     /// 0x4ad280(ship, class): `(100 - P) + room x 100`, P the fill of its
     /// top load of the class (`+0x527 + 4k`, 100 when whole or none); 0
     /// when full.
-    fn fill_left(&self, i: usize, class: Resource) -> i32 {
+    pub(super) fn fill_left(&self, i: usize, class: Resource) -> i32 {
         let s = self.objects[i].ship.as_ref().unwrap();
         let p = if s.cargo_kind == Some(class) && s.cargo > 0.0 {
             let n = (s.cargo / 100.0).ceil();
