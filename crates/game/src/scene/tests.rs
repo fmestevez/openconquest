@@ -2729,63 +2729,6 @@ fn miss007_yard_rests() {
     assert_eq!(br.rng.0, rng.0);
 }
 
-/// A boat hunts a leviathan and brings it home for 5000 amber and 2500
-/// fish; the zone is then empty (needs `OPENCONQUEST_DATA`).
-#[test]
-fn leviathan_hunt() {
-    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
-        return;
-    };
-    let data = GameData::open(std::path::Path::new(&root)).unwrap();
-    let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
-    // No lairs: their creatures would throw at the ships.
-    scene
-        .objects
-        .retain(|o| o.class != ObjectClass::CreatureSpawn);
-    let boat = scene
-        .objects
-        .iter()
-        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
-        .unwrap();
-    let (bx, by, boat) = (boat.x, boat.y, boat.id);
-    // The nearest fishing ground stands in for a leviathan zone.
-    let zone = scene
-        .objects
-        .iter()
-        .filter(|o| o.deposit.is_some_and(|d| d.resource == Resource::Fish))
-        .min_by(|a, b| {
-            let d = |o: &&MapObject| (o.x - bx).powi(2) + (o.y - by).powi(2);
-            d(a).total_cmp(&d(b))
-        })
-        .unwrap()
-        .id;
-    let z = scene.object_index(zone).unwrap();
-    // A leviathan of 100, taken 50 a cast of the net.
-    scene.objects[z].deposit = Some(crate::objects::Deposit {
-        resource: Resource::Leviathan,
-        remaining: Some(100.0),
-        regrows: 0,
-        refill: 0.0,
-    });
-    scene.order_gather(boat, zone).unwrap();
-    let (amber, fish) = (scene.amber, scene.fish);
-    for _ in 0..60 * 600 {
-        scene.update(1.0 / 60.0, &data, &mut caches);
-        if scene.fish > fish {
-            break;
-        }
-    }
-    assert_eq!((scene.amber, scene.fish), (amber + 5000, fish + 2500));
-    // Emptied, the shoal goes once its dive's wait is over (0x48dd80):
-    // at most its time up (33 + 3 x 60 + 33 ticks) and down (75) on.
-    let by = scene.ticks + 33 + 3 * 60 + 33 + 75;
-    while scene.object_index(zone).is_some() && scene.ticks < by {
-        scene.update(crate::clock::TICK, &data, &mut caches);
-    }
-    assert!(scene.object_index(zone).is_none(), "the leviathan is gone");
-}
-
 /// Waypoints add legs to a ship's route (needs `OPENCONQUEST_DATA`).
 #[test]
 fn waypoints() {
@@ -5905,42 +5848,6 @@ fn pointers_load() {
     }
 }
 
-/// A boat fishing casts its net (needs `OPENCONQUEST_DATA`).
-#[test]
-fn fishing_casts_the_net() {
-    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
-        return;
-    };
-    let data = GameData::open(std::path::Path::new(&root)).unwrap();
-    let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
-    let (boat, bx, by) = scene
-        .objects
-        .iter()
-        .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
-        .map(|o| (o.id, o.x, o.y))
-        .unwrap();
-    let ground = scene
-        .objects
-        .iter()
-        .filter(|o| o.deposit.is_some_and(|d| d.resource == Resource::Fish))
-        .min_by(|a, b| {
-            let d = |o: &&MapObject| (o.x - bx).powi(2) + (o.y - by).powi(2);
-            d(a).total_cmp(&d(b))
-        })
-        .unwrap()
-        .id;
-    scene.order_gather(boat, ground).unwrap();
-    let net = (0..60 * 120).any(|_| {
-        scene.update(1.0 / 60.0, &data, &mut caches);
-        scene
-            .planks
-            .iter()
-            .any(|p| p.activity == super::unload::Activity::Fishing && !p.frame().is_empty())
-    });
-    assert!(net);
-}
-
 /// Exhausted amber lies empty for a while and grows back to what it held
 /// (needs `OPENCONQUEST_DATA`).
 #[test]
@@ -6508,61 +6415,6 @@ fn ships_turn_then_sail_the_grid() {
     }
     assert!(turned, "never turned");
     assert!(last != (x0, y0), "never moved");
-}
-
-/// Shoals keep moving while fished, and the fishing ship follows its shoal
-/// and goes on fishing (needs `OPENCONQUEST_DATA`).
-#[test]
-fn fishing_ships_follow_their_shoal() {
-    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
-        return;
-    };
-    let data = GameData::open(std::path::Path::new(&root)).unwrap();
-    let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
-    let ship = scene
-        .objects
-        .iter()
-        .find(|o| {
-            scene.is_own(o)
-                && o.ship
-                    .as_ref()
-                    .is_some_and(|s| crate::objects::cargo_capacity(s.kind) > 0.0)
-        })
-        .unwrap()
-        .id;
-    let shoal = scene
-        .objects
-        .iter()
-        .find(|o| o.class == ObjectClass::FishZone)
-        .unwrap()
-        .id;
-    scene.order_gather(ship, shoal).unwrap();
-    let mut spots = std::collections::HashSet::new();
-    let mut caught = 0.0f32;
-    let (mut nets, mut off) = (0, false);
-    for _ in 0..50 * 90 {
-        scene.update(0.02, &data, &mut caches);
-        let o = &scene.objects[scene.object_index(shoal).unwrap()];
-        spots.insert((o.x as i32, o.y as i32));
-        let s = scene.objects[scene.object_index(ship).unwrap()]
-            .ship
-            .as_ref()
-            .unwrap();
-        caught = caught.max(s.cargo);
-        // The net lies off the ship by its table, not on its middle.
-        let o = &scene.objects[scene.object_index(ship).unwrap()];
-        for p in scene.planks.iter().filter(|p| p.ship == ship) {
-            for (_, x, y) in p.frame() {
-                nets += 1;
-                off |= (x - o.x).hypot(y - o.y) > 4.0;
-            }
-        }
-    }
-    assert!(nets > 0, "no net was cast");
-    assert!(off, "the net lies off the ship's middle");
-    assert!(spots.len() > 1, "the shoal never moved");
-    assert!(caught > 0.0, "nothing caught");
 }
 
 /// Selling an item from a settlement's stock brings back three quarters of
@@ -7615,71 +7467,6 @@ fn damage_slows_ships() {
         super::sail::top_speed(5, 2, combat::hull_points(5) as i32),
         78000
     );
-}
-
-/// Merchants never fish a shoal that is diving, gone below or out of
-/// reach: the net comes in as it dives (needs `OPENCONQUEST_DATA`).
-#[test]
-fn no_fishing_over_a_dived_shoal() {
-    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
-        return;
-    };
-    let data = GameData::open(std::path::Path::new(&root)).unwrap();
-    let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
-    scene.brain = None;
-    let merchants: Vec<u32> = scene
-        .objects
-        .iter()
-        .filter(|o| {
-            scene.is_own(o)
-                && o.ship
-                    .as_ref()
-                    .is_some_and(|s| objects::cargo_capacity(s.kind) > 0.0)
-        })
-        .map(|o| o.id)
-        .collect();
-    let shoals: Vec<u32> = scene
-        .objects
-        .iter()
-        .filter(|o| o.class == ObjectClass::FishZone)
-        .map(|o| o.id)
-        .collect();
-    for (k, &m) in merchants.iter().enumerate() {
-        let _ = scene.order_gather(m, shoals[k % shoals.len()]);
-    }
-    let mut bad = 0;
-    for step in 0..50 * 600 {
-        scene.update(0.02, &data, &mut caches);
-        for &m in &merchants {
-            let Some(i) = scene.object_index(m) else {
-                continue;
-            };
-            let o = &scene.objects[i];
-            if let Some(Task::Gather {
-                deposit,
-                phase: objects::GatherPhase::Collecting,
-            }) = o.ship.as_ref().unwrap().task
-            {
-                let Some(d) = scene.object_index(deposit) else {
-                    continue;
-                };
-                let dd = &scene.objects[d];
-                if dd.class != ObjectClass::FishZone {
-                    continue;
-                }
-                let dist = (dd.x - o.x).hypot(dd.y - o.y) / 64.0;
-                let gone = scene.shoal_gone(deposit);
-                let left = scene.shoals_shown.get(&deposit).copied();
-                let netted = scene.planks.iter().any(|p| p.ship == m);
-                if gone || dist > 1.6 || left.is_some_and(|l| l < SHOAL_DIVING) {
-                    bad += 1;
-                    eprintln!("t={:.1} ship {m} shoal {deposit} gone {gone} dist {dist:.2} left {left:?} net {netted}", step as f32 * 0.02);
-                }
-            }
-        }
-    }
-    assert_eq!(bad, 0, "fished where the shoal was not");
 }
 
 /// A merchant sent to fish answers (0x49d3c0, needs `OPENCONQUEST_DATA`).

@@ -356,6 +356,8 @@ pub struct Scene {
     /// A leviathan hunt's line and haul (`WMOST_`, `WNOSIL_`; see
     /// `Scene::hunt_gear`).
     pub hunt_art: std::rc::Rc<(Frames, Frames)>,
+    /// A fishing ship's net by its facing (`SETKA_<facing>`, 0x4b1720).
+    pub net_art: std::rc::Rc<[Frames; 4]>,
     /// The queued targets' marks' pictures (`fleet_attack::wp_art`).
     pub wp_art: std::rc::Rc<fleet_attack::WpArt>,
     /// The ships showing a queued target's mark (the object's `+0x35`,
@@ -618,6 +620,7 @@ mod creatures;
 mod dig;
 pub mod fire;
 mod fire_pass;
+mod fishing;
 mod gulls;
 mod halt;
 mod hazards;
@@ -930,6 +933,10 @@ impl Scene {
                 objects::sequence_frames(data, caches, "WMOST_").unwrap_or_default(),
                 objects::sequence_frames(data, caches, "WNOSIL_").unwrap_or_default(),
             )),
+            net_art: std::rc::Rc::new(std::array::from_fn(|facing| {
+                objects::sequence_frames(data, caches, &format!("SETKA_{facing}"))
+                    .unwrap_or_default()
+            })),
             plank_art: std::rc::Rc::new(std::array::from_fn(|facing| {
                 objects::composite_layer_frames(data, caches, "MOST0_", facing).unwrap_or_default()
             })),
@@ -2722,16 +2729,6 @@ impl Scene {
         self.shoals_gone.contains_key(&id)
     }
 
-    /// Whether object `id` is a fish shoal diving or gone below: there is
-    /// nothing to fish there.
-    pub fn shoal_down(&self, id: u32) -> bool {
-        self.shoal_gone(id)
-            || self
-                .shoals_shown
-                .get(&id)
-                .is_some_and(|&l| l < SHOAL_DIVING)
-    }
-
     /// Scrolls the minimap only as far as keeps the view, whose top-left
     /// cell is `cell` and size `size` cells, inside it (0x51b8c0).
     pub fn follow_view(&self, cell: (i32, i32), size: (i32, i32)) {
@@ -2784,7 +2781,7 @@ impl Scene {
             .collect();
         for id in ships {
             if let Some(i) = self.object_index(id) {
-                self.run_task(i, dt, data, caches);
+                self.run_task(i);
             }
         }
         self.clock += dt;

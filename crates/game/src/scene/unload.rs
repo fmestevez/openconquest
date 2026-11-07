@@ -242,23 +242,6 @@ pub(super) fn walkway_side(facing: usize, heading: usize) -> usize {
     let not = [2, 3, 0, 1][facing % 4];
     usize::from(heading != not)
 }
-/// Where a fishing ship's net lies: its picture's top-left from the top-left
-/// of the ship's frame, by ship type and heading (0x59afa8; headings four
-/// apart alike).
-const NET_AT: [[(i8, i8); 4]; 12] = [
-    [(9, 32), (21, 29), (-3, 29), (-4, 27)],
-    [(14, 34), (28, 31), (0, 29), (-1, 33)],
-    [(19, 43), (35, 40), (8, 39), (10, 40)],
-    [(19, 43), (35, 40), (8, 39), (10, 40)],
-    [(16, 34), (31, 33), (7, 35), (3, 31)],
-    [(15, 37), (31, 33), (6, 32), (2, 31)],
-    [(16, 34), (31, 33), (7, 35), (3, 31)],
-    [(15, 37), (31, 33), (6, 32), (2, 31)],
-    [(16, 34), (31, 33), (7, 35), (3, 31)],
-    [(15, 37), (31, 33), (6, 32), (2, 31)],
-    [(16, 34), (31, 33), (7, 35), (3, 31)],
-    [(15, 37), (31, 33), (6, 32), (2, 31)],
-];
 /// Milliseconds per frame of a walkway, a net and the porters bringing
 /// amber aboard: one a game tick (0x4b0590, 0x4ae760); a load comes aboard
 /// each round.
@@ -271,8 +254,6 @@ pub enum Activity {
     /// At an amber deposit: the walkway `AMOST_<facing>` to the shore and
     /// porters bringing amber aboard (`ANOSIL_<facing>`).
     Amber,
-    /// At a fishing ground: the net (`SETKA_<facing>`, four facings).
-    Fishing,
 }
 
 /// A merchant's walkway or net: its going down played once, then what it
@@ -296,14 +277,6 @@ impl Plank {
     /// Milliseconds per frame of its animation.
     fn frame_ms(&self) -> f32 {
         PLANK_FRAME_MS
-    }
-
-    /// Seconds a round of the work takes (the porters' or the net's
-    /// cycle), once the walkway is down; `None` before.
-    pub fn round_seconds(&self) -> Option<f32> {
-        let down = self.age_ms >= self.frames.len() as f32 * self.frame_ms();
-        (down && !self.looping.is_empty())
-            .then(|| self.looping.len() as f32 * PLANK_FRAME_MS / 1000.0)
     }
 
     /// The walkway's frame, and the looped work over it once it is down.
@@ -386,12 +359,6 @@ impl Scene {
                     seq(&format!("ANOSIL_{facing}")),
                 )
             }
-            Activity::Fishing => {
-                let ship_heading = self.objects[i].ship.as_ref().map_or(0, |s| s.heading);
-                // Its long side along the hull: 0 east-west, 1 north-east,
-                // 2 north-south, 3 north-west.
-                (Vec::new(), seq(&format!("SETKA_{}", ship_heading % 4)))
-            }
         };
         // A walkway reaches from the ship towards the target: its far end
         // is as far out as the laid-down picture is long that way. A net
@@ -401,7 +368,7 @@ impl Scene {
             (dx / d, dy / d)
         };
         let reach = match (activity, frames.last().and_then(|f| f.first())) {
-            (Activity::Fishing, _) | (_, None) => 0.0,
+            (_, None) => 0.0,
             (_, Some(l)) => {
                 (ux.abs() * l.image.width as f32 + uy.abs() * l.image.height as f32) * 0.8
             }
@@ -426,21 +393,6 @@ impl Scene {
                     x = top_left.0 + l.image.width as f32 / 2.0;
                     y = top_left.1 + l.image.height as f32 / 2.0;
                 }
-            }
-        }
-        // The net lies where the ship type's table puts it for its heading
-        // (0x4ae760, state 6): its picture's top-left that far from the
-        // ship frame's; drawn by its middle.
-        if activity == Activity::Fishing {
-            if let (Some(s), Some(l)) = (
-                self.objects[i].ship.as_ref(),
-                looping.first().and_then(|f| f.first()),
-            ) {
-                let k = s.kind as usize % 12;
-                let (ox, oy) = NET_AT[k][s.heading % 4];
-                let half = objects::SHIP_FRAME[k] / 2.0;
-                x = sx - half + ox as f32 - l.dx as f32 + l.image.width as f32 / 2.0;
-                y = sy - half + oy as f32 - l.dy as f32 + l.image.height as f32 / 2.0;
             }
         }
         let loop_at = match looping.first().and_then(|f| f.first()) {
@@ -477,10 +429,6 @@ impl Scene {
                         let kind = ship.and_then(|sh| sh.cargo_kind);
                         match p.activity {
                             Activity::Amber => kind != Some(objects::Resource::Fish),
-                            Activity::Fishing => matches!(
-                                kind,
-                                Some(objects::Resource::Fish | objects::Resource::Leviathan)
-                            ),
                         }
                     }
                     _ => false,

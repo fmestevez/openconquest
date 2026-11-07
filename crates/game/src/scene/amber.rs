@@ -219,17 +219,18 @@ impl Scene {
         Some(n)
     }
 
-    /// 0x4ad300(ship, 2, n): the take stored aboard, up to its room
-    /// (0x4ad280: the top load's part left and the free loads of 100);
-    /// true when that room was no more than the take (full).
-    fn amber_store(&mut self, k: usize, n: i32) -> bool {
+    /// 0x4ad300(ship, class slot, n) (amber 2, fish 0): the take stored
+    /// aboard, up to its room (0x4ad280: the top load's part left and the
+    /// free loads of 100); true when that room was no more than the take
+    /// (full). Nothing taken, nothing stored and not full.
+    pub(super) fn store_take(&mut self, k: usize, class: Resource, n: i32) -> bool {
         if n == 0 {
             return false;
         }
-        let left = self.fill_left(k, Resource::Amber);
+        let left = self.fill_left(k, class);
         let s = self.objects[k].ship.as_mut().unwrap();
         s.cargo += n.min(left) as f32;
-        s.cargo_kind = Some(Resource::Amber);
+        s.cargo_kind = Some(class);
         left <= n
     }
 
@@ -324,7 +325,7 @@ impl Scene {
                     if n <= f {
                         l.porters = Some(0);
                         l.state = 0xf;
-                        if self.amber_store(k, l.load) {
+                        if self.store_take(k, Resource::Amber, l.load) {
                             l.load = 0;
                             l.porters = None;
                             l.state = 0xe;

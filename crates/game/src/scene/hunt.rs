@@ -39,14 +39,14 @@ const RELOAD_JITTER: u32 = 60;
 /// What 0x4ac8d0 finds: nothing (0xff), the leviathan seen but not yet
 /// near enough or the ship under way (0), seen within reach (1).
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Look {
+pub(super) enum Look {
     Lost,
     Seen,
     Near,
 }
 
 impl Scene {
-    fn hunt_cell(&self, i: usize) -> (i32, i32) {
+    pub(super) fn hunt_cell(&self, i: usize) -> (i32, i32) {
         let t = TILE_SIZE as f32;
         (
             (self.objects[i].x / t).floor() as i32,
@@ -54,7 +54,7 @@ impl Scene {
         )
     }
 
-    fn hunt_mut(&mut self, i: usize) -> &mut Hunt {
+    pub(super) fn hunt_mut(&mut self, i: usize) -> &mut Hunt {
         self.objects[i]
             .ship
             .as_mut()
@@ -89,6 +89,7 @@ impl Scene {
     /// (0x557440), else 10. Its route is kept till then.
     pub(super) fn order_hunt(
         &mut self,
+        class: Resource,
         i: usize,
         lev: u32,
         at: (i32, i32),
@@ -101,7 +102,7 @@ impl Scene {
             self.objects[p].owner == self.objects[i].owner && self.takes_cargo(&self.objects[p])
         });
         let ship = self.objects[i].ship.as_mut().unwrap();
-        if ship.cargo_kind.is_some_and(|k| k != Resource::Leviathan) {
+        if ship.cargo_kind.is_some_and(|k| k != class) {
             ship.cargo = 0.0;
         }
         ship.task = Some(Task::Gather {
@@ -116,7 +117,7 @@ impl Scene {
         ship.home_port = if own_port { port } else { 0 };
         ship.last_deposit = lev;
         ship.gathered = Some(objects::Gathered {
-            class: Resource::Leviathan,
+            class,
             cell: at,
             rect,
         });
@@ -130,7 +131,7 @@ impl Scene {
     pub(super) fn run_hunts(&mut self, data: &GameData, caches: &mut Caches) {
         let mut ids = Vec::new();
         for k in 0..self.objects.len() {
-            let hunting = self.hunting(k);
+            let hunting = self.hunting(k) || self.fishing(k);
             let Some(s) = self.objects[k].ship.as_mut() else {
                 continue;
             };
@@ -151,6 +152,21 @@ impl Scene {
             let Some(i) = self.object_index(id) else {
                 continue;
             };
+            if self.fishing(i) {
+                // Class 0x191: sub-code 9 0x4ad680, 10 0x4ae760.
+                match self.objects[i].ship.as_ref().and_then(|s| s.task) {
+                    Some(Task::Gather {
+                        phase: GatherPhase::ToDeposit,
+                        ..
+                    }) => self.fish_sail(i, lev),
+                    Some(Task::Gather {
+                        phase: GatherPhase::Collecting,
+                        ..
+                    }) => self.fish_watch(i, lev),
+                    _ => {}
+                }
+                continue;
+            }
             match self.objects[i].ship.as_ref().and_then(|s| s.task) {
                 Some(Task::Gather {
                     phase: GatherPhase::ToDeposit,
@@ -173,7 +189,7 @@ impl Scene {
     /// 0x80). The route as the port's behaviours plan theirs. (The wait
     /// counter's 150 of 0x4a6150 is the port's own mover's.) With a
     /// `region` (mode 6), 0x4a5a10 plans inside it (`Scene::plan_region`).
-    fn hunt_plan(&mut self, i: usize, goal: (i32, i32), region: Option<&Region>) {
+    pub(super) fn hunt_plan(&mut self, i: usize, goal: (i32, i32), region: Option<&Region>) {
         let now = self.ticks;
         let here = self.hunt_cell(i);
         let s = self.objects[i].ship.as_ref().unwrap();
@@ -245,7 +261,7 @@ impl Scene {
 
     /// Whether ship `i` is between two cells (0x4ac8d0: `+0x596` and move
     /// state 4 or more), and the cell it is going into (`+0x5b6`).
-    fn hunt_under_way(&self, i: usize) -> Option<(i32, i32)> {
+    pub(super) fn hunt_under_way(&self, i: usize) -> Option<(i32, i32)> {
         self.objects[i].ship.as_ref()?.under_way_into()
     }
 
@@ -318,35 +334,47 @@ impl Scene {
         }
         if dist >= 0 {
             if dist > reach {
-                let t = TILE_SIZE as f32;
-                let s = self.objects[i].ship.as_ref().unwrap();
-                let next = s
-                    .path
-                    .front()
-                    .map(|&(x, y)| ((x / t).floor() as i32, (y / t).floor() as i32));
-                let mut grid = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
-                for y in y0..y1 {
-                    for x in x0..x1 {
-                        let c = (x, y);
-                        let other = self.slot_ship(c).is_some_and(|k| k != i);
-                        let open = self.sea_cell(c, false) && !(other && Some(c) != next);
-                        grid.push(if open { 0 } else { -1 });
-                    }
-                }
-                let region = Region {
-                    x0,
-                    y0,
-                    goal: (to.0 - x0, to.1 - y0),
-                    w: x1 - x0,
-                    h: y1 - y0,
-                    grid,
-                };
-                self.hunt_plan(i, to, Some(&region));
+                self.look_move(i, to, (x0, y0, x1, y1));
             } else if under.is_none() {
                 return Look::Near;
             }
         }
         Look::Seen
+    }
+
+    /// 0x4ac8d0's move to `to` (0x4a6270 mode 6) inside its look's box
+    /// `[x0, x1) x [y0, y1)`: the box's water cells open but for another
+    /// ship lying in one that is not the ship's next cell.
+    pub(super) fn look_move(
+        &mut self,
+        i: usize,
+        to: (i32, i32),
+        (x0, y0, x1, y1): (i32, i32, i32, i32),
+    ) {
+        let t = TILE_SIZE as f32;
+        let s = self.objects[i].ship.as_ref().unwrap();
+        let next = s
+            .path
+            .front()
+            .map(|&(x, y)| ((x / t).floor() as i32, (y / t).floor() as i32));
+        let mut grid = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let c = (x, y);
+                let other = self.slot_ship(c).is_some_and(|k| k != i);
+                let open = self.sea_cell(c, false) && !(other && Some(c) != next);
+                grid.push(if open { 0 } else { -1 });
+            }
+        }
+        let region = Region {
+            x0,
+            y0,
+            goal: (to.0 - x0, to.1 - y0),
+            w: x1 - x0,
+            h: y1 - y0,
+            grid,
+        };
+        self.hunt_plan(i, to, Some(&region));
     }
 
     /// A warship's guns on a leviathan showing itself (0x4bf9b0 with its
@@ -634,11 +662,18 @@ impl Scene {
                 .and_then(|f| art.get(f))
                 .and_then(|l| l.first())
         }
-        [pick(line, h.line), pick(haul, h.haul)]
+        let mut out: Vec<_> = [pick(line, h.line), pick(haul, h.haul)]
             .into_iter()
             .flatten()
             .map(|l| (l, h.gear.0, h.gear.1))
-            .collect()
+            .collect();
+        // A fish gather's net (`Scene::fish_watch`).
+        if let Some(n) = h.net {
+            if let Some(l) = pick(&self.net_art[n.facing as usize % 4], Some(n.shown)) {
+                out.push((l, n.at.0, n.at.1));
+            }
+        }
+        out
     }
 
     fn hunt_watch(&mut self, i: usize, lev: u32, data: &GameData, caches: &mut Caches) {

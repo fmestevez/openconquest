@@ -1,0 +1,408 @@
+//! A ship's fish gather (Run_Ship.cpp, the gather task of class 0x191,
+//! routed by 0x4ac2d0), a game tick at a time, in the ship's `Hunt` (its
+//! step `+0x77d`): sub-code 9 (0x4ad680) sails to the shoal's cell till
+//! within 2 cells; sub-code 10 (0x4ae760) by its step:
+//!
+//! - **1**: the look 0x4ac8d0 over the 5 x 5 cells (0x59af48) about the
+//!   ship for the shoal in a cell's slot with its picture (`+0x111`, states
+//!   1-3). Not seen: sub-code 9. Seen elsewhere: a move there (0x4a6270
+//!   mode 6, inside the box). On it and not under way: no room (0x4be800
+//!   mode 3 0 and the top load whole, `+0x527` 0 or 100) posts notice
+//!   0x138 to its group (0x4a1430, class 0x191) and waits; else the net
+//!   (slot 1, 0x50cbf0 depth 0x3e6 kind 8, `SETKA_<facing>` by `+0x75` 3
+//!   through 0x4e1bb0(1)) at the hull picture's middle, frame 0, step 2.
+//! - **2**: the take 0x4ad4a0 (the shoal still in the ship's cell's slot
+//!   with its picture: 0x4ad0e0 class 0x191 into `+0x782`), none or called
+//!   off (`+0x77c < 0`) the net freed (0x4e0220) and step 5; else, the ship
+//!   not turning (move state 2), step 6, the net made again if gone.
+//! - **6**: a frame a tick (`+0x7d` 0 against the game time `+0x81`): the
+//!   net's top left the hull's plus 0x59afa8; turning, the net freed and
+//!   step 2; the facing changed, the picture again; drawn (0x4e0470) and
+//!   its frame up `[game +0xe2]`; at its count, frame 0, step 2 and the
+//!   catch stored (0x4ad300(ship, 0, catch)): full, the catch 0, notice
+//!   0x138 (0x4ad640, not when called off), step 1, the order ends (event
+//!   8 0xc0) and the net freed.
+//! - **5**: called off, or after notice 0x138 (0x4ad640), step 1 and the
+//!   order ends (event 8 0xc0).
+//!
+//! Nothing holds the ship's commands (no 0x4b37d0): `+0x77b` 1 in steps 2
+//! and 6 is the task's busy flag. A stop past step 1 calls it off
+//! (0x4abc60).
+
+use openconquest_formats::ObjectClass;
+
+use super::hunt::Look;
+use super::{walk_path, Scene};
+use crate::objects::{GatherPhase, Net, Resource, Task};
+
+/// The square of cells the fishing look covers (0x59af48 by ship type: 5
+/// for every type).
+const LOOK: i32 = 5;
+
+/// Where a fishing ship's net lies: its picture's top left from the hull
+/// picture's, by ship type and heading (0x59afa8[type x 8 + heading];
+/// headings four apart alike).
+const NET_AT: [[(i8, i8); 4]; 12] = [
+    [(9, 32), (21, 29), (-3, 29), (-4, 27)],
+    [(14, 34), (28, 31), (0, 29), (-1, 33)],
+    [(19, 43), (35, 40), (8, 39), (10, 40)],
+    [(19, 43), (35, 40), (8, 39), (10, 40)],
+    [(16, 34), (31, 33), (7, 35), (3, 31)],
+    [(15, 37), (31, 33), (6, 32), (2, 31)],
+    [(16, 34), (31, 33), (7, 35), (3, 31)],
+    [(15, 37), (31, 33), (6, 32), (2, 31)],
+    [(16, 34), (31, 33), (7, 35), (3, 31)],
+    [(15, 37), (31, 33), (6, 32), (2, 31)],
+    [(16, 34), (31, 33), (7, 35), (3, 31)],
+    [(15, 37), (31, 33), (6, 32), (2, 31)],
+];
+
+impl Scene {
+    /// Whether ship `k` gathers fish (its gather task of class 0x191).
+    pub(super) fn fishing(&self, k: usize) -> bool {
+        self.objects[k].ship.as_ref().is_some_and(|s| {
+            matches!(s.task, Some(Task::Gather { .. }))
+                && s.gathered.is_some_and(|g| g.class == Resource::Fish)
+        })
+    }
+
+    /// The shoal's cell (vt+0x28, 0x48eb60: `+0x9d` / `+0xa1` but in
+    /// states 4, 5 and 0xff): one standing, below or not, not lying empty
+    /// to grow back.
+    fn shoal_where(&self, shoal: u32) -> Option<(i32, i32)> {
+        let k = self.object_index(shoal)?;
+        let o = &self.objects[k];
+        (o.class == ObjectClass::FishZone && o.deposit.is_some()).then(|| self.hunt_cell(k))
+    }
+
+    /// Whether shoal `shoal` lies in `cell`'s slot with its picture
+    /// (`+0x111`, its states 1-3: not gone below).
+    fn shoal_shown_in(&self, shoal: u32, cell: (i32, i32)) -> bool {
+        self.shoal_where(shoal) == Some(cell) && !self.shoal_gone(shoal)
+    }
+
+    /// The hull picture's top left (`+0x8be +0x59` / `+0x5d`) and size
+    /// (`+0x61` / `+0x65`), as the port places it (`render::layer_origin`).
+    fn hull_rect(&self, i: usize) -> (i32, i32, i32, i32) {
+        let o = &self.objects[i];
+        match o.frames.first().and_then(|f| f.first()) {
+            Some(l) => {
+                let (x, y) = crate::render::layer_origin(o, l);
+                (x, y, l.image.width as i32, l.image.height as i32)
+            }
+            None => (o.x as i32, o.y as i32, 0, 0),
+        }
+    }
+
+    /// The net 0x4ae760 makes (steps 1 and 2): frame 0, its top left at
+    /// the hull picture's middle, its facing the ship's heading less 4
+    /// above 3.
+    fn new_net(&self, i: usize) -> Net {
+        let (x, y, w, h) = self.hull_rect(i);
+        let heading = self.objects[i].ship.as_ref().map_or(0, |s| s.heading);
+        Net {
+            frame: 0,
+            shown: 0,
+            facing: (heading % 4) as u8,
+            at: (w / 2 + x, h / 2 + y),
+        }
+    }
+
+    /// Sub-code 9 (0x4ad680) for a shoal, at step 1: its cell (0x48eb60);
+    /// none posts notice 0x138 with class 0 to the ship's group
+    /// (0x4a1430), every tick. Within 0x59af48[type] / 2 cells (0x557440)
+    /// sub-code 10; and a move to its cell (0x4a6270 mode 5).
+    pub(super) fn fish_sail(&mut self, i: usize, shoal: u32) {
+        if self.objects[i]
+            .ship
+            .as_ref()
+            .and_then(|s| s.hunt)
+            .is_some_and(|h| h.step != 1)
+        {
+            return;
+        }
+        let id = self.objects[i].id;
+        let Some(cell) = self.shoal_where(shoal) else {
+            self.post_notice(id, 0x138, 0);
+            return;
+        };
+        let here = self.hunt_cell(i);
+        if walk_path::dist(here.0, here.1, cell.0, cell.1) <= LOOK / 2 {
+            if let Some(s) = self.objects[i].ship.as_mut() {
+                s.task = Some(Task::Gather {
+                    deposit: shoal,
+                    phase: GatherPhase::Collecting,
+                });
+            }
+        }
+        self.hunt_plan(i, cell, None);
+    }
+
+    /// 0x4ac8d0 for a shoal (size 5, reach 0): over the box about the ship
+    /// (the cell it is going into while under way), clipped to the map, row
+    /// by row, the shoal in a cell's slot with its picture, its distance
+    /// 0x557440 (the last such cell kept). None: lost. Further than 0: a
+    /// move there inside the box. On it and not under way: near.
+    fn fish_look(&mut self, i: usize, shoal: u32) -> Look {
+        let under = self.hunt_under_way(i);
+        let (cx, cy) = under.unwrap_or_else(|| self.hunt_cell(i));
+        let (w, h) = (self.nav.width as i32, self.nav.height as i32);
+        let half = LOOK / 2;
+        let (x0, x1) = ((cx - half).max(0), (cx + half + 1).min(w));
+        let (y0, y1) = ((cy - half).max(0), (cy + half + 1).min(h));
+        let mut found = None;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if self.shoal_shown_in(shoal, (x, y)) {
+                    found = Some(((x, y), walk_path::dist(cx, cy, x, y)));
+                }
+            }
+        }
+        let Some((to, dist)) = found else {
+            return Look::Lost;
+        };
+        if dist > 0 {
+            self.look_move(i, to, (x0, y0, x1, y1));
+        } else if under.is_none() {
+            return Look::Near;
+        }
+        Look::Seen
+    }
+
+    /// 0x4ad4a0: the order's shoal in the slot of the ship's cell
+    /// (`+0x5a3` / `+0x5a7`) with its picture: the take 0x4ad0e0 class
+    /// 0x191 (0x59b2a8 by ship type: 33, 50, 20, 20; a third for player
+    /// 16; at most what it holds), the shoal's amount less it (vt+4 mode
+    /// 0, 0x48d6e0). None otherwise.
+    fn fish_take(&mut self, i: usize, shoal: u32) -> Option<i32> {
+        if !self.shoal_shown_in(shoal, self.hunt_cell(i)) {
+            return None;
+        }
+        let kind = self.objects[i].ship.as_ref()?.kind;
+        let barbarian = self.objects[i].owner == Some((4, 0));
+        let mut n = super::trade::take_per_round(Resource::Fish, kind, barbarian) as i32;
+        let d = self.object_index(shoal)?;
+        if let Some(left) = self.objects[d]
+            .deposit
+            .as_mut()
+            .and_then(|dep| dep.remaining.as_mut())
+        {
+            n = n.min(*left as i32);
+            *left -= n as f32;
+        }
+        Some(n)
+    }
+
+    /// The order's end (event 8 0xc0), after notice 0x138 with class
+    /// 0x191 to the ship's group unless called off (0x4ad640).
+    fn fish_end(&mut self, i: usize, shoal: u32) {
+        let called_off = self.objects[i]
+            .ship
+            .as_ref()
+            .and_then(|s| s.hunt)
+            .is_some_and(|h| h.called_off);
+        if called_off {
+            let s = self.objects[i].ship.as_mut().unwrap();
+            s.task = None;
+            s.path.clear();
+        } else {
+            self.gathering_done(i, shoal);
+        }
+    }
+
+    /// Sub-code 10 (0x4ae760), by its step.
+    pub(super) fn fish_watch(&mut self, i: usize, shoal: u32) {
+        let Some(s) = self.objects[i].ship.as_ref() else {
+            return;
+        };
+        let (kind, heading, turning) = (s.kind as usize % 12, s.heading, s.move_state == 2);
+        let step = s.hunt.map_or(1, |h| h.step);
+        match step {
+            1 => {
+                match self.fish_look(i, shoal) {
+                    Look::Lost => {
+                        let s = self.objects[i].ship.as_mut().unwrap();
+                        s.task = Some(Task::Gather {
+                            deposit: shoal,
+                            phase: GatherPhase::ToDeposit,
+                        });
+                        return;
+                    }
+                    Look::Seen => return,
+                    Look::Near => {}
+                }
+                // No room and the top load whole: notice 0x138, every
+                // tick, the order kept.
+                if self.fill_left(i, Resource::Fish) == 0 {
+                    let id = self.objects[i].id;
+                    self.post_notice(id, 0x138, super::gather::class_code(Resource::Fish));
+                    return;
+                }
+                let net = self.new_net(i);
+                let h = self.hunt_mut(i);
+                h.step = 2;
+                h.net = Some(net);
+            }
+            2 => {
+                let take = self.fish_take(i, shoal);
+                let net = self.new_net(i);
+                let h = self.hunt_mut(i);
+                if let Some(n) = take {
+                    h.catch = n;
+                }
+                if take.is_none() || h.called_off {
+                    h.step = 5;
+                    h.net = None;
+                    return;
+                }
+                if !turning {
+                    h.step = 6;
+                    h.net.get_or_insert(net);
+                }
+            }
+            6 => {
+                let (x, y, _, _) = self.hull_rect(i);
+                let (ox, oy) = NET_AT[kind][heading % 4];
+                let h = self.hunt_mut(i);
+                let Some(mut net) = h.net else {
+                    return;
+                };
+                net.at = (x + ox as i32, y + oy as i32);
+                if turning {
+                    h.net = None;
+                    h.step = 2;
+                    return;
+                }
+                // A new facing loads its picture again (0x4e1bb0(1); its
+                // frame kept: not decoded whether 0x50d080 resets it).
+                net.facing = (heading % 4) as u8;
+                net.shown = net.frame;
+                net.frame += 1;
+                h.net = Some(net);
+                let count = self.net_art[net.facing as usize].len() as i32;
+                if net.frame < count {
+                    return;
+                }
+                let h = self.hunt_mut(i);
+                h.net.as_mut().unwrap().frame = 0;
+                h.step = 2;
+                let catch = h.catch;
+                if self.store_take(i, Resource::Fish, catch) {
+                    let h = self.hunt_mut(i);
+                    h.catch = 0;
+                    h.step = 1;
+                    h.net = None;
+                    self.fish_end(i, shoal);
+                }
+            }
+            5 => {
+                self.hunt_mut(i).step = 1;
+                self.fish_end(i, shoal);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::objects;
+    use crate::scene::{Caches, GameData};
+
+    /// miss000's own boat sent to the shoal nearest it, the shoals held up
+    /// (their own dives left out): it sails there (sub-code 9), the look
+    /// finds it on its cell, the net goes out (step 2) and a cast takes 33
+    /// (0x59b2a8[0]) each round of the net's frames (step 6, a frame a
+    /// tick, then a tick of step 2) till its 4 loads are full: 13 casts,
+    /// the last stored 4 (0x4ad300: up to the room left), notice 0x138
+    /// and the order ends.
+    #[test]
+    fn the_boat_fishes_by_its_steps() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let (boat, bx, by) = scene
+            .objects
+            .iter()
+            .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+            .map(|o| (o.id, o.x, o.y))
+            .unwrap();
+        let shoal = scene
+            .objects
+            .iter()
+            .filter(|o| o.class == ObjectClass::FishZone && o.deposit.is_some())
+            .min_by(|a, b| {
+                let d = |o: &&objects::MapObject| (o.x - bx).powi(2) + (o.y - by).powi(2);
+                d(a).total_cmp(&d(b))
+            })
+            .unwrap()
+            .id;
+        let k = scene.object_index(shoal).unwrap();
+        let before = scene.objects[k].deposit.unwrap().remaining.unwrap();
+        scene.order_gather(boat, shoal).unwrap();
+        let mut steps: Vec<u8> = Vec::new();
+        let mut catches = Vec::new();
+        let (mut round, mut rounds) = (0, Vec::new());
+        let mut facing = 0;
+        for _ in 0..20_000 {
+            // The shoal stays up (`Scene::move_shoals` left out).
+            scene.shoals_shown.insert(shoal, f32::MAX);
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            let i = scene.object_index(boat).unwrap();
+            let s = scene.objects[i].ship.as_ref().unwrap();
+            if s.task.is_none() {
+                break;
+            }
+            let Some(h) = s.hunt else {
+                continue;
+            };
+            if !matches!(
+                s.task,
+                Some(Task::Gather {
+                    phase: GatherPhase::Collecting,
+                    ..
+                })
+            ) {
+                continue;
+            }
+            assert!(!scene.hunt_holds(boat), "not held");
+            if steps.last() != Some(&h.step) {
+                if h.step == 6 {
+                    catches.push(h.catch);
+                }
+                if steps.last() == Some(&6) {
+                    rounds.push(round);
+                }
+                round = 0;
+                steps.push(h.step);
+            }
+            round += 1;
+            if let Some(n) = h.net {
+                facing = n.facing;
+            }
+        }
+        let count = scene.net_art[facing as usize].len();
+        assert!(count > 0);
+        let mut want = vec![1u8];
+        for _ in 0..13 {
+            want.extend([2, 6]);
+        }
+        assert_eq!(steps, want, "the steps");
+        assert_eq!(catches, [33; 13]);
+        assert_eq!(rounds, [count; 12], "a round the net's frames");
+        let i = scene.object_index(boat).unwrap();
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        assert!(s.task.is_none());
+        assert_eq!(s.cargo, 400.0);
+        let k = scene.object_index(shoal).unwrap();
+        assert_eq!(
+            scene.objects[k].deposit.unwrap().remaining,
+            Some(before - 13.0 * 33.0)
+        );
+    }
+}

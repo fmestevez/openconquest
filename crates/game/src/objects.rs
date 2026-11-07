@@ -655,7 +655,8 @@ pub struct Closing {
     pub hook_cell: (i32, i32),
 }
 
-/// A ship's leviathan hunt, a game tick at a time (see `Ship::hunt`).
+/// A ship's leviathan hunt or fish gather, a game tick at a time (see
+/// `Ship::hunt`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Hunt {
     /// The step of 0x4aeef0 (`+0x77d`): 1 watching, 10 turning, 0xc the
@@ -691,6 +692,23 @@ pub struct Hunt {
     pub called_off: bool,
     /// Its commands held (0x4b37d0: `+0x261 &= 0x2000`) until 0x4b3850.
     pub held: bool,
+    /// A fish gather's net (0x4ae760: picture slot 1, `SETKA_<facing>`)
+    /// while it is out.
+    #[serde(default)]
+    pub net: Option<Net>,
+}
+
+/// A fishing ship's net (0x4ae760, picture slot 1 `+0x8c2`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Net {
+    /// Its frame counter (`+0x45`), up by `[game +0xe2]` a tick of step 6.
+    pub frame: i32,
+    /// The frame drawn (the counter 0x4e0470 last passed, before the add).
+    pub shown: i32,
+    /// Its facing (`+0x79c`: the heading, less 4 above 3): `SETKA_<facing>`.
+    pub facing: u8,
+    /// Its picture's top left (`+0x59` / `+0x5d`).
+    pub at: (i32, i32),
 }
 
 impl Default for Hunt {
@@ -711,6 +729,7 @@ impl Default for Hunt {
             gear: (0, 0),
             called_off: false,
             held: false,
+            net: None,
         }
     }
 }

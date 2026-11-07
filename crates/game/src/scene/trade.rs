@@ -2496,8 +2496,9 @@ impl Scene {
         }
         let deposit = self.objects[d].id;
         let resource = class;
-        if class == Resource::Leviathan {
-            return self.order_hunt(i, deposit, at, rect, port);
+        // A leviathan (0x4aeef0) or fish (0x4ae760): a game tick at a time.
+        if matches!(class, Resource::Leviathan | Resource::Fish) {
+            return self.order_hunt(class, i, deposit, at, rect, port);
         }
         let (x, y) = self.deposit_goal(i, d);
         let path = self
@@ -2593,7 +2594,7 @@ impl Scene {
     }
 
     /// Advances the standing order of ship `i`.
-    pub(super) fn run_task(&mut self, i: usize, dt: f32, data: &GameData, caches: &mut Caches) {
+    pub(super) fn run_task(&mut self, i: usize) {
         // A founding ship's order runs at its tick (`Scene::run_landings`,
         // 0x4b3370).
         if matches!(
@@ -2602,198 +2603,28 @@ impl Scene {
         ) {
             return;
         }
-        let t = TILE_SIZE as f32;
         let Some(ship) = &self.objects[i].ship else {
             return;
         };
-        let Some(Task::Gather { deposit, phase }) = ship.task else {
+        // Amber (0x4b0590, `Scene::run_amber`), fish (0x4ae760) and a
+        // leviathan (0x4aeef0, both `Scene::run_hunts`) go a game tick at
+        // a time, and the unload (0x4adef0, `Scene::run_unloads`).
+        let Some(Task::Gather {
+            deposit,
+            phase: GatherPhase::ToPort(port),
+        }) = ship.task
+        else {
             return;
         };
-        // Amber goes a game tick at a time (0x4b0590, `Scene::run_amber`).
-        if self.amber_order(i).is_some() {
-            return;
-        }
-        // A leviathan hunt goes a game tick at a time (`Scene::run_hunts`).
-        if ship.hunt.is_some() && matches!(phase, GatherPhase::ToDeposit | GatherPhase::Collecting)
-        {
-            return;
-        }
         if !ship.path.is_empty() {
             return;
         }
-        let (sx, sy) = (self.objects[i].x, self.objects[i].y);
-        let near = |o: &MapObject, cells: f32| {
-            ((o.x - sx).powi(2) + (o.y - sy).powi(2)).sqrt() <= cells * t
-        };
-        let capacity = cargo_capacity(ship.kind);
-        let set = |scene: &mut Scene, task: Option<Task>, path: Option<VecDeque<(f32, f32)>>| {
-            scene.objects[i].ship.as_mut().unwrap().task = task;
-            if let Some(p) = path {
-                scene.store_route(i, p);
-            }
-        };
-        // An exhausted deposit growing back counts as gone.
-        let deposit_at = self
-            .object_index(deposit)
-            .filter(|&d| self.objects[d].deposit.is_some());
-        match phase {
-            GatherPhase::ToDeposit => {
-                let arrived = deposit_at.is_some_and(|d| near(&self.objects[d], 1.6));
-                // A shoal: wait while it is below; sail on to where it
-                // comes up.
-                if let Some(d) =
-                    deposit_at.filter(|&d| self.objects[d].class == ObjectClass::FishZone)
-                {
-                    if self.shoal_down(self.objects[d].id) {
-                        return;
-                    }
-                    if !arrived {
-                        let (x, y) = (self.objects[d].x, self.objects[d].y);
-                        if let Some(path) = self.plan_route(i, x, y) {
-                            self.store_route(i, path);
-                        }
-                        return;
-                    }
-                }
-                // Stopped short (it gave a jammed route up, 0x4a618d): its
-                // gathering sends it on again while that gets it nearer.
-                if let (false, Some(d)) = (arrived, deposit_at) {
-                    let (dx, dy) = (self.objects[d].x, self.objects[d].y);
-                    let gap = |(x, y): (f32, f32)| (x - dx).hypot(y - dy);
-                    if let Some(path) = self.plan_route_to_water(i, dx, dy) {
-                        if path
-                            .back()
-                            .is_some_and(|&e| gap(e) + t / 2.0 < gap((sx, sy)))
-                        {
-                            return set(self, Some(Task::Gather { deposit, phase }), Some(path));
-                        }
-                    }
-                }
-                let next = arrived.then_some(Task::Gather {
-                    deposit,
-                    phase: GatherPhase::Collecting,
-                });
-                set(self, next, None);
-            }
-            GatherPhase::Collecting => {
-                let Some(d) = deposit_at else {
-                    return self.gathering_done(i, deposit);
-                };
-                // A shoal that has gone below or moved on: follow it.
-                if self.objects[d].class == ObjectClass::FishZone
-                    && (self.shoal_down(self.objects[d].id) || !near(&self.objects[d], 1.6))
-                {
-                    let ship = self.objects[i].ship.as_mut().unwrap();
-                    ship.task = Some(Task::Gather {
-                        deposit,
-                        phase: GatherPhase::ToDeposit,
-                    });
-                    return;
-                }
-                let dep = self.objects[d].deposit.unwrap();
-                // A walkway to the amber, or the net out.
-                let activity = match dep.resource {
-                    Resource::Amber => Some(super::unload::Activity::Amber),
-                    Resource::Fish | Resource::Leviathan => Some(super::unload::Activity::Fishing),
-                };
-                if let Some(a) = activity {
-                    self.show_activity(i, deposit, a, data, caches);
-                }
-                let ship = self.objects[i].ship.as_ref().unwrap();
-                // Once the walkway is down or the net out, a load a round of
-                // its animation.
-                // Player 0x10: nation 4 (the barbarians), slot 0.
-                let barbarian = self.objects[i].owner == Some((4, 0));
-                let take = take_per_round(dep.resource, ship.kind, barbarian);
-                let rate = self
-                    .planks
-                    .iter()
-                    .find(|p| p.ship == self.objects[i].id)
-                    .and_then(|p| p.round_seconds())
-                    .map_or(0.0, |s| take / s);
-                let mut take = (rate * dt).min(capacity - ship.cargo);
-                if let Some(left) = dep.remaining {
-                    take = take.min(left);
-                }
-                let ship = self.objects[i].ship.as_mut().unwrap();
-                ship.cargo += take;
-                ship.cargo_kind = Some(dep.resource);
-                let (full, cargo) = (ship.cargo >= capacity, ship.cargo);
-                let mut exhausted = false;
-                let mut rest = 0.0;
-                let mut thirds = None;
-                if let Some(left) = self.objects[d]
-                    .deposit
-                    .as_mut()
-                    .and_then(|d| d.remaining.as_mut())
-                {
-                    let third = |v: f32| (v / 100.0).ceil() as i64;
-                    thirds = Some(third(*left));
-                    *left -= take;
-                    exhausted = *left <= 1e-3;
-                    if exhausted {
-                        // What rounding left of it goes aboard too.
-                        rest = left.max(0.0);
-                        *left = 0.0;
-                    }
-                    // The picture shrinks as the amber runs out.
-                    if thirds == Some(third(*left)) {
-                        thirds = None;
-                    }
-                }
-                if exhausted {
-                    // What rounding left of it goes aboard too, the load
-                    // made whole.
-                    let s = self.objects[i].ship.as_mut().unwrap();
-                    let c = s.cargo + rest;
-                    s.cargo = if (c - c.round()).abs() < 0.01 {
-                        c.round()
-                    } else {
-                        c
-                    }
-                    .min(capacity);
-                }
-                if thirds.is_some() && !exhausted {
-                    self.refresh_amber(d, data, caches);
-                }
-                if exhausted {
-                    let ship_id = self.objects[i].id;
-                    let dep = self.objects[d].deposit.unwrap();
-                    if dep.resource == Resource::Leviathan {
-                        // Hunted out it stays: its own states take it down
-                        // (0x494b90 state 3, amount below 1).
-                    } else if dep.regrows > 0 {
-                        // Amber grows back after a while.
-                        self.objects[d].deposit = None;
-                        self.objects[d].dormant = Some((dep, 0.0));
-                        self.refresh_amber(d, data, caches);
-                    } else {
-                        // Removing the deposit may shift the ship's index.
-                        self.objects.remove(d);
-                    }
-                    let Some(i) = self.object_index(ship_id) else {
-                        return;
-                    };
-                    if cargo > 0.0 {
-                        self.gathering_done(i, deposit);
-                    } else if let Some(ship) = self.objects[i].ship.as_mut() {
-                        ship.task = None;
-                    }
-                } else if full {
-                    self.gathering_done(i, deposit);
-                }
-            }
-            GatherPhase::ToPort(port) => {
-                // On its berth (vt+0xb8) 0x4adef0 step 1 lands it, a game
-                // tick at a time (`Scene::run_unloads`).
-                if self.on_unload_berth(i, port) {
-                    return;
-                }
-                self.send_to_port(i, deposit)
-            }
-            // The machine runs at the game tick (`Scene::run_unloads`).
-            GatherPhase::Unloading(_) => {}
+        // On its berth (vt+0xb8) 0x4adef0 step 1 lands it, a game tick at
+        // a time (`Scene::run_unloads`).
+        if self.on_unload_berth(i, port) {
+            return;
         }
+        self.send_to_port(i, deposit)
     }
 
     /// Sends ship `i` (gathering from `deposit`) to unload.

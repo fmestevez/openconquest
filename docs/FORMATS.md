@@ -8471,6 +8471,60 @@ sends it on. Not ported: 0x499aa0's object-slot and heading-corner tests
 computers' doubled take (0x4ad0e0's side and difficulty test),
 `+0x25d |= 0x40`, 0x4a6270's failure to reach the seat (the port waits).
 
+**Fish, step by step** (0x4ae760, `scene/fishing.rs`; class 0x191 through
+0x4ac2d0: sub-code 9 0x4ad680, 10 0x4ae760, 11 0x4aeb80). The order
+(0x4aab00, needs `+0x261 & 0x20`): the shoal `+0x78a` / `+0x77e`, the box
+its cell `+0x9d / +0xa1` -/+ 2 clipped to the map, step 1, the first plan
+at once; sub-code 9 when the box's first corner lies more than
+0x59af48[type] / 2 = 2 cells off (0x557440), as the hunt's. Sub-code 9
+(0x4ad680, step 1): the shoal's cell by vt+0x28 (0x48eb60: `+0x9d/+0xa1`
+but in states 4, 5 and 0xff, so below too); none, notice 0x138 class 0
+every tick; within 2 cells sub-code 10; a move to the cell (0x4a6270
+mode 5). Sub-code 10, a game tick at a time, its step `+0x77d`:
+
+- **1**: `+0x77b` 0; 0x4ac8d0(0x59af48[type] = 5, shoal, id, 0x191, 0):
+  over the 5 x 5 cells about the ship (the cell it is going into while
+  under way), row by row, the shoal in a cell's slot `+8` with its picture
+  `+0x111` (its states 1-3, diving too); the last such cell's distance
+  (0x557440). None (0xff): step 1, sub-code 9. Further than 0: a move there
+  (0x4a6270 mode 6 inside the box, as the hunt's). On it, not under way
+  (1): with no room (0x4be800 mode 3 0) and the top load whole (`+0x527`
+  0 or 100) notice 0x138 with 0x191 to its group (0x4a1430), the order
+  kept (every tick); else step 2, the old net freed (0x4e0220), the net
+  (slot 1, 0x50cbf0 depth 0x3e6 kind 8) at the hull picture's `+0x59 +
+  +0x61 / 2`, `+0x5d + +0x65 / 2`, frame `+0x45` 0, delay `+0x7d` 0,
+  `+0x81` the game time, its facing `+0x79c` the heading less 4 above 3,
+  `+0x75` 3 and 0x4e1bb0(1): `SETKA_%1d` (0x4b1720) of the facing.
+- **2**: 0x4ad4a0: the order's shoal (class 0x191, `+0x78a`, its id) in
+  the slot of the ship's cell `+0x5a3/+0x5a7` with its picture: `+0x782` =
+  0x4ad0e0(ship, 0x191): 0x59b2a8[type] (33, 50, 20, 20; doubled for a
+  computer under 0x4ad0e0's side and difficulty test; a third for player
+  16), at most the amount `+0x78`, which vt+4 mode 0 (0x48d6e0) lowers by
+  it; notice 0x12f (0x4a13b0). No take, or called off (`+0x77c < 0`):
+  step 5, the net freed, `+0x77b` 0. Else `+0x77b` 1 and, not turning
+  (move state 2), step 6, the net made as at step 1 if none.
+- **6**: `+0x77b` 1; when the game time less `+0x81` is above `+0x7d` (0:
+  every tick), `+0x81` the time, the net's top left the hull's plus
+  0x59afa8[type x 8 + heading]; turning, the net freed and step 2; a new
+  facing, the picture again (0x4e1bb0(1)); 0x4e0470 (frame `+0x45`, depth
+  the hull's less 0x46), then `+0x45 += [game +0xe2]`; at its count
+  `+0x49` frame 0, step 2 and 0x4ad300(ship, 0, `+0x782`): full, `+0x782`
+  0, 0x4ad640 (notice 0x138 class 0x191 unless called off), step 1, event
+  8 0xc0 (the order ends) and the net freed.
+- **5**: `+0x77b` 0; called off, or after 0x4ad640, step 1 and event 8
+  0xc0.
+
+Nothing holds the commands (no 0x4b37d0); a stop past step 1 calls it off
+(0x4abc60, `+0x25d & 0x40`): a cast under way plays out, then step 2 goes
+to 5 and the order ends without the notice. So a boat takes 33 a cast,
+`SETKA_` (59 frames) a cast plus a tick of step 2, and fills its 4 loads
+with 13 casts (the 13th stores 4, the shoal loses 33). Sub-code 11
+(0x4aeb80) is not ported. Not ported: the take's notice 0x12f, the
+computers' doubled take, whether 0x4e1bb0's new picture keeps the frame
+(the port keeps it), 0x4ad680's skip while on `+0x786` and moving. The
+port's old fish stages (the net as a `Plank`, a rate per second, the
+shoal followed by distance) are removed.
+
 **Unload, step by step** (0x4adef0, `scene/port_unload.rs`; the unloading
 order 0xc, event 0x40 `{400, 0xc, port, prio}` by 0x4aab00, from the
 human's unload order, a gather zone's 0x1f and the computers' treasure
