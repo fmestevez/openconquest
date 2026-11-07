@@ -5435,6 +5435,11 @@ impl App {
             }
             Command::STOP => {
                 self.pending = None;
+                // Command 10 through the navy (0x49e230's default case):
+                // the selection's group kept, its block ended (0x4a1c60).
+                let _ = self.issue(Order::KeepGroup {
+                    ships: self.selection(),
+                });
                 for id in self.selection() {
                     let _ = self.issue(Order::Stop { id });
                 }
@@ -7175,6 +7180,13 @@ impl App {
                 }
             }
             return;
+        }
+        // The plain move goes to the selection's group first (0x49e230 ->
+        // 0x49de70 -> 0x4ccc30: its block ended, the group kept), once.
+        if k == 0 {
+            let _ = self.issue(Order::KeepGroup {
+                ships: self.selection(),
+            });
         }
         let (dx, dy) = group_offset(k);
         let target = (target.0 + dx, target.1 + dy);

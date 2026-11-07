@@ -33,6 +33,12 @@ pub enum Order {
     Stop {
         id: u32,
     },
+    /// The selection's plain order (a move without Shift, a stop) as the
+    /// navy takes it (0x49e230), sent once before the ships' own: the
+    /// selection's group kept, its block ended (`keep_selection_group`).
+    KeepGroup {
+        ships: Vec<u32>,
+    },
     /// The Building page's "default arming" checkbox.
     DefaultArming {
         on: bool,
@@ -489,6 +495,16 @@ impl Scene {
             | Order::GuardZone { .. }
             | Order::FleetAttack { .. } => {}
             Order::Behaviour { .. } | Order::LoadCrew { .. } | Order::LoadObject { .. } => {}
+            // The selection's plain order: its group kept (0x49e230),
+            // made at once at the click, before the ships' own orders.
+            Order::KeepGroup { ships } => {
+                self.keep_selection_group(ships);
+                return Ok(0);
+            }
+            // After `KeepGroup` a move or stop finds its ship in the
+            // selection's bare group, which it keeps.
+            Order::Move { ship: id, .. } | Order::Stop { id }
+                if self.human_groups.iter().any(|g| g.ships.contains(id)) => {}
             Order::Stop { id } => self.leave_zones(&[*id]),
             o => {
                 if let Some(id) = o.ship() {
@@ -743,6 +759,10 @@ impl Scene {
             }
             Stop { id } => {
                 self.stop(id);
+                Ok(0)
+            }
+            KeepGroup { ref ships } => {
+                self.keep_selection_group(ships);
                 Ok(0)
             }
             DefaultArming { on } => {

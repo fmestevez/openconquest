@@ -34,6 +34,10 @@ pub struct HumanGuard {
     pub behaviour: super::gather::HumanBehaviour,
     /// Group `+0x25`: the block.
     pub block: Option<GuardBlock>,
+    /// The block's route `+0x61`: the Shift move's waypoints (0x49de70;
+    /// the guard's code never reads it: the cells are only marked).
+    #[serde(default)]
+    pub route: Option<super::gather::Route>,
 }
 
 impl GuardGroup for HumanGuard {
@@ -125,6 +129,7 @@ impl Scene {
                     elapsed,
                     behaviour,
                     block: None,
+                    route: None,
                 });
                 self.human_guards.len() - 1
             }
@@ -188,6 +193,13 @@ impl Scene {
         if !gone.is_empty() {
             self.leave_guards(&gone);
         }
+        // A sunk ship leaves its bare group too (0x4a8410 -> 0x49bef0).
+        let objects = &self.objects;
+        for g in &mut self.human_groups {
+            g.ships
+                .retain(|&id| objects.iter().any(|o| o.id == id && o.ship.is_some()));
+        }
+        self.human_groups.retain(|g| !g.ships.is_empty());
         for z in 0..self.human_guards.len() {
             let mut g = self.human_guards.remove(z);
             self.guard_tick(&mut g);
@@ -419,5 +431,116 @@ mod tests {
         };
         assert!(listed(GuardGroup::behaviour(g).0).contains(&idf));
         assert!(listed(0).is_empty());
+    }
+
+    /// The selection's group through plain orders on miss000: a move
+    /// without Shift (0x49de70 -> 0x4ccc30) and a stop (command 10,
+    /// 0x49e230's default) end its block (0x4a1c60) and keep the group,
+    /// its serial and behaviour (0x49ca60 makes one only for a changed
+    /// selection); the guard zone then given reads the attack zone's
+    /// players; a Shift move on the guard group appends the cell to the
+    /// block's route `+0x61` (0x49de70: 0x4ce5e0, 0x4ce6c0) and keeps it;
+    /// a changed selection makes a new group, its ship leaving the old.
+    #[test]
+    fn plain_orders_keep_the_selection_group() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(2)
+            .collect();
+        let (i0, i1) = (ships[0], ships[1]);
+        let t = TILE_SIZE as f32;
+        let water = |scene: &Scene, c: (i32, i32)| {
+            scene.nav.is_sea(c.0, c.1) && scene.nav.passable(c.0, c.1, true)
+        };
+        let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+        let c0 = (3..h - 3)
+            .flat_map(|y| (3..w - 3).map(move |x| (x, y)))
+            .find(|&c| {
+                (-3..=3)
+                    .flat_map(|dy| (-3..=3).map(move |dx| (c.0 + dx, c.1 + dy)))
+                    .all(|c| water(&scene, c))
+            })
+            .unwrap();
+        for (i, c) in [(i0, c0), (i1, (c0.0 + 1, c0.1))] {
+            let o = &mut scene.objects[i];
+            o.owner = Some(human);
+            o.x = c.0 as f32 * t + t / 2.0;
+            o.y = c.1 as f32 * t + t / 2.0;
+            let s = o.ship.as_mut().unwrap();
+            s.kind = 2;
+            s.argo = false;
+            s.move_state = 0;
+        }
+        let (id0, id1) = (scene.objects[i0].id, scene.objects[i1].id);
+        let corner = |d: i32| ((c0.0 + d) as f32 * t + 1.0, (c0.1 + d) as f32 * t + 1.0);
+        let players = !(1u32 << ((human.1 + human.0 * 4) & 0x1f));
+        let given = Some((players, u32::MAX, u32::MAX));
+        scene
+            .order_attack_zone(&[id0, id1], corner(2), corner(-2))
+            .unwrap();
+        let serial = scene.human_attacks[0].serial;
+        let sel = vec![id0, id1];
+        let mut apply = |scene: &mut Scene, o: Order| {
+            scene.apply(&o, &data, &mut caches).unwrap();
+        };
+        // The move: the attack block ended, the group kept.
+        apply(&mut scene, Order::KeepGroup { ships: sel.clone() });
+        for (id, k) in [(id0, 0.0), (id1, 1.0)] {
+            let (x, y) = corner(1);
+            apply(
+                &mut scene,
+                Order::Move {
+                    ship: id,
+                    x: x + k * t,
+                    y,
+                },
+            );
+        }
+        assert!(scene.human_attacks.is_empty());
+        assert_eq!(scene.human_groups.len(), 1);
+        let g = &scene.human_groups[0];
+        assert_eq!((g.serial, g.behaviour), (serial, given));
+        // The stop keeps it again.
+        apply(&mut scene, Order::KeepGroup { ships: sel.clone() });
+        for id in [id0, id1] {
+            apply(&mut scene, Order::Stop { id });
+        }
+        assert_eq!(scene.human_groups.len(), 1);
+        assert_eq!(scene.human_groups[0].serial, serial);
+        // The guard zone on it reads the attack zone's players.
+        scene.order_guard_zone(&sel, corner(2), corner(-2)).unwrap();
+        assert!(scene.human_groups.is_empty());
+        let g = &scene.human_guards[0];
+        assert_eq!((g.serial, g.behaviour), (serial, given));
+        // Shift moves: the cells appended to the guard block's route.
+        scene.order_shift_move(&sel, c0.0 + 2, c0.1).unwrap();
+        scene.order_shift_move(&sel, c0.0 + 2, c0.1).unwrap();
+        scene.order_shift_move(&sel, c0.0 - 2, c0.1).unwrap();
+        assert!(scene.waypoint_moves.is_empty());
+        let g = &scene.human_guards[0];
+        assert_eq!(g.serial, serial);
+        assert!(g.block.is_some());
+        let route = g.route.as_ref().unwrap();
+        assert_eq!(route.waypoints, vec![(c0.0 + 2, c0.1), (c0.0 - 2, c0.1)]);
+        // A changed selection: a new group of its own, id0 leaving the
+        // guard group with notice 0x137.
+        apply(&mut scene, Order::KeepGroup { ships: vec![id0] });
+        apply(&mut scene, Order::Stop { id: id0 });
+        assert_eq!(scene.human_guards[0].ships, vec![id1]);
+        assert!(scene.human_guards[0]
+            .notices
+            .iter()
+            .any(|n| n.code == 0x137 && n.ship == id0));
+        let g = &scene.human_groups[0];
+        assert_eq!((g.ships.clone(), g.behaviour), (vec![id0], None));
+        assert_eq!(g.serial, scene.zone_serial);
+        assert!(g.serial > serial);
     }
 }

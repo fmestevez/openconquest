@@ -118,6 +118,9 @@ pub struct SaveGame {
     /// The human groups' guard blocks.
     #[serde(default)]
     pub human_guards: Vec<crate::scene::HumanGuard>,
+    /// The human groups with no block.
+    #[serde(default)]
+    pub human_groups: Vec<crate::scene::HumanGroup>,
     #[serde(default)]
     pub zone_serial: u32,
     /// The navy's generator.

@@ -47,16 +47,19 @@ impl Scene {
     /// the fleet attack task) the block's route is made if null and the
     /// cell appended unless listed (0x4ce6c0), no ship sent (0x4cec00
     /// needs the cell listed in a route just made: never); the human's
-    /// attack block `{0x70, 0x20}` alike (its code never reads the
-    /// route: the cells are only marked). Else 0x4cf2c0 (payload
+    /// attack block `{0x70, 0x20}` and the guard block `{0x6e, 0x29}`
+    /// alike (their code never reads the route: the cells are only
+    /// marked), the group kept. Else 0x4cf2c0 (payload
     /// `{x, y, 1, 0, 1, &cell}`, place 1, from the group 0): a move block
     /// of another kind (100 / 1) ended (0x4a1c60); the group's 100 / 2
     /// rewritten (`+8` now, `+0xc`-`+0x18` the payload) and the cell
     /// appended to its route (0x4ce6c0), no ship sent, the route not
     /// being new; else the block made (0x4cef80, its route 0x4ce5e0 with
-    /// the cell, the notices 0x4a1150) on the selection's group (a new
-    /// one, 0x49ca60, its ships leaving their old groups; the port's
-    /// plain moves make no block) and each ship sent to the route's
+    /// the cell, the notices 0x4a1150) on the selection's group (kept
+    /// with its serial, `+8` and behaviour when the selection is a bare
+    /// group's, `HumanGroup`, the plain move's `{100, 1}` not ported;
+    /// else a new one, 0x49ca60, its ships leaving their old groups) and
+    /// each ship sent to the route's
     /// first waypoint (0x4cf070, a plain move) with its progress `(-1,
     /// -1)`, way `+0x14` (0x4ce8a0). Each waypoint appended gets its mark
     /// (`Route::append`).
@@ -89,6 +92,13 @@ impl Scene {
                 .append(x, y);
             return Ok(());
         }
+        if let Some(z) = self.selection_guard(&ships) {
+            self.human_guards[z]
+                .route
+                .get_or_insert_with(Route::default)
+                .append(x, y);
+            return Ok(());
+        }
         let now = self.ticks;
         if let Some(z) = self.selection_waypoint_move(&ships) {
             let m = &mut self.waypoint_moves[z];
@@ -98,20 +108,26 @@ impl Scene {
             m.route.append(x, y);
             return Ok(());
         }
-        self.leave_zones(&ships);
-        self.zone_serial += 1;
+        let (serial, elapsed, behaviour) = match self.end_selection_block(&ships) {
+            Some((serial, elapsed, _, behaviour)) => (serial, elapsed, behaviour),
+            None => {
+                self.leave_zones(&ships);
+                self.zone_serial += 1;
+                (self.zone_serial, 0, None)
+            }
+        };
         let mut route = Route::default();
         route.append(x, y);
         self.waypoint_moves.push(WaypointMove {
-            serial: self.zone_serial,
+            serial,
             ships: ships.clone(),
             notices: Vec::new(),
-            elapsed: 0,
+            elapsed,
             made: now,
             cell: (x, y),
             way: 1,
             route,
-            behaviour: None,
+            behaviour,
         });
         let z = self.waypoint_moves.len() - 1;
         let (fx, fy) = self.waypoint_moves[z].route.waypoints[0];

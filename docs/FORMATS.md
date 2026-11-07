@@ -10525,12 +10525,69 @@ made, carried by `end_selection_block`; the attack zone now keeps the
 selection's group whatever its block (its serial and `+8`), as the
 guard zone does; a gather zone reads the human group's (its escorts'
 `+0x14` test 0x4c6100 and 300's sub 1). `+0x15` (0 from the human) is
-not kept. Not ported: the port keeps no group for a selection without
-a block (its plain moves, stops and single-ship orders take the ships
-out of their groups, `leave_zones`), so a behaviour given then such an
-order is lost where the original's unchanged selection keeps it; the
-Shift move on a guard group (0x49de70 appends to the guard block's
-route `+0x61`) still makes a new group.
+not kept.
+
+**The navy's selection** (navy `+0x20` flag, `+0x21` the player, `+0x72`
+per player a list of picked objects, `+0xc2` per player the selected
+group's index or -1). Flag 1: the selection is the list, not yet a
+group; flag 0: it is group `+0xc2` (or nothing). Messages (0x49ab30):
+- 0xc456 (pick, `[5] != 0`): 0x49ecb0 deselects (flag 0 with a group:
+  0xc453 `{0}` to its ships, `+0xc2 = -1`; flag 1: 0xc453 `{0}` to the
+  list's, the list emptied 0x49c250, flag 0); then an object in a group
+  (its `+0x5c` >= 0) selects **that whole group** (`+0xc2` its index,
+  0xc453 `{1}` to its ships, flag stays 0); else it goes in the list
+  (0x49c2f0), flag 1. With `[5] == 0`: 0x4a2b10 and flag 1.
+- 0xc455 (add/remove, 0x49e850): flag 1: an object listed is taken out
+  (0x55b500, 0xc453 `{0}`); else one neither a ship (200..0xd3) nor a
+  class with bit `1 << (+0x50 - 0x32) & 0x1c`, or with 0x49ec60, clears
+  the selection first (0x4a2050, flag 1); then listed, flag 1. Flag 0
+  with a group: a member is taken out of it (0x49bef0, 0xc453 `{0}`);
+  a ship with `+0x251 == 4` only deselected; any other ship or such
+  class **joins the selected group** (0x49bd60, notice 0x4a1340,
+  selected); another object clears and starts a list (flag 1).
+- other writers of `+0x20`: 0x49c670 (non-ship class-0x32 objects
+  without the class bits dropped from the list; flag 1 when asked),
+  0x49ab30's other cases (0x49af17 .. 0x49b704), 0x49eb2a, 0x49ed86:
+  not read.
+- 0xc458, the order (0x49e230): flag 1 with a list: 0x49ca60 makes the
+  group (a single non-ship returns -1 and the command goes to it raw):
+  a group (0x49b990 kind 10) of the listed ships with `+0x251 != 4` and
+  the class-bit objects, each leaving its old group (0x49bd60); then
+  the list emptied (0x49c250) and flag 0. With the group (`+0xc2`
+  >= 0, ships in it): 0x14 the move 0x49de70, 0x15..0x18 0x49dda0,
+  0x19..0x1d 0x49d3c0, 0x1e 0x49dc40, 0x1f 0x49dfb0, 0x20 0x49dc90,
+  0x23 0x49d790; any other (the stop 10 among them): the block ended
+  (0x4a1c60), 0x49e0e0 on the payload, the command to each ship
+  (0x520cc0), the group kept.
+- 0x49de70, the move: block null or kind 100: with Shift (key flag 4)
+  0x4cf2c0 (the waypoint move); without, 0x4ccc30 with `{x, y, 1}`.
+  Another block: with Shift its route `+0x61` made if null (0x4ce5e0)
+  and the cell appended unless listed (0x4ce6c0), 0x4cec00 only for a
+  listed cell in a new route (never), the block kept; without,
+  0x4ccc30 with `{x, y, 0}`. 0x4ccc30 ends any block but `{100, 1}`
+  (0x4a1c60), makes or rewrites the move block `{100, 1}` (0x4cc500;
+  `+8` game `+0xde`, `+0xc..+0x18` the payload), 0x4cc970, and sends
+  each ship (0x4cc650): the group kept.
+
+Ported: the bare group `HumanGroup` (`Scene::human_groups`): a plain
+move (`Order::KeepGroup` from the app once, then each ship's `Move`)
+and the stop (`KeepGroup`, then `Stop`) end the selection's block and
+keep its group with its serial, `+8` and behaviour; a selection that is
+no group's makes a new one, its ships leaving the old (`leave_zones`,
+which takes ships out of bare groups too; a bare group has no notices,
+0x4a1770 posting none without `+0x2d`); every block given later
+(`end_selection_block`) takes the bare group's fields, the Shift move's
+waypoint move among them; a sunk ship leaves it. The Shift move on a
+guard group appends to its route (`HumanGuard::route`, only marked)
+and keeps it (`plain_orders_keep_the_selection_group`, miss000). Not
+ported: the selection model itself: the port's selection is its own
+list and a group is the selection's when their ships are the same,
+where the original's is the group picked whole by 0xc456 (any member
+clicked) or grown by 0xc455, and a new group for any list picked
+otherwise even of the same ships; the move block `{100, 1}` (0x4cc500,
+0x4cc970, its tick, its `+8`); the other plain commands (each ship's
+own order through the navy's default case, which the port still gives
+alone: `leave_zones`).
 
 The human's attack zone (0x49d9d0) gives the selection's group its
 behaviour first (0x49da43: 0x4c4350 `{0, 0x4a2f10(player), -1, -1}`;
