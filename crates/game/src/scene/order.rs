@@ -713,11 +713,20 @@ impl Scene {
     /// applies orders as they are delivered, so the ship's state before
     /// its first such order of the batch (the last tick's outbox, then
     /// the player's) is kept and an order is run over it only if the
-    /// original's would win. `None` for an order outside the group. (Not
-    /// ported: a busy task's deferral (0x4abe50: one code kept in
-    /// `+0x265`, 0x20, 0x40, 0x10, 0x100, 0x80 first, the current task
-    /// wound down by 0x4abc60); the events wait in the original until the
-    /// ship's own turn in the tick, the port runs them at delivery.)
+    /// original's would win. Before the group, 0x4abe50: a ship whose
+    /// running task is busy (`Scene::task_busy`) has it wound down
+    /// (0x4abc60, `Scene::wind_down`) and loses the batch's orders of the
+    /// group, the fire records with them. `None` for an order outside
+    /// the group. (Not ported: the events wait in the original until the
+    /// ship's own turn in the tick, and 0x4ab720's gate (0x4ab7ef) keeps
+    /// them pending there while `+0x261 & 0x1f0` is clear, till the word
+    /// comes back; the port runs them at delivery, so a hold started
+    /// between the two by an object earlier in the Sapp's walk (0x542270,
+    /// its list `+0x10` by 0x541b40, the places not decoded) does not
+    /// keep them. Every hold the port has refuses the group's commands at
+    /// 0x4e2ba0 already, so nothing passes delivery to wait at the gate.
+    /// With the group's event refused at its run, the port keeps the old
+    /// task, which 0x4abe50 has taken off `+0x25d` (`&= 0xffffff0f`).)
     fn one_event_a_tick(
         &mut self,
         order: &Order,
@@ -740,7 +749,9 @@ impl Scene {
                     return None;
                 }
                 // The group pending this tick goes; then the stop.
-                if let Some(TickOrder::Ran { before, .. }) = self.tick_orders.remove(&id) {
+                if let Some(TickOrder::Ran { before, .. } | TickOrder::Dropped { before }) =
+                    self.tick_orders.remove(&id)
+                {
                     self.objects[i].ship = Some(*before);
                 }
                 self.tick_orders.insert(id, TickOrder::Stopped);
@@ -758,11 +769,23 @@ impl Scene {
                 self.objects[i].ship = Some((*before).clone());
                 before
             }
+            Some(TickOrder::Dropped { .. }) => return Some(Ok(0)),
             None => {
-                // The group's turn: 0x4abe00 first (with the fire task on
-                // and afloat), whatever the order then does.
+                // The group's turn: 0x4abe50 first; a busy task is wound
+                // down (0x4abc60) and the group dropped (`Scene::task_busy`).
+                let before = Box::new(self.objects[i].ship.clone().unwrap());
+                let busy = self.task_busy(i);
+                if busy {
+                    self.wind_down(i);
+                }
+                // Then 0x4abe00 (with the fire task on and afloat),
+                // whatever the order does or whether it was dropped.
                 let s = self.objects[i].ship.as_mut().unwrap();
                 s.fire_reset();
+                if busy {
+                    self.tick_orders.insert(ship, TickOrder::Dropped { before });
+                    return Some(Ok(0));
+                }
                 Box::new(s.clone())
             }
         };
@@ -777,6 +800,34 @@ impl Scene {
         self.tick_orders
             .insert(ship, TickOrder::Ran { rank, before });
         Some(r)
+    }
+
+    /// Whether ship `i`'s running task is busy at its order group's turn
+    /// (0x4abe50 at 0x4abe50-0x4abea1): the task of 0x20 with `+0x739`,
+    /// 0x40 with `+0x77b`, 0x10 with `+0x6a0`, 0x80 with `+0x58b` or
+    /// 0x100 with `+0x5e2` set. Busy, 0x4abe50 keeps the first pending of
+    /// 0x20, 0x40, 0x10, 0x100, 0x80 in `+0x265`, winds the task down
+    /// (0x4abc60) and zeroes `+0x265` again whenever `+0x7d6` is not 0
+    /// (0x4abf00-0x4abf0a), which it is with that event pending (0x4abc60
+    /// and its callees 0x4c1950, 0x4a3800, 0x4b93f0, 0x4a6330 leave
+    /// `+0x7d6`), then drops the group (`&= 0xfffffe0f`): the orders are
+    /// lost, not deferred (0x4abf21's restore from `+0x265` is never
+    /// reached with a code; only 0x4abe50 writes it nonzero). No
+    /// instruction writes `+0x739`, `+0x58b` or `+0x5e2` (the listing's
+    /// only references are 0x4abe50's reads), so those tasks are never
+    /// busy. The 0x40 task's byte is the fish gather's (`Ship::net_busy`),
+    /// read here for the tasks the port runs in `Ship::hunt` (the fish
+    /// gather, the leviathan hunt). (Not ported: the 0x10 task's
+    /// `+0x6a0`, set from the hook's throw or the rammer's contact,
+    /// 0x4b5ed0, 0x4b6081, 0x4b741f, 0x4b7519, 0x4c2335, 0x4c2649, and
+    /// cleared at 0x4aa8ee, 0x4b6ba7, 0x4b7e38, 0x4c24c2, 0x4c3fcc, its
+    /// wind-down by `+0x6a9`; a `+0x77b` left set under the amber
+    /// gather, the treasure take or the unload, the other 0x40 tasks.)
+    pub(super) fn task_busy(&self, i: usize) -> bool {
+        let Some(s) = self.objects[i].ship.as_ref() else {
+            return false;
+        };
+        s.net_busy && (self.hunting(i) || self.fishing(i))
     }
 
     /// Carries out `order` at once.
@@ -1121,7 +1172,8 @@ impl Scene {
 /// A ship's order of the 0x1f0 group this tick (`Scene::one_event_a_tick`):
 /// one ran, of its rank (0 for 0x20 .. 3 for 0x80, 4 for an attack's fire
 /// records 0x100), over the ship as it was
-/// before; or a stop came, which drops the rest of the tick's.
+/// before; or a stop came, which drops the rest of the tick's; or the
+/// ship was busy and dropped them all.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TickOrder {
     Ran {
@@ -1129,6 +1181,11 @@ pub enum TickOrder {
         before: Box<crate::objects::Ship>,
     },
     Stopped,
+    /// The ship was busy at the group's turn (0x4abe50): its task wound
+    /// down over the ship as it was `before`, the group dropped.
+    Dropped {
+        before: Box<crate::objects::Ship>,
+    },
 }
 
 /// The human's unload goes out with priority 75 (0x4d74a0's 0x1f).

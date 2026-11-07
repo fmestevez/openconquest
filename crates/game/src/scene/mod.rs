@@ -2534,6 +2534,14 @@ impl Scene {
                 self.cancel_build(i);
                 return;
             }
+            self.wind_down(i);
+        }
+    }
+
+    /// 0x4abc60, the running task wound down: by the stop (0x4aa540)
+    /// and by a busy ship's order group (0x4abe50, `Scene::busy`).
+    pub(super) fn wind_down(&mut self, i: usize) {
+        {
             // A loader past its hold is released (0x4aa540 with `+0x25d &
             // 0x10`: `+0x6a2` 0xff; linked, `+0x6e5` 4 too), its order
             // going on to its end (`Scene::run_load_runs`).

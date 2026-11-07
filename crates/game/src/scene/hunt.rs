@@ -65,7 +65,7 @@ impl Scene {
 
     /// Whether ship `k` hunts a leviathan (its gather task of class
     /// 0x192, sailing to it or watching over it).
-    fn hunting(&self, k: usize) -> bool {
+    pub(super) fn hunting(&self, k: usize) -> bool {
         self.objects[k].ship.as_ref().is_some_and(|s| {
             matches!(s.task, Some(Task::Gather { .. }))
                 && s.gathered.is_some_and(|g| g.class == Resource::Leviathan)

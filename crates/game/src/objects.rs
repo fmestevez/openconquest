@@ -568,6 +568,14 @@ pub struct Ship {
     /// 0x4aeef0; `scene::hunt`).
     #[serde(default)]
     pub hunt: Option<Hunt>,
+    /// The fish gather's busy byte (`+0x77b`): 0x4ae760 sets it 0 at step
+    /// 1 (0x4ae7b6), at step 2 with no take or called off (0x4ae9d1) and
+    /// at step 5 (0x4aeb3a), 1 at step 2 with a take (0x4ae8f4) and at
+    /// step 6 (0x4ae9e6); nothing else writes it (0x4aab00 leaves it), so
+    /// a gather that ends full at step 6 leaves it set for the ship's next
+    /// 0x40 task. Read by 0x4abe50 (`Scene::task_busy`).
+    #[serde(default)]
+    pub net_busy: bool,
     /// Closing in on the prey of a ram or boarding (`Task::Ram`,
     /// `Task::Board`; `scene::closing`).
     #[serde(default)]
@@ -2528,6 +2536,7 @@ pub fn resolve(
         build: None,
         lcg: None,
         hunt: None,
+        net_busy: false,
         closing: None,
         attack_plan: RoutePlan::default(),
         ram_wait: 0,

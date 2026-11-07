@@ -219,6 +219,8 @@ impl Scene {
         let step = s.hunt.map_or(1, |h| h.step);
         match step {
             1 => {
+                // `+0x77b` 0 (0x4ae7b6).
+                self.objects[i].ship.as_mut().unwrap().net_busy = false;
                 match self.fish_look(i, shoal) {
                     Look::Lost => {
                         let s = self.objects[i].ship.as_mut().unwrap();
@@ -253,14 +255,21 @@ impl Scene {
                 if take.is_none() || h.called_off {
                     h.step = 5;
                     h.net = None;
+                    // `+0x77b` 0 (0x4ae9d1).
+                    self.objects[i].ship.as_mut().unwrap().net_busy = false;
                     return;
                 }
+                // `+0x77b` 1 (0x4ae8f4).
+                self.objects[i].ship.as_mut().unwrap().net_busy = true;
+                let h = self.hunt_mut(i);
                 if !turning {
                     h.step = 6;
                     h.net.get_or_insert(net);
                 }
             }
             6 => {
+                // `+0x77b` 1 (0x4ae9e6).
+                self.objects[i].ship.as_mut().unwrap().net_busy = true;
                 let (x, y, _, _) = self.hull_rect(i);
                 let (ox, oy) = NET_AT[kind][heading % 4];
                 let h = self.hunt_mut(i);
@@ -296,6 +305,8 @@ impl Scene {
                 }
             }
             5 => {
+                // `+0x77b` 0 (0x4aeb3a).
+                self.objects[i].ship.as_mut().unwrap().net_busy = false;
                 self.hunt_mut(i).step = 1;
                 self.fish_end(i, shoal);
             }
@@ -308,7 +319,7 @@ impl Scene {
 mod tests {
     use super::*;
     use crate::objects;
-    use crate::scene::{Caches, GameData};
+    use crate::scene::{Caches, GameData, Order};
 
     /// miss000's own boat sent to the shoal nearest it, the shoals held up
     /// (their own dives left out): it sails there (sub-code 9), the look
@@ -404,5 +415,126 @@ mod tests {
             scene.objects[k].deposit.unwrap().remaining,
             Some(before - 13.0 * 33.0)
         );
+        // The haul ended full at step 6: `+0x77b` stays set.
+        assert!(s.net_busy);
+    }
+
+    /// 0x4abe50 on miss000's boat at its shoal: sailing there (`+0x77b`
+    /// 0) a move runs at the group's turn; casting (step 6, `+0x77b` 1)
+    /// the move is lost and the gather called off (0x4abc60: `+0x77c`
+    /// 0xff), the net's round played out, then step 2 to 5 and the end
+    /// with less than full aboard; the stop or a later order not needed.
+    #[test]
+    fn a_casting_boats_order_is_lost() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let fresh = |caches: &mut Caches| {
+            let mut scene = Scene::load(&data, caches, "miss000").unwrap();
+            scene.brain = None;
+            let (boat, bx, by) = scene
+                .objects
+                .iter()
+                .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+                .map(|o| (o.id, o.x, o.y))
+                .unwrap();
+            let shoal = scene
+                .objects
+                .iter()
+                .filter(|o| o.class == ObjectClass::FishZone && o.deposit.is_some())
+                .min_by(|a, b| {
+                    let d = |o: &&objects::MapObject| (o.x - bx).powi(2) + (o.y - by).powi(2);
+                    d(a).total_cmp(&d(b))
+                })
+                .unwrap()
+                .id;
+            scene.order_gather(boat, shoal).unwrap();
+            (scene, boat, shoal, bx, by)
+        };
+        let gathers = |scene: &Scene, boat: u32| {
+            let i = scene.object_index(boat).unwrap();
+            matches!(
+                scene.objects[i].ship.as_ref().unwrap().task,
+                Some(Task::Gather { .. })
+            )
+        };
+        // Sailing: not busy, the move runs.
+        let (mut scene, boat, shoal, bx, by) = fresh(&mut caches);
+        for _ in 0..5 {
+            scene.shoals_shown.insert(shoal, f32::MAX);
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        let i = scene.object_index(boat).unwrap();
+        assert!(!scene.task_busy(i));
+        scene
+            .apply(
+                &Order::Move {
+                    ship: boat,
+                    x: bx,
+                    y: by,
+                },
+                &data,
+                &mut caches,
+            )
+            .unwrap();
+        assert!(!gathers(&scene, boat), "the move ran");
+        // Casting: busy, the move lost.
+        let (mut scene, boat, shoal, bx, by) = fresh(&mut caches);
+        let step = |scene: &Scene| {
+            let i = scene.object_index(boat).unwrap();
+            scene.objects[i].ship.as_ref().unwrap().hunt.map(|h| h.step)
+        };
+        for _ in 0..20_000 {
+            scene.shoals_shown.insert(shoal, f32::MAX);
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            if step(&scene) == Some(6) {
+                break;
+            }
+        }
+        assert_eq!(step(&scene), Some(6));
+        let i = scene.object_index(boat).unwrap();
+        assert!(scene.task_busy(i));
+        scene
+            .apply(
+                &Order::Move {
+                    ship: boat,
+                    x: bx,
+                    y: by,
+                },
+                &data,
+                &mut caches,
+            )
+            .unwrap();
+        // A second order of the tick goes with it.
+        scene
+            .apply(
+                &Order::Gather {
+                    ship: boat,
+                    deposit: shoal,
+                    port: 0,
+                },
+                &data,
+                &mut caches,
+            )
+            .unwrap();
+        let i = scene.object_index(boat).unwrap();
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        assert!(gathers(&scene, boat), "the move lost");
+        assert!(s.hunt.unwrap().called_off);
+        let mut steps = vec![6u8];
+        while gathers(&scene, boat) {
+            scene.shoals_shown.insert(shoal, f32::MAX);
+            scene.update(crate::clock::TICK, &data, &mut caches);
+            if let Some(h) = step(&scene).filter(|&h| steps.last() != Some(&h)) {
+                steps.push(h);
+            }
+        }
+        assert_eq!(steps, [6, 2, 5, 1]);
+        let i = scene.object_index(boat).unwrap();
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        assert!(s.cargo < 400.0);
+        assert!(!s.net_busy);
     }
 }

@@ -1626,10 +1626,13 @@ Every command reaches it through 0x4e2ba0 (the computers' too: 0x520cc0
 to the ship's message handler 0x4dc630, which calls 0x4e2ba0 at
 0x4dcf60), whose tests ask bits the held words (0x2000, 0, stone's)
 lack, so a held ship refuses them there; the port's `being_built` skip
-stands for `+0x251 == 2`. Not ported: the events kept pending past the
-gate (a hold starting between a command's delivery and the ship's turn
-in the tick, the port running events at delivery; 0x4abe50's deferral),
-0x4bb126 (0x4bb22c:
+stands for `+0x251 == 2`. 0x4abe50 (the busy task's orders lost, not
+deferred) is ported: see "One event a tick". Not ported: the events
+kept pending past the gate (a hold starting between a command's
+delivery and the ship's turn in the tick, by an object earlier in the
+Sapp's walk 0x542270, whose places are not decoded; the port runs events
+at delivery, and every hold it has refuses the group's commands at
+0x4e2ba0, so none waits there), 0x4bb126 (0x4bb22c:
 bit 12 in 0x4bad90's square for a reach of 4 and over, which no caller
 asks), the mover 0x4a3f40's 0x4a4bf5 (a word nonzero saved into `+0x698`
 by 0x4b37d0 with 0x2000, `+0x25d |= 0x10`), the pointer helpers of the
@@ -5536,9 +5539,34 @@ zeroed, one whose target is gone, allied or out of 0x4abf60 is kept;
 running task is busy (0x20 with `+0x739`, 0x40 `+0x77b`, 0x10 `+0x6a0`,
 0x80 `+0x58b`, 0x100 `+0x5e2`), the pending group (or, with none, the
 code kept in `+0x265`) goes on and the tasks 0x10-0x80 are cleared from
-`+0x25d`; else the first pending of 0x20, 0x40, 0x10, 0x100, 0x80 is kept
-in `+0x265`, 0x4abc60 winds the current task down and the pending group
-is dropped (`+0x265` zeroed again if anything else is pending).
+`+0x25d` (`&= 0xffffff0f`, 0x4abf41); else the first pending of 0x20,
+0x40, 0x10, 0x100, 0x80 is kept in `+0x265`, 0x4abc60 winds the current
+task down, `+0x265` is zeroed again when `+0x7d6` is not 0 (0x4abf00:
+the whole word, reloaded after the call) and the group is dropped (`&=
+0xfffffe0f`). With an event of the group pending `+0x7d6` is not 0
+(0x4abc60 and its callees 0x4c1950, 0x4a3800, 0x4b93f0, 0x4a6330 do not
+write it; only 0x4abe50 writes `+0x265` nonzero, 0x4aa540 and others
+zero it), so the busy ship's orders are lost, not deferred, and the
+restore at 0x4abf2d-0x4abf3b never finds a code. 0x4abe00 still runs
+after (with the fire task on). No instruction writes `+0x739`, `+0x58b`
+or `+0x5e2` (the listing's only references are 0x4abe50's reads; the
+route block's zeroing aside), so those never make a task busy. `+0x77b`
+is the fish gather's (0x4ae760: 0 at step 1 0x4ae7b6, step 2 without a
+take or called off 0x4ae9d1, step 5 0x4aeb3a; 1 at step 2 with a take
+0x4ae8f4 and step 6 0x4ae9e6), never reset by 0x4aab00, so a haul that
+ends full at step 6 leaves it set and the ship's next 0x40 task is busy
+until a fish step clears it. `+0x6a0` is the 0x10 task's: 1 from the
+hook's throw (0x4b5ed0, 0x4b741f with `+0x6a9 = 7`; 0x4b6081, 0x4b7519)
+or the rammer's contact (0x4c2335, 0x4c2649), 0 at 0x4aa8ee (0x4aa840),
+0x4b6ba7, 0x4b7e38, 0x4c24c2, 0x4c3fcc. The port (`Scene::task_busy`,
+`Ship::net_busy`, `a_casting_boats_order_is_lost` on miss000: a move
+to a boat casting at step 6 is lost with the tick's gather, the gather
+called off, steps 6, 2, 5, 1 and the end under full; sailing there the
+move runs): the 0x40 byte for the fish gather and the leviathan hunt.
+Not ported: `+0x6a0` (the port's hook-out and charge stages not mapped
+to its writes; the wind-down by `+0x6a9`), a `+0x77b` left set under the
+amber gather, the treasure take or the unload, and a refused event's
+old task, which the port keeps though 0x4abe50 took its bit off.
 
 **When a command arrives** (Players.cpp; decompiles of 0x520cc0,
 0x51fe20, 0x521570, 0x5228c0, 0x542390, 0x51f250, 0x541f70). 0x520cc0
@@ -5589,8 +5617,8 @@ group and goes with any order of it in the batch; a stop drops the
 batch's. Not ported: the hold after loading a save (`+0x3e` is the
 Players object's; whether a load rebuilds it was not read) and after a
 change of speed; the ship's pending events are run at delivery, not at
-its own turn in the tick; 0x4abe50's deferral of a busy task (the port
-has no busy marks); 0x4abe00, 0x4aa290 / 0x4aa2a0 not read; `+0x251 ==
+its own turn in the tick; 0x4abe50's busy task for the 0x10 group
+(`+0x6a0`, see above); 0x4abe00, 0x4aa290 / 0x4aa2a0 not read; `+0x251 ==
 1` not identified; a fire at a target (0x15, kind 1: the port's forts
 only); the commands still given at once: the computers' founding (its
 answer decides their move), treasure hunts (a refused one tries the
@@ -11172,7 +11200,7 @@ record's position alike with state 1, the others in 3 to 1. `+0x25d &
 0x100` (the fire task) is set only at 0x4aa7b8, 0x4ab580 and 0x4abdf2,
 cleared only at 0x4aa799 and 0x4abdd2. 0x4abc60's callers: the stop
 0x4aa540 (mask 0 at 0x4aa570, other bits left at 0x4aa7f5), 0x4abe50's
-deferral (0x4abefb) and the rammer's sail (0x4c2fee); 0x4aa540 with
+busy branch (0x4abefb) and the rammer's sail (0x4c2fee); 0x4aa540 with
 0x100 in its mask (0x4c09c0's 0x180) runs the same fire part alone.
 0x4ac5d0 sets positions 0 and 1 to its object (class 0x192), its second
 caller (0x4acf0f) all three first. Ported (`Ship::fire_wind_down`,
@@ -11183,7 +11211,7 @@ caller (0x4acf0f) all three first. Ported (`Ship::fire_wind_down`,
 (`one_event_a_tick`, once a batch), the hunt's 0x4acc61, and the fire
 pass's own writes (0x4c1240's 3, 0x4c09c0's 1 in reach; below). Not
 ported: kind 1 and 2 records (the port's ships take no
-0x15); 0x4abe50's deferral; the hunt's second site (0x4acf3a, the
+0x15); 0x4abe50's busy branch for the 0x10 task (`+0x6a0`); the hunt's second site (0x4acf3a, the
 port's hunt has one). 0x4d60c0's cases on it are ported (`ha_retarget`).
 
 **The fire pass's reach and ready mask** (`scene::fire_pass`). A ship's
