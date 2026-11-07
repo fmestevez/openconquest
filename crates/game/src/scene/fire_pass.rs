@@ -737,13 +737,16 @@ impl Scene {
 
     /// The gate of the ship's tick to 0x4c1240 (0x4abb39-0x4abb99): every
     /// fourth tick (`(now ^ id) & 3 == 0`), a ship that may fire (0x4e6700
-    /// 0x15: capability `+0x261 & 0x800`, armed, not limed `+0x258`) or
-    /// (type above 1) is a royal ship, rammer or ship killer (0x597a30) or
-    /// carries a hero who fights (0x4e66c0, 0x4b4dd0), with the fire task
-    /// (`+0x25d & 0x100`) or a switch of guard, ram, board (`+0x684`) on,
-    /// afloat (`+0x251 == 0`) and under no status (`+0x25c`: the siren's
-    /// song); then 0x4bf9b0 (`ready_mask`), its mask not 0.
-    fn fire_gate(&mut self, i: usize) -> Option<Ready> {
+    /// 0x15: capability `+0x261 & 0x800` as `Scene::capabilities` has it,
+    /// armed, not limed `+0x258`) or (type above 1, 0x4abb59) with its ram
+    /// or board switch on (0x4e66c0: `+0x684 & 6`) is a royal ship, rammer
+    /// or ship killer (0x597a30) or carries a hero who fights (0x4b4dd0),
+    /// with the fire task (`+0x25d & 0x100`) or a switch of guard, ram,
+    /// board (`+0x684`) on, afloat (`+0x251 == 0`) and under no status
+    /// (`+0x25c`: the siren's song); then 0x4bf9b0 (`ready_mask`), its mask
+    /// not 0. Types 0 and 1 lack bit 11 (0x4e6930) and pass neither way:
+    /// boats and merchants never fire, at will, on guard or on an order.
+    pub(super) fn fire_gate(&mut self, i: usize) -> Option<Ready> {
         let now = self.ticks;
         let id = self.objects[i].id;
         if (now ^ id) & 3 != 0 || self.being_built(id) {
@@ -755,14 +758,14 @@ impl Scene {
         if c.hull <= 0.0 || self.charmed.contains_key(&id) {
             return None;
         }
-        let held = self.hunt_holds(id) || self.landing_holds(id);
-        let fires = !held && o.is_armed() && c.lime <= 0.0;
+        let fires = self.capabilities(i) & 0x800 != 0 && o.is_armed() && c.lime <= 0.0;
+        let b = s.behaviour;
         let fights = s.kind > 1
+            && (b.ram || b.board)
             && (matches!(s.kind, 2 | 5 | 6) || s.heroes.iter().any(|&h| h != objects::ORPHEUS));
         if !fires && !fights {
             return None;
         }
-        let b = s.behaviour;
         if !s.firing && !(b.guard || b.ram || b.board) {
             return None;
         }

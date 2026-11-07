@@ -1575,7 +1575,23 @@ LoadCrew) keep the hold tests (not decoded: what of the original stands
 for them); `Scene::stop` and the Stop's tick clear on bit 13;
 `order_move` and `go_to_cell` (event 0x80) on bit 10 (the song's own
 move is the charm's, `creatures.rs`); `may_fire` and `may_close` for
-the pointer. Other readers, not ported: 0x4ab720 at 0x4ab7ef (`& 0x1f0`
+the pointer. The tick's fire gate (0x4abb4b: 0x4e6700(0x15, 0)) reads
+it too, so boats and merchants (types 0 and 1, bit 11 cleared by
+0x4e6930: `mov eax, 0xfffff7ff` at 0x4e6951 by the index bytes 0x4e6968
+`00 00 01 ...`, 0xfffffeff for 2-11, the type byte `+0x25a` from record
+field 7) never fire: no fire at will, guard or aggressor, as the other
+way, 0x4e66c0, is tried only for a type above 1 (0x4abb59 `cmp byte
+[esi+0x25a], 1; jbe`) and wants the ram or board switch (`+0x684 & 6`,
+0x4e66c6) before 0x597a30 (types 2, 5, 6) or a hero; their page
+0x4e6e90 has no fire button. Nothing gives a boat or merchant bit 11
+back but 0x4bbfa0 (`+0x275` set: 0xffffffff, at a boarded ship's state
+6 end, 0x4c3c58; not ported); every other writer masks with 0x4e6930,
+saves the word or sets bits 10, 12, 13, 14 only. miss001's one human
+ship is the boat carried from miss000 (`list_treasures`, record field 8
+masked again by 0x4dfa90); its records' two ships (types 2 and 5, field
+16 = 8) are the barbarians'. The port's `fire_gate` tests
+`Scene::capabilities & 0x800` and the ram / board switch so
+(`boats_and_merchants_never_fire`). Other readers, not ported: 0x4ab720 at 0x4ab7ef (`& 0x1f0`
 with events pending or `+0x265` deferred and `+0x251` neither 1 nor 2, else none but the song's (kind 0x17 with `+0x25c`), the port keeping the `+0x251 == 2` skip (`being_built`) in `carry_out`; not ported:
 0x4abe50's deferral), 0x4aa990 (0x4aa99e, 0x4aa9af: bits 1 and 0 again
 at the event), 0x4aab00 (0x4aacb6-0x4aacde: bits 5, 6, 7 again by class),

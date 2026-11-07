@@ -1448,6 +1448,7 @@ mod tests {
             o.y = c.1 as f32 * t + t / 2.0;
             let s = o.ship.as_mut().unwrap();
             s.kind = 2;
+            s.caps = crate::objects::caps_mask(2);
             s.argo = false;
             s.move_state = 0;
         }
@@ -1540,6 +1541,7 @@ mod tests {
             o.y = cells[k].1 as f32 * t + t / 2.0;
             let s = o.ship.as_mut().unwrap();
             s.kind = 2;
+            s.caps = crate::objects::caps_mask(2);
             s.argo = false;
             s.move_state = 0;
         }

@@ -208,6 +208,7 @@ fn shipyard_berth_and_queue_follow_the_original() {
     {
         let s = scene.objects[k].ship.as_mut().unwrap();
         s.kind = 1;
+        s.caps = crate::objects::caps_mask(1);
         let b = s.build.as_mut().unwrap();
         b.frame = if heading == 6 { 40 } else { 0 };
         b.since = 8;
@@ -299,6 +300,7 @@ fn warship_sinks_enemy() {
     let (x, y) = (scene.objects[mine].x, scene.objects[mine].y);
     let ship = scene.objects[mine].ship.as_mut().unwrap();
     ship.kind = 2;
+    ship.caps = objects::caps_mask(2);
     let c = scene.objects[mine].combat.as_mut().unwrap();
     c.weapons = combat::DEFAULT_WEAPONS[2].to_vec();
     c.max_hull = combat::hull_strength(2);
@@ -1885,6 +1887,7 @@ fn behaviours() {
         c.hull = 100_000.0;
         let s = scene.objects[i].ship.as_mut().unwrap();
         s.kind = 5;
+        s.caps = crate::objects::caps_mask(5);
         s.path.clear();
         s.task = None;
     }
@@ -2084,6 +2087,7 @@ fn at_will_timers() {
     let m = scene.object_index(mine).unwrap();
     let s = scene.objects[m].ship.as_mut().unwrap();
     s.kind = 5;
+    s.caps = crate::objects::caps_mask(5);
     s.behaviour.fire_state = 4;
     let wait = |s: &Scene| s.objects[m].ship.as_ref().unwrap().ram_wait;
     // The first tick past 50 whose low bits are the id's.
@@ -2123,6 +2127,7 @@ fn ready_mask_as_0x4bf9b0() {
     scene.objects[m].combat.as_mut().unwrap().weapons = vec![3, 6];
     let s = scene.objects[m].ship.as_mut().unwrap();
     s.kind = 4;
+    s.caps = crate::objects::caps_mask(4);
     s.crew.squads = [1, 0, 0];
     s.behaviour = Default::default();
     s.fire_times = [0; 12];
@@ -2200,6 +2205,7 @@ fn fire_state_writers() {
         c.weapons = vec![4, 4];
         let s = scene.objects[m].ship.as_mut().unwrap();
         s.kind = 3;
+        s.caps = crate::objects::caps_mask(3);
         s.crew.squads = [0; 3];
     }
     let ship = |s: &Scene| s.objects[m].ship.clone().unwrap();
@@ -2390,6 +2396,7 @@ fn ship_behaviour_masks() {
         c.hull = 100_000.0;
         let s = scene.objects[i].ship.as_mut().unwrap();
         s.kind = 3;
+        s.caps = crate::objects::caps_mask(3);
         s.path.clear();
         s.task = None;
         s.behaviour.ram = false;
@@ -2855,7 +2862,9 @@ fn zones() {
     let mine = scene
         .objects
         .iter()
-        .find(|o| scene.is_own(o) && o.ship.is_some())
+        .find(|o| {
+            scene.is_own(o) && o.ship.is_some() && o.ship.as_ref().is_some_and(|s| s.kind >= 2)
+        })
         .unwrap()
         .id;
     let enemy = scene
@@ -4088,6 +4097,7 @@ fn crews_under_fire() {
     // (0x4bf9b0 reads 11 items for them, 9 for the others); quick lime has
     // power only on a type 9 (0x4bc360).
     scene.objects[m].ship.as_mut().unwrap().kind = 9;
+    scene.objects[m].ship.as_mut().unwrap().caps = crate::objects::caps_mask(9);
     let e = scene.object_index(enemy).unwrap();
     scene.objects[e].owner = Some((1, (human.slot + 1) % 4));
     scene.objects[e].x = mx + 100.0;
@@ -4741,6 +4751,7 @@ fn miss001_parchment_held_by_masks() {
         .unwrap();
     let s = scene.objects[ship].ship.as_mut().unwrap();
     s.kind = 11;
+    s.caps = crate::objects::caps_mask(11);
     s.treasures.push(scroll);
     assert!(scene.goal_met(Goal::Kept(27)));
     assert!(!scene.goal_met(Goal::Aboard(27)));
@@ -6747,6 +6758,7 @@ fn boarding_pair(scene: &mut Scene, dx: i32, dy: i32) -> (u32, u32, (i32, i32)) 
         s.task = None;
         s.heading = 0;
         s.kind = kind;
+        s.caps = objects::caps_mask(kind);
         s.crew = combat::Crew {
             class: 2,
             squads: [0, 0, crew],
@@ -7295,6 +7307,7 @@ fn rammer_looks_and_picks_its_goal() {
     (o.x, o.y) = (mx + t, my - t + 8.0);
     let s = o.ship.as_mut().unwrap();
     s.kind = 4;
+    s.caps = crate::objects::caps_mask(4);
     s.heading = 6;
     s.move_state = 5;
     s.between.set(true);
@@ -9130,6 +9143,10 @@ fn an_attack_at_ruins_is_taken_and_dropped() {
         .id;
     let s = scene.object_index(ship).unwrap();
     scene.objects[s].combat.as_mut().unwrap().weapons = vec![4; 2];
+    // A warship: types 0 and 1 lack the fire bit 11 (0x4e6930).
+    let sh = scene.objects[s].ship.as_mut().unwrap();
+    sh.kind = 4;
+    sh.caps = crate::objects::caps_mask(4);
     let (enemy, owner) = scene
         .objects
         .iter()
@@ -9368,7 +9385,12 @@ fn attacks_end_at_ruins() {
     let ship = scene
         .objects
         .iter()
-        .find(|o| scene.is_own(o) && o.ship.is_some() && o.is_armed())
+        .find(|o| {
+            scene.is_own(o)
+                && o.ship.is_some()
+                && o.is_armed()
+                && o.ship.as_ref().is_some_and(|s| s.kind >= 2)
+        })
         .unwrap()
         .id;
     scene.order_attack(ship, target).unwrap();
@@ -9456,6 +9478,7 @@ fn units_wear_and_move_with_their_condition() {
         let o = &mut scene.objects[k];
         let s = o.ship.as_mut().unwrap();
         s.kind = 3;
+        s.caps = crate::objects::caps_mask(3);
         (s.armour, s.ram) = (0, 0);
         s.crew.squads = [0, 0, 2];
         s.conditions = Default::default();
@@ -9973,6 +9996,7 @@ fn fleece_and_argus_mend_in_steps() {
         let o = &mut scene.objects[k];
         let s = o.ship.as_mut().unwrap();
         s.kind = 2;
+        s.caps = crate::objects::caps_mask(2);
         s.heroes = vec![5];
         s.treasures = vec![crate::objects::Treasure {
             kind: 16,
@@ -10308,6 +10332,7 @@ fn a_blow_slows_the_way_till_the_next_step() {
     (o.x, o.y) = middle(cell);
     let s = o.ship.as_mut().unwrap();
     s.kind = 0;
+    s.caps = crate::objects::caps_mask(0);
     s.armour = 1;
     (s.heading, s.rotation, s.task) = (0, None, None);
     (s.way, s.way_rest, s.brake, s.ahead) = (0, 0, 0, None);
@@ -10405,6 +10430,7 @@ fn a_refused_look_ahead_counts_the_wait() {
     (o.x, o.y) = middle(cell);
     let s = o.ship.as_mut().unwrap();
     s.kind = 0;
+    s.caps = crate::objects::caps_mask(0);
     (s.heading, s.rotation, s.task) = (0, None, None);
     (s.way, s.way_rest, s.brake, s.ahead) = (0, 0, 0, None);
     s.move_state = 3;
@@ -18758,6 +18784,7 @@ fn ships_sold_at_a_dock() {
         let o = &mut scene.objects[k];
         let s = o.ship.as_mut().unwrap();
         s.kind = 0;
+        s.caps = crate::objects::caps_mask(0);
         s.crew.squads = [1, 0, 0];
         s.conditions = Default::default();
         s.conditions[0] = vec![80];
@@ -20521,4 +20548,56 @@ fn commands_are_refused_on_the_word() {
     scene.objects[i].ship.as_mut().unwrap().caps = 0xffff_feff & !0x2000;
     scene.stop(id);
     assert_eq!(scene.objects[i].ship.as_ref().unwrap().path.len(), 1);
+}
+
+/// Boats and merchants (types 0 and 1) never fire (needs
+/// `OPENCONQUEST_DATA`): 0x4e6930 leaves them without bit 11, so the
+/// command handler drops their attack (0x4e6700 0x15), their page
+/// (0x4e6e90) has no fire button, and the tick's fire gate (0x4abb50)
+/// fails 0x4e6700 0x15 and, being of type 1 or below, never tries
+/// 0x4e66c0 (0x4abb59): no fire at will or on guard. miss001's one ship
+/// of the player's is the boat carried from miss000 (record field 8
+/// masked again by 0x4dfa90).
+#[test]
+fn boats_and_merchants_never_fire() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    past_hold(&mut scene);
+    scene.brain = None;
+    let boats: Vec<usize> = (0..scene.objects.len())
+        .filter(|&i| {
+            let o = &scene.objects[i];
+            scene.is_own(o) && o.is_armed() && o.ship.as_ref().is_some_and(|s| s.kind <= 1)
+        })
+        .collect();
+    assert!(!boats.is_empty());
+    for &i in &boats {
+        assert_eq!(scene.capabilities(i) & 0x800, 0);
+        let menu = crate::commands::main_menu(&scene, &scene.objects[i]);
+        assert!(menu
+            .iter()
+            .flatten()
+            .all(|b| b.command != crate::commands::Command::FIRE));
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.firing = true;
+        s.behaviour.guard = true;
+        s.behaviour.ram = true;
+        s.behaviour.board = true;
+        s.behaviour.fire_state = 1;
+        s.fire_times = [0; 12];
+        let gate = |scene: &mut Scene| {
+            (0..4).any(|k| {
+                scene.ticks = 1000 + k;
+                scene.fire_gate(i).is_some()
+            })
+        };
+        assert!(!gate(&mut scene));
+        // With bit 11 its weapons would be ready on guard.
+        scene.objects[i].ship.as_mut().unwrap().caps |= 0x800;
+        assert!(gate(&mut scene));
+    }
 }
