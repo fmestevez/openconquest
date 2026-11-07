@@ -16325,8 +16325,8 @@ fn brain_fleet_moves_in_formation() {
     let want = [
         (62, (47, 41)),
         (63, (44, 39)),
-        (64, (45, 41)),
         (65, (43, 41)),
+        (64, (45, 41)),
         (66, (45, 42)),
     ];
     assert_eq!(order.slots, want);
@@ -21293,7 +21293,7 @@ fn the_raiders_take_their_cells_ships_by_type() {
     let mut caches = Caches::default();
     for (m, k, ids) in [
         ("miss009", 4, &[19, 20, 21, 22, 23, 24, 25, 26][..]),
-        ("miss009", 6, &[62, 63, 64, 65, 66][..]),
+        ("miss009", 6, &[62, 63, 65, 64, 66][..]),
         ("miss010", 4, &[7, 6, 8, 9, 10, 11][..]),
     ] {
         let mut scene = Scene::load(&data, &mut caches, m).unwrap();
@@ -21316,4 +21316,69 @@ fn the_raiders_take_their_cells_ships_by_type() {
             "{m} {k}"
         );
     }
+}
+
+/// The members' starting objects (0x479200 -> 0x4a0480 op 8): a fleet's
+/// by 0x49c830 (its player's ships of its types and forts, the areas
+/// row by row), a builder's by 0x49c710 (its player's buildings of its
+/// classes, 0x4c4b30).
+#[test]
+fn the_members_take_their_cells_objects_row_by_row() {
+    use super::brain::building_of_classes;
+    // 0x4c4b30: forts by any of 0x1c, barbarians by any of 0xe000.
+    let pass: Vec<u32> = (0x30..0x4c)
+        .filter(|&c| building_of_classes(c, 0x1fff))
+        .collect();
+    assert_eq!(pass, (0x32..=0x3e).collect::<Vec<_>>());
+    let pass: Vec<u32> = (0x30..0x4c)
+        .filter(|&c| building_of_classes(c, 0x4000))
+        .collect();
+    assert_eq!(pass, [0x3f, 0x40, 0x41]);
+    assert!(building_of_classes(0x36, 0x10) && !building_of_classes(0x33, 0x1c));
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let restart = |scene: &mut Scene, caches: &mut Caches| {
+        let difficulty = scene.brain.as_ref().unwrap().difficulty;
+        scene.brain = None;
+        scene.start_brain(&data, caches, difficulty);
+    };
+    let ships = |scene: &Scene, k: usize| scene.brain.as_ref().unwrap().fleets[k].ships.clone();
+    // Row by row: miss010's (1, 8) area (19, 6, 6, 6), miss013's (2, 5)
+    // (38, 65, 3, 2).
+    let scene = Scene::load(&data, &mut caches, "miss010").unwrap();
+    assert_eq!(ships(&scene, 16), [58, 61, 59, 64, 96, 62, 63, 60, 65]);
+    let mut scene = Scene::load(&data, &mut caches, "miss013").unwrap();
+    assert_eq!(ships(&scene, 16), [150, 146, 148, 147, 149]);
+    // Another player's ship stays out.
+    let i = scene.object_index(150).unwrap();
+    scene.objects[i].owner = Some((3, 3));
+    restart(&mut scene, &mut caches);
+    assert_eq!(ships(&scene, 16), [146, 148, 147, 149]);
+    // miss010's (1, 0), forts only (0x1c), takes its small fortress 15 but
+    // not as a town; (1, 1), 0x1fff, takes its settlement 23.
+    let mut scene = Scene::load(&data, &mut caches, "miss010").unwrap();
+    assert_eq!((ships(&scene, 8), ships(&scene, 9)), (vec![15], vec![23]));
+    let i = scene.object_index(15).unwrap();
+    scene.objects[i].class = ObjectClass::Building(0x33);
+    restart(&mut scene, &mut caches);
+    assert!(ships(&scene, 8).is_empty());
+    // The barbarians' builders (0xe000) take their structures, not a town.
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    assert_eq!(ships(&scene, 0), [7, 6]);
+    let i = scene.object_index(6).unwrap();
+    scene.objects[i].class = ObjectClass::Building(0x33);
+    restart(&mut scene, &mut caches);
+    assert_eq!(ships(&scene, 0), [7]);
+    // A fleet takes its player's fort in its cells: miss007's (0, 11)
+    // area holds the big fortress 1, the human's; made the barbarians'
+    // it joins the fleet.
+    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
+    assert!(!ships(&scene, 11).contains(&1));
+    let i = scene.object_index(1).unwrap();
+    scene.objects[i].owner = Some((4, 0));
+    restart(&mut scene, &mut caches);
+    assert!(ships(&scene, 11).contains(&1));
 }

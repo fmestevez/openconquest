@@ -3482,14 +3482,57 @@ flags of the 0x479200 calls: 0xfff (every type) for every other kind-10
 member with cells, 0x1c (2, 3, 4) for miss004's caseless (0, 7), (2, 5)
 (0x454304, 0x454412; the port makes no fleet for them), 0 for MissWEB's
 member 3 (0x47cfc7); a kind-11 member's cells go to 0x49c710 with
-`param_5` instead. 0x49c830's other tests on a ship (class 200): its
-player (`+0x55 + 4 * +0x54`), not already of the group (`+0x5c`), the
-cell not its `+0x5ab`, and `+0x251` not 4. On the real data every ship
-in these members' cells passes (miss009 (0, 4): ids 19-26, (0, 6): 62-66;
-miss010 (0, 4): 6-11, all types 2, 3, 5, 6). Ported: `cell_types`,
-`ship_of_types` (`scene/brain.rs`, `start_brain`). Not ported: 0x49c830's
-`+0x5ab` and `+0x251` tests and its kind-0x32 buildings (classes 0x34-0x36)
-for kind-10 members; 0x49c710's test of the builders' cells. **The human's guard zone** (behaviour page
+`param_5` instead.
+**The members' starting objects** (0x479200 -> 0x4a0480 op 8, one call
+for each area: record `[0]` player, `[1]` the fleet id 0x4a0480 op 1
+gave, `[2..5]` the area, `[6]` the cell mask, never set by 0x479200 so
+every cell is read, `[7]` the types, `[8]` the classes). A kind-10
+member's go to 0x49c830, a kind-11's to 0x49c710 with its list
+(`+0x29`). Both move an area of negative width or height to its other
+corner, then walk it row by row, x within y, reading each cell's object
+(`+0xc` of the map's 0x18-byte cell records, `DAT_005c74fc`, row width
+`DAT_005c74ec`), and take only objects of the record's player
+(`+0x55 + 4 x +0x54`). **0x49c830**: an object not of this fleet
+already (`+0x5c`, the fleet id); of family 0x32 (0x50e600: classes
+0x32-0x4a) only the forts 0x34-0x36 (`1 << (class - 0x32) & 0x1c`),
+with no type test; of family 200 a ship whose `+0x5ab` (the cell it is
+going into, `Ship::under_way_into`) is not this cell, passing 0x4e5970
+with `[7]`, `+0x251` not 4 (sunk). It is added by 0x49bd60(obj, fleet):
+taken out of its old fleet first (0x49bef0, when its `+0x5c` is set),
+its `+0x5c` set, message 0x29 `{1, fleet, 0}` to it (0x520cc0), and,
+when that took, notice 300 to the fleet (0x4a1340); when the player is
+the navy's `+0x21`, the fleet is the navy's `+0xc2 + 4p` instead of the
+record's. **0x49c710**: a family-0x32 building passing 0x4c4b30(obj,
+`[8]`), added to the list by 0x42c390 (once by id `+0x4c`; only objects
+whose `+4` is 0x1491, 0x1a6b or 0x1494). **0x4c4b30** on the class
+`+0x50`: bit `class - 0x32` for 0x32, 0x33, 0x37-0x3e; any of 0x1c for
+0x34-0x36; any of 0xe000 for the barbarians' 0x3f-0x41; else 0. The
+kind-11 calls with cells pass 0xe000 for the barbarians' builders
+(member 0 of group 0 in miss001, miss002, miss005-miss013, of group 1
+in miss003 0x450875, miss004 0x454467; group 0's members 1-5 in
+miss007 0x46016d-0x460299, 1-3 in miss008, miss009, miss010, 4 in
+miss011 0x46f088), 0x1c for miss010 (1, 0) (0x46adb2: its small
+fortress 15), 0x4000 for MissWEB (0, 0) (0x47cdf6), 0x1fff for every
+other. On the real data every builder keeps what it held (the
+barbarians' structures, the nations' towns, settlements and forts) and
+no fleet's cells hold a fort of its player (miss007 (0, 11)'s big
+fortress 1 is the human's), but the fleets' ships now come in the
+cells' row order (miss009 (0, 6): 62, 63, 65, 64, 66). miss004's
+caseless (0, 7) (cells (8, 2), (10, 8), (7, 13)) and (2, 5) ((7, 22),
+(7, 27)) hold only their players' small fortresses 44, 59, 45 and 77,
+78, which 0x49c830 takes into those fleets, never run; the port makes
+no fleet for them (adding members would move every later fleet's index
+in the saves), so those forts are in no member. Ported: `cell_types`,
+`cell_classes`, `ship_of_types`, `building_of_classes`
+(`scene/brain.rs`, `start_brain`); the test
+`the_members_take_their_cells_objects_row_by_row`. Not ported: the
+navy's `+0x21` fleet (no brain group is the human's); 0x42c390's tag
+test (`+4`, not decoded which objects carry 0x1491, 0x1a6b, 0x1494);
+which cells of a building's footprint hold it at `+0xc` (not decoded:
+the port reads the building's anchor cell); the fort's message 0x29 and
+`+0x5c` / `+0x60` (the forts of miss004's caseless members).
+`+0x251` 4 is not tested: `start_brain` runs at the mission's load,
+where no ship sinks. **The human's guard zone** (behaviour page
 slot 9, command 0x74: 0x4f34c0 sets the drag's message 0x23 sub 9,
 as 0x75 sub 10) is 0x49d790 case 9: fourteen dwords zeroed,
 `[0..3]` the payload's rect `{x, y, w, h}` (shorts at `+1`, `+5`), no

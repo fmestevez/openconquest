@@ -12,6 +12,7 @@ use openconquest_formats::map::TILE_SIZE;
 use super::Scene;
 use crate::assets::GameData;
 use crate::objects::{Caches, Resource};
+use openconquest_formats::ObjectClass;
 
 /// A rectangle of map cells: x, y, width, height.
 pub type Cells = (i32, i32, i32, i32);
@@ -827,13 +828,76 @@ pub(super) type GroupPlayer = Option<(u32, u32)>;
 /// 0x46734e) and miss010 (0, 4) (0x46ad0b) pass 0x6e (types 1, 2, 3, 5,
 /// 6: no boats, boarders or the nations' own ships), miss004's members
 /// with no case (0, 7), (2, 5) (calls 0x454304, 0x454412) 0x1c (the port
-/// makes no fleet for them), MissWEB's member 3 (0x47cfc7) 0, every other
-/// kind-10 member 0xfff (all twelve types); the builders' (kind 11) cells
-/// go to 0x49c710 instead (not read here: they keep every ship).
+/// makes no fleet for them: their cells hold only their players' small
+/// fortresses, 44, 59, 45 and 77, 78, which 0x49c830 takes into them),
+/// MissWEB's member 3 (0x47cfc7) 0, every other kind-10 member 0xfff (all
+/// twelve types); the builders' (kind 11) cells go to 0x49c710 instead
+/// (`cell_classes`).
 fn cell_types(name: &str, g: u8, m: u8) -> u32 {
     match (name, g, m) {
         ("miss009", 0, 4 | 6) | ("miss010", 0, 4) => 0x6e,
         _ => 0xfff,
+    }
+}
+
+/// The building classes a builder (kind 11) member `(g, m)` takes from
+/// its cells: 0x479200's `param_5`, op 8's record `[8]`, which 0x4a0480
+/// hands to 0x49c710 as the test 0x4c4b30(building, classes). Of the
+/// kind-11 calls with cells, the barbarians' builders pass 0xe000 (their
+/// structures 0x3f-0x41): member 0 of group 0 in miss001, miss002 and
+/// miss005-miss013 (0x44b3e9, 0x44d695, 0x457f6a, 0x45baf9, 0x460104,
+/// 0x463aa7, 0x4671cb, 0x46ac23, 0x46efab, 0x47366f, 0x477fe3) and of
+/// group 1 in miss003, miss004 (0x450875, 0x454467), group 0's members 1-5 in miss007
+/// (0x46016d-0x460299), 1-3 in miss008 (0x463b10-0x463ba7), miss009
+/// (0x467234-0x4672ca) and miss010 (0x46ac7b-0x46acf9), 4 in miss011
+/// (0x46f088); miss010 (1, 0) 0x1c (forts, 0x46adb2); every other
+/// builder 0x1fff (the nations' buildings 0x32-0x3e: miss002 (1, 7)
+/// 0x44d7b0, miss003 (0, 3) 0x4507db, miss004 (0, 5), (2, 3) 0x454274,
+/// 0x4543a2, miss008 (1, 0-2) 0x463cda-0x463d6f, miss010 (1, 1), (1, 2)
+/// 0x46ae0c, 0x46ae47, group 1's member 0 in miss005-miss013 but miss010
+/// (0x457ff1, 0x45bb80, 0x46039c, 0x4673d9, 0x46f1ed, 0x473771,
+/// 0x4780bd), group 2's in miss006, miss012, miss013 (0x45bc5e, 0x4738c7,
+/// 0x4781e4)); MissWEB's (0, 0) 0x4000 (0x47cdf6), its (1, 5) 0x1fff
+/// (0x47d01d). None for a fleet (kind 10, 0x49c830) or a member without
+/// cells.
+fn cell_classes(name: &str, g: u8, m: u8) -> Option<u32> {
+    match (name, g, m) {
+        ("miss010", 1, 0) => Some(0x1c),
+        ("miss002", 1, 7)
+        | ("miss003", 0, 3)
+        | ("miss004", 0, 5)
+        | ("miss004", 2, 3)
+        | ("miss008", 1, 0..=2)
+        | ("miss010", 1, 1 | 2) => Some(0x1fff),
+        ("miss003" | "miss004", 1, 0) => Some(0xe000),
+        (
+            "miss001" | "miss002" | "miss005" | "miss006" | "miss011" | "miss012" | "miss013",
+            0,
+            0,
+        )
+        | ("miss007", 0, 0..=5)
+        | ("miss008" | "miss009" | "miss010", 0, 0..=3)
+        | ("miss011", 0, 4) => Some(0xe000),
+        (
+            "miss005" | "miss006" | "miss007" | "miss009" | "miss011" | "miss012" | "miss013",
+            1,
+            0,
+        )
+        | ("miss006" | "miss012" | "miss013", 2, 0) => Some(0x1fff),
+        _ => None,
+    }
+}
+
+/// 0x4c4b30: whether a building of class `class` (`+0x50`, 0x50e600
+/// 0x32) is among `classes`: bit `class - 0x32` for 0x32, 0x33 and
+/// 0x37-0x3e, any of 0x1c for the forts 0x34-0x36, any of 0xe000 for the
+/// barbarians' 0x3f-0x41; other classes fail.
+pub(super) fn building_of_classes(class: u32, classes: u32) -> bool {
+    match class {
+        0x34..=0x36 => classes & 0x1c != 0,
+        0x3f..=0x41 => classes & 0xe000 != 0,
+        0x32..=0x3e => classes & 1 << (class - 0x32) != 0,
+        _ => false,
     }
 }
 
@@ -1071,33 +1135,73 @@ impl Scene {
             fields: [0; 8],
         };
         for def in m.fleets {
-            // The ships (or buildings) standing in the given cells (0x479200),
-            // a ship only of the member's types (0x49c830 -> 0x4e5970).
+            // The objects standing in the given cells (0x479200, op 8 of
+            // 0x4a0480 for each area): a fleet's (kind 10) by 0x49c830, a
+            // builder's (kind 11) by 0x49c710. Both walk an area row by row
+            // (an area of negative width or height first moved to its other
+            // corner), each cell's object (`+0xc` of its 0x18-byte record)
+            // of the group's player (`+0x55 + 4 x +0x54`). The record's
+            // cell mask `[6]` is never set by 0x479200, so every cell is read.
+            let player = group_player(&self.mission, def.group);
             let types = cell_types(&self.mission, def.group, def.member);
-            let ships: Vec<u32> = def
-                .cells
-                .iter()
-                .flat_map(|&(x, y, w, h)| {
-                    self.objects
-                        .iter()
-                        .filter(move |o| {
-                            let (cx, cy) = ((o.x / t) as i32, (o.y / t) as i32);
-                            o.combat.is_some()
+            let classes = cell_classes(&self.mission, def.group, def.member);
+            let mut ships: Vec<u32> = Vec::new();
+            for &(x, y, w, h) in def.cells {
+                let (x, w) = if w < 0 { (x + w, -w) } else { (x, w) };
+                let (y, h) = if h < 0 { (y + h, -h) } else { (y, h) };
+                for cy in y..y + h {
+                    for cx in x..x + w {
+                        for o in self.objects.iter().filter(|o| {
+                            ((o.x / t) as i32, (o.y / t) as i32) == (cx, cy)
                                 && o.owner.is_some()
-                                && cx >= x
-                                && cx < x + w
-                                && cy >= y
-                                && cy < y + h
-                                && o.ship
-                                    .as_ref()
-                                    .is_none_or(|s| ship_of_types(s.kind, s.argo, types))
-                        })
-                        .filter(|o| !self.is_own(o))
-                        .map(|o| o.id)
-                })
-                .collect();
+                                && o.owner == player
+                        }) {
+                            let take = match classes {
+                                // 0x49c710: a building (0x50e600 0x32) of
+                                // the classes (0x4c4b30), into the list
+                                // (0x42c390, once each).
+                                Some(classes) => match o.class {
+                                    ObjectClass::Building(c) | ObjectClass::Barbarian(c) => {
+                                        building_of_classes(c, classes)
+                                    }
+                                    _ => false,
+                                },
+                                // 0x49c830: a fort (0x34-0x36, bits 0x1c
+                                // from 0x32), whatever the types; a ship
+                                // (200) not on its way into this cell
+                                // (`+0x5ab`), of the types (0x4e5970) and
+                                // not sunk (`+0x251` 4: the brain starts
+                                // at the mission's load, no ship sinking).
+                                None => match o.class {
+                                    ObjectClass::Building(0x34..=0x36) => true,
+                                    ObjectClass::Ship => o.ship.as_ref().is_some_and(|s| {
+                                        s.under_way_into() != Some((cx, cy))
+                                            && ship_of_types(s.kind, s.argo, types)
+                                    }),
+                                    _ => false,
+                                },
+                            };
+                            if take && !ships.contains(&o.id) {
+                                ships.push(o.id);
+                            }
+                        }
+                    }
+                }
+            }
+            if classes.is_none() {
+                // 0x49bd60: an object already of another of its player's
+                // fleets leaves it (0x49bef0) for this one.
+                // A builder's list is not a fleet (no `+0x5c`): it keeps it.
+                for (f, d) in brain.fleets.iter_mut().zip(m.fleets) {
+                    if f.player == player
+                        && cell_classes(&self.mission, d.group, d.member).is_none()
+                    {
+                        f.ships.retain(|id| !ships.contains(id));
+                    }
+                }
+            }
             let mut f = Fleet::new(ships);
-            f.player = group_player(&self.mission, def.group);
+            f.player = player;
             brain.fleets.push(f);
         }
         self.brain = Some(brain);
