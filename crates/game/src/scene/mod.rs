@@ -655,6 +655,7 @@ mod human_attack;
 mod human_guard;
 mod order;
 mod placement;
+mod port_unload;
 mod script;
 mod seats;
 mod siren;
@@ -2867,6 +2868,7 @@ impl Scene {
             self.run_fire_pass(data, caches);
             self.run_landings(data, caches);
             self.run_amber(data, caches);
+            self.run_unloads();
             // The commands of this tick reach their objects at the start
             // of the next, before anything runs (0x51fe20: 0x521570,
             // 0x5228c0, then the tick 0x542390): delivered here, before

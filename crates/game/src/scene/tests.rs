@@ -1484,29 +1484,34 @@ fn merchant_gathers_amber() {
         )
         .unwrap();
     let amber = scene.amber;
-    let (mut partly, mut walkway, mut porters) = (false, false, false);
+    let (mut walkway, mut porters) = (false, false);
     let mut amber_walkway = false;
     for _ in 0..60 * 600 {
         scene.update(1.0 / 60.0, &data, &mut caches);
-        // Unloading takes a while: porters carry the goods in.
-        partly |= scene.amber > amber && scene.amber < amber + 400;
-        walkway |= scene
-            .planks
-            .iter()
-            .any(|p| p.activity == super::unload::Activity::Unloading);
-        amber_walkway |= scene.objects[scene.object_index(boat).unwrap()]
+        let s = scene.objects[scene.object_index(boat).unwrap()]
             .ship
             .as_ref()
-            .and_then(|s| s.landing.as_ref())
-            .is_some_and(|l| l.plank.is_some());
-        porters |= !scene.porters.is_empty();
+            .unwrap();
+        let unloading = matches!(
+            s.task,
+            Some(Task::Gather {
+                phase: crate::objects::GatherPhase::Unloading(_),
+                ..
+            })
+        );
+        let l = s.landing.as_ref();
+        amber_walkway |= !unloading && l.is_some_and(|l| l.plank.is_some());
+        walkway |= unloading && l.is_some_and(|l| l.plank.is_some());
+        porters |= unloading && l.is_some_and(|l| l.porters.is_some());
+        // Paid whole at the porters' last frame (0x4add10 -> 0x4ad9f0).
+        assert!(scene.amber == amber || scene.amber == amber + 480);
         if scene.amber >= amber + 400 {
             break;
         }
     }
     // 400 amber unloaded is worth 480 (0x4a8fa0: x 3 x 40%).
     assert_eq!(scene.amber, amber + 480, "one full boat load delivered");
-    assert!(partly && walkway && porters, "{partly} {walkway} {porters}");
+    assert!(walkway && porters, "{walkway} {porters}");
     assert!(amber_walkway, "a walkway to the amber while gathering");
     let left = scene.objects[scene.object_index(deposit).unwrap()]
         .deposit
@@ -13056,12 +13061,16 @@ fn town_orders_play_the_town_call() {
     assert!(!called(&mut scene, &TOWN_CALLS));
 }
 
-/// A merchant unloading at a port lies held, move state 6, each tick
-/// (0x4adef0 step 0x11); leaving, it lies still (0x4a5b70) and moves a
-/// cell off the berth with priority 91 (0x4b46f0 with '['), having
-/// handed its category-4 treasures to the port's town (0x4add10 ->
-/// 0x4ad9f0 -> 0x4bdc10 -> 0x441480): a pack unpacked into the stock, a
-/// barrel (category 2) kept (needs `OPENCONQUEST_DATA`).
+/// A merchant on a port's berth unloads by 0x4adef0's steps: the
+/// close-in 0x4afe50(1) (10), the furl (0xb), the walkway up a frame a
+/// tick (0x10), the porters' one round a frame a tick, held at move
+/// state 6 (0x11), the walkway down (0xe) and the back-out (0x13), the
+/// commands held from step 10 to the back-out's end. At the porters' last
+/// frame the goods are handed over (0x4add10 -> 0x4ad9f0): its 50 fish to
+/// its player, its category-4 treasures to the port's town (0x4bdc10 ->
+/// 0x441480: a pack unpacked into the stock, a barrel, category 2, kept).
+/// Leaving, it lies still (0x4a5b70) and moves a cell off the berth with
+/// priority 91 (0x4b46f0 with '[') (needs `OPENCONQUEST_DATA`).
 #[test]
 fn merchant_unloading_at_a_port_is_held() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -13106,7 +13115,7 @@ fn merchant_unloading_at_a_port_is_held() {
         s.move_state = 0;
         s.task = Some(Task::Gather {
             deposit: u32::MAX,
-            phase: crate::objects::GatherPhase::Unloading(port),
+            phase: crate::objects::GatherPhase::ToPort(port),
         });
         let tr = |kind, param, amount| crate::objects::Treasure {
             kind,
@@ -13117,24 +13126,58 @@ fn merchant_unloading_at_a_port_is_held() {
     }
     let town = scene.home_settlement(p).expect("the port's town");
     let garrison = scene.garrison(town)[2];
-    scene.update(crate::clock::TICK, &data, &mut caches);
-    let k = scene.object_index(id).unwrap();
-    let s = scene.objects[k].ship.as_ref().unwrap();
-    assert_eq!(s.move_state, 6);
+    let fish_of = |scene: &Scene| match scene.human {
+        Some(h) if Some((h.nation, h.slot)) == owner => scene.fish,
+        _ => scene.purses.get(&owner.unwrap()).map_or(0, |p| p.1),
+    };
+    let fish = fish_of(&scene);
+    let mut steps: Vec<u8> = Vec::new();
+    let (mut round, mut rounds) = (0, Vec::new());
+    let (mut plank_top, mut walk_dir) = (0, 0);
     let mut ticks = 0;
-    while scene.objects[scene.object_index(id).unwrap()]
-        .ship
-        .as_ref()
-        .unwrap()
-        .task
-        .is_some()
-    {
+    loop {
         scene.update(crate::clock::TICK, &data, &mut caches);
         ticks += 1;
         assert!(ticks < 2000);
+        let k = scene.object_index(id).unwrap();
+        let s = scene.objects[k].ship.as_ref().unwrap();
+        if s.task.is_none() {
+            break;
+        }
+        let Some(l) = s.landing.as_ref() else {
+            assert!(steps.is_empty(), "the hold till the back-out's end");
+            continue;
+        };
+        assert_eq!(scene.capabilities(k), s.caps & 0x2000, "held");
+        // Held from the step's first run (the tick after it is entered).
+        if l.state == 0x11 && steps.last() == Some(&0x11) {
+            assert_eq!(s.move_state, 6);
+        }
+        if steps.last() != Some(&l.state) {
+            if steps.last() == Some(&0x11) {
+                rounds.push(round);
+            }
+            round = 0;
+            steps.push(l.state);
+        }
+        round += 1;
+        plank_top = plank_top.max(l.plank.unwrap_or(0));
+        walk_dir = l.walk_dir;
+        if l.state == 0x11 {
+            assert_eq!(fish_of(&scene), fish, "paid at the end");
+        }
     }
+    assert_eq!(steps, [10, 0xb, 0x10, 0x11, 0xe, 0x13], "the steps");
+    // The porters' frames, a tick each (entered at frame 0, the hand-over
+    // at the tick reaching their count).
+    let porters = scene.landing_art[walk_dir as usize % 8][1].len();
+    assert_eq!(rounds, [porters]);
+    let walkway = scene.landing_art[walk_dir as usize % 8][0].len() as i32;
+    assert_eq!(plank_top, walkway - 1);
+    assert_eq!(fish_of(&scene), fish + 50);
     let k = scene.object_index(id).unwrap();
     let s = scene.objects[k].ship.as_ref().unwrap();
+    assert!(s.landing.is_none() && s.cargo == 0.0);
     assert_ne!(s.move_state, 6);
     assert!(s.priority >= 91);
     let kinds: Vec<u8> = s.treasures.iter().map(|t| t.kind).collect();
@@ -16296,6 +16339,36 @@ fn brain_fleet_moves_in_formation() {
 }
 
 /// A boat of miss000's gathering amber in a zone, with its first cargo.
+/// Ends ship `i`'s unload at `port` as the last hull step of 0x4adef0
+/// step 0x13 does (the back-out at its line's start).
+fn finish_unload(scene: &mut Scene, i: usize, port: u32) {
+    let (x, y) = (scene.objects[i].x, scene.objects[i].y);
+    scene.objects[i].ship.as_mut().unwrap().landing = Some(crate::objects::Landing {
+        state: 0x13,
+        abort: false,
+        dir: 0,
+        group: None,
+        walk_dir: 0,
+        line: false,
+        from: (x, y),
+        to: (x, y),
+        count: 0,
+        at: 0,
+        back: 0,
+        face: 0,
+        turn: 0,
+        furl: 0,
+        hull_ticks: super::landing::HULL_DELAY,
+        plank: None,
+        porters: None,
+        plank_at: (0.0, 0.0),
+        clock: 0.0,
+        dock: Some(port),
+        load: 0,
+    });
+    scene.unload_landing_tick(i, port);
+}
+
 fn amber_boat_in_zone(data: &GameData, caches: &mut Caches) -> (Scene, u32, u32, Vec<u32>) {
     let mut scene = Scene::load(data, caches, "miss000").unwrap();
     past_hold(&mut scene);
@@ -16986,7 +17059,7 @@ fn zone_sends_an_unloaded_boat_back() {
             phase: GatherPhase::Unloading(ports[0]),
         });
     }
-    scene.run_task(i, 0.0, &data, &mut caches);
+    finish_unload(&mut scene, i, ports[0]);
     let s = scene.objects[i].ship.as_ref().unwrap();
     assert!(s.task.is_none());
     let notes: Vec<(u32, u32)> = scene.gather_zones[0]
@@ -18308,7 +18381,7 @@ fn zone_route_from_shift_moves() {
             phase: GatherPhase::Unloading(ports[0]),
         });
     }
-    scene.run_task(i, 0.0, &data, &mut caches);
+    finish_unload(&mut scene, i, ports[0]);
     scene.update(crate::clock::TICK, &data, &mut caches);
     let z = &scene.gather_zones[zi];
     assert_eq!(z.deferred.len(), 1);

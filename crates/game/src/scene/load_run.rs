@@ -65,7 +65,7 @@ impl Scene {
     /// its berth), stands (`+0xa4` 1) and holds no ship (`+0x1e0` 0).
     /// (Not ported: the town test for the class flag 0x10 of `+0x1d8`,
     /// `+0x1c8` != 0.)
-    fn takes_hook(&self, t: usize) -> bool {
+    pub(super) fn takes_hook(&self, t: usize) -> bool {
         let id = self.objects[t].id;
         self.vt_berth(t) != (-1, -1) && !self.fallen(id) && self.occupant(id).is_none()
     }

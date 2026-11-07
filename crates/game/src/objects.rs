@@ -1485,14 +1485,6 @@ pub enum Resource {
     Leviathan,
 }
 
-/// What goods unloaded are worth (0x4ad9f0, 0x4a8fa0): amber 3 x 40% (120
-/// amber a hundred), fish one for one, a leviathan 125 x 40% = 50 amber a
-/// unit and 2500 fish an unloading (so the manual's 5000 amber and 2500
-/// fish for one of 100).
-pub const AMBER_WORTH: (i64, i64) = (6, 5);
-pub const LEVIATHAN_AMBER: i64 = 50;
-pub const LEVIATHAN_FISH: i64 = 2500;
-
 /// A deposit of a resource on the map.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Deposit {

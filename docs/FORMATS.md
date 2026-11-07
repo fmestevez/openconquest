@@ -1544,13 +1544,9 @@ the ram's prey bit 12 off while its rammer is at `RamStage::Charge` and
 0 through `Ship::ram_hit`), which the pages and `takes_contact` read;
 the cancelled build's 0 in `Ship::caps`; the amber gather's hold from
 step 1 -> 10 to step 5's end (0x4b0d74) as its machine's `Landing`
-(`Scene::landing_holds`, see "Amber, step by step"). Not ported: the
-unload's hold (the port's unload is not the original's step machine:
-its hold runs from step 1 -> 10 at the berth `+0x7bd`, lying still, the
-port `+0x7b1` on its cell, vt+0xb0 true, 0x4afe50(1) true, the contact
-`{0x32, 5, port}` made, to step 0x13's end, the slide back done,
-0x4b3850 at 0x4ae683; no phase of the port's `GatherPhase` starts or
-ends at those steps), the `+0x251 == 1` clears
+(`Scene::landing_holds`, see "Amber, step by step"). The unload's hold
+from step 1 -> 10 to step 0x13's end (0x4b3850 at 0x4ae683) likewise
+(see "Unload, step by step"). Not ported: the `+0x251 == 1` clears
 (0x4b3882, 0x4defda; no ship writer of `+0x251 = 1` found), the
 capture's `|= 0x2000`, 0x4bbfa0 (`+0x275` not loaded), the mover's
 0x4a473e / 0x4a4c0d, the saved copy (0x4e2326).
@@ -8474,6 +8470,67 @@ sends it on. Not ported: 0x499aa0's object-slot and heading-corner tests
 (the port reads the draught's grid), the take's notice 0x4a13b0, the
 computers' doubled take (0x4ad0e0's side and difficulty test),
 `+0x25d |= 0x40`, 0x4a6270's failure to reach the seat (the port waits).
+
+**Unload, step by step** (0x4adef0, `scene/port_unload.rs`; the unloading
+order 0xc, event 0x40 `{400, 0xc, port, prio}` by 0x4aab00, from the
+human's unload order, a gather zone's 0x1f and the computers' treasure
+carrier's `{port, 1, 0x5a}`; the step `+0x77d`, the machine the ship's
+`Landing`, its `dock` the contact `+0x8e6`, the task in
+`GatherPhase::Unloading` from step 10 on):
+
+- **1**: off its berth `+0x7bd` (the port's vt+0xb8) the berth wait
+  (`+0x78e`, `run_berth_waits`) and the sail there (0x4a6270); the port's
+  slot gone, 0x4c5910's port (event 0x40 `{400, 0xc, id, 0x5a}`) or event
+  8 0. On the berth and lying still (`+0x58c` 0), the port `+0x7b1` still
+  the object at its cell `+0x7b5`, its vt+0xb0 (0x40dfe0) true and
+  0x4afe50(ship, 1) true: the contact `{0x32, 5, port id, port}` made
+  (no 0xcb7: the port's `+0x1e0` is not set), or a contact of kind 0x32
+  with another object freed (0x4b3970(0), 0x4e06a0) and the step ends,
+  another kind waits; `+0x78e` = `+0x79f` = 0, step 10, the commands held
+  (0x4b37d0 with 0x2000, 0x4ae191), `+0x25d |= 0x40`.
+- **0x4afe50(1)**: the land cell is the port's cell `+0x7b5`; the
+  direction 0x59791d (`+0x7a3`, `+0x79c`) and the shore group 0x4b3770
+  on it (none: 0) as mode 0's; the line's distance east or west
+  0x59a7c8[type x 8] = 10 times the direction's dx, north or south
+  0x59a82c[type x 8] = 13 times its dy (not by the group; the dock's
+  0x4b17e0 has the same); slanting, the hull on its cell's middle, 0.
+- **10**: no contact, `+0x77c` = 0xff; 0x4b0470(1) -> 0x4b02a0, two points
+  a tick. At its end, called off: the contact freed (0xcb8), the line
+  freed, the hull frame `h x 4`, `+0x25b` 0, 0x4b3850, event 8 0xc0;
+  else with a contact 0xb, without 0x13.
+- **0xb** (0x4b89b0): furled, `+0x25b` 5, no contact called off, `+0x79f`
+  0; the walkway (slot 1, 0x3e6, delay `+0x7d` 0: a frame a tick) at the
+  hull picture's top-left plus 0x59a8e8[((dir + (0x4b8a40(dir, heading)
+  + type x 2) x 8) x 8] (`unload::WALKWAY_AT`), frame 0; step 0x10.
+- **0x10**: no contact called off. Called off: above frame 0 down one,
+  else the walkway gone (0x4e0220), step 0x13, `+0x79f` = `+0x7a5`. Else
+  up one; at its count (`+0x49`) the last frame, step 0x11 and the
+  porters (slot 3, 0x3de, direction `+0x79c`, `+0x76` 2, `+0x77` 1, frame
+  0) on the walkway's top-left.
+- **0x11**: not called off and in contact: `+0x58c` = 6 and 0x4add10 (by
+  the walkway's delay: a tick): the porters a frame on; at their count
+  0x4ad9f0 (`Scene::unload_at`), notice 0x13f (0x4a1980 with `+0x6cb`),
+  the porters gone (0x4e0240), step 0xe. Else the porters gone, 0xe.
+- **0xe**: the walkway down the map's `+0xe2` (a tick's worth); below 0,
+  gone, step 0x13, `+0x79f` = `+0x7a5`.
+- **0x13** (hull delay): `+0x79f` back two points, the furl a frame down
+  (above `h x 8 + 0x58`); below 1 the hull on its cell's middle, the
+  contact freed (0x523d80, then for kind 0x32 0x4b3970(0): 0xcb8, which
+  0x4e7640 answers clearing the port's `+0x1e0` whatever it holds), the
+  line freed, frame `h x 4`, `+0x25b` 0; then 0x4b3850, 0x4a5b70 (route
+  dropped, `+0x58c` 0), 0x4b39d0 when `+0x252`, step 1, event 8 0x40,
+  0x4b46f0 with '[' (a cell off the berth, priority 91) and notice 0x139
+  (0x4a1520). Else the hull on the line's point `+0x79f`.
+- **0x15**: 0x4adda0 (`+0x7c1` 4 or 5: a party's walkway; not reached
+  from these steps).
+
+So the goods are paid whole at the porters' last frame, one round of
+them, not a trip at a time. Not ported: the port's contact lost other
+than by the port going (the port's contact is the port while it stands),
+a contact of kind 0x32 with another object (the port waits on any
+contact), `+0x25d |= 0x40`, 0x523d80, 0x4b39d0, `+0x6cb` (notice 0x13f
+carries 0), step 0x15, player 16's class 0x40 target (its vt+0xb8 berth
+not decoded: the ship waits by it).
 
 
 Gathering (0x4ad0e0): each take moves amber 100 (boats and merchants; 20

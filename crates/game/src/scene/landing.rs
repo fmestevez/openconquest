@@ -374,6 +374,20 @@ impl Scene {
     /// (0x599c44 / 0x59a1c8 / 0x599ee8 / 0x59a4c8[type x 12 + group]) and
     /// side-on heading (`close_in_line`), true. The machine at step 10.
     pub(super) fn take_close_in(&mut self, k: usize, land: (i32, i32)) -> Option<Landing> {
+        self.close_in_on(k, land, false)
+    }
+
+    /// 0x4afe50(ship, `port`): mode 0 the take's (`take_close_in`); mode 1
+    /// the unload's on the port's cell `+0x7b5` (0x4adef0 step 1), alike
+    /// but for the line's distance: east or west 0x59a7c8[type] = 10, north
+    /// or south 0x59a82c[type] = 13 (the dock's, `dock_close_in`), not by
+    /// the shore's group (still looked for: none, false).
+    pub(super) fn close_in_on(
+        &mut self,
+        k: usize,
+        land: (i32, i32),
+        port: bool,
+    ) -> Option<Landing> {
         let t = TILE_SIZE as f32;
         let o = &self.objects[k];
         let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
@@ -415,7 +429,11 @@ impl Scene {
             dock: None,
             load: 0,
         };
-        let d = trade::APPROACH[dir as usize / 2][kind][g as usize] as f32;
+        let d = match (port, dir % 4) {
+            (true, 0) => 10.0,
+            (true, _) => 13.0,
+            (false, _) => trade::APPROACH[dir as usize / 2][kind][g as usize] as f32,
+        };
         self.close_in_line(k, &mut l, here, dir, d);
         Some(l)
     }

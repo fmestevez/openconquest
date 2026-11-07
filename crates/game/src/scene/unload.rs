@@ -11,13 +11,6 @@ use super::{heading_towards, Scene};
 use crate::assets::GameData;
 use crate::objects::{self, Caches, Layer};
 
-/// Goods a laden porter trip carries ashore: a cargo slot of 100 (the ship
-/// holds its load in slots of 100, 0x4ad300, and each trip is started by
-/// one message, 0x4aab00).
-pub const TRIP_LOAD: f32 = 100.0;
-/// Units of cargo unloaded a second where there is no walkway to show
-/// (a slot a laden and an empty trip, 2 x 38 ticks).
-pub const UNLOAD_RATE: f32 = TRIP_LOAD / (76.0 * crate::clock::TICK);
 /// Where the unloading walkway lies: its picture's top-left from the
 /// top-left of the ship's frame, by ship type, side (see `walkway_side`)
 /// and facing (0x59a8e8, 0x4adef0 state 0xb). Types 4-11 share a row.

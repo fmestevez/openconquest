@@ -2800,172 +2800,23 @@ impl Scene {
                 let Some(p) = self.object_index(port) else {
                     return self.send_to_port(i, deposit);
                 };
-                // At a moorage's front; at player 16's barbarian structure
-                // as close as the water lets it come (not decoded: its own
-                // cell vt+0x28, which 0x4c5910 reads for it).
-                let arrived = match self.front_cell(p) {
-                    Some(_) => {
-                        let (bx, by) = self.berth(p);
-                        if (bx - sx).hypot(by - sy) > 0.75 * t {
-                            false
-                        } else {
-                            // In its cell, it closes in on the pier.
-                            if let Some(cell) = self.objects[p].cell {
-                                if let Some(((ax, ay), face)) = self.approach(i, cell, true) {
-                                    let ship = self.objects[i].ship.as_mut().unwrap();
-                                    ship.face = Some(face);
-                                    if (ax - sx).hypot(ay - sy) > 1.0 {
-                                        ship.path = [(ax, ay)].into();
-                                        return;
-                                    }
-                                }
-                            }
-                            true
-                        }
-                    }
-                    None => near(&self.objects[p], self.landing_reach(p).max(2.6)),
-                };
-                if !arrived {
-                    return self.send_to_port(i, deposit);
-                }
-                // Arrived: the porters carry the goods in.
-                set(
-                    self,
-                    Some(Task::Gather {
-                        deposit,
-                        phase: GatherPhase::Unloading(port),
-                    }),
-                    None,
-                );
-                self.show_activity(i, port, super::unload::Activity::Unloading, data, caches);
-            }
-            GatherPhase::Unloading(port) => {
-                let Some(p) = self.object_index(port) else {
-                    return self.send_to_port(i, deposit);
-                };
-                // Lying at a port with its anchor down, the porters at
-                // work, it is held: move state 6, written each tick
-                // (0x4adef0 step 0x11 at 0x4ae486). Only ports take that
-                // path (the unloading order 0xc, 0x4aab00: class 0x39, for
-                // player 16 class 0x40); 0x4b0590 is the amber collecting
-                // (sub-codes 10 / 11), and towns take no cargo.
-                let at_port = self.unloads_at_port(i, p);
-                if at_port {
-                    self.objects[i].ship.as_mut().unwrap().move_state = 6;
-                }
-                let id = self.objects[i].id;
-                let walkway = self
-                    .planks
-                    .iter()
-                    .any(|p| p.ship == id && p.activity == super::unload::Activity::Unloading);
-                let trips = self.unloaded.iter().filter(|&&s| s == id).count() as f32;
-                self.unloaded.retain(|&s| s != id);
-                let ship = self.objects[i].ship.as_mut().unwrap();
-                let kind = ship.cargo_kind;
-                // Goods come ashore a slot a laden porter trip (at the
-                // porters' pace where no walkway shows).
-                let before = ship.cargo;
-                let after = if walkway {
-                    // The original counts whole units: a fraction left
-                    // (rounding at large steps) is not worth a trip, and
-                    // would keep the ship waiting for one.
-                    Some((before - trips * super::unload::TRIP_LOAD).max(0.0))
-                        .filter(|&a| a >= 1.0)
-                        .unwrap_or(0.0)
-                } else {
-                    (before - super::unload::UNLOAD_RATE * dt).max(0.0)
-                };
-                ship.cargo = after;
-                let came = (before.floor() - after.floor()) as i64;
-                // Each unloading draws the ship a priority of 91-100
-                // (0x4ad9f0), above those coming in to gather (90), so
-                // leaving it may push them aside.
-                if came > 0 && (1..235).contains(&ship.priority) {
-                    ship.priority = 91 + (self.rng.next() % 10) as u8;
-                }
-                if let (Some(owner), true) = (self.objects[i].owner, came > 0) {
-                    // What it is worth (0x4ad9f0).
-                    let (num, den) = crate::objects::AMBER_WORTH;
-                    let whole = |v: f32| v.floor() as i64;
-                    match kind {
-                        Some(Resource::Amber) => {
-                            let paid = whole(before.floor() * num as f32 / den as f32)
-                                - whole(after.floor() * num as f32 / den as f32);
-                            self.earn(owner, paid, 0)
-                        }
-                        Some(Resource::Fish) => self.earn(owner, 0, came),
-                        Some(Resource::Leviathan) => {
-                            // Its 2500 fish as the unloading ends.
-                            let fish = if after <= 0.0 {
-                                crate::objects::LEVIATHAN_FISH
-                            } else {
-                                0
-                            };
-                            self.earn(owner, crate::objects::LEVIATHAN_AMBER * came, fish)
-                        }
-                        None => {}
-                    }
-                }
-                if after > 0.0 {
+                // On its berth (vt+0xb8) 0x4adef0 step 1 lands it, a game
+                // tick at a time (`Scene::run_unloads`).
+                if self.on_unload_berth(i, port) {
                     return;
                 }
-                // It casts off once its porters are back aboard.
-                let id = self.objects[i].id;
-                if self.porters.iter().any(|p| p.ship == id)
-                    || self.planks.iter().any(|p| p.ship == id && p.trips % 2 == 1)
+                // Player 16's barbarian structure (class 0x40): its berth
+                // vt+0xb8 not decoded (0x4c5910 reads its own cell vt+0x28),
+                // so not ported: the ship waits by it.
+                if self.front_cell(p).is_none()
+                    && near(&self.objects[p], self.landing_reach(p).max(2.6))
                 {
                     return;
                 }
-                // The crew's experience (0x4ad9f0, 0x4b4680): fish 10 (at a
-                // building of family 0x32 not a fort, 0x34-0x36: the ports
-                // 0x39 and 0x40 are), a leviathan 400, amber 100.
-                let gain = match kind {
-                    Some(Resource::Fish) => 10,
-                    Some(Resource::Leviathan) => 400,
-                    Some(Resource::Amber) => 100,
-                    None => 0,
-                };
-                self.gain_experience(i, gain);
-                // Then its treasures go to the port's town (0x4add10 runs
-                // all of 0x4ad9f0, the port its contact).
-                self.unload_treasures(i, p);
-                let roll = 91 + (self.rng.next() % 10) as u8;
-                let ship = self.objects[i].ship.as_mut().unwrap();
-                ship.cargo = 0.0;
-                ship.cargo_kind = None;
-                // Unloaded, an order's priority between 1 and 234 is
-                // rolled again, 91-100 (0x4ad9f0).
-                if (1..=234).contains(&ship.priority) {
-                    ship.priority = roll;
-                }
-                // Leaving a port its route is cleared and it lies still
-                // (step 0x13, 0x4a5b70).
-                if at_port {
-                    ship.move_state = 0;
-                }
-                // Its task ends (event 8, mask 0x40) and it posts notice
-                // 0x139 to its group (0x4a1520, step 0x13): it goes back
-                // only when its gather zone sends it (0x4c9930).
-                set(self, None, None);
-                let id = self.objects[i].id;
-                self.post_notice(id, 0x139, 0);
-                // It moves a cell off the port's berth (0x4b46f0 with '[',
-                // priority 91).
-                if at_port {
-                    self.off_the_berth(i, 91);
-                }
+                self.send_to_port(i, deposit)
             }
-        }
-    }
-
-    /// Whether ship `i` unloads at `p` by the unloading order 0xc (0x4aab00
-    /// with 0x4ac050): a port (class 0x39), or, for player 16, a
-    /// barbarian structure of class 0x40.
-    pub(super) fn unloads_at_port(&self, i: usize, p: usize) -> bool {
-        match self.objects[p].class {
-            ObjectClass::Building(PORT) => true,
-            ObjectClass::Barbarian(0x40) => self.objects[i].owner == Some((4, 0)),
-            _ => false,
+            // The machine runs at the game tick (`Scene::run_unloads`).
+            GatherPhase::Unloading(_) => {}
         }
     }
 
@@ -3078,57 +2929,6 @@ impl Scene {
             }
         }
         (o.x, o.y)
-    }
-
-    /// How ship `i` closes in on the shore cell `target` to load amber or
-    /// (`port`) to unload (0x4afe50): only from straight beside it, a set
-    /// distance from its cell's middle towards it, turning to lie side-on
-    /// (whichever way is nearer its heading). The point and that heading.
-    pub(super) fn approach(
-        &self,
-        i: usize,
-        target: (i32, i32),
-        port: bool,
-    ) -> Option<((f32, f32), usize)> {
-        let t = TILE_SIZE as f32;
-        let o = &self.objects[i];
-        let ship = o.ship.as_ref()?;
-        let (cx, cy) = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
-        let dir = match (target.0 - cx, target.1 - cy) {
-            (1, 0) => 0,
-            (0, -1) => 2,
-            (-1, 0) => 4,
-            (0, 1) => 6,
-            _ => return None,
-        };
-        let k = ship.kind as usize % 12;
-        let dist = if port {
-            // 0x59a7c8 across, 0x59a82c up and down.
-            if dir % 4 == 0 {
-                10
-            } else {
-                13
-            }
-        } else {
-            // The shore's shape: its tile among the groups at 0x5bb870
-            // (0x4b3770), then the distance by direction, type and group.
-            let group = shore_group(&self.grid, target.0, target.1)?;
-            APPROACH[dir / 2][k][group]
-        };
-        if dist == 0 {
-            return None;
-        }
-        let (ux, uy) = [(1.0, 0.0), (0.0, -1.0), (-1.0, 0.0), (0.0, 1.0)][dir / 2];
-        let (mx, my) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
-        // Side-on: north or south to a shore east or west, east or west to
-        // one north or south.
-        let (a, b) = if dir % 4 == 0 { (2, 6) } else { (0, 4) };
-        let turn = |h: usize| {
-            let d = (h as i32 - ship.heading as i32).rem_euclid(8);
-            d.min(8 - d)
-        };
-        let face = if turn(a) < turn(b) { a } else { b };
-        Some(((mx + ux * dist as f32, my + uy * dist as f32), face))
     }
 
     /// Sends merchant `ship` to unload its goods at own port `port` (the
