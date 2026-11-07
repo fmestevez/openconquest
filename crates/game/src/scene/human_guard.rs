@@ -543,4 +543,110 @@ mod tests {
         assert_eq!(g.serial, scene.zone_serial);
         assert!(g.serial > serial);
     }
+
+    /// The navy's selection (0x49ab30): a picked list's order makes a new
+    /// group even of a group's ships (0x49ca60); the group a ship is in is
+    /// what Ctrl-click selects (0xc456, 0x49ecb0); Shift-click in group
+    /// mode joins (0x49bd60, notice 300) or takes out (0x49bef0, 0x137).
+    #[test]
+    fn the_selection_groups_made_joined_and_left() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(3)
+            .collect();
+        assert_eq!(ships.len(), 3);
+        let t = TILE_SIZE as f32;
+        let water = |scene: &Scene, c: (i32, i32)| {
+            scene.nav.is_sea(c.0, c.1) && scene.nav.passable(c.0, c.1, true)
+        };
+        let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+        let c0 = (3..h - 3)
+            .flat_map(|y| (3..w - 3).map(move |x| (x, y)))
+            .find(|&c| {
+                (-3..=3)
+                    .flat_map(|dy| (-3..=3).map(move |dx| (c.0 + dx, c.1 + dy)))
+                    .all(|c| water(&scene, c))
+            })
+            .unwrap();
+        for (k, &i) in ships.iter().enumerate() {
+            let o = &mut scene.objects[i];
+            o.owner = Some(human);
+            o.x = (c0.0 + k as i32 - 1) as f32 * t + t / 2.0;
+            o.y = c0.1 as f32 * t + t / 2.0;
+            let s = o.ship.as_mut().unwrap();
+            s.kind = 2;
+            s.argo = false;
+            s.move_state = 0;
+        }
+        let ids: Vec<u32> = ships.iter().map(|&i| scene.objects[i].id).collect();
+        let (id0, id1, id2) = (ids[0], ids[1], ids[2]);
+        let corner = |d: i32| ((c0.0 + d) as f32 * t + 1.0, (c0.1 + d) as f32 * t + 1.0);
+        let mut apply = |scene: &mut Scene, o: Order| {
+            scene.apply(&o, &data, &mut caches).unwrap();
+        };
+        let sel = vec![id0, id1];
+        scene
+            .order_attack_zone(&sel, corner(3), corner(-3))
+            .unwrap();
+        let serial = scene.human_attacks[0].serial;
+        // Ctrl-click on either ship finds the attack block's group.
+        assert_eq!(scene.human_group_ships(id1), Some(&sel[..]));
+        assert_eq!(scene.human_group_ships(id2), None);
+        // Group mode, Shift on id2: it joins the block, which hears 300.
+        apply(
+            &mut scene,
+            Order::JoinGroup {
+                member: id0,
+                ship: id2,
+            },
+        );
+        let a = &scene.human_attacks[0];
+        assert_eq!(a.ships, vec![id0, id1, id2]);
+        assert!(a.notices.iter().any(|n| n.code == 300 && n.ship == id2));
+        // Shift on a member: taken out, the block hearing 0x137.
+        apply(&mut scene, Order::LeaveGroup { ship: id1 });
+        let a = &scene.human_attacks[0];
+        assert_eq!(a.ships, vec![id0, id2]);
+        assert!(a.notices.iter().any(|n| n.code == 0x137 && n.ship == id1));
+        // A picked list of the same ships: a new group, zeroed, the block
+        // left (its ships gone, it with them).
+        apply(
+            &mut scene,
+            Order::NewGroup {
+                ships: vec![id0, id2],
+            },
+        );
+        assert!(scene.human_attacks.is_empty());
+        let g = &scene.human_groups[0];
+        assert_eq!(
+            (g.ships.clone(), g.behaviour, g.elapsed),
+            (vec![id0, id2], None, 0)
+        );
+        assert!(g.serial > serial);
+        let made = g.serial;
+        // A bare group joined: no notice to post; then the treasure take
+        // (the default case) keeps it.
+        apply(
+            &mut scene,
+            Order::JoinGroup {
+                member: id2,
+                ship: id1,
+            },
+        );
+        assert_eq!(scene.human_groups[0].ships, vec![id0, id2, id1]);
+        let sel = vec![id0, id2, id1];
+        apply(&mut scene, Order::KeepGroup { ships: sel.clone() });
+        let target = scene.objects.iter().find(|o| o.id != id0).unwrap().id;
+        let _ = scene.apply(&Order::Take { ship: id0, target }, &data, &mut caches);
+        assert_eq!(scene.human_groups.len(), 1);
+        assert_eq!(scene.human_groups[0].serial, made);
+        assert_eq!(scene.human_groups[0].ships, sel);
+    }
 }

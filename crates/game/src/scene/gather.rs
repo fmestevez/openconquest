@@ -515,6 +515,93 @@ impl Scene {
         });
     }
 
+    /// A picked list's group (0x49e230 with flag `+0x20` set -> 0x49ca60):
+    /// a group (0x49b990 kind 10, zeroed) of the listed ships, each leaving
+    /// its old group (0x49bd60), even when they were all one group's.
+    /// Nothing without a ship.
+    pub(super) fn new_group(&mut self, ships: &[u32]) {
+        let ships: Vec<u32> = ships
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.object_index(id)
+                    .is_some_and(|i| self.objects[i].ship.is_some())
+            })
+            .collect();
+        if ships.is_empty() {
+            return;
+        }
+        self.leave_zones(&ships);
+        self.zone_serial += 1;
+        self.human_groups.push(HumanGroup {
+            serial: self.zone_serial,
+            ships,
+            elapsed: 0,
+            behaviour: None,
+        });
+    }
+
+    /// The ships of the human group holding `id` (its `+0x5c`): a block's
+    /// or a bare one's.
+    pub fn human_group_ships(&self, id: u32) -> Option<&[u32]> {
+        if let Some(z) = self.ship_zone(id) {
+            Some(&self.gather_zones[z].ships)
+        } else if let Some(z) = self.ship_attack(id) {
+            Some(&self.human_attacks[z].ships)
+        } else if let Some(z) = self.ship_fleet(id) {
+            Some(&self.fleet_attacks[z].ships)
+        } else if let Some(z) = self.ship_waypoint_move(id) {
+            Some(&self.waypoint_moves[z].ships)
+        } else if let Some(z) = self.ship_guard(id) {
+            Some(&self.human_guards[z].ships)
+        } else {
+            self.human_groups
+                .iter()
+                .find(|g| g.ships.contains(&id))
+                .map(|g| g.ships.as_slice())
+        }
+    }
+
+    /// Ship `ship` joins the group of `member` (0xc455 in group mode,
+    /// 0x49e850: 0x49bd60 takes it out of its old group, 0x4a1770 posting
+    /// 0x137 there, and lists it; then 0x4a1340 posts 300 while the group
+    /// has a block). Nothing when `member` is in no group or `ship` is
+    /// in it already.
+    pub(super) fn join_group(&mut self, member: u32, ship: u32) {
+        if member == ship
+            || self
+                .human_group_ships(member)
+                .is_none_or(|s| s.contains(&ship))
+        {
+            return;
+        }
+        self.leave_zones(&[ship]);
+        let list = if let Some(z) = self.ship_zone(member) {
+            &mut self.gather_zones[z].ships
+        } else if let Some(z) = self.ship_attack(member) {
+            &mut self.human_attacks[z].ships
+        } else if let Some(z) = self.ship_fleet(member) {
+            &mut self.fleet_attacks[z].ships
+        } else if let Some(z) = self.ship_waypoint_move(member) {
+            &mut self.waypoint_moves[z].ships
+        } else if let Some(z) = self.ship_guard(member) {
+            &mut self.human_guards[z].ships
+        } else if let Some(g) = self
+            .human_groups
+            .iter_mut()
+            .find(|g| g.ships.contains(&member))
+        {
+            // A bare group has no block, so no notice (0x4a1340 needs
+            // `+0x2d`).
+            g.ships.push(ship);
+            return;
+        } else {
+            return;
+        };
+        list.push(ship);
+        self.post_notice(ship, 300, 0);
+    }
+
     /// Ends the gather zone of `group` (its task replaced, 0x4a1c60).
     /// Its marks freed for the viewing player (0x4cacf0 with 0).
     pub(super) fn end_zone(&mut self, group: ZoneGroup) {

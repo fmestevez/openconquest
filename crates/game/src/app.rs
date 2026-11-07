@@ -940,6 +940,12 @@ pub struct App {
     selected: Option<u32>,
     /// Other own ships selected with it.
     group: Vec<u32>,
+    /// The navy's selected group `+0xc2` (its ships when selected) while
+    /// the selection is that group, its flag `+0x20` clear (0xc456 on a
+    /// grouped ship, or a group made by an order); otherwise the selection
+    /// is a picked list `+0x72` (flag set), which the next order makes a
+    /// new group of (0x49e230 -> 0x49ca60).
+    navy_group: Option<Vec<u32>>,
     /// The groups assigned with Ctrl+1 ... Ctrl+0 (Cmd on macOS), recalled
     /// with 1 ... 0 (the manual's "Game Hot Keys").
     groups: [Vec<u32>; 10],
@@ -1238,6 +1244,7 @@ impl App {
             minimap_drag: false,
             selected: None,
             group: Vec::new(),
+            navy_group: None,
             groups: Default::default(),
             selected_since: HashMap::new(),
             site_shown: None,
@@ -6192,7 +6199,14 @@ impl App {
         }
         if self.pending == Some(Command::TREASURE) {
             let order = match self.object_at(pos) {
-                Some(target) => self.order_each(|ship| Order::Take { ship, target }),
+                // Command 0x22 through the navy's default case (0x49e230):
+                // the selection's group kept, its block ended (0x4a1c60).
+                Some(target) => {
+                    let _ = self.issue(Order::KeepGroup {
+                        ships: self.selection(),
+                    });
+                    self.order_each(|ship| Order::Take { ship, target })
+                }
                 None => Err("Choose a treasure or a hero's house".into()),
             };
             match order {
@@ -6696,6 +6710,72 @@ impl App {
     /// Gives `order` for the player: at once in a single-player game, in a
     /// coming turn in a multiplayer one (where refusals show then).
     fn issue(&mut self, order: Order) -> Result<u32, String> {
+        if self.selection_order(&order) {
+            self.navy_group_made();
+        }
+        self.send(order)
+    }
+
+    /// Whether `order` is a command of the selection's, which the navy
+    /// takes through 0x49e230 (0xc458).
+    fn selection_order(&self, order: &Order) -> bool {
+        match order {
+            Order::KeepGroup { .. }
+            | Order::Patrol { .. }
+            | Order::ZoneWaypoint { .. }
+            | Order::ShiftMove { .. }
+            | Order::AttackZone { .. }
+            | Order::GuardZone { .. }
+            | Order::FleetAttack { .. }
+            | Order::GatherAt { .. }
+            | Order::GatherArea { .. } => true,
+            Order::Behaviour { ship, .. } => self.selection().contains(ship),
+            o => o.ship().is_some_and(|id| self.selection().contains(&id)),
+        }
+    }
+
+    /// Whether the selection is the navy's selected group (flag `+0x20`
+    /// clear): its ships those of the group selected.
+    fn navy_flag_clear(&self) -> bool {
+        let alive = |ids: &[u32]| {
+            let mut v: Vec<u32> = ids
+                .iter()
+                .copied()
+                .filter(|&id| self.scene.object_index(id).is_some())
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        let sel = alive(&self.selection());
+        self.navy_group
+            .as_ref()
+            .is_some_and(|g| !sel.is_empty() && alive(g) == sel)
+    }
+
+    /// 0x49e230 with the flag set: 0x49ca60 makes a group of the picked
+    /// list's ships (each leaving its old one), the list emptied and the
+    /// flag cleared, the new group selected.
+    fn navy_group_made(&mut self) {
+        if self.navy_flag_clear() {
+            return;
+        }
+        let ships: Vec<u32> = self
+            .selection()
+            .into_iter()
+            .filter(|&id| self.own_ship(id))
+            .collect();
+        if ships.is_empty() {
+            return;
+        }
+        let _ = self.send(Order::NewGroup {
+            ships: ships.clone(),
+        });
+        self.navy_group = Some(ships);
+    }
+
+    /// Sends `order` on: at once in a single-player game, in a coming turn
+    /// in a multiplayer one.
+    fn send(&mut self, order: Order) -> Result<u32, String> {
         if let Some(net) = self.net.as_mut() {
             net.send(order);
             return Ok(0);
@@ -6803,9 +6883,21 @@ impl App {
                     .is_some_and(|i| self.scene.is_own(&self.scene.objects[i]))
             })
             .collect();
+        // The selection exactly the group's already (0x4a2830 > 0): kept
+        // as it is, its flag too (the view's centring on it, 0xc459 and
+        // 0xcbb from 0x517f40, not ported).
+        let mut sel = self.selection();
+        let mut all = ids.clone();
+        sel.sort_unstable();
+        all.sort_unstable();
+        if !sel.is_empty() && sel == all {
+            return;
+        }
+        // Else 0x4a2b10 lists its own objects: a picked list (flag set).
         if let Some((&first, rest)) = ids.split_first() {
             self.selected = Some(first);
             self.group = rest.to_vec();
+            self.navy_group = None;
             self.page = Page::Main;
         }
     }
@@ -6841,6 +6933,7 @@ impl App {
             self.page = Page::Main;
         }
         self.selected = Some(id);
+        self.navy_group = None;
         self.group = all.into_iter().skip(1).collect();
     }
 
@@ -6944,15 +7037,27 @@ impl App {
                 }
             }
         }
-        // Ctrl-click on an own ship selects its group (0x5180e0 with
-        // MK_CONTROL: message 0xc456, 0x49ecb0, the ship's fleet +0x5c).
+        // Ctrl-click on an own ship selects the navy's group it is in
+        // (0x5180e0 with MK_CONTROL: message 0xc456, 0x49ecb0: the
+        // selection cleared, then the group of the ship's `+0x5c` selected
+        // whole, the flag clear); a ship in none is listed alone (0x49c2f0,
+        // the flag set), as a plain click does.
         let ctrl = self.modifiers.control_key() || self.modifiers.super_key();
         if ctrl && !shift && !dragged {
             if let Some(id) = self.object_at(to).filter(|&id| self.own_ship(id)) {
-                if let Some(n) = self.groups.iter().position(|g| g.contains(&id)) {
-                    self.recall_group(n);
-                    return;
+                let ships = self.scene.human_group_ships(id).map(|g| g.to_vec());
+                if id != self.selected.unwrap_or(u32::MAX) {
+                    self.page = Page::Main;
                 }
+                self.selected = Some(id);
+                self.group = ships
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .filter(|&s| s != id)
+                    .collect();
+                self.navy_group = ships;
+                return;
             }
         }
         let mut chosen: Vec<u32> = if dragged {
@@ -6969,8 +7074,36 @@ impl App {
         } else {
             self.object_at(to).into_iter().collect()
         };
+        if shift && !dragged && self.navy_flag_clear() {
+            // Shift-click with the navy's group selected (0xc455, 0x49e850
+            // with the flag clear): a member is taken out of the group
+            // (0x49bef0) and deselected, the group still selected; another
+            // own ship joins it (0x49bd60, notice 0x4a1340) and is selected.
+            let Some(&id) = chosen.first().filter(|&&id| self.own_ship(id)) else {
+                return;
+            };
+            let mut all = self.selection();
+            if let Some(k) = all.iter().position(|&s| s == id) {
+                all.remove(k);
+                let _ = self.issue(Order::LeaveGroup { ship: id });
+            } else {
+                let member = all[0];
+                let _ = self.issue(Order::JoinGroup { member, ship: id });
+                all.push(id);
+            }
+            let first = all.first().copied();
+            if first != self.selected {
+                self.page = Page::Main;
+            }
+            self.selected = first;
+            self.group = all.iter().copied().skip(1).collect();
+            self.navy_group = (!all.is_empty()).then_some(all);
+            return;
+        }
         if shift && !dragged {
-            // Shift-click adds or removes one own ship.
+            // Shift-click on a picked list (0xc455, 0x49e850 with the
+            // flag set) adds or removes one own ship; a list of one object
+            // not a ship (0x49ec60) is cleared first.
             if let Some(&id) = chosen.first().filter(|&&id| self.own_ship(id)) {
                 let mut all = self.selection();
                 if let Some(k) = all.iter().position(|&s| s == id) {
@@ -7012,6 +7145,9 @@ impl App {
         }
         self.selected = first;
         self.group = chosen.into_iter().skip(1).collect();
+        // A click (0xc453), a Shift-click on a list (0xc455) or the modern
+        // mouse's box: a picked list, the flag set.
+        self.navy_group = None;
     }
 
     /// Whether a click's pick `chosen` is one object the viewer owns by
@@ -7086,6 +7222,12 @@ impl App {
                 )
             });
             if takeable && self.own_ship(id) {
+                // Command 0x22, the selection's group kept (0x49e230).
+                if k == 0 {
+                    let _ = self.issue(Order::KeepGroup {
+                        ships: self.selection(),
+                    });
+                }
                 match self.issue(Order::Take { ship: id, target }) {
                     Ok(_) if k == 0 => self.confirm(pos),
                     Ok(_) => {}

@@ -39,6 +39,24 @@ pub enum Order {
     KeepGroup {
         ships: Vec<u32>,
     },
+    /// A picked list's first order (0x49e230 with the navy's flag
+    /// `+0x20` set): 0x49ca60 makes a new group of its ships, each leaving
+    /// its old one, even when they are another group's (`new_group`).
+    NewGroup {
+        ships: Vec<u32>,
+    },
+    /// Shift-click on an own ship not in the selected group (0xc455,
+    /// 0x49e850): it joins the group of `member` (0x49bd60, notice 300 by
+    /// 0x4a1340; `join_group`).
+    JoinGroup {
+        member: u32,
+        ship: u32,
+    },
+    /// Shift-click on a member of the selected group (0xc455, 0x49e850):
+    /// it is taken out of the group (0x49bef0; `leave_zones`).
+    LeaveGroup {
+        ship: u32,
+    },
     /// The Building page's "default arming" checkbox.
     DefaultArming {
         on: bool,
@@ -506,9 +524,23 @@ impl Scene {
                 self.keep_selection_group(ships);
                 return Ok(0);
             }
-            // After `KeepGroup` a move or stop finds its ship in the
+            // The selection's group, made, joined or left at once.
+            Order::NewGroup { ships } => {
+                self.new_group(ships);
+                return Ok(0);
+            }
+            Order::JoinGroup { member, ship } => {
+                self.join_group(*member, *ship);
+                return Ok(0);
+            }
+            Order::LeaveGroup { ship } => {
+                self.leave_zones(&[*ship]);
+                return Ok(0);
+            }
+            // After `KeepGroup` a plain order (0x49e230's default case: the
+            // move, the stop 10, the treasure 0x22) finds its ship in the
             // selection's bare group, which it keeps.
-            Order::Move { ship: id, .. } | Order::Stop { id }
+            Order::Move { ship: id, .. } | Order::Stop { id } | Order::Take { ship: id, .. }
                 if self.human_groups.iter().any(|g| g.ships.contains(id)) => {}
             Order::Stop { id } => self.leave_zones(&[*id]),
             o => {
@@ -768,6 +800,18 @@ impl Scene {
             }
             KeepGroup { ref ships } => {
                 self.keep_selection_group(ships);
+                Ok(0)
+            }
+            NewGroup { ref ships } => {
+                self.new_group(ships);
+                Ok(0)
+            }
+            JoinGroup { member, ship } => {
+                self.join_group(member, ship);
+                Ok(0)
+            }
+            LeaveGroup { ship } => {
+                self.leave_zones(&[ship]);
                 Ok(0)
             }
             DefaultArming { on } => {

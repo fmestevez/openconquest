@@ -10545,10 +10545,29 @@ group; flag 0: it is group `+0xc2` (or nothing). Messages (0x49ab30):
   a ship with `+0x251 == 4` only deselected; any other ship or such
   class **joins the selected group** (0x49bd60, notice 0x4a1340,
   selected); another object clears and starts a list (flag 1).
-- other writers of `+0x20`: 0x49c670 (non-ship class-0x32 objects
-  without the class bits dropped from the list; flag 1 when asked),
-  0x49ab30's other cases (0x49af17 .. 0x49b704), 0x49eb2a, 0x49ed86:
-  not read.
+- the senders (0x5180e0 pointer mode 5, an own object `+0x57` 1): a
+  plain click 0xc453 `{1, obj}` (0x49ab30: the selection cleared as
+  above, 0x4a2050 with 0, then the object listed by 0x49c2f0 unless a
+  sinking ship, `+0x251` 4; flag 1); Shift (key flag 4) 0xc455; Ctrl (8,
+  without Shift) 0xc456 `{1, obj}`.
+- 0xc455's list mode clears first only for a list of one object neither
+  a ship nor a class-bit one (0x49ec60); taking out the last leaves the
+  list empty, flag 1.
+- the number keys (0x50f910, messages 0xd80 .. 0xd9d, `n = msg - 0xd80`):
+  below 0x14 the store: 0xd9e `{n % 10}` to the navy (0x49ab30: list
+  `+0x162[n]` emptied, 0x4a2990 adds each object of the selection, the
+  group's or the list's, by 0x4a25c0), game `+0x3265[n % 10] = n % 10`;
+  else the recall (0x4ee970, then 0x517f40 with `+0x3265[n % 10]` unless
+  -1): 0xd9f, 0x4a2830: -1 for an empty list (nothing), the count when
+  the selection is exactly the list (kept, flag too; 0xc459 to the
+  object 0x4a2c80 picks and 0xcbb, the view centred on it), else 0: the
+  selection cleared and 0x4a2b10 lists the list's objects still the
+  player's (from the last; a sinking ship or another's dropped from it,
+  each sent 0xc453 `{1}`), flag 1; 0x517f40 then sends 0xc456 `{0, n}`
+  (0x4a2b10 again, flag 1).
+- 0xc457 (0x517d1c's sender, an area's objects, not reached by the
+  port), 0x49c670 (non-ship class-0x32 objects without the class bits
+  dropped from the list; flag 1 when asked).
 - 0xc458, the order (0x49e230): flag 1 with a list: 0x49ca60 makes the
   group (a single non-ship returns -1 and the command goes to it raw):
   a group (0x49b990 kind 10) of the listed ships with `+0x251 != 4` and
@@ -10579,15 +10598,27 @@ which takes ships out of bare groups too; a bare group has no notices,
 (`end_selection_block`) takes the bare group's fields, the Shift move's
 waypoint move among them; a sunk ship leaves it. The Shift move on a
 guard group appends to its route (`HumanGuard::route`, only marked)
-and keeps it (`plain_orders_keep_the_selection_group`, miss000). Not
-ported: the selection model itself: the port's selection is its own
-list and a group is the selection's when their ships are the same,
-where the original's is the group picked whole by 0xc456 (any member
-clicked) or grown by 0xc455, and a new group for any list picked
-otherwise even of the same ships; the move block `{100, 1}` (0x4cc500,
-0x4cc970, its tick, its `+8`); the other plain commands (each ship's
-own order through the navy's default case, which the port still gives
-alone: `leave_zones`).
+and keeps it (`plain_orders_keep_the_selection_group`, miss000). The
+selection model (`App::navy_group`, the group's ships while the flag is
+clear): a click, a Shift-click on a list, the modern mouse's box or
+double click and a number key's recall make a picked list (flag set);
+Ctrl-click selects the group the ship is in whole (`human_group_ships`:
+any human block's or a bare group's), a ship in none alone and listed;
+Shift-click with the group selected takes a member out
+(`Order::LeaveGroup`, 0x137 to its block) or has another own ship join
+it (`Order::JoinGroup`: 0x49bd60, 300 to its block, none to a bare
+group); the first order of a picked list (`App::issue` on any of the
+selection's orders) makes a new zeroed group of its ships
+(`Order::NewGroup`, 0x49ca60), even when they were a group's, which is
+then selected. The treasure take (command 0x22, the default case) keeps
+the group as the move and stop do
+(`the_selection_groups_made_joined_and_left`, miss000). Not ported: the
+class-bit objects (classes 0x34..0x36) in lists and groups, and a
+sinking ship's own case (the port's own ships only); a number recall
+of the selection itself centring the view (0xc459, 0xcbb); 0xc457; the
+move block `{100, 1}` (0x4cc500, 0x4cc970, its tick, its `+8`); the
+other plain commands with no `KeepGroup` yet (each ship's own order,
+`leave_zones`; the sale 0x34 goes to a site in the port).
 
 The human's attack zone (0x49d9d0) gives the selection's group its
 behaviour first (0x49da43: 0x4c4350 `{0, 0x4a2f10(player), -1, -1}`;
