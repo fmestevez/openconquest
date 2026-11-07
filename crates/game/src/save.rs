@@ -115,6 +115,9 @@ pub struct SaveGame {
     /// The human groups' waypoint moves.
     #[serde(default)]
     pub waypoint_moves: Vec<crate::scene::WaypointMove>,
+    /// The human groups' guard blocks.
+    #[serde(default)]
+    pub human_guards: Vec<crate::scene::HumanGuard>,
     #[serde(default)]
     pub zone_serial: u32,
     /// The navy's generator.

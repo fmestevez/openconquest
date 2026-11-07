@@ -2848,8 +2848,8 @@ fn scout_out_and_back() {
     assert!(near((px, py), (x, y)) && task.is_none(), "came home");
 }
 
-/// A ship guarding a zone fights an enemy that comes into it; an attack
-/// zone order ends once the zone is clear (needs `OPENCONQUEST_DATA`).
+/// An attack zone order ends once the zone is clear (needs
+/// `OPENCONQUEST_DATA`).
 #[test]
 fn zones() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -2890,59 +2890,13 @@ fn zones() {
     scene.objects[e].owner = Some((1, (human.slot + 1) % 4));
     scene.objects[e].combat.as_mut().unwrap().weapons.clear();
     scene.objects[e].ship.as_mut().unwrap().crew.squads = [0; 3];
-    // The enemy lies outside the zone at first.
-    scene.objects[e].x = mx + 64.0 * 8.0;
-    scene.objects[e].y = my;
-    let zone = (
-        (mx - 64.0 * 3.0, my - 64.0 * 3.0),
-        (mx + 64.0 * 3.0, my + 64.0 * 3.0),
-    );
-    assert!(
-        scene.order_zone(enemy, zone.0, zone.1, false).is_err(),
-        "unarmed"
-    );
-    scene.order_zone(mine, zone.0, zone.1, false).unwrap();
-    let hull = |s: &Scene| {
-        s.objects[s.object_index(enemy).unwrap()]
-            .combat
-            .as_ref()
-            .unwrap()
-            .hull
-    };
-    let before = hull(&scene);
-    for _ in 0..50 * 5 {
-        scene.update(0.02, &data, &mut caches);
-    }
-    assert_eq!(hull(&scene), before, "outside the zone, left alone");
-    let task = |s: &Scene| {
-        s.objects[s.object_index(mine).unwrap()]
-            .ship
-            .as_ref()
-            .unwrap()
-            .task
-    };
-    assert!(matches!(
-        task(&scene),
-        Some(Task::Zone { attack: false, .. })
-    ));
-    // It sails in and is fought.
-    let e = scene.object_index(enemy).unwrap();
-    scene.objects[e].x = mx + 64.0 * 2.0;
-    for _ in 0..50 * 10 {
-        scene.update(0.02, &data, &mut caches);
-    }
-    assert!(scene.object_index(enemy).is_none_or(|e| scene.objects[e]
-        .combat
-        .as_ref()
-        .unwrap()
-        .hull
-        < before));
     // An attack zone with nothing in it is done at once.
     scene
-        .order_zone(mine, (mx - 64.0, my - 64.0), (mx - 32.0, my - 32.0), true)
+        .order_zone(mine, (mx - 64.0, my - 64.0), (mx - 32.0, my - 32.0))
         .unwrap();
     scene.update(0.02, &data, &mut caches);
-    assert_eq!(task(&scene), None);
+    let m = scene.object_index(mine).unwrap();
+    assert_eq!(scene.objects[m].ship.as_ref().unwrap().task, None);
 }
 
 /// A click on amber with a boat selected makes the boat a group with a

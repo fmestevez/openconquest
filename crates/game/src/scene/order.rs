@@ -124,6 +124,14 @@ pub enum Order {
         a: (f32, f32),
         b: (f32, f32),
     },
+    /// The human's guard zone with `ships` selected (0x49d790 case 9):
+    /// the selection's group given the guard block over the rectangle
+    /// dragged between `a` and `b` (`human_guard`).
+    GuardZone {
+        ships: Vec<u32>,
+        a: (f32, f32),
+        b: (f32, f32),
+    },
     /// The human's fleet command `command` (0x15 / 0x16 attack, 0x17
     /// board, 0x18 ram) at `target` with `ships` selected (0x49dda0): the
     /// selection's group given the fleet attack task (`fleet_attack`).
@@ -478,6 +486,7 @@ impl Scene {
             | Order::ShiftMove { .. }
             | Order::Patrol { .. }
             | Order::AttackZone { .. }
+            | Order::GuardZone { .. }
             | Order::FleetAttack { .. } => {}
             Order::Behaviour { .. } | Order::LoadCrew { .. } | Order::LoadObject { .. } => {}
             Order::Stop { id } => self.leave_zones(&[*id]),
@@ -786,8 +795,11 @@ impl Scene {
                 b,
                 attack: true,
             } => done(self.order_attack_zone(&[ship], a, b)),
-            Zone { ship, a, b, attack } => done(self.order_zone(ship, a, b, attack)),
+            // A guard zone given to one ship (an outbox of an older save)
+            // is its group's.
+            Zone { ship, a, b, .. } => done(self.order_guard_zone(&[ship], a, b)),
             AttackZone { ref ships, a, b } => done(self.order_attack_zone(ships, a, b)),
+            GuardZone { ref ships, a, b } => done(self.order_guard_zone(ships, a, b)),
             FleetAttack {
                 ref ships,
                 target,

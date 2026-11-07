@@ -3436,11 +3436,22 @@ second rect, no mask, `[9]` flags 0, `[10]` mode **2**; straight to
 0x4d1ce0 on the selection's group (no 0x4c4350 behaviour first, unlike
 case 10): the formation into the rect (0x4d1080), and at each pass
 (P = 0x4b, the human being no player of kind 3 or 4) 0x4d33c0 only, so
-mode 1's patrol rounds (0x4d2720) are reached by no sender at all. Not
-ported: the human's guard zone through the block; the port still gives
-each ship its own `order_zone` (`Order::Zone`, attack false), and
-`fleet_guard.rs` runs only on a computer's flotilla (its fields, period
-and target players read from `Computer`).
+mode 1's patrol rounds (0x4d2720) are reached by no sender at all.
+The group is the selection's (0x49e230; else 0x49ca60's new group,
+zeroed by 0x49b990, so its `+0x19..+0x24` are 0 and the watch's
+0x4cd300 lists no targets in the zone: only a post hit within 3 of its
+cell or inside the zone, `+0x691`, engages, on its attacker); a group
+kept from an attack zone keeps the players 0x4c4350 gave it. Ported:
+`order_guard_zone` (`Order::GuardZone`, `scene/human_guard.rs`): the
+block is `fleet_guard.rs`'s, driven through `GuardGroup` (ships, block,
+owner, `+0x19..+0x21`, P, `+8`, notices) by a computer's flotilla and by
+`HumanGuard` (P = 0x4b); the guard group's ships leave it on other
+orders with 0x137 (`leave_zones`), its notices posted (`post_notice`),
+its block ended by another (`end_selection_block`), saved. The port's
+per-ship guard zone (`Task::Zone` with attack false) is gone; an older
+save's `Order::Zone` with attack false becomes the guard zone of its
+ship. Not ported: the group's `+0x19..+0x24` kept through the port's
+other human blocks (only the attack zone's are carried).
 
 The move states (+0x58c, dispatched by the move tick 0x4a3f40): 0 lying
 still (0x4a3150: the hull rocks, the velocity halves each frame), 1 told to
@@ -10706,9 +10717,9 @@ occupants hold only the cells the ships are in); nature objects' player
 in 0x4cd300's and 0x4d5430's tests (the port's ownerless creatures are
 no player's, as in 0x4d6640's port). 0x13a's senders: **Prey
 notices**. The status 0x4d63d0 is ported, its readers (the
-tasks' 0x4a0d80) hold brains' and computers' groups only. The port's
-per-ship `Task::Zone` stays for the guard zone (the original's is the
-guard block, mode 2: "Who makes it" under the guard task; not ported).
+tasks' 0x4a0d80) hold brains' and computers' groups only. The human's
+guard zone is the guard block, mode 2 ("Who makes it" under the guard
+task, `human_guard.rs`).
 
 A fort of the forts' flotilla takes the `#` too (below).
 

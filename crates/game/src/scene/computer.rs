@@ -41,7 +41,7 @@ use crate::objects::{Resource, Task};
 /// A rectangle of map cells: x, y, width, height.
 type Cells = (i32, i32, i32, i32);
 
-mod fleet_guard;
+pub(super) mod fleet_guard;
 
 /// Flotilla roles (`AIPlayer + 0xdfc` entries, field 0; 0x483e10).
 const MANAGER: u8 = 0;
@@ -6325,7 +6325,7 @@ impl Scene {
             FleetOrder::Gather(..) => {}
             FleetOrder::Attack(area) => {
                 let (a, b) = world(area);
-                if self.order_zone(id, a, b, true).is_err() {
+                if self.order_zone(id, a, b).is_err() {
                     let (cx, cy) = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
                     self.post(Order::Move {
                         ship: id,

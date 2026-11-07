@@ -22,19 +22,13 @@ impl Scene {
         Ok(())
     }
 
-    /// Has own ship `ship` guard (or with `attack`, attack) the world
-    /// rectangle between the corners `a` and `b`. Not the original's: its
-    /// guard zone (command 0x74, 0x4f34c0 drag sub 9) is 0x49d790 case 9,
-    /// the guard block 0x4d1ce0 on the selection's group with the rect,
-    /// no mask, flags 0 and mode 2 (`computer/fleet_guard.rs` runs it only
-    /// for a computer's flotilla); not ported.
-    pub fn order_zone(
-        &mut self,
-        ship: u32,
-        a: (f32, f32),
-        b: (f32, f32),
-        attack: bool,
-    ) -> Result<(), String> {
+    /// Has own ship `ship` attack the world rectangle between the corners
+    /// `a` and `b` (the port's own, for the brains' and computers' area
+    /// attacks; the human's guard zone is the guard block,
+    /// `order_guard_zone`; a `Task::Zone` with `attack` false is an older
+    /// save's).
+    pub fn order_zone(&mut self, ship: u32, a: (f32, f32), b: (f32, f32)) -> Result<(), String> {
+        let attack = true;
         let i = self.object_index(ship).ok_or("No such ship")?;
         if !self.objects[i].is_armed() {
             return Err("The ship has no weapons".into());

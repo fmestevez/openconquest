@@ -6895,7 +6895,10 @@ impl App {
                     let ships = self.selection();
                     self.issue(Order::AttackZone { ships, a, b }).map(|_| ())
                 }
-                (Some(a), Some(b)) => self.order_each(|ship| Order::Zone { ship, a, b, attack }),
+                (Some(a), Some(b)) => {
+                    let ships = self.selection();
+                    self.issue(Order::GuardZone { ships, a, b }).map(|_| ())
+                }
                 _ => Err("Drag a rectangle around the zone".into()),
             };
             match order {

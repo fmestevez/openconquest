@@ -1,6 +1,7 @@
 //! The navy's guard task (fleet order 0x6e, block `{0x6e, 0x29}`, made by
 //! 0x4d1ce0, its notices 0x4d1ea0, its tick 0x4d3b30) for the computers'
-//! flotillas (0x483570, mode 3).
+//! flotillas (0x483570, mode 3) and the human's guard zone (0x49d790 case
+//! 9, mode 2, `human_guard`), both through `GuardGroup`.
 
 use openconquest_formats::map::TILE_SIZE;
 use openconquest_formats::ObjectClass;
@@ -13,7 +14,7 @@ use crate::scene::{Order, Scene};
 /// The guard block `{0x6e, 0x29}` (group `+0x25`, 0x65 bytes). The lists
 /// are `None` while null (made at their first entry, freed by a rewrite).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(super) struct GuardBlock {
+pub struct GuardBlock {
     /// `+8` made (the game's tick).
     pub made: u32,
     /// `+0xc..+0x18` the zone (args 0-3: the flotilla's home `+0x178`).
@@ -48,7 +49,7 @@ pub(super) struct GuardBlock {
 /// A post or patrol entry: `{ship*, ship id, x, y, tick}` (the port keeps
 /// the id for both).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct Post {
+pub struct Post {
     pub ship: u32,
     pub x: i32,
     pub y: i32,
@@ -58,7 +59,7 @@ pub(super) struct Post {
 /// An engaged entry: `{ship*, ship id, target*, target id, x, y}`; the
 /// target 0 when cleared (0x4d1ea0's 0x13a / 0x13c / 0x13d).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct Engaged {
+pub struct Engaged {
     pub ship: u32,
     pub target: u32,
     pub x: i32,
@@ -402,11 +403,80 @@ pub(super) fn spiral(
     -4
 }
 
+/// What the guard block reads of the group holding it: a computer's
+/// flotilla (`Flotilla`) or a human's group (`HumanGuard`).
+pub(in crate::scene) trait GuardGroup {
+    /// Group `+0x31`: its ships, by id.
+    fn ships(&self) -> &[u32];
+    /// Group `+0x25`: the block.
+    fn block(&self) -> &Option<GuardBlock>;
+    fn block_mut(&mut self) -> &mut Option<GuardBlock>;
+    /// The group's player (the targets' and the enemy's side).
+    fn owner(&self) -> (u32, u32);
+    /// Group `+0x19`, `+0x1d`, `+0x21`: the behaviour 0x4c4350 gave it
+    /// (zeroes when never given).
+    fn behaviour(&self) -> (u32, u32, u32);
+    /// The period P (0x4d3b30, 0x4d3080): for a computer side (3 or 4)
+    /// out of the campaign by its level `+0x1a31` 0x69, 0x4b, 0x3c, else
+    /// 0x4b.
+    fn period(&self) -> u32;
+    /// Group `+8`.
+    fn elapsed(&mut self) -> &mut u32;
+    /// Group `+0x2d`: the block's notices `(ship, code)`, oldest first,
+    /// taken.
+    fn take_notices(&mut self) -> Vec<(u32, u32)>;
+}
+
+/// A computer's flotilla `f` as the block's group.
+pub(super) struct Flotilla<'a> {
+    pub ai: &'a mut Computer,
+    pub f: usize,
+}
+
+impl GuardGroup for Flotilla<'_> {
+    fn ships(&self) -> &[u32] {
+        &self.ai.flotillas[self.f].ships
+    }
+    fn block(&self) -> &Option<GuardBlock> {
+        &self.ai.flotillas[self.f].guard
+    }
+    fn block_mut(&mut self) -> &mut Option<GuardBlock> {
+        &mut self.ai.flotillas[self.f].guard
+    }
+    fn owner(&self) -> (u32, u32) {
+        self.ai.owner
+    }
+    fn behaviour(&self) -> (u32, u32, u32) {
+        self.ai.flotillas[self.f].behaviour.unwrap_or((0, 0, 0))
+    }
+    fn period(&self) -> u32 {
+        [0x69, 0x4b, 0x3c][self.ai.difficulty.min(2)]
+    }
+    fn elapsed(&mut self) -> &mut u32 {
+        &mut self.ai.flotillas[self.f].elapsed
+    }
+    /// The notices posted to the block (the port's `(ship, block, code,
+    /// rec[4])`, those of an older block dropped); none while freed
+    /// (`no_notices`).
+    fn take_notices(&mut self) -> Vec<(u32, u32)> {
+        let fl = &mut self.ai.flotillas[self.f];
+        if fl.no_notices {
+            return Vec::new();
+        }
+        let block = fl.block;
+        std::mem::take(&mut fl.joined)
+            .into_iter()
+            .filter(|&(_, at, _, _)| at == block)
+            .map(|(id, _, code, _)| (id, code))
+            .collect()
+    }
+}
+
 impl Scene {
     /// Fleet order 0x6e from a computer's flotilla (the only sender of
     /// 0x6e through 0x4a09d0: no mission's brain guards; 0x4d1ce0's other
-    /// caller is the human's guard zone, 0x49d790 case 9, mode 2, not
-    /// ported) (0x483570 mode 3, at
+    /// caller is the human's guard zone, 0x49d790 case 9, mode 2,
+    /// `order_guard_zone`) (0x483570 mode 3, at
     /// 0x47e48d, 0x47e88d, 0x47ecbd, 0x47ef37): the args the flotilla's
     /// home `+0x178` (the zone), its zone `+0x168` (the second rect), no
     /// mask, `+0x154` = (AIPlayer `+0x20` == 0) << 16, task 7's (0x47ef29)
@@ -420,11 +490,25 @@ impl Scene {
     /// when its w and h are both set, else each ship posted at its cell
     /// (0x4d1450); 0 nothing.
     pub(super) fn guard_order(&mut self, ai: &mut Computer, f: usize) {
-        let now = self.now();
-        let fl = &mut ai.flotillas[f];
+        let fl = &ai.flotillas[f];
         let flags = u32::from(ai.difficulty == 0) << 16 | u32::from(fl.task == 7);
         let (rect, rect2) = (fl.home, fl.zone);
-        let b = fl.guard.get_or_insert_with(Default::default);
+        self.guard_make(&mut Flotilla { ai, f }, rect, rect2, flags, 3);
+    }
+
+    /// 0x4d1ce0's block, made (0x4d1bc0) or rewritten (0x4d0c90 with 1),
+    /// with the zone, the second rect, no mask, the flags and the mode;
+    /// then the posts by the mode (`guard_order`).
+    pub(in crate::scene) fn guard_make(
+        &mut self,
+        g: &mut dyn GuardGroup,
+        rect: Cells,
+        rect2: Cells,
+        flags: u32,
+        mode: u16,
+    ) {
+        let now = self.now();
+        let b = g.block_mut().get_or_insert_with(Default::default);
         b.spots = None;
         b.posts = None;
         b.engaged = None;
@@ -433,16 +517,16 @@ impl Scene {
         b.rect = rect;
         b.mask = None;
         b.flags = flags;
-        b.mode = 3;
+        b.mode = mode;
         b.rect2 = rect2;
         match b.mode {
             1 | 2 => {
-                self.guard_formation(ai, f, rect, None);
+                self.guard_formation(g, rect, None);
             }
             3 if rect2.2 != 0 && rect2.3 != 0 => {
-                self.guard_formation(ai, f, rect2, None);
+                self.guard_formation(g, rect2, None);
             }
-            3 => self.guard_post_here(ai, f),
+            3 => self.guard_post_here(g),
             _ => {}
         }
     }
@@ -460,9 +544,9 @@ impl Scene {
 
     /// 0x4d19b0 kind 1: the ship posted at `cell` (0x4d15a0) and sent
     /// there (0x4cf070). Whether listed (always, the block being there).
-    fn guard_post_go(&mut self, ai: &mut Computer, f: usize, ship: u32, cell: (i32, i32)) -> bool {
+    fn guard_post_go(&mut self, g: &mut dyn GuardGroup, ship: u32, cell: (i32, i32)) -> bool {
         let now = self.now();
-        let Some(b) = ai.flotillas[f].guard.as_mut() else {
+        let Some(b) = g.block_mut().as_mut() else {
             return false;
         };
         b.post(ship, cell.0, cell.1, now);
@@ -472,9 +556,9 @@ impl Scene {
 
     /// 0x4d1450: each ship of the group (class 200) posted at its own cell
     /// (0x4d15a0), not moved.
-    fn guard_post_here(&mut self, ai: &mut Computer, f: usize) {
+    fn guard_post_here(&mut self, g: &mut dyn GuardGroup) {
         let now = self.now();
-        for id in ai.flotillas[f].ships.clone() {
+        for id in g.ships().to_vec() {
             let Some(i) = self.object_index(id) else {
                 continue;
             };
@@ -482,7 +566,7 @@ impl Scene {
                 continue;
             }
             let (x, y) = self.ship_cell(i);
-            if let Some(b) = ai.flotillas[f].guard.as_mut() {
+            if let Some(b) = g.block_mut().as_mut() {
                 b.post(id, x, y, now);
             }
         }
@@ -492,10 +576,10 @@ impl Scene {
     /// (never cleared) and up to n spots appended by 0x561530 over the zone
     /// with the mask, the cells water (0x4d1520: 0x4999e0(x, y, 0)).
     /// Returns n.
-    fn guard_spots(&mut self, ai: &mut Computer, f: usize) -> i32 {
-        let n = ai.flotillas[f].ships.len() as i32;
+    fn guard_spots(&mut self, g: &mut dyn GuardGroup) -> i32 {
+        let n = g.ships().len() as i32;
         let dims = (self.nav.width as i32, self.nav.height as i32);
-        let Some(b) = ai.flotillas[f].guard.as_mut() else {
+        let Some(b) = g.block_mut().as_mut() else {
             return n;
         };
         let mut spots = b.spots.take().unwrap_or_default();
@@ -519,21 +603,20 @@ impl Scene {
     /// already a post's cell, the first that lists the ship. Whether one did.
     pub(super) fn guard_post_one(
         &mut self,
-        ai: &mut Computer,
-        f: usize,
+        g: &mut dyn GuardGroup,
         ship: u32,
         force: bool,
     ) -> bool {
-        let Some(b) = ai.flotillas[f].guard.as_ref() else {
+        let Some(b) = g.block().as_ref() else {
             return false;
         };
         if !force && b.find(ship) != 0 {
             return false;
         }
-        if self.guard_spots(ai, f) <= 0 {
+        if self.guard_spots(g) <= 0 {
             return false;
         }
-        let b = ai.flotillas[f].guard.as_ref().unwrap();
+        let b = g.block().as_ref().unwrap();
         let spots = b.spots.clone().unwrap_or_default();
         match &b.posts {
             None => {
@@ -543,7 +626,7 @@ impl Scene {
                     return false;
                 }
                 let r = (self.navy_draw() as usize) % spots.len();
-                self.guard_post_go(ai, f, ship, spots[r])
+                self.guard_post_go(g, ship, spots[r])
             }
             Some(posts) => {
                 let posts = posts.clone();
@@ -551,7 +634,7 @@ impl Scene {
                     if posts.iter().any(|p| (p.x, p.y) == s) {
                         continue;
                     }
-                    if self.guard_post_go(ai, f, ship, s) {
+                    if self.guard_post_go(g, ship, s) {
                         return true;
                     }
                 }
@@ -580,8 +663,7 @@ impl Scene {
     /// a failure; the original goes on with stack words never written.)
     pub(super) fn guard_formation(
         &mut self,
-        ai: &mut Computer,
-        f: usize,
+        g: &mut dyn GuardGroup,
         rect: Cells,
         ship: Option<u32>,
     ) -> i32 {
@@ -626,8 +708,8 @@ impl Scene {
         let Some(centre) = self.guard_centre(rect) else {
             return 0;
         };
-        let ships: Vec<(u32, (i32, i32), bool)> = ai.flotillas[f]
-            .ships
+        let ships: Vec<(u32, (i32, i32), bool)> = g
+            .ships()
             .iter()
             .filter_map(|&id| {
                 let i = self.object_index(id)?;
@@ -658,19 +740,19 @@ impl Scene {
         let mut moved = 0;
         for (k, (s, &cell)) in ships.iter().zip(&planned.cells).enumerate() {
             let Some(given) = ship else {
-                moved += i32::from(self.guard_post_go(ai, f, s.0, cell));
+                moved += i32::from(self.guard_post_go(g, s.0, cell));
                 continue;
             };
             if s.0 == given {
-                moved += i32::from(self.guard_post_go(ai, f, s.0, cell));
+                moved += i32::from(self.guard_post_go(g, s.0, cell));
                 continue;
             }
-            let Some(b) = ai.flotillas[f].guard.as_mut() else {
+            let Some(b) = g.block_mut().as_mut() else {
                 continue;
             };
             let found = b.find(s.0);
             match found >> 16 {
-                1 => moved += i32::from(self.guard_post_go(ai, f, s.0, cell)),
+                1 => moved += i32::from(self.guard_post_go(g, s.0, cell)),
                 2 => {
                     let idx = (found & 0xffff) as usize;
                     if let Some(e) = b.engaged.as_mut().and_then(|l| l.get_mut(idx)) {
@@ -726,38 +808,31 @@ impl Scene {
     /// list the boarding and ramming picks (0x4d3990); `+8` = 0. Then `+8`
     /// grows by the tick.
     pub(super) fn guard_pass(&mut self, ai: &mut Computer, f: usize) {
-        let heard = if ai.flotillas[f].joined.is_empty() || ai.flotillas[f].no_notices {
-            0
-        } else {
-            self.guard_notices(ai, f)
-        };
-        let period = [0x69, 0x4b, 0x3c][ai.difficulty.min(2)];
-        if heard == 0
-            && ai.flotillas[f].elapsed > period
-            && ai.flotillas[f].guard.is_some()
-            && !ai.flotillas[f].ships.is_empty()
-        {
-            match ai.flotillas[f].guard.as_ref().unwrap().mode {
+        self.guard_tick(&mut Flotilla { ai, f });
+    }
+
+    /// 0x4d3b30 on any group holding the block (`guard_pass`).
+    pub(in crate::scene) fn guard_tick(&mut self, g: &mut dyn GuardGroup) {
+        let heard = self.guard_notices(g);
+        let period = g.period();
+        if heard == 0 && *g.elapsed() > period && g.block().is_some() && !g.ships().is_empty() {
+            match g.block().as_ref().unwrap().mode {
                 1 => {
-                    if self.guard_watch(ai, f) == 0 {
-                        self.guard_patrol(ai, f);
+                    if self.guard_watch(g) == 0 {
+                        self.guard_patrol(g);
                     }
                 }
                 2 | 3 => {
-                    self.guard_watch(ai, f);
+                    self.guard_watch(g);
                 }
                 _ => {}
             }
-            if ai.flotillas[f]
-                .guard
-                .as_ref()
-                .is_some_and(|b| b.engaged.is_some())
-            {
-                self.guard_strike(ai, f);
+            if g.block().as_ref().is_some_and(|b| b.engaged.is_some()) {
+                self.guard_strike(g);
             }
-            ai.flotillas[f].elapsed = 0;
+            *g.elapsed() = 0;
         }
-        ai.flotillas[f].elapsed += 1;
+        *g.elapsed() += 1;
     }
 
     /// 0x4d1ea0: the group's notices newest first, each removed; one whose
@@ -772,20 +847,16 @@ impl Scene {
     /// the patrol (kind 4) restaffed by 0x4d25a0 with 0x4d2110's size;
     /// 0x13a / 0x13c / 0x13d (target gone, a boarding or ram
     /// ended) the ship's engaged entry, found by mode 0, its target zeroed.
-    fn guard_notices(&mut self, ai: &mut Computer, f: usize) -> u32 {
-        let block = ai.flotillas[f].block;
-        let three = ai.flotillas[f].behaviour.unwrap_or((0, 0, 0));
+    fn guard_notices(&mut self, g: &mut dyn GuardGroup) -> u32 {
+        let three = g.behaviour();
         let mut heard = 0;
-        for (id, at, code, _) in std::mem::take(&mut ai.flotillas[f].joined)
-            .into_iter()
-            .rev()
-        {
-            let in_group = ai.flotillas[f].ships.contains(&id) && self.object_index(id).is_some();
-            if at != block || (!in_group && code != 0x137) {
+        for (id, code) in g.take_notices().into_iter().rev() {
+            let in_group = g.ships().contains(&id) && self.object_index(id).is_some();
+            if !in_group && code != 0x137 {
                 continue;
             }
             heard += 1;
-            let Some(b) = ai.flotillas[f].guard.as_mut() else {
+            let Some(b) = g.block_mut().as_mut() else {
                 continue;
             };
             match code {
@@ -793,27 +864,27 @@ impl Scene {
                     let (mode, rect2) = (b.mode, b.rect2);
                     match mode {
                         1 | 2 => {
-                            self.guard_post_one(ai, f, id, false);
+                            self.guard_post_one(g, id, false);
                         }
                         3 if rect2.2 == 0 || rect2.3 == 0 => {
-                            self.guard_post_one(ai, f, id, false);
+                            self.guard_post_one(g, id, false);
                         }
                         3 => {
-                            self.guard_formation(ai, f, rect2, Some(id));
+                            self.guard_formation(g, rect2, Some(id));
                         }
                         _ => {}
                     }
                     self.send_behaviour(id, three);
                 }
                 0x136 => {
-                    if b.find(id) >> 16 & 4 != 0 && self.guard_settled(ai, f) {
-                        self.guard_next_corner(ai, f);
+                    if b.find(id) >> 16 & 4 != 0 && self.guard_settled(g) {
+                        self.guard_next_corner(g);
                     }
                 }
                 0x137 => {
                     if b.remove(id) >> 16 == 4 {
-                        let k = patrol_size(ai.flotillas[f].ships.len());
-                        self.guard_restaff(ai, f, k);
+                        let k = patrol_size(g.ships().len());
+                        self.guard_restaff(g, k);
                     }
                 }
                 0x13a | 0x13c | 0x13d => {
@@ -834,17 +905,9 @@ impl Scene {
     /// 0x4d18d0: ship `ship` engaged on `target` at `(x, y)` (the list made
     /// if null, `+0x2c` = now): its entry updated, else appended and the
     /// attack sent (0x4d0140: command 0x16 `{target, 7, 7, -1}`).
-    fn guard_engage(
-        &mut self,
-        ai: &mut Computer,
-        f: usize,
-        ship: u32,
-        target: u32,
-        x: i32,
-        y: i32,
-    ) {
+    fn guard_engage(&mut self, g: &mut dyn GuardGroup, ship: u32, target: u32, x: i32, y: i32) {
         let now = self.now();
-        let Some(b) = ai.flotillas[f].guard.as_mut() else {
+        let Some(b) = g.block_mut().as_mut() else {
             return;
         };
         b.engaged_at = now;
@@ -875,8 +938,8 @@ impl Scene {
     /// its target found every post from the last removed and engaged on it
     /// at its cell (0x4d18d0); above 0 the sharing out 0x4d2b00 with the
     /// targets, the hit patrol ships' list (A4) and the hit posts' (A1).
-    fn guard_watch(&mut self, ai: &mut Computer, f: usize) -> i32 {
-        let Some(b) = ai.flotillas[f].guard.clone() else {
+    fn guard_watch(&mut self, g: &mut dyn GuardGroup) -> i32 {
+        let Some(b) = g.block().clone() else {
             return 0;
         };
         let mut last: Option<u32> = None;
@@ -922,10 +985,10 @@ impl Scene {
                 }
             }
         }
-        let busy = self.guard_retreat(ai, f);
-        let players = ai.flotillas[f].behaviour.map_or(0, |b| b.0);
+        let busy = self.guard_retreat(g);
+        let players = g.behaviour().0;
         let found: Vec<u32> = self
-            .area_targets(b.rect, Some(ai.owner), players)
+            .area_targets(b.rect, Some(g.owner()), players)
             .iter()
             .map(|t| t.id)
             .collect();
@@ -933,16 +996,16 @@ impl Scene {
         if targets == 0 && busy == 0 {
             if let Some(engaged) = b.engaged.clone() {
                 for e in engaged.iter().rev() {
-                    let g = ai.flotillas[f].guard.as_mut().unwrap();
-                    g.remove(e.ship);
-                    match g.mode {
+                    let gb = g.block_mut().as_mut().unwrap();
+                    gb.remove(e.ship);
+                    match gb.mode {
                         1 | 2 => {
-                            self.guard_post_one(ai, f, e.ship, true);
+                            self.guard_post_one(g, e.ship, true);
                         }
                         3 => {
                             let now = self.now();
-                            let g = ai.flotillas[f].guard.as_mut().unwrap();
-                            g.post(e.ship, e.x, e.y, now);
+                            let gb = g.block_mut().as_mut().unwrap();
+                            gb.post(e.ship, e.x, e.y, now);
                             self.guard_move(e.ship, (e.x, e.y));
                         }
                         _ => {}
@@ -951,26 +1014,26 @@ impl Scene {
             }
         }
         let sum = a4.len() as i32 + a1.len() as i32 + targets;
-        let g = ai.flotillas[f].guard.as_ref().unwrap();
+        let gb = g.block().as_ref().unwrap();
         if sum == 0 {
-            let posts = g.posts.as_ref().map_or(0, Vec::len);
-            let engaged = g.engaged.as_ref().map_or(0, Vec::len);
-            if g.pull_back && posts > 0 && engaged > 0 {
+            let posts = gb.posts.as_ref().map_or(0, Vec::len);
+            let engaged = gb.engaged.as_ref().map_or(0, Vec::len);
+            if gb.pull_back && posts > 0 && engaged > 0 {
                 let r = self.navy_draw() as usize % engaged;
-                let g = ai.flotillas[f].guard.as_ref().unwrap();
-                let target = g.engaged.as_ref().unwrap()[r].target;
+                let gb = g.block().as_ref().unwrap();
+                let target = gb.engaged.as_ref().unwrap()[r].target;
                 if target != 0 && self.object_index(target).is_some() {
                     let mut k = posts;
                     while k > 0 {
                         k -= 1;
-                        let g = ai.flotillas[f].guard.as_mut().unwrap();
-                        let p = g.posts.as_mut().unwrap().remove(k);
-                        self.guard_engage(ai, f, p.ship, target, p.x, p.y);
+                        let gb = g.block_mut().as_mut().unwrap();
+                        let p = gb.posts.as_mut().unwrap().remove(k);
+                        self.guard_engage(g, p.ship, target, p.x, p.y);
                     }
                 }
             }
         } else {
-            self.guard_share(ai, f, &found, &a4, &a1);
+            self.guard_share(g, &found, &a4, &a1);
         }
         sum
     }
@@ -978,12 +1041,6 @@ impl Scene {
     /// The strength (0x50ea70) of the ship or object `id`, 0 when gone.
     fn guard_strength(&self, id: u32) -> i32 {
         self.object_index(id).map_or(0, |i| self.strength(i))
-    }
-
-    /// The guard's period P (0x4d3b30, 0x4d3080): by the computer's level
-    /// 0x69, 0x4b, 0x3c.
-    fn guard_period(ai: &Computer) -> u32 {
-        [0x69, 0x4b, 0x3c][ai.difficulty.min(2)]
     }
 
     /// 0x4d3080(G, 2), the retreat test, on the engaged list: `+0x2b`
@@ -1000,9 +1057,9 @@ impl Scene {
     /// there are some and the own strength is below twice the enemy's.
     /// Neither of the two first and 0, with now - `+0x2c` below 3 P
     /// (unsigned; also with no list): 1.
-    fn guard_retreat(&mut self, ai: &mut Computer, f: usize) -> i32 {
+    fn guard_retreat(&mut self, g: &mut dyn GuardGroup) -> i32 {
         let now = self.now();
-        let Some(b) = ai.flotillas[f].guard.as_mut() else {
+        let Some(b) = g.block_mut().as_mut() else {
             return 0;
         };
         b.pull_back = false;
@@ -1028,7 +1085,7 @@ impl Scene {
                 own += self.strength(i);
                 if let Some(by) = self.objects[i].ship.as_ref().and_then(|s| s.blow) {
                     if let Some(k) = self.object_index(by) {
-                        if let Some(b) = ai.flotillas[f].guard.as_mut() {
+                        if let Some(b) = g.block_mut().as_mut() {
                             b.engaged_at = now;
                         }
                         let st = self.strength(k);
@@ -1043,7 +1100,7 @@ impl Scene {
                     idle += 1;
                 }
             }
-            let enemy = best.map_or(0, |a| self.enemy_power(ai.owner, a));
+            let enemy = best.map_or(0, |a| self.enemy_power(g.owner(), a));
             if idle == n
                 || (n < 8 && n > 0 && stray * 100 / n > 90)
                 || (n >= 8 && stray * 100 / n > 70)
@@ -1052,12 +1109,12 @@ impl Scene {
             } else {
                 result = stray;
                 if stray != 0 && own < enemy * 2 {
-                    ai.flotillas[f].guard.as_mut().unwrap().pull_back = true;
+                    g.block_mut().as_mut().unwrap().pull_back = true;
                 }
             }
         }
-        let at = ai.flotillas[f].guard.as_ref().map_or(0, |b| b.engaged_at);
-        if result == 0 && !settled && now.wrapping_sub(at) < 3 * Self::guard_period(ai) {
+        let at = g.block().as_ref().map_or(0, |b| b.engaged_at);
+        if result == 0 && !settled && now.wrapping_sub(at) < 3 * g.period() {
             result = 1;
         }
         result
@@ -1067,7 +1124,7 @@ impl Scene {
     /// targets summed; at most twice `own`, that sum; else one entry
     /// **drawn** (navy LCG `% n`) and its target's group (0x408b70) weighed
     /// `fire + board / 10`. An empty list 0.
-    fn guard_weigh(&mut self, ai: &Computer, targets: &[u32], own: i32) -> i32 {
+    fn guard_weigh(&mut self, g: &dyn GuardGroup, targets: &[u32], own: i32) -> i32 {
         if targets.is_empty() {
             return 0;
         }
@@ -1080,12 +1137,12 @@ impl Scene {
         if t == 0 {
             return 0;
         }
-        self.enemy_power(ai.owner, t)
+        self.enemy_power(g.owner(), t)
     }
 
     /// The strength summed of the patrol's ships.
-    fn guard_patrol_strength(&self, ai: &Computer, f: usize) -> i32 {
-        let b = ai.flotillas[f].guard.as_ref();
+    fn guard_patrol_strength(&self, g: &dyn GuardGroup) -> i32 {
+        let b = g.block().as_ref();
         b.and_then(|b| b.patrol.as_ref())
             .into_iter()
             .flatten()
@@ -1099,14 +1156,13 @@ impl Scene {
     /// target **drawn** for each (navy LCG `% t`, its case 1).
     fn guard_send_all(
         &mut self,
-        ai: &mut Computer,
-        f: usize,
+        g: &mut dyn GuardGroup,
         patrol: bool,
         targets: &[u32],
         drawn: bool,
     ) {
         let n = {
-            let b = ai.flotillas[f].guard.as_ref().unwrap();
+            let b = g.block().as_ref().unwrap();
             let l = if patrol { &b.patrol } else { &b.posts };
             match l {
                 Some(l) => l.len(),
@@ -1115,7 +1171,7 @@ impl Scene {
         };
         let mut r = 0;
         for k in (0..n).rev() {
-            let b = ai.flotillas[f].guard.as_mut().unwrap();
+            let b = g.block_mut().as_mut().unwrap();
             let l = if patrol { &mut b.patrol } else { &mut b.posts };
             let Some(l) = l.as_mut().filter(|l| k < l.len()) else {
                 continue;
@@ -1131,7 +1187,7 @@ impl Scene {
                 }
                 t
             };
-            self.guard_engage(ai, f, p.ship, t, p.x, p.y);
+            self.guard_engage(g, p.ship, t, p.x, p.y);
         }
     }
 
@@ -1156,55 +1212,54 @@ impl Scene {
     ///    **Stand-in, not the original's:** the ship's own cell, as 2 uses.
     fn guard_share(
         &mut self,
-        ai: &mut Computer,
-        f: usize,
+        g: &mut dyn GuardGroup,
         targets: &[u32],
         a4: &[(u32, u32)],
         a1: &[(u32, u32)],
     ) {
-        if ai.flotillas[f].guard.is_none() {
+        if g.block().is_none() {
             return;
         }
-        let counts = |ai: &Computer| {
-            let b = ai.flotillas[f].guard.as_ref().unwrap();
+        let counts = |g: &dyn GuardGroup| {
+            let b = g.block().as_ref().unwrap();
             let n = b.patrol.as_ref().map_or(0, Vec::len) + b.posts.as_ref().map_or(0, Vec::len);
             (n, b.patrol.is_some(), b.posts.is_some())
         };
         if !targets.is_empty() {
-            let own = self.guard_patrol_strength(ai, f);
-            let v = self.guard_weigh(ai, targets, own);
+            let own = self.guard_patrol_strength(g);
+            let v = self.guard_weigh(g, targets, own);
             if own < v * 3 {
-                self.guard_send_all(ai, f, false, targets, true);
+                self.guard_send_all(g, false, targets, true);
             }
-            self.guard_send_all(ai, f, true, targets, true);
+            self.guard_send_all(g, true, targets, true);
         }
-        let (n, _, posts) = counts(ai);
+        let (n, _, posts) = counts(g);
         if !a1.is_empty() && n > 0 && posts {
             let own: i32 = a1.iter().map(|&(s, _)| self.guard_strength(s)).sum();
             let attackers: Vec<u32> = a1.iter().map(|&(_, a)| a).collect();
-            let v = self.guard_weigh(ai, &attackers, own);
+            let v = self.guard_weigh(g, &attackers, own);
             if own < v * 3 {
-                self.guard_send_all(ai, f, false, &attackers, false);
-                self.guard_send_all(ai, f, true, &attackers, false);
+                self.guard_send_all(g, false, &attackers, false);
+                self.guard_send_all(g, true, &attackers, false);
             } else {
                 for &(ship, attacker) in a1 {
-                    self.guard_reengage(ai, f, ship, attacker);
+                    self.guard_reengage(g, ship, attacker);
                 }
             }
         }
-        let (n, patrol, _) = counts(ai);
+        let (n, patrol, _) = counts(g);
         if !a4.is_empty() && patrol && n > 0 {
-            let own = self.guard_patrol_strength(ai, f);
+            let own = self.guard_patrol_strength(g);
             let attackers: Vec<u32> = a4.iter().map(|&(_, a)| a).collect();
-            let v = self.guard_weigh(ai, &attackers, own);
+            let v = self.guard_weigh(g, &attackers, own);
             if own < v * 3 {
-                self.guard_send_all(ai, f, false, &attackers, false);
-                self.guard_send_all(ai, f, true, &attackers, false);
+                self.guard_send_all(g, false, &attackers, false);
+                self.guard_send_all(g, true, &attackers, false);
             } else {
                 for &(ship, attacker) in a4.iter().rev() {
                     // Stand-in (see above): the original's cell is A4[4],
                     // A4[5], never written.
-                    self.guard_reengage(ai, f, ship, attacker);
+                    self.guard_reengage(g, ship, attacker);
                 }
             }
         }
@@ -1212,15 +1267,15 @@ impl Scene {
 
     /// 0x4d2b00's single sends: ship `ship` out of every list (0x4d1750
     /// mode 1) and, listed, engaged on `attacker` at its own cell.
-    fn guard_reengage(&mut self, ai: &mut Computer, f: usize, ship: u32, attacker: u32) {
-        if ai.flotillas[f].guard.as_mut().unwrap().remove(ship) == 0 {
+    fn guard_reengage(&mut self, g: &mut dyn GuardGroup, ship: u32, attacker: u32) {
+        if g.block_mut().as_mut().unwrap().remove(ship) == 0 {
             return;
         }
         let Some(i) = self.object_index(ship) else {
             return;
         };
         let (x, y) = self.ship_cell(i);
-        self.guard_engage(ai, f, ship, attacker, x, y);
+        self.guard_engage(g, ship, attacker, x, y);
     }
 
     /// 0x4d2720, the patrol rounds (mode 1, the watch giving 0), only with
@@ -1229,9 +1284,9 @@ impl Scene {
     /// entry 10001 ticks old or more (unsigned, `>= 0x2711`), or 0x4d2200,
     /// the next corner. (Its branch for an age of 65000 or more, a 1 in 3
     /// draw recalling the patrol, lies under `age < 0x2711`: never taken.)
-    fn guard_patrol(&mut self, ai: &mut Computer, f: usize) {
+    fn guard_patrol(&mut self, g: &mut dyn GuardGroup) {
         let now = self.now();
-        let Some(b) = ai.flotillas[f].guard.as_ref() else {
+        let Some(b) = g.block().as_ref() else {
             return;
         };
         if b.engaged.as_ref().is_some_and(|l| !l.is_empty()) {
@@ -1239,14 +1294,14 @@ impl Scene {
         }
         match b.patrol.as_ref().filter(|l| !l.is_empty()) {
             None => {
-                if b.posts.is_some() && self.guard_open_cells(ai, f) {
-                    let k = patrol_size(ai.flotillas[f].ships.len());
-                    self.guard_restaff(ai, f, k);
+                if b.posts.is_some() && self.guard_open_cells(g) {
+                    let k = patrol_size(g.ships().len());
+                    self.guard_restaff(g, k);
                 }
             }
             Some(l) => {
-                if now.wrapping_sub(l[0].tick) >= 0x2711 || self.guard_settled(ai, f) {
-                    self.guard_next_corner(ai, f);
+                if now.wrapping_sub(l[0].tick) >= 0x2711 || self.guard_settled(g) {
+                    self.guard_next_corner(g);
                 }
             }
         }
@@ -1256,8 +1311,8 @@ impl Scene {
     /// to the zone's right edge and y from 0 to its bottom edge (from the
     /// map's origin, not the zone's: the original's), the cell `y x W + x`;
     /// whether the count passes 3 x the group's ships.
-    fn guard_open_cells(&self, ai: &Computer, f: usize) -> bool {
-        let Some(b) = ai.flotillas[f].guard.as_ref() else {
+    fn guard_open_cells(&self, g: &dyn GuardGroup) -> bool {
+        let Some(b) = g.block().as_ref() else {
             return false;
         };
         let (rx, ry, rw, rh) = b.rect;
@@ -1271,16 +1326,16 @@ impl Scene {
                 }
             }
         }
-        n > 3 * ai.flotillas[f].ships.len() as i32
+        n > 3 * g.ships().len() as i32
     }
 
     /// 0x4d2200: the patrol not empty, every ship within 1 of its entry on
     /// both axes, and of those at least one entry older than 200 ticks
     /// (unsigned).
-    fn guard_settled(&self, ai: &Computer, f: usize) -> bool {
+    fn guard_settled(&self, g: &dyn GuardGroup) -> bool {
         let now = self.now();
-        let Some(l) = ai.flotillas[f]
-            .guard
+        let Some(l) = g
+            .block()
             .as_ref()
             .and_then(|b| b.patrol.as_ref())
             .filter(|l| !l.is_empty())
@@ -1305,8 +1360,8 @@ impl Scene {
 
     /// `+0x29` on round 0-3 and the patrol sent to that corner of the zone
     /// (0x4d2160, 0x4d22f0): 0x4d2720's and notice 0x136's.
-    fn guard_next_corner(&mut self, ai: &mut Computer, f: usize) {
-        let Some(b) = ai.flotillas[f].guard.as_mut() else {
+    fn guard_next_corner(&mut self, g: &mut dyn GuardGroup) {
+        let Some(b) = g.block_mut().as_mut() else {
             return;
         };
         b.corner = b.corner.wrapping_add(1);
@@ -1314,7 +1369,7 @@ impl Scene {
             b.corner = 0;
         }
         let to = corner(b.rect, u32::from(b.corner));
-        self.guard_patrol_go(ai, f, to);
+        self.guard_patrol_go(g, to);
     }
 
     /// 0x4d22f0(x, y): the patrol empty, 0. One ship: its entry at `(x, y)`
@@ -1323,10 +1378,10 @@ impl Scene {
     /// `(x, y)` on 0x4d50b0's grids, the first 0x5c9398 when a ship has
     /// `+0x592` 0, the second 0x5c93bc when one has it set; planned, each
     /// ship's entry at its cell and moved there. The count sent.
-    fn guard_patrol_go(&mut self, ai: &mut Computer, f: usize, (x, y): (i32, i32)) -> i32 {
+    fn guard_patrol_go(&mut self, g: &mut dyn GuardGroup, (x, y): (i32, i32)) -> i32 {
         let now = self.now();
-        let Some(l) = ai.flotillas[f]
-            .guard
+        let Some(l) = g
+            .block()
             .as_ref()
             .and_then(|b| b.patrol.clone())
             .filter(|l| !l.is_empty())
@@ -1335,7 +1390,7 @@ impl Scene {
         };
         if l.len() < 2 {
             let ship = l[0].ship;
-            if let Some(b) = ai.flotillas[f].guard.as_mut() {
+            if let Some(b) = g.block_mut().as_mut() {
                 b.patrol_add(ship, x, y, now);
             }
             self.guard_move(ship, (x, y));
@@ -1376,7 +1431,7 @@ impl Scene {
             return 0;
         }
         for (s, &cell) in ships.iter().zip(&planned.cells) {
-            if let Some(b) = ai.flotillas[f].guard.as_mut() {
+            if let Some(b) = g.block_mut().as_mut() {
                 b.patrol_add(s.0, cell.0, cell.1, now);
             }
             self.guard_move(s.0, cell);
@@ -1400,10 +1455,10 @@ impl Scene {
     /// patrol at (-1, -1) (0x4d1670) and its post removed, largest index
     /// first; then the patrol sent (0x4d22f0) to the corner `restaff_pick`
     /// leaves in `ebx` (an index above 3 the top left). Whether any went.
-    fn guard_restaff(&mut self, ai: &mut Computer, f: usize, k: usize) -> bool {
+    fn guard_restaff(&mut self, g: &mut dyn GuardGroup, k: usize) -> bool {
         let now = self.now();
-        let posts = ai.flotillas[f]
-            .guard
+        let posts = g
+            .block()
             .as_ref()
             .and_then(|b| b.posts.as_ref())
             .map_or(0, Vec::len);
@@ -1413,7 +1468,7 @@ impl Scene {
         let start = self.navy_draw() as usize % posts;
         let c = self.navy_draw() & 3;
         let (idx, ebx) = restaff_pick(posts, start, k, c);
-        let b = ai.flotillas[f].guard.as_mut().unwrap();
+        let b = g.block_mut().as_mut().unwrap();
         b.corner = c as u8;
         let mut moved = false;
         for i in idx {
@@ -1423,7 +1478,7 @@ impl Scene {
             moved = true;
         }
         let to = corner(b.rect, ebx);
-        if self.guard_patrol_go(ai, f, to) > 0 {
+        if self.guard_patrol_go(g, to) > 0 {
             moved = true;
         }
         moved
@@ -1439,8 +1494,8 @@ impl Scene {
     /// odds 101 or more ram it (0x4d01d0, 0x18), and from then on no ship
     /// takes the next step; else, none sent so yet this pass, a ship of
     /// kind 10 rams and one of kind 11 boards what 0x4baae0 finds again.
-    fn guard_strike(&mut self, ai: &mut Computer, f: usize) {
-        let Some(b) = ai.flotillas[f].guard.as_ref() else {
+    fn guard_strike(&mut self, g: &mut dyn GuardGroup) {
+        let Some(b) = g.block().as_ref() else {
             return;
         };
         let Some(engaged) = b.engaged.clone() else {
@@ -1775,7 +1830,7 @@ mod tests {
             .unwrap();
         assert_eq!(posts.len(), 2);
         scene.outbox.clear();
-        let sum = scene.guard_watch(&mut ai, g);
+        let sum = scene.guard_watch(&mut Flotilla { ai: &mut ai, f: g });
         assert_eq!(sum, targets.len() as i32);
         let b = ai.flotillas[g].guard.clone().unwrap();
         assert!(b.posts.unwrap().is_empty());
@@ -1795,7 +1850,7 @@ mod tests {
             }));
         }
         assert_eq!(b.engaged_at, scene.now());
-        assert_eq!(scene.guard_retreat(&mut ai, g), 1);
+        assert_eq!(scene.guard_retreat(&mut Flotilla { ai: &mut ai, f: g }), 1);
         assert!(!ai.flotillas[g].guard.as_ref().unwrap().pull_back);
         scene.computers.players[0] = ai;
     }

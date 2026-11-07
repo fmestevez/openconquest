@@ -383,6 +383,7 @@ impl Scene {
         self.leave_attacks(ids);
         self.leave_fleets(ids);
         self.leave_waypoint_moves(ids);
+        self.leave_guards(ids);
     }
 
     /// The selection's group given a new block (0x49e230 keeps it while
@@ -414,6 +415,10 @@ impl Scene {
         if let Some(g) = self.selection_waypoint_move(ships) {
             let m = self.waypoint_moves.remove(g);
             return Some((m.serial, m.elapsed, Some(m.route)));
+        }
+        if let Some(g) = self.selection_guard(ships) {
+            let g = self.human_guards.remove(g);
+            return Some((g.serial, g.elapsed, None));
         }
         None
     }
@@ -447,6 +452,8 @@ impl Scene {
             self.fleet_attacks[z].notices.push(notice);
         } else if let Some(z) = self.ship_waypoint_move(id) {
             self.waypoint_moves[z].notices.push(notice);
+        } else if let Some(z) = self.ship_guard(id) {
+            self.human_guards[z].notices.push(notice);
         } else {
             for ai in &mut self.computers.players {
                 if ai.post_notice(id, code, class) {

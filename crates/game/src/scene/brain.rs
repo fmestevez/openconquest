@@ -2553,7 +2553,7 @@ impl Scene {
             ((x + w) as f32 * t, (y + h) as f32 * t),
         );
         for id in self.fleet_ships(k) {
-            let _ = self.order_zone(id, a, b, true);
+            let _ = self.order_zone(id, a, b);
         }
     }
 
