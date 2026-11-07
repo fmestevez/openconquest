@@ -21163,3 +21163,33 @@ fn ships_unload_at_a_barbarian_structure() {
     assert_eq!(s.cargo, 0.0);
     assert_eq!(scene.purses.get(&(4, 0)).map_or(0, |p| p.1), fish + 50);
 }
+
+/// The brains' groups' players (brain `+0x24 + 0xc g`, set at message
+/// 0x8d1: `group_players`) are those of the ships each member starts with,
+/// in every mission (needs `OPENCONQUEST_DATA`).
+#[test]
+fn brain_groups_hold_their_players_ships() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut checked = 0;
+    for n in 0..14 {
+        let name = format!("miss{n:03}");
+        let scene = Scene::load(&data, &mut caches, &name).unwrap();
+        let brain = scene.brain.as_ref().unwrap();
+        for f in &brain.fleets {
+            let p = f.player.unwrap();
+            assert!(p == (4, 0) || p == (3, 3) || p == (3, 2), "{name}");
+            for &id in &f.ships {
+                let o = &scene.objects[scene.object_index(id).unwrap()];
+                if o.ship.is_some() {
+                    assert_eq!(o.owner, Some(p), "{name}");
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 0);
+}

@@ -1413,54 +1413,63 @@ impl Scene {
     /// the tick.
     pub(super) fn run_gather_zones(&mut self) {
         self.run_berth_waits();
+        // A brain fleet's zone runs in the brain's groups' walk, at its
+        // group's place (`run_brain_blocks`).
         let mut z = 0;
         while z < self.gather_zones.len() {
-            let ships: Option<Vec<u32>> = match self.gather_zones[z].group {
-                ZoneGroup::Brain(k) => self
-                    .brain
-                    .as_ref()
-                    .and_then(|b| b.fleets.get(k))
-                    .map(|f| f.ships.clone()),
-                ZoneGroup::Computer(p, f) => self.computer_flotilla_ships(p, f),
-                ZoneGroup::Human(_) => None,
-            };
-            if let Some(mut ships) = ships {
-                let mut seen = std::collections::HashSet::new();
-                ships.retain(|id| seen.insert(*id));
-                self.gather_zones[z].ships = ships;
+            if !matches!(self.gather_zones[z].group, ZoneGroup::Brain(_)) {
+                self.gather_zone_tick(z);
             }
-            let live: Vec<u32> = self.gather_zones[z]
-                .ships
-                .iter()
-                .copied()
-                .filter(|&id| {
-                    self.object_index(id)
-                        .is_some_and(|i| self.objects[i].ship.is_some())
-                })
-                .collect();
-            if let Some(o) = live
-                .iter()
-                .find_map(|&id| self.objects[self.object_index(id).unwrap()].owner)
-            {
-                self.gather_zones[z].owner = Some(o);
-            }
-            self.gather_zones[z].ships = live;
-            let mut sent = 0;
-            if !self.gather_zones[z].notices.is_empty() {
-                sent = self.zone_notices(z);
-            }
-            if sent == 0
-                && self.gather_zones[z].elapsed > 0x55
-                && !self.gather_zones[z].ships.is_empty()
-            {
-                self.gather_zones[z].elapsed = 0;
-                self.zone_replan(z);
-            }
-            self.gather_zones[z].elapsed += 1;
             z += 1;
         }
         self.gather_zones
             .retain(|z| !(matches!(z.group, ZoneGroup::Human(_)) && z.ships.is_empty()));
+    }
+
+    /// One gather zone's tick (0x4ca8d0, from the navy's 0x4c4f40).
+    pub(super) fn gather_zone_tick(&mut self, z: usize) {
+        let ships: Option<Vec<u32>> = match self.gather_zones[z].group {
+            ZoneGroup::Brain(k) => self
+                .brain
+                .as_ref()
+                .and_then(|b| b.fleets.get(k))
+                .map(|f| f.ships.clone()),
+            ZoneGroup::Computer(p, f) => self.computer_flotilla_ships(p, f),
+            ZoneGroup::Human(_) => None,
+        };
+        if let Some(mut ships) = ships {
+            let mut seen = std::collections::HashSet::new();
+            ships.retain(|id| seen.insert(*id));
+            self.gather_zones[z].ships = ships;
+        }
+        let live: Vec<u32> = self.gather_zones[z]
+            .ships
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.object_index(id)
+                    .is_some_and(|i| self.objects[i].ship.is_some())
+            })
+            .collect();
+        if let Some(o) = live
+            .iter()
+            .find_map(|&id| self.objects[self.object_index(id).unwrap()].owner)
+        {
+            self.gather_zones[z].owner = Some(o);
+        }
+        self.gather_zones[z].ships = live;
+        let mut sent = 0;
+        if !self.gather_zones[z].notices.is_empty() {
+            sent = self.zone_notices(z);
+        }
+        if sent == 0
+            && self.gather_zones[z].elapsed > 0x55
+            && !self.gather_zones[z].ships.is_empty()
+        {
+            self.gather_zones[z].elapsed = 0;
+            self.zone_replan(z);
+        }
+        self.gather_zones[z].elapsed += 1;
     }
 
     /// 0x4c9e30: the notices newest first, each removed after its case;

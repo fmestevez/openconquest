@@ -341,6 +341,13 @@ pub struct Fleet {
     /// yard's wait after the ship is over (`Op::Release`, state 0xc).
     #[serde(default)]
     pub build: Option<(usize, u8)>,
+    /// Member `+4`: the group's player (`(nation, slot)` of the navy's
+    /// index, brain `+0x24 + 0xc g`, `group_players`), copied by 0x479200
+    /// and given to 0x4a0480 op 1 (0x49b990 appends the group to that
+    /// player's list, navy `+0x22 + 4p`). Set each brain tick; none
+    /// before the first.
+    #[serde(default)]
+    pub(super) player: Option<(u32, u32)>,
 }
 
 /// A fleet's move order (its block 0x4cc500 `{100, 1, now, x, y, ...}`).
@@ -598,13 +605,9 @@ impl super::computer::fleet_attack_zone::AttackGroup for Fleet {
     fn elapsed(&mut self) -> &mut u32 {
         &mut self.elapsed
     }
-    /// The group's player (member `+4`): that of its ships, each of the
-    /// group's own player (none without a ship on the map).
-    fn owner(&self, scene: &Scene) -> (u32, u32) {
-        self.ships
-            .iter()
-            .find_map(|&id| scene.objects[scene.object_index(id)?].owner)
-            .unwrap_or((u32::MAX, u32::MAX))
+    /// The group's player (member `+4`, `Fleet::player`).
+    fn owner(&self, _: &Scene) -> (u32, u32) {
+        self.player.unwrap_or((u32::MAX, u32::MAX))
     }
     /// The campaign's (game `+0xd80` 1): 0x5a for every side.
     fn period(&self) -> u32 {
@@ -640,14 +643,9 @@ impl super::computer::fleet_treasure::TreasureGroup for Fleet {
     fn elapsed(&mut self) -> &mut u32 {
         &mut self.elapsed
     }
-    /// The group's player (member `+4`): that of its ships, each of the
-    /// group's own player (none without a ship on the map, where the
-    /// block lists no port).
-    fn owner(&self, scene: &Scene) -> (u32, u32) {
-        self.ships
-            .iter()
-            .find_map(|&id| scene.objects[scene.object_index(id)?].owner)
-            .unwrap_or((u32::MAX, u32::MAX))
+    /// The group's player (member `+4`, `Fleet::player`).
+    fn owner(&self, _: &Scene) -> (u32, u32) {
+        self.player.unwrap_or((u32::MAX, u32::MAX))
     }
     /// Block `+0x30`, the first word of the call's member p10: that
     /// member's group, taken as a land fleet as the repair's dock pick
@@ -698,6 +696,7 @@ impl Fleet {
             attack: None,
             ordered: false,
             build: None,
+            player: None,
         }
     }
 }
@@ -791,6 +790,31 @@ pub(super) fn mission_turn(name: &str, scene: &mut Scene, k: usize) {
     if let Some(turn) = mission(name).and_then(|m| m.turn) {
         turn(scene, k);
     }
+}
+
+/// The brain's groups' players (brain `+0x24 + 0xc g`, the navy's index
+/// `nation * 4 + slot`), as message 0x8d1 sets them with the group count
+/// `+0x20`: miss000 0x449bc7, miss001 0x44b08d, miss002 0x44d1ae /
+/// 0x44d1c5, miss003 0x44fe62 / 0x44fe7d, miss004 0x453bd5-0x453c0b,
+/// miss005 0x457a19 / 0x457a34, miss006 0x45b352-0x45b389, miss007
+/// 0x45f860 / 0x45f87b, miss008 0x463384 / 0x46339f, miss009 0x4664bd /
+/// 0x4664d8, miss010 0x46a233 / 0x46a24e, miss011 0x46ea0e / 0x46ea29,
+/// miss012 0x4730c3-0x4730fa, miss013 0x477a54-0x477a8a.
+fn group_players(name: &str) -> &'static [u32] {
+    match name {
+        "miss000" | "miss001" => &[16],
+        "miss002" | "miss005" | "miss007" | "miss008" | "miss010" => &[16, 15],
+        "miss003" => &[15, 16],
+        "miss004" => &[15, 16, 14],
+        "miss009" | "miss011" => &[16, 14],
+        "miss006" | "miss012" | "miss013" => &[16, 15, 14],
+        _ => &[],
+    }
+}
+
+/// Group `g`'s player as `(nation, slot)` (`group_players`).
+fn group_player(name: &str, g: u8) -> Option<(u32, u32)> {
+    group_players(name).get(g as usize).map(|&p| (p / 4, p % 4))
 }
 
 fn mission(name: &str) -> Option<Mission> {
@@ -1035,7 +1059,9 @@ impl Scene {
                         .map(|o| o.id)
                 })
                 .collect();
-            brain.fleets.push(Fleet::new(ships));
+            let mut f = Fleet::new(ships);
+            f.player = group_player(&self.mission, def.group);
+            brain.fleets.push(f);
         }
         self.brain = Some(brain);
         (m.start)(self, data, caches);
@@ -1132,6 +1158,48 @@ impl Scene {
     /// does the rest of its own (`after`, for miss005 and miss011). A
     /// member runs whether or not it has ships (the original checks only
     /// its fleet id).
+    /// The brain fleets' blocks in the navy's tick (message 0, 0x49ab30 at
+    /// 0x49acb6): the 20 players' group lists (navy `+0x22 + 4p`) in
+    /// turn, each list by index (its count read before the walk), a land
+    /// fleet (kind 0xb) run by its pass 0x42b910, any other by 0x4c4f40,
+    /// which switches on its block's kind (`+0x25`) and sub-kind and runs
+    /// that block's tick alone. A group's index is its place in its
+    /// player's list, appended at its making (0x49b990); the brains make
+    /// every member at message 0x8d1 (0x479200), in member order within a
+    /// group, each group its own player (`group_players`). So the fleets
+    /// run by their group's player, then by member. (The brains' land
+    /// fleets run in `run_brain_lands`, apart: not ported at their place.)
+    fn run_brain_blocks(&mut self, defs: &[FleetDef]) {
+        let brain = self.brain.as_mut().unwrap();
+        let n = defs.len().min(brain.fleets.len());
+        let mut order = Vec::with_capacity(n);
+        for (k, d) in defs.iter().enumerate().take(n) {
+            let p = group_player(&brain.mission, d.group);
+            brain.fleets[k].player = p;
+            order.push((p, d.member, k));
+        }
+        order.sort_unstable();
+        for (_, _, k) in order {
+            match self.brain.as_ref().unwrap().fleets[k].block {
+                0x82 => self.repair_order_tick(k),
+                100 => self.move_order_tick(k),
+                0x70 => self.attack_order_tick(k),
+                0x8c => self.found_order_tick(k),
+                0xbe => self.treasure_order_tick(k),
+                0x78 => {
+                    let z = self
+                        .gather_zones
+                        .iter()
+                        .position(|z| z.group == super::gather::ZoneGroup::Brain(k));
+                    if let Some(z) = z {
+                        self.gather_zone_tick(z);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub(super) fn run_brain(&mut self) {
         let Some(brain) = self.brain.as_mut() else {
             return;
@@ -1144,11 +1212,7 @@ impl Scene {
         };
         // The fleets' orders tick too (the navy's message 0, 0x49ad18;
         // not decoded: whether before or after the brain's).
-        self.run_repair_orders();
-        self.run_move_orders();
-        self.run_attack_orders();
-        self.run_found_orders();
-        self.run_treasure_orders();
+        self.run_brain_blocks(m.fleets);
         if tick % 5 != 0 {
             return;
         }
@@ -2253,74 +2317,79 @@ impl Scene {
     /// the group's three (0x4c42f0 at 0x4cde70, queued), whether or not it
     /// was sent to a dock. (Not ported here: the pass's reports of blows,
     /// 0x4a21c0, which the port makes at once, `fleet_attacked`.)
-    pub(super) fn run_repair_orders(&mut self) {
-        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
-            if self.brain.as_ref().unwrap().fleets[k].repair.is_none() {
+    pub(super) fn repair_order_tick(&mut self, k: usize) {
+        if self.brain.as_ref().unwrap().fleets[k].repair.is_none() {
+            return;
+        }
+        let queue = std::mem::take(&mut self.brain.as_mut().unwrap().fleets[k].notices);
+        let mut sent = 0;
+        for &(id, code, _) in queue.iter().rev() {
+            if !self.brain.as_ref().unwrap().fleets[k].ships.contains(&id) {
                 continue;
             }
-            let queue = std::mem::take(&mut self.brain.as_mut().unwrap().fleets[k].notices);
-            let mut sent = 0;
-            for &(id, code, _) in queue.iter().rev() {
-                if !self.brain.as_ref().unwrap().fleets[k].ships.contains(&id) {
-                    continue;
-                }
-                if code == 0x134 {
-                    self.brain_repaired(k, id);
-                    continue;
-                }
-                if code != 300 {
-                    continue;
-                }
-                self.repair_pick(k);
-                let dock = self.brain.as_ref().unwrap().fleets[k]
-                    .repair
-                    .as_ref()
-                    .unwrap()
-                    .dock;
-                if dock != 0 {
-                    self.repair_send(id, dock);
-                    sent += 1;
-                }
-                // Then the group's behaviour, sent or not (0x4cde70; the
-                // zeroes when never given).
-                let (players, classes, third) = self.brain.as_ref().unwrap().fleets[k]
-                    .behaviour
-                    .unwrap_or((0, 0, 0));
-                self.post(super::Order::BehaviourCommand {
-                    ship: id,
-                    sub: 1,
-                    players,
-                    classes,
-                    third,
-                });
+            if code == 0x134 {
+                self.brain_repaired(k, id);
+                continue;
             }
-            let order = self.brain.as_ref().unwrap().fleets[k]
+            if code != 300 {
+                continue;
+            }
+            self.repair_pick(k);
+            let dock = self.brain.as_ref().unwrap().fleets[k]
                 .repair
-                .clone()
-                .unwrap();
-            if sent == 0 && order.elapsed > 0x5f {
-                self.brain.as_mut().unwrap().fleets[k]
-                    .repair
-                    .as_mut()
-                    .unwrap()
-                    .elapsed = 0;
-                for id in self.fleet_ships(k) {
-                    let still = self.object_index(id).is_some_and(|i| {
-                        self.objects[i]
-                            .ship
-                            .as_ref()
-                            .is_some_and(|s| s.move_state == 0)
-                    });
-                    if still && !order.mended.contains(&id) {
-                        self.repair_send(id, order.dock);
-                    }
-                }
+                .as_ref()
+                .unwrap()
+                .dock;
+            if dock != 0 {
+                self.repair_send(id, dock);
+                sent += 1;
             }
+            // Then the group's behaviour, sent or not (0x4cde70; the
+            // zeroes when never given).
+            let (players, classes, third) = self.brain.as_ref().unwrap().fleets[k]
+                .behaviour
+                .unwrap_or((0, 0, 0));
+            self.post(super::Order::BehaviourCommand {
+                ship: id,
+                sub: 1,
+                players,
+                classes,
+                third,
+            });
+        }
+        let order = self.brain.as_ref().unwrap().fleets[k]
+            .repair
+            .clone()
+            .unwrap();
+        if sent == 0 && order.elapsed > 0x5f {
             self.brain.as_mut().unwrap().fleets[k]
                 .repair
                 .as_mut()
                 .unwrap()
-                .elapsed += 1;
+                .elapsed = 0;
+            for id in self.fleet_ships(k) {
+                let still = self.object_index(id).is_some_and(|i| {
+                    self.objects[i]
+                        .ship
+                        .as_ref()
+                        .is_some_and(|s| s.move_state == 0)
+                });
+                if still && !order.mended.contains(&id) {
+                    self.repair_send(id, order.dock);
+                }
+            }
+        }
+        self.brain.as_mut().unwrap().fleets[k]
+            .repair
+            .as_mut()
+            .unwrap()
+            .elapsed += 1;
+    }
+
+    #[cfg(test)]
+    pub(super) fn run_repair_orders(&mut self) {
+        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
+            self.repair_order_tick(k);
         }
     }
 
@@ -2402,16 +2471,14 @@ impl Scene {
 
     /// The founding blocks' ticks (0x4cbe70, the navy's 0x4c5047) of the
     /// brain fleets that hold one (`fleet_found`).
-    fn run_found_orders(&mut self) {
-        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
-            let f = &mut self.brain.as_mut().unwrap().fleets[k];
-            if f.block != 0x8c {
-                continue;
-            }
-            let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
-            self.found_tick(&mut f);
-            self.brain.as_mut().unwrap().fleets[k] = f;
+    pub(super) fn found_order_tick(&mut self, k: usize) {
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        if f.block != 0x8c {
+            return;
         }
+        let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
+        self.found_tick(&mut f);
+        self.brain.as_mut().unwrap().fleets[k] = f;
     }
 
     /// Fleet order 0x8c from member `k` (0x479af0, from 0x47b000's first
@@ -2444,16 +2511,14 @@ impl Scene {
 
     /// The treasure blocks' ticks (0x4da6a0, the navy's 0x4c5088) of the
     /// brain fleets that hold one (`fleet_treasure`).
-    fn run_treasure_orders(&mut self) {
-        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
-            let f = &mut self.brain.as_mut().unwrap().fleets[k];
-            if f.block != 0xbe {
-                continue;
-            }
-            let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
-            self.treasure_tick(&mut f);
-            self.brain.as_mut().unwrap().fleets[k] = f;
+    pub(super) fn treasure_order_tick(&mut self, k: usize) {
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        if f.block != 0xbe {
+            return;
         }
+        let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
+        self.treasure_tick(&mut f);
+        self.brain.as_mut().unwrap().fleets[k] = f;
     }
 
     /// Fleet order 0xbe from member `k` (0x47aed0's first call, 0x479c90):
@@ -2785,88 +2850,93 @@ impl Scene {
     /// join sent to the order's cell is also sent the group's behaviour
     /// (0x4cc72f). (Not ported: the reports of blows, 0x4a21c0, which the
     /// port makes at once.)
-    pub(super) fn run_move_orders(&mut self) {
+    pub(super) fn move_order_tick(&mut self, k: usize) {
         let t = TILE_SIZE as f32;
-        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
-            let f = &self.brain.as_ref().unwrap().fleets[k];
-            let Some(order) = f.move_order.clone() else {
+        let f = &self.brain.as_ref().unwrap().fleets[k];
+        let Some(order) = f.move_order.clone() else {
+            return;
+        };
+        let joined = std::mem::take(&mut self.brain.as_mut().unwrap().fleets[k].joined);
+        let mut heard = 0;
+        for id in joined.into_iter().rev() {
+            if !self.fleet_ships(k).contains(&id) || self.object_index(id).is_none() {
                 continue;
-            };
-            let joined = std::mem::take(&mut self.brain.as_mut().unwrap().fleets[k].joined);
-            let mut heard = 0;
-            for id in joined.into_iter().rev() {
-                if !self.fleet_ships(k).contains(&id) || self.object_index(id).is_none() {
-                    continue;
-                }
-                heard = self.plan_formation(k);
-                if heard == 0 {
-                    let (x, y) = (
-                        order.to.0 as f32 * t + t / 2.0,
-                        order.to.1 as f32 * t + t / 2.0,
-                    );
-                    self.post(super::Order::MoveKeep { ship: id, x, y });
-                    // Then the group's behaviour, whether or not it was
-                    // given one (0x4cc71b-0x4cc72f: the zeroes then).
-                    let (players, classes, third) = self.brain.as_ref().unwrap().fleets[k]
-                        .behaviour
-                        .unwrap_or((0, 0, 0));
-                    self.post(super::Order::BehaviourCommand {
-                        ship: id,
-                        sub: 1,
-                        players,
-                        classes,
-                        third,
-                    });
-                    heard += 1;
-                }
             }
-            let order = self.brain.as_ref().unwrap().fleets[k]
-                .move_order
-                .clone()
-                .unwrap();
-            if heard == 0 && self.brain.as_ref().unwrap().fleets[k].elapsed > 100 {
-                self.brain.as_mut().unwrap().fleets[k].elapsed = 0;
-                let behaviour = self.brain.as_ref().unwrap().fleets[k].behaviour;
-                for id in self.fleet_ships(k) {
-                    let Some(i) = self.object_index(id) else {
-                        continue;
-                    };
-                    // A ship whose players or classes are not the group's
-                    // (0x4cce41-0x4cce73, group `+0x14` set) is sent the
-                    // group's behaviour again.
-                    if let (Some(s), Some((players, classes, third))) =
-                        (self.objects[i].ship.as_ref(), behaviour)
-                    {
-                        if s.behaviour.players != players || s.behaviour.classes != classes {
-                            self.post(super::Order::BehaviourCommand {
-                                ship: id,
-                                sub: 1,
-                                players,
-                                classes,
-                                third,
-                            });
-                        }
-                    }
-                    let o = &self.objects[i];
-                    if o.ship.as_ref().is_none_or(|s| s.move_state != 0) {
-                        continue;
-                    }
-                    let cell = order
-                        .slots
-                        .iter()
-                        .find(|s| s.0 == id)
-                        .map_or(order.to, |s| s.1);
-                    let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
-                    if (here.0 - cell.0).abs() > 1 || (here.1 - cell.1).abs() > 1 {
-                        self.post(super::Order::Move {
+            heard = self.plan_formation(k);
+            if heard == 0 {
+                let (x, y) = (
+                    order.to.0 as f32 * t + t / 2.0,
+                    order.to.1 as f32 * t + t / 2.0,
+                );
+                self.post(super::Order::MoveKeep { ship: id, x, y });
+                // Then the group's behaviour, whether or not it was
+                // given one (0x4cc71b-0x4cc72f: the zeroes then).
+                let (players, classes, third) = self.brain.as_ref().unwrap().fleets[k]
+                    .behaviour
+                    .unwrap_or((0, 0, 0));
+                self.post(super::Order::BehaviourCommand {
+                    ship: id,
+                    sub: 1,
+                    players,
+                    classes,
+                    third,
+                });
+                heard += 1;
+            }
+        }
+        let order = self.brain.as_ref().unwrap().fleets[k]
+            .move_order
+            .clone()
+            .unwrap();
+        if heard == 0 && self.brain.as_ref().unwrap().fleets[k].elapsed > 100 {
+            self.brain.as_mut().unwrap().fleets[k].elapsed = 0;
+            let behaviour = self.brain.as_ref().unwrap().fleets[k].behaviour;
+            for id in self.fleet_ships(k) {
+                let Some(i) = self.object_index(id) else {
+                    continue;
+                };
+                // A ship whose players or classes are not the group's
+                // (0x4cce41-0x4cce73, group `+0x14` set) is sent the
+                // group's behaviour again.
+                if let (Some(s), Some((players, classes, third))) =
+                    (self.objects[i].ship.as_ref(), behaviour)
+                {
+                    if s.behaviour.players != players || s.behaviour.classes != classes {
+                        self.post(super::Order::BehaviourCommand {
                             ship: id,
-                            x: cell.0 as f32 * t + t / 2.0,
-                            y: cell.1 as f32 * t + t / 2.0,
+                            sub: 1,
+                            players,
+                            classes,
+                            third,
                         });
                     }
                 }
+                let o = &self.objects[i];
+                if o.ship.as_ref().is_none_or(|s| s.move_state != 0) {
+                    continue;
+                }
+                let cell = order
+                    .slots
+                    .iter()
+                    .find(|s| s.0 == id)
+                    .map_or(order.to, |s| s.1);
+                let here = ((o.x / t).floor() as i32, (o.y / t).floor() as i32);
+                if (here.0 - cell.0).abs() > 1 || (here.1 - cell.1).abs() > 1 {
+                    self.post(super::Order::Move {
+                        ship: id,
+                        x: cell.0 as f32 * t + t / 2.0,
+                        y: cell.1 as f32 * t + t / 2.0,
+                    });
+                }
             }
-            self.brain.as_mut().unwrap().fleets[k].elapsed += 1;
+        }
+        self.brain.as_mut().unwrap().fleets[k].elapsed += 1;
+    }
+
+    #[cfg(test)]
+    pub(super) fn run_move_orders(&mut self) {
+        for k in 0..self.brain.as_ref().unwrap().fleets.len() {
+            self.move_order_tick(k);
         }
     }
 
@@ -2911,15 +2981,20 @@ impl Scene {
 
     /// The attack blocks' passes (0x4d6cd0, the navy's 0x4c4f40) of the
     /// brain fleets that hold one (`fleet_attack_zone::attack_tick`).
+    pub(super) fn attack_order_tick(&mut self, k: usize) {
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        if f.block != 0x70 || f.attack.is_none() {
+            return;
+        }
+        let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
+        self.attack_tick(&mut f);
+        self.brain.as_mut().unwrap().fleets[k] = f;
+    }
+
+    #[cfg(test)]
     pub(super) fn run_attack_orders(&mut self) {
         for k in 0..self.brain.as_ref().unwrap().fleets.len() {
-            let f = &mut self.brain.as_mut().unwrap().fleets[k];
-            if f.block != 0x70 || f.attack.is_none() {
-                continue;
-            }
-            let mut f = std::mem::replace(f, Fleet::new(Vec::new()));
-            self.attack_tick(&mut f);
-            self.brain.as_mut().unwrap().fleets[k] = f;
+            self.attack_order_tick(k);
         }
     }
 

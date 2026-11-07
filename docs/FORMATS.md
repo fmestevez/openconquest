@@ -11460,6 +11460,50 @@ a brain's mended ship's join posts 300 as a prize's
 (`brain_heard_join`), only with a block, and a new block of another
 kind drops the joins not heard (`brain_block`).
 
+**The navy's group walk** (message 0, 0x49ab30 at 0x49acb6; nothing
+while game `+0x3212` is -1 and `+0x3225` 0). The navy keeps a group list
+per player, `+0x22 + 4p` for p in 0..0x14 (the navy's index `nation *
+4 + slot`, as `+0x21` = game `+0x3212 * 4 + +0x3213`). It walks the
+players in turn, each list by index (the count read before the walk):
+a land fleet (record kind 0xb) runs its pass 0x42b910 on `+0x29`, any
+other group 0x4c4f40(p, index, group), which switches on the block's
+kind and sub-kind (`+0x25`, below) and runs that block's tick alone.
+0x4a0480 op 1 `{kind, player}` makes a group by 0x49b990: a record
+zeroed, `[0]` the kind (10 sea, 0xb land, with its land fleet 0x42b370 /
+0x42b3a0 at `+0x29`), `[3]` the serial navy `+0x1c` + 1, appended to
+that player's list (0x5577d0), its index returned. The brains' member
+`+4` is the group's player, brain `+0x24 + 0xc g` (0x479200 copies it
+and passes it to op 1 with the kind, the index into member `+0`).
+Message 0x8d1 sets the group count `+0x20` and each group's player,
+member count and members: miss000 [16] (0x449bc7), miss001 [16]
+(0x44b08d), miss002 [16, 15] (0x44d1ae), miss003 [15, 16] (0x44fe62),
+miss004 [15, 16, 14] (0x453bd5), miss005 [16, 15] (0x457a19), miss006
+[16, 15, 14] (0x45b352), miss007 [16, 15] (0x45f860), miss008 [16, 15]
+(0x463384), miss009 [16, 14] (0x4664bd), miss010 [16, 15] (0x46a233),
+miss011 [16, 14] (0x46ea0e), miss012 [16, 15, 14] (0x4730c3), miss013
+[16, 15, 14] (0x477a54); every member is made there (0x479200's 222
+sites), in member order within a group (miss004 makes group 2 before
+group 1, each its own player). So the brain fleets' blocks run by their
+group's player, then member, each its one block. The Sapp's tick
+(0x542270) sends message 0 to the objects of its list `+0x10` in turn,
+appended at their making (0x541b40). Ported: `group_players`,
+`Fleet::player` (the group's player for the blocks' `owner`; before, its
+ships' owner), `run_brain_blocks` (the brain fleets' repair, move, attack,
+founding, treasure and gather blocks in that walk, by `Fleet::block`:
+before, every repair, move, ... block in turn by kind, a repair order
+or move left over under another block still run, and the brains'
+gather zones in the computers' and human's pass);
+`brain_groups_hold_their_players_ships`. Not decoded: where the navy,
+the brain, the computers' players and the ships stand in the Sapp's
+list (the port keeps its places: the navy's walk, then the brain, then
+the computers, `Scene::update`). Not ported: the walk across the port's
+other groups: the human's blocks (`run_human_attacks`,
+`run_human_guards`, `run_waypoint_moves`, gather zones), the
+computers' flotillas' blocks (run in `computer_tick`) and the brains'
+land fleets' passes (`run_brain_lands`, after the computers) each run in
+their own pass, not at their group's place in the players' lists
+(the human's and computers' groups' list indices are not carried).
+
 **The brains' blocks' notices.** Each block's reader takes every
 notice of the group's queue off, newest first, and acts on these codes
 alone (the ship looked up in the group's list, 0x4cc590): move 100
@@ -11488,12 +11532,7 @@ done, result 10 to p3, else (1 included) to p4; then the timeout
 (`+0x18 + +0x14 <=` now, p10 non-zero) to p3; then the events, each
 switch overriding the one before. (Before, the port gave each ship a
 zone order and waited for them idle.) Ported: miss000's guards
-(`brain_guards_attack_through_the_zone_block`). Not decoded: the
-brains' group's player for a fleet with no ship on the map (the port
-takes its ships' owner, `AttackGroup::owner`); the order of the groups
-in the navy's tick 0x4c4f40 against the port's pass by kind (repair,
-move, attack, founding, treasure), which orders their draws of the
-navy's generator. Not ported: the fleet attack task's (the port keeps it per ship, no group: see
+(`brain_guards_attack_through_the_zone_block`). Not ported: the fleet attack task's (the port keeps it per ship, no group: see
 "A ship's order at a jam"); the waypoint move, 0xa0, 0xaa, 0xb4 (not in
 the port).
 
