@@ -28,11 +28,10 @@ pub struct HumanGuard {
     pub notices: Vec<Notice>,
     /// Group `+8`: ticks since the last pass.
     pub elapsed: u32,
-    /// Group `+0x19`, `+0x1d`, `+0x21`: the behaviour 0x4c4350 gave it
-    /// (the group is zeroed when made, 0x49b990; kept from an attack
-    /// zone's group, `HumanAttack::players`).
+    /// Group `+0x14..+0x24` (`HumanBehaviour`): `None` as made
+    /// (0x49b990), else kept from the group's earlier blocks.
     #[serde(default)]
-    pub behaviour: (u32, u32, u32),
+    pub behaviour: super::gather::HumanBehaviour,
     /// Group `+0x25`: the block.
     pub block: Option<GuardBlock>,
 }
@@ -51,7 +50,7 @@ impl GuardGroup for HumanGuard {
         self.owner
     }
     fn behaviour(&self) -> (u32, u32, u32) {
-        self.behaviour
+        self.behaviour.unwrap_or((0, 0, 0))
     }
     fn period(&self) -> u32 {
         PERIOD
@@ -108,21 +107,14 @@ impl Scene {
         let z = match self.selection_guard(&ships) {
             Some(z) => z,
             None => {
-                // The attack block's group keeps the behaviour it was
-                // given (0x4c4350); the port's other blocks hold none.
-                let behaviour = self
-                    .selection_attack(&ships)
-                    .map(|g| {
-                        let a = &self.human_attacks[g];
-                        (a.players, a.classes, a.third)
-                    })
-                    .unwrap_or_default();
-                let (serial, elapsed) = match self.end_selection_block(&ships) {
-                    Some((serial, elapsed, _)) => (serial, elapsed),
+                // The group keeps its behaviour `+0x14..+0x24` from its
+                // earlier blocks (0x4a1c60 leaves it); a new one has none.
+                let (serial, elapsed, behaviour) = match self.end_selection_block(&ships) {
+                    Some((serial, elapsed, _, behaviour)) => (serial, elapsed, behaviour),
                     None => {
                         self.leave_zones(&ships);
                         self.zone_serial += 1;
-                        (self.zone_serial, 0)
+                        (self.zone_serial, 0, None)
                     }
                 };
                 self.human_guards.push(HumanGuard {
@@ -286,7 +278,7 @@ mod tests {
         assert_eq!(scene.human_guards.len(), 1);
         let g = scene.human_guards[0].clone();
         assert_eq!(g.ships, [id0, id1]);
-        assert_eq!(g.behaviour, (0, 0, 0));
+        assert_eq!(g.behaviour, None);
         let b = g.block.unwrap();
         let rect = (c0.0 - 2, c0.1 - 2, 5, 5);
         assert_eq!(
@@ -337,5 +329,95 @@ mod tests {
         let b = scene.human_guards[0].block.as_ref().unwrap();
         assert!(b.posts.as_ref().unwrap().is_empty());
         assert!(scene.human_guards[0].notices.is_empty());
+    }
+
+    /// A group's behaviour `+0x14..+0x24` goes with the group through its
+    /// blocks: the attack zone gives it (0x49da43: 0x4c4350 `{0,
+    /// 0x4a2f10(player), -1, -1}`), the patrol's waypoint move and the
+    /// guard zone keep it (0x4a1c60 leaves the group's fields), and the
+    /// guard watch's 0x4cd300 then lists the enemy in its zone; a fresh
+    /// group's is zero (0x49b990).
+    #[test]
+    fn human_group_keeps_its_behaviour() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let human = scene.human.map(|h| (h.nation, h.slot)).unwrap();
+        let foe_owner = (human.0 ^ 1, human.1);
+        let ships: Vec<usize> = (0..scene.objects.len())
+            .filter(|&i| scene.objects[i].ship.is_some())
+            .take(3)
+            .collect();
+        let (i0, i1, f) = (ships[0], ships[1], ships[2]);
+        let t = TILE_SIZE as f32;
+        let water = |scene: &Scene, c: (i32, i32)| {
+            scene.nav.is_sea(c.0, c.1) && scene.nav.passable(c.0, c.1, true)
+        };
+        let (w, h) = (scene.nav.width as i32, scene.nav.height as i32);
+        let c0 = (3..h - 3)
+            .flat_map(|y| (3..w - 3).map(move |x| (x, y)))
+            .find(|&c| {
+                (-3..=3)
+                    .flat_map(|dy| (-3..=3).map(move |dx| (c.0 + dx, c.1 + dy)))
+                    .all(|c| water(&scene, c))
+            })
+            .unwrap();
+        let (c1, cf) = ((c0.0 + 1, c0.1), (c0.0 - 1, c0.1 - 1));
+        for (i, c, owner) in [(i0, c0, human), (i1, c1, human), (f, cf, foe_owner)] {
+            let o = &mut scene.objects[i];
+            o.owner = Some(owner);
+            o.x = c.0 as f32 * t + t / 2.0;
+            o.y = c.1 as f32 * t + t / 2.0;
+            let s = o.ship.as_mut().unwrap();
+            s.kind = 2;
+            s.argo = false;
+            s.move_state = 0;
+        }
+        let (id0, id1, idf) = (
+            scene.objects[i0].id,
+            scene.objects[i1].id,
+            scene.objects[f].id,
+        );
+        let corner = |d: i32| ((c0.0 + d) as f32 * t + 1.0, (c0.1 + d) as f32 * t + 1.0);
+        let players = !(1u32 << ((human.1 + human.0 * 4) & 0x1f));
+        let given = Some((players, u32::MAX, u32::MAX));
+        // A fresh group: none.
+        scene
+            .order_guard_zone(&[id0, id1], corner(2), corner(-2))
+            .unwrap();
+        assert_eq!(scene.human_guards[0].behaviour, None);
+        scene.leave_zones(&[id0, id1]);
+        assert!(scene.human_guards.is_empty());
+        // Attack zone, patrol, guard zone: the one group, its behaviour
+        // kept.
+        scene
+            .order_attack_zone(&[id0, id1], corner(2), corner(-2))
+            .unwrap();
+        let serial = scene.human_attacks[0].serial;
+        scene
+            .order_patrol_route(&[id0, id1], c0.0 + 2, c0.1)
+            .unwrap();
+        assert!(scene.human_attacks.is_empty());
+        assert_eq!(scene.waypoint_moves[0].serial, serial);
+        assert_eq!(scene.waypoint_moves[0].behaviour, given);
+        scene
+            .order_guard_zone(&[id0, id1], corner(2), corner(-2))
+            .unwrap();
+        assert!(scene.waypoint_moves.is_empty());
+        let g = &scene.human_guards[0];
+        assert_eq!((g.serial, g.behaviour), (serial, given));
+        let rect = g.block.as_ref().unwrap().rect;
+        let listed = |p: u32| -> Vec<u32> {
+            scene
+                .area_targets(rect, Some(human), p)
+                .iter()
+                .map(|t| t.id)
+                .collect()
+        };
+        assert!(listed(GuardGroup::behaviour(g).0).contains(&idf));
+        assert!(listed(0).is_empty());
     }
 }

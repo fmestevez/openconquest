@@ -3441,7 +3441,8 @@ The group is the selection's (0x49e230; else 0x49ca60's new group,
 zeroed by 0x49b990, so its `+0x19..+0x24` are 0 and the watch's
 0x4cd300 lists no targets in the zone: only a post hit within 3 of its
 cell or inside the zone, `+0x691`, engages, on its attacker); a group
-kept from an attack zone keeps the players 0x4c4350 gave it. Ported:
+kept from an attack zone keeps the players 0x4c4350 gave it (see
+"The human group's behaviour" below). Ported:
 `order_guard_zone` (`Order::GuardZone`, `scene/human_guard.rs`): the
 block is `fleet_guard.rs`'s, driven through `GuardGroup` (ships, block,
 owner, `+0x19..+0x21`, P, `+8`, notices) by a computer's flotilla and by
@@ -10497,6 +10498,39 @@ an item in a position `+0x289..+0x291`) or not (`+3`); then the area's
 target (0x4d6640): armed ships and a target, 500 (running); else 0x1f5
 (done), result 10 with armed ships, 1 without. Tasks 8, 9 and 10
 (0x47eb70, 0x47e3c0, 0x47e7c0 via 0x483730) read only the code.
+
+**The human group's behaviour** (group `+0x14..+0x24`). 0x4c4350
+(`this, player, group, p3, p4, p5, p6`; null group returns 0) writes
+`+0x14 = 1`, `+0x15 = p3`, `+0x19 = p4` (the players to fight), `+0x1d
+= p5` (the classes), `+0x21 = p6` (the third; its high byte is `+0x24`),
+then sends each member ship command `#` sub 1 `{p4, p5, p6}` (0x4c42f0
+-> 0x520cc0) and returns the member count. Its only callers are the
+attack zone 0x49da43 (`{0, 0x4a2f10(player), -1, -1}`) and fleet order
+0x72 (0x4a0ad4), whose senders are the brains' 0x4797e0 and the
+computers' 0x482eb0; no data table holds its address, and the behaviour
+page's buttons reach it by neither. 0x4c4410 (order 0x72 with first
+field 100) zeroes `+0x14..+0x24` and sends sub 2, and never runs. A
+group record is zeroed when made (0x49b990: fifteen dwords and a byte;
+kind 10, `+0xc` the player's next serial), the selection's group made
+by 0x49ca60 when the selection changed (0x49e230 `+0x20`), else kept;
+ending a block (0x4a1c60) leaves the group's fields. So a human group
+has `+0x14 = 0` and `+0x19..+0x24` 0 until an attack zone is given to
+it, and from then on every later block on it (gather zone, fleet
+attack, waypoint move, patrol, guard zone) reads the attack zone's
+players: a plain guard zone on a fresh selection has none, and its
+watch (0x4cd300) lists no targets. Ported: `HumanBehaviour` on every
+human group (`GatherZone`, `FleetAttack`, `WaypointMove`, `HumanGuard`;
+`HumanAttack`'s `players`, `classes`, `third` always given), `None` as
+made, carried by `end_selection_block`; the attack zone now keeps the
+selection's group whatever its block (its serial and `+8`), as the
+guard zone does; a gather zone reads the human group's (its escorts'
+`+0x14` test 0x4c6100 and 300's sub 1). `+0x15` (0 from the human) is
+not kept. Not ported: the port keeps no group for a selection without
+a block (its plain moves, stops and single-ship orders take the ships
+out of their groups, `leave_zones`), so a behaviour given then such an
+order is lost where the original's unchanged selection keeps it; the
+Shift move on a guard group (0x49de70 appends to the guard block's
+route `+0x61`) still makes a new group.
 
 The human's attack zone (0x49d9d0) gives the selection's group its
 behaviour first (0x49da43: 0x4c4350 `{0, 0x4a2f10(player), -1, -1}`;

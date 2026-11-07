@@ -31,6 +31,9 @@ pub struct WaypointMove {
     pub way: i8,
     /// Block `+0x61`.
     pub route: Route,
+    /// Group `+0x14..+0x24` (`HumanBehaviour`).
+    #[serde(default)]
+    pub behaviour: super::gather::HumanBehaviour,
 }
 
 /// 0x4cf550's period: the ships lying still are sent on once group `+8`
@@ -108,6 +111,7 @@ impl Scene {
             cell: (x, y),
             way: 1,
             route,
+            behaviour: None,
         });
         let z = self.waypoint_moves.len() - 1;
         let (fx, fy) = self.waypoint_moves[z].route.waypoints[0];
@@ -158,12 +162,12 @@ impl Scene {
             self.waypoint_moves[z].route.add(x, y, false, None);
             return Ok(());
         }
-        let (serial, elapsed) = match self.end_selection_block(&ships) {
-            Some((serial, elapsed, _)) => (serial, elapsed),
+        let (serial, elapsed, behaviour) = match self.end_selection_block(&ships) {
+            Some((serial, elapsed, _, behaviour)) => (serial, elapsed, behaviour),
             None => {
                 self.leave_zones(&ships);
                 self.zone_serial += 1;
-                (self.zone_serial, 0)
+                (self.zone_serial, 0, None)
             }
         };
         let mut route = Route::default();
@@ -191,6 +195,7 @@ impl Scene {
             cell: (x, y),
             way: 2,
             route,
+            behaviour,
         });
         let z = self.waypoint_moves.len() - 1;
         let Some(&(fx, fy)) = self.waypoint_moves[z].route.waypoints.get(1) else {

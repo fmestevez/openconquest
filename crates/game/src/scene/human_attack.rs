@@ -159,25 +159,18 @@ impl Scene {
         };
         let players = !(1u32 << ((slot + nation * 4) & 0x1f));
         let (classes, third) = (u32::MAX, u32::MAX);
-        // The group: the selection's own, its gather block ended, or a new
-        // one.
-        let mut elapsed = 0;
+        // The group: the selection's own (its block of another kind ended,
+        // 0x4a1c60, its serial and `+8` kept; its behaviour rewritten
+        // below), or a new one.
         let z = match self.selection_attack(&ships) {
             Some(z) => Some(z),
             None => {
-                let serial = match self.selection_zone(&ships) {
-                    Some(g) => {
-                        let zone = self.gather_zones.remove(g);
-                        elapsed = zone.elapsed;
-                        match zone.group {
-                            super::gather::ZoneGroup::Human(s) => s,
-                            _ => unreachable!(),
-                        }
-                    }
+                let (serial, elapsed) = match self.end_selection_block(&ships) {
+                    Some((serial, elapsed, _, _)) => (serial, elapsed),
                     None => {
                         self.leave_zones(&ships);
                         self.zone_serial += 1;
-                        self.zone_serial
+                        (self.zone_serial, 0)
                     }
                 };
                 self.human_attacks.push(HumanAttack {

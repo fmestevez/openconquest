@@ -60,6 +60,9 @@ pub struct FleetAttack {
     /// group (0x49de70).
     #[serde(default)]
     pub route: Option<Route>,
+    /// Group `+0x14..+0x24` (`HumanBehaviour`).
+    #[serde(default)]
+    pub behaviour: super::gather::HumanBehaviour,
 }
 
 /// A command record (0x4cfdf0, 0x18 bytes `{ship id, +0xc, +0x10, +0x14,
@@ -166,12 +169,12 @@ impl Scene {
                 // The group: the selection's own (its other block ended,
                 // its counter kept, with Shift its route taken first), or
                 // a new one.
-                let (serial, elapsed, route) = match self.end_selection_block(&group) {
+                let (serial, elapsed, route, behaviour) = match self.end_selection_block(&group) {
                     Some(t) => t,
                     None => {
                         self.leave_zones(&group);
                         self.zone_serial += 1;
-                        (self.zone_serial, 0, None)
+                        (self.zone_serial, 0, None, None)
                     }
                 };
                 self.fleet_attacks.push(FleetAttack {
@@ -188,6 +191,7 @@ impl Scene {
                     queue: Vec::new(),
                     held: Vec::new(),
                     route: route.filter(|_| keys & 4 != 0),
+                    behaviour,
                 });
                 self.fleet_attacks.len() - 1
             }

@@ -86,7 +86,23 @@ pub struct GatherZone {
     pub elapsed: u32,
     /// Block `+0x5d`: nothing left to do (0x4ca290).
     pub done: bool,
+    /// A human's group: its behaviour (`HumanBehaviour`). A brain's fleet
+    /// and a computer's flotilla keep theirs on the fleet.
+    #[serde(default)]
+    pub behaviour: HumanBehaviour,
 }
+
+/// A human group's behaviour, group `+0x14..+0x24`: `None` while the
+/// group is as made (0x49b990 zeroes the record, so `+0x14` and
+/// `+0x19..+0x24` are 0); else what 0x4c4350 wrote, `+0x14 = 1` and
+/// `(+0x19 players, +0x1d classes, +0x21 third)` (`+0x15`, the order's
+/// first field, is 0 from the human's one caller, the attack zone
+/// 0x49da43). 0x4c4350's other caller is fleet order 0x72 (0x4a0ad4),
+/// sent only by the brains (0x4797e0) and the computers (0x482eb0), so
+/// nothing else gives a human group one. Every block keeps it: a block
+/// ended (0x4a1c60) leaves the group's fields, and the selection's group
+/// is kept while the selection is unchanged (0x49e230).
+pub type HumanBehaviour = Option<(u32, u32, u32)>;
 
 /// Whose block a route `+0x61` is (the human groups').
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -391,34 +407,36 @@ impl Scene {
     /// zone's marks freed first, 0x4a2050 with 0; every block's notices
     /// `+0x2d` freed), the group's serial and counter `+8` kept, and its
     /// route `+0x61`, which 0x4a1c60 frees (0x4ce5a0) unless the caller
-    /// took it first. `None` when the selection is no human block's group.
+    /// took it first, and its behaviour `+0x14..+0x24` (`HumanBehaviour`).
+    /// `None` when the selection is no human block's group.
     pub(super) fn end_selection_block(
         &mut self,
         ships: &[u32],
-    ) -> Option<(u32, u32, Option<Route>)> {
+    ) -> Option<(u32, u32, Option<Route>, HumanBehaviour)> {
         if let Some(g) = self.selection_zone(ships) {
             let ZoneGroup::Human(serial) = self.gather_zones[g].group else {
                 unreachable!()
             };
             self.gather_marks(g, false);
             let zone = self.gather_zones.remove(g);
-            return Some((serial, zone.elapsed, zone.route));
+            return Some((serial, zone.elapsed, zone.route, zone.behaviour));
         }
         if let Some(g) = self.selection_attack(ships) {
             let a = self.human_attacks.remove(g);
-            return Some((a.serial, a.elapsed, a.route));
+            let behaviour = Some((a.players, a.classes, a.third));
+            return Some((a.serial, a.elapsed, a.route, behaviour));
         }
         if let Some(g) = self.selection_fleet(ships) {
             let a = self.fleet_attacks.remove(g);
-            return Some((a.serial, a.elapsed, a.route));
+            return Some((a.serial, a.elapsed, a.route, a.behaviour));
         }
         if let Some(g) = self.selection_waypoint_move(ships) {
             let m = self.waypoint_moves.remove(g);
-            return Some((m.serial, m.elapsed, Some(m.route)));
+            return Some((m.serial, m.elapsed, Some(m.route), m.behaviour));
         }
         if let Some(g) = self.selection_guard(ships) {
             let g = self.human_guards.remove(g);
-            return Some((g.serial, g.elapsed, None));
+            return Some((g.serial, g.elapsed, None, g.behaviour));
         }
         None
     }
@@ -597,7 +615,7 @@ impl Scene {
             None => {
                 let taken = self.end_selection_block(&ships);
                 match taken {
-                    Some((serial, elapsed, route)) => {
+                    Some((serial, elapsed, route, behaviour)) => {
                         kept = route.filter(|_| shift);
                         let owner = ships.iter().find_map(|&id| {
                             self.object_index(id).and_then(|i| self.objects[i].owner)
@@ -619,6 +637,7 @@ impl Scene {
                             deferred: Vec::new(),
                             elapsed,
                             done: false,
+                            behaviour,
                         });
                         ZoneGroup::Human(serial)
                     }
@@ -798,6 +817,7 @@ impl Scene {
                     deferred: Vec::new(),
                     elapsed: 0,
                     done: false,
+                    behaviour: None,
                 });
                 self.gather_zones.len() - 1
             }
@@ -913,7 +933,7 @@ impl Scene {
     /// Whether zone `z`'s group was given a behaviour (`+0x14`, fleet
     /// order 0x72): a brain's fleet once told one; a computer's flotilla
     /// always (its navy group gets one at its making, 0x483e10); a
-    /// human's group never (the port has no order 0x72 for them).
+    /// human's group once an attack zone gave it one (`HumanBehaviour`).
     fn zone_group_behaves(&self, z: usize) -> bool {
         match self.gather_zones[z].group {
             ZoneGroup::Brain(k) => self
@@ -922,7 +942,7 @@ impl Scene {
                 .and_then(|b| b.fleets.get(k))
                 .is_some_and(|f| f.behaviour.is_some()),
             ZoneGroup::Computer(..) => true,
-            ZoneGroup::Human(_) => false,
+            ZoneGroup::Human(_) => self.gather_zones[z].behaviour.is_some(),
         }
     }
 
@@ -937,7 +957,7 @@ impl Scene {
                 .and_then(|f| f.behaviour)
                 .unwrap_or((0, 0, 0)),
             ZoneGroup::Computer(p, f) => self.computer_flotilla_behaviour(p, f),
-            ZoneGroup::Human(_) => (0, 0, 0),
+            ZoneGroup::Human(_) => self.gather_zones[z].behaviour.unwrap_or((0, 0, 0)),
         }
     }
 
