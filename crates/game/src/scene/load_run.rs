@@ -563,7 +563,10 @@ impl Scene {
         let Some(t) = self.object_index(target) else {
             return;
         };
-        let ObjectClass::Building(class) = self.objects[t].class else {
+        // 0x50e600 sorts classes 0x32-0x4a as buildings (0x32): player
+        // 16's structures (class 0x40) among them.
+        let (ObjectClass::Building(class) | ObjectClass::Barbarian(class)) = self.objects[t].class
+        else {
             return;
         };
         let Some(owner) = self.objects[k].owner else {

@@ -21075,3 +21075,91 @@ fn brain_repair_hears_the_mending_end() {
         .iter()
         .any(|o| matches!(*o, Order::Halt { id: i } if i == id)));
 }
+
+/// Player 16's barbarian structure (class 0x40, vtable 0x594920) takes an
+/// unload as a port does: its vt+0xb8 is the ports' 0x40e050 (the anchor
+/// a step toward the record's field 10, `+0x1dc`, as its `+0x1d8` is 0xa)
+/// and vt+0xb0 their 0x40dfe0. miss001's at (27, 3) faces 6, its berth
+/// (27, 4). A kind-0x32 contact the ship holds with another building (a
+/// load run's whose order went before the hold) is freed by step 1
+/// (0x4b3970(0), 0x4e06a0), which then ends; the next tick makes the
+/// structure's. The fish is paid to the ship's player at the porters' last
+/// frame (0x4ad9f0: the contact's 0x50e600 is 0x32, not a fort) (needs
+/// `OPENCONQUEST_DATA`).
+#[test]
+fn ships_unload_at_a_barbarian_structure() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss001").unwrap();
+    let p = scene
+        .objects
+        .iter()
+        .position(|o| o.class == ObjectClass::Barbarian(0x40))
+        .unwrap();
+    assert_eq!(scene.objects[p].cell, Some((27, 3)));
+    assert_eq!(scene.vt_berth(p), (27, 4));
+    assert!(scene.takes_hook(p));
+    let port = scene.objects[p].id;
+    let owner = scene.objects[p].owner;
+    assert_eq!(owner, Some((4, 0)));
+    let other = scene
+        .objects
+        .iter()
+        .find(|o| matches!(o.class, ObjectClass::Building(_)))
+        .unwrap()
+        .id;
+    let k = scene.objects.iter().position(|o| o.ship.is_some()).unwrap();
+    let id = scene.objects[k].id;
+    scene.objects[k].owner = owner;
+    let t = TILE_SIZE as f32;
+    scene.objects[k].x = 27.0 * t + t / 2.0;
+    scene.objects[k].y = 4.0 * t + t / 2.0;
+    {
+        let s = scene.objects[k].ship.as_mut().unwrap();
+        s.path.clear();
+        s.cargo = 50.0;
+        s.cargo_kind = Some(crate::objects::Resource::Fish);
+        s.move_state = 0;
+        s.treasures.clear();
+        s.task = Some(Task::Gather {
+            deposit: u32::MAX,
+            phase: crate::objects::GatherPhase::ToPort(port),
+        });
+    }
+    scene.occupants.push((other, id));
+    let fish = scene.purses.get(&(4, 0)).map_or(0, |p| p.1);
+    let mut steps: Vec<u8> = Vec::new();
+    let mut ticks = 0;
+    loop {
+        scene.update(crate::clock::TICK, &data, &mut caches);
+        ticks += 1;
+        assert!(ticks < 2000);
+        if ticks == 1 {
+            assert!(scene.occupants.iter().all(|o| o.1 != id), "freed");
+            let s = scene.objects[scene.object_index(id).unwrap()].ship.as_ref();
+            assert!(s.unwrap().landing.is_none(), "the step ended");
+        }
+        let s = scene.objects[scene.object_index(id).unwrap()]
+            .ship
+            .as_ref()
+            .unwrap();
+        if s.task.is_none() {
+            break;
+        }
+        if let Some(l) = s.landing.as_ref() {
+            if steps.last() != Some(&l.state) {
+                steps.push(l.state);
+            }
+        }
+    }
+    assert_eq!(steps, [10, 0xb, 0x10, 0x11, 0xe, 0x13], "the steps");
+    let s = scene.objects[scene.object_index(id).unwrap()]
+        .ship
+        .as_ref()
+        .unwrap();
+    assert_eq!(s.cargo, 0.0);
+    assert_eq!(scene.purses.get(&(4, 0)).map_or(0, |p| p.1), fish + 50);
+}

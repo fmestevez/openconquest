@@ -566,11 +566,6 @@ fn sprites<'a>(scene: &'a Scene, time_ms: u64) -> Vec<Sprite<'a>> {
             on_ships.push((p.ship, false, layers, x, y));
         }
     }
-    for p in &scene.porters {
-        if let Some(layers) = p.frame(time_ms) {
-            on_ships.push((p.ship, true, layers, p.x, p.y));
-        }
-    }
     for (ship, cross, layers, x, y) in on_ships {
         if let Some((depth, slot)) = walk(ship, cross) {
             push(

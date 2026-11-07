@@ -2592,19 +2592,6 @@ impl Scene {
         }
     }
 
-    /// How far from building `p` (in cells) a ship can come: from its
-    /// nearest water, and a cell more.
-    pub(super) fn landing_reach(&self, p: usize) -> f32 {
-        let t = TILE_SIZE as f32;
-        let (x, y) = (self.objects[p].x, self.objects[p].y);
-        self.nav
-            .nearest_water((x / t) as i32, (y / t) as i32)
-            .map_or(2.6, |(cx, cy)| {
-                let (wx, wy) = (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0);
-                (wx - x).hypot(wy - y) / t + 1.0
-            })
-    }
-
     /// Advances the standing order of ship `i`.
     pub(super) fn run_task(&mut self, i: usize, dt: f32, data: &GameData, caches: &mut Caches) {
         // A founding ship's order runs at its tick (`Scene::run_landings`,
@@ -2797,20 +2784,9 @@ impl Scene {
                 }
             }
             GatherPhase::ToPort(port) => {
-                let Some(p) = self.object_index(port) else {
-                    return self.send_to_port(i, deposit);
-                };
                 // On its berth (vt+0xb8) 0x4adef0 step 1 lands it, a game
                 // tick at a time (`Scene::run_unloads`).
                 if self.on_unload_berth(i, port) {
-                    return;
-                }
-                // Player 16's barbarian structure (class 0x40): its berth
-                // vt+0xb8 not decoded (0x4c5910 reads its own cell vt+0x28),
-                // so not ported: the ship waits by it.
-                if self.front_cell(p).is_none()
-                    && near(&self.objects[p], self.landing_reach(p).max(2.6))
-                {
                     return;
                 }
                 self.send_to_port(i, deposit)
@@ -2902,11 +2878,20 @@ impl Scene {
         cells
     }
 
-    /// Where a ship lies to unload at `p`: before a moorage's front, else at
-    /// the building.
+    /// Where a ship lies to unload at `p` (its berth `+0x7bd`, vt+0xb8):
+    /// before a moorage's front; player 16's barbarian structure (class
+    /// 0x40, vtable 0x594920) has the ports' 0x40e050, its anchor a step
+    /// toward its facing `+0x1dc` (0x5c4f4c), the record's field 10 (its
+    /// `+0x1d8` 0xa, 0x40ef70); else at the building.
     pub(super) fn berth(&self, p: usize) -> (f32, f32) {
         let t = TILE_SIZE as f32;
-        match self.front_cell(p) {
+        let barbarian = self.objects[p].class == ObjectClass::Barbarian(0x40);
+        let cell = if barbarian {
+            self.berth_cell(p)
+        } else {
+            self.front_cell(p)
+        };
+        match cell {
             Some((cx, cy)) => (cx as f32 * t + t / 2.0, cy as f32 * t + t / 2.0),
             None => (self.objects[p].x, self.objects[p].y),
         }

@@ -374,8 +374,6 @@ pub struct Scene {
     pub landing_art: std::rc::Rc<[[Frames; 3]; 8]>,
     /// Landing parties walking to their sites (LandingClassTy, 0x4221c0).
     pub parties: Vec<landing::Party>,
-    /// Ships whose laden porter trips have just put a slot ashore.
-    unloaded: Vec<u32>,
     wake_clock: f32,
     pub wake_art: std::rc::Rc<(Frames, Frames)>,
     /// Seconds until the computer players next decide.
@@ -472,9 +470,8 @@ pub struct Scene {
     /// Each player's starting view (`WIN_VIEW`): the top-left cell of the
     /// original's view, by player id `nation * 4 + slot`.
     pub views: Vec<Option<(u32, u32)>>,
-    /// Walkways and porters of ships unloading (only shown).
+    /// Walkways and nets of ships gathering (only shown).
     pub planks: Vec<unload::Plank>,
-    pub porters: Vec<unload::Porter>,
     /// The human player's statistics for the outcome screen.
     pub stats: stats::Stats,
     /// What the human player may build, fit, research and learn.
@@ -914,7 +911,6 @@ impl Scene {
             trails: true,
             trail_art: BTreeMap::new(),
             trail_clock: 0.0,
-            unloaded: Vec::new(),
             sparkles: Default::default(),
             flocks: Default::default(),
             sheep_clock: 0.0,
@@ -1028,7 +1024,6 @@ impl Scene {
             active: 0,
             stats: Default::default(),
             planks: Vec::new(),
-            porters: Vec::new(),
             views: (0..20)
                 .map(|id| openconquest_formats::mission::start_view(&archive, id / 4, id % 4))
                 .collect(),
@@ -1305,9 +1300,7 @@ impl Scene {
             volcanoes: self.volcanoes.clone(),
             brain_flames: self.brain_flames.iter().map(|(&k, &v)| (k, v)).collect(),
             brain_brews: self.brain_brews.clone(),
-            planks: self.saved_planks().0,
-            porters: self.saved_planks().1,
-            unloaded: self.unloaded.clone(),
+            planks: self.saved_planks(),
             fires: self.saved_fires(),
             building_fires: self.saved_building_fires(),
             refits: self.refits.clone(),
@@ -1533,7 +1526,6 @@ impl Scene {
         scene.volcanoes = save.volcanoes.clone();
         scene.brain_flames = save.brain_flames.iter().copied().collect();
         scene.brain_brews = save.brain_brews.clone();
-        scene.unloaded = save.unloaded.clone();
         scene.refits = save.refits.clone();
         scene.flame = save.flame;
         scene.mend_steps = save.mend_steps.iter().copied().collect();
@@ -1542,7 +1534,7 @@ impl Scene {
             scene.gull_rng = r.clone();
         }
         scene.last_attack = save.last_attack;
-        scene.restore_planks(&save.planks, &save.porters, data, caches);
+        scene.restore_planks(&save.planks, data, caches);
         scene.restore_fires(&save.fires, data, caches);
         scene.restore_building_fires(&save.building_fires, data, caches);
         if let Some(p) = save.permits {
@@ -2932,7 +2924,7 @@ impl Scene {
         self.run_loads();
         self.run_flyers(dt, data, caches);
         self.run_walkers();
-        self.run_porters(dt, data, caches);
+        self.run_planks(dt);
         self.run_furling(dt);
         self.run_rocking(dt);
         self.run_regrowth(dt, data, caches);
@@ -3425,12 +3417,7 @@ impl Scene {
         let lying: HashSet<u32> = self
             .planks
             .iter()
-            .filter(|p| {
-                matches!(
-                    p.activity,
-                    unload::Activity::Unloading | unload::Activity::Amber
-                )
-            })
+            .filter(|p| p.activity == unload::Activity::Amber)
             .map(|p| p.ship)
             .collect();
         let step = dt / objects::SHIP_FURL_SECONDS;

@@ -8525,12 +8525,29 @@ carrier's `{port, 1, 0x5a}`; the step `+0x77d`, the machine the ship's
   from these steps).
 
 So the goods are paid whole at the porters' last frame, one round of
-them, not a trip at a time. Not ported: the port's contact lost other
-than by the port going (the port's contact is the port while it stands),
-a contact of kind 0x32 with another object (the port waits on any
-contact), `+0x25d |= 0x40`, 0x523d80, 0x4b39d0, `+0x6cb` (notice 0x13f
-carries 0), step 0x15, player 16's class 0x40 target (its vt+0xb8 berth
-not decoded: the ship waits by it).
+them, not a trip at a time. Player 16's barbarian structure (class
+0x40, vtable 0x594920) is a target as a port: its vt+0xb0 is the ports'
+0x40dfe0 and vt+0xb8 their 0x40e050 (the anchor plus 0x5c4f4c[`+0x1dc`],
+-1 none); its `+0x1d8` is 0xa (0x40ef70 for class 0x40: flag 8 loads
+`+0x1dc` from the record's field 10 at 0x4280f2, no flag 0x10 so no town
+test), so the berth is the anchor a step toward field 10 (miss001's at
+(27, 3) faces 6, berth (27, 4)); its unload pays as a port's (0x4ad9f0:
+0x50e600 sorts 0x32-0x4a as buildings, the fish test excludes only
+0x34-0x36). The contact step 1 meets: none, or the port's own (the
+same object and id), goes on; another object's of kind 0x32 is freed
+(0x4b3970(0): 0xcb8, its `+0x1e0` cleared; 0x4e06a0) and the step ends,
+the port's made the next tick; another kind waits. In the port a
+building's kind-0x32 contact that outlives its order is a load run's
+dropped before the hold (0x4b8d10 frees the line `+0x6df` and the load
+fields, not `+0x8e6`): its `occupants` entry. Not ported: the port's
+contact lost other than by the port going (the port's contact is the
+port while it stands), the load run's lingering contacts of kinds 300
+(the hook in the air) and 200 (a ship) (the port drops them with the
+run, so the unload does not wait on them), `+0x25d |= 0x40`, 0x523d80,
+0x4b39d0, `+0x6cb` (notice 0x13f carries 0), step 0x15. The old
+`Activity::Unloading` walkway and porter trips (`NOSIL_`, a slot of
+goods a trip) are removed: the unload draws its walkway and porters from
+its landing (`landing_art`).
 
 
 Gathering (0x4ad0e0): each take moves amber 100 (boats and merchants; 20

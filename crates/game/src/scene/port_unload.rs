@@ -6,9 +6,13 @@
 //!   (`+0x58c` 0), the port `+0x7b1` still standing on its cell, its
 //!   vt+0xb0 (0x40dfe0) true and the close-in 0x4afe50(ship, 1) on the
 //!   port's cell true: the contact `+0x8e6` {0x32, 5, port id, port} made
-//!   (no 0xcb7 sent), `+0x78e` and `+0x79f` 0, step 10 and the commands
-//!   held (0x4b37d0 with 0x2000, 0x4ae191). Off the berth: the wait by a
-//!   crowded berth (`Scene::run_berth_waits`) and the sailing there.
+//!   (no 0xcb7 sent), or a contact of kind 0x32 with another object freed
+//!   (0xcb8 to it, 0x4e06a0) and the step ended, another kind waited on;
+//!   `+0x78e` and `+0x79f` 0, step 10 and the commands held (0x4b37d0
+//!   with 0x2000, 0x4ae191). Off the berth: the wait by a crowded berth
+//!   (`Scene::run_berth_waits`) and the sailing there. Player 16's
+//!   barbarian structure (class 0x40, vtable 0x594920) has the ports'
+//!   vt+0xb0 0x40dfe0 and vt+0xb8 0x40e050.
 //! - **10** (0x4b0470(1) -> 0x4b02a0), no contact the order called off:
 //!   the slide, two points a tick; at its end step 0xb; called off and
 //!   back at its start, the contact freed (0xcb8 to the port), the commands
@@ -107,9 +111,17 @@ impl Scene {
         let Some(mut l) = self.close_in_on(i, cell, true) else {
             return;
         };
-        // A contact with something else (`+0x8e6`): kind 0x32 is freed and
-        // the step ends, another kind waits (not ported: the ports' ships
-        // hold no building contact here but a load run's).
+        // A contact with something else (`+0x8e6`): kind 0x32 is freed
+        // (0x4b3970(0): 0xcb8 to it, its `+0x1e0` cleared; 0x4e06a0) and
+        // the step ends, to make the port's the next tick; another kind
+        // waits. A building's 0x32 left by a load run whose order went
+        // before the hold (0x4b8d10 frees the line, not `+0x8e6`) is its
+        // `occupants` entry.
+        let id = self.objects[i].id;
+        if let Some(&(other, _)) = self.occupants.iter().find(|o| o.1 == id && o.0 != port) {
+            self.occupants.retain(|o| o.0 != other);
+            return;
+        }
         if self.in_contact(i) {
             return;
         }

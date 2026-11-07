@@ -1,11 +1,9 @@
-//! What merchants are shown doing (Run_Ship.cpp, 0x4e1bb0): unloading at
-//! a port or settlement they lay a walkway to the shore (the composite
-//! `MOST0_`, one layer per facing) and porters
-//! (`NOSIL_<loaded><0><heading>`) walk it, laden ashore and back empty,
-//! while the cargo comes in little by little; gathering
+//! What merchants are shown doing (Run_Ship.cpp, 0x4e1bb0): gathering
 //! amber, a walkway to the deposit (`AMOST_<facing>`) with porters bringing
 //! it aboard (`ANOSIL_<facing>`); fishing, their net (`SETKA_<facing>`).
-//! All only shown; the goods are counted by the ship's task.
+//! All only shown; the goods are counted by the ship's task. (The unload
+//! at a port is its step machine 0x4adef0, `scene/port_unload.rs`; its
+//! walkway's place `WALKWAY_AT` is kept here.)
 
 use super::{heading_towards, Scene};
 use crate::assets::GameData;
@@ -270,10 +268,6 @@ const PLANK_FRAME_MS: f32 = crate::clock::TICK_MS as f32;
 /// 0x4e1bb0).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Activity {
-    /// At a port or settlement: the walkway `MOST0_` (a composite of 18
-    /// frames whose eight layers are the facings) and porters carrying the
-    /// goods ashore.
-    Unloading,
     /// At an amber deposit: the walkway `AMOST_<facing>` to the shore and
     /// porters bringing amber aboard (`ANOSIL_<facing>`).
     Amber,
@@ -293,28 +287,9 @@ pub struct Plank {
     pub frames: Vec<Vec<Layer>>,
     pub looping: Vec<Vec<Layer>>,
     pub age_ms: f32,
-    /// The walkway's top-left (porters walk it from there) and facing,
-    /// and how many porter trips it has seen: laden ashore on even ones,
-    /// back empty on odd ones.
-    top_left: (f32, f32),
-    facing: usize,
-    pub trips: u32,
     /// Where the looped work (porters bringing amber aboard, the net) is
     /// drawn about.
     loop_at: (f32, f32),
-}
-
-/// A trip of porters over a walkway (0x4adda0): one picture laid on it
-/// (71 by 38), the men walking across it as it plays, a frame a tick.
-pub struct Porter {
-    /// The ship whose goods it carries.
-    pub ship: u32,
-    pub x: f32,
-    pub y: f32,
-    pub frames: Vec<Vec<Layer>>,
-    age_ms: f32,
-    laden: bool,
-    facing: usize,
 }
 
 impl Plank {
@@ -350,14 +325,6 @@ impl Plank {
             ));
         }
         out
-    }
-}
-
-impl Porter {
-    /// Its frame, while the trip lasts.
-    pub fn frame(&self, _time_ms: u64) -> Option<&[Layer]> {
-        let f = (self.age_ms / PLANK_FRAME_MS) as usize;
-        self.frames.get(f).map(|l| l.as_slice())
     }
 }
 
@@ -412,11 +379,6 @@ impl Scene {
         let heading = heading_towards(dx, dy);
         let mut seq = |name: &str| objects::sequence_frames(data, caches, name).unwrap_or_default();
         let (mut frames, mut looping) = match activity {
-            Activity::Unloading => (
-                objects::composite_layer_frames(data, caches, "MOST0_", heading)
-                    .unwrap_or_default(),
-                Vec::new(),
-            ),
             Activity::Amber => {
                 let facing = heading / 2 * 2;
                 (
@@ -446,28 +408,10 @@ impl Scene {
         };
         let (mut x, mut y) = (sx + ux * reach / 2.0, sy + uy * reach / 2.0);
         let mut top_left = (x, y);
-        // A walkway to a port lies where the ship type's table puts it for
-        // its facing (0x4adef0, state 0xb); drawn by its middle.
-        if activity == Activity::Unloading {
-            if let (Some(s), Some(l)) = (
-                self.objects[i].ship.as_ref(),
-                frames.last().and_then(|f| f.first()),
-            ) {
-                let k = s.kind as usize % 12;
-                let side = walkway_side(heading, s.heading);
-                let (ox, oy) = WALKWAY_AT[k.min(4)][side][heading];
-                let half = objects::SHIP_FRAME[k] / 2.0;
-                top_left = (sx - half + ox as f32, sy - half + oy as f32);
-                x = top_left.0 + l.image.width as f32 / 2.0;
-                y = top_left.1 + l.image.height as f32 / 2.0;
-            }
-        }
-        // A walkway to amber likewise (0x4b0590, state 0xb), by the
+        // A walkway to amber lies (0x4b0590, state 0xb) by the
         // direction of the shore and its shape; its porters on it.
-        let mut facing = heading;
         if activity == Activity::Amber {
             if let Some((dir, off)) = self.amber_walkway(i, s) {
-                facing = dir;
                 frames = objects::sequence_frames(data, caches, &format!("AMOST_{dir}"))
                     .unwrap_or_default();
                 looping = objects::sequence_frames(data, caches, &format!("ANOSIL_{dir}"))
@@ -515,24 +459,17 @@ impl Scene {
             frames,
             looping,
             age_ms: 0.0,
-            top_left,
-            facing,
-            trips: 0,
             loop_at,
         });
     }
 
-    /// Walkways go once their ship has unloaded; porters come and go.
-    pub(super) fn run_porters(&mut self, dt: f32, data: &GameData, caches: &mut Caches) {
+    /// Walkways and nets go once their ship stops that work.
+    pub(super) fn run_planks(&mut self, dt: f32) {
         // A walkway or net stays while its ship does that work.
         let working = |s: &Scene, p: &Plank| {
             s.object_index(p.ship).is_some_and(|i| {
                 let ship = s.objects[i].ship.as_ref();
                 match ship.and_then(|sh| sh.task) {
-                    Some(objects::Task::Gather {
-                        phase: objects::GatherPhase::Unloading(_),
-                        ..
-                    }) => p.activity == Activity::Unloading,
                     Some(objects::Task::Gather {
                         phase: objects::GatherPhase::Collecting,
                         ..
@@ -544,7 +481,6 @@ impl Scene {
                                 kind,
                                 Some(objects::Resource::Fish | objects::Resource::Leviathan)
                             ),
-                            Activity::Unloading => false,
                         }
                     }
                     _ => false,
@@ -553,79 +489,10 @@ impl Scene {
         };
         let planks = std::mem::take(&mut self.planks);
         self.planks = planks.into_iter().filter(|p| working(self, p)).collect();
-        // Ships with goods still aboard.
-        let laden: std::collections::HashSet<u32> = self
-            .objects
-            .iter()
-            .filter(|o| o.ship.as_ref().is_some_and(|s| s.cargo >= 1.0))
-            .map(|o| o.id)
-            .collect();
-        // Trips play one after another once the walkway is down: laden
-        // ashore while there are goods aboard, and back empty after each.
-        for p in &mut self.porters {
-            p.age_ms += dt * 1000.0;
-        }
-        // A laden trip done puts a slot of goods ashore.
-        for p in self
-            .porters
-            .iter()
-            .filter(|p| p.laden && p.frame(0).is_none())
-        {
-            self.unloaded.push(p.ship);
-        }
-        self.porters.retain(|p| p.frame(0).is_some());
-        let mut new = Vec::new();
         for p in &mut self.planks {
             p.age_ms += dt * 1000.0;
-            let down = p.age_ms >= p.frames.len() as f32 * p.frame_ms();
-            let busy = self.porters.iter().any(|t| t.ship == p.ship);
-            let back = p.trips % 2 == 1;
-            if p.activity == Activity::Unloading
-                && down
-                && !busy
-                && (back || laden.contains(&p.ship))
-            {
-                p.trips += 1;
-                new.push((p.ship, p.top_left, !back, p.facing));
-            }
-        }
-        for (ship, top_left, loaded, facing) in new {
-            let frames = porter_frames(data, caches, loaded, facing);
-            let (w, h) = frames
-                .iter()
-                .find_map(|f| f.first())
-                .map_or((0.0, 0.0), |l| {
-                    (l.image.width as f32, l.image.height as f32)
-                });
-            self.porters.push(Porter {
-                ship,
-                x: top_left.0 + w / 2.0,
-                y: top_left.1 + h / 2.0,
-                frames,
-                age_ms: 0.0,
-                laden: loaded,
-                facing,
-            });
         }
     }
-}
-
-/// A porter trip's frames (`NOSIL_<laden><way><facing>`, 0x4b6ca0): laden
-/// from the ship ashore (way 0), or empty back aboard (way 1), over a
-/// walkway facing `facing`.
-fn porter_frames(
-    data: &GameData,
-    caches: &mut Caches,
-    loaded: bool,
-    facing: usize,
-) -> Vec<Vec<Layer>> {
-    let name = format!("NOSIL_{}{}{facing}", u8::from(loaded), u8::from(!loaded));
-    let mut frames = objects::sequence_frames(data, caches, &name).unwrap_or_default();
-    // The first frame of a walk is empty.
-    if frames.len() > 1 {
-        frames.remove(0);
-    }
-    frames
 }
 
 impl Scene {
@@ -721,52 +588,25 @@ pub struct SavedPlank {
     activity: Activity,
     target: u32,
     age_ms: f32,
-    trips: u32,
-}
-
-/// A porters' trip as a save keeps it.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SavedPorter {
-    ship: u32,
-    x: f32,
-    y: f32,
-    age_ms: f32,
-    laden: bool,
-    facing: usize,
 }
 
 impl Scene {
-    pub(super) fn saved_planks(&self) -> (Vec<SavedPlank>, Vec<SavedPorter>) {
-        (
-            self.planks
-                .iter()
-                .map(|p| SavedPlank {
-                    ship: p.ship,
-                    activity: p.activity,
-                    target: p.target,
-                    age_ms: p.age_ms,
-                    trips: p.trips,
-                })
-                .collect(),
-            self.porters
-                .iter()
-                .map(|p| SavedPorter {
-                    ship: p.ship,
-                    x: p.x,
-                    y: p.y,
-                    age_ms: p.age_ms,
-                    laden: p.laden,
-                    facing: p.facing,
-                })
-                .collect(),
-        )
+    pub(super) fn saved_planks(&self) -> Vec<SavedPlank> {
+        self.planks
+            .iter()
+            .map(|p| SavedPlank {
+                ship: p.ship,
+                activity: p.activity,
+                target: p.target,
+                age_ms: p.age_ms,
+            })
+            .collect()
     }
 
-    /// Puts saved walkways, nets and porters back.
+    /// Puts saved walkways and nets back.
     pub(super) fn restore_planks(
         &mut self,
         planks: &[SavedPlank],
-        porters: &[SavedPorter],
         data: &GameData,
         caches: &mut Caches,
     ) {
@@ -781,19 +621,7 @@ impl Scene {
                 .find(|q| q.ship == p.ship && q.activity == p.activity)
             {
                 q.age_ms = p.age_ms;
-                q.trips = p.trips;
             }
-        }
-        for p in porters {
-            self.porters.push(Porter {
-                ship: p.ship,
-                x: p.x,
-                y: p.y,
-                frames: porter_frames(data, caches, p.laden, p.facing),
-                age_ms: p.age_ms,
-                laden: p.laden,
-                facing: p.facing,
-            });
         }
     }
 }
