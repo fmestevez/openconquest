@@ -437,6 +437,8 @@ impl Scene {
             thrown: Some(self.clock),
             hooking: true,
         });
+        // State 7 and `+0x6a0 = 1` (0x4b5ed0).
+        self.objects[i].ship.as_mut().unwrap().hook_busy = true;
         self.fire_shot(
             shot::Firing {
                 item: shot::HOOK,
@@ -555,6 +557,10 @@ impl Scene {
         // hook); the boarder at its hook cell lies still (0, 0x4a3560
         // with its contact +0x6a9 = 6).
         s.move_state = if boarder { 0 } else { 6 };
+        // The boarder's `+0x6a0 = 1` (0x4b6081).
+        if boarder {
+            s.hook_busy = true;
+        }
         s.grapple = Some(Grapple {
             with,
             boarder,
@@ -772,6 +778,7 @@ impl Scene {
                     // and its move.
                     if g.boarder {
                         s.board_wait = self.ticks;
+                        s.hook_busy = false;
                         if matches!(s.task, Some(Task::Board { target, .. }) if target == g.with) {
                             s.task = None;
                             s.closing = None;
@@ -1304,7 +1311,12 @@ impl Scene {
                     }
                 }
             }
-            self.objects[i].ship.as_mut().unwrap().ram_hit = (!done).then_some(h);
+            let s = self.objects[i].ship.as_mut().unwrap();
+            s.ram_hit = (!done).then_some(h);
+            // `+0x6a0 = 0` (0x4c3fcc).
+            if done {
+                s.hook_busy = false;
+            }
         }
     }
 

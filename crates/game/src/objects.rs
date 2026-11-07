@@ -576,6 +576,18 @@ pub struct Ship {
     /// 0x40 task. Read by 0x4abe50 (`Scene::task_busy`).
     #[serde(default)]
     pub net_busy: bool,
+    /// The 0x10 task's busy byte (`+0x6a0`): 0 at the order (0x4aa840,
+    /// 0x4aa8ee), 1 at the boarder's hook throw (0x4b5df0 state 1 -> 7,
+    /// 0x4b5ed0) and grapple (0x4b6081), the loader's throw (0x4b73a0
+    /// state 1 -> 7, 0x4b741f) and link (0x4b7519), and the rammer's
+    /// prey within reach (0x4c2230 states 1 and 2: 0x4c2335 alongside,
+    /// 0x4c2649 closing); 0 again only at the boarder's state 6 done
+    /// (0x4b6ba7), the loader's (0x4b7e38), the rammer's release in
+    /// state 2 (0x4c24c2) and a rammed ship's slide done (0x4c3fcc), so a
+    /// hook that misses or a prey that slips out of reach leaves it set
+    /// for the rest of the order. Read by 0x4abe50 (`Scene::task_busy`).
+    #[serde(default)]
+    pub hook_busy: bool,
     /// Closing in on the prey of a ram or boarding (`Task::Ram`,
     /// `Task::Board`; `scene::closing`).
     #[serde(default)]
@@ -661,6 +673,11 @@ pub struct Closing {
     pub thrown: Option<u32>,
     #[serde(default)]
     pub hook_cell: (i32, i32),
+    /// The call-off (`+0x6a2` 0xff, 1 from the order 0x4aa840): given by
+    /// 0x4abc60 to a 0x10 task it cannot end at once; read in the
+    /// rammer's state 2 (0x4c2230 at 0x4c2480, `Scene::ram_contact`).
+    #[serde(default)]
+    pub called_off: bool,
 }
 
 /// A ship's leviathan hunt or fish gather, a game tick at a time (see
@@ -2537,6 +2554,7 @@ pub fn resolve(
         lcg: None,
         hunt: None,
         net_busy: false,
+        hook_busy: false,
         closing: None,
         attack_plan: RoutePlan::default(),
         ram_wait: 0,

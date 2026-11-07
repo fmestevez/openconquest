@@ -2565,6 +2565,44 @@ impl Scene {
             if self.stop_landing(i) {
                 return;
             }
+            // The 0x10 task closing in (0x4abc60 with `+0x25d & 0x10`):
+            // ended only in state 1 (`+0x6a9`; 2 is the rammer's contact
+            // wait) at a cell its slot holds, not under way (`+0x596`, move
+            // state 5, 4 or 1) into a cell another holds (`+0x5b6`): then
+            // `+0x25d &= ~0x10`, 0x4c1950, 0x4a3800. Else it is called off
+            // (`+0x6a2 = 0xff`) and goes on.
+            let closing_in = self.objects[i].ship.as_ref().is_some_and(|s| {
+                s.grapple.is_none()
+                    && s.ram_run.is_none()
+                    && s.load_run.is_none()
+                    && matches!(
+                        s.task,
+                        Some(
+                            objects::Task::Ram { .. }
+                                | objects::Task::Board { hooking: false, .. }
+                                | objects::Task::LoadAt { .. }
+                                | objects::Task::LoadRuins { .. }
+                        )
+                    )
+            });
+            let called_off = closing_in && {
+                let s = self.objects[i].ship.as_ref().unwrap();
+                let state_1 = s.closing.is_none_or(|c| !c.contact_wait);
+                let into_other = s.between.get()
+                    && matches!(s.move_state, 5 | 4 | 1)
+                    && self.slot_holder(s.entering) != Some(i);
+                let own = self.slot_holder(self.cell_of_object(i)) == Some(i);
+                !(state_1 && !into_other && own)
+            };
+            if called_off {
+                if let Some(c) = self.objects[i]
+                    .ship
+                    .as_mut()
+                    .and_then(|s| s.closing.as_mut())
+                {
+                    c.called_off = true;
+                }
+            }
             if let Some(ship) = self.objects[i].ship.as_mut() {
                 ship.pending = None;
                 // A stop under way forgets the cells it kept closed
@@ -2593,6 +2631,9 @@ impl Scene {
                 // on its own (`Scene::run_hunts`); at step 1 it ends.
                 if let Some(h) = ship.hunt.as_mut().filter(|h| h.step != 1) {
                     h.called_off = true;
+                    return;
+                }
+                if called_off {
                     return;
                 }
                 ship.task = None;

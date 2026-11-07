@@ -243,6 +243,7 @@ impl Scene {
             s.path.clear();
             s.task = Some(Task::LoadRuins { target });
             s.closing = None;
+            s.hook_busy = false;
             return Ok(());
         }
         if ship == target || !fits || other.owner != self.objects[i].owner {
@@ -261,6 +262,8 @@ impl Scene {
         s.path.clear();
         s.task = Some(Task::LoadAt { target });
         s.closing = None;
+        // `+0x6a0 = 0` (0x4aa8ee).
+        s.hook_busy = false;
         Ok(())
     }
 

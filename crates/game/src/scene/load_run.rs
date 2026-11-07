@@ -145,6 +145,8 @@ impl Scene {
         let cl = s.closing.as_mut().unwrap();
         cl.thrown = Some(now);
         cl.hook_cell = hook_cell;
+        // State 7 and `+0x6a0 = 1` (0x4b741f).
+        s.hook_busy = true;
         s.load_run = Some(LoadRun {
             target,
             building: !ship_target,
@@ -504,6 +506,8 @@ impl Scene {
         s.way = 0;
         s.face = None;
         s.move_state = 0;
+        // `+0x6a0 = 1` (0x4b7519).
+        s.hook_busy = true;
         r.stage = LoadStage::Pull;
         r.ticks = 0;
         r.home = home;
@@ -545,6 +549,8 @@ impl Scene {
         s.furl = 0.0;
         s.rotation = None;
         s.load_run = None;
+        // `+0x6a0 = 0` (0x4b7e38).
+        s.hook_busy = false;
         s.task = None;
         s.closing = None;
         s.path.clear();

@@ -5555,18 +5555,41 @@ is the fish gather's (0x4ae760: 0 at step 1 0x4ae7b6, step 2 without a
 take or called off 0x4ae9d1, step 5 0x4aeb3a; 1 at step 2 with a take
 0x4ae8f4 and step 6 0x4ae9e6), never reset by 0x4aab00, so a haul that
 ends full at step 6 leaves it set and the ship's next 0x40 task is busy
-until a fish step clears it. `+0x6a0` is the 0x10 task's: 1 from the
-hook's throw (0x4b5ed0, 0x4b741f with `+0x6a9 = 7`; 0x4b6081, 0x4b7519)
-or the rammer's contact (0x4c2335, 0x4c2649), 0 at 0x4aa8ee (0x4aa840),
-0x4b6ba7, 0x4b7e38, 0x4c24c2, 0x4c3fcc. The port (`Scene::task_busy`,
-`Ship::net_busy`, `a_casting_boats_order_is_lost` on miss000: a move
-to a boat casting at step 6 is lost with the tick's gather, the gather
-called off, steps 6, 2, 5, 1 and the end under full; sailing there the
-move runs): the 0x40 byte for the fish gather and the leviathan hunt.
-Not ported: `+0x6a0` (the port's hook-out and charge stages not mapped
-to its writes; the wind-down by `+0x6a9`), a `+0x77b` left set under the
-amber gather, the treasure take or the unload, and a refused event's
-old task, which the port keeps though 0x4abe50 took its bit off.
+until a fish step clears it. `+0x6a0` is the 0x10 task's (`+0x25d &
+0x10`, set by its order 0x4aa840 with `+0x6a0 = 0` at 0x4aa8ee): 1 at
+the boarder's hook throw (0x4b5df0 state 1 -> 7 on 0x4b84b0, 0x4b5ed0)
+and its grapple (0x4b6081), the loader's throw (0x4b73a0 state 1 -> 7,
+0x4b741f) and hold (0x4b74fb, 0x4b7519), and the rammer's prey within
+reach (0x4c2230 states 1 / 2 after 0x4b8d80 and 0x4c1f60: alongside
+0x4c2335 in state 1, closing 0x4c2649 at 0x4c263e); 0 at the boarder's
+state 6 done (0x4b6ba7), the loader's (0x4b7e38), the rammer's state 2
+release (0x4c24c2) and a rammed ship's slide done (0x4c3fcc). A hook
+that misses (state 7 -> 1) or a prey slipping out of reach does not
+clear it, so the order stays busy to its end. 0x4abc60 for the 0x10
+task: with `+0x6a9` 0, or 1 at a cell whose slot (0x5c74fc `+0xc`) holds
+the ship and not under way (`+0x596` with move state 5, 4 or 1) into a
+cell `+0x5b6` another holds, the task ends (`+0x25d &= ~0x10`, 0x4c1950,
+0x4a3800, and 0x4b93f0 for `+0x696` 1); else `+0x6a2 = 0xff` (and for a
+load, `+0x696` 3, in move state 6 and `+0x6a9` 4, `+0x6e5 = 4`), which
+the rammer's state 2 reads (0x4c2480: at a cell, 0x4e0b50, its slot
+holding it: 0x4c1950, `+0x6a0 = 0`, 0x4b8d10, state 1, event 8 0x90) and
+the boarder's states 7, 8, 0xb and on. The port (`Scene::task_busy`,
+`Ship::net_busy`, `Ship::hook_busy`, `Closing::called_off`;
+`a_casting_boats_order_is_lost` on miss000: a move to a boat casting at
+step 6 is lost with the tick's gather, the gather called off, steps 6,
+2, 5, 1 and the end under full; sailing there the move runs;
+`a_hooking_boarders_order_is_lost` on miss000: a move given before the
+throw runs, one given with the hook in the air is lost): the 0x40 byte
+for the fish gather and the leviathan hunt, the 0x10 byte for a board,
+ram or load order; 0x4abc60's test for a ship closing in (states 1 and
+2, the slots as `Scene::slot_holder` has them), and the rammer's state 2
+release. Not ported: the call-off's other readers (the boarder's state 7
+-> 1 and event 8 0x10, its grapple states; a stop or a busy drop there
+ends the task at once as before, and the loader's hold keeps its
+`released`), 0x4b93f0 (not read), the rammer's states 3 and 6 under a
+call-off (the port's charge ends with the task), a `+0x77b` left set
+under the amber gather, the treasure take or the unload, and a refused
+event's old task, which the port keeps though 0x4abe50 took its bit off.
 
 **When a command arrives** (Players.cpp; decompiles of 0x520cc0,
 0x51fe20, 0x521570, 0x5228c0, 0x542390, 0x51f250, 0x541f70). 0x520cc0

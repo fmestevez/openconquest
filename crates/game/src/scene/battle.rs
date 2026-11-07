@@ -1585,6 +1585,8 @@ impl Scene {
         }
         ship.path.clear();
         ship.closing = None;
+        // `+0x6a0 = 0` (0x4aa840 at 0x4aa8ee).
+        ship.hook_busy = false;
         ship.task = Some(if board {
             Task::Board {
                 target,

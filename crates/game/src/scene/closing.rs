@@ -196,6 +196,7 @@ impl Scene {
                     by_id: false,
                     thrown: None,
                     hook_cell: (0, 0),
+                    called_off: false,
                 });
             }
             let near = s.closing.unwrap().near;
@@ -279,6 +280,7 @@ impl Scene {
                 by_id: !near,
                 thrown: None,
                 hook_cell: (0, 0),
+                called_off: false,
             });
         }
         let s = self.objects[i].ship.as_ref().unwrap();
@@ -734,6 +736,11 @@ impl Scene {
             return;
         };
         let (alongside, goal) = self.ram_goal(i, ti);
+        // Within reach `+0x6a0` is 1 (0x4c2335 in state 1 alongside,
+        // 0x4c2649 at 0x4c263e); only state 2 is reached after state 1.
+        if reach {
+            self.objects[i].ship.as_mut().unwrap().hook_busy = true;
+        }
         if !reach {
             if self.closing_plan(i, goal, Some(&region), false) == Planned::NoRoute {
                 let c = self.closing_mut(i);
@@ -777,6 +784,23 @@ impl Scene {
     /// whose setter is not traced.)
     fn ram_contact(&mut self, i: usize, ti: usize) {
         let waiting = self.closing_mut(i).contact_wait;
+        // Called off in state 2 (0x4c2480: `+0x6a2` below 0), at a cell
+        // (0x4e0b50) whose slot holds it: the reservation freed
+        // (0x4c1950), `+0x6a0 = 0` (0x4c24c2), the order zeroed
+        // (0x4b8d10), state 1 and event 8 0x90, which ends the ram and its
+        // move.
+        if waiting
+            && self.closing_mut(i).called_off
+            && self.objects[i].ship.as_ref().unwrap().plans_from_own_cell()
+            && self.slot_holder(self.cell_of_object(i)) == Some(i)
+        {
+            let s = self.objects[i].ship.as_mut().unwrap();
+            s.hook_busy = false;
+            s.task = None;
+            s.closing = None;
+            s.path.clear();
+            return;
+        }
         if !waiting {
             let own = self.cell_of_object(i);
             let reserved = self
@@ -1084,6 +1108,7 @@ mod tests {
                             by_id: false,
                             thrown: None,
                             hook_cell: (0, 0),
+                            called_off: false,
                         });
                         (scene.objects[i].x, scene.objects[i].y) = Scene::cell_middle(c);
                         if scene.reserved_cell(i).is_some_and(|r| r != c) {
@@ -1186,6 +1211,7 @@ mod tests {
                         by_id: false,
                         thrown: None,
                         hook_cell: (0, 0),
+                        called_off: false,
                     });
                     (scene.objects[i].x, scene.objects[i].y) = Scene::cell_middle(c);
                     let look = scene.load_look(i, t);

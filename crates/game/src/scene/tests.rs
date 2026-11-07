@@ -6594,6 +6594,71 @@ fn boarding_pair(scene: &mut Scene, dx: i32, dy: i32) -> (u32, u32, (i32, i32)) 
 /// both go back to their cells, at the original's pace (0x4b84b0,
 /// 0x4b54a0, 0x4b5df0, 0x4c3410; needs `OPENCONQUEST_DATA`).
 #[test]
+fn a_hooking_boarders_order_is_lost() {
+    use order::Order;
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    // A move far off: whether it ran shows in the route's end.
+    let far = |scene: &Scene, i: usize| {
+        let t = TILE_SIZE as f32;
+        let (cx, cy) = scene.cell_of_object(i);
+        let (x, y) = (-8..=8)
+            .flat_map(|dy| (-8..=8).map(move |dx| (cx + dx, cy + dy)))
+            .find(|&(x, y)| (x - cx).abs().max((y - cy).abs()) >= 6 && scene.nav.is_water(x, y))
+            .unwrap();
+        (x as f32 * t + t / 2.0, y as f32 * t + t / 2.0)
+    };
+    let run = |hooked: bool, caches: &mut Caches| {
+        let mut scene = Scene::load(&data, caches, "miss000").unwrap();
+        scene.brain = None;
+        let (mine, other, _) = boarding_pair(&mut scene, 1, 0);
+        while scene.ticks < order::HOLD {
+            scene.update(crate::clock::TICK, &data, caches);
+        }
+        scene.order_close(mine, other, true).unwrap();
+        let i = scene.object_index(mine).unwrap();
+        // The order clears `+0x6a0` (0x4aa8ee); before the throw the
+        // task is not busy.
+        assert!(!scene.objects[i].ship.as_ref().unwrap().hook_busy);
+        assert!(!scene.task_busy(i));
+        if hooked {
+            for _ in 0..200 {
+                scene.update(crate::clock::TICK, &data, caches);
+                if scene.shots.iter().any(|s| s.rope == Some(mine)) {
+                    break;
+                }
+            }
+            // The throw: state 7 and `+0x6a0 = 1` (0x4b5ed0).
+            let i = scene.object_index(mine).unwrap();
+            assert!(scene.objects[i].ship.as_ref().unwrap().hook_busy);
+            assert!(scene.task_busy(i));
+        }
+        let (x, y) = far(&scene, scene.object_index(mine).unwrap());
+        scene
+            .apply(&Order::Move { ship: mine, x, y }, &data, caches)
+            .unwrap();
+        let i = scene.object_index(mine).unwrap();
+        let s = scene.objects[i].ship.as_ref().unwrap().clone();
+        (s, (x, y))
+    };
+    // Not yet thrown: the move runs, the boarding gone with it.
+    let (s, (x, y)) = run(false, &mut caches);
+    let t = TILE_SIZE as f32;
+    let goal = ((x / t).floor() as i32, (y / t).floor() as i32);
+    assert_eq!(s.goal, Some(goal));
+    assert!(s.task.is_none());
+    // Hooking: busy (0x4abe50), the task wound down (0x4abc60) and the
+    // move lost: no route stored. (State 7 is called off in the original,
+    // `+0x6a2 = 0xff`; the port ends it at once, see `Scene::wind_down`.)
+    let (s, _) = run(true, &mut caches);
+    assert_eq!(s.goal, None, "the move was lost");
+    assert!(s.task.is_none());
+}
+
+#[test]
 fn boarders_hook_and_lie_alongside() {
     use crate::objects::GrappleStage;
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
@@ -7176,6 +7241,7 @@ fn prey_gone_ends_with_a_notice() {
             by_id: false,
             thrown: None,
             hook_cell: (0, 0),
+            called_off: false,
         });
         scene.ticks += 1;
         scene.run_closing(&data, &mut caches);

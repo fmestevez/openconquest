@@ -825,17 +825,26 @@ impl Scene {
     /// only references are 0x4abe50's reads), so those tasks are never
     /// busy. The 0x40 task's byte is the fish gather's (`Ship::net_busy`),
     /// read here for the tasks the port runs in `Ship::hunt` (the fish
-    /// gather, the leviathan hunt). (Not ported: the 0x10 task's
-    /// `+0x6a0`, set from the hook's throw or the rammer's contact,
-    /// 0x4b5ed0, 0x4b6081, 0x4b741f, 0x4b7519, 0x4c2335, 0x4c2649, and
-    /// cleared at 0x4aa8ee, 0x4b6ba7, 0x4b7e38, 0x4c24c2, 0x4c3fcc, its
-    /// wind-down by `+0x6a9`; a `+0x77b` left set under the amber
-    /// gather, the treasure take or the unload, the other 0x40 tasks.)
+    /// gather, the leviathan hunt); the 0x10 task's is `Ship::hook_busy`,
+    /// read for a board, ram or load order. (Not ported: a `+0x77b` left
+    /// set under the amber gather, the treasure take or the unload, the
+    /// other 0x40 tasks.)
     pub(super) fn task_busy(&self, i: usize) -> bool {
         let Some(s) = self.objects[i].ship.as_ref() else {
             return false;
         };
-        s.net_busy && (self.hunting(i) || self.fishing(i))
+        // The 0x10 task (`+0x25d & 0x10`, set by 0x4aa840): a board, ram
+        // or load order.
+        let ten = matches!(
+            s.task,
+            Some(
+                crate::objects::Task::Board { .. }
+                    | crate::objects::Task::Ram { .. }
+                    | crate::objects::Task::LoadAt { .. }
+                    | crate::objects::Task::LoadRuins { .. }
+            )
+        );
+        (s.net_busy && (self.hunting(i) || self.fishing(i))) || (s.hook_busy && ten)
     }
 
     /// Carries out `order` at once.
