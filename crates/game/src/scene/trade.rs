@@ -47,8 +47,6 @@ pub(super) enum Piece {
 /// once per round of the porters, fish once per cast of the net.
 pub(super) fn take_per_round(resource: Resource, kind: u8, barbarian: bool) -> f32 {
     let n = match (resource, kind) {
-        // A leviathan 50 a cast, whoever hunts it (0x4ad0e0).
-        (Resource::Leviathan, _) => return 50.0,
         (Resource::Amber, 0 | 1) => 100.0,
         (Resource::Fish, 0) => 33.0,
         (Resource::Fish, 1) => 50.0,

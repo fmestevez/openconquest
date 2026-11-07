@@ -1594,17 +1594,55 @@ ship is the boat carried from miss000 (`list_treasures`, record field 8
 masked again by 0x4dfa90); its records' two ships (types 2 and 5, field
 16 = 8) are the barbarians'. The port's `fire_gate` tests
 `Scene::capabilities & 0x800` and the ram / board switch so
-(`boats_and_merchants_never_fire`). Other readers, not ported: 0x4ab720 at 0x4ab7ef (`& 0x1f0`
-with events pending or `+0x265` deferred and `+0x251` neither 1 nor 2, else none but the song's (kind 0x17 with `+0x25c`), the port keeping the `+0x251 == 2` skip (`being_built`) in `carry_out`; not ported:
-0x4abe50's deferral), 0x4aa990 (0x4aa99e, 0x4aa9af: bits 1 and 0 again
-at the event), 0x4aab00 (0x4aacb6-0x4aacde: bits 5, 6, 7 again by class),
-0x4a4bf5 (the mover: word nonzero), the song's 0x4a7476 / 0x4a7567 and
-0x4ab930 (0x4ab981: bit 14), bit 12 in 0x4b84b0, 0x4bb126, 0x4bbfc0,
-0x4c0bc0, 0x4c1760, 0x4d3990, 0x4d6cd0 (the contact tests; the port's
-`takes_contact` covers 0x4e3580 / 0x4e3800 only), the pointer helpers
-0x4e4630 (bit 1), 0x4e46c0 (bit 11 and the positions), 0x4e4750,
-0x4e47e0 (bits 8 and 7 over a deposit), 0x4e48b4 (bit 7), 0x4e73c0
-(`& 0x1f0`), and 0x4e12e0 (copies it, 0x4e14c7).
+(`boats_and_merchants_never_fire`).
+
+Every reader of `+0x261` in the code (the disassembly's `+ 0x261]`, 107
+places in 61 functions), apart from the writers above. Ported: the
+command tests 0x4e6700 (by 0x4e2ba0), the pages 0x4e6980 / 0x4e6e90
+(their buttons' switch cases
+0x4e6bbc-0x4e6ddf, 0x4e6ecf-0x4e719a), the stop 0x4aa540, the move 0x4ab250,
+the pointer's 0x4e45c0 with 0x4e3580 / 0x4e3800 (`may_fire`,
+`may_close`), the fire gate 0x4abb4b, and bit 12 in the contact tests:
+the hook 0x4b84b0 (0x4b85dd), the hook holding 0x4bbfc0 (0x4bbfde:
+`load_run`, `grapple`), the at-will list 0x4c0bc0 (0x4c0c7b:
+`at_will`), the ram's grant 0x4c1760 (0x4c1786: `grapple`), the guard's
+picks 0x4d3990 (0x4d3a2a: `fleet_guard`), the attack zone's 0x4d6cd0
+(0x4d6f56: `fleet_attack_zone`), all through `takes_contact`; the
+song's 0x4a7476 / 0x4a7567 and 0x4ab930 (0x4ab981: bit 14 into `+0x25d`
+0x400; see the charm, `creatures.rs`). The event re-tests: 0x4aa990
+(0x4aa99e, 0x4aa9af) kind 1 (dock) bit 1, kind 2 (found) bit 0, as
+0x4e2ba0's own; 0x4aab00 (0x4aacb6-0x4aacde, after its kinds 4, 5 and
+0xc) by the class `+0x839`: fish 0x191 bit 5, leviathan 0x192 bit 6,
+amber 400 bit 7, a refused one dropped (`+0x7d6 &= ~0x40` done first),
+so the amber wants bits 6 (0x4e6700 0x1a) and 7: `word_test`, as the
+port runs the event at delivery (`the_amber_event_wants_bit_7`; every
+map ship's record field 8 is 0xffffffff on miss000-miss013, so no
+shipped ship lacks bit 7 but by a hold, which clears bit 6 too). The
+gate 0x4ab720 at 0x4ab7ef: the group 0x1f0 runs only with `+0x251`
+neither 1 nor 2 and `+0x261 & 0x1f0`, else (but the song's kind 0x17
+with `+0x25c`) it returns at 0x4ab922 with `+0x7d6` untouched, the
+events kept pending till the word comes back (no fire records either).
+Every command reaches it through 0x4e2ba0 (the computers' too: 0x520cc0
+to the ship's message handler 0x4dc630, which calls 0x4e2ba0 at
+0x4dcf60), whose tests ask bits the held words (0x2000, 0, stone's)
+lack, so a held ship refuses them there; the port's `being_built` skip
+stands for `+0x251 == 2`. Not ported: the events kept pending past the
+gate (a hold starting between a command's delivery and the ship's turn
+in the tick, the port running events at delivery; 0x4abe50's deferral),
+0x4bb126 (0x4bb22c:
+bit 12 in 0x4bad90's square for a reach of 4 and over, which no caller
+asks), the mover 0x4a3f40's 0x4a4bf5 (a word nonzero saved into `+0x698`
+by 0x4b37d0 with 0x2000, `+0x25d |= 0x10`), the pointer helpers of the
+ship's answer 0x4dd424 (0x4e4630: bit 1 over an own dock, 0x40 unless
+`+0x271` is 0x4ac110's and 0x4b8cb0; 0x4e46c0 / 0x4e4750: bit 11 and a
+weapon at a position, 8; 0x4e47e0, called at 0x4dd582 / 0x4dd81c /
+0x4dda7b: over a deposit bit 8 (amber 400 with room 0x4be800(3) or
+`+0x52f` part filled, 4 for types 0 and 1; fish 0x191 by `+0x527` and
+the shoal's state `+0x74`, 0x200 or 7 / 2; leviathan 0x192 by
+0x4aeeb0 or room, 0x800 / 0x1000), else bit 7 for 2; 0x4e48b4 bit 7:
+the port's pointers over deposits stay on the cargo hold), the refit
+0x4e73c0 (`+0x251 == 0` and `& 0x1f0`, types 2-7; caller not decoded),
+and the save's copy 0x4e12e0 (0x4e14c7).
 
 ## Object panel (ships)
 

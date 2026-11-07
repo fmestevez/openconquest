@@ -20980,3 +20980,61 @@ fn brain_groups_hold_their_players_ships() {
     }
     assert!(checked > 0);
 }
+
+/// The gather event's own test of the word (0x4aab00 at 0x4aacb6-0x4aacde,
+/// needs `OPENCONQUEST_DATA`): amber (class 400) wants bit 7 besides
+/// 0x4e2ba0's bit 6, fish bit 5, so a word without bit 7 refuses the
+/// amber and keeps the fish. Every map ship's record field 8 is
+/// 0xffffffff (0x4dfa90), so none lacks it on the shipped missions.
+#[test]
+fn the_amber_event_wants_bit_7() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut checked = 0;
+    for m in 0..14 {
+        let mut caches = Caches::default();
+        let Ok(mut scene) = Scene::load(&data, &mut caches, &format!("miss{m:03}")) else {
+            continue;
+        };
+        let deposit = |scene: &Scene, class: ObjectClass| {
+            scene
+                .objects
+                .iter()
+                .find(|o| o.class == class)
+                .map(|o| o.id)
+        };
+        let (Some(amber), Some(fish)) = (
+            deposit(&scene, ObjectClass::Amber),
+            deposit(&scene, ObjectClass::FishZone),
+        ) else {
+            continue;
+        };
+        for i in 0..scene.objects.len() {
+            let Some(s) = scene.objects[i].ship.as_ref() else {
+                continue;
+            };
+            let ship = scene.objects[i].id;
+            let caps = s.caps;
+            let gather = |deposit| Order::Gather {
+                ship,
+                deposit,
+                port: 0,
+            };
+            // As loaded, both pass.
+            assert_eq!(scene.word_test(&gather(amber)), Some(true));
+            assert_eq!(scene.word_test(&gather(fish)), Some(true));
+            // Without bit 7 the amber's event refuses; the fish passes.
+            scene.objects[i].ship.as_mut().unwrap().caps = caps & !0x80;
+            assert_eq!(scene.word_test(&gather(amber)), Some(false));
+            assert_eq!(scene.word_test(&gather(fish)), Some(true));
+            // Without bit 6, 0x4e2ba0 refuses it.
+            scene.objects[i].ship.as_mut().unwrap().caps = caps & !0x40;
+            assert_eq!(scene.word_test(&gather(amber)), Some(false));
+            scene.objects[i].ship.as_mut().unwrap().caps = caps;
+            checked += 1;
+        }
+    }
+    assert!(checked > 0);
+}

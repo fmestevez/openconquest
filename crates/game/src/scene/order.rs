@@ -643,9 +643,12 @@ impl Scene {
     /// take 0x22 kind 0x10 bit 15 with room (0x4be800 modes 6 and 7), the
     /// spells (0x22 other kinds) none. The stop (case 10, event 8) and
     /// the behaviour switches (0x23) take no test here; the stop's is
-    /// its event's (0x4aa540, `Scene::stop`). `None` for an order that is
-    /// not such a command, or not to a ship.
-    fn word_test(&self, order: &Order) -> Option<bool> {
+    /// its event's (0x4aa540, `Scene::stop`). The events test again: the
+    /// dock / found 0x4aa990 kind 1 bit 1, kind 2 bit 0 (0x4aa99e,
+    /// 0x4aa9af: 0x4e2ba0's own), the gathers 0x4aab00 by class (the
+    /// amber's bit 7 besides). `None` for an order that is not such a
+    /// command, or not to a ship.
+    pub(super) fn word_test(&self, order: &Order) -> Option<bool> {
         use Order::*;
         let i = self.object_index(order.ship()?)?;
         let s = self.objects[i].ship.as_ref()?;
@@ -659,6 +662,13 @@ impl Scene {
                 let d = self.object_index(deposit);
                 match d.and_then(|d| super::gather::deposit_class(&self.objects[d])) {
                     Some(Resource::Fish) => 0x20,
+                    // The event tests the class again (0x4aab00 at
+                    // 0x4aacb6-0x4aacde): fish 0x191 bit 5, leviathan
+                    // 0x192 bit 6, amber 400 bit 7, a refused one dropped
+                    // (`+0x7d6 &= ~0x40` first); the amber so wants bits
+                    // 6 (0x4e6700) and 7. The port runs the event at
+                    // delivery, so the two tests read one word.
+                    Some(Resource::Amber) => 0x40 | 0x80,
                     _ => 0x40,
                 }
             }
@@ -672,7 +682,7 @@ impl Scene {
             }
             _ => return None,
         };
-        Some(caps & bit != 0)
+        Some(caps & bit == bit)
     }
 
     /// A ship takes one order of the 0x1f0 group a tick (0x4ab720): its
