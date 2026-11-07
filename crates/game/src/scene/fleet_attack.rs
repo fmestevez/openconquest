@@ -267,9 +267,9 @@ impl Scene {
         self.fleet_attacks.retain(|a| !a.ships.is_empty());
     }
 
-    /// The navy's tick for the fleet attack groups (0x4d0650 each, from
-    /// 0x4c4f40); a block ended by its notices goes (0x4a1c60 -> 0x4cf940).
-    pub(super) fn run_fleet_attacks(&mut self) {
+    /// Ships sunk or taken leave their groups (0x4a8410 -> 0x49bef0),
+    /// before the navy's walk.
+    pub(super) fn drop_gone_fleet_attacks(&mut self) {
         let gone: Vec<u32> = self
             .fleet_attacks
             .iter()
@@ -282,6 +282,13 @@ impl Scene {
         if !gone.is_empty() {
             self.leave_fleets(&gone);
         }
+    }
+
+    /// The navy's tick for the fleet attack groups (0x4d0650 each, from
+    /// 0x4c4f40); a block ended by its notices goes (0x4a1c60 -> 0x4cf940).
+    #[cfg(test)]
+    pub(super) fn run_fleet_attacks(&mut self) {
+        self.drop_gone_fleet_attacks();
         let mut z = 0;
         while z < self.fleet_attacks.len() {
             let mut a = self.fleet_attacks.remove(z);
@@ -300,7 +307,7 @@ impl Scene {
     /// a boarding strength (`+0x53c > 0`); for 0x18 no ram or boarding.
     /// Then `+8` grows by the tick's `+0xe2` (1). No draws. Returns
     /// whether the block is still there.
-    fn fa_tick(&mut self, a: &mut FleetAttack) -> bool {
+    pub(super) fn fa_tick(&mut self, a: &mut FleetAttack) -> bool {
         let heard = if a.notices.is_empty() {
             0
         } else {

@@ -178,9 +178,9 @@ impl Scene {
         self.human_guards.retain(|g| !g.ships.is_empty());
     }
 
-    /// The navy's tick for the guard groups (0x4d3b30 each, from
-    /// 0x4c4f40).
-    pub(super) fn run_human_guards(&mut self) {
+    /// Ships sunk or taken leave their groups (0x4a8410 -> 0x49bef0),
+    /// before the navy's walk.
+    pub(super) fn drop_gone_guards(&mut self) {
         let gone: Vec<u32> = self
             .human_guards
             .iter()
@@ -200,6 +200,13 @@ impl Scene {
                 .retain(|&id| objects.iter().any(|o| o.id == id && o.ship.is_some()));
         }
         self.human_groups.retain(|g| !g.ships.is_empty());
+    }
+
+    /// The navy's tick for the guard groups (0x4d3b30 each, from
+    /// 0x4c4f40).
+    #[cfg(test)]
+    pub(super) fn run_human_guards(&mut self) {
+        self.drop_gone_guards();
         for z in 0..self.human_guards.len() {
             let mut g = self.human_guards.remove(z);
             self.guard_tick(&mut g);

@@ -298,8 +298,9 @@ impl Scene {
         self.human_attacks.retain(|a| !a.ships.is_empty());
     }
 
-    /// The navy's tick for the attack groups (0x4d61d0 each).
-    pub(super) fn run_human_attacks(&mut self) {
+    /// Ships sunk or taken leave their groups (0x4a8410 -> 0x49bef0),
+    /// before the navy's walk.
+    pub(super) fn drop_gone_attacks(&mut self) {
         let gone: Vec<u32> = self
             .human_attacks
             .iter()
@@ -312,6 +313,12 @@ impl Scene {
         if !gone.is_empty() {
             self.leave_attacks(&gone);
         }
+    }
+
+    /// The navy's tick for the attack groups (0x4d61d0 each).
+    #[cfg(test)]
+    pub(super) fn run_human_attacks(&mut self) {
+        self.drop_gone_attacks();
         for z in 0..self.human_attacks.len() {
             let mut a = self.human_attacks.remove(z);
             self.ha_tick(&mut a);
@@ -326,7 +333,7 @@ impl Scene {
     /// cell sent there (0x4cf070), in mode 2 0x4d60c0; under way, in mode
     /// 2 0x4d60c0. Then mode 1 plans again (0x4d5a80). `+8` grows by the
     /// tick.
-    fn ha_tick(&mut self, a: &mut HumanAttack) {
+    pub(super) fn ha_tick(&mut self, a: &mut HumanAttack) {
         let heard = if a.notices.is_empty() {
             0
         } else {

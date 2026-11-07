@@ -11585,16 +11585,42 @@ founding, treasure and gather blocks in that walk, by `Fleet::block`:
 before, every repair, move, ... block in turn by kind, a repair order
 or move left over under another block still run, and the brains'
 gather zones in the computers' and human's pass);
-`brain_groups_hold_their_players_ships`. Not decoded: where the navy,
-the brain, the computers' players and the ships stand in the Sapp's
-list (the port keeps its places: the navy's walk, then the brain, then
-the computers, `Scene::update`). Not ported: the walk across the port's
-other groups: the human's blocks (`run_human_attacks`,
-`run_human_guards`, `run_waypoint_moves`, gather zones), the
-computers' flotillas' blocks (run in `computer_tick`) and the brains'
-land fleets' passes (`run_brain_lands`, after the computers) each run in
-their own pass, not at their group's place in the players' lists
-(the human's and computers' groups' list indices are not carried).
+`brain_groups_hold_their_players_ships`. The other groups' makers
+(every direct caller of 0x4a0480 op 1 and of 0x49b990): the human's,
+0x49ca60 (from the order 0x49e230, `0x49b990(player, 10)`, the index to
+navy `+0xc2 + 4p`); the computers' flotillas, 0x483e10 (op 1 `{0x483df0
+(role), player +0x1c}`: 0x483df0 is `neg; sbb; add 0xb`, kind 0xb for
+role 0, the manager, 10 for any other; the flotilla appended to the
+player's `+0xdfc` list in the same call, its navy index at `+8`); the
+brains', 0x479200. 0x5577d0 appends at the count and never reuses an
+entry, and the serial `+0x1c` is the navy's one counter, so each list
+is in making order: the human's groups by serial, a computer's
+flotillas by their index (the manager's land fleet, 0x42b910, at its
+place), a brain's members as above. **Ported** (`scene/navy.rs`,
+`run_navy`): one walk over every group, sorted by (player = nation x 4
++ slot, place): the human's blocks by their serial (gather zone, attack
+zone, fleet attack, waypoint move, guard: `human_group_tick`), each
+computer player's flotillas by index (`flotilla_group_tick`: the
+manager's `land_fleet`, else the move, attack zone, dock, guard or the
+joins' notices; a flotilla's gather zone just before), and the brains'
+members (`brain_group_tick`: the block, then a land member's
+`land_pass`). Before the walk the sunk ships leave their groups (the
+`drop_gone_*`, `computer_drop_gone`) and an old save's brain jobs and
+casts are queued (`brain_lands_load`); the brain's and the computers'
+clocks count first (`brain_clock`, `computers_clock`); then the brain's
+own turn (`brain_turn`) and, later, the computers' (`run_computers`:
+news, the flotillas' turns). Before, each kind ran in its own pass (the
+human's in turn by kind, the flotillas' blocks and land fleet in
+`computer_tick`, the brains' land fleets after the computers).
+`the_navy_walks_every_sides_groups_by_player_lists` (battle01,
+miss004). Not decoded: where the navy, the brain, the computers'
+players and the ships stand in the Sapp's list `+0x10` (0x542270 /
+0x541b40; the port keeps the navy's walk where it was, before the brain
+and the computers, so a computer's news and turns now follow its
+flotillas' blocks in the tick, which before came after them). Not
+ported: the human's bare groups and the plain move block `{100, 1}`
+(no tick in the port); the flotillas' walk only while the computers run
+(`computers.on`).
 
 **The brains' blocks' notices.** Each block's reader takes every
 notice of the group's queue off, newest first, and acts on these codes

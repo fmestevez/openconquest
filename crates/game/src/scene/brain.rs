@@ -707,7 +707,7 @@ fn standing() -> [bool; 2] {
 
 /// A town order as an old save kept it, before the brains' orders went
 /// through their land fleets' queues (`Brain::lands`); read only to move
-/// it there (`run_brain_lands`).
+/// it there (`brain_group_tick`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Job {
     /// Code 1 (table 0x5ac7c8's order 2 and the two temples): the town in
@@ -816,6 +816,9 @@ fn group_players(name: &str) -> &'static [u32] {
 fn group_player(name: &str, g: u8) -> Option<(u32, u32)> {
     group_players(name).get(g as usize).map(|&p| (p / 4, p % 4))
 }
+
+/// A group's player as `(nation, slot)`, none when not known.
+pub(super) type GroupPlayer = Option<(u32, u32)>;
 
 fn mission(name: &str) -> Option<Mission> {
     match name {
@@ -1167,10 +1170,18 @@ impl Scene {
     /// player's list, appended at its making (0x49b990); the brains make
     /// every member at message 0x8d1 (0x479200), in member order within a
     /// group, each group its own player (`group_players`). So the fleets
-    /// run by their group's player, then by member. (The brains' land
-    /// fleets run in `run_brain_lands`, apart: not ported at their place.)
-    fn run_brain_blocks(&mut self, defs: &[FleetDef]) {
-        let brain = self.brain.as_mut().unwrap();
+    /// run by their group's player, then by member, a land member (kind
+    /// 0xb) by its land fleet's pass (`run_navy` walks them with the
+    /// other sides' groups). The entries `(player, member, k)`, each
+    /// fleet given its group's player.
+    pub(super) fn brain_groups(&mut self) -> Vec<(GroupPlayer, u8, usize)> {
+        let Some(brain) = self.brain.as_mut() else {
+            return Vec::new();
+        };
+        let Some(m) = mission(&brain.mission) else {
+            return Vec::new();
+        };
+        let defs = m.fleets;
         let n = defs.len().min(brain.fleets.len());
         let mut order = Vec::with_capacity(n);
         for (k, d) in defs.iter().enumerate().take(n) {
@@ -1178,8 +1189,13 @@ impl Scene {
             brain.fleets[k].player = p;
             order.push((p, d.member, k));
         }
-        order.sort_unstable();
-        for (_, _, k) in order {
+        order
+    }
+
+    /// Brain member `k`'s group in the navy's walk: its block's tick
+    /// (0x4c4f40), and its land fleet's pass (0x42b910) for a land member.
+    pub(super) fn brain_group_tick(&mut self, k: usize) {
+        {
             match self.brain.as_ref().unwrap().fleets[k].block {
                 0x82 => self.repair_order_tick(k),
                 100 => self.move_order_tick(k),
@@ -1198,21 +1214,43 @@ impl Scene {
                 _ => {}
             }
         }
+        let now = self.brain.as_ref().unwrap().tick;
+        if let Some(mut lf) = self.brain.as_mut().unwrap().lands.remove(&k) {
+            self.land_pass(&mut lf, &mut super::computer::LandHost::Brain(k), now);
+            self.brain.as_mut().unwrap().lands.insert(k, lf);
+        }
     }
 
-    pub(super) fn run_brain(&mut self) {
+    /// The brain's clock (its message 0's count), before the navy's walk.
+    pub(super) fn brain_clock(&mut self) {
         let Some(brain) = self.brain.as_mut() else {
             return;
         };
         brain.tick += 1;
+        LEVEL.with(|l| l.set(brain.difficulty));
+    }
+
+    /// The brain's clock, the navy's walk and the brain's own turn, as
+    /// `Scene::update` runs them.
+    #[cfg(test)]
+    pub(super) fn run_brain(&mut self) {
+        self.brain_clock();
+        self.run_navy();
+        self.brain_turn();
+    }
+
+    /// The brain's message 0 past its clock: its members' programs.
+    /// (Not decoded: whether the navy's tick, 0x49ad18, runs before or
+    /// after the brain's.)
+    pub(super) fn brain_turn(&mut self) {
+        let Some(brain) = self.brain.as_mut() else {
+            return;
+        };
         let tick = brain.tick;
         LEVEL.with(|l| l.set(brain.difficulty));
         let Some(m) = mission(&brain.mission) else {
             return;
         };
-        // The fleets' orders tick too (the navy's message 0, 0x49ad18;
-        // not decoded: whether before or after the brain's).
-        self.run_brain_blocks(m.fleets);
         if tick % 5 != 0 {
             return;
         }
@@ -3502,13 +3540,14 @@ impl Scene {
         }
     }
 
-    /// The brains' land fleets' message 0, every tick (`land_pass`, the
-    /// computers' own). An old save's town orders and casts join the
+    /// Before the navy's walk, where the brains' land fleets run
+    /// (`land_pass`, the computers' own, in `brain_group_tick`): an old
+    /// save's town orders and casts join the
     /// queues first: its repairs (`Job::Repair`) are sent again, its
     /// waiting casts queued with their passes left; its full-town orders,
     /// which their yards send at their state 0, and its mendings under
     /// way are dropped (the building mends on, unhalted).
-    pub(super) fn run_brain_lands(&mut self) {
+    pub(super) fn brain_lands_load(&mut self) {
         let Some(brain) = self.brain.as_mut() else {
             return;
         };
@@ -3537,13 +3576,6 @@ impl Scene {
                     },
                 });
             }
-        }
-        let now = self.brain.as_ref().unwrap().tick;
-        let fleets: Vec<usize> = self.brain.as_ref().unwrap().lands.keys().copied().collect();
-        for k in fleets {
-            let mut lf = self.brain.as_mut().unwrap().lands.remove(&k).unwrap();
-            self.land_pass(&mut lf, &mut super::computer::LandHost::Brain(k), now);
-            self.brain.as_mut().unwrap().lands.insert(k, lf);
         }
     }
 

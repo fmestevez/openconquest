@@ -1411,10 +1411,11 @@ impl Scene {
     /// (0x4c9e30) and, when that sent nothing and more than 85 calls have
     /// passed, its ships planned again (0x4ca290); the count grows by
     /// the tick.
+    #[cfg(test)]
     pub(super) fn run_gather_zones(&mut self) {
         self.run_berth_waits();
         // A brain fleet's zone runs in the brain's groups' walk, at its
-        // group's place (`run_brain_blocks`).
+        // group's place (`run_navy`).
         let mut z = 0;
         while z < self.gather_zones.len() {
             if !matches!(self.gather_zones[z].group, ZoneGroup::Brain(_)) {

@@ -267,9 +267,9 @@ impl Scene {
         self.waypoint_moves.retain(|m| !m.ships.is_empty());
     }
 
-    /// The navy's tick for the waypoint move groups (0x4cf550 each, from
-    /// 0x4c4f40).
-    pub(super) fn run_waypoint_moves(&mut self) {
+    /// Ships sunk or taken leave their groups (0x4a8410 -> 0x49bef0),
+    /// before the navy's walk.
+    pub(super) fn drop_gone_waypoint_moves(&mut self) {
         let gone: Vec<u32> = self
             .waypoint_moves
             .iter()
@@ -282,6 +282,13 @@ impl Scene {
         if !gone.is_empty() {
             self.leave_waypoint_moves(&gone);
         }
+    }
+
+    /// The navy's tick for the waypoint move groups (0x4cf550 each, from
+    /// 0x4c4f40).
+    #[cfg(test)]
+    pub(super) fn run_waypoint_moves(&mut self) {
+        self.drop_gone_waypoint_moves();
         for z in 0..self.waypoint_moves.len() {
             self.wm_tick(z);
         }
@@ -301,7 +308,7 @@ impl Scene {
     /// (0x4cf070) and, that waypoint its own cell, its progress set to it
     /// (0x4ce8a0, which posts its 0x136). Then `+8` grows by the tick's
     /// `+0xe2` (1). No draws.
-    fn wm_tick(&mut self, z: usize) {
+    pub(super) fn wm_tick(&mut self, z: usize) {
         if !self.waypoint_moves[z].notices.is_empty() {
             self.wm_notices(z);
         }

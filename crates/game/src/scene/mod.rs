@@ -653,6 +653,7 @@ mod gorgon;
 mod grapple;
 mod human_attack;
 mod human_guard;
+mod navy;
 mod order;
 mod placement;
 mod port_unload;
@@ -2803,15 +2804,15 @@ impl Scene {
             // (0x4230f0 states 4, 5, 2). (Not settled: its place among the
             // objects' ticks, against the ship's take of the same tick.)
             removed.extend(self.step_house_fades(data, caches));
-            // The navy's tick (message 0, 0x49ab30 -> 0x4c4f40): the gather
-            // zones hear their ships' notices and plan again. (Not settled:
-            // whether before or after the ships' own ticks.)
-            self.run_gather_zones();
-            self.run_human_attacks();
-            self.run_fleet_attacks();
-            self.run_waypoint_moves();
-            self.run_human_guards();
-            self.run_brain();
+            // The navy's tick (message 0, 0x49ab30 -> 0x4c4f40): every
+            // side's groups in its players' lists (`run_navy`), the brain's
+            // and the computers' clocks counted first. (Not decoded: the
+            // navy's, the brain's, the computers' and the ships' places in
+            // the Sapp's list `+0x10`, 0x542270 / 0x541b40.)
+            self.brain_clock();
+            self.computers_clock();
+            self.run_navy();
+            self.brain_turn();
             self.step_fort_draws();
             self.heal_aboard();
             self.step_dock_repairs(data, caches);
@@ -2831,7 +2832,6 @@ impl Scene {
             self.tick_ship_shields(data, caches);
             self.step_ship_fires();
             self.run_computers();
-            self.run_brain_lands();
             self.run_town_links();
             self.run_yards(data, caches);
             // Standing pictures before construction, so one finished this

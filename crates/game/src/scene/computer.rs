@@ -698,7 +698,7 @@ impl Computer {
         }
     }
 
-    fn id(&self) -> u32 {
+    pub(super) fn id(&self) -> u32 {
         self.owner.0 * 4 + self.owner.1
     }
 
@@ -974,13 +974,21 @@ impl Scene {
         }
     }
 
-    /// Runs the computer players one game tick (message 0 to each).
-    pub(super) fn run_computers(&mut self) {
+    /// The computer players' clock, before the navy's walk (their
+    /// flotillas' blocks run there, `run_navy`).
+    pub(super) fn computers_clock(&mut self) {
         if !self.computers.on {
             return;
         }
         self.start_computers();
         self.computers.tick += 1;
+    }
+
+    /// Runs the computer players one game tick (message 0 to each).
+    pub(super) fn run_computers(&mut self) {
+        if !self.computers.on {
+            return;
+        }
         for k in 0..self.computers.players.len() {
             let mut ai = std::mem::take(&mut self.computers.players[k]);
             self.computer_tick(&mut ai);
@@ -1127,10 +1135,9 @@ impl Scene {
     }
 
     /// One tick of a computer player (message 0, 0x488960).
-    fn computer_tick(&mut self, ai: &mut Computer) {
-        let now = self.now();
-        // Ships sunk or taken leave their flotillas (0x4a8410 ->
-        // 0x49bef0: notice 0x137).
+    /// Ships sunk or taken leave their flotillas (0x4a8410 -> 0x49bef0:
+    /// notice 0x137).
+    pub(super) fn computer_drop_gone(&mut self, ai: &mut Computer) {
         let owner = ai.owner;
         for f in 0..ai.flotillas.len() {
             for id in ai.flotillas[f].ships.clone() {
@@ -1142,6 +1149,45 @@ impl Scene {
                 }
             }
         }
+    }
+
+    /// The navy's walk's entries for computer player `k`'s flotillas:
+    /// `(player, index)`, each flotilla's navy group made with it
+    /// (0x483e10 -> 0x4a0480 op 1 `{0x483df0(role), +0x1c}`: kind 0xb, the
+    /// land fleet, for the manager, 10 for any other role), appended to
+    /// the player's list in the flotillas' making order.
+    pub(super) fn flotilla_groups(&self, k: usize) -> Vec<(u32, usize)> {
+        let ai = &self.computers.players[k];
+        (0..ai.flotillas.len()).map(|f| (ai.id(), f)).collect()
+    }
+
+    /// One flotilla's group in the navy's walk (0x49ab30 at 0x49acb6): the
+    /// manager's land group by its pass 0x42b910 (`land_fleet`), any other
+    /// by 0x4c4f40, its block's tick (a move's pass 0x4ccd80, the attack
+    /// zone, the dock, the guard, else the notices of the joins).
+    pub(super) fn flotilla_group_tick(&mut self, k: usize, f: usize) {
+        let mut ai = std::mem::take(&mut self.computers.players[k]);
+        if ai.flotillas[f].role == MANAGER {
+            let now = self.now();
+            self.land_fleet(&mut ai, now);
+        } else if ai.flotillas[f].block == 100 && ai.flotillas[f].move_order.is_some() {
+            self.flotilla_move_pass(&mut ai, f);
+        } else if ai.flotillas[f].block == 0x70 {
+            self.attack_pass(&mut ai, f);
+        } else if ai.flotillas[f].block == 200 && ai.flotillas[f].dock_block.is_some() {
+            self.dock_pass(&mut ai, f);
+        } else if ai.flotillas[f].block == 0x6e && ai.flotillas[f].guard.is_some() {
+            self.guard_pass(&mut ai, f);
+        } else {
+            self.read_joins(&mut ai, f);
+        }
+        self.computers.players[k] = ai;
+    }
+
+    fn computer_tick(&mut self, ai: &mut Computer) {
+        let now = self.now();
+        let owner = ai.owner;
+        self.computer_drop_gone(ai);
         self.computer_news(ai);
         for (target, shooter) in std::mem::take(&mut ai.attacks) {
             self.computer_hit(ai, target, shooter);
@@ -1150,25 +1196,11 @@ impl Scene {
         if self.owned(owner).is_empty() {
             return;
         }
-        // The navy's tick (0x4c4f40) for the flotillas' blocks: a move's
-        // pass (0x4ccd80), else the notices of the joins.
-        for f in 0..ai.flotillas.len() {
-            if ai.flotillas[f].block == 100 && ai.flotillas[f].move_order.is_some() {
-                self.flotilla_move_pass(ai, f);
-            } else if ai.flotillas[f].block == 0x70 {
-                self.attack_pass(ai, f);
-            } else if ai.flotillas[f].block == 200 && ai.flotillas[f].dock_block.is_some() {
-                self.dock_pass(ai, f);
-            } else if ai.flotillas[f].block == 0x6e && ai.flotillas[f].guard.is_some() {
-                self.guard_pass(ai, f);
-            } else {
-                self.read_joins(ai, f);
-            }
-        }
+        // The flotillas' blocks and the land fleet run in the navy's walk
+        // (`run_navy`).
         for f in 0..ai.flotillas.len() {
             self.flotilla_turn(ai, f, now);
         }
-        self.land_fleet(ai, now);
     }
 
     /// New and lost objects (messages 0x5d95, 0x5d97 and 0x5d9b).
