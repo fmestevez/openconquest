@@ -63,19 +63,6 @@ const BOX_THRESHOLD: f64 = 6.0;
 /// Two clicks on a ship within this make a double click (modern mouse).
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
-/// Where the `k`-th ship of a group goes relative to the point it is sent
-/// to: rings of places 48 pixels apart.
-fn group_offset(k: usize) -> (f32, f32) {
-    if k == 0 {
-        return (0.0, 0.0);
-    }
-    let ring = ((k as f32).sqrt().ceil()) as i32;
-    let around = (8 * ring) as usize;
-    let a = (k % around) as f32 / around as f32 * std::f32::consts::TAU;
-    let r = 48.0 * ring as f32;
-    (r * a.cos(), r * a.sin())
-}
-
 /// The first of the ten flag frames of each player (nation x 4 + slot;
 /// table 0x5c2560), in `M_FLAGS`.
 const FLAG_STARTS: [u32; 16] = [
@@ -6732,6 +6719,7 @@ impl App {
             | Order::Patrol { .. }
             | Order::ZoneWaypoint { .. }
             | Order::ShiftMove { .. }
+            | Order::FleetMove { .. }
             | Order::AttackZone { .. }
             | Order::GuardZone { .. }
             | Order::FleetAttack { .. }
@@ -7340,28 +7328,20 @@ impl App {
             }
             return;
         }
-        // The plain move goes to the selection's group first (0x49e230 ->
-        // 0x49de70 -> 0x4ccc30: its block ended, the group kept), once.
+        // The plain move: the click's cell to the selection's group
+        // (0x49e230 -> 0x49de70 -> 0x4ccc30, the block `{100, 1}`), whose
+        // formation sends the ships (0x4cc970), once for the selection.
         if k == 0 {
-            let _ = self.issue(Order::KeepGroup {
-                ships: self.selection(),
-            });
-        }
-        let (dx, dy) = group_offset(k);
-        let target = (target.0 + dx, target.1 + dy);
-        if !is_ship {
-            return;
-        }
-        let (x, y) = target;
-        let order = if self.modifiers.shift_key() {
-            Order::Waypoint { ship: id, x, y }
-        } else {
-            Order::Move { ship: id, x, y }
-        };
-        if self.issue(order).is_err() {
-            self.say("The ship cannot sail there.");
-        } else if k == 0 {
-            self.sent = Some((x - dx, y - dy, self.time_ms));
+            let ships: Vec<u32> = self
+                .selection()
+                .into_iter()
+                .filter(|&s| self.own_ship(s))
+                .collect();
+            let t = openconquest_formats::map::TILE_SIZE as f32;
+            let (x, y) = ((target.0 / t).floor() as i32, (target.1 / t).floor() as i32);
+            if self.issue(Order::FleetMove { ships, x, y }).is_ok() {
+                self.sent = Some((target.0, target.1, self.time_ms));
+            }
         }
     }
 
@@ -8581,23 +8561,6 @@ impl ApplicationHandler for App {
         event_loop.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(16),
         ));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::group_offset;
-
-    #[test]
-    fn group_places_are_apart() {
-        let places: Vec<(f32, f32)> = (0..12).map(group_offset).collect();
-        assert_eq!(places[0], (0.0, 0.0));
-        for (i, a) in places.iter().enumerate() {
-            for b in &places[i + 1..] {
-                let d = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
-                assert!(d > 16.0, "{a:?} {b:?}");
-            }
-        }
     }
 }
 

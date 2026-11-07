@@ -1616,7 +1616,7 @@ impl Scene {
     /// (0x419f80 case 0x23 sub 1: the players without its own, the
     /// classes and the kinds stored, every unit group at will, `+0x498`
     /// 0; `Scene::fort_command`).
-    fn send_behaviour(&mut self, id: u32, (players, classes, third): (u32, u32, u32)) {
+    pub(super) fn send_behaviour(&mut self, id: u32, (players, classes, third): (u32, u32, u32)) {
         self.post(Order::BehaviourCommand {
             ship: id,
             sub: 1,
@@ -4939,57 +4939,14 @@ impl Scene {
     /// 0x4cf070, command 0x14 priority 0). Returns the ships sent: 0 with
     /// none, or when the planner gives no cells.
     fn flotilla_formation(&mut self, ai: &mut Computer, f: usize) -> usize {
-        let t = TILE_SIZE as f32;
-        let Some(to) = ai.flotillas[f].move_order.as_ref().map(|o| o.to) else {
+        let Some(order) = ai.flotillas[f].move_order.as_mut() else {
             return 0;
         };
-        let ships: Vec<(u32, crate::formation::Ship)> = ai.flotillas[f]
-            .ships
-            .iter()
-            .filter_map(|&id| {
-                let o = &self.objects[self.object_index(id)?];
-                let s = o.ship.as_ref()?;
-                Some((
-                    id,
-                    crate::formation::Ship {
-                        x: (o.x / t).floor() as i32,
-                        y: (o.y / t).floor() as i32,
-                        shallow: !crate::objects::deep_draught(s.kind),
-                    },
-                ))
-            })
-            .collect();
-        let cells = match ships.len() {
-            0 => return 0,
-            1 => vec![to],
-            _ => {
-                let (w, h) = (self.nav.width as i32, self.nav.height as i32);
-                let grid = |deep: bool| -> Vec<i16> {
-                    (0..h)
-                        .flat_map(|y| (0..w).map(move |x| (x, y)))
-                        .map(|(x, y)| if self.nav.passable(x, y, deep) { 0 } else { -1 })
-                        .collect()
-                };
-                let list: Vec<_> = ships.iter().map(|s| s.1).collect();
-                match crate::formation::plan(&grid(true), &grid(false), (w, h), to, &list) {
-                    Ok(c) => c,
-                    Err(_) => return 0,
-                }
-            }
-        };
-        let order = ai.flotillas[f].move_order.as_mut().unwrap();
-        for (&(id, _), &cell) in ships.iter().zip(&cells) {
-            match order.slots.iter_mut().find(|s| s.0 == id) {
-                Some(s) => s.1 = cell,
-                None => order.slots.push((id, cell)),
-            }
-        }
-        let mut sent = 0;
-        for ((id, _), cell) in ships.into_iter().zip(cells) {
-            let (x, y) = (cell.0 as f32 * t + t / 2.0, cell.1 as f32 * t + t / 2.0);
-            self.post(Order::Move { ship: id, x, y });
-            sent += 1;
-        }
+        let to = order.to;
+        let mut slots = std::mem::take(&mut order.slots);
+        let ships = ai.flotillas[f].ships.clone();
+        let sent = self.move_formation(&ships, to, &mut slots);
+        ai.flotillas[f].move_order.as_mut().unwrap().slots = slots;
         sent
     }
 

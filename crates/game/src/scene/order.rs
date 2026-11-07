@@ -145,6 +145,13 @@ pub enum Order {
         x: i32,
         y: i32,
     },
+    /// The human's move click at cell `(x, y)` without Shift with `ships`
+    /// selected (0x49de70 -> 0x4ccc30; `Scene::order_plain_move`).
+    FleetMove {
+        ships: Vec<u32>,
+        x: i32,
+        y: i32,
+    },
     /// The human's attack zone with `ships` selected (0x49d790 case 10):
     /// the selection's group given the attack block over the rectangle
     /// dragged between `a` and `b` (`human_attack`).
@@ -525,6 +532,7 @@ impl Scene {
             | Order::GatherZone { .. }
             | Order::ZoneWaypoint { .. }
             | Order::ShiftMove { .. }
+            | Order::FleetMove { .. }
             | Order::Patrol { .. }
             | Order::AttackZone { .. }
             | Order::GuardZone { .. }
@@ -970,6 +978,7 @@ impl Scene {
             } => done(self.order_gather_area(ships, a, b, resource)),
             ZoneWaypoint { ref ships, x, y } => done(self.order_zone_waypoint(ships, x, y)),
             ShiftMove { ref ships, x, y } => done(self.order_shift_move(ships, x, y)),
+            FleetMove { ref ships, x, y } => done(self.order_plain_move(ships, x, y)),
             GatherAt {
                 ref ships,
                 deposit,

@@ -57,8 +57,7 @@ impl Scene {
     /// being new; else the block made (0x4cef80, its route 0x4ce5e0 with
     /// the cell, the notices 0x4a1150) on the selection's group (kept
     /// with its serial, `+8` and behaviour when the selection is a bare
-    /// group's, `HumanGroup`, the plain move's `{100, 1}` not ported;
-    /// else a new one, 0x49ca60, its ships leaving their old groups) and
+    /// group's, `HumanGroup`, its plain move `{100, 1}` ended; else a new one, 0x49ca60, its ships leaving their old groups) and
     /// each ship sent to the route's
     /// first waypoint (0x4cf070, a plain move) with its progress `(-1,
     /// -1)`, way `+0x14` (0x4ce8a0). Each waypoint appended gets its mark

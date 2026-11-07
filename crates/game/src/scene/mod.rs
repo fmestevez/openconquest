@@ -659,6 +659,7 @@ mod human_guard;
 mod navy;
 mod order;
 mod placement;
+mod plain_move;
 mod port_unload;
 mod script;
 mod seats;

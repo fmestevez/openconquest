@@ -76,6 +76,7 @@ impl Scene {
             .chain(self.waypoint_moves.iter().map(|m| m.serial))
             .chain(self.human_guards.iter().map(|g| g.serial))
             .chain(self.human_founds.iter().map(|g| g.serial))
+            .chain(self.human_groups.iter().map(|g| g.serial))
             .collect();
         serials.sort_unstable();
         serials.dedup();
@@ -98,6 +99,24 @@ impl Scene {
         }
         walk.sort_by_key(|&(p, i, _)| (p, i));
         walk
+    }
+
+    /// The human groups' serials in the walk.
+    #[cfg(test)]
+    pub(super) fn navy_walk_serials(&mut self) -> Vec<u32> {
+        self.navy_walk()
+            .into_iter()
+            .filter_map(|(_, _, g)| match g {
+                Group::Human(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `human_group_tick`, for the tests.
+    #[cfg(test)]
+    pub(super) fn human_group_tick_for_test(&mut self, s: u32) {
+        self.human_group_tick(s);
     }
 
     /// A human group's block tick (0x4c4f40), whichever block it holds.
@@ -130,6 +149,11 @@ impl Scene {
         }
         if let Some(z) = self.human_founds.iter().position(|g| g.serial == s) {
             self.human_found_tick(z);
+        }
+        // A bare group (block null) runs nothing; the plain move `{100,
+        // 1}` its pass 0x4ccd80.
+        if let Some(z) = self.human_groups.iter().position(|g| g.serial == s) {
+            self.plain_move_tick(z);
         }
     }
 }

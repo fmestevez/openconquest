@@ -10880,8 +10880,7 @@ group; flag 0: it is group `+0xc2` (or nothing). Messages (0x49ab30):
   each ship (0x4cc650): the group kept.
 
 Ported: the bare group `HumanGroup` (`Scene::human_groups`): a plain
-move (`Order::KeepGroup` from the app once, then each ship's `Move`)
-and the stop (`KeepGroup`, then `Stop`) end the selection's block and
+move (`Order::FleetMove`, the plain move below) and the stop (`KeepGroup`, then `Stop`) end the selection's block and
 keep its group with its serial, `+8` and behaviour; a selection that is
 no group's makes a new one, its ships leaving the old (`leave_zones`,
 which takes ships out of bare groups too; a bare group has no notices,
@@ -10907,7 +10906,6 @@ the group as the move and stop do
 class-bit objects (classes 0x34..0x36) in lists and groups, and a
 sinking ship's own case (the port's own ships only); a number recall
 of the selection itself centring the view (0xc459, 0xcbb); 0xc457; the
-move block `{100, 1}` (0x4cc500, 0x4cc970, its tick, its `+8`); the
 other plain commands with no `KeepGroup` yet (each ship's own order,
 `leave_zones`; the sale 0x34 goes to a site in the port).
 
@@ -11646,9 +11644,53 @@ players and the ships stand in the Sapp's list `+0x10` (0x542270 /
 0x541b40; the port keeps the navy's walk where it was, before the brain
 and the computers, so a computer's news and turns now follow its
 flotillas' blocks in the tick, which before came after them). Not
-ported: the human's bare groups and the plain move block `{100, 1}`
-(no tick in the port); the flotillas' walk only while the computers run
-(`computers.on`).
+ported: the flotillas' walk only while the computers run
+(`computers.on`). The human's bare groups are in the walk by serial and
+run nothing (0x4c4f40 tests `+0x25` first, and `+8` grows only in a
+block's tick); the plain move `{100, 1}` runs its pass there
+(`human_group_tick` -> `plain_move_tick`, below).
+
+**The plain move `{100, 1}`** (the human's move click without Shift:
+0x49e230 case 0x14 -> 0x49de70 -> 0x4ccc30). 0x49de70's payload is
+`{x, y, 1, 0}` (the click's cell) when the group's block is null or of
+kind 100 (either sub-kind), else `{x, y, 0, 0}`. 0x4ccc30: a block but
+`{100, 1}` ended (0x4a1c60); with none, 0x4cc500 makes the block (0x65
+bytes zeroed, `{100, 1}`, `+8` game `+0xde`, `+0xc..+0x18` the payload,
+the notices 0x4a1150); a `{100, 1}` is rewritten the same, its slots
+`+0x24` and notices kept. Then 0x4cc970 plans the formation (one ship:
+the cell; more: the planner 0x5614e0 over the deep and shallow grids,
+0x4d50b0), each ship's cell noted in the slots `+0x24` (0x4cc7d0: by
+ship id, rewritten or appended) and the ship sent there (0x4cc8c0 ->
+0x4cf070, command 0x14 `{x, y, 0}`); when it sends none, each ship of
+the group gets 0x4cc650 (command 0x14 `{x, y, 0xff}`, priority kept).
+The tick (0x4c4f40 -> 0x4ccd80, each game tick): the notices first,
+newest first, each taken off (0x4cc6a0): 300 of a ship of the group
+(0x4cc590) has 0x4cc970 run anew and, when it sends none, the ship sent
+by 0x4cc650 and the group's behaviour (0x4c42f0 sub 1 with group `+0x19
+/ +0x1d / +0x21`); any other code is dropped. With none heard (no
+notices, none, or 0x4cc6a0 giving 0) and group `+8` over 100: `+8` set
+to 0 and each ship (type 200): group `+0x14` set and its `+0x689 /
++0x68d` not the group's `+0x19 / +0x1d`, the behaviour sent again
+(0x4c42f0); a blow marked (`+0x691`), its report (0x4a21c0) and 0x4cf760
+(command 0x28, forgotten); lying still (`+0x58c` 0) and more than one
+cell off its slot (in x or y; 0x4cc760, the block's cell without one),
+0x4cf070 there. Then `+8` grows by game `+0xe2`. None of 0x4cc500,
+0x4ccc30, 0x4ccd80, 0x4cc6a0, 0x4cc970, 0x4cc8c0, 0x4cc7d0, 0x4cc760,
+0x4cf070 sets the block's end flag `+0x5d`, so 0x4c4f40 never ends it:
+it lasts until another block replaces it (a stop or take, 0x49e230's
+default; a Shift move, 0x4cf2c0; any other block's order) or the group
+goes. Ported (`scene/plain_move.rs`): `Order::FleetMove` from the app's
+right click, once for the selection's own ships (before: `KeepGroup`,
+then each ship's `Move` to the click plus a ring offset of the port's,
+`group_offset`, removed); `HumanGroup::plain_move` (`PlainMove`, saved,
+serde default none), `order_plain_move`, `plain_move_tick`;
+`move_formation` is the computers' 0x4cc970 factored off
+`flotilla_formation`; a join to the group posts its 300 (`join_group`,
+`post_notice`); `KeepGroup` ends the block. Not ported: the blow's
+report 0x4a21c0 (the port makes it as the blow lands), 0x4cc8c0's -1
+(0x4cc7d0 fails only with no group: the port counts every ship sent),
+the leaving ships' 0x137 (0x4a1770; 0x4cc6a0 drops it).
+`the_plain_move_runs_through_its_group_block` (miss000).
 
 **The brains' blocks' notices.** Each block's reader takes every
 notice of the group's queue off, newest first, and acts on these codes

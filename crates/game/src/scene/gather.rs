@@ -104,13 +104,13 @@ pub struct GatherZone {
 /// is kept while the selection is unchanged (0x49e230).
 pub type HumanBehaviour = Option<(u32, u32, u32)>;
 
-/// A human group with no block the port runs (`+0x25` null, or the plain
-/// move's `{100, 1}`, 0x4cc500, whose tick is not ported): the selection's
-/// group kept through a plain move (0x49de70 without Shift -> 0x4ccc30,
-/// which ends any block but `{100, 1}`) or a stop and the navy's other
-/// plain commands (0x49e230's default: 0x4a1c60, then the command to each
-/// ship). Its notices `+0x2d` went with its block (0x4a1770 posts none to
-/// a group without them).
+/// A human group with no block (`+0x25` null) or the plain move's
+/// `{100, 1}` (0x4cc500, `plain_move`): the selection's group kept through
+/// a plain move (0x49de70 without Shift -> 0x4ccc30, which ends any block
+/// but `{100, 1}`) or a stop and the navy's other plain commands
+/// (0x49e230's default: 0x4a1c60, then the command to each ship). With no
+/// block its notices `+0x2d` went with it (0x4a1770 posts none to a group
+/// without them), and the navy's tick runs nothing for it (0x4c4f40).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HumanGroup {
     /// The group's serial number (shared with the other human groups).
@@ -121,6 +121,9 @@ pub struct HumanGroup {
     pub elapsed: u32,
     /// Group `+0x14..+0x24`.
     pub behaviour: HumanBehaviour,
+    /// Group `+0x25`: the plain move block `{100, 1}`, or none.
+    #[serde(default)]
+    pub plain_move: Option<super::plain_move::PlainMove>,
 }
 
 /// Whose block a route `+0x61` is (the human groups').
@@ -501,7 +504,12 @@ impl Scene {
                     .is_some_and(|i| self.objects[i].ship.is_some())
             })
             .collect();
-        if ships.is_empty() || self.selection_group(&ships).is_some() {
+        if ships.is_empty() {
+            return;
+        }
+        // A plain move ended (0x4a1c60), the group kept.
+        if let Some(g) = self.selection_group(&ships) {
+            self.human_groups[g].plain_move = None;
             return;
         }
         let (serial, elapsed, behaviour) = match self.end_selection_block(&ships) {
@@ -517,6 +525,7 @@ impl Scene {
             ships,
             elapsed,
             behaviour,
+            plain_move: None,
         });
     }
 
@@ -543,6 +552,7 @@ impl Scene {
             ships,
             elapsed: 0,
             behaviour: None,
+            plain_move: None,
         });
     }
 
@@ -601,8 +611,11 @@ impl Scene {
             .find(|g| g.ships.contains(&member))
         {
             // A bare group has no block, so no notice (0x4a1340 needs
-            // `+0x2d`).
+            // `+0x2d`); the plain move's has.
             g.ships.push(ship);
+            if g.plain_move.is_some() {
+                self.post_notice(ship, 300, 0);
+            }
             return;
         } else {
             return;
@@ -644,6 +657,13 @@ impl Scene {
             self.human_guards[z].notices.push(notice);
         } else if let Some(z) = self.ship_found(id) {
             self.human_founds[z].notices.push(notice);
+        } else if let Some(pm) = self
+            .human_groups
+            .iter_mut()
+            .find(|g| g.ships.contains(&id))
+            .and_then(|g| g.plain_move.as_mut())
+        {
+            pm.notices.push(notice);
         } else if !self.brain_notice(id, code, class) {
             for ai in &mut self.computers.players {
                 if ai.post_notice(id, code, class) {
