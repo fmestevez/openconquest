@@ -277,7 +277,7 @@ openconquest-extract video gamedata/video/title.avi frames/ --every 25
 ```sh
 cargo test
 # Also decode every resource of an installed copy:
-OPENCONQUEST_DATA=$PWD/gamedata cargo test --release
+OPENCONQUEST_DATA=$PWD/gamedata cargo test --profile quick
 ```
 
 Continuous integration (`.github/workflows/ci.yml`) checks formatting,

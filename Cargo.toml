@@ -32,3 +32,16 @@ opt-level = 2
 
 [profile.dev]
 opt-level = 1
+
+# The checks' build (`cargo test --profile quick`): our crates lightly
+# optimised and incremental, the dependencies fully, so the test build
+# compiles in a fraction of the release time and still runs the scenario
+# tests fast.
+[profile.quick]
+inherits = "release"
+opt-level = 1
+incremental = true
+codegen-units = 256
+
+[profile.quick.package."*"]
+opt-level = 3

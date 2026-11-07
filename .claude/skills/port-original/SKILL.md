@@ -44,7 +44,7 @@ skill). If any part is not, go back and read it; do not fill it in.
 - When a model of a routine exists (a script emulating it), compare the
   port against it over many inputs with a temporary `#[ignore]` test, then
   remove that test.
-- Run: `OPENCONQUEST_DATA=$PWD/gamedata cargo test --release -q`.
+- Run: `OPENCONQUEST_DATA=$PWD/gamedata cargo test --profile quick -q`.
 
 ## Shipping
 

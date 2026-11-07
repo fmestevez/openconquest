@@ -59,7 +59,8 @@ way when touched. Search for "estimate", "approximat", "not decoded",
   (they live in `~/Library/Caches/openconquest-re`, outside the repo).
 - Checks before a commit: `cargo fmt`, `cargo clippy --release -q
   --all-targets` with no warnings, and `OPENCONQUEST_DATA=$PWD/gamedata
-  cargo test --release -q` passing.
+  cargo test --profile quick -q` passing (the `quick` profile builds the
+  tests in under a minute; `--release` takes about 20 minutes).
 - After a change the user will play, rebuild the app:
   `./scripts/bundle-macos.sh` (`dist/OpenConquest.app`).
 - Code reads like the code around it: its comment density, naming and
@@ -80,7 +81,7 @@ paid for on every later call. Keep the context small:
 - Batch: put several greps and reads in one shell call; plan a step before
   taking it rather than probing line by line.
 - Build and test narrowly while working: `cargo check`, then
-  `cargo test --release -q NAME` for the tests you touch. Run the full
+  `cargo test --profile quick -q NAME` for the tests you touch. Run the full
   checks (fmt, clippy, the whole suite) once, before the commit.
 - Do not start sub-agents of your own.
 - Stay small: one item, about 60 tool calls. Cost grows with every call,
