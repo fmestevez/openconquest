@@ -799,10 +799,35 @@ impl Scene {
         };
         let r = self.apply_now(order, data, caches);
         if r.is_err() {
-            // Refused (0x4aab00, 0x4ab250 returning early): the old task
-            // stays, and what was pending went with the clear.
+            // Refused (0x4aab00, 0x4ab250 returning early): what was
+            // pending went with the clear, and 0x4abe50 had already taken
+            // the tasks 0x10-0x80 off `+0x25d` (`&= 0xffffff0f`, 0x4abf41),
+            // so the old one's machine is no longer run (the ship tick
+            // 0x4ab930 runs the 0x20, 0x10, 0x40 and 0x80 machines,
+            // 0x4b17b0, 0x4c1370 / 0x4b4da0 / 0x4b7370, 0x4ac2d0, 0x4a5f30,
+            // by those bits): it is over where it stood, nothing of it
+            // freed or wound down (no 0x4abc60, no stop of the move under
+            // way, `+0x400`'s 0x4a3f40). The take's step 5 has its bit off
+            // already (0x4b0e40) and stays as it was.
             if let Some(i) = self.object_index(ship) {
-                self.objects[i].ship = Some((*before).clone());
+                let mut s = (*before).clone();
+                use crate::objects::Task::*;
+                if matches!(
+                    s.task,
+                    Some(
+                        Gather { .. }
+                            | Board { .. }
+                            | Ram { .. }
+                            | LoadAt { .. }
+                            | LoadRuins { .. }
+                            | Found { .. }
+                            | Repair { .. }
+                    )
+                ) || matches!(s.task, Some(Take { step, .. }) if step != 5)
+                {
+                    s.task = None;
+                }
+                self.objects[i].ship = Some(s);
             }
         }
         self.tick_orders
@@ -824,11 +849,12 @@ impl Scene {
     /// instruction writes `+0x739`, `+0x58b` or `+0x5e2` (the listing's
     /// only references are 0x4abe50's reads), so those tasks are never
     /// busy. The 0x40 task's byte is the fish gather's (`Ship::net_busy`),
-    /// read here for the tasks the port runs in `Ship::hunt` (the fish
-    /// gather, the leviathan hunt); the 0x10 task's is `Ship::hook_busy`,
-    /// read for a board, ram or load order. (Not ported: a `+0x77b` left
-    /// set under the amber gather, the treasure take or the unload, the
-    /// other 0x40 tasks.)
+    /// which no other 0x40 machine writes, so one a full haul left set
+    /// makes any 0x40 task busy: the gathers (fish, leviathan, amber, and
+    /// the unload they go on to), the unload order and the treasure take
+    /// (`+0x25d |= 0x40` at 0x4aab00's end, 0x4ab1ef; the take's step 5
+    /// takes it off again, 0x4b0e40). The 0x10 task's is
+    /// `Ship::hook_busy`, read for a board, ram or load order.
     pub(super) fn task_busy(&self, i: usize) -> bool {
         let Some(s) = self.objects[i].ship.as_ref() else {
             return false;
@@ -844,7 +870,13 @@ impl Scene {
                     | crate::objects::Task::LoadRuins { .. }
             )
         );
-        (s.net_busy && (self.hunting(i) || self.fishing(i))) || (s.hook_busy && ten)
+        // The 0x40 task (`+0x25d & 0x40`).
+        let forty = match s.task {
+            Some(crate::objects::Task::Gather { .. }) => true,
+            Some(crate::objects::Task::Take { step, .. }) => step != 5,
+            _ => false,
+        };
+        (s.net_busy && forty) || (s.hook_busy && ten)
     }
 
     /// Carries out `order` at once.

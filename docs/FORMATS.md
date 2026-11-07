@@ -5691,10 +5691,48 @@ and back-off on, the task ending with state 6),
 tick at its own cell), on miss000. Not decoded: whether the hook's line
 is still drawn in the air once its record is freed (the port draws it
 till it lands); the port's charge does not look again, so 0x4c2480's
-alongside test (0x4c1f60 giving 2) is not made there. Not ported: a
-`+0x77b` left set under the amber gather, the treasure take or the
-unload, and a refused event's old task, which the port keeps though
-0x4abe50 took its bit off.
+alongside test (0x4c1f60 giving 2) is not made there.
+`+0x77b` under the other 0x40 tasks: no machine but the fish gather's
+writes it, so one left set by a full haul makes busy any task with
+`+0x25d & 0x40` (0x4aab00 sets it at its end, 0x4ab1ef, for every
+gather, the treasure take and the unload, code 0xc; the take's step 5
+clears it, 0x4b0e40). 0x4abc60 winds every 0x40 task down alike
+(0x4abd7c-0x4abd96): `+0x77d` (the step of the gathers 0x4ae760 /
+0x4b0590, the leviathan's, the take's 0x4b0e40 and the unload's
+0x4adef0; 0x4aab00 sets 1 and `+0x77c` 1 at the order) 1, the task
+ends (`+0x25d &= ~0x40`); else `+0x77c = 0xff`, the call-off, kept. The
+step 1 of each holds no contact and nothing held (the amber's seat and
+close-in, the take's sail and close-in, the unload's berth), so nothing
+is freed there but the move (0x4a6330, as for every task). Past it the
+machines read `+0x77c < 0` as under "A ship's amber gather", the take
+and "A ship's unload at a port" (the slide back from its start, the
+walkway down, the porters gone, the back-out; the unload's `+0x77c` set
+also with no contact `+0x8e6`, 0x4adef0 steps 10 and 0x10), the same as
+a stop's (0x4aa540 at 0x4aa710: `+0x77d` 1 or `+0x77c = 0xff`). The
+port: `Scene::task_busy` for any `Task::Gather` and a `Task::Take`
+short of step 5; `Scene::wind_down` as for the stop (step 1 without a
+`Landing` ends the task, past it `Landing::abort`);
+`a_stale_net_makes_the_unload_busy` on miss000 (the unload sailing to
+its berth with `+0x77b` 1: the move lost, the unload ended, the ship
+stopping). A refused event's old task: 0x4abe50 takes the tasks
+0x10-0x80 off `+0x25d` (`&= 0xffffff0f`, 0x4abf41) before the group's
+handler runs, and the ship tick 0x4ab930 runs their machines only by
+those bits (0x20 0x4b17b0, 0x10 0x4c1370 / 0x4b4da0 / 0x4b7370 by
+`+0x696`, 0x40 0x4ac2d0, 0x80 0x4a5f30), so a handler that returns
+early (0x4aab00's lookups, 0x4ab250) leaves the old task's machine
+stopped where it stood with nothing wound down or freed (no 0x4abc60;
+the route under way still sailed by `+0x400`'s 0x4a3f40). The port
+(`Scene::one_event_a_tick`): the old gather, take (short of step 5),
+board, ram, load, found or repair task ended, the ship as it was
+otherwise; `a_refused_order_ends_the_old_task` on miss000 (the boat
+sailing to its shoal told to unload at the shoal: no task, its route
+kept). Not ported: the machines' own re-sends (0x4b0590 step 1's event
+0x40 code 10, 0x4adef0 step 1's code 0xc to the port 0x4c5910 finds,
+0x4ad510's code 10 / 0xc), which the port carries out at once rather
+than through the next tick's 0x4ab720, so a stale `+0x77b` does not
+drop them there (the zone's 0x1f, `Scene::post`, does go through it);
+the 0x80 move's 0x4a5f30 stopped by a refusal (the port's move has no
+task to end: not decoded what of the port's move stands for it).
 
 **When a command arrives** (Players.cpp; decompiles of 0x520cc0,
 0x51fe20, 0x521570, 0x5228c0, 0x542390, 0x51f250, 0x541f70). 0x520cc0

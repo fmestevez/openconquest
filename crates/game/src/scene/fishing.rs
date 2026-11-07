@@ -537,4 +537,136 @@ mod tests {
         assert!(s.cargo < 400.0);
         assert!(!s.net_busy);
     }
+
+    /// `+0x77b` left set by a full haul (`the_boat_fishes_by_its_steps`)
+    /// makes the next 0x40 task busy whatever it is (0x4abe50): miss000's
+    /// boat sent to unload sails to its berth (0x4adef0 step 1); a move
+    /// then is lost and the unload ends there (0x4abc60: `+0x77d` 1),
+    /// the ship stopping in the cell it is going into. With `+0x77b` 0
+    /// the move runs.
+    #[test]
+    fn a_stale_net_makes_the_unload_busy() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let run = |net: bool, caches: &mut Caches| {
+            let mut scene = Scene::load(&data, caches, "miss000").unwrap();
+            scene.brain = None;
+            let boat = scene
+                .objects
+                .iter()
+                .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+                .unwrap()
+                .id;
+            let i = scene.object_index(boat).unwrap();
+            let port = scene.unloading_site(i).unwrap();
+            let s = scene.objects[i].ship.as_mut().unwrap();
+            s.cargo = 100.0;
+            s.cargo_kind = Some(Resource::Fish);
+            s.net_busy = net;
+            scene
+                .apply(
+                    &Order::Unload {
+                        ship: boat,
+                        port,
+                        prio: 75,
+                    },
+                    &data,
+                    caches,
+                )
+                .unwrap();
+            for _ in 0..5 {
+                scene.update(crate::clock::TICK, &data, caches);
+            }
+            let i = scene.object_index(boat).unwrap();
+            let s = scene.objects[i].ship.as_ref().unwrap();
+            assert!(matches!(
+                s.task,
+                Some(Task::Gather {
+                    phase: GatherPhase::ToPort(_),
+                    ..
+                })
+            ));
+            assert_eq!(scene.task_busy(i), net);
+            // A far water cell: the shoal's.
+            let (x, y) = scene
+                .objects
+                .iter()
+                .find(|o| o.class == ObjectClass::FishZone && o.deposit.is_some())
+                .map(|o| (o.x, o.y))
+                .unwrap();
+            scene
+                .apply(&Order::Move { ship: boat, x, y }, &data, caches)
+                .unwrap();
+            let s = scene.objects[i].ship.clone().unwrap();
+            (s, scene.cell_of_object(i))
+        };
+        let (s, _) = run(false, &mut caches);
+        assert!(s.task.is_none());
+        assert!(s.path.len() > 1, "the move ran");
+        let (s, _) = run(true, &mut caches);
+        assert!(s.task.is_none(), "the unload ended at step 1");
+        assert!(s.path.len() <= 1, "the move lost, the ship stopping");
+        assert!(s.net_busy, "nothing clears it but a fish step");
+    }
+
+    /// A refused order after 0x4abe50 took the tasks 0x10-0x80 off
+    /// `+0x25d` (0x4abf41): miss000's boat sailing to its shoal (sub-code
+    /// 9) told to unload at the shoal, no port of its player's (0x4aab00
+    /// code 0xc: 0x4ac050 finds none, returns), is left with no task, its
+    /// gather's machine stopped where it stood and the route it was on
+    /// sailed on (nothing wound down).
+    #[test]
+    fn a_refused_order_ends_the_old_task() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let (boat, bx, by) = scene
+            .objects
+            .iter()
+            .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+            .map(|o| (o.id, o.x, o.y))
+            .unwrap();
+        let shoal = scene
+            .objects
+            .iter()
+            .filter(|o| o.class == ObjectClass::FishZone && o.deposit.is_some())
+            .min_by(|a, b| {
+                let d = |o: &&objects::MapObject| (o.x - bx).powi(2) + (o.y - by).powi(2);
+                d(a).total_cmp(&d(b))
+            })
+            .unwrap()
+            .id;
+        scene.order_gather(boat, shoal).unwrap();
+        for _ in 0..5 {
+            scene.shoals_shown.insert(shoal, f32::MAX);
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        let i = scene.object_index(boat).unwrap();
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        assert!(matches!(s.task, Some(Task::Gather { .. })));
+        assert!(!s.path.is_empty(), "sailing");
+        let path = s.path.clone();
+        s.cargo = 100.0;
+        s.cargo_kind = Some(Resource::Fish);
+        let r = scene.apply(
+            &Order::Unload {
+                ship: boat,
+                port: shoal,
+                prio: 75,
+            },
+            &data,
+            &mut caches,
+        );
+        assert!(r.is_err(), "refused");
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        assert!(s.task.is_none(), "the old task over");
+        assert_eq!(s.path, path, "the route kept");
+    }
 }
