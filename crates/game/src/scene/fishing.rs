@@ -319,7 +319,8 @@ impl Scene {
 mod tests {
     use super::*;
     use crate::objects;
-    use crate::scene::{Caches, GameData, Order};
+    use crate::scene::{Caches, GameData, MapObject, Order};
+    use openconquest_formats::map::TILE_SIZE;
 
     /// miss000's own boat sent to the shoal nearest it, the shoals held up
     /// (their own dives left out): it sails there (sub-code 9), the look
@@ -811,11 +812,12 @@ mod tests {
             });
             s.path.clear();
             let p = scene.object_index(gone).unwrap();
+            scene.unload_order_cells(i, p);
             scene.objects.remove(p);
             let i = scene.object_index(boat).unwrap();
             let next = scene.unloading_site(i);
             scene.outbox.push(Order::Stop { id: 0 });
-            scene.run_task(i);
+            scene.run_unloads();
             (scene, boat, gone, next)
         };
         let (mut scene, boat, gone, next) = run(false, &mut caches);
@@ -842,5 +844,158 @@ mod tests {
         scene.deliver(&data, &mut caches);
         let i = scene.object_index(boat).unwrap();
         assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
+    }
+
+    /// 0x4adef0 step 1 off the berth, every tick: the first cargo ship
+    /// with two ports of its player's, bound for the farther. Under way
+    /// with that port's slot empty, it sends itself to 0x4c5910's (event
+    /// 0x40, read next tick); on the berth with the slot empty, nothing;
+    /// the port standing and its own (`+0x7ad`), a plan to that port's
+    /// berth (0x4a6270), not to the nearest; `+0x7ad` given up (0), no
+    /// plan; with no port left, the stop (event 8 0) posted, the task
+    /// kept till it is read.
+    #[test]
+    fn the_unloads_step_one_tests_its_port_every_tick() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let fresh = |caches: &mut Caches, name: &str| {
+            let mut scene = Scene::load(&data, caches, name).unwrap();
+            scene.brain = None;
+            for _ in 0..3 {
+                scene.update(crate::clock::TICK, &data, caches);
+            }
+            scene.outbox.clear();
+            scene
+        };
+        // The first mission with a cargo ship of two ports: the nearest
+        // and the other.
+        let (name, boat, near, far) = (0..=20)
+            .find_map(|m| {
+                let name = format!("miss{m:03}");
+                Scene::load(&data, &mut caches, &name).ok()?;
+                let mut scene = fresh(&mut caches, &name);
+                (0..scene.objects.len()).find_map(|i| {
+                    let s = scene.objects[i].ship.as_ref()?;
+                    if crate::objects::cargo_capacity(s.kind) <= 0.0 {
+                        return None;
+                    }
+                    let near = scene.unloading_site(i)?;
+                    let id = scene.objects[i].id;
+                    let p = scene.object_index(near).unwrap();
+                    let o = scene.objects.remove(p);
+                    let k = scene.object_index(id).unwrap();
+                    let far = scene.unloading_site(k);
+                    scene.objects.insert(p, o);
+                    Some((name.clone(), id, near, far?))
+                })
+            })
+            .expect("a ship with two ports");
+        let mut scene = fresh(&mut caches, &name);
+        let send = |scene: &mut Scene, port: u32| {
+            let i = scene.object_index(boat).unwrap();
+            let p = scene.object_index(port).unwrap();
+            let s = scene.objects[i].ship.as_mut().unwrap();
+            s.cargo = 100.0;
+            s.cargo_kind = Some(Resource::Fish);
+            s.task = Some(Task::Gather {
+                deposit: 0,
+                phase: GatherPhase::ToPort(port),
+            });
+            s.home_port = port;
+            scene.unload_order_cells(i, p);
+            i
+        };
+        let task = |scene: &Scene| {
+            let i = scene.object_index(boat).unwrap();
+            scene.objects[i].ship.as_ref().unwrap().task
+        };
+        let t = TILE_SIZE as f32;
+        // Under way, the slot empty: the event to the nearest, at once.
+        let i = send(&mut scene, far);
+        let (sx, sy) = (scene.objects[i].x, scene.objects[i].y);
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.path = [(sx + 2.0 * t, sy), (sx + 4.0 * t, sy)]
+            .into_iter()
+            .collect();
+        let p = scene.object_index(far).unwrap();
+        scene.objects.remove(p);
+        scene.run_unloads();
+        assert!(matches!(
+            scene.outbox[..],
+            [Order::UnloadEvent { ship, port, prio: 0x5a }] if ship == boat && port == near
+        ));
+        // On its berth with the slot empty: nothing.
+        let mut scene = fresh(&mut caches, &name);
+        let i = send(&mut scene, far);
+        let (_, (bx, by)) = scene.objects[i]
+            .ship
+            .as_ref()
+            .unwrap()
+            .unload_cells
+            .unwrap();
+        scene.objects[i].x = (bx as f32 + 0.5) * t;
+        scene.objects[i].y = (by as f32 + 0.5) * t;
+        scene.objects[i].ship.as_mut().unwrap().path.clear();
+        let p = scene.object_index(far).unwrap();
+        scene.objects.remove(p);
+        for _ in 0..30 {
+            scene.run_unloads();
+        }
+        assert!(scene.outbox.is_empty());
+        assert!(matches!(
+            task(&scene),
+            Some(Task::Gather { phase: GatherPhase::ToPort(p), .. }) if p == far
+        ));
+        // The port standing and its own: the plan to its berth, lying
+        // still (the first at once, `+0x593`).
+        let mut scene = fresh(&mut caches, &name);
+        let i = send(&mut scene, far);
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.path.clear();
+        s.unload_plan.first_plan = true;
+        scene.run_unloads();
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        let (_, berth) = s.unload_cells.unwrap();
+        let last = *s.path.back().expect("a route");
+        assert_eq!(
+            ((last.0 / t).floor() as i32, (last.1 / t).floor() as i32),
+            berth
+        );
+        // Its port given up (`+0x7ad` 0): no plan.
+        let mut scene = fresh(&mut caches, &name);
+        let i = send(&mut scene, far);
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        s.path.clear();
+        s.unload_plan.first_plan = true;
+        s.home_port = 0;
+        scene.run_unloads();
+        assert!(scene.objects[i].ship.as_ref().unwrap().path.is_empty());
+        assert!(scene.outbox.is_empty());
+        // No port left: the stop, read at the next delivery.
+        let mut scene = fresh(&mut caches, &name);
+        let i = send(&mut scene, far);
+        scene.objects[i].ship.as_mut().unwrap().path.clear();
+        let owner = scene.objects[i].owner;
+        scene
+            .objects
+            .retain(|o| o.owner != owner || !scene_takes(o));
+        let i = scene.object_index(boat).unwrap();
+        assert!(scene.unloading_site(i).is_none());
+        scene.run_unloads();
+        assert!(matches!(scene.outbox[..], [Order::StopEvent { ship }] if ship == boat));
+        assert!(task(&scene).is_some());
+        scene.deliver(&data, &mut caches);
+        assert!(task(&scene).is_none());
+    }
+
+    /// A port or a barbarian structure, what 0x4c5910 may pick.
+    fn scene_takes(o: &MapObject) -> bool {
+        matches!(
+            o.class,
+            ObjectClass::Building(crate::economy::PORT) | ObjectClass::Barbarian(0x40)
+        )
     }
 }

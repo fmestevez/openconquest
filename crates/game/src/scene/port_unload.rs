@@ -9,8 +9,15 @@
 //!   (no 0xcb7 sent), or a contact of kind 0x32 with another object freed
 //!   (0xcb8 to it, 0x4e06a0) and the step ended, another kind waited on;
 //!   `+0x78e` and `+0x79f` 0, step 10 and the commands held (0x4b37d0
-//!   with 0x2000, 0x4ae191). Off the berth: the wait by a crowded berth
-//!   (`Scene::run_berth_waits`) and the sailing there. Player 16's
+//!   with 0x2000, 0x4ae191); the port's slot empty there, nothing. Off
+//!   the berth: the wait by a crowded berth (`Scene::run_berth_waits`);
+//!   then, every tick, under way too: the port's anchor `+0x7b5` with its
+//!   slot empty, the ship sends itself to 0x4c5910's port (event 0x40
+//!   `{400, 0xc, id, player, 0x5a}`), none, the stop (event 8 0), both
+//!   read at its next tick (`Scene::post_event`); the slot holding its
+//!   port `+0x7ad`, a plan to that port's berth (0x4a6270 mode 5); held
+//!   by another (`+0x7ad` 0 after the berth wait's give-up), nothing.
+//!   Player 16's
 //!   barbarian structure (class 0x40, vtable 0x594920) has the ports'
 //!   vt+0xb0 0x40dfe0 and vt+0xb8 0x40e050.
 //! - **10** (0x4b0470(1) -> 0x4b02a0), no contact the order called off:
@@ -43,6 +50,9 @@
 
 use super::*;
 use crate::objects::{GatherPhase, Task};
+
+/// 0x4a6150's wait between plans (`+0x57f`, 0x19 from 0x4aab00).
+const PLAN_TICKS: u32 = 25;
 
 impl Scene {
     /// Every ship's unload at a port, a game tick (0x4adef0).
@@ -82,17 +92,51 @@ impl Scene {
         }
     }
 
-    /// Whether ship `i` lies on port `port`'s berth (`+0x7bd`, vt+0xb8),
-    /// where 0x4adef0 step 1 lands it rather than sailing.
-    pub(super) fn on_unload_berth(&self, i: usize, port: u32) -> bool {
-        self.object_index(port)
-            .and_then(|p| self.berth_cell(p))
-            .is_some_and(|b| self.cell_of(i) == b)
+    /// The unload's anchor and berth cells (`+0x7b5`, `+0x7bd`, set by
+    /// 0x4aab00 code 0xc), as kept; from a save before they were, the
+    /// port's while it stands.
+    pub(super) fn unload_cells(&self, i: usize, port: u32) -> Option<((i32, i32), (i32, i32))> {
+        let s = self.objects[i].ship.as_ref()?;
+        s.unload_cells.or_else(|| {
+            let p = self.object_index(port)?;
+            Some((self.objects[p].cell?, self.berth_cell(p)?))
+        })
     }
 
-    /// 0x4adef0 step 1 on the berth, for ship `i` bound for `port`.
+    /// 0x4adef0 step 1 for ship `i` bound for `port`. On the berth
+    /// `+0x7bd` (0x4adef0 at 0x4adf1a) it lands; the port's slot empty
+    /// there, nothing (the test of `+0x7b1` against the slot fails).
+    /// Off it (the berth wait is `run_berth_waits`'), the slot of the
+    /// anchor `+0x7b5` (0x5c74fc `+0xc`): empty, 0x4c5910's port gets the
+    /// event 0x40 `{400, 0xc, id, player, 0x5a}`, none the stop (vt+4(8,
+    /// 0)); holding the port `+0x7ad`, `+0x7b1` = it and the plan to its
+    /// berth (0x4a6270 mode 5, vt+0xb8); held by another, nothing. (A
+    /// save without the cells: none known, the slot is taken as empty.)
     fn unload_step_one(&mut self, i: usize, port: u32) {
-        if !self.on_unload_berth(i, port) {
+        let cells = self.unload_cells(i, port);
+        if cells.is_none_or(|(_, berth)| self.cell_of(i) != berth) {
+            let id = self.objects[i].id;
+            match cells.and_then(|(anchor, _)| self.slot_object(anchor)) {
+                None => match self.unloading_site(i) {
+                    Some(port) => self.post_event(super::Order::UnloadEvent {
+                        ship: id,
+                        port,
+                        prio: 0x5a,
+                    }),
+                    None => self.post_event(super::Order::StopEvent { ship: id }),
+                },
+                Some(k)
+                    if self.objects[k].id == self.objects[i].ship.as_ref().unwrap().home_port =>
+                {
+                    if let Some(b) = self.berth_cell(k) {
+                        self.unload_plan(i, b);
+                    }
+                }
+                Some(_) => {}
+            }
+            return;
+        }
+        if self.object_index(port).is_none() {
             return;
         }
         let s = self.objects[i].ship.as_ref().unwrap();
@@ -132,6 +176,40 @@ impl Scene {
             *phase = GatherPhase::Unloading(port);
         }
         s.landing = Some(l);
+    }
+
+    /// 0x4adef0 step 1's plan to the berth `goal` (0x4a6270 mode 5 ->
+    /// 0x4a6150, the first at once with `+0x593`, set by the order): once
+    /// 25 ticks have passed since the last plan (`+0x57b`), if the ship
+    /// changed cells, the goal changed or it lies still, and not turning
+    /// (move state 2). (0x4a6150's goal-is-its-cell end is not met: off
+    /// the berth. Its wait counter `+0x591` is the port's own mover's.)
+    /// Then 0x4a6330: the route stored if found; the plan's tick and cell
+    /// kept, its goal only with a route (0x4a6100).
+    fn unload_plan(&mut self, i: usize, goal: (i32, i32)) {
+        let now = self.ticks;
+        let own = self.cell_of_object(i);
+        let s = self.objects[i].ship.as_ref().unwrap();
+        let p = s.unload_plan;
+        if !p.first_plan {
+            let changed = own != p.plan_from || goal != p.plan_goal || s.move_state == 0;
+            if !changed || s.move_state == 2 || now.wrapping_sub(p.planned) < PLAN_TICKS {
+                return;
+            }
+        }
+        let t = TILE_SIZE as f32;
+        let (x, y) = (goal.0 as f32 * t + t / 2.0, goal.1 as f32 * t + t / 2.0);
+        let route = self.plan_route_to_water(i, x, y);
+        let plan_goal = if route.is_some() { goal } else { p.plan_goal };
+        if let Some(path) = route {
+            self.store_route(i, path);
+        }
+        self.objects[i].ship.as_mut().unwrap().unload_plan = crate::objects::RoutePlan {
+            planned: now,
+            plan_from: own,
+            plan_goal,
+            first_plan: false,
+        };
     }
 
     /// The contact freed (0x4b3970(0): 0xcb8 to the port, 0x4e7640 clears

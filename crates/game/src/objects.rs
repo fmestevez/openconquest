@@ -476,6 +476,15 @@ pub struct Ship {
     /// 0 for none.
     #[serde(default)]
     pub berth_wait: u32,
+    /// The unload's cells (0x4aab00 code 0xc): its port's anchor `+0x7b5`
+    /// (`+0x74`, `+0x78`), whose slot 0x4adef0 step 1 tests, and the
+    /// berth `+0x7bd` (the port's vt+0xb8). `None` from a save before
+    /// they were kept: taken from the port while it stands.
+    #[serde(default)]
+    pub unload_cells: Option<((i32, i32), (i32, i32))>,
+    /// The unload's route plans at step 1 (0x4a6270 -> 0x4a6150).
+    #[serde(default)]
+    pub unload_plan: RoutePlan,
     /// `+0x691` / `+0x692`: the last blow taken, by whom (0x4bf170 at
     /// each shot landing; command 0x28 sub 4 clears it).
     #[serde(default)]
@@ -2550,6 +2559,8 @@ pub fn resolve(
         last_deposit: 0,
         gathered: None,
         berth_wait: 0,
+        unload_cells: None,
+        unload_plan: RoutePlan::default(),
         blow: None,
         face: None,
         furl: 0.0,

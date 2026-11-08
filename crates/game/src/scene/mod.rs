@@ -2889,17 +2889,6 @@ impl Scene {
                 };
             }
         }
-        let ships: Vec<u32> = self
-            .objects
-            .iter()
-            .filter(|o| o.ship.as_ref().is_some_and(|s| s.task.is_some()))
-            .map(|o| o.id)
-            .collect();
-        for id in ships {
-            if let Some(i) = self.object_index(id) {
-                self.run_task(i);
-            }
-        }
         self.clock += dt;
         self.sight_timer -= dt;
         if self.sight_timer <= 0.0 {

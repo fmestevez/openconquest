@@ -2882,7 +2882,8 @@ impl Scene {
             else {
                 continue;
             };
-            let Some(b) = self.object_index(port).and_then(|p| self.berth_cell(p)) else {
+            // The berth `+0x7bd` as the order set it, the port there or not.
+            let Some((_, b)) = self.unload_cells(k, port) else {
                 continue;
             };
             let here = (

@@ -136,13 +136,13 @@ impl Scene {
             // sent as the ship's own event 0x40 code 10, priority 0x5a
             // (0x4b0590 step 1), read by its next tick's 0x4ab720
             // (a refusal there, or a busy task, ends this one); none, the
-            // stop (event 8 0).
+            // stop (event 8 0), read there too.
             match self.box_deposit(i, g.rect, Resource::Amber, 1, -1) {
                 Some(n) => {
                     let deposit = self.objects[n].id;
                     self.post_event(super::Order::GatherEvent { ship: id, deposit });
                 }
-                None => self.objects[i].ship.as_mut().unwrap().task = None,
+                None => self.post_event(super::Order::StopEvent { ship: id }),
             }
             return;
         };

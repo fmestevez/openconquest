@@ -151,6 +151,15 @@ pub enum Order {
         port: u32,
         prio: u8,
     },
+    /// The stop (event 8 with no record, 0x4aa540) a ship's own machine
+    /// sends itself (vt+4(8, 0)): the amber's step 1 with no amber left
+    /// in its box (0x4b0590), the unload's step 1 with its port's slot
+    /// empty and no other port (0x4adef0). Read by its next tick's
+    /// 0x4ab720 as the stop command is (0x4e2ba0 case 10's `vt+4(8,
+    /// NULL)`).
+    StopEvent {
+        ship: u32,
+    },
     /// The human's Shift move click with `ships` selected, the ships of a
     /// group running a gather zone (0x49e230 case 0x14 -> 0x49de70 with
     /// key flag 4): cell `(x, y)` added to the zone's waypoints `+0x61`.
@@ -511,6 +520,7 @@ impl Order {
             | Gather { ship, .. }
             | GatherEvent { ship, .. }
             | UnloadEvent { ship, .. }
+            | StopEvent { ship }
             | Follow { ship, .. }
             | Take { ship, .. }
             | Unload { ship, .. }
@@ -618,7 +628,12 @@ impl Scene {
         let at = self
             .outbox
             .iter()
-            .take_while(|o| matches!(o, Order::GatherEvent { .. } | Order::UnloadEvent { .. }))
+            .take_while(|o| {
+                matches!(
+                    o,
+                    Order::GatherEvent { .. } | Order::UnloadEvent { .. } | Order::StopEvent { .. }
+                )
+            })
             .count();
         self.outbox.insert(at, order);
     }
@@ -795,7 +810,7 @@ impl Scene {
             Close { ship, .. } => (ship, 2),
             Move { ship, .. } | MoveKeep { ship, .. } => (ship, 3),
             Attack { ship, .. } => (ship, 4),
-            Stop { id } => {
+            Stop { id } | StopEvent { ship: id } => {
                 let i = self.object_index(id)?;
                 self.objects[i].ship.as_ref()?;
                 // Refused without bit 13 (0x4aa540), the group pending
@@ -968,7 +983,7 @@ impl Scene {
                     Err("The ship cannot go there".into())
                 }
             }
-            Stop { id } => {
+            Stop { id } | StopEvent { ship: id } => {
                 self.stop(id);
                 Ok(0)
             }

@@ -2591,60 +2591,6 @@ impl Scene {
         }
     }
 
-    /// Advances the standing order of ship `i`.
-    pub(super) fn run_task(&mut self, i: usize) {
-        // A founding ship's order runs at its tick (`Scene::run_landings`,
-        // 0x4b3370).
-        if matches!(
-            self.objects[i].ship.as_ref().and_then(|s| s.task),
-            Some(Task::Found { .. })
-        ) {
-            return;
-        }
-        let Some(ship) = &self.objects[i].ship else {
-            return;
-        };
-        // Amber (0x4b0590, `Scene::run_amber`), fish (0x4ae760) and a
-        // leviathan (0x4aeef0, both `Scene::run_hunts`) go a game tick at
-        // a time, and the unload (0x4adef0, `Scene::run_unloads`).
-        let Some(Task::Gather {
-            deposit,
-            phase: GatherPhase::ToPort(port),
-        }) = ship.task
-        else {
-            return;
-        };
-        if !ship.path.is_empty() {
-            return;
-        }
-        // On its berth (vt+0xb8) 0x4adef0 step 1 lands it, a game tick at
-        // a time (`Scene::run_unloads`).
-        if self.on_unload_berth(i, port) {
-            return;
-        }
-        // Its port's cell holding it no more (0x4adef0 step 1, the slot
-        // `+0x7b5` empty), it sends itself to the port 0x4c5910 finds,
-        // event 0x40 code 0xc with priority 0x5a, read by its
-        // next tick's 0x4ab720 (`Scene::post_event`); none, the stop
-        // (event 8 0). (Not ported: the original tests this every tick of
-        // step 1 off the berth cell, under way too; the port at its
-        // route's end.)
-        if self.object_index(port).is_none() {
-            let id = self.objects[i].id;
-            match self.unloading_site(i) {
-                Some(port) => self.post_event(super::Order::UnloadEvent {
-                    ship: id,
-                    port,
-                    prio: 0x5a,
-                }),
-                None => self.objects[i].ship.as_mut().unwrap().task = None,
-            }
-            return;
-        }
-        self.send_to_port(i, deposit)
-    }
-
-    /// Sends ship `i` (gathering from `deposit`) to unload.
     /// The water cell in front of moorage or shipyard `p` (record field
     /// 10: 0 east, 2 north, 4 west, 6 south), where ships berth.
     pub(super) fn front_cell(&self, p: usize) -> Option<(i32, i32)> {
@@ -2832,6 +2778,7 @@ impl Scene {
         ship.priority = prio.wrapping_add(1);
         ship.home_port = port;
         ship.berth_wait = 0;
+        self.unload_order_cells(i, p);
         self.store_route(i, path);
         Ok(())
     }
@@ -2853,6 +2800,23 @@ impl Scene {
         self.post_notice(id, 0x138, class);
     }
 
+    /// 0x4aab00 code 0xc's cells for ship `i` sent to port `p`: the
+    /// anchor `+0x7b5` (`+0x74`, `+0x78`) and the berth `+0x7bd`
+    /// (vt+0xb8), the step-1 plan's first made here (`+0x593`: the port
+    /// plans as the order is taken).
+    pub(super) fn unload_order_cells(&mut self, i: usize, p: usize) {
+        let cells = self.objects[p].cell.zip(self.berth_cell(p));
+        let plan = crate::objects::RoutePlan {
+            planned: self.ticks,
+            plan_from: self.cell_of_object(i),
+            plan_goal: cells.map_or((0, 0), |c| c.1),
+            first_plan: false,
+        };
+        let s = self.objects[i].ship.as_mut().unwrap();
+        s.unload_cells = cells;
+        s.unload_plan = plan;
+    }
+
     /// Sends ship `i` to the nearest port (0x4c5910), as the leviathan's
     /// 0x4ad510 does and a ship whose port is gone on the way (0x4adef0
     /// step 1).
@@ -2869,6 +2833,9 @@ impl Scene {
                     deposit,
                     phase: GatherPhase::ToPort(port),
                 });
+                ship.home_port = port;
+                let p = self.object_index(port).unwrap();
+                self.unload_order_cells(i, p);
                 self.store_route(i, path);
             }
             None => ship.task = None,

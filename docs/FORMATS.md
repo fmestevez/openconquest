@@ -5787,18 +5787,32 @@ commands, after the events already there: written at the machine's
 tick, the record is overwritten by a command of its code delivered at
 the next tick's start), delivered at the tick's end through
 `one_event_a_tick` (rank of the 0x40 code); `amber_step_one`,
-`hunt_next` and `run_task`'s unload with its port gone;
+`hunt_next` and `unload_step_one` with its port gone;
 `a_machines_event_waits_for_the_next_tick` (the event in the outbox,
 the task unchanged in that tick; delivered, the unload to the other
-port, or with `+0x77b` set dropped and the unload ended). Not ported:
-the unload's step-1 test of the slot every tick under way (the port
-makes it at its route's end, and at the berth cell with the port gone,
-where the original does nothing, the port sends it on as well); the
-stop events (event 8 0) these machines send are carried out at once;
-with the port still there, the port's step 1 off the berth sends it to
-the nearest port (`send_to_port`) where 0x4adef0 plans to its own
-berth (0x4a6270); the follow's own parts under a refusal (the port's
-`Task::Convoy` is its own).
+port, or with `+0x77b` set dropped and the unload ended). The stops
+these machines send (vt+4(8, 0): 0x4b0590 step 1 with no amber in the
+box, 0x4adef0 step 1 with no port) are events too, read at the next
+tick as the stop command's (0x4e2ba0 case 10, 0x4aa540 with bit 13):
+`Order::StopEvent`. The unload's step 1 (0x4adef0 case 1, read whole):
+on the berth `+0x7bd` (the ship's cell, 0x4adf1a) it lands as below,
+and with the port's slot empty there (`+0x7b1` not the slot's object)
+does nothing; off it, every step-1 tick, under way too: the berth wait,
+then the anchor `+0x7b5`'s slot (0x5c74fc `+0xc`): empty, the event to
+0x4c5910's port or the stop; holding the port `+0x7ad` (its `+0x4c`),
+`+0x7b1` = it and 0x4a6270(mode 5) to its berth (vt+0xb8), whose
+0x4a6150 plans 25 ticks after the last (`+0x57b`, `+0x57f` 0x19 from
+0x4aab00), the cell or goal changed or lying still, not turning; held
+by another (`+0x7ad` 0 after the wait's give-up), nothing. The port
+(`unload_step_one`, `unload_plan`, `Ship::unload_cells` and
+`Ship::unload_plan` set as 0x4aab00 code 0xc writes `+0x7b5`, `+0x7bd`,
+`+0x7ad`, `Scene::unload_order_cells`; a save without the cells takes
+the port's while it stands, else the slot as empty);
+`the_unloads_step_one_tests_its_port_every_tick` (first mission with
+a ship of two ports). Not ported: the order's first plan, which the
+original makes at step 1's first tick (`+0x593`), is made as the event
+is taken, and 0x4aab00 refuses no port it cannot route to; the follow's
+own parts under a refusal (the port's `Task::Convoy` is its own).
 
 **When a command arrives** (Players.cpp; decompiles of 0x520cc0,
 0x51fe20, 0x521570, 0x5228c0, 0x542390, 0x51f250, 0x541f70). 0x520cc0
@@ -8831,10 +8845,12 @@ carrier's `{port, 1, 0x5a}`; the step `+0x77d`, the machine the ship's
 `Landing`, its `dock` the contact `+0x8e6`, the task in
 `GatherPhase::Unloading` from step 10 on):
 
-- **1**: off its berth `+0x7bd` (the port's vt+0xb8) the berth wait
-  (`+0x78e`, `run_berth_waits`) and the sail there (0x4a6270); the port's
-  slot gone, 0x4c5910's port (event 0x40 `{400, 0xc, id, 0x5a}`) or event
-  8 0. On the berth and lying still (`+0x58c` 0), the port `+0x7b1` still
+- **1**: off its berth `+0x7bd` (the port's vt+0xb8), every tick under
+  way too, the berth wait (`+0x78e`, `run_berth_waits`); the port's anchor
+  slot `+0x7b5` empty, 0x4c5910's port (event 0x40 `{400, 0xc, id,
+  0x5a}`) or event 8 0, both read next tick; holding its port `+0x7ad`,
+  the plan to its berth (0x4a6270 mode 5); another, nothing. On the
+  berth with the slot empty, nothing. On the berth and lying still (`+0x58c` 0), the port `+0x7b1` still
   the object at its cell `+0x7b5`, its vt+0xb0 (0x40dfe0) true and
   0x4afe50(ship, 1) true: the contact `{0x32, 5, port id, port}` made
   (no 0xcb7: the port's `+0x1e0` is not set), or a contact of kind 0x32
