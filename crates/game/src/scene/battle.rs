@@ -838,10 +838,17 @@ impl Scene {
         caches: &mut Caches,
     ) {
         self.scout_attacked(target);
-        self.computer_attacked(target, shooter);
-        self.brain_hit(target);
-        // A brain's fleet notes who fired on it, whoever it was.
-        self.fleet_attacked(target, shooter);
+        // A ship's blow reaches its player only by its group's pass
+        // (0x4a21c0, `report_blow`, once the shot lands and marks it);
+        // the port's buildings still report as the volley goes.
+        let ship = self
+            .object_index(target)
+            .is_some_and(|i| self.objects[i].ship.is_some());
+        if !ship {
+            self.computer_attacked(target, shooter);
+            self.brain_hit(target);
+            self.fleet_attacked(target, shooter);
+        }
         // A guard told to fire on aggressors turns on whoever shoots it
         // (the port's own; its attack fires from the fire pass, by the
         // attack's records, 0x4ab3f0 kind 3).

@@ -2945,10 +2945,10 @@ impl Scene {
     /// deposits nothing, without it counts as working (`local_34`, which
     /// is also the route flag of the later unloads). With deposits the
     /// route flag of the plan is the route's being there (`local_c`).
-    /// (Not ported: the blow's report to the brain,
-    /// message 0x5d9c (0x4a21c0, whose header words `[0]`, `[1]` are left
-    /// unwritten on the stack): the port reports blows as they land
-    /// (`fleet_attacked`).) After the ships, each wreck's cell (`+0x35`)
+    /// A ship with a blow marked has it reported to its player (message
+    /// 0x5d9c, 0x4a21c0 at 0x4ca411, whose header words `[0]`, `[1]` are
+    /// left unwritten on the stack) and forgotten (0x4cf760,
+    /// `report_blow`). After the ships, each wreck's cell (`+0x35`)
     /// goes to every ship as command 0x29 sub 2 (its path memory), every
     /// re-plan.
     fn zone_replan(&mut self, z: usize) -> i32 {
@@ -2978,9 +2978,7 @@ impl Scene {
                         }
                     }
                 }
-                if self.objects[i].ship.as_ref().unwrap().blow.is_some() {
-                    self.post(Order::ClearBlow { ship: id });
-                }
+                self.report_blow(id);
                 let s = self.objects[i].ship.as_ref().unwrap();
                 if matches!(s.task, Some(Task::Gather { .. })) {
                     continue;

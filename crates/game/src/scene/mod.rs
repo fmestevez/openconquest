@@ -528,6 +528,11 @@ pub struct Scene {
     /// (`+0x2e`, 0x520cc0), delivered in order at the next tick
     /// (`Scene::deliver`).
     pub outbox: Vec<Order>,
+    /// The blows reported in the navy's walk and not yet heard, `(ship,
+    /// shooter)` (0x4a21c0's message 0x5d9c, `Scene::report_blow`): taken
+    /// by the target's player at the end of the reporting group's tick
+    /// (`Scene::hear_blow_reports`), so always empty between ticks.
+    pub blow_reports: Vec<(u32, u32)>,
     /// The groups' gather zones (fleet order 0x78, `gather`), in the
     /// order the navy's tick runs them.
     pub gather_zones: Vec<gather::GatherZone>,
@@ -981,6 +986,7 @@ impl Scene {
             refit_batches: BTreeMap::new(),
             tick_orders: BTreeMap::new(),
             outbox: Vec::new(),
+            blow_reports: Vec::new(),
             gather_zones: Vec::new(),
             human_attacks: Vec::new(),
             fleet_attacks: Vec::new(),

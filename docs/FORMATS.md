@@ -4029,7 +4029,7 @@ list and escorts).
   and follow. Escort entries are 0xd bytes `{escort, ward, target,
   state}`. Before that, each ship with a blow is reported (0x4a21c0:
   message 0x5d9c to the brain, its header `[0]`, `[1]` unwritten stack;
-  the port reports blows as they land instead) and sent command 0x28 sub
+  `Scene::report_blow`) and sent command 0x28 sub
   4 (0x4cf760), which clears `+0x691`, `+0x692`, `+0x634` at the next
   tick, so the escorts of this pass still see it. The blow is marked by
   0x4bf3aa for every shot landing on a ship (not one with `+0x251` 2,
@@ -9881,7 +9881,7 @@ Primitives not yet ported (the later brains use them):
   (0x49bd60); it is noted in `+0x1d` with state 10 (0x4cd980) and given
   ship command 10. 0x136 only with waypoints. If no 300 sent a ship and
   fleet `+8 > 0x5f`: `+8` = 0, each ship's pending blow is reported
-  (0x4a21c0, 0x4cf760), and each ship lying still (`+0x58c` 0) not noted
+  (0x4a21c0 at 0x4ce22d, 0x4cf760), and each ship lying still (`+0x58c` 0) not noted
   mended is sent to `+0x10` again. Last `+8 += game +0xe2`. The fleet
   record is zeroed when made (0x49b990), so `+8` starts at 0. **Who
   joins**: the brain's message 0x5d97 (the capture 0x4b6f20) for player
@@ -9916,7 +9916,7 @@ Primitives not yet ported (the later brains use them):
   unhurt ship (the port's repair order refuses both); ship command 10
   after 0x134; 0x4c42f0; whether the navy's tick (0x49ad18) runs before or
   after the brain's; the 0x5d98 gate `+0x14`. The pass's blow reports are
-  not ported (the port reports at once). Not ported: the
+  ported (`report_blow`, before the ship's still test). Not ported: the
   MissWEB brain's (0x47d109; the port has no MissWEB); 0x49bd60's
   removal from the ship's old fleet (0x49bef0, by its `+0x5c`) when a
   brain player takes another brain player's ship.
@@ -9927,6 +9927,39 @@ Primitives not yet ported (the later brains use them):
 - **0x479ed0** makes a fleet (0x4a0480 op 0xb) with a type mask;
   **0x479f40** and **0x479fb0** test the brain's event list against
   objects (0x49c3f0).
+
+**The report of a blow** (0x4a21c0; ported, `Scene::report_blow`,
+`hear_blow_reports`, test `a_blow_is_reported_by_its_groups_pass`). Its
+ten callers are the group blocks' periodic passes (0x4ca411 in 0x4ca290,
+0x4cbf51 0x4cbe70, 0x4cce9b 0x4ccd80, 0x4ce22d 0x4ce140, 0x4cf640
+0x4cf550, 0x4d6eb0 0x4d6cd0, 0x4d7c3d 0x4d7b50, 0x4d841f 0x4d8330,
+0x4da78d 0x4da6a0, 0x4dbec2 0x4dbd90), each for a ship of the group
+with `+0x691` set, called as `(player, fleet number, ship, +0x692,
++0x634)` and followed at once by 0x4cf760 (command 0x28 sub 4 through
+0x520cc0: the mark cleared at the next tick's delivery). It zeroes a
+0x26-byte record: `+0` / `+4` the ship's `+0x4c` / `+0x50`, `+8` /
+`+9` its `+0x54` / `+0x55`, `+0xa` the ship, `+0xe` its vt+0x28's
+second result, `+0x12` its `+0x5c` (short), `+0x16` the fleet number,
+`+0x1a` the shooter, `+0x1e` / `+0x22` the cell's low and high words;
+and sends `{[2] player +0x34 of 0xba0-byte record param_1, [3] 2, [4]
+0x5d9c, [5] 0, [6] &record}` through `this +0xc` vt+0x18 (the header's
+`[0]`, `[1]` left as the stack had them): a direct send, heard by the
+player's brain or computer there and then. The only other senders of
+0x5d9c are 0x427d07 and the town's 0x43b3d0 (buildings), so a ship's
+blow reaches its player only through its group's pass: a ship in no
+group, or in a group whose block has no such pass, never reports one.
+The port: the passes of `plain_move_tick`, `flotilla_move_pass`,
+`move_order_tick` (0x4ccd80), `repair_order_tick` (0x4ce140),
+`dock_pass` (0x4dbd90), `zone_replan` (0x4ca290), the waypoint move
+(0x4cf550), `attack_tick` (0x4d6cd0), `treasure_tick` (0x4da6a0) and
+`found_tick` (0x4cbe70) call `report_blow`, which queues `(ship,
+shooter)` and posts `Order::ClearBlow`; the walk (`run_navy`) hands the
+queue to `computer_attacked`, `brain_hit` and `fleet_attacked` at the end
+of each group's tick (the brain's fleet and the computer are out of
+their lists while their blocks run); a volley at a ship no longer
+reports (a building's still does, at the volley). Not ported: 0x4d7b50
+and 0x4d8330 (no block in the port); the computer's handling (0x488960)
+at its turn rather than at the send (`Computer::attacks`, as before).
 
 More `missCOM` pieces: a blow landing on a ship (0x4bf170, per projectile)
 sets its `+0x691` and `+0x692` (the shooter's id), whoever shot; the AI
@@ -9939,7 +9972,8 @@ the fleet's queue sent nothing and fleet `+8`, to which each call adds
 0x1e (0x4d8330) or 0x5f (0x4dbd90; 0x4ce140 repair), `+8` then set to 0
 (0x4ca290: another structure, not read). Not decoded: the orders of
 0x4cbe70, 0x4cf550, 0x4d7b50, 0x4d8330, 0x4da6a0, 0x4dbd90. The port
-reports at once (it has no tick for the orders but the repair). The brain (0x47b2e0) keeps the report in its
+reports from its blocks' passes (see "The report of a blow"); 0x4d7b50
+and 0x4d8330 are not ported, so a group on them reports none. The brain (0x47b2e0) keeps the report in its
 list `+0x100` unless one for the same fleet and player is there: the first
 waits, later ones are dropped. The event 0x47a060 `{brain, g, m, state,
 mask, after, stamp}` takes the member's report: younger than `after` into
@@ -10963,7 +10997,7 @@ newest first, each planning the formation anew and, only when that
 sends none, sending the join to the order's cell with the group's three;
 then, none heard and group `+8` over 100, `+8` zeroed and each ship
 sent the three when its `+0x689 / +0x68d` differ, made to forget a
-blow (0x4cf760; the report 0x4a21c0 not ported) and, lying still more
+blow (0x4a21c0, 0x4cf760, `report_blow`) and, lying still more
 than a cell off its cell, sent there again; `+8` grows by the tick).
 Group `+8` (`Flotilla::elapsed`) is the move's and the attack's; the
 gather zone keeps its own (not ported: that it is one counter carried
@@ -12025,15 +12059,14 @@ cell off its slot (in x or y; 0x4cc760, the block's cell without one),
 0x4cf070 sets the block's end flag `+0x5d`, so 0x4c4f40 never ends it:
 it lasts until another block replaces it (a stop or take, 0x49e230's
 default; a Shift move, 0x4cf2c0; any other block's order) or the group
-goes. Ported (`scene/plain_move.rs`): `Order::FleetMove` from the app's
+goes. Ported (`scene/plain_move.rs`; the blow's report `report_blow`): `Order::FleetMove` from the app's
 right click, once for the selection's own ships (before: `KeepGroup`,
 then each ship's `Move` to the click plus a ring offset of the port's,
 `group_offset`, removed); `HumanGroup::plain_move` (`PlainMove`, saved,
 serde default none), `order_plain_move`, `plain_move_tick`;
 `move_formation` is the computers' 0x4cc970 factored off
 `flotilla_formation`; a join to the group posts its 300 (`join_group`,
-`post_notice`); `KeepGroup` ends the block. Not ported: the blow's
-report 0x4a21c0 (the port makes it as the blow lands), 0x4cc8c0's -1
+`post_notice`); `KeepGroup` ends the block. Not ported: 0x4cc8c0's -1
 (0x4cc7d0 fails only with no group: the port counts every ship sent),
 the leaving ships' 0x137 (0x4a1770; 0x4cc6a0 drops it).
 `the_plain_move_runs_through_its_group_block` (miss000).
@@ -12282,8 +12315,7 @@ take posts 0x142 or 0x141 (`take_treasure`); command 0x1f with its
 priority (`Order::Unload`'s `prio`; its test of something aboard counts
 treasures and heroes). Not ported: the 0x137 of a carrier gone from
 the objects (the port no longer has its cell: the record dropped, no
-search); 0x4a21c0's report of a blow (the port reports blows as they
-land); which cells of a building hold it in their slot (its anchor, as
+search); which cells of a building hold it in their slot (its anchor, as
 the dock block's); the treasure's state 5; two treasures on a cell (the
 port takes the first in object order).
 

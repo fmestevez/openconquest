@@ -197,8 +197,8 @@ impl Scene {
     /// so no join is heard again and the area looked at again each tick.
     /// Else `+8` goes back to 0 and each ship of the group: sent the
     /// group's three when its `+0x689 / +0x68d` are not the group's
-    /// (`+0x14` set); with a blow marked made to forget it (0x4cf760; the
-    /// report 0x4a21c0 not ported); then a draw of the navy's generator
+    /// (`+0x14` set); with a blow marked, reported (0x4a21c0) and made to
+    /// forget it (0x4cf760, `report_blow`); then a draw of the navy's generator
     /// `% 100` and, the block's flags `+0x2c >> 16` 1, above 60 nothing
     /// more (2: above 30); a phantom (`+0x253`) nothing more; one boarding
     /// or ramming (`+0x25d == 0x10`, `closing_in`) nothing more; one that
@@ -268,9 +268,7 @@ impl Scene {
                             self.send_behaviour(id, b);
                         }
                     }
-                    if self.objects[i].ship.as_ref().unwrap().blow.is_some() {
-                        self.post(Order::ClearBlow { ship: id });
-                    }
+                    self.report_blow(id);
                     let roll = self.navy_draw() % 100;
                     if (level == 1 && roll > 60) || (level == 2 && roll > 30) {
                         continue;

@@ -197,8 +197,8 @@ impl Scene {
     /// 100, `+8` goes back to 0 and each ship of the group: sent the
     /// group's behaviour again when its `+0x689 / +0x68d` are not the
     /// group's (group `+0x14` set); with a blow marked (`+0x691`) made to
-    /// forget it (0x4cf760, command 0x28 sub 4; not ported: the blow's
-    /// report 0x4a21c0, which the port makes as it lands); lying still
+    /// forget it (0x4cf760, command 0x28 sub 4) after its report to the
+    /// player (0x4a21c0, `report_blow`); lying still
     /// (`+0x58c` 0) more than a cell off its cell in the block (in x or
     /// y; the block's cell without one, 0x4cc760), sent there again
     /// (0x4cf070). Then `+8` grows by the tick. The block's own code
@@ -249,10 +249,8 @@ impl Scene {
                     }
                 }
                 let s = self.objects[i].ship.as_ref().unwrap();
-                let (blow, still) = (s.blow.is_some(), s.move_state == 0);
-                if blow {
-                    self.post(Order::ClearBlow { ship: id });
-                }
+                let still = s.move_state == 0;
+                self.report_blow(id);
                 if !still {
                     continue;
                 }

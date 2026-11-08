@@ -55,9 +55,48 @@ impl Scene {
                 }
                 Group::Brain(k) => self.brain_group_tick(k),
             }
+            self.hear_blow_reports();
         }
         self.gather_zones
             .retain(|z| !(matches!(z.group, ZoneGroup::Human(_)) && z.ships.is_empty()));
+    }
+
+    /// A ship of the group with a blow marked (`+0x691`, by 0x4bf3aa at
+    /// a shot's landing): reported to its player and forgotten, as every
+    /// block's pass does it (0x4a21c0 then 0x4cf760, at 0x4ca411 0x4ca290,
+    /// 0x4cbf51 0x4cbe70, 0x4cce9b 0x4ccd80, 0x4ce22d 0x4ce140, 0x4cf640
+    /// 0x4cf550, 0x4d6eb0 0x4d6cd0, 0x4d7c3d 0x4d7b50, 0x4d841f 0x4d8330,
+    /// 0x4da78d 0x4da6a0, 0x4dbec2 0x4dbd90; nothing else reports a ship's
+    /// blow). 0x4a21c0 builds message 0x5d9c `{.., ship, .., fleet number
+    /// +0x16, shooter +0x692 +0x1a, its cell +0x634 +0x1e / +0x22}` and
+    /// sends it straight (`[1] = 2`, the Players object's vt+0x18) to the
+    /// player's `+0x34` object, its brain or computer, which hears it
+    /// there and then; the port holds it to the end of the group's tick
+    /// (`hear_blow_reports`), the brain's fleet or the computer being out
+    /// of its list while its blocks run. 0x4cf760 is command 0x28 sub 4,
+    /// delivered at the next tick (`Order::ClearBlow`).
+    pub(super) fn report_blow(&mut self, ship: u32) {
+        let Some(by) = self
+            .object_index(ship)
+            .and_then(|i| self.objects[i].ship.as_ref())
+            .and_then(|s| s.blow)
+        else {
+            return;
+        };
+        self.blow_reports.push((ship, by));
+        self.post(super::Order::ClearBlow { ship });
+    }
+
+    /// The reports of blows (message 0x5d9c) made in a group's tick, heard
+    /// by the target's player: a computer's (0x488960, kept to its turn),
+    /// the brain's (0x47b2e0 into its list `+0x100`, `fleet_attacked`;
+    /// miss006's 0x45b280, `brain_hit`).
+    pub(super) fn hear_blow_reports(&mut self) {
+        for (ship, by) in std::mem::take(&mut self.blow_reports) {
+            self.computer_attacked(ship, by);
+            self.brain_hit(ship);
+            self.fleet_attacked(ship, by);
+        }
     }
 
     /// The walk's groups, `(player, place in its list, group)`, in order.
@@ -222,5 +261,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A blow on a ship reaches its player only by its group's pass
+    /// (0x4a21c0 then 0x4cf760): on miss013, member (2, 4) given the move
+    /// `{100}` (0x4ccd80), a ship marked by another's shot is not
+    /// reported while the fleet's `+8` is at most 100; once it is over,
+    /// the walk reports it (the brain's list `+0x100`, the shooter) and
+    /// the ship forgets the blow at the next delivery (command 0x28 sub
+    /// 4).
+    #[test]
+    fn a_blow_is_reported_by_its_groups_pass() {
+        let Some(data) = data() else {
+            return;
+        };
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss013").unwrap();
+        let k = scene.member_fleet(2, 4).unwrap();
+        let target = scene.brain.as_ref().unwrap().fleets[k].ships[0];
+        let i = scene.object_index(target).unwrap();
+        let shooter = scene
+            .objects
+            .iter()
+            .find(|o| o.ship.is_some() && o.id != target)
+            .map(|o| o.id)
+            .unwrap();
+        let to = scene.ship_cell(i);
+        scene.fleet_move(k, to, 0);
+        scene.outbox.clear();
+        let fleet = |s: &Scene| s.brain.as_ref().unwrap().fleets[k].attacked_by;
+        scene.objects[i].ship.as_mut().unwrap().blow = Some(shooter);
+        scene.brain.as_mut().unwrap().fleets[k].elapsed = 100;
+        scene.run_navy();
+        assert_eq!(fleet(&scene), None);
+        assert_eq!(scene.objects[i].ship.as_ref().unwrap().blow, Some(shooter));
+        assert!(scene.blow_reports.is_empty());
+        scene.brain.as_mut().unwrap().fleets[k].elapsed = 101;
+        scene.run_navy();
+        assert_eq!(fleet(&scene), Some(shooter));
+        assert!(scene.blow_reports.is_empty());
+        assert_eq!(scene.brain.as_ref().unwrap().fleets[k].elapsed, 1);
+        assert!(scene
+            .outbox
+            .iter()
+            .any(|o| matches!(o, crate::scene::Order::ClearBlow { ship } if *ship == target)));
+        // Still marked until the command is delivered.
+        assert_eq!(scene.objects[i].ship.as_ref().unwrap().blow, Some(shooter));
+        scene.ticks = scene.ticks.max(crate::scene::order::HOLD);
+        scene.deliver(&data, &mut caches);
+        assert_eq!(scene.objects[i].ship.as_ref().unwrap().blow, None);
     }
 }

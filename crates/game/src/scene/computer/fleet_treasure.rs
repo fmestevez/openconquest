@@ -695,8 +695,8 @@ impl Scene {
     /// notices (`treasure_notices`); when none sent a ship (or none were
     /// heard), group `+8` past 0x5a and the block there, `+8` back to 0
     /// and each ship of the group in turn (index `n`): a blow marked
-    /// (`+0x691`) forgotten (0x4cf760, command 0x28 sub 4; its report
-    /// 0x4a21c0 the port's as it lands); lying still (`+0x58c` 0) and
+    /// (`+0x691`) forgotten (0x4cf760, command 0x28 sub 4) after its
+    /// report 0x4a21c0 (`report_blow`); lying still (`+0x58c` 0) and
     /// recorded (0x4d9760): with record `n` (the loop's index, not the
     /// ship's) of state 2 and treasures aboard (`+0x482`), the trip home
     /// again (`treasure_home`); else, with a record of state 2 (the
@@ -718,11 +718,8 @@ impl Scene {
                 let Some(s) = self.objects[i].ship.as_ref() else {
                     continue;
                 };
-                let (blow, still, aboard) =
-                    (s.blow.is_some(), s.move_state == 0, s.treasures.len());
-                if blow {
-                    self.post(Order::ClearBlow { ship: id });
-                }
+                let (still, aboard) = (s.move_state == 0, s.treasures.len());
+                self.report_blow(id);
                 let b = g.block().as_ref().unwrap();
                 if !still || !b.ships.iter().any(|r| r.ship == id) {
                     continue;

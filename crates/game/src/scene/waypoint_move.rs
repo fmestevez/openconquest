@@ -6,7 +6,7 @@
 //! docs/FORMATS.md ("The waypoint move").
 
 use super::gather::{Notice, Owner, Route};
-use super::{Order, Scene};
+use super::Scene;
 use serde::{Deserialize, Serialize};
 
 /// A human group running the waypoint move: the group's own fields the
@@ -303,8 +303,8 @@ impl Scene {
     /// 0x4cf550: with no notices, or none heard (0x4cf0b0; it hears only
     /// a 300 with no route, which this block always has), and group `+8`
     /// over 100 (unsigned): `+8 = 0` and each ship of the group: a blow
-    /// marked (`+0x691`) forgotten (0x4cf760, command 0x28 sub 4; its
-    /// report 0x4a21c0 to the brain the port makes as the blow lands);
+    /// marked (`+0x691`) forgotten (0x4cf760, command 0x28 sub 4) after
+    /// its report 0x4a21c0 to the player (`report_blow`);
     /// lying still (`+0x58c` 0) and on the route (0x4cea20 at or above
     /// 0): off its entry (`(-1, -1)`, read as cell 0) 0x4ceab0 with cell
     /// -1, whose `closer` reads the word before its wavefront (a heap
@@ -330,7 +330,7 @@ impl Scene {
                     continue;
                 };
                 if s.blow.is_some() {
-                    self.post(Order::ClearBlow { ship: id });
+                    self.report_blow(id);
                 }
                 if self.objects[i].ship.as_ref().unwrap().move_state != 0 {
                     continue;
@@ -397,6 +397,7 @@ mod tests {
     use super::*;
     use crate::assets::GameData;
     use crate::objects::Caches;
+    use crate::scene::Order;
     use openconquest_formats::map::TILE_SIZE;
 
     /// Two of the human's ships on miss000 given Shift move clicks at

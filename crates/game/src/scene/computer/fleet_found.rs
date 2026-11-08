@@ -638,8 +638,8 @@ impl Scene {
     /// notices (`found_notices`); when no 300 was heard (or none were
     /// posted), group `+8` past 100 and the block there, `+8` back to 0
     /// and each ship of the group: a blow marked (`+0x691`) forgotten
-    /// (0x4cf760, command 0x28 sub 4; its report 0x4a21c0 the port's as
-    /// it lands); lying still (`+0x58c` 0), not landing (`+0x25d & 0x20`)
+    /// (0x4cf760, command 0x28 sub 4) after its report 0x4a21c0
+    /// (`report_blow`); lying still (`+0x58c` 0), not landing (`+0x25d & 0x20`)
     /// and the block not done, its site again (`found_send`). Then `+8`
     /// grows by the tick.
     pub(in crate::scene) fn found_tick(&mut self, g: &mut dyn FoundGroup) {
@@ -657,11 +657,8 @@ impl Scene {
                 let Some(s) = self.objects[i].ship.as_ref() else {
                     continue;
                 };
-                let (blow, still, landing) =
-                    (s.blow.is_some(), s.move_state == 0, s.landing.is_some());
-                if blow {
-                    self.post(Order::ClearBlow { ship: id });
-                }
+                let (still, landing) = (s.move_state == 0, s.landing.is_some());
+                self.report_blow(id);
                 let done = g.block().as_ref().is_some_and(|b| b.done);
                 if still && !landing && !done {
                     self.found_send(g, id);

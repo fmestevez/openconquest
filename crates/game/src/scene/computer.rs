@@ -4960,8 +4960,8 @@ impl Scene {
     /// each ship of the flotilla: sent the group's behaviour again when
     /// its `+0x689 / +0x68d` are not the group's `+0x19 / +0x1d` (group
     /// `+0x14` set); with a blow marked (`+0x691`) made to forget it
-    /// (0x4cf760, command 0x28 sub 4; not ported: the blow's report to the
-    /// player, 0x4a21c0, which the port makes as it lands); lying still
+    /// (0x4cf760, command 0x28 sub 4) after its report to the player
+    /// (0x4a21c0, `report_blow`); lying still
     /// (`+0x58c` 0) more than a cell off its cell in the block (in x or
     /// y; the order's cell without one), sent there again (0x4cf070).
     /// Then `+8` grows by the tick.
@@ -5013,10 +5013,8 @@ impl Scene {
                     }
                 }
                 let s = self.objects[i].ship.as_ref().unwrap();
-                let (blow, still) = (s.blow.is_some(), s.move_state == 0);
-                if blow {
-                    self.post(Order::ClearBlow { ship: id });
-                }
+                let still = s.move_state == 0;
+                self.report_blow(id);
                 if !still {
                     continue;
                 }
@@ -5463,8 +5461,8 @@ impl Scene {
     /// back to 0 and, with ships: fewer than 2 entries in state 2 and
     /// docks (0x4db2e0), the nearest `2 - n` sent to the dock (0x4dbb90);
     /// then each ship of the flotilla: a blow marked (`+0x691`) forgotten
-    /// (0x4cf760, command 0x28 sub 4; the report 0x4a21c0 is the port's as
-    /// it lands); lying still (`+0x58c` 0) and listed, at distance `d`
+    /// (0x4cf760, command 0x28 sub 4) after its report 0x4a21c0
+    /// (`report_blow`); lying still (`+0x58c` 0) and listed, at distance `d`
     /// (0x557440: `(least + 2 x most) / 2` of the cell steps) from its
     /// entry's cell: below 2 and not in state 2, at 1 in state 1 sent to
     /// its cell when free for its draught (0x499a40); else in state 1 sent
@@ -5501,14 +5499,8 @@ impl Scene {
         let Some(s) = self.objects[i].ship.as_ref() else {
             return;
         };
-        let (blow, still, deep) = (
-            s.blow.is_some(),
-            s.move_state == 0,
-            crate::objects::deep_draught(s.kind),
-        );
-        if blow {
-            self.post(Order::ClearBlow { ship: id });
-        }
+        let (still, deep) = (s.move_state == 0, crate::objects::deep_draught(s.kind));
+        self.report_blow(id);
         if !still {
             return;
         }

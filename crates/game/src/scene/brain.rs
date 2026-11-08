@@ -1243,7 +1243,7 @@ impl Scene {
     /// A brain hears its player's object `target` was struck (message
     /// 0x5d9c): miss006's brain, the first time one of squadron (2, 6)'s
     /// ships is, sends its ships to squadron (2, 7) (0x45b280, 0x479370).
-    /// (Not ported: the report's timing; see `fleet_attacked`.)
+    /// (A ship's report comes from its group's pass, `report_blow`.)
     pub(super) fn brain_hit(&mut self, target: u32) {
         let Some(b) = self.brain.as_ref() else {
             return;
@@ -1278,9 +1278,9 @@ impl Scene {
     /// 0x4ccd80 (order 100, move), 0x4cbe70 and 0x4cf550; 0x5a for 0x4d6cd0
     /// (0x70, attack; 0x3c on a branch not read) and 0x4da6a0; 0x4b for
     /// 0x4d7b50; 0x1e for 0x4d8330; 0x5f for 0x4dbd90 and 0x4ce140 (0x82,
-    /// repair). Not ported: the port has no tick for the other orders
-    /// (nor the map of 0x4cbe70, 0x4cf550, 0x4d7b50, 0x4d8330, 0x4da6a0,
-    /// 0x4dbd90 and 0x4ca290 to their orders), so it reports at once.
+    /// repair). Heard at the end of the reporting group's tick
+    /// (`hear_blow_reports`); 0x4d7b50 and 0x4d8330 are not ported, so a
+    /// fleet on their orders reports none.
     pub(super) fn fleet_attacked(&mut self, target: u32, shooter: u32) {
         if let Some(b) = self.brain.as_mut() {
             for f in &mut b.fleets {
@@ -2491,8 +2491,8 @@ impl Scene {
     /// is sent to `+0x10` again. Then `+8` grows by the update's ticks
     /// (`game +0xe2`, as the wind's counter). A join heard is then sent
     /// the group's three (0x4c42f0 at 0x4cde70, queued), whether or not it
-    /// was sent to a dock. (Not ported here: the pass's reports of blows,
-    /// 0x4a21c0, which the port makes at once, `fleet_attacked`.)
+    /// was sent to a dock. Each ship of the `+8` pass with a blow marked
+    /// has it reported and forgotten first (0x4ce22d, `report_blow`).
     pub(super) fn repair_order_tick(&mut self, k: usize) {
         if self.brain.as_ref().unwrap().fleets[k].repair.is_none() {
             return;
@@ -2544,6 +2544,8 @@ impl Scene {
                 .unwrap()
                 .elapsed = 0;
             for id in self.fleet_ships(k) {
+                // A blow marked: reported and forgotten (0x4ce22d).
+                self.report_blow(id);
                 let still = self.object_index(id).is_some_and(|i| {
                     self.objects[i]
                         .ship
@@ -3043,8 +3045,8 @@ impl Scene {
     /// +0x68d` is not the group's `+0x19 / +0x1d` (group `+0x14` set)
     /// first sent it again (0x4c42f0); then `+8` grows by the tick. A
     /// join sent to the order's cell is also sent the group's behaviour
-    /// (0x4cc72f). (Not ported: the reports of blows, 0x4a21c0, which the
-    /// port makes at once.)
+    /// (0x4cc72f). Each ship of that pass with a blow marked has it
+    /// reported and forgotten after its behaviour (`report_blow`).
     pub(super) fn move_order_tick(&mut self, k: usize) {
         let t = TILE_SIZE as f32;
         let f = &self.brain.as_ref().unwrap().fleets[k];
@@ -3106,6 +3108,8 @@ impl Scene {
                         });
                     }
                 }
+                // A blow marked: reported and forgotten (0x4cce78-0x4ccea8).
+                self.report_blow(id);
                 let o = &self.objects[i];
                 if o.ship.as_ref().is_none_or(|s| s.move_state != 0) {
                     continue;
