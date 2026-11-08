@@ -5642,6 +5642,91 @@ fn an_empty_fleet_takes_its_orders_as_the_original() {
     );
 }
 
+/// The capture's stop (0x4b6f20 at 0x4b7098: vt+4(8, 0)) is taken at the
+/// prize's next message 0 (0x4ab720 -> 0x4aa540): a prize after its taker
+/// in the walk (0x542270) stops in the taker's tick, at the capture; one
+/// before it at its next tick, after that tick's delivery, the batch's
+/// group orders to it lost (needs `OPENCONQUEST_DATA`).
+#[test]
+fn a_prize_stops_at_its_next_tick() {
+    let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+        return;
+    };
+    let data = GameData::open(std::path::Path::new(&root)).unwrap();
+    let mut caches = Caches::default();
+    let mut scene = Scene::load(&data, &mut caches, "miss010").unwrap();
+    scene.brain = None;
+    scene.ticks = 100;
+    let human = scene.human.map(|h| (h.nation, h.slot));
+    let theirs: Vec<usize> = (0..scene.objects.len())
+        .filter(|&i| {
+            let o = &scene.objects[i];
+            o.ship.is_some()
+                && !scene.is_own(o)
+                && o.owner
+                    .is_some_and(|w| w != crate::combat::MONSTERS && w != (4, 0))
+        })
+        .collect();
+    // The taker the middle one of three: the prizes go to the human.
+    let (before, after) = (theirs[0], theirs[2]);
+    let taker = scene.objects[theirs[1]].id;
+    let send = |scene: &mut Scene, caches: &mut Caches, id: u32| {
+        let i = scene.object_index(id).unwrap();
+        let (x, y) = (scene.objects[i].x, scene.objects[i].y);
+        let _ = scene.apply(
+            &Order::Move {
+                ship: id,
+                x: x + 96.0,
+                y,
+            },
+            &data,
+            caches,
+        );
+    };
+    let path = |scene: &Scene, id: u32| {
+        let i = scene.object_index(id).unwrap();
+        scene.objects[i].ship.as_ref().unwrap().path.len()
+    };
+    // After its taker: stopped at the capture.
+    let a = scene.objects[after].id;
+    send(&mut scene, &mut caches, a);
+    assert!(path(&scene, a) > 0);
+    scene.tick_orders.clear();
+    scene.capture(
+        a,
+        Some(taker),
+        human,
+        0,
+        Default::default(),
+        &data,
+        &mut caches,
+    );
+    assert_eq!(path(&scene, a), 0);
+    assert!(scene.capture_stops.is_empty());
+    // Before it: its route kept till the next tick's delivery, where an
+    // order delivered with the stop is lost, and one after it too.
+    let b = scene.objects[before].id;
+    send(&mut scene, &mut caches, b);
+    assert!(path(&scene, b) > 0);
+    scene.tick_orders.clear();
+    scene.capture(
+        b,
+        Some(taker),
+        human,
+        0,
+        Default::default(),
+        &data,
+        &mut caches,
+    );
+    assert!(path(&scene, b) > 0);
+    assert_eq!(scene.capture_stops, vec![b]);
+    send(&mut scene, &mut caches, b);
+    scene.run_capture_stops();
+    assert_eq!(path(&scene, b), 0);
+    send(&mut scene, &mut caches, b);
+    assert_eq!(path(&scene, b), 0);
+}
+
 /// A prize taken gets bit 13 (stop) of its capability word, the rest kept
 /// (0x4b6f20 at 0x4b707f: `+0x261 |= 0x2000`; needs `OPENCONQUEST_DATA`).
 #[test]
@@ -5674,17 +5759,18 @@ fn a_prize_gets_its_stop() {
         state: 3,
         player: 2,
     };
-    scene.capture(id, human, 0, Default::default(), &data, &mut caches);
+    scene.capture(id, None, human, 0, Default::default(), &data, &mut caches);
     let i = scene.object_index(id).unwrap();
     assert_eq!(scene.objects[i].owner, human);
     let s = scene.objects[i].ship.as_ref().unwrap();
     assert_eq!(s.caps, 0x3234);
     assert_eq!(scene.capabilities(i), 0x3234);
-    // Its weapon positions' records zeroed (0x4b7058), guard and fire
-    // state kept.
+    // Its weapon positions' records zeroed (0x4b7058), guard kept; the
+    // fire state kept by the capture, then 2 from its stop (no taker
+    // before it: taken at once, 0x4aa540 -> 0x4abc60's tail).
     assert_eq!(s.behaviour.aims, [objects::Aim::default(); 4]);
     assert!(s.behaviour.guard);
-    assert_eq!(s.behaviour.fire_state, 3);
+    assert_eq!(s.behaviour.fire_state, 2);
 }
 
 /// A boarded ship whose map record's field 16 byte (`+0x275`) is set gets
@@ -5798,10 +5884,10 @@ fn kills_are_put_down_as_the_original() {
     let mut scene = fresh(&mut caches);
     let (e, m) = (ships(&scene, false)[0], ships(&scene, true)[0]);
     let enemy = scene.objects[scene.object_index(e).unwrap()].owner;
-    scene.capture(e, human, 0, Default::default(), &data, &mut caches);
+    scene.capture(e, None, human, 0, Default::default(), &data, &mut caches);
     assert_eq!(sum(&scene.stats.ships_destroyed), 1);
     assert_eq!(sum(&scene.stats.ships_boarded), 1);
-    scene.capture(m, enemy, 0, Default::default(), &data, &mut caches);
+    scene.capture(m, None, enemy, 0, Default::default(), &data, &mut caches);
     assert_eq!(sum(&scene.stats.ships_lost), 1);
     // Player 16's prize is not taken: it sinks, put down to its taker
     // (0x4b7169), boarded counted all the same.
@@ -5809,7 +5895,7 @@ fn kills_are_put_down_as_the_original() {
     let e = ships(&scene, false)[0];
     let ei = scene.object_index(e).unwrap();
     scene.objects[ei].owner = Some((4, 0));
-    scene.capture(e, human, 0, Default::default(), &data, &mut caches);
+    scene.capture(e, None, human, 0, Default::default(), &data, &mut caches);
     assert!(scene
         .object_index(e)
         .is_none_or(|i| scene.objects[i].owner == Some((4, 0))));
@@ -7849,7 +7935,15 @@ fn brains_mend_their_prizes() {
     let crew = scene.objects[ship].ship.as_ref().unwrap().crew;
     let units = scene.objects[ship].unit_conditions();
     let marines = [units[0].clone(), units[1].clone(), units[2].clone()];
-    scene.capture(id, Some(owner), crew.class, marines, &data, &mut caches);
+    scene.capture(
+        id,
+        None,
+        Some(owner),
+        crew.class,
+        marines,
+        &data,
+        &mut caches,
+    );
     let i = scene.object_index(id).unwrap();
     assert!(
         matches!(
@@ -13491,7 +13585,15 @@ fn repair_orders_as_the_original() {
     let crew = scene.objects[ship].ship.as_ref().unwrap().crew;
     let units = scene.objects[ship].unit_conditions();
     let marines = [units[0].clone(), units[1].clone(), units[2].clone()];
-    scene.capture(id, Some((3, 3)), crew.class, marines, &data, &mut caches);
+    scene.capture(
+        id,
+        None,
+        Some((3, 3)),
+        crew.class,
+        marines,
+        &data,
+        &mut caches,
+    );
     assert!(scene.brain.as_ref().unwrap().fleets[4].ships.contains(&id));
     let i = scene.object_index(id).unwrap();
     assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());

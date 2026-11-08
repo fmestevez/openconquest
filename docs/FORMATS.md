@@ -11390,11 +11390,28 @@ from `+0x63c`, all four), the fire state `+0x5d1` and `+0x638` kept
 there: the pending group `+0x7d6 &= ~0x1f0` (0x4b7077) and `+0x265 = 0`
 (0x4b708c), nothing to clear in the port, which runs a ship's events at
 delivery and keeps no `+0x265`; then the stop event vt+4(8, 0)
-(0x4b7098), run at the prize's next tick (0x4aa540, taken as bit 13 is
-now set). Not ported: that stop (the port clears the prize's task and
-route at once instead: not decoded how the prize's tick falls against
-the capture's in the Sapp walk, and so whether the brain's prize order
-reaches it before the stop), `+0x719 = 0` (0x4b70a9), the 0x40 task's
+(0x4b7098), pending in `+0x7d6` and taken at the prize's next message 0
+(0x4dec40 at 0x4df031: 0x4ab720 -> 0x4aa540 -> 0x4abc60, before
+0x4ab930's machines at 0x4df038), on bit 13, which the capture has just
+set over the boarded ship's cleared word (0x4c3410 state 9). The capture
+runs in the taker's tick (its boarding machine 0x4b5df0, at 0x4b6a16),
+so a prize after the taker in the Sapp's walk stops in that tick, one
+before it at the next tick, after that tick's delivery (0x5228c0): the
+group orders delivered then are lost with the pending group (`&=
+0xfffffe07`). The brain's prize order always comes after the stop:
+0x4b6cd0's 0x5d97 is a direct send (`[1] = 2`, `+0x70` vt+0x18), the
+member hears the join as notice 300 at the next tick's group walk and
+posts its dock order (delivered the tick after); the taker's 0x13a
+(0x4a1800) goes to its group's queue the same way. Ported (`capture`,
+`capture_stop`, `run_capture_stops`; `a_prize_stops_at_its_next_tick`):
+by the objects' order, the stop (`wind_down`) at the capture or after the
+next delivery, the batch's group orders to the prize undone and the rest
+dropped (`TickOrder::Stopped`); the bit read from `Ship::caps`, not the
+port's boarded hold (was: task and route cleared at once). Its tail
+gives fire state 2 (0x4abc60). The stand-in dock order for miss007-013
+(`brain_prize`, not the original's: those brains' 0x5d97 handlers, e.g.
+0x46f5b3, 0x473d41, not decoded) is given at once and wound down by a
+deferred stop. Not ported: `+0x719 = 0` (0x4b70a9), the 0x40 task's
 record `+0x76e` (0x19 dwords; the port's task cleared), 0x50de40, 0x50da60, 0x4b6cd0.
 Command `#` (0x4e2ba0 case 0x23; payload players `+1`, classes `+5`,
 third `+9`): sub 1 guard on where off, ram where off with bit 25, board
@@ -11929,12 +11946,18 @@ player, then every object made since (ships launched, shots, ...) in
 the order made. **Ported**: the computer players' turn (`run_computers`)
 moved to the end of the tick's passes, after the map objects' (before,
 between the ships' fires and the town links); the navy's walk before
-the brain's turn and both before the objects stands. Not ported: the
+the brain's turn and both before the objects stands. The brain's and
+the computers' clocks (`brain_clock`, `computers_clock`) are the game
+clock, Players `+0xde`, raised by the tick count `+0xe2` (0x521330 at
+0x5213a9, 0x521ecf at 0x52234e) in 0x521570 / 0x5228c0 before 0x542390
+sends the tick; the brain copies it into `+0xfc` at each message
+(0x47b2e0), the land fleets (0x42b910) and the blocks (`+8`) read
+`+0xde` itself: one value for the whole walk, so counting both before
+`run_navy` stands. The ruins' and houses' steps (`step_ruins`,
+`step_house_fades`, buildings' message 0) moved after the navy and the
+brain's turn. Not ported: the
 port runs its objects by pass (each system over all objects) and many
 passes per update, not per object in list order; the brain's and the
-computers' clocks (`brain_clock`, `computers_clock`) are counted before
-the navy's walk, not at their own objects' message 0 (what reads them
-there not decoded); the ruins' and houses' steps run before the navy;
 the save's load path (the objects' order on a loaded game, 0x4e21f5 and
 the rest) not decoded; nor whether 0x1487 and the map objects made
 during another's message 2 (a town's buildings) come between records.

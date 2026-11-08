@@ -1907,7 +1907,7 @@ impl Scene {
         }
         let owner = self.objects[i].owner;
         let taken = owner != Some(PLAYER_16) && self.objects[ti].owner != Some(PLAYER_16);
-        self.capture(t, owner, class, prize, data, caches);
+        self.capture(t, Some(a), owner, class, prize, data, caches);
         // The taker posts notice 0x13a with its prize to its group
         // (0x4b6f20 at 0x4b7105: 0x4a1800, `{prize, 0x17}`), but where
         // player 16 is a side.
@@ -1945,9 +1945,11 @@ impl Scene {
     /// Gives ship `id` to `owner`, redrawing it in the new owner's colours.
     /// Its crew becomes `marines`: the conditions of the units of each
     /// marine kind, of crew class `class`.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn capture(
         &mut self,
         id: u32,
+        by: Option<u32>,
         owner: Option<(u32, u32)>,
         class: u8,
         marines: [Vec<u8>; 3],
@@ -2000,8 +2002,6 @@ impl Scene {
             for (k, m) in marines.into_iter().enumerate() {
                 ship.conditions[k] = m;
             }
-            ship.task = None;
-            ship.path.clear();
             // The capture (0x4b6f20 at 0x4b7085) clears the ram and board
             // switches (`+0x684 &= ~6`); the guard and the masks stay.
             ship.behaviour.ram = false;
@@ -2032,6 +2032,23 @@ impl Scene {
             Err(e) => eprintln!("could not redraw captured ship: {e:#}"),
         }
         obj.record = rec;
+        // Then the stop event vt+4(8, 0) (0x4b7098), pending in `+0x7d6`
+        // and taken at the prize's next message 0 (0x4dec40: 0x4ab720 ->
+        // 0x4aa540, then 0x4ab930's machines). The capture runs in the
+        // taker's tick (its boarding machine 0x4b5df0 at 0x4b6a16), so a
+        // prize after it in the Sapp's walk (0x542270, the list `+0x10`)
+        // stops in this tick; one before it, at the next, after that
+        // tick's delivery (0x5228c0), which so loses the batch's group
+        // orders (`Scene::run_capture_stops`). Either way the brain's
+        // prize order comes later: 0x4b6cd0's 0x5d97 is a direct send
+        // (`[1] = 2`) to the brain, whose member hears the join as notice
+        // 300 at the next group walk and posts its dock order from there.
+        let taker = by.and_then(|b| self.object_index(b));
+        if taker.is_some_and(|b| i < b) {
+            self.capture_stops.push(id);
+        } else {
+            self.capture_stop(i);
+        }
         self.brain_prize(id, (nation, player));
         // Then message 0x5d94 with 0 for its treasures (0x4b6f20 at
         // 0x4b7142: 0x4b6e80 as the taker, while the prize holds any, for
@@ -2043,6 +2060,50 @@ impl Scene {
             .map_or(Vec::new(), |s| s.treasures.clone());
         for tr in held {
             self.treasure_news(owner, None, tr, false);
+        }
+    }
+
+    /// The capture's stop (event 8, 0x4aa540) on prize `i`: taken on bit
+    /// 13 of its word (`+0x261 & 0x2000`), which the capture has just set
+    /// (0x4b707f) over the boarded ship's cleared one (0x4c3410 state 9,
+    /// 0x4b37d0 with 0), and 0x4ab720 runs before the machines of 0x4ab930
+    /// could clear it again: `Ship::caps`, not the port's boarded hold in
+    /// `Scene::capabilities`. Its task wound down (0x4abc60, `wind_down`).
+    fn capture_stop(&mut self, i: usize) {
+        if self.objects[i]
+            .ship
+            .as_ref()
+            .is_some_and(|s| s.caps & 0x2000 != 0)
+        {
+            self.wind_down(i);
+        }
+    }
+
+    /// The stops of prizes taken this tick by a taker later in the walk
+    /// (`capture`), at their next tick after the delivery: the batch's
+    /// group orders to them go (0x4aa540 clears the pending group, `&=
+    /// 0xfffffe07`), the ship put back as it was before them, and the
+    /// rest of the batch dropped (`TickOrder::Stopped`).
+    pub(super) fn run_capture_stops(&mut self) {
+        use super::order::TickOrder;
+        for id in std::mem::take(&mut self.capture_stops) {
+            let Some(i) = self.object_index(id) else {
+                continue;
+            };
+            if self.objects[i]
+                .ship
+                .as_ref()
+                .is_none_or(|s| s.caps & 0x2000 == 0)
+            {
+                continue;
+            }
+            if let Some(TickOrder::Ran { before, .. } | TickOrder::Dropped { before }) =
+                self.tick_orders.remove(&id)
+            {
+                self.objects[i].ship = Some(*before);
+            }
+            self.tick_orders.insert(id, TickOrder::Stopped);
+            self.capture_stop(i);
         }
     }
 

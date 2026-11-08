@@ -492,6 +492,10 @@ pub struct Scene {
     /// Big reefs a brain raises this tick: cell and kind (not saved: raised
     /// at once).
     pending_reefs: Vec<(i32, i32, u32)>,
+    /// Prizes whose capture's stop waits for their next tick, after the
+    /// delivery (`Scene::run_capture_stops`; not saved: run in the tick
+    /// that made them).
+    capture_stops: Vec<u32>,
     /// Land creatures a brain puts down this tick (0x414db0): class and
     /// cell (not saved: put down at once).
     pending_walkers: Vec<(u32, (i32, i32))>,
@@ -994,6 +998,7 @@ impl Scene {
             sink_drops: Vec::new(),
             sinkings: Vec::new(),
             pending_reefs: Vec::new(),
+            capture_stops: Vec::new(),
             pending_walkers: Vec::new(),
             pending_casts: Vec::new(),
             brain_flames: Default::default(),
@@ -2907,23 +2912,29 @@ impl Scene {
         while self.brain_clock >= crate::clock::TICK {
             self.brain_clock -= crate::clock::TICK;
             self.ticks += 1;
+            // The navy's tick (message 0, 0x49ab30 -> 0x4c4f40): every
+            // side's groups in its players' lists (`run_navy`). The Sapp's
+            // walk (0x542270) runs its list `+0x10` in making order
+            // (0x541b40): the navy 0x203f, then the brain (0x51f680), then
+            // the map's objects and the computer players (message 8,
+            // 0x522d50). The brain's and the computers' clocks are the game
+            // clock (Players `+0xde`, raised by the tick's count `+0xe2` in
+            // 0x521330 / 0x521ecf before 0x542390 sends the tick; the
+            // brain's `+0xfc` copied from it at each message, 0x47b2e0; the
+            // land fleets 0x42b910 and the blocks' `+8` read it): counted
+            // here, before the walk.
+            self.brain_clock();
+            self.computers_clock();
+            self.run_navy();
+            self.brain_turn();
             // The ruins' picture steps (vt+0x3c 0x4230f0, first in each
-            // building's message 0, before anything can make it fall).
+            // building's message 0, before anything can make it fall), the
+            // buildings being map objects, after the navy and the brain.
             let mut removed = self.step_ruins();
             // A taken hero's house steps its pictures the same way
             // (0x4230f0 states 4, 5, 2). (Not settled: its place among the
             // objects' ticks, against the ship's take of the same tick.)
             removed.extend(self.step_house_fades(data, caches));
-            // The navy's tick (message 0, 0x49ab30 -> 0x4c4f40): every
-            // side's groups in its players' lists (`run_navy`), the brain's
-            // and the computers' clocks counted first. The Sapp's walk
-            // (0x542270) runs its list `+0x10` in making order (0x541b40):
-            // the navy 0x203f, then the brain (0x51f680), then the map's
-            // objects and the computer players (message 8, 0x522d50).
-            self.brain_clock();
-            self.computers_clock();
-            self.run_navy();
-            self.brain_turn();
             self.step_fort_draws();
             self.heal_aboard();
             self.step_dock_repairs(data, caches);
@@ -2981,6 +2992,9 @@ impl Scene {
             // (0x542390's posted queue `+4`): the objects are removed.
             self.remove_ruins(&removed);
             self.deliver(data, caches);
+            // The prizes taken by a later taker stop at their next tick,
+            // after its delivery (0x4aa540, `capture`).
+            self.run_capture_stops();
         }
         // The mission is judged every 250 ticks (0x448d40), a campaign
         // mission by its own judge every 125 or 75.
