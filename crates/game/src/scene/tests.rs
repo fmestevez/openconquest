@@ -7887,72 +7887,87 @@ fn merchants_unload_where_sent() {
     panic!("never unloaded ({} fish)", scene.fish - fish);
 }
 
-/// A ship a campaign brain's player captures goes to be mended at one of
-/// that player's docks (miss007-miss013, whose prize tables are not
-/// ported; needs `OPENCONQUEST_DATA`).
+/// A ship a campaign brain's player captures joins the member its
+/// handler of 0x5d97 names (0x479300 -> 0x4a0480 op 2: the fleet number of
+/// the ship's own player, 0x49bd60) and is given no order at the capture;
+/// in miss012 player 14's prize joins (2, 5) while the 300 goes to (1, 5),
+/// and in miss013 it joins (2, 6) with the 300 to (1, 6); miss000 and
+/// miss001 have no handler (needs `OPENCONQUEST_DATA`).
 #[test]
-fn brains_mend_their_prizes() {
+fn brains_take_their_prizes() {
     let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
         return;
     };
     let data = GameData::open(std::path::Path::new(&root)).unwrap();
     let mut caches = Caches::default();
-    let mut scene = Scene::load(&data, &mut caches, "miss007").unwrap();
-    assert!(scene.brain.is_some());
-    let human = scene.human.map(|h| (h.nation, h.slot));
-    // One of the computer's buildings stands in for a dock, put west of
-    // the ship's cell and facing east, so its berth (0x4b23a0) is that
-    // cell.
-    let b = scene
-        .objects
-        .iter()
-        .position(|o| {
-            matches!(o.class, ObjectClass::Building(_))
-                && o.owner
-                    .is_some_and(|w| Some(w) != human && w != combat::MONSTERS)
-        })
-        .expect("a computer building");
-    let owner = scene.objects[b].owner.unwrap();
-    let (sx, sy) = scene
-        .objects
-        .iter()
-        .find(|o| scene.is_own(o) && o.ship.is_some())
-        .map(|o| ((o.x / 64.0).floor() as i32, (o.y / 64.0).floor() as i32))
-        .unwrap();
-    let o = &mut scene.objects[b];
-    o.record.fields.resize(o.record.fields.len().max(11), 0);
-    o.record.fields[10] = 0;
-    o.cell = Some((sx - 1, sy));
-    scene.objects[b].class = ObjectClass::Building(economy::DOCK);
-    let ship = scene
-        .objects
-        .iter()
-        .position(|o| scene.is_own(o) && o.ship.is_some())
-        .unwrap();
-    let c = scene.objects[ship].combat.as_mut().unwrap();
-    c.hull = c.max_hull / 2.0;
-    let id = scene.objects[ship].id;
-    let crew = scene.objects[ship].ship.as_ref().unwrap().crew;
-    let units = scene.objects[ship].unit_conditions();
-    let marines = [units[0].clone(), units[1].clone(), units[2].clone()];
-    scene.capture(
-        id,
-        None,
-        Some(owner),
-        crew.class,
-        marines,
-        &data,
-        &mut caches,
+    type Case = (
+        &'static str,
+        (u32, u32),
+        Option<(u8, usize)>,
+        Option<(u8, usize)>,
     );
-    let i = scene.object_index(id).unwrap();
-    assert!(
-        matches!(
-            scene.objects[i].ship.as_ref().unwrap().task,
-            Some(Task::Repair { .. })
-        ),
-        "{:?}",
-        scene.objects[i].ship.as_ref().unwrap().task
-    );
+    let cases: &[Case] = &[
+        ("miss000", (3, 3), None, None),
+        ("miss001", (3, 3), None, None),
+        ("miss007", (3, 3), Some((1, 6)), Some((1, 6))),
+        ("miss008", (3, 3), Some((1, 13)), Some((1, 13))),
+        ("miss009", (3, 2), Some((1, 6)), Some((1, 6))),
+        ("miss010", (3, 3), Some((1, 10)), Some((1, 10))),
+        ("miss011", (3, 2), Some((1, 6)), Some((1, 6))),
+        ("miss012", (3, 3), Some((1, 5)), Some((1, 5))),
+        ("miss012", (3, 2), Some((2, 5)), Some((1, 5))),
+        ("miss013", (3, 3), Some((1, 5)), Some((1, 5))),
+        ("miss013", (3, 2), Some((2, 6)), Some((1, 6))),
+    ];
+    for &(mission, owner, into, heard) in cases {
+        let mut scene = Scene::load(&data, &mut caches, mission).unwrap();
+        assert!(scene.brain.is_some());
+        let ship = scene
+            .objects
+            .iter()
+            .position(|o| scene.is_own(o) && o.ship.is_some())
+            .unwrap();
+        let id = scene.objects[ship].id;
+        let crew = scene.objects[ship].ship.as_ref().unwrap().crew;
+        let units = scene.objects[ship].unit_conditions();
+        let marines = [units[0].clone(), units[1].clone(), units[2].clone()];
+        for f in &mut scene.brain.as_mut().unwrap().fleets {
+            f.notices.clear();
+            f.joined.clear();
+        }
+        scene.capture(
+            id,
+            None,
+            Some(owner),
+            crew.class,
+            marines,
+            &data,
+            &mut caches,
+        );
+        let br = scene.brain.as_ref().unwrap();
+        let holders: Vec<usize> = (0..br.fleets.len())
+            .filter(|&k| br.fleets[k].ships.contains(&id))
+            .collect();
+        let want = into.map(|(g, m)| scene.member_fleet(g, m).unwrap());
+        assert_eq!(
+            holders,
+            want.into_iter().collect::<Vec<_>>(),
+            "{mission} {owner:?}"
+        );
+        if let Some(h) = heard.map(|(g, m)| scene.member_fleet(g, m).unwrap()) {
+            let f = &br.fleets[h];
+            let posted = f.notices.iter().any(|n| n.0 == id) || f.joined.contains(&id);
+            assert_eq!(
+                posted,
+                f.hears_notices() || (f.block != 0 && f.block != 0x70)
+            );
+        }
+        let i = scene.object_index(id).unwrap();
+        assert!(
+            scene.objects[i].ship.as_ref().unwrap().task.is_none(),
+            "{mission}"
+        );
+    }
 }
 
 /// A brain's mended ship joining its member (0x479300 op 2 -> 0x4a0480:

@@ -578,7 +578,7 @@ impl Fleet {
     /// with a route `+0x61`, which the brains' order never gives) and the
     /// attack zone's (0x4d6960: 300, 0x13a) while its notices are not
     /// freed (0x4d6520; none posted then, 0x4a1340).
-    fn hears_notices(&self) -> bool {
+    pub(super) fn hears_notices(&self) -> bool {
         match self.block {
             0x8c | 0xbe | 0x82 => true,
             0x70 => !self.attack.as_ref().is_some_and(|b| b.freed),
@@ -2595,6 +2595,25 @@ impl Scene {
             f.ships.push(id);
         }
         self.brain_heard_join(k, id);
+    }
+
+    /// Ship `id` added to member `into` and message 300 posted to member
+    /// `heard`, another player's (0x4a0480 op 2 given a record of the
+    /// other player: 0x49bd60 adds to the fleet number of the ship's own
+    /// player, 0x4a1340 posts to the record's). (The two members used,
+    /// miss012's (1, 5) and miss013's (1, 6), have no gather zone.)
+    pub(super) fn brain_join_heard(&mut self, id: u32, into: (u8, usize), heard: (u8, usize)) {
+        let (Some(k), Some(h)) = (
+            self.member_fleet(into.0, into.1),
+            self.member_fleet(heard.0, heard.1),
+        ) else {
+            return;
+        };
+        let f = &mut self.brain.as_mut().unwrap().fleets[k];
+        if !f.ships.contains(&id) {
+            f.ships.push(id);
+        }
+        self.brain_heard_join(h, id);
     }
 
     /// Message 300 for ship `id` that joined brain fleet `k` (0x4a0480 op
@@ -13737,7 +13756,8 @@ mod miss011 {
 /// north-west members 1 and 2 (0x4709c0, 0x470b10) gather amber and fish,
 /// 3 (0x470c60, (10, 10, 3, 3)) patrols the home waters, 4 (0x470eb0, (22,
 /// 12, 2, 2)) patrols the middle sea and then picks a target (for itself
-/// or for member 3), 5 (0x475a70) mends prizes, 6 (0x471440) casts at the
+/// or for member 3), 5 (0x475a70) mends prizes (player 14's join (2, 5):
+/// `brain_prize`), 6 (0x471440) casts at the
 /// player near player 15's temple and 7 (0x4718c0, (19, 15, 2, 2)) guards
 /// the coast. In the south-west members 1 and 2 (0x471ef0, 0x472040)
 /// gather, 3 and 4 (0x472190, 0x472370; (1, 46, 2, 2), (10, 49, 3, 2))
@@ -13745,9 +13765,7 @@ mod miss011 {
 /// spell on its ships when it fights, 6 (0x477190) mends and 7 (0x472890)
 /// casts at the player near player 14's temple (as player 15).
 /// (Not ported: the yards' code 0x34 (town order 48, 0x47b130 code 0x30:
-/// a medium fort, class 0x35; no member ever asks for it); prizes of either Persian player handed to
-/// group 1's repair member (0x5d97): here each player's prizes sail to its
-/// own docks (`brain_prize`); the unreachable
+/// a medium fort, class 0x35; no member ever asks for it); the unreachable
 /// states of members (1, 4) and (1, 7) (0x19, 0x28: nothing sends them
 /// there). The casters look
 /// through the player's things in the scene's order; a building is "in"
@@ -14900,10 +14918,7 @@ mod miss012 {
 /// 7 (0x477210) casts at the player near player 14's temple (as player
 /// 15).
 /// (Not ported: the yards' code 0x34 (town order 48, 0x47b130 code 0x30:
-/// a medium fort, class 0x35; no member ever asks for it); prizes handed to member (1, 5) (player
-/// 15's) or (1, 6) (player 14's: the caster, which never moves them)
-/// (0x5d97): here each player's prizes sail to its own docks
-/// (`brain_prize`); member (1, 4)'s state 0x19
+/// a medium fort, class 0x35; no member ever asks for it); member (1, 4)'s state 0x19
 /// (a sail to (42, 21)), which nothing sends it to. Member (1, 4)'s fights
 /// look their zone up in a shorter table than the one its patrol watches
 /// (0x5b5138 against 0x5b51f0): the player seen in (0, 18, 8, 8) sends it

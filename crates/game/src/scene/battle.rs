@@ -2108,43 +2108,51 @@ impl Scene {
     }
 
     /// A prize taken by a campaign brain's player (event 0x5d97, sent by
-    /// the capture 0x4b6f20). In miss002-miss006 it joins the player's
-    /// repair member (0x479300 op 2: the handlers' tables), whose repair
-    /// order sends it to its yard's dock (message 300, `run_repair_orders`):
-    /// player 15's in miss002 (1, 8), miss003 (0, 4), miss004 (0, 6),
-    /// miss005 and miss006 (1, 5); player 14's in miss004 (2, 4), miss006
-    /// (2, 5). Elsewhere (not ported: miss007-miss013's tables) it sails to
-    /// one of the player's docks, picked at random.
+    /// the capture 0x4b6f20). The handlers (miss002 0x44d0e0 ...
+    /// miss013 0x478692) test the prize's player and call 0x479300(g, m,
+    /// ship) for one member: player 15's in miss002 (1, 8), miss003 (0,
+    /// 4), miss004 (0, 6), miss005 and miss006 (1, 5), miss007 (1, 6)
+    /// (0x46088b), miss008 (1, 13) (0x464153), miss010 (1, 10)
+    /// (0x46b323), miss012 and miss013 (1, 5) (0x473dee, 0x478692);
+    /// player 14's in miss004 (2, 4), miss006 (2, 5), miss009 (1, 6)
+    /// (0x46792a), miss011 (1, 6) (0x46f5b3), miss012 (1, 5) and miss013
+    /// (1, 6). miss000 (0x449b10) and miss001 (0x44af70) have no case:
+    /// the prize joins nothing. 0x479300 hands the member's record
+    /// `{fleet, player}` to 0x4a0480 op 2, which (the record's fleet being
+    /// kind 10) adds the ship to that fleet number of **the ship's own
+    /// player** (0x49bd60) and posts message 300 to the record's player's
+    /// fleet (0x4a1340). So player 14's prizes in miss012 sail with its
+    /// member (2, 5) while the 300 goes to (1, 5), whose repair order
+    /// hears only ships in its own list (0x4cc590): nobody sends them; in
+    /// miss013 they join (2, 6), the repair, the 300 going to the idle
+    /// (1, 6), which has no queue (no order): the repair sends them at
+    /// its resend (`+8 > 0x5f`, `repair_order_tick`).
     fn brain_prize(&mut self, id: u32, owner: (u32, u32)) {
         if self.brain.is_none() || self.human.map(|h| (h.nation, h.slot)) == Some(owner) {
             return;
         }
         let mission = self.brain.as_ref().unwrap().mission.clone();
-        let repair = match (mission.as_str(), owner.0 * 4 + owner.1) {
-            ("miss002", 15) => Some((1, 8)),
-            ("miss003", 15) => Some((0, 4)),
-            ("miss004", 15) => Some((0, 6)),
-            ("miss004", 14) => Some((2, 4)),
-            ("miss005" | "miss006", 15) => Some((1, 5)),
-            ("miss006", 14) => Some((2, 5)),
-            ("miss002" | "miss003" | "miss004" | "miss005" | "miss006", _) => return,
-            _ => None,
+        // (the member called, the member of the ship's own player).
+        let (heard, into) = match (mission.as_str(), owner.0 * 4 + owner.1) {
+            ("miss002", 15) => ((1, 8), (1, 8)),
+            ("miss003", 15) => ((0, 4), (0, 4)),
+            ("miss004", 15) => ((0, 6), (0, 6)),
+            ("miss004", 14) => ((2, 4), (2, 4)),
+            ("miss005" | "miss006" | "miss012" | "miss013", 15) => ((1, 5), (1, 5)),
+            ("miss006", 14) => ((2, 5), (2, 5)),
+            ("miss007", 15) => ((1, 6), (1, 6)),
+            ("miss008", 15) => ((1, 13), (1, 13)),
+            ("miss009" | "miss011", 14) => ((1, 6), (1, 6)),
+            ("miss010", 15) => ((1, 10), (1, 10)),
+            ("miss012", 14) => ((1, 5), (2, 5)),
+            ("miss013", 14) => ((1, 6), (2, 6)),
+            _ => return,
         };
-        if let Some((group, member)) = repair {
-            self.brain_join(id, group, member);
-            return;
+        if heard == into {
+            self.brain_join(id, into.0, into.1);
+        } else {
+            self.brain_join_heard(id, into, heard);
         }
-        let docks: Vec<u32> = self
-            .objects
-            .iter()
-            .filter(|o| o.owner == Some(owner) && o.class == ObjectClass::Building(economy::DOCK))
-            .map(|o| o.id)
-            .collect();
-        if docks.is_empty() {
-            return;
-        }
-        let dock = docks[self.rng.next() as usize % docks.len()];
-        let _ = self.order_repair(id, dock);
     }
 
     pub(super) fn spawn_effect(

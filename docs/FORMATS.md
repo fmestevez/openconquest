@@ -9748,7 +9748,10 @@ miss012 (0x472fa0; members 0x46fb80-0x472890, repair 0x475a70, 0x477190):
   miss011's member 7 about player 15's and player 14's first temple 0x3e,
   both casting through member (1, 0) (waits 0x5b40b0, 0x5b4170:
   (3, 2, 1) x 1500; spells `+0x17c`, `+0x19c`, (1, 2, 3); odds (20, 15,
-  10)). Prizes of both players join member (1, 5) (0x5d97); unordered
+  10)). Prizes of both players are handed to member (1, 5) (0x5d97,
+  0x473dee: 0x479300(1, 5)): player 15's join it, player 14's join
+  player 14's fleet 5, member (2, 5), the 300 going to (1, 5), whose
+  repair hears only its own ships (below); unordered
   launches join member 2 (boats, merchants) or 4 of their player's group
   (0x5d98).
 - **The start.** Amber at (40, 0), (45, 0) and (53, 0) and fish at
@@ -9825,8 +9828,10 @@ miss013 (0x477930; members 0x4741b0-0x477210, judge 0x473f40):
   ticks (until fewer than three). Member 6 (0x477190) mends, member 7
   (0x477210) casts about player 14's first temple 0x3e (spells `+0x19c`),
   through member (1, 0). Zone fights last 1500 ticks, answering fire 375.
-  Prizes of player 15 join member (1, 5), of player 14 member (1, 6)
-  (0x5d97); unordered launches join member 2 (boats, merchants) or 4 of
+  Prizes of player 15 join member (1, 5), of player 14 are handed to
+  member (1, 6) (0x5d97, 0x478692): they join player 14's fleet 6, the
+  repair (2, 6), the 300 going to (1, 6) (no order, so no queue); the
+  repair sends them at its resend; unordered launches join member 2 (boats, merchants) or 4 of
   their player's group (0x5d98).
 - **The start.** Amber at (47, 0), (49, 1) and (38, 0) and fish at
   (36, 1) on every difficulty; the purses are miss012's (player 15:
@@ -9882,15 +9887,27 @@ Primitives not yet ported (the later brains use them):
   joins**: the brain's message 0x5d97 (the capture 0x4b6f20) for player
   15's (miss004 and miss006 also 14's) prizes, by 0x479300 op 2: miss002
   15 (1, 8); miss003 15 (0, 4); miss004 15 (0, 6), 14 (2, 4); miss005 15
-  (1, 5); miss006 15 (1, 5), 14 (2, 5); no type test. 0x49bd60 adds the
-  ship to fleet n of **the ship's own player**. So miss003's order starts
+  (1, 5); miss006 15 (1, 5), 14 (2, 5); miss007 15 (1, 6) (0x46088b);
+  miss008 15 (1, 13) (0x464153); miss009 14 (1, 6) (0x46792a); miss010
+  15 (1, 10) (0x46b323); miss011 14 (1, 6) (0x46f5b3); miss012 15 and 14
+  (1, 5) (0x473dee); miss013 15 (1, 5), 14 (1, 6) (0x478692); miss000
+  and miss001 have no case (the prize joins nothing); no type test.
+  0x479300 passes the member's record `{fleet +0, player +4}` (written
+  by 0x479200) to 0x4a0480 op 2: if the record's fleet is kind 10,
+  0x49bd60 adds the ship to fleet n of **the ship's own player** (its
+  `+0x54`/`+0x55`) and 0x4a1340 posts the 300 to the record's player's
+  fleet n (`+0x2d`); the repair's 300 (0x4cc590) looks the ship up in
+  its own list and does nothing without it. So miss012's player-14
+  prizes sail with (2, 5) (no one sends them; the 300 goes to (1, 5)),
+  and miss013's join (2, 6), the repair, the 300 going to (1, 6). miss003's order starts
   with no dock (fleet 0 is a ship fleet, kind 10) and its first prize sets
   `+0x10` to the dock of the town at (58, 1); miss005's starts with the
   dock of the town at (8, 11) (fleet 0 is the yard); miss002's (1, 0) and
   miss004's (0, 0) and (2, 0) are kind 10 too (0x8d1). The port:
   `repair::<YARD>`, `Scene::repair_order`, `repair_pick`,
   `run_repair_orders` (each brain tick), `brain_repaired` (0x134),
-  `brain_join` (0x5d97, from `brain_prize`), the order on `Fleet::repair`
+  `brain_join` (0x5d97, from `brain_prize`; `brain_join_heard` for
+  miss012's and miss013's player-14 prizes), the order on `Fleet::repair`
   (`+0x10`, `+0x21`, `+8`, `+0x1d`) and the queue on `Fleet::joined`; a
   land fleet's list is its member's buildings, a town's docks those of
   its list `+0x1d0`, in its order; the update's ticks `game +0xe2` are taken as 1 a
@@ -9899,9 +9916,10 @@ Primitives not yet ported (the later brains use them):
   unhurt ship (the port's repair order refuses both); ship command 10
   after 0x134; 0x4c42f0; whether the navy's tick (0x49ad18) runs before or
   after the brain's; the 0x5d98 gate `+0x14`. The pass's blow reports are
-  not ported (the port reports at once). miss007-miss013's prize tables
-  are not ported: their prizes sail to one of the player's docks, picked
-  at random.
+  not ported (the port reports at once). Not ported: the
+  MissWEB brain's (0x47d109; the port has no MissWEB); 0x49bd60's
+  removal from the ship's old fleet (0x49bef0, by its `+0x5c`) when a
+  brain player takes another brain player's ship.
 - **0x47ae10, cast** (`(group, member, kind, x, y, pay)`). The fleet casts
   spell `kind` (5-16, one per command; costs from 0x596844 by 0x47abb0,
   paid when `pay`) at cell (x, y) through message 0x3ee (0x47ab40). It is
