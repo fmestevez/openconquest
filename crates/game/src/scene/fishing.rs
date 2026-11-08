@@ -668,5 +668,179 @@ mod tests {
         let s = scene.objects[i].ship.as_ref().unwrap();
         assert!(s.task.is_none(), "the old task over");
         assert_eq!(s.path, path, "the route kept");
+        assert!(s.adrift, "no machine to plan it again");
+    }
+
+    /// A refused order takes the 0x80 move's machine off too (0x4abe50 at
+    /// 0x4abf41; the ship tick 0x4ab930 runs 0x4a5f30 only by `+0x25d &
+    /// 0x80`): miss000's boat whose plain move found no route yet (its
+    /// waited re-plan pending, 0x4a6150) is told to unload at a shoal
+    /// (refused, 0x4aab00 code 0xc): the re-plan never comes, the route
+    /// it has kept; a move given after runs and plans again.
+    #[test]
+    fn a_refused_order_stops_the_move_machine() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        let mut scene = Scene::load(&data, &mut caches, "miss000").unwrap();
+        scene.brain = None;
+        let boat = scene
+            .objects
+            .iter()
+            .find(|o| scene.is_own(o) && o.ship.as_ref().is_some_and(|s| s.kind == 0))
+            .unwrap()
+            .id;
+        let (shoal, sx, sy) = scene
+            .objects
+            .iter()
+            .find(|o| o.class == ObjectClass::FishZone && o.deposit.is_some())
+            .map(|o| (o.id, o.x, o.y))
+            .unwrap();
+        for _ in 0..3 {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        let i = scene.object_index(boat).unwrap();
+        let s = scene.objects[i].ship.as_mut().unwrap();
+        // The first plan's none (0x4a5f30 -> 0x4a6330 0xff): pending.
+        s.pending = Some((sx, sy));
+        s.waited = crate::clock::TICK;
+        s.cargo = 100.0;
+        s.cargo_kind = Some(Resource::Fish);
+        let r = scene.apply(
+            &Order::Unload {
+                ship: boat,
+                port: shoal,
+                prio: 75,
+            },
+            &data,
+            &mut caches,
+        );
+        assert!(r.is_err(), "refused");
+        for _ in 0..40 {
+            scene.update(crate::clock::TICK, &data, &mut caches);
+        }
+        let i = scene.object_index(boat).unwrap();
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        assert!(s.pending.is_none(), "0x4a5f30 no longer runs");
+        assert!(s.adrift);
+        assert!(s.path.is_empty(), "no plan made for it");
+        scene
+            .apply(
+                &Order::Move {
+                    ship: boat,
+                    x: sx,
+                    y: sy,
+                },
+                &data,
+                &mut caches,
+            )
+            .unwrap();
+        let s = scene.objects[i].ship.as_ref().unwrap();
+        assert!(!s.adrift, "its move machine on again");
+        assert!(s.path.len() > 1);
+    }
+
+    /// A machine's own event (vt+4(0x40, ..)) is read by the ship's next
+    /// tick's 0x4ab720 like any of the group: miss000's boat sent to
+    /// unload loses its port on the way; at its step 1 (0x4adef0, the
+    /// port's slot empty) it sends itself to the port 0x4c5910 finds
+    /// (event 0x40 code 0xc, priority 0x5a), not carried out in that
+    /// tick; with `+0x77b` left set by a full haul, 0x4abe50 finds the
+    /// unload busy at that next tick and drops the event, the unload
+    /// winding down (0x4abc60, `+0x77d` 1: ended).
+    #[test]
+    fn a_machines_event_waits_for_the_next_tick() {
+        let Some(root) = std::env::var_os("OPENCONQUEST_DATA") else {
+            return;
+        };
+        let data = GameData::open(std::path::Path::new(&root)).unwrap();
+        let mut caches = Caches::default();
+        // The first mission whose ship has two ports of its player's to
+        // unload at (0x4c5910's).
+        let pick = |caches: &mut Caches| {
+            for m in 0..=20 {
+                let name = format!("miss{m:03}");
+                let Ok(mut scene) = Scene::load(&data, caches, &name) else {
+                    continue;
+                };
+                scene.brain = None;
+                for _ in 0..3 {
+                    scene.update(crate::clock::TICK, &data, caches);
+                }
+                for i in 0..scene.objects.len() {
+                    let Some(s) = scene.objects[i].ship.as_ref() else {
+                        continue;
+                    };
+                    if crate::objects::cargo_capacity(s.kind) <= 0.0 {
+                        continue;
+                    }
+                    let Some(gone) = scene.unloading_site(i) else {
+                        continue;
+                    };
+                    let id = scene.objects[i].id;
+                    let p = scene.object_index(gone).unwrap();
+                    let o = scene.objects.remove(p);
+                    let k = scene.object_index(id).unwrap();
+                    let other = scene.unloading_site(k).is_some();
+                    scene.objects.insert(p, o);
+                    if other {
+                        return (name, id);
+                    }
+                }
+            }
+            panic!("no ship with two ports");
+        };
+        let (name, boat) = pick(&mut caches);
+        let run = |net: bool, caches: &mut Caches| {
+            let mut scene = Scene::load(&data, caches, &name).unwrap();
+            scene.brain = None;
+            for _ in 0..3 {
+                scene.update(crate::clock::TICK, &data, caches);
+            }
+            let i = scene.object_index(boat).unwrap();
+            let gone = scene.unloading_site(i).unwrap();
+            let s = scene.objects[i].ship.as_mut().unwrap();
+            s.cargo = 100.0;
+            s.cargo_kind = Some(Resource::Fish);
+            s.net_busy = net;
+            s.task = Some(Task::Gather {
+                deposit: 0,
+                phase: GatherPhase::ToPort(gone),
+            });
+            s.path.clear();
+            let p = scene.object_index(gone).unwrap();
+            scene.objects.remove(p);
+            let i = scene.object_index(boat).unwrap();
+            let next = scene.unloading_site(i);
+            scene.outbox.push(Order::Stop { id: 0 });
+            scene.run_task(i);
+            (scene, boat, gone, next)
+        };
+        let (mut scene, boat, gone, next) = run(false, &mut caches);
+        let next = next.unwrap();
+        // Posted before the commands already in the outbox.
+        assert!(matches!(
+            scene.outbox[0],
+            Order::UnloadEvent { ship, port, prio: 0x5a } if ship == boat && port == next
+        ));
+        let i = scene.object_index(boat).unwrap();
+        let task = |scene: &Scene| scene.objects[i].ship.as_ref().unwrap().task;
+        assert!(matches!(
+            task(&scene),
+            Some(Task::Gather { phase: GatherPhase::ToPort(p), .. }) if p == gone
+        ));
+        scene.outbox.remove(1);
+        scene.deliver(&data, &mut caches);
+        assert!(matches!(
+            task(&scene),
+            Some(Task::Gather { phase: GatherPhase::ToPort(p), .. }) if p == next
+        ));
+        let (mut scene, boat, _, _) = run(true, &mut caches);
+        scene.outbox.remove(1);
+        scene.deliver(&data, &mut caches);
+        let i = scene.object_index(boat).unwrap();
+        assert!(scene.objects[i].ship.as_ref().unwrap().task.is_none());
     }
 }

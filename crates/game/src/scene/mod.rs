@@ -1923,7 +1923,7 @@ impl Scene {
             let o = &self.objects[i];
             let Some(s) = o.ship.as_ref() else { continue };
             let Some(to) = s.pending else { continue };
-            if s.task.is_some() {
+            if s.task.is_some() || s.adrift {
                 self.objects[i].ship.as_mut().unwrap().pending = None;
                 continue;
             }
@@ -2226,6 +2226,8 @@ impl Scene {
         }
         s.face = None;
         s.stalled = 0.0;
+        // 0x4b4b50 sends it a move (event 0x80), its machine on again.
+        s.adrift = false;
         s.priority = priority;
         s.patience = objects::PATIENCE;
         s.blocked = 0.0;
@@ -2254,6 +2256,11 @@ impl Scene {
             let Some(i) = self.object_index(id) else {
                 continue;
             };
+            // With no machine left to run 0x4a6150 (`Ship::adrift`) it
+            // neither gives up nor plans again: it waits on the step.
+            if self.objects[i].ship.as_ref().is_some_and(|s| s.adrift) {
+                continue;
+            }
             // Held up 150 ticks, it gives the move up and lies still
             // (0x4a618d: message 0x80, sub 8), where its player's ships of
             // higher priority may push it aside; a gatherer's task sends
@@ -2454,7 +2461,9 @@ impl Scene {
                     return false;
                 };
                 s.planned += dt;
-                let moving = !s.path.is_empty() && s.blocked <= 0.0 && s.grapple.is_none();
+                // No machine runs 0x4a6150 for an adrift route.
+                let moving =
+                    !s.path.is_empty() && s.blocked <= 0.0 && s.grapple.is_none() && !s.adrift;
                 if moving && s.planned >= every {
                     s.planned = 0.0;
                     return true;

@@ -232,6 +232,7 @@ impl Scene {
             return;
         };
         ship.path = path;
+        ship.adrift = false;
         // `+0x5b2`: the route's last cell (0x4a664d, 0x4a67c9).
         if let Some(&(lx, ly)) = ship.path.back() {
             ship.goal = Some(cell_of(lx, ly));

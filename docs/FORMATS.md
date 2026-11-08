@@ -5750,13 +5750,55 @@ the route under way still sailed by `+0x400`'s 0x4a3f40). The port
 board, ram, load, found or repair task ended, the ship as it was
 otherwise; `a_refused_order_ends_the_old_task` on miss000 (the boat
 sailing to its shoal told to unload at the shoal: no task, its route
-kept). Not ported: the machines' own re-sends (0x4b0590 step 1's event
-0x40 code 10, 0x4adef0 step 1's code 0xc to the port 0x4c5910 finds,
-0x4ad510's code 10 / 0xc), which the port carries out at once rather
-than through the next tick's 0x4ab720, so a stale `+0x77b` does not
-drop them there (the zone's 0x1f, `Scene::post`, does go through it);
-the 0x80 move's 0x4a5f30 stopped by a refusal (the port's move has no
-task to end: not decoded what of the port's move stands for it).
+kept). The 0x80 move under a refusal: 0x4ab250 (the move event) only
+copies the order's record to the move's (`+0x54c..+0x55e` from
+`+0x858..+0x86d`), zeroes `+0x562..`, sets `+0x57b` 0, `+0x57f` 0x19,
+`+0x593` 1, `+0x591` 0, `+0x5c7` the priority (unless 0xff), `+0x5c8` 5
+and `+0x25d |= 0x80`; the planning is all 0x4a5f30's, run by the ship
+tick while `+0x25d & 0x80`: with `+0x593` the first plan (0x4a6330, then
+0x4a6100), else 0x4a6150 (the re-plan every 25 ticks, under way or held
+up, the waited plan of a move with no route yet, the give-up on its goal
+or at a wait of 150 with event 8 0x80), and for a follow (`+0x54c` 1,
+0x4a5df0) the ward gone (event 8 0xc0) or within `+0x556` (0x4a6330 stop
+to `+0x85c`). The route itself is sailed by the 0x400 bit (0x4a3f40, set
+from capability bit 14 every tick by 0x4ab930), which 0x4abe50 leaves.
+So a refused order leaves the route sailing to its end with nothing to
+plan it again. The port: `Ship::adrift`, set by `one_event_a_tick` on a
+refusal with `Ship::pending` cleared; while set `Scene::plan_pending`,
+`Scene::refresh_routes` and `Scene::go_round` (its give-up and re-plans;
+the push of a blocker, the step's, stays) pass the ship over; any route
+stored (`store_route`: an order, a machine's plan) or a push aside
+(0x4b4b50's move event) clears it; `a_refused_order_stops_the_move_machine`
+on miss000 (a move with no route yet: no waited plan after 40 ticks; a
+move after plans again). The machines' own events (vt+4(0x40, ..), not
+commands: no 0x4e2ba0 test) wait for the ship's next 0x4ab720, where a
+busy task drops them like any of the group: the amber's step 1 with no
+standing amber in its cell, to the nearest in the box (0x4ac610 mode 1;
+`{400, 10, id, 0, 0xff, 0x5a}`, 0x4b0590 step 1; none, event 8 0),
+the leviathan hunter's next prey or port (0x4ad510: `{0x192, 10, it,
+.., 0xff, 0x5a}`, else `{0x192, 0xc, port, .., player, 0x5a}` to
+`+0x7ad` or 0x4c5910's) and the unload's step 1 off its berth cell with
+its port's slot (`+0x7b5`) empty (0x4adef0 step 1: `{400, 0xc,
+0x4c5910's port, .., player, 0x5a}`; none, event 8 0). 0x4aab00's only
+capability test is code 10's class (fish bit 5, leviathan 6, amber 7);
+code 0xc's port is looked up (0x4ac050) with no test of the ship. The port: `Order::GatherEvent` and
+`Order::UnloadEvent`, `Scene::post_event` (into the outbox before its
+commands, after the events already there: written at the machine's
+tick, the record is overwritten by a command of its code delivered at
+the next tick's start), delivered at the tick's end through
+`one_event_a_tick` (rank of the 0x40 code); `amber_step_one`,
+`hunt_next` and `run_task`'s unload with its port gone;
+`a_machines_event_waits_for_the_next_tick` (the event in the outbox,
+the task unchanged in that tick; delivered, the unload to the other
+port, or with `+0x77b` set dropped and the unload ended). Not ported:
+the unload's step-1 test of the slot every tick under way (the port
+makes it at its route's end, and at the berth cell with the port gone,
+where the original does nothing, the port sends it on as well); the
+stop events (event 8 0) these machines send are carried out at once;
+with the port still there, the port's step 1 off the berth sends it to
+the nearest port (`send_to_port`) where 0x4adef0 plans to its own
+berth (0x4a6270); the follow's own parts under a refusal (the port's
+`Task::Convoy` is its own).
 
 **When a command arrives** (Players.cpp; decompiles of 0x520cc0,
 0x51fe20, 0x521570, 0x5228c0, 0x542390, 0x51f250, 0x541f70). 0x520cc0

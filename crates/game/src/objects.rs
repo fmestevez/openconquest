@@ -366,6 +366,16 @@ pub struct Ship {
     /// every 25 ticks (0x4a6150), keeping whatever route it had.
     #[serde(default)]
     pub pending: Option<(f32, f32)>,
+    /// Its route left with no machine to plan it again: a refused order
+    /// of the 0x1f0 group took the tasks 0x10-0x80 off `+0x25d` (0x4abe50
+    /// at 0x4abf41), the 0x80 move's 0x4a5f30 among them, so nothing runs
+    /// 0x4a6150 for it (no re-plan under way or held up, no give-up at a
+    /// wait of 150, no waited plan of `pending`) while `+0x400`'s 0x4a3f40
+    /// still sails the route it has. Cleared as a route is stored again
+    /// (an order or a machine's plan) or the ship is pushed aside
+    /// (0x4b4b50's move event 0x80).
+    #[serde(default)]
+    pub adrift: bool,
     /// Its way (`+0x59b`), in the original's units of 1/6000 pixel a tick
     /// straight on: stepped every tick under way by its acceleration or
     /// brake and the wind (`scene::sail`, 0x4a3f40).
@@ -2526,6 +2536,7 @@ pub fn resolve(
         remembered: Vec::new(),
         planned: 0.0,
         pending: None,
+        adrift: false,
         way: 0,
         way_rest: 0,
         brake: 0,

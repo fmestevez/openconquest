@@ -570,7 +570,10 @@ impl Scene {
                 .map(|g| g.rect)
             {
                 if let Some(d) = self.hunt_box(i, r) {
-                    let _ = self.order_gather_with(id, d, 0);
+                    self.post_event(super::Order::GatherEvent {
+                        ship: id,
+                        deposit: d,
+                    });
                     return true;
                 }
             }
@@ -586,9 +589,15 @@ impl Scene {
         let Some(p) = port else {
             return false;
         };
-        // Refused by 0x4aab00 (not a port taking cargo): dropped, the
-        // task kept.
-        let _ = self.unload_event(i, p, NEXT);
+        // Both are the ship's own events (vt+4(0x40, ..)), run by its next
+        // tick's 0x4ab720 (`Scene::post_event`): refused by 0x4aab00 (not
+        // a port taking cargo) or dropped by a busy task there.
+        let port = self.objects[p].id;
+        self.post_event(super::Order::UnloadEvent {
+            ship: id,
+            port,
+            prio: NEXT,
+        });
         true
     }
 

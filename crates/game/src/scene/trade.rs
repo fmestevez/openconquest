@@ -2622,6 +2622,25 @@ impl Scene {
         if self.on_unload_berth(i, port) {
             return;
         }
+        // Its port's cell holding it no more (0x4adef0 step 1, the slot
+        // `+0x7b5` empty), it sends itself to the port 0x4c5910 finds,
+        // event 0x40 code 0xc with priority 0x5a, read by its
+        // next tick's 0x4ab720 (`Scene::post_event`); none, the stop
+        // (event 8 0). (Not ported: the original tests this every tick of
+        // step 1 off the berth cell, under way too; the port at its
+        // route's end.)
+        if self.object_index(port).is_none() {
+            let id = self.objects[i].id;
+            match self.unloading_site(i) {
+                Some(port) => self.post_event(super::Order::UnloadEvent {
+                    ship: id,
+                    port,
+                    prio: 0x5a,
+                }),
+                None => self.objects[i].ship.as_mut().unwrap().task = None,
+            }
+            return;
+        }
         self.send_to_port(i, deposit)
     }
 

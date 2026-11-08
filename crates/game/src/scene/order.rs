@@ -130,6 +130,27 @@ pub enum Order {
         #[serde(default)]
         port: u32,
     },
+    /// Event 0x40 code 10 `{class, 10, deposit, 0, player 0xff, 0x5a}` a
+    /// ship's own machine sends itself (vt+4(0x40, ..)): the amber's step
+    /// 1 to the nearest standing amber (0x4b0590 step 1), the
+    /// leviathan hunter's next prey (0x4ad510). Not a command: no 0x4e2ba0
+    /// test, only 0x4aab00's of the class (fish bit 5, leviathan 6, amber
+    /// 7, 0x4aacb6-0x4aacde); run by the ship's next 0x4ab720 like any
+    /// event of the 0x40 code (`Scene::post_event`).
+    GatherEvent {
+        ship: u32,
+        deposit: u32,
+    },
+    /// Event 0x40 code 0xc `{400, 0xc, port, 0, player, 0x5a}` a ship's
+    /// own machine sends itself to unload at `port`: the unload's step 1
+    /// whose port's cell holds it no more, to the one 0x4c5910 finds
+    /// (0x4adef0 step 1), and the leviathan hunter's (0x4ad510). No
+    /// test but 0x4aab00's look-up of the port.
+    UnloadEvent {
+        ship: u32,
+        port: u32,
+        prio: u8,
+    },
     /// The human's Shift move click with `ships` selected, the ships of a
     /// group running a gather zone (0x49e230 case 0x14 -> 0x49de70 with
     /// key flag 4): cell `(x, y)` added to the zone's waypoints `+0x61`.
@@ -488,6 +509,8 @@ impl Order {
             | GatherZone { ship, .. }
             | Convoy { ship, .. }
             | Gather { ship, .. }
+            | GatherEvent { ship, .. }
+            | UnloadEvent { ship, .. }
             | Follow { ship, .. }
             | Take { ship, .. }
             | Unload { ship, .. }
@@ -582,6 +605,22 @@ impl Scene {
     /// tick, in the order given, after nobody in this tick has seen it.
     pub(super) fn post(&mut self, order: Order) {
         self.outbox.push(order);
+    }
+
+    /// A ship's machine sends itself an event (vt+4: its record written,
+    /// `+0x7d6` set) for its next tick's 0x4ab720, where it is the
+    /// group's like any order (a busy task drops it, `task_busy`). Written
+    /// at the machine's tick, it is under the commands delivered at the
+    /// next tick's start (0x5228c0 -> 0x4e2ba0 -> vt+4 overwrite a
+    /// record of their code), so it goes before every command in the
+    /// outbox, after the events already there.
+    pub(super) fn post_event(&mut self, order: Order) {
+        let at = self
+            .outbox
+            .iter()
+            .take_while(|o| matches!(o, Order::GatherEvent { .. } | Order::UnloadEvent { .. }))
+            .count();
+        self.outbox.insert(at, order);
     }
 
     /// Delivers the outbox at a tick's turn (0x521570, 0x5228c0): each
@@ -693,6 +732,8 @@ impl Scene {
                     _ => 0x40,
                 }
             }
+            // An event, past 0x4e2ba0: 0x4aab00's own tests at its run.
+            GatherEvent { .. } | UnloadEvent { .. } => return Some(true),
             Repair { .. } | Sell { .. } => 2,
             Unload { .. } | LoadObject { .. } => 4,
             Found { .. } => 1,
@@ -734,8 +775,9 @@ impl Scene {
     /// brain, then the map's objects by record and the computers) does not
     /// keep them. Every hold the port has refuses the group's commands at
     /// 0x4e2ba0 already, so nothing passes delivery to wait at the gate.
-    /// With the group's event refused at its run, the port keeps the old
-    /// task, which 0x4abe50 has taken off `+0x25d` (`&= 0xffffff0f`).)
+    /// With the group's event refused at its run, the old task, which
+    /// 0x4abe50 has taken off `+0x25d` (`&= 0xffffff0f`), ends, and the
+    /// 0x80 move's machine with it (`Ship::adrift`).)
     fn one_event_a_tick(
         &mut self,
         order: &Order,
@@ -745,7 +787,11 @@ impl Scene {
         use Order::*;
         let (ship, rank) = match *order {
             Found { ship, .. } | Repair { ship, .. } | Sell { ship, .. } => (ship, 0),
-            Gather { ship, .. } | Take { ship, .. } | Unload { ship, .. } => (ship, 1),
+            Gather { ship, .. }
+            | GatherEvent { ship, .. }
+            | Take { ship, .. }
+            | Unload { ship, .. }
+            | UnloadEvent { ship, .. } => (ship, 1),
             Close { ship, .. } => (ship, 2),
             Move { ship, .. } | MoveKeep { ship, .. } => (ship, 3),
             Attack { ship, .. } => (ship, 4),
@@ -828,6 +874,10 @@ impl Scene {
                 {
                     s.task = None;
                 }
+                // The 0x80 move's 0x4a5f30 is off too: the route it has
+                // sails on (0x4a3f40), planned again by nothing.
+                s.pending = None;
+                s.adrift = true;
                 self.objects[i].ship = Some(s);
             }
         }
@@ -1063,6 +1113,26 @@ impl Scene {
             } => done(self.order_gather_with(ship, deposit, port)),
             Take { ship, target } => done(self.order_take(ship, target)),
             Unload { ship, port, prio } => done(self.order_unload_with(ship, port, prio)),
+            GatherEvent { ship, deposit } => {
+                // 0x4aab00's class test (0x4aacb6-0x4aacde) on `+0x261`.
+                let i = self.object_index(ship).ok_or("No such ship")?;
+                let d = self.object_index(deposit).ok_or("No such deposit")?;
+                let bit = match super::gather::deposit_class(&self.objects[d]) {
+                    Some(Resource::Fish) => 0x20,
+                    Some(Resource::Leviathan) => 0x40,
+                    Some(Resource::Amber) => 0x80,
+                    _ => 0,
+                };
+                if self.capabilities(i) & bit != bit {
+                    return Err("The ship cannot gather that now".into());
+                }
+                done(self.order_gather_with(ship, deposit, 0))
+            }
+            UnloadEvent { ship, port, prio } => {
+                let i = self.object_index(ship).ok_or("No such ship")?;
+                let p = self.object_index(port).ok_or("No such port")?;
+                done(self.unload_event(i, p, prio))
+            }
             Found {
                 ship,
                 cx,
