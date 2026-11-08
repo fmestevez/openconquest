@@ -11842,16 +11842,60 @@ news, the flotillas' turns). Before, each kind ran in its own pass (the
 human's in turn by kind, the flotillas' blocks and land fleet in
 `computer_tick`, the brains' land fleets after the computers).
 `the_navy_walks_every_sides_groups_by_player_lists` (battle01,
-miss004). Not decoded: where the navy, the brain, the computers'
-players and the ships stand in the Sapp's list `+0x10` (0x542270 /
-0x541b40; the port keeps the navy's walk where it was, before the brain
-and the computers, so a computer's news and turns now follow its
-flotillas' blocks in the tick, which before came after them). Not
-ported: the flotillas' walk only while the computers run
+miss004). Their places in the Sapp's walk: see "The objects' order in a
+tick" below. Not ported: the flotillas' walk only while the computers run
 (`computers.on`). The human's bare groups are in the walk by serial and
 run nothing (0x4c4f40 tests `+0x25` first, and `+8` grows only in a
 block's tick); the plain move `{100, 1}` runs its pass there
 (`human_group_tick` -> `plain_move_tick`, below).
+
+**The objects' order in a tick** (Sapp.cpp 0x541b40, 0x542270,
+0x541d20; Players.cpp 0x51f0b0, 0x51f150, 0x51f680, 0x51e810,
+0x522d50). Every game object is made through 0x541b40 (its only callers:
+Players vt+8 0x51f0b0, which also numbers it `+0x4c` from Players
+`+0x20`, the map's maker 0x51f150, and Sapp vt+0xc 0x541c10; then
+message 2 with the payload): 0x540030 builds it from the registry
+(`[Sapp +0x18] +8`, `{type, constructor}` pairs at 0x5c0d00) and
+0x5577d0 appends `{payload, object}` to the Sapp's list `+0x10` at its
+count, never reusing an entry. The tick 0x542270 (sent by 0x542390 after
+the queue `+8`, `[4] = 0`) walks that list from 0 with an index
+registered at `+0xc` (0x559410) and re-reads the count each step, so an
+object made during the walk is appended and gets its message 0 in the
+same tick. The removal 0x541d20 (message 3, 0x540180, then 0x55b500,
+which moves the later entries down) lowers every registered index at
+or past the removed entry unless 0: an object removed before or at the
+walk's place does not make it skip the next, except at index 0 (the
+index stays 0 and the next step reads index 1, skipping the entry moved
+to 0). The order of making: Players' set-up 0x51f680 (Sapp vt+0x14,
+from 0x541880 at the Players constructor 0x51fa31): 0x186f the weather
+(0x407cc0), 0x1487 (0x499790, handler 0x499560; not decoded), 0x1686
+DarkTy (0x48bf90), 0x1c57 Navy.cpp (0x4a7f00, handler 0x4a78a0: the
+players' records), 0x203f Flotil.cpp (0x49b7d0, handler 0x49ab30: the
+groups' walk, `run_navy`), 0x2427 the judge Boss_kib (0x448e30), in
+the campaign the mission's brain (0x2913f + mission, or 0x2928c), and
+0x1684 the gulls (0x41ce00 -> 0x41cda0). Then message 8 (0x522d50,
+host path `+0xd7c != 0`): the map's records in file order by 0x549850 ->
+0x51e810, each by its class (200-211 ships 0x1488, 0x32-0x33 towns
+0x1491, 0x34-0x36 forts 0x1494, 0x37-0x3e and 0x3f-0x49 buildings,
+0x190-0x192, 0x1f4-0x1fd creatures and hazards, 600-0x25e, 300 shots,
+0x2be-0x2c1), then in the campaign the records of `+0x33ba`, then (not
+the campaign, `+0x30d9 != 2`) one AIPlayerClassTy 0x29596 for each player
+0-19 whose side `+0x1a1d` is 3. So a tick runs: the weather, 0x1487,
+the fog, Navy.cpp, the navy's group walk, the judge, the brain, the
+gulls, the map's objects in record order, the computer players by
+player, then every object made since (ships launched, shots, ...) in
+the order made. **Ported**: the computer players' turn (`run_computers`)
+moved to the end of the tick's passes, after the map objects' (before,
+between the ships' fires and the town links); the navy's walk before
+the brain's turn and both before the objects stands. Not ported: the
+port runs its objects by pass (each system over all objects) and many
+passes per update, not per object in list order; the brain's and the
+computers' clocks (`brain_clock`, `computers_clock`) are counted before
+the navy's walk, not at their own objects' message 0 (what reads them
+there not decoded); the ruins' and houses' steps run before the navy;
+the save's load path (the objects' order on a loaded game, 0x4e21f5 and
+the rest) not decoded; nor whether 0x1487 and the map objects made
+during another's message 2 (a town's buildings) come between records.
 
 **The plain move `{100, 1}`** (the human's move click without Shift:
 0x49e230 case 0x14 -> 0x49de70 -> 0x4ccc30). 0x49de70's payload is

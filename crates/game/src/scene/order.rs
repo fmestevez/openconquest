@@ -730,7 +730,8 @@ impl Scene {
     /// them pending there while `+0x261 & 0x1f0` is clear, till the word
     /// comes back; the port runs them at delivery, so a hold started
     /// between the two by an object earlier in the Sapp's walk (0x542270,
-    /// its list `+0x10` by 0x541b40, the places not decoded) does not
+    /// its list `+0x10` in making order by 0x541b40: the navy, the
+    /// brain, then the map's objects by record and the computers) does not
     /// keep them. Every hold the port has refuses the group's commands at
     /// 0x4e2ba0 already, so nothing passes delivery to wait at the gate.
     /// With the group's event refused at its run, the port keeps the old

@@ -2907,9 +2907,10 @@ impl Scene {
             removed.extend(self.step_house_fades(data, caches));
             // The navy's tick (message 0, 0x49ab30 -> 0x4c4f40): every
             // side's groups in its players' lists (`run_navy`), the brain's
-            // and the computers' clocks counted first. (Not decoded: the
-            // navy's, the brain's, the computers' and the ships' places in
-            // the Sapp's list `+0x10`, 0x542270 / 0x541b40.)
+            // and the computers' clocks counted first. The Sapp's walk
+            // (0x542270) runs its list `+0x10` in making order (0x541b40):
+            // the navy 0x203f, then the brain (0x51f680), then the map's
+            // objects and the computer players (message 8, 0x522d50).
             self.brain_clock();
             self.computers_clock();
             self.run_navy();
@@ -2932,7 +2933,6 @@ impl Scene {
             self.tick_building_statuses(data, caches);
             self.tick_ship_shields(data, caches);
             self.step_ship_fires();
-            self.run_computers();
             self.run_town_links();
             self.run_yards(data, caches);
             // Standing pictures before construction, so one finished this
@@ -2959,6 +2959,11 @@ impl Scene {
             self.run_landings(data, caches);
             self.run_amber(data, caches);
             self.run_unloads();
+            // The computer players (AIPlayerClassTy 0x29596) are made at
+            // message 8 (0x522d50) after the map's objects (0x549850 ->
+            // 0x51e810 for each record), so their message 0 comes after
+            // those objects' in the Sapp's walk (0x542270).
+            self.run_computers();
             // The commands of this tick reach their objects at the start
             // of the next, before anything runs (0x51fe20: 0x521570,
             // 0x5228c0, then the tick 0x542390): delivered here, before
